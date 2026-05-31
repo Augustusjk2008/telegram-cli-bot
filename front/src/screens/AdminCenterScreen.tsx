@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Eye, EyeOff, RefreshCw, RotateCcw, Save, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Eye, EyeOff, RefreshCw, RotateCcw, Save, Trash2 } from "lucide-react";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
   AdminUser,
@@ -8,6 +8,7 @@ import type {
   AppUpdateStatus,
   BotSummary,
   Capability,
+  CliErrorStatsResult,
   CreateAnnouncementInput,
   EnvConfigItem,
   EnvConfigPatchInput,
@@ -32,7 +33,7 @@ type Props = {
   canManageEnvConfig?: boolean;
 };
 
-type AdminCenterTab = "users" | "invites" | "updates" | "announcements" | "lan-chat" | "env";
+type AdminCenterTab = "users" | "invites" | "cli-errors" | "updates" | "announcements" | "lan-chat" | "env";
 
 const ENV_CATEGORY_LABELS: Record<string, string> = {
   basic: "基础",
@@ -105,6 +106,24 @@ function formatEnvValue(value: EnvConfigValue | undefined, masked = false) {
   return value || "";
 }
 
+function topEntryLabel(values: Record<string, number>) {
+  const [key, count] = Object.entries(values).sort((left, right) => right[1] - left[1])[0] || [];
+  return key ? `${key} (${count})` : "无";
+}
+
+function formatShortTime(value: string) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+}
+
+function shortErrorText(value: string) {
+  const text = (value || "").trim();
+  if (!text) return "-";
+  return text.length > 120 ? `${text.slice(0, 117).trim()}...` : text;
+}
+
 function envValueEquals(left: EnvConfigValue | undefined, right: EnvConfigValue | undefined) {
   return formatEnvValue(left) === formatEnvValue(right);
 }
@@ -132,6 +151,8 @@ export function AdminCenterScreen({
   const [registerCodes, setRegisterCodes] = useState<RegisterCodeItem[]>([]);
   const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus | null>(null);
   const [offlinePackages, setOfflinePackages] = useState<OfflineUpdatePackageList | null>(null);
+  const [cliErrorStats, setCliErrorStats] = useState<CliErrorStatsResult | null>(null);
+  const [cliErrorHours, setCliErrorHours] = useState(24);
   const [announcements, setAnnouncements] = useState<AnnouncementItem[]>([]);
   const [announcementDraft, setAnnouncementDraft] = useState<CreateAnnouncementInput>(DEFAULT_ANNOUNCEMENT_DRAFT);
   const [announcementSaving, setAnnouncementSaving] = useState(false);
@@ -151,6 +172,7 @@ export function AdminCenterScreen({
   const [loadedTabs, setLoadedTabs] = useState<Record<AdminCenterTab, boolean>>({
     users: false,
     invites: false,
+    "cli-errors": false,
     updates: false,
     announcements: false,
     "lan-chat": false,
@@ -173,6 +195,7 @@ export function AdminCenterScreen({
     () => [
       "users",
       ...(canManageRegisterCodes ? (["invites"] as AdminCenterTab[]) : []),
+      "cli-errors",
       "updates",
       "announcements",
       "lan-chat",
@@ -291,6 +314,31 @@ export function AdminCenterScreen({
     }
   }
 
+  async function loadCliErrorStats(nextNotice = "", refresh = false) {
+    if (refresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+    setError("");
+    if (!nextNotice) {
+      setNotice("");
+    }
+    try {
+      const data = await client.getCliErrorStats({ hours: cliErrorHours, limit: 50 });
+      setCliErrorStats(data);
+      setLoadedTabs((prev) => ({ ...prev, "cli-errors": true }));
+      if (nextNotice) {
+        setNotice(nextNotice);
+      }
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "加载 CLI 错误统计失败"));
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }
+
   async function loadAnnouncements(nextNotice = "", refresh = false) {
     if (refresh) {
       setRefreshing(true);
@@ -389,6 +437,8 @@ export function AdminCenterScreen({
       await loadUsers(nextNotice, refresh);
     } else if (activeTab === "invites" && canManageRegisterCodes) {
       await loadInvites(nextNotice, refresh);
+    } else if (activeTab === "cli-errors") {
+      await loadCliErrorStats(nextNotice, refresh);
     } else if (activeTab === "updates") {
       await loadUpdates(nextNotice, refresh);
     } else if (activeTab === "lan-chat") {
@@ -775,6 +825,8 @@ export function AdminCenterScreen({
                   ? "邀请码"
                   : tab === "updates"
                     ? "升级"
+                    : tab === "cli-errors"
+                      ? "CLI 错误"
                     : tab === "announcements"
                       ? "公告"
                       : tab === "env"
@@ -1524,6 +1576,119 @@ export function AdminCenterScreen({
 
             <div role="log" className="h-56 overflow-y-auto rounded-lg bg-slate-950 p-3 font-mono text-xs text-slate-100 whitespace-pre-wrap break-all">
               {updateLogLines.length ? updateLogLines.join("\n") : "暂无升级输出"}
+            </div>
+          </section>
+        ) : null}
+
+        {!loading && activeTab === "cli-errors" ? (
+          <section aria-labelledby="cli-error-stats-title" className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <h2 id="cli-error-stats-title" className="text-base font-semibold text-[var(--text)]">CLI 错误统计</h2>
+                <p className="text-sm text-[var(--muted)]">最近错误、类别和高频文本。</p>
+              </div>
+              <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
+                时间范围
+                <select
+                  value={cliErrorHours}
+                  onChange={(event) => {
+                    setCliErrorHours(Number(event.target.value));
+                    setLoadedTabs((prev) => ({ ...prev, "cli-errors": false }));
+                  }}
+                  className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                >
+                  <option value={24}>24 小时</option>
+                  <option value={72}>72 小时</option>
+                  <option value={168}>7 天</option>
+                </select>
+              </label>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                总错误: <span className="font-semibold text-[var(--text)]">{cliErrorStats?.summary.total || 0}</span>
+              </p>
+              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                CLI 最高: <span className="font-semibold text-[var(--text)]">{topEntryLabel(cliErrorStats?.summary.byCliType || {})}</span>
+              </p>
+              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                Bot 最高: <span className="font-semibold text-[var(--text)]">{topEntryLabel(cliErrorStats?.summary.byBot || {})}</span>
+              </p>
+              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                类别最高: <span className="font-semibold text-[var(--text)]">{topEntryLabel(cliErrorStats?.summary.byCategory || {})}</span>
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <div className="rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3">
+                <h3 className="text-sm font-semibold text-[var(--text)]">按类别</h3>
+                <div className="mt-3 space-y-2 text-sm">
+                  {Object.entries(cliErrorStats?.summary.byCategory || {}).map(([category, count]) => (
+                    <div key={category} className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] px-3 py-2">
+                      <span className="text-[var(--text)]">{category}</span>
+                      <span className="text-[var(--muted)]">{count}</span>
+                    </div>
+                  ))}
+                  {!Object.keys(cliErrorStats?.summary.byCategory || {}).length ? (
+                    <p className="text-[var(--muted)]">暂无错误</p>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3">
+                <h3 className="text-sm font-semibold text-[var(--text)]">高频错误</h3>
+                <div className="mt-3 space-y-2 text-sm">
+                  {(cliErrorStats?.topErrors || []).map((item) => (
+                    <div key={`${item.category}-${item.message}`} className="rounded-lg border border-[var(--border)] px-3 py-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-[var(--muted)]">{item.category}</span>
+                        <span className="text-[var(--text)]">{item.count} 次</span>
+                      </div>
+                      <p className="mt-1 break-all text-[var(--text)]">{item.message}</p>
+                    </div>
+                  ))}
+                  {!cliErrorStats?.topErrors.length ? <p className="text-[var(--muted)]">暂无高频错误</p> : null}
+                </div>
+              </div>
+            </div>
+
+            <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg)]">
+              <div className="flex items-center gap-2 border-b border-[var(--border)] px-3 py-2">
+                <AlertTriangle className="h-4 w-4 text-amber-500" />
+                <h3 className="text-sm font-semibold text-[var(--text)]">最近错误</h3>
+                <span className="ml-auto text-xs text-[var(--muted)]">最近: {formatShortTime(cliErrorStats?.summary.latestAt || "")}</span>
+              </div>
+              <div className="max-h-[420px] overflow-auto">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="sticky top-0 bg-[var(--surface)] text-xs text-[var(--muted)]">
+                    <tr>
+                      <th className="px-3 py-2 font-medium">时间</th>
+                      <th className="px-3 py-2 font-medium">Bot</th>
+                      <th className="px-3 py-2 font-medium">CLI</th>
+                      <th className="px-3 py-2 font-medium">类别</th>
+                      <th className="px-3 py-2 font-medium">错误</th>
+                      <th className="px-3 py-2 font-medium">ID</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(cliErrorStats?.items || []).map((item) => (
+                      <tr key={item.turnId} className="border-t border-[var(--border)] align-top">
+                        <td className="whitespace-nowrap px-3 py-2 text-[var(--muted)]">{formatShortTime(item.startedAt)}</td>
+                        <td className="px-3 py-2 text-[var(--text)]">{item.botAlias}</td>
+                        <td className="px-3 py-2 text-[var(--text)]">{item.cliType}</td>
+                        <td className="px-3 py-2 text-[var(--text)]">{item.category}</td>
+                        <td className="max-w-md break-all px-3 py-2 text-[var(--text)]">{shortErrorText(item.errorMessage || item.errorCode)}</td>
+                        <td className="break-all px-3 py-2 font-mono text-xs text-[var(--muted)]">
+                          {item.conversationId}<br />{item.turnId}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {!cliErrorStats?.items.length ? (
+                  <p className="px-3 py-4 text-sm text-[var(--muted)]">暂无错误记录</p>
+                ) : null}
+              </div>
             </div>
           </section>
         ) : null}

@@ -71,6 +71,11 @@ import type {
   ChatMessageMetaInfo,
   ChatStatusUpdate,
   ChatTraceEvent,
+  CliErrorStatsFilters,
+  CliErrorStatsItem,
+  CliErrorStatsResult,
+  CliErrorStatsSummary,
+  CliErrorTopItem,
   CliParamsPayload,
   CliType,
   AgentClusterConfig,
@@ -867,6 +872,41 @@ type RawAppUpdateDownloadProgress = {
   total_bytes?: number;
   percent?: number;
   message?: string;
+};
+
+type RawCliErrorStatsItem = {
+  bot_alias?: string;
+  cli_type?: string;
+  working_dir?: string;
+  conversation_id?: string;
+  turn_id?: string;
+  started_at?: string;
+  completed_at?: string;
+  error_code?: string;
+  error_message?: string;
+  category?: string;
+  duration_ms?: number | null;
+};
+
+type RawCliErrorTopItem = {
+  message?: string;
+  count?: number;
+  category?: string;
+  latest_at?: string;
+};
+
+type RawCliErrorStatsSummary = {
+  total?: number;
+  by_cli_type?: Record<string, number>;
+  by_bot?: Record<string, number>;
+  by_category?: Record<string, number>;
+  latest_at?: string;
+};
+
+type RawCliErrorStatsResult = {
+  summary?: RawCliErrorStatsSummary;
+  top_errors?: RawCliErrorTopItem[];
+  items?: RawCliErrorStatsItem[];
 };
 
 type RawAssistantProposal = {
@@ -2520,6 +2560,49 @@ function mapAppUpdateDownloadProgress(raw: RawAppUpdateDownloadProgress): AppUpd
   };
 }
 
+function mapCliErrorStatsSummary(raw: RawCliErrorStatsSummary | undefined): CliErrorStatsSummary {
+  return {
+    total: Number(raw?.total || 0),
+    byCliType: raw?.by_cli_type || {},
+    byBot: raw?.by_bot || {},
+    byCategory: raw?.by_category || {},
+    latestAt: raw?.latest_at || "",
+  };
+}
+
+function mapCliErrorStatsItem(raw: RawCliErrorStatsItem): CliErrorStatsItem {
+  return {
+    botAlias: raw.bot_alias || "",
+    cliType: raw.cli_type || "",
+    workingDir: raw.working_dir || "",
+    conversationId: raw.conversation_id || "",
+    turnId: raw.turn_id || "",
+    startedAt: raw.started_at || "",
+    completedAt: raw.completed_at || "",
+    errorCode: raw.error_code || "",
+    errorMessage: raw.error_message || "",
+    category: raw.category || "unknown",
+    durationMs: typeof raw.duration_ms === "number" ? raw.duration_ms : null,
+  };
+}
+
+function mapCliErrorTopItem(raw: RawCliErrorTopItem): CliErrorTopItem {
+  return {
+    message: raw.message || "",
+    count: Number(raw.count || 0),
+    category: raw.category || "unknown",
+    latestAt: raw.latest_at || "",
+  };
+}
+
+function mapCliErrorStatsResult(raw: RawCliErrorStatsResult): CliErrorStatsResult {
+  return {
+    summary: mapCliErrorStatsSummary(raw.summary),
+    topErrors: (raw.top_errors || []).map(mapCliErrorTopItem),
+    items: (raw.items || []).map(mapCliErrorStatsItem),
+  };
+}
+
 function calculateDownloadPercent(downloadedBytes: number, totalBytes?: number) {
   if (!totalBytes || totalBytes <= 0) {
     return undefined;
@@ -3622,6 +3705,18 @@ export class RealWebBotClient implements WebBotClient {
       body: JSON.stringify(mapEnvPatchInput(input)),
     });
     return mapEnvPatchResult(data);
+  }
+
+  async getCliErrorStats(filters: CliErrorStatsFilters = {}): Promise<CliErrorStatsResult> {
+    const params = new URLSearchParams();
+    if (filters.hours) params.set("hours", String(filters.hours));
+    if (filters.alias) params.set("alias", filters.alias);
+    if (filters.cliType) params.set("cli_type", filters.cliType);
+    if (filters.category) params.set("category", filters.category);
+    if (filters.limit) params.set("limit", String(filters.limit));
+    const query = params.toString();
+    const data = await this.requestJson<RawCliErrorStatsResult>(`/api/admin/cli-errors${query ? `?${query}` : ""}`);
+    return mapCliErrorStatsResult(data);
   }
 
   async listBots(): Promise<BotSummary[]> {

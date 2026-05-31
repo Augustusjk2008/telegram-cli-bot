@@ -5,6 +5,7 @@ from aiohttp import web
 
 def register(app: web.Application, server) -> None:
     app.router.add_get("/api/admin/bots", server.admin_bots)
+    app.router.add_get("/api/admin/cli-errors", server.admin_cli_error_stats)
     app.router.add_get("/api/admin/assets/avatars", server.admin_list_avatar_assets)
     app.router.add_get("/api/admin/bots/{alias}/processing", server.admin_processing)
     app.router.add_post("/api/admin/bots", server.admin_add_bot)

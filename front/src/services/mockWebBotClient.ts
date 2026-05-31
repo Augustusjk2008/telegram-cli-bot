@@ -59,6 +59,8 @@ import type {
   ChatStatusUpdate,
   ChatTraceDetails,
   ChatTraceEvent,
+  CliErrorStatsFilters,
+  CliErrorStatsResult,
   CliType,
   CliParamsPayload,
   ClusterConfigUpdateInput,
@@ -1412,6 +1414,70 @@ export class MockWebBotClient implements WebBotClient {
   private gitSmartCommitActiveJobs = new Map<string, string>();
   private gitSmartCommitJobSeq = 1;
   private gitProxySettings: GitProxySettings = { address: "", port: "" };
+  private cliErrorStats: CliErrorStatsResult = {
+    summary: {
+      total: 3,
+      byCliType: { codex: 2, kimi: 1 },
+      byBot: { main: 2, reviewer: 1 },
+      byCategory: { rate_limit: 2, resume_session: 1 },
+      latestAt: "2026-05-31T10:20:00+08:00",
+    },
+    topErrors: [
+      {
+        message: "HTTP 429 rate limit reached",
+        count: 2,
+        category: "rate_limit",
+        latestAt: "2026-05-31T10:20:00+08:00",
+      },
+      {
+        message: "failed to resume: conversation not found",
+        count: 1,
+        category: "resume_session",
+        latestAt: "2026-05-31T09:40:00+08:00",
+      },
+    ],
+    items: [
+      {
+        botAlias: "main",
+        cliType: "codex",
+        workingDir: DEMO_MAIN_WORKDIR,
+        conversationId: "conv_demo_1",
+        turnId: "turn_demo_1",
+        startedAt: "2026-05-31T10:20:00+08:00",
+        completedAt: "2026-05-31T10:20:12+08:00",
+        errorCode: "failed",
+        errorMessage: "HTTP 429 rate limit reached",
+        category: "rate_limit",
+        durationMs: 12000,
+      },
+      {
+        botAlias: "main",
+        cliType: "codex",
+        workingDir: DEMO_MAIN_WORKDIR,
+        conversationId: "conv_demo_2",
+        turnId: "turn_demo_2",
+        startedAt: "2026-05-31T09:48:00+08:00",
+        completedAt: "2026-05-31T09:48:04+08:00",
+        errorCode: "failed",
+        errorMessage: "HTTP 429 rate limit reached",
+        category: "rate_limit",
+        durationMs: 4000,
+      },
+      {
+        botAlias: "reviewer",
+        cliType: "kimi",
+        workingDir: DEMO_TEAM_WORKDIR,
+        conversationId: "conv_demo_3",
+        turnId: "turn_demo_3",
+        startedAt: "2026-05-31T09:40:00+08:00",
+        completedAt: "2026-05-31T09:40:08+08:00",
+        errorCode: "error",
+        errorMessage: "failed to resume: conversation not found",
+        category: "resume_session",
+        durationMs: 8000,
+      },
+    ],
+  };
   private updateStatus: AppUpdateStatus = {
     currentVersion: APP_VERSION,
     currentPackageKind: "installer",
@@ -4553,6 +4619,34 @@ export class MockWebBotClient implements WebBotClient {
 
   async getGitProxySettings(): Promise<GitProxySettings> {
     return { ...this.gitProxySettings };
+  }
+
+  async getCliErrorStats(filters: CliErrorStatsFilters = {}): Promise<CliErrorStatsResult> {
+    const items = this.cliErrorStats.items.filter((item) => {
+      if (filters.alias && item.botAlias !== filters.alias) return false;
+      if (filters.cliType && item.cliType !== filters.cliType) return false;
+      if (filters.category && item.category !== filters.category) return false;
+      return true;
+    });
+    const byCliType: Record<string, number> = {};
+    const byBot: Record<string, number> = {};
+    const byCategory: Record<string, number> = {};
+    items.forEach((item) => {
+      byCliType[item.cliType] = (byCliType[item.cliType] || 0) + 1;
+      byBot[item.botAlias] = (byBot[item.botAlias] || 0) + 1;
+      byCategory[item.category] = (byCategory[item.category] || 0) + 1;
+    });
+    return {
+      summary: {
+        total: items.length,
+        byCliType,
+        byBot,
+        byCategory,
+        latestAt: items[0]?.startedAt || "",
+      },
+      topErrors: this.cliErrorStats.topErrors.filter((item) => !filters.category || item.category === filters.category),
+      items: items.slice(0, filters.limit || 200),
+    };
   }
 
   async updateGitProxySettings(address: string): Promise<GitProxySettings> {

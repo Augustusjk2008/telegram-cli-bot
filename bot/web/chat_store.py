@@ -52,6 +52,17 @@ def _row_text(row: sqlite3.Row, key: str) -> str:
     return str(row[key] or "")
 
 
+def _duration_ms(started_at: str, completed_at: str | None) -> int | None:
+    if not started_at or not completed_at:
+        return None
+    try:
+        started = datetime.fromisoformat(started_at)
+        completed = datetime.fromisoformat(completed_at)
+    except ValueError:
+        return None
+    return max(0, int(round((completed - started).total_seconds() * 1000)))
+
+
 def clear_chat_store_prepare_cache() -> None:
     with _STORE_PREPARE_LOCK:
         _PREPARED_STORES.clear()
@@ -1239,6 +1250,66 @@ class ChatStore:
             content_chars=len(str(content or "")),
         )
         return message
+
+    def list_error_turns(self, from_at: str, to_at: str, limit: int) -> list[dict[str, Any]]:
+        normalized_limit = max(1, min(int(limit or 200), 5000))
+        conn = self._connect(create=False)
+        if conn is None:
+            return []
+        from bot.web.cli_error_stats import classify_cli_error
+
+        with closing(conn):
+            rows = conn.execute(
+                """
+                SELECT
+                    conversations.bot_alias AS bot_alias,
+                    conversations.cli_type AS cli_type,
+                    conversations.working_dir AS working_dir,
+                    conversations.id AS conversation_id,
+                    turns.id AS turn_id,
+                    turns.started_at AS started_at,
+                    turns.completed_at AS completed_at,
+                    turns.error_code AS error_code,
+                    turns.error_message AS error_message,
+                    turns.completion_state AS completion_state
+                FROM turns
+                JOIN conversations ON conversations.id = turns.conversation_id
+                WHERE turns.started_at >= ?
+                  AND turns.started_at <= ?
+                  AND (
+                    turns.completion_state IN ('failed', 'error', 'cancelled')
+                    OR COALESCE(turns.error_code, '') != ''
+                    OR COALESCE(turns.error_message, '') != ''
+                  )
+                ORDER BY turns.started_at DESC, turns.id DESC
+                LIMIT ?
+                """,
+                (from_at, to_at, normalized_limit),
+            ).fetchall()
+
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            error_code = str(row["error_code"] or "")
+            error_message = str(row["error_message"] or "")
+            category = classify_cli_error(" ".join(part for part in [error_code, error_message] if part))
+            started_at = str(row["started_at"] or "")
+            completed_at = str(row["completed_at"] or "")
+            items.append(
+                {
+                    "bot_alias": str(row["bot_alias"] or ""),
+                    "cli_type": str(row["cli_type"] or ""),
+                    "working_dir": str(row["working_dir"] or ""),
+                    "conversation_id": str(row["conversation_id"] or ""),
+                    "turn_id": str(row["turn_id"] or ""),
+                    "started_at": started_at,
+                    "completed_at": completed_at,
+                    "error_code": error_code,
+                    "error_message": error_message,
+                    "category": category,
+                    "duration_ms": _duration_ms(started_at, completed_at),
+                }
+            )
+        return items
 
     def _load_trace_stats(
         self,

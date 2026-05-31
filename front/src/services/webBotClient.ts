@@ -15,6 +15,8 @@ import type {
   ChatStatusUpdate,
   ChatTraceDetails,
   ChatTraceEvent,
+  CliErrorStatsFilters,
+  CliErrorStatsResult,
   AssistantAdminAuditResult,
   AssistantDiagnosticsFilters,
   AssistantMemoryBulkInvalidateResult,
@@ -153,6 +155,7 @@ export interface WebBotClient {
   getEnvConfig(): Promise<EnvConfigSnapshot>;
   previewEnvConfig(input: EnvConfigPatchInput): Promise<EnvConfigPatchResult>;
   updateEnvConfig(input: EnvConfigPatchInput): Promise<EnvConfigPatchResult>;
+  getCliErrorStats(filters?: CliErrorStatsFilters): Promise<CliErrorStatsResult>;
   listBots(): Promise<BotSummary[]>;
   listPlugins(refresh?: boolean): Promise<PluginSummary[]>;
   listInstallablePlugins(): Promise<InstallablePluginSummary[]>;

@@ -72,6 +72,7 @@ from bot.updater import (
     set_update_enabled,
 )
 from .announcement_store import AnnouncementStore
+from .cli_error_stats import collect_cli_error_stats
 from .diagnostics import diag_enabled, diag_log_event, diag_log_slow, diag_loop_lag_ms
 from .env_service import EnvConfigService, EnvValidationError
 from .lan_chat_service import LanChatService
@@ -2997,6 +2998,24 @@ class WebApiServer:
     async def admin_bots(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_ADMIN_OPS)
         return _json({"ok": True, "data": self._decorate_bots_for_auth(auth, list_bots(self.manager, auth.user_id))})
+
+    async def admin_cli_error_stats(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        try:
+            hours = int(str(request.query.get("hours", "24") or "24"))
+            limit = int(str(request.query.get("limit", "200") or "200"))
+        except ValueError as exc:
+            raise WebApiError(400, "invalid_request", "hours 和 limit 必须是整数") from exc
+        data = await asyncio.to_thread(
+            collect_cli_error_stats,
+            self.manager,
+            hours=max(1, min(hours, 24 * 30)),
+            alias=str(request.query.get("alias", "") or "").strip(),
+            cli_type=str(request.query.get("cli_type", "") or "").strip(),
+            category=str(request.query.get("category", "") or "").strip(),
+            limit=max(1, min(limit, 1000)),
+        )
+        return _json({"ok": True, "data": data})
     
     async def admin_processing(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)

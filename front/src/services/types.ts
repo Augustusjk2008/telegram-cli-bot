@@ -149,6 +149,49 @@ export type EnvConfigPatchResult = {
   backupPath: string;
 };
 
+export type CliErrorStatsItem = {
+  botAlias: string;
+  cliType: CliType | string;
+  workingDir: string;
+  conversationId: string;
+  turnId: string;
+  startedAt: string;
+  completedAt: string;
+  errorCode: string;
+  errorMessage: string;
+  category: string;
+  durationMs: number | null;
+};
+
+export type CliErrorTopItem = {
+  message: string;
+  count: number;
+  category: string;
+  latestAt: string;
+};
+
+export type CliErrorStatsSummary = {
+  total: number;
+  byCliType: Record<string, number>;
+  byBot: Record<string, number>;
+  byCategory: Record<string, number>;
+  latestAt: string;
+};
+
+export type CliErrorStatsResult = {
+  summary: CliErrorStatsSummary;
+  topErrors: CliErrorTopItem[];
+  items: CliErrorStatsItem[];
+};
+
+export type CliErrorStatsFilters = {
+  hours?: number;
+  alias?: string;
+  cliType?: string;
+  category?: string;
+  limit?: number;
+};
+
 export type BotSummary = {
   alias: string;
   cliType: CliType;
