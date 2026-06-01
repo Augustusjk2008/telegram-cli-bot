@@ -646,6 +646,14 @@ export type ConversationDeleteResult = {
   messages?: ChatMessage[];
 };
 
+export type ConversationBulkDeleteResult = {
+  deletedCount: number;
+  activeConversationId: string;
+  nativeSessionCleared: boolean;
+  items: ConversationSummary[];
+  messages: ChatMessage[];
+};
+
 export type ChatStatusUpdate = {
   elapsedSeconds?: number;
   previewText?: string;

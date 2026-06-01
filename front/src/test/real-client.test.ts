@@ -803,6 +803,27 @@ describe("RealWebBotClient", () => {
     expect(data.items[0].nativeSource?.sessionId).toBe("thread-1");
   });
 
+  test("deleteAllConversations calls collection delete and maps result", async () => {
+    fetchMock.mockResolvedValueOnce(jsonOk({
+      deleted_count: 3,
+      active_conversation_id: "",
+      native_session_cleared: true,
+      items: [],
+      messages: [],
+    }));
+
+    const client = new RealWebBotClient();
+    const data = await client.deleteAllConversations("main", { deleteNativeSession: true });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/bots/main/conversations?delete_native_session=true",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(data.deletedCount).toBe(3);
+    expect(data.messages).toEqual([]);
+    expect(data.nativeSessionCleared).toBe(true);
+  });
+
   
   
   test("getMessageTrace maps rich native trace payload for one history message", async () => {

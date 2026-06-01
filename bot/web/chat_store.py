@@ -1933,6 +1933,34 @@ class ChatStore:
             with conn:
                 conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
 
+    def archive_bot_conversations(
+        self,
+        *,
+        bot_id: int,
+        user_id: int,
+        working_dir: str,
+        include_archived: bool = False,
+    ) -> int:
+        conn = self._connect(create=False)
+        if conn is None:
+            return 0
+        now = _utc_now()
+        archived_clause = "" if include_archived else "AND archived_at IS NULL"
+        with closing(conn):
+            with conn:
+                result = conn.execute(
+                    f"""
+                    UPDATE conversations
+                    SET archived_at = COALESCE(archived_at, ?),
+                        status = ?,
+                        updated_at = ?
+                    WHERE bot_id = ? AND user_id = ? AND working_dir = ?
+                    {archived_clause}
+                    """,
+                    (now, "archived", now, bot_id, user_id, working_dir),
+                )
+                return int(result.rowcount or 0)
+
     def delete_bot_history(self, *, bot_id: int) -> int:
         conn = self._connect(create=False)
         if conn is None:

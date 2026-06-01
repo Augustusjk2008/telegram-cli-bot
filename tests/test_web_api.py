@@ -54,6 +54,7 @@ from bot.web.api_service import (
     change_working_directory,
     create_agent,
     create_conversation,
+    delete_all_conversations,
     delete_conversation,
     delete_agent,
     get_directory_listing,
@@ -1191,6 +1192,29 @@ def test_conversation_api_create_list_and_select(web_manager: MultiBotManager, t
     assert selected["conversation"]["active"] is True
     assert selected["messages"] == []
     assert session.active_conversation_id == conversation_id
+
+
+def test_conversation_api_delete_all_clears_bot_workspace_sessions(web_manager: MultiBotManager, tmp_path: Path):
+    web_manager.main_profile.working_dir = str(tmp_path)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+
+    first = create_conversation(web_manager, "main", 1001, "第一")
+    second = create_conversation(web_manager, "main", 1001, "第二")
+    session.codex_session_id = "thread-1"
+    session.active_conversation_id = second["conversation"]["id"]
+    session.persist()
+
+    result = delete_all_conversations(web_manager, "main", 1001, delete_native_session=True)
+
+    assert result["deleted_count"] == 2
+    assert result["items"] == []
+    assert result["messages"] == []
+    assert result["native_session_cleared"] is True
+    assert session.active_conversation_id is None
+    assert session.codex_session_id is None
+    assert list_conversations(web_manager, "main", 1001)["items"] == []
+    assert first["conversation"]["id"] != second["conversation"]["id"]
 
 
 @pytest.mark.asyncio

@@ -138,6 +138,7 @@ from .api_service import (
     change_working_directory,
     create_agent,
     create_conversation,
+    delete_all_conversations,
     delete_conversation,
     execute_plan,
     create_directory,
@@ -2388,6 +2389,18 @@ class WebApiServer:
         body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
         agent_id = self._request_agent_id(request, body)
         data = create_conversation(self.manager, alias, self._chat_user_id(auth), str(body.get("title") or ""), agent_id=agent_id)
+        return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
+
+    async def delete_conversations_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_CHAT_SEND)
+        alias = self._manager_alias(request)
+        delete_native = str(request.query.get("delete_native_session", "")).lower() in {"1", "true", "yes", "on"}
+        data = delete_all_conversations(
+            self.manager,
+            alias,
+            self._chat_user_id(auth),
+            delete_native_session=delete_native,
+        )
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
     async def post_plan_execute_view(self, request: web.Request) -> web.Response:

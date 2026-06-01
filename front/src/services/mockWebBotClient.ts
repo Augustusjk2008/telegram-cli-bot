@@ -43,6 +43,7 @@ import type {
   AgentScopedOptions,
   AgentSummary,
   ChatSendOptions,
+  ConversationBulkDeleteResult,
   ConversationDeleteResult,
   ConversationListResult,
   PlanExecuteInput,
@@ -3407,6 +3408,34 @@ export class MockWebBotClient implements WebBotClient {
       nativeSessionCleared: Boolean(options.deleteNativeSession),
       items: nextItems,
       ...(wasActive ? { messages: [] } : {}),
+    };
+  }
+
+  async deleteAllConversations(
+    botAlias: string,
+    options: { deleteNativeSession?: boolean } = {},
+  ): Promise<ConversationBulkDeleteResult> {
+    let deletedCount = 0;
+    for (const key of Array.from(this.conversationsByBot.keys())) {
+      if (!key.startsWith(`${botAlias}:`)) {
+        continue;
+      }
+      deletedCount += this.conversationsByBot.get(key)?.length || 0;
+      this.conversationsByBot.set(key, []);
+      this.activeConversationByBot.set(key, "");
+    }
+    mockChatMessages[botAlias] = [];
+    for (const key of Object.keys(mockChatMessages)) {
+      if (key.startsWith(`${botAlias}:`)) {
+        mockChatMessages[key] = [];
+      }
+    }
+    return {
+      deletedCount,
+      activeConversationId: "",
+      nativeSessionCleared: Boolean(options.deleteNativeSession),
+      items: [],
+      messages: [],
     };
   }
 

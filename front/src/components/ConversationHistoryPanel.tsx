@@ -15,6 +15,7 @@ type Props = {
   onNewConversation: () => void;
   onSelectConversation: (conversationId: string) => void;
   onDeleteConversation: (conversation: ConversationSummary, deleteNativeSession: boolean) => void;
+  onDeleteAllConversations: (deleteNativeSession: boolean) => void;
 };
 
 function formatConversationTime(value: string) {
@@ -42,13 +43,16 @@ export function ConversationHistoryPanel({
   onNewConversation,
   onSelectConversation,
   onDeleteConversation,
+  onDeleteAllConversations,
 }: Props) {
   const [pendingDelete, setPendingDelete] = useState<ConversationSummary | null>(null);
+  const [pendingDeleteAll, setPendingDeleteAll] = useState(false);
   const [deleteNativeSession, setDeleteNativeSession] = useState(true);
 
   useEffect(() => {
     if (!open) {
       setPendingDelete(null);
+      setPendingDeleteAll(false);
       return;
     }
     const onKeyDown = (event: KeyboardEvent) => {
@@ -74,6 +78,7 @@ export function ConversationHistoryPanel({
   }
 
   const deleting = Boolean(deletingConversationId);
+  const deleteDialogTitle = pendingDeleteAll ? "删除全部会话" : "删除会话";
 
   return (
     <div className="workbench-dialog-backdrop absolute inset-0 z-30 flex items-end bg-black/20 sm:items-stretch sm:bg-black/10">
@@ -85,6 +90,18 @@ export function ConversationHistoryPanel({
               <span>历史会话</span>
             </div>
             <div className="ml-auto flex items-center gap-1.5">
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => {
+                  setDeleteNativeSession(true);
+                  setPendingDeleteAll(true);
+                }}
+                className={toolbarButtonClass("danger", "sm", "h-8")}
+              >
+                <Trash2 className="h-4 w-4" />
+                清空
+              </button>
               <button
                 type="button"
                 disabled={disabled}
@@ -176,7 +193,7 @@ export function ConversationHistoryPanel({
         </div>
       </aside>
       <button type="button" aria-label="关闭历史会话" className="hidden flex-1 sm:block" onClick={onClose} />
-      {pendingDelete ? (
+      {pendingDelete || pendingDeleteAll ? (
         <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/30 px-4">
           <div
             role="dialog"
@@ -184,8 +201,10 @@ export function ConversationHistoryPanel({
             aria-labelledby="delete-conversation-title"
             className="w-full max-w-sm rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-4 shadow-[var(--shadow-card)]"
           >
-            <h2 id="delete-conversation-title" className="text-sm font-semibold text-[var(--text)]">删除会话</h2>
-            <p className="mt-2 text-sm leading-6 text-[var(--muted)]">共享会话，删除会影响所有可访问该 bot 的用户。</p>
+            <h2 id="delete-conversation-title" className="text-sm font-semibold text-[var(--text)]">{deleteDialogTitle}</h2>
+            <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+              {pendingDeleteAll ? "将删除本 bot 当前工作区全部历史会话，影响所有可访问该 bot 的用户。" : "共享会话，删除会影响所有可访问该 bot 的用户。"}
+            </p>
             <label className="mt-3 flex items-center gap-2 text-sm text-[var(--text)]">
               <input
                 type="checkbox"
@@ -199,7 +218,10 @@ export function ConversationHistoryPanel({
               <button
                 type="button"
                 disabled={deleting}
-                onClick={() => setPendingDelete(null)}
+                onClick={() => {
+                  setPendingDelete(null);
+                  setPendingDeleteAll(false);
+                }}
                 className={toolbarButtonClass("plain", "md")}
               >
                 取消
@@ -207,7 +229,15 @@ export function ConversationHistoryPanel({
               <button
                 type="button"
                 disabled={deleting}
-                onClick={() => onDeleteConversation(pendingDelete, deleteNativeSession)}
+                onClick={() => {
+                  if (pendingDeleteAll) {
+                    onDeleteAllConversations(deleteNativeSession);
+                    return;
+                  }
+                  if (pendingDelete) {
+                    onDeleteConversation(pendingDelete, deleteNativeSession);
+                  }
+                }}
                 className={toolbarButtonClass("danger", "md")}
               >
                 删除

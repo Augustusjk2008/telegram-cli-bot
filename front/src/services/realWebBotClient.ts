@@ -98,6 +98,7 @@ import type {
   ClusterTaskStatus,
   ClusterTemplateListResult,
   ClusterTemplateSummary,
+  ConversationBulkDeleteResult,
   ConversationListResult,
   ConversationDeleteResult,
   PlanExecuteInput,
@@ -339,6 +340,14 @@ type RawPlanExecuteResult = {
 
 type RawConversationDeleteResult = {
   deleted_conversation_id?: string;
+  active_conversation_id?: string;
+  native_session_cleared?: boolean;
+  items?: RawConversationSummary[];
+  messages?: RawHistoryItem[] | null;
+};
+
+type RawConversationBulkDeleteResult = {
+  deleted_count?: number;
   active_conversation_id?: string;
   native_session_cleared?: boolean;
   items?: RawConversationSummary[];
@@ -4057,6 +4066,31 @@ export class RealWebBotClient implements WebBotClient {
       nativeSessionCleared: Boolean(data.native_session_cleared),
       items: (data.items || []).map(mapConversationSummary),
       ...(Array.isArray(data.messages) ? { messages: data.messages.map((item, index) => mapChatMessage(item, index)) } : {}),
+    };
+  }
+
+  async deleteAllConversations(
+    botAlias: string,
+    options: { deleteNativeSession?: boolean } = {},
+  ): Promise<ConversationBulkDeleteResult> {
+    const params = new URLSearchParams();
+    if (options.deleteNativeSession) {
+      params.set("delete_native_session", "true");
+    }
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    const data = await this.requestJson<RawConversationBulkDeleteResult>(
+      `/api/bots/${encodeURIComponent(botAlias)}/conversations${suffix}`,
+      {
+        method: "DELETE",
+        headers: this.headers(),
+      },
+    );
+    return {
+      deletedCount: Number(data.deleted_count || 0),
+      activeConversationId: String(data.active_conversation_id || ""),
+      nativeSessionCleared: Boolean(data.native_session_cleared),
+      items: (data.items || []).map(mapConversationSummary),
+      messages: Array.isArray(data.messages) ? data.messages.map((item, index) => mapChatMessage(item, index)) : [],
     };
   }
 

@@ -303,6 +303,14 @@ function deleteScopedConversation(
   });
 }
 
+function deleteAllScopedConversations(
+  client: WebBotClient,
+  botAlias: string,
+  deleteNativeSession: boolean,
+) {
+  return client.deleteAllConversations(botAlias, { deleteNativeSession });
+}
+
 function pendingCronUserId(runId: string) {
   return `assistant-cron-user-${runId}`;
 }
@@ -2222,6 +2230,39 @@ export function ChatScreen({
     }
   }
 
+  async function handleDeleteAllConversations(deleteNativeSession: boolean) {
+    if (isStreamingRef.current) {
+      setError("当前任务运行中，先终止或等待完成");
+      return;
+    }
+    setDeletingConversationId("__all__");
+    setConversationLoading(true);
+    setError("");
+    try {
+      const data = await deleteAllScopedConversations(client, botAlias, deleteNativeSession);
+      stopAssistantPoll();
+      stopSseRecoveryWatch();
+      stopClusterTaskPoll();
+      setClusterRunId("");
+      setClusterTaskStatus(null);
+      setClusterTaskError("");
+      clusterRunIdRef.current = "";
+      setExpandedTracePanels({});
+      setTraceLoadState({});
+      setPendingCronRuns([]);
+      setQueuedMessageState(null, { botAlias, agentId: activeAgentIdRef.current || "main" });
+      setConversations(data.items);
+      setItems(data.messages);
+      itemsRef.current = data.messages;
+      setHistoryPanelOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "删除全部会话失败");
+    } finally {
+      setConversationLoading(false);
+      setDeletingConversationId("");
+    }
+  }
+
   const handleSelectAgent = useCallback((agentId: string) => {
     const normalized = agentId || "main";
     const previousAgentId = activeAgentIdRef.current || "main";
@@ -3072,6 +3113,7 @@ export function ChatScreen({
         onNewConversation={() => void handleNewConversation()}
         onSelectConversation={(conversationId) => void handleSelectConversation(conversationId)}
         onDeleteConversation={(conversation, deleteNativeSession) => void handleDeleteConversation(conversation, deleteNativeSession)}
+        onDeleteAllConversations={(deleteNativeSession) => void handleDeleteAllConversations(deleteNativeSession)}
       />
       {showImmersiveButton ? (
         <button

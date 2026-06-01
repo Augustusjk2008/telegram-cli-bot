@@ -165,6 +165,92 @@ def test_chat_store_conversations_are_scoped_by_agent(monkeypatch, tmp_path: Pat
     assert reviewer_rows[0]["agent_id"] == "reviewer"
 
 
+def test_chat_store_archives_all_bot_conversations_in_workspace(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    other_workspace = tmp_path / "other"
+    workspace.mkdir()
+    other_workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    store = ChatStore(workspace)
+    main_id = store.create_conversation(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        native_provider="codex",
+        agent_id="main",
+        title="主会话",
+    )
+    reviewer_id = store.create_conversation(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        native_provider="codex",
+        agent_id="reviewer",
+        title="审查会话",
+    )
+    store.create_conversation(
+        bot_id=2,
+        bot_alias="other",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        native_provider="codex",
+        title="其它 bot",
+    )
+    ChatStore(other_workspace).create_conversation(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(other_workspace),
+        session_epoch=1,
+        native_provider="codex",
+        title="其它工作区",
+    )
+
+    deleted = store.archive_bot_conversations(bot_id=1, user_id=1001, working_dir=str(workspace))
+
+    assert deleted == 2
+    assert store.list_conversations(bot_id=1, user_id=1001, working_dir=str(workspace), agent_id="main") == []
+    assert store.list_conversations(bot_id=1, user_id=1001, working_dir=str(workspace), agent_id="reviewer") == []
+    archived_ids = {
+        row["id"]
+        for row in store.list_conversations(
+            bot_id=1,
+            user_id=1001,
+            working_dir=str(workspace),
+            agent_id="main",
+            include_archived=True,
+        )
+    } | {
+        row["id"]
+        for row in store.list_conversations(
+            bot_id=1,
+            user_id=1001,
+            working_dir=str(workspace),
+            agent_id="reviewer",
+            include_archived=True,
+        )
+    }
+    assert archived_ids == {main_id, reviewer_id}
+    assert len(store.list_conversations(bot_id=2, user_id=1001, working_dir=str(workspace))) == 1
+    assert len(ChatStore(other_workspace).list_conversations(bot_id=1, user_id=1001, working_dir=str(other_workspace))) == 1
+
+
 def test_chat_store_selectable_conversation_preserves_native_session(monkeypatch, tmp_path: Path):
     home = tmp_path / "home"
     home.mkdir()

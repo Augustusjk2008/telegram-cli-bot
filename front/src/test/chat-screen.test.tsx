@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { BotOverview, ChatMessage, ChatTraceDetails, CliParamsPayload, ClusterTaskStatus, ConversationDeleteResult, ConversationListResult, ConversationSelectResult, GitActionResult, GitDiffPayload, GitOverview, PromptPreset } from "../services/types";
+import type { BotOverview, ChatMessage, ChatTraceDetails, CliParamsPayload, ClusterTaskStatus, ConversationBulkDeleteResult, ConversationDeleteResult, ConversationListResult, ConversationSelectResult, GitActionResult, GitDiffPayload, GitOverview, PromptPreset } from "../services/types";
 import { WebApiClientError } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
@@ -86,6 +86,13 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
     }),
     deleteConversation: async (): Promise<ConversationDeleteResult> => ({
       deletedConversationId: "conv-deleted",
+      activeConversationId: "",
+      nativeSessionCleared: true,
+      items: [],
+      messages: [],
+    }),
+    deleteAllConversations: async (): Promise<ConversationBulkDeleteResult> => ({
+      deletedCount: 0,
       activeConversationId: "",
       nativeSessionCleared: true,
       items: [],
@@ -743,6 +750,57 @@ test("chat screen blocks conversation switch while streaming", async () => {
   await user.click(await screen.findByRole("button", { name: "历史会话" }));
 
   expect(await screen.findByRole("button", { name: "旧会话 旧回答" })).toBeDisabled();
+});
+
+test("chat screen can delete all conversations for current bot", async () => {
+  const user = userEvent.setup();
+  const now = new Date().toISOString();
+  const deleteAllConversations = vi.fn(async (): Promise<ConversationBulkDeleteResult> => ({
+    deletedCount: 2,
+    activeConversationId: "",
+    nativeSessionCleared: true,
+    items: [],
+    messages: [],
+  }));
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [{
+      id: "assistant-1",
+      role: "assistant",
+      text: "旧消息",
+      createdAt: now,
+      state: "done",
+    }],
+    listConversations: async (): Promise<ConversationListResult> => ({
+      activeConversationId: "conv-1",
+      items: [{
+        id: "conv-1",
+        title: "旧会话",
+        lastMessagePreview: "旧消息",
+        messageCount: 2,
+        pinned: false,
+        active: true,
+        status: "active",
+        botAlias: "main",
+        botMode: "cli",
+        cliType: "codex",
+        workingDir: "C:\\workspace",
+        createdAt: now,
+        updatedAt: now,
+      }],
+    }),
+    deleteAllConversations,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("旧消息")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "历史会话" }));
+  await user.click(await screen.findByRole("button", { name: "清空" }));
+  await user.click(await screen.findByRole("button", { name: "删除" }));
+
+  expect(deleteAllConversations).toHaveBeenCalledWith("main", { deleteNativeSession: true });
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+  expect(screen.queryByText("旧会话")).not.toBeInTheDocument();
 });
 
 

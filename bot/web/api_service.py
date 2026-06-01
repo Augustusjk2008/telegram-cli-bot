@@ -2216,6 +2216,66 @@ def delete_conversation(
     }
 
 
+def _agent_ids_for_profile(profile: BotProfile) -> list[str]:
+    ids: list[str] = []
+    for agent in profile.normalized_agents():
+        agent_id = str(agent.id or "main").strip().lower() or "main"
+        if agent_id not in ids:
+            ids.append(agent_id)
+    return ids or ["main"]
+
+
+def delete_all_conversations(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    *,
+    delete_native_session: bool = False,
+) -> dict[str, Any]:
+    profile = get_profile_or_raise(manager, alias)
+    bot_id = resolve_session_bot_id(manager, alias)
+    shared_user_id = chat_session_user_id(user_id)
+    agent_ids = _agent_ids_for_profile(profile)
+    sessions_by_agent: dict[str, UserSession] = {}
+
+    for agent_id in agent_ids:
+        _profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, agent_id)
+        sessions_by_agent[session.agent_id] = session
+        with session._lock:
+            if bool(session.is_processing):
+                _raise(409, "conversation_switch_blocked", "当前任务运行中，先终止或等待完成")
+
+    main_session = sessions_by_agent.get("main") or next(iter(sessions_by_agent.values()))
+    store = _get_chat_store(main_session)
+    deleted_count = store.archive_bot_conversations(
+        bot_id=bot_id,
+        user_id=main_session.user_id,
+        working_dir=main_session.working_dir,
+    )
+
+    native_cleared = False
+    for session in sessions_by_agent.values():
+        with session._lock:
+            session.active_conversation_id = None
+            session.message_count = 0
+            if delete_native_session:
+                if session.codex_session_id or session.claude_session_id or session.kimi_session_id:
+                    native_cleared = True
+                session.codex_session_id = None
+                session.claude_session_id = None
+                session.kimi_session_id = None
+                session.claude_session_initialized = False
+        session.persist()
+
+    return {
+        "deleted_count": deleted_count,
+        "active_conversation_id": "",
+        "native_session_cleared": native_cleared,
+        "items": [],
+        "messages": [],
+    }
+
+
 def get_history_delta(
     manager: MultiBotManager,
     alias: str,

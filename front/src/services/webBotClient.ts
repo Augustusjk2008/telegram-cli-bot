@@ -101,6 +101,7 @@ import type {
   ClusterTaskStatus,
   ClusterTemplateListResult,
   ConversationListResult,
+  ConversationBulkDeleteResult,
   ConversationDeleteResult,
   PlanExecuteInput,
   PlanExecuteResult,
@@ -192,6 +193,10 @@ export interface WebBotClient {
     conversationId: string,
     options?: AgentScopedOptions & { deleteNativeSession?: boolean },
   ): Promise<ConversationDeleteResult>;
+  deleteAllConversations(
+    botAlias: string,
+    options?: { deleteNativeSession?: boolean },
+  ): Promise<ConversationBulkDeleteResult>;
   executePlan(botAlias: string, input: PlanExecuteInput): Promise<PlanExecuteResult>;
   listMessages(botAlias: string, options?: AgentScopedOptions): Promise<ChatMessage[]>;
   listMessageDelta(botAlias: string, afterId: string, limit?: number, options?: AgentScopedOptions): Promise<HistoryDeltaResult>;
