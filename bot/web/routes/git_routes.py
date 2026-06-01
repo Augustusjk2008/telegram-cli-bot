@@ -9,6 +9,7 @@ def register(app: web.Application, server) -> None:
     app.router.add_get("/api/bots/{alias}/git/branches", server.get_git_branches_view)
     app.router.add_post("/api/bots/{alias}/git/branches", server.post_git_branch_create)
     app.router.add_post("/api/bots/{alias}/git/branches/switch", server.post_git_branch_switch)
+    app.router.add_post("/api/bots/{alias}/git/branches/reset", server.post_git_branch_reset)
     app.router.add_get("/api/bots/{alias}/git/stashes", server.get_git_stashes_view)
     app.router.add_post("/api/bots/{alias}/git/stashes/apply", server.post_git_stash_apply)
     app.router.add_post("/api/bots/{alias}/git/stashes/drop", server.post_git_stash_drop)

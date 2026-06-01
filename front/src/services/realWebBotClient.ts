@@ -45,6 +45,7 @@ import type {
   CreateAssistantCronJobInput,
   GitActionResult,
   GitBlamePayload,
+  GitBranchResetResult,
   GitBranchList,
   GitCommitMessageCliConfig,
   GitCommitMessageCliConfigUpdateInput,
@@ -54,6 +55,7 @@ import type {
   GitIdentityConfig,
   GitIdentityScope,
   GitProxySettings,
+  GitResetMode,
   GitOverview,
   GitSmartCommitJob,
   GitStashList,
@@ -790,6 +792,14 @@ type RawGitBranchSummary = {
 type RawGitBranchList = {
   current_branch?: string;
   branches?: RawGitBranchSummary[];
+};
+
+type RawGitBranchResetResult = {
+  message?: string;
+  overview: RawGitOverview;
+  branches?: RawGitBranchSummary[];
+  current_branch?: string;
+  head_commit?: string;
 };
 
 type RawGitStashEntry = {
@@ -2450,6 +2460,16 @@ function mapGitBranchList(raw: RawGitBranchList): GitBranchList {
       shortHash: item.short_hash || "",
       subject: item.subject || "",
     })),
+  };
+}
+
+function mapGitBranchResetResult(raw: RawGitBranchResetResult): GitBranchResetResult {
+  return {
+    message: raw.message || "",
+    overview: mapGitOverview(raw.overview),
+    branches: mapGitBranchList({ current_branch: raw.current_branch, branches: raw.branches }).branches,
+    currentBranch: raw.current_branch || "",
+    headCommit: raw.head_commit || "",
   };
 }
 
@@ -5144,6 +5164,17 @@ export class RealWebBotClient implements WebBotClient {
       body: JSON.stringify({ name }),
     });
     return mapGitBranchList(data);
+  }
+
+  async resetGitBranch(botAlias: string, commit: string, mode: GitResetMode): Promise<GitBranchResetResult> {
+    const data = await this.requestJson<RawGitBranchResetResult>(`/api/bots/${encodeURIComponent(botAlias)}/git/branches/reset`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ commit, mode }),
+    });
+    return mapGitBranchResetResult(data);
   }
 
   async listGitStashes(botAlias: string): Promise<GitStashList> {

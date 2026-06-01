@@ -87,6 +87,22 @@ def _assert_valid_branch_name(repo_root: str, name: str) -> str:
 
 
 _STASH_REF_RE = re.compile(r"^stash@\{\d+\}$")
+_COMMIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
+
+
+def _resolve_commit_ref(repo_root: str, ref: str) -> str:
+    value = (ref or "").strip()
+    if not _COMMIT_SHA_RE.match(value):
+        _raise(400, "invalid_git_commit", "提交引用不合法")
+
+    result = _run_git(repo_root, ["rev-parse", "--verify", f"{value}^{{commit}}"], check=False)
+    if result.returncode != 0:
+        _raise(400, "invalid_git_commit", "提交不存在")
+
+    full_sha = (result.stdout or "").strip()
+    if not full_sha:
+        _raise(400, "invalid_git_commit", "提交不存在")
+    return full_sha
 
 
 def _normalize_stash_ref(ref: str) -> str:
@@ -1133,12 +1149,54 @@ def create_git_branch(
     branch_name = _assert_valid_branch_name(repo_root, name)
     args = ["branch", branch_name]
     if (start_point or "").strip():
-        args.append(_assert_valid_branch_name(repo_root, start_point))
+        args.append(_resolve_commit_ref(repo_root, start_point))
     try:
         _run_git(repo_root, args)
         return _list_git_branches_for_repo(repo_root)
     except GitCommandError as exc:
         _raise(400, "git_branch_create_failed", str(exc))
+
+
+def reset_git_branch_to_commit(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    commit: str,
+    mode: str = "mixed",
+) -> dict[str, Any]:
+    working_dir, repo_root = _require_repo_root(manager, alias, user_id)
+    reset_mode = (mode or "mixed").strip().lower()
+    if reset_mode not in {"soft", "mixed", "hard"}:
+        _raise(400, "invalid_git_reset_mode", "reset 模式不合法")
+
+    full_sha = _resolve_commit_ref(repo_root, commit)
+    head_result = _run_git(repo_root, ["symbolic-ref", "--short", "HEAD"], check=False)
+    if head_result.returncode != 0 or not (head_result.stdout or "").strip():
+        _raise(409, "git_detached_head", "当前处于 detached HEAD，无法重置分支")
+
+    status_result = _run_git(repo_root, ["status", "--porcelain"], check=False)
+    if (status_result.stdout or "").strip():
+        _raise(409, "git_dirty_worktree", "工作区有未提交改动，无法重置分支")
+
+    ancestor_result = _run_git(repo_root, ["merge-base", "--is-ancestor", full_sha, "HEAD"], check=False)
+    if ancestor_result.returncode != 0:
+        _raise(409, "git_commit_not_ancestor", "目标提交不是当前 HEAD 的祖先")
+
+    try:
+        _run_git(repo_root, ["reset", f"--{reset_mode}", full_sha])
+    except GitCommandError as exc:
+        _raise(400, "git_branch_reset_failed", str(exc))
+
+    _invalidate_git_status_cache(repo_root)
+    overview = _build_git_overview(working_dir, repo_root)
+    branches = _list_git_branches_for_repo(repo_root)
+    return {
+        "message": "分支已重置",
+        "overview": overview,
+        "branches": branches["branches"],
+        "current_branch": branches["current_branch"],
+        "head_commit": full_sha,
+    }
 
 
 def switch_git_branch(manager: MultiBotManager, alias: str, user_id: int, name: str) -> dict[str, Any]:

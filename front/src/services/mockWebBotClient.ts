@@ -94,6 +94,7 @@ import type {
   FileReadResult,
   GitActionResult,
   GitBlamePayload,
+  GitBranchResetResult,
   GitBranchList,
   GitCommitMessageCliConfig,
   GitCommitMessageCliConfigUpdateInput,
@@ -102,6 +103,7 @@ import type {
   GitIdentityConfig,
   GitIdentityScope,
   GitProxySettings,
+  GitResetMode,
   GitOverview,
   GitSmartCommitJob,
   GitStashList,
@@ -5037,8 +5039,10 @@ export class MockWebBotClient implements WebBotClient {
     return this.getGitBranchListState(botAlias);
   }
 
-  async createGitBranch(botAlias: string, name: string, _startPoint = ""): Promise<GitBranchList> {
+  async createGitBranch(botAlias: string, name: string, startPoint = ""): Promise<GitBranchList> {
     const current = await this.getGitBranchListState(botAlias);
+    const overview = await this.getGitOverview(botAlias);
+    const sourceCommit = overview.recentCommits.find((item) => item.hash === startPoint || item.shortHash === startPoint);
     const next = {
       currentBranch: current.currentBranch,
       branches: [
@@ -5047,8 +5051,8 @@ export class MockWebBotClient implements WebBotClient {
           name,
           current: false,
           upstream: "",
-          shortHash: "abc1234",
-          subject: "created from current branch",
+          shortHash: sourceCommit?.shortHash || overview.recentCommits[0]?.shortHash || "abc1234",
+          subject: sourceCommit?.subject || overview.recentCommits[0]?.subject || "created from current branch",
         },
       ],
     };
@@ -5069,6 +5073,44 @@ export class MockWebBotClient implements WebBotClient {
     };
     this.gitBranches.set(botAlias, next);
     return next;
+  }
+
+  async resetGitBranch(botAlias: string, commit: string, mode: GitResetMode): Promise<GitBranchResetResult> {
+    const overview = await this.getGitOverview(botAlias);
+    const target = overview.recentCommits.find((item) => item.hash === commit || item.shortHash === commit);
+    const fallbackCommit = target || {
+      hash: commit,
+      shortHash: commit.slice(0, 7),
+      authorName: "Web Bot",
+      authoredAt: new Date().toISOString(),
+      subject: `reset --${mode}`,
+      message: `reset --${mode}`,
+    };
+    const nextOverview = {
+      ...overview,
+      isClean: true,
+      changedFiles: [],
+      recentCommits: [
+        fallbackCommit,
+        ...overview.recentCommits.filter((item) => item.hash !== fallbackCommit.hash),
+      ],
+    };
+    this.gitOverviews.set(botAlias, nextOverview);
+    const current = await this.getGitBranchListState(botAlias);
+    const nextBranches = {
+      currentBranch: current.currentBranch,
+      branches: current.branches.map((item) => item.current
+        ? { ...item, shortHash: fallbackCommit.shortHash, subject: fallbackCommit.subject }
+        : item),
+    };
+    this.gitBranches.set(botAlias, nextBranches);
+    return {
+      message: "分支已重置",
+      overview: nextOverview,
+      branches: nextBranches.branches,
+      currentBranch: nextBranches.currentBranch,
+      headCommit: fallbackCommit.hash,
+    };
   }
 
   async listGitStashes(botAlias: string): Promise<GitStashList> {

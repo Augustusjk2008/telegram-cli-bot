@@ -264,6 +264,7 @@ from .git_service import (
     pull_git_remote,
     push_git_remote,
     reset_git_commit_message_cli_config,
+    reset_git_branch_to_commit,
     ensure_git_status_snapshot_unchanged,
     stage_all_git_changes,
     stage_git_paths,
@@ -2602,6 +2603,20 @@ class WebApiServer:
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         data = await asyncio.to_thread(switch_git_branch, self.manager, alias, auth.user_id, str(body.get("name") or ""))
+        return _json({"ok": True, "data": data})
+
+    async def post_git_branch_reset(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_GIT_OPS)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        data = await asyncio.to_thread(
+            reset_git_branch_to_commit,
+            self.manager,
+            alias,
+            auth.user_id,
+            str(body.get("commit") or ""),
+            str(body.get("mode") or "mixed"),
+        )
         return _json({"ok": True, "data": data})
 
     async def get_git_stashes_view(self, request: web.Request) -> web.Response:

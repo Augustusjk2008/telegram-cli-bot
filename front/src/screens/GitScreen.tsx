@@ -16,6 +16,7 @@ import {
   Minus,
   Plus,
   RefreshCw,
+  RotateCcw,
   Save,
   SendHorizontal,
   Sparkles,
@@ -34,6 +35,7 @@ import type {
   GitIdentityConfig,
   GitIdentityScope,
   GitOverview,
+  GitResetMode,
   GitSmartCommitJob,
   GitStashList,
 } from "../services/types";
@@ -177,6 +179,8 @@ export function GitScreen({
   const [branches, setBranches] = useState<GitBranchList>({ currentBranch: "", branches: [] });
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [branchDraft, setBranchDraft] = useState("");
+  const [commitBranchDrafts, setCommitBranchDrafts] = useState<Record<string, string>>({});
+  const [commitResetModes, setCommitResetModes] = useState<Record<string, GitResetMode>>({});
   const [selectedBranch, setSelectedBranch] = useState("");
   const [stashes, setStashes] = useState<GitStashList>({ items: [] });
   const [stashesLoading, setStashesLoading] = useState(false);
@@ -437,6 +441,61 @@ export function GitScreen({
       setNotice("分支已创建");
     } catch (err) {
       setError(err instanceof Error ? err.message : "创建分支失败");
+    } finally {
+      setActionLoading("");
+    }
+  }
+
+  function updateCommitBranchDraft(commitHash: string, value: string) {
+    setCommitBranchDrafts((current) => ({ ...current, [commitHash]: value }));
+  }
+
+  function updateCommitResetMode(commitHash: string, value: GitResetMode) {
+    setCommitResetModes((current) => ({ ...current, [commitHash]: value }));
+  }
+
+  async function createBranchFromCommit(commit: GitOverview["recentCommits"][number]) {
+    const name = (commitBranchDrafts[commit.hash] || "").trim();
+    if (!name) {
+      setError("分支名不能为空");
+      return;
+    }
+    setActionLoading(`branch-create:${commit.hash}`);
+    setError("");
+    setNotice("");
+    try {
+      const next = await client.createGitBranch(botAlias, name, commit.hash);
+      setBranches(next);
+      setSelectedBranch(name);
+      setCommitBranchDrafts((current) => ({ ...current, [commit.hash]: "" }));
+      setNotice(`分支已从 ${commit.shortHash} 创建`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "创建分支失败");
+    } finally {
+      setActionLoading("");
+    }
+  }
+
+  async function resetBranchToCommit(commit: GitOverview["recentCommits"][number]) {
+    const mode = commitResetModes[commit.hash] || "mixed";
+    const currentBranch = overview?.currentBranch || branches.currentBranch || "当前分支";
+    const confirmed = window.confirm(
+      `确定将 ${currentBranch} 重置到 ${commit.shortHash}（${commit.subject}）吗？\n模式：${mode}`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    setActionLoading(`branch-reset:${commit.hash}`);
+    setError("");
+    setNotice("");
+    try {
+      const result = await client.resetGitBranch(botAlias, commit.hash, mode);
+      syncOverview(result.overview);
+      setBranches({ currentBranch: result.currentBranch, branches: result.branches });
+      setSelectedBranch(result.currentBranch);
+      setNotice(result.message || `已重置到 ${commit.shortHash}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "重置分支失败");
     } finally {
       setActionLoading("");
     }
@@ -1125,11 +1184,69 @@ export function GitScreen({
                       <div data-testid="git-recent-commits-content" className={sectionBodyClass(listClass())}>
                         {overview.recentCommits.map((item) => (
                           <div key={item.hash} className={listRowClass("block px-1.5 py-2")}>
-                            <div className="text-sm font-medium text-[var(--text)]" title={item.message || item.subject}>
-                              {item.subject}
-                            </div>
-                            <div className="mt-1 text-[11px] text-[var(--muted)]">
-                              {item.shortHash} · {item.authorName} · {item.authoredAt}
+                            <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="text-sm font-medium text-[var(--text)]" title={item.message || item.subject}>
+                                  {item.subject}
+                                </div>
+                                <div className="mt-1 text-[11px] text-[var(--muted)]">
+                                  {item.shortHash} · {item.authorName} · {item.authoredAt}
+                                </div>
+                              </div>
+                              <div className="flex min-w-[260px] flex-1 flex-wrap justify-end gap-1.5">
+                                <label className="min-w-[130px] flex-1 sm:flex-none">
+                                  <span className="sr-only">从 {item.shortHash} 新建分支名</span>
+                                  <input
+                                    aria-label={`从 ${item.shortHash} 新建分支名`}
+                                    value={commitBranchDrafts[item.hash] || ""}
+                                    onChange={(event) => updateCommitBranchDraft(item.hash, event.target.value)}
+                                    placeholder="feature/name"
+                                    className="h-7 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 text-xs"
+                                  />
+                                </label>
+                                <button
+                                  type="button"
+                                  aria-label={`从此提交新建分支 ${item.shortHash}`}
+                                  title="从此提交新建分支"
+                                  onClick={() => void createBranchFromCommit(item)}
+                                  disabled={mutationBusy || !(commitBranchDrafts[item.hash] || "").trim()}
+                                  className={iconButtonClass()}
+                                >
+                                  {actionLoading === `branch-create:${item.hash}` ? (
+                                    <LoaderCircle className="h-3 w-3 animate-spin" />
+                                  ) : (
+                                    <GitFork className="h-3 w-3" />
+                                  )}
+                                </button>
+                                <label>
+                                  <span className="sr-only">重置模式 {item.shortHash}</span>
+                                  <select
+                                    aria-label={`重置模式 ${item.shortHash}`}
+                                    value={commitResetModes[item.hash] || "mixed"}
+                                    onChange={(event) => updateCommitResetMode(item.hash, event.target.value as GitResetMode)}
+                                    disabled={mutationBusy}
+                                    className="h-7 rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 text-xs"
+                                  >
+                                    <option value="soft">soft</option>
+                                    <option value="mixed">mixed</option>
+                                    <option value="hard">hard</option>
+                                  </select>
+                                </label>
+                                <button
+                                  type="button"
+                                  aria-label={`重置到此提交 ${item.shortHash}`}
+                                  title="重置到此提交"
+                                  onClick={() => void resetBranchToCommit(item)}
+                                  disabled={mutationBusy}
+                                  className={iconButtonClass()}
+                                >
+                                  {actionLoading === `branch-reset:${item.hash}` ? (
+                                    <LoaderCircle className="h-3 w-3 animate-spin" />
+                                  ) : (
+                                    <RotateCcw className="h-3 w-3" />
+                                  )}
+                                </button>
+                              </div>
                             </div>
                           </div>
                         ))}

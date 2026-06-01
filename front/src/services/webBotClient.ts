@@ -64,6 +64,7 @@ import type {
   OfflineUpdatePackageList,
   GitActionResult,
   GitBlamePayload,
+  GitBranchResetResult,
   GitBranchList,
   GitCommitMessageCliConfig,
   GitCommitMessageCliConfigUpdateInput,
@@ -73,6 +74,7 @@ import type {
   GitIdentityConfig,
   GitIdentityScope,
   GitProxySettings,
+  GitResetMode,
   GitOverview,
   GitStashList,
   GitTreeStatus,
@@ -294,6 +296,7 @@ export interface WebBotClient {
   listGitBranches(botAlias: string): Promise<GitBranchList>;
   createGitBranch(botAlias: string, name: string, startPoint?: string): Promise<GitBranchList>;
   switchGitBranch(botAlias: string, name: string): Promise<GitBranchList>;
+  resetGitBranch(botAlias: string, commit: string, mode: GitResetMode): Promise<GitBranchResetResult>;
   listGitStashes(botAlias: string): Promise<GitStashList>;
   applyGitStash(botAlias: string, ref: string): Promise<GitActionResult>;
   dropGitStash(botAlias: string, ref: string): Promise<GitActionResult>;

@@ -113,6 +113,7 @@ from bot.web.git_service import (
     list_git_branches,
     list_git_stashes,
     reset_git_commit_message_cli_config,
+    reset_git_branch_to_commit,
     stage_git_paths,
     switch_git_branch,
     update_git_commit_message_cli_config,
@@ -524,6 +525,19 @@ def _init_git_repo(repo_dir: Path):
     _run_git_command(repo_dir, "config", "user.email", "web-bot@example.com")
 
 
+def _commit_repo_file(repo_dir: Path, filename: str, content: str, message: str) -> str:
+    target = repo_dir / filename
+    target.write_text(content, encoding="utf-8")
+    _run_git_command(repo_dir, "add", filename)
+    _run_git_command(repo_dir, "commit", "-m", message)
+    return _run_git_command(repo_dir, "rev-parse", "HEAD").stdout.strip()
+
+
+def _use_repo(web_manager: MultiBotManager, repo_dir: Path) -> None:
+    web_manager.main_profile.working_dir = str(repo_dir)
+    change_working_directory(web_manager, "main", 1001, str(repo_dir))
+
+
 @pytest.mark.asyncio
 async def test_auth_route_requires_token(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
@@ -855,6 +869,111 @@ async def test_git_tree_status_route_returns_decoration_payload(
         "tracked.txt": "modified",
         "scratch.tmp": "ignored",
     }
+
+
+def test_create_git_branch_from_full_sha(web_manager: MultiBotManager, temp_dir: Path):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    first_sha = _commit_repo_file(repo_dir, "tracked.txt", "one\n", "first")
+    _commit_repo_file(repo_dir, "tracked.txt", "two\n", "second")
+    _use_repo(web_manager, repo_dir)
+
+    result = create_git_branch(web_manager, "main", 1001, "from-first", first_sha)
+
+    created = next(item for item in result["branches"] if item["name"] == "from-first")
+    assert created["short_hash"] == first_sha[:7]
+    assert created["subject"] == "first"
+
+
+def test_create_git_branch_from_short_sha(web_manager: MultiBotManager, temp_dir: Path):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    first_sha = _commit_repo_file(repo_dir, "tracked.txt", "one\n", "first")
+    _commit_repo_file(repo_dir, "tracked.txt", "two\n", "second")
+    _use_repo(web_manager, repo_dir)
+
+    result = create_git_branch(web_manager, "main", 1001, "from-short", first_sha[:7])
+
+    created = next(item for item in result["branches"] if item["name"] == "from-short")
+    assert created["short_hash"] == first_sha[:7]
+
+
+def test_create_git_branch_from_invalid_commit_returns_code(web_manager: MultiBotManager, temp_dir: Path):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    _commit_repo_file(repo_dir, "tracked.txt", "one\n", "first")
+    _use_repo(web_manager, repo_dir)
+
+    with pytest.raises(WebApiError) as exc_info:
+        create_git_branch(web_manager, "main", 1001, "bad-start", "not-a-sha")
+
+    assert exc_info.value.code == "invalid_git_commit"
+
+
+def test_reset_git_branch_to_ancestor_commit(web_manager: MultiBotManager, temp_dir: Path):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    first_sha = _commit_repo_file(repo_dir, "tracked.txt", "one\n", "first")
+    _commit_repo_file(repo_dir, "tracked.txt", "two\n", "second")
+    _use_repo(web_manager, repo_dir)
+
+    result = reset_git_branch_to_commit(web_manager, "main", 1001, first_sha, "mixed")
+
+    head = _run_git_command(repo_dir, "rev-parse", "HEAD").stdout.strip()
+    assert head == first_sha
+    assert result["head_commit"] == first_sha
+    assert result["current_branch"] in {"main", "master"}
+    assert result["overview"]["recent_commits"][0]["hash"] == first_sha
+
+
+def test_reset_git_branch_rejects_dirty_worktree(web_manager: MultiBotManager, temp_dir: Path):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    first_sha = _commit_repo_file(repo_dir, "tracked.txt", "one\n", "first")
+    _commit_repo_file(repo_dir, "tracked.txt", "two\n", "second")
+    (repo_dir / "tracked.txt").write_text("dirty\n", encoding="utf-8")
+    _use_repo(web_manager, repo_dir)
+
+    with pytest.raises(WebApiError) as exc_info:
+        reset_git_branch_to_commit(web_manager, "main", 1001, first_sha, "mixed")
+
+    assert exc_info.value.code == "git_dirty_worktree"
+
+
+def test_reset_git_branch_rejects_detached_head(web_manager: MultiBotManager, temp_dir: Path):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    first_sha = _commit_repo_file(repo_dir, "tracked.txt", "one\n", "first")
+    _commit_repo_file(repo_dir, "tracked.txt", "two\n", "second")
+    _run_git_command(repo_dir, "checkout", first_sha)
+    _use_repo(web_manager, repo_dir)
+
+    with pytest.raises(WebApiError) as exc_info:
+        reset_git_branch_to_commit(web_manager, "main", 1001, first_sha, "mixed")
+
+    assert exc_info.value.code == "git_detached_head"
+
+
+def test_reset_git_branch_rejects_non_ancestor_commit(web_manager: MultiBotManager, temp_dir: Path):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    _commit_repo_file(repo_dir, "tracked.txt", "one\n", "first")
+    _run_git_command(repo_dir, "switch", "-c", "other")
+    other_sha = _commit_repo_file(repo_dir, "other.txt", "other\n", "other")
+    _run_git_command(repo_dir, "switch", "-")
+    _use_repo(web_manager, repo_dir)
+
+    with pytest.raises(WebApiError) as exc_info:
+        reset_git_branch_to_commit(web_manager, "main", 1001, other_sha, "mixed")
+
+    assert exc_info.value.code == "git_commit_not_ancestor"
 
 
 @pytest.mark.asyncio

@@ -11,10 +11,13 @@ import type {
   CliParamsPayload,
   DirectoryListing,
   GitActionResult,
+  GitBranchList,
+  GitBranchResetResult,
   GitCommitMessageCliConfig,
   GitCommitMessageGenerateResult,
   GitIdentityConfig,
   GitOverview,
+  GitResetMode,
   GitSmartCommitJob,
   SessionState,
   TunnelSnapshot,
@@ -56,6 +59,14 @@ function buildRepoOverview(overrides: Partial<GitOverview> = {}): GitOverview {
         authoredAt: "2026-04-09 21:00:00 +0800",
         subject: "feat: initial commit",
         message: "feat: initial commit\n\nadd first repo snapshot",
+      },
+      {
+        hash: "123456789abc",
+        shortHash: "1234567",
+        authorName: "Web Bot",
+        authoredAt: "2026-04-08 21:00:00 +0800",
+        subject: "docs: older commit",
+        message: "docs: older commit",
       },
     ],
     ...overrides,
@@ -331,6 +342,68 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
       message: "已恢复暂存",
       overview: buildRepoOverview(),
     }),
+    listGitBranches: async (): Promise<GitBranchList> => ({
+      currentBranch: "main",
+      branches: [
+        {
+          name: "main",
+          current: true,
+          upstream: "origin/main",
+          shortHash: "abcdef0",
+          subject: "feat: initial commit",
+        },
+      ],
+    }),
+    createGitBranch: async (_botAlias, name): Promise<GitBranchList> => ({
+      currentBranch: "main",
+      branches: [
+        {
+          name: "main",
+          current: true,
+          upstream: "origin/main",
+          shortHash: "abcdef0",
+          subject: "feat: initial commit",
+        },
+        {
+          name,
+          current: false,
+          upstream: "",
+          shortHash: "abcdef0",
+          subject: "feat: initial commit",
+        },
+      ],
+    }),
+    switchGitBranch: async (_botAlias, name): Promise<GitBranchList> => ({
+      currentBranch: name,
+      branches: [
+        {
+          name,
+          current: true,
+          upstream: "",
+          shortHash: "abcdef0",
+          subject: "feat: initial commit",
+        },
+      ],
+    }),
+    resetGitBranch: async (_botAlias, commit): Promise<GitBranchResetResult> => ({
+      message: "分支已重置",
+      overview: buildRepoOverview({
+        isClean: true,
+        changedFiles: [],
+        recentCommits: buildRepoOverview().recentCommits.filter((item) => item.hash === commit),
+      }),
+      branches: [
+        {
+          name: "main",
+          current: true,
+          upstream: "origin/main",
+          shortHash: commit.slice(0, 7),
+          subject: "docs: older commit",
+        },
+      ],
+      currentBranch: "main",
+      headCommit: commit,
+    }),
     ...overrides,
   });
 }
@@ -351,6 +424,134 @@ test("renders git repo summary and changed files", async () => {
     "title",
     "feat: initial commit\n\nadd first repo snapshot",
   );
+});
+
+
+test("recent commit rows expose branch and reset actions", async () => {
+  render(<GitScreen botAlias="main" client={createClient()} />);
+
+  expect(await screen.findByRole("button", { name: "从此提交新建分支 abcdef0" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "重置到此提交 abcdef0" })).toBeInTheDocument();
+  expect(screen.getByLabelText("从 abcdef0 新建分支名")).toBeInTheDocument();
+  expect(screen.getByLabelText("重置模式 abcdef0")).toHaveValue("mixed");
+});
+
+
+test("creates branch from selected commit hash", async () => {
+  const user = userEvent.setup();
+  const createGitBranch = vi.fn(async (_botAlias: string, name: string): Promise<GitBranchList> => ({
+    currentBranch: "main",
+    branches: [
+      {
+        name,
+        current: false,
+        upstream: "",
+        shortHash: "abcdef0",
+        subject: "feat: initial commit",
+      },
+    ],
+  }));
+
+  render(
+    <GitScreen
+      botAlias="main"
+      client={createClient({ createGitBranch })}
+    />,
+  );
+
+  await user.type(await screen.findByLabelText("从 abcdef0 新建分支名"), "feature/from-commit");
+  await user.click(screen.getByRole("button", { name: "从此提交新建分支 abcdef0" }));
+
+  expect(createGitBranch).toHaveBeenCalledWith("main", "feature/from-commit", "abcdef012345");
+  expect(await screen.findByText("分支已从 abcdef0 创建")).toBeInTheDocument();
+});
+
+
+test("resets branch to selected commit after confirm", async () => {
+  const user = userEvent.setup();
+  const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+  const resetGitBranch = vi.fn(async (_botAlias: string, commit: string, mode: GitResetMode): Promise<GitBranchResetResult> => ({
+    message: "分支已重置",
+    overview: buildRepoOverview({
+      currentBranch: "main",
+      isClean: true,
+      changedFiles: [],
+      recentCommits: [
+        {
+          hash: commit,
+          shortHash: commit.slice(0, 7),
+          authorName: "Web Bot",
+          authoredAt: "2026-04-09 21:00:00 +0800",
+          subject: `reset ${mode}`,
+          message: `reset ${mode}`,
+        },
+      ],
+    }),
+    branches: [
+      {
+        name: "main",
+        current: true,
+        upstream: "origin/main",
+        shortHash: commit.slice(0, 7),
+        subject: `reset ${mode}`,
+      },
+    ],
+    currentBranch: "main",
+    headCommit: commit,
+  }));
+
+  render(
+    <GitScreen
+      botAlias="main"
+      client={createClient({ resetGitBranch })}
+    />,
+  );
+
+  await user.selectOptions(await screen.findByLabelText("重置模式 abcdef0"), "hard");
+  await user.click(screen.getByRole("button", { name: "重置到此提交 abcdef0" }));
+
+  expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("main"));
+  expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("abcdef0"));
+  expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("feat: initial commit"));
+  expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("hard"));
+  expect(resetGitBranch).toHaveBeenCalledWith("main", "abcdef012345", "hard");
+  expect(await screen.findByText("分支已重置")).toBeInTheDocument();
+});
+
+
+test("reset action disables commit operations while running", async () => {
+  const user = userEvent.setup();
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  let resolveReset: ((value: GitBranchResetResult) => void) | null = null;
+  const resetGitBranch = vi.fn((_botAlias: string, commit: string) => new Promise<GitBranchResetResult>((resolve) => {
+    resolveReset = resolve;
+  }));
+
+  render(
+    <GitScreen
+      botAlias="main"
+      client={createClient({ resetGitBranch })}
+    />,
+  );
+
+  const resetButton = await screen.findByRole("button", { name: "重置到此提交 abcdef0" });
+  await user.type(screen.getByLabelText("从 abcdef0 新建分支名"), "feature/busy");
+  const branchButton = screen.getByRole("button", { name: "从此提交新建分支 abcdef0" });
+  expect(branchButton).not.toBeDisabled();
+
+  await user.click(resetButton);
+
+  expect(resetButton).toBeDisabled();
+  expect(branchButton).toBeDisabled();
+
+  resolveReset?.({
+    message: "分支已重置",
+    overview: buildRepoOverview({ isClean: true, changedFiles: [] }),
+    branches: [],
+    currentBranch: "main",
+    headCommit: "abcdef012345",
+  });
+  expect(await screen.findByText("分支已重置")).toBeInTheDocument();
 });
 
 

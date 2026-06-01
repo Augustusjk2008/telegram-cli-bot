@@ -1748,6 +1748,16 @@ export type GitBranchList = {
   branches: GitBranchSummary[];
 };
 
+export type GitResetMode = "soft" | "mixed" | "hard";
+
+export type GitBranchResetResult = {
+  message: string;
+  overview: GitOverview;
+  branches: GitBranchSummary[];
+  currentBranch: string;
+  headCommit: string;
+};
+
 export type GitStashEntry = {
   ref: string;
   hash: string;

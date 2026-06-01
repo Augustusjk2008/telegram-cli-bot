@@ -1500,6 +1500,86 @@ describe("RealWebBotClient", () => {
     });
   });
 
+  test("createGitBranch sends start point in request body", async () => {
+    fetchMock.mockResolvedValueOnce(jsonOk({
+      current_branch: "main",
+      branches: [
+        {
+          name: "feature/from-commit",
+          current: false,
+          upstream: "",
+          short_hash: "abcdef0",
+          subject: "feat: initial commit",
+        },
+      ],
+    }));
+
+    const client = new RealWebBotClient();
+    const result = await client.createGitBranch("main", "feature/from-commit", "abcdef012345");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/bots/main/git/branches",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ name: "feature/from-commit", start_point: "abcdef012345" }),
+      }),
+    );
+    expect(result.branches[0].shortHash).toBe("abcdef0");
+  });
+
+  test("resetGitBranch sends commit and mode then maps payload", async () => {
+    fetchMock.mockResolvedValueOnce(jsonOk({
+      message: "分支已重置",
+      overview: {
+        repo_found: true,
+        can_init: false,
+        working_dir: "C:\\workspace\\repo",
+        repo_path: "C:\\workspace\\repo",
+        repo_name: "repo",
+        current_branch: "main",
+        is_clean: true,
+        ahead_count: 0,
+        behind_count: 0,
+        changed_files: [],
+        recent_commits: [
+          {
+            hash: "abcdef012345",
+            short_hash: "abcdef0",
+            author_name: "Web Bot",
+            authored_at: "2026-04-09 21:00:00 +0800",
+            subject: "feat: initial commit",
+          },
+        ],
+      },
+      branches: [
+        {
+          name: "main",
+          current: true,
+          upstream: "origin/main",
+          short_hash: "abcdef0",
+          subject: "feat: initial commit",
+        },
+      ],
+      current_branch: "main",
+      head_commit: "abcdef012345",
+    }));
+
+    const client = new RealWebBotClient();
+    const result = await client.resetGitBranch("main", "abcdef012345", "hard");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/bots/main/git/branches/reset",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ commit: "abcdef012345", mode: "hard" }),
+      }),
+    );
+    expect(result.currentBranch).toBe("main");
+    expect(result.headCommit).toBe("abcdef012345");
+    expect(result.overview.isClean).toBe(true);
+    expect(result.branches[0].name).toBe("main");
+  });
+
   
   
   test("assistant proposal endpoints map payloads", async () => {
