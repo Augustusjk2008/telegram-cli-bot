@@ -707,7 +707,6 @@ type RawCliParamsPayload = {
 };
 
 const RESTART_SERVICE_REQUEST_TIMEOUT_MS = 4000;
-const CHAT_STREAM_REQUEST_TIMEOUT_MS = 30 * 60 * 1000;
 
 type RawTunnelSnapshot = {
   mode: "disabled" | "cloudflare_quick" | "manual";
@@ -4128,192 +4127,152 @@ export class RealWebBotClient implements WebBotClient {
     onTrace?: (trace: ChatTraceEvent) => void,
     options?: ChatSendOptions,
   ): Promise<ChatMessage> {
-    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-    const externalSignal = options?.signal;
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
-    let externalAbortListener: (() => void) | null = null;
-    if (controller && externalSignal) {
-      externalAbortListener = () => {
-        controller.abort();
-      };
-      if (externalSignal.aborted) {
-        controller.abort();
-      } else {
-        externalSignal.addEventListener("abort", externalAbortListener, { once: true });
+    const response = await fetch(`/api/bots/${encodeURIComponent(botAlias)}/chat/stream`, {
+      method: "POST",
+      headers: this.headers({
+        "Content-Type": "application/json",
+      }),
+      body: JSON.stringify({
+        message: text,
+        ...(options?.taskMode ? { task_mode: options.taskMode } : {}),
+        ...(options?.taskPayload ? { task_payload: options.taskPayload } : {}),
+        ...(options?.visibleText ? { visible_text: options.visibleText } : {}),
+        ...(options?.agentId ? { agent_id: options.agentId } : {}),
+        ...(options?.cluster ? { cluster: true } : {}),
+        ...(options?.mentions ? {
+          mentions: options.mentions.map((mention) => ({
+            agent_id: mention.agentId,
+            label: mention.label,
+            start: mention.start,
+            end: mention.end,
+          })),
+        } : {}),
+      }),
+    });
+
+    if (!response.ok || !response.body) {
+      let message = "发送消息失败";
+      try {
+        const payload = (await response.json()) as JsonEnvelope<unknown>;
+        message = payload.error?.message || message;
+      } catch {
+        // ignore parse failures
       }
+      throw new Error(message);
     }
-    if (controller && typeof setTimeout !== "undefined") {
-      timeoutId = setTimeout(() => {
-        controller.abort();
-      }, CHAT_STREAM_REQUEST_TIMEOUT_MS);
-    }
-    try {
-      const response = await fetch(`/api/bots/${encodeURIComponent(botAlias)}/chat/stream`, {
-        method: "POST",
-        headers: this.headers({
-          "Content-Type": "application/json",
-        }),
-        ...(controller?.signal ? { signal: controller.signal } : (externalSignal ? { signal: externalSignal } : {})),
-        body: JSON.stringify({
-          message: text,
-          ...(options?.taskMode ? { task_mode: options.taskMode } : {}),
-          ...(options?.taskPayload ? { task_payload: options.taskPayload } : {}),
-          ...(options?.visibleText ? { visible_text: options.visibleText } : {}),
-          ...(options?.agentId ? { agent_id: options.agentId } : {}),
-          ...(options?.cluster ? { cluster: true } : {}),
-          ...(options?.mentions ? {
-            mentions: options.mentions.map((mention) => ({
-              agent_id: mention.agentId,
-              label: mention.label,
-              start: mention.start,
-              end: mention.end,
-            })),
-          } : {}),
-        }),
-      });
 
-      if (!response.ok || !response.body) {
-        let message = "发送消息失败";
-        try {
-          const payload = (await response.json()) as JsonEnvelope<unknown>;
-          message = payload.error?.message || message;
-        } catch {
-          // ignore parse failures
-        }
-        throw new Error(message);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let streamedText = "";
+    let finalText = "";
+    let finalElapsedSeconds: number | undefined;
+    let finalMessage: ChatMessage | null = null;
+    const streamedTrace: ChatTraceEvent[] = [];
+    let streamedContextUsage: ChatMessageContextUsage | undefined;
+    let streamFinished = false;
+
+    while (!streamFinished) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
       }
+      buffer += decoder.decode(value, { stream: true });
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let streamedText = "";
-      let finalText = "";
-      let finalElapsedSeconds: number | undefined;
-      let finalMessage: ChatMessage | null = null;
-      const streamedTrace: ChatTraceEvent[] = [];
-      let streamedContextUsage: ChatMessageContextUsage | undefined;
-      let streamFinished = false;
-      let gotDoneEvent = false;
+      let separatorIndex = buffer.indexOf("\n\n");
+      while (separatorIndex >= 0) {
+        const block = buffer.slice(0, separatorIndex);
+        buffer = buffer.slice(separatorIndex + 2);
 
-      while (!streamFinished) {
-        const { value, done } = await reader.read();
-        if (done) {
-          break;
-        }
-        buffer += decoder.decode(value, { stream: true });
-
-        let separatorIndex = buffer.indexOf("\n\n");
-        while (separatorIndex >= 0) {
-          const block = buffer.slice(0, separatorIndex);
-          buffer = buffer.slice(separatorIndex + 2);
-
-          const event = parseSseBlock(block);
-          if (!event) {
-            separatorIndex = buffer.indexOf("\n\n");
-            continue;
-          }
-
-          if (event.type === "delta" && event.text) {
-            streamedText += event.text;
-            onChunk(event.text);
-          } else if (event.type === "meta") {
-            const clusterRunId = typeof event.cluster_run_id === "string" ? event.cluster_run_id : "";
-            if (clusterRunId) {
-              onStatus?.({ clusterRunId });
-            }
-          } else if (event.type === "status") {
-            if (typeof event.elapsed_seconds === "number") {
-              finalElapsedSeconds = event.elapsed_seconds;
-            }
-            const contextUsage = mapContextUsage(event.context_usage);
-            if (contextUsage) {
-              streamedContextUsage = contextUsage;
-            }
-            const statusUpdate: ChatStatusUpdate = {
-              elapsedSeconds: event.elapsed_seconds,
-              previewText: event.preview_text,
-            };
-            if (contextUsage) {
-              statusUpdate.contextUsage = contextUsage;
-            }
-            onStatus?.(statusUpdate);
-          } else if (event.type === "trace") {
-            const traceEvent = mapTraceEvent(event.event);
-            if (traceEvent) {
-              streamedTrace.push(traceEvent);
-              onTrace?.(traceEvent);
-            }
-          } else if (event.type === "done") {
-            gotDoneEvent = true;
-            if (event.message) {
-              finalMessage = mapChatMessage(event.message, 0);
-              finalMessage.meta = mergeMessageMeta(
-                streamedContextUsage ? { contextUsage: streamedContextUsage } : undefined,
-                finalMessage.meta,
-                streamedTrace,
-              );
-              finalText = finalMessage.text;
-            } else {
-              finalText = event.output || streamedText;
-            }
-            if (typeof event.elapsed_seconds === "number") {
-              finalElapsedSeconds = event.elapsed_seconds;
-            }
-            streamFinished = true;
-            await reader.cancel().catch(() => undefined);
-            break;
-          } else if (event.type === "error") {
-            throw new Error(event.message || "流式响应失败");
-          }
-
+        const event = parseSseBlock(block);
+        if (!event) {
           separatorIndex = buffer.indexOf("\n\n");
+          continue;
         }
-      }
 
-      if (!gotDoneEvent) {
-        throw new Error("连接中断");
-      }
+        if (event.type === "delta" && event.text) {
+          streamedText += event.text;
+          onChunk(event.text);
+        } else if (event.type === "meta") {
+          const clusterRunId = typeof event.cluster_run_id === "string" ? event.cluster_run_id : "";
+          if (clusterRunId) {
+            onStatus?.({ clusterRunId });
+          }
+        } else if (event.type === "status") {
+          if (typeof event.elapsed_seconds === "number") {
+            finalElapsedSeconds = event.elapsed_seconds;
+          }
+          const contextUsage = mapContextUsage(event.context_usage);
+          if (contextUsage) {
+            streamedContextUsage = contextUsage;
+          }
+          const statusUpdate: ChatStatusUpdate = {
+            elapsedSeconds: event.elapsed_seconds,
+            previewText: event.preview_text,
+          };
+          if (contextUsage) {
+            statusUpdate.contextUsage = contextUsage;
+          }
+          onStatus?.(statusUpdate);
+        } else if (event.type === "trace") {
+          const traceEvent = mapTraceEvent(event.event);
+          if (traceEvent) {
+            streamedTrace.push(traceEvent);
+            onTrace?.(traceEvent);
+          }
+        } else if (event.type === "done") {
+          if (event.message) {
+            finalMessage = mapChatMessage(event.message, 0);
+            finalMessage.meta = mergeMessageMeta(
+              streamedContextUsage ? { contextUsage: streamedContextUsage } : undefined,
+              finalMessage.meta,
+              streamedTrace,
+            );
+            finalText = finalMessage.text;
+          } else {
+            finalText = event.output || streamedText;
+          }
+          if (typeof event.elapsed_seconds === "number") {
+            finalElapsedSeconds = event.elapsed_seconds;
+          }
+          streamFinished = true;
+          await reader.cancel().catch(() => undefined);
+          break;
+        } else if (event.type === "error") {
+          throw new Error(event.message || "流式响应失败");
+        }
 
-      if (finalMessage) {
-        return {
-          ...finalMessage,
-          elapsedSeconds: finalMessage.elapsedSeconds ?? finalElapsedSeconds,
-          meta: mergeMessageMeta(
-            streamedContextUsage ? { contextUsage: streamedContextUsage } : undefined,
-            finalMessage.meta,
-            streamedTrace,
-          ),
-        };
-      }
-
-      const messageText = finalText || streamedText;
-      const meta = mergeMessageMeta(
-        streamedContextUsage ? { contextUsage: streamedContextUsage } : undefined,
-        undefined,
-        streamedTrace,
-      );
-      return {
-        id: `assistant-${Date.now()}`,
-        role: "assistant",
-        text: messageText,
-        createdAt: new Date().toISOString(),
-        state: "done",
-        ...(typeof finalElapsedSeconds === "number" ? { elapsedSeconds: finalElapsedSeconds } : {}),
-        ...(meta ? { meta } : {}),
-      };
-    } catch (err) {
-      if (controller?.signal.aborted || externalSignal?.aborted) {
-        throw new Error("连接中断");
-      }
-      throw err;
-    } finally {
-      if (timeoutId !== null) {
-        clearTimeout(timeoutId);
-      }
-      if (externalSignal && externalAbortListener) {
-        externalSignal.removeEventListener("abort", externalAbortListener);
+        separatorIndex = buffer.indexOf("\n\n");
       }
     }
+
+    if (finalMessage) {
+      return {
+        ...finalMessage,
+        elapsedSeconds: finalMessage.elapsedSeconds ?? finalElapsedSeconds,
+        meta: mergeMessageMeta(
+          streamedContextUsage ? { contextUsage: streamedContextUsage } : undefined,
+          finalMessage.meta,
+          streamedTrace,
+        ),
+      };
+    }
+
+    const messageText = finalText || streamedText;
+    const meta = mergeMessageMeta(
+      streamedContextUsage ? { contextUsage: streamedContextUsage } : undefined,
+      undefined,
+      streamedTrace,
+    );
+    return {
+      id: `assistant-${Date.now()}`,
+      role: "assistant",
+      text: messageText,
+      createdAt: new Date().toISOString(),
+      state: "done",
+      ...(typeof finalElapsedSeconds === "number" ? { elapsedSeconds: finalElapsedSeconds } : {}),
+      ...(meta ? { meta } : {}),
+    };
   }
 
   async getDebugProfile(botAlias: string): Promise<DebugProfile | null> {

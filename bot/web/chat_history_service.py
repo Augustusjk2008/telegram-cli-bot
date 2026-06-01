@@ -76,46 +76,7 @@ class ChatHistoryService:
     def __init__(self, store: ChatStore) -> None:
         self.store = store
 
-    def reconcile_active_conversation(self, session: UserSession) -> str:
-        active_id = _active_conversation_id(session)
-        if active_id:
-            try:
-                conversation = self.store.get_conversation(active_id)
-            except KeyError:
-                conversation = {}
-            if (
-                conversation
-                and int(conversation.get("bot_id") or 0) == session.bot_id
-                and int(conversation.get("user_id") or 0) == session.user_id
-                and str(conversation.get("agent_id") or "main") == session.agent_id
-                and str(conversation.get("working_dir") or "") == session.working_dir
-                and not str(conversation.get("archived_at") or "").strip()
-            ):
-                return active_id
-
-        latest_id = self.store.get_latest_conversation_id(
-            bot_id=session.bot_id,
-            user_id=session.user_id,
-            agent_id=session.agent_id,
-            working_dir=session.working_dir,
-            session_epoch=_session_epoch(session),
-        )
-        if not latest_id:
-            latest_id = self.store.get_latest_conversation_id(
-                bot_id=session.bot_id,
-                user_id=session.user_id,
-                agent_id=session.agent_id,
-                working_dir=session.working_dir,
-                session_epoch=None,
-            )
-        if latest_id != active_id:
-            with session._lock:
-                session.active_conversation_id = latest_id or None
-            session.persist()
-        return latest_id
-
     def reconcile_idle_streaming_turns(self, session: UserSession) -> int:
-        self.reconcile_active_conversation(session)
         with session._lock:
             is_processing = bool(session.is_processing)
         if is_processing:
@@ -222,12 +183,6 @@ class ChatHistoryService:
     def replace_assistant_preview(self, handle: ChatTurnHandle, preview_text: str) -> None:
         self.store.replace_assistant_content(handle, preview_text[-800:], state="streaming")
 
-    def persist_turn_native_session_id(self, handle: ChatTurnHandle, native_session_id: str | None) -> bool:
-        return self.store.persist_turn_native_session_id(handle, native_session_id)
-
-    def clear_native_session_id(self, handle: ChatTurnHandle) -> bool:
-        return self.store.clear_native_session_id(handle)
-
     def update_context_usage(self, handle: ChatTurnHandle, context_usage: dict[str, Any] | None) -> bool:
         return self.store.update_context_usage(handle.turn_id, context_usage)
 
@@ -277,7 +232,6 @@ class ChatHistoryService:
         )
 
     def list_history(self, profile: BotProfile, session: UserSession, limit: int = 50) -> list[dict[str, Any]]:
-        self.reconcile_active_conversation(session)
         self.reconcile_idle_streaming_turns(session)
         items = self.store.list_active_history(
             bot_id=session.bot_id,
@@ -369,7 +323,6 @@ class ChatHistoryService:
         return True
 
     def build_session_snapshot(self, profile: BotProfile, session: UserSession) -> dict[str, Any]:
-        self.reconcile_active_conversation(session)
         self.reconcile_idle_streaming_turns(session)
         with session._lock:
             is_processing = bool(session.is_processing)
@@ -407,7 +360,6 @@ class ChatHistoryService:
         }
 
     def summarize_active_conversation(self, profile: BotProfile, session: UserSession) -> dict[str, Any]:
-        self.reconcile_active_conversation(session)
         return {
             "current_working_dir": session.working_dir,
             "history_count": self.store.count_history(

@@ -32,11 +32,6 @@ def test_classify_cli_error(message: str, category: str):
     assert classify_cli_error(message) == category
 
 
-def test_classify_stale_stream_recovered_as_interrupted():
-    assert classify_cli_error("stale_stream_recovered 上次运行未正常结束") == "interrupted"
-    assert classify_cli_error("unknown thread") == "resume_session"
-
-
 def test_normalize_error_message_redacts_noisy_parts():
     message = (
         "failed C:\\Users\\Kai\\very\\long\\repo\\file.py "
@@ -99,34 +94,3 @@ def test_collect_cli_error_stats_groups_by_cli_bot_category(monkeypatch: pytest.
     assert stats["items"][0]["turn_id"] == failed.turn_id
     assert stats["items"][0]["duration_ms"] is not None
     assert stats["top_errors"][0]["count"] == 1
-
-
-def test_collect_cli_error_stats_reconciles_stale_streaming_turns(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    home = tmp_path / "home"
-    home.mkdir()
-    workdir = tmp_path / "repo"
-    workdir.mkdir()
-    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
-    storage_file = tmp_path / "managed_bots.json"
-    storage_file.write_text(json.dumps({"bots": []}), encoding="utf-8")
-    manager = MultiBotManager(
-        BotProfile(alias="main", token="", cli_type="codex", cli_path="codex", working_dir=str(workdir)),
-        str(storage_file),
-    )
-    session = get_session_for_alias(manager, "main", 1001)
-    session.working_dir = str(workdir)
-    service = ChatHistoryService(ChatStore(workdir))
-    service.start_turn(
-        profile=manager.main_profile,
-        session=session,
-        user_text="hello",
-        native_provider="codex",
-    )
-    with session._lock:
-        session.is_processing = False
-
-    stats = collect_cli_error_stats(manager, hours=24, limit=20)
-
-    assert stats["summary"]["total"] == 1
-    assert stats["summary"]["by_category"] == {"interrupted": 1}
-    assert stats["items"][0]["error_code"] == "stale_stream_recovered"

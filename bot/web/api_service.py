@@ -2671,68 +2671,6 @@ def _current_native_session_id(session: UserSession, cli_type: str) -> str:
     return ""
 
 
-def _set_native_session_id(session: UserSession, cli_type: str, native_session_id: str | None) -> bool:
-    session_id = str(native_session_id or "").strip()
-    if not session_id:
-        return False
-    normalized = normalize_cli_type(cli_type)
-    changed = False
-    with session._lock:
-        if normalized == "codex":
-            changed = session.codex_session_id != session_id
-            session.codex_session_id = session_id
-        elif normalized == "claude":
-            changed = session.claude_session_id != session_id or not session.claude_session_initialized
-            session.claude_session_id = session_id
-            session.claude_session_initialized = True
-        elif normalized == "kimi":
-            changed = session.kimi_session_id != session_id
-            session.kimi_session_id = session_id
-    if changed:
-        session.persist()
-    return changed
-
-
-def _persist_running_native_session_id(
-    service: ChatHistoryService,
-    handle,
-    session: UserSession,
-    cli_type: str,
-    native_session_id: str | None,
-) -> bool:
-    session_id = str(native_session_id or "").strip()
-    if not session_id:
-        return False
-    changed = _set_native_session_id(session, cli_type, session_id)
-    persisted = service.persist_turn_native_session_id(handle, session_id)
-    return changed or persisted
-
-
-def _clear_invalid_native_session_for_turn(
-    service: ChatHistoryService,
-    handle,
-    session: UserSession,
-    cli_type: str,
-) -> bool:
-    normalized = normalize_cli_type(cli_type)
-    changed = False
-    with session._lock:
-        if normalized == "codex" and session.codex_session_id is not None:
-            session.codex_session_id = None
-            changed = True
-        elif normalized == "claude" and (session.claude_session_id is not None or session.claude_session_initialized):
-            session.claude_session_id = None
-            session.claude_session_initialized = False
-            changed = True
-        elif normalized == "kimi" and session.kimi_session_id is not None:
-            session.kimi_session_id = None
-            changed = True
-    cleared = service.clear_native_session_id(handle)
-    if changed:
-        session.persist()
-    return changed or cleared
-
-
 def _status_context_session_id(
     session: UserSession,
     cli_type: str,
@@ -3647,13 +3585,6 @@ def _codex_line_allows_quiet_finish(
     if event_type == "turn.completed":
         return True
 
-    if event_type == "item.completed":
-        item = event.get("item")
-        if not isinstance(item, dict):
-            return False
-        item_type = str(item.get("type") or "").strip()
-        return bool(completed_text and item_type in {"assistant_message", "agent_message"})
-
     payload: Any = None
     if event_type == "event_msg":
         payload = event.get("payload")
@@ -4505,7 +4436,6 @@ async def _stream_cli_chat(
                         if cli_type == "codex":
                             now = loop.time()
                             for line in text_chunk.splitlines():
-                                previous_thread_id = thread_id
                                 thread_id, codex_done_candidate, codex_done_seen_at = _advance_codex_done_candidate(
                                     line,
                                     thread_id=thread_id,
@@ -4513,14 +4443,6 @@ async def _stream_cli_chat(
                                     candidate_seen_at=codex_done_seen_at,
                                     now=now,
                                 )
-                                if thread_id and thread_id != previous_thread_id:
-                                    _persist_running_native_session_id(
-                                        service,
-                                        turn_handle,
-                                        session,
-                                        cli_type,
-                                        thread_id,
-                                    )
                         elif claude_collector is not None:
                             claude_collector.consume_chunk(text_chunk, now=loop.time())
 
@@ -4722,8 +4644,9 @@ async def _stream_cli_chat(
                             session.codex_session_id = thread_id
                             session_id_changed = True
                     elif should_reset_codex_session(attempt.codex_session_id, response, returncode):
-                        if _clear_invalid_native_session_for_turn(service, turn_handle, session, cli_type):
-                            session_id_changed = False
+                        if session.codex_session_id is not None:
+                            session.codex_session_id = None
+                            session_id_changed = True
             elif cli_type == "claude":
                 with session._lock:
                     if should_mark_claude_session_initialized(response, returncode):
@@ -5182,8 +5105,9 @@ async def run_cli_chat(
                             session.codex_session_id = thread_id
                             session_id_changed = True
                     elif should_reset_codex_session(attempt.codex_session_id, response, returncode):
-                        if _clear_invalid_native_session_for_turn(service, turn_handle, session, cli_type):
-                            session_id_changed = False
+                        if session.codex_session_id is not None:
+                            session.codex_session_id = None
+                            session_id_changed = True
             elif cli_type == "claude":
                 with session._lock:
                     if should_mark_claude_session_initialized(response, returncode):
