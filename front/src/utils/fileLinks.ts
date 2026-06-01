@@ -1,3 +1,5 @@
+import { withApiBase } from "./publicBase";
+
 const EXTERNAL_PROTOCOL_RE = /^(https?:|mailto:|tel:)/i;
 const BLOCKED_PROTOCOL_RE = /^(javascript|vbscript|data):/i;
 const ABS_PATH_PREFIX = "/abs/path/";
@@ -147,5 +149,5 @@ export function resolveMarkdownImagePath(src: string, markdownPath: string) {
 
 export function buildFileDownloadUrl(botAlias: string, filename: string) {
   const params = new URLSearchParams({ filename });
-  return `/api/bots/${encodeURIComponent(botAlias)}/files/download?${params.toString()}`;
+  return withApiBase(`/api/bots/${encodeURIComponent(botAlias)}/files/download?${params.toString()}`);
 }

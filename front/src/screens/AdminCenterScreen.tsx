@@ -137,6 +137,14 @@ function normalizeEnvDraftValue(item: EnvConfigItem, value: string | boolean): E
   return String(value);
 }
 
+function envDraftString(values: Record<string, EnvConfigValue>, key: string) {
+  const value = values[key];
+  if (Array.isArray(value)) return value.join(",");
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "number") return String(value);
+  return String(value || "");
+}
+
 export function AdminCenterScreen({
   client = new MockWebBotClient(),
   onClose,
@@ -221,6 +229,15 @@ export function AdminCenterScreen({
     const category = activeEnvCategory || envCategories[0] || "";
     return (envConfig?.items || []).filter((item) => item.category === category);
   }, [activeEnvCategory, envCategories, envConfig]);
+  const envConflictMessage = useMemo(() => {
+    const fixedEnabled = envDraft.WEB_FIXED_PUBLIC_FORWARD_ENABLED === true
+      || envDraftString(envDraft, "WEB_FIXED_PUBLIC_FORWARD_ENABLED").toLowerCase() === "true";
+    const tunnelMode = envDraftString(envDraft, "WEB_TUNNEL_MODE").trim();
+    if (fixedEnabled && tunnelMode === "cloudflare_quick") {
+      return "固定公网转发和 Cloudflare Quick Tunnel 不能同时启用。";
+    }
+    return "";
+  }, [envDraft]);
 
   useEffect(() => {
     if (!visibleTabs.includes(activeTab)) {
@@ -728,6 +745,10 @@ export function AdminCenterScreen({
       setError("没有可保存的环境配置改动");
       return;
     }
+    if (envConflictMessage) {
+      setError(envConflictMessage);
+      return;
+    }
     setEnvSaving(true);
     setError("");
     setNotice("");
@@ -744,6 +765,10 @@ export function AdminCenterScreen({
   const saveEnvChanges = async () => {
     if (!envChangedItems.length) {
       setError("没有可保存的环境配置改动");
+      return;
+    }
+    if (envConflictMessage) {
+      setError(envConflictMessage);
       return;
     }
     setEnvSaving(true);
@@ -1150,7 +1175,7 @@ export function AdminCenterScreen({
                 <button
                   type="button"
                   onClick={() => void previewEnvChanges()}
-                  disabled={envSaving || envChangedItems.length === 0}
+                  disabled={envSaving || envChangedItems.length === 0 || Boolean(envConflictMessage)}
                   className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
                 >
                   预览 diff
@@ -1158,7 +1183,7 @@ export function AdminCenterScreen({
                 <button
                   type="button"
                   onClick={() => void saveEnvChanges()}
-                  disabled={envSaving || envChangedItems.length === 0}
+                  disabled={envSaving || envChangedItems.length === 0 || Boolean(envConflictMessage)}
                   className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm tcb-solid-accent hover:opacity-90 disabled:opacity-60"
                 >
                   <Save className="h-4 w-4" />
@@ -1184,6 +1209,12 @@ export function AdminCenterScreen({
                     {envRestarting ? "请求中..." : "重启服务"}
                   </button>
                 ) : null}
+              </div>
+            ) : null}
+
+            {envConflictMessage ? (
+              <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-700">
+                {envConflictMessage}
               </div>
             ) : null}
 
@@ -1226,7 +1257,7 @@ export function AdminCenterScreen({
                 <button
                   type="button"
                   onClick={() => void saveEnvChanges()}
-                  disabled={envSaving}
+                  disabled={envSaving || Boolean(envConflictMessage)}
                   className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm tcb-solid-accent hover:opacity-90 disabled:opacity-60"
                 >
                   <Save className="h-4 w-4" />

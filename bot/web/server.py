@@ -37,9 +37,14 @@ from bot.config import (
     PUSHPLUS_TIMEOUT_SECONDS,
     PUSHPLUS_TOKEN,
     PUSHPLUS_TOPIC,
+    TCB_HUB_NODE_TOKEN,
+    TCB_NODE_ID,
+    WEB_BASE_PATH,
     WEB_ALLOWED_ORIGINS,
     WEB_API_TOKEN,
     WEB_DEFAULT_USER_ID,
+    WEB_FIXED_PUBLIC_FORWARD_ENABLED,
+    WEB_FIXED_PUBLIC_FORWARD_URL,
     WEB_HOST,
     WEB_PORT,
     WEB_PUBLIC_URL,
@@ -75,6 +80,7 @@ from .announcement_store import AnnouncementStore
 from .cli_error_stats import collect_cli_error_stats
 from .diagnostics import diag_enabled, diag_log_event, diag_log_slow, diag_loop_lag_ms
 from .env_service import EnvConfigService, EnvValidationError
+from .exposure_service import WebExposureService
 from .lan_chat_service import LanChatService
 from .notification_service import ChatNotificationService
 from .os_open_service import DesktopOpenError, open_directory_in_desktop
@@ -833,6 +839,15 @@ class WebApiServer:
             public_url=WEB_PUBLIC_URL,
             cloudflared_path=WEB_TUNNEL_CLOUDFLARED_PATH,
             state_file=str(_resolve_tunnel_state_file()),
+            fixed_public_forward_enabled=WEB_FIXED_PUBLIC_FORWARD_ENABLED,
+        )
+        self._exposure_service = WebExposureService(
+            tunnel_service=self._tunnel_service,
+            fixed_public_forward_enabled=WEB_FIXED_PUBLIC_FORWARD_ENABLED,
+            fixed_public_forward_url=WEB_FIXED_PUBLIC_FORWARD_URL,
+            hub_node_token=TCB_HUB_NODE_TOKEN,
+            node_id=TCB_NODE_ID,
+            base_path=WEB_BASE_PATH,
         )
 
     def _auth_context(self, request: web.Request) -> AuthContext:
@@ -1328,7 +1343,7 @@ class WebApiServer:
         self._schedule_tunnel_ready_notification(snapshot, reason=reason)
 
     async def _fresh_tunnel_snapshot(self) -> dict[str, Any]:
-        return self._tunnel_service.snapshot()
+        return self._exposure_service.snapshot()
 
     async def health(self, request: web.Request) -> web.Response:
         return _json(
@@ -1545,8 +1560,7 @@ class WebApiServer:
         return result
 
     def _public_tunnel_url(self) -> str:
-        snapshot = self._tunnel_service.snapshot()
-        return str(snapshot.get("public_url") or "").strip().rstrip("/")
+        return self._exposure_service.public_url()
 
     def _chat_notification_url(self, alias: str, conversation_id: str = "") -> str:
         base_url = self._public_tunnel_url()
@@ -3349,6 +3363,8 @@ class WebApiServer:
 
     async def admin_tunnel_start(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
+        if self._exposure_service.is_fixed_public_forward():
+            raise WebApiError(409, "fixed_public_forward_enabled", "固定公网转发模式不能启动 Cloudflare Quick Tunnel")
         started_at = time.perf_counter()
         diag_log_event(logger, "tunnel_start_stage", stage="request")
         snapshot = await self._tunnel_service.start()
@@ -3368,6 +3384,8 @@ class WebApiServer:
 
     async def admin_tunnel_restart(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
+        if self._exposure_service.is_fixed_public_forward():
+            raise WebApiError(409, "fixed_public_forward_enabled", "固定公网转发模式不能重启 Cloudflare Quick Tunnel")
         started_at = time.perf_counter()
         diag_log_event(logger, "tunnel_restart_stage", stage="request")
         snapshot = await self._tunnel_service.restart()
@@ -4128,6 +4146,21 @@ class WebApiServer:
             middlewares=[cors_middleware, diag_slow_request_middleware, error_middleware],
             client_max_size=25 * 1024 * 1024,
         )
+        self._register_app_routes(app)
+        base_path = self._web_base_path()
+        if base_path:
+            subapp = web.Application(
+                client_max_size=25 * 1024 * 1024,
+            )
+            self._register_app_routes(subapp)
+            self._register_static_routes(subapp)
+            self._register_spa_fallback(subapp)
+            app.add_subapp(base_path, subapp)
+        self._register_static_routes(app)
+        self._register_spa_fallback(app)
+        return app
+
+    def _register_app_routes(self, app: web.Application) -> None:
         for module in (
             auth_routes,
             announcement_routes,
@@ -4146,13 +4179,21 @@ class WebApiServer:
         app.router.add_get("/api/notifications/settings", self.get_notification_settings)
         app.router.add_post("/api/notifications/pushplus/test", self.post_pushplus_test)
         app.router.add_get("/api/notifications/ws", self.notifications_ws)
-        
-        # Add static file serving for frontend when dist exists
+
+    def _register_static_routes(self, app: web.Application) -> None:
         assets_dir = Path(self._get_static_dir("assets"))
         if assets_dir.exists():
             app.router.add_static("/assets", path=str(assets_dir), name="assets")
+
+    def _register_spa_fallback(self, app: web.Application) -> None:
         app.router.add_get("/{tail:.*}", self.serve_index, name="index")
-        return app
+
+    @staticmethod
+    def _web_base_path() -> str:
+        value = str(WEB_BASE_PATH or "").strip()
+        if not value or value == "/":
+            return ""
+        return value.rstrip("/")
     
     def _get_static_dir(self, subdir=None):
         """Get static directory path."""

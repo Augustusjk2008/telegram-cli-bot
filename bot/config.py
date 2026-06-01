@@ -88,6 +88,42 @@ def _get_project_int(name: str, default: int) -> int:
         return default
 
 
+_NODE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+
+
+def _normalize_node_id(value: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    if not _NODE_ID_RE.fullmatch(normalized):
+        logging.warning("忽略无效的 TCB_NODE_ID=%s", normalized)
+        return ""
+    return normalized
+
+
+def _normalize_base_path(value: str, node_id: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized or normalized == "/":
+        return ""
+    normalized = normalized.rstrip("/")
+    expected = f"/node/{node_id}" if node_id else ""
+    if expected and normalized == expected:
+        return normalized
+    logging.warning("忽略无效的 WEB_BASE_PATH=%s，必须为空或等于 %s", normalized, expected or "/node/<TCB_NODE_ID>")
+    return ""
+
+
+def _effective_frontend_base_path(name: str, web_base_path: str) -> str:
+    raw_value = _get_project_config(name, "").strip()
+    if not raw_value:
+        return web_base_path
+    normalized = raw_value.rstrip("/") if raw_value != "/" else ""
+    if normalized == web_base_path:
+        return web_base_path
+    logging.warning("忽略无效的 %s=%s，必须为空或等于 WEB_BASE_PATH=%s", name, raw_value, web_base_path)
+    return web_base_path
+
+
 DEFAULT_APP_UPDATE_REPOSITORY = "Augustusjk2008/telegram-cli-bot"
 
 ALLOWED_USER_IDS: List[int] = []
@@ -124,6 +160,13 @@ WEB_PUBLIC_URL = os.environ.get("WEB_PUBLIC_URL", "").strip()
 WEB_API_TOKEN = os.environ.get("WEB_API_TOKEN", "").strip()
 WEB_ALLOWED_ORIGINS = _split_csv_env(os.environ.get("WEB_ALLOWED_ORIGINS", ""))
 WEB_DEFAULT_USER_ID = ALLOWED_USER_IDS[0] if ALLOWED_USER_IDS else 1
+TCB_NODE_ID = _normalize_node_id(_get_project_config("TCB_NODE_ID", ""))
+WEB_BASE_PATH = _normalize_base_path(_get_project_config("WEB_BASE_PATH", ""), TCB_NODE_ID)
+EFFECTIVE_VITE_BASE_PATH = _effective_frontend_base_path("VITE_BASE_PATH", WEB_BASE_PATH)
+EFFECTIVE_VITE_API_BASE_URL = _effective_frontend_base_path("VITE_API_BASE_URL", WEB_BASE_PATH)
+WEB_FIXED_PUBLIC_FORWARD_ENABLED = _get_project_bool("WEB_FIXED_PUBLIC_FORWARD_ENABLED", False)
+WEB_FIXED_PUBLIC_FORWARD_URL = _get_project_config("WEB_FIXED_PUBLIC_FORWARD_URL", "").strip()
+TCB_HUB_NODE_TOKEN = _get_project_config("TCB_HUB_NODE_TOKEN", "").strip()
 WEB_TUNNEL_MODE = os.environ.get("WEB_TUNNEL_MODE", "disabled").strip().lower() or "disabled"
 WEB_TUNNEL_AUTOSTART = os.environ.get("WEB_TUNNEL_AUTOSTART", "true").lower() == "true"
 # 可选：指定 cloudflared 的完整路径；若已在 PATH 中可留空。

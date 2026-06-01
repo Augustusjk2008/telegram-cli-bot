@@ -1,8 +1,10 @@
 import json
 import socket
 from contextlib import closing
+from pathlib import Path
 
 import pytest
+from aiohttp.test_utils import TestClient, TestServer
 
 from bot.main import _get_web_access_lines
 from bot.web.runtime_binding import RuntimeWebBind, resolve_runtime_web_bind
@@ -68,5 +70,34 @@ async def test_health_reports_runtime_port() -> None:
 
     assert payload["host"] == "127.0.0.1"
     assert payload["port"] == 8768
+
+
+@pytest.mark.asyncio
+async def test_web_base_path_serves_api_and_spa(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "/node/nanjing-laptop")
+    dist = tmp_path / "dist"
+    assets = dist / "assets"
+    assets.mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html><title>app</title>", encoding="utf-8")
+    (assets / "app.js").write_text("console.log('ok')", encoding="utf-8")
+
+    server = WebApiServer(object(), host="127.0.0.1", port=8768, tunnel_service=DummyTunnelService())
+    monkeypatch.setattr(server, "_get_static_dir", lambda subdir=None: str(dist / subdir) if subdir else str(dist))
+
+    app = server._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            root_health = await client.get("/api/health")
+            sub_health = await client.get("/node/nanjing-laptop/api/health")
+            root_asset = await client.get("/assets/app.js")
+            sub_asset = await client.get("/node/nanjing-laptop/assets/app.js")
+            sub_spa = await client.get("/node/nanjing-laptop/xxx")
+
+            assert root_health.status == 200
+            assert sub_health.status == 200
+            assert root_asset.status == 200
+            assert sub_asset.status == 200
+            assert sub_spa.status == 200
+            assert "app" in await sub_spa.text()
 
 

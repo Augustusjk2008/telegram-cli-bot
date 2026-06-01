@@ -1647,11 +1647,11 @@ export type AvatarAsset = {
   url: string;
 };
 
-export type TunnelSnapshot = {
-  mode: "disabled" | "cloudflare_quick" | "manual";
+export type PublicExposureSnapshot = {
+  mode: "disabled" | "cloudflare_quick" | "manual" | "fixed_public_forward";
   status: "stopped" | "waiting_local" | "waiting_url" | "connected" | "verifying_public" | "starting" | "running" | "error";
   phase?: string;
-  source: "disabled" | "quick_tunnel" | "manual_config";
+  source: "disabled" | "quick_tunnel" | "manual_config" | "fixed_public_forward";
   publicUrl: string;
   localUrl: string;
   lastError: string;
@@ -1666,7 +1666,12 @@ export type TunnelSnapshot = {
   registeredAt?: string;
   logTail?: string[];
   pid?: number | null;
+  fixedPublicForwardEnabled?: boolean;
+  nodeId?: string;
+  basePath?: string;
 };
+
+export type TunnelSnapshot = PublicExposureSnapshot;
 
 export type GitChangedFile = {
   path: string;

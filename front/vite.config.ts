@@ -173,6 +173,14 @@ function resolveVendorChunk(id: string) {
   return 'vendor';
 }
 
+function normalizeBasePath(value?: string) {
+  const raw = String(value || '').trim();
+  if (!raw || raw === '/') {
+    return '/';
+  }
+  return `/${raw.replace(/^\/+/, '').replace(/\/+$/, '')}/`;
+}
+
 export default defineConfig(({mode}) => {
   const repoRoot = path.resolve(__dirname, '..');
   const frontRoot = path.resolve(__dirname, '.');
@@ -184,7 +192,15 @@ export default defineConfig(({mode}) => {
   const publicEnv = Object.fromEntries(
     Object.entries(env).filter(([key]) => key.startsWith('VITE_')),
   );
+  if (!publicEnv.VITE_BASE_PATH && env.WEB_BASE_PATH) {
+    publicEnv.VITE_BASE_PATH = env.WEB_BASE_PATH;
+  }
+  if (!publicEnv.VITE_API_BASE_URL && env.WEB_BASE_PATH) {
+    publicEnv.VITE_API_BASE_URL = env.WEB_BASE_PATH;
+  }
+  const viteBasePath = normalizeBasePath(env.VITE_BASE_PATH || env.WEB_BASE_PATH);
   return {
+    base: viteBasePath,
     plugins: [react(), tailwindcss()],
     test: {
       globals: true,
@@ -220,6 +236,10 @@ export default defineConfig(({mode}) => {
       hmr: process.env.DISABLE_HMR !== 'true',
       proxy: {
         '/api': {
+          target: 'http://127.0.0.1:8765',
+          changeOrigin: true,
+        },
+        '/node': {
           target: 'http://127.0.0.1:8765',
           changeOrigin: true,
         },

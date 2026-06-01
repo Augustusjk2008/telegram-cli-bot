@@ -126,6 +126,12 @@ function tunnelStatusText(status: TunnelSnapshot["status"]) {
   return "已停止";
 }
 
+function tunnelSourceText(tunnel: TunnelSnapshot) {
+  if (tunnel.source === "fixed_public_forward" || tunnel.mode === "fixed_public_forward") return "固定公网转发";
+  if (tunnel.source === "manual_config") return "手工地址";
+  return "Quick Tunnel";
+}
+
 function notificationPermissionText(permission: BrowserNotificationPermission) {
   if (permission === "granted") return "已允许";
   if (permission === "denied") return "已拒绝";
@@ -944,7 +950,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 <p className="text-sm text-[var(--muted)]">状态: {tunnelStatusText(tunnel.status)}</p>
               </div>
               <StateBadge tone="neutral">
-                {tunnel.source === "manual_config" ? "手工地址" : "Quick Tunnel"}
+                {tunnelSourceText(tunnel)}
               </StateBadge>
             </div>
 
@@ -960,7 +966,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             </div>
 
             <div className="flex flex-wrap gap-2">
-              {tunnel.source !== "manual_config" ? (
+              {tunnel.source === "quick_tunnel" ? (
                 <>
                   <button
                     type="button"
@@ -990,7 +996,9 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 </>
               ) : (
                 <div className="rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-3 py-2 text-sm text-[var(--muted)]">
-                  当前使用 `WEB_PUBLIC_URL` 手工配置地址
+                  {tunnel.source === "fixed_public_forward"
+                    ? "固定公网转发在管理中心配置"
+                    : "当前使用 `WEB_PUBLIC_URL` 手工配置地址"}
                 </div>
               )}
 

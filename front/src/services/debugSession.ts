@@ -1,3 +1,5 @@
+import { buildWsUrl } from "../utils/publicBase";
+
 export type DebugSessionEvent = {
   type: string;
   payload?: Record<string, unknown>;
@@ -20,14 +22,10 @@ export type DebugSessionHandle = {
 };
 
 function buildDebugSessionUrl({ token = "", botAlias }: Pick<DebugSessionOptions, "token" | "botAlias">) {
-  const origin = typeof window !== "undefined" ? window.location.origin : "http://localhost";
-  const url = new URL("/debug/ws", origin);
-  if (token.trim()) {
-    url.searchParams.set("token", token.trim());
-  }
-  url.searchParams.set("alias", botAlias);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  return url.toString();
+  return buildWsUrl("/debug/ws", {
+    token: token.trim(),
+    alias: botAlias,
+  });
 }
 
 export function createDebugSession({

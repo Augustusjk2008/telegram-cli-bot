@@ -88,6 +88,36 @@ from bot.web.api_service import (
     update_bot_workdir,
     write_file_content,
 )
+
+
+class _FixedForwardTunnelService:
+    def should_autostart(self) -> bool:
+        return False
+
+    def snapshot(self) -> dict[str, object]:
+        return {
+            "mode": "disabled",
+            "status": "stopped",
+            "phase": "stopped",
+            "source": "disabled",
+            "public_url": "",
+            "local_url": "http://127.0.0.1:8765",
+            "last_error": "",
+            "verified": False,
+            "pid": None,
+        }
+
+    async def start(self) -> dict[str, object]:
+        return self.snapshot()
+
+    async def stop(self) -> dict[str, object]:
+        return self.snapshot()
+
+    async def restart(self) -> dict[str, object]:
+        return self.snapshot()
+
+    def preserve_for_restart(self) -> dict[str, object]:
+        return self.snapshot()
 from bot.app_settings import get_git_proxy_settings, update_git_proxy_address, update_git_proxy_port
 from bot.web import api_service
 from bot.web.chat_history_service import ChatHistoryService
@@ -204,6 +234,32 @@ def _seed_chat_turn(
         native_provider=web_manager.main_profile.cli_type,
     )
     service.complete_turn(handle, content=assistant_text, completion_state="completed", context_usage=context_usage)
+
+
+@pytest.mark.asyncio
+async def test_admin_tunnel_reports_fixed_forward_and_blocks_start(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server.WEB_FIXED_PUBLIC_FORWARD_ENABLED", True)
+    monkeypatch.setattr("bot.web.server.WEB_FIXED_PUBLIC_FORWARD_URL", "http://124.221.226.63:18088/node/nanjing-laptop")
+    monkeypatch.setattr("bot.web.server.TCB_HUB_NODE_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server.TCB_NODE_ID", "nanjing-laptop")
+    monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "/node/nanjing-laptop")
+
+    app = WebApiServer(web_manager, tunnel_service=_FixedForwardTunnelService())._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            status_response = await client.get("/api/admin/tunnel")
+            payload = await status_response.json()
+            start_response = await client.post("/api/admin/tunnel/start")
+
+    assert status_response.status == 200
+    assert payload["data"]["mode"] == "fixed_public_forward"
+    assert payload["data"]["source"] == "fixed_public_forward"
+    assert payload["data"]["public_url"] == "http://124.221.226.63:18088/node/nanjing-laptop"
+    assert start_response.status == 409
+
 
 @pytest.mark.asyncio
 async def test_stream_chat_cluster_requires_enabled_cluster(web_manager: MultiBotManager):

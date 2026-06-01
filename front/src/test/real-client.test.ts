@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { RealWebBotClient } from "../services/realWebBotClient";
+import { buildFileDownloadUrl } from "../utils/fileLinks";
 import {
   createClusterBundleDiff,
   createClusterStatus,
@@ -55,6 +56,43 @@ describe("RealWebBotClient", () => {
     );
     expect(session.isLoggedIn).toBe(true);
     expect(session.currentBotAlias).toBe("");
+  });
+
+  test("applies public base path to fetch calls", async () => {
+    vi.stubGlobal("__PUBLIC_ENV__", {
+      VITE_API_BASE_URL: "/node/nanjing-laptop",
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        data: {
+          user_id: 1001,
+        },
+      }),
+    });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/node/nanjing-laptop/api/auth/me",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+        }),
+      }),
+    );
+  });
+
+  test("applies public base path to generated file download links", () => {
+    vi.stubGlobal("__PUBLIC_ENV__", {
+      VITE_API_BASE_URL: "/node/nanjing-laptop",
+    });
+
+    expect(buildFileDownloadUrl("main", "docs/readme.md")).toBe(
+      "/node/nanjing-laptop/api/bots/main/files/download?filename=docs%2Freadme.md",
+    );
   });
 
   

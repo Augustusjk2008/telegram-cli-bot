@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { SettingsScreen } from "../screens/SettingsScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { DirectoryListing } from "../services/types";
+import type { DirectoryListing, TunnelSnapshot } from "../services/types";
 import { CHAT_COMPLETION_WEB_NOTIFICATION_KEY } from "../utils/chatNotificationEvents";
 
 afterEach(() => {
@@ -81,6 +81,33 @@ test("git proxy controls stack on narrow screens", async () => {
   expect(row).toHaveClass("flex-col", "sm:flex-row", "sm:items-center");
   expect(screen.getByLabelText("Git 代理地址")).toHaveClass("w-full", "min-w-0", "flex-1");
   expect(screen.getByRole("button", { name: "保存 Git 代理" })).toHaveClass("tcb-solid-accent", "w-full", "sm:w-auto");
+});
+
+class FixedForwardSettingsClient extends MockWebBotClient {
+  async getTunnelStatus(): Promise<TunnelSnapshot> {
+    return {
+      mode: "fixed_public_forward",
+      status: "running",
+      source: "fixed_public_forward",
+      publicUrl: "http://124.221.226.63:18088/node/nanjing-laptop",
+      localUrl: "http://127.0.0.1:8765",
+      lastError: "",
+      verified: true,
+      fixedPublicForwardEnabled: true,
+      nodeId: "nanjing-laptop",
+      basePath: "/node/nanjing-laptop",
+    };
+  }
+}
+
+test("fixed public forward hides quick tunnel controls in settings", async () => {
+  render(<SettingsScreen botAlias="main" client={new FixedForwardSettingsClient()} onLogout={() => undefined} />);
+
+  expect(await screen.findByText("固定公网转发")).toBeInTheDocument();
+  expect(screen.getByText("固定公网转发在管理中心配置")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "启动 Tunnel" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "停止 Tunnel" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /重启 Tunnel/ })).not.toBeInTheDocument();
 });
 
 

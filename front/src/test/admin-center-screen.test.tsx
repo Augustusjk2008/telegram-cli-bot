@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { AdminCenterScreen } from "../screens/AdminCenterScreen";
@@ -102,6 +102,25 @@ test("admin center edits env config with diff confirmation and restart hint", as
     });
   });
   expect(await screen.findByText(/需重启: WEB_PORT/)).toBeInTheDocument();
+});
+
+test("admin center blocks fixed forward and quick tunnel conflict", async () => {
+  const user = userEvent.setup();
+  const { client, updateEnvConfig } = createClient();
+  await client.login({ username: "127.0.0.1", password: "test" });
+
+  render(<AdminCenterScreen client={client} onClose={() => {}} />);
+
+  await user.click(await screen.findByRole("tab", { name: "环境配置" }));
+  await screen.findByRole("heading", { name: "环境配置" });
+  await user.click(screen.getByRole("button", { name: "Tunnel" }));
+  const fixedForwardPanel = screen.getByText("固定公网转发").closest("article");
+  expect(fixedForwardPanel).not.toBeNull();
+  await user.click(within(fixedForwardPanel as HTMLElement).getByRole("checkbox"));
+
+  expect(screen.getByText("固定公网转发和 Cloudflare Quick Tunnel 不能同时启用。")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "保存环境配置" })).toBeDisabled();
+  expect(updateEnvConfig).not.toHaveBeenCalled();
 });
 
 

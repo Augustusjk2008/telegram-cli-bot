@@ -7,6 +7,7 @@ import {
   getTerminalTheme,
   type UiThemeName,
 } from "../theme";
+import { buildWsUrl } from "../utils/publicBase";
 
 export type TerminalSessionOptions = {
   token: string;
@@ -120,12 +121,11 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
       return;
     }
 
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const params = new URLSearchParams({
       token: options.token,
       owner_id: options.ownerId,
     });
-    const socketUrl = `${protocol}//${window.location.host}/terminal/ws?${params.toString()}`;
+    const socketUrl = buildWsUrl("/terminal/ws", params);
     socket = new WebSocket(socketUrl);
     socket.binaryType = "arraybuffer";
     isAttached = false;

@@ -1,4 +1,5 @@
 import { WebApiClientError } from "./types";
+import { buildWsUrl, withApiBase } from "../utils/publicBase";
 import type {
   AdminUser,
   AdminUserUpdateInput,
@@ -716,10 +717,10 @@ type RawCliParamsPayload = {
 const RESTART_SERVICE_REQUEST_TIMEOUT_MS = 4000;
 
 type RawTunnelSnapshot = {
-  mode: "disabled" | "cloudflare_quick" | "manual";
+  mode: "disabled" | "cloudflare_quick" | "manual" | "fixed_public_forward";
   status: "stopped" | "waiting_local" | "waiting_url" | "connected" | "verifying_public" | "starting" | "running" | "error";
   phase?: string;
-  source: "disabled" | "quick_tunnel" | "manual_config";
+  source: "disabled" | "quick_tunnel" | "manual_config" | "fixed_public_forward";
   public_url?: string;
   local_url?: string;
   last_error?: string;
@@ -734,6 +735,9 @@ type RawTunnelSnapshot = {
   registered_at?: string;
   log_tail?: string[];
   pid?: number | null;
+  fixed_public_forward_enabled?: boolean;
+  node_id?: string;
+  base_path?: string;
 };
 
 type RawGitChangedFile = {
@@ -2063,6 +2067,9 @@ function mapTunnelSnapshot(raw: RawTunnelSnapshot): TunnelSnapshot {
     registeredAt: raw.registered_at || "",
     logTail: Array.isArray(raw.log_tail) ? raw.log_tail.map(String) : [],
     pid: raw.pid ?? null,
+    fixedPublicForwardEnabled: Boolean(raw.fixed_public_forward_enabled),
+    nodeId: raw.node_id || "",
+    basePath: raw.base_path || "",
   };
 }
 
@@ -3345,16 +3352,7 @@ function mapNotificationSettings(data: RawNotificationSettings | null | undefine
 }
 
 function buildWebSocketUrl(path: string, token: string) {
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const configuredBase = typeof __PUBLIC_ENV__ !== "undefined" ? __PUBLIC_ENV__.VITE_API_BASE_URL : "";
-  const configuredUrl = configuredBase ? new URL(configuredBase, window.location.href) : null;
-  const host = configuredUrl?.host || window.location.host;
-  const basePath = configuredUrl?.pathname && configuredUrl.pathname !== "/" ? configuredUrl.pathname.replace(/\/$/, "") : "";
-  const url = new URL(`${protocol}//${host}${basePath}${path}`);
-  if (token) {
-    url.searchParams.set("token", token);
-  }
-  return url.toString();
+  return buildWsUrl(path, token ? { token } : undefined);
 }
 
 function isWebNotificationEvent(value: unknown): value is WebNotificationEvent {
@@ -3374,7 +3372,7 @@ export class RealWebBotClient implements WebBotClient {
   }
 
   private async requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const response = await fetch(path, {
+    const response = await fetch(withApiBase(path), {
       ...init,
       cache: "no-store",
       headers: this.headers(init.headers),
@@ -3416,7 +3414,7 @@ export class RealWebBotClient implements WebBotClient {
     onProgress: (event: AppUpdateDownloadProgress) => void,
     fallbackMessage: string,
   ): Promise<AppUpdateStatus> {
-    const response = await fetch(path, {
+    const response = await fetch(withApiBase(path), {
       method: "POST",
       headers: this.headers({
         "Content-Type": "application/json",
@@ -3483,7 +3481,7 @@ export class RealWebBotClient implements WebBotClient {
   }
 
   async getPublicHostInfo(): Promise<PublicHostInfo> {
-    const response = await fetch("/api/health", {
+    const response = await fetch(withApiBase("/api/health"), {
       cache: "no-store",
       headers: this.headers(),
     });
@@ -4241,7 +4239,7 @@ export class RealWebBotClient implements WebBotClient {
     onTrace?: (trace: ChatTraceEvent) => void,
     options?: ChatSendOptions,
   ): Promise<ChatMessage> {
-    const response = await fetch(`/api/bots/${encodeURIComponent(botAlias)}/chat/stream`, {
+    const response = await fetch(withApiBase(`/api/bots/${encodeURIComponent(botAlias)}/chat/stream`), {
       method: "POST",
       headers: this.headers({
         "Content-Type": "application/json",
@@ -4738,7 +4736,7 @@ export class RealWebBotClient implements WebBotClient {
 
   async getPluginArtifactBlob(botAlias: string, artifactId: string): Promise<Blob> {
     const response = await fetch(
-      `/api/bots/${encodeURIComponent(botAlias)}/plugins/artifacts/${encodeURIComponent(artifactId)}`,
+      withApiBase(`/api/bots/${encodeURIComponent(botAlias)}/plugins/artifacts/${encodeURIComponent(artifactId)}`),
       {
         headers: this.headers(),
       },
@@ -4751,7 +4749,7 @@ export class RealWebBotClient implements WebBotClient {
 
   async downloadPluginArtifact(botAlias: string, artifactId: string, filename: string): Promise<void> {
     const response = await fetch(
-      `/api/bots/${encodeURIComponent(botAlias)}/plugins/artifacts/${encodeURIComponent(artifactId)}`,
+      withApiBase(`/api/bots/${encodeURIComponent(botAlias)}/plugins/artifacts/${encodeURIComponent(artifactId)}`),
       {
         headers: this.headers(),
       },
@@ -4949,7 +4947,7 @@ export class RealWebBotClient implements WebBotClient {
   async uploadFile(botAlias: string, file: File): Promise<void> {
     const formData = new FormData();
     formData.append("file", file);
-    const response = await fetch(`/api/bots/${encodeURIComponent(botAlias)}/files/upload`, {
+    const response = await fetch(withApiBase(`/api/bots/${encodeURIComponent(botAlias)}/files/upload`), {
       method: "POST",
       headers: this.headers(),
       body: formData,
@@ -4961,7 +4959,7 @@ export class RealWebBotClient implements WebBotClient {
 
   async downloadFile(botAlias: string, filename: string, onProgress?: (progress: FileDownloadProgress) => void): Promise<void> {
     const params = new URLSearchParams({ filename });
-    const response = await fetch(`/api/bots/${encodeURIComponent(botAlias)}/files/download?${params.toString()}`, {
+    const response = await fetch(withApiBase(`/api/bots/${encodeURIComponent(botAlias)}/files/download?${params.toString()}`), {
       headers: this.headers(),
     });
     if (!response.ok) {
@@ -4999,7 +4997,7 @@ export class RealWebBotClient implements WebBotClient {
         }, RESTART_SERVICE_REQUEST_TIMEOUT_MS)
       : null;
     try {
-      const response = await fetch("/api/admin/restart", {
+      const response = await fetch(withApiBase("/api/admin/restart"), {
         method: "POST",
         cache: "no-store",
         keepalive: true,
@@ -5483,9 +5481,7 @@ export class RealWebBotClient implements WebBotClient {
   }
 
   openLanChatSocket(onEvent: (event: LanChatEvent) => void): () => void {
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const tokenParam = this.token ? `?token=${encodeURIComponent(this.token)}` : "";
-    const socket = new WebSocket(`${protocol}//${window.location.host}/lan-chat/ws${tokenParam}`);
+    const socket = new WebSocket(buildWsUrl("/lan-chat/ws", this.token ? { token: this.token } : undefined));
     socket.addEventListener("message", (event) => {
       try {
         const mapped = mapLanChatEvent(JSON.parse(event.data));
@@ -5632,7 +5628,7 @@ export class RealWebBotClient implements WebBotClient {
     handlers?: AssistantPatchGenerationHandlers,
   ): Promise<AssistantPatchMetadata> {
     const response = await fetch(
-      `/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/proposals/${encodeURIComponent(proposalId)}/patch/stream`,
+      withApiBase(`/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/proposals/${encodeURIComponent(proposalId)}/patch/stream`),
       {
         method: "POST",
         headers: this.headers({

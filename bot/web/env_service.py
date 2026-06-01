@@ -61,6 +61,7 @@ _KEY_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 _LINE_RE = re.compile(r"^(\s*(?:export\s+)?)(" + _KEY_RE.pattern[1:-1] + r")(\s*=\s*)(.*?)(\r?\n?)$")
 _BOOL_TRUE = {"1", "true", "yes", "on"}
 _BOOL_FALSE = {"0", "false", "no", "off"}
+_NODE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 
 ENV_SCHEMA: tuple[EnvField, ...] = (
@@ -82,7 +83,14 @@ ENV_SCHEMA: tuple[EnvField, ...] = (
     EnvField("WEB_PORT", "监听端口", "Web 服务监听端口。", "number", "8765", "web", min_value=1, max_value=65535, integer=True),
     EnvField("WEB_API_TOKEN", "登录口令", "旧版 Web API 登录口令。", "password", "", "web", sensitive=True, max_length=8192),
     EnvField("WEB_ALLOWED_ORIGINS", "CORS 允许来源", "逗号分隔的允许来源。", "csv", "", "web"),
+    EnvField("TCB_NODE_ID", "节点 ID", "Hub 固定公网转发节点 ID。", "string", "", "web", max_length=64),
+    EnvField("WEB_BASE_PATH", "Web 子路径", "固定转发子路径，空或 /node/<节点 ID>。", "string", "", "web", rebuild_required=True),
+    EnvField("VITE_BASE_PATH", "前端资源子路径", "构建期配置；留空则跟随 WEB_BASE_PATH。", "string", "", "frontend", rebuild_required=True),
+    EnvField("VITE_API_BASE_URL", "前端 API 子路径", "构建期配置；留空则跟随 WEB_BASE_PATH。", "string", "", "frontend", rebuild_required=True),
     EnvField("WEB_PUBLIC_URL", "公网 URL", "反代或隧道公网访问地址。", "string", "", "tunnel"),
+    EnvField("WEB_FIXED_PUBLIC_FORWARD_ENABLED", "固定公网转发", "启用 Hub 固定 IP/域名转发。", "boolean", "false", "tunnel"),
+    EnvField("WEB_FIXED_PUBLIC_FORWARD_URL", "固定公网入口", "Hub 公网入口 URL，含 /node/<节点 ID>。", "string", "", "tunnel"),
+    EnvField("TCB_HUB_NODE_TOKEN", "Hub 节点授权码", "Hub 分配给本节点的授权码。", "password", "", "tunnel", sensitive=True, max_length=8192),
     EnvField("WEB_TUNNEL_MODE", "隧道模式", "内置隧道模式。", "select", "disabled", "tunnel", options=("disabled", "cloudflare_quick")),
     EnvField("WEB_TUNNEL_AUTOSTART", "自动启动隧道", "Web 启动时自动拉起隧道。", "boolean", "true", "tunnel"),
     EnvField("WEB_TUNNEL_CLOUDFLARED_PATH", "cloudflared 路径", "cloudflared 可执行文件路径。", "path", "", "tunnel"),
@@ -268,6 +276,13 @@ def _normalize_csv(value: Any) -> str:
     return ",".join(item.strip() for item in str(value).split(",") if item.strip())
 
 
+def _normalize_base_path_value(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text or text == "/":
+        return ""
+    return text.rstrip("/")
+
+
 def _normalize_value(field: EnvField, value: Any) -> str:
     if isinstance(value, dict):
         action = value.get("action")
@@ -289,6 +304,8 @@ def _normalize_value(field: EnvField, value: Any) -> str:
         normalized = _normalize_number(field, value)
     elif field.type == "csv":
         normalized = _normalize_csv(value)
+    elif field.key in {"WEB_BASE_PATH", "VITE_BASE_PATH", "VITE_API_BASE_URL"}:
+        normalized = _normalize_base_path_value(value)
     else:
         normalized = str(value).strip() if field.type == "select" else str(value)
     if "\n" in normalized or "\r" in normalized:
@@ -447,7 +464,74 @@ class EnvConfigService:
                 current_value = example_values.get(normalized_key, field.default)
             if normalized_value != current_value:
                 changes[normalized_key] = normalized_value
+        self._validate_combination(env_values, example_values, changes)
         return changes
+
+    def _validate_combination(
+        self,
+        env_values: dict[str, str],
+        example_values: dict[str, str],
+        changes: dict[str, str],
+    ) -> None:
+        values: dict[str, str] = {}
+        for field in ENV_SCHEMA:
+            values[field.key] = env_values.get(field.key, example_values.get(field.key, field.default))
+        values.update(changes)
+
+        node_id = str(values.get("TCB_NODE_ID", "") or "").strip()
+        if node_id and not _NODE_ID_RE.fullmatch(node_id):
+            raise EnvValidationError(
+                "invalid_env_value",
+                "TCB_NODE_ID 只能包含字母、数字、下划线、短横线，且最长 64 字符",
+                {"key": "TCB_NODE_ID"},
+            )
+
+        web_base_path = _normalize_base_path_value(values.get("WEB_BASE_PATH", ""))
+        if web_base_path:
+            expected = f"/node/{node_id}" if node_id else ""
+            if not node_id or web_base_path != expected:
+                raise EnvValidationError(
+                    "invalid_env_value",
+                    "WEB_BASE_PATH 必须为空或等于 /node/<TCB_NODE_ID>",
+                    {"key": "WEB_BASE_PATH", "expected": expected or "/node/<TCB_NODE_ID>"},
+                )
+
+        for key in ("VITE_BASE_PATH", "VITE_API_BASE_URL"):
+            value = _normalize_base_path_value(values.get(key, ""))
+            if value and value != web_base_path:
+                raise EnvValidationError(
+                    "invalid_env_value",
+                    f"{key} 必须为空或等于 WEB_BASE_PATH",
+                    {"key": key, "expected": web_base_path},
+                )
+
+        fixed_enabled = _normalize_boolean("WEB_FIXED_PUBLIC_FORWARD_ENABLED", values.get("WEB_FIXED_PUBLIC_FORWARD_ENABLED", "false")) == "true"
+        tunnel_mode = str(values.get("WEB_TUNNEL_MODE", "disabled") or "disabled").strip().lower() or "disabled"
+        if fixed_enabled:
+            if not str(values.get("WEB_FIXED_PUBLIC_FORWARD_URL", "") or "").strip():
+                raise EnvValidationError(
+                    "invalid_env_value",
+                    "启用固定公网转发时必须填写 WEB_FIXED_PUBLIC_FORWARD_URL",
+                    {"key": "WEB_FIXED_PUBLIC_FORWARD_URL"},
+                )
+            if not str(values.get("TCB_HUB_NODE_TOKEN", "") or "").strip():
+                raise EnvValidationError(
+                    "invalid_env_value",
+                    "启用固定公网转发时必须填写 Hub 节点授权码",
+                    {"key": "TCB_HUB_NODE_TOKEN"},
+                )
+            if tunnel_mode != "disabled":
+                raise EnvValidationError(
+                    "invalid_env_value",
+                    "固定公网转发和 Cloudflare Quick Tunnel 不能同时启用",
+                    {"key": "WEB_TUNNEL_MODE"},
+                )
+        if tunnel_mode == "cloudflare_quick" and fixed_enabled:
+            raise EnvValidationError(
+                "invalid_env_value",
+                "Cloudflare Quick Tunnel 和固定公网转发不能同时启用",
+                {"key": "WEB_FIXED_PUBLIC_FORWARD_ENABLED"},
+            )
 
     def _render_updated_env(self, lines: list[EnvLine], changes: dict[str, str]) -> str:
         pending = dict(changes)

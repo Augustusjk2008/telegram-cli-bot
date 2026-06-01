@@ -68,15 +68,17 @@ class TunnelService:
         startup_timeout: float = 10.0,
         local_health_timeout: float = 5.0,
         public_health_timeout: float = 60.0,
+        fixed_public_forward_enabled: bool = False,
     ):
         normalized_mode = (mode or "disabled").strip().lower()
-        if public_url.strip():
+        if public_url.strip() and not fixed_public_forward_enabled:
             normalized_mode = "manual"
         elif normalized_mode not in {"disabled", "cloudflare_quick"}:
             normalized_mode = "disabled"
 
         self._mode = normalized_mode
         self._autostart = bool(autostart)
+        self._fixed_public_forward_enabled = bool(fixed_public_forward_enabled)
         self._manual_public_url = public_url.strip()
         self._cloudflared_path = cloudflared_path.strip()
         self._startup_timeout = startup_timeout
@@ -304,7 +306,12 @@ class TunnelService:
             return copy.deepcopy(self._snapshot)
 
     def should_autostart(self) -> bool:
-        return self._mode == "cloudflare_quick" and self._autostart and not self._manual_public_url
+        return (
+            self._mode == "cloudflare_quick"
+            and self._autostart
+            and not self._manual_public_url
+            and not self._fixed_public_forward_enabled
+        )
 
     def _set_snapshot(self, **changes: Any) -> None:
         if "status" in changes and "phase" not in changes:
