@@ -8,6 +8,7 @@ import { PersistentTerminalProvider } from "../terminal/PersistentTerminalProvid
 import { DebugPane } from "../workbench/DebugPane";
 import { DesktopWorkbench } from "../workbench/DesktopWorkbench";
 import { buildWorkbenchSessionStorageKey } from "../workbench/workbenchSession";
+import type { DirectoryListing, FileCreateResult } from "../services/types";
 
 function render(ui: ReactElement) {
   const client = ((ui.props as { client?: MockWebBotClient }).client) || new MockWebBotClient();
@@ -46,6 +47,7 @@ function createDeferred<T>() {
 test("desktop workbench shows four panes and persists collapse state", async () => {
   const user = userEvent.setup();
   const onViewModeChange = vi.fn();
+  const onLogout = vi.fn();
 
   render(
     <DesktopWorkbench
@@ -58,6 +60,7 @@ test("desktop workbench shows four panes and persists collapse state", async () 
       viewMode="desktop"
       onViewModeChange={onViewModeChange}
       onOpenBotSwitcher={() => {}}
+      onLogout={onLogout}
     />,
   );
 
@@ -74,6 +77,9 @@ test("desktop workbench shows four panes and persists collapse state", async () 
 
   await user.click(screen.getByRole("button", { name: "竖屏版" }));
   expect(onViewModeChange).toHaveBeenCalledWith("mobile");
+
+  await user.click(screen.getByRole("button", { name: "退出登录" }));
+  expect(onLogout).toHaveBeenCalledTimes(1);
 });
 
 
@@ -104,6 +110,107 @@ test("desktop structureOnly file click never opens editor or reads full content"
   expect(readFileFull).not.toHaveBeenCalled();
   expect(screen.queryByTestId("desktop-pane-editor")).not.toBeInTheDocument();
   expect(screen.queryByRole("tab", { name: /README\.md/ })).not.toBeInTheDocument();
+});
+
+test("desktop file tree can clear selected folder before creating at root", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const createTextFile = vi.fn(async (
+    _botAlias: string,
+    filename: string,
+    content = "",
+    _parentPath?: string,
+  ): Promise<FileCreateResult> => ({
+    path: filename,
+    fileSizeBytes: new TextEncoder().encode(content).length,
+    lastModifiedNs: "1",
+  }));
+  const createDirectory = vi.fn(async () => undefined);
+  vi.spyOn(client, "createTextFile").mockImplementation(createTextFile);
+  vi.spyOn(client, "createDirectory").mockImplementation(createDirectory);
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  const docsButton = await screen.findByRole("button", { name: "展开 docs" });
+  await user.click(docsButton);
+  expectDesktopTreeRowSelected("docs");
+
+  await user.click(docsButton);
+  expectDesktopTreeRowSelected("docs", false);
+
+  await user.click(screen.getByRole("button", { name: "新建文件" }));
+  await user.type(screen.getByLabelText("文件名"), "root-note.md");
+  await user.click(screen.getByRole("button", { name: "创建" }));
+
+  expect(createTextFile).toHaveBeenCalledWith("main", "root-note.md", "", "/Users/demo/orbit-safe-claw");
+
+  vi.spyOn(window, "prompt").mockReturnValue("root-folder");
+  await user.click(screen.getByRole("button", { name: "新建文件夹" }));
+
+  expect(createDirectory).toHaveBeenCalledWith("main", "root-folder", "/Users/demo/orbit-safe-claw");
+});
+
+test("desktop file tree ignores selected file as create parent", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const createTextFile = vi.fn(async (
+    _botAlias: string,
+    filename: string,
+    content = "",
+    _parentPath?: string,
+  ): Promise<FileCreateResult> => ({
+    path: filename,
+    fileSizeBytes: new TextEncoder().encode(content).length,
+    lastModifiedNs: "1",
+  }));
+  vi.spyOn(client, "listFiles").mockImplementation(async (_botAlias: string, path?: string): Promise<DirectoryListing> => {
+    const workingDir = path || "/Users/demo/orbit-safe-claw";
+    if (workingDir.endsWith("/docs")) {
+      return {
+        workingDir,
+        entries: [
+          { name: "architecture.md", isDir: false, size: 1536, updatedAt: "2026-04-22T10:00:00Z" },
+        ],
+      };
+    }
+    return {
+      workingDir,
+      entries: [
+        { name: "docs", isDir: true, updatedAt: "2026-04-22T10:00:00Z" },
+      ],
+    };
+  });
+  vi.spyOn(client, "createTextFile").mockImplementation(createTextFile);
+
+  render(
+    <DesktopWorkbench
+      authToken="123"
+      botAlias="main"
+      client={client}
+      viewMode="desktop"
+      onViewModeChange={() => {}}
+      onOpenBotSwitcher={() => {}}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "展开 docs" }));
+  await user.click(await screen.findByRole("button", { name: "打开 docs/architecture.md" }));
+  expectDesktopTreeRowSelected("docs/architecture.md");
+
+  await user.click(screen.getByRole("button", { name: "新建文件" }));
+  await user.type(screen.getByLabelText("文件名"), "root-note.md");
+  await user.click(screen.getByRole("button", { name: "创建" }));
+
+  expect(createTextFile).toHaveBeenCalledWith("main", "root-note.md", "", "/Users/demo/orbit-safe-claw");
 });
 
 

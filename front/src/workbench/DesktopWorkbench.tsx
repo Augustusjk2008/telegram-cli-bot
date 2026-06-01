@@ -137,6 +137,7 @@ type Props = {
   onViewModeChange?: (viewMode: ViewMode) => void;
   onOpenBotSwitcher?: (anchorRect?: DOMRect) => void;
   onOpenBotManager?: () => void;
+  onLogout?: () => void;
   onDirtyTabsChange?: (hasDirtyTabs: boolean) => void;
   onChatPaneVisibilityChange?: (visible: boolean) => void;
 };
@@ -180,6 +181,7 @@ export function DesktopWorkbench({
   onViewModeChange,
   onOpenBotSwitcher,
   onOpenBotManager,
+  onLogout,
   onDirtyTabsChange,
   onChatPaneVisibilityChange,
 }: Props) {
@@ -936,7 +938,7 @@ export function DesktopWorkbench({
           botAlias={botAlias}
           botAvatarName={botAvatarName}
           client={client}
-          onLogout={() => undefined}
+          onLogout={() => onLogout?.()}
           embedded
           prefilledWorkdir={pendingSidebarWorkdir || fileTree.rootPath}
           onWorkdirUpdated={(nextWorkdir) => {
@@ -1005,6 +1007,7 @@ export function DesktopWorkbench({
         onToggleChat={toggleChat}
         onViewModeChange={(nextMode) => onViewModeChange?.(nextMode)}
         onOpenBotSwitcher={(anchorRect) => onOpenBotSwitcher?.(anchorRect)}
+        onLogout={() => onLogout?.()}
       />
 
       <div data-testid="desktop-workbench-shell" className="min-h-0 overflow-hidden bg-[var(--workbench-titlebar-bg)]">

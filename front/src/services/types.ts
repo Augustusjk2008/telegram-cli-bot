@@ -1710,10 +1710,16 @@ export type GitCommitGraphRef = {
   current: boolean;
 };
 
+export type GitCommitGraphEdge = {
+  from: number;
+  to: number;
+  commit?: string;
+};
+
 export type GitCommitGraphLane = {
   column: number;
   width: number;
-  edges: unknown[];
+  edges: GitCommitGraphEdge[];
 };
 
 export type GitCommitGraphNode = {

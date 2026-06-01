@@ -47,6 +47,7 @@ import type {
   GitBlamePayload,
   GitBranchResetResult,
   GitBranchList,
+  GitCommitGraphEdge,
   GitCommitGraphOptions,
   GitCommitGraphPayload,
   GitCommitGraphRefKind,
@@ -779,6 +780,12 @@ type RawGitCommitGraphRef = {
   current?: boolean;
 };
 
+type RawGitCommitGraphEdge = {
+  from?: unknown;
+  to?: unknown;
+  commit?: string;
+};
+
 type RawGitCommitGraphNode = {
   hash?: string;
   short_hash?: string;
@@ -790,7 +797,7 @@ type RawGitCommitGraphNode = {
   graph?: {
     column?: number;
     width?: number;
-    edges?: unknown[];
+    edges?: RawGitCommitGraphEdge[];
   };
   can_reset?: boolean;
 };
@@ -2487,9 +2494,9 @@ function mapGitCommitGraph(raw: RawGitCommitGraphPayload): GitCommitGraphPayload
           current: Boolean(ref.current),
         })),
         graph: {
-          column: Number(graph.column || 0),
-          width: Number(graph.width || 1),
-          edges: Array.isArray(graph.edges) ? graph.edges : [],
+          column: mapGitCommitGraphNumber(graph.column, 0),
+          width: mapGitCommitGraphNumber(graph.width, 1),
+          edges: mapGitCommitGraphEdges(graph.edges),
         },
         ...(typeof node.can_reset === "boolean" ? { canReset: node.can_reset } : {}),
       };
@@ -2497,6 +2504,28 @@ function mapGitCommitGraph(raw: RawGitCommitGraphPayload): GitCommitGraphPayload
     hasMore: Boolean(raw.has_more),
     nextCursor: raw.next_cursor || "",
   };
+}
+
+function mapGitCommitGraphEdges(raw: RawGitCommitGraphEdge[] | undefined): GitCommitGraphEdge[] {
+  return (raw || [])
+    .filter((edge): edge is RawGitCommitGraphEdge => Boolean(edge) && typeof edge === "object")
+    .map((edge) => {
+      const from = Number(edge.from);
+      const to = Number(edge.to);
+      return {
+        from: Number.isFinite(from) ? from : 0,
+        to: Number.isFinite(to) ? to : 0,
+        ...(edge.commit ? { commit: String(edge.commit) } : {}),
+      };
+    });
+}
+
+function mapGitCommitGraphNumber(value: unknown, fallback: number) {
+  if (value === null || value === undefined || value === "") {
+    return fallback;
+  }
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : fallback;
 }
 
 function mapGitDiffPayload(raw: RawGitDiffPayload): GitDiffPayload {

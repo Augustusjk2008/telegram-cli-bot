@@ -1019,7 +1019,7 @@ export function FileTreePane({
       return "";
     }
     const selectedNode = findTreeNodeByPath(tree.rootEntries, tree.branches, selectedPath);
-    return selectedNode?.isDir ? selectedPath : parentTreePath(selectedPath);
+    return selectedNode?.isDir ? selectedPath : "";
   }
 
   function handleEntryContextMenu(event: MouseEvent<HTMLButtonElement>, entry: FileTreeNode, absolutePath: string) {
@@ -1394,7 +1394,11 @@ export function FileTreePane({
             onDrop={(event) => handleDirectoryDrop(event, entry)}
             onDragEnd={resetInternalDrag}
             onClick={() => {
-              tree.selectPath(entry.path);
+              if (tree.selectedPath === entry.path) {
+                tree.clearSelection();
+              } else {
+                tree.selectPath(entry.path);
+              }
               void tree.toggleDirectory(entry.path);
             }}
             className={clsx(
@@ -1594,6 +1598,12 @@ export function FileTreePane({
       <div
         data-testid="desktop-file-tree-scroll"
         data-root-drop-target={dropTargetPath === ROOT_DROP_TARGET ? "true" : "false"}
+        onClick={(event) => {
+          const target = event.target;
+          if (target instanceof Element && !target.closest("[data-tree-path]")) {
+            tree.clearSelection();
+          }
+        }}
         className={clsx(
           "flex min-h-0 flex-1 flex-col px-2 py-2",
           dropTargetPath === ROOT_DROP_TARGET && "bg-[var(--accent-soft)] outline outline-1 outline-[var(--accent)]",

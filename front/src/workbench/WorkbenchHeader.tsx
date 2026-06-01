@@ -5,6 +5,7 @@ import {
   Bot,
   FolderGit2,
   GitBranch,
+  LogOut,
   MonitorSmartphone,
   PanelBottom,
   PanelBottomDashed,
@@ -41,6 +42,7 @@ type Props = {
   onToggleChat: () => void;
   onViewModeChange: (viewMode: ViewMode) => void;
   onOpenBotSwitcher: (anchorRect?: DOMRect) => void;
+  onLogout: () => void;
 };
 
 export function WorkbenchHeader({
@@ -59,6 +61,7 @@ export function WorkbenchHeader({
   onToggleChat,
   onViewModeChange,
   onOpenBotSwitcher,
+  onLogout,
 }: Props) {
   const reduceMotion = useReducedMotion();
   const botLabelMotion = resolveMotionProps(premiumMotion.statusSettle, reduceMotion);
@@ -192,6 +195,15 @@ export function WorkbenchHeader({
             </button>
           ))}
         </div>
+        <button
+          type="button"
+          aria-label="退出登录"
+          title="退出登录"
+          onClick={onLogout}
+          className="inline-flex h-8 w-8 items-center justify-center border border-[var(--border)] bg-[var(--surface-glass)] text-[var(--muted)] transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)]"
+        >
+          <LogOut className="h-4 w-4" />
+        </button>
       </div>
     </header>
   );

@@ -1144,6 +1144,7 @@ export function App() {
               setIsChatImmersive(false);
               setIsTerminalImmersive(false);
             }}
+            onLogout={handleLogout}
             onDirtyTabsChange={setDesktopHasDirtyTabs}
             onChatPaneVisibilityChange={setDesktopChatPaneVisible}
           />

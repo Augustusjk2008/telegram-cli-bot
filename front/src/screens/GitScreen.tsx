@@ -32,6 +32,7 @@ import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
   GitBlamePayload,
   GitBranchList,
+  GitCommitGraphEdge,
   GitCommitGraphNode,
   GitCommitGraphPayload,
   GitCommitGraphRef,
@@ -59,6 +60,10 @@ type GitFileGroupKey = "staged" | "unstaged" | "untracked";
 type CommitLike = Pick<GitCommitGraphNode, "hash" | "shortHash" | "subject">;
 
 const GIT_GRAPH_LIMIT = 50;
+const GIT_GRAPH_ROW_HEIGHT = 58;
+const GIT_GRAPH_LANE_GAP = 18;
+const GIT_GRAPH_LANE_PADDING = 12;
+const GIT_GRAPH_NODE_RADIUS = 4;
 
 function groupedFiles(overview: GitOverview | null) {
   const changedFiles = overview?.changedFiles || [];
@@ -178,9 +183,169 @@ function graphRefTone(ref: GitCommitGraphRef) {
   return ref.kind === "remote_branch" ? "neutral" : "accent";
 }
 
-function graphLaneLines(width: number, column: number) {
-  const laneCount = Math.max(width || 1, column + 1);
-  return Array.from({ length: laneCount }, (_, index) => index);
+function clampGraphColumn(value: number, laneCount: number) {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.min(Math.max(Math.round(value), 0), Math.max(laneCount - 1, 0));
+}
+
+function graphLaneCount(nodes: GitCommitGraphNode[]) {
+  return Math.max(
+    1,
+    ...nodes.map((node) => Math.max(
+      node.graph.width || 1,
+      node.graph.column + 1,
+      ...(node.graph.edges || []).flatMap((edge) => [edge.from + 1, edge.to + 1]),
+    )),
+  );
+}
+
+function laneX(column: number) {
+  return GIT_GRAPH_LANE_PADDING + column * GIT_GRAPH_LANE_GAP;
+}
+
+function graphEdgeKey(node: GitCommitGraphNode, edge: GitCommitGraphEdge, index: number) {
+  return `${node.hash}-${edge.from}-${edge.to}-${edge.commit || index}`;
+}
+
+function formatCommitGraphDate(value: string | number | Date) {
+  if (!value) {
+    return "-";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+  return date.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+type GitCommitGraphLiteProps = {
+  nodes: GitCommitGraphNode[];
+  selectedHash: string;
+  disabled: boolean;
+  onSelect: (hash: string) => void;
+};
+
+function GitCommitGraphLite({ nodes, selectedHash, disabled, onSelect }: GitCommitGraphLiteProps) {
+  const laneCount = graphLaneCount(nodes);
+  const laneWidth = GIT_GRAPH_LANE_PADDING * 2 + (laneCount - 1) * GIT_GRAPH_LANE_GAP;
+  const midY = GIT_GRAPH_ROW_HEIGHT / 2;
+
+  return (
+    <div className="min-w-0 divide-y divide-[var(--workbench-hairline)]">
+      {nodes.map((node) => {
+        const selected = selectedHash === node.hash;
+        const nodeColumn = clampGraphColumn(node.graph.column, laneCount);
+        const shortHash = node.shortHash || node.hash.slice(0, 7);
+        return (
+          <button
+            key={node.hash}
+            type="button"
+            data-testid={`git-graph-row-${shortHash}`}
+            data-selected={selected ? "true" : "false"}
+            aria-label={`选择提交 ${shortHash}`}
+            onClick={() => onSelect(node.hash)}
+            disabled={disabled}
+            className={clsx(
+              "grid w-full min-w-0 items-stretch gap-3 px-2 py-2 text-left transition-colors",
+              "hover:bg-[var(--workbench-hover-bg)] disabled:cursor-not-allowed disabled:opacity-70",
+              selected ? "bg-[var(--workbench-active-bg)]" : "",
+            )}
+            style={{ gridTemplateColumns: `${laneWidth}px minmax(0, 1fr)` }}
+          >
+            <svg
+              data-testid={`git-graph-lanes-${shortHash}`}
+              aria-hidden="true"
+              width={laneWidth}
+              height={GIT_GRAPH_ROW_HEIGHT}
+              viewBox={`0 0 ${laneWidth} ${GIT_GRAPH_ROW_HEIGHT}`}
+              className="block overflow-visible"
+            >
+              {Array.from({ length: laneCount }, (_, column) => (
+                <line
+                  key={`lane-${column}`}
+                  x1={laneX(column)}
+                  x2={laneX(column)}
+                  y1="0"
+                  y2={GIT_GRAPH_ROW_HEIGHT}
+                  stroke="var(--workbench-hairline)"
+                  strokeWidth="1"
+                />
+              ))}
+              {(node.graph.edges || []).map((edge, index) => {
+                const from = clampGraphColumn(edge.from, laneCount);
+                const to = clampGraphColumn(edge.to, laneCount);
+                const fromX = laneX(from);
+                const toX = laneX(to);
+                const path = from === to
+                  ? `M ${fromX} ${midY} L ${toX} ${GIT_GRAPH_ROW_HEIGHT}`
+                  : `M ${fromX} ${midY} C ${fromX} ${midY + 14}, ${toX} ${GIT_GRAPH_ROW_HEIGHT - 14}, ${toX} ${GIT_GRAPH_ROW_HEIGHT}`;
+                return (
+                  <path
+                    key={graphEdgeKey(node, edge, index)}
+                    data-testid={`git-graph-edge-${shortHash}-${index}`}
+                    d={path}
+                    fill="none"
+                    stroke="var(--accent)"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    opacity={from === nodeColumn ? 0.95 : 0.58}
+                  />
+                );
+              })}
+              <circle
+                cx={laneX(nodeColumn)}
+                cy={midY}
+                r={GIT_GRAPH_NODE_RADIUS + 2}
+                fill="var(--workbench-panel-elevated-bg)"
+                stroke={selected ? "var(--accent)" : "var(--workbench-hairline)"}
+                strokeWidth="1"
+              />
+              <circle
+                data-testid={`git-graph-node-${shortHash}`}
+                cx={laneX(nodeColumn)}
+                cy={midY}
+                r={GIT_GRAPH_NODE_RADIUS}
+                fill="var(--accent)"
+              />
+            </svg>
+            <div className="flex min-w-0 flex-col justify-center gap-1">
+              <div className="flex min-w-0 items-center gap-2 text-[11px] text-[var(--muted)]">
+                <span className="shrink-0 font-mono font-semibold text-[var(--accent)]">
+                  {shortHash} - {node.authorName || "-"}
+                </span>
+                <span className="min-w-0 truncate">{formatCommitGraphDate(node.authoredAt)}</span>
+              </div>
+              <div className="min-w-0 truncate text-sm font-medium text-[var(--text)]" title={node.subject || "-"}>
+                {node.subject || "-"}
+              </div>
+              {node.refs.length > 0 ? (
+                <div className="flex min-w-0 flex-wrap gap-1 pt-0.5">
+                  {node.refs.map((ref) => (
+                    <StateBadge
+                      key={`${node.hash}-${ref.kind}-${ref.name}`}
+                      tone={graphRefTone(ref)}
+                      className="max-w-full min-w-0 truncate"
+                    >
+                      <span data-testid={`git-graph-ref-${shortHash}-${ref.name}`} className="block min-w-0 truncate">
+                        {ref.name}
+                      </span>
+                    </StateBadge>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 export function GitScreen({
@@ -201,8 +366,6 @@ export function GitScreen({
   const [branches, setBranches] = useState<GitBranchList>({ currentBranch: "", branches: [] });
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [branchDraft, setBranchDraft] = useState("");
-  const [commitBranchDrafts, setCommitBranchDrafts] = useState<Record<string, string>>({});
-  const [commitResetModes, setCommitResetModes] = useState<Record<string, GitResetMode>>({});
   const [selectedBranch, setSelectedBranch] = useState("");
   const [stashes, setStashes] = useState<GitStashList>({ items: [] });
   const [stashesLoading, setStashesLoading] = useState(false);
@@ -216,7 +379,6 @@ export function GitScreen({
   const [selectedGraphHash, setSelectedGraphHash] = useState("");
   const [graphBranchDraft, setGraphBranchDraft] = useState("");
   const [graphResetMode, setGraphResetMode] = useState<GitResetMode>("mixed");
-  const [commitsCollapsed, setCommitsCollapsed] = useState(false);
   const [identityConfig, setIdentityConfig] = useState<GitIdentityConfig | null>(null);
   const [identityScope, setIdentityScope] = useState<GitIdentityScope>("global");
   const [identityName, setIdentityName] = useState("");
@@ -298,7 +460,7 @@ export function GitScreen({
         ? current || next.nodes[0]?.hash || ""
         : next.nodes.some((node) => node.hash === current) ? current : next.nodes[0]?.hash || "");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "加载版本树失败");
+      setError(err instanceof Error ? err.message : "加载提交图失败");
     } finally {
       setGraphLoading(false);
     }
@@ -524,14 +686,6 @@ export function GitScreen({
     }
   }
 
-  function updateCommitBranchDraft(commitHash: string, value: string) {
-    setCommitBranchDrafts((current) => ({ ...current, [commitHash]: value }));
-  }
-
-  function updateCommitResetMode(commitHash: string, value: GitResetMode) {
-    setCommitResetModes((current) => ({ ...current, [commitHash]: value }));
-  }
-
   async function createBranchFromTarget(commit: CommitLike, name: string, onSuccess?: () => void) {
     if (!name) {
       setError("分支名不能为空");
@@ -552,13 +706,6 @@ export function GitScreen({
     } finally {
       setActionLoading("");
     }
-  }
-
-  async function createBranchFromCommit(commit: GitOverview["recentCommits"][number]) {
-    const name = (commitBranchDrafts[commit.hash] || "").trim();
-    await createBranchFromTarget(commit, name, () => {
-      setCommitBranchDrafts((current) => ({ ...current, [commit.hash]: "" }));
-    });
   }
 
   async function createBranchFromGraphNode() {
@@ -592,10 +739,6 @@ export function GitScreen({
     } finally {
       setActionLoading("");
     }
-  }
-
-  async function resetBranchToCommit(commit: GitOverview["recentCommits"][number]) {
-    await resetBranchToTarget(commit, commitResetModes[commit.hash] || "mixed");
   }
 
   async function resetBranchToGraphNode() {
@@ -1268,7 +1411,7 @@ export function GitScreen({
                 <section data-testid="git-version-tree-panel" className={sectionClass("space-y-2")}>
                   <div className={sectionHeaderClass("flex-wrap")}>
                     <div>
-                      <h2 className="text-sm font-semibold">版本树</h2>
+                      <h2 className="text-sm font-semibold">提交图</h2>
                       <p className="text-xs text-[var(--muted)]">
                         {graphPayload ? `${graphPayload.nodes.length} 个提交` : "未加载"}
                       </p>
@@ -1306,7 +1449,7 @@ export function GitScreen({
                       </button>
                       <button
                         type="button"
-                        aria-label={graphCollapsed ? "展开版本树" : "收起版本树"}
+                        aria-label={graphCollapsed ? "展开提交图" : "收起提交图"}
                         onClick={() => setGraphCollapsed((value) => !value)}
                         className={iconButtonClass()}
                       >
@@ -1317,64 +1460,27 @@ export function GitScreen({
                   {!graphCollapsed ? (
                     <div data-testid="git-version-tree-content" className={sectionBodyClass("space-y-3")}>
                       {graphLoading && !graphPayload ? (
-                        <div className={emptyStateClass()}>加载版本树...</div>
+                        <div className={emptyStateClass()}>加载提交图...</div>
                       ) : null}
                       {graphPayload && graphPayload.nodes.length === 0 ? (
                         <div className={emptyStateClass()}>暂无提交</div>
                       ) : null}
                       {graphPayload && graphPayload.nodes.length > 0 ? (
-                        <div className="space-y-1">
-                          {graphPayload.nodes.map((node) => {
-                            const selected = selectedGraphHash === node.hash;
-                            return (
-                              <button
-                                key={node.hash}
-                                type="button"
-                                data-testid={`git-graph-node-${node.shortHash}`}
-                                onClick={() => setSelectedGraphHash(node.hash)}
+                        <div className="space-y-2">
+                          <div className="overflow-x-auto rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)]">
+                            <div
+                              data-testid="git-commit-graph"
+                              aria-disabled={mutationBusy}
+                              className={clsx("git-commit-graph min-w-0", mutationBusy ? "pointer-events-none opacity-70" : "")}
+                            >
+                              <GitCommitGraphLite
+                                nodes={graphPayload.nodes}
+                                selectedHash={selectedGraphHash}
                                 disabled={mutationBusy}
-                                className={clsx(
-                                  "grid w-full grid-cols-[80px_minmax(0,1fr)] items-stretch gap-2 rounded-md border px-2 py-2 text-left transition-colors",
-                                  selected
-                                    ? "border-[var(--workbench-hover-border)] bg-[var(--workbench-active-bg)]"
-                                    : "border-transparent hover:bg-[var(--workbench-hover-bg)]",
-                                  mutationBusy ? "opacity-70" : "",
-                                )}
-                              >
-                                <div className="relative h-full min-h-12 overflow-hidden rounded bg-[var(--workbench-panel-elevated-bg)]" aria-label={`lane ${node.graph.column + 1}/${node.graph.width}`}>
-                                  {graphLaneLines(node.graph.width, node.graph.column).map((lane) => (
-                                    <span
-                                      key={lane}
-                                      className="absolute top-0 h-full w-px bg-[var(--workbench-hairline)]"
-                                      style={{ left: `${((lane + 0.5) / Math.max(node.graph.width, 1)) * 100}%` }}
-                                    />
-                                  ))}
-                                  <span
-                                    className="absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-[var(--workbench-panel-elevated-bg)] bg-[var(--accent)]"
-                                    style={{ left: `${((node.graph.column + 0.5) / Math.max(node.graph.width, 1)) * 100}%` }}
-                                  />
-                                </div>
-                                <div className="min-w-0">
-                                  <div className="flex min-w-0 flex-wrap items-center gap-2">
-                                    <span className="font-mono text-xs font-semibold text-[var(--accent)]">{node.shortHash}</span>
-                                    <span className="min-w-0 truncate text-sm font-medium text-[var(--text)]">{node.subject || "-"}</span>
-                                  </div>
-                                  <div className="mt-1 text-[11px] text-[var(--muted)]">
-                                    {node.authorName || "-"} · {node.authoredAt || "-"}
-                                  </div>
-                                  {node.refs.length > 0 ? (
-                                    <div className="mt-2 flex flex-wrap gap-1">
-                                      {node.refs.map((ref) => (
-                                        <StateBadge key={`${node.hash}-${ref.kind}-${ref.name}`} tone={graphRefTone(ref)} className="max-w-full truncate">
-                                          {ref.name}
-                                        </StateBadge>
-                                      ))}
-                                    </div>
-                                  ) : null}
-                                </div>
-                              </button>
-                            );
-                          })}
+                                onSelect={setSelectedGraphHash}
+                              />
+                            </div>
+                          </div>
                         </div>
                       ) : null}
                       {selectedGraphNode ? (
@@ -1384,9 +1490,9 @@ export function GitScreen({
                             <div className="truncate text-[var(--muted)]">{selectedGraphNode.subject}</div>
                           </div>
                           <label className="min-w-[150px] flex-1 sm:flex-none">
-                            <span className="sr-only">从版本树新建分支名</span>
+                            <span className="sr-only">从提交图新建分支名</span>
                             <input
-                              aria-label="从版本树新建分支名"
+                              aria-label="从提交图新建分支名"
                               value={graphBranchDraft}
                               onChange={(event) => setGraphBranchDraft(event.target.value)}
                               placeholder="feature/name"
@@ -1408,9 +1514,9 @@ export function GitScreen({
                             新建分支
                           </button>
                           <label>
-                            <span className="sr-only">版本树重置模式</span>
+                            <span className="sr-only">提交图重置模式</span>
                             <select
-                              aria-label="版本树重置模式"
+                              aria-label="提交图重置模式"
                               value={graphResetMode}
                               onChange={(event) => setGraphResetMode(event.target.value as GitResetMode)}
                               disabled={mutationBusy}
@@ -1448,100 +1554,6 @@ export function GitScreen({
                         </button>
                       ) : null}
                     </div>
-                  ) : null}
-                </section>
-
-                <section data-testid="git-recent-commits-panel" className={sectionClass("space-y-2")}>
-                  <div className={sectionHeaderClass()}>
-                    <h2 className="text-sm font-semibold">最近提交</h2>
-                    <button
-                      type="button"
-                      aria-label={commitsCollapsed ? "展开最近提交" : "收起最近提交"}
-                      onClick={() => setCommitsCollapsed((value) => !value)}
-                      className={iconButtonClass()}
-                    >
-                      {commitsCollapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                    </button>
-                  </div>
-                  {!commitsCollapsed ? (
-                    overview.recentCommits.length === 0 ? (
-                      <div className={sectionBodyClass()}>
-                        <div className={emptyStateClass()}>
-                          当前仓库还没有提交记录
-                        </div>
-                      </div>
-                    ) : (
-                      <div data-testid="git-recent-commits-content" className={sectionBodyClass(listClass())}>
-                        {overview.recentCommits.map((item) => (
-                          <div key={item.hash} className={listRowClass("block px-1.5 py-2")}>
-                            <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
-                              <div className="min-w-0">
-                                <div className="text-sm font-medium text-[var(--text)]" title={item.message || item.subject}>
-                                  {item.subject}
-                                </div>
-                                <div className="mt-1 text-[11px] text-[var(--muted)]">
-                                  {item.shortHash} · {item.authorName} · {item.authoredAt}
-                                </div>
-                              </div>
-                              <div className="flex min-w-[260px] flex-1 flex-wrap justify-end gap-1.5">
-                                <label className="min-w-[130px] flex-1 sm:flex-none">
-                                  <span className="sr-only">从 {item.shortHash} 新建分支名</span>
-                                  <input
-                                    aria-label={`从 ${item.shortHash} 新建分支名`}
-                                    value={commitBranchDrafts[item.hash] || ""}
-                                    onChange={(event) => updateCommitBranchDraft(item.hash, event.target.value)}
-                                    placeholder="feature/name"
-                                    className="h-7 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 text-xs"
-                                  />
-                                </label>
-                                <button
-                                  type="button"
-                                  aria-label={`从此提交新建分支 ${item.shortHash}`}
-                                  title="从此提交新建分支"
-                                  onClick={() => void createBranchFromCommit(item)}
-                                  disabled={mutationBusy || !(commitBranchDrafts[item.hash] || "").trim()}
-                                  className={iconButtonClass()}
-                                >
-                                  {actionLoading === `branch-create:${item.hash}` ? (
-                                    <LoaderCircle className="h-3 w-3 animate-spin" />
-                                  ) : (
-                                    <GitFork className="h-3 w-3" />
-                                  )}
-                                </button>
-                                <label>
-                                  <span className="sr-only">重置模式 {item.shortHash}</span>
-                                  <select
-                                    aria-label={`重置模式 ${item.shortHash}`}
-                                    value={commitResetModes[item.hash] || "mixed"}
-                                    onChange={(event) => updateCommitResetMode(item.hash, event.target.value as GitResetMode)}
-                                    disabled={mutationBusy}
-                                    className="h-7 rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 text-xs"
-                                  >
-                                    <option value="soft">soft</option>
-                                    <option value="mixed">mixed</option>
-                                    <option value="hard">hard</option>
-                                  </select>
-                                </label>
-                                <button
-                                  type="button"
-                                  aria-label={`重置到此提交 ${item.shortHash}`}
-                                  title="重置到此提交"
-                                  onClick={() => void resetBranchToCommit(item)}
-                                  disabled={mutationBusy}
-                                  className={iconButtonClass()}
-                                >
-                                  {actionLoading === `branch-reset:${item.hash}` ? (
-                                    <LoaderCircle className="h-3 w-3 animate-spin" />
-                                  ) : (
-                                    <RotateCcw className="h-3 w-3" />
-                                  )}
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )
                   ) : null}
                 </section>
               </div>

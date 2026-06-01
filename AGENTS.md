@@ -126,6 +126,7 @@ Vivado waveform plugin 使用 Python JSON-RPC stdio backend。它按 source fing
 - 自动更新只检查 GitHub Releases
 - `docs/` 必须保持在 git 外；release note 也不要 force-add 或提交
 - GitHub Release body 来自 `.release-local/publish-release.ps1 -ReleaseNotesFile <markdown-file>`；省略则用 `gh release create --generate-notes`
+- Web 公告运行时文件不在仓库根；从 `bot/runtime_paths.py:get_announcements_content_path()` 取，默认 `Path.home() / ".tcb" / "orbit-safe-claw" / "announcements" / "content.json"`，可被 `TCB_DATA_DIR` 覆盖。仓库根 `.web_announcements.json` 仅旧数据迁移用，不要作为当前公告维护位置
 - 下载的更新在下次启动时通过 `python -m bot.updater apply-pending --repo-root <repo>` 应用
 
 ## 约定
