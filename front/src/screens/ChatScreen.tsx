@@ -221,10 +221,14 @@ function writeStoredQueuedMessage(botAlias: string, agentId: string, message: Qu
   if (typeof window === "undefined") {
     return;
   }
+  const sendOptions = message.sendOptions ? { ...message.sendOptions } : undefined;
+  if (sendOptions) {
+    delete sendOptions.signal;
+  }
   window.localStorage.setItem(queuedMessageStorageKey(botAlias, agentId, accountId), JSON.stringify({
     text: message.text,
     attachments: message.attachments,
-    sendOptions: message.sendOptions,
+    sendOptions,
   }));
 }
 
@@ -1159,6 +1163,7 @@ export function ChatScreen({
   const activeAgentIdRef = useRef(activeAgentId);
   const assistantPollTimerRef = useRef<number | null>(null);
   const sseRecoveryTimerRef = useRef<number | null>(null);
+  const activeSseAbortControllerRef = useRef<AbortController | null>(null);
   const sseLastActivityAtRef = useRef<number | null>(null);
   const pollAssistantStateRef = useRef<(() => Promise<void>) | null>(null);
   const drainQueuedMessageIfIdleRef = useRef<((context?: { botAlias: string; agentId: string }) => Promise<void>) | null>(null);
@@ -1482,6 +1487,8 @@ export function ChatScreen({
             setPendingCronRuns(refreshedPendingRuns);
           }
           assistantSendVersionRef.current += 1;
+          activeSseAbortControllerRef.current?.abort();
+          activeSseAbortControllerRef.current = null;
           const { shouldPoll } = applyHistoryView(messages, overview, refreshedPendingRuns);
           if (!shouldPoll) {
             void drainQueuedMessageIfIdleRef.current?.({ botAlias, agentId });
@@ -2436,6 +2443,8 @@ export function ChatScreen({
       createdAt: new Date().toISOString(),
       state: "streaming",
     };
+    const streamAbortController = typeof AbortController !== "undefined" ? new AbortController() : null;
+    activeSseAbortControllerRef.current = streamAbortController;
 
     setError("");
     if (options.clearPendingAttachments) {
@@ -2536,24 +2545,30 @@ export function ChatScreen({
           },
         ));
       };
-      const finalMessage = options.sendOptions
+      const baseSendOptions = options.sendOptions
+        ? (
+          options.sendOptions.cluster || activeAgentIdRef.current === "main"
+            ? options.sendOptions
+            : { ...options.sendOptions, agentId: activeAgentIdRef.current }
+        )
+        : (
+          activeAgentIdRef.current === "main"
+            ? undefined
+            : { agentId: activeAgentIdRef.current }
+        );
+      const sendOptions = streamAbortController
+        ? { ...(baseSendOptions || {}), signal: streamAbortController.signal }
+        : baseSendOptions;
+      const finalMessage = sendOptions
         ? await client.sendMessage(
           botAlias,
           composedText,
           onChunk,
           onStatus,
           onTrace,
-          options.sendOptions.cluster || activeAgentIdRef.current === "main"
-            ? options.sendOptions
-            : { ...options.sendOptions, agentId: activeAgentIdRef.current },
+          sendOptions,
         )
-        : (
-          activeAgentIdRef.current === "main"
-            ? await client.sendMessage(botAlias, composedText, onChunk, onStatus, onTrace)
-            : await client.sendMessage(botAlias, composedText, onChunk, onStatus, onTrace, {
-              agentId: activeAgentIdRef.current,
-            })
-        );
+        : await client.sendMessage(botAlias, composedText, onChunk, onStatus, onTrace);
 
       if (sendVersion !== assistantSendVersionRef.current) {
         return;
@@ -2584,6 +2599,29 @@ export function ChatScreen({
       }
       const message = err instanceof Error ? err.message : "发送失败";
       setError(message);
+      if (message.includes("连接中断")) {
+        try {
+          const agentId = activeAgentIdRef.current;
+          const overview = await getScopedOverview(client, botAlias, agentId);
+          if (sendVersion === assistantSendVersionRef.current) {
+            const messages = await listScopedMessages(client, botAlias, agentId);
+            if (sendVersion === assistantSendVersionRef.current) {
+              setBotOverview(overview);
+              setWorkingDir(overview.workingDir || "");
+              restoreClusterRunFromOverview(overview);
+              const refreshedPendingRuns = resolvePendingCronRuns(pendingCronRunsRef.current, messages);
+              if (refreshedPendingRuns.length !== pendingCronRunsRef.current.length) {
+                setPendingCronRuns(refreshedPendingRuns);
+              }
+              streamAbortController?.abort();
+              applyHistoryView(messages, overview, refreshedPendingRuns);
+              return;
+            }
+          }
+        } catch {
+          // keep local error state
+        }
+      }
       setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => ({
         ...item,
         text: message,
@@ -2593,6 +2631,9 @@ export function ChatScreen({
     } finally {
       if (sendVersion !== assistantSendVersionRef.current) {
         return;
+      }
+      if (activeSseAbortControllerRef.current === streamAbortController) {
+        activeSseAbortControllerRef.current = null;
       }
       stopSseRecoveryWatch();
       sseLastActivityAtRef.current = null;
@@ -2604,7 +2645,7 @@ export function ChatScreen({
       emitBotActivityForActiveAgent("idle");
       void drainQueuedMessageIfIdleRef.current?.({ botAlias: sendBotAlias, agentId: sendAgentId });
     }
-  }, [botAlias, client, markSseActivity, onUnreadResult, pollClusterTasks, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch]);
+  }, [applyHistoryView, botAlias, client, markSseActivity, onUnreadResult, pollClusterTasks, restoreClusterRunFromOverview, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch]);
 
   drainQueuedMessageIfIdleRef.current = async (context) => {
     const targetBotAlias = context?.botAlias || botAlias;

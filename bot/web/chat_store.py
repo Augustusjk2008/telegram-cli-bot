@@ -604,6 +604,37 @@ class ChatStore:
                     raise KeyError(conversation_id)
                 return self._conversation_from_row(row)
 
+    def get_latest_conversation_id(
+        self,
+        *,
+        bot_id: int,
+        user_id: int,
+        agent_id: str = "main",
+        working_dir: str,
+        session_epoch: int | None = None,
+    ) -> str:
+        conn = self._connect(create=False)
+        if conn is None:
+            return ""
+        clauses = ["bot_id = ?", "user_id = ?", "agent_id = ?", "working_dir = ?", "archived_at IS NULL"]
+        params: list[Any] = [bot_id, user_id, str(agent_id or "main"), working_dir]
+        if session_epoch is not None:
+            clauses.append("session_epoch = ?")
+            params.append(max(0, int(session_epoch or 0)))
+        with closing(conn):
+            with conn:
+                row = conn.execute(
+                    f"""
+                    SELECT id
+                    FROM conversations
+                    WHERE {' AND '.join(clauses)}
+                    ORDER BY pinned DESC, updated_at DESC, created_at DESC, id DESC
+                    LIMIT 1
+                    """,
+                    params,
+                ).fetchone()
+                return str(row["id"] or "") if row is not None else ""
+
     def list_conversations(
         self,
         *,
@@ -894,6 +925,75 @@ class ChatStore:
                 state=state,
                 content_chars=len(str(content or "")),
             )
+
+    def persist_turn_native_session_id(self, handle: ChatTurnHandle, native_session_id: str | None) -> bool:
+        session_id = str(native_session_id or "").strip()
+        if not session_id:
+            return False
+        now = _utc_now()
+        with self._connect_for_write() as conn:
+            row = conn.execute(
+                "SELECT conversation_id, native_session_id FROM turns WHERE id = ?",
+                (handle.turn_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            existing = str(row["native_session_id"] or "").strip()
+            if existing == session_id:
+                conn.execute(
+                    """
+                    UPDATE conversations
+                    SET native_session_id = COALESCE(NULLIF(native_session_id, ''), ?),
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (session_id, now, handle.conversation_id),
+                )
+                return False
+            conn.execute(
+                """
+                UPDATE turns
+                SET native_session_id = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (session_id, now, handle.turn_id),
+            )
+            conn.execute(
+                """
+                UPDATE conversations
+                SET native_session_id = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (session_id, now, handle.conversation_id),
+            )
+            return True
+
+    def clear_native_session_id(self, handle: ChatTurnHandle) -> bool:
+        now = _utc_now()
+        with self._connect_for_write() as conn:
+            turn_row = conn.execute(
+                "SELECT native_session_id FROM turns WHERE id = ?",
+                (handle.turn_id,),
+            ).fetchone()
+            if turn_row is None:
+                return False
+            conversation_row = conn.execute(
+                "SELECT native_session_id FROM conversations WHERE id = ?",
+                (handle.conversation_id,),
+            ).fetchone()
+            changed = bool(str(turn_row["native_session_id"] or "").strip())
+            changed = changed or bool(conversation_row is not None and str(conversation_row["native_session_id"] or "").strip())
+            conn.execute(
+                "UPDATE turns SET native_session_id = NULL, updated_at = ? WHERE id = ?",
+                (now, handle.turn_id),
+            )
+            conn.execute(
+                "UPDATE conversations SET native_session_id = NULL, updated_at = ? WHERE id = ?",
+                (now, handle.conversation_id),
+            )
+            return changed
 
     def replace_message_content(self, message_id: str, content: str, *, state: str = "done") -> dict[str, Any]:
         started_at = time.perf_counter()
@@ -1358,7 +1458,7 @@ class ChatStore:
         meta = {
             "completion_state": row["completion_state"],
             "native_provider": row["native_provider"],
-            "native_session_id": row["native_session_id"],
+            "native_session_id": str(row["native_session_id"] or ""),
             "trace_count": int(trace_stats.get("trace_count", 0) or 0),
             "tool_call_count": int(trace_stats.get("tool_call_count", 0) or 0),
             "process_count": int(trace_stats.get("process_count", 0) or 0),
@@ -1705,6 +1805,72 @@ class ChatStore:
             result_count=row_count,
         )
         return row_count
+
+    def mark_stale_streaming_turns_for_workspace(
+        self,
+        *,
+        bot_id: int,
+        working_dir: str,
+        bot_alias: str = "",
+        cli_type: str = "",
+        error_code: str = "stale_stream_recovered",
+        fallback_content: str = "上次运行未正常结束，已停止显示正在输出。",
+    ) -> int:
+        conn = self._connect(create=False)
+        if conn is None:
+            return 0
+        now = _utc_now()
+        alias_filter = str(bot_alias or "").strip().lower()
+        cli_type_filter = str(cli_type or "").strip().lower()
+        with closing(conn):
+            with conn:
+                clauses = [
+                    "c.bot_id = ?",
+                    "c.working_dir = ?",
+                    "c.archived_at IS NULL",
+                    "m.role = ?",
+                    "m.state = ?",
+                ]
+                params: list[Any] = [bot_id, working_dir, "assistant", "streaming"]
+                if alias_filter:
+                    clauses.append("LOWER(c.bot_alias) = ?")
+                    params.append(alias_filter)
+                if cli_type_filter:
+                    clauses.append("LOWER(c.cli_type) = ?")
+                    params.append(cli_type_filter)
+                rows = conn.execute(
+                    f"""
+                    SELECT
+                        t.id AS turn_id,
+                        t.assistant_message_id AS assistant_message_id,
+                        m.content AS assistant_content
+                    FROM turns AS t
+                    JOIN messages AS m ON m.id = t.assistant_message_id
+                    JOIN conversations AS c ON c.id = t.conversation_id
+                    WHERE {' AND '.join(clauses)}
+                    """,
+                    params,
+                ).fetchall()
+                for row in rows:
+                    content = str(row["assistant_content"] or "").strip() or fallback_content
+                    conn.execute(
+                        "UPDATE messages SET content = ?, state = ?, updated_at = ? WHERE id = ?",
+                        (content, "error", now, row["assistant_message_id"]),
+                    )
+                    conn.execute(
+                        """
+                        UPDATE turns
+                        SET assistant_state = ?,
+                            completion_state = ?,
+                            completed_at = ?,
+                            updated_at = ?,
+                            error_code = ?,
+                            error_message = ?
+                        WHERE id = ?
+                        """,
+                        ("error", error_code, now, now, error_code, content, row["turn_id"]),
+                    )
+                return len(rows)
 
     def get_running_reply(
         self,

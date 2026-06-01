@@ -1217,6 +1217,25 @@ def test_conversation_api_delete_all_clears_bot_workspace_sessions(web_manager: 
     assert first["conversation"]["id"] != second["conversation"]["id"]
 
 
+def test_history_reconciles_stale_active_conversation(web_manager: MultiBotManager, tmp_path: Path):
+    web_manager.main_profile.working_dir = str(tmp_path)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+
+    stale = create_conversation(web_manager, "main", 1001, "已删除")
+    latest = create_conversation(web_manager, "main", 1001, "保留")
+    store = ChatStore(tmp_path)
+    store.delete_conversation_by_id(stale["conversation"]["id"])
+    with session._lock:
+        session.active_conversation_id = stale["conversation"]["id"]
+    session.persist()
+
+    history = get_history(web_manager, "main", 1001)
+
+    assert session.active_conversation_id == latest["conversation"]["id"]
+    assert history["items"] == []
+
+
 @pytest.mark.asyncio
 async def test_agent_api_create_update_delete(web_manager: MultiBotManager):
     listed = list_agents(web_manager, "main")
@@ -1390,13 +1409,14 @@ def _quick_codex_schedule() -> list[tuple[float, str]]:
 
 
 class BlockingAfterFinalStdout:
-    def __init__(self):
+    def __init__(self, *, include_turn_completed: bool = True):
         self.closed = threading.Event()
         self._lines = [
             '{"type":"thread.started","thread_id":"thread-final"}\n',
             '{"type":"item.completed","item":{"type":"assistant_message","text":"完成回复"}}\n',
-            '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n',
         ]
+        if include_turn_completed:
+            self._lines.append('{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n')
 
     def readline(self):
         if self._lines:
@@ -1412,8 +1432,8 @@ class BlockingAfterFinalStdout:
 
 
 class FakeCodexProcessWithBlockingStdout:
-    def __init__(self):
-        self.stdout = BlockingAfterFinalStdout()
+    def __init__(self, *, include_turn_completed: bool = True):
+        self.stdout = BlockingAfterFinalStdout(include_turn_completed=include_turn_completed)
         self.stdin = None
         self.returncode = None
         self.terminate = MagicMock(side_effect=self._terminate)
@@ -1499,6 +1519,108 @@ def assert_recording_process_closed(process: RecordingProcess):
     assert process.stdin.closed is True
     assert process.stdout.closed is True
     assert process.stderr.closed is True
+
+
+async def _collect_stream_events(stream):
+    return [event async for event in stream]
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_quiet_finishes_after_codex_assistant_completed_without_turn_completed(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    web_manager.main_profile.cli_type = "codex"
+    monkeypatch.setattr(api_service, "CODEX_DONE_QUIET_SECONDS", 0.01)
+    process = FakeCodexProcessWithBlockingStdout(include_turn_completed=False)
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=process):
+        events = await asyncio.wait_for(
+            _collect_stream_events(_stream_cli_chat(web_manager, "main", 1001, "继续")),
+            timeout=2,
+        )
+
+    done_event = next(event for event in events if event["type"] == "done")
+    assert done_event["message"]["content"] == "完成回复"
+    assert process.terminate.called
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_persists_codex_thread_before_cancel(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    web_manager.main_profile.cli_type = "codex"
+    monkeypatch.setattr(api_service, "CODEX_DONE_QUIET_SECONDS", 60)
+    process = FakeCodexProcessWithBlockingStdout(include_turn_completed=False)
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=process):
+        stream = _stream_cli_chat(web_manager, "main", 1001, "继续")
+        await stream.__anext__()
+        await stream.__anext__()
+        await stream.aclose()
+
+    session = get_session_for_alias(web_manager, "main", 1001)
+    store = ChatStore(Path(session.working_dir))
+    conversation = store.get_conversation(str(session.active_conversation_id))
+    messages = store.list_messages(str(session.active_conversation_id))
+    assistant = next(item for item in messages if item["role"] == "assistant")
+
+    assert session.codex_session_id == "thread-final"
+    assert conversation["native_session_id"] == "thread-final"
+    assert assistant["meta"]["native_session_id"] == "thread-final"
+
+
+@pytest.mark.asyncio
+async def test_run_cli_chat_clears_bad_codex_native_session_from_conversation(
+    web_manager: MultiBotManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    web_manager.main_profile.cli_type = "codex"
+    web_manager.main_profile.working_dir = str(tmp_path)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+    store = ChatStore(tmp_path)
+    service = ChatHistoryService(store)
+    seed = service.start_turn(
+        profile=web_manager.main_profile,
+        session=session,
+        user_text="旧问题",
+        native_provider="codex",
+    )
+    service.complete_turn(
+        seed,
+        content="旧回复",
+        completion_state="completed",
+        native_session_id="bad-thread",
+    )
+
+    select_conversation(web_manager, "main", 1001, seed.conversation_id)
+    assert session.codex_session_id == "bad-thread"
+
+    async def fake_communicate(_process):
+        return "unknown thread", None, 1
+
+    process = RecordingProcess([])
+    monkeypatch.setattr(api_service, "_communicate_codex_process", fake_communicate)
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=process):
+        result = await run_cli_chat(web_manager, "main", 1001, "继续")
+
+    conversation = store.get_conversation(seed.conversation_id)
+    assert result["message"]["state"] == "error"
+    assert session.codex_session_id is None
+    assert conversation["native_session_id"] == ""
+
+    select_conversation(web_manager, "main", 1001, seed.conversation_id)
+    assert session.codex_session_id is None
 
 
 @pytest.mark.asyncio

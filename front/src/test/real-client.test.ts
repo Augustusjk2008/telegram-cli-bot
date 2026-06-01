@@ -168,6 +168,35 @@ describe("RealWebBotClient", () => {
     expect(body.mentions[0]).toMatchObject({ agent_id: "reviewer", label: "代码审查" });
   });
 
+  test("sendMessage rejects stream EOF without done event", async () => {
+    const encoder = new TextEncoder();
+    const onChunk = vi.fn();
+    const onStatus = vi.fn();
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: vi.fn()
+            .mockResolvedValueOnce({
+              value: encoder.encode(
+                "event: status\ndata: {\"type\":\"status\",\"elapsed_seconds\":2,\"preview_text\":\"处理中\"}\n\n"
+                + "event: delta\ndata: {\"type\":\"delta\",\"text\":\"半截\"}\n\n",
+              ),
+              done: false,
+            })
+            .mockResolvedValueOnce({ value: undefined, done: true }),
+          cancel: vi.fn().mockResolvedValue(undefined),
+        }),
+      },
+    });
+
+    const client = new RealWebBotClient();
+
+    await expect(client.sendMessage("main", "hi", onChunk, onStatus)).rejects.toThrow("连接中断");
+    expect(onStatus).toHaveBeenCalledWith(expect.objectContaining({ previewText: "处理中" }));
+    expect(onChunk).toHaveBeenCalledWith("半截");
+  });
+
   test("maps context_usage from history and stream done message", async () => {
     const encoder = new TextEncoder();
     fetchMock

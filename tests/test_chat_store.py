@@ -389,3 +389,77 @@ def test_get_trace_recovery_context_returns_turn_native_context(monkeypatch, tmp
     }
 
 
+def test_store_persists_native_session_id_before_turn_completion(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    store = ChatStore(workspace)
+    handle = store.begin_turn(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        user_text="继续",
+        native_provider="codex",
+    )
+
+    store.persist_turn_native_session_id(handle, "thread-early")
+    store.replace_assistant_content(handle, "已开始回复", state="streaming")
+    store.mark_stale_streaming_turns(
+        bot_id=1,
+        user_id=1001,
+        working_dir=str(workspace),
+        session_epoch=1,
+        conversation_id=handle.conversation_id,
+    )
+
+    conversation = store.get_conversation(handle.conversation_id)
+    assistant = store.list_messages(handle.conversation_id)[1]
+    assert conversation["native_session_id"] == "thread-early"
+    assert assistant["content"] == "已开始回复"
+    assert assistant["meta"]["native_session_id"] == "thread-early"
+    assert assistant["meta"]["completion_state"] == "stale_stream_recovered"
+
+
+def test_store_can_clear_bad_native_session_id_from_turn_and_conversation(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    store = ChatStore(workspace)
+    handle = store.begin_turn(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        user_text="继续",
+        native_provider="codex",
+    )
+    store.complete_turn(
+        handle,
+        content="unknown thread",
+        completion_state="error",
+        native_session_id="bad-thread",
+        error_code="error",
+        error_message="unknown thread",
+    )
+
+    assert store.clear_native_session_id(handle) is True
+
+    conversation = store.get_conversation(handle.conversation_id)
+    assistant = store.list_messages(handle.conversation_id)[1]
+    assert conversation["native_session_id"] == ""
+    assert assistant["meta"]["native_session_id"] == ""
+
+

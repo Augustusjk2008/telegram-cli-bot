@@ -683,6 +683,7 @@ export type ChatSendOptions = {
   agentId?: string;
   cluster?: boolean;
   mentions?: AgentMention[];
+  signal?: AbortSignal;
 };
 
 export type BrowserNotificationPermission = NotificationPermission | "unsupported";

@@ -16,7 +16,8 @@ _ERROR_RULES: list[tuple[str, tuple[str, ...]]] = [
     ("rate_limit", ("429", "rate limit")),
     ("server_5xx", ("500", "502", "503", "upstream error")),
     ("network", ("timeout", "connection", "dns", "fetch failed")),
-    ("resume_session", ("failed to resume", "conversation not found")),
+    ("resume_session", ("failed to resume", "conversation not found", "unknown session", "unknown thread")),
+    ("interrupted", ("stale_stream_recovered", "connection interrupted", "stream interrupted")),
     ("mcp", ("mcp", "tool unavailable", "server not configured")),
     ("permission", ("permission denied", "approval", "sandbox")),
     ("parse", ("json decode", "invalid json")),
@@ -74,6 +75,7 @@ def collect_cli_error_stats(
     seen_turns: set[str] = set()
     fetch_limit = max(normalized_limit, 1000)
     for workspace in _iter_profile_workspaces(manager, alias_filter=alias_filter, cli_type_filter=cli_type_filter):
+        _reconcile_workspace_stale_streams(manager, workspace, alias_filter=alias_filter, cli_type_filter=cli_type_filter)
         for item in ChatStore(Path(workspace)).list_error_turns(
             from_at=from_at.isoformat(),
             to_at=to_at.isoformat(),
@@ -111,6 +113,58 @@ def collect_cli_error_stats(
         "items": limited_items,
         "top_errors": _build_top_errors(summary_items),
     }
+
+
+def _reconcile_workspace_stale_streams(
+    manager: MultiBotManager,
+    workspace: str,
+    *,
+    alias_filter: str = "",
+    cli_type_filter: str = "",
+) -> None:
+    store = ChatStore(Path(workspace))
+    for profile in [manager.main_profile, *[manager.managed_profiles[key] for key in sorted(manager.managed_profiles)]]:
+        if alias_filter and str(profile.alias or "").strip().lower() != alias_filter:
+            continue
+        if cli_type_filter and str(profile.cli_type or "").strip().lower() != cli_type_filter:
+            continue
+        if normalize_workspace_dir(str(profile.working_dir or "")) != normalize_workspace_dir(workspace):
+            continue
+        if _profile_has_processing_session(manager, profile.alias):
+            continue
+        store.mark_stale_streaming_turns_for_workspace(
+            bot_id=_resolve_stats_bot_id(manager, profile.alias),
+            working_dir=str(workspace),
+            bot_alias=profile.alias,
+            cli_type=profile.cli_type,
+        )
+
+
+def _profile_has_processing_session(manager: MultiBotManager, alias: str) -> bool:
+    try:
+        from bot.sessions import sessions, sessions_lock
+    except ImportError:
+        return False
+
+    bot_id = _resolve_stats_bot_id(manager, alias)
+    with sessions_lock:
+        scoped_sessions = [session for key, session in sessions.items() if key[0] == bot_id]
+    for session in scoped_sessions:
+        with session._lock:
+            if bool(session.is_processing):
+                return True
+    return False
+
+
+def _resolve_stats_bot_id(manager: MultiBotManager, alias: str) -> int:
+    import zlib
+
+    app = manager.applications.get(alias)
+    if app:
+        bot_id = app.bot_data.get("bot_id")
+        if isinstance(bot_id, int):
+            return bot_id
+    return -int(zlib.adler32(f"web:{alias}".encode("utf-8")))
 
 
 def _strip_url_query(match: re.Match[str]) -> str:
