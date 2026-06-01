@@ -96,6 +96,8 @@ import type {
   GitBlamePayload,
   GitBranchResetResult,
   GitBranchList,
+  GitCommitGraphOptions,
+  GitCommitGraphPayload,
   GitCommitMessageCliConfig,
   GitCommitMessageCliConfigUpdateInput,
   GitCommitMessageGenerateResult,
@@ -4846,6 +4848,90 @@ export class MockWebBotClient implements WebBotClient {
       workingDir: overview.workingDir,
       repoPath: overview.repoPath,
       items,
+    };
+  }
+
+  async getGitCommitGraph(botAlias: string, options: GitCommitGraphOptions = {}): Promise<GitCommitGraphPayload> {
+    const overview = await this.getGitOverview(botAlias);
+    const scope = options.scope || "all";
+    if (!overview.repoFound) {
+      return {
+        repoFound: false,
+        scope,
+        nodes: [],
+        hasMore: false,
+        nextCursor: "",
+      };
+    }
+
+    const allNodes = [
+      {
+        hash: "f03a9c6d1e2b4a7890f1234567890abcdef0001",
+        shortHash: "f03a9c6",
+        parents: ["c9d8e7f6a5b4c321001122334455667788990000", "91a7b6c5d4e3f2011223344556677889900aabb"],
+        authorName: "Web Bot",
+        authoredAt: "2026-05-28T09:18:00+08:00",
+        subject: "merge: sync release graph",
+        refs: [
+          { name: "HEAD", kind: "head" as const, current: true },
+          { name: overview.currentBranch || "main", kind: "local_branch" as const, current: true },
+          { name: "origin/main", kind: "remote_branch" as const, current: false },
+        ],
+        graph: { column: 0, width: 3, edges: [{ from: 0, to: 0 }, { from: 1, to: 0 }] },
+        canReset: true,
+      },
+      {
+        hash: "c9d8e7f6a5b4c321001122334455667788990000",
+        shortHash: "c9d8e7f",
+        parents: ["847b894000000000000000000000000000000000"],
+        authorName: "Web Bot",
+        authoredAt: "2026-05-27T21:40:00+08:00",
+        subject: "feat: add git version tree",
+        refs: [
+          { name: "feature/git-panel", kind: "local_branch" as const, current: false },
+          { name: "v0.9.0", kind: "tag" as const, current: false },
+        ],
+        graph: { column: 0, width: 2, edges: [{ from: 0, to: 0 }] },
+        canReset: true,
+      },
+      {
+        hash: "91a7b6c5d4e3f2011223344556677889900aabb",
+        shortHash: "91a7b6c",
+        parents: ["847b894000000000000000000000000000000000"],
+        authorName: "Reviewer",
+        authoredAt: "2026-05-27T18:12:00+08:00",
+        subject: "fix: keep graph lanes stable",
+        refs: [
+          { name: "origin/release", kind: "remote_branch" as const, current: false },
+        ],
+        graph: { column: 1, width: 2, edges: [{ from: 1, to: 0 }] },
+        canReset: true,
+      },
+      {
+        hash: "847b894000000000000000000000000000000000",
+        shortHash: "847b894",
+        parents: [],
+        authorName: "Web Bot",
+        authoredAt: "2026-04-08T03:00:00+08:00",
+        subject: "feat: 实现完整的Web前端与后端集成",
+        refs: [],
+        graph: { column: 0, width: 1, edges: [] },
+        canReset: true,
+      },
+    ];
+    const scopedNodes = scope === "current"
+      ? allNodes.filter((node) => node.hash !== "91a7b6c5d4e3f2011223344556677889900aabb")
+      : allNodes;
+    const offset = Number(options.cursor || 0) || 0;
+    const limit = Math.max(1, Math.min(Number(options.limit || 100), 300));
+    const nodes = scopedNodes.slice(offset, offset + limit);
+    const nextOffset = offset + nodes.length;
+    return {
+      repoFound: true,
+      scope,
+      nodes,
+      hasMore: nextOffset < scopedNodes.length,
+      nextCursor: nextOffset < scopedNodes.length ? String(nextOffset) : "",
     };
   }
 

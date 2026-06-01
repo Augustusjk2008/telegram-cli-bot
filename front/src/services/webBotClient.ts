@@ -66,6 +66,8 @@ import type {
   GitBlamePayload,
   GitBranchResetResult,
   GitBranchList,
+  GitCommitGraphOptions,
+  GitCommitGraphPayload,
   GitCommitMessageCliConfig,
   GitCommitMessageCliConfigUpdateInput,
   GitCommitMessageGenerateResult,
@@ -281,6 +283,7 @@ export interface WebBotClient {
   ): Promise<AppUpdateStatus>;
   getGitOverview(botAlias: string): Promise<GitOverview>;
   getGitTreeStatus(botAlias: string): Promise<GitTreeStatus>;
+  getGitCommitGraph(botAlias: string, options?: GitCommitGraphOptions): Promise<GitCommitGraphPayload>;
   initGitRepository(botAlias: string): Promise<GitOverview>;
   getGitDiff(botAlias: string, path: string, staged?: boolean): Promise<GitDiffPayload>;
   stageGitPaths(botAlias: string, paths: string[]): Promise<GitActionResult>;

@@ -32,6 +32,10 @@ import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
   GitBlamePayload,
   GitBranchList,
+  GitCommitGraphNode,
+  GitCommitGraphPayload,
+  GitCommitGraphRef,
+  GitGraphScope,
   GitIdentityConfig,
   GitIdentityScope,
   GitOverview,
@@ -52,6 +56,9 @@ type Props = {
 };
 
 type GitFileGroupKey = "staged" | "unstaged" | "untracked";
+type CommitLike = Pick<GitCommitGraphNode, "hash" | "shortHash" | "subject">;
+
+const GIT_GRAPH_LIMIT = 50;
 
 function groupedFiles(overview: GitOverview | null) {
   const changedFiles = overview?.changedFiles || [];
@@ -161,6 +168,21 @@ function gitSmartCommitStatusText(job: GitSmartCommitJob | null, fallbackOvervie
   return hash ? `${text} · ${hash}` : text;
 }
 
+function graphRefTone(ref: GitCommitGraphRef) {
+  if (ref.kind === "head") {
+    return "success";
+  }
+  if (ref.kind === "tag") {
+    return "warning";
+  }
+  return ref.kind === "remote_branch" ? "neutral" : "accent";
+}
+
+function graphLaneLines(width: number, column: number) {
+  const laneCount = Math.max(width || 1, column + 1);
+  return Array.from({ length: laneCount }, (_, index) => index);
+}
+
 export function GitScreen({
   botAlias,
   botAvatarName,
@@ -187,6 +209,13 @@ export function GitScreen({
   const [blame, setBlame] = useState<GitBlamePayload | null>(null);
   const [blameLoadingPath, setBlameLoadingPath] = useState("");
   const [changesCollapsed, setChangesCollapsed] = useState(false);
+  const [graphCollapsed, setGraphCollapsed] = useState(false);
+  const [graphScope, setGraphScope] = useState<GitGraphScope>("all");
+  const [graphPayload, setGraphPayload] = useState<GitCommitGraphPayload | null>(null);
+  const [graphLoading, setGraphLoading] = useState(false);
+  const [selectedGraphHash, setSelectedGraphHash] = useState("");
+  const [graphBranchDraft, setGraphBranchDraft] = useState("");
+  const [graphResetMode, setGraphResetMode] = useState<GitResetMode>("mixed");
   const [commitsCollapsed, setCommitsCollapsed] = useState(false);
   const [identityConfig, setIdentityConfig] = useState<GitIdentityConfig | null>(null);
   const [identityScope, setIdentityScope] = useState<GitIdentityScope>("global");
@@ -213,6 +242,10 @@ export function GitScreen({
     [groups.unstaged, groups.untracked],
   );
   const totalChanges = groups.staged.length + groups.unstaged.length + groups.untracked.length;
+  const selectedGraphNode = useMemo(
+    () => graphPayload?.nodes.find((node) => node.hash === selectedGraphHash) || null,
+    [graphPayload, selectedGraphHash],
+  );
 
   function confirmDiscardPath(path: string) {
     return window.confirm(`确定丢弃 ${path} 的改动吗？`);
@@ -249,10 +282,49 @@ export function GitScreen({
     }
   }
 
+  async function loadGitGraph(options: { scope?: GitGraphScope; cursor?: string; append?: boolean } = {}) {
+    const scope = options.scope || graphScope;
+    setGraphLoading(true);
+    try {
+      const next = await client.getGitCommitGraph(botAlias, {
+        scope,
+        limit: GIT_GRAPH_LIMIT,
+        cursor: options.cursor,
+      });
+      setGraphPayload((current) => options.append && current
+        ? { ...next, nodes: [...current.nodes, ...next.nodes] }
+        : next);
+      setSelectedGraphHash((current) => options.append
+        ? current || next.nodes[0]?.hash || ""
+        : next.nodes.some((node) => node.hash === current) ? current : next.nodes[0]?.hash || "");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "加载版本树失败");
+    } finally {
+      setGraphLoading(false);
+    }
+  }
+
+  async function refreshGitWorkspace(options: { graph?: boolean } = {}) {
+    await refreshOverviewQuietly();
+    await loadBranches();
+    if (options.graph !== false) {
+      await loadGitGraph({ scope: graphScope });
+    }
+  }
+
   useEffect(() => {
     void loadOverview();
     void loadIdentityConfig("global");
   }, [botAlias, client]);
+
+  useEffect(() => {
+    if (overview?.repoFound) {
+      void loadGitGraph({ scope: graphScope });
+    } else {
+      setGraphPayload(null);
+      setSelectedGraphHash("");
+    }
+  }, [botAlias, client, overview?.repoFound, graphScope]);
 
   async function applySmartCommitJob(job: GitSmartCommitJob, options?: { refreshOverview?: boolean }) {
     setSmartCommitJob(job);
@@ -382,6 +454,7 @@ export function GitScreen({
   async function runAction(
     key: string,
     fn: () => Promise<{ message: string; overview: GitOverview }>,
+    options: { refreshWorkspace?: boolean } = {},
   ) {
     setActionLoading(key);
     setError("");
@@ -389,6 +462,10 @@ export function GitScreen({
     try {
       const result = await fn();
       syncOverview(result.overview);
+      if (options.refreshWorkspace) {
+        await loadBranches();
+        await loadGitGraph({ scope: graphScope });
+      }
       setNotice(result.message || "Git 操作完成");
       if (key === "commit") {
         setCommitMessage("");
@@ -436,8 +513,9 @@ export function GitScreen({
     try {
       const next = await client.createGitBranch(botAlias, name, "");
       setBranches(next);
-      setSelectedBranch(name);
       setBranchDraft("");
+      await refreshGitWorkspace();
+      setSelectedBranch(name);
       setNotice("分支已创建");
     } catch (err) {
       setError(err instanceof Error ? err.message : "创建分支失败");
@@ -454,8 +532,7 @@ export function GitScreen({
     setCommitResetModes((current) => ({ ...current, [commitHash]: value }));
   }
 
-  async function createBranchFromCommit(commit: GitOverview["recentCommits"][number]) {
-    const name = (commitBranchDrafts[commit.hash] || "").trim();
+  async function createBranchFromTarget(commit: CommitLike, name: string, onSuccess?: () => void) {
     if (!name) {
       setError("分支名不能为空");
       return;
@@ -466,8 +543,9 @@ export function GitScreen({
     try {
       const next = await client.createGitBranch(botAlias, name, commit.hash);
       setBranches(next);
+      onSuccess?.();
+      await refreshGitWorkspace();
       setSelectedBranch(name);
-      setCommitBranchDrafts((current) => ({ ...current, [commit.hash]: "" }));
       setNotice(`分支已从 ${commit.shortHash} 创建`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "创建分支失败");
@@ -476,8 +554,22 @@ export function GitScreen({
     }
   }
 
-  async function resetBranchToCommit(commit: GitOverview["recentCommits"][number]) {
-    const mode = commitResetModes[commit.hash] || "mixed";
+  async function createBranchFromCommit(commit: GitOverview["recentCommits"][number]) {
+    const name = (commitBranchDrafts[commit.hash] || "").trim();
+    await createBranchFromTarget(commit, name, () => {
+      setCommitBranchDrafts((current) => ({ ...current, [commit.hash]: "" }));
+    });
+  }
+
+  async function createBranchFromGraphNode() {
+    if (!selectedGraphNode) {
+      return;
+    }
+    const name = graphBranchDraft.trim();
+    await createBranchFromTarget(selectedGraphNode, name, () => setGraphBranchDraft(""));
+  }
+
+  async function resetBranchToTarget(commit: CommitLike, mode: GitResetMode) {
     const currentBranch = overview?.currentBranch || branches.currentBranch || "当前分支";
     const confirmed = window.confirm(
       `确定将 ${currentBranch} 重置到 ${commit.shortHash}（${commit.subject}）吗？\n模式：${mode}`,
@@ -493,12 +585,24 @@ export function GitScreen({
       syncOverview(result.overview);
       setBranches({ currentBranch: result.currentBranch, branches: result.branches });
       setSelectedBranch(result.currentBranch);
+      await refreshGitWorkspace();
       setNotice(result.message || `已重置到 ${commit.shortHash}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "重置分支失败");
     } finally {
       setActionLoading("");
     }
+  }
+
+  async function resetBranchToCommit(commit: GitOverview["recentCommits"][number]) {
+    await resetBranchToTarget(commit, commitResetModes[commit.hash] || "mixed");
+  }
+
+  async function resetBranchToGraphNode() {
+    if (!selectedGraphNode || selectedGraphNode.canReset === false) {
+      return;
+    }
+    await resetBranchToTarget(selectedGraphNode, graphResetMode);
   }
 
   async function switchBranch() {
@@ -512,7 +616,7 @@ export function GitScreen({
     try {
       const next = await client.switchGitBranch(botAlias, selectedBranch);
       setBranches(next);
-      await loadOverview();
+      await refreshGitWorkspace();
       setNotice(`已切换到 ${selectedBranch}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "切换分支失败");
@@ -972,7 +1076,7 @@ export function GitScreen({
                   <div className={sectionBodyClass("flex flex-wrap gap-2")}>
                     <button
                       type="button"
-                      onClick={() => void runAction("fetch", () => client.fetchGitRemote(botAlias))}
+                      onClick={() => void runAction("fetch", () => client.fetchGitRemote(botAlias), { refreshWorkspace: true })}
                       disabled={mutationBusy}
                       className={buttonClass()}
                     >
@@ -981,7 +1085,7 @@ export function GitScreen({
                     </button>
                     <button
                       type="button"
-                      onClick={() => void runAction("pull", () => client.pullGitRemote(botAlias))}
+                      onClick={() => void runAction("pull", () => client.pullGitRemote(botAlias), { refreshWorkspace: true })}
                       disabled={mutationBusy}
                       className={buttonClass()}
                     >
@@ -1159,6 +1263,192 @@ export function GitScreen({
                       智能提交
                     </button>
                   </div>
+                </section>
+
+                <section data-testid="git-version-tree-panel" className={sectionClass("space-y-2")}>
+                  <div className={sectionHeaderClass("flex-wrap")}>
+                    <div>
+                      <h2 className="text-sm font-semibold">版本树</h2>
+                      <p className="text-xs text-[var(--muted)]">
+                        {graphPayload ? `${graphPayload.nodes.length} 个提交` : "未加载"}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      <div className="inline-flex rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] p-0.5">
+                        {([
+                          ["all", "全部"],
+                          ["current", "当前分支"],
+                        ] as const).map(([scope, label]) => (
+                          <button
+                            key={scope}
+                            type="button"
+                            onClick={() => setGraphScope(scope)}
+                            disabled={mutationBusy || graphLoading}
+                            className={clsx(
+                              "rounded px-2 py-1 text-xs transition-colors",
+                              graphScope === scope
+                                ? "bg-[var(--workbench-active-bg)] text-[var(--accent)]"
+                                : "text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)]",
+                            )}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void loadGitGraph({ scope: graphScope })}
+                        disabled={mutationBusy || graphLoading}
+                        className={buttonClass()}
+                      >
+                        {graphLoading ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                        刷新
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={graphCollapsed ? "展开版本树" : "收起版本树"}
+                        onClick={() => setGraphCollapsed((value) => !value)}
+                        className={iconButtonClass()}
+                      >
+                        {graphCollapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                      </button>
+                    </div>
+                  </div>
+                  {!graphCollapsed ? (
+                    <div data-testid="git-version-tree-content" className={sectionBodyClass("space-y-3")}>
+                      {graphLoading && !graphPayload ? (
+                        <div className={emptyStateClass()}>加载版本树...</div>
+                      ) : null}
+                      {graphPayload && graphPayload.nodes.length === 0 ? (
+                        <div className={emptyStateClass()}>暂无提交</div>
+                      ) : null}
+                      {graphPayload && graphPayload.nodes.length > 0 ? (
+                        <div className="space-y-1">
+                          {graphPayload.nodes.map((node) => {
+                            const selected = selectedGraphHash === node.hash;
+                            return (
+                              <button
+                                key={node.hash}
+                                type="button"
+                                data-testid={`git-graph-node-${node.shortHash}`}
+                                onClick={() => setSelectedGraphHash(node.hash)}
+                                disabled={mutationBusy}
+                                className={clsx(
+                                  "grid w-full grid-cols-[80px_minmax(0,1fr)] items-stretch gap-2 rounded-md border px-2 py-2 text-left transition-colors",
+                                  selected
+                                    ? "border-[var(--workbench-hover-border)] bg-[var(--workbench-active-bg)]"
+                                    : "border-transparent hover:bg-[var(--workbench-hover-bg)]",
+                                  mutationBusy ? "opacity-70" : "",
+                                )}
+                              >
+                                <div className="relative h-full min-h-12 overflow-hidden rounded bg-[var(--workbench-panel-elevated-bg)]" aria-label={`lane ${node.graph.column + 1}/${node.graph.width}`}>
+                                  {graphLaneLines(node.graph.width, node.graph.column).map((lane) => (
+                                    <span
+                                      key={lane}
+                                      className="absolute top-0 h-full w-px bg-[var(--workbench-hairline)]"
+                                      style={{ left: `${((lane + 0.5) / Math.max(node.graph.width, 1)) * 100}%` }}
+                                    />
+                                  ))}
+                                  <span
+                                    className="absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-[var(--workbench-panel-elevated-bg)] bg-[var(--accent)]"
+                                    style={{ left: `${((node.graph.column + 0.5) / Math.max(node.graph.width, 1)) * 100}%` }}
+                                  />
+                                </div>
+                                <div className="min-w-0">
+                                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                                    <span className="font-mono text-xs font-semibold text-[var(--accent)]">{node.shortHash}</span>
+                                    <span className="min-w-0 truncate text-sm font-medium text-[var(--text)]">{node.subject || "-"}</span>
+                                  </div>
+                                  <div className="mt-1 text-[11px] text-[var(--muted)]">
+                                    {node.authorName || "-"} · {node.authoredAt || "-"}
+                                  </div>
+                                  {node.refs.length > 0 ? (
+                                    <div className="mt-2 flex flex-wrap gap-1">
+                                      {node.refs.map((ref) => (
+                                        <StateBadge key={`${node.hash}-${ref.kind}-${ref.name}`} tone={graphRefTone(ref)} className="max-w-full truncate">
+                                          {ref.name}
+                                        </StateBadge>
+                                      ))}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                      {selectedGraphNode ? (
+                        <div data-testid="git-version-tree-actions" className="flex flex-wrap items-center gap-2 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] p-2">
+                          <div className="min-w-0 flex-1 text-xs">
+                            <div className="font-mono font-semibold text-[var(--accent)]">{selectedGraphNode.shortHash}</div>
+                            <div className="truncate text-[var(--muted)]">{selectedGraphNode.subject}</div>
+                          </div>
+                          <label className="min-w-[150px] flex-1 sm:flex-none">
+                            <span className="sr-only">从版本树新建分支名</span>
+                            <input
+                              aria-label="从版本树新建分支名"
+                              value={graphBranchDraft}
+                              onChange={(event) => setGraphBranchDraft(event.target.value)}
+                              placeholder="feature/name"
+                              disabled={mutationBusy}
+                              className="h-8 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 text-xs"
+                            />
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => void createBranchFromGraphNode()}
+                            disabled={mutationBusy || !graphBranchDraft.trim()}
+                            className={buttonClass()}
+                          >
+                            {actionLoading === `branch-create:${selectedGraphNode.hash}` ? (
+                              <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <GitFork className="h-3.5 w-3.5" />
+                            )}
+                            新建分支
+                          </button>
+                          <label>
+                            <span className="sr-only">版本树重置模式</span>
+                            <select
+                              aria-label="版本树重置模式"
+                              value={graphResetMode}
+                              onChange={(event) => setGraphResetMode(event.target.value as GitResetMode)}
+                              disabled={mutationBusy}
+                              className="h-8 rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 text-xs"
+                            >
+                              <option value="soft">soft</option>
+                              <option value="mixed">mixed</option>
+                              <option value="hard">hard</option>
+                            </select>
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => void resetBranchToGraphNode()}
+                            disabled={mutationBusy || selectedGraphNode.canReset === false}
+                            className={buttonClass()}
+                          >
+                            {actionLoading === `branch-reset:${selectedGraphNode.hash}` ? (
+                              <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <RotateCcw className="h-3.5 w-3.5" />
+                            )}
+                            重置到此提交
+                          </button>
+                        </div>
+                      ) : null}
+                      {graphPayload?.hasMore ? (
+                        <button
+                          type="button"
+                          onClick={() => void loadGitGraph({ scope: graphScope, cursor: graphPayload.nextCursor, append: true })}
+                          disabled={mutationBusy || graphLoading}
+                          className={buttonClass()}
+                        >
+                          {graphLoading ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                          加载更多
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </section>
 
                 <section data-testid="git-recent-commits-panel" className={sectionClass("space-y-2")}>

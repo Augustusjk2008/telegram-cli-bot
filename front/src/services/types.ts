@@ -1694,6 +1694,48 @@ export type GitTreeStatus = {
   items: Record<string, GitTreeDecorationKind>;
 };
 
+export type GitGraphScope = "all" | "current";
+
+export type GitCommitGraphOptions = {
+  scope?: GitGraphScope;
+  limit?: number;
+  cursor?: string;
+};
+
+export type GitCommitGraphRefKind = "head" | "local_branch" | "remote_branch" | "tag";
+
+export type GitCommitGraphRef = {
+  name: string;
+  kind: GitCommitGraphRefKind;
+  current: boolean;
+};
+
+export type GitCommitGraphLane = {
+  column: number;
+  width: number;
+  edges: unknown[];
+};
+
+export type GitCommitGraphNode = {
+  hash: string;
+  shortHash: string;
+  parents: string[];
+  authorName: string;
+  authoredAt: string;
+  subject: string;
+  refs: GitCommitGraphRef[];
+  graph: GitCommitGraphLane;
+  canReset?: boolean;
+};
+
+export type GitCommitGraphPayload = {
+  repoFound: boolean;
+  scope: GitGraphScope;
+  nodes: GitCommitGraphNode[];
+  hasMore: boolean;
+  nextCursor: string;
+};
+
 export type GitOverview = {
   repoFound: boolean;
   canInit: boolean;

@@ -250,6 +250,7 @@ from .git_service import (
     generate_git_smart_commit_message,
     generate_git_commit_message,
     get_git_blame,
+    get_git_commit_graph,
     get_git_commit_message_cli_config,
     get_git_diff,
     get_git_identity_config,
@@ -2570,6 +2571,20 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         data = await asyncio.to_thread(get_git_overview, self.manager, alias, auth.user_id)
+        return _json({"ok": True, "data": data})
+
+    async def get_git_commit_graph_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_GIT_OPS)
+        alias = self._manager_alias(request)
+        data = await asyncio.to_thread(
+            get_git_commit_graph,
+            self.manager,
+            alias,
+            auth.user_id,
+            request.query.get("scope", "all"),
+            request.query.get("limit", ""),
+            request.query.get("cursor", ""),
+        )
         return _json({"ok": True, "data": data})
 
     async def get_git_tree_status_view(self, request: web.Request) -> web.Response:

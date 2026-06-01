@@ -5,6 +5,7 @@ from aiohttp import web
 
 def register(app: web.Application, server) -> None:
     app.router.add_get("/api/bots/{alias}/git", server.get_git_overview_view)
+    app.router.add_get("/api/bots/{alias}/git/graph", server.get_git_commit_graph_view)
     app.router.add_get("/api/bots/{alias}/git/tree-status", server.get_git_tree_status_view)
     app.router.add_get("/api/bots/{alias}/git/branches", server.get_git_branches_view)
     app.router.add_post("/api/bots/{alias}/git/branches", server.post_git_branch_create)

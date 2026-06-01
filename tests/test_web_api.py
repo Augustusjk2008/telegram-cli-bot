@@ -104,6 +104,7 @@ from bot.web.git_service import (
     drop_git_stash,
     generate_git_commit_message,
     get_git_blame,
+    get_git_commit_graph,
     get_git_commit_message_cli_config,
     get_git_diff,
     get_git_identity_config,
@@ -538,6 +539,10 @@ def _use_repo(web_manager: MultiBotManager, repo_dir: Path) -> None:
     change_working_directory(web_manager, "main", 1001, str(repo_dir))
 
 
+def _current_git_branch(repo_dir: Path) -> str:
+    return _run_git_command(repo_dir, "branch", "--show-current").stdout.strip()
+
+
 @pytest.mark.asyncio
 async def test_auth_route_requires_token(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
@@ -869,6 +874,185 @@ async def test_git_tree_status_route_returns_decoration_payload(
         "tracked.txt": "modified",
         "scratch.tmp": "ignored",
     }
+
+
+def test_git_commit_graph_linear_history_returns_parents_and_lanes(
+    web_manager: MultiBotManager,
+    temp_dir: Path,
+):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    first_sha = _commit_repo_file(repo_dir, "tracked.txt", "one\n", "first")
+    second_sha = _commit_repo_file(repo_dir, "tracked.txt", "two\n", "second")
+    _use_repo(web_manager, repo_dir)
+
+    result = get_git_commit_graph(web_manager, "main", 1001, scope="current")
+
+    assert result["repo_found"] is True
+    assert result["scope"] == "current"
+    assert result["has_more"] is False
+    assert [node["hash"] for node in result["nodes"]] == [second_sha, first_sha]
+    assert result["nodes"][0]["parents"] == [first_sha]
+    assert result["nodes"][0]["short_hash"] == second_sha[:7]
+    assert result["nodes"][0]["author_name"] == "Web Bot Test"
+    assert result["nodes"][0]["subject"] == "second"
+    assert result["nodes"][0]["graph"]["column"] == 0
+    assert result["nodes"][0]["graph"]["width"] >= 1
+    assert result["nodes"][1]["parents"] == []
+
+
+def test_git_commit_graph_merge_history_and_refs(
+    web_manager: MultiBotManager,
+    temp_dir: Path,
+):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    base_sha = _commit_repo_file(repo_dir, "base.txt", "base\n", "base")
+    current_branch = _current_git_branch(repo_dir)
+    _run_git_command(repo_dir, "tag", "-a", "v-base", base_sha, "-m", "v-base")
+    _run_git_command(repo_dir, "switch", "-c", "feature")
+    feature_sha = _commit_repo_file(repo_dir, "feature.txt", "feature\n", "feature")
+    _run_git_command(repo_dir, "update-ref", "refs/remotes/origin/feature", feature_sha)
+    _run_git_command(repo_dir, "switch", current_branch)
+    main_sha = _commit_repo_file(repo_dir, "main.txt", "main\n", "main")
+    _run_git_command(repo_dir, "tag", "v-main", main_sha)
+    _run_git_command(repo_dir, "merge", "--no-ff", "feature", "-m", "merge feature")
+    merge_sha = _run_git_command(repo_dir, "rev-parse", "HEAD").stdout.strip()
+    _use_repo(web_manager, repo_dir)
+
+    result = get_git_commit_graph(web_manager, "main", 1001, scope="all")
+    nodes_by_hash = {node["hash"]: node for node in result["nodes"]}
+    merge_node = nodes_by_hash[merge_sha]
+
+    assert set(merge_node["parents"]) == {main_sha, feature_sha}
+    assert len(merge_node["graph"]["edges"]) == 2
+    assert merge_node["graph"]["width"] >= 2
+
+    def has_ref(commit: str, name: str, kind: str, current: bool | None = None) -> bool:
+        for ref in nodes_by_hash[commit]["refs"]:
+            if ref["name"] == name and ref["kind"] == kind and (current is None or ref["current"] is current):
+                return True
+        return False
+
+    assert has_ref(merge_sha, "HEAD", "head", True)
+    assert has_ref(merge_sha, current_branch, "local_branch", True)
+    assert has_ref(feature_sha, "feature", "local_branch", False)
+    assert has_ref(feature_sha, "origin/feature", "remote_branch", False)
+    assert has_ref(main_sha, "v-main", "tag", False)
+    assert has_ref(base_sha, "v-base", "tag", False)
+
+
+def test_git_commit_graph_scope_filters_current_branch(
+    web_manager: MultiBotManager,
+    temp_dir: Path,
+):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    base_sha = _commit_repo_file(repo_dir, "base.txt", "base\n", "base")
+    current_branch = _current_git_branch(repo_dir)
+    _run_git_command(repo_dir, "switch", "-c", "side", base_sha)
+    side_sha = _commit_repo_file(repo_dir, "side.txt", "side\n", "side")
+    _run_git_command(repo_dir, "switch", current_branch)
+    main_sha = _commit_repo_file(repo_dir, "main.txt", "main\n", "main")
+    _use_repo(web_manager, repo_dir)
+
+    current_graph = get_git_commit_graph(web_manager, "main", 1001, scope="current")
+    all_graph = get_git_commit_graph(web_manager, "main", 1001, scope="all")
+
+    current_hashes = {node["hash"] for node in current_graph["nodes"]}
+    all_hashes = {node["hash"] for node in all_graph["nodes"]}
+    assert {main_sha, base_sha}.issubset(current_hashes)
+    assert side_sha not in current_hashes
+    assert {main_sha, side_sha, base_sha}.issubset(all_hashes)
+
+
+@pytest.mark.asyncio
+async def test_git_commit_graph_route_paginates_and_validates(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    first_sha = _commit_repo_file(repo_dir, "tracked.txt", "one\n", "first")
+    second_sha = _commit_repo_file(repo_dir, "tracked.txt", "two\n", "second")
+    third_sha = _commit_repo_file(repo_dir, "tracked.txt", "three\n", "third")
+    _use_repo(web_manager, repo_dir)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            first_resp = await client.get("/api/bots/main/git/graph?scope=current&limit=2")
+            first_payload = await first_resp.json()
+            second_resp = await client.get(
+                "/api/bots/main/git/graph",
+                params={"scope": "current", "limit": "2", "cursor": first_payload["data"]["next_cursor"]},
+            )
+            second_payload = await second_resp.json()
+            bad_limit_resp = await client.get("/api/bots/main/git/graph?limit=301")
+            bad_limit_payload = await bad_limit_resp.json()
+            bad_cursor_resp = await client.get("/api/bots/main/git/graph?cursor=not-base64")
+            bad_cursor_payload = await bad_cursor_resp.json()
+
+    assert first_resp.status == 200
+    assert first_payload["data"]["has_more"] is True
+    assert first_payload["data"]["next_cursor"]
+    assert [node["hash"] for node in first_payload["data"]["nodes"]] == [third_sha, second_sha]
+    assert second_resp.status == 200
+    assert second_payload["data"]["has_more"] is False
+    assert second_payload["data"]["next_cursor"] == ""
+    assert [node["hash"] for node in second_payload["data"]["nodes"]] == [first_sha]
+    assert bad_limit_resp.status == 400
+    assert bad_limit_payload["error"]["code"] == "invalid_limit"
+    assert bad_cursor_resp.status == 400
+    assert bad_cursor_payload["error"]["code"] == "invalid_cursor"
+
+
+@pytest.mark.asyncio
+async def test_git_commit_graph_route_returns_not_git_repo(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    _use_repo(web_manager, temp_dir)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get("/api/bots/main/git/graph")
+            payload = await resp.json()
+
+    assert resp.status == 409
+    assert payload["error"]["code"] == "not_git_repo"
+
+
+def test_git_overview_recent_commits_remains_latest_eight(
+    web_manager: MultiBotManager,
+    temp_dir: Path,
+):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    commits = [
+        _commit_repo_file(repo_dir, "tracked.txt", f"{index}\n", f"commit {index}")
+        for index in range(10)
+    ]
+    _use_repo(web_manager, repo_dir)
+
+    overview = get_git_overview(web_manager, "main", 1001)
+
+    assert [item["hash"] for item in overview["recent_commits"]] == list(reversed(commits[-8:]))
 
 
 def test_create_git_branch_from_full_sha(web_manager: MultiBotManager, temp_dir: Path):

@@ -13,6 +13,8 @@ import type {
   GitActionResult,
   GitBranchList,
   GitBranchResetResult,
+  GitCommitGraphOptions,
+  GitCommitGraphPayload,
   GitCommitMessageCliConfig,
   GitCommitMessageGenerateResult,
   GitIdentityConfig,
@@ -83,6 +85,44 @@ function buildSmartCommitJob(overrides: Partial<GitSmartCommitJob> = {}): GitSma
     message: "",
     error: "",
     overview: null,
+    ...overrides,
+  };
+}
+
+function buildCommitGraph(overrides: Partial<GitCommitGraphPayload> = {}): GitCommitGraphPayload {
+  return {
+    repoFound: true,
+    scope: "all",
+    nodes: [
+      {
+        hash: "abcdef012345",
+        shortHash: "abcdef0",
+        parents: ["123456789abc"],
+        authorName: "Web Bot",
+        authoredAt: "2026-04-09T21:00:00+08:00",
+        subject: "feat: initial commit",
+        refs: [
+          { name: "HEAD", kind: "head", current: true },
+          { name: "main", kind: "local_branch", current: true },
+          { name: "v1.0.0", kind: "tag", current: false },
+        ],
+        graph: { column: 0, width: 2, edges: [{ from: 0, to: 0 }] },
+        canReset: true,
+      },
+      {
+        hash: "123456789abc",
+        shortHash: "1234567",
+        parents: [],
+        authorName: "Web Bot",
+        authoredAt: "2026-04-08T21:00:00+08:00",
+        subject: "docs: older commit",
+        refs: [{ name: "origin/main", kind: "remote_branch", current: false }],
+        graph: { column: 1, width: 2, edges: [] },
+        canReset: true,
+      },
+    ],
+    hasMore: false,
+    nextCursor: "",
     ...overrides,
   };
 }
@@ -296,6 +336,9 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
       pid: null,
     }),
     getGitOverview: async (): Promise<GitOverview> => buildRepoOverview(),
+    getGitCommitGraph: async (_botAlias, options?: GitCommitGraphOptions): Promise<GitCommitGraphPayload> => buildCommitGraph({
+      scope: options?.scope || "all",
+    }),
     initGitRepository: async (): Promise<GitOverview> => buildRepoOverview(),
     getGitDiff: async () => ({
       path: "tracked.txt",
@@ -417,7 +460,7 @@ test("renders git repo summary and changed files", async () => {
   render(<GitScreen botAlias="main" client={createClient()} />);
 
   expect(await screen.findByText("repo")).toBeInTheDocument();
-  expect(screen.getByText("当前分支")).toBeInTheDocument();
+  expect(screen.getAllByText("当前分支").length).toBeGreaterThan(0);
   expect(screen.getByText("tracked.txt")).toBeInTheDocument();
   expect(screen.getByText("feat: initial commit")).toBeInTheDocument();
   expect(screen.getByText("feat: initial commit")).toHaveAttribute(
@@ -434,6 +477,147 @@ test("recent commit rows expose branch and reset actions", async () => {
   expect(screen.getByRole("button", { name: "重置到此提交 abcdef0" })).toBeInTheDocument();
   expect(screen.getByLabelText("从 abcdef0 新建分支名")).toBeInTheDocument();
   expect(screen.getByLabelText("重置模式 abcdef0")).toHaveValue("mixed");
+});
+
+test("renders version tree commit lanes and refs", async () => {
+  render(<GitScreen botAlias="main" client={createClient()} />);
+
+  const panel = await screen.findByTestId("git-version-tree-panel");
+
+  expect(within(panel).getByText("版本树")).toBeInTheDocument();
+  expect(await within(panel).findByTestId("git-graph-node-abcdef0")).toBeInTheDocument();
+  expect(within(panel).getByLabelText("lane 1/2")).toBeInTheDocument();
+  expect(within(panel).getByText("HEAD")).toBeInTheDocument();
+  expect(within(panel).getByText("main")).toBeInTheDocument();
+  expect(within(panel).getByText("v1.0.0")).toBeInTheDocument();
+  expect(within(panel).getByTestId("git-version-tree-actions")).toBeInTheDocument();
+});
+
+test("version tree scope switch reloads graph", async () => {
+  const user = userEvent.setup();
+  const getGitCommitGraph = vi.fn(async (_botAlias: string, options?: GitCommitGraphOptions): Promise<GitCommitGraphPayload> => buildCommitGraph({
+    scope: options?.scope || "all",
+  }));
+
+  render(
+    <GitScreen
+      botAlias="main"
+      client={createClient({ getGitCommitGraph })}
+    />,
+  );
+
+  await screen.findByTestId("git-version-tree-panel");
+  await user.click(screen.getByRole("button", { name: "当前分支" }));
+
+  expect(await screen.findByTestId("git-graph-node-abcdef0")).toBeInTheDocument();
+  expect(getGitCommitGraph).toHaveBeenCalledWith("main", expect.objectContaining({ scope: "current", limit: 50 }));
+});
+
+test("version tree load more appends nodes", async () => {
+  const user = userEvent.setup();
+  const getGitCommitGraph = vi.fn(async (_botAlias: string, options?: GitCommitGraphOptions): Promise<GitCommitGraphPayload> => {
+    if (options?.cursor === "page-2") {
+      return buildCommitGraph({
+        nodes: [
+          {
+            hash: "feedbeef0000",
+            shortHash: "feedbee",
+            parents: [],
+            authorName: "Web Bot",
+            authoredAt: "2026-04-07T21:00:00+08:00",
+            subject: "chore: second page",
+            refs: [],
+            graph: { column: 0, width: 1, edges: [] },
+          },
+        ],
+        hasMore: false,
+        nextCursor: "",
+      });
+    }
+    return buildCommitGraph({
+      nodes: [buildCommitGraph().nodes[0]],
+      hasMore: true,
+      nextCursor: "page-2",
+    });
+  });
+
+  render(
+    <GitScreen
+      botAlias="main"
+      client={createClient({ getGitCommitGraph })}
+    />,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "加载更多" }));
+
+  expect(await screen.findByTestId("git-graph-node-feedbee")).toBeInTheDocument();
+  expect(screen.getByTestId("git-graph-node-abcdef0")).toBeInTheDocument();
+  expect(getGitCommitGraph).toHaveBeenCalledWith("main", expect.objectContaining({ cursor: "page-2" }));
+});
+
+test("version tree creates branch with selected node hash", async () => {
+  const user = userEvent.setup();
+  const createGitBranch = vi.fn(async (_botAlias: string, name: string): Promise<GitBranchList> => ({
+    currentBranch: "main",
+    branches: [
+      {
+        name,
+        current: false,
+        upstream: "",
+        shortHash: "1234567",
+        subject: "docs: older commit",
+      },
+    ],
+  }));
+
+  render(
+    <GitScreen
+      botAlias="main"
+      client={createClient({ createGitBranch })}
+    />,
+  );
+
+  await user.click(await screen.findByTestId("git-graph-node-1234567"));
+  await user.type(screen.getByLabelText("从版本树新建分支名"), "feature/tree");
+  await user.click(within(screen.getByTestId("git-version-tree-actions")).getByRole("button", { name: "新建分支" }));
+
+  expect(createGitBranch).toHaveBeenCalledWith("main", "feature/tree", "123456789abc");
+  expect(await screen.findByText("分支已从 1234567 创建")).toBeInTheDocument();
+});
+
+test("version tree resets with selected node hash and mode", async () => {
+  const user = userEvent.setup();
+  const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+  const resetGitBranch = vi.fn(async (_botAlias: string, commit: string, mode: GitResetMode): Promise<GitBranchResetResult> => ({
+    message: "分支已重置",
+    overview: buildRepoOverview({ isClean: true, changedFiles: [] }),
+    branches: [
+      {
+        name: "main",
+        current: true,
+        upstream: "origin/main",
+        shortHash: commit.slice(0, 7),
+        subject: `reset ${mode}`,
+      },
+    ],
+    currentBranch: "main",
+    headCommit: commit,
+  }));
+
+  render(
+    <GitScreen
+      botAlias="main"
+      client={createClient({ resetGitBranch })}
+    />,
+  );
+
+  await user.click(await screen.findByTestId("git-graph-node-1234567"));
+  await user.selectOptions(screen.getByLabelText("版本树重置模式"), "hard");
+  await user.click(within(screen.getByTestId("git-version-tree-actions")).getByRole("button", { name: "重置到此提交" }));
+
+  expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("1234567"));
+  expect(resetGitBranch).toHaveBeenCalledWith("main", "123456789abc", "hard");
+  expect(await screen.findByText("分支已重置")).toBeInTheDocument();
 });
 
 
@@ -538,11 +722,16 @@ test("reset action disables commit operations while running", async () => {
   await user.type(screen.getByLabelText("从 abcdef0 新建分支名"), "feature/busy");
   const branchButton = screen.getByRole("button", { name: "从此提交新建分支 abcdef0" });
   expect(branchButton).not.toBeDisabled();
+  expect(await screen.findByTestId("git-version-tree-actions")).toBeInTheDocument();
 
   await user.click(resetButton);
 
   expect(resetButton).toBeDisabled();
   expect(branchButton).toBeDisabled();
+  expect(screen.getByTestId("git-graph-node-abcdef0")).toBeDisabled();
+  expect(screen.getByLabelText("从版本树新建分支名")).toBeDisabled();
+  expect(screen.getByLabelText("版本树重置模式")).toBeDisabled();
+  expect(within(screen.getByTestId("git-version-tree-actions")).getByRole("button", { name: "重置到此提交" })).toBeDisabled();
 
   resolveReset?.({
     message: "分支已重置",

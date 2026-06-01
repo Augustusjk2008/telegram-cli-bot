@@ -1500,6 +1500,71 @@ describe("RealWebBotClient", () => {
     });
   });
 
+  test("getGitCommitGraph maps snake case payload and query", async () => {
+    fetchMock.mockResolvedValueOnce(jsonOk({
+      repo_found: true,
+      scope: "current",
+      nodes: [
+        {
+          hash: "abcdef012345",
+          short_hash: "abcdef0",
+          parents: ["123456789abc"],
+          author_name: "Web Bot",
+          authored_at: "2026-04-09T21:00:00+08:00",
+          subject: "feat: graph",
+          refs: [
+            { name: "HEAD", kind: "head", current: true },
+            { name: "main", kind: "local_branch", current: true },
+            { name: "origin/main", kind: "remote_branch", current: false },
+          ],
+          graph: {
+            column: 1,
+            width: 3,
+            edges: [{ from: 1, to: 0 }],
+          },
+          can_reset: false,
+        },
+      ],
+      has_more: true,
+      next_cursor: "cursor-2",
+    }));
+
+    const client = new RealWebBotClient();
+    const graph = await client.getGitCommitGraph("main", { scope: "current", limit: 25, cursor: "cursor-1" });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/bots/main/git/graph?scope=current&limit=25&cursor=cursor-1",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+    expect(graph).toEqual({
+      repoFound: true,
+      scope: "current",
+      nodes: [
+        {
+          hash: "abcdef012345",
+          shortHash: "abcdef0",
+          parents: ["123456789abc"],
+          authorName: "Web Bot",
+          authoredAt: "2026-04-09T21:00:00+08:00",
+          subject: "feat: graph",
+          refs: [
+            { name: "HEAD", kind: "head", current: true },
+            { name: "main", kind: "local_branch", current: true },
+            { name: "origin/main", kind: "remote_branch", current: false },
+          ],
+          graph: {
+            column: 1,
+            width: 3,
+            edges: [{ from: 1, to: 0 }],
+          },
+          canReset: false,
+        },
+      ],
+      hasMore: true,
+      nextCursor: "cursor-2",
+    });
+  });
+
   test("createGitBranch sends start point in request body", async () => {
     fetchMock.mockResolvedValueOnce(jsonOk({
       current_branch: "main",

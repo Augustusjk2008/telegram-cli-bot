@@ -47,6 +47,9 @@ import type {
   GitBlamePayload,
   GitBranchResetResult,
   GitBranchList,
+  GitCommitGraphOptions,
+  GitCommitGraphPayload,
+  GitCommitGraphRefKind,
   GitCommitMessageCliConfig,
   GitCommitMessageCliConfigUpdateInput,
   GitCommitMessageGenerateResult,
@@ -56,6 +59,7 @@ import type {
   GitIdentityScope,
   GitProxySettings,
   GitResetMode,
+  GitGraphScope,
   GitOverview,
   GitSmartCommitJob,
   GitStashList,
@@ -767,6 +771,36 @@ type RawGitTreeStatus = {
   working_dir: string;
   repo_path: string;
   items: Record<string, "added" | "modified" | "ignored">;
+};
+
+type RawGitCommitGraphRef = {
+  name?: string;
+  kind?: string;
+  current?: boolean;
+};
+
+type RawGitCommitGraphNode = {
+  hash?: string;
+  short_hash?: string;
+  parents?: string[];
+  author_name?: string;
+  authored_at?: string;
+  subject?: string;
+  refs?: RawGitCommitGraphRef[];
+  graph?: {
+    column?: number;
+    width?: number;
+    edges?: unknown[];
+  };
+  can_reset?: boolean;
+};
+
+type RawGitCommitGraphPayload = {
+  repo_found?: boolean;
+  scope?: string;
+  nodes?: RawGitCommitGraphNode[];
+  has_more?: boolean;
+  next_cursor?: string;
 };
 
 type RawGitDiffPayload = {
@@ -2431,6 +2465,37 @@ function mapGitTreeStatus(raw: RawGitTreeStatus): GitTreeStatus {
     workingDir: raw.working_dir || "",
     repoPath: raw.repo_path || "",
     items: raw.items || {},
+  };
+}
+
+function mapGitCommitGraph(raw: RawGitCommitGraphPayload): GitCommitGraphPayload {
+  return {
+    repoFound: Boolean(raw.repo_found),
+    scope: raw.scope === "current" ? "current" : "all",
+    nodes: (raw.nodes || []).map((node) => {
+      const graph = node.graph || {};
+      return {
+        hash: node.hash || "",
+        shortHash: node.short_hash || "",
+        parents: Array.isArray(node.parents) ? node.parents : [],
+        authorName: node.author_name || "",
+        authoredAt: node.authored_at || "",
+        subject: node.subject || "",
+        refs: (node.refs || []).map((ref) => ({
+          name: ref.name || "",
+          kind: (ref.kind || "local_branch") as GitCommitGraphRefKind,
+          current: Boolean(ref.current),
+        })),
+        graph: {
+          column: Number(graph.column || 0),
+          width: Number(graph.width || 1),
+          edges: Array.isArray(graph.edges) ? graph.edges : [],
+        },
+        ...(typeof node.can_reset === "boolean" ? { canReset: node.can_reset } : {}),
+      };
+    }),
+    hasMore: Boolean(raw.has_more),
+    nextCursor: raw.next_cursor || "",
   };
 }
 
@@ -5035,6 +5100,21 @@ export class RealWebBotClient implements WebBotClient {
   async getGitTreeStatus(botAlias: string): Promise<GitTreeStatus> {
     const data = await this.requestJson<RawGitTreeStatus>(`/api/bots/${encodeURIComponent(botAlias)}/git/tree-status`);
     return mapGitTreeStatus(data);
+  }
+
+  async getGitCommitGraph(botAlias: string, options: GitCommitGraphOptions = {}): Promise<GitCommitGraphPayload> {
+    const params = new URLSearchParams();
+    params.set("scope", options.scope || "all");
+    if (typeof options.limit === "number") {
+      params.set("limit", String(options.limit));
+    }
+    if (options.cursor) {
+      params.set("cursor", options.cursor);
+    }
+    const data = await this.requestJson<RawGitCommitGraphPayload>(
+      `/api/bots/${encodeURIComponent(botAlias)}/git/graph?${params.toString()}`,
+    );
+    return mapGitCommitGraph(data);
   }
 
   async initGitRepository(botAlias: string): Promise<GitOverview> {
