@@ -123,6 +123,23 @@ test("admin center blocks fixed forward and quick tunnel conflict", async () => 
   expect(updateEnvConfig).not.toHaveBeenCalled();
 });
 
+test("admin center shows fixed forward hub token and frps port fields", async () => {
+  const user = userEvent.setup();
+  const { client } = createClient();
+  await client.login({ username: "127.0.0.1", password: "test" });
+
+  render(<AdminCenterScreen client={client} onClose={() => {}} />);
+
+  await user.click(await screen.findByRole("tab", { name: "环境配置" }));
+  await screen.findByRole("heading", { name: "环境配置" });
+  await user.click(screen.getByRole("button", { name: "Tunnel" }));
+
+  expect(screen.getByText("Hub 节点授权码")).toBeInTheDocument();
+  expect(screen.getByText("TCB_HUB_NODE_TOKEN")).toBeInTheDocument();
+  expect(screen.getByText("Hub frps 端口")).toBeInTheDocument();
+  expect(screen.getByText("TCB_HUB_FRPS_PORT")).toBeInTheDocument();
+});
+
 
 
 

@@ -28,6 +28,7 @@ def test_env_service_accepts_fixed_public_forward_config(tmp_path: Path) -> None
             "values": {
                 "WEB_FIXED_PUBLIC_FORWARD_ENABLED": True,
                 "WEB_FIXED_PUBLIC_FORWARD_URL": "http://124.221.226.63:18088/node/nanjing-laptop",
+                "TCB_HUB_FRPS_PORT": 7000,
                 "TCB_HUB_NODE_TOKEN": "secret",
             }
         }
@@ -36,8 +37,21 @@ def test_env_service_accepts_fixed_public_forward_config(tmp_path: Path) -> None
     assert result["changedKeys"] == [
         "WEB_FIXED_PUBLIC_FORWARD_ENABLED",
         "WEB_FIXED_PUBLIC_FORWARD_URL",
+        "TCB_HUB_FRPS_PORT",
         "TCB_HUB_NODE_TOKEN",
     ]
+
+
+def test_env_service_exposes_fixed_forward_hub_fields(tmp_path: Path) -> None:
+    _write_env(tmp_path, "")
+
+    snapshot = EnvConfigService(tmp_path).snapshot()
+    items = {item["key"]: item for item in snapshot["items"]}
+
+    assert items["TCB_HUB_NODE_TOKEN"]["category"] == "tunnel"
+    assert items["TCB_HUB_NODE_TOKEN"]["type"] == "password"
+    assert items["TCB_HUB_FRPS_PORT"]["category"] == "tunnel"
+    assert items["TCB_HUB_FRPS_PORT"]["type"] == "number"
 
 
 def test_env_service_rejects_fixed_forward_and_quick_tunnel(tmp_path: Path) -> None:
@@ -59,6 +73,7 @@ def test_env_service_rejects_fixed_forward_and_quick_tunnel(tmp_path: Path) -> N
                 "values": {
                     "WEB_FIXED_PUBLIC_FORWARD_ENABLED": True,
                     "WEB_FIXED_PUBLIC_FORWARD_URL": "http://124.221.226.63:18088/node/nanjing-laptop",
+                    "TCB_HUB_FRPS_PORT": 7000,
                     "TCB_HUB_NODE_TOKEN": "secret",
                     "WEB_TUNNEL_MODE": "cloudflare_quick",
                 }
@@ -67,6 +82,23 @@ def test_env_service_rejects_fixed_forward_and_quick_tunnel(tmp_path: Path) -> N
 
     assert exc_info.value.code == "invalid_env_value"
     assert "不能同时启用" in exc_info.value.message
+
+
+def test_env_service_requires_frps_port_for_fixed_forward(tmp_path: Path) -> None:
+    _write_env(tmp_path, "TCB_NODE_ID=nanjing-laptop\nWEB_BASE_PATH=/node/nanjing-laptop\nWEB_TUNNEL_MODE=disabled\n")
+
+    with pytest.raises(EnvValidationError) as exc_info:
+        EnvConfigService(tmp_path).reload_preview(
+            {
+                "values": {
+                    "WEB_FIXED_PUBLIC_FORWARD_ENABLED": True,
+                    "WEB_FIXED_PUBLIC_FORWARD_URL": "http://124.221.226.63:18088/node/nanjing-laptop",
+                    "TCB_HUB_NODE_TOKEN": "secret",
+                }
+            }
+        )
+
+    assert exc_info.value.data["key"] == "TCB_HUB_FRPS_PORT"
 
 
 def test_env_service_rejects_base_path_mismatch(tmp_path: Path) -> None:

@@ -90,6 +90,7 @@ ENV_SCHEMA: tuple[EnvField, ...] = (
     EnvField("WEB_PUBLIC_URL", "公网 URL", "反代或隧道公网访问地址。", "string", "", "tunnel"),
     EnvField("WEB_FIXED_PUBLIC_FORWARD_ENABLED", "固定公网转发", "启用 Hub 固定 IP/域名转发。", "boolean", "false", "tunnel"),
     EnvField("WEB_FIXED_PUBLIC_FORWARD_URL", "固定公网入口", "Hub 公网入口 URL，含 /node/<节点 ID>。", "string", "", "tunnel"),
+    EnvField("TCB_HUB_FRPS_PORT", "Hub frps 端口", "Hub 分配给 frpc 连接 frps 的端口，不是公网 HTTP 访问端口。", "number", "", "tunnel", min_value=1, max_value=65535, integer=True),
     EnvField("TCB_HUB_NODE_TOKEN", "Hub 节点授权码", "Hub 分配给本节点的授权码。", "password", "", "tunnel", sensitive=True, max_length=8192),
     EnvField("WEB_TUNNEL_MODE", "隧道模式", "内置隧道模式。", "select", "disabled", "tunnel", options=("disabled", "cloudflare_quick")),
     EnvField("WEB_TUNNEL_AUTOSTART", "自动启动隧道", "Web 启动时自动拉起隧道。", "boolean", "true", "tunnel"),
@@ -513,6 +514,12 @@ class EnvConfigService:
                     "invalid_env_value",
                     "启用固定公网转发时必须填写 WEB_FIXED_PUBLIC_FORWARD_URL",
                     {"key": "WEB_FIXED_PUBLIC_FORWARD_URL"},
+                )
+            if not str(values.get("TCB_HUB_FRPS_PORT", "") or "").strip():
+                raise EnvValidationError(
+                    "invalid_env_value",
+                    "启用固定公网转发时必须填写 Hub frps 端口",
+                    {"key": "TCB_HUB_FRPS_PORT"},
                 )
             if not str(values.get("TCB_HUB_NODE_TOKEN", "") or "").strip():
                 raise EnvValidationError(

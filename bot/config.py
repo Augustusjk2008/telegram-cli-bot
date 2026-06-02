@@ -88,6 +88,17 @@ def _get_project_int(name: str, default: int) -> int:
         return default
 
 
+def _get_project_optional_int(name: str, default: int = 0) -> int:
+    raw_value = _get_project_config(name, "").strip()
+    if not raw_value:
+        return default
+    try:
+        return int(raw_value)
+    except ValueError:
+        logging.warning("忽略无效的整数配置 %s=%s，使用默认值 %s", name, raw_value, default)
+        return default
+
+
 _NODE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 
@@ -166,6 +177,7 @@ EFFECTIVE_VITE_BASE_PATH = _effective_frontend_base_path("VITE_BASE_PATH", WEB_B
 EFFECTIVE_VITE_API_BASE_URL = _effective_frontend_base_path("VITE_API_BASE_URL", WEB_BASE_PATH)
 WEB_FIXED_PUBLIC_FORWARD_ENABLED = _get_project_bool("WEB_FIXED_PUBLIC_FORWARD_ENABLED", False)
 WEB_FIXED_PUBLIC_FORWARD_URL = _get_project_config("WEB_FIXED_PUBLIC_FORWARD_URL", "").strip()
+TCB_HUB_FRPS_PORT = _get_project_optional_int("TCB_HUB_FRPS_PORT", 0)
 TCB_HUB_NODE_TOKEN = _get_project_config("TCB_HUB_NODE_TOKEN", "").strip()
 WEB_TUNNEL_MODE = os.environ.get("WEB_TUNNEL_MODE", "disabled").strip().lower() or "disabled"
 WEB_TUNNEL_AUTOSTART = os.environ.get("WEB_TUNNEL_AUTOSTART", "true").lower() == "true"
