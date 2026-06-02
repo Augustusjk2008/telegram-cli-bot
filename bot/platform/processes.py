@@ -11,6 +11,20 @@ def build_subprocess_group_kwargs() -> dict:
     return {"start_new_session": True}
 
 
+def build_chat_cli_process_kwargs() -> dict:
+    if os.name != "nt":
+        return {"start_new_session": True}
+
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(
+        subprocess,
+        "CREATE_NEW_PROCESS_GROUP",
+        0,
+    )
+    if not creationflags:
+        return {}
+    return {"creationflags": creationflags}
+
+
 def build_hidden_process_kwargs() -> dict:
     if os.name != "nt":
         return {}

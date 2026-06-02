@@ -124,7 +124,7 @@ from bot.manager import MultiBotManager
 from bot.messages import msg
 from bot.models import AgentProfile, BotProfile, UserSession
 from bot.platform.output import strip_ansi_escape
-from bot.platform.processes import build_hidden_process_kwargs, terminate_process_tree_sync
+from bot.platform.processes import build_chat_cli_process_kwargs, build_hidden_process_kwargs, terminate_process_tree_sync
 from bot.platform.subprocess_streams import close_process_streams
 from bot.session_store import rename_bot_sessions as rename_stored_bot_sessions
 from bot.sessions import (
@@ -2407,15 +2407,12 @@ def kill_user_process(manager: MultiBotManager, alias: str, user_id: int, agent_
     try:
         if process is not None and process.poll() is None:
             _terminate_process_sync(process)
+            close_process_streams(process)
+            session.persist()
             return {"killed": True, "message": msg("kill", "killed"), "stop_requested": True}
+        close_process_streams(process)
         with session._lock:
-            session.process = None
-            session.stop_requested = False
-            session.is_processing = False
-            session.running_user_text = None
-            session.running_preview_text = ""
-            session.running_started_at = None
-            session.running_updated_at = None
+            _reset_session_runtime_flags(session)
         _get_chat_history_service(session).reconcile_idle_streaming_turns(session)
         session.persist()
         result = {"killed": False, "message": msg("kill", "already_done"), "stale_cleared": True}
@@ -3857,6 +3854,9 @@ def _terminate_process_sync(process: subprocess.Popen, kill_timeout: float = 2.0
         pass
 
 
+PROCESS_STDOUT_EXIT_DRAIN_SECONDS = 0.2
+
+
 def _close_process_stdout(process: Any) -> None:
     stdout = getattr(process, "stdout", None)
     if stdout is None:
@@ -3867,6 +3867,69 @@ def _close_process_stdout(process: Any) -> None:
         pass
 
 
+def _start_process_stdout_reader(
+    process: subprocess.Popen,
+    output_queue: queue.Queue[Any],
+    *,
+    drain_seconds: float = PROCESS_STDOUT_EXIT_DRAIN_SECONDS,
+) -> threading.Event:
+    reader_done = threading.Event()
+
+    def read_stdout() -> None:
+        try:
+            stdout = process.stdout
+            if stdout is None or not hasattr(stdout, "readline"):
+                return
+            while True:
+                line = stdout.readline()
+                if line:
+                    output_queue.put(line)
+                    continue
+                if process.poll() is not None:
+                    break
+                time.sleep(0.01)
+        except Exception as exc:  # pragma: no cover - defensive
+            output_queue.put(exc)
+        finally:
+            reader_done.set()
+
+    threading.Thread(target=read_stdout, daemon=True).start()
+    return reader_done
+
+
+def _maybe_stop_waiting_for_stdout_after_exit(
+    process: subprocess.Popen,
+    reader_done: threading.Event,
+    output_queue: queue.Queue[Any],
+    exit_seen_at: float | None,
+    *,
+    drain_seconds: float = PROCESS_STDOUT_EXIT_DRAIN_SECONDS,
+) -> tuple[bool, float | None]:
+    if reader_done.is_set():
+        return False, None
+    if process.poll() is None:
+        return False, None
+    now = time.monotonic()
+    if exit_seen_at is None:
+        return False, now
+    if not output_queue.empty():
+        return False, exit_seen_at
+    if now - exit_seen_at < drain_seconds:
+        return False, exit_seen_at
+    _close_process_stdout(process)
+    return True, exit_seen_at
+
+
+def _reset_session_runtime_flags(session: UserSession) -> None:
+    session.process = None
+    session.is_processing = False
+    session.stop_requested = False
+    session.running_user_text = None
+    session.running_preview_text = ""
+    session.running_started_at = None
+    session.running_updated_at = None
+
+
 async def _communicate_process(process: subprocess.Popen) -> tuple[str, int]:
     try:
         stdout = getattr(process, "stdout", None)
@@ -3875,31 +3938,9 @@ async def _communicate_process(process: subprocess.Popen) -> tuple[str, int]:
             return str(output or ""), getattr(process, "returncode", None) or process.wait() or 0
 
         output_queue: queue.Queue[Any] = queue.Queue()
-        reader_done = threading.Event()
+        reader_done = _start_process_stdout_reader(process, output_queue)
         chunks: list[str] = []
-
-        def read_stdout() -> None:
-            try:
-                stdout = process.stdout
-                if stdout is None:
-                    return
-                while True:
-                    line = stdout.readline()
-                    if line:
-                        output_queue.put(line)
-                        continue
-                    if process.poll() is not None:
-                        remaining = stdout.read()
-                        if remaining:
-                            output_queue.put(remaining)
-                        break
-                    time.sleep(0.05)
-            except Exception as exc:  # pragma: no cover - defensive
-                output_queue.put(exc)
-            finally:
-                reader_done.set()
-
-        threading.Thread(target=read_stdout, daemon=True).start()
+        stdout_exit_seen_at: float | None = None
 
         try:
             while not reader_done.is_set() or not output_queue.empty():
@@ -3914,6 +3955,14 @@ async def _communicate_process(process: subprocess.Popen) -> tuple[str, int]:
                         raise item
                     chunks.append(str(item))
 
+                should_stop, stdout_exit_seen_at = _maybe_stop_waiting_for_stdout_after_exit(
+                    process,
+                    reader_done,
+                    output_queue,
+                    stdout_exit_seen_at,
+                )
+                if should_stop:
+                    break
                 if not drained:
                     await asyncio.sleep(0.05)
         except Exception:
@@ -3940,7 +3989,7 @@ async def _communicate_codex_process(process: subprocess.Popen) -> tuple[str, Op
 
         loop = asyncio.get_running_loop()
         output_queue: queue.Queue[Any] = queue.Queue()
-        reader_done = threading.Event()
+        reader_done = _start_process_stdout_reader(process, output_queue)
         chunks: list[str] = []
         thread_id: Optional[str] = None
         candidate_text: Optional[str] = None
@@ -3948,29 +3997,7 @@ async def _communicate_codex_process(process: subprocess.Popen) -> tuple[str, Op
         done_terminate_started_at: Optional[float] = None
         done_force_killed = False
         done_stdout_closed = False
-
-        def read_stdout() -> None:
-            try:
-                if process.stdout is None:
-                    return
-                stdout = process.stdout
-                while True:
-                    line = stdout.readline()
-                    if line:
-                        output_queue.put(line)
-                        continue
-                    if process.poll() is not None:
-                        remaining = stdout.read()
-                        if remaining:
-                            output_queue.put(remaining)
-                        break
-                    time.sleep(0.05)
-            except Exception as exc:  # pragma: no cover - defensive
-                output_queue.put(exc)
-            finally:
-                reader_done.set()
-
-        threading.Thread(target=read_stdout, daemon=True).start()
+        stdout_exit_seen_at: float | None = None
 
         try:
             while not reader_done.is_set() or not output_queue.empty():
@@ -4004,7 +4031,7 @@ async def _communicate_codex_process(process: subprocess.Popen) -> tuple[str, Op
                         break
                     if done_terminate_started_at is None and process.poll() is None:
                         done_terminate_started_at = now
-                        process.terminate()
+                        await loop.run_in_executor(None, _terminate_process_sync, process)
                     elif (
                         done_terminate_started_at is not None
                         and not done_force_killed
@@ -4014,6 +4041,14 @@ async def _communicate_codex_process(process: subprocess.Popen) -> tuple[str, Op
                         done_force_killed = True
                         await loop.run_in_executor(None, _terminate_process_sync, process)
 
+                should_stop, stdout_exit_seen_at = _maybe_stop_waiting_for_stdout_after_exit(
+                    process,
+                    reader_done,
+                    output_queue,
+                    stdout_exit_seen_at,
+                )
+                if should_stop:
+                    break
                 if not drained:
                     await asyncio.sleep(0.05)
             waited_returncode = await loop.run_in_executor(None, _wait_for_process_exit_sync, process, 1.0)
@@ -4053,34 +4088,11 @@ async def _communicate_claude_process(
 
         loop = asyncio.get_running_loop()
         output_queue: queue.Queue[Any] = queue.Queue()
-        reader_done = threading.Event()
+        reader_done = _start_process_stdout_reader(process, output_queue)
         collector = ClaudeDoneCollector(done_session)
         done_terminate_started_at: Optional[float] = None
         done_force_killed = False
-
-        def read_stdout() -> None:
-            try:
-                if process.stdout is None:
-                    return
-                stdout = process.stdout
-                while True:
-                    line = stdout.readline()
-                    if line:
-                        output_queue.put(line)
-                        continue
-                    if process.poll() is not None:
-                        remaining = stdout.read()
-                        if remaining:
-                            output_queue.put(remaining)
-                        break
-                    time.sleep(0.05)
-            except Exception as exc:  # pragma: no cover - defensive
-                output_queue.put(exc)
-            finally:
-                reader_done.set()
-
-        reader_thread = threading.Thread(target=read_stdout, daemon=True)
-        reader_thread.start()
+        stdout_exit_seen_at: float | None = None
 
         try:
             while not reader_done.is_set() or not output_queue.empty():
@@ -4103,7 +4115,7 @@ async def _communicate_claude_process(
                     and process.poll() is None
                 ):
                     done_terminate_started_at = now
-                    process.terminate()
+                    await loop.run_in_executor(None, _terminate_process_sync, process)
                 elif (
                     done_terminate_started_at is not None
                     and not done_force_killed
@@ -4113,6 +4125,14 @@ async def _communicate_claude_process(
                     done_force_killed = True
                     await loop.run_in_executor(None, _terminate_process_sync, process)
 
+                should_stop, stdout_exit_seen_at = _maybe_stop_waiting_for_stdout_after_exit(
+                    process,
+                    reader_done,
+                    output_queue,
+                    stdout_exit_seen_at,
+                )
+                if should_stop:
+                    break
                 if not drained:
                     await asyncio.sleep(0.1)
 
@@ -4295,7 +4315,7 @@ async def _stream_cli_chat(
                     env=env,
                     encoding="utf-8",
                     errors="replace",
-                    **build_hidden_process_kwargs(),
+                    **build_chat_cli_process_kwargs(),
                 )
                 active_process = process
                 process_pid = int(getattr(process, "pid", 0) or 0)
@@ -4350,7 +4370,7 @@ async def _stream_cli_chat(
                 meta_sent = True
 
             output_queue: queue.Queue[Any] = queue.Queue()
-            reader_done = threading.Event()
+            reader_done = _start_process_stdout_reader(process, output_queue)
             preview_state = _StreamPreviewState(cli_type)
             persistence_buffer = StreamingPersistenceBuffer(
                 service,
@@ -4366,6 +4386,7 @@ async def _stream_cli_chat(
             done_terminate_started_at: Optional[float] = None
             done_force_killed = False
             done_stdout_closed = False
+            stdout_exit_seen_at: float | None = None
             codex_done_candidate: Optional[str] = None
             codex_done_seen_at: Optional[float] = None
             trace_state = create_stream_trace_state(cli_type)
@@ -4389,28 +4410,6 @@ async def _stream_cli_chat(
                 persistence_buffer.maybe_flush()
                 return trace_event
 
-            def read_stdout() -> None:
-                try:
-                    if process.stdout is None:
-                        return
-                    stdout = process.stdout
-                    while True:
-                        line = stdout.readline()
-                        if line:
-                            output_queue.put(line)
-                            continue
-                        if process.poll() is not None:
-                            remaining = stdout.read()
-                            if remaining:
-                                output_queue.put(remaining)
-                            break
-                        time.sleep(0.05)
-                except Exception as exc:  # pragma: no cover - defensive
-                    output_queue.put(exc)
-                finally:
-                    reader_done.set()
-
-            threading.Thread(target=read_stdout, daemon=True).start()
             cli_started_at = time.perf_counter()
 
             try:
@@ -4461,7 +4460,7 @@ async def _stream_cli_chat(
                         and process.poll() is None
                     ):
                         done_terminate_started_at = loop.time()
-                        process.terminate()
+                        await loop.run_in_executor(None, _terminate_process_sync, process)
                     elif (
                         claude_collector is not None
                         and claude_collector.detector is not None
@@ -4470,7 +4469,7 @@ async def _stream_cli_chat(
                         and process.poll() is None
                     ):
                         done_terminate_started_at = loop.time()
-                        process.terminate()
+                        await loop.run_in_executor(None, _terminate_process_sync, process)
                     elif (
                         cli_type == "codex"
                         and codex_done_seen_at is not None
@@ -4479,7 +4478,7 @@ async def _stream_cli_chat(
                         and (loop.time() - codex_done_seen_at) >= CODEX_DONE_QUIET_SECONDS
                     ):
                         done_terminate_started_at = loop.time()
-                        process.terminate()
+                        await loop.run_in_executor(None, _terminate_process_sync, process)
                     elif (
                         done_terminate_started_at is not None
                         and not done_force_killed
@@ -4499,6 +4498,15 @@ async def _stream_cli_chat(
                         if not done_stdout_closed:
                             _close_process_stdout(process)
                             done_stdout_closed = True
+                        break
+
+                    should_stop, stdout_exit_seen_at = _maybe_stop_waiting_for_stdout_after_exit(
+                        process,
+                        reader_done,
+                        output_queue,
+                        stdout_exit_seen_at,
+                    )
+                    if should_stop:
                         break
 
                     if claude_collector is not None:
@@ -4847,8 +4855,7 @@ async def _stream_cli_chat(
         lingering_process: subprocess.Popen | None = None
         with session._lock:
             lingering_process = session.process
-            session.process = None
-            session.is_processing = False
+            _reset_session_runtime_flags(session)
         lingering_process = lingering_process or active_process
         if lingering_process is not None and lingering_process.poll() is None:
             if loop is not None:
@@ -5019,7 +5026,7 @@ async def run_cli_chat(
                     env=env,
                     encoding="utf-8",
                     errors="replace",
-                    **build_hidden_process_kwargs(),
+                    **build_chat_cli_process_kwargs(),
                 )
                 active_process = process
                 process_pid = int(getattr(process, "pid", 0) or 0)
@@ -5287,9 +5294,11 @@ async def run_cli_chat(
             )
         with session._lock:
             lingering_process = session.process
-            session.process = None
-            session.is_processing = False
-        close_process_streams(lingering_process or active_process)
+            _reset_session_runtime_flags(session)
+        lingering_process = lingering_process or active_process
+        if lingering_process is not None and lingering_process.poll() is None:
+            _terminate_process_sync(lingering_process)
+        close_process_streams(lingering_process)
 
 
 async def run_chat(

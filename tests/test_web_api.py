@@ -46,6 +46,9 @@ from bot.web.api_service import (
     AuthContext,
     _stream_cli_chat,
     _build_stream_status_event,
+    _communicate_claude_process,
+    _communicate_kimi_process,
+    _communicate_process,
     _extract_codex_stream_preview,
     stream_assistant_run_request,
     WebApiError,
@@ -1792,6 +1795,48 @@ class FakeCodexProcessWithBlockingStdout:
         self.returncode = -9
 
 
+class BlockingAfterLinesStdout:
+    def __init__(self, lines: list[str]):
+        self.closed = threading.Event()
+        self._lines = list(lines)
+
+    def readline(self):
+        if self._lines:
+            return self._lines.pop(0)
+        self.closed.wait(30)
+        return ""
+
+    def read(self):
+        return ""
+
+    def close(self):
+        self.closed.set()
+
+
+class BlockingAfterLinesProcess:
+    def __init__(self, lines: list[str]):
+        self.stdout = BlockingAfterLinesStdout(lines)
+        self.stdin = None
+        self.stderr = None
+        self.returncode = None
+        self.pid = 4321
+        self.kill = MagicMock(side_effect=self._kill)
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout=None):
+        if self.returncode is None:
+            raise subprocess.TimeoutExpired("cli", timeout or 0)
+        return self.returncode
+
+    def _kill(self):
+        self.returncode = -9
+
+    def terminate(self):
+        self.returncode = -15
+
+
 class RecordingStream:
     def __init__(self, *, fail_write: bool = False):
         self.closed = False
@@ -1858,6 +1903,225 @@ def assert_recording_process_closed(process: RecordingProcess):
     assert process.stdin.closed is True
     assert process.stdout.closed is True
     assert process.stderr.closed is True
+
+
+async def _collect_stream_events(stream):
+    events = []
+    async for event in stream:
+        events.append(event)
+    return events
+
+
+@pytest.mark.asyncio
+async def test_communicate_process_drains_briefly_after_exit_and_closes_blocking_stdout():
+    class BlockingStdout:
+        def __init__(self):
+            self.closed = threading.Event()
+            self._lines = ["完成\n"]
+
+        def readline(self):
+            if self._lines:
+                return self._lines.pop(0)
+            self.closed.wait(30)
+            return ""
+
+        def read(self):
+            return ""
+
+        def close(self):
+            self.closed.set()
+
+    class ExitedProcess:
+        def __init__(self):
+            self.stdout = BlockingStdout()
+            self.stdin = None
+            self.stderr = None
+            self.returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    process = ExitedProcess()
+
+    output, returncode = await asyncio.wait_for(_communicate_process(process), timeout=2)
+
+    assert output == "完成\n"
+    assert returncode == 0
+    assert process.stdout.closed.is_set()
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_finishes_after_final_message_when_stdout_blocks(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    web_manager.main_profile.cli_type = "codex"
+    fake_process = FakeCodexProcessWithBlockingStdout()
+    monkeypatch.setattr(api_service, "CODEX_DONE_QUIET_SECONDS", 0.01)
+    monkeypatch.setattr(api_service, "CODEX_TERMINATE_GRACE_SECONDS", 0.01)
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process):
+        events = await asyncio.wait_for(
+            _collect_stream_events(_stream_cli_chat(web_manager, "main", 1001, "执行")),
+            timeout=2,
+        )
+
+    done_event = next(event for event in events if event["type"] == "done")
+    session = get_session_for_alias(web_manager, "main", 1001)
+    assert done_event["output"] == "完成回复"
+    assert fake_process.stdout.closed.is_set()
+    assert session.process is None
+    assert session.is_processing is False
+
+
+@pytest.mark.asyncio
+async def test_communicate_claude_and_kimi_do_not_wait_forever_on_blocking_stdout(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot.claude_done import build_claude_done_session
+
+    claude_done = build_claude_done_session(
+        "prompt",
+        cli_type="claude",
+        enabled=True,
+        quiet_seconds=0.01,
+        nonce="test",
+    )
+    claude_process = BlockingAfterLinesProcess(
+        [
+            '{"type":"stream_event","session_id":"sess-1","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"完成"}}}\n',
+            '{"type":"result","subtype":"success","session_id":"sess-1","result":"完成\\n__TCB_DONE_test__"}\n',
+        ]
+    )
+
+    with patch("bot.web.api_service._terminate_process_sync", side_effect=lambda proc: proc.kill()):
+        claude_text, claude_session_id, claude_returncode = await asyncio.wait_for(
+            _communicate_claude_process(claude_process, done_session=claude_done),
+            timeout=2,
+        )
+
+    kimi_process = BlockingAfterLinesProcess(
+        ['{"role":"assistant","content":[{"type":"text","text":"完成"}]}\n']
+    )
+    kimi_process.returncode = 0
+    kimi_text, kimi_returncode = await asyncio.wait_for(_communicate_kimi_process(kimi_process), timeout=2)
+
+    assert claude_text == "完成"
+    assert claude_session_id == "sess-1"
+    assert claude_returncode == 0
+    assert claude_process.kill.called
+    assert claude_process.stdout.closed.is_set()
+    assert kimi_text == "完成"
+    assert kimi_returncode == 0
+    assert kimi_process.stdout.closed.is_set()
+
+
+@pytest.mark.asyncio
+async def test_cli_chat_popen_uses_chat_cli_process_kwargs(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    process = RecordingProcess(['{"type":"item.completed","item":{"type":"assistant_message","text":"完成"}}\n'])
+    captured_kwargs: list[dict[str, object]] = []
+
+    def fake_popen(_cmd, **kwargs):
+        captured_kwargs.append(kwargs)
+        return process
+
+    monkeypatch.setattr(api_service, "build_chat_cli_process_kwargs", lambda: {"creationflags": 0x08000200})
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", fake_popen):
+        stream_events = await asyncio.wait_for(
+            _collect_stream_events(_stream_cli_chat(web_manager, "main", 1001, "执行")),
+            timeout=2,
+        )
+
+    process = RecordingProcess(['{"type":"item.completed","item":{"type":"assistant_message","text":"完成"}}\n'])
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", fake_popen):
+        run_result = await asyncio.wait_for(run_cli_chat(web_manager, "main", 1001, "执行"), timeout=2)
+
+    assert next(event for event in stream_events if event["type"] == "done")["output"] == "完成"
+    assert run_result["output"] == "完成"
+    assert captured_kwargs[0]["creationflags"] == 0x08000200
+    assert captured_kwargs[1]["creationflags"] == 0x08000200
+
+
+@pytest.mark.asyncio
+async def test_run_cli_chat_finally_terminates_lingering_process(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    web_manager.main_profile.cli_type = "codex"
+    process = RecordingProcess([])
+    communicate_mock = AsyncMock(return_value=("完成", "thread-1", 0))
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=process), \
+         patch("bot.web.api_service._communicate_codex_process", communicate_mock), \
+         patch("bot.web.api_service._terminate_process_sync", side_effect=lambda proc: proc.kill()) as terminate_mock:
+        result = await asyncio.wait_for(run_cli_chat(web_manager, "main", 1001, "执行"), timeout=2)
+
+    session = get_session_for_alias(web_manager, "main", 1001)
+    assert result["output"] == "完成"
+    terminate_mock.assert_called_with(process)
+    assert process.kill.called
+    assert session.process is None
+    assert session.is_processing is False
+
+
+def test_kill_user_process_terminates_live_process_and_clears_stale_process(
+    web_manager: MultiBotManager,
+):
+    live_process = RecordingProcess([])
+    session = get_session_for_alias(web_manager, "main", 1001)
+    with session._lock:
+        session.is_processing = True
+        session.process = live_process
+        session.stop_requested = True
+        session.running_user_text = "执行"
+        session.running_preview_text = "处理中"
+        session.running_started_at = "2026-06-02T00:00:00"
+        session.running_updated_at = "2026-06-02T00:00:01"
+
+    with patch("bot.web.api_service._terminate_process_sync", side_effect=lambda proc: proc.kill()) as terminate_mock, \
+         patch.object(ChatHistoryService, "reconcile_idle_streaming_turns", return_value=0) as reconcile_mock:
+        result = kill_user_process(web_manager, "main", 1001)
+
+    assert result["killed"] is True
+    terminate_mock.assert_called_with(live_process)
+    reconcile_mock.assert_not_called()
+    assert live_process.kill.called
+    assert live_process.stdout.closed is True
+    assert session.process is live_process
+    assert session.is_processing is True
+    assert session.stop_requested is True
+    assert session.running_user_text == "执行"
+    assert session.running_preview_text == "处理中"
+
+    stale_process = RecordingProcess([])
+    stale_process.returncode = 0
+    with session._lock:
+        session.is_processing = True
+        session.process = stale_process
+
+    with patch.object(ChatHistoryService, "reconcile_idle_streaming_turns", return_value=0) as stale_reconcile_mock:
+        stale_result = kill_user_process(web_manager, "main", 1001)
+
+    assert stale_result["stale_cleared"] is True
+    stale_reconcile_mock.assert_called()
+    assert stale_process.stdout.closed is True
+    assert session.process is None
+    assert session.is_processing is False
 
 
 @pytest.mark.asyncio
