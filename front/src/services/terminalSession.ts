@@ -44,6 +44,35 @@ function buildTerminalAppearance(themeName: UiThemeName) {
   };
 }
 
+function displayWsPath(socketUrl: string): string {
+  try {
+    const parsed = new URL(socketUrl, typeof window !== "undefined" ? window.location.origin : "http://localhost");
+    return `${parsed.pathname}${parsed.search ? "?..." : ""}`;
+  } catch {
+    return socketUrl;
+  }
+}
+
+function formatWsCloseMessage(event: CloseEvent, socketUrl: string, attached: boolean): string {
+  const path = displayWsPath(socketUrl);
+  const reason = event.reason ? `，原因：${event.reason}` : "";
+  if (event.code === 1000 && attached) {
+    return "";
+  }
+  if (event.code === 1008) {
+    return `访问令牌无效或没有终端权限，WebSocket 已关闭（路径 ${path}，code ${event.code}${reason}）`;
+  }
+  if (event.code === 1006) {
+    return `终端已启动，但 WebSocket 连接失败（路径 ${path}，code ${event.code}）。请检查地址/base path 或反向代理是否转发 WebSocket`;
+  }
+  return `终端 WebSocket 已关闭（路径 ${path}，code ${event.code}${reason}）`;
+}
+
+function formatWsErrorMessage(socketUrl: string) {
+  const path = displayWsPath(socketUrl);
+  return `终端已启动，但 WebSocket 连接失败（路径 ${path}）。请检查地址/base path、访问令牌或反向代理 WebSocket 转发`;
+}
+
 export function createTerminalSession(container: HTMLElement, options: TerminalSessionOptions): TerminalSession {
   const themeName = options.themeName ?? DEFAULT_UI_THEME;
   const term = new Terminal({
@@ -55,9 +84,12 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
   });
   const fitAddon = new FitAddon();
   let socket: WebSocket | null = null;
+  let currentSocketUrl = "";
   let attachAddon: AttachAddon | null = null;
   let initialMessageListener: ((event: MessageEvent) => void) | null = null;
   let isAttached = false;
+  let receivedInitialMessage = false;
+  let reportedSocketError = false;
 
   term.loadAddon(fitAddon);
   term.open(container);
@@ -103,6 +135,10 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
   }
 
   function handleTerminalError(message: string) {
+    if (!message) {
+      return;
+    }
+    reportedSocketError = true;
     options.onError?.(message);
   }
 
@@ -126,9 +162,12 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
       owner_id: options.ownerId,
     });
     const socketUrl = buildWsUrl("/terminal/ws", params);
+    currentSocketUrl = socketUrl;
     socket = new WebSocket(socketUrl);
     socket.binaryType = "arraybuffer";
     isAttached = false;
+    receivedInitialMessage = false;
+    reportedSocketError = false;
 
     socket.addEventListener("open", () => {
       const geometry = getGeometry();
@@ -140,13 +179,14 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
     });
 
     initialMessageListener = (event: MessageEvent) => {
+      receivedInitialMessage = true;
       cleanupSocket();
 
       if (typeof event.data === "string") {
         try {
           const payload = JSON.parse(event.data) as { error?: string; pty_mode?: boolean | null };
           if (payload.error) {
-            handleTerminalError(payload.error);
+            handleTerminalError(`终端 WebSocket 连接被后端拒绝：${payload.error}`);
             return;
           }
           if (typeof payload.pty_mode === "boolean") {
@@ -170,12 +210,16 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
     };
 
     socket.addEventListener("message", initialMessageListener);
-    socket.addEventListener("close", () => {
+    socket.addEventListener("close", (event) => {
       cleanupSocket();
+      const message = formatWsCloseMessage(event, currentSocketUrl || socketUrl, isAttached || receivedInitialMessage);
+      if (message && !reportedSocketError) {
+        handleTerminalError(message);
+      }
       options.onClose?.();
     });
     socket.addEventListener("error", () => {
-      handleTerminalError("终端连接失败");
+      handleTerminalError(formatWsErrorMessage(currentSocketUrl || socketUrl));
     });
   }
 

@@ -129,6 +129,7 @@ export function TerminalScreen({
   const stagedWorkingDir = pendingWorkingDir?.trim() || "";
   const preferredTerminalDir = preferredWorkingDir.trim();
   const resolvedPtyMode = ptyMode ?? terminal.snapshot.ptyMode;
+  const hasRunningTerminal = terminal.snapshot.started && !terminal.snapshot.closed;
 
   useEffect(() => {
     isVisibleRef.current = isVisible;
@@ -519,7 +520,11 @@ export function TerminalScreen({
 
   const effectiveError = disabledReason || error || terminal.error || actionsError;
   const connectionText = effectiveError
-    ? (terminalDisabled ? "无权限" : "连接失败")
+    ? terminalDisabled
+      ? "无权限"
+      : error && hasRunningTerminal
+        ? "WebSocket 连接失败"
+        : "连接失败"
     : isConnected
       ? "已连接"
       : terminal.snapshot.connectionText || "未启动";

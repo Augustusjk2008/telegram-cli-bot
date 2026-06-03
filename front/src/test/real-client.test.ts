@@ -23,6 +23,7 @@ describe("RealWebBotClient", () => {
   }
 
   beforeEach(() => {
+    window.history.replaceState(null, "", "/");
     vi.stubGlobal("__PUBLIC_ENV__", {});
     vi.stubGlobal("fetch", fetchMock);
   });
@@ -60,6 +61,7 @@ describe("RealWebBotClient", () => {
   });
 
   test("applies public base path to fetch calls", async () => {
+    window.history.replaceState(null, "", "/node/nanjing-laptop/");
     vi.stubGlobal("__PUBLIC_ENV__", {
       VITE_API_BASE_URL: "/node/nanjing-laptop",
     });
@@ -86,7 +88,35 @@ describe("RealWebBotClient", () => {
     );
   });
 
+  test("ignores configured base path when current page is served from root", async () => {
+    vi.stubGlobal("__PUBLIC_ENV__", {
+      VITE_API_BASE_URL: "/node/local",
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        data: {
+          user_id: 1001,
+        },
+      }),
+    });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/auth/me",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer secret-token",
+        }),
+      }),
+    );
+  });
+
   test("applies public base path to generated file download links", () => {
+    window.history.replaceState(null, "", "/node/nanjing-laptop/");
     vi.stubGlobal("__PUBLIC_ENV__", {
       VITE_API_BASE_URL: "/node/nanjing-laptop",
     });
@@ -97,6 +127,7 @@ describe("RealWebBotClient", () => {
   });
 
   test("applies public base path to listed avatar asset urls", async () => {
+    window.history.replaceState(null, "", "/node/nanjing-laptop/");
     vi.stubGlobal("__PUBLIC_ENV__", {
       VITE_API_BASE_URL: "/node/nanjing-laptop",
     });

@@ -110,6 +110,8 @@ async def test_web_base_path_serves_api_and_spa(monkeypatch: pytest.MonkeyPatch,
             assert root_asset.status == 200
             assert sub_asset.status == 200
             assert sub_spa.status == 200
-            assert "app" in await sub_spa.text()
-
+            sub_spa_text = await sub_spa.text()
+            assert "app" in sub_spa_text
+            assert "window.__TCB_PUBLIC_ENV__" in sub_spa_text
+            assert '"VITE_API_BASE_URL": "/node/nanjing-laptop"' in sub_spa_text
 

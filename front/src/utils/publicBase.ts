@@ -6,14 +6,37 @@ function normalizeBasePath(value: string | undefined): string {
   return `/${raw.replace(/^\/+/, "").replace(/\/+$/, "")}`;
 }
 
+function runtimePublicEnv(): Record<string, string | undefined> {
+  const runtimeEnv = typeof window !== "undefined"
+    ? (window as Window & { __TCB_PUBLIC_ENV__?: Record<string, string | undefined> }).__TCB_PUBLIC_ENV__
+    : undefined;
+  if (runtimeEnv) {
+    return runtimeEnv;
+  }
+  return typeof __PUBLIC_ENV__ !== "undefined" ? __PUBLIC_ENV__ : {};
+}
+
+function pageUsesBasePath(base: string): boolean {
+  if (!base || typeof window === "undefined") {
+    return true;
+  }
+  const pathname = window.location.pathname || "/";
+  return pathname === base || pathname.startsWith(`${base}/`);
+}
+
+function activeBasePath(value: string | undefined): string {
+  const base = normalizeBasePath(value);
+  return pageUsesBasePath(base) ? base : "";
+}
+
 export function publicBasePath(): string {
-  const env = typeof __PUBLIC_ENV__ !== "undefined" ? __PUBLIC_ENV__ : {};
-  return normalizeBasePath(env.VITE_API_BASE_URL || env.VITE_BASE_PATH || env.WEB_BASE_PATH);
+  const env = runtimePublicEnv();
+  return activeBasePath(env.VITE_API_BASE_URL || env.VITE_BASE_PATH || env.WEB_BASE_PATH);
 }
 
 export function publicAssetBasePath(): string {
-  const env = typeof __PUBLIC_ENV__ !== "undefined" ? __PUBLIC_ENV__ : {};
-  return normalizeBasePath(env.VITE_BASE_PATH || env.WEB_BASE_PATH || env.VITE_API_BASE_URL);
+  const env = runtimePublicEnv();
+  return activeBasePath(env.VITE_BASE_PATH || env.WEB_BASE_PATH || env.VITE_API_BASE_URL);
 }
 
 function withBasePath(base: string, path: string): string {

@@ -1732,6 +1732,26 @@ async def test_terminal_rebuild_reports_invalid_shell_without_starting_session(
 
 
 @pytest.mark.asyncio
+async def test_terminal_websocket_reports_not_running_before_attach(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            ws = await client.ws_connect("/terminal/ws?token=secret")
+            await ws.send_json({"owner_id": "not-started"})
+            message = await ws.receive_json()
+            await ws.close()
+
+    assert message == {"error": "终端未启动"}
+
+
+@pytest.mark.asyncio
 async def test_terminal_websocket_allows_configured_public_url_origin(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,

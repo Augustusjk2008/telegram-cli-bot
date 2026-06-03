@@ -11,6 +11,13 @@ const terminalEventHandlers = vi.hoisted(() => ({
   onWriteParsed: undefined as undefined | (() => void),
   onScroll: undefined as undefined | (() => void),
 }));
+const terminalSessionOptions = vi.hoisted(() => ({
+  latest: undefined as undefined | {
+    onOpen?: () => void;
+    onError?: (message: string) => void;
+    onClose?: () => void;
+  },
+}));
 const resizeObserverMock = vi.hoisted(() => ({
   callback: undefined as undefined | ResizeObserverCallback,
 }));
@@ -26,8 +33,12 @@ const terminalSessionMock = vi.hoisted(() => ({
 }));
 
 vi.mock("../services/terminalSession", () => ({
-  createTerminalSession: createTerminalSessionMock.mockImplementation((_container: HTMLElement, options: { onOpen?: () => void }) => ({
+  createTerminalSession: createTerminalSessionMock.mockImplementation((
+    _container: HTMLElement,
+    options: { onOpen?: () => void; onError?: (message: string) => void; onClose?: () => void },
+  ) => ({
     ...(() => {
+      terminalSessionOptions.latest = options;
       const xtermRoot = document.createElement("div");
       xtermRoot.className = "xterm";
       const xtermViewport = document.createElement("div");
@@ -98,6 +109,7 @@ beforeEach(() => {
   createTerminalSessionMock.mockClear();
   terminalEventHandlers.onWriteParsed = undefined;
   terminalEventHandlers.onScroll = undefined;
+  terminalSessionOptions.latest = undefined;
   resizeObserverMock.callback = undefined;
   terminalSessionMock.sendControl.mockReset();
   terminalSessionMock.sendText.mockReset();
@@ -210,6 +222,21 @@ test("重建终端失败时显示后端错误且不创建终端会话", async ()
   expect(createTerminalSessionMock).not.toHaveBeenCalled();
 });
 
+test("终端已启动但 websocket 失败时显示 websocket 错误状态", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+
+  renderTerminalScreen({}, client);
+  await rebuildTerminal(user);
+
+  act(() => {
+    terminalSessionOptions.latest?.onError?.("终端已启动，但 WebSocket 连接失败（路径 /node/demo/terminal/ws?...，code 1006）");
+  });
+
+  expect(screen.getByRole("heading", { name: "WebSocket 连接失败" })).toBeInTheDocument();
+  expect(screen.getByText(/路径 \/node\/demo\/terminal\/ws/)).toBeInTheDocument();
+  expect(screen.queryByText("未启动终端")).not.toBeInTheDocument();
+});
 
 
 

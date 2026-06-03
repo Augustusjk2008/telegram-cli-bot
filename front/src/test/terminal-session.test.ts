@@ -89,9 +89,22 @@ class MockSocket {
     this.dispatch("close", new CloseEvent("close"));
   }
 
+  closeWith(code: number, reason = "") {
+    this.readyState = MockSocket.CLOSED;
+    this.dispatch("close", new CloseEvent("close", { code, reason }));
+  }
+
   open() {
     this.readyState = MockSocket.OPEN;
     this.dispatch("open", new Event("open"));
+  }
+
+  emitError() {
+    this.dispatch("error", new Event("error"));
+  }
+
+  emitMessage(data: string | ArrayBuffer | Blob) {
+    this.dispatch("message", new MessageEvent("message", { data }));
   }
 
   private dispatch(type: string, event: Event) {
@@ -102,9 +115,11 @@ class MockSocket {
 }
 
 beforeEach(() => {
+  window.history.replaceState(null, "", "/");
   terminalState.instances = [];
   terminalState.fitCalls = 0;
   socketState.instances = [];
+  vi.stubGlobal("__PUBLIC_ENV__", {});
   vi.stubGlobal("WebSocket", MockSocket as unknown as typeof WebSocket);
 });
 
@@ -141,4 +156,83 @@ test("connect sends initial geometry and fit sends resize payload", () => {
   });
 });
 
+test("connect applies node base path to websocket url", () => {
+  window.history.replaceState(null, "", "/node/nanjing-laptop/");
+  vi.stubGlobal("__PUBLIC_ENV__", {
+    VITE_API_BASE_URL: "/node/nanjing-laptop",
+  });
+  const container = document.createElement("div");
+  const session = createTerminalSession(container, {
+    token: "abc",
+    ownerId: "owner-1",
+  });
 
+  session.connect();
+  const socket = socketState.instances[0];
+
+  expect(new URL(socket.url).pathname).toBe("/node/nanjing-laptop/terminal/ws");
+});
+
+test("connect ignores node base path when page is served from root", () => {
+  vi.stubGlobal("__PUBLIC_ENV__", {
+    VITE_API_BASE_URL: "/node/local",
+  });
+  const container = document.createElement("div");
+  const session = createTerminalSession(container, {
+    token: "abc",
+    ownerId: "owner-1",
+  });
+
+  session.connect();
+  const socket = socketState.instances[0];
+
+  expect(new URL(socket.url).pathname).toBe("/terminal/ws");
+});
+
+test("reports backend terminal websocket error before attach", () => {
+  const errors: string[] = [];
+  const container = document.createElement("div");
+  const session = createTerminalSession(container, {
+    token: "abc",
+    ownerId: "owner-1",
+    onError: (message) => errors.push(message),
+  });
+
+  session.connect();
+  socketState.instances[0].emitMessage(JSON.stringify({ error: "终端未启动" }));
+
+  expect(errors).toEqual(["终端 WebSocket 连接被后端拒绝：终端未启动"]);
+});
+
+test("reports websocket close code and path when connection fails", () => {
+  const errors: string[] = [];
+  const container = document.createElement("div");
+  const session = createTerminalSession(container, {
+    token: "abc",
+    ownerId: "owner-1",
+    onError: (message) => errors.push(message),
+  });
+
+  session.connect();
+  socketState.instances[0].closeWith(1006);
+
+  expect(errors[0]).toContain("终端已启动，但 WebSocket 连接失败");
+  expect(errors[0]).toContain("路径 /terminal/ws?...");
+  expect(errors[0]).toContain("code 1006");
+});
+
+test("reports websocket error with path context", () => {
+  const errors: string[] = [];
+  const container = document.createElement("div");
+  const session = createTerminalSession(container, {
+    token: "abc",
+    ownerId: "owner-1",
+    onError: (message) => errors.push(message),
+  });
+
+  session.connect();
+  socketState.instances[0].emitError();
+
+  expect(errors[0]).toContain("终端已启动，但 WebSocket 连接失败");
+  expect(errors[0]).toContain("路径 /terminal/ws?...");
+});

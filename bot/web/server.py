@@ -2013,6 +2013,9 @@ class WebApiServer:
         message = str(exc).strip() or "终端 shell 启动失败"
         return WebApiError(400, "terminal_launch_failed", message)
 
+    def _request_log_path(self, request: web.Request) -> str:
+        return request.path_qs.split("?", 1)[0]
+
     async def get_terminal_session(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_TERMINAL_EXEC)
         owner_id = self._resolve_terminal_owner_id(request.query.get("owner_id"))
@@ -2118,6 +2121,14 @@ class WebApiServer:
     async def terminal_ws(self, request: web.Request) -> web.WebSocketResponse:
         self._require_websocket_origin(request)
         auth = await self._with_capability(request, CAP_TERMINAL_EXEC)
+        request_path = self._request_log_path(request)
+        logger.info(
+            "终端 WebSocket 鉴权通过 path=%s user_id=%s account=%s capability=%s",
+            request_path,
+            auth.user_id,
+            auth.account_id,
+            CAP_TERMINAL_EXEC in auth.capabilities,
+        )
         ws = web.WebSocketResponse(heartbeat=30.0)
         await ws.prepare(request)
         self._terminal_sockets.add(ws)
@@ -2129,7 +2140,24 @@ class WebApiServer:
         queue: asyncio.Queue[bytes | object] | None = None
         tasks: list[asyncio.Task[Any]] = []
         try:
-            init_message = await ws.receive()
+            try:
+                init_message = await asyncio.wait_for(ws.receive(), timeout=10)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "终端 WebSocket 初始化超时 path=%s user_id=%s",
+                    request_path,
+                    auth.user_id,
+                )
+                await ws.close(code=WSCloseCode.POLICY_VIOLATION, message=b"terminal init timeout")
+                return ws
+            if init_message.type in {WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR}:
+                logger.info(
+                    "终端 WebSocket 初始化前关闭 path=%s user_id=%s type=%s",
+                    request_path,
+                    auth.user_id,
+                    init_message.type,
+                )
+                return ws
             init_data: dict[str, Any] = {}
             if init_message.type == WSMsgType.TEXT:
                 try:
@@ -2140,6 +2168,13 @@ class WebApiServer:
                     init_data = {}
             owner_id = self._resolve_terminal_owner_id(init_data.get("owner_id") or request.query.get("owner_id"))
             from_seq = int(init_data.get("from_seq") or request.query.get("from_seq") or 0)
+            logger.info(
+                "终端 WebSocket attach 开始 path=%s user_id=%s owner=%s from_seq=%s",
+                request_path,
+                auth.user_id,
+                owner_id,
+                from_seq,
+            )
             queue, snapshot = await self._terminal_manager.attach(auth.user_id, owner_id, from_seq=from_seq)
             try:
                 await ws.send_json({
@@ -2149,6 +2184,13 @@ class WebApiServer:
             except _CLIENT_DISCONNECT_ERRORS:
                 logger.info("终端 WebSocket 客户端在初始化完成前断开: owner=%s", owner_id)
                 return ws
+            logger.info(
+                "终端 WebSocket attach 成功 user_id=%s owner=%s pty=%s last_seq=%s",
+                auth.user_id,
+                owner_id,
+                snapshot.get("pty_mode"),
+                snapshot.get("last_seq"),
+            )
 
             async def forward_output() -> None:
                 while True:
@@ -2210,6 +2252,13 @@ class WebApiServer:
                     output_task.cancel()
                 await asyncio.gather(output_task, return_exceptions=True)
         except TerminalNotRunningError as exc:
+            logger.warning(
+                "终端 WebSocket attach 失败，终端未启动 user_id=%s owner=%s path=%s: %s",
+                auth.user_id,
+                owner_id or request.query.get("owner_id", ""),
+                request_path,
+                exc,
+            )
             if not ws.closed:
                 try:
                     await ws.send_json({"error": str(exc)})
@@ -4289,12 +4338,29 @@ class WebApiServer:
         if subdir:
             static_dir = static_dir / subdir
         return str(static_dir)
+
+    def _public_runtime_env_script(self) -> str:
+        payload = {
+            "WEB_BASE_PATH": WEB_BASE_PATH,
+            "VITE_BASE_PATH": WEB_BASE_PATH,
+            "VITE_API_BASE_URL": WEB_BASE_PATH,
+        }
+        return f"<script>window.__TCB_PUBLIC_ENV__={json.dumps(payload, ensure_ascii=False)};</script>"
+
+    def _inject_public_runtime_env(self, html: str) -> str:
+        script = self._public_runtime_env_script()
+        if "__TCB_PUBLIC_ENV__" in html:
+            return html
+        if "<head>" in html:
+            return html.replace("<head>", f"<head>\n    {script}", 1)
+        return f"{script}\n{html}"
     
     async def serve_index(self, request):
         """Serve index.html for SPA routes."""
         index_path = Path(self._get_static_dir()) / "index.html"
         if index_path.exists():
-            response = web.FileResponse(str(index_path))
+            html = index_path.read_text(encoding="utf-8")
+            response = web.Response(text=self._inject_public_runtime_env(html), content_type="text/html")
             response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"
