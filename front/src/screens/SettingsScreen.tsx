@@ -132,6 +132,70 @@ function tunnelSourceText(tunnel: TunnelSnapshot) {
   return "Quick Tunnel";
 }
 
+function isFixedPublicForward(tunnel: TunnelSnapshot) {
+  return tunnel.source === "fixed_public_forward" || tunnel.mode === "fixed_public_forward";
+}
+
+function normalizeTunnelServiceStatus(value: string | null | undefined) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function tunnelServiceTone(value: string | null | undefined): "neutral" | "success" | "warning" | "danger" | "accent" {
+  const status = normalizeTunnelServiceStatus(value);
+  if (!status || ["stopped", "disabled", "offline"].includes(status)) return "neutral";
+  if (["running", "connected", "online", "ok", "healthy", "success"].includes(status)) return "success";
+  if (["starting", "pending", "waiting", "verifying"].some((token) => status.includes(token))) return "warning";
+  if (["error", "failed", "timeout", "forbidden"].some((token) => status.includes(token))) return "danger";
+  return "accent";
+}
+
+function frpcStatusText(value: string | null | undefined, fallbackStatus?: TunnelSnapshot["status"]) {
+  const status = normalizeTunnelServiceStatus(value) || normalizeTunnelServiceStatus(fallbackStatus);
+  if (!status || status === "stopped") return "已停止";
+  if (["running", "connected", "online", "ok", "healthy", "success"].includes(status)) return "运行中";
+  if (status === "starting") return "启动中";
+  if (["waiting", "pending"].some((token) => status.includes(token))) return "等待中";
+  if (["error", "failed", "timeout", "forbidden"].some((token) => status.includes(token))) return "异常";
+  return value || tunnelStatusText(fallbackStatus || "stopped");
+}
+
+function heartbeatStatusText(value: string | null | undefined) {
+  const status = normalizeTunnelServiceStatus(value);
+  if (!status || ["stopped", "disabled", "offline"].includes(status)) return "未上报";
+  if (["running", "connected", "online", "ok", "healthy", "success"].includes(status)) return "正常";
+  if (status === "starting") return "启动中";
+  if (["waiting", "pending"].some((token) => status.includes(token))) return "等待中";
+  if (["error", "failed", "timeout", "forbidden"].some((token) => status.includes(token))) return "异常";
+  return value || "未上报";
+}
+
+function fixedForwardErrorHint(value: string | null | undefined) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const normalized = text.toLowerCase();
+  if (
+    normalized.includes("403")
+    || (normalized.includes("node") && normalized.includes("token"))
+  ) {
+    return "节点 token 错";
+  }
+  if (
+    normalized.includes("login to server failed")
+    || normalized.includes("authorization failed")
+    || normalized.includes("auth failed")
+    || (normalized.includes("frps") && normalized.includes("token"))
+  ) {
+    return "frps token 错";
+  }
+  if (
+    ["timeout", "timed out", "10060", "10061", "refused", "unreachable", "no route", "i/o timeout"].some((token) => normalized.includes(token))
+    && (normalized.includes("7000") || normalized.includes("frps") || normalized.includes("dial tcp") || normalized.includes("connect"))
+  ) {
+    return "frps 端口不通/安全组未放通";
+  }
+  return "";
+}
+
 function notificationPermissionText(permission: BrowserNotificationPermission) {
   if (permission === "granted") return "已允许";
   if (permission === "denied") return "已拒绝";
@@ -941,6 +1005,15 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
 
         {tunnel ? (
           <div className={settingsPanelClass("space-y-4")}>
+            {(() => {
+              const fixedForward = isFixedPublicForward(tunnel);
+              const frpcStatus = fixedForward ? frpcStatusText(tunnel.frpcStatus, tunnel.status) : "";
+              const heartbeatStatus = fixedForward ? heartbeatStatusText(tunnel.heartbeatStatus) : "";
+              const frpcErrorHint = fixedForwardErrorHint(tunnel.frpcLastError || tunnel.lastError);
+              const heartbeatErrorHint = fixedForwardErrorHint(tunnel.heartbeatLastError);
+
+              return (
+                <>
             <div className="flex items-start justify-between gap-4">
               <div className="space-y-1">
                 <div className="flex items-center gap-2">
@@ -957,6 +1030,12 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             <div className="space-y-2 text-sm text-[var(--muted)]">
               <p className="break-all"><span className="font-medium text-[var(--text)]">HTTPS 访问:</span> {tunnel.publicUrl || "未建立公网地址"}</p>
               <p className="break-all"><span className="font-medium text-[var(--text)]">本地转发目标:</span> {tunnel.localUrl}</p>
+              {fixedForward && tunnel.nodeId ? (
+                <p className="break-all"><span className="font-medium text-[var(--text)]">Node ID:</span> {tunnel.nodeId}</p>
+              ) : null}
+              {fixedForward && tunnel.basePath ? (
+                <p className="break-all"><span className="font-medium text-[var(--text)]">Base Path:</span> {tunnel.basePath}</p>
+              ) : null}
               {tunnel.publicUrl && tunnel.source === "quick_tunnel" && tunnel.status !== "running" && !tunnel.lastError ? (
                 <p className="break-all">公网地址已创建，正在验证</p>
               ) : null}
@@ -964,6 +1043,42 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 <p className="break-all text-red-700"><span className="font-medium">错误:</span> {tunnel.lastError}</p>
               ) : null}
             </div>
+
+            {fixedForward ? (
+              <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+                <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-3 text-[var(--muted)]">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium text-[var(--text)]">frpc 状态</span>
+                    <StateBadge tone={tunnelServiceTone(tunnel.frpcStatus || tunnel.status)}>{frpcStatus}</StateBadge>
+                  </div>
+                  <div className="mt-2 space-y-1">
+                    <p>PID: {tunnel.frpcPid ?? tunnel.pid ?? "未启动"}</p>
+                    {tunnel.frpcLastError ? (
+                      <p className="break-all text-red-700">错误: {tunnel.frpcLastError}</p>
+                    ) : null}
+                    {frpcErrorHint ? (
+                      <p className="text-red-700">提示: {frpcErrorHint}</p>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-3 text-[var(--muted)]">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium text-[var(--text)]">Heartbeat</span>
+                    <StateBadge tone={tunnelServiceTone(tunnel.heartbeatStatus)}>{heartbeatStatus}</StateBadge>
+                  </div>
+                  <div className="mt-2 space-y-1">
+                    <p className="break-all">最近上报: {tunnel.heartbeatLastAt || "暂无"}</p>
+                    {tunnel.heartbeatLastError ? (
+                      <p className="break-all text-red-700">错误: {tunnel.heartbeatLastError}</p>
+                    ) : null}
+                    {heartbeatErrorHint ? (
+                      <p className="text-red-700">提示: {heartbeatErrorHint}</p>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
             <div className="flex flex-wrap gap-2">
               {tunnel.source === "quick_tunnel" ? (
@@ -1012,6 +1127,9 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 复制公网地址
               </button>
             </div>
+                </>
+              );
+            })()}
           </div>
         ) : null}
 

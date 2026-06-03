@@ -1669,6 +1669,12 @@ export type PublicExposureSnapshot = {
   fixedPublicForwardEnabled?: boolean;
   nodeId?: string;
   basePath?: string;
+  frpcStatus?: string;
+  frpcPid?: number | null;
+  frpcLastError?: string;
+  heartbeatStatus?: string;
+  heartbeatLastAt?: string;
+  heartbeatLastError?: string;
 };
 
 export type TunnelSnapshot = PublicExposureSnapshot;

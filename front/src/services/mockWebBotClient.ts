@@ -6663,6 +6663,12 @@ export class MockWebBotClient implements WebBotClient {
       fixedPublicForwardEnabled: false,
       nodeId: "demo-node",
       basePath: "",
+      frpcStatus: "",
+      frpcPid: null,
+      frpcLastError: "",
+      heartbeatStatus: "",
+      heartbeatLastAt: "",
+      heartbeatLastError: "",
     };
   }
 
@@ -6683,6 +6689,12 @@ export class MockWebBotClient implements WebBotClient {
       fixedPublicForwardEnabled: false,
       nodeId: "demo-node",
       basePath: "",
+      frpcStatus: "",
+      frpcPid: null,
+      frpcLastError: "",
+      heartbeatStatus: "",
+      heartbeatLastAt: "",
+      heartbeatLastError: "",
     };
   }
 

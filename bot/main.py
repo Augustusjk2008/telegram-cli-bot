@@ -43,7 +43,7 @@ from bot.models import BotProfile
 from bot.version import APP_VERSION
 from bot.web import WebApiServer
 from bot.web.api_service import execute_assistant_run_request, stream_assistant_run_request
-from bot.web.runtime_binding import RuntimeWebBind, resolve_runtime_web_bind
+from bot.web.runtime_binding import RuntimeWebBind, WebPortInUseError, resolve_runtime_web_bind
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +158,13 @@ def _get_local_browser_url(bind: RuntimeWebBind) -> str:
 
 def _allow_runtime_port_fallback() -> bool:
     return not is_supervised_restart()
+
+
+def _web_port_in_use_message(exc: WebPortInUseError) -> str:
+    return (
+        f"WEB_PORT {exc.port} 已被占用，监听地址: {exc.host}。"
+        "请关闭正在占用该端口的旧 tcb-hub/服务，或修改 .env 中 WEB_PORT 后重启。"
+    )
 
 
 def _env_flag_enabled(name: str, default: bool = True) -> bool:
@@ -454,6 +461,11 @@ def main():
             from bot.sessions import save_all_sessions
             save_all_sessions()
             break
+        except WebPortInUseError as e:
+            message = _web_port_in_use_message(e)
+            logger.error(message)
+            safe_print(message)
+            sys.exit(1)
         except Exception as e:
             logger.exception("运行异常，%s秒后自动重试: %s", MAIN_LOOP_RETRY_DELAY, e)
             safe_print(f"运行异常，将在 {MAIN_LOOP_RETRY_DELAY} 秒后自动重试: {e}")

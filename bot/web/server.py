@@ -37,6 +37,10 @@ from bot.config import (
     PUSHPLUS_TIMEOUT_SECONDS,
     PUSHPLUS_TOKEN,
     PUSHPLUS_TOPIC,
+    TCB_HUB_FRPC_AUTOSTART,
+    TCB_HUB_FRPC_PATH,
+    TCB_HUB_FRPS_PORT,
+    TCB_HUB_FRPS_TOKEN,
     TCB_HUB_NODE_TOKEN,
     TCB_NODE_ID,
     WEB_BASE_PATH,
@@ -81,6 +85,7 @@ from .cli_error_stats import collect_cli_error_stats
 from .diagnostics import diag_enabled, diag_log_event, diag_log_slow, diag_loop_lag_ms
 from .env_service import EnvConfigService, EnvValidationError
 from .exposure_service import WebExposureService
+from .fixed_forward_service import FixedForwardService
 from .lan_chat_service import LanChatService
 from .notification_service import ChatNotificationService
 from .os_open_service import DesktopOpenError, open_directory_in_desktop
@@ -790,6 +795,7 @@ class WebApiServer:
         host: str | None = None,
         port: int | None = None,
         tunnel_service: TunnelService | None = None,
+        fixed_forward_service: FixedForwardService | None = None,
     ):
         self.manager = manager
         self._host = str(host or WEB_HOST or "").strip() or "0.0.0.0"
@@ -841,8 +847,23 @@ class WebApiServer:
             state_file=str(_resolve_tunnel_state_file()),
             fixed_public_forward_enabled=WEB_FIXED_PUBLIC_FORWARD_ENABLED,
         )
+        self._fixed_forward_service = fixed_forward_service or FixedForwardService(
+            host=self._host,
+            port=self._port,
+            enabled=WEB_FIXED_PUBLIC_FORWARD_ENABLED,
+            autostart=TCB_HUB_FRPC_AUTOSTART,
+            public_url=WEB_FIXED_PUBLIC_FORWARD_URL,
+            node_id=TCB_NODE_ID,
+            base_path=WEB_BASE_PATH,
+            frps_port=TCB_HUB_FRPS_PORT,
+            node_token=TCB_HUB_NODE_TOKEN,
+            frps_token=TCB_HUB_FRPS_TOKEN,
+            frpc_path=TCB_HUB_FRPC_PATH,
+            runtime_dir=get_tunnel_state_path().parent / "fixed-forward",
+        )
         self._exposure_service = WebExposureService(
             tunnel_service=self._tunnel_service,
+            fixed_forward_service=self._fixed_forward_service,
             fixed_public_forward_enabled=WEB_FIXED_PUBLIC_FORWARD_ENABLED,
             fixed_public_forward_url=WEB_FIXED_PUBLIC_FORWARD_URL,
             hub_node_token=TCB_HUB_NODE_TOKEN,
@@ -3364,7 +3385,7 @@ class WebApiServer:
     async def admin_tunnel_start(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
         if self._exposure_service.is_fixed_public_forward():
-            raise WebApiError(409, "fixed_public_forward_enabled", "固定公网转发模式不能启动 Cloudflare Quick Tunnel")
+            return _json({"ok": True, "data": await self._fixed_forward_service.start()})
         started_at = time.perf_counter()
         diag_log_event(logger, "tunnel_start_stage", stage="request")
         snapshot = await self._tunnel_service.start()
@@ -3380,12 +3401,14 @@ class WebApiServer:
 
     async def admin_tunnel_stop(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
+        if self._exposure_service.is_fixed_public_forward():
+            return _json({"ok": True, "data": await self._fixed_forward_service.stop()})
         return _json({"ok": True, "data": await self._tunnel_service.stop()})
 
     async def admin_tunnel_restart(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
         if self._exposure_service.is_fixed_public_forward():
-            raise WebApiError(409, "fixed_public_forward_enabled", "固定公网转发模式不能重启 Cloudflare Quick Tunnel")
+            return _json({"ok": True, "data": await self._fixed_forward_service.restart()})
         started_at = time.perf_counter()
         diag_log_event(logger, "tunnel_restart_stage", stage="request")
         snapshot = await self._tunnel_service.restart()
@@ -4226,6 +4249,9 @@ class WebApiServer:
             self._loop_lag_task = asyncio.create_task(self._watch_loop_lag(), name="web-loop-lag-watch")
         if get_update_status().get("update_enabled"):
             self._update_task = asyncio.create_task(self._auto_refresh_update_status())
+        if self._fixed_forward_service.should_autostart():
+            fixed_snapshot = await self._fixed_forward_service.start()
+            logger.info("固定公网转发状态: %s %s", fixed_snapshot.get("status"), fixed_snapshot.get("public_url") or "")
         if self._tunnel_service.should_autostart():
             tunnel_snapshot = await self._tunnel_service.start()
             await self._notify_or_schedule_tunnel_public_url(tunnel_snapshot, reason="web_server_start")
@@ -4340,6 +4366,7 @@ class WebApiServer:
             self._tunnel_service.preserve_for_restart()
         else:
             await self._tunnel_service.stop()
+        await self._fixed_forward_service.stop()
         await self._runner.cleanup()
         self._runner = None
         self._site = None

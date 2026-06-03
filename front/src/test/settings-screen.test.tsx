@@ -96,6 +96,12 @@ class FixedForwardSettingsClient extends MockWebBotClient {
       fixedPublicForwardEnabled: true,
       nodeId: "nanjing-laptop",
       basePath: "/node/nanjing-laptop",
+      frpcStatus: "running",
+      frpcPid: 2468,
+      frpcLastError: "",
+      heartbeatStatus: "online",
+      heartbeatLastAt: "2026-06-03T10:01:02+08:00",
+      heartbeatLastError: "",
     };
   }
 }
@@ -108,6 +114,51 @@ test("fixed public forward hides quick tunnel controls in settings", async () =>
   expect(screen.queryByRole("button", { name: "启动 Tunnel" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "停止 Tunnel" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /重启 Tunnel/ })).not.toBeInTheDocument();
+});
+
+test("fixed public forward shows frpc and heartbeat details", async () => {
+  render(<SettingsScreen botAlias="main" client={new FixedForwardSettingsClient()} onLogout={() => undefined} />);
+
+  expect(await screen.findByText("frpc 状态")).toBeInTheDocument();
+  expect(screen.getByText("Heartbeat")).toBeInTheDocument();
+  expect(screen.getByText("Node ID:")).toBeInTheDocument();
+  expect(screen.getByText("nanjing-laptop")).toBeInTheDocument();
+  expect(screen.getByText("Base Path:")).toBeInTheDocument();
+  expect(screen.getByText("/node/nanjing-laptop")).toBeInTheDocument();
+  expect(screen.getByText("PID: 2468")).toBeInTheDocument();
+  expect(screen.getByText("最近上报: 2026-06-03T10:01:02+08:00")).toBeInTheDocument();
+});
+
+class FixedForwardErrorSettingsClient extends MockWebBotClient {
+  async getTunnelStatus(): Promise<TunnelSnapshot> {
+    return {
+      mode: "fixed_public_forward",
+      status: "error",
+      source: "fixed_public_forward",
+      publicUrl: "http://124.221.226.63:18088/node/nanjing-laptop",
+      localUrl: "http://127.0.0.1:8765",
+      lastError: "dial tcp 124.221.226.63:7000: i/o timeout",
+      verified: false,
+      fixedPublicForwardEnabled: true,
+      nodeId: "nanjing-laptop",
+      basePath: "/node/nanjing-laptop",
+      frpcStatus: "error",
+      frpcPid: null,
+      frpcLastError: "login to server failed: authorization failed",
+      heartbeatStatus: "error",
+      heartbeatLastAt: "",
+      heartbeatLastError: "heartbeat 403 forbidden: invalid node token",
+    };
+  }
+}
+
+test("fixed public forward maps token and port errors", async () => {
+  render(<SettingsScreen botAlias="main" client={new FixedForwardErrorSettingsClient()} onLogout={() => undefined} />);
+
+  expect(await screen.findByText("错误: login to server failed: authorization failed")).toBeInTheDocument();
+  expect(screen.getByText("提示: frps token 错")).toBeInTheDocument();
+  expect(screen.getByText("错误: heartbeat 403 forbidden: invalid node token")).toBeInTheDocument();
+  expect(screen.getByText("提示: 节点 token 错")).toBeInTheDocument();
 });
 
 

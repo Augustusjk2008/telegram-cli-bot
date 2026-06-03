@@ -41,6 +41,7 @@ class WebExposureService:
         self,
         *,
         tunnel_service: Any,
+        fixed_forward_service: Any | None = None,
         fixed_public_forward_enabled: bool = False,
         fixed_public_forward_url: str = "",
         hub_node_token: str = "",
@@ -48,6 +49,7 @@ class WebExposureService:
         base_path: str = "",
     ) -> None:
         self._tunnel_service = tunnel_service
+        self._fixed_forward_service = fixed_forward_service
         self._fixed_public_forward_enabled = bool(fixed_public_forward_enabled)
         self._fixed_public_forward_url = fixed_public_forward_url.strip()
         self._hub_node_token = hub_node_token.strip()
@@ -57,6 +59,21 @@ class WebExposureService:
     def snapshot(self) -> dict[str, Any]:
         tunnel_snapshot = self._tunnel_snapshot()
         if self._fixed_public_forward_enabled:
+            if self._fixed_forward_service is not None:
+                snapshot = self._fixed_forward_snapshot()
+                snapshot.update(
+                    {
+                        "mode": "fixed_public_forward",
+                        "source": "fixed_public_forward",
+                        "fixed_public_forward_enabled": True,
+                        "public_url": str(snapshot.get("public_url") or self._fixed_public_forward_url),
+                        "local_url": str(snapshot.get("local_url") or tunnel_snapshot.get("local_url") or ""),
+                        "node_id": str(snapshot.get("node_id") or self._node_id),
+                        "base_path": str(snapshot.get("base_path") or self._base_path),
+                    }
+                )
+                return snapshot
+
             last_error = ""
             verified = True
             if not self._fixed_public_forward_url:
@@ -95,4 +112,8 @@ class WebExposureService:
 
     def _tunnel_snapshot(self) -> dict[str, Any]:
         snapshot = self._tunnel_service.snapshot()
+        return copy.deepcopy(snapshot if isinstance(snapshot, dict) else {})
+
+    def _fixed_forward_snapshot(self) -> dict[str, Any]:
+        snapshot = self._fixed_forward_service.snapshot()
         return copy.deepcopy(snapshot if isinstance(snapshot, dict) else {})

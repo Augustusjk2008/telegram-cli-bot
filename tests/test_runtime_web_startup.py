@@ -7,7 +7,7 @@ import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 from bot.main import _get_web_access_lines
-from bot.web.runtime_binding import RuntimeWebBind, resolve_runtime_web_bind
+from bot.web.runtime_binding import RuntimeWebBind, WebPortInUseError, resolve_runtime_web_bind
 from bot.web.server import WebApiServer
 
 
@@ -59,6 +59,18 @@ def test_resolve_runtime_web_bind_uses_next_port_when_requested_port_is_busy() -
     assert bind.configured_port == requested_port
     assert bind.actual_port > requested_port
     assert bind.port_changed is True
+
+
+def test_resolve_runtime_web_bind_raises_typed_error_without_fallback() -> None:
+    held_socket, requested_port = _hold_tcp_port("127.0.0.1")
+    try:
+        with pytest.raises(WebPortInUseError) as exc_info:
+            resolve_runtime_web_bind("127.0.0.1", requested_port, allow_port_fallback=False)
+    finally:
+        held_socket.close()
+
+    assert exc_info.value.port == requested_port
+    assert exc_info.value.host == "127.0.0.1"
 
 
 @pytest.mark.asyncio

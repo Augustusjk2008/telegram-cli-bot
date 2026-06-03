@@ -104,9 +104,17 @@ function Show-TunnelHint {
 
     $webPublicUrl = Get-DotEnvValue -Path $Path -Name "WEB_PUBLIC_URL"
     $webTunnelMode = Get-DotEnvValue -Path $Path -Name "WEB_TUNNEL_MODE"
+    $fixedForwardEnabled = Get-DotEnvValue -Path $Path -Name "WEB_FIXED_PUBLIC_FORWARD_ENABLED"
+    $fixedForwardUrl = Get-DotEnvValue -Path $Path -Name "WEB_FIXED_PUBLIC_FORWARD_URL"
+    $fixedForwardEnabledValue = if ($null -eq $fixedForwardEnabled) { "" } else { $fixedForwardEnabled.Trim().ToLowerInvariant() }
+    $hasFixedForward = (
+        $fixedForwardEnabledValue -in @("1", "true", "yes", "on") -and
+        -not [string]::IsNullOrWhiteSpace($fixedForwardUrl)
+    )
 
     if (
         [string]::IsNullOrWhiteSpace($webPublicUrl) -and
+        -not $hasFixedForward -and
         (
             [string]::IsNullOrWhiteSpace($webTunnelMode) -or
             $webTunnelMode -eq "disabled"

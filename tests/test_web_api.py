@@ -14,7 +14,7 @@ import zlib
 from datetime import datetime, timedelta
 from itertools import chain, repeat
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 
@@ -121,6 +121,55 @@ class _FixedForwardTunnelService:
 
     def preserve_for_restart(self) -> dict[str, object]:
         return self.snapshot()
+
+
+class _RecordingFixedForwardService:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def should_autostart(self) -> bool:
+        return False
+
+    def snapshot(self) -> dict[str, object]:
+        return self._snapshot("snapshot")
+
+    async def start(self) -> dict[str, object]:
+        self.calls.append("start")
+        return self._snapshot("running")
+
+    async def stop(self) -> dict[str, object]:
+        self.calls.append("stop")
+        return self._snapshot("stopped")
+
+    async def restart(self) -> dict[str, object]:
+        self.calls.append("restart")
+        return self._snapshot("running")
+
+    def preserve_for_restart(self) -> dict[str, object]:
+        return self.snapshot()
+
+    def _snapshot(self, status: str) -> dict[str, object]:
+        return {
+            "mode": "fixed_public_forward",
+            "status": status,
+            "phase": status,
+            "source": "fixed_public_forward",
+            "public_url": "http://124.221.226.63:18088/node/nanjing-laptop",
+            "local_url": "http://127.0.0.1:8765",
+            "last_error": "",
+            "verified": status == "running",
+            "pid": 1234 if status == "running" else None,
+            "fixed_public_forward_enabled": True,
+            "node_id": "nanjing-laptop",
+            "base_path": "/node/nanjing-laptop",
+        }
+
+
+class _NoopRunner:
+    async def cleanup(self) -> None:
+        return None
+
+
 from bot.app_settings import get_git_proxy_settings, update_git_proxy_address, update_git_proxy_port
 from bot.web import api_service
 from bot.web.chat_history_service import ChatHistoryService
@@ -240,7 +289,7 @@ def _seed_chat_turn(
 
 
 @pytest.mark.asyncio
-async def test_admin_tunnel_reports_fixed_forward_and_blocks_start(
+async def test_admin_tunnel_reports_fixed_forward_and_controls_fixed_service(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -250,18 +299,49 @@ async def test_admin_tunnel_reports_fixed_forward_and_blocks_start(
     monkeypatch.setattr("bot.web.server.TCB_NODE_ID", "nanjing-laptop")
     monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "/node/nanjing-laptop")
 
-    app = WebApiServer(web_manager, tunnel_service=_FixedForwardTunnelService())._build_app()
+    fixed_service = _RecordingFixedForwardService()
+    app = WebApiServer(
+        web_manager,
+        tunnel_service=_FixedForwardTunnelService(),
+        fixed_forward_service=fixed_service,
+    )._build_app()
     async with TestServer(app) as test_server:
         async with TestClient(test_server) as client:
             status_response = await client.get("/api/admin/tunnel")
             payload = await status_response.json()
             start_response = await client.post("/api/admin/tunnel/start")
+            start_payload = await start_response.json()
+            restart_response = await client.post("/api/admin/tunnel/restart")
+            restart_payload = await restart_response.json()
+            stop_response = await client.post("/api/admin/tunnel/stop")
+            stop_payload = await stop_response.json()
 
     assert status_response.status == 200
     assert payload["data"]["mode"] == "fixed_public_forward"
     assert payload["data"]["source"] == "fixed_public_forward"
     assert payload["data"]["public_url"] == "http://124.221.226.63:18088/node/nanjing-laptop"
-    assert start_response.status == 409
+    assert start_response.status == 200
+    assert start_payload["data"]["status"] == "running"
+    assert restart_response.status == 200
+    assert restart_payload["data"]["status"] == "running"
+    assert stop_response.status == 200
+    assert stop_payload["data"]["status"] == "stopped"
+    assert fixed_service.calls == ["start", "restart", "stop"]
+
+
+@pytest.mark.asyncio
+async def test_web_server_stop_preserve_tunnel_stops_fixed_forward(web_manager: MultiBotManager):
+    fixed_service = _RecordingFixedForwardService()
+    server = WebApiServer(
+        web_manager,
+        tunnel_service=_FixedForwardTunnelService(),
+        fixed_forward_service=fixed_service,
+    )
+    server._runner = cast(Any, _NoopRunner())
+
+    await server.stop(preserve_tunnel=True)
+
+    assert fixed_service.calls == ["stop"]
 
 
 @pytest.mark.asyncio

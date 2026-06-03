@@ -88,10 +88,16 @@ get_dotenv_value() {
 }
 
 show_tunnel_hint() {
-  local web_public_url web_tunnel_mode
+  local web_public_url web_tunnel_mode fixed_forward_enabled fixed_forward_url
   web_public_url="$(get_dotenv_value "WEB_PUBLIC_URL")"
   web_tunnel_mode="$(get_dotenv_value "WEB_TUNNEL_MODE")"
-  if [[ -z "$web_public_url" && ( -z "$web_tunnel_mode" || "$web_tunnel_mode" == "disabled" ) ]]; then
+  fixed_forward_enabled="$(get_dotenv_value "WEB_FIXED_PUBLIC_FORWARD_ENABLED" | tr '[:upper:]' '[:lower:]')"
+  fixed_forward_url="$(get_dotenv_value "WEB_FIXED_PUBLIC_FORWARD_URL")"
+  local has_fixed_forward=0
+  if [[ -n "$fixed_forward_url" && "$fixed_forward_enabled" =~ ^(1|true|yes|on)$ ]]; then
+    has_fixed_forward=1
+  fi
+  if [[ -z "$web_public_url" && "$has_fixed_forward" -eq 0 && ( -z "$web_tunnel_mode" || "$web_tunnel_mode" == "disabled" ) ]]; then
     echo "[提示] 当前未配置公网访问。"
     echo "如需外网访问，可在 .env 中设置 WEB_TUNNEL_MODE=cloudflare_quick，或配置反向代理后填写 WEB_PUBLIC_URL。"
   fi

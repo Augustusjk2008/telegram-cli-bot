@@ -179,6 +179,9 @@ WEB_FIXED_PUBLIC_FORWARD_ENABLED = _get_project_bool("WEB_FIXED_PUBLIC_FORWARD_E
 WEB_FIXED_PUBLIC_FORWARD_URL = _get_project_config("WEB_FIXED_PUBLIC_FORWARD_URL", "").strip()
 TCB_HUB_FRPS_PORT = _get_project_optional_int("TCB_HUB_FRPS_PORT", 0)
 TCB_HUB_NODE_TOKEN = _get_project_config("TCB_HUB_NODE_TOKEN", "").strip()
+TCB_HUB_FRPS_TOKEN = _get_project_config("TCB_HUB_FRPS_TOKEN", "").strip()
+TCB_HUB_FRPC_PATH = _get_project_config("TCB_HUB_FRPC_PATH", "").strip()
+TCB_HUB_FRPC_AUTOSTART = _get_project_bool("TCB_HUB_FRPC_AUTOSTART", True)
 WEB_TUNNEL_MODE = os.environ.get("WEB_TUNNEL_MODE", "disabled").strip().lower() or "disabled"
 WEB_TUNNEL_AUTOSTART = os.environ.get("WEB_TUNNEL_AUTOSTART", "true").lower() == "true"
 # 可选：指定 cloudflared 的完整路径；若已在 PATH 中可留空。

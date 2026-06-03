@@ -92,6 +92,9 @@ ENV_SCHEMA: tuple[EnvField, ...] = (
     EnvField("WEB_FIXED_PUBLIC_FORWARD_URL", "固定公网入口", "Hub 公网入口 URL，含 /node/<节点 ID>。", "string", "", "tunnel"),
     EnvField("TCB_HUB_FRPS_PORT", "Hub frps 端口", "Hub 分配给 frpc 连接 frps 的端口，不是公网 HTTP 访问端口。", "number", "", "tunnel", min_value=1, max_value=65535, integer=True),
     EnvField("TCB_HUB_NODE_TOKEN", "Hub 节点授权码", "Hub 分配给本节点的授权码。", "password", "", "tunnel", sensitive=True, max_length=8192),
+    EnvField("TCB_HUB_FRPS_TOKEN", "Hub frps Token", "frpc 连接 Hub frps 使用的 token。", "password", "", "tunnel", sensitive=True, max_length=8192),
+    EnvField("TCB_HUB_FRPC_PATH", "frpc 路径", "frpc 可执行文件路径；留空则使用 PATH 中的 frpc。", "path", "", "tunnel"),
+    EnvField("TCB_HUB_FRPC_AUTOSTART", "frpc 自动启动", "Web 启动时自动拉起固定公网转发。", "boolean", "true", "tunnel"),
     EnvField("WEB_TUNNEL_MODE", "隧道模式", "内置隧道模式。", "select", "disabled", "tunnel", options=("disabled", "cloudflare_quick")),
     EnvField("WEB_TUNNEL_AUTOSTART", "自动启动隧道", "Web 启动时自动拉起隧道。", "boolean", "true", "tunnel"),
     EnvField("WEB_TUNNEL_CLOUDFLARED_PATH", "cloudflared 路径", "cloudflared 可执行文件路径。", "path", "", "tunnel"),
@@ -526,6 +529,12 @@ class EnvConfigService:
                     "invalid_env_value",
                     "启用固定公网转发时必须填写 Hub 节点授权码",
                     {"key": "TCB_HUB_NODE_TOKEN"},
+                )
+            if not str(values.get("TCB_HUB_FRPS_TOKEN", "") or "").strip():
+                raise EnvValidationError(
+                    "invalid_env_value",
+                    "启用固定公网转发时必须填写 Hub frps token",
+                    {"key": "TCB_HUB_FRPS_TOKEN"},
                 )
             if tunnel_mode != "disabled":
                 raise EnvValidationError(

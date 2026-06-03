@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from aiohttp import ClientSession
 import pytest
+from bot.web.runtime_binding import WebPortInUseError
 
 @pytest.fixture(autouse=True)
 def _prevent_real_browser_open(monkeypatch):
@@ -91,4 +92,26 @@ async def test_run_all_bots_requires_web_runtime(monkeypatch):
          patch.object(main_module.asyncio, "Event", return_value=MagicMock()):
         with pytest.raises(RuntimeError, match="WEB_ENABLED 不能为 false"):
             await main_module.run_all_bots()
+
+
+def test_main_exits_without_retry_when_configured_web_port_is_busy(monkeypatch):
+    import bot.main as main_module
+
+    calls = {"sleep": 0}
+
+    def raise_port_in_use():
+        raise WebPortInUseError(8765, "0.0.0.0")
+
+    monkeypatch.setattr(main_module, "validate_cli_type", lambda _cli_type: None)
+    monkeypatch.setattr(main_module, "disable_console_quick_edit", lambda: None)
+    monkeypatch.setattr(main_module, "suppress_windows_error_dialogs", lambda: None)
+    monkeypatch.setattr(main_module, "prevent_system_sleep", lambda: None)
+    monkeypatch.setattr(main_module, "run_all_bots", raise_port_in_use)
+    monkeypatch.setattr(main_module.time, "sleep", lambda _seconds: calls.__setitem__("sleep", calls["sleep"] + 1))
+
+    with pytest.raises(SystemExit) as exc_info:
+        main_module.main()
+
+    assert exc_info.value.code == 1
+    assert calls["sleep"] == 0
 

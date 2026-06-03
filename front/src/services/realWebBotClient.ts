@@ -738,6 +738,12 @@ type RawTunnelSnapshot = {
   fixed_public_forward_enabled?: boolean;
   node_id?: string;
   base_path?: string;
+  frpc_status?: string;
+  frpc_pid?: number | null;
+  frpc_last_error?: string;
+  heartbeat_status?: string;
+  heartbeat_last_at?: string;
+  heartbeat_last_error?: string;
 };
 
 type RawGitChangedFile = {
@@ -2070,6 +2076,12 @@ function mapTunnelSnapshot(raw: RawTunnelSnapshot): TunnelSnapshot {
     fixedPublicForwardEnabled: Boolean(raw.fixed_public_forward_enabled),
     nodeId: raw.node_id || "",
     basePath: raw.base_path || "",
+    frpcStatus: raw.frpc_status || "",
+    frpcPid: raw.frpc_pid ?? null,
+    frpcLastError: raw.frpc_last_error || "",
+    heartbeatStatus: raw.heartbeat_status || "",
+    heartbeatLastAt: raw.heartbeat_last_at || "",
+    heartbeatLastError: raw.heartbeat_last_error || "",
   };
 }
 
