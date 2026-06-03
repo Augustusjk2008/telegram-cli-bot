@@ -30,6 +30,8 @@ CAP_TERMINAL_EXEC = "terminal_exec"
 CAP_DEBUG_EXEC = "debug_exec"
 CAP_GIT_OPS = "git_ops"
 CAP_MANAGE_CLI_PARAMS = "manage_cli_params"
+CAP_MANAGE_BOTS = "manage_bots"
+CAP_CREATE_WORKDIR_DIRECTORY = "create_workdir_directory"
 CAP_VIEW_PLUGINS = "view_plugins"
 CAP_RUN_PLUGINS = "run_plugins"
 CAP_ADMIN_OPS = "admin_ops"
@@ -63,6 +65,8 @@ MEMBER_CAPABILITIES = frozenset(
         CAP_READ_FILE_CONTENT,
         CAP_CHAT_SEND,
         CAP_MANAGE_CLI_PARAMS,
+        CAP_MANAGE_BOTS,
+        CAP_CREATE_WORKDIR_DIRECTORY,
         CAP_VIEW_PLUGINS,
     }
 )

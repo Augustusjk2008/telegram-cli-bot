@@ -40,7 +40,7 @@ from bot.messages import msg
 from bot.models import AgentProfile, BotProfile, UserSession
 from bot.plugins.service import PluginService
 from bot.session_store import load_session, save_session
-from bot.web.auth_store import WebAuthStore
+from bot.web.auth_store import CAP_CREATE_WORKDIR_DIRECTORY, CAP_MANAGE_BOTS, CAP_VIEW_FILE_TREE, WebAuthStore
 from bot.web.server import WebApiServer
 from bot.web.api_service import (
     AuthContext,
@@ -664,6 +664,70 @@ def test_write_file_content_updates_text_and_returns_version(web_manager: MultiB
     assert result["last_modified_ns"] >= previous["last_modified_ns"]
     assert content["content"] == "line1\nline2\n"
     assert content["last_modified_ns"] == result["last_modified_ns"]
+
+
+@pytest.mark.asyncio
+async def test_member_manage_bots_can_create_workdir_without_write_files(
+    web_manager: MultiBotManager,
+    isolated_web_auth_store: WebAuthStore,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    isolated_web_auth_store.register_codes_path.write_text(
+        json.dumps({"items": [{"code": "INVITE-001", "disabled": False}]}),
+        encoding="utf-8",
+    )
+    session = isolated_web_auth_store.register_member("alice", "pw-123", "INVITE-001")
+    updated = isolated_web_auth_store.update_member(
+        session.account.account_id,
+        capabilities=[CAP_VIEW_FILE_TREE, CAP_MANAGE_BOTS, CAP_CREATE_WORKDIR_DIRECTORY],
+    )
+    assert "write_files" not in updated["capabilities"]
+    assert "admin_ops" not in updated["capabilities"]
+    refreshed = isolated_web_auth_store.login_member("alice", "pw-123")
+    headers = {"Authorization": f"Bearer {refreshed.token}"}
+    from bot.web.permission_store import BotPermissionStore
+
+    permissions = BotPermissionStore(temp_dir / ".web_permissions.json")
+    permissions.grant_bot_to_account(refreshed.account.account_id, "main")
+    monkeypatch.setattr("bot.web.server._BOT_PERMISSION_STORE", permissions)
+
+    parent_dir = temp_dir / "workdirs"
+    parent_dir.mkdir()
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            list_response = await client.get("/api/bots/main/ls", params={"path": str(temp_dir)}, headers=headers)
+            workdir_mkdir_response = await client.post(
+                "/api/bots/main/workdir/mkdir",
+                json={"parent_path": str(parent_dir), "name": "agent-one"},
+                headers=headers,
+            )
+            files_mkdir_response = await client.post(
+                "/api/bots/main/files/mkdir",
+                json={"parent_path": str(parent_dir), "name": "blocked"},
+                headers=headers,
+            )
+            create_response = await client.post(
+                "/api/admin/bots",
+                json={
+                    "alias": "agentone",
+                    "bot_mode": "cli",
+                    "cli_type": "codex",
+                    "cli_path": "codex",
+                    "working_dir": str(parent_dir / "agent-one"),
+                },
+                headers=headers,
+            )
+            create_payload = await create_response.json()
+
+    assert list_response.status == 200
+    assert workdir_mkdir_response.status == 200
+    assert (parent_dir / "agent-one").is_dir()
+    assert files_mkdir_response.status == 403
+    assert create_response.status == 200
+    assert create_payload["data"]["bot"]["alias"] == "agentone"
 
 def _run_git_command(repo_dir: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(

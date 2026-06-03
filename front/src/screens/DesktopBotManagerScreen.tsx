@@ -62,6 +62,7 @@ type Props = {
   onSelect: (alias: string) => void;
   onBotsChange?: (bots: BotSummary[]) => void;
   canManage?: boolean;
+  canCreateWorkdirDirectory?: boolean;
 };
 
 type Mode = "inspect" | "create";
@@ -213,11 +214,13 @@ function WorkdirConflictNotice({
 function CreatePanel({
   manager,
   canManage,
+  canCreateWorkdirDirectory,
   onCreated,
   onDirtyChange,
 }: {
   manager: ReturnType<typeof useBotManager>;
   canManage: boolean;
+  canCreateWorkdirDirectory: boolean;
   onCreated: (alias: string) => void;
   onDirtyChange: (dirty: boolean) => void;
 }) {
@@ -358,6 +361,8 @@ function CreatePanel({
           client={manager.client}
           initialPath={draft.workingDir}
           mutateBrowseState={false}
+          mode="workdir"
+          canCreateDirectory={canCreateWorkdirDirectory}
           onPick={(workingDir) => setDraft((prev) => ({ ...prev, workingDir }))}
           onClose={() => setShowWorkdirPicker(false)}
         />
@@ -370,6 +375,7 @@ function EditPanel({
   bot,
   manager,
   canManage,
+  canCreateWorkdirDirectory,
   onCancel,
   onSaved,
   onDirtyChange,
@@ -377,6 +383,7 @@ function EditPanel({
   bot: BotSummary;
   manager: ReturnType<typeof useBotManager>;
   canManage: boolean;
+  canCreateWorkdirDirectory: boolean;
   onCancel: () => void;
   onSaved: (alias: string) => void;
   onDirtyChange: (dirty: boolean) => void;
@@ -591,6 +598,8 @@ function EditPanel({
           client={manager.client}
           initialPath={draft.workingDir}
           mutateBrowseState={false}
+          mode="workdir"
+          canCreateDirectory={canCreateWorkdirDirectory}
           onPick={(workingDir) => setDraft((prev) => ({ ...prev, workingDir }))}
           onClose={() => setShowWorkdirPicker(false)}
         />
@@ -766,6 +775,7 @@ export function DesktopBotManagerScreen({
   onSelect,
   onBotsChange,
   canManage = true,
+  canCreateWorkdirDirectory = true,
 }: Props) {
   const manager = useBotManager({ client, onBotsChange });
   const [query, setQuery] = useState("");
@@ -1332,6 +1342,7 @@ export function DesktopBotManagerScreen({
             <CreatePanel
               manager={manager}
               canManage={canManage}
+              canCreateWorkdirDirectory={canCreateWorkdirDirectory}
               onCreated={(alias) => {
                 setDirty(false);
                 setFocusedAlias(alias);
@@ -1350,6 +1361,7 @@ export function DesktopBotManagerScreen({
                   bot={focusedBot}
                   manager={manager}
                   canManage={canManage}
+                  canCreateWorkdirDirectory={canCreateWorkdirDirectory}
                   onCancel={() => {
                     setDirty(false);
                     setInspectorTab("overview");

@@ -223,6 +223,8 @@ const MEMBER_CAPABILITIES: Capability[] = [
   "debug_exec",
   "git_ops",
   "manage_cli_params",
+  "manage_bots",
+  "create_workdir_directory",
   "view_plugins",
   "run_plugins",
   "admin_ops",
@@ -4026,6 +4028,10 @@ export class MockWebBotClient implements WebBotClient {
     const separator = currentPath.endsWith("/") ? "" : "/";
     const childPath = currentPath === "/" ? `/${folderName}` : `${currentPath}${separator}${folderName}`;
     botFiles[childPath] = botFiles[childPath] || [];
+  }
+
+  async createWorkdirDirectory(botAlias: string, parentPath: string, name: string): Promise<void> {
+    await this.createDirectory(botAlias, name, parentPath);
   }
 
   async deletePath(botAlias: string, path: string): Promise<void> {

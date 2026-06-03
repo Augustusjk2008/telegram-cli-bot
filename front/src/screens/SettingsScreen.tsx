@@ -278,7 +278,12 @@ export function SettingsScreen({
   const [tunnelAction, setTunnelAction] = useState<"" | "start" | "stop" | "restart" | "copy">("");
   const isMainBot = botAlias === "main";
   const workdirLocked = overview?.botMode === "assistant";
-  const canManageBotRuntime = sessionCapabilities.length === 0 || sessionCapabilities.includes("admin_ops");
+  const canManageBotRuntime = sessionCapabilities.length === 0 || sessionCapabilities.includes("manage_bots") || sessionCapabilities.includes("admin_ops");
+  const canCreateWorkdirDirectory =
+    sessionCapabilities.length === 0
+    || sessionCapabilities.includes("create_workdir_directory")
+    || sessionCapabilities.includes("manage_bots")
+    || sessionCapabilities.includes("admin_ops");
   const canManageCliParams = canManageBotRuntime || sessionCapabilities.includes("manage_cli_params");
 
   useEffect(() => {
@@ -947,6 +952,9 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             botAlias={botAlias}
             client={client}
             initialPath={workdirDraft}
+            mutateBrowseState={false}
+            mode="workdir"
+            canCreateDirectory={canCreateWorkdirDirectory}
             onPick={(workingDir) => {
               setWorkdirDraft(workingDir);
               setPendingWorkdirConflict(null);

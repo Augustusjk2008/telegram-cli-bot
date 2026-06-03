@@ -98,6 +98,8 @@ from .auth_store import (
     CAP_CHAT_SEND,
     CAP_DEBUG_EXEC,
     CAP_GIT_OPS,
+    CAP_CREATE_WORKDIR_DIRECTORY,
+    CAP_MANAGE_BOTS,
     CAP_MANAGE_CLI_PARAMS,
     CAP_MANAGE_REGISTER_CODES,
     CAP_MUTATE_BROWSE_STATE,
@@ -160,6 +162,7 @@ from .api_service import (
     delete_conversation,
     execute_plan,
     create_directory,
+    create_workdir_directory,
     create_text_file,
     copy_path,
     delete_path,
@@ -2955,6 +2958,23 @@ class WebApiServer:
         )
         return _json({"ok": True, "data": data})
 
+    async def create_workdir_directory_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_auth(request)
+        alias = self._manager_alias(request)
+        auth = self._bot_auth(auth, alias)
+        request["auth"] = auth
+        if CAP_CREATE_WORKDIR_DIRECTORY not in auth.capabilities and CAP_MANAGE_BOTS not in auth.capabilities:
+            _require_capability(auth, CAP_CREATE_WORKDIR_DIRECTORY)
+        body = await self._parse_json(request)
+        data = create_workdir_directory(
+            self.manager,
+            alias,
+            self._chat_user_id(auth),
+            body.get("parent_path", ""),
+            body.get("name", ""),
+        )
+        return _json({"ok": True, "data": data})
+
     async def open_workdir_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_ADMIN_OPS)
         if not self._is_local_admin(auth):
@@ -3118,7 +3138,7 @@ class WebApiServer:
         )
 
     async def admin_bots(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_ADMIN_OPS)
+        auth = await self._with_capability(request, CAP_MANAGE_BOTS)
         return _json({"ok": True, "data": self._decorate_bots_for_auth(auth, list_bots(self.manager, auth.user_id))})
 
     async def admin_cli_error_stats(self, request: web.Request) -> web.Response:
@@ -3145,7 +3165,7 @@ class WebApiServer:
         return _json({"ok": True, "data": get_processing_sessions(alias)})
 
     async def admin_add_bot(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_ADMIN_OPS)
+        auth = await self._with_capability(request, CAP_MANAGE_BOTS)
         body = await self._parse_json(request)
         try:
             _BOT_PERMISSION_STORE.assert_can_create_bot(auth.account_id, is_local_admin=self._is_local_admin(auth))
@@ -3191,7 +3211,7 @@ class WebApiServer:
         return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})
 
     async def admin_update_cli(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_ADMIN_OPS)
+        auth = await self._with_capability(request, CAP_MANAGE_BOTS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         data = await update_bot_cli(
@@ -3203,7 +3223,7 @@ class WebApiServer:
         return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})
 
     async def admin_rename_bot(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_ADMIN_OPS)
+        auth = await self._with_capability(request, CAP_MANAGE_BOTS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         data = await rename_managed_bot(self.manager, alias, str(body.get("new_alias", "")))
@@ -3213,7 +3233,7 @@ class WebApiServer:
         return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})
 
     async def admin_update_workdir(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_ADMIN_OPS)
+        auth = await self._with_capability(request, CAP_MANAGE_BOTS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         data = await update_bot_workdir(
@@ -3226,14 +3246,14 @@ class WebApiServer:
         return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})
 
     async def admin_update_avatar(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_ADMIN_OPS)
+        auth = await self._with_capability(request, CAP_MANAGE_BOTS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         data = await update_bot_avatar(self.manager, alias, body.get("avatar_name"), auth.user_id)
         return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})
 
     async def admin_update_prompt_presets(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_ADMIN_OPS)
+        auth = await self._with_capability(request, CAP_MANAGE_BOTS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         if "prompt_presets" in body:

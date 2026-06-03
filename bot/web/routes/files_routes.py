@@ -18,6 +18,7 @@ def register(app: web.Application, server) -> None:
     app.router.add_post("/api/bots/{alias}/chat/attachments", server.upload_chat_attachment)
     app.router.add_post("/api/bots/{alias}/chat/attachments/delete", server.delete_chat_attachment_view)
     app.router.add_post("/api/bots/{alias}/files/mkdir", server.create_directory_view)
+    app.router.add_post("/api/bots/{alias}/workdir/mkdir", server.create_workdir_directory_view)
     app.router.add_post("/api/bots/{alias}/files/open-workdir", server.open_workdir_view)
     app.router.add_post("/api/bots/{alias}/files/reveal", server.post_files_reveal)
     app.router.add_post("/api/bots/{alias}/files/write", server.write_file_view)

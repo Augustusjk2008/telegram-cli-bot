@@ -227,6 +227,7 @@ export interface WebBotClient {
   revealFileTreePath(botAlias: string, path: string): Promise<FileTreeRevealResult>;
   changeDirectory(botAlias: string, path: string): Promise<string>;
   createDirectory(botAlias: string, name: string, parentPath?: string): Promise<void>;
+  createWorkdirDirectory(botAlias: string, parentPath: string, name: string): Promise<void>;
   deletePath(botAlias: string, path: string): Promise<void>;
   resolveFileOpenTarget(botAlias: string, path: string): Promise<FileOpenTarget>;
   readFile(botAlias: string, filename: string): Promise<FileReadResult>;

@@ -369,6 +369,27 @@ def resolve_new_directory_path(base_dir: str, name: str) -> tuple[str, str]:
     return candidate, os.path.abspath(os.path.join(base_dir, candidate))
 
 
+def resolve_workdir_directory_parent(parent_path: str) -> str:
+    candidate = str(parent_path or "").strip()
+    if not candidate:
+        _raise(400, "missing_parent_path", "父目录不能为空")
+    if is_windows_drives_virtual_root(candidate):
+        _raise(409, "virtual_directory_unsupported", "当前视图仅用于切换盘符，不能直接执行文件操作")
+
+    parent_dir = os.path.realpath(os.path.abspath(os.path.expanduser(candidate)))
+    if not os.path.isdir(parent_dir):
+        _raise(404, "dir_not_found", f"目录不存在: {parent_dir}")
+    return parent_dir
+
+
+def ensure_child_path(parent_dir: str, target_path: str) -> None:
+    try:
+        if os.path.commonpath([os.path.realpath(parent_dir), os.path.realpath(target_path)]) != os.path.realpath(parent_dir):
+            _raise(400, "unsafe_workdir_path", "文件夹路径不安全")
+    except ValueError:
+        _raise(400, "unsafe_workdir_path", "文件夹路径不安全")
+
+
 def validate_text_filename(name: str) -> str:
     candidate = str(name or "").strip()
     if not candidate or candidate in {".", ".."} or "\x00" in candidate:
@@ -500,6 +521,38 @@ def create_directory(
         "name": directory_name,
         "created_path": target_path,
         "working_dir": browser_dir,
+    }
+
+
+def create_workdir_directory(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    parent_path: str,
+    name: str,
+) -> dict[str, Any]:
+    ensure_file_browser_supported(manager, alias)
+    parent_dir = resolve_workdir_directory_parent(parent_path)
+    directory_name, target_path = resolve_new_directory_path(parent_dir, name)
+    ensure_child_path(parent_dir, target_path)
+
+    if os.path.exists(target_path):
+        _raise(409, "path_exists", "目标已存在")
+
+    try:
+        os.mkdir(target_path)
+    except FileExistsError:
+        _raise(409, "path_exists", "目标已存在")
+    except PermissionError as exc:
+        _raise(403, "system_permission_denied", "系统权限不足，无法创建目录")
+    except OSError as exc:
+        _raise(500, "create_workdir_directory_failed", f"创建目录失败: {exc}")
+
+    invalidate_workspace_indexes(manager, alias, user_id, parent_dir)
+    return {
+        "name": directory_name,
+        "created_path": target_path,
+        "working_dir": parent_dir,
     }
 
 

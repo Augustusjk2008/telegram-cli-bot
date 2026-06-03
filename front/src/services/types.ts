@@ -17,6 +17,8 @@ export type Capability =
   | "debug_exec"
   | "git_ops"
   | "manage_cli_params"
+  | "manage_bots"
+  | "create_workdir_directory"
   | "view_plugins"
   | "run_plugins"
   | "manage_register_codes"

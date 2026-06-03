@@ -81,6 +81,8 @@ const ACCOUNT_CAPABILITY_OPTIONS: Array<{ id: Capability; label: string }> = [
   { id: "terminal_exec", label: "终端" },
   { id: "debug_exec", label: "调试" },
   { id: "git_ops", label: "Git" },
+  { id: "manage_bots", label: "管理智能体" },
+  { id: "create_workdir_directory", label: "新建工作目录" },
   { id: "run_plugins", label: "运行插件" },
   { id: "admin_ops", label: "管理操作" },
   { id: "manage_register_codes", label: "邀请码/用户" },

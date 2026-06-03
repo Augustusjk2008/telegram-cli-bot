@@ -19,6 +19,7 @@ type Props = {
   onSelect: (alias: string) => void;
   onBotsChange?: (bots: BotSummary[]) => void;
   canManage?: boolean;
+  canCreateWorkdirDirectory?: boolean;
 };
 
 function DeleteBotDialog({
@@ -73,7 +74,13 @@ function DeleteBotDialog({
   );
 }
 
-export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBotsChange, canManage = true }: Props) {
+export function BotListScreen({
+  client = new MockWebBotClient(),
+  onSelect,
+  onBotsChange,
+  canManage = true,
+  canCreateWorkdirDirectory = true,
+}: Props) {
   const [renamingAlias, setRenamingAlias] = useState("");
   const [renameDrafts, setRenameDrafts] = useState<Record<string, string>>({});
   const [showWorkdirPicker, setShowWorkdirPicker] = useState(false);
@@ -390,6 +397,8 @@ export function BotListScreen({ client = new MockWebBotClient(), onSelect, onBot
           client={client}
           initialPath={createDraft.workingDir}
           mutateBrowseState={false}
+          mode="workdir"
+          canCreateDirectory={canCreateWorkdirDirectory}
           onPick={(workingDir) => setCreateDraft((prev) => ({ ...prev, workingDir }))}
           onClose={() => setShowWorkdirPicker(false)}
         />

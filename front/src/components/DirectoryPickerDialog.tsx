@@ -10,6 +10,8 @@ type Props = {
   client: WebBotClient;
   initialPath?: string;
   mutateBrowseState?: boolean;
+  mode?: "files" | "workdir";
+  canCreateDirectory?: boolean;
   onPick: (path: string) => void;
   onClose: () => void;
 };
@@ -57,6 +59,8 @@ export function DirectoryPickerDialog({
   client,
   initialPath = "",
   mutateBrowseState = true,
+  mode = "files",
+  canCreateDirectory = true,
   onPick,
   onClose,
 }: Props) {
@@ -122,6 +126,10 @@ export function DirectoryPickerDialog({
   }
 
   async function handleCreateDirectory() {
+    if (!canCreateDirectory) {
+      setError("当前账号无权新建工作目录");
+      return;
+    }
     const name = newFolderName.trim();
     if (!name) {
       setError("文件夹名称不能为空");
@@ -130,7 +138,12 @@ export function DirectoryPickerDialog({
     setBusy(true);
     setError("");
     try {
-      await client.createDirectory(botAlias, name, currentPathRef.current || currentPath);
+      const parentPath = currentPathRef.current || currentPath;
+      if (mode === "workdir") {
+        await client.createWorkdirDirectory(botAlias, parentPath, name);
+      } else {
+        await client.createDirectory(botAlias, name, parentPath);
+      }
       setNewFolderName("");
       await loadCurrentDirectory();
     } catch (nextError) {
@@ -186,10 +199,8 @@ export function DirectoryPickerDialog({
       setLoading(true);
       setError("");
       try {
-        const [originListing, homePath] = await Promise.all([
-          client.listFiles(botAlias),
-          client.getCurrentPath(botAlias),
-        ]);
+        const originListing = await client.listFiles(botAlias);
+        const homePath = mutateBrowseState ? await client.getCurrentPath(botAlias) : originListing.workingDir;
         if (!active) {
           return;
         }
@@ -291,7 +302,7 @@ export function DirectoryPickerDialog({
           <button
             type="button"
             onClick={() => void handleCreateDirectory()}
-            disabled={busy || loading || isVirtualRoot}
+            disabled={busy || loading || isVirtualRoot || !canCreateDirectory}
             className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
           >
             <FolderPlus className="h-4 w-4" />
@@ -311,7 +322,7 @@ export function DirectoryPickerDialog({
           <p className="text-xs text-[var(--muted)]">当前目录</p>
           <p className="mt-1 break-all text-sm text-[var(--text)]">{currentPath || "加载中..."}</p>
           {isVirtualRoot ? <p className="mt-2 text-xs text-[var(--muted)]">请先选择具体目录或卷。</p> : null}
-          {!isVirtualRoot ? (
+          {!isVirtualRoot && canCreateDirectory ? (
             <div className="mt-3 flex flex-wrap gap-2">
               <input
                 aria-label="新文件夹名称"

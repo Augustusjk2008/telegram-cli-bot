@@ -175,6 +175,7 @@ from bot.web.files_service import (
     change_working_directory,
     copy_path,
     create_directory,
+    create_workdir_directory,
     create_text_file,
     delete_chat_attachment,
     delete_path,

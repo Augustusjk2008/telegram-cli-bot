@@ -331,7 +331,8 @@ export function App() {
   const canUseGit = hasCapability(session, "git_ops");
   const canViewPlugins = hasCapability(session, "view_plugins");
   const canUseSettings = hasCapability(session, "admin_ops");
-  const canManageBots = hasCapability(session, "admin_ops");
+  const canManageBots = hasCapability(session, "manage_bots") || hasCapability(session, "admin_ops");
+  const canCreateWorkdirDirectory = hasCapability(session, "create_workdir_directory") || canManageBots;
   const canOpenAdminCenter = hasCapability(session, "admin_ops");
   const canManageEnvConfig = hasCapability(session, "admin_ops");
   const canManageRegisterCodes = hasCapability(session, "manage_register_codes");
@@ -867,6 +868,7 @@ export function App() {
             onSelect={handleSelectBot}
             onBotsChange={setBots}
             canManage={canManageBots}
+            canCreateWorkdirDirectory={canCreateWorkdirDirectory}
           />
           {notificationCenter}
           {announcementDialog}
@@ -875,7 +877,13 @@ export function App() {
     }
     return (
       <>
-        <BotListScreen client={client} onSelect={handleSelectBot} onBotsChange={setBots} canManage={canManageBots} />
+        <BotListScreen
+          client={client}
+          onSelect={handleSelectBot}
+          onBotsChange={setBots}
+          canManage={canManageBots}
+          canCreateWorkdirDirectory={canCreateWorkdirDirectory}
+        />
         {notificationCenter}
         {announcementDialog}
       </>
