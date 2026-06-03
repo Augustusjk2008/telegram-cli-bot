@@ -171,6 +171,7 @@ WEB_PUBLIC_URL = os.environ.get("WEB_PUBLIC_URL", "").strip()
 WEB_API_TOKEN = os.environ.get("WEB_API_TOKEN", "").strip()
 WEB_ALLOWED_ORIGINS = _split_csv_env(os.environ.get("WEB_ALLOWED_ORIGINS", ""))
 WEB_DEFAULT_USER_ID = ALLOWED_USER_IDS[0] if ALLOWED_USER_IDS else 1
+WEB_TERMINAL_SHELL_PATH = _get_project_config("WEB_TERMINAL_SHELL_PATH", "").strip()
 TCB_NODE_ID = _normalize_node_id(_get_project_config("TCB_NODE_ID", ""))
 WEB_BASE_PATH = _normalize_base_path(_get_project_config("WEB_BASE_PATH", ""), TCB_NODE_ID)
 EFFECTIVE_VITE_BASE_PATH = _effective_frontend_base_path("VITE_BASE_PATH", WEB_BASE_PATH)

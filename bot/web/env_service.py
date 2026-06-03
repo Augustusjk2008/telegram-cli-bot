@@ -83,6 +83,7 @@ ENV_SCHEMA: tuple[EnvField, ...] = (
     EnvField("WEB_PORT", "监听端口", "Web 服务监听端口。", "number", "8765", "web", min_value=1, max_value=65535, integer=True),
     EnvField("WEB_API_TOKEN", "登录口令", "旧版 Web API 登录口令。", "password", "", "web", sensitive=True, max_length=8192),
     EnvField("WEB_ALLOWED_ORIGINS", "CORS 允许来源", "逗号分隔的允许来源。", "csv", "", "web"),
+    EnvField("WEB_TERMINAL_SHELL_PATH", "Web 终端 Shell 路径", "Web 终端启动的 shell 可执行文件路径；留空使用系统默认 shell。", "path", "", "web"),
     EnvField("TCB_NODE_ID", "节点 ID", "Hub 固定公网转发节点 ID。", "string", "", "web", max_length=64),
     EnvField("WEB_BASE_PATH", "Web 子路径", "固定转发子路径，空或 /node/<节点 ID>。", "string", "", "web", rebuild_required=True),
     EnvField("VITE_BASE_PATH", "前端资源子路径", "构建期配置；留空则跟随 WEB_BASE_PATH。", "string", "", "frontend", rebuild_required=True),

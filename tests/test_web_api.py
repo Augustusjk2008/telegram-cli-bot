@@ -1524,6 +1524,119 @@ async def test_terminal_session_routes_and_websocket_attach(
                 assert state.get("closed") is not True
                 await ws.close()
 
+
+@pytest.mark.asyncio
+async def test_terminal_rebuild_uses_configured_shell_path(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.web.server.WEB_TERMINAL_SHELL_PATH", "/usr/bin/zsh")
+
+    state: dict[str, object] = {}
+
+    class FakeProcess:
+        is_pty = False
+        pid = 4322
+
+        def read(self, timeout: int = 1000) -> bytes:
+            return b""
+
+        def write(self, data: bytes) -> None:
+            pass
+
+        def isalive(self) -> bool:
+            return True
+
+        def terminate(self) -> None:
+            state["terminated"] = True
+
+        def close(self) -> None:
+            state["closed"] = True
+
+    def fake_create_shell_process(
+        shell_type: str,
+        cwd: str,
+        use_pty: bool = True,
+        cols: int | None = None,
+        rows: int | None = None,
+    ):
+        state["shell_type"] = shell_type
+        state["cwd"] = cwd
+        return FakeProcess()
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            with patch("bot.web.terminal_manager.create_shell_process", side_effect=fake_create_shell_process):
+                resp = await client.post(
+                    "/api/terminal/session/rebuild?token=secret",
+                    json={"owner_id": "configured-shell", "cwd": str(temp_dir), "shell": "bash"},
+                )
+
+                assert resp.status == 200
+                assert state["shell_type"] == "/usr/bin/zsh"
+                assert state["cwd"] == str(temp_dir)
+
+
+@pytest.mark.asyncio
+async def test_terminal_rebuild_auto_uses_default_shell_without_configured_path(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.web.server.WEB_TERMINAL_SHELL_PATH", "")
+
+    state: dict[str, object] = {}
+
+    class FakeProcess:
+        is_pty = False
+        pid = 4323
+
+        def read(self, timeout: int = 1000) -> bytes:
+            return b""
+
+        def write(self, data: bytes) -> None:
+            pass
+
+        def isalive(self) -> bool:
+            return True
+
+        def terminate(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    def fake_create_shell_process(
+        shell_type: str,
+        cwd: str,
+        use_pty: bool = True,
+        cols: int | None = None,
+        rows: int | None = None,
+    ):
+        state["shell_type"] = shell_type
+        return FakeProcess()
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            with patch("bot.web.terminal_manager.create_shell_process", side_effect=fake_create_shell_process), \
+                 patch("bot.web.server.get_default_shell", return_value="bash"):
+                resp = await client.post(
+                    "/api/terminal/session/rebuild?token=secret",
+                    json={"owner_id": "default-shell", "cwd": str(temp_dir), "shell": "auto"},
+                )
+
+                assert resp.status == 200
+                assert state["shell_type"] == "bash"
+
 @pytest.mark.asyncio
 async def test_admin_update_routes_proxy_update_service(web_manager, monkeypatch):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")

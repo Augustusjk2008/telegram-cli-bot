@@ -56,6 +56,8 @@ def test_env_service_exposes_fixed_forward_hub_fields(tmp_path: Path) -> None:
     assert items["TCB_HUB_FRPS_TOKEN"]["type"] == "password"
     assert items["TCB_HUB_FRPC_PATH"]["category"] == "tunnel"
     assert items["TCB_HUB_FRPC_PATH"]["type"] == "path"
+    assert items["WEB_TERMINAL_SHELL_PATH"]["category"] == "web"
+    assert items["WEB_TERMINAL_SHELL_PATH"]["type"] == "path"
     assert items["TCB_HUB_FRPS_PORT"]["category"] == "tunnel"
     assert items["TCB_HUB_FRPS_PORT"]["type"] == "number"
 

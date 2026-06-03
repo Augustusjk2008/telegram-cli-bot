@@ -105,6 +105,14 @@ macOS：
 
 如果启用了 `WEB_TUNNEL_MODE=cloudflare_quick` 且 tunnel 拉起成功，控制台会打印公网地址二维码，方便手机扫码打开。
 
+Web 终端默认在后端启动系统 shell：Windows 为 PowerShell，Linux 为 `bash`，macOS 为 `$SHELL` 或 `/bin/zsh`。如需指定 shell 可执行文件，设置：
+
+```env
+WEB_TERMINAL_SHELL_PATH=/usr/bin/zsh
+```
+
+Windows 可写 `C:\Program Files\PowerShell\7\pwsh.exe`。这里配置的是 Web xterm 内运行的 shell，不是外部 GUI 终端窗口。
+
 ## 固定公网地址和反向代理
 
 如果你有固定 IP 服务器，可用反向代理把公网路径转到运行 Orbit Safe Claw 的机器。建议每台机器使用一个独立子路径：

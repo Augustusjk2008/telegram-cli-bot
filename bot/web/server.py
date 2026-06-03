@@ -52,6 +52,7 @@ from bot.config import (
     WEB_HOST,
     WEB_PORT,
     WEB_PUBLIC_URL,
+    WEB_TERMINAL_SHELL_PATH,
     WEB_TUNNEL_AUTOSTART,
     WEB_TUNNEL_CLOUDFLARED_PATH,
     WEB_TUNNEL_MODE,
@@ -1975,6 +1976,16 @@ class WebApiServer:
         logger.warning("终端请求缺少 owner_id，回退默认 owner=%s", DEFAULT_TERMINAL_OWNER_ID)
         return DEFAULT_TERMINAL_OWNER_ID
 
+    def _resolve_terminal_shell(self, value: object) -> str:
+        configured_shell = WEB_TERMINAL_SHELL_PATH.strip()
+        if configured_shell:
+            return configured_shell
+        default_shell = get_default_shell()
+        shell_type = str(value or default_shell).strip() or default_shell
+        if shell_type == "auto":
+            return default_shell
+        return shell_type
+
     async def get_terminal_session(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_TERMINAL_EXEC)
         owner_id = self._resolve_terminal_owner_id(request.query.get("owner_id"))
@@ -1985,10 +1996,7 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_TERMINAL_EXEC)
         body = await self._parse_json(request)
         owner_id = self._resolve_terminal_owner_id(body.get("owner_id"))
-        default_shell = get_default_shell()
-        shell_type = str(body.get("shell") or default_shell).strip() or default_shell
-        if shell_type == "auto":
-            shell_type = default_shell
+        shell_type = self._resolve_terminal_shell(body.get("shell"))
         raw_cwd = str(body.get("cwd") or os.getcwd()).strip() or os.getcwd()
         cwd = os.path.abspath(os.path.expanduser(raw_cwd))
         if not os.path.isdir(cwd):
@@ -2040,10 +2048,7 @@ class WebApiServer:
         snapshot = await self._terminal_manager.get_snapshot(auth.user_id, owner_id)
         started_terminal = False
         if not snapshot.get("started"):
-            default_shell = get_default_shell()
-            shell_type = str(body.get("shell") or default_shell).strip() or default_shell
-            if shell_type == "auto":
-                shell_type = default_shell
+            shell_type = self._resolve_terminal_shell(body.get("shell"))
             size = _parse_terminal_size(body)
             snapshot = await self._terminal_manager.rebuild(
                 auth.user_id,
