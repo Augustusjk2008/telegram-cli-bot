@@ -105,6 +105,109 @@ macOS：
 
 如果启用了 `WEB_TUNNEL_MODE=cloudflare_quick` 且 tunnel 拉起成功，控制台会打印公网地址二维码，方便手机扫码打开。
 
+## 固定公网地址和反向代理
+
+如果你有固定 IP 服务器，可用反向代理把公网路径转到运行 Orbit Safe Claw 的机器。建议每台机器使用一个独立子路径：
+
+```text
+http://<固定IP>:18088/node/<节点ID>/
+```
+
+本机 `.env` 示例：
+
+```env
+WEB_ENABLED=true
+WEB_HOST=0.0.0.0
+WEB_PORT=8765
+WEB_API_TOKEN=change-this-password
+TCB_NODE_ID=my-laptop
+WEB_BASE_PATH=/node/my-laptop
+WEB_PUBLIC_URL=http://<固定IP>:18088/node/my-laptop
+WEB_TUNNEL_MODE=disabled
+```
+
+`VITE_BASE_PATH` 和 `VITE_API_BASE_URL` 留空会跟随 `WEB_BASE_PATH`；如手动填写，必须和 `WEB_BASE_PATH` 相同。改了 `WEB_BASE_PATH` 或 `VITE_*` 后需重新构建前端并重启 Web：
+
+```bash
+cd front && npm run build
+python -m bot
+```
+
+公网服务器需要：
+
+- 放通公网访问端口，如 `18088`
+- 能访问本机 Web 地址，如 `http://127.0.0.1:8765` 或内网 / 隧道端口
+- 保留 `/node/<节点ID>/` 路径前缀转发，不要在反代层剥掉
+- 支持 WebSocket Upgrade，终端、调试和通知会用到
+
+如果 Orbit Safe Claw 直接跑在公网服务器上，反代到 `127.0.0.1:8765` 即可。如果它跑在家用电脑或内网机器上，推荐用 frp：公网服务器运行 `frps`，本机运行 `frpc`，再让反代转到 `frps` 的 HTTP 入口。
+
+公网服务器 `frps.toml` 最小示例：
+
+```toml
+bindPort = 7000
+vhostHTTPPort = 18765
+auth.token = "<frps-token>"
+```
+
+本机启用内置 frpc 自动转发时，追加这些 `.env`：
+
+```env
+WEB_FIXED_PUBLIC_FORWARD_ENABLED=true
+WEB_FIXED_PUBLIC_FORWARD_URL=http://<固定IP>:18088/node/my-laptop
+TCB_HUB_FRPS_PORT=7000
+TCB_HUB_FRPS_TOKEN=<frps-token>
+TCB_HUB_NODE_TOKEN=<random-node-token>
+TCB_HUB_FRPC_PATH=frpc
+TCB_HUB_FRPC_AUTOSTART=true
+```
+
+`TCB_HUB_FRPC_PATH` 留空或写 `frpc` 时，会从 `PATH` 查找；也可写绝对路径，如 Windows 的 `C:\tools\frp\frpc.exe`、Linux / macOS 的 `/usr/local/bin/frpc`。路径不要写 `~` 或 shell alias。
+
+frpc 安装方式：
+
+- 打开 <https://github.com/fatedier/frp/releases>，下载匹配系统和 CPU 的压缩包
+- Windows：解压后把 `frpc.exe` 所在目录加入 `PATH`，或把完整路径写入 `TCB_HUB_FRPC_PATH`
+- Linux：解压后运行 `sudo install -m 755 frpc /usr/local/bin/frpc`
+- macOS：解压后运行 `sudo install -m 755 frpc /usr/local/bin/frpc`；如被 Gatekeeper 拦截，执行 `sudo xattr -d com.apple.quarantine /usr/local/bin/frpc`
+- 安装后运行 `frpc --version` 验证
+
+Caddy 示例：
+
+```caddyfile
+:18088 {
+  handle /node/my-laptop/* {
+    reverse_proxy 127.0.0.1:18765
+  }
+}
+```
+
+Nginx 示例：
+
+```nginx
+map $http_upgrade $connection_upgrade {
+  default upgrade;
+  '' close;
+}
+
+server {
+  listen 18088;
+
+  location /node/my-laptop/ {
+    proxy_pass http://127.0.0.1:18765;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+  }
+}
+```
+
+上例 `127.0.0.1:18765` 是 `frps` 的 `vhostHTTPPort`。如果服务直接跑在公网服务器上，可改成 `127.0.0.1:8765`，并不启用 `WEB_FIXED_PUBLIC_FORWARD_ENABLED`。
+
 ## 基本配置
 
 首次安装后至少确认这些 `.env` 项：
