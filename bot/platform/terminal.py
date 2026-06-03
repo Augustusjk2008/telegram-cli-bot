@@ -7,6 +7,7 @@ import os
 import base64
 import select
 import shlex
+import shutil
 import subprocess
 import sys
 import threading
@@ -16,6 +17,19 @@ from bot.platform.processes import build_subprocess_group_kwargs
 from bot.platform.subprocess_streams import close_process_streams
 
 logger = logging.getLogger(__name__)
+
+
+class TerminalLaunchError(RuntimeError):
+    """终端 shell 启动失败。"""
+
+
+def _format_launch_error(argv: list[str], exc: OSError) -> str:
+    command = argv[0] if argv else ""
+    if isinstance(exc, FileNotFoundError):
+        return f"终端 shell 未找到: {command}"
+    if isinstance(exc, PermissionError):
+        return f"终端 shell 无执行权限: {command}"
+    return f"终端 shell 启动失败: {command or exc}"
 
 try:
     import fcntl
@@ -188,7 +202,24 @@ def _build_posix_shell_argv(shell_type: str) -> list[str]:
         if not any(arg in {"-l", "--login"} for arg in argv[1:]):
             argv.append("-l")
         return argv
-    return shlex.split(shell_type or "bash", posix=True)
+    argv = shlex.split(shell_type or "bash", posix=True)
+    return argv or ["bash"]
+
+
+def _validate_posix_shell_argv(argv: list[str]) -> None:
+    command = argv[0] if argv else ""
+    if not command:
+        raise TerminalLaunchError("终端 shell 不能为空")
+    if "\\" in command or (len(command) >= 2 and command[1] == ":"):
+        raise TerminalLaunchError(f"终端 shell 不是当前 Linux/macOS 可执行路径: {command}")
+    if os.path.isabs(command):
+        if not os.path.exists(command):
+            raise TerminalLaunchError(f"终端 shell 未找到: {command}")
+        if not os.access(command, os.X_OK):
+            raise TerminalLaunchError(f"终端 shell 无执行权限: {command}")
+        return
+    if shutil.which(command) is None:
+        raise TerminalLaunchError(f"终端 shell 未找到: {command}")
 
 
 def create_shell_process(
@@ -249,29 +280,41 @@ def create_shell_process(
     if use_pty:
         import pty
 
+        argv = _build_posix_shell_argv(cmdline)
+        _validate_posix_shell_argv(argv)
         master_fd, slave_fd = pty.openpty()
-        process = subprocess.Popen(
-            _build_posix_shell_argv(cmdline),
-            stdin=slave_fd,
-            stdout=slave_fd,
-            stderr=slave_fd,
-            cwd=cwd,
-            env={**os.environ, "FORCE_COLOR": "1", "TERM": "xterm-256color"},
-            **build_subprocess_group_kwargs(),
-        )
+        try:
+            process = subprocess.Popen(
+                argv,
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                cwd=cwd,
+                env={**os.environ, "FORCE_COLOR": "1", "TERM": "xterm-256color"},
+                **build_subprocess_group_kwargs(),
+            )
+        except OSError as exc:
+            os.close(master_fd)
+            os.close(slave_fd)
+            raise TerminalLaunchError(_format_launch_error(argv, exc)) from exc
         os.close(slave_fd)
         pty_process = PosixPtyProcess(process, master_fd)
         pty_process.resize(cols, rows)
         return PtyWrapper(pty_process, is_pty=True)
 
-    process = subprocess.Popen(
-        _build_posix_shell_argv(cmdline),
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        cwd=cwd,
-        env={**os.environ, "FORCE_COLOR": "1", "TERM": "xterm-256color"},
-        bufsize=0,
-        **build_subprocess_group_kwargs(),
-    )
+    argv = _build_posix_shell_argv(cmdline)
+    _validate_posix_shell_argv(argv)
+    try:
+        process = subprocess.Popen(
+            argv,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            cwd=cwd,
+            env={**os.environ, "FORCE_COLOR": "1", "TERM": "xterm-256color"},
+            bufsize=0,
+            **build_subprocess_group_kwargs(),
+        )
+    except OSError as exc:
+        raise TerminalLaunchError(_format_launch_error(argv, exc)) from exc
     return PtyWrapper(process, is_pty=False)

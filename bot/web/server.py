@@ -16,6 +16,7 @@ import threading
 import time
 import uuid
 import zlib
+from itertools import chain
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlencode, urlparse
@@ -118,7 +119,12 @@ from .auth_store import (
     WebAuthStore,
 )
 from .permission_store import BotPermissionStore
-from .terminal_manager import TERMINAL_CLIENT_EOF, TerminalNotRunningError, TerminalSessionManager
+from .terminal_manager import (
+    TERMINAL_CLIENT_EOF,
+    TerminalLaunchError,
+    TerminalNotRunningError,
+    TerminalSessionManager,
+)
 from .tunnel_service import TunnelService
 from .routes import (
     admin_routes,
@@ -473,7 +479,14 @@ def _is_request_origin_allowed(request: web.Request) -> bool:
     origin = str(request.headers.get("Origin") or "").strip()
     if not origin:
         return True
-    normalized_allowed = {_normalize_origin(item) for item in WEB_ALLOWED_ORIGINS}
+    normalized_allowed = {
+        _normalize_origin(item)
+        for item in chain(
+            WEB_ALLOWED_ORIGINS,
+            (_origin_only(WEB_PUBLIC_URL), _origin_only(WEB_FIXED_PUBLIC_FORWARD_URL)),
+        )
+        if str(item or "").strip()
+    }
     normalized_origin = _normalize_origin(origin)
     if "*" in normalized_allowed or normalized_origin in normalized_allowed:
         return True
@@ -520,6 +533,13 @@ def _parse_optional_int(value: object, *, field_name: str) -> int | None:
 
 def _normalize_origin(origin: str) -> str:
     return origin.rstrip("/")
+
+
+def _origin_only(value: str) -> str:
+    parsed = urlparse(str(value or "").strip())
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+    return str(value or "").strip().rstrip("/")
 
 
 def _format_sse(event_type: str, data: dict[str, Any]) -> bytes:
@@ -1986,6 +2006,10 @@ class WebApiServer:
             return default_shell
         return shell_type
 
+    def _terminal_launch_error(self, exc: TerminalLaunchError) -> WebApiError:
+        message = str(exc).strip() or "终端 shell 启动失败"
+        return WebApiError(400, "terminal_launch_failed", message)
+
     async def get_terminal_session(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_TERMINAL_EXEC)
         owner_id = self._resolve_terminal_owner_id(request.query.get("owner_id"))
@@ -2002,14 +2026,18 @@ class WebApiServer:
         if not os.path.isdir(cwd):
             cwd = os.getcwd()
         size = _parse_terminal_size(body)
-        data = await self._terminal_manager.rebuild(
-            auth.user_id,
-            owner_id,
-            cwd=cwd,
-            shell_type=shell_type,
-            cols=size[0] if size else None,
-            rows=size[1] if size else None,
-        )
+        try:
+            data = await self._terminal_manager.rebuild(
+                auth.user_id,
+                owner_id,
+                cwd=cwd,
+                shell_type=shell_type,
+                cols=size[0] if size else None,
+                rows=size[1] if size else None,
+            )
+        except TerminalLaunchError as exc:
+            logger.warning("终端启动失败 owner=%s shell=%s cwd=%s: %s", owner_id, shell_type, cwd, exc)
+            raise self._terminal_launch_error(exc) from exc
         return _json({"ok": True, "data": data})
 
     async def post_terminal_close(self, request: web.Request) -> web.Response:
@@ -2050,14 +2078,25 @@ class WebApiServer:
         if not snapshot.get("started"):
             shell_type = self._resolve_terminal_shell(body.get("shell"))
             size = _parse_terminal_size(body)
-            snapshot = await self._terminal_manager.rebuild(
-                auth.user_id,
-                owner_id,
-                cwd=action.resolved_cwd,
-                shell_type=shell_type,
-                cols=size[0] if size else None,
-                rows=size[1] if size else None,
-            )
+            try:
+                snapshot = await self._terminal_manager.rebuild(
+                    auth.user_id,
+                    owner_id,
+                    cwd=action.resolved_cwd,
+                    shell_type=shell_type,
+                    cols=size[0] if size else None,
+                    rows=size[1] if size else None,
+                )
+            except TerminalLaunchError as exc:
+                logger.warning(
+                    "终端快捷命令启动失败 owner=%s action=%s shell=%s cwd=%s: %s",
+                    owner_id,
+                    action.id,
+                    shell_type,
+                    action.resolved_cwd,
+                    exc,
+                )
+                raise self._terminal_launch_error(exc) from exc
             started_terminal = True
         await self._terminal_manager.write_input(auth.user_id, owner_id, f"{action.command}\r\n".encode("utf-8"))
         return _json(

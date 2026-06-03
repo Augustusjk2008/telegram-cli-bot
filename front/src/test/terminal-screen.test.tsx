@@ -197,6 +197,18 @@ test("disabled terminal blocks rebuild, close, shortcut controls and actions", a
   expect(terminalSessionMock.sendControl).not.toHaveBeenCalled();
 });
 
+test("重建终端失败时显示后端错误且不创建终端会话", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "rebuildTerminalSession").mockRejectedValue(new Error("终端 shell 未找到: zsh"));
+
+  renderTerminalScreen({}, client);
+
+  await user.click(screen.getByRole("button", { name: "重建终端" }));
+
+  expect(await screen.findByText("终端 shell 未找到: zsh")).toBeInTheDocument();
+  expect(createTerminalSessionMock).not.toHaveBeenCalled();
+});
 
 
 

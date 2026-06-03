@@ -10,7 +10,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
-from bot.platform.terminal import PtyWrapper, create_shell_process
+from bot.platform.terminal import PtyWrapper, TerminalLaunchError, create_shell_process
 
 logger = logging.getLogger(__name__)
 

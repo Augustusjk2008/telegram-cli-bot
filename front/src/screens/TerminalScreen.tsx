@@ -294,7 +294,12 @@ export function TerminalScreen({
     disposeSession();
     setError("");
     setFollowing(true);
-    await terminal.rebuild(nextWorkingDir);
+    try {
+      await terminal.rebuild(nextWorkingDir);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "重建终端失败");
+      setIsConnected(false);
+    }
   }
 
   async function closeTerminal() {

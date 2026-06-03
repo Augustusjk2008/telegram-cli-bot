@@ -1637,6 +1637,100 @@ async def test_terminal_rebuild_auto_uses_default_shell_without_configured_path(
                 assert resp.status == 200
                 assert state["shell_type"] == "bash"
 
+
+@pytest.mark.asyncio
+async def test_terminal_rebuild_reports_invalid_shell_without_starting_session(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.web.server.WEB_TERMINAL_SHELL_PATH", "")
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            owner_id = "missing-shell"
+            resp = await client.post(
+                "/api/terminal/session/rebuild?token=secret",
+                json={"owner_id": owner_id, "cwd": str(temp_dir), "shell": "definitely-missing-shell"},
+            )
+            payload = await resp.json()
+            session_resp = await client.get(f"/api/terminal/session?token=secret&owner_id={owner_id}")
+            session_payload = await session_resp.json()
+
+    assert resp.status == 400
+    assert payload["error"]["code"] == "terminal_launch_failed"
+    assert "未找到" in payload["error"]["message"]
+    assert session_payload["data"]["started"] is False
+
+
+@pytest.mark.asyncio
+async def test_terminal_websocket_allows_configured_public_url_origin(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.web.server.WEB_PUBLIC_URL", "http://proxy.example.test/node/local")
+    monkeypatch.setattr("bot.web.server.WEB_FIXED_PUBLIC_FORWARD_URL", "")
+
+    state: dict[str, object] = {"writes": []}
+
+    class FakeProcess:
+        is_pty = True
+        pid = 4324
+
+        def read(self, timeout: int = 1000) -> bytes:
+            return b""
+
+        def write(self, data: bytes) -> None:
+            cast(list[bytes], state["writes"]).append(data)
+
+        def isalive(self) -> bool:
+            return True
+
+        def terminate(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    def fake_create_shell_process(
+        shell_type: str,
+        cwd: str,
+        use_pty: bool = True,
+        cols: int | None = None,
+        rows: int | None = None,
+    ):
+        return FakeProcess()
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            with patch("bot.web.terminal_manager.create_shell_process", side_effect=fake_create_shell_process), \
+                 patch("bot.web.server.get_default_shell", return_value="bash"):
+                owner_id = "public-origin"
+                rebuild_resp = await client.post(
+                    "/api/terminal/session/rebuild?token=secret",
+                    json={"owner_id": owner_id, "cwd": str(temp_dir), "shell": "auto"},
+                )
+                ws = await client.ws_connect(
+                    "/terminal/ws?token=secret",
+                    headers={"Origin": "http://proxy.example.test"},
+                )
+                await ws.send_json({"owner_id": owner_id})
+                first_message = await ws.receive_json()
+                await ws.close()
+
+    assert rebuild_resp.status == 200
+    assert first_message == {"pty_mode": True, "connection_text": "运行中"}
+
+
 @pytest.mark.asyncio
 async def test_admin_update_routes_proxy_update_service(web_manager, monkeypatch):
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
