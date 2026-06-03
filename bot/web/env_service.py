@@ -220,7 +220,10 @@ def _encode_value(value: str) -> str:
 
 
 def _line_for_value(line: EnvLine, value: str) -> str:
-    return f"{line.prefix or ''}{line.key}{line.separator or '='}{_encode_value(value)}{line.comment_suffix}{line.newline or '\n'}"
+    newline = line.newline or "\n"
+    separator = line.separator or "="
+    prefix = line.prefix or ""
+    return f"{prefix}{line.key}{separator}{_encode_value(value)}{line.comment_suffix}{newline}"
 
 
 def _is_masked_keep(value: Any, field: EnvField) -> bool:
