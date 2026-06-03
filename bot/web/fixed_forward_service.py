@@ -446,6 +446,7 @@ class FixedForwardService:
                 'type = "http"',
                 'localIP = "127.0.0.1"',
                 f"localPort = {self._port}",
+                f"customDomains = [{_toml_string(server_addr)}]",
                 f"locations = [{_toml_string(self._base_path)}]",
                 "",
                 "[proxies.requestHeaders.set]",

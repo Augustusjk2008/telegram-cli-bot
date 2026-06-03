@@ -98,6 +98,7 @@ def test_build_frpc_config_matches_hub_template(tmp_path: Path) -> None:
     assert 'type = "http"' in content
     assert 'localIP = "127.0.0.1"' in content
     assert "localPort = 8765" in content
+    assert 'customDomains = ["124.221.226.63"]' in content
     assert 'locations = ["/node/nanjing-laptop"]' in content
     assert 'X-Forwarded-Prefix = "/node/nanjing-laptop"' in content
     assert 'X-TCB-Node-ID = "nanjing-laptop"' in content
