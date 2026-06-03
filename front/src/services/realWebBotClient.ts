@@ -1,5 +1,5 @@
 import { WebApiClientError } from "./types";
-import { buildWsUrl, withApiBase } from "../utils/publicBase";
+import { buildWsUrl, withApiBase, withPublicBase } from "../utils/publicBase";
 import type {
   AdminUser,
   AdminUserUpdateInput,
@@ -2088,7 +2088,7 @@ function mapTunnelSnapshot(raw: RawTunnelSnapshot): TunnelSnapshot {
 function mapAvatarAsset(raw: RawAvatarAsset): AvatarAsset {
   return {
     name: raw.name,
-    url: raw.url,
+    url: withPublicBase(raw.url),
   };
 }
 

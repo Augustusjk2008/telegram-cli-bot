@@ -226,6 +226,23 @@ def _png_bytes(width: int, height: int) -> bytes:
         + chunk(b"IEND", b"")
     )
 
+
+def test_list_avatar_assets_prefixes_web_base_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    avatar_path = tmp_path / "avatar_01.png"
+    avatar_path.write_bytes(_png_bytes(64, 64))
+    monkeypatch.setattr(api_service, "_avatar_asset_dirs", lambda: [tmp_path])
+
+    payload = api_service.list_avatar_assets(base_path="/node/nanjing-laptop")
+
+    assert payload == {
+        "items": [
+            {
+                "name": "avatar_01.png",
+                "url": "/node/nanjing-laptop/assets/avatars/avatar_01.png",
+            }
+        ]
+    }
+
 @pytest.fixture
 def web_manager(temp_dir: Path) -> MultiBotManager:
     storage_file = temp_dir / "managed_bots.json"

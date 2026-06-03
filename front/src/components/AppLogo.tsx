@@ -1,8 +1,9 @@
 import { clsx } from "clsx";
 import { APP_NAME } from "../theme";
+import { withPublicBase } from "../utils/publicBase";
 
-export const APP_LOGO_SRC = "/assets/app-logo.svg";
-export const APP_LOGO_CLASSIC_SRC = "/assets/app-logo-classic.svg";
+export const APP_LOGO_SRC = withPublicBase("/assets/app-logo.svg");
+export const APP_LOGO_CLASSIC_SRC = withPublicBase("/assets/app-logo-classic.svg");
 
 type Props = {
   size?: number;

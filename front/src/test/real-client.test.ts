@@ -23,6 +23,7 @@ describe("RealWebBotClient", () => {
   }
 
   beforeEach(() => {
+    vi.stubGlobal("__PUBLIC_ENV__", {});
     vi.stubGlobal("fetch", fetchMock);
   });
 
@@ -93,6 +94,30 @@ describe("RealWebBotClient", () => {
     expect(buildFileDownloadUrl("main", "docs/readme.md")).toBe(
       "/node/nanjing-laptop/api/bots/main/files/download?filename=docs%2Freadme.md",
     );
+  });
+
+  test("applies public base path to listed avatar asset urls", async () => {
+    vi.stubGlobal("__PUBLIC_ENV__", {
+      VITE_API_BASE_URL: "/node/nanjing-laptop",
+    });
+    fetchMock.mockResolvedValue(jsonOk({
+      items: [{
+        name: "avatar_01.png",
+        url: "/assets/avatars/avatar_01.png",
+      }],
+    }));
+
+    const client = new RealWebBotClient();
+    const assets = await client.listAvatarAssets();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/node/nanjing-laptop/api/admin/assets/avatars",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+    expect(assets).toEqual([{
+      name: "avatar_01.png",
+      url: "/node/nanjing-laptop/assets/avatars/avatar_01.png",
+    }]);
   });
 
   

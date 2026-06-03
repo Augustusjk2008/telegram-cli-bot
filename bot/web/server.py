@@ -3124,7 +3124,7 @@ class WebApiServer:
 
     async def admin_list_avatar_assets(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
-        return _json({"ok": True, "data": list_avatar_assets()})
+        return _json({"ok": True, "data": list_avatar_assets(base_path=self._web_base_path())})
 
     async def admin_remove_bot(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)

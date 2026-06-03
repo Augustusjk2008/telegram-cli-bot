@@ -11,9 +11,16 @@ export function publicBasePath(): string {
   return normalizeBasePath(env.VITE_API_BASE_URL || env.VITE_BASE_PATH || env.WEB_BASE_PATH);
 }
 
-export function withApiBase(path: string): string {
-  const base = publicBasePath();
+export function publicAssetBasePath(): string {
+  const env = typeof __PUBLIC_ENV__ !== "undefined" ? __PUBLIC_ENV__ : {};
+  return normalizeBasePath(env.VITE_BASE_PATH || env.WEB_BASE_PATH || env.VITE_API_BASE_URL);
+}
+
+function withBasePath(base: string, path: string): string {
   const rawPath = String(path || "");
+  if (!rawPath) {
+    return rawPath;
+  }
   if (!base || /^https?:\/\//i.test(rawPath) || /^wss?:\/\//i.test(rawPath)) {
     return rawPath;
   }
@@ -22,6 +29,14 @@ export function withApiBase(path: string): string {
     return normalizedPath;
   }
   return `${base}${normalizedPath}`;
+}
+
+export function withApiBase(path: string): string {
+  return withBasePath(publicBasePath(), path);
+}
+
+export function withPublicBase(path: string): string {
+  return withBasePath(publicAssetBasePath(), path);
 }
 
 export function buildWsUrl(path: string, params?: URLSearchParams | Record<string, string | number | boolean | undefined>): string {

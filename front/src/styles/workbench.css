@@ -345,8 +345,8 @@
   background:
     radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--accent-strong) 70%, transparent), transparent 48%),
     linear-gradient(135deg, var(--accent), var(--accent-strong));
-  -webkit-mask-image: url("/assets/workbench-editor-empty-mask.png?v=20260531-2");
-  mask-image: url("/assets/workbench-editor-empty-mask.png?v=20260531-2");
+  -webkit-mask-image: var(--workbench-empty-mask-image, url("/assets/workbench-editor-empty-mask.png?v=20260531-2"));
+  mask-image: var(--workbench-empty-mask-image, url("/assets/workbench-editor-empty-mask.png?v=20260531-2"));
   -webkit-mask-mode: luminance;
   mask-mode: luminance;
   -webkit-mask-repeat: no-repeat;

@@ -402,7 +402,22 @@ def _is_supported_avatar_asset(path: Path) -> bool:
     return dimensions == (64, 64)
 
 
-def list_avatar_assets() -> dict[str, Any]:
+def _normalize_public_base_path(base_path: str | None) -> str:
+    value = str(base_path if base_path is not None else config.WEB_BASE_PATH or "").strip()
+    if not value or value == "/":
+        return ""
+    return f"/{value.strip('/')}"
+
+
+def _public_asset_url(path: str, *, base_path: str | None = None) -> str:
+    normalized_path = f"/{str(path or '').lstrip('/')}"
+    base = _normalize_public_base_path(base_path)
+    if base and normalized_path != base and not normalized_path.startswith(f"{base}/"):
+        return f"{base}{normalized_path}"
+    return normalized_path
+
+
+def list_avatar_assets(*, base_path: str | None = None) -> dict[str, Any]:
     items_by_name: dict[str, dict[str, str]] = {}
     for directory in _avatar_asset_dirs():
         if not directory.exists():
@@ -418,7 +433,7 @@ def list_avatar_assets() -> dict[str, Any]:
                 path.name,
                 {
                     "name": path.name,
-                    "url": f"/assets/avatars/{path.name}",
+                    "url": _public_asset_url(f"/assets/avatars/{path.name}", base_path=base_path),
                 },
             )
 

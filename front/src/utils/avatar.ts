@@ -1,10 +1,11 @@
 import type { AvatarAsset } from "../services/types";
+import { withPublicBase } from "./publicBase";
 
 const USER_AVATAR_STORAGE_KEY = "web-user-avatar-name";
 
 export const DEFAULT_AVATAR_ASSETS: AvatarAsset[] = Array.from({ length: 12 }, (_, index) => {
   const name = `avatar_${String(index + 1).padStart(2, "0")}.png`;
-  return { name, url: `/assets/avatars/${name}` };
+  return { name, url: withPublicBase(`/assets/avatars/${name}`) };
 });
 
 export function resolveAvatarName(avatarName: string | undefined, _kind: "user" | "bot") {
@@ -13,7 +14,7 @@ export function resolveAvatarName(avatarName: string | undefined, _kind: "user" 
 
 export function buildAvatarUrl(avatarName: string | undefined, kind: "user" | "bot") {
   const resolvedName = resolveAvatarName(avatarName, kind);
-  return resolvedName ? `/assets/avatars/${resolvedName}` : "";
+  return resolvedName ? withPublicBase(`/assets/avatars/${resolvedName}`) : "";
 }
 
 export function pickAvailableAvatarName(
