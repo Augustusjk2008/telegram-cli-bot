@@ -449,8 +449,7 @@ export function ChatComposer({
               disabled={inputDisabled}
               className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-[var(--workbench-hairline)] bg-[var(--surface)] px-2.5 py-1 text-[var(--text)] hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] disabled:opacity-60"
             >
-              <span className="font-medium">@{agent.id}</span>
-              <span className="truncate text-[var(--muted)]">{agent.name}</span>
+              <span className="truncate font-medium">@{agent.name}</span>
             </button>
           ))}
         </div>
