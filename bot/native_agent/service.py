@@ -137,7 +137,7 @@ class NativeAgentService:
                 native_provider=NATIVE_AGENT_PROVIDER,
                 actor=actor,
             )
-            aggregator = NativeAgentAggregator(user_message_id=f"user_{uuid.uuid4().hex[:12]}")
+            aggregator = NativeAgentAggregator(user_message_id=f"msg_{uuid.uuid4().hex[:12]}")
             persistence_buffer = StreamingPersistenceBuffer(history_service, turn_handle, loop_time=loop.time)
 
             yield {

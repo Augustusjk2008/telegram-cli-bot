@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { AvatarPicker } from "../components/AvatarPicker";
 import { BotActivitySummary } from "../components/BotActivitySummary";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
+import { NativeAgentConfigFields } from "../components/NativeAgentConfigFields";
 import { StatusPill } from "../components/StatusPill";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { BotSummary, CliType, CreateBotInput } from "../services/types";
@@ -12,7 +13,7 @@ import {
   useBotManager,
   type CreateDraft,
 } from "./useBotManager";
-import { isBotOffline, isMainBot } from "./botManagerModel";
+import { DEFAULT_NATIVE_AGENT_CONFIG, isBotOffline, isMainBot } from "./botManagerModel";
 
 type Props = {
   client?: WebBotClient;
@@ -228,6 +229,30 @@ export function BotListScreen({
             onChange={(event) => setCreateDraft((prev) => ({ ...prev, cliPath: event.target.value }))}
             className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
             placeholder={defaultCliPathForType(createDraft.cliType)}
+          />
+          <NativeAgentConfigFields
+            enabled={createDraft.botMode === "cli" && Boolean(createDraft.supportedExecutionModes?.includes("native_agent"))}
+            defaultMode={createDraft.defaultExecutionMode || "cli"}
+            command={createDraft.nativeAgent?.command || DEFAULT_NATIVE_AGENT_CONFIG.command}
+            hostname={createDraft.nativeAgent?.hostname || DEFAULT_NATIVE_AGENT_CONFIG.hostname}
+            port={createDraft.nativeAgent?.port || 0}
+            serverPassword={createDraft.nativeAgent?.serverPassword}
+            disabled={!canManage || createDraft.botMode !== "cli" || savingAction !== ""}
+            onEnabledChange={(enabled) => setCreateDraft((prev) => ({
+              ...prev,
+              supportedExecutionModes: enabled ? ["cli", "native_agent"] : ["cli"],
+              defaultExecutionMode: enabled ? prev.defaultExecutionMode || "cli" : "cli",
+              nativeAgent: prev.nativeAgent || { ...DEFAULT_NATIVE_AGENT_CONFIG },
+            }))}
+            onDefaultModeChange={(defaultExecutionMode) => setCreateDraft((prev) => ({ ...prev, defaultExecutionMode }))}
+            onNativeAgentChange={(patch) => setCreateDraft((prev) => ({
+              ...prev,
+              nativeAgent: {
+                ...DEFAULT_NATIVE_AGENT_CONFIG,
+                ...(prev.nativeAgent || {}),
+                ...patch,
+              },
+            }))}
           />
           <div className="flex flex-col gap-2 sm:flex-row">
             <input

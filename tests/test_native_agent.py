@@ -211,6 +211,7 @@ async def test_native_agent_service_stream_persists_done_message(tmp_path: Path)
             assert session_id == "sess-1"
             assert text == "你好"
             assert message_id
+            assert str(message_id).startswith("msg")
             assert self.ready is True
             self.prompt_called = True
             return {}
