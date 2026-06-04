@@ -7,9 +7,10 @@ import pytest
 
 from bot.models import BotProfile, UserSession
 from bot.native_agent.aggregator import NativeAgentAggregator
-from bot.native_agent.client import NativeAgentClient, NativeAgentServerRef, parse_sse_block
+from bot.native_agent.client import NativeAgentClient, NativeAgentClientError, NativeAgentServerRef, parse_sse_block
 from bot.native_agent.events import is_relevant_event, unwrap_event
-from bot.native_agent.service import NativeAgentService
+from bot.native_agent.service import NativeAgentService, normalize_execution_mode
+from bot.native_agent.server_manager import NativeAgentServerManager
 from bot.web.chat_history_service import ChatHistoryService
 from bot.web.chat_store import ChatStore
 
@@ -71,6 +72,17 @@ def test_native_agent_client_basic_auth_uses_opencode_username():
     assert headers["Authorization"] == "Basic b3BlbmNvZGU6c2VjcmV0"
 
 
+def test_normalize_execution_mode_uses_profile_default_for_pure_native_bot():
+    profile = BotProfile(
+        alias="native",
+        supported_execution_modes=["native_agent"],
+        default_execution_mode="native_agent",
+    )
+
+    assert normalize_execution_mode("cli", profile) == "native_agent"
+    assert normalize_execution_mode("", profile) == "native_agent"
+
+
 @pytest.mark.asyncio
 async def test_native_agent_client_prompt_async_uses_parts_shape(monkeypatch: pytest.MonkeyPatch):
     captured: dict[str, object] = {}
@@ -82,14 +94,83 @@ async def test_native_agent_client_prompt_async_uses_parts_shape(monkeypatch: py
     monkeypatch.setattr(NativeAgentClient, "_request_json", fake_request_json)
     client = NativeAgentClient(NativeAgentServerRef(base_url="http://127.0.0.1:4096"))
 
-    await client.prompt_async("sess-1", "你好", message_id="msg-1")
+    await client.prompt_async(
+        "sess-1",
+        "你好",
+        message_id="msg-1",
+        model="anthropic/claude-sonnet-4-5",
+        agent="reviewer",
+    )
 
     assert captured["method"] == "POST"
     assert captured["path"] == "/session/sess-1/prompt_async"
     assert captured["json_body"] == {
         "messageID": "msg-1",
         "parts": [{"type": "text", "text": "你好"}],
+        "model": "anthropic/claude-sonnet-4-5",
+        "agent": "reviewer",
     }
+
+
+@pytest.mark.asyncio
+async def test_native_agent_server_manager_reuses_single_global_handle_and_falls_back_to_legacy_path(monkeypatch: pytest.MonkeyPatch):
+    from bot import config
+    from bot.native_agent import server_manager as server_manager_module
+
+    captured: dict[str, object] = {}
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.returncode = None
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = 0
+
+        async def wait(self):
+            return 0
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return FakeProcess()
+
+    async def fake_health(self):
+        return {"ok": True}
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    monkeypatch.setattr(config, "NATIVE_AGENT_COMMAND", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PATH", "legacy-opencode")
+    monkeypatch.setattr(config, "NATIVE_AGENT_HOST", "127.0.0.1")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PORT", 0)
+    monkeypatch.setattr(config, "NATIVE_AGENT_SERVER_PASSWORD", "secret")
+    monkeypatch.setattr(server_manager_module, "resolve_cli_executable", lambda command, _cwd=None: "C:/tools/opencode.cmd")
+    monkeypatch.setattr(server_manager_module, "build_executable_invocation", lambda path: ["cmd.exe", "/d", "/c", path])
+    monkeypatch.setattr(server_manager_module.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(server_manager_module.NativeAgentClient, "health", fake_health)
+
+    manager = NativeAgentServerManager()
+    monkeypatch.setattr(manager, "_pick_port", lambda _host: 4096)
+
+    first = await manager.ensure_started()
+    second = await manager.ensure_started()
+
+    assert first is second
+    assert first.base_url == "http://127.0.0.1:4096"
+    assert first.password == "secret"
+    assert captured["args"] == (
+        "cmd.exe",
+        "/d",
+        "/c",
+        "C:/tools/opencode.cmd",
+        "serve",
+        "--hostname",
+        "127.0.0.1",
+        "--port",
+        "4096",
+    )
 
 
 @pytest.mark.asyncio
@@ -207,12 +288,14 @@ async def test_native_agent_service_stream_persists_done_message(tmp_path: Path)
         async def create_session(self, *, cwd=None):
             return {"id": "sess-1"}
 
-        async def prompt_async(self, session_id, text, *, message_id=None):
+        async def prompt_async(self, session_id, text, *, message_id=None, model=None, agent=None):
             assert session_id == "sess-1"
             assert text == "你好"
             assert message_id
             assert str(message_id).startswith("msg")
             assert self.ready is True
+            assert model in {"", None}
+            assert agent in {"", None}
             self.prompt_called = True
             return {}
 
@@ -244,16 +327,14 @@ async def test_native_agent_service_stream_persists_done_message(tmp_path: Path)
             return [{"role": "assistant", "content": "回答"}]
 
     class FakeHandle:
-        key = "native-key"
-
         def client(self):
             return FakeClient()
 
     class FakeManager:
-        async def get_server(self, **_kwargs):
+        async def ensure_started(self):
             return FakeHandle()
 
-        async def get_existing(self, _key):
+        async def get_existing(self):
             return FakeHandle()
 
     service = NativeAgentService()
@@ -290,8 +371,10 @@ async def test_native_agent_service_waits_for_event_ready_before_prompt(tmp_path
         async def create_session(self, *, cwd=None):
             return {"id": "sess-1"}
 
-        async def prompt_async(self, session_id, text, *, message_id=None):
+        async def prompt_async(self, session_id, text, *, message_id=None, model=None, agent=None):
             self.prompt_ready_states.append(self.ready)
+            assert model in {"", None}
+            assert agent in {"", None}
             self.prompt_called = True
             return {}
 
@@ -317,16 +400,14 @@ async def test_native_agent_service_waits_for_event_ready_before_prompt(tmp_path
     fake_client = FakeClient()
 
     class FakeHandle:
-        key = "native-key"
-
         def client(self):
             return fake_client
 
     class FakeManager:
-        async def get_server(self, **_kwargs):
+        async def ensure_started(self):
             return FakeHandle()
 
-        async def get_existing(self, _key):
+        async def get_existing(self):
             return FakeHandle()
 
     service = NativeAgentService()
@@ -358,7 +439,9 @@ async def test_native_agent_stream_starts_separate_conversation_from_cli(tmp_pat
         async def create_session(self, *, cwd=None):
             return {"id": "sess-1"}
 
-        async def prompt_async(self, session_id, text, *, message_id=None):
+        async def prompt_async(self, session_id, text, *, message_id=None, model=None, agent=None):
+            assert model in {"", None}
+            assert agent in {"", None}
             self.prompt_called = True
             return {}
 
@@ -381,16 +464,14 @@ async def test_native_agent_stream_starts_separate_conversation_from_cli(tmp_pat
             return [{"role": "assistant", "content": "原生"}]
 
     class FakeHandle:
-        key = "native-key"
-
         def client(self):
             return FakeClient()
 
     class FakeManager:
-        async def get_server(self, **_kwargs):
+        async def ensure_started(self):
             return FakeHandle()
 
-        async def get_existing(self, _key):
+        async def get_existing(self):
             return FakeHandle()
 
     service = NativeAgentService()
@@ -430,3 +511,94 @@ async def test_native_agent_stream_starts_separate_conversation_from_cli(tmp_pat
     )
     providers = {item["native_provider"] for item in conversations}
     assert providers == {"codex", "native_agent"}
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_recreates_invalid_persisted_session_and_passes_model_agent(tmp_path: Path):
+    class FakeClient:
+        def __init__(self) -> None:
+            self.prompt_called = False
+            self.prompt_payload: tuple[str, str, str, str, str] | None = None
+
+        async def get_session(self, session_id):
+            raise NativeAgentClientError(f"missing session {session_id}")
+
+        async def create_session(self, *, cwd=None):
+            assert cwd == str(tmp_path)
+            return {"id": "sess-new"}
+
+        async def prompt_async(self, session_id, text, *, message_id=None, model=None, agent=None):
+            self.prompt_called = True
+            self.prompt_payload = (session_id, text, str(message_id or ""), str(model or ""), str(agent or ""))
+            return {}
+
+        async def events(self, *, global_events=True, ready_event=None):
+            if ready_event is not None:
+                ready_event.set()
+            while not self.prompt_called:
+                await asyncio.sleep(0)
+            yield {
+                "directory": str(tmp_path),
+                "payload": {
+                    "type": "message.part.updated",
+                    "sessionID": "sess-new",
+                    "part": {"id": "p1", "type": "text", "delta": "完成"},
+                },
+            }
+            yield {"directory": str(tmp_path), "payload": {"type": "session.idle", "sessionID": "sess-new"}}
+
+        async def list_messages(self, session_id):
+            assert session_id == "sess-new"
+            return [{"role": "assistant", "content": "完成"}]
+
+    fake_client = FakeClient()
+
+    class FakeHandle:
+        def client(self):
+            return fake_client
+
+    class FakeManager:
+        async def ensure_started(self):
+            return FakeHandle()
+
+        async def get_existing(self):
+            return FakeHandle()
+
+    service = NativeAgentService()
+    service._server_manager = FakeManager()
+    profile = BotProfile(
+        alias="main",
+        working_dir=str(tmp_path),
+        native_agent={
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-5",
+            "opencode_agent": "reviewer",
+        },
+    )
+    session = UserSession(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        working_dir=str(tmp_path),
+        native_agent_session_id="sess-old",
+    )
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    events = [
+        event async for event in service.stream_chat(
+            profile=profile,
+            session=session,
+            user_text="你好",
+            prompt_text="你好",
+            history_service=history,
+        )
+    ]
+
+    done = next(event for event in events if event["type"] == "done")
+    assert done["output"] == "完成"
+    assert session.native_agent_session_id == "sess-new"
+    assert fake_client.prompt_payload is not None
+    assert fake_client.prompt_payload[0] == "sess-new"
+    assert fake_client.prompt_payload[1] == "你好"
+    assert fake_client.prompt_payload[3] == "anthropic/claude-sonnet-4-5"
+    assert fake_client.prompt_payload[4] == "reviewer"

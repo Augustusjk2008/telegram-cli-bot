@@ -1,4 +1,13 @@
-import type { AgentSummary, BotStatus, BotSummary, ChatExecutionMode, CliType, NativeAgentConfig } from "../services/types";
+import type {
+  AgentSummary,
+  BotOverview,
+  BotStatus,
+  BotSummary,
+  ChatExecutionMode,
+  CliType,
+  EnvConfigSnapshot,
+  NativeAgentConfig,
+} from "../services/types";
 
 export type ManagerViewFilter = "all" | BotStatus | "attention";
 export type BulkAction = "start" | "stop" | "delete";
@@ -10,8 +19,7 @@ export type EditDraft = {
   cliPath: string;
   workingDir: string;
   avatarName: string;
-  nativeAgentEnabled: boolean;
-  defaultExecutionMode: ChatExecutionMode;
+  runtimeBackend: ChatExecutionMode;
   nativeAgent: NativeAgentConfig;
 };
 
@@ -52,17 +60,58 @@ export type BotConfigSnapshot = {
   cliPath: string;
   workingDir: string;
   avatarName: string;
-  supportedExecutionModes: ChatExecutionMode[];
-  defaultExecutionMode: ChatExecutionMode;
+  runtimeBackend: ChatExecutionMode;
   nativeAgent: NativeAgentConfig;
   agents: AgentSummary[];
 };
 
 export const DEFAULT_NATIVE_AGENT_CONFIG: NativeAgentConfig = {
-  command: "opencode",
-  hostname: "127.0.0.1",
-  port: 0,
+  provider: "",
+  model: "",
+  opencodeAgent: "",
 };
+
+type ExecutionModeSource =
+  | Pick<BotSummary, "supportedExecutionModes" | "defaultExecutionMode" | "executionMode">
+  | Pick<BotOverview, "supportedExecutionModes" | "defaultExecutionMode" | "executionMode">;
+
+export function getSupportedExecutionModes(source?: ExecutionModeSource | null): ChatExecutionMode[] {
+  return source?.supportedExecutionModes?.length ? source.supportedExecutionModes : ["cli"];
+}
+
+export function getRuntimeBackend(source?: ExecutionModeSource | null): ChatExecutionMode {
+  const supported = getSupportedExecutionModes(source);
+  const preferred = source?.executionMode ?? source?.defaultExecutionMode;
+  if (preferred && supported.includes(preferred)) {
+    return preferred;
+  }
+  if (supported.includes("cli")) {
+    return "cli";
+  }
+  return supported[0] || "cli";
+}
+
+export function buildExecutionConfig(runtimeBackend: ChatExecutionMode) {
+  return runtimeBackend === "native_agent"
+    ? { supportedExecutionModes: ["native_agent"] as ChatExecutionMode[], defaultExecutionMode: "native_agent" as const }
+    : { supportedExecutionModes: ["cli"] as ChatExecutionMode[], defaultExecutionMode: "cli" as const };
+}
+
+export function isNativeAgentGloballyEnabled(snapshot?: EnvConfigSnapshot | null) {
+  const item = snapshot?.items?.find((entry) => entry.key === "NATIVE_AGENT_ENABLED");
+  if (!item) {
+    return null;
+  }
+  if (typeof item.value === "boolean") {
+    return item.value;
+  }
+  return String(item.value || "").trim().toLowerCase() === "true";
+}
+
+export function isPureNativeBot(source?: ExecutionModeSource | null) {
+  const supported = getSupportedExecutionModes(source);
+  return supported.length === 1 && supported[0] === "native_agent";
+}
 
 export function nativeAgentConfigFromBot(bot: BotSummary): NativeAgentConfig {
   return {
@@ -72,7 +121,7 @@ export function nativeAgentConfigFromBot(bot: BotSummary): NativeAgentConfig {
 }
 
 export function supportsNativeAgent(bot: BotSummary) {
-  return (bot.supportedExecutionModes || ["cli"]).includes("native_agent");
+  return getSupportedExecutionModes(bot).includes("native_agent");
 }
 
 const MANAGER_STATUS_PRIORITY: Record<BotStatus, number> = {
@@ -136,6 +185,10 @@ export function botMatchesManagerQuery(bot: BotSummary, query: string) {
     bot.workingDir,
     bot.cliType,
     bot.botMode || "",
+    getRuntimeBackend(bot),
+    bot.nativeAgent?.provider || "",
+    bot.nativeAgent?.model || "",
+    bot.nativeAgent?.opencodeAgent || "",
     ...(bot.busyAgentNames || []),
   ].join(" ").toLowerCase();
   return haystack.includes(normalized);
@@ -171,11 +224,6 @@ export function countBotManagerStats(items: BotSummary[]) {
 }
 
 export function draftFromBot(bot: BotSummary): EditDraft {
-  const nativeAgentEnabled = supportsNativeAgent(bot);
-  const supported = bot.supportedExecutionModes || ["cli"];
-  const defaultExecutionMode = bot.defaultExecutionMode && supported.includes(bot.defaultExecutionMode)
-    ? bot.defaultExecutionMode
-    : "cli";
   return {
     alias: bot.alias,
     botMode: bot.botMode === "assistant" ? "assistant" : "cli",
@@ -183,8 +231,7 @@ export function draftFromBot(bot: BotSummary): EditDraft {
     cliPath: bot.cliPath || bot.cliType,
     workingDir: bot.workingDir,
     avatarName: bot.avatarName || "",
-    nativeAgentEnabled,
-    defaultExecutionMode: nativeAgentEnabled ? defaultExecutionMode : "cli",
+    runtimeBackend: getRuntimeBackend(bot),
     nativeAgent: nativeAgentConfigFromBot(bot),
   };
 }
@@ -204,7 +251,7 @@ export function detectBotIssues(bot: BotSummary, allBots: BotSummary[]): BotIssu
   if (!bot.workingDir.trim()) {
     issues.push({ code: "missing_workdir", severity: "warning", label: "缺少工作目录" });
   }
-  if (bot.cliPath !== undefined && !bot.cliPath.trim()) {
+  if (getRuntimeBackend(bot) === "cli" && bot.cliPath !== undefined && !bot.cliPath.trim()) {
     issues.push({ code: "missing_cli_path", severity: "warning", label: "CLI 路径为空" });
   }
 
@@ -307,8 +354,7 @@ export function getBotConfigSnapshot(bot: BotSummary): BotConfigSnapshot {
     cliPath: bot.cliPath || bot.cliType,
     workingDir: bot.workingDir,
     avatarName: bot.avatarName || "",
-    supportedExecutionModes: bot.supportedExecutionModes || ["cli"],
-    defaultExecutionMode: bot.defaultExecutionMode || "cli",
+    runtimeBackend: getRuntimeBackend(bot),
     nativeAgent: nativeAgentConfigFromBot(bot),
     agents: bot.agents || [],
   };

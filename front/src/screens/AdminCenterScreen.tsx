@@ -38,6 +38,7 @@ type AdminCenterTab = "users" | "invites" | "cli-errors" | "updates" | "announce
 const ENV_CATEGORY_LABELS: Record<string, string> = {
   basic: "基础",
   web: "Web",
+  native_agent: "原生 Agent",
   tunnel: "Tunnel",
   updates: "更新",
   update: "更新",
@@ -51,6 +52,7 @@ const ENV_CATEGORY_LABELS: Record<string, string> = {
 const ENV_CATEGORY_ORDER = [
   "basic",
   "web",
+  "native_agent",
   "tunnel",
   "updates",
   "update",

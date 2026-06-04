@@ -9,7 +9,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import bot.config as config
+from bot.cli import resolve_cli_executable
 from bot.native_agent.client import NativeAgentClient, NativeAgentServerRef
+from bot.platform.executables import build_executable_invocation
 
 
 @dataclass
@@ -18,7 +21,6 @@ class NativeAgentServerHandle:
     base_url: str
     password: str
     username: str
-    cwd: str
     process: asyncio.subprocess.Process | None = None
 
     def client(self) -> NativeAgentClient:
@@ -27,47 +29,77 @@ class NativeAgentServerHandle:
 
 class NativeAgentServerManager:
     def __init__(self) -> None:
-        self._servers: dict[str, NativeAgentServerHandle] = {}
+        self._handle: NativeAgentServerHandle | None = None
         self._lock = asyncio.Lock()
 
-    def _config_hash(self, config: dict[str, Any]) -> str:
+    def _config_hash(self, server_config: dict[str, Any]) -> str:
         material = "|".join(
             [
-                str(config.get("command") or "opencode"),
-                str(config.get("hostname") or "127.0.0.1"),
-                str(config.get("port") or 0),
+                str(server_config.get("command") or "opencode"),
+                str(server_config.get("hostname") or "127.0.0.1"),
+                str(server_config.get("port") or 0),
+                str(server_config.get("password") or ""),
             ]
         )
         return hashlib.sha256(material.encode("utf-8")).hexdigest()[:12]
 
-    def _server_key(self, *, bot_id: int, cwd: str, config: dict[str, Any]) -> str:
-        real_cwd = str(Path(cwd).expanduser().resolve())
-        return f"{bot_id}:{real_cwd}:{self._config_hash(config)}"
+    def _server_key(self, server_config: dict[str, Any]) -> str:
+        return f"global:{self._config_hash(server_config)}"
 
-    def _pick_port(self) -> int:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.bind(("127.0.0.1", 0))
-            return int(sock.getsockname()[1])
+    def _current_config(self) -> dict[str, Any]:
+        command = str(config.NATIVE_AGENT_COMMAND or config.NATIVE_AGENT_PATH or "opencode").strip() or "opencode"
+        hostname = str(config.NATIVE_AGENT_HOST or "127.0.0.1").strip() or "127.0.0.1"
+        try:
+            configured_port = min(65535, max(0, int(config.NATIVE_AGENT_PORT or 0)))
+        except (TypeError, ValueError):
+            configured_port = 0
+        password = str(config.NATIVE_AGENT_SERVER_PASSWORD or "").strip()
+        return {
+            "command": command,
+            "hostname": hostname,
+            "port": configured_port,
+            "password": password,
+        }
 
-    async def get_server(self, *, bot_id: int, cwd: str, config: dict[str, Any]) -> NativeAgentServerHandle:
-        key = self._server_key(bot_id=bot_id, cwd=cwd, config=config)
+    def _pick_port(self, hostname: str) -> int:
+        bind_host = str(hostname or "127.0.0.1").strip() or "127.0.0.1"
+        bind_host = bind_host.strip("[]")
+        family = socket.AF_INET6 if ":" in bind_host and bind_host != "0.0.0.0" else socket.AF_INET
+        try:
+            with socket.socket(family, socket.SOCK_STREAM) as sock:
+                sock.bind((bind_host, 0))
+                return int(sock.getsockname()[1])
+        except OSError:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.bind(("127.0.0.1", 0))
+                return int(sock.getsockname()[1])
+
+    async def ensure_started(self) -> NativeAgentServerHandle:
+        if not config.NATIVE_AGENT_ENABLED:
+            raise RuntimeError("原生 agent 服务未启用")
+        server_config = self._current_config()
+        key = self._server_key(server_config)
         async with self._lock:
-            existing = self._servers.get(key)
-            if existing is not None and await self._is_healthy(existing):
+            existing = self._handle
+            if existing is not None and existing.key == key and await self._is_healthy(existing):
                 return existing
             if existing is not None:
                 await self._stop_handle(existing)
-                self._servers.pop(key, None)
-            handle = await self._start_server(key=key, cwd=cwd, config=config)
-            self._servers[key] = handle
+                self._handle = None
+            handle = await self._start_server(key=key, server_config=server_config)
+            self._handle = handle
             return handle
 
-    async def get_existing(self, key: str | None) -> NativeAgentServerHandle | None:
-        normalized = str(key or "").strip()
-        if not normalized:
-            return None
+    async def get_existing(self) -> NativeAgentServerHandle | None:
         async with self._lock:
-            return self._servers.get(normalized)
+            existing = self._handle
+            if existing is None:
+                return None
+            if await self._is_healthy(existing):
+                return existing
+            await self._stop_handle(existing)
+            self._handle = None
+            return None
 
     async def _is_healthy(self, handle: NativeAgentServerHandle) -> bool:
         process = handle.process
@@ -79,34 +111,46 @@ class NativeAgentServerManager:
         except Exception:
             return False
 
-    async def _start_server(self, *, key: str, cwd: str, config: dict[str, Any]) -> NativeAgentServerHandle:
-        command = str(config.get("command") or "opencode").strip() or "opencode"
-        hostname = str(config.get("hostname") or "127.0.0.1").strip() or "127.0.0.1"
-        configured_port = int(config.get("port") or 0)
-        port = configured_port if configured_port > 0 else self._pick_port()
-        password = str(config.get("server_password") or "").strip() or secrets.token_urlsafe(24)
+    def _resolve_command(self, command: str) -> list[str]:
+        resolved = resolve_cli_executable(command, config.WORKING_DIR)
+        if resolved:
+            return build_executable_invocation(resolved)
+        return [command]
+
+    def _format_base_url(self, hostname: str, port: int) -> str:
+        normalized = str(hostname or "127.0.0.1").strip() or "127.0.0.1"
+        if ":" in normalized and not normalized.startswith("["):
+            normalized = f"[{normalized}]"
+        return f"http://{normalized}:{port}"
+
+    async def _start_server(self, *, key: str, server_config: dict[str, Any]) -> NativeAgentServerHandle:
+        command = str(server_config.get("command") or "opencode").strip() or "opencode"
+        hostname = str(server_config.get("hostname") or "127.0.0.1").strip() or "127.0.0.1"
+        configured_port = int(server_config.get("port") or 0)
+        port = configured_port if configured_port > 0 else self._pick_port(hostname)
+        password = str(server_config.get("password") or "").strip() or secrets.token_urlsafe(24)
         username = "opencode"
         env = os.environ.copy()
         env["OPENCODE_SERVER_USERNAME"] = username
         env["OPENCODE_SERVER_PASSWORD"] = password
+        invocation = self._resolve_command(command)
         process = await asyncio.create_subprocess_exec(
-            command,
+            *invocation,
             "serve",
             "--hostname",
             hostname,
             "--port",
             str(port),
-            cwd=cwd,
+            cwd=str(Path(config.WORKING_DIR).expanduser().resolve()),
             env=env,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
         handle = NativeAgentServerHandle(
             key=key,
-            base_url=f"http://{hostname}:{port}",
+            base_url=self._format_base_url(hostname, port),
             password=password,
             username=username,
-            cwd=str(Path(cwd).expanduser().resolve()),
             process=process,
         )
         last_error: Exception | None = None
@@ -135,9 +179,9 @@ class NativeAgentServerManager:
 
     async def stop_all(self) -> None:
         async with self._lock:
-            handles = list(self._servers.values())
-            self._servers.clear()
-        for handle in handles:
+            handle = self._handle
+            self._handle = None
+        if handle is not None:
             await self._stop_handle(handle)
 
 

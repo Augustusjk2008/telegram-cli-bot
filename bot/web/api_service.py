@@ -122,7 +122,7 @@ from bot.cli import (
 )
 from bot.manager import MultiBotManager
 from bot.messages import msg
-from bot.models import AgentProfile, BotProfile, EXECUTION_MODE_CLI, UserSession
+from bot.models import AgentProfile, BotProfile, EXECUTION_MODE_CLI, UserSession, normalize_native_agent_config
 from bot.native_agent import (
     NATIVE_AGENT_PROVIDER,
     get_native_agent_service,
@@ -570,11 +570,9 @@ def _build_session_ids(session: UserSession) -> dict[str, Any]:
 def _clear_native_agent_session_locked(session: UserSession) -> bool:
     changed = bool(
         session.native_agent_session_id
-        or session.native_agent_server_key
         or session.native_agent_run_id
     )
     session.native_agent_session_id = None
-    session.native_agent_server_key = None
     session.native_agent_run_id = None
     return changed
 
@@ -738,11 +736,7 @@ def build_bot_summary(
         "cli_path": profile.cli_path,
         "supported_execution_modes": list(profile.supported_execution_modes),
         "default_execution_mode": profile.default_execution_mode,
-        "native_agent": {
-            key: value
-            for key, value in dict(profile.native_agent or {}).items()
-            if key != "server_password"
-        },
+        "native_agent": normalize_native_agent_config(profile.native_agent),
         "working_dir": working_dir,
         "avatar_name": profile.avatar_name or "",
         "prompt_presets": [dict(item) for item in profile.prompt_presets],

@@ -91,7 +91,6 @@ from .env_service import EnvConfigService, EnvValidationError
 from .exposure_service import WebExposureService
 from .fixed_forward_service import FixedForwardService
 from .lan_chat_service import LanChatService
-from bot.native_agent.server_manager import SERVER_MANAGER as NATIVE_AGENT_SERVER_MANAGER
 from .notification_service import ChatNotificationService
 from .os_open_service import DesktopOpenError, open_directory_in_desktop
 from .pushplus_client import PushPlusClient
@@ -4806,7 +4805,6 @@ class WebApiServer:
         plugin_service = getattr(self.manager, "plugin_service", None)
         if plugin_service is not None:
             await plugin_service.shutdown()
-        await NATIVE_AGENT_SERVER_MANAGER.stop_all()
         await self.lan_chat_service.close()
         if preserve_tunnel:
             self._tunnel_service.preserve_for_restart()

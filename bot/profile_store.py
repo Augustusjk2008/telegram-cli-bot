@@ -13,7 +13,7 @@ from bot.cli import validate_cli_type
 from bot.cli_params import CliParamsConfig
 from bot.cluster.config import normalize_bot_cluster_config
 from bot.config import CLI_PATH, CLI_TYPE, RESERVED_ALIASES, WORKING_DIR
-from bot.models import AgentProfile, BotProfile, normalize_prompt_presets
+from bot.models import AgentProfile, BotProfile, normalize_execution_mode_config, normalize_prompt_presets
 
 logger = logging.getLogger(__name__)
 
@@ -170,19 +170,14 @@ def apply_persisted_main_profile(main_profile: BotProfile, app_settings_file: Pa
     if "prompt_presets" in profile_data:
         main_profile.prompt_presets = normalize_prompt_presets(profile_data.get("prompt_presets"))
 
-    if any(key in profile_data for key in ("supported_execution_modes", "supportedExecutionModes")):
-        from bot.models import normalize_execution_modes
-
-        main_profile.supported_execution_modes = normalize_execution_modes(
-            profile_data.get("supported_execution_modes", profile_data.get("supportedExecutionModes"))
+    if any(key in profile_data for key in ("supported_execution_modes", "supportedExecutionModes", "default_execution_mode", "defaultExecutionMode")):
+        supported_execution_modes, default_execution_mode = normalize_execution_mode_config(
+            profile_data.get("supported_execution_modes", profile_data.get("supportedExecutionModes")),
+            profile_data.get("default_execution_mode", profile_data.get("defaultExecutionMode")),
+            bot_mode=main_profile.bot_mode,
         )
-
-    if any(key in profile_data for key in ("default_execution_mode", "defaultExecutionMode")):
-        from bot.models import normalize_execution_mode
-
-        main_profile.default_execution_mode = normalize_execution_mode(
-            profile_data.get("default_execution_mode", profile_data.get("defaultExecutionMode"))
-        )
+        main_profile.supported_execution_modes = supported_execution_modes
+        main_profile.default_execution_mode = default_execution_mode
 
     if any(key in profile_data for key in ("native_agent", "nativeAgent")):
         from bot.models import normalize_native_agent_config

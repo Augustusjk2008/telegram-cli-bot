@@ -29,6 +29,7 @@ import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
   BotClusterConfig,
   BotSummary,
+  ChatExecutionMode,
   CliType,
   CliParamsPayload,
   ClusterStatus,
@@ -37,15 +38,18 @@ import type {
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import {
+  buildExecutionConfig,
   buildBulkActionPlan,
   countBotManagerStats,
   DEFAULT_NATIVE_AGENT_CONFIG,
   detectBotIssues,
   draftFromBot,
+  getRuntimeBackend,
   getBotManagerStatus,
   getVisibleManagedBots,
   isBotOffline,
   isMainBot,
+  isNativeAgentGloballyEnabled,
   type BulkAction,
   type BulkActionResult,
   type EditDraft,
@@ -99,13 +103,13 @@ function managerPillStatus(bot: BotSummary) {
 }
 
 function normalizeCreateDraft(draft: CreateDraft): CreateDraft {
+  const executionConfig = buildExecutionConfig(draft.runtimeBackend);
   const nativeAgent = {
     ...DEFAULT_NATIVE_AGENT_CONFIG,
     ...(draft.nativeAgent || {}),
-    command: (draft.nativeAgent?.command || DEFAULT_NATIVE_AGENT_CONFIG.command).trim(),
-    hostname: (draft.nativeAgent?.hostname || DEFAULT_NATIVE_AGENT_CONFIG.hostname).trim(),
-    port: Math.min(65535, Math.max(0, Number(draft.nativeAgent?.port || 0) || 0)),
-    ...(draft.nativeAgent?.serverPassword !== undefined ? { serverPassword: draft.nativeAgent.serverPassword.trim() } : {}),
+    provider: draft.nativeAgent?.provider?.trim() || "",
+    model: draft.nativeAgent?.model?.trim() || "",
+    opencodeAgent: draft.nativeAgent?.opencodeAgent?.trim() || "",
   };
   return {
     alias: draft.alias.trim(),
@@ -114,10 +118,9 @@ function normalizeCreateDraft(draft: CreateDraft): CreateDraft {
     cliPath: draft.cliPath.trim(),
     workingDir: draft.workingDir.trim(),
     avatarName: draft.avatarName.trim(),
-    supportedExecutionModes: draft.supportedExecutionModes?.includes("native_agent") ? ["cli", "native_agent"] : ["cli"],
-    defaultExecutionMode: draft.defaultExecutionMode === "native_agent" && draft.supportedExecutionModes?.includes("native_agent")
-      ? "native_agent"
-      : "cli",
+    runtimeBackend: draft.runtimeBackend,
+    supportedExecutionModes: executionConfig.supportedExecutionModes,
+    defaultExecutionMode: executionConfig.defaultExecutionMode,
     nativeAgent,
   };
 }
@@ -130,15 +133,13 @@ function normalizeEditDraft(draft: EditDraft): EditDraft {
     cliPath: draft.cliPath.trim(),
     workingDir: draft.workingDir.trim(),
     avatarName: draft.avatarName.trim(),
-    nativeAgentEnabled: draft.nativeAgentEnabled,
-    defaultExecutionMode: draft.nativeAgentEnabled && draft.defaultExecutionMode === "native_agent" ? "native_agent" : "cli",
+    runtimeBackend: draft.runtimeBackend,
     nativeAgent: {
       ...DEFAULT_NATIVE_AGENT_CONFIG,
       ...draft.nativeAgent,
-      command: draft.nativeAgent.command.trim(),
-      hostname: draft.nativeAgent.hostname.trim(),
-      port: Math.min(65535, Math.max(0, Number(draft.nativeAgent.port || 0) || 0)),
-      ...(draft.nativeAgent.serverPassword !== undefined ? { serverPassword: draft.nativeAgent.serverPassword.trim() } : {}),
+      provider: draft.nativeAgent.provider.trim(),
+      model: draft.nativeAgent.model.trim(),
+      opencodeAgent: draft.nativeAgent.opencodeAgent.trim(),
     },
   };
 }
@@ -164,6 +165,10 @@ function createDraftEquals(left: CreateDraft, right: CreateDraft) {
 
 function cliPathPlaceholder(cliType: CliType) {
   return defaultCliPathForType(cliType);
+}
+
+function runtimeBackendLabel(runtimeBackend: ChatExecutionMode) {
+  return runtimeBackend === "native_agent" ? "原生 agent" : "CLI";
 }
 
 function issueClassName(severity: "info" | "warning") {
@@ -240,12 +245,14 @@ function CreatePanel({
   manager,
   canManage,
   canCreateWorkdirDirectory,
+  nativeAgentFeatureEnabled,
   onCreated,
   onDirtyChange,
 }: {
   manager: ReturnType<typeof useBotManager>;
   canManage: boolean;
   canCreateWorkdirDirectory: boolean;
+  nativeAgentFeatureEnabled: boolean | null;
   onCreated: (alias: string) => void;
   onDirtyChange: (dirty: boolean) => void;
 }) {
@@ -272,6 +279,17 @@ function CreatePanel({
     onDirtyChange(dirty);
   }, [dirty, onDirtyChange]);
 
+  useEffect(() => {
+    if (nativeAgentFeatureEnabled === false && draft.runtimeBackend === "native_agent") {
+      setDraft((prev) => ({
+        ...prev,
+        runtimeBackend: "cli",
+        supportedExecutionModes: ["cli"],
+        defaultExecutionMode: "cli",
+      }));
+    }
+  }, [draft.runtimeBackend, nativeAgentFeatureEnabled]);
+
   async function submit() {
     const created = await manager.createBot(draft);
     if (created) {
@@ -279,6 +297,8 @@ function CreatePanel({
       onCreated(created.alias);
     }
   }
+
+  const nativeAgentOptionVisible = nativeAgentFeatureEnabled !== false || draft.runtimeBackend === "native_agent";
 
   return (
     <div className="space-y-4">
@@ -317,8 +337,6 @@ function CreatePanel({
               setDraft((prev) => ({
                 ...prev,
                 botMode,
-                supportedExecutionModes: botMode === "cli" ? prev.supportedExecutionModes : ["cli"],
-                defaultExecutionMode: botMode === "cli" ? prev.defaultExecutionMode : "cli",
               }));
             }}
             className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm"
@@ -328,6 +346,30 @@ function CreatePanel({
           </select>
         </label>
         <label className="space-y-1 text-sm">
+          <span className="text-[var(--muted)]">运行后端</span>
+          <select
+            aria-label="运行后端"
+            value={draft.runtimeBackend}
+            onChange={(event) => {
+              const runtimeBackend = event.target.value as CreateDraft["runtimeBackend"];
+              setDraft((prev) => ({
+                ...prev,
+                runtimeBackend,
+                supportedExecutionModes: [runtimeBackend],
+                defaultExecutionMode: runtimeBackend,
+              }));
+            }}
+            className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm"
+          >
+            <option value="cli">CLI</option>
+            {nativeAgentOptionVisible ? <option value="native_agent">原生 agent</option> : null}
+          </select>
+          {nativeAgentFeatureEnabled === false ? (
+            <p className="text-xs text-[var(--muted)]">原生 agent 全局未启用</p>
+          ) : null}
+        </label>
+        {draft.runtimeBackend === "cli" ? (
+          <label className="space-y-1 text-sm">
           <span className="text-[var(--muted)]">CLI 类型</span>
           <select
             aria-label="新智能体 CLI 类型"
@@ -342,8 +384,10 @@ function CreatePanel({
             <option value="claude">claude</option>
             <option value="kimi">kimi</option>
           </select>
-        </label>
-        <label className="space-y-1 text-sm">
+          </label>
+        ) : null}
+        {draft.runtimeBackend === "cli" ? (
+          <label className="space-y-1 text-sm">
           <span className="text-[var(--muted)]">CLI 路径</span>
           <input
             aria-label="新智能体 CLI 路径"
@@ -352,32 +396,25 @@ function CreatePanel({
             className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm"
             placeholder={cliPathPlaceholder(draft.cliType)}
           />
-        </label>
+          </label>
+        ) : null}
       </div>
-      <NativeAgentConfigFields
-        enabled={draft.botMode === "cli" && Boolean(draft.supportedExecutionModes?.includes("native_agent"))}
-        defaultMode={draft.defaultExecutionMode || "cli"}
-        command={draft.nativeAgent?.command || DEFAULT_NATIVE_AGENT_CONFIG.command}
-        hostname={draft.nativeAgent?.hostname || DEFAULT_NATIVE_AGENT_CONFIG.hostname}
-        port={draft.nativeAgent?.port || 0}
-        serverPassword={draft.nativeAgent?.serverPassword}
-        disabled={!canManage || draft.botMode !== "cli" || manager.savingAction !== ""}
-        onEnabledChange={(enabled) => setDraft((prev) => ({
-          ...prev,
-          supportedExecutionModes: enabled ? ["cli", "native_agent"] : ["cli"],
-          defaultExecutionMode: enabled ? prev.defaultExecutionMode || "cli" : "cli",
-          nativeAgent: prev.nativeAgent || { ...DEFAULT_NATIVE_AGENT_CONFIG },
-        }))}
-        onDefaultModeChange={(defaultExecutionMode) => setDraft((prev) => ({ ...prev, defaultExecutionMode }))}
-        onNativeAgentChange={(patch) => setDraft((prev) => ({
-          ...prev,
-          nativeAgent: {
-            ...DEFAULT_NATIVE_AGENT_CONFIG,
-            ...(prev.nativeAgent || {}),
-            ...patch,
-          },
-        }))}
-      />
+      {draft.runtimeBackend === "native_agent" ? (
+        <NativeAgentConfigFields
+          provider={draft.nativeAgent?.provider || DEFAULT_NATIVE_AGENT_CONFIG.provider}
+          model={draft.nativeAgent?.model || DEFAULT_NATIVE_AGENT_CONFIG.model}
+          opencodeAgent={draft.nativeAgent?.opencodeAgent || DEFAULT_NATIVE_AGENT_CONFIG.opencodeAgent}
+          disabled={!canManage || manager.savingAction !== ""}
+          onNativeAgentChange={(patch) => setDraft((prev) => ({
+            ...prev,
+            nativeAgent: {
+              ...DEFAULT_NATIVE_AGENT_CONFIG,
+              ...(prev.nativeAgent || {}),
+              ...patch,
+            },
+          }))}
+        />
+      ) : null}
       <label className="block space-y-1 text-sm">
         <span className="text-[var(--muted)]">工作目录</span>
         <div className="flex gap-2">
@@ -433,6 +470,7 @@ function EditPanel({
   manager,
   canManage,
   canCreateWorkdirDirectory,
+  nativeAgentFeatureEnabled,
   onCancel,
   onSaved,
   onDirtyChange,
@@ -441,6 +479,7 @@ function EditPanel({
   manager: ReturnType<typeof useBotManager>;
   canManage: boolean;
   canCreateWorkdirDirectory: boolean;
+  nativeAgentFeatureEnabled: boolean | null;
   onCancel: () => void;
   onSaved: (alias: string) => void;
   onDirtyChange: (dirty: boolean) => void;
@@ -455,6 +494,7 @@ function EditPanel({
   const [clusterError, setClusterError] = useState("");
   const dirty = !draftEquals(draft, draftFromBot(bot));
   const directoryBrowserAlias = manager.bots.find((item) => isMainBot(item))?.alias || manager.bots[0]?.alias || "main";
+  const nativeAgentOptionVisible = nativeAgentFeatureEnabled !== false || draft.runtimeBackend === "native_agent";
 
   useEffect(() => {
     setDraft(draftFromBot(bot));
@@ -465,6 +505,15 @@ function EditPanel({
   useEffect(() => {
     onDirtyChange(dirty);
   }, [dirty, onDirtyChange]);
+
+  useEffect(() => {
+    if (nativeAgentFeatureEnabled === false && draft.runtimeBackend !== "native_agent") {
+      return;
+    }
+    if (nativeAgentFeatureEnabled === false && draft.runtimeBackend === "native_agent" && getRuntimeBackend(bot) !== "native_agent") {
+      setDraft((prev) => ({ ...prev, runtimeBackend: "cli" }));
+    }
+  }, [bot, draft.runtimeBackend, nativeAgentFeatureEnabled]);
 
   useEffect(() => {
     if ((bot.botMode || "cli") !== "cli") {
@@ -582,6 +631,23 @@ function EditPanel({
           </select>
         </label>
         <label className="space-y-1 text-sm">
+          <span className="text-[var(--muted)]">运行后端</span>
+          <select
+            aria-label="运行后端"
+            value={draft.runtimeBackend}
+            disabled={!canManage}
+            onChange={(event) => setDraft((prev) => ({ ...prev, runtimeBackend: event.target.value as EditDraft["runtimeBackend"] }))}
+            className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm disabled:opacity-60"
+          >
+            <option value="cli">CLI</option>
+            {nativeAgentOptionVisible ? <option value="native_agent">原生 agent</option> : null}
+          </select>
+          {nativeAgentFeatureEnabled === false ? (
+            <p className="text-xs text-[var(--muted)]">原生 agent 全局未启用</p>
+          ) : null}
+        </label>
+        {draft.runtimeBackend === "cli" ? (
+          <label className="space-y-1 text-sm">
           <span className="text-[var(--muted)]">CLI 类型</span>
           <select
             aria-label="智能体 CLI 类型"
@@ -594,8 +660,10 @@ function EditPanel({
             <option value="claude">claude</option>
             <option value="kimi">kimi</option>
           </select>
-        </label>
-        <label className="space-y-1 text-sm">
+          </label>
+        ) : null}
+        {draft.runtimeBackend === "cli" ? (
+          <label className="space-y-1 text-sm">
           <span className="text-[var(--muted)]">CLI 路径</span>
           <input
             aria-label="智能体 CLI 路径"
@@ -605,30 +673,24 @@ function EditPanel({
             className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm disabled:opacity-60"
             placeholder={cliPathPlaceholder(draft.cliType)}
           />
-        </label>
+          </label>
+        ) : null}
       </div>
-      <NativeAgentConfigFields
-        enabled={draft.nativeAgentEnabled}
-        defaultMode={draft.defaultExecutionMode}
-        command={draft.nativeAgent.command}
-        hostname={draft.nativeAgent.hostname}
-        port={draft.nativeAgent.port}
-        serverPassword={draft.nativeAgent.serverPassword}
-        disabled={!canManage || draft.botMode !== "cli" || manager.savingAction !== ""}
-        onEnabledChange={(nativeAgentEnabled) => setDraft((prev) => ({
-          ...prev,
-          nativeAgentEnabled,
-          defaultExecutionMode: nativeAgentEnabled ? prev.defaultExecutionMode : "cli",
-        }))}
-        onDefaultModeChange={(defaultExecutionMode) => setDraft((prev) => ({ ...prev, defaultExecutionMode }))}
-        onNativeAgentChange={(patch) => setDraft((prev) => ({
-          ...prev,
-          nativeAgent: {
-            ...prev.nativeAgent,
-            ...patch,
-          },
-        }))}
-      />
+      {draft.runtimeBackend === "native_agent" ? (
+        <NativeAgentConfigFields
+          provider={draft.nativeAgent.provider}
+          model={draft.nativeAgent.model}
+          opencodeAgent={draft.nativeAgent.opencodeAgent}
+          disabled={!canManage || manager.savingAction !== ""}
+          onNativeAgentChange={(patch) => setDraft((prev) => ({
+            ...prev,
+            nativeAgent: {
+              ...prev.nativeAgent,
+              ...patch,
+            },
+          }))}
+        />
+      ) : null}
       <label className="block space-y-1 text-sm">
         <span className="text-[var(--muted)]">工作目录</span>
         <div className="flex gap-2">
@@ -684,7 +746,7 @@ function EditPanel({
         />
       ) : null}
 
-      {(bot.botMode || "cli") === "cli" ? (
+      {(bot.botMode || "cli") === "cli" && draft.runtimeBackend === "cli" ? (
         <div className="space-y-4 border-t border-[var(--border)] pt-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <label className="inline-flex items-center gap-2 text-sm font-medium">
@@ -744,12 +806,14 @@ function EditPanel({
         </div>
       ) : null}
 
-      <BotCliParamsPanel
-        botAlias={bot.alias}
-        client={manager.client}
-        canManage={canManage}
-        reloadKey={`${bot.alias}:${bot.cliType}:${bot.cliPath || ""}`}
-      />
+      {draft.runtimeBackend === "cli" ? (
+        <BotCliParamsPanel
+          botAlias={bot.alias}
+          client={manager.client}
+          canManage={canManage}
+          reloadKey={`${bot.alias}:${bot.cliType}:${bot.cliPath || ""}`}
+        />
+      ) : null}
     </div>
   );
 }
@@ -857,6 +921,7 @@ export function DesktopBotManagerScreen({
   canCreateWorkdirDirectory = true,
 }: Props) {
   const manager = useBotManager({ client, onBotsChange });
+  const [nativeAgentFeatureEnabled, setNativeAgentFeatureEnabled] = useState<boolean | null>(null);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<ManagerViewFilter>("all");
   const [mode, setMode] = useState<Mode>("inspect");
@@ -888,6 +953,22 @@ export function DesktopBotManagerScreen({
   );
 
   const stats = countBotManagerStats(manager.bots);
+
+  useEffect(() => {
+    let cancelled = false;
+    void client.getEnvConfig()
+      .then((snapshot) => {
+        if (cancelled) return;
+        setNativeAgentFeatureEnabled(isNativeAgentGloballyEnabled(snapshot));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setNativeAgentFeatureEnabled(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client]);
 
   useEffect(() => {
     if (!focusedBot && visibleBots[0]) {
@@ -1301,6 +1382,7 @@ export function DesktopBotManagerScreen({
                   const current = bot.alias === currentAlias;
                   const checked = selectedAliases.has(bot.alias);
                   const issues = detectBotIssues(bot, manager.bots);
+                  const runtimeBackend = getRuntimeBackend(bot);
 
                   return (
                     <tr
@@ -1360,7 +1442,9 @@ export function DesktopBotManagerScreen({
                       <td className={clsx(
                         "px-2 py-2 align-middle text-xs",
                         focused ? "text-[var(--text)]" : "text-[var(--muted)]",
-                      )}>{bot.botMode || "cli"} · {bot.cliType}</td>
+                      )}>
+                        {bot.botMode || "cli"} · {runtimeBackend === "cli" ? `CLI / ${bot.cliType}` : "原生 agent"}
+                      </td>
                       <td
                         className={clsx(
                           "truncate px-2 py-2 align-middle font-mono text-xs",
@@ -1422,6 +1506,7 @@ export function DesktopBotManagerScreen({
               manager={manager}
               canManage={canManage}
               canCreateWorkdirDirectory={canCreateWorkdirDirectory}
+              nativeAgentFeatureEnabled={nativeAgentFeatureEnabled}
               onCreated={(alias) => {
                 setDirty(false);
                 setFocusedAlias(alias);
@@ -1441,6 +1526,7 @@ export function DesktopBotManagerScreen({
                   manager={manager}
                   canManage={canManage}
                   canCreateWorkdirDirectory={canCreateWorkdirDirectory}
+                  nativeAgentFeatureEnabled={nativeAgentFeatureEnabled}
                   onCancel={() => {
                     setDirty(false);
                     setInspectorTab("overview");
@@ -1469,14 +1555,32 @@ export function DesktopBotManagerScreen({
                         {isMainBot(focusedBot) ? <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-xs text-[var(--muted)]">主</span> : null}
                         <StatusPill status={managerPillStatus(focusedBot)} />
                       </div>
-                      <div className="mt-1 text-sm text-[var(--muted)]">{focusedBot.botMode || "cli"} · {focusedBot.cliType}</div>
+                      <div className="mt-1 text-sm text-[var(--muted)]">
+                        {focusedBot.botMode || "cli"} · {runtimeBackendLabel(getRuntimeBackend(focusedBot))}
+                      </div>
                     </div>
                   </div>
 
                   <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-3">
-                    <div className="text-xs font-medium text-[var(--muted)]">CLI 路径</div>
-                    <div className="mt-1 break-all font-mono text-xs">{focusedBot.cliPath || focusedBot.cliType}</div>
+                    <div className="text-xs font-medium text-[var(--muted)]">运行后端</div>
+                    <div className="mt-1 text-sm">{runtimeBackendLabel(getRuntimeBackend(focusedBot))}</div>
                   </div>
+
+                  {getRuntimeBackend(focusedBot) === "cli" ? (
+                    <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-3">
+                      <div className="text-xs font-medium text-[var(--muted)]">CLI 路径</div>
+                      <div className="mt-1 break-all font-mono text-xs">{focusedBot.cliPath || focusedBot.cliType}</div>
+                    </div>
+                  ) : (
+                    <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-3">
+                      <div className="text-xs font-medium text-[var(--muted)]">原生 agent</div>
+                      <div className="mt-1 space-y-1 text-xs text-[var(--muted)]">
+                        <div>Provider: {focusedBot.nativeAgent?.provider || "未设置"}</div>
+                        <div>Model: {focusedBot.nativeAgent?.model || "未设置"}</div>
+                        <div>OpenCode agent: {focusedBot.nativeAgent?.opencodeAgent || "未设置"}</div>
+                      </div>
+                    </div>
+                  )}
 
                   <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-3">
                     <div className="text-xs font-medium text-[var(--muted)]">工作目录</div>

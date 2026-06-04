@@ -62,6 +62,19 @@ def test_env_service_exposes_fixed_forward_hub_fields(tmp_path: Path) -> None:
     assert items["TCB_HUB_FRPS_PORT"]["type"] == "number"
 
 
+def test_env_service_exposes_native_agent_global_fields(tmp_path: Path) -> None:
+    _write_env(tmp_path, "")
+
+    snapshot = EnvConfigService(tmp_path).snapshot()
+    items = {item["key"]: item for item in snapshot["items"]}
+
+    assert items["NATIVE_AGENT_ENABLED"]["type"] == "boolean"
+    assert items["NATIVE_AGENT_COMMAND"]["type"] == "path"
+    assert items["NATIVE_AGENT_HOST"]["type"] == "string"
+    assert items["NATIVE_AGENT_PORT"]["type"] == "number"
+    assert items["NATIVE_AGENT_SERVER_PASSWORD"]["type"] == "password"
+
+
 def test_env_service_rejects_fixed_forward_and_quick_tunnel(tmp_path: Path) -> None:
     _write_env(
         tmp_path,

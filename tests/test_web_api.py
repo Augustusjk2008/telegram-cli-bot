@@ -804,21 +804,21 @@ async def test_bot_overview_route(web_manager: MultiBotManager, monkeypatch: pyt
 
 def test_build_bot_summary_returns_native_agent_config_without_password(web_manager: MultiBotManager):
     web_manager.main_profile.default_execution_mode = "native_agent"
+    web_manager.main_profile.supported_execution_modes = ["native_agent"]
     web_manager.main_profile.native_agent = {
-        "command": "opencode",
-        "hostname": "127.0.0.1",
-        "port": 4096,
-        "server_password": "secret",
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-5",
+        "opencode_agent": "reviewer",
     }
 
     summary = build_bot_summary(web_manager, "main")
 
-    assert summary["supported_execution_modes"] == ["cli", "native_agent"]
+    assert summary["supported_execution_modes"] == ["native_agent"]
     assert summary["default_execution_mode"] == "native_agent"
     assert summary["native_agent"] == {
-        "command": "opencode",
-        "hostname": "127.0.0.1",
-        "port": 4096,
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-5",
+        "opencode_agent": "reviewer",
     }
 
 
@@ -834,13 +834,12 @@ async def test_admin_execution_route_updates_native_agent_config_and_hides_passw
             resp = await client.patch(
                 "/api/admin/bots/main/execution",
                 json={
-                    "supported_execution_modes": ["cli", "native_agent"],
+                    "supported_execution_modes": ["native_agent"],
                     "default_execution_mode": "native_agent",
                     "native_agent": {
-                        "command": "opencode",
-                        "hostname": "127.0.0.1",
-                        "port": 4096,
-                        "server_password": "secret",
+                        "provider": "anthropic",
+                        "model": "claude-sonnet-4-5",
+                        "opencode_agent": "reviewer",
                     },
                 },
             )
@@ -848,12 +847,17 @@ async def test_admin_execution_route_updates_native_agent_config_and_hides_passw
 
     assert resp.status == 200
     assert payload["data"]["bot"]["default_execution_mode"] == "native_agent"
+    assert payload["data"]["bot"]["supported_execution_modes"] == ["native_agent"]
     assert payload["data"]["bot"]["native_agent"] == {
-        "command": "opencode",
-        "hostname": "127.0.0.1",
-        "port": 4096,
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-5",
+        "opencode_agent": "reviewer",
     }
-    assert web_manager.main_profile.native_agent["server_password"] == "secret"
+    assert web_manager.main_profile.native_agent == {
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-5",
+        "opencode_agent": "reviewer",
+    }
 
 @pytest.mark.asyncio
 async def test_web_api_lists_plugins_and_resolves_vcd_handler(
@@ -3232,7 +3236,6 @@ async def test_kill_user_process_aborts_native_agent_run(web_manager: MultiBotMa
         session.is_processing = True
         session.process = None
         session.native_agent_session_id = "native-1"
-        session.native_agent_server_key = "server-1"
         session.native_agent_run_id = "run-1"
 
     with patch("bot.web.api_service.get_native_agent_service") as service_factory, \
@@ -3254,7 +3257,6 @@ async def test_reply_native_agent_permission_calls_native_service(web_manager: M
     session = get_session_for_alias(web_manager, "main", 1001)
     with session._lock:
         session.native_agent_session_id = "native-1"
-        session.native_agent_server_key = "server-1"
 
     with patch("bot.web.api_service.get_native_agent_service") as service_factory:
         service = service_factory.return_value

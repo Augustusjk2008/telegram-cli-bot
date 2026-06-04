@@ -397,16 +397,15 @@ async def run_all_bots():
         allow_port_fallback=_allow_runtime_port_fallback(),
     )
     web_server = WebApiServer(manager, host=runtime_bind.host, port=runtime_bind.actual_port)
-    await web_server.start()
-    await manager.start_background_services(
-        result_executor=lambda request: execute_assistant_run_request(manager, request),
-        stream_executor=lambda request: stream_assistant_run_request(manager, request),
-    )
-    logger.info("Web API 已附加到主进程")
-    _print_web_access_lines(runtime_bind)
-    await _open_local_browser(runtime_bind)
-
     try:
+        await web_server.start()
+        await manager.start_background_services(
+            result_executor=lambda request: execute_assistant_run_request(manager, request),
+            stream_executor=lambda request: stream_assistant_run_request(manager, request),
+        )
+        logger.info("Web API 已附加到主进程")
+        _print_web_access_lines(runtime_bind)
+        await _open_local_browser(runtime_bind)
         await config.RESTART_EVENT.wait()
     finally:
         await web_server.stop(preserve_tunnel=config.RESTART_REQUESTED)

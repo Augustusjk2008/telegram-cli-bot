@@ -12,11 +12,12 @@ from bot.models import (
     EXECUTION_MODE_CLI,
     EXECUTION_MODE_NATIVE_AGENT,
     UserSession,
+    build_native_agent_model_id,
     normalize_execution_mode as _normalize_execution_mode,
     normalize_native_agent_config,
 )
 from bot.native_agent.aggregator import NativeAgentAggregator
-from bot.native_agent.client import NativeAgentClient
+from bot.native_agent.client import NativeAgentClient, NativeAgentClientError
 from bot.native_agent.events import is_relevant_event, unwrap_event
 from bot.native_agent.server_manager import SERVER_MANAGER, NativeAgentServerHandle
 from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenceBuffer
@@ -31,9 +32,16 @@ def normalize_execution_mode(value: Any, profile: BotProfile | None = None) -> s
     if not mode:
         mode = EXECUTION_MODE_CLI
     if profile is not None:
-        supported = set(getattr(profile, "supported_execution_modes", []) or [EXECUTION_MODE_CLI])
+        supported_modes = list(getattr(profile, "supported_execution_modes", []) or [EXECUTION_MODE_CLI])
+        supported = set(supported_modes)
         if mode not in supported:
-            return EXECUTION_MODE_CLI
+            default_mode = _normalize_execution_mode(
+                getattr(profile, "default_execution_mode", ""),
+                default=supported_modes[0] if supported_modes else EXECUTION_MODE_CLI,
+            )
+            if default_mode in supported:
+                return default_mode
+            return supported_modes[0] if supported_modes else EXECUTION_MODE_CLI
     return mode
 
 
@@ -41,19 +49,38 @@ class NativeAgentService:
     def __init__(self) -> None:
         self._server_manager = SERVER_MANAGER
 
-    async def _server_for(self, profile: BotProfile, session: UserSession) -> NativeAgentServerHandle:
-        config = normalize_native_agent_config(getattr(profile, "native_agent", {}))
-        return await self._server_manager.get_server(
-            bot_id=session.bot_id,
-            cwd=session.working_dir,
-            config=config,
-        )
+    async def _server_for(self) -> NativeAgentServerHandle:
+        return await self._server_manager.ensure_started()
 
     async def _client_for_active_run(self, session: UserSession) -> NativeAgentClient | None:
-        with session._lock:
-            server_key = session.native_agent_server_key
-        handle = await self._server_manager.get_existing(server_key)
+        handle = await self._server_manager.get_existing()
         return handle.client() if handle is not None else None
+
+    def _prompt_options(self, profile: BotProfile) -> tuple[str, str]:
+        native_agent = normalize_native_agent_config(getattr(profile, "native_agent", {}))
+        return (
+            build_native_agent_model_id(native_agent),
+            str(native_agent.get("opencode_agent") or "").strip(),
+        )
+
+    async def _ensure_session_id(self, client: NativeAgentClient, session: UserSession) -> str:
+        with session._lock:
+            native_session_id = str(session.native_agent_session_id or "").strip()
+        if native_session_id:
+            try:
+                await client.get_session(native_session_id)
+            except NativeAgentClientError:
+                with session._lock:
+                    session.native_agent_session_id = None
+                session.persist()
+                native_session_id = ""
+        if not native_session_id:
+            created = await client.create_session(cwd=session.working_dir)
+            native_session_id = _extract_session_id(created)
+            with session._lock:
+                session.native_agent_session_id = native_session_id
+            session.persist()
+        return native_session_id
 
     async def abort(self, session: UserSession) -> bool:
         with session._lock:
@@ -118,17 +145,10 @@ class NativeAgentService:
         reader_task: asyncio.Task[None] | None = None
 
         try:
-            server = await self._server_for(profile, session)
+            server = await self._server_for()
             client = server.client()
-            with session._lock:
-                native_session_id = str(session.native_agent_session_id or "").strip()
-            if not native_session_id:
-                created = await client.create_session(cwd=session.working_dir)
-                native_session_id = _extract_session_id(created)
-            with session._lock:
-                session.native_agent_session_id = native_session_id
-                session.native_agent_server_key = server.key
-            session.persist()
+            native_session_id = await self._ensure_session_id(client, session)
+            model_id, agent_id = self._prompt_options(profile)
 
             turn_handle = history_service.start_turn(
                 profile=profile,
@@ -171,7 +191,13 @@ class NativeAgentService:
 
             reader_task = asyncio.create_task(read_events())
             await event_ready.wait()
-            await client.prompt_async(native_session_id, prompt_text, message_id=aggregator.user_message_id)
+            await client.prompt_async(
+                native_session_id,
+                prompt_text,
+                message_id=aggregator.user_message_id,
+                model=model_id or None,
+                agent=agent_id or None,
+            )
             while True:
                 queued_event = await event_queue.get()
                 if queued_event is None:

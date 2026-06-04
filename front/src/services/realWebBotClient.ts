@@ -1892,14 +1892,10 @@ function mapNativeAgentConfig(value: unknown): NativeAgentConfig | undefined {
     return undefined;
   }
   const raw = value as Record<string, unknown>;
-  const rawPort = raw.port;
-  const port = typeof rawPort === "number" ? rawPort : Number(rawPort || 0);
-  const serverPassword = raw.server_password ?? raw.serverPassword;
   return {
-    command: String(raw.command || raw.path || "opencode"),
-    hostname: String(raw.hostname || raw.host || "127.0.0.1"),
-    port: Number.isFinite(port) && port > 0 ? Math.min(65535, Math.floor(port)) : 0,
-    ...(typeof serverPassword === "string" && serverPassword ? { serverPassword } : {}),
+    provider: String(raw.provider || ""),
+    model: String(raw.model || ""),
+    opencodeAgent: String(raw.opencode_agent ?? raw.opencodeAgent ?? raw.agent ?? ""),
   };
 }
 
@@ -5662,10 +5658,9 @@ export class RealWebBotClient implements WebBotClient {
         supported_execution_modes: input.supportedExecutionModes,
         default_execution_mode: input.defaultExecutionMode,
         native_agent: {
-          command: input.nativeAgent.command,
-          hostname: input.nativeAgent.hostname,
-          port: input.nativeAgent.port,
-          ...(input.nativeAgent.serverPassword !== undefined ? { server_password: input.nativeAgent.serverPassword } : {}),
+          provider: input.nativeAgent.provider,
+          model: input.nativeAgent.model,
+          opencode_agent: input.nativeAgent.opencodeAgent,
         },
       }),
     });
@@ -6243,10 +6238,9 @@ export class RealWebBotClient implements WebBotClient {
         ...(input.defaultExecutionMode ? { default_execution_mode: input.defaultExecutionMode } : {}),
         ...(input.nativeAgent ? {
           native_agent: {
-            command: input.nativeAgent.command,
-            hostname: input.nativeAgent.hostname,
-            port: input.nativeAgent.port,
-            ...(input.nativeAgent.serverPassword !== undefined ? { server_password: input.nativeAgent.serverPassword } : {}),
+            provider: input.nativeAgent.provider,
+            model: input.nativeAgent.model,
+            opencode_agent: input.nativeAgent.opencodeAgent,
           },
         } : {}),
       }),

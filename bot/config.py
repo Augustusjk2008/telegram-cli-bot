@@ -150,6 +150,19 @@ for uid in _allowed_raw.split(","):
 CLI_TYPE = _get_project_config("CLI_TYPE", "codex").strip().lower()
 CLI_PATH = _get_project_config("CLI_PATH", "codex")
 NATIVE_AGENT_PATH = _get_project_config("NATIVE_AGENT_PATH", "opencode").strip() or "opencode"
+NATIVE_AGENT_ENABLED = _get_project_bool("NATIVE_AGENT_ENABLED", False)
+NATIVE_AGENT_COMMAND = (
+    _get_project_config("NATIVE_AGENT_COMMAND", "").strip()
+    or NATIVE_AGENT_PATH
+    or "opencode"
+)
+NATIVE_AGENT_HOST = _get_project_config("NATIVE_AGENT_HOST", "127.0.0.1").strip() or "127.0.0.1"
+NATIVE_AGENT_PORT = min(65535, max(0, _get_project_optional_int("NATIVE_AGENT_PORT", 0)))
+NATIVE_AGENT_SERVER_PASSWORD = (
+    _get_project_config("NATIVE_AGENT_SERVER_PASSWORD", "").strip()
+    or _get_project_config("NATIVE_AGENT_PASSWORD", "").strip()
+)
+NATIVE_AGENT_PASSWORD = NATIVE_AGENT_SERVER_PASSWORD
 CLI_MODEL_OPTIONS = normalize_cli_model_options(_split_csv_env(_get_project_config("CLI_MODEL_OPTIONS", "")))
 CLI_GLOBAL_EXTRA_ARGS = _parse_cli_global_extra_args(_get_project_config("CLI_GLOBAL_EXTRA_ARGS", "{}"))
 WORKING_DIR = os.path.abspath(os.path.expanduser(os.environ.get("WORKING_DIR", os.getcwd())))

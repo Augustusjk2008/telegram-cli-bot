@@ -18,17 +18,20 @@ from bot.assistant.runtime import AssistantRunRequest, AssistantRuntimeCoordinat
 from bot.cli import resolve_cli_executable, validate_cli_type
 from bot.cli_params import CliParamsConfig, coerce_param_value
 from bot.cluster.config import normalize_agent_cluster_config, normalize_bot_cluster_config
-from bot.config import BOT_ALIAS_RE, CLI_PATH, CLI_TYPE, RESERVED_ALIASES, WORKING_DIR, _DOTENV_VALUES
+from bot.config import BOT_ALIAS_RE, CLI_PATH, CLI_TYPE, NATIVE_AGENT_ENABLED, RESERVED_ALIASES, WORKING_DIR, _DOTENV_VALUES
 from bot.agents import normalize_agent_id, normalize_agent_name, normalize_agent_prompt, now_iso
 from bot.models import (
     AgentProfile,
     BotProfile,
+    EXECUTION_MODE_NATIVE_AGENT,
     GitCommitMessageCliConfig,
     normalize_execution_mode,
+    normalize_execution_mode_config,
     normalize_execution_modes,
     normalize_native_agent_config,
     normalize_prompt_presets,
 )
+from bot.native_agent.server_manager import SERVER_MANAGER as NATIVE_AGENT_SERVER_MANAGER
 from bot.plugins.service import PluginService
 from bot.platform.paths import truncate_path_for_display
 from bot.profile_store import (
@@ -418,6 +421,8 @@ class MultiBotManager:
     ) -> None:
         self._assistant_result_executor = result_executor
         self._assistant_stream_executor = stream_executor
+        if NATIVE_AGENT_ENABLED:
+            await NATIVE_AGENT_SERVER_MANAGER.ensure_started()
         await self._ensure_assistant_services()
 
     async def start_watchdog(self) -> None:
@@ -427,21 +432,24 @@ class MultiBotManager:
         self._watchdog_task = None
 
     async def stop_background_services(self) -> None:
-        assistant_alias = self.assistant_alias()
-        wait_for_watch_tasks = self.assistant_runtime is not None
-        if assistant_alias is not None:
-            terminate_bot_processes(assistant_alias)
-        if self.assistant_runtime is not None:
-            await self.assistant_runtime.stop()
-            self.assistant_runtime = None
-        if self.assistant_cron_service is not None:
-            stop = getattr(self.assistant_cron_service, "stop", None)
-            if callable(stop):
-                if isinstance(self.assistant_cron_service, AssistantCronService):
-                    await stop(cancel_watch_tasks=not wait_for_watch_tasks)
-                else:
-                    await stop()
-            self.assistant_cron_service = None
+        try:
+            assistant_alias = self.assistant_alias()
+            wait_for_watch_tasks = self.assistant_runtime is not None
+            if assistant_alias is not None:
+                terminate_bot_processes(assistant_alias)
+            if self.assistant_runtime is not None:
+                await self.assistant_runtime.stop()
+                self.assistant_runtime = None
+            if self.assistant_cron_service is not None:
+                stop = getattr(self.assistant_cron_service, "stop", None)
+                if callable(stop):
+                    if isinstance(self.assistant_cron_service, AssistantCronService):
+                        await stop(cancel_watch_tasks=not wait_for_watch_tasks)
+                    else:
+                        await stop()
+                self.assistant_cron_service = None
+        finally:
+            await NATIVE_AGENT_SERVER_MANAGER.stop_all()
 
     async def shutdown_all(self) -> None:
         await self.stop_background_services()
@@ -475,15 +483,21 @@ class MultiBotManager:
             raise ValueError("webcli 模式已弃用，请使用 'cli' 或 'assistant'")
         if resolved_bot_mode not in {"cli", "assistant"}:
             raise ValueError(f"bot_mode 必须是 'cli' 或 'assistant'，当前值: {resolved_bot_mode}")
-        resolved_supported_execution_modes = normalize_execution_modes(supported_execution_modes)
-        if resolved_bot_mode != "cli" and "native_agent" in resolved_supported_execution_modes:
-            raise ValueError("仅 CLI Bot 支持原生 agent")
-        resolved_default_execution_mode = normalize_execution_mode(
+        requested_supported_execution_modes = normalize_execution_modes(supported_execution_modes)
+        requested_default_execution_mode = normalize_execution_mode(
             default_execution_mode,
-            default=resolved_supported_execution_modes[0],
+            default=requested_supported_execution_modes[0],
         )
-        if resolved_default_execution_mode not in resolved_supported_execution_modes:
-            resolved_default_execution_mode = resolved_supported_execution_modes[0]
+        if resolved_bot_mode != "cli" and (
+            EXECUTION_MODE_NATIVE_AGENT in requested_supported_execution_modes
+            or requested_default_execution_mode == EXECUTION_MODE_NATIVE_AGENT
+        ):
+            raise ValueError("仅 CLI Bot 支持原生 agent")
+        resolved_supported_execution_modes, resolved_default_execution_mode = normalize_execution_mode_config(
+            requested_supported_execution_modes,
+            default_execution_mode,
+            bot_mode=resolved_bot_mode,
+        )
         resolved_native_agent = normalize_native_agent_config(native_agent)
 
         if resolved_bot_mode == "assistant":
@@ -495,7 +509,10 @@ class MultiBotManager:
 
         if not os.path.isdir(resolved_working_dir):
             raise ValueError(f"工作目录不存在: {resolved_working_dir}")
-        if resolve_cli_executable(resolved_cli_path, resolved_working_dir) is None:
+        if (
+            resolved_default_execution_mode != EXECUTION_MODE_NATIVE_AGENT
+            and resolve_cli_executable(resolved_cli_path, resolved_working_dir) is None
+        ):
             raise ValueError(
                 f"未找到 CLI 可执行文件: {resolved_cli_path} "
                 f"(请在设置页填写可执行名或完整路径，例如 Windows 可能需要 claude.cmd)"
@@ -622,28 +639,28 @@ class MultiBotManager:
         data: dict[str, Any],
     ) -> None:
         normalized_alias = str(alias or "").strip().lower()
-        supported = normalize_execution_modes(
+        requested_supported_execution_modes = normalize_execution_modes(
             data.get("supported_execution_modes", data.get("supportedExecutionModes"))
         )
-        default_mode = normalize_execution_mode(
+        requested_default_execution_mode = normalize_execution_mode(
             data.get("default_execution_mode", data.get("defaultExecutionMode")),
-            default=supported[0],
+            default=requested_supported_execution_modes[0],
         )
-        if default_mode not in supported:
-            default_mode = supported[0]
         raw_native_agent = data.get("native_agent", data.get("nativeAgent"))
 
         async with self._lock:
             profile = self._get_profile_for_update(normalized_alias)
-            if profile.bot_mode != "cli" and "native_agent" in supported:
-                raise ValueError("仅 CLI Bot 支持原生 agent")
-            native_agent = normalize_native_agent_config(raw_native_agent)
-            if isinstance(raw_native_agent, dict) and not any(
-                key in raw_native_agent for key in ("server_password", "serverPassword")
+            if profile.bot_mode != "cli" and (
+                EXECUTION_MODE_NATIVE_AGENT in requested_supported_execution_modes
+                or requested_default_execution_mode == EXECUTION_MODE_NATIVE_AGENT
             ):
-                native_agent["server_password"] = str(
-                    dict(profile.native_agent or {}).get("server_password") or ""
-                )
+                raise ValueError("仅 CLI Bot 支持原生 agent")
+            supported, default_mode = normalize_execution_mode_config(
+                requested_supported_execution_modes,
+                requested_default_execution_mode,
+                bot_mode=profile.bot_mode,
+            )
+            native_agent = normalize_native_agent_config(raw_native_agent)
             profile.supported_execution_modes = supported
             profile.default_execution_mode = default_mode
             profile.native_agent = native_agent

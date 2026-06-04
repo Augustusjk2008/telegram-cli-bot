@@ -606,25 +606,24 @@ describe("RealWebBotClient", () => {
         service_status: "online",
         activity_status: "idle",
         working_dir: "C:\\workspace\\demo",
-        supported_execution_modes: ["cli", "native_agent"],
+        supported_execution_modes: ["native_agent"],
         default_execution_mode: "native_agent",
         native_agent: {
-          command: "opencode",
-          hostname: "127.0.0.1",
-          port: 4096,
+          provider: "anthropic",
+          model: "claude-sonnet-4-5",
+          opencode_agent: "reviewer",
         },
       },
     }));
 
     const client = new RealWebBotClient();
     const bot = await client.updateBotExecutionConfig("main", {
-      supportedExecutionModes: ["cli", "native_agent"],
+      supportedExecutionModes: ["native_agent"],
       defaultExecutionMode: "native_agent",
       nativeAgent: {
-        command: "opencode",
-        hostname: "127.0.0.1",
-        port: 4096,
-        serverPassword: "secret",
+        provider: "anthropic",
+        model: "claude-sonnet-4-5",
+        opencodeAgent: "reviewer",
       },
     });
     const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
@@ -634,19 +633,18 @@ describe("RealWebBotClient", () => {
       expect.objectContaining({ method: "PATCH" }),
     );
     expect(body).toEqual({
-      supported_execution_modes: ["cli", "native_agent"],
+      supported_execution_modes: ["native_agent"],
       default_execution_mode: "native_agent",
       native_agent: {
-        command: "opencode",
-        hostname: "127.0.0.1",
-        port: 4096,
-        server_password: "secret",
+        provider: "anthropic",
+        model: "claude-sonnet-4-5",
+        opencode_agent: "reviewer",
       },
     });
     expect(bot.nativeAgent).toEqual({
-      command: "opencode",
-      hostname: "127.0.0.1",
-      port: 4096,
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      opencodeAgent: "reviewer",
     });
   });
 
@@ -732,6 +730,11 @@ describe("RealWebBotClient", () => {
               supported_execution_modes: ["cli", "native_agent"],
               default_execution_mode: "native_agent",
               execution_mode: "native_agent",
+              native_agent: {
+                provider: "anthropic",
+                model: "claude-sonnet-4-5",
+                opencode_agent: "reviewer",
+              },
               assistant_runtime: {
                 pending_count: 2,
                 queued_count: 1,
@@ -783,6 +786,11 @@ describe("RealWebBotClient", () => {
     expect(overview.supportedExecutionModes).toEqual(["cli", "native_agent"]);
     expect(overview.defaultExecutionMode).toBe("native_agent");
     expect(overview.executionMode).toBe("native_agent");
+    expect(overview.nativeAgent).toEqual({
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      opencodeAgent: "reviewer",
+    });
     expect(overview.runningReply).toEqual({
       previewText: "处理中预览",
       startedAt: "2026-04-09T10:40:00",

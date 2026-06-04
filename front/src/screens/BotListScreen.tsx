@@ -13,7 +13,7 @@ import {
   useBotManager,
   type CreateDraft,
 } from "./useBotManager";
-import { DEFAULT_NATIVE_AGENT_CONFIG, isBotOffline, isMainBot } from "./botManagerModel";
+import { DEFAULT_NATIVE_AGENT_CONFIG, isBotOffline, isMainBot, isNativeAgentGloballyEnabled } from "./botManagerModel";
 
 type Props = {
   client?: WebBotClient;
@@ -87,6 +87,7 @@ export function BotListScreen({
   const [showWorkdirPicker, setShowWorkdirPicker] = useState(false);
   const [pendingDeleteAlias, setPendingDeleteAlias] = useState("");
   const [deleteHistory, setDeleteHistory] = useState(false);
+  const [nativeAgentFeatureEnabled, setNativeAgentFeatureEnabled] = useState<boolean | null>(null);
   const {
     bots,
     avatarAssets,
@@ -117,6 +118,33 @@ export function BotListScreen({
       return { ...prev, cliPath: buildCreateDraft(prev.cliType, bots).cliPath };
     });
   }, [bots]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void client.getEnvConfig()
+      .then((snapshot) => {
+        if (cancelled) return;
+        setNativeAgentFeatureEnabled(isNativeAgentGloballyEnabled(snapshot));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setNativeAgentFeatureEnabled(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client]);
+
+  useEffect(() => {
+    if (nativeAgentFeatureEnabled === false && createDraft.runtimeBackend === "native_agent") {
+      setCreateDraft((prev) => ({
+        ...prev,
+        runtimeBackend: "cli",
+        supportedExecutionModes: ["cli"],
+        defaultExecutionMode: "cli",
+      }));
+    }
+  }, [createDraft.runtimeBackend, nativeAgentFeatureEnabled]);
 
   async function handleCreateBot() {
     const created = await createBot(createDraft);
@@ -153,6 +181,8 @@ export function BotListScreen({
       setDeleteHistory(false);
     }
   }
+
+  const nativeAgentOptionVisible = nativeAgentFeatureEnabled !== false || createDraft.runtimeBackend === "native_agent";
 
   return (
     <main className="flex-1 overflow-y-auto bg-[var(--bg)] p-4">
@@ -206,54 +236,75 @@ export function BotListScreen({
               </select>
             </label>
             <label className="space-y-1 text-sm">
-              <span className="text-[var(--muted)]">新智能体 CLI 类型</span>
+              <span className="text-[var(--muted)]">运行后端</span>
               <select
-                aria-label="新智能体 CLI 类型"
-                value={createDraft.cliType}
+                aria-label="运行后端"
+                value={createDraft.runtimeBackend}
                 onChange={(event) => {
-                  const cliType = event.target.value as CliType;
-                  setCreateDraft((prev) => ({ ...prev, cliType, cliPath: buildCreateDraft(cliType, bots).cliPath }));
+                  const runtimeBackend = event.target.value as CreateDraft["runtimeBackend"];
+                  setCreateDraft((prev) => ({
+                    ...prev,
+                    runtimeBackend,
+                    supportedExecutionModes: [runtimeBackend],
+                    defaultExecutionMode: runtimeBackend,
+                  }));
                 }}
                 className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2"
               >
-                <option value="codex">codex</option>
-                <option value="claude">claude</option>
-                <option value="kimi">kimi</option>
+                <option value="cli">CLI</option>
+                {nativeAgentOptionVisible ? <option value="native_agent">原生 agent</option> : null}
               </select>
+              {nativeAgentFeatureEnabled === false ? (
+                <p className="text-xs text-[var(--muted)]">原生 agent 全局未启用</p>
+              ) : null}
             </label>
           </div>
-          <input
-            aria-label="新智能体 CLI 路径"
-            type="text"
-            value={createDraft.cliPath}
-            onChange={(event) => setCreateDraft((prev) => ({ ...prev, cliPath: event.target.value }))}
-            className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
-            placeholder={defaultCliPathForType(createDraft.cliType)}
-          />
-          <NativeAgentConfigFields
-            enabled={createDraft.botMode === "cli" && Boolean(createDraft.supportedExecutionModes?.includes("native_agent"))}
-            defaultMode={createDraft.defaultExecutionMode || "cli"}
-            command={createDraft.nativeAgent?.command || DEFAULT_NATIVE_AGENT_CONFIG.command}
-            hostname={createDraft.nativeAgent?.hostname || DEFAULT_NATIVE_AGENT_CONFIG.hostname}
-            port={createDraft.nativeAgent?.port || 0}
-            serverPassword={createDraft.nativeAgent?.serverPassword}
-            disabled={!canManage || createDraft.botMode !== "cli" || savingAction !== ""}
-            onEnabledChange={(enabled) => setCreateDraft((prev) => ({
-              ...prev,
-              supportedExecutionModes: enabled ? ["cli", "native_agent"] : ["cli"],
-              defaultExecutionMode: enabled ? prev.defaultExecutionMode || "cli" : "cli",
-              nativeAgent: prev.nativeAgent || { ...DEFAULT_NATIVE_AGENT_CONFIG },
-            }))}
-            onDefaultModeChange={(defaultExecutionMode) => setCreateDraft((prev) => ({ ...prev, defaultExecutionMode }))}
-            onNativeAgentChange={(patch) => setCreateDraft((prev) => ({
-              ...prev,
-              nativeAgent: {
-                ...DEFAULT_NATIVE_AGENT_CONFIG,
-                ...(prev.nativeAgent || {}),
-                ...patch,
-              },
-            }))}
-          />
+          {createDraft.runtimeBackend === "cli" ? (
+            <div className="grid grid-cols-2 gap-3">
+              <label className="space-y-1 text-sm">
+                <span className="text-[var(--muted)]">新智能体 CLI 类型</span>
+                <select
+                  aria-label="新智能体 CLI 类型"
+                  value={createDraft.cliType}
+                  onChange={(event) => {
+                    const cliType = event.target.value as CliType;
+                    setCreateDraft((prev) => ({ ...prev, cliType, cliPath: buildCreateDraft(cliType, bots).cliPath }));
+                  }}
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2"
+                >
+                  <option value="codex">codex</option>
+                  <option value="claude">claude</option>
+                  <option value="kimi">kimi</option>
+                </select>
+              </label>
+            </div>
+          ) : null}
+          {createDraft.runtimeBackend === "cli" ? (
+            <input
+              aria-label="新智能体 CLI 路径"
+              type="text"
+              value={createDraft.cliPath}
+              onChange={(event) => setCreateDraft((prev) => ({ ...prev, cliPath: event.target.value }))}
+              className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
+              placeholder={defaultCliPathForType(createDraft.cliType)}
+            />
+          ) : null}
+          {createDraft.runtimeBackend === "native_agent" ? (
+            <NativeAgentConfigFields
+              provider={createDraft.nativeAgent?.provider || DEFAULT_NATIVE_AGENT_CONFIG.provider}
+              model={createDraft.nativeAgent?.model || DEFAULT_NATIVE_AGENT_CONFIG.model}
+              opencodeAgent={createDraft.nativeAgent?.opencodeAgent || DEFAULT_NATIVE_AGENT_CONFIG.opencodeAgent}
+              disabled={!canManage || savingAction !== ""}
+              onNativeAgentChange={(patch) => setCreateDraft((prev) => ({
+                ...prev,
+                nativeAgent: {
+                  ...DEFAULT_NATIVE_AGENT_CONFIG,
+                  ...(prev.nativeAgent || {}),
+                  ...patch,
+                },
+              }))}
+            />
+          ) : null}
           <div className="flex flex-col gap-2 sm:flex-row">
             <input
               aria-label="新智能体工作目录"

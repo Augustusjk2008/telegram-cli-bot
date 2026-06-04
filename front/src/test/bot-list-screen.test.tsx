@@ -23,7 +23,7 @@ class BotListClient extends MockWebBotClient {
         isMain: true,
         supportedExecutionModes: ["cli"],
         defaultExecutionMode: "cli",
-        nativeAgent: { command: "opencode", hostname: "127.0.0.1", port: 0 },
+        nativeAgent: { provider: "", model: "", opencodeAgent: "" },
       },
     ];
   }
@@ -56,11 +56,10 @@ test("bot list creates bot with native agent config", async () => {
   await screen.findByRole("heading", { name: "智能体管理" });
   await user.type(screen.getByLabelText("新智能体别名"), "native1");
   await user.type(screen.getByLabelText("新智能体工作目录"), "C:\\workspace\\native1");
-  await user.click(screen.getByLabelText("启用原生 agent"));
-  await user.selectOptions(screen.getByLabelText("默认执行模式"), "native_agent");
-  fireEvent.change(screen.getByLabelText("原生 agent 命令"), { target: { value: "C:\\tools\\opencode.exe" } });
-  await user.clear(screen.getByLabelText("原生 agent 端口"));
-  await user.type(screen.getByLabelText("原生 agent 端口"), "4096");
+  await user.selectOptions(screen.getByLabelText("运行后端"), "native_agent");
+  fireEvent.change(screen.getByLabelText("原生 agent Provider"), { target: { value: "anthropic" } });
+  fireEvent.change(screen.getByLabelText("原生 agent Model"), { target: { value: "claude-sonnet-4-5" } });
+  fireEvent.change(screen.getByLabelText("OpenCode agent"), { target: { value: "reviewer" } });
   await user.click(screen.getByRole("button", { name: "创建智能体" }));
 
   await waitFor(() => {
@@ -68,12 +67,12 @@ test("bot list creates bot with native agent config", async () => {
   });
   expect(client.addBotCalls[0]).toMatchObject({
     alias: "native1",
-    supportedExecutionModes: ["cli", "native_agent"],
+    supportedExecutionModes: ["native_agent"],
     defaultExecutionMode: "native_agent",
     nativeAgent: {
-      command: "C:\\tools\\opencode.exe",
-      hostname: "127.0.0.1",
-      port: 4096,
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      opencodeAgent: "reviewer",
     },
   });
 });

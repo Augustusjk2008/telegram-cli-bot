@@ -93,40 +93,37 @@ class TestManagerLoadSave:
                 await manager.add_bot("assistant2", "", "codex", "codex", str(assistant_dir), "assistant")
 
     @pytest.mark.asyncio
-    async def test_add_bot_persists_native_agent_execution_config(self, temp_dir: Path):
+    async def test_add_native_agent_bot_skips_cli_validation_and_persists_native_config(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
         manager = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
 
-        with patch("bot.manager.resolve_cli_executable", return_value="codex"), \
-             patch.object(manager, "_start_profile", AsyncMock(return_value=None)):
+        with patch.object(manager, "_start_profile", AsyncMock(return_value=None)):
             await manager.add_bot(
                 "native1",
                 "",
                 "codex",
-                "codex",
+                "missing-cli",
                 str(temp_dir),
                 "cli",
-                supported_execution_modes=["cli", "native_agent"],
+                supported_execution_modes=["native_agent"],
                 default_execution_mode="native_agent",
                 native_agent={
-                    "command": "opencode",
-                    "hostname": "127.0.0.1",
-                    "port": 4096,
-                    "server_password": "secret",
+                    "provider": "anthropic",
+                    "model": "claude-sonnet-4-5",
+                    "opencode_agent": "reviewer",
                 },
             )
 
         restored = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
         profile = restored.managed_profiles["native1"]
 
-        assert profile.supported_execution_modes == ["cli", "native_agent"]
+        assert profile.supported_execution_modes == ["native_agent"]
         assert profile.default_execution_mode == "native_agent"
         assert profile.native_agent == {
-            "command": "opencode",
-            "hostname": "127.0.0.1",
-            "port": 4096,
-            "server_password": "secret",
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-5",
+            "opencode_agent": "reviewer",
         }
 
 class TestManagerValidation:
@@ -151,7 +148,7 @@ class TestManagerValidation:
         assert restored.main_profile.working_dir == str(new_dir)
 
     @pytest.mark.asyncio
-    async def test_main_bot_execution_config_persists_and_preserves_password(self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
+    async def test_main_bot_execution_config_coerces_to_single_backend_and_persists_native_fields(self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
         settings_file = temp_dir / ".web_admin_settings.json"
@@ -164,30 +161,49 @@ class TestManagerValidation:
                 "supported_execution_modes": ["cli", "native_agent"],
                 "default_execution_mode": "native_agent",
                 "native_agent": {
-                    "command": "opencode",
-                    "hostname": "127.0.0.1",
-                    "port": 4096,
-                    "server_password": "secret",
+                    "provider": "anthropic",
+                    "model": "claude-sonnet-4-5",
+                    "opencode_agent": "reviewer",
                 },
             },
         )
+        assert manager.main_profile.supported_execution_modes == ["native_agent"]
+        assert manager.main_profile.default_execution_mode == "native_agent"
         await manager.set_bot_execution_config(
             "main",
             {
                 "supported_execution_modes": ["cli", "native_agent"],
                 "default_execution_mode": "cli",
                 "native_agent": {
-                    "command": "C:\\tools\\opencode.exe",
-                    "hostname": "127.0.0.1",
-                    "port": 0,
+                    "provider": "openai",
+                    "model": "gpt-5",
+                    "opencode_agent": "planner",
                 },
             },
         )
 
         restored = MultiBotManager(BotProfile(alias="main", token="main_tok", working_dir=str(temp_dir)), str(storage))
 
-        assert restored.main_profile.supported_execution_modes == ["cli", "native_agent"]
+        assert restored.main_profile.supported_execution_modes == ["cli"]
         assert restored.main_profile.default_execution_mode == "cli"
-        assert restored.main_profile.native_agent["command"] == "C:\\tools\\opencode.exe"
-        assert restored.main_profile.native_agent["server_password"] == "secret"
+        assert restored.main_profile.native_agent == {
+            "provider": "openai",
+            "model": "gpt-5",
+            "opencode_agent": "planner",
+        }
+
+    @pytest.mark.asyncio
+    async def test_background_services_start_and_shutdown_global_native_agent_server(self, temp_dir: Path):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        manager = MultiBotManager(BotProfile(alias="main", token="main_tok", working_dir=str(temp_dir)), str(storage))
+
+        with patch("bot.manager.NATIVE_AGENT_ENABLED", True), \
+             patch("bot.manager.NATIVE_AGENT_SERVER_MANAGER.ensure_started", AsyncMock()) as start_mock, \
+             patch("bot.manager.NATIVE_AGENT_SERVER_MANAGER.stop_all", AsyncMock()) as stop_mock:
+            await manager.start_background_services(result_executor=AsyncMock(return_value={}))
+            await manager.shutdown_all()
+
+        start_mock.assert_awaited_once()
+        stop_mock.assert_awaited_once()
 

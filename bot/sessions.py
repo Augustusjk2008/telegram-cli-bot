@@ -60,7 +60,6 @@ def _merge_session_state(preferred: UserSession, fallback: UserSession, *, bot_i
         preferred.claude_session_id = preferred.claude_session_id or fallback.claude_session_id
         preferred.kimi_session_id = preferred.kimi_session_id or fallback.kimi_session_id
         preferred.native_agent_session_id = preferred.native_agent_session_id or fallback.native_agent_session_id
-        preferred.native_agent_server_key = preferred.native_agent_server_key or fallback.native_agent_server_key
         preferred.claude_session_initialized = (
             preferred.claude_session_initialized or fallback.claude_session_initialized
         )
@@ -154,7 +153,6 @@ def _save_session_to_store(session: UserSession):
             claude_session_id=session.claude_session_id,
             kimi_session_id=session.kimi_session_id,
             native_agent_session_id=session.native_agent_session_id,
-            native_agent_server_key=session.native_agent_server_key,
             working_dir=session.working_dir,
             browse_dir=session.browse_dir,
             message_count=session.message_count,
@@ -181,7 +179,6 @@ def _build_session_from_store(
     claude_session_id = None
     kimi_session_id = None
     native_agent_session_id = None
-    native_agent_server_key = None
     claude_session_initialized = False
     working_dir = default_working_dir
     browse_dir = None
@@ -211,7 +208,8 @@ def _build_session_from_store(
         claude_session_id = stored_data.get("claude_session_id")
         kimi_session_id = stored_data.get("kimi_session_id")
         native_agent_session_id = stored_data.get("native_agent_session_id")
-        native_agent_server_key = stored_data.get("native_agent_server_key")
+        if stored_data.get("native_agent_server_key"):
+            should_persist_migration = True
         working_dir = stored_data.get("working_dir") or default_working_dir
         browse_dir = stored_data.get("browse_dir") or None
         try:
@@ -257,7 +255,6 @@ def _build_session_from_store(
             claude_session_id=claude_session_id,
             kimi_session_id=kimi_session_id,
             native_agent_session_id=native_agent_session_id,
-            native_agent_server_key=native_agent_server_key,
             claude_session_initialized=claude_session_initialized,
             web_turn_overlays=web_turn_overlays,
             running_user_text=running_user_text,
@@ -369,7 +366,6 @@ def update_bot_working_dir(bot_alias: str, working_dir: str) -> int:
             session.claude_session_id = None
             session.kimi_session_id = None
             session.native_agent_session_id = None
-            session.native_agent_server_key = None
             session.native_agent_run_id = None
             session.claude_session_initialized = False
             session.active_conversation_id = None

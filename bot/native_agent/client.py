@@ -73,6 +73,9 @@ class NativeAgentClient:
             body["cwd"] = cwd
         return await self._request_json("POST", "/session", json_body=body)
 
+    async def get_session(self, session_id: str) -> dict[str, Any]:
+        return await self._request_json("GET", f"/session/{session_id}")
+
     async def list_messages(self, session_id: str) -> list[dict[str, Any]]:
         payload = await self._request_json("GET", f"/session/{session_id}/message")
         raw_items: list[Any]
@@ -86,11 +89,23 @@ class NativeAgentClient:
             raw_items = []
         return [_flatten_message(item) for item in raw_items if isinstance(item, dict)]
 
-    async def prompt_async(self, session_id: str, text: str, *, message_id: str | None = None) -> dict[str, Any]:
+    async def prompt_async(
+        self,
+        session_id: str,
+        text: str,
+        *,
+        message_id: str | None = None,
+        model: str | None = None,
+        agent: str | None = None,
+    ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "messageID": str(message_id or f"msg_{uuid.uuid4().hex}"),
             "parts": [{"type": "text", "text": text}],
         }
+        if str(model or "").strip():
+            body["model"] = str(model).strip()
+        if str(agent or "").strip():
+            body["agent"] = str(agent).strip()
         return await self._request_json("POST", f"/session/{session_id}/prompt_async", json_body=body)
 
     async def abort(self, session_id: str) -> dict[str, Any]:

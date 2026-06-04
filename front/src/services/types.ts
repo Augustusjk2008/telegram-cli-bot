@@ -196,10 +196,9 @@ export type CliErrorStatsFilters = {
 };
 
 export type NativeAgentConfig = {
-  command: string;
-  hostname: string;
-  port: number;
-  serverPassword?: string;
+  provider: string;
+  model: string;
+  opencodeAgent: string;
 };
 
 export type BotExecutionConfigInput = {

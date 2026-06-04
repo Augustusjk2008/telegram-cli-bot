@@ -278,7 +278,7 @@ function getDefaultExecutionMode(overview?: Pick<BotOverview, "defaultExecutionM
   const supportedExecutionModes = getSupportedExecutionModes(overview);
   return overview?.defaultExecutionMode && supportedExecutionModes.includes(overview.defaultExecutionMode)
     ? overview.defaultExecutionMode
-    : "cli";
+    : (supportedExecutionModes.includes("cli") ? "cli" : supportedExecutionModes[0] || "cli");
 }
 
 function getScopedOverview(client: WebBotClient, botAlias: string, agentId: string, executionMode?: ChatExecutionMode) {
@@ -1406,9 +1406,9 @@ export function ChatScreen({
   useEffect(() => {
     const supported = getSupportedExecutionModes(botOverview);
     if (!supported.includes(executionModeRef.current)) {
-      setExecutionMode("cli");
+      setExecutionMode(getDefaultExecutionMode(botOverview));
     }
-  }, [botOverview?.supportedExecutionModes, setExecutionMode]);
+  }, [botOverview?.defaultExecutionMode, botOverview?.supportedExecutionModes, setExecutionMode]);
 
   useEffect(() => {
     clusterRunIdRef.current = clusterRunId;
@@ -1763,7 +1763,7 @@ export function ChatScreen({
     forceAutoScrollRef.current = true;
 
     const storedExecutionMode = readStoredExecutionMode(botAlias, storageScope);
-    const requestedExecutionMode = storedExecutionMode ?? "cli";
+    const requestedExecutionMode = storedExecutionMode || undefined;
     const requestedAgentId = activeAgentIdRef.current || "main";
     const loadAgents = typeof client.listAgents === "function"
       ? client.listAgents(botAlias).catch(() => ({ items: fallbackAgents() }))
@@ -1797,7 +1797,9 @@ export function ChatScreen({
           activeAgentIdRef.current = nextAgentId;
           window.localStorage.setItem(activeAgentStorageKey(botAlias, storageScope), nextAgentId);
         }
-        if (nextAgentId !== requestedAgentId || nextExecutionMode !== requestedExecutionMode) {
+        const requestedComparisonMode = requestedExecutionMode ?? "cli";
+        const executionModeNeedsReload = nextExecutionMode !== requestedComparisonMode;
+        if (nextAgentId !== requestedAgentId || executionModeNeedsReload) {
           [messages, overview] = await Promise.all([
             listScopedMessages(client, botAlias, nextAgentId, nextExecutionMode),
             getScopedOverview(client, botAlias, nextAgentId, nextExecutionMode),
@@ -3140,7 +3142,7 @@ export function ChatScreen({
   const assistantAvatarName = botOverview?.avatarName || botAvatarName;
   const activeAgent = agents.find((agent) => agent.id === activeAgentId) || agents[0] || fallbackAgents()[0];
   const supportedExecutionModes = getSupportedExecutionModes(botOverview);
-  const effectiveExecutionMode = supportedExecutionModes.includes(executionMode) ? executionMode : "cli";
+  const effectiveExecutionMode = supportedExecutionModes.includes(executionMode) ? executionMode : getDefaultExecutionMode(botOverview);
   const nativeExecutionMode = effectiveExecutionMode === "native_agent";
   const clusterMode = Boolean(botOverview?.cluster?.enabled);
   const activeClusterChildReadOnly = clusterMode && activeAgentId !== "main";

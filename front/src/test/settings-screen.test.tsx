@@ -74,6 +74,39 @@ test("assistant bots lock the default workdir in settings", async () => {
   expect(screen.getByText("assistant 型 Bot 的默认工作目录已锁定")).toBeInTheDocument();
 });
 
+test("native bots hide cli settings and params", async () => {
+  const client = new MockWebBotClient();
+  await client.addBot({
+    alias: "native1",
+    botMode: "cli",
+    cliType: "codex",
+    cliPath: "codex",
+    workingDir: "C:\\workspace\\native1",
+    avatarName: "avatar_01.png",
+    supportedExecutionModes: ["native_agent"],
+    defaultExecutionMode: "native_agent",
+    nativeAgent: {
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      opencodeAgent: "reviewer",
+    },
+  });
+
+  render(<SettingsScreen botAlias="native1" client={client} onLogout={() => undefined} />);
+
+  expect(await screen.findByText("运行后端:")).toBeInTheDocument();
+  expect(screen.getByText("原生 agent")).toBeInTheDocument();
+  expect(screen.queryByLabelText("CLI 类型")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("CLI 路径")).not.toBeInTheDocument();
+  expect(screen.queryByText("保存 CLI 配置")).not.toBeInTheDocument();
+  expect(screen.getByText("Provider:")).toBeInTheDocument();
+  expect(screen.getByText("anthropic")).toBeInTheDocument();
+  expect(screen.getByText("Model:")).toBeInTheDocument();
+  expect(screen.getByText("claude-sonnet-4-5")).toBeInTheDocument();
+  expect(screen.getByText("OpenCode agent:")).toBeInTheDocument();
+  expect(screen.getByText("reviewer")).toBeInTheDocument();
+});
+
 test("git proxy controls stack on narrow screens", async () => {
   render(<SettingsScreen botAlias="main" client={new MockWebBotClient()} onLogout={() => undefined} />);
 

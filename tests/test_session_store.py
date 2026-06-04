@@ -65,14 +65,12 @@ class TestSaveAndLoadSession:
                 bot_id=1,
                 user_id=100,
                 native_agent_session_id="native-session-1",
-                native_agent_server_key="server-key",
             )
 
             data = load_session(1, 100)
 
         assert data is not None
         assert data["native_agent_session_id"] == "native-session-1"
-        assert data["native_agent_server_key"] == "server-key"
 
 
 class TestRemoveAllSessionsForBot:
@@ -157,4 +155,3 @@ class TestRenameBotSessions:
             assert moved_snapshot is not None
             assert moved_snapshot["claude_session_id"] == "claude-old"
             assert moved_snapshot["session_epoch"] == 2
-

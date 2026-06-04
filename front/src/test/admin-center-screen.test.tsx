@@ -140,6 +140,23 @@ test("admin center shows fixed forward hub token and frps port fields", async ()
   expect(screen.getByText("TCB_HUB_FRPS_PORT")).toBeInTheDocument();
 });
 
+test("admin center shows native agent global fields", async () => {
+  const user = userEvent.setup();
+  const { client } = createClient();
+  await client.login({ username: "127.0.0.1", password: "test" });
+
+  render(<AdminCenterScreen client={client} onClose={() => {}} />);
+
+  await user.click(await screen.findByRole("tab", { name: "环境配置" }));
+  await screen.findByRole("heading", { name: "环境配置" });
+  await user.click(screen.getByRole("button", { name: /原生/i }));
+
+  expect(screen.getByText("启用原生 agent")).toBeInTheDocument();
+  expect(screen.getByText("NATIVE_AGENT_ENABLED")).toBeInTheDocument();
+  expect(screen.getByText("原生 agent 命令")).toBeInTheDocument();
+  expect(screen.getByText("NATIVE_AGENT_COMMAND")).toBeInTheDocument();
+});
+
 
 
 

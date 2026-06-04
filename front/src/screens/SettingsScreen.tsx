@@ -27,6 +27,7 @@ import type { WebBotClient } from "../services/webBotClient";
 import { DEFAULT_AVATAR_ASSETS, readStoredUserAvatarName } from "../utils/avatar";
 import { normalizePathInput } from "../utils/pathInput";
 import { defaultCliPathForType } from "./useBotManager";
+import { getRuntimeBackend } from "./botManagerModel";
 import {
   CHAT_BODY_FONT_FAMILY_OPTIONS,
   CHAT_BODY_FONT_SIZE_OPTIONS,
@@ -285,6 +286,8 @@ export function SettingsScreen({
     || sessionCapabilities.includes("manage_bots")
     || sessionCapabilities.includes("admin_ops");
   const canManageCliParams = canManageBotRuntime || sessionCapabilities.includes("manage_cli_params");
+  const runtimeBackend = getRuntimeBackend(overview);
+  const nativeRuntime = runtimeBackend === "native_agent";
 
   useEffect(() => {
     let cancelled = false;
@@ -841,7 +844,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                   id={isMainBot ? "main-bot-ops-title" : "bot-runtime-title"}
                   className="text-base font-semibold text-[var(--text)]"
                 >
-                  {isMainBot ? "主 Bot 运维" : "Bot CLI 配置"}
+                  {isMainBot ? "主 Bot 运维" : "Bot 运行配置"}
                 </h2>
                 {isMainBot ? (
                   <p className="text-sm text-[var(--muted)]">主 Bot 的运行配置入口。</p>
@@ -849,15 +852,20 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
               </div>
 
               <div className="space-y-2">
-                <p><span className="font-medium text-[var(--text)]">CLI:</span> {overview.cliType}</p>
-                {overview.cliPath ? (
+                <p><span className="font-medium text-[var(--text)]">运行后端:</span> {nativeRuntime ? "原生 agent" : "CLI"}</p>
+                {!nativeRuntime ? <p><span className="font-medium text-[var(--text)]">CLI:</span> {overview.cliType}</p> : null}
+                {!nativeRuntime && overview.cliPath ? (
                   <p className="break-all"><span className="font-medium text-[var(--text)]">CLI 路径:</span> {overview.cliPath}</p>
                 ) : null}
+                {nativeRuntime ? <p><span className="font-medium text-[var(--text)]">Provider:</span> {overview.nativeAgent?.provider || "未设置"}</p> : null}
+                {nativeRuntime ? <p><span className="font-medium text-[var(--text)]">Model:</span> {overview.nativeAgent?.model || "未设置"}</p> : null}
+                {nativeRuntime ? <p><span className="font-medium text-[var(--text)]">OpenCode agent:</span> {overview.nativeAgent?.opencodeAgent || "未设置"}</p> : null}
                 <p><span className="font-medium text-[var(--text)]">状态:</span> {overview.status}</p>
                 <p className="break-all"><span className="font-medium text-[var(--text)]">目录:</span> {overview.workingDir}</p>
               </div>
 
-              <div className="space-y-3 border-t border-[var(--border)] pt-4">
+              {!nativeRuntime ? (
+                <div className="space-y-3 border-t border-[var(--border)] pt-4">
                 <h3 className="font-medium text-[var(--text)]">运行配置</h3>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <label className="space-y-1">
@@ -896,7 +904,8 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                   <Save className="h-4 w-4" />
                   {savingCliConfig ? "保存中..." : "保存 CLI 配置"}
                 </button>
-              </div>
+                </div>
+              ) : null}
 
               <div className="space-y-3 border-t border-[var(--border)] pt-4">
                 <div>
@@ -1002,7 +1011,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
           />
         ) : null}
 
-        {overview && showBotRuntimeSettings ? (
+        {overview && showBotRuntimeSettings && !nativeRuntime ? (
           <BotCliParamsPanel
             botAlias={botAlias}
             client={client}

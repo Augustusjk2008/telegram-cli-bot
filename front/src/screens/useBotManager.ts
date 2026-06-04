@@ -4,6 +4,7 @@ import { WebApiClientError } from "../services/types";
 import type {
   AvatarAsset,
   BotSummary,
+  ChatExecutionMode,
   CliType,
   CreateBotInput,
   RemoveBotOptions,
@@ -14,15 +15,18 @@ import type { WebBotClient } from "../services/webBotClient";
 import { DEFAULT_AVATAR_ASSETS, pickAvailableAvatarName } from "../utils/avatar";
 import { normalizePathInput } from "../utils/pathInput";
 import {
+  buildExecutionConfig,
   DEFAULT_NATIVE_AGENT_CONFIG,
-  draftFromBot,
   getErrorMessage,
+  getRuntimeBackend,
   isBotOffline,
   isMainBot,
   type EditDraft,
 } from "./botManagerModel";
 
-export type CreateDraft = CreateBotInput;
+export type CreateDraft = CreateBotInput & {
+  runtimeBackend: ChatExecutionMode;
+};
 export type { EditDraft } from "./botManagerModel";
 
 export const EMPTY_CREATE_DRAFT: CreateDraft = {
@@ -34,6 +38,7 @@ export const EMPTY_CREATE_DRAFT: CreateDraft = {
   avatarName: "",
   supportedExecutionModes: ["cli"],
   defaultExecutionMode: "cli",
+  runtimeBackend: "cli",
   nativeAgent: { ...DEFAULT_NATIVE_AGENT_CONFIG },
 };
 
@@ -63,6 +68,7 @@ export function buildCreateDraft(cliType: CliType = "codex", bots: BotSummary[] 
     ...EMPTY_CREATE_DRAFT,
     cliType,
     cliPath: resolveDefaultCliPath(cliType, bots),
+    runtimeBackend: "cli",
     nativeAgent: { ...DEFAULT_NATIVE_AGENT_CONFIG },
   };
 }
@@ -131,12 +137,11 @@ export function useBotManager({
     setError("");
     setNotice("");
     try {
-      if (draft.supportedExecutionModes?.includes("native_agent") && !draft.nativeAgent?.command?.trim()) {
-        setError("原生 agent 命令不能为空");
-        return null;
-      }
+      const { runtimeBackend, ...input } = draft;
+      const executionConfig = buildExecutionConfig(runtimeBackend);
       const created = await client.addBot({
-        ...draft,
+        ...input,
+        ...executionConfig,
         alias: draft.alias.trim(),
         cliPath: normalizePathInput(draft.cliPath),
         workingDir: normalizePathInput(draft.workingDir),
@@ -144,10 +149,9 @@ export function useBotManager({
         nativeAgent: {
           ...DEFAULT_NATIVE_AGENT_CONFIG,
           ...(draft.nativeAgent || {}),
-          command: normalizePathInput(draft.nativeAgent?.command || DEFAULT_NATIVE_AGENT_CONFIG.command),
-          hostname: (draft.nativeAgent?.hostname || DEFAULT_NATIVE_AGENT_CONFIG.hostname).trim(),
-          port: Math.min(65535, Math.max(0, Number(draft.nativeAgent?.port || 0) || 0)),
-          ...(draft.nativeAgent?.serverPassword !== undefined ? { serverPassword: draft.nativeAgent.serverPassword.trim() } : {}),
+          provider: draft.nativeAgent?.provider?.trim() || "",
+          model: draft.nativeAgent?.model?.trim() || "",
+          opencodeAgent: draft.nativeAgent?.opencodeAgent?.trim() || "",
         },
       });
       setNotice("智能体已创建");
@@ -347,38 +351,32 @@ export function useBotManager({
       nextBot = renamed;
     }
 
-    const cliUpdated = await updateBotCli(nextBot, draft.cliType, draft.cliPath);
-    if (!cliUpdated) {
-      return { ok: false };
+    if (draft.runtimeBackend === "cli") {
+      const cliUpdated = await updateBotCli(nextBot, draft.cliType, draft.cliPath);
+      if (!cliUpdated) {
+        return { ok: false };
+      }
+      nextBot = cliUpdated;
     }
-    nextBot = cliUpdated;
 
-    const supportedExecutionModes = draft.nativeAgentEnabled ? ["cli", "native_agent"] as const : ["cli"] as const;
-    const defaultExecutionMode = draft.nativeAgentEnabled ? draft.defaultExecutionMode : "cli";
+    const executionConfig = buildExecutionConfig(draft.runtimeBackend);
     const executionChanged = JSON.stringify({
-      supportedExecutionModes: nextBot.supportedExecutionModes || ["cli"],
-      defaultExecutionMode: nextBot.defaultExecutionMode || "cli",
+      runtimeBackend: getRuntimeBackend(nextBot),
       nativeAgent: nextBot.nativeAgent || DEFAULT_NATIVE_AGENT_CONFIG,
     }) !== JSON.stringify({
-      supportedExecutionModes: [...supportedExecutionModes],
-      defaultExecutionMode,
+      runtimeBackend: draft.runtimeBackend,
       nativeAgent: draft.nativeAgent,
     });
     if (executionChanged) {
-      if (draft.nativeAgentEnabled && !draft.nativeAgent.command.trim()) {
-        setError("原生 agent 命令不能为空");
-        return { ok: false };
-      }
       nextBot = await client.updateBotExecutionConfig(nextBot.alias, {
-        supportedExecutionModes: [...supportedExecutionModes],
-        defaultExecutionMode,
+        supportedExecutionModes: executionConfig.supportedExecutionModes,
+        defaultExecutionMode: executionConfig.defaultExecutionMode,
         nativeAgent: {
           ...DEFAULT_NATIVE_AGENT_CONFIG,
           ...draft.nativeAgent,
-          command: normalizePathInput(draft.nativeAgent.command),
-          hostname: draft.nativeAgent.hostname.trim() || DEFAULT_NATIVE_AGENT_CONFIG.hostname,
-          port: Math.min(65535, Math.max(0, Number(draft.nativeAgent.port || 0) || 0)),
-          ...(draft.nativeAgent.serverPassword !== undefined ? { serverPassword: draft.nativeAgent.serverPassword.trim() } : {}),
+          provider: draft.nativeAgent.provider.trim(),
+          model: draft.nativeAgent.model.trim(),
+          opencodeAgent: draft.nativeAgent.opencodeAgent.trim(),
         },
       });
       setNotice("执行模式配置已更新");

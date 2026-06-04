@@ -36,7 +36,7 @@ class DesktopManagerClient extends MockWebBotClient {
         isMain: true,
         supportedExecutionModes: ["cli"],
         defaultExecutionMode: "cli",
-        nativeAgent: { command: "opencode", hostname: "127.0.0.1", port: 0 },
+        nativeAgent: { provider: "", model: "", opencodeAgent: "" },
       },
       {
         alias: "review",
@@ -52,9 +52,9 @@ class DesktopManagerClient extends MockWebBotClient {
         workingDir: "C:\\workspace\\review",
         lastActiveText: "处理中",
         avatarName: "avatar_02.png",
-        supportedExecutionModes: ["cli", "native_agent"],
+        supportedExecutionModes: ["native_agent"],
         defaultExecutionMode: "native_agent",
-        nativeAgent: { command: "opencode", hostname: "127.0.0.1", port: 4096 },
+        nativeAgent: { provider: "anthropic", model: "claude-sonnet-4-5", opencodeAgent: "reviewer" },
       },
       {
         alias: "offline-team",
@@ -69,7 +69,7 @@ class DesktopManagerClient extends MockWebBotClient {
         avatarName: "avatar_03.png",
         supportedExecutionModes: ["cli"],
         defaultExecutionMode: "cli",
-        nativeAgent: { command: "opencode", hostname: "127.0.0.1", port: 0 },
+        nativeAgent: { provider: "", model: "", opencodeAgent: "" },
       },
     ];
   }
@@ -121,6 +121,9 @@ class DesktopManagerClient extends MockWebBotClient {
       workingDir: input.workingDir,
       lastActiveText: "运行中",
       avatarName: input.avatarName,
+      supportedExecutionModes: input.supportedExecutionModes,
+      defaultExecutionMode: input.defaultExecutionMode,
+      nativeAgent: input.nativeAgent,
     };
   }
 
@@ -418,11 +421,10 @@ test("desktop bot manager creates a bot with native agent config", async () => {
   await user.click(screen.getByRole("button", { name: "新增智能体" }));
   await user.type(screen.getByLabelText("新智能体别名"), "native1");
   await user.type(screen.getByLabelText("新智能体工作目录"), "C:\\workspace\\native1");
-  await user.click(screen.getByLabelText("启用原生 agent"));
-  await user.selectOptions(screen.getByLabelText("默认执行模式"), "native_agent");
-  fireEvent.change(screen.getByLabelText("原生 agent 命令"), { target: { value: "C:\\tools\\opencode.exe" } });
-  await user.clear(screen.getByLabelText("原生 agent 端口"));
-  await user.type(screen.getByLabelText("原生 agent 端口"), "4096");
+  await user.selectOptions(screen.getByLabelText("运行后端"), "native_agent");
+  fireEvent.change(screen.getByLabelText("原生 agent Provider"), { target: { value: "anthropic" } });
+  fireEvent.change(screen.getByLabelText("原生 agent Model"), { target: { value: "claude-sonnet-4-5" } });
+  fireEvent.change(screen.getByLabelText("OpenCode agent"), { target: { value: "reviewer" } });
   await user.click(screen.getByRole("button", { name: "创建智能体" }));
 
   await waitFor(() => {
@@ -430,12 +432,12 @@ test("desktop bot manager creates a bot with native agent config", async () => {
   });
   expect(client.addBotCalls[0]).toMatchObject({
     alias: "native1",
-    supportedExecutionModes: ["cli", "native_agent"],
+    supportedExecutionModes: ["native_agent"],
     defaultExecutionMode: "native_agent",
     nativeAgent: {
-      command: "C:\\tools\\opencode.exe",
-      hostname: "127.0.0.1",
-      port: 4096,
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      opencodeAgent: "reviewer",
     },
   });
 });
@@ -449,12 +451,13 @@ test("desktop bot manager edits native agent config", async () => {
   await screen.findByRole("heading", { name: "智能体管理" });
   await user.click(screen.getByRole("button", { name: "配置" }));
 
-  expect(screen.getByLabelText("启用原生 agent")).toBeChecked();
-  expect(screen.getByLabelText("默认执行模式")).toHaveValue("native_agent");
-  expect(screen.getByLabelText("原生 agent 命令")).toHaveValue("opencode");
-  expect(screen.getByLabelText("原生 agent 端口")).toHaveValue(4096);
+  expect(screen.getByLabelText("运行后端")).toHaveValue("native_agent");
+  expect(screen.queryByLabelText("智能体 CLI 类型")).not.toBeInTheDocument();
+  expect(screen.getByLabelText("原生 agent Provider")).toHaveValue("anthropic");
+  expect(screen.getByLabelText("原生 agent Model")).toHaveValue("claude-sonnet-4-5");
+  expect(screen.getByLabelText("OpenCode agent")).toHaveValue("reviewer");
 
-  fireEvent.change(screen.getByLabelText("原生 agent 命令"), { target: { value: "C:\\tools\\opencode.exe" } });
+  fireEvent.change(screen.getByLabelText("原生 agent Model"), { target: { value: "claude-opus-4-1" } });
   await user.click(screen.getByRole("button", { name: "保存智能体" }));
 
   await waitFor(() => {
@@ -463,18 +466,18 @@ test("desktop bot manager edits native agent config", async () => {
   expect(client.updateBotExecutionConfigCalls[0]).toEqual({
     botAlias: "review",
     input: {
-      supportedExecutionModes: ["cli", "native_agent"],
+      supportedExecutionModes: ["native_agent"],
       defaultExecutionMode: "native_agent",
       nativeAgent: {
-        command: "C:\\tools\\opencode.exe",
-        hostname: "127.0.0.1",
-        port: 4096,
+        provider: "anthropic",
+        model: "claude-opus-4-1",
+        opencodeAgent: "reviewer",
       },
     },
   });
 });
 
-test("desktop bot manager disables native agent and resets default mode", async () => {
+test("desktop bot manager switches native bot to cli backend", async () => {
   const user = userEvent.setup();
   const client = new DesktopManagerClient();
 
@@ -482,7 +485,7 @@ test("desktop bot manager disables native agent and resets default mode", async 
 
   await screen.findByRole("heading", { name: "智能体管理" });
   await user.click(screen.getByRole("button", { name: "配置" }));
-  await user.click(screen.getByLabelText("启用原生 agent"));
+  await user.selectOptions(screen.getByLabelText("运行后端"), "cli");
   await user.click(screen.getByRole("button", { name: "保存智能体" }));
 
   await waitFor(() => {
@@ -490,6 +493,36 @@ test("desktop bot manager disables native agent and resets default mode", async 
   });
   expect(client.updateBotExecutionConfigCalls[0].input.supportedExecutionModes).toEqual(["cli"]);
   expect(client.updateBotExecutionConfigCalls[0].input.defaultExecutionMode).toBe("cli");
+});
+
+test("desktop bot manager shows native agent disabled note when global switch is off", async () => {
+  const user = userEvent.setup();
+  const client = new DesktopManagerClient();
+  vi.spyOn(client, "getEnvConfig").mockResolvedValue({
+    envPath: ".env",
+    examplePath: ".env.example",
+    items: [{
+      key: "NATIVE_AGENT_ENABLED",
+      label: "启用原生 agent",
+      description: "",
+      type: "boolean",
+      category: "native_agent",
+      value: false,
+      defaultValue: false,
+      source: "env",
+      sensitive: false,
+      masked: false,
+      restartRequired: true,
+      rebuildRequired: false,
+    }],
+  });
+
+  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
+
+  await screen.findByRole("heading", { name: "智能体管理" });
+  await user.click(screen.getByRole("button", { name: "新增智能体" }));
+  expect(await screen.findByText("原生 agent 全局未启用")).toBeInTheDocument();
+  expect(screen.queryByRole("option", { name: "原生 agent" })).not.toBeInTheDocument();
 });
 
 
