@@ -18,7 +18,27 @@ type Props = {
   loadError?: string;
   onLoadTrace?: () => void;
   onCopyFinalAnswer?: () => boolean | void | Promise<boolean | void>;
+  onReplyNativePermission?: (permissionId: string, approved: boolean) => Promise<void>;
 };
+
+function getPayloadRecord(event: ChatTraceEvent): Record<string, unknown> {
+  return event.payload && typeof event.payload === "object"
+    ? event.payload as Record<string, unknown>
+    : {};
+}
+
+function getNativePermissionId(event: ChatTraceEvent) {
+  if (event.kind !== "permission") {
+    return "";
+  }
+  const payload = getPayloadRecord(event);
+  const permissionId = String(payload.id || payload.permissionID || payload.permission_id || "").trim();
+  const state = String(payload.state || payload.status || "").trim().toLowerCase();
+  if (!permissionId || state.includes("replied")) {
+    return "";
+  }
+  return permissionId;
+}
 
 function describeProcessEvent(event: ChatTraceEvent) {
   if (event.kind === "commentary") {
@@ -49,9 +69,11 @@ function ChatTracePanelInner({
   loadError = "",
   onLoadTrace,
   onCopyFinalAnswer,
+  onReplyNativePermission,
 }: Props) {
   const reduceMotion = useReducedMotion();
   const [copiedFinalAnswer, setCopiedFinalAnswer] = useState(false);
+  const [replyingPermissionId, setReplyingPermissionId] = useState("");
   const copyFeedbackTimerRef = useRef<number | null>(null);
   const events = trace || [];
   const summary = useMemo(() => ({
@@ -97,6 +119,17 @@ function ChatTracePanelInner({
       setCopiedFinalAnswer(false);
       copyFeedbackTimerRef.current = null;
     }, 2000);
+  };
+  const handleReplyNativePermission = async (permissionId: string, approved: boolean) => {
+    if (!onReplyNativePermission || replyingPermissionId) {
+      return;
+    }
+    setReplyingPermissionId(permissionId);
+    try {
+      await onReplyNativePermission(permissionId, approved);
+    } finally {
+      setReplyingPermissionId("");
+    }
   };
 
   return (
@@ -190,6 +223,7 @@ function ChatTracePanelInner({
 
               const event = entry.event;
               const isGenericEvent = isGenericProcessEvent(event);
+              const nativePermissionId = getNativePermissionId(event);
               return (
                 <motion.div
                   key={`${event.kind}-${event.rawType || "process"}-${event.summary}-${index}`}
@@ -213,6 +247,27 @@ function ChatTracePanelInner({
                   >
                     {event.summary || "无摘要"}
                   </div>
+                  {nativePermissionId && onReplyNativePermission ? (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        disabled={Boolean(replyingPermissionId)}
+                        onClick={() => void handleReplyNativePermission(nativePermissionId, true)}
+                        className="inline-flex h-7 items-center gap-1.5 rounded-md border border-[var(--accent-outline)] bg-[var(--accent-soft)] px-2.5 text-xs font-medium text-[var(--accent)] hover:bg-[var(--workbench-hover-bg)] disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {replyingPermissionId === nativePermissionId ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : null}
+                        允许一次
+                      </button>
+                      <button
+                        type="button"
+                        disabled={Boolean(replyingPermissionId)}
+                        onClick={() => void handleReplyNativePermission(nativePermissionId, false)}
+                        className="inline-flex h-7 items-center rounded-md border border-red-200 bg-red-50 px-2.5 text-xs font-medium text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        拒绝
+                      </button>
+                    </div>
+                  ) : null}
                 </motion.div>
               );
             })}

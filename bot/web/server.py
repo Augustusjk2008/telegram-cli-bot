@@ -91,6 +91,7 @@ from .env_service import EnvConfigService, EnvValidationError
 from .exposure_service import WebExposureService
 from .fixed_forward_service import FixedForwardService
 from .lan_chat_service import LanChatService
+from bot.native_agent.server_manager import SERVER_MANAGER as NATIVE_AGENT_SERVER_MANAGER
 from .notification_service import ChatNotificationService
 from .os_open_service import DesktopOpenError, open_directory_in_desktop
 from .pushplus_client import PushPlusClient
@@ -199,6 +200,7 @@ from .api_service import (
     get_processing_sessions,
     get_working_directory,
     kill_user_process,
+    reply_native_agent_permission,
     list_bots,
     list_agents,
     list_conversations,
@@ -1617,7 +1619,8 @@ class WebApiServer:
         auth = self._bot_auth(base_auth, alias)
         _require_capability(auth, CAP_VIEW_BOT_STATUS)
         agent_id = self._request_agent_id(request)
-        data = get_overview(self.manager, alias, auth.user_id, agent_id=agent_id)
+        execution_mode = str(request.query.get("execution_mode") or request.query.get("executionMode") or "").strip()
+        data = get_overview(self.manager, alias, auth.user_id, agent_id=agent_id, execution_mode=execution_mode)
         return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(base_auth, data["bot"])}})
 
     def _request_agent_id(self, request: web.Request, body: dict[str, Any] | None = None) -> str:
@@ -1890,6 +1893,7 @@ class WebApiServer:
         task_mode = str(body.get("task_mode") or "").strip()
         task_payload = body.get("task_payload")
         visible_text = body.get("visible_text")
+        execution_mode = str(body.get("execution_mode") or body.get("executionMode") or "").strip()
         agent_id = self._request_agent_id(request, body)
         cluster_enabled = bool(body.get("cluster"))
         mentions = body.get("mentions") if isinstance(body.get("mentions"), list) else []
@@ -1908,6 +1912,7 @@ class WebApiServer:
                     agent_id=agent_id,
                     cluster=cluster_enabled,
                     mentions=mentions,
+                    execution_mode=execution_mode,
                     actor=actor,
                 )
             else:
@@ -1919,6 +1924,7 @@ class WebApiServer:
                     agent_id=agent_id,
                     cluster=cluster_enabled,
                     mentions=mentions,
+                    execution_mode=execution_mode,
                     actor=actor,
                 )
         except Exception as exc:
@@ -1940,6 +1946,7 @@ class WebApiServer:
         task_mode = str(body.get("task_mode") or "").strip()
         task_payload = body.get("task_payload")
         visible_text = body.get("visible_text")
+        execution_mode = str(body.get("execution_mode") or body.get("executionMode") or "").strip()
         agent_id = self._request_agent_id(request, body)
         cluster_enabled = bool(body.get("cluster"))
         mentions = body.get("mentions") if isinstance(body.get("mentions"), list) else []
@@ -1962,6 +1969,7 @@ class WebApiServer:
                 "task_mode": task_mode or "standard",
                 "task_payload": dict(task_payload) if isinstance(task_payload, dict) else None,
                 "visible_text": str(visible_text) if visible_text is not None else None,
+                "execution_mode": execution_mode,
             }
             if agent_id != "main":
                 stream_kwargs["agent_id"] = agent_id
@@ -1980,7 +1988,10 @@ class WebApiServer:
             stream_kwargs = {
                 "cluster": cluster_enabled,
                 "mentions": mentions,
+                "execution_mode": execution_mode,
             } if cluster_enabled else {}
+            if execution_mode and not cluster_enabled:
+                stream_kwargs = {"execution_mode": execution_mode}
             if agent_id == "main":
                 event_stream = stream_chat(
                     self.manager,
@@ -2677,7 +2688,38 @@ class WebApiServer:
         alias = self._manager_alias(request)
         body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
         agent_id = self._request_agent_id(request, body)
-        return _json({"ok": True, "data": kill_user_process(self.manager, alias, self._chat_user_id(auth), agent_id=agent_id)})
+        execution_mode = str(body.get("execution_mode") or body.get("executionMode") or "").strip()
+        return _json({
+            "ok": True,
+            "data": await kill_user_process(
+                self.manager,
+                alias,
+                self._chat_user_id(auth),
+                agent_id=agent_id,
+                execution_mode=execution_mode,
+            ),
+        })
+
+    async def post_native_agent_permission_reply(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_CHAT_SEND)
+        alias = self._manager_alias(request)
+        permission_id = request.match_info.get("permission_id", "")
+        body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
+        agent_id = self._request_agent_id(request, body)
+        approved = bool(body.get("approved"))
+        if "approved" not in body:
+            response_value = str(body.get("response") or body.get("decision") or "").strip().lower()
+            approved = response_value in {"allow", "approve", "approved", "yes", "true", "1"}
+        data = await reply_native_agent_permission(
+            self.manager,
+            alias,
+            self._chat_user_id(auth),
+            permission_id,
+            approved=approved,
+            message=str(body.get("message") or ""),
+            agent_id=agent_id,
+        )
+        return _json({"ok": True, "data": data})
 
     async def get_cli_params(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_MANAGE_CLI_PARAMS)
@@ -2710,7 +2752,8 @@ class WebApiServer:
         alias = self._manager_alias(request)
         limit = int(request.query.get("limit", "50"))
         agent_id = self._request_agent_id(request)
-        data = get_history(self.manager, alias, self._chat_user_id(auth), limit=limit, agent_id=agent_id)
+        execution_mode = str(request.query.get("execution_mode") or request.query.get("executionMode") or "").strip()
+        data = get_history(self.manager, alias, self._chat_user_id(auth), limit=limit, agent_id=agent_id, execution_mode=execution_mode)
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
     async def get_history_delta_view(self, request: web.Request) -> web.Response:
@@ -2719,7 +2762,8 @@ class WebApiServer:
         limit = int(request.query.get("limit", "50"))
         after_id = request.query.get("after_id", "")
         agent_id = self._request_agent_id(request)
-        data = get_history_delta(self.manager, alias, self._chat_user_id(auth), after_id, limit=limit, agent_id=agent_id)
+        execution_mode = str(request.query.get("execution_mode") or request.query.get("executionMode") or "").strip()
+        data = get_history_delta(self.manager, alias, self._chat_user_id(auth), after_id, limit=limit, agent_id=agent_id, execution_mode=execution_mode)
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
     async def get_conversations_view(self, request: web.Request) -> web.Response:
@@ -2728,14 +2772,16 @@ class WebApiServer:
         limit = int(request.query.get("limit", "50"))
         query = request.query.get("q", "")
         agent_id = self._request_agent_id(request)
-        return _json({"ok": True, "data": list_conversations(self.manager, alias, self._chat_user_id(auth), limit=limit, query=query, agent_id=agent_id)})
+        execution_mode = str(request.query.get("execution_mode") or request.query.get("executionMode") or "").strip()
+        return _json({"ok": True, "data": list_conversations(self.manager, alias, self._chat_user_id(auth), limit=limit, query=query, agent_id=agent_id, execution_mode=execution_mode)})
 
     async def post_conversation_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_CHAT_SEND)
         alias = self._manager_alias(request)
         body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
         agent_id = self._request_agent_id(request, body)
-        data = create_conversation(self.manager, alias, self._chat_user_id(auth), str(body.get("title") or ""), agent_id=agent_id)
+        execution_mode = str(body.get("execution_mode") or body.get("executionMode") or "").strip()
+        data = create_conversation(self.manager, alias, self._chat_user_id(auth), str(body.get("title") or ""), agent_id=agent_id, execution_mode=execution_mode)
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
     async def delete_conversations_view(self, request: web.Request) -> web.Response:
@@ -2771,7 +2817,8 @@ class WebApiServer:
         conversation_id = request.match_info.get("conversation_id", "")
         body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
         agent_id = self._request_agent_id(request, body)
-        data = select_conversation(self.manager, alias, self._chat_user_id(auth), conversation_id, agent_id=agent_id)
+        execution_mode = str(body.get("execution_mode") or body.get("executionMode") or "").strip()
+        data = select_conversation(self.manager, alias, self._chat_user_id(auth), conversation_id, agent_id=agent_id, execution_mode=execution_mode)
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
     async def delete_conversation_view(self, request: web.Request) -> web.Response:
@@ -2780,6 +2827,7 @@ class WebApiServer:
         conversation_id = request.match_info.get("conversation_id", "")
         agent_id = self._request_agent_id(request)
         delete_native = str(request.query.get("delete_native_session", "")).lower() in {"1", "true", "yes", "on"}
+        execution_mode = str(request.query.get("execution_mode") or request.query.get("executionMode") or "").strip()
         data = delete_conversation(
             self.manager,
             alias,
@@ -2787,6 +2835,7 @@ class WebApiServer:
             conversation_id,
             agent_id=agent_id,
             delete_native_session=delete_native,
+            execution_mode=execution_mode,
         )
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
@@ -2909,7 +2958,8 @@ class WebApiServer:
         alias = self._manager_alias(request)
         message_id = request.match_info.get("message_id", "")
         agent_id = self._request_agent_id(request)
-        return _json({"ok": True, "data": get_history_trace(self.manager, alias, self._chat_user_id(auth), message_id, agent_id=agent_id)})
+        execution_mode = str(request.query.get("execution_mode") or request.query.get("executionMode") or "").strip()
+        return _json({"ok": True, "data": get_history_trace(self.manager, alias, self._chat_user_id(auth), message_id, agent_id=agent_id, execution_mode=execution_mode)})
 
     async def get_git_overview_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
@@ -4734,6 +4784,7 @@ class WebApiServer:
         plugin_service = getattr(self.manager, "plugin_service", None)
         if plugin_service is not None:
             await plugin_service.shutdown()
+        await NATIVE_AGENT_SERVER_MANAGER.stop_all()
         await self.lan_chat_service.close()
         if preserve_tunnel:
             self._tunnel_service.preserve_for_restart()

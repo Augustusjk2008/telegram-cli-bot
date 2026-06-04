@@ -60,6 +60,7 @@ import type {
   ChatStatusUpdate,
   ChatTraceDetails,
   ChatTraceEvent,
+  NativeAgentPermissionReplyOptions,
   CliErrorStatsFilters,
   CliErrorStatsResult,
   CliType,
@@ -1389,6 +1390,9 @@ export class MockWebBotClient implements WebBotClient {
         busyAgentNames: [],
         busyAgentCount: item.status === "busy" ? 1 : 0,
         promptPresets: clonePromptPresets(item.promptPresets),
+        supportedExecutionModes: ["cli", "native_agent"],
+        defaultExecutionMode: "cli",
+        nativeAgent: { command: "opencode", hostname: "127.0.0.1", port: 0 },
         cluster: {
           ...DEFAULT_CLUSTER,
           modelTiers: { ...DEFAULT_CLUSTER.modelTiers },
@@ -4760,8 +4764,19 @@ export class MockWebBotClient implements WebBotClient {
     return;
   }
 
-  async killTask(botAlias: string): Promise<string> {
+  async killTask(botAlias: string, options: AgentScopedOptions = {}): Promise<string> {
+    void options;
     return "已发送终止任务请求";
+  }
+
+  async replyNativeAgentPermission(
+    botAlias: string,
+    permissionId: string,
+    options: NativeAgentPermissionReplyOptions,
+  ): Promise<{ permissionId: string; approved: boolean }> {
+    void botAlias;
+    void options;
+    return { permissionId, approved: Boolean(options.approved) };
   }
 
   async restartService(): Promise<void> {

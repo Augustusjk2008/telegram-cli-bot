@@ -25,6 +25,7 @@ import type {
   ClusterTaskStatus,
   ChatMessage,
   ChatMessageMetaInfo,
+  ChatExecutionMode,
   ChatSendOptions,
   ChatStatusUpdate,
   CliParamsPayload,
@@ -151,6 +152,10 @@ function planModeStorageKey(botAlias: string, accountId?: string) {
   return `tcb.planMode.${storageScopePrefix(accountId)}${botAlias}`;
 }
 
+function executionModeStorageKey(botAlias: string, accountId?: string) {
+  return `tcb.executionMode.${storageScopePrefix(accountId)}${botAlias}`;
+}
+
 function isPlanExecutionPrompt(text: string) {
   return text.trimStart().startsWith("请按方案执行。方案文件：");
 }
@@ -182,6 +187,25 @@ function writeStoredPlanMode(botAlias: string, enabled: boolean, accountId?: str
     return;
   }
   window.localStorage.removeItem(planModeStorageKey(botAlias, accountId));
+}
+
+function readStoredExecutionMode(botAlias: string, accountId?: string): ChatExecutionMode {
+  if (typeof window === "undefined") {
+    return "cli";
+  }
+  const value = window.localStorage.getItem(executionModeStorageKey(botAlias, accountId));
+  return value === "native_agent" ? "native_agent" : "cli";
+}
+
+function writeStoredExecutionMode(botAlias: string, mode: ChatExecutionMode, accountId?: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  if (mode === "native_agent") {
+    window.localStorage.setItem(executionModeStorageKey(botAlias, accountId), mode);
+    return;
+  }
+  window.localStorage.removeItem(executionModeStorageKey(botAlias, accountId));
 }
 
 function readStoredQueuedMessage(botAlias: string, agentId: string, accountId?: string): QueuedChatMessage | null {
@@ -235,36 +259,40 @@ function clearStoredQueuedMessage(botAlias: string, agentId: string, accountId?:
   window.localStorage.removeItem(queuedMessageStorageKey(botAlias, agentId, accountId));
 }
 
-function agentOptions(agentId?: string) {
-  return agentId && agentId !== "main" ? { agentId } : undefined;
+function agentOptions(agentId?: string, executionMode?: ChatExecutionMode): { agentId?: string; executionMode?: ChatExecutionMode } | undefined {
+  const options = {
+    ...(agentId && agentId !== "main" ? { agentId } : {}),
+    ...(executionMode === "native_agent" ? { executionMode } : {}),
+  };
+  return Object.keys(options).length > 0 ? options : undefined;
 }
 
-function getScopedOverview(client: WebBotClient, botAlias: string, agentId: string) {
-  const options = agentOptions(agentId);
+function getScopedOverview(client: WebBotClient, botAlias: string, agentId: string, executionMode?: ChatExecutionMode) {
+  const options = agentOptions(agentId, executionMode);
   return options ? client.getBotOverview(botAlias, options) : client.getBotOverview(botAlias);
 }
 
-function listScopedMessages(client: WebBotClient, botAlias: string, agentId: string) {
-  const options = agentOptions(agentId);
+function listScopedMessages(client: WebBotClient, botAlias: string, agentId: string, executionMode?: ChatExecutionMode) {
+  const options = agentOptions(agentId, executionMode);
   return options ? client.listMessages(botAlias, options) : client.listMessages(botAlias);
 }
 
-function listScopedMessageDelta(client: WebBotClient, botAlias: string, afterId: string, limit: number, agentId: string) {
-  const options = agentOptions(agentId);
+function listScopedMessageDelta(client: WebBotClient, botAlias: string, afterId: string, limit: number, agentId: string, executionMode?: ChatExecutionMode) {
+  const options = agentOptions(agentId, executionMode);
   return options
     ? client.listMessageDelta(botAlias, afterId, limit, options)
     : client.listMessageDelta(botAlias, afterId, limit);
 }
 
-function getScopedMessageTrace(client: WebBotClient, botAlias: string, messageId: string, agentId: string) {
-  const options = agentOptions(agentId);
+function getScopedMessageTrace(client: WebBotClient, botAlias: string, messageId: string, agentId: string, executionMode?: ChatExecutionMode) {
+  const options = agentOptions(agentId, executionMode);
   return options
     ? client.getMessageTrace(botAlias, messageId, options)
     : client.getMessageTrace(botAlias, messageId);
 }
 
-function listScopedConversations(client: WebBotClient, botAlias: string, query: string, agentId: string) {
-  const options = agentOptions(agentId);
+function listScopedConversations(client: WebBotClient, botAlias: string, query: string, agentId: string, executionMode?: ChatExecutionMode) {
+  const options = agentOptions(agentId, executionMode);
   return options
     ? client.listConversations(botAlias, query, options)
     : client.listConversations(botAlias, query);
@@ -277,15 +305,15 @@ function isMissingClusterRunError(err: unknown) {
   );
 }
 
-function selectScopedConversation(client: WebBotClient, botAlias: string, conversationId: string, agentId: string) {
-  const options = agentOptions(agentId);
+function selectScopedConversation(client: WebBotClient, botAlias: string, conversationId: string, agentId: string, executionMode?: ChatExecutionMode) {
+  const options = agentOptions(agentId, executionMode);
   return options
     ? client.selectConversation(botAlias, conversationId, options)
     : client.selectConversation(botAlias, conversationId);
 }
 
-function createScopedConversation(client: WebBotClient, botAlias: string, agentId: string) {
-  const options = agentOptions(agentId);
+function createScopedConversation(client: WebBotClient, botAlias: string, agentId: string, executionMode?: ChatExecutionMode) {
+  const options = agentOptions(agentId, executionMode);
   return options ? client.createConversation(botAlias, "", options) : client.createConversation(botAlias);
 }
 
@@ -295,8 +323,9 @@ function deleteScopedConversation(
   conversationId: string,
   agentId: string,
   deleteNativeSession: boolean,
+  executionMode?: ChatExecutionMode,
 ) {
-  const options = agentOptions(agentId);
+  const options = agentOptions(agentId, executionMode);
   return client.deleteConversation(botAlias, conversationId, {
     ...(options || {}),
     deleteNativeSession,
@@ -519,6 +548,40 @@ function mergeMessageMeta(base?: ChatMessageMetaInfo, incoming?: ChatMessageMeta
   };
 
   return Object.values(meta).some((value) => typeof value !== "undefined") ? meta : undefined;
+}
+
+function isNativePermissionTrace(event: ChatTraceEvent, permissionId: string) {
+  const payload = event.payload && typeof event.payload === "object"
+    ? event.payload as Record<string, unknown>
+    : {};
+  const currentId = String(payload.id || payload.permissionID || payload.permission_id || "").trim();
+  return event.kind === "permission" && currentId === permissionId;
+}
+
+function markNativePermissionTraceReplied(meta: ChatMessageMetaInfo | undefined, permissionId: string, approved: boolean): ChatMessageMetaInfo | undefined {
+  if (!meta?.trace?.length) {
+    return meta;
+  }
+  return {
+    ...meta,
+    trace: meta.trace.map((event) => {
+      if (!isNativePermissionTrace(event, permissionId)) {
+        return event;
+      }
+      const payload = event.payload && typeof event.payload === "object"
+        ? event.payload as Record<string, unknown>
+        : {};
+      return {
+        ...event,
+        summary: approved ? "原生 agent 权限已允许" : "原生 agent 权限已拒绝",
+        payload: {
+          ...payload,
+          state: "permission.replied",
+          response: approved ? "once" : "reject",
+        },
+      };
+    }),
+  };
 }
 
 function buildComposedMessageText(text: string, attachments: PendingChatAttachment[]) {
@@ -827,6 +890,7 @@ type ChatMessageRowProps = {
   onLoadTrace: (messageId: string) => void;
   onToggleTracePanel: (messageClientStateKey: string) => void;
   onCopyFinalAnswer: (text: string) => boolean | void | Promise<boolean | void>;
+  onReplyNativePermission: (permissionId: string, approved: boolean) => Promise<void>;
   wideMessages: boolean;
 };
 
@@ -846,6 +910,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   onLoadTrace,
   onToggleTracePanel,
   onCopyFinalAnswer,
+  onReplyNativePermission,
   wideMessages,
 }: ChatMessageRowProps) {
   const reduceMotion = useReducedMotion();
@@ -984,6 +1049,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
             loadError={traceLoadState?.error}
             onLoadTrace={() => void onLoadTrace(item.id)}
             onCopyFinalAnswer={item.text ? () => onCopyFinalAnswer(item.text) : undefined}
+            onReplyNativePermission={onReplyNativePermission}
           />
         ) : null}
       </div>
@@ -1017,6 +1083,7 @@ const ChatMessageList = memo(function ChatMessageList({
   loadMessageTrace,
   handleToggleTracePanel,
   handleCopyFinalAnswer,
+  handleReplyNativePermission,
   executingPlanMessageId,
   planExecuteError,
   handleExecutePlan,
@@ -1034,6 +1101,7 @@ const ChatMessageList = memo(function ChatMessageList({
   loadMessageTrace: (messageId: string) => void;
   handleToggleTracePanel: (messageClientStateKey: string) => void;
   handleCopyFinalAnswer: (text: string) => boolean | void | Promise<boolean | void>;
+  handleReplyNativePermission: (permissionId: string, approved: boolean) => Promise<void>;
   executingPlanMessageId: string;
   planExecuteError: string;
   handleExecutePlan: (messageId: string, content: string) => void;
@@ -1057,6 +1125,7 @@ const ChatMessageList = memo(function ChatMessageList({
         onLoadTrace={loadMessageTrace}
         onToggleTracePanel={handleToggleTracePanel}
         onCopyFinalAnswer={handleCopyFinalAnswer}
+        onReplyNativePermission={handleReplyNativePermission}
         wideMessages={wideMessages}
       />
       {row.planDraft ? (
@@ -1137,6 +1206,7 @@ export function ChatScreen({
   const [clusterTaskError, setClusterTaskError] = useState("");
   const [clusterSaving, setClusterSaving] = useState(false);
   const [planMode, setPlanModeState] = useState(() => readStoredPlanMode(botAlias, storageScope));
+  const [executionMode, setExecutionModeState] = useState<ChatExecutionMode>(() => readStoredExecutionMode(botAlias, storageScope));
   const [executingPlanMessageId, setExecutingPlanMessageId] = useState("");
   const [planExecuteError, setPlanExecuteError] = useState("");
   const [composerPulseKey, setComposerPulseKey] = useState(0);
@@ -1157,6 +1227,7 @@ export function ChatScreen({
   const queuedMessageRef = useRef<QueuedChatMessage | null>(null);
   const agentsRef = useRef<AgentSummary[]>(fallbackAgents());
   const activeAgentIdRef = useRef(activeAgentId);
+  const executionModeRef = useRef(executionMode);
   const assistantPollTimerRef = useRef<number | null>(null);
   const sseRecoveryTimerRef = useRef<number | null>(null);
   const sseLastActivityAtRef = useRef<number | null>(null);
@@ -1178,6 +1249,15 @@ export function ChatScreen({
     setPlanModeState((current) => {
       const next = typeof value === "function" ? value(current) : value;
       writeStoredPlanMode(previousBotAliasRef.current, next, previousStorageScopeRef.current);
+      return next;
+    });
+  }, []);
+
+  const setExecutionMode = useCallback((value: ChatExecutionMode | ((current: ChatExecutionMode) => ChatExecutionMode)) => {
+    setExecutionModeState((current) => {
+      const next = typeof value === "function" ? value(current) : value;
+      writeStoredExecutionMode(previousBotAliasRef.current, next, previousStorageScopeRef.current);
+      executionModeRef.current = next;
       return next;
     });
   }, []);
@@ -1212,6 +1292,9 @@ export function ChatScreen({
     previousStorageScopeRef.current = storageScope;
     assistantSendVersionRef.current += 1;
     setPlanModeState(readStoredPlanMode(botAlias, storageScope));
+    const storedExecutionMode = readStoredExecutionMode(botAlias, storageScope);
+    executionModeRef.current = storedExecutionMode;
+    setExecutionModeState(storedExecutionMode);
   }, [botAlias, storageScope]);
 
   useEffect(() => {
@@ -1295,6 +1378,19 @@ export function ChatScreen({
   useEffect(() => {
     activeAgentIdRef.current = activeAgentId;
   }, [activeAgentId]);
+
+  useEffect(() => {
+    executionModeRef.current = executionMode;
+  }, [executionMode]);
+
+  useEffect(() => {
+    const supported = botOverview?.supportedExecutionModes?.length
+      ? botOverview.supportedExecutionModes
+      : ["cli" as const];
+    if (!supported.includes(executionModeRef.current)) {
+      setExecutionMode("cli");
+    }
+  }, [botOverview?.supportedExecutionModes, setExecutionMode]);
 
   useEffect(() => {
     clusterRunIdRef.current = clusterRunId;
@@ -1453,7 +1549,8 @@ export function ChatScreen({
 
         try {
           const agentId = activeAgentIdRef.current;
-          const overview = await getScopedOverview(client, botAlias, agentId);
+          const currentExecutionMode = executionModeRef.current;
+          const overview = await getScopedOverview(client, botAlias, agentId, currentExecutionMode);
           if (sendVersion !== assistantSendVersionRef.current || !isSseStreaming()) {
             return;
           }
@@ -1469,7 +1566,7 @@ export function ChatScreen({
             return;
           }
 
-          const messages = await listScopedMessages(client, botAlias, agentId);
+          const messages = await listScopedMessages(client, botAlias, agentId, currentExecutionMode);
           if (sendVersion !== assistantSendVersionRef.current || !isSseStreaming()) {
             return;
           }
@@ -1509,7 +1606,8 @@ export function ChatScreen({
 
     try {
       const agentId = activeAgentIdRef.current;
-      const overview = await getScopedOverview(client, botAlias, agentId);
+      const currentExecutionMode = executionModeRef.current;
+      const overview = await getScopedOverview(client, botAlias, agentId, currentExecutionMode);
       if (sendVersion !== assistantSendVersionRef.current || isSseStreaming()) {
         return;
       }
@@ -1542,12 +1640,12 @@ export function ChatScreen({
       if (shouldRefreshMessages) {
         const afterId = previousItems[previousItems.length - 1]?.id || "";
         if (hasStreamingAssistant) {
-          messages = await listScopedMessages(client, botAlias, agentId);
+          messages = await listScopedMessages(client, botAlias, agentId, currentExecutionMode);
         } else if (afterId) {
-          const delta = await listScopedMessageDelta(client, botAlias, afterId, 50, agentId);
+          const delta = await listScopedMessageDelta(client, botAlias, afterId, 50, agentId, currentExecutionMode);
           messages = delta.reset ? delta.items : [...previousItems, ...delta.items];
         } else {
-          messages = await listScopedMessages(client, botAlias, agentId);
+          messages = await listScopedMessages(client, botAlias, agentId, currentExecutionMode);
         }
       }
       if (sendVersion !== assistantSendVersionRef.current || isSseStreaming()) {
@@ -1653,8 +1751,8 @@ export function ChatScreen({
 
     Promise.all([
       loadAgents,
-      listScopedMessages(client, botAlias, requestedAgentId),
-      getScopedOverview(client, botAlias, requestedAgentId),
+      listScopedMessages(client, botAlias, requestedAgentId, executionModeRef.current),
+      getScopedOverview(client, botAlias, requestedAgentId, executionModeRef.current),
     ])
       .then(async ([agentData, initialMessages, initialOverview]) => {
         if (cancelled) return;
@@ -1667,8 +1765,8 @@ export function ChatScreen({
           activeAgentIdRef.current = nextAgentId;
           window.localStorage.setItem(activeAgentStorageKey(botAlias, storageScope), nextAgentId);
           [messages, overview] = await Promise.all([
-            listScopedMessages(client, botAlias, nextAgentId),
-            getScopedOverview(client, botAlias, nextAgentId),
+            listScopedMessages(client, botAlias, nextAgentId, executionModeRef.current),
+            getScopedOverview(client, botAlias, nextAgentId, executionModeRef.current),
           ]);
           if (cancelled || activeAgentIdRef.current !== nextAgentId) {
             return;
@@ -2055,6 +2153,23 @@ export function ChatScreen({
     }
   }, []);
 
+  const handleReplyNativePermission = useCallback(async (permissionId: string, approved: boolean) => {
+    try {
+      await client.replyNativeAgentPermission(botAlias, permissionId, {
+        approved,
+        agentId: activeAgentIdRef.current,
+        executionMode: "native_agent",
+      });
+      setItems((prev) => prev.map((item) => {
+        const nextMeta = markNativePermissionTraceReplied(item.meta, permissionId, approved);
+        return nextMeta === item.meta ? item : { ...item, meta: nextMeta };
+      }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "处理原生 agent 权限失败");
+      throw err;
+    }
+  }, [botAlias, client]);
+
   const loadMessageTrace = useCallback(async (messageId: string) => {
     const currentMessage = itemsRef.current.find((item) => item.id === messageId);
     if (!currentMessage || currentMessage.role !== "assistant") {
@@ -2081,7 +2196,7 @@ export function ChatScreen({
     }));
 
     try {
-      const traceDetails = await getScopedMessageTrace(client, botAlias, messageId, activeAgentIdRef.current);
+      const traceDetails = await getScopedMessageTrace(client, botAlias, messageId, activeAgentIdRef.current, executionModeRef.current);
       setItems((prev) => updateMessageByIdOrClientStateKey(prev, messageId, messageClientStateKey, (item) => ({
         ...item,
         meta: mergeMessageMeta(item.meta, {
@@ -2113,7 +2228,7 @@ export function ChatScreen({
     setConversationLoading(true);
     setError("");
     try {
-      const data = await listScopedConversations(client, botAlias, query, activeAgentIdRef.current);
+      const data = await listScopedConversations(client, botAlias, query, activeAgentIdRef.current, executionModeRef.current);
       setConversations(data.items);
     } catch (err) {
       setError(err instanceof Error ? err.message : "加载历史会话失败");
@@ -2135,7 +2250,7 @@ export function ChatScreen({
     setConversationLoading(true);
     setError("");
     try {
-      const data = await selectScopedConversation(client, botAlias, conversationId, activeAgentIdRef.current);
+      const data = await selectScopedConversation(client, botAlias, conversationId, activeAgentIdRef.current, executionModeRef.current);
       stopAssistantPoll();
       stopSseRecoveryWatch();
       stopClusterTaskPoll();
@@ -2161,6 +2276,10 @@ export function ChatScreen({
       setError("当前任务运行中，先终止或等待完成");
       return;
     }
+    if (executionModeRef.current === "native_agent" && activeAgentIdRef.current !== "main") {
+      setError("原生 agent 模式暂不支持子 agent，请切回主 agent 后继续");
+      return;
+    }
     if (botOverview?.cluster?.enabled && activeAgentIdRef.current !== "main") {
       setError("子 agent 仅支持查看历史，请切回主 agent 后继续");
       return;
@@ -2168,7 +2287,7 @@ export function ChatScreen({
     setConversationLoading(true);
     setError("");
     try {
-      const data = await createScopedConversation(client, botAlias, activeAgentIdRef.current);
+      const data = await createScopedConversation(client, botAlias, activeAgentIdRef.current, executionModeRef.current);
       stopAssistantPoll();
       stopSseRecoveryWatch();
       stopClusterTaskPoll();
@@ -2204,6 +2323,7 @@ export function ChatScreen({
         conversation.id,
         activeAgentIdRef.current,
         deleteNativeSession,
+        executionModeRef.current,
       );
       setConversations(data.items);
       if (conversation.active || data.messages) {
@@ -2296,8 +2416,8 @@ export function ChatScreen({
     setStreamStartedAtMs(null);
 
     Promise.all([
-      listScopedMessages(client, botAlias, normalized),
-      getScopedOverview(client, botAlias, normalized),
+      listScopedMessages(client, botAlias, normalized, executionModeRef.current),
+      getScopedOverview(client, botAlias, normalized, executionModeRef.current),
     ])
       .then(([messages, overview]) => {
         if (activeAgentIdRef.current !== normalized) {
@@ -2656,10 +2776,13 @@ export function ChatScreen({
       setConversations((prev) => [result.conversation, ...prev.map((item) => ({ ...item, active: false }))]);
       setHistoryPanelOpen(false);
       setPlanMode(false);
+      const currentExecutionMode = executionModeRef.current;
       await sendMessageInternal(result.executionMessage, {
-        sendOptions: botOverview?.cluster?.enabled
-          ? { taskMode: "standard", cluster: true }
-          : { taskMode: "standard" },
+        sendOptions: currentExecutionMode === "native_agent"
+          ? { taskMode: "standard", executionMode: currentExecutionMode }
+          : botOverview?.cluster?.enabled
+            ? { taskMode: "standard", cluster: true }
+            : { taskMode: "standard" },
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "执行方案失败";
@@ -2673,19 +2796,26 @@ export function ChatScreen({
 
   const handleSend = useCallback(async (text: string, mentions: AgentMention[] = []) => {
     const clusterMode = Boolean(botOverview?.cluster?.enabled);
-    if (clusterMode && activeAgentIdRef.current !== "main") {
+    const currentExecutionMode = executionModeRef.current;
+    const nativeSend = currentExecutionMode === "native_agent";
+    if (nativeSend && activeAgentIdRef.current !== "main") {
+      setError("原生 agent 模式暂不支持子 agent，请切回主 agent 后继续");
+      return;
+    }
+    if (!nativeSend && clusterMode && activeAgentIdRef.current !== "main") {
       setError("子 agent 仅支持查看历史，请切回主 agent 后继续");
       return;
     }
-    const clusterSend = clusterMode || mentions.length > 0;
+    const clusterSend = !nativeSend && (clusterMode || mentions.length > 0);
     const isExecutingPlanPrompt = isPlanExecutionPrompt(text);
     if (planMode && isExecutingPlanPrompt) {
       setPlanMode(false);
     }
-    const shouldSendPlanMode = planMode && !isExecutingPlanPrompt;
+    const shouldSendPlanMode = !nativeSend && planMode && !isExecutingPlanPrompt;
     const sendOptions = isExecutingPlanPrompt
       ? {
         taskMode: "standard" as const,
+        ...(nativeSend ? { executionMode: currentExecutionMode } : {}),
         ...(clusterSend ? { cluster: true, mentions } : {}),
       }
       : shouldSendPlanMode
@@ -2695,7 +2825,9 @@ export function ChatScreen({
       }
       : clusterSend
         ? { cluster: true, mentions }
-        : undefined;
+        : nativeSend
+          ? { executionMode: currentExecutionMode }
+          : undefined;
     if (isStreamingRef.current) {
       const nextQueuedMessage: QueuedChatMessage = {
         text: text.trim(),
@@ -2719,7 +2851,7 @@ export function ChatScreen({
       clearPendingAttachments: true,
       sendOptions,
     });
-  }, [botOverview?.cluster?.enabled, pendingAttachments, planMode, sendMessageInternal]);
+  }, [botOverview?.cluster?.enabled, pendingAttachments, planMode, sendMessageInternal, setPlanMode]);
 
   async function handleToggleClusterMode() {
     if (!botOverview?.cluster || clusterSaving) {
@@ -2820,7 +2952,11 @@ export function ChatScreen({
     setActionLoading("kill");
     setError("");
     try {
-      const message = await client.killTask(botAlias);
+      const currentExecutionMode = executionModeRef.current;
+      const message = await client.killTask(botAlias, {
+        ...(activeAgentIdRef.current !== "main" ? { agentId: activeAgentIdRef.current } : {}),
+        ...(currentExecutionMode === "native_agent" ? { executionMode: currentExecutionMode } : {}),
+      });
       appendSystemMessage(message || "已发送终止任务请求");
     } catch (err) {
       setError(err instanceof Error ? err.message : "终止任务失败");
@@ -2844,6 +2980,23 @@ export function ChatScreen({
       setModelSaving(false);
     }
   }
+
+  const handleExecutionModeChange = useCallback((mode: ChatExecutionMode) => {
+    if (mode === executionModeRef.current || isStreamingRef.current) {
+      return;
+    }
+    setError("");
+    setExecutionMode(mode);
+    if (mode === "native_agent") {
+      setPlanMode(false);
+      if (activeAgentIdRef.current !== "main") {
+        handleSelectAgent("main");
+      }
+      if (countPersistedHistoryItems(itemsRef.current) > 0) {
+        appendSystemMessage("已切换到原生 agent。当前会话已有历史时，建议新建会话后继续。");
+      }
+    }
+  }, [setExecutionMode, setPlanMode]);
 
   const handleSaveGlobalPromptPresets = useCallback(async (presets: PromptPreset[]) => {
     const nextPresets = await client.updateGlobalPromptPresets(presets);
@@ -2874,16 +3027,24 @@ export function ChatScreen({
   const assistantName = botAlias;
   const assistantAvatarName = botOverview?.avatarName || botAvatarName;
   const activeAgent = agents.find((agent) => agent.id === activeAgentId) || agents[0] || fallbackAgents()[0];
+  const supportedExecutionModes = botOverview?.supportedExecutionModes?.length
+    ? botOverview.supportedExecutionModes
+    : ["cli" as const];
+  const effectiveExecutionMode = supportedExecutionModes.includes(executionMode) ? executionMode : "cli";
+  const nativeExecutionMode = effectiveExecutionMode === "native_agent";
   const clusterMode = Boolean(botOverview?.cluster?.enabled);
   const activeClusterChildReadOnly = clusterMode && activeAgentId !== "main";
-  const chatMutationsDisabled = readOnly || activeClusterChildReadOnly;
-  const chatDisabledReason = activeClusterChildReadOnly
+  const activeNativeReadOnly = nativeExecutionMode && activeAgentId !== "main";
+  const chatMutationsDisabled = readOnly || activeClusterChildReadOnly || activeNativeReadOnly;
+  const chatDisabledReason = activeNativeReadOnly
+    ? "原生 agent 模式暂不支持子 agent，请切回主 agent"
+    : activeClusterChildReadOnly
     ? "集群子智能体只读，请切回主智能体发送消息"
     : disabledReason || readOnlyReason || (readOnly ? "主机已关闭聊天，当前无法发送消息" : "");
   const killTaskDisabled = chatMutationsDisabled || !isStreaming || actionLoading === "kill";
   const clusterAgents = agents.filter((agent) => !agent.isMain && agent.enabled);
   const showAgentSwitcher = agents.length > 1;
-  const showClusterToggle = Boolean(botOverview?.cluster) && botOverview?.botMode !== "assistant";
+  const showClusterToggle = Boolean(botOverview?.cluster) && botOverview?.botMode !== "assistant" && !nativeExecutionMode;
   const showTopChrome = !embedded && !isImmersive;
   const showActionBar = !isImmersive;
   const showImmersiveButton = !embedded && isVisible && Boolean(onToggleImmersive);
@@ -2897,7 +3058,9 @@ export function ChatScreen({
     : modelOptions;
   const messageContentWidthClass = embedded ? "mx-auto w-full max-w-5xl space-y-4" : "w-full space-y-4";
   const composerPlaceholder = chatDisabledReason
-    || (clusterMode ? "@ 可指定智能体集群" : (showAgentSwitcher ? `发给 ${activeAgent.name}...` : "输入消息"));
+    || (nativeExecutionMode
+      ? "输入消息"
+      : (clusterMode ? "@ 可指定智能体集群" : (showAgentSwitcher ? `发给 ${activeAgent.name}...` : "输入消息")));
   const deletedAttachmentKeysByMessage = useMemo(() => {
     const next: Record<string, Record<string, boolean>> = {};
     for (const [key, value] of Object.entries(deletedAttachmentKeys)) {
@@ -2977,11 +3140,15 @@ export function ChatScreen({
         <ChatActionBar
           visibleModelOptions={visibleModelOptions}
           selectedModel={selectedModel}
-          modelDisabled={modelSaving || readOnly}
+          modelDisabled={modelSaving || readOnly || nativeExecutionMode}
           onModelChange={(model) => void handleModelChange(model)}
+          executionMode={effectiveExecutionMode}
+          supportedExecutionModes={supportedExecutionModes}
+          executionModeDisabled={loading || isStreaming || readOnly}
+          onExecutionModeChange={handleExecutionModeChange}
           agents={showAgentSwitcher ? agents : []}
           activeAgentId={activeAgentId}
-          agentDisabled={loading}
+          agentDisabled={loading || nativeExecutionMode}
           onSelectAgent={handleSelectAgent}
           showClusterToggle={showClusterToggle}
           clusterMode={clusterMode}
@@ -2989,7 +3156,7 @@ export function ChatScreen({
           clusterDisabled={loading || isStreaming || clusterSaving || readOnly}
           onToggleClusterMode={() => void handleToggleClusterMode()}
           planMode={planMode}
-          planDisabled={loading || isStreaming || chatMutationsDisabled}
+          planDisabled={loading || isStreaming || chatMutationsDisabled || nativeExecutionMode}
           onTogglePlanMode={() => setPlanMode((value) => !value)}
           embedded={embedded}
           focused={focused}
@@ -3079,6 +3246,7 @@ export function ChatScreen({
             loadMessageTrace={loadMessageTrace}
             handleToggleTracePanel={handleToggleTracePanel}
             handleCopyFinalAnswer={handleCopyFinalAnswer}
+            handleReplyNativePermission={handleReplyNativePermission}
             executingPlanMessageId={executingPlanMessageId}
             planExecuteError={planExecuteError}
             handleExecutePlan={handleExecutePlan}

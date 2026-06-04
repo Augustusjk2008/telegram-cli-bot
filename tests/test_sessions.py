@@ -60,6 +60,8 @@ class TestClearBotSessions:
         reviewer = get_or_create_session(1, "main", 100, str(old_dir), agent_id="reviewer")
         main.codex_session_id = "codex-main"
         reviewer.codex_session_id = "codex-reviewer"
+        main.native_agent_session_id = "native-main"
+        reviewer.native_agent_session_id = "native-reviewer"
 
         update_bot_working_dir("main", str(new_dir))
 
@@ -67,6 +69,8 @@ class TestClearBotSessions:
         assert reviewer.working_dir == str(new_dir)
         assert main.codex_session_id is None
         assert reviewer.codex_session_id is None
+        assert main.native_agent_session_id is None
+        assert reviewer.native_agent_session_id is None
 
 class TestSessionPersistence:
     """测试会话持久化功能"""
@@ -85,4 +89,3 @@ class TestSessionPersistence:
             session = get_session(1, "main", 100, str(temp_dir))
 
         assert session.kimi_session_id == "kimi-session-1"
-

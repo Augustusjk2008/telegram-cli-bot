@@ -73,8 +73,9 @@ class StreamingPersistenceBuffer:
 
 
 class ChatHistoryService:
-    def __init__(self, store: ChatStore) -> None:
+    def __init__(self, store: ChatStore, *, native_provider_filter: str | None = None) -> None:
         self.store = store
+        self.native_provider_filter = str(native_provider_filter or "").strip() or None
 
     def reconcile_idle_streaming_turns(self, session: UserSession) -> int:
         with session._lock:
@@ -88,6 +89,7 @@ class ChatHistoryService:
             working_dir=session.working_dir,
             session_epoch=_session_epoch(session),
             conversation_id=_active_conversation_id(session) or None,
+            native_provider=self.native_provider_filter,
         )
 
     def _should_attempt_trace_recovery(self, context: dict[str, Any]) -> bool:
@@ -97,7 +99,8 @@ class ChatHistoryService:
             return False
         if str(context.get("completion_state") or "") not in {"completed", "cancelled"}:
             return False
-        provider = normalize_cli_type(str(context.get("native_provider") or ""))
+        raw_provider = str(context.get("native_provider") or "").strip().lower()
+        provider = raw_provider if raw_provider == "native_agent" else normalize_cli_type(raw_provider)
         if provider not in {"codex", "claude", "kimi"}:
             return False
         return bool(str(context.get("native_session_id") or "").strip())
@@ -155,7 +158,18 @@ class ChatHistoryService:
         prompt_surface_version: str | None = None,
         actor: dict[str, Any] | None = None,
     ) -> ChatTurnHandle:
-        had_active_conversation = bool(_active_conversation_id(session))
+        active_conversation_id = _active_conversation_id(session)
+        if active_conversation_id:
+            try:
+                active_provider = self.store.get_conversation_native_provider(active_conversation_id)
+            except KeyError:
+                active_provider = ""
+            if str(active_provider or "").strip().lower() != str(native_provider or "").strip().lower():
+                with session._lock:
+                    session.active_conversation_id = None
+                session.persist()
+                active_conversation_id = ""
+        had_active_conversation = bool(active_conversation_id)
         handle = self.store.begin_turn(
             bot_id=session.bot_id,
             bot_alias=session.bot_alias,
@@ -167,7 +181,7 @@ class ChatHistoryService:
             session_epoch=_session_epoch(session),
             user_text=user_text,
             native_provider=native_provider,
-            conversation_id=_active_conversation_id(session) or None,
+            conversation_id=active_conversation_id or None,
             assistant_home=assistant_home,
             managed_prompt_hash=managed_prompt_hash,
             prompt_surface_version=prompt_surface_version,
@@ -240,6 +254,7 @@ class ChatHistoryService:
             working_dir=session.working_dir,
             session_epoch=_session_epoch(session),
             conversation_id=_active_conversation_id(session) or None,
+            native_provider=self.native_provider_filter,
             limit=limit,
         )
         if items and not _active_conversation_id(session):
@@ -271,6 +286,7 @@ class ChatHistoryService:
             working_dir=session.working_dir,
             session_epoch=_session_epoch(session),
             conversation_id=_active_conversation_id(session) or None,
+            native_provider=self.native_provider_filter,
             limit=limit,
         )
 
@@ -340,6 +356,7 @@ class ChatHistoryService:
                 working_dir=session.working_dir,
                 session_epoch=_session_epoch(session),
                 conversation_id=_active_conversation_id(session) or None,
+                native_provider=self.native_provider_filter,
             ),
             "is_processing": is_processing,
             "running_reply": self.store.get_running_reply(
@@ -349,11 +366,13 @@ class ChatHistoryService:
                 working_dir=session.working_dir,
                 session_epoch=_session_epoch(session),
                 conversation_id=_active_conversation_id(session) or None,
+                native_provider=self.native_provider_filter,
             ) if is_processing else None,
             "session_ids": {
                 "codex_session_id": session.codex_session_id,
                 "claude_session_id": session.claude_session_id,
                 "kimi_session_id": session.kimi_session_id,
+                "native_agent_session_id": session.native_agent_session_id,
                 "claude_session_initialized": session.claude_session_initialized,
             },
             "active_conversation_id": _active_conversation_id(session),
@@ -369,6 +388,7 @@ class ChatHistoryService:
                 working_dir=session.working_dir,
                 session_epoch=_session_epoch(session),
                 conversation_id=_active_conversation_id(session) or None,
+                native_provider=self.native_provider_filter,
             ),
             "message_count": session.message_count,
             "bot_mode": profile.bot_mode,

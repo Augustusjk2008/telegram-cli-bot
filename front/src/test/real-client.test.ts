@@ -262,6 +262,75 @@ describe("RealWebBotClient", () => {
     expect(body.mentions[0]).toMatchObject({ agent_id: "reviewer", label: "代码审查" });
   });
 
+  test("sendMessage includes native agent execution mode", async () => {
+    const encoder = new TextEncoder();
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: vi.fn()
+            .mockResolvedValueOnce({
+              value: encoder.encode("data: {\"type\":\"done\",\"output\":\"ok\"}\n\n"),
+              done: false,
+            })
+            .mockResolvedValueOnce({ value: undefined, done: true }),
+          cancel: vi.fn().mockResolvedValue(undefined),
+        }),
+      },
+    });
+
+    const client = new RealWebBotClient();
+    await client.sendMessage("main", "hi", vi.fn(), undefined, undefined, {
+      executionMode: "native_agent",
+    });
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+    expect(body.execution_mode).toBe("native_agent");
+  });
+
+  test("killTask includes scoped agent and execution mode", async () => {
+    fetchMock.mockResolvedValue(jsonOk({ message: "已请求原生 agent 停止" }));
+
+    const client = new RealWebBotClient();
+    const message = await client.killTask("main", { agentId: "reviewer", executionMode: "native_agent" });
+
+    expect(message).toBe("已请求原生 agent 停止");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/bots/main/kill",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          agent_id: "reviewer",
+          execution_mode: "native_agent",
+        }),
+      }),
+    );
+  });
+
+  test("replyNativeAgentPermission posts scoped approval", async () => {
+    fetchMock.mockResolvedValue(jsonOk({ permission_id: "perm-1", approved: true }));
+
+    const client = new RealWebBotClient();
+    const result = await client.replyNativeAgentPermission("main", "perm-1", {
+      approved: true,
+      message: "允许本次读取",
+      executionMode: "native_agent",
+    });
+
+    expect(result).toEqual({ permissionId: "perm-1", approved: true });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/bots/main/native-agent/permissions/perm-1/reply",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          execution_mode: "native_agent",
+          approved: true,
+          message: "允许本次读取",
+        }),
+      }),
+    );
+  });
+
   test("maps context_usage from history and stream done message", async () => {
     const encoder = new TextEncoder();
     fetchMock
@@ -795,10 +864,10 @@ describe("RealWebBotClient", () => {
       systemPrompt: "写文档",
       enabled: true,
     });
-    await client.getBotOverview("main", { agentId: "reviewer" });
-    await client.listMessages("main", { agentId: "reviewer" });
-    await client.listConversations("main", "", { agentId: "reviewer" });
-    await client.createConversation("main", "审查", { agentId: "reviewer" });
+    await client.getBotOverview("main", { agentId: "reviewer", executionMode: "native_agent" });
+    await client.listMessages("main", { agentId: "reviewer", executionMode: "native_agent" });
+    await client.listConversations("main", "", { agentId: "reviewer", executionMode: "native_agent" });
+    await client.createConversation("main", "审查", { agentId: "reviewer", executionMode: "native_agent" });
 
     expect(agents.items[0]).toEqual(expect.objectContaining({
       id: "reviewer",
@@ -829,17 +898,17 @@ describe("RealWebBotClient", () => {
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       3,
-      "/api/bots/main?agent_id=reviewer",
+      "/api/bots/main?agent_id=reviewer&execution_mode=native_agent",
       expect.objectContaining({ cache: "no-store" }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       4,
-      "/api/bots/main/history?agent_id=reviewer",
+      "/api/bots/main/history?agent_id=reviewer&execution_mode=native_agent",
       expect.objectContaining({ cache: "no-store" }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       5,
-      "/api/bots/main/conversations?limit=80&agent_id=reviewer",
+      "/api/bots/main/conversations?limit=80&agent_id=reviewer&execution_mode=native_agent",
       expect.objectContaining({ cache: "no-store" }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -850,6 +919,7 @@ describe("RealWebBotClient", () => {
         body: JSON.stringify({
           title: "审查",
           agent_id: "reviewer",
+          execution_mode: "native_agent",
         }),
       }),
     );

@@ -87,6 +87,7 @@ def _snapshot_rank(data: dict[str, Any] | None) -> tuple[int, int, int, str]:
         int(bool(snapshot.get("codex_session_id")))
         + int(bool(snapshot.get("claude_session_id")))
         + int(bool(snapshot.get("kimi_session_id")))
+        + int(bool(snapshot.get("native_agent_session_id")))
     )
     session_epoch = max(0, int(snapshot.get("session_epoch", 0) or 0))
     last_activity = str(snapshot.get("last_activity") or "")
@@ -142,6 +143,10 @@ def _merge_session_snapshots(source: dict[str, Any] | None, target: dict[str, An
         merged.pop("claude_session_id", None)
     if not merged.get("kimi_session_id"):
         merged.pop("kimi_session_id", None)
+    if not merged.get("native_agent_session_id"):
+        merged.pop("native_agent_session_id", None)
+    if not merged.get("native_agent_server_key"):
+        merged.pop("native_agent_server_key", None)
     if not merged.get("active_conversation_id"):
         merged.pop("active_conversation_id", None)
     if not merged.get("managed_prompt_hash_seen"):
@@ -246,6 +251,8 @@ def migrate_local_history_snapshot(data: dict[str, Any] | None, *, default_worki
     next_data["codex_session_id"] = None
     next_data["claude_session_id"] = None
     next_data["kimi_session_id"] = None
+    next_data["native_agent_session_id"] = None
+    next_data["native_agent_server_key"] = None
     next_data["claude_session_initialized"] = False
     next_data.pop("running_user_text", None)
     next_data.pop("running_preview_text", None)
@@ -261,6 +268,8 @@ def save_session(
     codex_session_id: Optional[str] = None,
     claude_session_id: Optional[str] = None,
     kimi_session_id: Optional[str] = None,
+    native_agent_session_id: Optional[str] = None,
+    native_agent_server_key: Optional[str] = None,
     working_dir: Optional[str] = None,
     browse_dir: Optional[str] = None,
     history: Optional[list[dict]] = None,
@@ -288,6 +297,10 @@ def save_session(
         session_data["claude_session_id"] = claude_session_id
     if kimi_session_id:
         session_data["kimi_session_id"] = kimi_session_id
+    if native_agent_session_id:
+        session_data["native_agent_session_id"] = native_agent_session_id
+    if native_agent_server_key:
+        session_data["native_agent_server_key"] = native_agent_server_key
     if isinstance(working_dir, str) and working_dir:
         session_data["working_dir"] = working_dir
     if isinstance(browse_dir, str) and browse_dir:

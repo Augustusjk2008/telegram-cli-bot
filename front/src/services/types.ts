@@ -1,4 +1,5 @@
 export type CliType = "claude" | "codex" | "kimi";
+export type ChatExecutionMode = "cli" | "native_agent";
 export type BotStatus = "running" | "busy" | "unread" | "offline";
 export type BotServiceStatus = "online" | "offline";
 export type BotActivityStatus = "idle" | "busy";
@@ -219,6 +220,9 @@ export type BotSummary = {
   cluster?: BotClusterConfig;
   promptPresets?: PromptPreset[];
   globalPromptPresets?: PromptPreset[];
+  supportedExecutionModes?: ChatExecutionMode[];
+  defaultExecutionMode?: ChatExecutionMode;
+  nativeAgent?: Record<string, unknown>;
 };
 
 export type PromptPreset = {
@@ -453,6 +457,7 @@ export type AgentMutationResult = {
 
 export type AgentScopedOptions = {
   agentId?: string;
+  executionMode?: ChatExecutionMode;
 };
 
 export type WorkdirChangeConflict = {
@@ -538,6 +543,9 @@ export type BotOverview = {
   effectiveCapabilities?: Capability[];
   promptPresets?: PromptPreset[];
   globalPromptPresets?: PromptPreset[];
+  supportedExecutionModes?: ChatExecutionMode[];
+  defaultExecutionMode?: ChatExecutionMode;
+  nativeAgent?: Record<string, unknown>;
 };
 
 export type ChatTraceEvent = {
@@ -685,6 +693,12 @@ export type ChatSendOptions = {
   agentId?: string;
   cluster?: boolean;
   mentions?: AgentMention[];
+  executionMode?: ChatExecutionMode;
+};
+
+export type NativeAgentPermissionReplyOptions = AgentScopedOptions & {
+  approved: boolean;
+  message?: string;
 };
 
 export type BrowserNotificationPermission = NotificationPermission | "unsupported";

@@ -319,16 +319,23 @@ class ChatStore:
         agent_id: str = "main",
         working_dir: str,
         session_epoch: int,
+        native_provider: str | None = None,
     ) -> str | None:
+        provider_clause = ""
+        params: list[Any] = [bot_id, user_id, str(agent_id or "main"), working_dir, session_epoch]
+        if str(native_provider or "").strip():
+            provider_clause = "AND native_provider = ?"
+            params.append(str(native_provider or "").strip())
         row = conn.execute(
-            """
+            f"""
             SELECT id
             FROM conversations
             WHERE bot_id = ? AND user_id = ? AND agent_id = ? AND working_dir = ? AND session_epoch = ? AND archived_at IS NULL
+            {provider_clause}
             ORDER BY updated_at DESC, created_at DESC, id DESC
             LIMIT 1
             """,
-            (bot_id, user_id, str(agent_id or "main"), working_dir, session_epoch),
+            params,
         ).fetchone()
         if row is None:
             return None
@@ -344,6 +351,7 @@ class ChatStore:
         agent_id: str = "main",
         working_dir: str,
         session_epoch: int,
+        native_provider: str | None = None,
     ) -> str | None:
         normalized_id = str(conversation_id or "").strip()
         if not normalized_id:
@@ -354,6 +362,7 @@ class ChatStore:
                 agent_id=agent_id,
                 working_dir=working_dir,
                 session_epoch=session_epoch,
+                native_provider=native_provider,
             )
 
         row = conn.execute(
@@ -391,11 +400,11 @@ class ChatStore:
             """
             SELECT id
             FROM conversations
-            WHERE bot_id = ? AND user_id = ? AND agent_id = ? AND working_dir = ? AND session_epoch = ? AND archived_at IS NULL
+            WHERE bot_id = ? AND user_id = ? AND agent_id = ? AND working_dir = ? AND session_epoch = ? AND native_provider = ? AND archived_at IS NULL
             ORDER BY updated_at DESC, created_at DESC, id DESC
             LIMIT 1
             """,
-            (bot_id, user_id, str(agent_id or "main"), working_dir, session_epoch),
+            (bot_id, user_id, str(agent_id or "main"), working_dir, session_epoch, native_provider),
         ).fetchone()
 
         if row is not None:
@@ -604,6 +613,20 @@ class ChatStore:
                     raise KeyError(conversation_id)
                 return self._conversation_from_row(row)
 
+    def get_conversation_native_provider(self, conversation_id: str) -> str:
+        conn = self._connect(create=False)
+        if conn is None:
+            raise KeyError(conversation_id)
+        with closing(conn):
+            with conn:
+                row = conn.execute(
+                    "SELECT native_provider FROM conversations WHERE id = ? AND archived_at IS NULL",
+                    (conversation_id,),
+                ).fetchone()
+                if row is None:
+                    raise KeyError(conversation_id)
+                return str(row["native_provider"] or "")
+
     def list_conversations(
         self,
         *,
@@ -614,6 +637,7 @@ class ChatStore:
         limit: int = 50,
         query: str = "",
         include_archived: bool = False,
+        native_provider: str | None = None,
     ) -> list[dict[str, Any]]:
         conn = self._connect(create=False)
         if conn is None:
@@ -624,6 +648,10 @@ class ChatStore:
         archived_clause = "" if include_archived else "AND archived_at IS NULL"
         query_clause = ""
         params: list[Any] = [bot_id, user_id, str(agent_id or "main"), working_dir]
+        provider_clause = ""
+        if str(native_provider or "").strip():
+            provider_clause = "AND native_provider = ?"
+            params.append(str(native_provider or "").strip())
         if normalized_query:
             query_clause = "AND (title LIKE ? OR last_message_preview LIKE ?)"
             query_value = f"%{normalized_query}%"
@@ -638,6 +666,7 @@ class ChatStore:
                     FROM conversations
                     WHERE bot_id = ? AND user_id = ? AND agent_id = ? AND working_dir = ?
                     {archived_clause}
+                    {provider_clause}
                     {query_clause}
                     ORDER BY pinned DESC, updated_at DESC, created_at DESC, id DESC
                     LIMIT ?
@@ -1363,6 +1392,13 @@ class ChatStore:
             "tool_call_count": int(trace_stats.get("tool_call_count", 0) or 0),
             "process_count": int(trace_stats.get("process_count", 0) or 0),
         }
+        native_provider = str(row["native_provider"] or "").strip()
+        native_session_id = str(row["native_session_id"] or "").strip()
+        if native_provider or native_session_id:
+            meta["native_source"] = {
+                "provider": native_provider,
+                "session_id": native_session_id,
+            }
         if str(row["role"] or "") == "assistant":
             try:
                 parsed_context_usage = _parse_json(row["context_usage_json"])
@@ -1552,6 +1588,7 @@ class ChatStore:
         session_epoch: int,
         agent_id: str = "main",
         conversation_id: str | None = None,
+        native_provider: str | None = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
         started_at = time.perf_counter()
@@ -1568,6 +1605,7 @@ class ChatStore:
                     agent_id=agent_id,
                     working_dir=working_dir,
                     session_epoch=session_epoch,
+                    native_provider=native_provider,
                 )
         if resolved_conversation_id is None:
             return []
@@ -1595,6 +1633,7 @@ class ChatStore:
         session_epoch: int,
         agent_id: str = "main",
         conversation_id: str | None = None,
+        native_provider: str | None = None,
     ) -> int:
         started_at = time.perf_counter()
         conn = self._connect(create=False)
@@ -1610,6 +1649,7 @@ class ChatStore:
                     agent_id=agent_id,
                     working_dir=working_dir,
                     session_epoch=session_epoch,
+                    native_provider=native_provider,
                 )
                 if resolved_conversation_id is None:
                     return 0
@@ -1640,6 +1680,7 @@ class ChatStore:
         session_epoch: int,
         agent_id: str = "main",
         conversation_id: str | None = None,
+        native_provider: str | None = None,
         error_code: str = "stale_stream_recovered",
         fallback_content: str = "上次运行未正常结束，已停止显示正在输出。",
     ) -> int:
@@ -1658,6 +1699,7 @@ class ChatStore:
                     agent_id=agent_id,
                     working_dir=working_dir,
                     session_epoch=session_epoch,
+                    native_provider=native_provider,
                 )
                 if resolved_conversation_id is None:
                     return 0
@@ -1715,6 +1757,7 @@ class ChatStore:
         session_epoch: int,
         agent_id: str = "main",
         conversation_id: str | None = None,
+        native_provider: str | None = None,
     ) -> dict[str, Any] | None:
         started_at = time.perf_counter()
         conn = self._connect(create=False)
@@ -1730,6 +1773,7 @@ class ChatStore:
                     agent_id=agent_id,
                     working_dir=working_dir,
                     session_epoch=session_epoch,
+                    native_provider=native_provider,
                 )
                 if resolved_conversation_id is None:
                     return None

@@ -212,7 +212,7 @@ export function ConversationHistoryPanel({
                 onChange={(event) => setDeleteNativeSession(event.target.checked)}
                 className="h-4 w-4 rounded border-[var(--border)]"
               />
-              <span>同时清除关联 CLI session 存储</span>
+              <span>同时清除关联会话 session 存储</span>
             </label>
             <div className="mt-4 flex justify-end gap-2">
               <button

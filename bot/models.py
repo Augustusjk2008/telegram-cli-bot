@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from bot.config import CLI_TYPE, CLI_PATH, WORKING_DIR
+from bot.config import CLI_TYPE, CLI_PATH, NATIVE_AGENT_PATH, WORKING_DIR
 from bot.cli_params import CliParamsConfig
 from bot.cluster.config import (
     AgentClusterConfig,
@@ -28,6 +28,47 @@ PROMPT_PRESET_MAX_ITEMS = 50
 PROMPT_PRESET_TITLE_MAX_LENGTH = 80
 PROMPT_PRESET_CONTENT_MAX_LENGTH = 12000
 PROMPT_PRESET_ID_MAX_LENGTH = 128
+EXECUTION_MODE_CLI = "cli"
+EXECUTION_MODE_NATIVE_AGENT = "native_agent"
+SUPPORTED_EXECUTION_MODES = {EXECUTION_MODE_CLI, EXECUTION_MODE_NATIVE_AGENT}
+
+
+def normalize_execution_mode(value: Any, *, default: str = EXECUTION_MODE_CLI) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in SUPPORTED_EXECUTION_MODES:
+        return normalized
+    return default if default in SUPPORTED_EXECUTION_MODES else EXECUTION_MODE_CLI
+
+
+def normalize_execution_modes(value: Any) -> list[str]:
+    if isinstance(value, (list, tuple, set)):
+        modes = [normalize_execution_mode(item, default="") for item in value]
+    else:
+        modes = [EXECUTION_MODE_CLI]
+    result: list[str] = []
+    for mode in modes:
+        if mode in SUPPORTED_EXECUTION_MODES and mode not in result:
+            result.append(mode)
+    return result or [EXECUTION_MODE_CLI]
+
+
+def normalize_native_agent_config(value: Any) -> dict[str, Any]:
+    data = value if isinstance(value, dict) else {}
+    command = str(data.get("command") or data.get("path") or NATIVE_AGENT_PATH or "opencode").strip() or "opencode"
+    hostname = str(data.get("hostname") or data.get("host") or "127.0.0.1").strip() or "127.0.0.1"
+    raw_port = data.get("port")
+    port = 0
+    try:
+        port = max(0, int(raw_port or 0))
+    except (TypeError, ValueError):
+        port = 0
+    server_password = str(data.get("server_password") or data.get("serverPassword") or "").strip()
+    return {
+        "command": command,
+        "hostname": hostname,
+        "port": port,
+        "server_password": server_password,
+    }
 
 
 def normalize_prompt_presets(value: Any, *, strict: bool = False) -> list[dict[str, str]]:
@@ -152,6 +193,9 @@ class BotProfile:
     agents: List[AgentProfile] = field(default_factory=list)
     cluster: BotClusterConfig = field(default_factory=BotClusterConfig)
     prompt_presets: List[dict[str, str]] = field(default_factory=list)
+    supported_execution_modes: List[str] = field(default_factory=lambda: ["cli"])
+    default_execution_mode: str = "cli"
+    native_agent: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         result = {
@@ -161,6 +205,9 @@ class BotProfile:
             "working_dir": self.working_dir,
             "enabled": self.enabled,
             "bot_mode": self.bot_mode,
+            "supported_execution_modes": normalize_execution_modes(self.supported_execution_modes),
+            "default_execution_mode": normalize_execution_mode(self.default_execution_mode),
+            "native_agent": normalize_native_agent_config(self.native_agent),
         }
         if self.avatar_name:
             result["avatar_name"] = self.avatar_name
@@ -223,6 +270,13 @@ class BotProfile:
             agents=agents,
             cluster=normalize_bot_cluster_config(data.get("cluster")),
             prompt_presets=normalize_prompt_presets(data.get("prompt_presets", data.get("promptPresets"))),
+            supported_execution_modes=normalize_execution_modes(
+                data.get("supported_execution_modes", data.get("supportedExecutionModes"))
+            ),
+            default_execution_mode=normalize_execution_mode(
+                data.get("default_execution_mode", data.get("defaultExecutionMode", "cli"))
+            ),
+            native_agent=normalize_native_agent_config(data.get("native_agent", data.get("nativeAgent"))),
         )
 
 
@@ -240,6 +294,9 @@ class UserSession:
     codex_session_id: Optional[str] = None
     claude_session_id: Optional[str] = None
     kimi_session_id: Optional[str] = None
+    native_agent_session_id: Optional[str] = None
+    native_agent_server_key: Optional[str] = None
+    native_agent_run_id: Optional[str] = None
     claude_session_initialized: bool = False
     process: Optional[subprocess.Popen] = None
     is_processing: bool = False
@@ -336,6 +393,7 @@ class UserSession:
         terminate_session_process(self)
         with self._lock:
             self.process = None
+            self.native_agent_run_id = None
             self.stop_requested = False
             self.is_processing = False
             self.running_user_text = None
@@ -408,6 +466,9 @@ class UserSession:
             self.codex_session_id = None
             self.claude_session_id = None
             self.kimi_session_id = None
+            self.native_agent_session_id = None
+            self.native_agent_server_key = None
+            self.native_agent_run_id = None
             self.claude_session_initialized = False
             self.active_conversation_id = None
         self.persist()

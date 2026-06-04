@@ -1,13 +1,17 @@
 import { ClipboardList, History, LoaderCircle, Maximize2, Minimize2, Network, Square } from "lucide-react";
 import { AgentSwitcher } from "./AgentSwitcher";
 import { toolbarButtonClass } from "./ToolbarButton";
-import type { AgentSummary } from "../services/types";
+import type { AgentSummary, ChatExecutionMode } from "../services/types";
 
 type Props = {
   visibleModelOptions: string[];
   selectedModel: string;
   modelDisabled?: boolean;
   onModelChange: (model: string) => void;
+  executionMode: ChatExecutionMode;
+  supportedExecutionModes?: ChatExecutionMode[];
+  executionModeDisabled?: boolean;
+  onExecutionModeChange: (mode: ChatExecutionMode) => void;
   agents: AgentSummary[];
   activeAgentId: string;
   agentDisabled?: boolean;
@@ -34,12 +38,18 @@ const neutralButtonClassName = toolbarButtonClass("ghost", "sm", "h-8 rounded-md
 const iconButtonClassName = toolbarButtonClass("ghost", "icon", "h-8 w-8 rounded-md border-transparent bg-transparent");
 const activeClusterButtonClassName = "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-[var(--accent-outline)] bg-[var(--accent-soft)] px-2.5 text-xs font-medium text-[var(--accent)] transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:opacity-60";
 const activePlanButtonClassName = "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-[var(--accent-outline)] bg-[var(--workbench-active-bg)] px-2.5 text-xs font-medium text-[var(--accent)] transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:opacity-60";
+const segmentedButtonClassName = "inline-flex h-8 shrink-0 items-center rounded-md border border-transparent px-2.5 text-xs font-medium text-[var(--muted)] transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:opacity-60";
+const activeSegmentedButtonClassName = "inline-flex h-8 shrink-0 items-center rounded-md border border-[var(--accent-outline)] bg-[var(--workbench-active-bg)] px-2.5 text-xs font-medium text-[var(--accent)] transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:opacity-60";
 
 export function ChatActionBar({
   visibleModelOptions,
   selectedModel,
   modelDisabled = false,
   onModelChange,
+  executionMode,
+  supportedExecutionModes = ["cli"],
+  executionModeDisabled = false,
+  onExecutionModeChange,
   agents,
   activeAgentId,
   agentDisabled = false,
@@ -66,6 +76,28 @@ export function ChatActionBar({
         data-testid="chat-action-bar"
         className="flex max-w-full gap-2 overflow-x-auto"
       >
+        {supportedExecutionModes.length > 1 ? (
+          <div className={groupClassName} role="group" aria-label="执行模式">
+            <button
+              type="button"
+              aria-pressed={executionMode === "cli"}
+              disabled={executionModeDisabled}
+              onClick={() => onExecutionModeChange("cli")}
+              className={executionMode === "cli" ? activeSegmentedButtonClassName : segmentedButtonClassName}
+            >
+              CLI
+            </button>
+            <button
+              type="button"
+              aria-pressed={executionMode === "native_agent"}
+              disabled={executionModeDisabled}
+              onClick={() => onExecutionModeChange("native_agent")}
+              className={executionMode === "native_agent" ? activeSegmentedButtonClassName : segmentedButtonClassName}
+            >
+              原生 agent
+            </button>
+          </div>
+        ) : null}
         <div className={groupClassName} role="group" aria-label="聊天上下文">
           {visibleModelOptions.length > 0 ? (
             <select

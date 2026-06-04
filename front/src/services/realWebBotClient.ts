@@ -72,6 +72,7 @@ import type {
   BotSummary,
   ChatAttachmentDeleteResult,
   ChatAttachmentUploadResult,
+  ChatExecutionMode,
   ChatSendOptions,
   ChatMessage,
   ChatMessageContextUsage,
@@ -79,6 +80,7 @@ import type {
   ChatMessageMetaInfo,
   ChatStatusUpdate,
   ChatTraceEvent,
+  NativeAgentPermissionReplyOptions,
   CliErrorStatsFilters,
   CliErrorStatsItem,
   CliErrorStatsResult,
@@ -237,6 +239,14 @@ type RawBotSummary = {
   promptPresets?: RawPromptPreset[];
   global_prompt_presets?: RawPromptPreset[];
   globalPromptPresets?: RawPromptPreset[];
+  supported_execution_modes?: string[];
+  supportedExecutionModes?: string[];
+  default_execution_mode?: string;
+  defaultExecutionMode?: string;
+  execution_mode?: string;
+  executionMode?: string;
+  native_agent?: Record<string, unknown>;
+  nativeAgent?: Record<string, unknown>;
 };
 
 type RawPromptPreset = {
@@ -1422,6 +1432,22 @@ function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
   if (Array.isArray(raw.effective_capabilities) || Array.isArray(raw.effectiveCapabilities)) {
     summary.effectiveCapabilities = (raw.effective_capabilities ?? raw.effectiveCapabilities ?? []).map((item) => item as Capability);
   }
+  const supportedExecutionModes = mapExecutionModes(raw.supported_execution_modes ?? raw.supportedExecutionModes);
+  if (supportedExecutionModes) {
+    summary.supportedExecutionModes = supportedExecutionModes;
+  }
+  const defaultExecutionMode = normalizeExecutionMode(raw.default_execution_mode ?? raw.defaultExecutionMode);
+  if (defaultExecutionMode) {
+    summary.defaultExecutionMode = defaultExecutionMode;
+  }
+  const executionMode = normalizeExecutionMode(raw.execution_mode ?? raw.executionMode);
+  if (executionMode) {
+    summary.executionMode = executionMode;
+  }
+  const nativeAgent = raw.native_agent ?? raw.nativeAgent;
+  if (nativeAgent && typeof nativeAgent === "object") {
+    summary.nativeAgent = nativeAgent;
+  }
   if (raw.owner_account_id || raw.ownerAccountId) {
     summary.ownerAccountId = String(raw.owner_account_id ?? raw.ownerAccountId ?? "");
   }
@@ -1713,6 +1739,19 @@ function appendAgentParam(params: URLSearchParams, agentId?: string) {
   }
 }
 
+function appendExecutionModeParam(params: URLSearchParams, executionMode?: ChatExecutionMode) {
+  if (executionMode === "native_agent") {
+    params.set("execution_mode", executionMode);
+  }
+}
+
+function scopedRequestBody(options: AgentScopedOptions = {}) {
+  return {
+    ...(options.agentId ? { agent_id: options.agentId } : {}),
+    ...(options.executionMode === "native_agent" ? { execution_mode: options.executionMode } : {}),
+  };
+}
+
 function mapWorkdirChangeConflict(raw: unknown): WorkdirChangeConflict | undefined {
   if (!raw || typeof raw !== "object") {
     return undefined;
@@ -1828,13 +1867,39 @@ function mapTraceEvent(raw?: RawChatTraceEvent | null): ChatTraceEvent | null {
   return event;
 }
 
+function normalizeExecutionMode(value: unknown): ChatExecutionMode | undefined {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "cli" || normalized === "native_agent") {
+    return normalized;
+  }
+  return undefined;
+}
+
+function mapExecutionModes(value: unknown): ChatExecutionMode[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const modes = value
+    .map((item) => normalizeExecutionMode(item))
+    .filter((item): item is ChatExecutionMode => Boolean(item));
+  return modes.length > 0 ? Array.from(new Set(modes)) : undefined;
+}
+
+function displayNativeProvider(provider?: string) {
+  const normalized = String(provider || "").trim().toLowerCase();
+  if (normalized === "native_agent" || normalized === "opencode") {
+    return "原生 agent";
+  }
+  return provider || undefined;
+}
+
 function mapContextUsage(raw?: RawChatMessageContextUsage | null): ChatMessageContextUsage | undefined {
   if (!raw) {
     return undefined;
   }
   const contextUsage: ChatMessageContextUsage = {};
   if (raw.provider) {
-    contextUsage.provider = raw.provider;
+    contextUsage.provider = displayNativeProvider(raw.provider);
   }
   if (raw.source) {
     contextUsage.source = raw.source;
@@ -1906,7 +1971,7 @@ function mapMessageMeta(raw?: RawChatMessageMeta | null): ChatMessageMetaInfo | 
   }
   if (raw.native_source?.provider || raw.native_source?.session_id) {
     meta.nativeSource = {
-      provider: raw.native_source.provider || undefined,
+      provider: displayNativeProvider(raw.native_source.provider),
       sessionId: raw.native_source.session_id || undefined,
     };
   }
@@ -2033,7 +2098,7 @@ function mapConversationSummary(raw: RawConversationSummary): ConversationSummar
     workingDir: String(raw.working_dir || ""),
     ...(nativeProvider || nativeSessionId ? {
       nativeSource: {
-        provider: nativeProvider,
+        provider: displayNativeProvider(nativeProvider),
         sessionId: nativeSessionId,
       },
     } : {}),
@@ -4049,6 +4114,7 @@ export class RealWebBotClient implements WebBotClient {
   async getBotOverview(botAlias: string, options: AgentScopedOptions = {}): Promise<BotOverview> {
     const params = new URLSearchParams();
     appendAgentParam(params, options.agentId);
+    appendExecutionModeParam(params, options.executionMode);
     const suffix = params.toString() ? `?${params.toString()}` : "";
     const data = await this.requestJson<{
       bot: RawBotSummary & { assistant_runtime?: RawAssistantRuntimeSnapshot | null };
@@ -4090,6 +4156,7 @@ export class RealWebBotClient implements WebBotClient {
   async listMessages(botAlias: string, options: AgentScopedOptions = {}): Promise<ChatMessage[]> {
     const params = new URLSearchParams();
     appendAgentParam(params, options.agentId);
+    appendExecutionModeParam(params, options.executionMode);
     const suffix = params.toString() ? `?${params.toString()}` : "";
     const data = await this.requestJson<{ items: RawHistoryItem[] }>(`/api/bots/${encodeURIComponent(botAlias)}/history${suffix}`);
     return data.items.map((item, index) => mapChatMessage(item, index));
@@ -4101,6 +4168,7 @@ export class RealWebBotClient implements WebBotClient {
       params.set("q", query.trim());
     }
     appendAgentParam(params, options.agentId);
+    appendExecutionModeParam(params, options.executionMode);
     const data = await this.requestJson<{ items: RawConversationSummary[]; active_conversation_id: string }>(
       `/api/bots/${encodeURIComponent(botAlias)}/conversations?${params.toString()}`,
     );
@@ -4118,7 +4186,7 @@ export class RealWebBotClient implements WebBotClient {
         headers: this.headers({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           title,
-          ...(options.agentId ? { agent_id: options.agentId } : {}),
+          ...scopedRequestBody(options),
         }),
       },
     );
@@ -4157,7 +4225,7 @@ export class RealWebBotClient implements WebBotClient {
       {
         method: "POST",
         headers: this.headers({ "Content-Type": "application/json" }),
-        body: JSON.stringify(options.agentId ? { agent_id: options.agentId } : {}),
+        body: JSON.stringify(scopedRequestBody(options)),
       },
     );
     return {
@@ -4173,6 +4241,7 @@ export class RealWebBotClient implements WebBotClient {
   ): Promise<ConversationDeleteResult> {
     const params = new URLSearchParams();
     appendAgentParam(params, options.agentId);
+    appendExecutionModeParam(params, options.executionMode);
     if (options.deleteNativeSession) {
       params.set("delete_native_session", "true");
     }
@@ -4224,6 +4293,7 @@ export class RealWebBotClient implements WebBotClient {
       limit: String(limit),
     });
     appendAgentParam(params, options.agentId);
+    appendExecutionModeParam(params, options.executionMode);
     const data = await this.requestJson<{ items: RawHistoryItem[]; reset: boolean }>(
       `/api/bots/${encodeURIComponent(botAlias)}/history/delta?${params.toString()}`,
     );
@@ -4236,6 +4306,7 @@ export class RealWebBotClient implements WebBotClient {
   async getMessageTrace(botAlias: string, messageId: string, options: AgentScopedOptions = {}): Promise<ChatTraceDetails> {
     const params = new URLSearchParams();
     appendAgentParam(params, options.agentId);
+    appendExecutionModeParam(params, options.executionMode);
     const suffix = params.toString() ? `?${params.toString()}` : "";
     const data = await this.requestJson<RawChatTraceDetails>(
       `/api/bots/${encodeURIComponent(botAlias)}/history/${encodeURIComponent(messageId)}/trace${suffix}`,
@@ -4262,6 +4333,7 @@ export class RealWebBotClient implements WebBotClient {
         ...(options?.taskPayload ? { task_payload: options.taskPayload } : {}),
         ...(options?.visibleText ? { visible_text: options.visibleText } : {}),
         ...(options?.agentId ? { agent_id: options.agentId } : {}),
+        ...(options?.executionMode ? { execution_mode: options.executionMode } : {}),
         ...(options?.cluster ? { cluster: true } : {}),
         ...(options?.mentions ? {
           mentions: options.mentions.map((mention) => ({
@@ -4396,6 +4468,33 @@ export class RealWebBotClient implements WebBotClient {
       state: "done",
       ...(typeof finalElapsedSeconds === "number" ? { elapsedSeconds: finalElapsedSeconds } : {}),
       ...(meta ? { meta } : {}),
+    };
+  }
+
+  async replyNativeAgentPermission(
+    botAlias: string,
+    permissionId: string,
+    options: NativeAgentPermissionReplyOptions,
+  ): Promise<{ permissionId: string; approved: boolean }> {
+    const data = await this.requestJson<{
+      permission_id?: string;
+      permissionId?: string;
+      approved?: boolean;
+    }>(
+      `/api/bots/${encodeURIComponent(botAlias)}/native-agent/permissions/${encodeURIComponent(permissionId)}/reply`,
+      {
+        method: "POST",
+        headers: this.headers({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          ...scopedRequestBody(options),
+          approved: Boolean(options.approved),
+          ...(options.message ? { message: options.message } : {}),
+        }),
+      },
+    );
+    return {
+      permissionId: String(data.permission_id || data.permissionId || permissionId),
+      approved: Boolean(data.approved),
     };
   }
 
@@ -5007,9 +5106,11 @@ export class RealWebBotClient implements WebBotClient {
     });
   }
 
-  async killTask(botAlias: string): Promise<string> {
+  async killTask(botAlias: string, options: AgentScopedOptions = {}): Promise<string> {
     const data = await this.requestJson<{ message?: string }>(`/api/bots/${encodeURIComponent(botAlias)}/kill`, {
       method: "POST",
+      headers: this.headers({ "Content-Type": "application/json" }),
+      body: JSON.stringify(scopedRequestBody(options)),
     });
     return data.message || "已发送终止任务请求";
   }

@@ -25,3 +25,7 @@ def register(app: web.Application, server) -> None:
     )
     app.router.add_post("/api/bots/{alias}/reset", server.post_reset)
     app.router.add_post("/api/bots/{alias}/kill", server.post_kill)
+    app.router.add_post(
+        "/api/bots/{alias}/native-agent/permissions/{permission_id}/reply",
+        server.post_native_agent_permission_reply,
+    )

@@ -84,6 +84,7 @@ from bot.web.api_service import (
     read_file_content,
     move_path,
     rename_path,
+    reply_native_agent_permission,
     run_chat,
     run_cli_chat,
     save_chat_attachment,
@@ -256,6 +257,7 @@ def web_manager(temp_dir: Path) -> MultiBotManager:
         cli_path="codex",
         working_dir=str(temp_dir),
         enabled=True,
+        supported_execution_modes=["cli", "native_agent"],
     )
     return MultiBotManager(main_profile=profile, storage_file=str(storage_file))
 
@@ -2291,6 +2293,30 @@ def test_conversation_api_create_list_and_select(web_manager: MultiBotManager, t
     assert session.active_conversation_id == conversation_id
 
 
+def test_native_agent_conversation_api_uses_native_provider(web_manager: MultiBotManager, tmp_path: Path):
+    web_manager.main_profile.working_dir = str(tmp_path)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+
+    created = create_conversation(web_manager, "main", 1001, "原生任务", execution_mode="native_agent")
+    conversation_id = created["conversation"]["id"]
+
+    assert created["conversation"]["native_provider"] == "native_agent"
+    assert created["conversation"]["execution_mode"] == "native_agent"
+
+    with session._lock:
+        session.native_agent_session_id = "native-old"
+    session.persist()
+
+    selected = select_conversation(web_manager, "main", 1001, conversation_id, execution_mode="native_agent")
+
+    assert selected["conversation"]["execution_mode"] == "native_agent"
+    assert session.native_agent_session_id is None
+    with pytest.raises(WebApiError) as exc_info:
+        select_conversation(web_manager, "main", 1001, conversation_id, execution_mode="cli")
+    assert exc_info.value.code == "conversation_execution_mode_mismatch"
+
+
 def test_conversation_api_delete_all_clears_bot_workspace_sessions(web_manager: MultiBotManager, tmp_path: Path):
     web_manager.main_profile.working_dir = str(tmp_path)
     session = get_session_for_alias(web_manager, "main", 1001)
@@ -2421,6 +2447,47 @@ async def test_stream_cli_chat_emits_trace_events_and_done_message(web_manager: 
     assert trace_events[1]["event"]["kind"] == "tool_result"
     assert done_event["message"]["role"] == "assistant"
     assert done_event["message"]["content"] == "目录已读取完成。"
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_routes_native_agent_execution_mode(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, Any] = {}
+
+    class FakeNativeService:
+        async def stream_chat(self, **kwargs):
+            captured.update(kwargs)
+            yield {"type": "meta", "execution_mode": "native_agent"}
+            yield {
+                "type": "done",
+                "output": "原生回复",
+                "message": {
+                    "id": "assistant-native",
+                    "role": "assistant",
+                    "content": "原生回复",
+                    "created_at": "2026-06-04T00:00:00",
+                    "meta": {"native_source": {"provider": "native_agent", "session_id": "native-1"}},
+                },
+                "elapsed_seconds": 1,
+                "returncode": 0,
+            }
+
+    monkeypatch.setattr(api_service, "get_native_agent_service", lambda: FakeNativeService())
+
+    events = [
+        event async for event in api_service.stream_chat(
+            web_manager,
+            "main",
+            1001,
+            "你好",
+            execution_mode="native_agent",
+        )
+    ]
+
+    assert events[-1]["type"] == "done"
+    assert captured["profile"] is web_manager.main_profile
+    assert captured["session"].agent_id == "main"
+    assert captured["user_text"] == "你好"
+    assert captured["prompt_text"] == "你好"
 
 
 def _codex_context_usage(left_percent: int) -> dict[str, object]:
@@ -2814,7 +2881,8 @@ async def test_run_cli_chat_finally_terminates_lingering_process(
     assert session.is_processing is False
 
 
-def test_kill_user_process_terminates_live_process_and_clears_stale_process(
+@pytest.mark.asyncio
+async def test_kill_user_process_terminates_live_process_and_clears_stale_process(
     web_manager: MultiBotManager,
 ):
     live_process = RecordingProcess([])
@@ -2830,7 +2898,7 @@ def test_kill_user_process_terminates_live_process_and_clears_stale_process(
 
     with patch("bot.web.api_service._terminate_process_sync", side_effect=lambda proc: proc.kill()) as terminate_mock, \
          patch.object(ChatHistoryService, "reconcile_idle_streaming_turns", return_value=0) as reconcile_mock:
-        result = kill_user_process(web_manager, "main", 1001)
+        result = await kill_user_process(web_manager, "main", 1001)
 
     assert result["killed"] is True
     terminate_mock.assert_called_with(live_process)
@@ -2850,13 +2918,66 @@ def test_kill_user_process_terminates_live_process_and_clears_stale_process(
         session.process = stale_process
 
     with patch.object(ChatHistoryService, "reconcile_idle_streaming_turns", return_value=0) as stale_reconcile_mock:
-        stale_result = kill_user_process(web_manager, "main", 1001)
+        stale_result = await kill_user_process(web_manager, "main", 1001)
 
     assert stale_result["stale_cleared"] is True
     stale_reconcile_mock.assert_called()
     assert stale_process.stdout.closed is True
     assert session.process is None
     assert session.is_processing is False
+
+
+@pytest.mark.asyncio
+async def test_kill_user_process_aborts_native_agent_run(web_manager: MultiBotManager):
+    session = get_session_for_alias(web_manager, "main", 1001)
+    with session._lock:
+        session.is_processing = True
+        session.process = None
+        session.native_agent_session_id = "native-1"
+        session.native_agent_server_key = "server-1"
+        session.native_agent_run_id = "run-1"
+
+    with patch("bot.web.api_service.get_native_agent_service") as service_factory, \
+         patch.object(ChatHistoryService, "reconcile_idle_streaming_turns", return_value=0) as reconcile_mock:
+        service = service_factory.return_value
+        service.abort = AsyncMock(return_value=True)
+        result = await kill_user_process(web_manager, "main", 1001)
+
+    assert result["killed"] is True
+    assert result["native_agent_aborted"] is True
+    assert result["stop_requested"] is True
+    service.abort.assert_awaited_once_with(session)
+    reconcile_mock.assert_not_called()
+    assert session.stop_requested is True
+
+
+@pytest.mark.asyncio
+async def test_reply_native_agent_permission_calls_native_service(web_manager: MultiBotManager):
+    session = get_session_for_alias(web_manager, "main", 1001)
+    with session._lock:
+        session.native_agent_session_id = "native-1"
+        session.native_agent_server_key = "server-1"
+
+    with patch("bot.web.api_service.get_native_agent_service") as service_factory:
+        service = service_factory.return_value
+        service.reply_permission = AsyncMock(return_value={"ok": True})
+        result = await reply_native_agent_permission(
+            web_manager,
+            "main",
+            1001,
+            "perm-1",
+            approved=True,
+            message="允许本次读取",
+        )
+
+    assert result["permission_id"] == "perm-1"
+    assert result["approved"] is True
+    service.reply_permission.assert_awaited_once_with(
+        session,
+        "perm-1",
+        approved=True,
+        message="允许本次读取",
+    )
 
 
 @pytest.mark.asyncio

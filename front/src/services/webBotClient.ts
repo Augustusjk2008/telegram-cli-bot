@@ -94,6 +94,7 @@ import type {
   WebNotificationEvent,
   ChatAttachmentUploadResult,
   ChatAttachmentDeleteResult,
+  NativeAgentPermissionReplyOptions,
   ChatSendOptions,
   ClusterConfigUpdateInput,
   ClusterConfigUpdateResult,
@@ -213,6 +214,11 @@ export interface WebBotClient {
     onTrace?: (trace: ChatTraceEvent) => void,
     options?: ChatSendOptions,
   ): Promise<ChatMessage>;
+  replyNativeAgentPermission(
+    botAlias: string,
+    permissionId: string,
+    options: NativeAgentPermissionReplyOptions,
+  ): Promise<{ permissionId: string; approved: boolean }>;
   getDebugProfile(botAlias: string): Promise<DebugProfile | null>;
   getDebugState(botAlias: string): Promise<DebugState>;
   getTerminalSession(ownerId: string): Promise<PersistentTerminalSnapshot>;
@@ -266,7 +272,7 @@ export interface WebBotClient {
   uploadFile(botAlias: string, file: File): Promise<void>;
   downloadFile(botAlias: string, filename: string, onProgress?: (progress: FileDownloadProgress) => void): Promise<void>;
   resetSession(botAlias: string): Promise<void>;
-  killTask(botAlias: string): Promise<string>;
+  killTask(botAlias: string, options?: AgentScopedOptions): Promise<string>;
   restartService(): Promise<void>;
   getGitProxySettings(): Promise<GitProxySettings>;
   updateGitProxySettings(address: string): Promise<GitProxySettings>;

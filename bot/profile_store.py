@@ -85,6 +85,18 @@ def load_managed_profiles(
             profile_data["cluster"] = item["cluster"]
         if "prompt_presets" in item or "promptPresets" in item:
             profile_data["prompt_presets"] = item.get("prompt_presets", item.get("promptPresets"))
+        if "supported_execution_modes" in item or "supportedExecutionModes" in item:
+            profile_data["supported_execution_modes"] = item.get(
+                "supported_execution_modes",
+                item.get("supportedExecutionModes"),
+            )
+        if "default_execution_mode" in item or "defaultExecutionMode" in item:
+            profile_data["default_execution_mode"] = item.get(
+                "default_execution_mode",
+                item.get("defaultExecutionMode"),
+            )
+        if "native_agent" in item or "nativeAgent" in item:
+            profile_data["native_agent"] = item.get("native_agent", item.get("nativeAgent"))
         profiles[alias] = BotProfile.from_dict(profile_data)
 
     assistant_aliases = [alias for alias, profile in profiles.items() if profile.bot_mode == "assistant"]
@@ -157,6 +169,27 @@ def apply_persisted_main_profile(main_profile: BotProfile, app_settings_file: Pa
 
     if "prompt_presets" in profile_data:
         main_profile.prompt_presets = normalize_prompt_presets(profile_data.get("prompt_presets"))
+
+    if any(key in profile_data for key in ("supported_execution_modes", "supportedExecutionModes")):
+        from bot.models import normalize_execution_modes
+
+        main_profile.supported_execution_modes = normalize_execution_modes(
+            profile_data.get("supported_execution_modes", profile_data.get("supportedExecutionModes"))
+        )
+
+    if any(key in profile_data for key in ("default_execution_mode", "defaultExecutionMode")):
+        from bot.models import normalize_execution_mode
+
+        main_profile.default_execution_mode = normalize_execution_mode(
+            profile_data.get("default_execution_mode", profile_data.get("defaultExecutionMode"))
+        )
+
+    if any(key in profile_data for key in ("native_agent", "nativeAgent")):
+        from bot.models import normalize_native_agent_config
+
+        main_profile.native_agent = normalize_native_agent_config(
+            profile_data.get("native_agent", profile_data.get("nativeAgent"))
+        )
 
 
 def persist_main_profile(main_profile: BotProfile, app_settings_file: Path) -> None:
