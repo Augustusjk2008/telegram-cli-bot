@@ -1,7 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, LoaderCircle, Paperclip, Plus, Settings, Trash2, X } from "lucide-react";
-import { toolbarButtonClass } from "./ToolbarButton";
+import { ChevronDown, LoaderCircle, Paperclip, Plus, Send, Settings, Trash2, X } from "lucide-react";
 import type { AgentMention, AgentSummary, PromptPreset } from "../services/types";
 
 type ComposerAttachment = {
@@ -89,9 +88,10 @@ export function ChatComposer({
   const shellClassName = compact
     ? "chat-composer-delight border-t border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2 py-2"
     : "chat-composer-delight border-t border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-3 py-3";
-  const formClassName = compact
-    ? "flex items-end gap-2 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-2 shadow-[var(--shadow-soft)]"
-    : "flex items-end gap-2 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-2 shadow-[var(--shadow-soft)]";
+  const formClassName = "relative";
+  const inputBarClassName = compact
+    ? "relative flex min-h-10 items-center rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] shadow-[var(--shadow-soft)] focus-within:border-[var(--workbench-hover-border)]"
+    : "relative flex min-h-11 items-center rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] shadow-[var(--shadow-soft)] focus-within:border-[var(--workbench-hover-border)]";
   const inputDisabled = disabled || uploadingAttachments;
   const [message, setMessage] = useState("");
   const [presetMenuOpen, setPresetMenuOpen] = useState(false);
@@ -467,26 +467,29 @@ export function ChatComposer({
           setMentionQuery(null);
         }}
       >
-        <label className="relative inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] text-[var(--muted)] hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--accent)]">
-          <Paperclip className="h-4 w-4" />
-          <span className="sr-only">上传附件</span>
-          <input
-            aria-label="上传附件"
-            data-testid="chat-attachment-input"
-            type="file"
-            multiple
-            disabled={inputDisabled}
-            className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
-            onChange={(event) => {
-              const nextFiles = Array.from(event.currentTarget.files || []);
-              if (nextFiles.length > 0) {
-                onAttachFiles(nextFiles);
-              }
-              event.currentTarget.value = "";
-            }}
-          />
-        </label>
-        <div className="relative flex-1">
+        <div className={inputBarClassName}>
+          <label
+            className="absolute left-2 top-1/2 inline-flex h-8 w-8 shrink-0 -translate-y-1/2 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--accent)]"
+            title="上传附件"
+          >
+            <Plus className="h-4 w-4" />
+            <span className="sr-only">上传附件</span>
+            <input
+              aria-label="上传附件"
+              data-testid="chat-attachment-input"
+              type="file"
+              multiple
+              disabled={inputDisabled}
+              className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
+              onChange={(event) => {
+                const nextFiles = Array.from(event.currentTarget.files || []);
+                if (nextFiles.length > 0) {
+                  onAttachFiles(nextFiles);
+                }
+                event.currentTarget.value = "";
+              }}
+            />
+          </label>
           <textarea
             ref={textareaRef}
             name="message"
@@ -519,7 +522,7 @@ export function ChatComposer({
               }
               form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
             }}
-            className={`max-h-72 w-full resize-none rounded-md border border-transparent bg-transparent p-2 ${showPromptPresetControls ? "pr-11" : ""} text-[var(--text)] outline-none placeholder:text-[var(--muted)] focus:border-[var(--workbench-hover-border)] focus:bg-[var(--workbench-panel-elevated-bg)] disabled:opacity-60`}
+            className={`max-h-72 w-full resize-none border border-transparent bg-transparent pb-2.5 pl-12 pt-1.5 ${showPromptPresetControls ? "pr-20" : "pr-12"} leading-5 text-[var(--text)] outline-none placeholder:text-[var(--muted)] disabled:opacity-60`}
           />
           {showPromptPresetControls ? (
             <button
@@ -529,7 +532,7 @@ export function ChatComposer({
               title="提示词预设"
               disabled={inputDisabled}
               onClick={() => setPresetMenuOpen((value) => !value)}
-              className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--accent)] disabled:opacity-50"
+              className="absolute right-11 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--accent)] disabled:opacity-50"
             >
               <ChevronDown className="h-4 w-4" />
             </button>
@@ -538,7 +541,7 @@ export function ChatComposer({
             <div
               role="listbox"
               aria-label="提示词预设"
-              className="absolute bottom-full right-0 z-40 mb-2 w-64 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-1 shadow-[var(--shadow-card)]"
+              className="absolute bottom-full right-10 z-40 mb-2 w-64 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-1 shadow-[var(--shadow-card)]"
             >
               {showAnyPromptPresets ? (
                 <div className="max-h-64 overflow-y-auto">
@@ -567,7 +570,7 @@ export function ChatComposer({
             <div
               role="listbox"
               aria-label="智能体集群列表"
-              className="absolute bottom-full left-0 z-30 mb-2 max-h-56 w-full overflow-y-auto rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-1 shadow-[var(--shadow-card)]"
+              className="absolute bottom-full left-10 right-10 z-30 mb-2 max-h-56 overflow-y-auto rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-1 shadow-[var(--shadow-card)]"
             >
               {mentionOptions.map((agent) => (
                 <button
@@ -585,14 +588,20 @@ export function ChatComposer({
               ))}
             </div>
           ) : null}
+          <button
+            type="submit"
+            aria-label="发送"
+            title={uploadingAttachments ? "上传中..." : "发送"}
+            disabled={inputDisabled}
+            className="absolute right-2 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {uploadingAttachments ? (
+              <LoaderCircle className="h-4 w-4 animate-spin" />
+            ) : (
+              <Send className="h-4 w-4" />
+            )}
+          </button>
         </div>
-        <button
-          type="submit"
-          disabled={inputDisabled}
-          className={toolbarButtonClass("primary", "md", compact ? "h-10 px-3.5" : "h-10 px-4")}
-        >
-          {uploadingAttachments ? "上传中..." : "发送"}
-        </button>
       </form>
       {presetEditorDialog ? createPortal(presetEditorDialog, document.body) : null}
     </div>
