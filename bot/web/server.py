@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import functools
 import getpass
 import ipaddress
@@ -10,6 +11,7 @@ import json
 import logging
 import os
 import platform
+import re
 import subprocess
 import sys
 import threading
@@ -314,6 +316,11 @@ _CLIENT_DISCONNECT_ERRORS = (
     ConnectionResetError,
     BrokenPipeError,
 )
+_PUBLIC_RUNTIME_ENV_SCRIPT_RE = re.compile(
+    r"<script\b[^>]*>\s*window\.__TCB_PUBLIC_ENV__\s*=\s*.*?;\s*</script>",
+    re.IGNORECASE | re.DOTALL,
+)
+_HEAD_TAG_RE = re.compile(r"<head\b[^>]*>", re.IGNORECASE)
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -478,6 +485,22 @@ def _same_origin_host(origin: str, host: str) -> bool:
     return bool(origin_host) and origin_host.lower() == str(host or "").strip().lower()
 
 
+def _forwarded_request_origin(request: web.Request) -> str:
+    host = str(
+        request.headers.get("X-Forwarded-Host")
+        or request.headers.get("X-Original-Host")
+        or ""
+    ).split(",", 1)[0].strip()
+    if not host:
+        return ""
+    proto = str(
+        request.headers.get("X-Forwarded-Proto")
+        or request.headers.get("X-Forwarded-Scheme")
+        or ""
+    ).split(",", 1)[0].strip() or "http"
+    return _normalize_origin(f"{proto}://{host}")
+
+
 def _is_request_origin_allowed(request: web.Request) -> bool:
     origin = str(request.headers.get("Origin") or "").strip()
     if not origin:
@@ -493,7 +516,10 @@ def _is_request_origin_allowed(request: web.Request) -> bool:
     normalized_origin = _normalize_origin(origin)
     if "*" in normalized_allowed or normalized_origin in normalized_allowed:
         return True
-    return _same_origin_host(origin, request.headers.get("Host", ""))
+    return (
+        _same_origin_host(origin, request.headers.get("Host", ""))
+        or normalized_origin == _forwarded_request_origin(request)
+    )
 
 
 def _is_loopback_auto_auth_allowed(request: web.Request) -> bool:
@@ -1034,6 +1060,17 @@ class WebApiServer:
     def _require_websocket_origin(self, request: web.Request) -> None:
         if _is_request_origin_allowed(request):
             return
+        logger.warning(
+            "WebSocket Origin 不被允许 path=%s origin=%s host=%s forwarded_host=%s forwarded_proto=%s allowed_origins=%s public_url=%s fixed_public_url=%s",
+            request.path,
+            request.headers.get("Origin", ""),
+            request.headers.get("Host", ""),
+            request.headers.get("X-Forwarded-Host", ""),
+            request.headers.get("X-Forwarded-Proto", ""),
+            ",".join(WEB_ALLOWED_ORIGINS),
+            WEB_PUBLIC_URL,
+            WEB_FIXED_PUBLIC_FORWARD_URL,
+        )
         raise web.HTTPForbidden(text="WebSocket Origin 不被允许")
 
     def _can_operate_bot(self, auth: AuthContext, alias: str) -> bool:
@@ -2053,6 +2090,110 @@ class WebApiServer:
         data = await self._terminal_manager.close(auth.user_id, owner_id)
         return _json({"ok": True, "data": data})
 
+    async def get_terminal_stream(self, request: web.Request) -> web.StreamResponse:
+        auth = await self._with_capability(request, CAP_TERMINAL_EXEC)
+        owner_id = self._resolve_terminal_owner_id(request.query.get("owner_id"))
+        from_seq = int(request.query.get("from_seq") or 0)
+        request_path = self._request_log_path(request)
+        logger.info(
+            "终端 HTTP stream attach 开始 path=%s user_id=%s owner=%s from_seq=%s",
+            request_path,
+            auth.user_id,
+            owner_id,
+            from_seq,
+        )
+        queue: asyncio.Queue[bytes | object] | None = None
+        try:
+            queue, snapshot = await self._terminal_manager.attach(auth.user_id, owner_id, from_seq=from_seq)
+        except TerminalNotRunningError as exc:
+            logger.warning(
+                "终端 HTTP stream attach 失败，终端未启动 user_id=%s owner=%s path=%s: %s",
+                auth.user_id,
+                owner_id,
+                request_path,
+                exc,
+            )
+            raise WebApiError(409, "terminal_not_running", str(exc)) from exc
+
+        response = web.StreamResponse(
+            status=200,
+            headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            },
+        )
+        await response.prepare(request)
+
+        client_disconnected = False
+        try:
+            await response.write(
+                _format_sse(
+                    "ready",
+                    {
+                        "pty_mode": snapshot.get("pty_mode"),
+                        "connection_text": snapshot.get("connection_text"),
+                        "last_seq": snapshot.get("last_seq"),
+                    },
+                )
+            )
+            logger.info(
+                "终端 HTTP stream attach 成功 user_id=%s owner=%s pty=%s last_seq=%s",
+                auth.user_id,
+                owner_id,
+                snapshot.get("pty_mode"),
+                snapshot.get("last_seq"),
+            )
+            while True:
+                try:
+                    data = await asyncio.wait_for(queue.get(), timeout=15)
+                except asyncio.TimeoutError:
+                    await response.write(_format_sse("ping", {"ts": int(time.time())}))
+                    continue
+                if data is TERMINAL_CLIENT_EOF:
+                    await response.write(_format_sse("closed", {"reason": "terminal_closed"}))
+                    break
+                if not isinstance(data, bytes):
+                    continue
+                await response.write(
+                    _format_sse(
+                        "output",
+                        {
+                            "data": base64.b64encode(data).decode("ascii"),
+                            "encoding": "base64",
+                        },
+                    )
+                )
+        except _CLIENT_DISCONNECT_ERRORS:
+            client_disconnected = True
+            logger.info("终端 HTTP stream 客户端已断开，停止转发输出: owner=%s", owner_id)
+        finally:
+            if queue is not None:
+                await self._terminal_manager.detach(auth.user_id, owner_id, queue)
+            if not client_disconnected:
+                try:
+                    await response.write_eof()
+                except _CLIENT_DISCONNECT_ERRORS:
+                    pass
+        return response
+
+    async def post_terminal_input(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_TERMINAL_EXEC)
+        body = await self._parse_json(request)
+        owner_id = self._resolve_terminal_owner_id(body.get("owner_id"))
+        input_type = str(body.get("type") or "input").strip()
+        try:
+            if input_type == "resize":
+                size = _parse_terminal_size(body)
+                if size is not None:
+                    await self._terminal_manager.resize(auth.user_id, owner_id, *size)
+                return _json({"ok": True, "data": {"accepted": size is not None}})
+            data = str(body.get("data") or "").encode("utf-8")
+            await self._terminal_manager.write_input(auth.user_id, owner_id, data)
+        except TerminalNotRunningError as exc:
+            raise WebApiError(409, "terminal_not_running", str(exc)) from exc
+        return _json({"ok": True, "data": {"accepted": True}})
+
     async def get_terminal_actions_config(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_TERMINAL_EXEC)
         alias = self._manager_alias(request)
@@ -2119,6 +2260,17 @@ class WebApiServer:
         )
 
     async def terminal_ws(self, request: web.Request) -> web.WebSocketResponse:
+        logger.info(
+            "终端 WebSocket 请求到达 path=%s host=%s origin=%s forwarded_host=%s forwarded_proto=%s upgrade=%s has_token=%s remote=%s",
+            self._request_log_path(request),
+            request.headers.get("Host", ""),
+            request.headers.get("Origin", ""),
+            request.headers.get("X-Forwarded-Host", ""),
+            request.headers.get("X-Forwarded-Proto", ""),
+            request.headers.get("Upgrade", ""),
+            bool(_extract_auth_token(request)),
+            request.remote or "",
+        )
         self._require_websocket_origin(request)
         auth = await self._with_capability(request, CAP_TERMINAL_EXEC)
         request_path = self._request_log_path(request)
@@ -4340,23 +4492,48 @@ class WebApiServer:
         return str(static_dir)
 
     def _public_runtime_env_script(self) -> str:
+        base_path = self._web_base_path()
         payload = {
-            "WEB_BASE_PATH": WEB_BASE_PATH,
-            "VITE_BASE_PATH": WEB_BASE_PATH,
-            "VITE_API_BASE_URL": WEB_BASE_PATH,
+            "WEB_BASE_PATH": base_path,
+            "VITE_BASE_PATH": base_path,
+            "VITE_API_BASE_URL": base_path,
         }
         return f"<script>window.__TCB_PUBLIC_ENV__={json.dumps(payload, ensure_ascii=False)};</script>"
 
     def _inject_public_runtime_env(self, html: str) -> str:
         script = self._public_runtime_env_script()
-        if "__TCB_PUBLIC_ENV__" in html:
-            return html
-        if "<head>" in html:
-            return html.replace("<head>", f"<head>\n    {script}", 1)
-        return f"{script}\n{html}"
+        html_without_stale_env = _PUBLIC_RUNTIME_ENV_SCRIPT_RE.sub("", html)
+        head_match = _HEAD_TAG_RE.search(html_without_stale_env)
+        if head_match:
+            return (
+                f"{html_without_stale_env[:head_match.end()]}\n"
+                f"    {script}{html_without_stale_env[head_match.end():]}"
+            )
+        return f"{script}\n{html_without_stale_env}"
+
+    def _is_unmatched_terminal_ws_path(self, request: web.Request) -> bool:
+        path = request.path.rstrip("/")
+        if not path.startswith("/node/") or not path.endswith("/terminal/ws"):
+            return False
+        configured_path = self._web_base_path()
+        return not configured_path or path != f"{configured_path}/terminal/ws"
     
     async def serve_index(self, request):
         """Serve index.html for SPA routes."""
+        if self._is_unmatched_terminal_ws_path(request):
+            logger.warning(
+                "终端 WebSocket 路径未匹配当前 WEB_BASE_PATH: path=%s configured_base=%s",
+                request.path,
+                self._web_base_path() or "/",
+            )
+            return web.Response(
+                text=(
+                    "Terminal WebSocket route not found for this WEB_BASE_PATH. "
+                    f"path={request.path} configured_base={self._web_base_path() or '/'}"
+                ),
+                status=404,
+                content_type="text/plain",
+            )
         index_path = Path(self._get_static_dir()) / "index.html"
         if index_path.exists():
             html = index_path.read_text(encoding="utf-8")
@@ -4388,10 +4565,14 @@ class WebApiServer:
             logger.info("Web tunnel 状态: %s %s", tunnel_snapshot.get("status"), tunnel_snapshot.get("public_url") or "")
         local_url = TunnelService._build_local_url(self._host, self._port)
         logger.info(
-            "Web API 已启动: %s (token=%s, allowed_origins=%s)",
+            "Web API 已启动: %s (token=%s, allowed_origins=%s, node_id=%s, base_path=%s, public_url=%s, fixed_public_url=%s)",
             local_url,
             "已配置" if WEB_API_TOKEN else "未配置",
             ",".join(WEB_ALLOWED_ORIGINS),
+            TCB_NODE_ID or "",
+            self._web_base_path() or "/",
+            WEB_PUBLIC_URL or "",
+            WEB_FIXED_PUBLIC_FORWARD_URL or "",
         )
 
     async def _watch_loop_lag(self) -> None:

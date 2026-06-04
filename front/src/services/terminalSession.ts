@@ -7,7 +7,7 @@ import {
   getTerminalTheme,
   type UiThemeName,
 } from "../theme";
-import { buildWsUrl } from "../utils/publicBase";
+import { buildApiUrl, buildWsUrl, publicApiBaseDiagnostics, type PublicBaseDiagnostics } from "../utils/publicBase";
 
 export type TerminalSessionOptions = {
   token: string;
@@ -53,24 +53,36 @@ function displayWsPath(socketUrl: string): string {
   }
 }
 
-function formatWsCloseMessage(event: CloseEvent, socketUrl: string, attached: boolean): string {
+function formatWsDiagnostics(socketUrl: string, diagnostics: PublicBaseDiagnostics): string {
   const path = displayWsPath(socketUrl);
+  const baseSource = diagnostics.envKey ? `${diagnostics.source}:${diagnostics.envKey}` : diagnostics.source;
+  const selectedBase = diagnostics.selectedBasePath || "/";
+  const configuredBase = diagnostics.configuredBasePath || "/";
+  return `路径 ${path}，页面 ${diagnostics.pagePath}，base ${selectedBase}（配置 ${configuredBase}，来源 ${baseSource}）`;
+}
+
+function formatWsCloseMessage(
+  event: CloseEvent,
+  socketUrl: string,
+  diagnostics: PublicBaseDiagnostics,
+  attached: boolean,
+): string {
+  const context = formatWsDiagnostics(socketUrl, diagnostics);
   const reason = event.reason ? `，原因：${event.reason}` : "";
   if (event.code === 1000 && attached) {
     return "";
   }
   if (event.code === 1008) {
-    return `访问令牌无效或没有终端权限，WebSocket 已关闭（路径 ${path}，code ${event.code}${reason}）`;
+    return `访问令牌无效或没有终端权限，WebSocket 已关闭（${context}，code ${event.code}${reason}）`;
   }
   if (event.code === 1006) {
-    return `终端已启动，但 WebSocket 连接失败（路径 ${path}，code ${event.code}）。请检查地址/base path 或反向代理是否转发 WebSocket`;
+    return `终端已启动，但 WebSocket 连接失败（${context}，code ${event.code}）。请检查地址/base path 或反向代理是否转发 WebSocket`;
   }
-  return `终端 WebSocket 已关闭（路径 ${path}，code ${event.code}${reason}）`;
+  return `终端 WebSocket 已关闭（${context}，code ${event.code}${reason}）`;
 }
 
-function formatWsErrorMessage(socketUrl: string) {
-  const path = displayWsPath(socketUrl);
-  return `终端已启动，但 WebSocket 连接失败（路径 ${path}）。请检查地址/base path、访问令牌或反向代理 WebSocket 转发`;
+function formatWsErrorMessage(socketUrl: string, diagnostics: PublicBaseDiagnostics) {
+  return `终端已启动，但 WebSocket 连接失败（${formatWsDiagnostics(socketUrl, diagnostics)}）。请检查地址/base path、访问令牌或反向代理 WebSocket 转发`;
 }
 
 export function createTerminalSession(container: HTMLElement, options: TerminalSessionOptions): TerminalSession {
@@ -87,9 +99,18 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
   let currentSocketUrl = "";
   let attachAddon: AttachAddon | null = null;
   let initialMessageListener: ((event: MessageEvent) => void) | null = null;
+  let fallbackAbortController: AbortController | null = null;
+  let fallbackActive = false;
+  let fallbackStarted = false;
+  let ignoreSocketEvents = false;
   let isAttached = false;
   let receivedInitialMessage = false;
   let reportedSocketError = false;
+  const fallbackInputDisposable = term.onData((data) => {
+    if (fallbackActive) {
+      void postFallbackInput(data);
+    }
+  });
 
   term.loadAddon(fitAddon);
   term.open(container);
@@ -110,6 +131,10 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
   }
 
   function sendJson(payload: Record<string, unknown>) {
+    if (fallbackActive) {
+      void postFallbackInput(payload);
+      return;
+    }
     if (socket?.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify(payload));
     }
@@ -134,6 +159,12 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
     initialMessageListener = null;
   }
 
+  function cleanupFallback() {
+    fallbackAbortController?.abort();
+    fallbackAbortController = null;
+    fallbackActive = false;
+  }
+
   function handleTerminalError(message: string) {
     if (!message) {
       return;
@@ -152,6 +183,141 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
     options.onOpen?.();
   }
 
+  function attachFallback() {
+    if (isAttached) {
+      return;
+    }
+    isAttached = true;
+    options.onOpen?.();
+  }
+
+  async function postFallbackInput(payload: string | Record<string, unknown>) {
+    if (!fallbackActive) {
+      return;
+    }
+    const body = typeof payload === "string"
+      ? { owner_id: options.ownerId, data: payload }
+      : { owner_id: options.ownerId, ...payload };
+    try {
+      await fetch(buildApiUrl("/api/terminal/session/input"), {
+        method: "POST",
+        cache: "no-store",
+        headers: {
+          Authorization: `Bearer ${options.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+    } catch {
+      // The stream side reports connection failures; input POST failures are transient while reconnecting.
+    }
+  }
+
+  function decodeBase64Bytes(value: string): Uint8Array {
+    const binary = atob(value);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return bytes;
+  }
+
+  function handleFallbackEvent(eventType: string, payload: Record<string, unknown>) {
+    if (eventType === "ready") {
+      if (typeof payload.pty_mode === "boolean") {
+        options.onPtyMode?.(payload.pty_mode);
+      }
+      attachFallback();
+      return;
+    }
+    if (eventType === "output" && typeof payload.data === "string") {
+      term.write(decodeBase64Bytes(payload.data));
+      attachFallback();
+    }
+  }
+
+  async function readFallbackStream(response: Response) {
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error("浏览器不支持终端 HTTP 流");
+    }
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split(/\n\n/);
+      buffer = events.pop() ?? "";
+      for (const rawEvent of events) {
+        const lines = rawEvent.split(/\n/);
+        const typeLine = lines.find((line) => line.startsWith("event:"));
+        const dataLine = lines.find((line) => line.startsWith("data:"));
+        if (!dataLine) {
+          continue;
+        }
+        const eventType = typeLine ? typeLine.slice("event:".length).trim() : "message";
+        try {
+          const payload = JSON.parse(dataLine.slice("data:".length).trim()) as Record<string, unknown>;
+          handleFallbackEvent(eventType, payload);
+        } catch {
+          // Ignore malformed SSE frames.
+        }
+      }
+    }
+  }
+
+  function startHttpFallback(reason: string) {
+    if (fallbackStarted || fallbackActive) {
+      return;
+    }
+    fallbackStarted = true;
+    ignoreSocketEvents = true;
+    cleanupSocket();
+    socket?.close();
+    socket = null;
+    attachAddon?.dispose();
+    attachAddon = null;
+    fallbackAbortController = new AbortController();
+    const streamUrl = buildApiUrl("/api/terminal/session/stream", {
+      owner_id: options.ownerId,
+      from_seq: options.fromSeq ?? 0,
+    });
+    const controller = fallbackAbortController;
+    fallbackActive = true;
+    options.onError?.(`${reason}，已切换到 HTTP 终端流`);
+    void fetch(streamUrl, {
+      cache: "no-store",
+      headers: {
+        Authorization: `Bearer ${options.token}`,
+      },
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          const text = await response.text().catch(() => "");
+          throw new Error(text || `HTTP ${response.status}`);
+        }
+        await readFallbackStream(response);
+      })
+      .catch((err: unknown) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        handleTerminalError(err instanceof Error ? `终端 HTTP 流连接失败：${err.message}` : "终端 HTTP 流连接失败");
+      })
+      .finally(() => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        fallbackActive = false;
+        fallbackAbortController = null;
+        options.onClose?.();
+      });
+  }
+
   function connect() {
     if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
       return;
@@ -161,6 +327,7 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
       token: options.token,
       owner_id: options.ownerId,
     });
+    const wsDiagnostics = publicApiBaseDiagnostics();
     const socketUrl = buildWsUrl("/terminal/ws", params);
     currentSocketUrl = socketUrl;
     socket = new WebSocket(socketUrl);
@@ -168,6 +335,7 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
     isAttached = false;
     receivedInitialMessage = false;
     reportedSocketError = false;
+    ignoreSocketEvents = false;
 
     socket.addEventListener("open", () => {
       const geometry = getGeometry();
@@ -211,15 +379,34 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
 
     socket.addEventListener("message", initialMessageListener);
     socket.addEventListener("close", (event) => {
+      if (ignoreSocketEvents) {
+        return;
+      }
       cleanupSocket();
-      const message = formatWsCloseMessage(event, currentSocketUrl || socketUrl, isAttached || receivedInitialMessage);
+      const message = formatWsCloseMessage(
+        event,
+        currentSocketUrl || socketUrl,
+        wsDiagnostics,
+        isAttached || receivedInitialMessage,
+      );
+      if (event.code === 1006 && !isAttached && !receivedInitialMessage) {
+        startHttpFallback(message || "终端 WebSocket 连接失败");
+        return;
+      }
       if (message && !reportedSocketError) {
         handleTerminalError(message);
       }
       options.onClose?.();
     });
     socket.addEventListener("error", () => {
-      handleTerminalError(formatWsErrorMessage(currentSocketUrl || socketUrl));
+      if (ignoreSocketEvents) {
+        return;
+      }
+      if (!isAttached && !receivedInitialMessage) {
+        startHttpFallback(formatWsErrorMessage(currentSocketUrl || socketUrl, wsDiagnostics));
+        return;
+      }
+      handleTerminalError(formatWsErrorMessage(currentSocketUrl || socketUrl, wsDiagnostics));
     });
   }
 
@@ -228,6 +415,8 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
     connect,
     dispose: () => {
       cleanupSocket();
+      cleanupFallback();
+      fallbackInputDisposable.dispose();
       attachAddon?.dispose();
       attachAddon = null;
       socket?.close();
@@ -248,11 +437,19 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
       term.textarea?.focus();
     },
     sendControl: (sequence: string) => {
+      if (fallbackActive) {
+        void postFallbackInput(sequence);
+        return;
+      }
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(sequence);
       }
     },
     sendText: (text: string) => {
+      if (fallbackActive) {
+        void postFallbackInput(text);
+        return;
+      }
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(text);
       }

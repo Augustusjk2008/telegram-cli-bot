@@ -115,3 +115,61 @@ async def test_web_base_path_serves_api_and_spa(monkeypatch: pytest.MonkeyPatch,
             assert "window.__TCB_PUBLIC_ENV__" in sub_spa_text
             assert '"VITE_API_BASE_URL": "/node/nanjing-laptop"' in sub_spa_text
 
+
+@pytest.mark.asyncio
+async def test_runtime_public_env_replaces_stale_build_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "/node/nanjing-laptop")
+    dist = tmp_path / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text(
+        "\n".join(
+            [
+                "<!doctype html>",
+                "<html><head>",
+                "<script type=\"module\" src=\"/node/local/assets/app.js\"></script>",
+                "<script>window.__TCB_PUBLIC_ENV__={\"VITE_API_BASE_URL\":\"/node/local\"};</script>",
+                "</head><body>app</body></html>",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    server = WebApiServer(object(), host="127.0.0.1", port=8768, tunnel_service=DummyTunnelService())
+    monkeypatch.setattr(server, "_get_static_dir", lambda subdir=None: str(dist / subdir) if subdir else str(dist))
+
+    app = server._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            response = await client.get("/node/nanjing-laptop/")
+            text = await response.text()
+
+    assert response.status == 200
+    assert text.count("window.__TCB_PUBLIC_ENV__") == 1
+    assert '"VITE_API_BASE_URL": "/node/nanjing-laptop"' in text
+    assert '"VITE_API_BASE_URL":"/node/local"' not in text
+    assert text.index("window.__TCB_PUBLIC_ENV__") < text.index('type="module"')
+
+
+@pytest.mark.asyncio
+async def test_unmatched_node_terminal_ws_path_is_not_spa_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "")
+    dist = tmp_path / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html><title>app</title>", encoding="utf-8")
+
+    server = WebApiServer(object(), host="127.0.0.1", port=8768, tunnel_service=DummyTunnelService())
+    monkeypatch.setattr(server, "_get_static_dir", lambda subdir=None: str(dist / subdir) if subdir else str(dist))
+
+    app = server._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            response = await client.get("/node/local/terminal/ws")
+            text = await response.text()
+
+    assert response.status == 404
+    assert response.content_type == "text/plain"
+    assert "Terminal WebSocket route not found" in text
+    assert "app" not in text

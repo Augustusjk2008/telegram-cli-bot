@@ -7,6 +7,8 @@ const terminalState = vi.hoisted(() => ({
     cols: number;
     rows: number;
     options: { theme?: unknown; minimumContrastRatio?: unknown };
+    writes: unknown[];
+    emitData: (data: string) => void;
   }>,
   fitCalls: 0,
 }));
@@ -17,6 +19,8 @@ vi.mock("@xterm/xterm", () => ({
     rows = 40;
     options: { theme?: unknown; minimumContrastRatio?: unknown };
     textarea = document.createElement("textarea");
+    writes: unknown[] = [];
+    private readonly dataHandlers = new Set<(data: string) => void>();
 
     constructor(options: { theme?: unknown; minimumContrastRatio?: unknown }) {
       this.options = { ...options };
@@ -29,7 +33,20 @@ vi.mock("@xterm/xterm", () => ({
 
     focus() {}
 
-    write() {}
+    write(data: unknown) {
+      this.writes.push(data);
+    }
+
+    onData(handler: (data: string) => void) {
+      this.dataHandlers.add(handler);
+      return { dispose: () => this.dataHandlers.delete(handler) };
+    }
+
+    emitData(data: string) {
+      for (const handler of this.dataHandlers) {
+        handler(data);
+      }
+    }
 
     dispose() {}
 
@@ -54,6 +71,42 @@ vi.mock("@xterm/addon-attach", () => ({
 const socketState = {
   instances: [] as MockSocket[],
 };
+
+const fetchState = {
+  requests: [] as Array<{ url: string; init?: RequestInit }>,
+  inputBodies: [] as unknown[],
+};
+
+function createPendingFetch() {
+  return vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+    fetchState.requests.push({ url: String(url), init });
+    if (init?.body) {
+      try {
+        fetchState.inputBodies.push(JSON.parse(String(init.body)));
+      } catch {
+        fetchState.inputBodies.push(init.body);
+      }
+    }
+    return new Promise<Response>(() => {});
+  });
+}
+
+function createSseResponse(chunks: string[]) {
+  const encoder = new TextEncoder();
+  return new Response(new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(encoder.encode(chunk));
+      }
+      controller.close();
+    },
+  }), {
+    status: 200,
+    headers: {
+      "Content-Type": "text/event-stream",
+    },
+  });
+}
 
 class MockSocket {
   static CONNECTING = 0;
@@ -116,14 +169,19 @@ class MockSocket {
 
 beforeEach(() => {
   window.history.replaceState(null, "", "/");
+  delete window.__TCB_PUBLIC_ENV__;
   terminalState.instances = [];
   terminalState.fitCalls = 0;
   socketState.instances = [];
+  fetchState.requests = [];
+  fetchState.inputBodies = [];
   vi.stubGlobal("__PUBLIC_ENV__", {});
   vi.stubGlobal("WebSocket", MockSocket as unknown as typeof WebSocket);
+  vi.stubGlobal("fetch", createPendingFetch());
 });
 
 afterEach(() => {
+  delete window.__TCB_PUBLIC_ENV__;
   vi.unstubAllGlobals();
 });
 
@@ -161,6 +219,26 @@ test("connect applies node base path to websocket url", () => {
   vi.stubGlobal("__PUBLIC_ENV__", {
     VITE_API_BASE_URL: "/node/nanjing-laptop",
   });
+  const container = document.createElement("div");
+  const session = createTerminalSession(container, {
+    token: "abc",
+    ownerId: "owner-1",
+  });
+
+  session.connect();
+  const socket = socketState.instances[0];
+
+  expect(new URL(socket.url).pathname).toBe("/node/nanjing-laptop/terminal/ws");
+});
+
+test("connect uses runtime base path before stale build base path", () => {
+  window.history.replaceState(null, "", "/node/nanjing-laptop/");
+  vi.stubGlobal("__PUBLIC_ENV__", {
+    VITE_API_BASE_URL: "/node/local",
+  });
+  window.__TCB_PUBLIC_ENV__ = {
+    VITE_API_BASE_URL: "/node/nanjing-laptop",
+  };
   const container = document.createElement("div");
   const session = createTerminalSession(container, {
     token: "abc",
@@ -218,11 +296,69 @@ test("reports websocket close code and path when connection fails", () => {
 
   expect(errors[0]).toContain("终端已启动，但 WebSocket 连接失败");
   expect(errors[0]).toContain("路径 /terminal/ws?...");
+  expect(errors[0]).toContain("页面 /");
+  expect(errors[0]).toContain("base /（配置 /，来源 build）");
   expect(errors[0]).toContain("code 1006");
+});
+
+test("falls back to http terminal stream when websocket fails before attach", async () => {
+  const errors: string[] = [];
+  const opened: string[] = [];
+  const closed: string[] = [];
+  let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
+  const encoder = new TextEncoder();
+  vi.stubGlobal("fetch", vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+    fetchState.requests.push({ url: String(url), init });
+    if (init?.body) {
+      fetchState.inputBodies.push(JSON.parse(String(init.body)));
+      return Promise.resolve(new Response(JSON.stringify({ ok: true, data: { accepted: true } }), { status: 200 }));
+    }
+    return Promise.resolve(new Response(new ReadableStream({
+      start(controller) {
+        streamController = controller;
+        controller.enqueue(encoder.encode("event: ready\ndata: {\"pty_mode\":true,\"connection_text\":\"运行中\"}\n\n"));
+        controller.enqueue(encoder.encode("event: output\ndata: {\"data\":\"aGVsbG8K\",\"encoding\":\"base64\"}\n\n"));
+      },
+    }), {
+      status: 200,
+      headers: {
+        "Content-Type": "text/event-stream",
+      },
+    }));
+  }));
+  const container = document.createElement("div");
+  const session = createTerminalSession(container, {
+    token: "abc",
+    ownerId: "owner-1",
+    fromSeq: 7,
+    onOpen: () => opened.push("open"),
+    onClose: () => closed.push("close"),
+    onError: (message) => errors.push(message),
+  });
+
+  session.connect();
+  socketState.instances[0].emitError();
+  await vi.waitFor(() => expect(fetchState.requests.length).toBe(1));
+  await vi.waitFor(() => expect(opened).toEqual(["open"]));
+  session.sendText("pwd\n");
+
+  expect(errors[0]).toContain("已切换到 HTTP 终端流");
+  expect(new URL(fetchState.requests[0].url).pathname).toBe("/api/terminal/session/stream");
+  expect(new URL(fetchState.requests[0].url).searchParams.get("owner_id")).toBe("owner-1");
+  expect(new URL(fetchState.requests[0].url).searchParams.get("from_seq")).toBe("7");
+  expect(fetchState.requests[0].init?.headers).toEqual(expect.objectContaining({ Authorization: "Bearer abc" }));
+  expect(terminalState.instances[0].writes).toHaveLength(1);
+  await vi.waitFor(() => expect(fetchState.inputBodies).toEqual([{ owner_id: "owner-1", data: "pwd\n" }]));
+  streamController?.close();
+  await vi.waitFor(() => expect(closed).toEqual(["close"]));
 });
 
 test("reports websocket error with path context", () => {
   const errors: string[] = [];
+  window.history.replaceState(null, "", "/node/local/");
+  window.__TCB_PUBLIC_ENV__ = {
+    VITE_API_BASE_URL: "/node/local",
+  };
   const container = document.createElement("div");
   const session = createTerminalSession(container, {
     token: "abc",
@@ -234,5 +370,7 @@ test("reports websocket error with path context", () => {
   socketState.instances[0].emitError();
 
   expect(errors[0]).toContain("终端已启动，但 WebSocket 连接失败");
-  expect(errors[0]).toContain("路径 /terminal/ws?...");
+  expect(errors[0]).toContain("路径 /node/local/terminal/ws?...");
+  expect(errors[0]).toContain("页面 /node/local/");
+  expect(errors[0]).toContain("base /node/local（配置 /node/local，来源 runtime:VITE_API_BASE_URL）");
 });

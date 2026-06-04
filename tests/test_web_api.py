@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import queue
 import struct
 import subprocess
 import threading
@@ -1752,6 +1753,124 @@ async def test_terminal_websocket_reports_not_running_before_attach(
 
 
 @pytest.mark.asyncio
+async def test_terminal_websocket_accepts_configured_node_base_path(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "/node/local")
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            ws = await client.ws_connect("/node/local/terminal/ws?token=secret")
+            await ws.send_json({"owner_id": "not-started"})
+            message = await ws.receive_json()
+            await ws.close()
+
+            root_response = await client.get("/node/other/terminal/ws")
+            root_text = await root_response.text()
+
+    assert message == {"error": "终端未启动"}
+    assert root_response.status == 404
+    assert "Terminal WebSocket route not found" in root_text
+
+
+@pytest.mark.asyncio
+async def test_terminal_http_stream_and_input_fallback(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    state: dict[str, object] = {"writes": [], "resizes": []}
+    output_queue: queue.Queue[bytes] = queue.Queue()
+
+    class FakeProcess:
+        is_pty = True
+        pid = 4325
+
+        def read(self, timeout: int = 1000) -> bytes:
+            try:
+                return output_queue.get(timeout=timeout / 1000)
+            except queue.Empty:
+                return b""
+
+        def write(self, data: bytes) -> None:
+            cast(list[bytes], state["writes"]).append(data)
+
+        def resize(self, cols: int, rows: int) -> bool:
+            cast(list[tuple[int, int]], state["resizes"]).append((cols, rows))
+            return True
+
+        def isalive(self) -> bool:
+            return True
+
+        def terminate(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    def fake_create_shell_process(
+        shell_type: str,
+        cwd: str,
+        use_pty: bool = True,
+        cols: int | None = None,
+        rows: int | None = None,
+    ):
+        return FakeProcess()
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            with patch("bot.web.terminal_manager.create_shell_process", side_effect=fake_create_shell_process), \
+                 patch("bot.web.server.get_default_shell", return_value="bash"):
+                owner_id = "http-fallback"
+                rebuild_resp = await client.post(
+                    "/api/terminal/session/rebuild?token=secret",
+                    json={"owner_id": owner_id, "cwd": str(temp_dir), "shell": "auto"},
+                )
+                stream_resp = await client.get(
+                    f"/api/terminal/session/stream?token=secret&owner_id={owner_id}",
+                    timeout=5,
+                )
+                ready = await stream_resp.content.readline()
+                ready_data = await stream_resp.content.readline()
+                await stream_resp.content.readline()
+
+                input_resp = await client.post(
+                    "/api/terminal/session/input?token=secret",
+                    json={"owner_id": owner_id, "data": "echo hi\r\n"},
+                )
+                resize_resp = await client.post(
+                    "/api/terminal/session/input?token=secret",
+                    json={"owner_id": owner_id, "type": "resize", "cols": 120, "rows": 32},
+                )
+
+                output_queue.put(b"hello\n")
+                output_event = await stream_resp.content.readline()
+                output_data = await stream_resp.content.readline()
+                stream_resp.close()
+
+    assert rebuild_resp.status == 200
+    assert stream_resp.status == 200
+    assert ready == b"event: ready\n"
+    assert json.loads(ready_data.decode("utf-8").removeprefix("data: "))["pty_mode"] is True
+    assert input_resp.status == 200
+    assert resize_resp.status == 200
+    assert cast(list[bytes], state["writes"]) == [b"echo hi\r\n"]
+    assert cast(list[tuple[int, int]], state["resizes"]) == [(120, 32)]
+    assert output_event == b"event: output\n"
+    assert json.loads(output_data.decode("utf-8").removeprefix("data: "))["data"] == base64.b64encode(b"hello\n").decode("ascii")
+
+
+@pytest.mark.asyncio
 async def test_terminal_websocket_allows_configured_public_url_origin(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
@@ -1813,6 +1932,64 @@ async def test_terminal_websocket_allows_configured_public_url_origin(
 
     assert rebuild_resp.status == 200
     assert first_message == {"pty_mode": True, "connection_text": "运行中"}
+
+
+@pytest.mark.asyncio
+async def test_terminal_websocket_allows_forwarded_host_origin(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.web.server.WEB_PUBLIC_URL", "")
+    monkeypatch.setattr("bot.web.server.WEB_FIXED_PUBLIC_FORWARD_URL", "")
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            ws = await client.ws_connect(
+                "/terminal/ws?token=secret",
+                headers={
+                    "Origin": "https://proxy.example.test",
+                    "Host": "127.0.0.1:8765",
+                    "X-Forwarded-Host": "proxy.example.test",
+                    "X-Forwarded-Proto": "https",
+                },
+            )
+            await ws.send_json({"owner_id": "not-started"})
+            message = await ws.receive_json()
+            await ws.close()
+
+    assert message == {"error": "终端未启动"}
+
+
+@pytest.mark.asyncio
+async def test_terminal_websocket_rejects_unmatched_forwarded_host_origin(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.web.server.WEB_PUBLIC_URL", "")
+    monkeypatch.setattr("bot.web.server.WEB_FIXED_PUBLIC_FORWARD_URL", "")
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            with pytest.raises(WSServerHandshakeError) as exc_info:
+                await client.ws_connect(
+                    "/terminal/ws?token=secret",
+                    headers={
+                        "Origin": "https://proxy.example.test",
+                        "Host": "127.0.0.1:8765",
+                        "X-Forwarded-Host": "other.example.test",
+                        "X-Forwarded-Proto": "https",
+                    },
+                )
+
+    assert exc_info.value.status == 403
 
 
 @pytest.mark.asyncio
