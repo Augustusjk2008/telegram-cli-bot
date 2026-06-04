@@ -200,7 +200,7 @@ export interface WebBotClient {
   ): Promise<ConversationDeleteResult>;
   deleteAllConversations(
     botAlias: string,
-    options?: { deleteNativeSession?: boolean },
+    options?: AgentScopedOptions & { deleteNativeSession?: boolean },
   ): Promise<ConversationBulkDeleteResult>;
   executePlan(botAlias: string, input: PlanExecuteInput): Promise<PlanExecuteResult>;
   listMessages(botAlias: string, options?: AgentScopedOptions): Promise<ChatMessage[]>;

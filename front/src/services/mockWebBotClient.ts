@@ -3303,6 +3303,7 @@ export class MockWebBotClient implements WebBotClient {
       agents: this.ensureAgents(botAlias).map((agent) => this.cloneAgent(agent)),
       activeAgentId: agentId,
       busyAgentIds: [],
+      executionMode: options.executionMode || bot.executionMode || bot.defaultExecutionMode || "cli",
       globalPromptPresets: clonePromptPresets(this.globalPromptPresets),
     };
   }
@@ -3535,22 +3536,18 @@ export class MockWebBotClient implements WebBotClient {
 
   async deleteAllConversations(
     botAlias: string,
-    options: { deleteNativeSession?: boolean } = {},
+    options: AgentScopedOptions & { deleteNativeSession?: boolean } = {},
   ): Promise<ConversationBulkDeleteResult> {
-    let deletedCount = 0;
-    for (const key of Array.from(this.conversationsByBot.keys())) {
-      if (!key.startsWith(`${botAlias}:`)) {
-        continue;
-      }
-      deletedCount += this.conversationsByBot.get(key)?.length || 0;
-      this.conversationsByBot.set(key, []);
-      this.activeConversationByBot.set(key, "");
-    }
-    mockChatMessages[botAlias] = [];
-    for (const key of Object.keys(mockChatMessages)) {
-      if (key.startsWith(`${botAlias}:`)) {
-        mockChatMessages[key] = [];
-      }
+    const agentId = options.agentId || "main";
+    const key = this.getConversationKey(botAlias, agentId);
+    const items = this.ensureConversations(botAlias, agentId);
+    const deletedCount = items.length;
+    this.conversationsByBot.set(key, []);
+    this.activeConversationByBot.set(key, "");
+    if (agentId === "main") {
+      mockChatMessages[botAlias] = [];
+    } else {
+      mockChatMessages[this.agentKey(botAlias, agentId)] = [];
     }
     return {
       deletedCount,

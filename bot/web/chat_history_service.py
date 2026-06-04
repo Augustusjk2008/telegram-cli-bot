@@ -73,9 +73,24 @@ class StreamingPersistenceBuffer:
 
 
 class ChatHistoryService:
-    def __init__(self, store: ChatStore, *, native_provider_filter: str | None = None) -> None:
+    def __init__(
+        self,
+        store: ChatStore,
+        *,
+        native_provider_filter: str | None = None,
+        native_provider_exclude: str | None = None,
+    ) -> None:
         self.store = store
         self.native_provider_filter = str(native_provider_filter or "").strip() or None
+        self.native_provider_exclude = str(native_provider_exclude or "").strip() or None
+
+    def _matches_native_provider(self, native_provider: str | None) -> bool:
+        provider = str(native_provider or "").strip()
+        if self.native_provider_filter is not None and provider != self.native_provider_filter:
+            return False
+        if self.native_provider_exclude is not None and provider == self.native_provider_exclude:
+            return False
+        return True
 
     def reconcile_idle_streaming_turns(self, session: UserSession) -> int:
         with session._lock:
@@ -90,6 +105,7 @@ class ChatHistoryService:
             session_epoch=_session_epoch(session),
             conversation_id=_active_conversation_id(session) or None,
             native_provider=self.native_provider_filter,
+            native_provider_exclude=self.native_provider_exclude,
         )
 
     def _should_attempt_trace_recovery(self, context: dict[str, Any]) -> bool:
@@ -255,6 +271,7 @@ class ChatHistoryService:
             session_epoch=_session_epoch(session),
             conversation_id=_active_conversation_id(session) or None,
             native_provider=self.native_provider_filter,
+            native_provider_exclude=self.native_provider_exclude,
             limit=limit,
         )
         if items and not _active_conversation_id(session):
@@ -287,6 +304,7 @@ class ChatHistoryService:
             session_epoch=_session_epoch(session),
             conversation_id=_active_conversation_id(session) or None,
             native_provider=self.native_provider_filter,
+            native_provider_exclude=self.native_provider_exclude,
             limit=limit,
         )
 
@@ -299,6 +317,8 @@ class ChatHistoryService:
         try:
             context = self.store.get_trace_recovery_context(message_id)
         except KeyError:
+            return None
+        if not self._matches_native_provider(context.get("native_provider")):
             return None
         self._recover_trace_for_context(context)
         try:
@@ -357,6 +377,7 @@ class ChatHistoryService:
                 session_epoch=_session_epoch(session),
                 conversation_id=_active_conversation_id(session) or None,
                 native_provider=self.native_provider_filter,
+                native_provider_exclude=self.native_provider_exclude,
             ),
             "is_processing": is_processing,
             "running_reply": self.store.get_running_reply(
@@ -367,6 +388,7 @@ class ChatHistoryService:
                 session_epoch=_session_epoch(session),
                 conversation_id=_active_conversation_id(session) or None,
                 native_provider=self.native_provider_filter,
+                native_provider_exclude=self.native_provider_exclude,
             ) if is_processing else None,
             "session_ids": {
                 "codex_session_id": session.codex_session_id,
@@ -389,6 +411,7 @@ class ChatHistoryService:
                 session_epoch=_session_epoch(session),
                 conversation_id=_active_conversation_id(session) or None,
                 native_provider=self.native_provider_filter,
+                native_provider_exclude=self.native_provider_exclude,
             ),
             "message_count": session.message_count,
             "bot_mode": profile.bot_mode,

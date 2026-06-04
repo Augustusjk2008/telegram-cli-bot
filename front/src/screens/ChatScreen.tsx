@@ -189,11 +189,14 @@ function writeStoredPlanMode(botAlias: string, enabled: boolean, accountId?: str
   window.localStorage.removeItem(planModeStorageKey(botAlias, accountId));
 }
 
-function readStoredExecutionMode(botAlias: string, accountId?: string): ChatExecutionMode {
+function readStoredExecutionMode(botAlias: string, accountId?: string): ChatExecutionMode | null {
   if (typeof window === "undefined") {
-    return "cli";
+    return null;
   }
   const value = window.localStorage.getItem(executionModeStorageKey(botAlias, accountId));
+  if (value === null) {
+    return null;
+  }
   return value === "native_agent" ? "native_agent" : "cli";
 }
 
@@ -267,6 +270,17 @@ function agentOptions(agentId?: string, executionMode?: ChatExecutionMode): { ag
   return Object.keys(options).length > 0 ? options : undefined;
 }
 
+function getSupportedExecutionModes(overview?: Pick<BotOverview, "supportedExecutionModes"> | null): ChatExecutionMode[] {
+  return overview?.supportedExecutionModes?.length ? overview.supportedExecutionModes : ["cli"];
+}
+
+function getDefaultExecutionMode(overview?: Pick<BotOverview, "defaultExecutionMode" | "supportedExecutionModes"> | null): ChatExecutionMode {
+  const supportedExecutionModes = getSupportedExecutionModes(overview);
+  return overview?.defaultExecutionMode && supportedExecutionModes.includes(overview.defaultExecutionMode)
+    ? overview.defaultExecutionMode
+    : "cli";
+}
+
 function getScopedOverview(client: WebBotClient, botAlias: string, agentId: string, executionMode?: ChatExecutionMode) {
   const options = agentOptions(agentId, executionMode);
   return options ? client.getBotOverview(botAlias, options) : client.getBotOverview(botAlias);
@@ -335,9 +349,15 @@ function deleteScopedConversation(
 function deleteAllScopedConversations(
   client: WebBotClient,
   botAlias: string,
+  agentId: string,
   deleteNativeSession: boolean,
+  executionMode?: ChatExecutionMode,
 ) {
-  return client.deleteAllConversations(botAlias, { deleteNativeSession });
+  const options = agentOptions(agentId, executionMode);
+  return client.deleteAllConversations(botAlias, {
+    ...(options || {}),
+    deleteNativeSession,
+  });
 }
 
 function pendingCronUserId(runId: string) {
@@ -1206,7 +1226,7 @@ export function ChatScreen({
   const [clusterTaskError, setClusterTaskError] = useState("");
   const [clusterSaving, setClusterSaving] = useState(false);
   const [planMode, setPlanModeState] = useState(() => readStoredPlanMode(botAlias, storageScope));
-  const [executionMode, setExecutionModeState] = useState<ChatExecutionMode>(() => readStoredExecutionMode(botAlias, storageScope));
+  const [executionMode, setExecutionModeState] = useState<ChatExecutionMode>(() => readStoredExecutionMode(botAlias, storageScope) ?? "cli");
   const [executingPlanMessageId, setExecutingPlanMessageId] = useState("");
   const [planExecuteError, setPlanExecuteError] = useState("");
   const [composerPulseKey, setComposerPulseKey] = useState(0);
@@ -1292,7 +1312,7 @@ export function ChatScreen({
     previousStorageScopeRef.current = storageScope;
     assistantSendVersionRef.current += 1;
     setPlanModeState(readStoredPlanMode(botAlias, storageScope));
-    const storedExecutionMode = readStoredExecutionMode(botAlias, storageScope);
+    const storedExecutionMode = readStoredExecutionMode(botAlias, storageScope) ?? "cli";
     executionModeRef.current = storedExecutionMode;
     setExecutionModeState(storedExecutionMode);
   }, [botAlias, storageScope]);
@@ -1384,9 +1404,7 @@ export function ChatScreen({
   }, [executionMode]);
 
   useEffect(() => {
-    const supported = botOverview?.supportedExecutionModes?.length
-      ? botOverview.supportedExecutionModes
-      : ["cli" as const];
+    const supported = getSupportedExecutionModes(botOverview);
     if (!supported.includes(executionModeRef.current)) {
       setExecutionMode("cli");
     }
@@ -1744,6 +1762,8 @@ export function ChatScreen({
     shouldStickToBottomRef.current = true;
     forceAutoScrollRef.current = true;
 
+    const storedExecutionMode = readStoredExecutionMode(botAlias, storageScope);
+    const requestedExecutionMode = storedExecutionMode ?? "cli";
     const requestedAgentId = activeAgentIdRef.current || "main";
     const loadAgents = typeof client.listAgents === "function"
       ? client.listAgents(botAlias).catch(() => ({ items: fallbackAgents() }))
@@ -1751,24 +1771,38 @@ export function ChatScreen({
 
     Promise.all([
       loadAgents,
-      listScopedMessages(client, botAlias, requestedAgentId, executionModeRef.current),
-      getScopedOverview(client, botAlias, requestedAgentId, executionModeRef.current),
+      listScopedMessages(client, botAlias, requestedAgentId, requestedExecutionMode),
+      getScopedOverview(client, botAlias, requestedAgentId, requestedExecutionMode),
     ])
       .then(async ([agentData, initialMessages, initialOverview]) => {
         if (cancelled) return;
         const nextAgents = agentData.items.length > 0 ? agentData.items : fallbackAgents();
-        const nextAgentId = nextAgents.some((agent) => agent.id === requestedAgentId) ? requestedAgentId : "main";
+        const nextExecutionMode = storedExecutionMode
+          ? (getSupportedExecutionModes(initialOverview).includes(storedExecutionMode)
+            ? storedExecutionMode
+            : getDefaultExecutionMode(initialOverview))
+          : getDefaultExecutionMode(initialOverview);
+        const preferredAgentId = nextExecutionMode === "native_agent" ? "main" : requestedAgentId;
+        const nextAgentId = nextAgents.some((agent) => agent.id === preferredAgentId) ? preferredAgentId : "main";
         let messages = initialMessages;
         let overview = initialOverview;
+        if (storedExecutionMode && nextExecutionMode !== storedExecutionMode) {
+          setExecutionMode(nextExecutionMode);
+        } else if (!storedExecutionMode && nextExecutionMode !== requestedExecutionMode) {
+          executionModeRef.current = nextExecutionMode;
+          setExecutionModeState(nextExecutionMode);
+        }
         if (nextAgentId !== requestedAgentId) {
           setActiveAgentId(nextAgentId);
           activeAgentIdRef.current = nextAgentId;
           window.localStorage.setItem(activeAgentStorageKey(botAlias, storageScope), nextAgentId);
+        }
+        if (nextAgentId !== requestedAgentId || nextExecutionMode !== requestedExecutionMode) {
           [messages, overview] = await Promise.all([
-            listScopedMessages(client, botAlias, nextAgentId, executionModeRef.current),
-            getScopedOverview(client, botAlias, nextAgentId, executionModeRef.current),
+            listScopedMessages(client, botAlias, nextAgentId, nextExecutionMode),
+            getScopedOverview(client, botAlias, nextAgentId, nextExecutionMode),
           ]);
-          if (cancelled || activeAgentIdRef.current !== nextAgentId) {
+          if (cancelled || activeAgentIdRef.current !== nextAgentId || executionModeRef.current !== nextExecutionMode) {
             return;
           }
         }
@@ -2359,7 +2393,13 @@ export function ChatScreen({
     setConversationLoading(true);
     setError("");
     try {
-      const data = await deleteAllScopedConversations(client, botAlias, deleteNativeSession);
+      const data = await deleteAllScopedConversations(
+        client,
+        botAlias,
+        activeAgentIdRef.current,
+        deleteNativeSession,
+        executionModeRef.current,
+      );
       stopAssistantPoll();
       stopSseRecoveryWatch();
       stopClusterTaskPoll();
@@ -2985,18 +3025,90 @@ export function ChatScreen({
     if (mode === executionModeRef.current || isStreamingRef.current) {
       return;
     }
+    const previousAgentId = activeAgentIdRef.current || "main";
+    const nextAgentId = mode === "native_agent" ? "main" : previousAgentId;
     setError("");
     setExecutionMode(mode);
     if (mode === "native_agent") {
       setPlanMode(false);
-      if (activeAgentIdRef.current !== "main") {
-        handleSelectAgent("main");
-      }
-      if (countPersistedHistoryItems(itemsRef.current) > 0) {
-        appendSystemMessage("已切换到原生 agent。当前会话已有历史时，建议新建会话后继续。");
-      }
     }
-  }, [setExecutionMode, setPlanMode]);
+    clearStoredQueuedMessage(botAlias, previousAgentId, storageScope);
+    clearStoredQueuedMessage(botAlias, nextAgentId, storageScope);
+    activeAgentIdRef.current = nextAgentId;
+    setActiveAgentId(nextAgentId);
+    window.localStorage.setItem(activeAgentStorageKey(botAlias, storageScope), nextAgentId);
+    assistantSendVersionRef.current += 1;
+    stopAssistantPoll();
+    stopSseRecoveryWatch();
+    stopClusterTaskPoll();
+    loadingRef.current = true;
+    setLoading(true);
+    setError("");
+    setItems([]);
+    setConversations([]);
+    setExpandedTracePanels({});
+    setTraceLoadState({});
+    setPendingCronRuns([]);
+    setPendingAttachments([]);
+    setQueuedMessage(null);
+    queuedMessageRef.current = null;
+    setClusterRunId("");
+    setClusterTaskStatus(null);
+    setClusterTaskError("");
+    clusterRunIdRef.current = "";
+    isStreamingRef.current = false;
+    streamModeRef.current = "";
+    setIsStreaming(false);
+    setStreamMode("");
+    setStreamStartedAtMs(null);
+
+    Promise.all([
+      listScopedMessages(client, botAlias, nextAgentId, mode),
+      getScopedOverview(client, botAlias, nextAgentId, mode),
+    ])
+      .then(([messages, overview]) => {
+        if (activeAgentIdRef.current !== nextAgentId || executionModeRef.current !== mode) {
+          return;
+        }
+        setBotOverview(overview);
+        setWorkingDir(overview.workingDir || "");
+        restoreClusterRunFromOverview(overview);
+        if (overview.agents && overview.agents.length > 0) {
+          setAgents(overview.agents);
+        }
+        const { shouldPoll } = applyHistoryView(messages, overview, []);
+        loadingRef.current = false;
+        setLoading(false);
+        if (historyPanelOpen) {
+          void loadConversations(conversationQuery);
+        }
+        if (!shouldPoll) {
+          void drainQueuedMessageIfIdleRef.current?.({ botAlias, agentId: nextAgentId });
+        }
+      })
+      .catch((err: Error) => {
+        if (activeAgentIdRef.current !== nextAgentId || executionModeRef.current !== mode) {
+          return;
+        }
+        setError(err.message || "切换执行模式失败");
+        loadingRef.current = false;
+        setLoading(false);
+      });
+  }, [
+    applyHistoryView,
+    botAlias,
+    client,
+    conversationQuery,
+    historyPanelOpen,
+    loadConversations,
+    restoreClusterRunFromOverview,
+    setExecutionMode,
+    setPlanMode,
+    stopAssistantPoll,
+    stopClusterTaskPoll,
+    stopSseRecoveryWatch,
+    storageScope,
+  ]);
 
   const handleSaveGlobalPromptPresets = useCallback(async (presets: PromptPreset[]) => {
     const nextPresets = await client.updateGlobalPromptPresets(presets);
@@ -3027,9 +3139,7 @@ export function ChatScreen({
   const assistantName = botAlias;
   const assistantAvatarName = botOverview?.avatarName || botAvatarName;
   const activeAgent = agents.find((agent) => agent.id === activeAgentId) || agents[0] || fallbackAgents()[0];
-  const supportedExecutionModes = botOverview?.supportedExecutionModes?.length
-    ? botOverview.supportedExecutionModes
-    : ["cli" as const];
+  const supportedExecutionModes = getSupportedExecutionModes(botOverview);
   const effectiveExecutionMode = supportedExecutionModes.includes(executionMode) ? executionMode : "cli";
   const nativeExecutionMode = effectiveExecutionMode === "native_agent";
   const clusterMode = Boolean(botOverview?.cluster?.enabled);

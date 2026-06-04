@@ -115,6 +115,7 @@ class NativeAgentService:
         error_message = ""
         last_status_signature = ""
         final_text = ""
+        reader_task: asyncio.Task[None] | None = None
 
         try:
             server = await self._server_for(profile, session)
@@ -149,8 +150,35 @@ class NativeAgentService:
                 "working_dir": session.working_dir,
             }
 
+            event_queue: asyncio.Queue[dict[str, Any] | BaseException | None] = asyncio.Queue()
+            event_ready = asyncio.Event()
+
+            async def read_events() -> None:
+                try:
+                    try:
+                        async for raw_event in client.events(global_events=True, ready_event=event_ready):
+                            await event_queue.put(raw_event)
+                    except TypeError:
+                        event_ready.set()
+                        async for raw_event in client.events(global_events=True):
+                            await event_queue.put(raw_event)
+                    await event_queue.put(None)
+                except asyncio.CancelledError:
+                    raise
+                except BaseException as exc:
+                    event_ready.set()
+                    await event_queue.put(exc)
+
+            reader_task = asyncio.create_task(read_events())
+            await event_ready.wait()
             await client.prompt_async(native_session_id, prompt_text, message_id=aggregator.user_message_id)
-            async for raw_event in client.events(global_events=True):
+            while True:
+                queued_event = await event_queue.get()
+                if queued_event is None:
+                    break
+                if isinstance(queued_event, BaseException):
+                    raise queued_event
+                raw_event = queued_event
                 event = unwrap_event(raw_event)
                 if event is None or not is_relevant_event(event, session_id=native_session_id, cwd=session.working_dir):
                     continue
@@ -195,6 +223,12 @@ class NativeAgentService:
                     break
                 if result.done:
                     break
+
+            reader_task.cancel()
+            try:
+                await reader_task
+            except asyncio.CancelledError:
+                pass
 
             try:
                 messages = await client.list_messages(native_session_id)
@@ -262,6 +296,12 @@ class NativeAgentService:
                 )
             yield {"type": "error", "code": "native_agent_error", "message": f"原生 agent 执行失败: {error_message}"}
         finally:
+            if reader_task is not None and not reader_task.done():
+                reader_task.cancel()
+                try:
+                    await reader_task
+                except asyncio.CancelledError:
+                    pass
             with session._lock:
                 session.native_agent_run_id = None
                 session.is_processing = False

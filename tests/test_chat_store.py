@@ -251,6 +251,141 @@ def test_chat_store_archives_all_bot_conversations_in_workspace(monkeypatch, tmp
     assert len(ChatStore(other_workspace).list_conversations(bot_id=1, user_id=1001, working_dir=str(other_workspace))) == 1
 
 
+def test_chat_store_provider_scope_excludes_native_conversation_id(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    store = ChatStore(workspace)
+    native_handle = store.begin_turn(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        user_text="原生",
+        native_provider="native_agent",
+    )
+    store.complete_turn(native_handle, content="原生回复", completion_state="completed", native_session_id="native-1")
+
+    items = store.list_active_history(
+        bot_id=1,
+        user_id=1001,
+        working_dir=str(workspace),
+        session_epoch=1,
+        conversation_id=native_handle.conversation_id,
+        native_provider_exclude="native_agent",
+    )
+
+    assert items == []
+
+
+def test_chat_store_list_and_archive_honor_provider_and_agent_scope(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    store = ChatStore(workspace)
+    main_cli_id = store.create_conversation(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        native_provider="codex",
+        agent_id="main",
+        title="CLI",
+    )
+    main_native_id = store.create_conversation(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        native_provider="native_agent",
+        agent_id="main",
+        title="Native",
+    )
+    reviewer_cli_id = store.create_conversation(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        native_provider="codex",
+        agent_id="reviewer",
+        title="Reviewer",
+    )
+
+    cli_rows = store.list_conversations(
+        bot_id=1,
+        user_id=1001,
+        working_dir=str(workspace),
+        agent_id="main",
+        native_provider_exclude="native_agent",
+        limit=10,
+    )
+    native_rows = store.list_conversations(
+        bot_id=1,
+        user_id=1001,
+        working_dir=str(workspace),
+        agent_id="main",
+        native_provider="native_agent",
+        limit=10,
+    )
+
+    assert [row["id"] for row in cli_rows] == [main_cli_id]
+    assert [row["id"] for row in native_rows] == [main_native_id]
+
+    deleted = store.archive_bot_conversations(
+        bot_id=1,
+        user_id=1001,
+        working_dir=str(workspace),
+        agent_id="main",
+        native_provider="native_agent",
+    )
+
+    assert deleted == 1
+    assert {
+        row["id"]
+        for row in store.list_conversations(
+            bot_id=1,
+            user_id=1001,
+            working_dir=str(workspace),
+            agent_id="main",
+            include_archived=True,
+            limit=10,
+        )
+    } == {main_cli_id, main_native_id}
+    assert [row["id"] for row in store.list_conversations(
+        bot_id=1,
+        user_id=1001,
+        working_dir=str(workspace),
+        agent_id="main",
+        native_provider_exclude="native_agent",
+        limit=10,
+    )] == [main_cli_id]
+    assert [row["id"] for row in store.list_conversations(
+        bot_id=1,
+        user_id=1001,
+        working_dir=str(workspace),
+        agent_id="reviewer",
+        limit=10,
+    )] == [reviewer_cli_id]
+
+
 def test_chat_store_selectable_conversation_preserves_native_session(monkeypatch, tmp_path: Path):
     home = tmp_path / "home"
     home.mkdir()
@@ -387,5 +522,3 @@ def test_get_trace_recovery_context_returns_turn_native_context(monkeypatch, tmp
         "tool_call_count": 0,
         "process_count": 1,
     }
-
-

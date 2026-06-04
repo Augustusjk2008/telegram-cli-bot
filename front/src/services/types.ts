@@ -222,6 +222,7 @@ export type BotSummary = {
   globalPromptPresets?: PromptPreset[];
   supportedExecutionModes?: ChatExecutionMode[];
   defaultExecutionMode?: ChatExecutionMode;
+  executionMode?: ChatExecutionMode;
   nativeAgent?: Record<string, unknown>;
 };
 
@@ -545,6 +546,7 @@ export type BotOverview = {
   globalPromptPresets?: PromptPreset[];
   supportedExecutionModes?: ChatExecutionMode[];
   defaultExecutionMode?: ChatExecutionMode;
+  executionMode?: ChatExecutionMode;
   nativeAgent?: Record<string, unknown>;
 };
 

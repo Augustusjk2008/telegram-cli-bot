@@ -28,7 +28,7 @@ function getPayloadRecord(event: ChatTraceEvent): Record<string, unknown> {
 }
 
 function getNativePermissionId(event: ChatTraceEvent) {
-  if (event.kind !== "permission") {
+  if (event.kind !== "permission" || String(event.source || "").trim().toLowerCase() !== "native_agent") {
     return "";
   }
   const payload = getPayloadRecord(event);

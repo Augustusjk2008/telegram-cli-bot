@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
@@ -18,6 +19,7 @@ class NativeAgentClientError(RuntimeError):
 class NativeAgentServerRef:
     base_url: str
     password: str = ""
+    username: str = "opencode"
 
 
 class NativeAgentClient:
@@ -31,7 +33,8 @@ class NativeAgentClient:
     def _headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
         headers = dict(extra or {})
         if self.server.password:
-            token = base64.b64encode(f":{self.server.password}".encode("utf-8")).decode("ascii")
+            username = str(self.server.username or "opencode").strip() or "opencode"
+            token = base64.b64encode(f"{username}:{self.server.password}".encode("utf-8")).decode("ascii")
             headers["Authorization"] = f"Basic {token}"
         return headers
 
@@ -72,19 +75,22 @@ class NativeAgentClient:
 
     async def list_messages(self, session_id: str) -> list[dict[str, Any]]:
         payload = await self._request_json("GET", f"/session/{session_id}/message")
+        raw_items: list[Any]
         if isinstance(payload.get("data"), list):
-            return [item for item in payload["data"] if isinstance(item, dict)]
-        if isinstance(payload.get("messages"), list):
-            return [item for item in payload["messages"] if isinstance(item, dict)]
-        if isinstance(payload.get("items"), list):
-            return [item for item in payload["items"] if isinstance(item, dict)]
-        return []
+            raw_items = payload["data"]
+        elif isinstance(payload.get("messages"), list):
+            raw_items = payload["messages"]
+        elif isinstance(payload.get("items"), list):
+            raw_items = payload["items"]
+        else:
+            raw_items = []
+        return [_flatten_message(item) for item in raw_items if isinstance(item, dict)]
 
     async def prompt_async(self, session_id: str, text: str, *, message_id: str | None = None) -> dict[str, Any]:
-        body: dict[str, Any] = {"text": text}
-        if message_id:
-            body["messageID"] = message_id
-            body["message_id"] = message_id
+        body: dict[str, Any] = {
+            "messageID": str(message_id or f"msg_{uuid.uuid4().hex}"),
+            "parts": [{"type": "text", "text": text}],
+        }
         return await self._request_json("POST", f"/session/{session_id}/prompt_async", json_body=body)
 
     async def abort(self, session_id: str) -> dict[str, Any]:
@@ -107,16 +113,24 @@ class NativeAgentClient:
         }
         return await self._request_json("POST", f"/session/{session_id}/permissions/{permission_id}", json_body=body)
 
-    async def events(self, *, global_events: bool = True) -> AsyncIterator[dict[str, Any]]:
+    async def events(
+        self,
+        *,
+        global_events: bool = True,
+        ready_event: asyncio.Event | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
         path = "/global/event" if global_events else "/event"
         async with ClientSession(timeout=ClientTimeout(total=None, sock_connect=10, sock_read=None)) as session:
             async with session.get(self._url(path), headers=self._headers({"Accept": "text/event-stream"})) as response:
                 if response.status >= 400:
                     text = await response.text()
                     raise NativeAgentClientError(text.strip() or f"HTTP {response.status}")
+                if ready_event is not None:
+                    ready_event.set()
                 buffer = ""
                 async for chunk in response.content.iter_chunked(4096):
                     buffer += chunk.decode("utf-8", errors="replace")
+                    buffer = _normalize_sse_newlines(buffer)
                     while "\n\n" in buffer:
                         block, buffer = buffer.split("\n\n", 1)
                         event = parse_sse_block(block)
@@ -128,7 +142,7 @@ class NativeAgentClient:
 def parse_sse_block(block: str) -> dict[str, Any] | None:
     event_name = ""
     data_lines: list[str] = []
-    for raw_line in str(block or "").splitlines():
+    for raw_line in _normalize_sse_newlines(str(block or "")).split("\n"):
         line = raw_line.rstrip("\r")
         if not line or line.startswith(":"):
             continue
@@ -148,3 +162,73 @@ def parse_sse_block(block: str) -> dict[str, Any] | None:
             payload["type"] = event_name
         return payload
     return {"type": event_name or "message", "data": payload}
+
+
+def _normalize_sse_newlines(value: str) -> str:
+    return value.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _part_text(part: Any) -> str:
+    if part is None:
+        return ""
+    if isinstance(part, str):
+        return part
+    if isinstance(part, (int, float, bool)):
+        return str(part)
+    if isinstance(part, list):
+        return "".join(_part_text(item) for item in part)
+    if not isinstance(part, dict):
+        return ""
+    for key in ("text", "content", "value", "message", "summary", "delta"):
+        value = part.get(key)
+        if value is not None:
+            text = _part_text(value)
+            if text:
+                return text
+    nested = part.get("part")
+    if isinstance(nested, dict):
+        return _part_text(nested)
+    return ""
+
+
+def _parts_text(parts: Any) -> str:
+    if not isinstance(parts, list):
+        return ""
+    texts: list[str] = []
+    for part in parts:
+        if isinstance(part, dict):
+            kind = str(part.get("type") or part.get("kind") or "").strip().lower()
+            if kind and kind not in {"text", "assistant_text", "message"}:
+                continue
+        text = _part_text(part)
+        if text:
+            texts.append(text)
+    return "".join(texts)
+
+
+def _flatten_message(message: dict[str, Any]) -> dict[str, Any]:
+    info = message.get("info") if isinstance(message.get("info"), dict) else {}
+    parts = message.get("parts") if isinstance(message.get("parts"), list) else []
+    flattened = dict(info)
+    flattened.update({key: value for key, value in message.items() if key != "info"})
+    if info:
+        flattened.setdefault("info", dict(info))
+    message_id = (
+        flattened.get("id")
+        or flattened.get("messageID")
+        or flattened.get("message_id")
+        or flattened.get("messageId")
+        or info.get("id")
+        or info.get("messageID")
+        or info.get("message_id")
+        or info.get("messageId")
+    )
+    role = flattened.get("role") or info.get("role")
+    content = flattened.get("content") or flattened.get("text") or _parts_text(parts)
+    if message_id:
+        flattened["id"] = str(message_id)
+    if role:
+        flattened["role"] = str(role)
+    flattened["content"] = str(content or "")
+    flattened["parts"] = parts
+    return flattened

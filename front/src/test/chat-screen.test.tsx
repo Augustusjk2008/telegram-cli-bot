@@ -660,6 +660,7 @@ test("native permission trace can be approved from trace panel", async () => {
           processCount: 1,
           trace: [{
             kind: "permission",
+            source: "native_agent",
             summary: "原生 agent 请求权限",
             payload: {
               id: "perm-1",
@@ -684,6 +685,49 @@ test("native permission trace can be approved from trace panel", async () => {
     expect.objectContaining({ approved: true, executionMode: "native_agent" }),
   ));
   expect(await screen.findByText("原生 agent 权限已允许")).toBeInTheDocument();
+});
+
+test("non-native permission trace hides native permission actions", async () => {
+  const user = userEvent.setup();
+  const client = createClient({
+    getBotOverview: async (): Promise<BotOverview> => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: true,
+      supportedExecutionModes: ["cli", "native_agent"],
+      defaultExecutionMode: "cli",
+    }),
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        text: "",
+        createdAt: new Date().toISOString(),
+        state: "streaming",
+        meta: {
+          traceCount: 1,
+          processCount: 1,
+          trace: [{
+            kind: "permission",
+            source: "codex",
+            summary: "CLI 请求确认",
+            payload: {
+              id: "perm-1",
+              state: "permission.updated",
+            },
+          }],
+        },
+      },
+    ],
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: "展开过程详情" }));
+  expect(screen.queryByRole("button", { name: "允许一次" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "拒绝" })).not.toBeInTheDocument();
 });
 
 
@@ -915,7 +959,7 @@ test("queues and merges messages typed while a reply is streaming", async () => 
 
 test("sends native agent execution mode from action bar", async () => {
   const user = userEvent.setup();
-  const sendMessage = vi.fn(async (
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
     _botAlias: string,
     _text: string,
     onChunk: (chunk: string) => void,
@@ -940,7 +984,7 @@ test("sends native agent execution mode from action bar", async () => {
   };
   const client = createClient({
     getBotOverview: async () => overview,
-    sendMessage: sendMessage as never,
+    sendMessage,
   });
 
   render(<ChatScreen botAlias="main" client={client} />);
@@ -951,6 +995,87 @@ test("sends native agent execution mode from action bar", async () => {
 
   await waitFor(() => expect(sendMessage).toHaveBeenCalled());
   expect(sendMessage.mock.calls[0][5]).toMatchObject({ executionMode: "native_agent" });
+});
+
+test("execution mode switch reloads scoped history", async () => {
+  const user = userEvent.setup();
+  const getBotOverview = vi.fn<WebBotClient["getBotOverview"]>(async (_botAlias, options) => ({
+    alias: "main",
+    cliType: "codex",
+    status: "running",
+    workingDir: "C:\\workspace",
+    isProcessing: false,
+    supportedExecutionModes: ["cli", "native_agent"],
+    defaultExecutionMode: "cli",
+    executionMode: options?.executionMode === "native_agent" ? "native_agent" : "cli",
+  }));
+  const listMessages = vi.fn<WebBotClient["listMessages"]>(async (_botAlias, options) => options?.executionMode === "native_agent"
+    ? [{
+      id: "assistant-native",
+      role: "assistant",
+      text: "原生历史",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    }]
+    : [{
+      id: "assistant-cli",
+      role: "assistant",
+      text: "CLI 历史",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    }]);
+  const client = createClient({
+    getBotOverview,
+    listMessages,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByText("CLI 历史")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "原生 agent" }));
+  expect(await screen.findByText("原生历史")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "CLI" }));
+  expect(await screen.findByText("CLI 历史")).toBeInTheDocument();
+  expect(listMessages.mock.calls.some(([, options]) => options?.executionMode === "native_agent")).toBe(true);
+  expect(listMessages.mock.calls.some(([, options]) => !options?.executionMode)).toBe(true);
+});
+
+test("uses overview default execution mode when storage is empty", async () => {
+  const getBotOverview = vi.fn<WebBotClient["getBotOverview"]>(async (_botAlias, options) => ({
+    alias: "main",
+    cliType: "codex",
+    status: "running",
+    workingDir: "C:\\workspace",
+    isProcessing: false,
+    supportedExecutionModes: ["cli", "native_agent"],
+    defaultExecutionMode: "native_agent",
+    executionMode: options?.executionMode === "native_agent" ? "native_agent" : "cli",
+  }));
+  const listMessages = vi.fn<WebBotClient["listMessages"]>(async (_botAlias, options) => options?.executionMode === "native_agent"
+    ? [{
+      id: "assistant-native",
+      role: "assistant",
+      text: "原生默认历史",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    }]
+    : [{
+      id: "assistant-cli",
+      role: "assistant",
+      text: "CLI 默认历史",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    }]);
+  const client = createClient({
+    getBotOverview,
+    listMessages,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByText("原生默认历史")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "原生 agent" })).toHaveAttribute("aria-pressed", "true");
+  expect(window.localStorage.getItem("tcb.executionMode.main")).toBeNull();
 });
 
 
@@ -1136,5 +1261,4 @@ test("assistant proposal patch request event sends structured chat task and disp
     summary: "patch 已生成\n目标工程: main",
   });
 });
-
 

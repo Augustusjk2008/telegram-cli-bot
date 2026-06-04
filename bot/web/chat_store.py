@@ -310,6 +310,25 @@ class ChatStore:
         ).fetchone()
         return int(row["next_seq"])
 
+    def _provider_scope_clause(
+        self,
+        *,
+        native_provider: str | None = None,
+        native_provider_exclude: str | None = None,
+        column: str = "native_provider",
+    ) -> tuple[str, list[Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        provider = str(native_provider or "").strip()
+        exclude = str(native_provider_exclude or "").strip()
+        if provider:
+            clauses.append(f"AND {column} = ?")
+            params.append(provider)
+        if exclude:
+            clauses.append(f"AND COALESCE({column}, '') != ?")
+            params.append(exclude)
+        return ("\n".join(clauses), params)
+
     def _get_active_conversation_id(
         self,
         conn: sqlite3.Connection,
@@ -320,12 +339,14 @@ class ChatStore:
         working_dir: str,
         session_epoch: int,
         native_provider: str | None = None,
+        native_provider_exclude: str | None = None,
     ) -> str | None:
-        provider_clause = ""
         params: list[Any] = [bot_id, user_id, str(agent_id or "main"), working_dir, session_epoch]
-        if str(native_provider or "").strip():
-            provider_clause = "AND native_provider = ?"
-            params.append(str(native_provider or "").strip())
+        provider_clause, provider_params = self._provider_scope_clause(
+            native_provider=native_provider,
+            native_provider_exclude=native_provider_exclude,
+        )
+        params.extend(provider_params)
         row = conn.execute(
             f"""
             SELECT id
@@ -352,6 +373,7 @@ class ChatStore:
         working_dir: str,
         session_epoch: int,
         native_provider: str | None = None,
+        native_provider_exclude: str | None = None,
     ) -> str | None:
         normalized_id = str(conversation_id or "").strip()
         if not normalized_id:
@@ -363,15 +385,21 @@ class ChatStore:
                 working_dir=working_dir,
                 session_epoch=session_epoch,
                 native_provider=native_provider,
+                native_provider_exclude=native_provider_exclude,
             )
 
+        provider_clause, provider_params = self._provider_scope_clause(
+            native_provider=native_provider,
+            native_provider_exclude=native_provider_exclude,
+        )
         row = conn.execute(
-            """
+            f"""
             SELECT id
             FROM conversations
             WHERE id = ? AND bot_id = ? AND user_id = ? AND agent_id = ? AND working_dir = ? AND archived_at IS NULL
+            {provider_clause}
             """,
-            (normalized_id, bot_id, user_id, str(agent_id or "main"), working_dir),
+            [normalized_id, bot_id, user_id, str(agent_id or "main"), working_dir, *provider_params],
         ).fetchone()
         if row is None:
             return None
@@ -638,6 +666,7 @@ class ChatStore:
         query: str = "",
         include_archived: bool = False,
         native_provider: str | None = None,
+        native_provider_exclude: str | None = None,
     ) -> list[dict[str, Any]]:
         conn = self._connect(create=False)
         if conn is None:
@@ -648,10 +677,11 @@ class ChatStore:
         archived_clause = "" if include_archived else "AND archived_at IS NULL"
         query_clause = ""
         params: list[Any] = [bot_id, user_id, str(agent_id or "main"), working_dir]
-        provider_clause = ""
-        if str(native_provider or "").strip():
-            provider_clause = "AND native_provider = ?"
-            params.append(str(native_provider or "").strip())
+        provider_clause, provider_params = self._provider_scope_clause(
+            native_provider=native_provider,
+            native_provider_exclude=native_provider_exclude,
+        )
+        params.extend(provider_params)
         if normalized_query:
             query_clause = "AND (title LIKE ? OR last_message_preview LIKE ?)"
             query_value = f"%{normalized_query}%"
@@ -1589,6 +1619,7 @@ class ChatStore:
         agent_id: str = "main",
         conversation_id: str | None = None,
         native_provider: str | None = None,
+        native_provider_exclude: str | None = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
         started_at = time.perf_counter()
@@ -1606,6 +1637,7 @@ class ChatStore:
                     working_dir=working_dir,
                     session_epoch=session_epoch,
                     native_provider=native_provider,
+                    native_provider_exclude=native_provider_exclude,
                 )
         if resolved_conversation_id is None:
             return []
@@ -1634,6 +1666,7 @@ class ChatStore:
         agent_id: str = "main",
         conversation_id: str | None = None,
         native_provider: str | None = None,
+        native_provider_exclude: str | None = None,
     ) -> int:
         started_at = time.perf_counter()
         conn = self._connect(create=False)
@@ -1650,6 +1683,7 @@ class ChatStore:
                     working_dir=working_dir,
                     session_epoch=session_epoch,
                     native_provider=native_provider,
+                    native_provider_exclude=native_provider_exclude,
                 )
                 if resolved_conversation_id is None:
                     return 0
@@ -1681,6 +1715,7 @@ class ChatStore:
         agent_id: str = "main",
         conversation_id: str | None = None,
         native_provider: str | None = None,
+        native_provider_exclude: str | None = None,
         error_code: str = "stale_stream_recovered",
         fallback_content: str = "上次运行未正常结束，已停止显示正在输出。",
     ) -> int:
@@ -1700,6 +1735,7 @@ class ChatStore:
                     working_dir=working_dir,
                     session_epoch=session_epoch,
                     native_provider=native_provider,
+                    native_provider_exclude=native_provider_exclude,
                 )
                 if resolved_conversation_id is None:
                     return 0
@@ -1758,6 +1794,7 @@ class ChatStore:
         agent_id: str = "main",
         conversation_id: str | None = None,
         native_provider: str | None = None,
+        native_provider_exclude: str | None = None,
     ) -> dict[str, Any] | None:
         started_at = time.perf_counter()
         conn = self._connect(create=False)
@@ -1774,6 +1811,7 @@ class ChatStore:
                     working_dir=working_dir,
                     session_epoch=session_epoch,
                     native_provider=native_provider,
+                    native_provider_exclude=native_provider_exclude,
                 )
                 if resolved_conversation_id is None:
                     return None
@@ -1984,12 +2022,26 @@ class ChatStore:
         user_id: int,
         working_dir: str,
         include_archived: bool = False,
+        agent_id: str | None = None,
+        native_provider: str | None = None,
+        native_provider_exclude: str | None = None,
     ) -> int:
         conn = self._connect(create=False)
         if conn is None:
             return 0
         now = _utc_now()
         archived_clause = "" if include_archived else "AND archived_at IS NULL"
+        agent_clause = ""
+        params: list[Any] = [now, "archived", now, bot_id, user_id, working_dir]
+        normalized_agent_id = str(agent_id or "").strip()
+        if normalized_agent_id:
+            agent_clause = "AND agent_id = ?"
+            params.append(normalized_agent_id)
+        provider_clause, provider_params = self._provider_scope_clause(
+            native_provider=native_provider,
+            native_provider_exclude=native_provider_exclude,
+        )
+        params.extend(provider_params)
         with closing(conn):
             with conn:
                 result = conn.execute(
@@ -1999,9 +2051,11 @@ class ChatStore:
                         status = ?,
                         updated_at = ?
                     WHERE bot_id = ? AND user_id = ? AND working_dir = ?
+                    {agent_clause}
                     {archived_clause}
+                    {provider_clause}
                     """,
-                    (now, "archived", now, bot_id, user_id, working_dir),
+                    params,
                 )
                 return int(result.rowcount or 0)
 

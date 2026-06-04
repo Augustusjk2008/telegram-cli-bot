@@ -676,6 +676,9 @@ describe("RealWebBotClient", () => {
               cli_type: "codex",
               status: "running",
               working_dir: "C:\\workspace\\profile",
+              supported_execution_modes: ["cli", "native_agent"],
+              default_execution_mode: "native_agent",
+              execution_mode: "native_agent",
               assistant_runtime: {
                 pending_count: 2,
                 queued_count: 1,
@@ -724,6 +727,9 @@ describe("RealWebBotClient", () => {
 
     expect(overview.workingDir).toBe("C:\\workspace\\session");
     expect(overview.status).toBe("busy");
+    expect(overview.supportedExecutionModes).toEqual(["cli", "native_agent"]);
+    expect(overview.defaultExecutionMode).toBe("native_agent");
+    expect(overview.executionMode).toBe("native_agent");
     expect(overview.runningReply).toEqual({
       previewText: "处理中预览",
       startedAt: "2026-04-09T10:40:00",
@@ -986,6 +992,28 @@ describe("RealWebBotClient", () => {
     expect(data.deletedCount).toBe(3);
     expect(data.messages).toEqual([]);
     expect(data.nativeSessionCleared).toBe(true);
+  });
+
+  test("deleteAllConversations forwards scoped params", async () => {
+    fetchMock.mockResolvedValueOnce(jsonOk({
+      deleted_count: 1,
+      active_conversation_id: "",
+      native_session_cleared: true,
+      items: [],
+      messages: [],
+    }));
+
+    const client = new RealWebBotClient();
+    await client.deleteAllConversations("main", {
+      agentId: "reviewer",
+      executionMode: "native_agent",
+      deleteNativeSession: true,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/bots/main/conversations?agent_id=reviewer&execution_mode=native_agent&delete_native_session=true",
+      expect.objectContaining({ method: "DELETE" }),
+    );
   });
 
   

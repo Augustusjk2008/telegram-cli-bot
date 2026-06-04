@@ -2787,11 +2787,22 @@ class WebApiServer:
     async def delete_conversations_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_CHAT_SEND)
         alias = self._manager_alias(request)
+        body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
+        agent_id = self._request_agent_id(request, body)
         delete_native = str(request.query.get("delete_native_session", "")).lower() in {"1", "true", "yes", "on"}
+        execution_mode = str(
+            body.get("execution_mode")
+            or body.get("executionMode")
+            or request.query.get("execution_mode")
+            or request.query.get("executionMode")
+            or ""
+        ).strip()
         data = delete_all_conversations(
             self.manager,
             alias,
             self._chat_user_id(auth),
+            agent_id=agent_id,
+            execution_mode=execution_mode,
             delete_native_session=delete_native,
         )
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})

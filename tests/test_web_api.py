@@ -87,6 +87,7 @@ from bot.web.api_service import (
     reply_native_agent_permission,
     run_chat,
     run_cli_chat,
+    reset_user_session,
     save_chat_attachment,
     save_uploaded_file,
     select_conversation,
@@ -1508,6 +1509,7 @@ async def test_terminal_session_routes_and_websocket_attach(
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
     monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
     monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.web.server.WEB_TERMINAL_SHELL_PATH", "")
 
     state: dict[str, object] = {"writes": []}
 
@@ -2338,6 +2340,248 @@ def test_conversation_api_delete_all_clears_bot_workspace_sessions(web_manager: 
     assert session.codex_session_id is None
     assert list_conversations(web_manager, "main", 1001)["items"] == []
     assert first["conversation"]["id"] != second["conversation"]["id"]
+
+
+def test_history_and_trace_are_isolated_by_execution_mode(web_manager: MultiBotManager, tmp_path: Path):
+    web_manager.main_profile.working_dir = str(tmp_path)
+    profile = web_manager.main_profile
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    cli_handle = history.start_turn(
+        profile=profile,
+        session=session,
+        user_text="CLI",
+        native_provider="codex",
+    )
+    history.append_trace_event(cli_handle, {"kind": "tool_call", "summary": "cli trace"})
+    cli_message = history.complete_turn(
+        cli_handle,
+        content="CLI 回复",
+        completion_state="completed",
+        native_session_id="thread-1",
+    )
+
+    native_handle = history.start_turn(
+        profile=profile,
+        session=session,
+        user_text="Native",
+        native_provider="native_agent",
+    )
+    history.complete_turn(
+        native_handle,
+        content="原生回复",
+        completion_state="completed",
+        native_session_id="native-1",
+    )
+
+    native_history = get_history(web_manager, "main", 1001, execution_mode="native_agent")
+    cli_history_when_native_active = get_history(web_manager, "main", 1001, execution_mode="cli")
+    native_overview = get_overview(web_manager, "main", 1001, execution_mode="native_agent")
+    cli_list = list_conversations(web_manager, "main", 1001, execution_mode="cli")
+    native_list = list_conversations(web_manager, "main", 1001, execution_mode="native_agent")
+
+    assert [item["content"] for item in native_history["items"]] == ["Native", "原生回复"]
+    assert cli_history_when_native_active["items"] == []
+    assert native_overview["session"]["history_count"] == 2
+    assert [item["id"] for item in cli_list["items"]] == [cli_handle.conversation_id]
+    assert [item["id"] for item in native_list["items"]] == [native_handle.conversation_id]
+
+    with pytest.raises(WebApiError) as exc_info:
+        get_history_trace(
+            web_manager,
+            "main",
+            1001,
+            str(cli_message["id"]),
+            execution_mode="native_agent",
+        )
+    assert exc_info.value.code == "trace_not_found"
+
+    select_conversation(
+        web_manager,
+        "main",
+        1001,
+        cli_handle.conversation_id,
+        execution_mode="cli",
+    )
+
+    assert get_history(web_manager, "main", 1001, execution_mode="native_agent")["items"] == []
+    assert [item["content"] for item in get_history(web_manager, "main", 1001, execution_mode="cli")["items"]] == [
+        "CLI",
+        "CLI 回复",
+    ]
+
+
+def test_delete_all_conversations_scopes_agent_and_execution_mode(web_manager: MultiBotManager, tmp_path: Path):
+    web_manager.main_profile.working_dir = str(tmp_path)
+    web_manager.main_profile.agents = [AgentProfile(id="reviewer", name="审查")]
+    main_session = get_session_for_alias(web_manager, "main", 1001)
+    main_session.working_dir = str(tmp_path)
+    _profile, _agent, reviewer_session = get_chat_session_for_alias(web_manager, "main", 1001, "reviewer")
+    reviewer_session.working_dir = str(tmp_path)
+
+    main_cli = create_conversation(web_manager, "main", 1001, "主 CLI", execution_mode="cli")
+    create_conversation(web_manager, "main", 1001, "主 Native", execution_mode="native_agent")
+    reviewer_cli = create_conversation(web_manager, "main", 1001, "审查 CLI", agent_id="reviewer", execution_mode="cli")
+
+    with main_session._lock:
+        main_session.codex_session_id = "thread-1"
+        main_session.native_agent_session_id = "native-1"
+    main_session.persist()
+
+    result = delete_all_conversations(
+        web_manager,
+        "main",
+        1001,
+        agent_id="main",
+        execution_mode="native_agent",
+        delete_native_session=True,
+    )
+
+    assert result["deleted_count"] == 1
+    assert result["native_session_cleared"] is True
+    assert main_session.native_agent_session_id is None
+    assert main_session.codex_session_id == "thread-1"
+    assert [item["id"] for item in list_conversations(web_manager, "main", 1001, execution_mode="cli")["items"]] == [
+        main_cli["conversation"]["id"]
+    ]
+    assert list_conversations(web_manager, "main", 1001, execution_mode="native_agent")["items"] == []
+    assert [item["id"] for item in list_conversations(web_manager, "main", 1001, agent_id="reviewer", execution_mode="cli")["items"]] == [
+        reviewer_cli["conversation"]["id"]
+    ]
+
+    reviewer_result = delete_all_conversations(
+        web_manager,
+        "main",
+        1001,
+        agent_id="reviewer",
+        execution_mode="cli",
+    )
+
+    assert reviewer_result["deleted_count"] == 1
+    assert [item["id"] for item in list_conversations(web_manager, "main", 1001, execution_mode="cli")["items"]] == [
+        main_cli["conversation"]["id"]
+    ]
+    assert list_conversations(web_manager, "main", 1001, agent_id="reviewer", execution_mode="cli")["items"] == []
+
+
+def test_reset_user_session_blocks_while_processing(web_manager: MultiBotManager):
+    session = get_session_for_alias(web_manager, "main", 1001)
+    with session._lock:
+        session.is_processing = True
+        session.native_agent_session_id = "native-1"
+
+    with pytest.raises(WebApiError) as exc_info:
+        reset_user_session(web_manager, "main", 1001)
+
+    assert exc_info.value.status == 409
+    assert exc_info.value.code == "conversation_switch_blocked"
+
+
+@pytest.mark.asyncio
+async def test_reset_user_session_during_fake_native_stream_returns_409_and_stream_finishes(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class FakeNativeService:
+        async def stream_chat(self, **kwargs):
+            session = kwargs["session"]
+            with session._lock:
+                session.is_processing = True
+            started.set()
+            yield {"type": "meta", "execution_mode": "native_agent"}
+            await release.wait()
+            with session._lock:
+                session.is_processing = False
+            yield {
+                "type": "done",
+                "output": "完成",
+                "message": {"id": "assistant-1", "role": "assistant", "content": "完成", "meta": {}},
+                "elapsed_seconds": 0,
+                "returncode": 0,
+            }
+
+    monkeypatch.setattr(api_service, "get_native_agent_service", lambda: FakeNativeService())
+
+    async def collect_events():
+        return [
+            event
+            async for event in api_service.stream_chat(
+                web_manager,
+                "main",
+                1001,
+                "你好",
+                execution_mode="native_agent",
+            )
+        ]
+
+    task = asyncio.create_task(collect_events())
+    await started.wait()
+
+    with pytest.raises(WebApiError) as exc_info:
+        reset_user_session(web_manager, "main", 1001)
+
+    assert exc_info.value.status == 409
+    assert exc_info.value.code == "conversation_switch_blocked"
+
+    release.set()
+    events = await task
+    assert events[-1]["type"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_delete_conversations_route_reads_agent_and_execution_mode(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: dict[str, Any] = {}
+
+    def fake_delete_all(manager, alias, user_id, *, agent_id="main", execution_mode="", delete_native_session=False):
+        captured.update(
+            {
+                "alias": alias,
+                "user_id": user_id,
+                "agent_id": agent_id,
+                "execution_mode": execution_mode,
+                "delete_native_session": delete_native_session,
+            }
+        )
+        return {"deleted_count": 0, "active_conversation_id": "", "native_session_cleared": False, "items": [], "messages": []}
+
+    def fake_auth(_self, _request):
+        return AuthContext(
+            user_id=1001,
+            token_used=True,
+            account_id="local-admin",
+            username="local-admin",
+            role="owner",
+            capabilities={"chat_send"},
+            is_local_admin=True,
+        )
+
+    monkeypatch.setattr("bot.web.server.delete_all_conversations", fake_delete_all)
+    monkeypatch.setattr("bot.web.server.WebApiServer._auth_context", fake_auth)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.delete(
+                "/api/bots/main/conversations?delete_native_session=true",
+                json={"agent_id": "reviewer", "execution_mode": "native_agent"},
+            )
+            assert resp.status == 200
+
+    assert captured == {
+        "alias": "main",
+        "user_id": 1,
+        "agent_id": "reviewer",
+        "execution_mode": "native_agent",
+        "delete_native_session": True,
+    }
 
 
 @pytest.mark.asyncio

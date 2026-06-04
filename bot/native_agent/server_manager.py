@@ -17,11 +17,12 @@ class NativeAgentServerHandle:
     key: str
     base_url: str
     password: str
+    username: str
     cwd: str
     process: asyncio.subprocess.Process | None = None
 
     def client(self) -> NativeAgentClient:
-        return NativeAgentClient(NativeAgentServerRef(self.base_url, self.password))
+        return NativeAgentClient(NativeAgentServerRef(self.base_url, self.password, self.username))
 
 
 class NativeAgentServerManager:
@@ -84,7 +85,9 @@ class NativeAgentServerManager:
         configured_port = int(config.get("port") or 0)
         port = configured_port if configured_port > 0 else self._pick_port()
         password = str(config.get("server_password") or "").strip() or secrets.token_urlsafe(24)
+        username = "opencode"
         env = os.environ.copy()
+        env["OPENCODE_SERVER_USERNAME"] = username
         env["OPENCODE_SERVER_PASSWORD"] = password
         process = await asyncio.create_subprocess_exec(
             command,
@@ -102,6 +105,7 @@ class NativeAgentServerManager:
             key=key,
             base_url=f"http://{hostname}:{port}",
             password=password,
+            username=username,
             cwd=str(Path(cwd).expanduser().resolve()),
             process=process,
         )

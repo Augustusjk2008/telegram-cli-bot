@@ -122,7 +122,7 @@ from bot.cli import (
 )
 from bot.manager import MultiBotManager
 from bot.messages import msg
-from bot.models import AgentProfile, BotProfile, UserSession
+from bot.models import AgentProfile, BotProfile, EXECUTION_MODE_CLI, UserSession
 from bot.native_agent import (
     NATIVE_AGENT_PROVIDER,
     get_native_agent_service,
@@ -616,8 +616,9 @@ def _get_chat_history_service(session: UserSession) -> ChatHistoryService:
 
 
 def _history_service_for_execution_mode(session: UserSession, execution_mode: str) -> ChatHistoryService:
-    provider_filter = NATIVE_AGENT_PROVIDER if execution_mode == NATIVE_AGENT_PROVIDER else ""
-    return ChatHistoryService(_get_chat_store(session), native_provider_filter=provider_filter)
+    if execution_mode == NATIVE_AGENT_PROVIDER:
+        return ChatHistoryService(_get_chat_store(session), native_provider_filter=NATIVE_AGENT_PROVIDER)
+    return ChatHistoryService(_get_chat_store(session), native_provider_exclude=NATIVE_AGENT_PROVIDER)
 
 
 def get_file_browser_directory(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
@@ -2067,6 +2068,22 @@ def _ensure_conversation_execution_mode(conversation: dict[str, Any], requested_
     return conversation_mode
 
 
+def _active_conversation_matches_execution_mode(
+    store: ChatStore,
+    conversation_id: str,
+    execution_mode: str,
+) -> bool:
+    normalized_id = str(conversation_id or "").strip()
+    if not normalized_id:
+        return False
+    try:
+        provider = store.get_conversation_native_provider(normalized_id)
+    except KeyError:
+        return True
+    conversation_mode = NATIVE_AGENT_PROVIDER if str(provider or "").strip().lower() == NATIVE_AGENT_PROVIDER else EXECUTION_MODE_CLI
+    return conversation_mode == execution_mode
+
+
 def list_conversations(
     manager: MultiBotManager,
     alias: str,
@@ -2080,6 +2097,7 @@ def list_conversations(
     resolved_execution_mode = normalize_execution_mode(execution_mode, profile)
     store = _get_chat_store(session)
     active_id = str(getattr(session, "active_conversation_id", "") or "")
+    visible_active_id = active_id if _active_conversation_matches_execution_mode(store, active_id, resolved_execution_mode) else ""
     items = store.list_conversations(
         bot_id=session.bot_id,
         user_id=session.user_id,
@@ -2088,18 +2106,19 @@ def list_conversations(
         limit=max(1, limit),
         query=query,
         native_provider=NATIVE_AGENT_PROVIDER if resolved_execution_mode == NATIVE_AGENT_PROVIDER else None,
+        native_provider_exclude=NATIVE_AGENT_PROVIDER if resolved_execution_mode != NATIVE_AGENT_PROVIDER else None,
     )
     return {
         "items": [
             {
                 **item,
-                "active": str(item.get("id") or "") == active_id,
+                "active": str(item.get("id") or "") == visible_active_id,
                 "bot_mode": str(item.get("bot_mode") or profile.bot_mode),
                 "execution_mode": _conversation_execution_mode(item),
             }
             for item in items
         ],
-        "active_conversation_id": active_id,
+        "active_conversation_id": visible_active_id,
         "execution_mode": resolved_execution_mode,
     }
 
@@ -2237,7 +2256,7 @@ def select_conversation(
             session.native_agent_session_id = native_session_id or None
     session.persist()
 
-    messages = ChatHistoryService(store).list_history(profile, session, limit=50)
+    messages = _history_service_for_execution_mode(session, conversation_execution_mode).list_history(profile, session, limit=50)
     return {
         "conversation": {
             **conversation,
@@ -2333,41 +2352,53 @@ def delete_all_conversations(
     alias: str,
     user_id: int,
     *,
+    agent_id: str = "main",
+    execution_mode: str = "",
     delete_native_session: bool = False,
 ) -> dict[str, Any]:
-    profile = get_profile_or_raise(manager, alias)
-    bot_id = resolve_session_bot_id(manager, alias)
-    shared_user_id = chat_session_user_id(user_id)
-    agent_ids = _agent_ids_for_profile(profile)
-    sessions_by_agent: dict[str, UserSession] = {}
+    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    resolved_execution_mode = normalize_execution_mode(execution_mode, profile)
+    with session._lock:
+        if bool(session.is_processing):
+            _raise(409, "conversation_switch_blocked", "当前任务运行中，先终止或等待完成")
+        active_conversation_id = str(session.active_conversation_id or "")
 
-    for agent_id in agent_ids:
-        _profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, agent_id)
-        sessions_by_agent[session.agent_id] = session
-        with session._lock:
-            if bool(session.is_processing):
-                _raise(409, "conversation_switch_blocked", "当前任务运行中，先终止或等待完成")
-
-    main_session = sessions_by_agent.get("main") or next(iter(sessions_by_agent.values()))
-    store = _get_chat_store(main_session)
+    store = _get_chat_store(session)
     deleted_count = store.archive_bot_conversations(
-        bot_id=bot_id,
-        user_id=main_session.user_id,
-        working_dir=main_session.working_dir,
+        bot_id=session.bot_id,
+        user_id=session.user_id,
+        working_dir=session.working_dir,
+        agent_id=session.agent_id,
+        native_provider=NATIVE_AGENT_PROVIDER if resolved_execution_mode == NATIVE_AGENT_PROVIDER else None,
+        native_provider_exclude=NATIVE_AGENT_PROVIDER if resolved_execution_mode != NATIVE_AGENT_PROVIDER else None,
     )
 
     native_cleared = False
-    for session in sessions_by_agent.values():
-        with session._lock:
+    with session._lock:
+        if _active_conversation_matches_execution_mode(store, active_conversation_id, resolved_execution_mode):
             session.active_conversation_id = None
             session.message_count = 0
-            if delete_native_session:
-                native_cleared = _clear_all_native_sessions_locked(session) or native_cleared
-        session.persist()
+        if delete_native_session:
+            if resolved_execution_mode == NATIVE_AGENT_PROVIDER:
+                if session.native_agent_session_id:
+                    _clear_native_agent_session_locked(session)
+                    native_cleared = True
+            else:
+                if session.codex_session_id is not None:
+                    session.codex_session_id = None
+                    native_cleared = True
+                if session.claude_session_id is not None:
+                    session.claude_session_id = None
+                    session.claude_session_initialized = False
+                    native_cleared = True
+                if session.kimi_session_id is not None:
+                    session.kimi_session_id = None
+                    native_cleared = True
+    session.persist()
 
     return {
         "deleted_count": deleted_count,
-        "active_conversation_id": "",
+        "active_conversation_id": str(session.active_conversation_id or ""),
         "native_session_cleared": native_cleared,
         "items": [],
         "messages": [],
@@ -2434,6 +2465,10 @@ def reset_user_session(manager: MultiBotManager, alias: str, user_id: int, agent
             _profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, normalized_agent_id)
     else:
         session = align_session_paths(session, profile.working_dir, profile.bot_mode)
+
+    with session._lock:
+        if bool(session.is_processing):
+            _raise(409, "conversation_switch_blocked", "当前任务运行中，先终止或等待完成")
 
     _get_chat_history_service(session).reset_active_conversation(profile, session)
     removed = reset_session(bot_id, user_id, agent_id=normalized_agent_id)

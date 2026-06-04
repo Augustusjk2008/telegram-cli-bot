@@ -4264,9 +4264,11 @@ export class RealWebBotClient implements WebBotClient {
 
   async deleteAllConversations(
     botAlias: string,
-    options: { deleteNativeSession?: boolean } = {},
+    options: AgentScopedOptions & { deleteNativeSession?: boolean } = {},
   ): Promise<ConversationBulkDeleteResult> {
     const params = new URLSearchParams();
+    appendAgentParam(params, options.agentId);
+    appendExecutionModeParam(params, options.executionMode);
     if (options.deleteNativeSession) {
       params.set("delete_native_session", "true");
     }

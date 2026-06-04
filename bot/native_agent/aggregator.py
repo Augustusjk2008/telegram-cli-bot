@@ -38,6 +38,25 @@ def _part_id(part: dict[str, Any]) -> str:
     return ""
 
 
+def _message_parts_text(parts: Any) -> str:
+    if not isinstance(parts, list):
+        return _value_text(parts)
+    texts: list[str] = []
+    for part in parts:
+        if not isinstance(part, dict):
+            text = _value_text(part)
+            if text:
+                texts.append(text)
+            continue
+        kind = str(part.get("type") or part.get("kind") or "").strip().lower()
+        if kind and kind not in {"text", "assistant_text", "message"}:
+            continue
+        text = _value_text(part.get("text") or part.get("content") or part.get("value") or part)
+        if text:
+            texts.append(text)
+    return "".join(texts)
+
+
 @dataclass
 class NativeAgentAggregationResult:
     delta: str = ""
@@ -100,7 +119,7 @@ class NativeAgentAggregator:
         if role == "assistant" and message_id:
             self.assistant_message_id = message_id
             result.assistant_message_id = message_id
-        text = _value_text(message.get("text") or message.get("content"))
+        text = _value_text(message.get("text") or message.get("content")) or _message_parts_text(message.get("parts"))
         if role == "assistant" and text:
             previous = self.final_text
             self.final_text = text
@@ -226,7 +245,7 @@ class NativeAgentAggregator:
             role = str(message.get("role") or "").lower()
             if role != "assistant":
                 continue
-            text = _value_text(message.get("text") or message.get("content") or message.get("parts"))
+            text = _message_parts_text(message.get("parts")) or _value_text(message.get("text") or message.get("content"))
             if text:
                 self.final_text = text
         return self.text()
