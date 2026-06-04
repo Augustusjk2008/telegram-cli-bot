@@ -1648,6 +1648,70 @@ async def test_terminal_rebuild_uses_configured_shell_path(
 
 
 @pytest.mark.asyncio
+async def test_terminal_websocket_closes_when_terminal_session_closes(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    class FakeProcess:
+        is_pty = True
+        pid = 4330
+
+        def read(self, timeout: int = 1000) -> bytes:
+            return b""
+
+        def write(self, data: bytes) -> None:
+            pass
+
+        def isalive(self) -> bool:
+            return True
+
+        def terminate(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    def fake_create_shell_process(
+        shell_type: str,
+        cwd: str,
+        use_pty: bool = True,
+        cols: int | None = None,
+        rows: int | None = None,
+    ):
+        return FakeProcess()
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            with patch("bot.web.terminal_manager.create_shell_process", side_effect=fake_create_shell_process), \
+                 patch("bot.web.server.get_default_shell", return_value="bash"):
+                owner_id = "close-ws-terminal"
+                rebuild_resp = await client.post(
+                    "/api/terminal/session/rebuild?token=secret",
+                    json={"owner_id": owner_id, "cwd": str(temp_dir), "shell": "auto"},
+                )
+                ws = await client.ws_connect("/terminal/ws?token=secret")
+                await ws.send_json({"owner_id": owner_id})
+                first_message = await ws.receive_json()
+
+                close_resp = await client.post(
+                    "/api/terminal/session/close?token=secret",
+                    json={"owner_id": owner_id},
+                )
+                close_message = await asyncio.wait_for(ws.receive(), timeout=2)
+
+    assert rebuild_resp.status == 200
+    assert first_message == {"pty_mode": True, "connection_text": "运行中"}
+    assert close_resp.status == 200
+    assert close_message.type in {WSMsgType.CLOSE, WSMsgType.CLOSED}
+
+
+@pytest.mark.asyncio
 async def test_terminal_rebuild_auto_uses_default_shell_without_configured_path(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,

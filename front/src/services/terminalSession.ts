@@ -69,7 +69,7 @@ function formatWsCloseMessage(
 ): string {
   const context = formatWsDiagnostics(socketUrl, diagnostics);
   const reason = event.reason ? `，原因：${event.reason}` : "";
-  if (event.code === 1000 && attached) {
+  if ((event.code === 1000 || event.code === 1005) && attached) {
     return "";
   }
   if (event.code === 1008) {
@@ -479,12 +479,13 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
     term,
     connect,
     dispose: () => {
+      ignoreSocketEvents = true;
       cleanupSocket();
       cleanupFallback();
       fallbackInputDisposable.dispose();
       attachAddon?.dispose();
       attachAddon = null;
-      socket?.close();
+      socket?.close(1000);
       socket = null;
       term.dispose();
     },

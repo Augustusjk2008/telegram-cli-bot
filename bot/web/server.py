@@ -2446,12 +2446,16 @@ class WebApiServer:
                 asyncio.create_task(forward_input()),
             ]
             output_task, input_task = tasks
-            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
 
             if output_task in done and output_task.exception() is not None:
                 input_task.cancel()
                 await asyncio.gather(input_task, return_exceptions=True)
                 output_task.result()
+            elif output_task in done:
+                input_task.cancel()
+                await asyncio.gather(input_task, return_exceptions=True)
+                await ws.close(code=WSCloseCode.OK, message=b"terminal closed")
             else:
                 await input_task
                 if not output_task.done():

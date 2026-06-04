@@ -301,6 +301,46 @@ test("reports websocket close code and path when connection fails", () => {
   expect(errors[0]).toContain("code 1006");
 });
 
+test("does not report normal post-attach websocket close as an error", () => {
+  const errors: string[] = [];
+  const closed: string[] = [];
+  const container = document.createElement("div");
+  const session = createTerminalSession(container, {
+    token: "abc",
+    ownerId: "owner-1",
+    onClose: () => closed.push("close"),
+    onError: (message) => errors.push(message),
+  });
+
+  session.connect();
+  socketState.instances[0].open();
+  socketState.instances[0].emitMessage(JSON.stringify({ pty_mode: true }));
+  socketState.instances[0].closeWith(1005);
+
+  expect(errors).toEqual([]);
+  expect(closed).toEqual(["close"]);
+});
+
+test("dispose ignores websocket close events from its own close call", () => {
+  const errors: string[] = [];
+  const closed: string[] = [];
+  const container = document.createElement("div");
+  const session = createTerminalSession(container, {
+    token: "abc",
+    ownerId: "owner-1",
+    onClose: () => closed.push("close"),
+    onError: (message) => errors.push(message),
+  });
+
+  session.connect();
+  socketState.instances[0].open();
+  socketState.instances[0].emitMessage(JSON.stringify({ pty_mode: true }));
+  session.dispose();
+
+  expect(errors).toEqual([]);
+  expect(closed).toEqual([]);
+});
+
 test("falls back to http terminal stream when websocket fails before attach", async () => {
   const errors: string[] = [];
   const opened: string[] = [];
