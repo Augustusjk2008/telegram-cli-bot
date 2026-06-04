@@ -597,6 +597,59 @@ describe("RealWebBotClient", () => {
     );
   });
 
+  test("updateBotExecutionConfig posts native agent config", async () => {
+    fetchMock.mockResolvedValueOnce(jsonOk({
+      bot: {
+        alias: "main",
+        cli_type: "codex",
+        status: "running",
+        service_status: "online",
+        activity_status: "idle",
+        working_dir: "C:\\workspace\\demo",
+        supported_execution_modes: ["cli", "native_agent"],
+        default_execution_mode: "native_agent",
+        native_agent: {
+          command: "opencode",
+          hostname: "127.0.0.1",
+          port: 4096,
+        },
+      },
+    }));
+
+    const client = new RealWebBotClient();
+    const bot = await client.updateBotExecutionConfig("main", {
+      supportedExecutionModes: ["cli", "native_agent"],
+      defaultExecutionMode: "native_agent",
+      nativeAgent: {
+        command: "opencode",
+        hostname: "127.0.0.1",
+        port: 4096,
+        serverPassword: "secret",
+      },
+    });
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/admin/bots/main/execution",
+      expect.objectContaining({ method: "PATCH" }),
+    );
+    expect(body).toEqual({
+      supported_execution_modes: ["cli", "native_agent"],
+      default_execution_mode: "native_agent",
+      native_agent: {
+        command: "opencode",
+        hostname: "127.0.0.1",
+        port: 4096,
+        server_password: "secret",
+      },
+    });
+    expect(bot.nativeAgent).toEqual({
+      command: "opencode",
+      hostname: "127.0.0.1",
+      port: 4096,
+    });
+  });
+
   
   
   

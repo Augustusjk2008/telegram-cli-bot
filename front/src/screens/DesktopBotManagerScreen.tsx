@@ -31,6 +31,7 @@ import type {
   CliType,
   CliParamsPayload,
   ClusterStatus,
+  NativeAgentConfig,
   UpdateBotWorkdirOptions,
   WorkdirChangeConflict,
 } from "../services/types";
@@ -38,6 +39,7 @@ import type { WebBotClient } from "../services/webBotClient";
 import {
   buildBulkActionPlan,
   countBotManagerStats,
+  DEFAULT_NATIVE_AGENT_CONFIG,
   detectBotIssues,
   draftFromBot,
   getBotManagerStatus,
@@ -97,6 +99,14 @@ function managerPillStatus(bot: BotSummary) {
 }
 
 function normalizeCreateDraft(draft: CreateDraft): CreateDraft {
+  const nativeAgent = {
+    ...DEFAULT_NATIVE_AGENT_CONFIG,
+    ...(draft.nativeAgent || {}),
+    command: (draft.nativeAgent?.command || DEFAULT_NATIVE_AGENT_CONFIG.command).trim(),
+    hostname: (draft.nativeAgent?.hostname || DEFAULT_NATIVE_AGENT_CONFIG.hostname).trim(),
+    port: Math.min(65535, Math.max(0, Number(draft.nativeAgent?.port || 0) || 0)),
+    ...(draft.nativeAgent?.serverPassword !== undefined ? { serverPassword: draft.nativeAgent.serverPassword.trim() } : {}),
+  };
   return {
     alias: draft.alias.trim(),
     botMode: draft.botMode,
@@ -104,6 +114,11 @@ function normalizeCreateDraft(draft: CreateDraft): CreateDraft {
     cliPath: draft.cliPath.trim(),
     workingDir: draft.workingDir.trim(),
     avatarName: draft.avatarName.trim(),
+    supportedExecutionModes: draft.supportedExecutionModes?.includes("native_agent") ? ["cli", "native_agent"] : ["cli"],
+    defaultExecutionMode: draft.defaultExecutionMode === "native_agent" && draft.supportedExecutionModes?.includes("native_agent")
+      ? "native_agent"
+      : "cli",
+    nativeAgent,
   };
 }
 
@@ -115,6 +130,16 @@ function normalizeEditDraft(draft: EditDraft): EditDraft {
     cliPath: draft.cliPath.trim(),
     workingDir: draft.workingDir.trim(),
     avatarName: draft.avatarName.trim(),
+    nativeAgentEnabled: draft.nativeAgentEnabled,
+    defaultExecutionMode: draft.nativeAgentEnabled && draft.defaultExecutionMode === "native_agent" ? "native_agent" : "cli",
+    nativeAgent: {
+      ...DEFAULT_NATIVE_AGENT_CONFIG,
+      ...draft.nativeAgent,
+      command: draft.nativeAgent.command.trim(),
+      hostname: draft.nativeAgent.hostname.trim(),
+      port: Math.min(65535, Math.max(0, Number(draft.nativeAgent.port || 0) || 0)),
+      ...(draft.nativeAgent.serverPassword !== undefined ? { serverPassword: draft.nativeAgent.serverPassword.trim() } : {}),
+    },
   };
 }
 
@@ -211,6 +236,116 @@ function WorkdirConflictNotice({
   );
 }
 
+function NativeAgentConfigFields({
+  enabled,
+  defaultMode,
+  command,
+  hostname,
+  port,
+  serverPassword,
+  disabled,
+  onEnabledChange,
+  onDefaultModeChange,
+  onNativeAgentChange,
+}: {
+  enabled: boolean;
+  defaultMode: "cli" | "native_agent";
+  command: string;
+  hostname: string;
+  port: number;
+  serverPassword?: string;
+  disabled: boolean;
+  onEnabledChange: (value: boolean) => void;
+  onDefaultModeChange: (value: "cli" | "native_agent") => void;
+  onNativeAgentChange: (patch: Partial<NativeAgentConfig>) => void;
+}) {
+  return (
+    <section className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <label className="inline-flex items-center gap-2 text-sm font-medium">
+          <input
+            type="checkbox"
+            checked={enabled}
+            disabled={disabled}
+            onChange={(event) => {
+              const checked = event.target.checked;
+              onEnabledChange(checked);
+              if (!checked) {
+                onDefaultModeChange("cli");
+              }
+            }}
+          />
+          启用原生 agent
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <span className="text-[var(--muted)]">默认</span>
+          <select
+            aria-label="默认执行模式"
+            value={enabled ? defaultMode : "cli"}
+            disabled={disabled || !enabled}
+            onChange={(event) => onDefaultModeChange(event.target.value as "cli" | "native_agent")}
+            className="h-8 rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 text-sm disabled:opacity-60"
+          >
+            <option value="cli">CLI</option>
+            <option value="native_agent">原生 agent</option>
+          </select>
+        </label>
+      </div>
+      {enabled ? (
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          <label className="space-y-1 text-sm">
+            <span className="text-[var(--muted)]">命令</span>
+            <input
+              aria-label="原生 agent 命令"
+              value={command}
+              disabled={disabled}
+              onChange={(event) => onNativeAgentChange({ command: event.target.value })}
+              className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm disabled:opacity-60"
+              placeholder="opencode"
+            />
+          </label>
+          <label className="space-y-1 text-sm">
+            <span className="text-[var(--muted)]">Host</span>
+            <input
+              aria-label="原生 agent Host"
+              value={hostname}
+              disabled={disabled}
+              onChange={(event) => onNativeAgentChange({ hostname: event.target.value })}
+              className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm disabled:opacity-60"
+              placeholder="127.0.0.1"
+            />
+          </label>
+          <label className="space-y-1 text-sm">
+            <span className="text-[var(--muted)]">端口</span>
+            <input
+              aria-label="原生 agent 端口"
+              type="number"
+              min={0}
+              max={65535}
+              value={port}
+              disabled={disabled}
+              onChange={(event) => onNativeAgentChange({ port: Number(event.target.value || 0) })}
+              className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm disabled:opacity-60"
+            />
+          </label>
+          <label className="space-y-1 text-sm">
+            <span className="text-[var(--muted)]">密码</span>
+            <input
+              aria-label="原生 agent 服务密码"
+              type="password"
+              value={serverPassword || ""}
+              disabled={disabled}
+              onChange={(event) => onNativeAgentChange({ serverPassword: event.target.value })}
+              className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm disabled:opacity-60"
+              placeholder="留空自动生成"
+            />
+          </label>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function CreatePanel({
   manager,
   canManage,
@@ -287,7 +422,15 @@ function CreatePanel({
           <select
             aria-label="新智能体模式"
             value={draft.botMode}
-            onChange={(event) => setDraft((prev) => ({ ...prev, botMode: event.target.value as CreateDraft["botMode"] }))}
+            onChange={(event) => {
+              const botMode = event.target.value as CreateDraft["botMode"];
+              setDraft((prev) => ({
+                ...prev,
+                botMode,
+                supportedExecutionModes: botMode === "cli" ? prev.supportedExecutionModes : ["cli"],
+                defaultExecutionMode: botMode === "cli" ? prev.defaultExecutionMode : "cli",
+              }));
+            }}
             className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm"
           >
             <option value="cli">cli</option>
@@ -321,6 +464,30 @@ function CreatePanel({
           />
         </label>
       </div>
+      <NativeAgentConfigFields
+        enabled={draft.botMode === "cli" && Boolean(draft.supportedExecutionModes?.includes("native_agent"))}
+        defaultMode={draft.defaultExecutionMode || "cli"}
+        command={draft.nativeAgent?.command || DEFAULT_NATIVE_AGENT_CONFIG.command}
+        hostname={draft.nativeAgent?.hostname || DEFAULT_NATIVE_AGENT_CONFIG.hostname}
+        port={draft.nativeAgent?.port || 0}
+        serverPassword={draft.nativeAgent?.serverPassword}
+        disabled={!canManage || draft.botMode !== "cli" || manager.savingAction !== ""}
+        onEnabledChange={(enabled) => setDraft((prev) => ({
+          ...prev,
+          supportedExecutionModes: enabled ? ["cli", "native_agent"] : ["cli"],
+          defaultExecutionMode: enabled ? prev.defaultExecutionMode || "cli" : "cli",
+          nativeAgent: prev.nativeAgent || { ...DEFAULT_NATIVE_AGENT_CONFIG },
+        }))}
+        onDefaultModeChange={(defaultExecutionMode) => setDraft((prev) => ({ ...prev, defaultExecutionMode }))}
+        onNativeAgentChange={(patch) => setDraft((prev) => ({
+          ...prev,
+          nativeAgent: {
+            ...DEFAULT_NATIVE_AGENT_CONFIG,
+            ...(prev.nativeAgent || {}),
+            ...patch,
+          },
+        }))}
+      />
       <label className="block space-y-1 text-sm">
         <span className="text-[var(--muted)]">工作目录</span>
         <div className="flex gap-2">
@@ -550,6 +717,28 @@ function EditPanel({
           />
         </label>
       </div>
+      <NativeAgentConfigFields
+        enabled={draft.nativeAgentEnabled}
+        defaultMode={draft.defaultExecutionMode}
+        command={draft.nativeAgent.command}
+        hostname={draft.nativeAgent.hostname}
+        port={draft.nativeAgent.port}
+        serverPassword={draft.nativeAgent.serverPassword}
+        disabled={!canManage || draft.botMode !== "cli" || manager.savingAction !== ""}
+        onEnabledChange={(nativeAgentEnabled) => setDraft((prev) => ({
+          ...prev,
+          nativeAgentEnabled,
+          defaultExecutionMode: nativeAgentEnabled ? prev.defaultExecutionMode : "cli",
+        }))}
+        onDefaultModeChange={(defaultExecutionMode) => setDraft((prev) => ({ ...prev, defaultExecutionMode }))}
+        onNativeAgentChange={(patch) => setDraft((prev) => ({
+          ...prev,
+          nativeAgent: {
+            ...prev.nativeAgent,
+            ...patch,
+          },
+        }))}
+      />
       <label className="block space-y-1 text-sm">
         <span className="text-[var(--muted)]">工作目录</span>
         <div className="flex gap-2">

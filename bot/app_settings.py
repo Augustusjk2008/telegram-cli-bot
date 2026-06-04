@@ -17,6 +17,7 @@ from bot.cluster.config import (
     normalize_bot_cluster_config,
 )
 from bot.models import normalize_prompt_presets
+from bot.models import normalize_execution_mode, normalize_execution_modes, normalize_native_agent_config
 from bot.runtime_paths import get_app_settings_path
 
 APP_SETTINGS_FILE = get_app_settings_path()
@@ -199,6 +200,21 @@ def _normalize_main_bot_profile(value: Any) -> dict[str, Any]:
     prompt_presets = normalize_prompt_presets(value.get("prompt_presets", value.get("promptPresets")))
     if prompt_presets:
         normalized["prompt_presets"] = prompt_presets
+
+    if any(key in value for key in ("supported_execution_modes", "supportedExecutionModes")):
+        normalized["supported_execution_modes"] = normalize_execution_modes(
+            value.get("supported_execution_modes", value.get("supportedExecutionModes"))
+        )
+
+    if any(key in value for key in ("default_execution_mode", "defaultExecutionMode")):
+        normalized["default_execution_mode"] = normalize_execution_mode(
+            value.get("default_execution_mode", value.get("defaultExecutionMode"))
+        )
+
+    if any(key in value for key in ("native_agent", "nativeAgent")):
+        normalized["native_agent"] = normalize_native_agent_config(
+            value.get("native_agent", value.get("nativeAgent"))
+        )
 
     return normalized
 

@@ -801,6 +801,60 @@ async def test_bot_overview_route(web_manager: MultiBotManager, monkeypatch: pyt
     assert payload["data"]["bot"]["alias"] == "main"
     assert payload["data"]["session"]["working_dir"] == web_manager.main_profile.working_dir
 
+
+def test_build_bot_summary_returns_native_agent_config_without_password(web_manager: MultiBotManager):
+    web_manager.main_profile.default_execution_mode = "native_agent"
+    web_manager.main_profile.native_agent = {
+        "command": "opencode",
+        "hostname": "127.0.0.1",
+        "port": 4096,
+        "server_password": "secret",
+    }
+
+    summary = build_bot_summary(web_manager, "main")
+
+    assert summary["supported_execution_modes"] == ["cli", "native_agent"]
+    assert summary["default_execution_mode"] == "native_agent"
+    assert summary["native_agent"] == {
+        "command": "opencode",
+        "hostname": "127.0.0.1",
+        "port": 4096,
+    }
+
+
+@pytest.mark.asyncio
+async def test_admin_execution_route_updates_native_agent_config_and_hides_password(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.patch(
+                "/api/admin/bots/main/execution",
+                json={
+                    "supported_execution_modes": ["cli", "native_agent"],
+                    "default_execution_mode": "native_agent",
+                    "native_agent": {
+                        "command": "opencode",
+                        "hostname": "127.0.0.1",
+                        "port": 4096,
+                        "server_password": "secret",
+                    },
+                },
+            )
+            payload = await resp.json()
+
+    assert resp.status == 200
+    assert payload["data"]["bot"]["default_execution_mode"] == "native_agent"
+    assert payload["data"]["bot"]["native_agent"] == {
+        "command": "opencode",
+        "hostname": "127.0.0.1",
+        "port": 4096,
+    }
+    assert web_manager.main_profile.native_agent["server_password"] == "secret"
+
 @pytest.mark.asyncio
 async def test_web_api_lists_plugins_and_resolves_vcd_handler(
     web_manager: MultiBotManager,

@@ -3,13 +3,14 @@ import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { DesktopBotManagerScreen } from "../screens/DesktopBotManagerScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { BotSummary, CreateBotInput, DirectoryListing } from "../services/types";
+import type { BotExecutionConfigInput, BotSummary, CreateBotInput, DirectoryListing } from "../services/types";
 
 class DesktopManagerClient extends MockWebBotClient {
   browserPath = "C:\\workspace";
   listPaths: Array<string | undefined> = [];
   changeDirectoryCalls: Array<{ botAlias: string; path: string }> = [];
   addBotCalls: CreateBotInput[] = [];
+  updateBotExecutionConfigCalls: Array<{ botAlias: string; input: BotExecutionConfigInput }> = [];
   createDirectoryCalls: Array<{ botAlias: string; name: string; parentPath?: string }> = [];
   removeBotCalls: Array<{ botAlias: string; deleteHistory: boolean }> = [];
   private readonly directoryMap: Record<string, DirectoryListing["entries"]> = {
@@ -33,6 +34,9 @@ class DesktopManagerClient extends MockWebBotClient {
         lastActiveText: "运行中",
         avatarName: "avatar_01.png",
         isMain: true,
+        supportedExecutionModes: ["cli"],
+        defaultExecutionMode: "cli",
+        nativeAgent: { command: "opencode", hostname: "127.0.0.1", port: 0 },
       },
       {
         alias: "review",
@@ -48,6 +52,9 @@ class DesktopManagerClient extends MockWebBotClient {
         workingDir: "C:\\workspace\\review",
         lastActiveText: "处理中",
         avatarName: "avatar_02.png",
+        supportedExecutionModes: ["cli", "native_agent"],
+        defaultExecutionMode: "native_agent",
+        nativeAgent: { command: "opencode", hostname: "127.0.0.1", port: 4096 },
       },
       {
         alias: "offline-team",
@@ -60,6 +67,9 @@ class DesktopManagerClient extends MockWebBotClient {
         workingDir: "C:\\workspace\\offline",
         lastActiveText: "离线",
         avatarName: "avatar_03.png",
+        supportedExecutionModes: ["cli"],
+        defaultExecutionMode: "cli",
+        nativeAgent: { command: "opencode", hostname: "127.0.0.1", port: 0 },
       },
     ];
   }
@@ -111,6 +121,75 @@ class DesktopManagerClient extends MockWebBotClient {
       workingDir: input.workingDir,
       lastActiveText: "运行中",
       avatarName: input.avatarName,
+    };
+  }
+
+  async updateBotCli(botAlias: string, cliType: string, cliPath: string): Promise<BotSummary> {
+    const bot = (await this.listBots()).find((item) => item.alias === botAlias);
+    return {
+      ...(bot || {
+        alias: botAlias,
+        status: "running" as const,
+        serviceStatus: "online" as const,
+        activityStatus: "idle" as const,
+        workingDir: `C:\\workspace\\${botAlias}`,
+        lastActiveText: "运行中",
+      }),
+      cliType: cliType as BotSummary["cliType"],
+      cliPath,
+    };
+  }
+
+  async updateBotExecutionConfig(botAlias: string, input: BotExecutionConfigInput): Promise<BotSummary> {
+    this.updateBotExecutionConfigCalls.push({ botAlias, input });
+    return {
+      alias: botAlias,
+      cliType: "claude",
+      cliPath: "C:\\tools\\claude.cmd",
+      botMode: "cli",
+      status: "running",
+      serviceStatus: "online",
+      activityStatus: "idle",
+      workingDir: `C:\\workspace\\${botAlias}`,
+      lastActiveText: "运行中",
+      supportedExecutionModes: input.supportedExecutionModes,
+      defaultExecutionMode: input.defaultExecutionMode,
+      nativeAgent: input.nativeAgent,
+    };
+  }
+
+  async updateBotWorkdir(botAlias: string, workingDir: string): Promise<BotSummary> {
+    const bot = (await this.listBots()).find((item) => item.alias === botAlias);
+    return {
+      ...(bot || {
+        alias: botAlias,
+        cliType: "codex" as const,
+        cliPath: "codex",
+        botMode: "cli",
+        status: "running" as const,
+        serviceStatus: "online" as const,
+        activityStatus: "idle" as const,
+        lastActiveText: "运行中",
+      }),
+      workingDir,
+    };
+  }
+
+  async updateBotAvatar(botAlias: string, avatarName: string): Promise<BotSummary> {
+    const bot = (await this.listBots()).find((item) => item.alias === botAlias);
+    return {
+      ...(bot || {
+        alias: botAlias,
+        cliType: "codex" as const,
+        cliPath: "codex",
+        botMode: "cli",
+        status: "running" as const,
+        serviceStatus: "online" as const,
+        activityStatus: "idle" as const,
+        workingDir: `C:\\workspace\\${botAlias}`,
+        lastActiveText: "运行中",
+      }),
+      avatarName,
     };
   }
 
@@ -327,6 +406,90 @@ test("desktop bot manager creates a bot from detail panel", async () => {
     cliPath: "kimi",
     workingDir: "C:\\workspace\\team3",
   });
+});
+
+test("desktop bot manager creates a bot with native agent config", async () => {
+  const user = userEvent.setup();
+  const client = new DesktopManagerClient();
+
+  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
+
+  await screen.findByRole("heading", { name: "智能体管理" });
+  await user.click(screen.getByRole("button", { name: "新增智能体" }));
+  await user.type(screen.getByLabelText("新智能体别名"), "native1");
+  await user.type(screen.getByLabelText("新智能体工作目录"), "C:\\workspace\\native1");
+  await user.click(screen.getByLabelText("启用原生 agent"));
+  await user.selectOptions(screen.getByLabelText("默认执行模式"), "native_agent");
+  fireEvent.change(screen.getByLabelText("原生 agent 命令"), { target: { value: "C:\\tools\\opencode.exe" } });
+  await user.clear(screen.getByLabelText("原生 agent 端口"));
+  await user.type(screen.getByLabelText("原生 agent 端口"), "4096");
+  await user.click(screen.getByRole("button", { name: "创建智能体" }));
+
+  await waitFor(() => {
+    expect(client.addBotCalls).toHaveLength(1);
+  });
+  expect(client.addBotCalls[0]).toMatchObject({
+    alias: "native1",
+    supportedExecutionModes: ["cli", "native_agent"],
+    defaultExecutionMode: "native_agent",
+    nativeAgent: {
+      command: "C:\\tools\\opencode.exe",
+      hostname: "127.0.0.1",
+      port: 4096,
+    },
+  });
+});
+
+test("desktop bot manager edits native agent config", async () => {
+  const user = userEvent.setup();
+  const client = new DesktopManagerClient();
+
+  render(<DesktopBotManagerScreen client={client} currentAlias="review" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
+
+  await screen.findByRole("heading", { name: "智能体管理" });
+  await user.click(screen.getByRole("button", { name: "配置" }));
+
+  expect(screen.getByLabelText("启用原生 agent")).toBeChecked();
+  expect(screen.getByLabelText("默认执行模式")).toHaveValue("native_agent");
+  expect(screen.getByLabelText("原生 agent 命令")).toHaveValue("opencode");
+  expect(screen.getByLabelText("原生 agent 端口")).toHaveValue(4096);
+
+  fireEvent.change(screen.getByLabelText("原生 agent 命令"), { target: { value: "C:\\tools\\opencode.exe" } });
+  await user.click(screen.getByRole("button", { name: "保存智能体" }));
+
+  await waitFor(() => {
+    expect(client.updateBotExecutionConfigCalls).toHaveLength(1);
+  });
+  expect(client.updateBotExecutionConfigCalls[0]).toEqual({
+    botAlias: "review",
+    input: {
+      supportedExecutionModes: ["cli", "native_agent"],
+      defaultExecutionMode: "native_agent",
+      nativeAgent: {
+        command: "C:\\tools\\opencode.exe",
+        hostname: "127.0.0.1",
+        port: 4096,
+      },
+    },
+  });
+});
+
+test("desktop bot manager disables native agent and resets default mode", async () => {
+  const user = userEvent.setup();
+  const client = new DesktopManagerClient();
+
+  render(<DesktopBotManagerScreen client={client} currentAlias="review" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
+
+  await screen.findByRole("heading", { name: "智能体管理" });
+  await user.click(screen.getByRole("button", { name: "配置" }));
+  await user.click(screen.getByLabelText("启用原生 agent"));
+  await user.click(screen.getByRole("button", { name: "保存智能体" }));
+
+  await waitFor(() => {
+    expect(client.updateBotExecutionConfigCalls).toHaveLength(1);
+  });
+  expect(client.updateBotExecutionConfigCalls[0].input.supportedExecutionModes).toEqual(["cli"]);
+  expect(client.updateBotExecutionConfigCalls[0].input.defaultExecutionMode).toBe("cli");
 });
 
 

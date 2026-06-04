@@ -1,4 +1,4 @@
-import type { AgentSummary, BotStatus, BotSummary, CliType } from "../services/types";
+import type { AgentSummary, BotStatus, BotSummary, ChatExecutionMode, CliType, NativeAgentConfig } from "../services/types";
 
 export type ManagerViewFilter = "all" | BotStatus | "attention";
 export type BulkAction = "start" | "stop" | "delete";
@@ -10,6 +10,9 @@ export type EditDraft = {
   cliPath: string;
   workingDir: string;
   avatarName: string;
+  nativeAgentEnabled: boolean;
+  defaultExecutionMode: ChatExecutionMode;
+  nativeAgent: NativeAgentConfig;
 };
 
 export type BotIssueCode =
@@ -49,8 +52,28 @@ export type BotConfigSnapshot = {
   cliPath: string;
   workingDir: string;
   avatarName: string;
+  supportedExecutionModes: ChatExecutionMode[];
+  defaultExecutionMode: ChatExecutionMode;
+  nativeAgent: NativeAgentConfig;
   agents: AgentSummary[];
 };
+
+export const DEFAULT_NATIVE_AGENT_CONFIG: NativeAgentConfig = {
+  command: "opencode",
+  hostname: "127.0.0.1",
+  port: 0,
+};
+
+export function nativeAgentConfigFromBot(bot: BotSummary): NativeAgentConfig {
+  return {
+    ...DEFAULT_NATIVE_AGENT_CONFIG,
+    ...(bot.nativeAgent || {}),
+  };
+}
+
+export function supportsNativeAgent(bot: BotSummary) {
+  return (bot.supportedExecutionModes || ["cli"]).includes("native_agent");
+}
 
 const MANAGER_STATUS_PRIORITY: Record<BotStatus, number> = {
   unread: 0,
@@ -148,6 +171,11 @@ export function countBotManagerStats(items: BotSummary[]) {
 }
 
 export function draftFromBot(bot: BotSummary): EditDraft {
+  const nativeAgentEnabled = supportsNativeAgent(bot);
+  const supported = bot.supportedExecutionModes || ["cli"];
+  const defaultExecutionMode = bot.defaultExecutionMode && supported.includes(bot.defaultExecutionMode)
+    ? bot.defaultExecutionMode
+    : "cli";
   return {
     alias: bot.alias,
     botMode: bot.botMode === "assistant" ? "assistant" : "cli",
@@ -155,6 +183,9 @@ export function draftFromBot(bot: BotSummary): EditDraft {
     cliPath: bot.cliPath || bot.cliType,
     workingDir: bot.workingDir,
     avatarName: bot.avatarName || "",
+    nativeAgentEnabled,
+    defaultExecutionMode: nativeAgentEnabled ? defaultExecutionMode : "cli",
+    nativeAgent: nativeAgentConfigFromBot(bot),
   };
 }
 
@@ -276,6 +307,9 @@ export function getBotConfigSnapshot(bot: BotSummary): BotConfigSnapshot {
     cliPath: bot.cliPath || bot.cliType,
     workingDir: bot.workingDir,
     avatarName: bot.avatarName || "",
+    supportedExecutionModes: bot.supportedExecutionModes || ["cli"],
+    defaultExecutionMode: bot.defaultExecutionMode || "cli",
+    nativeAgent: nativeAgentConfigFromBot(bot),
     agents: bot.agents || [],
   };
 }

@@ -195,6 +195,19 @@ export type CliErrorStatsFilters = {
   limit?: number;
 };
 
+export type NativeAgentConfig = {
+  command: string;
+  hostname: string;
+  port: number;
+  serverPassword?: string;
+};
+
+export type BotExecutionConfigInput = {
+  supportedExecutionModes: ChatExecutionMode[];
+  defaultExecutionMode: ChatExecutionMode;
+  nativeAgent: NativeAgentConfig;
+};
+
 export type BotSummary = {
   alias: string;
   cliType: CliType;
@@ -223,7 +236,7 @@ export type BotSummary = {
   supportedExecutionModes?: ChatExecutionMode[];
   defaultExecutionMode?: ChatExecutionMode;
   executionMode?: ChatExecutionMode;
-  nativeAgent?: Record<string, unknown>;
+  nativeAgent?: NativeAgentConfig;
 };
 
 export type PromptPreset = {
@@ -547,7 +560,7 @@ export type BotOverview = {
   supportedExecutionModes?: ChatExecutionMode[];
   defaultExecutionMode?: ChatExecutionMode;
   executionMode?: ChatExecutionMode;
-  nativeAgent?: Record<string, unknown>;
+  nativeAgent?: NativeAgentConfig;
 };
 
 export type ChatTraceEvent = {
@@ -1658,6 +1671,9 @@ export type CreateBotInput = {
   cliPath: string;
   workingDir: string;
   avatarName: string;
+  supportedExecutionModes?: ChatExecutionMode[];
+  defaultExecutionMode?: ChatExecutionMode;
+  nativeAgent?: NativeAgentConfig;
 };
 
 export type AvatarAsset = {

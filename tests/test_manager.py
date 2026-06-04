@@ -92,6 +92,43 @@ class TestManagerLoadSave:
             with pytest.raises(ValueError, match="只允许一个 assistant"):
                 await manager.add_bot("assistant2", "", "codex", "codex", str(assistant_dir), "assistant")
 
+    @pytest.mark.asyncio
+    async def test_add_bot_persists_native_agent_execution_config(self, temp_dir: Path):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        manager = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
+
+        with patch("bot.manager.resolve_cli_executable", return_value="codex"), \
+             patch.object(manager, "_start_profile", AsyncMock(return_value=None)):
+            await manager.add_bot(
+                "native1",
+                "",
+                "codex",
+                "codex",
+                str(temp_dir),
+                "cli",
+                supported_execution_modes=["cli", "native_agent"],
+                default_execution_mode="native_agent",
+                native_agent={
+                    "command": "opencode",
+                    "hostname": "127.0.0.1",
+                    "port": 4096,
+                    "server_password": "secret",
+                },
+            )
+
+        restored = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
+        profile = restored.managed_profiles["native1"]
+
+        assert profile.supported_execution_modes == ["cli", "native_agent"]
+        assert profile.default_execution_mode == "native_agent"
+        assert profile.native_agent == {
+            "command": "opencode",
+            "hostname": "127.0.0.1",
+            "port": 4096,
+            "server_password": "secret",
+        }
+
 class TestManagerValidation:
     """测试验证逻辑"""
 
@@ -112,4 +149,45 @@ class TestManagerValidation:
         restored = MultiBotManager(BotProfile(alias="main", token="main_tok", working_dir=str(old_dir)), str(storage))
 
         assert restored.main_profile.working_dir == str(new_dir)
+
+    @pytest.mark.asyncio
+    async def test_main_bot_execution_config_persists_and_preserves_password(self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        settings_file = temp_dir / ".web_admin_settings.json"
+        monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
+
+        manager = MultiBotManager(BotProfile(alias="main", token="main_tok", working_dir=str(temp_dir)), str(storage))
+        await manager.set_bot_execution_config(
+            "main",
+            {
+                "supported_execution_modes": ["cli", "native_agent"],
+                "default_execution_mode": "native_agent",
+                "native_agent": {
+                    "command": "opencode",
+                    "hostname": "127.0.0.1",
+                    "port": 4096,
+                    "server_password": "secret",
+                },
+            },
+        )
+        await manager.set_bot_execution_config(
+            "main",
+            {
+                "supported_execution_modes": ["cli", "native_agent"],
+                "default_execution_mode": "cli",
+                "native_agent": {
+                    "command": "C:\\tools\\opencode.exe",
+                    "hostname": "127.0.0.1",
+                    "port": 0,
+                },
+            },
+        )
+
+        restored = MultiBotManager(BotProfile(alias="main", token="main_tok", working_dir=str(temp_dir)), str(storage))
+
+        assert restored.main_profile.supported_execution_modes == ["cli", "native_agent"]
+        assert restored.main_profile.default_execution_mode == "cli"
+        assert restored.main_profile.native_agent["command"] == "C:\\tools\\opencode.exe"
+        assert restored.main_profile.native_agent["server_password"] == "secret"
 

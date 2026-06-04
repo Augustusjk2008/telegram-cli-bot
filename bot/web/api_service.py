@@ -6205,6 +6205,9 @@ async def add_managed_bot(
     working_dir: Optional[str],
     avatar_name: Optional[str] = None,
     token: str = "",
+    supported_execution_modes: Any = None,
+    default_execution_mode: Any = None,
+    native_agent: Any = None,
 ) -> dict[str, Any]:
     resolved_avatar_name = _normalize_avatar_name(avatar_name, require_existing=bool(str(avatar_name or "").strip()))
     try:
@@ -6216,6 +6219,9 @@ async def add_managed_bot(
             working_dir=working_dir,
             bot_mode=bot_mode,
             avatar_name=resolved_avatar_name,
+            supported_execution_modes=supported_execution_modes,
+            default_execution_mode=default_execution_mode,
+            native_agent=native_agent,
         )
     except ValueError as exc:
         _raise(400, "invalid_bot_config", str(exc))
@@ -6260,6 +6266,14 @@ async def stop_managed_bot(manager: MultiBotManager, alias: str) -> dict[str, An
 
 async def update_bot_cli(manager: MultiBotManager, alias: str, cli_type: str, cli_path: str) -> dict[str, Any]:
     await manager.set_bot_cli(alias, cli_type, cli_path)
+    return {"bot": build_bot_summary(manager, alias)}
+
+
+async def update_bot_execution_config(manager: MultiBotManager, alias: str, data: dict[str, Any]) -> dict[str, Any]:
+    try:
+        await manager.set_bot_execution_config(alias, data)
+    except ValueError as exc:
+        _raise(400, "invalid_bot_execution_config", str(exc))
     return {"bot": build_bot_summary(manager, alias)}
 
 

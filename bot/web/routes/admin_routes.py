@@ -17,6 +17,7 @@ def register(app: web.Application, server) -> None:
     app.router.add_patch("/api/bots/{alias}/cli-params", server.patch_cli_params)
     app.router.add_post("/api/bots/{alias}/cli-params/reset", server.post_cli_params_reset)
     app.router.add_patch("/api/admin/bots/{alias}/cli", server.admin_update_cli)
+    app.router.add_patch("/api/admin/bots/{alias}/execution", server.admin_update_execution)
     app.router.add_patch("/api/admin/bots/{alias}/alias", server.admin_rename_bot)
     app.router.add_patch("/api/admin/bots/{alias}/workdir", server.admin_update_workdir)
     app.router.add_patch("/api/admin/bots/{alias}/avatar", server.admin_update_avatar)

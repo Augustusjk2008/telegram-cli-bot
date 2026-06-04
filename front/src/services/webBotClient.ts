@@ -17,6 +17,7 @@ import type {
   ChatTraceEvent,
   CliErrorStatsFilters,
   CliErrorStatsResult,
+  BotExecutionConfigInput,
   AssistantAdminAuditResult,
   AssistantDiagnosticsFilters,
   AssistantMemoryBulkInvalidateResult,
@@ -337,6 +338,7 @@ export interface WebBotClient {
   ): NotificationSubscription;
   sendNotificationPresenceUpdate?(presence: NotificationPresenceUpdate): void;
   updateBotCli(botAlias: string, cliType: string, cliPath: string): Promise<BotSummary>;
+  updateBotExecutionConfig(botAlias: string, input: BotExecutionConfigInput): Promise<BotSummary>;
   updateBotWorkdir(botAlias: string, workingDir: string, options?: UpdateBotWorkdirOptions): Promise<BotSummary>;
   updateBotAvatar(botAlias: string, avatarName: string): Promise<BotSummary>;
   addBot(input: CreateBotInput): Promise<BotSummary>;

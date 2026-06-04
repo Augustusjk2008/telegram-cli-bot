@@ -52,6 +52,7 @@ import type {
   ConversationSummary,
   CreateAssistantCronJobInput,
   BotOverview,
+  BotExecutionConfigInput,
   BotWorkdirOpenResult,
   BotSummary,
   ChatAttachmentDeleteResult,
@@ -5678,6 +5679,17 @@ export class MockWebBotClient implements WebBotClient {
     return this.getBotSummary(botAlias);
   }
 
+  async updateBotExecutionConfig(botAlias: string, input: BotExecutionConfigInput): Promise<BotSummary> {
+    const current = this.getBotSummary(botAlias);
+    this.bots.set(botAlias, {
+      ...current,
+      supportedExecutionModes: input.supportedExecutionModes,
+      defaultExecutionMode: input.defaultExecutionMode,
+      nativeAgent: input.nativeAgent,
+    });
+    return this.getBotSummary(botAlias);
+  }
+
   async updateBotWorkdir(
     botAlias: string,
     workingDir: string,
@@ -6455,6 +6467,9 @@ export class MockWebBotClient implements WebBotClient {
       busyAgentIds: [],
       busyAgentNames: [],
       busyAgentCount: 0,
+      supportedExecutionModes: input.supportedExecutionModes || ["cli"],
+      defaultExecutionMode: input.defaultExecutionMode || "cli",
+      nativeAgent: input.nativeAgent || { command: "opencode", hostname: "127.0.0.1", port: 0 },
       cluster: { ...DEFAULT_CLUSTER, modelTiers: { ...DEFAULT_CLUSTER.modelTiers } },
     };
     this.bots.set(alias, bot);

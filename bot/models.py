@@ -59,7 +59,7 @@ def normalize_native_agent_config(value: Any) -> dict[str, Any]:
     raw_port = data.get("port")
     port = 0
     try:
-        port = max(0, int(raw_port or 0))
+        port = min(65535, max(0, int(raw_port or 0)))
     except (TypeError, ValueError):
         port = 0
     server_password = str(data.get("server_password") or data.get("serverPassword") or "").strip()

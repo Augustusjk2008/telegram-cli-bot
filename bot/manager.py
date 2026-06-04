@@ -20,7 +20,15 @@ from bot.cli_params import CliParamsConfig, coerce_param_value
 from bot.cluster.config import normalize_agent_cluster_config, normalize_bot_cluster_config
 from bot.config import BOT_ALIAS_RE, CLI_PATH, CLI_TYPE, RESERVED_ALIASES, WORKING_DIR, _DOTENV_VALUES
 from bot.agents import normalize_agent_id, normalize_agent_name, normalize_agent_prompt, now_iso
-from bot.models import AgentProfile, BotProfile, GitCommitMessageCliConfig, normalize_prompt_presets
+from bot.models import (
+    AgentProfile,
+    BotProfile,
+    GitCommitMessageCliConfig,
+    normalize_execution_mode,
+    normalize_execution_modes,
+    normalize_native_agent_config,
+    normalize_prompt_presets,
+)
 from bot.plugins.service import PluginService
 from bot.platform.paths import truncate_path_for_display
 from bot.profile_store import (
@@ -451,6 +459,9 @@ class MultiBotManager:
         working_dir: Optional[str] = None,
         bot_mode: Optional[str] = None,
         avatar_name: Optional[str] = None,
+        supported_execution_modes: Any = None,
+        default_execution_mode: Any = None,
+        native_agent: Any = None,
     ) -> BotProfile:
         normalized_alias = str(alias or "").strip().lower()
         normalized_token = str(token or "").strip()
@@ -464,6 +475,16 @@ class MultiBotManager:
             raise ValueError("webcli 模式已弃用，请使用 'cli' 或 'assistant'")
         if resolved_bot_mode not in {"cli", "assistant"}:
             raise ValueError(f"bot_mode 必须是 'cli' 或 'assistant'，当前值: {resolved_bot_mode}")
+        resolved_supported_execution_modes = normalize_execution_modes(supported_execution_modes)
+        if resolved_bot_mode != "cli" and "native_agent" in resolved_supported_execution_modes:
+            raise ValueError("仅 CLI Bot 支持原生 agent")
+        resolved_default_execution_mode = normalize_execution_mode(
+            default_execution_mode,
+            default=resolved_supported_execution_modes[0],
+        )
+        if resolved_default_execution_mode not in resolved_supported_execution_modes:
+            resolved_default_execution_mode = resolved_supported_execution_modes[0]
+        resolved_native_agent = normalize_native_agent_config(native_agent)
 
         if resolved_bot_mode == "assistant":
             if working_dir is None or not str(working_dir).strip():
@@ -495,6 +516,9 @@ class MultiBotManager:
                 enabled=True,
                 bot_mode=resolved_bot_mode,
                 avatar_name=str(avatar_name or "").strip(),
+                supported_execution_modes=resolved_supported_execution_modes,
+                default_execution_mode=resolved_default_execution_mode,
+                native_agent=resolved_native_agent,
             )
 
             if resolved_bot_mode == "assistant":
@@ -587,6 +611,42 @@ class MultiBotManager:
                 )
             profile.cli_type = resolved_cli_type
             profile.cli_path = resolved_cli_path
+            if normalized_alias == self.main_profile.alias:
+                self._persist_main_profile()
+            else:
+                self._save_profiles()
+
+    async def set_bot_execution_config(
+        self,
+        alias: str,
+        data: dict[str, Any],
+    ) -> None:
+        normalized_alias = str(alias or "").strip().lower()
+        supported = normalize_execution_modes(
+            data.get("supported_execution_modes", data.get("supportedExecutionModes"))
+        )
+        default_mode = normalize_execution_mode(
+            data.get("default_execution_mode", data.get("defaultExecutionMode")),
+            default=supported[0],
+        )
+        if default_mode not in supported:
+            default_mode = supported[0]
+        raw_native_agent = data.get("native_agent", data.get("nativeAgent"))
+
+        async with self._lock:
+            profile = self._get_profile_for_update(normalized_alias)
+            if profile.bot_mode != "cli" and "native_agent" in supported:
+                raise ValueError("仅 CLI Bot 支持原生 agent")
+            native_agent = normalize_native_agent_config(raw_native_agent)
+            if isinstance(raw_native_agent, dict) and not any(
+                key in raw_native_agent for key in ("server_password", "serverPassword")
+            ):
+                native_agent["server_password"] = str(
+                    dict(profile.native_agent or {}).get("server_password") or ""
+                )
+            profile.supported_execution_modes = supported
+            profile.default_execution_mode = default_mode
+            profile.native_agent = native_agent
             if normalized_alias == self.main_profile.alias:
                 self._persist_main_profile()
             else:

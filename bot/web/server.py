@@ -246,6 +246,7 @@ from .api_service import (
     update_agent,
     update_bot_avatar,
     update_bot_cli,
+    update_bot_execution_config,
     update_global_prompt_presets,
     update_bot_prompt_presets,
     update_plugin,
@@ -3502,6 +3503,9 @@ class WebApiServer:
             cli_path=body.get("cli_path"),
             working_dir=body.get("working_dir"),
             avatar_name=body.get("avatar_name"),
+            supported_execution_modes=body.get("supported_execution_modes", body.get("supportedExecutionModes")),
+            default_execution_mode=body.get("default_execution_mode", body.get("defaultExecutionMode")),
+            native_agent=body.get("native_agent", body.get("nativeAgent")),
         )
         alias = data["bot"]["alias"]
         if not self._is_local_admin(auth):
@@ -3543,6 +3547,13 @@ class WebApiServer:
             cli_type=body.get("cli_type", ""),
             cli_path=body.get("cli_path", ""),
         )
+        return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})
+
+    async def admin_update_execution(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_MANAGE_BOTS)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        data = await update_bot_execution_config(self.manager, alias, body)
         return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})
 
     async def admin_rename_bot(self, request: web.Request) -> web.Response:

@@ -67,6 +67,7 @@ import type {
   GitStashList,
   GitTreeStatus,
   BotOverview,
+  BotExecutionConfigInput,
   BotWorkdirOpenResult,
   BotStatus,
   BotSummary,
@@ -81,6 +82,7 @@ import type {
   ChatStatusUpdate,
   ChatTraceEvent,
   NativeAgentPermissionReplyOptions,
+  NativeAgentConfig,
   CliErrorStatsFilters,
   CliErrorStatsItem,
   CliErrorStatsResult,
@@ -1444,8 +1446,8 @@ function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
   if (executionMode) {
     summary.executionMode = executionMode;
   }
-  const nativeAgent = raw.native_agent ?? raw.nativeAgent;
-  if (nativeAgent && typeof nativeAgent === "object") {
+  const nativeAgent = mapNativeAgentConfig(raw.native_agent ?? raw.nativeAgent);
+  if (nativeAgent) {
     summary.nativeAgent = nativeAgent;
   }
   if (raw.owner_account_id || raw.ownerAccountId) {
@@ -1883,6 +1885,22 @@ function mapExecutionModes(value: unknown): ChatExecutionMode[] | undefined {
     .map((item) => normalizeExecutionMode(item))
     .filter((item): item is ChatExecutionMode => Boolean(item));
   return modes.length > 0 ? Array.from(new Set(modes)) : undefined;
+}
+
+function mapNativeAgentConfig(value: unknown): NativeAgentConfig | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const raw = value as Record<string, unknown>;
+  const rawPort = raw.port;
+  const port = typeof rawPort === "number" ? rawPort : Number(rawPort || 0);
+  const serverPassword = raw.server_password ?? raw.serverPassword;
+  return {
+    command: String(raw.command || raw.path || "opencode"),
+    hostname: String(raw.hostname || raw.host || "127.0.0.1"),
+    port: Number.isFinite(port) && port > 0 ? Math.min(65535, Math.floor(port)) : 0,
+    ...(typeof serverPassword === "string" && serverPassword ? { serverPassword } : {}),
+  };
 }
 
 function displayNativeProvider(provider?: string) {
@@ -5634,6 +5652,26 @@ export class RealWebBotClient implements WebBotClient {
     return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
   }
 
+  async updateBotExecutionConfig(botAlias: string, input: BotExecutionConfigInput): Promise<BotSummary> {
+    const data = await this.requestJson<{ bot: RawBotSummary }>(`/api/admin/bots/${encodeURIComponent(botAlias)}/execution`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        supported_execution_modes: input.supportedExecutionModes,
+        default_execution_mode: input.defaultExecutionMode,
+        native_agent: {
+          command: input.nativeAgent.command,
+          hostname: input.nativeAgent.hostname,
+          port: input.nativeAgent.port,
+          ...(input.nativeAgent.serverPassword !== undefined ? { server_password: input.nativeAgent.serverPassword } : {}),
+        },
+      }),
+    });
+    return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
+  }
+
   async updateBotWorkdir(
     botAlias: string,
     workingDir: string,
@@ -6201,6 +6239,16 @@ export class RealWebBotClient implements WebBotClient {
         cli_path: input.cliPath,
         working_dir: input.workingDir,
         avatar_name: input.avatarName,
+        ...(input.supportedExecutionModes ? { supported_execution_modes: input.supportedExecutionModes } : {}),
+        ...(input.defaultExecutionMode ? { default_execution_mode: input.defaultExecutionMode } : {}),
+        ...(input.nativeAgent ? {
+          native_agent: {
+            command: input.nativeAgent.command,
+            hostname: input.nativeAgent.hostname,
+            port: input.nativeAgent.port,
+            ...(input.nativeAgent.serverPassword !== undefined ? { server_password: input.nativeAgent.serverPassword } : {}),
+          },
+        } : {}),
       }),
     });
     return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
