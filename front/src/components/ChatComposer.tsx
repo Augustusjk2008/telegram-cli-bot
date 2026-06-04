@@ -94,6 +94,7 @@ export function ChatComposer({
     : "relative flex min-h-11 items-center rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] shadow-[var(--shadow-soft)] focus-within:border-[var(--workbench-hover-border)]";
   const inputDisabled = disabled || uploadingAttachments;
   const [message, setMessage] = useState("");
+  const [isMultilineComposer, setIsMultilineComposer] = useState(false);
   const [presetMenuOpen, setPresetMenuOpen] = useState(false);
   const [presetEditorOpen, setPresetEditorOpen] = useState(false);
   const [editingPresetScope, setEditingPresetScope] = useState<PresetScope>("bot");
@@ -105,6 +106,7 @@ export function ChatComposer({
   const [presetError, setPresetError] = useState("");
   const [mentionQuery, setMentionQuery] = useState<MentionQuery | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const measureTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const presetIdCounterRef = useRef(1);
   const resolvedGlobalPromptPresets = globalPromptPresets ?? [];
   const resolvedBotPromptPresets = botPromptPresets ?? promptPresets;
@@ -126,6 +128,19 @@ export function ChatComposer({
     }).slice(0, 8);
   }, [clusterAgents, clusterMode, mentionQuery]);
   const showPromptPresetControls = showAnyPromptPresets || canManagePromptPresets;
+  const collapsedTextareaPaddingClassName = `pb-2.5 pl-12 pt-1.5 ${showPromptPresetControls ? "pr-20" : "pr-12"}`;
+  const composerTextareaBaseClassName = "max-h-72 w-full resize-none border border-transparent bg-transparent leading-5 text-[var(--text)] outline-none placeholder:text-[var(--muted)] disabled:opacity-60";
+  const inputTextareaClassName = `${composerTextareaBaseClassName} ${isMultilineComposer ? "px-3 pb-10 pt-2.5" : collapsedTextareaPaddingClassName}`;
+  const measureTextareaClassName = `${composerTextareaBaseClassName} pointer-events-none absolute inset-x-0 top-0 h-auto overflow-hidden opacity-0 ${collapsedTextareaPaddingClassName}`;
+  const attachmentButtonClassName = isMultilineComposer
+    ? "absolute bottom-1.5 left-2 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--accent)]"
+    : "absolute left-2 top-1/2 inline-flex h-8 w-8 shrink-0 -translate-y-1/2 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--accent)]";
+  const actionGroupClassName = isMultilineComposer
+    ? "absolute bottom-1.5 right-2 flex items-center gap-1"
+    : "absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-1";
+  const actionButtonClassName = "inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50";
+  const presetMenuClassName = `absolute bottom-full z-40 mb-2 w-64 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-1 shadow-[var(--shadow-card)] ${isMultilineComposer ? "right-2" : "right-10"}`;
+  const mentionMenuClassName = `absolute bottom-full z-30 mb-2 max-h-56 overflow-y-auto rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-1 shadow-[var(--shadow-card)] ${isMultilineComposer ? "left-3 right-3" : "left-10 right-10"}`;
 
   function updateMessage(next: string, cursor: number) {
     setMessage(next);
@@ -143,11 +158,22 @@ export function ChatComposer({
     if (!textarea) {
       return;
     }
+    const measureTextarea = measureTextareaRef.current;
+    if (measureTextarea) {
+      measureTextarea.style.height = "auto";
+      const computedStyle = window.getComputedStyle(measureTextarea);
+      const lineHeight = Number.parseFloat(computedStyle.lineHeight) || 20;
+      const paddingTop = Number.parseFloat(computedStyle.paddingTop) || 0;
+      const paddingBottom = Number.parseFloat(computedStyle.paddingBottom) || 0;
+      const singleLineHeight = Math.ceil(lineHeight + paddingTop + paddingBottom);
+      const shouldUseMultilineLayout = measureTextarea.scrollHeight > singleLineHeight + 2;
+      setIsMultilineComposer((current) => (current === shouldUseMultilineLayout ? current : shouldUseMultilineLayout));
+    }
     textarea.style.height = "auto";
     const nextHeight = Math.min(textarea.scrollHeight, 288);
     textarea.style.height = `${nextHeight}px`;
     textarea.style.overflowY = textarea.scrollHeight > 288 ? "auto" : "hidden";
-  }, [message, inputDisabled]);
+  }, [inputDisabled, isMultilineComposer, message, showPromptPresetControls]);
 
   function focusTextarea(cursor: number) {
     requestAnimationFrame(() => {
@@ -467,8 +493,17 @@ export function ChatComposer({
         }}
       >
         <div className={inputBarClassName}>
+          <textarea
+            ref={measureTextareaRef}
+            aria-hidden="true"
+            tabIndex={-1}
+            readOnly
+            value={message || " "}
+            rows={1}
+            className={measureTextareaClassName}
+          />
           <label
-            className="absolute left-2 top-1/2 inline-flex h-8 w-8 shrink-0 -translate-y-1/2 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--accent)]"
+            className={attachmentButtonClassName}
             title="上传附件"
           >
             <Plus className="h-4 w-4" />
@@ -521,26 +556,41 @@ export function ChatComposer({
               }
               form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
             }}
-            className={`max-h-72 w-full resize-none border border-transparent bg-transparent pb-2.5 pl-12 pt-1.5 ${showPromptPresetControls ? "pr-20" : "pr-12"} leading-5 text-[var(--text)] outline-none placeholder:text-[var(--muted)] disabled:opacity-60`}
+            className={inputTextareaClassName}
           />
-          {showPromptPresetControls ? (
+          <div className={actionGroupClassName}>
+            {showPromptPresetControls ? (
+              <button
+                type="button"
+                aria-label="打开提示词预设"
+                aria-expanded={presetMenuOpen}
+                title="提示词预设"
+                disabled={inputDisabled}
+                onClick={() => setPresetMenuOpen((value) => !value)}
+                className={actionButtonClassName}
+              >
+                <ChevronDown className="h-4 w-4" />
+              </button>
+            ) : null}
             <button
-              type="button"
-              aria-label="打开提示词预设"
-              aria-expanded={presetMenuOpen}
-              title="提示词预设"
+              type="submit"
+              aria-label="发送"
+              title={uploadingAttachments ? "上传中..." : "发送"}
               disabled={inputDisabled}
-              onClick={() => setPresetMenuOpen((value) => !value)}
-              className="absolute right-11 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--accent)] disabled:opacity-50"
+              className={actionButtonClassName}
             >
-              <ChevronDown className="h-4 w-4" />
+              {uploadingAttachments ? (
+                <LoaderCircle className="h-4 w-4 animate-spin" />
+              ) : (
+                <Send className="h-4 w-4" />
+              )}
             </button>
-          ) : null}
+          </div>
           {presetMenuOpen ? (
             <div
               role="listbox"
               aria-label="提示词预设"
-              className="absolute bottom-full right-10 z-40 mb-2 w-64 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-1 shadow-[var(--shadow-card)]"
+              className={presetMenuClassName}
             >
               {showAnyPromptPresets ? (
                 <div className="max-h-64 overflow-y-auto">
@@ -569,7 +619,7 @@ export function ChatComposer({
             <div
               role="listbox"
               aria-label="智能体集群列表"
-              className="absolute bottom-full left-10 right-10 z-30 mb-2 max-h-56 overflow-y-auto rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-1 shadow-[var(--shadow-card)]"
+              className={mentionMenuClassName}
             >
               {mentionOptions.map((agent) => (
                 <button
@@ -587,19 +637,6 @@ export function ChatComposer({
               ))}
             </div>
           ) : null}
-          <button
-            type="submit"
-            aria-label="发送"
-            title={uploadingAttachments ? "上传中..." : "发送"}
-            disabled={inputDisabled}
-            className="absolute right-2 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {uploadingAttachments ? (
-              <LoaderCircle className="h-4 w-4 animate-spin" />
-            ) : (
-              <Send className="h-4 w-4" />
-            )}
-          </button>
         </div>
       </form>
       {presetEditorDialog ? createPortal(presetEditorDialog, document.body) : null}
