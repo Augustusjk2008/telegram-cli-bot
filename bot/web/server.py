@@ -806,6 +806,10 @@ def _request_diag_agent(request: web.Request) -> str:
     return str(value or "").strip() or "main"
 
 
+def _is_websocket_request(request: web.Request) -> bool:
+    return str(request.headers.get("Upgrade") or "").strip().lower() == "websocket"
+
+
 @web.middleware
 async def diag_slow_request_middleware(request: web.Request, handler):
     if not diag_enabled():
@@ -820,19 +824,20 @@ async def diag_slow_request_middleware(request: web.Request, handler):
         status = int(exc.status)
         raise
     finally:
-        elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
-        route = getattr(getattr(request, "match_info", None), "route", None)
-        route_name = getattr(route, "resource", None)
-        diag_log_slow(
-            logger,
-            "web_request",
-            elapsed_ms,
-            method=request.method,
-            route=getattr(route_name, "canonical", "") or request.path,
-            status=status,
-            alias=_request_diag_alias(request),
-            agent=_request_diag_agent(request),
-        )
+        if not (_is_websocket_request(request) or status == 101):
+            elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
+            route = getattr(getattr(request, "match_info", None), "route", None)
+            route_name = getattr(route, "resource", None)
+            diag_log_slow(
+                logger,
+                "web_request",
+                elapsed_ms,
+                method=request.method,
+                route=getattr(route_name, "canonical", "") or request.path,
+                status=status,
+                alias=_request_diag_alias(request),
+                agent=_request_diag_agent(request),
+            )
 
 
 class WebApiServer:

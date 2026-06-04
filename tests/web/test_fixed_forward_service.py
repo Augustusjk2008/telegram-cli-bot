@@ -180,3 +180,36 @@ async def test_frpc_auth_failure_is_mapped_to_clear_error(tmp_path: Path, monkey
     assert snapshot["frpc_status"] == "error"
     assert snapshot["frpc_last_error"] == "frps token 错"
     assert "authorization failed" in snapshot["log_tail"][0]
+
+
+@pytest.mark.asyncio
+async def test_frpc_existing_proxy_failure_is_mapped_to_clear_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = _FakeProcess(["start error: proxy [nanjing-laptop] already exists\n"])
+    terminated: list[_FakeProcess] = []
+
+    def fake_terminate(target: _FakeProcess) -> None:
+        if target.poll() is not None:
+            return
+        terminated.append(target)
+        target.terminate()
+
+    monkeypatch.setattr("bot.web.fixed_forward_service.subprocess.Popen", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr("bot.web.fixed_forward_service.terminate_process_tree_sync", fake_terminate)
+    monkeypatch.setattr(
+        "bot.web.fixed_forward_service.FixedForwardService.check_frps_connectivity",
+        lambda self: {"ok": True, "error_class": "", "error_text": ""},
+    )
+    service = _service(tmp_path, startup_timeout=0.5)
+
+    snapshot = await service.start()
+
+    expected_error = "frps 已存在同名 proxy，请确认是否有旧 frpc 进程或重复 TCB_NODE_ID"
+    assert snapshot["status"] == "error"
+    assert snapshot["last_error"] == expected_error
+    assert snapshot["frpc_status"] == "error"
+    assert snapshot["frpc_last_error"] == expected_error
+    assert "proxy [nanjing-laptop] already exists" in snapshot["log_tail"][0]
+    assert terminated == [process]

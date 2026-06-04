@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import queue
 import struct
 import subprocess
@@ -1709,6 +1710,42 @@ async def test_terminal_websocket_closes_when_terminal_session_closes(
     assert first_message == {"pty_mode": True, "connection_text": "运行中"}
     assert close_resp.status == 200
     assert close_message.type in {WSMsgType.CLOSE, WSMsgType.CLOSED}
+
+
+@pytest.mark.asyncio
+async def test_diag_slow_request_skips_websocket_connections(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("TCB_DIAG_ENABLED", "1")
+    monkeypatch.setenv("TCB_DIAG_SLOW_MS", "1")
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    async def slow_http(_request: web.Request) -> web.Response:
+        await asyncio.sleep(0.01)
+        return web.json_response({"ok": True})
+
+    app = WebApiServer(web_manager)._build_app()
+    app.router.add_get("/__test/slow-http", slow_http)
+
+    caplog.set_level(logging.WARNING, logger="bot.web.server")
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            ws = await client.ws_connect("/api/notifications/ws?token=secret")
+            hello = await ws.receive_json()
+            assert hello["type"] == "hello"
+            await asyncio.sleep(0.01)
+            await ws.close()
+
+            response = await client.get("/__test/slow-http?token=secret")
+            assert response.status == 200
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert not any("event=web_request" in message and "route=/api/notifications/ws" in message for message in messages)
+    assert any("event=web_request" in message and "route=/__test/slow-http" in message for message in messages)
 
 
 @pytest.mark.asyncio

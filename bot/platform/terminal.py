@@ -241,40 +241,46 @@ def create_shell_process(
     cols, rows = _normalize_terminal_size(cols, rows)
 
     if sys.platform == "win32" and use_pty and _WINPTY_AVAILABLE and PtyProcess is not None:
-        process = PtyProcess.spawn(
-            cmdline,
-            cwd=cwd,
-            dimensions=(rows, cols),
-            env={
-                **os.environ,
-                "FORCE_COLOR": "1",
-                "TERM": "xterm-256color",
-                "PYTHONIOENCODING": "utf-8",
-                "PYTHONUTF8": "1",
-                "PYTHONUNBUFFERED": "1",
-                "CHCP": "65001",
-            },
-        )
+        try:
+            process = PtyProcess.spawn(
+                cmdline,
+                cwd=cwd,
+                dimensions=(rows, cols),
+                env={
+                    **os.environ,
+                    "FORCE_COLOR": "1",
+                    "TERM": "xterm-256color",
+                    "PYTHONIOENCODING": "utf-8",
+                    "PYTHONUTF8": "1",
+                    "PYTHONUNBUFFERED": "1",
+                    "CHCP": "65001",
+                },
+            )
+        except OSError as exc:
+            raise TerminalLaunchError(_format_launch_error([cmdline], exc)) from exc
         return PtyWrapper(process, is_pty=True)
 
     if sys.platform == "win32":
-        process = subprocess.Popen(
-            cmdline,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            cwd=cwd,
-            env={
-                **os.environ,
-                "FORCE_COLOR": "1",
-                "TERM": "xterm-256color",
-                "PYTHONIOENCODING": "utf-8",
-                "PYTHONUNBUFFERED": "1",
-                "CHCP": "65001",
-            },
-            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
-            bufsize=0,
-        )
+        try:
+            process = subprocess.Popen(
+                cmdline,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                cwd=cwd,
+                env={
+                    **os.environ,
+                    "FORCE_COLOR": "1",
+                    "TERM": "xterm-256color",
+                    "PYTHONIOENCODING": "utf-8",
+                    "PYTHONUNBUFFERED": "1",
+                    "CHCP": "65001",
+                },
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+                bufsize=0,
+            )
+        except OSError as exc:
+            raise TerminalLaunchError(_format_launch_error([cmdline], exc)) from exc
         return PtyWrapper(process, is_pty=False)
 
     if use_pty:

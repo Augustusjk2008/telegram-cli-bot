@@ -86,6 +86,11 @@ def _is_frpc_auth_error(line: str) -> bool:
     )
 
 
+def _is_frpc_proxy_already_exists_error(line: str) -> bool:
+    text = line.lower()
+    return "proxy [" in text and "already exists" in text
+
+
 def _is_frps_timeout_error(line: str) -> bool:
     text = line.lower()
     return (
@@ -507,6 +512,8 @@ class FixedForwardService:
     def _map_frpc_output_error(self, line: str) -> str:
         if _is_frpc_auth_error(line):
             return "frps token 错"
+        if _is_frpc_proxy_already_exists_error(line):
+            return "frps 已存在同名 proxy，请确认是否有旧 frpc 进程或重复 TCB_NODE_ID"
         if _is_frps_timeout_error(line):
             return "frps 端口不通/安全组未放通"
         return ""
@@ -528,6 +535,7 @@ class FixedForwardService:
                 if mapped_error:
                     self._set_snapshot(status="error", last_error=mapped_error, verified=False, pid=None)
                     ready_event.set()
+                    terminate_process_tree_sync(process)
                     return
 
             ready_event.set()
