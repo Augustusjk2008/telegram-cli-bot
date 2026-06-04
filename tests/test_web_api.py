@@ -1779,6 +1779,45 @@ async def test_terminal_websocket_accepts_configured_node_base_path(
 
 
 @pytest.mark.asyncio
+async def test_terminal_websocket_probe_reports_base_path_and_origin(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "/node/local")
+    monkeypatch.setattr("bot.web.server.WEB_PUBLIC_URL", "")
+    monkeypatch.setattr("bot.web.server.WEB_FIXED_PUBLIC_FORWARD_URL", "")
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            response = await client.get(
+                "/node/local/terminal/ws-probe?token=secret",
+                headers={
+                    "Origin": "https://proxy.example.test",
+                    "Host": "127.0.0.1:8765",
+                    "X-Forwarded-Host": "proxy.example.test",
+                    "X-Forwarded-Proto": "https",
+                },
+            )
+            payload = await response.json()
+
+            root_response = await client.get("/node/other/terminal/ws-probe")
+            root_text = await root_response.text()
+
+    assert response.status == 200
+    assert payload["data"]["path"] == "/node/local/terminal/ws-probe"
+    assert payload["data"]["configured_base_path"] == "/node/local"
+    assert payload["data"]["has_token"] is True
+    assert payload["data"]["auth_status"] == "ok"
+    assert payload["data"]["origin_allowed"] is True
+    assert root_response.status == 404
+    assert "Terminal WebSocket route not found" in root_text
+
+
+@pytest.mark.asyncio
 async def test_terminal_http_stream_and_input_fallback(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
@@ -1978,9 +2017,39 @@ async def test_terminal_websocket_rejects_unmatched_forwarded_host_origin(
     app = WebApiServer(web_manager)._build_app()
     async with TestServer(app) as test_server:
         async with TestClient(test_server) as client:
+            ws = await client.ws_connect(
+                "/terminal/ws?token=secret",
+                headers={
+                    "Origin": "https://proxy.example.test",
+                    "Host": "127.0.0.1:8765",
+                    "X-Forwarded-Host": "other.example.test",
+                    "X-Forwarded-Proto": "https",
+                },
+            )
+            await ws.send_json({"owner_id": "not-started"})
+            message = await ws.receive_json()
+            await ws.close()
+
+    assert message == {"error": "终端未启动"}
+
+
+@pytest.mark.asyncio
+async def test_terminal_websocket_rejects_unmatched_forwarded_host_without_token(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.web.server.WEB_PUBLIC_URL", "")
+    monkeypatch.setattr("bot.web.server.WEB_FIXED_PUBLIC_FORWARD_URL", "")
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
             with pytest.raises(WSServerHandshakeError) as exc_info:
                 await client.ws_connect(
-                    "/terminal/ws?token=secret",
+                    "/terminal/ws",
                     headers={
                         "Origin": "https://proxy.example.test",
                         "Host": "127.0.0.1:8765",

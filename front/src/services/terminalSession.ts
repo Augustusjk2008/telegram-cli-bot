@@ -85,6 +85,56 @@ function formatWsErrorMessage(socketUrl: string, diagnostics: PublicBaseDiagnost
   return `终端已启动，但 WebSocket 连接失败（${formatWsDiagnostics(socketUrl, diagnostics)}）。请检查地址/base path、访问令牌或反向代理 WebSocket 转发`;
 }
 
+type TerminalWsProbeData = {
+  path?: string;
+  configured_base_path?: string;
+  auth_status?: string;
+  auth_error?: string;
+  origin_allowed?: boolean;
+  host?: string;
+  forwarded_host?: string;
+  forwarded_proto?: string;
+};
+
+function formatProbeDiagnostics(data: TerminalWsProbeData, diagnostics: PublicBaseDiagnostics): string {
+  const authStatus = String(data.auth_status || "");
+  const authError = String(data.auth_error || "");
+  const configuredBase = String(data.configured_base_path || "");
+  const selectedBase = diagnostics.selectedBasePath || "";
+  const baseText = `后端 base ${configuredBase || "/"}`;
+  if (selectedBase && configuredBase && selectedBase !== configuredBase) {
+    return `诊断：HTTP 探针已到达后端，但页面 base 是 ${selectedBase}，${baseText}，请检查运行时 base path 配置。`;
+  }
+  if (authStatus && authStatus !== "ok") {
+    return `诊断：HTTP 探针已到达后端，但鉴权状态为 ${authStatus}${authError ? `（${authError}）` : ""}，请重新登录后再试。`;
+  }
+  if (data.origin_allowed === false) {
+    const forwarded = data.forwarded_host ? `，代理 Host ${data.forwarded_host}${data.forwarded_proto ? `/${data.forwarded_proto}` : ""}` : "";
+    return `诊断：HTTP 探针已到达后端且 token 有效，${baseText}，但 Origin/代理头不匹配${forwarded}；若仍失败，重点检查反向代理的 WebSocket Upgrade 转发。`;
+  }
+  return `诊断：HTTP 探针已到达后端且鉴权通过，${baseText}；WebSocket 仍失败时，通常是反向代理没有转发 Upgrade/Connection 头。`;
+}
+
+async function fetchWsProbe(token: string, ownerId: string, diagnostics: PublicBaseDiagnostics): Promise<string> {
+  const probeUrl = buildApiUrl("/terminal/ws-probe", {
+    owner_id: ownerId,
+  });
+  const response = await fetch(probeUrl, {
+    cache: "no-store",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    const detail = text.trim().slice(0, 160);
+    return `诊断：HTTP 探针返回 HTTP ${response.status}${detail ? `（${detail}）` : ""}，说明 base path 或代理转发也需要检查。`;
+  }
+  const payload = await response.json().catch(() => null) as { data?: TerminalWsProbeData } | null;
+  if (!payload?.data || typeof payload.data !== "object") {
+    return "诊断：HTTP 探针已返回，但内容无法解析，请查看后端日志中的终端 WebSocket 探针记录。";
+  }
+  return formatProbeDiagnostics(payload.data, diagnostics);
+}
+
 export function createTerminalSession(container: HTMLElement, options: TerminalSessionOptions): TerminalSession {
   const themeName = options.themeName ?? DEFAULT_UI_THEME;
   const term = new Terminal({
@@ -106,6 +156,7 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
   let isAttached = false;
   let receivedInitialMessage = false;
   let reportedSocketError = false;
+  let probeStarted = false;
   const fallbackInputDisposable = term.onData((data) => {
     if (fallbackActive) {
       void postFallbackInput(data);
@@ -316,6 +367,20 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
         fallbackAbortController = null;
         options.onClose?.();
       });
+    if (!probeStarted) {
+      probeStarted = true;
+      const diagnostics = publicApiBaseDiagnostics();
+      void fetchWsProbe(options.token, options.ownerId, diagnostics)
+        .then((probeMessage) => {
+          if (probeMessage) {
+            options.onError?.(`${reason}，已切换到 HTTP 终端流。${probeMessage}`);
+          }
+        })
+        .catch((err: unknown) => {
+          const detail = err instanceof Error && err.message ? `：${err.message}` : "";
+          options.onError?.(`${reason}，已切换到 HTTP 终端流。诊断：HTTP 探针无法完成${detail}`);
+        });
+    }
   }
 
   function connect() {

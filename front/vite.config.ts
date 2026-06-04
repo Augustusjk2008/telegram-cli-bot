@@ -238,10 +238,27 @@ export default defineConfig(({mode}) => {
         '/api': {
           target: 'http://127.0.0.1:8765',
           changeOrigin: true,
+          ws: true,
+        },
+        '/terminal': {
+          target: 'http://127.0.0.1:8765',
+          changeOrigin: true,
+          ws: true,
+        },
+        '/debug': {
+          target: 'http://127.0.0.1:8765',
+          changeOrigin: true,
+          ws: true,
+        },
+        '/lan-chat': {
+          target: 'http://127.0.0.1:8765',
+          changeOrigin: true,
+          ws: true,
         },
         '/node': {
           target: 'http://127.0.0.1:8765',
           changeOrigin: true,
+          ws: true,
         },
       },
     },

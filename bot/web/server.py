@@ -1073,6 +1073,20 @@ class WebApiServer:
         )
         raise web.HTTPForbidden(text="WebSocket Origin 不被允许")
 
+    async def _with_websocket_auth(self, request: web.Request) -> AuthContext:
+        has_explicit_token = bool(_extract_auth_token(request))
+        auth = await self._with_auth(request)
+        if not has_explicit_token:
+            self._require_websocket_origin(request)
+        return auth
+
+    async def _with_websocket_capability(self, request: web.Request, capability: str) -> AuthContext:
+        has_explicit_token = bool(_extract_auth_token(request))
+        auth = await self._with_capability(request, capability)
+        if not has_explicit_token:
+            self._require_websocket_origin(request)
+        return auth
+
     def _can_operate_bot(self, auth: AuthContext, alias: str) -> bool:
         normalized_alias = self._normalize_bot_alias(alias)
         return self._is_local_admin(auth) or _BOT_PERMISSION_STORE.can_operate_bot(auth.account_id, normalized_alias)
@@ -2053,6 +2067,47 @@ class WebApiServer:
     def _request_log_path(self, request: web.Request) -> str:
         return request.path_qs.split("?", 1)[0]
 
+    async def get_terminal_ws_probe(self, request: web.Request) -> web.Response:
+        origin_allowed = _is_request_origin_allowed(request)
+        has_token = bool(_extract_auth_token(request))
+        auth_status = "not_checked"
+        auth_error = ""
+        try:
+            await self._with_capability(request, CAP_TERMINAL_EXEC)
+            auth_status = "ok"
+        except WebApiError as exc:
+            auth_status = f"error:{exc.code}"
+            auth_error = exc.message
+
+        upgrade_hint = "not_websocket_probe"
+        if str(request.headers.get("Upgrade") or "").lower() == "websocket":
+            upgrade_hint = "websocket_upgrade_reached_probe"
+
+        data = {
+            "path": self._request_log_path(request),
+            "configured_base_path": self._web_base_path(),
+            "has_token": has_token,
+            "auth_status": auth_status,
+            "auth_error": auth_error,
+            "origin_allowed": origin_allowed,
+            "origin": request.headers.get("Origin", ""),
+            "host": request.headers.get("Host", ""),
+            "forwarded_host": request.headers.get("X-Forwarded-Host", ""),
+            "forwarded_proto": request.headers.get("X-Forwarded-Proto", ""),
+            "upgrade_hint": upgrade_hint,
+        }
+        logger.info(
+            "终端 WebSocket 探针 path=%s auth=%s origin_allowed=%s host=%s origin=%s forwarded_host=%s forwarded_proto=%s",
+            data["path"],
+            auth_status,
+            origin_allowed,
+            data["host"],
+            data["origin"],
+            data["forwarded_host"],
+            data["forwarded_proto"],
+        )
+        return _json({"ok": True, "data": data})
+
     async def get_terminal_session(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_TERMINAL_EXEC)
         owner_id = self._resolve_terminal_owner_id(request.query.get("owner_id"))
@@ -2271,8 +2326,7 @@ class WebApiServer:
             bool(_extract_auth_token(request)),
             request.remote or "",
         )
-        self._require_websocket_origin(request)
-        auth = await self._with_capability(request, CAP_TERMINAL_EXEC)
+        auth = await self._with_websocket_capability(request, CAP_TERMINAL_EXEC)
         request_path = self._request_log_path(request)
         logger.info(
             "终端 WebSocket 鉴权通过 path=%s user_id=%s account=%s capability=%s",
@@ -2438,8 +2492,7 @@ class WebApiServer:
         return ws
 
     async def notifications_ws(self, request: web.Request) -> web.WebSocketResponse:
-        self._require_websocket_origin(request)
-        auth = await self._with_auth(request)
+        auth = await self._with_websocket_auth(request)
         ws = web.WebSocketResponse(heartbeat=30.0)
         await ws.prepare(request)
         current_task = asyncio.current_task()
@@ -2781,8 +2834,7 @@ class WebApiServer:
         return _json({"ok": True, "data": await self._debug_service.evaluate(alias, auth.user_id, body)})
 
     async def debug_ws(self, request: web.Request) -> web.WebSocketResponse:
-        self._require_websocket_origin(request)
-        auth = await self._with_capability(request, CAP_DEBUG_EXEC)
+        auth = await self._with_websocket_capability(request, CAP_DEBUG_EXEC)
         alias = str(request.query.get("alias") or "").strip().lower()
         if not alias:
             raise WebApiError(400, "missing_alias", "缺少 Bot 别名")
@@ -4513,10 +4565,11 @@ class WebApiServer:
 
     def _is_unmatched_terminal_ws_path(self, request: web.Request) -> bool:
         path = request.path.rstrip("/")
-        if not path.startswith("/node/") or not path.endswith("/terminal/ws"):
+        terminal_paths = ("/terminal/ws", "/terminal/ws-probe")
+        if not path.startswith("/node/") or not any(path.endswith(suffix) for suffix in terminal_paths):
             return False
         configured_path = self._web_base_path()
-        return not configured_path or path != f"{configured_path}/terminal/ws"
+        return not configured_path or not any(path == f"{configured_path}{suffix}" for suffix in terminal_paths)
     
     async def serve_index(self, request):
         """Serve index.html for SPA routes."""

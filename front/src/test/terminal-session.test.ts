@@ -308,10 +308,22 @@ test("falls back to http terminal stream when websocket fails before attach", as
   let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
   const encoder = new TextEncoder();
   vi.stubGlobal("fetch", vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
-    fetchState.requests.push({ url: String(url), init });
+    const requestUrl = String(url);
+    fetchState.requests.push({ url: requestUrl, init });
     if (init?.body) {
       fetchState.inputBodies.push(JSON.parse(String(init.body)));
       return Promise.resolve(new Response(JSON.stringify({ ok: true, data: { accepted: true } }), { status: 200 }));
+    }
+    if (new URL(requestUrl).pathname === "/terminal/ws-probe") {
+      return Promise.resolve(new Response(JSON.stringify({
+        ok: true,
+        data: {
+          path: "/terminal/ws-probe",
+          configured_base_path: "",
+          auth_status: "ok",
+          origin_allowed: true,
+        },
+      }), { status: 200 }));
     }
     return Promise.resolve(new Response(new ReadableStream({
       start(controller) {
@@ -338,19 +350,64 @@ test("falls back to http terminal stream when websocket fails before attach", as
 
   session.connect();
   socketState.instances[0].emitError();
-  await vi.waitFor(() => expect(fetchState.requests.length).toBe(1));
+  await vi.waitFor(() => expect(fetchState.requests.length).toBeGreaterThanOrEqual(2));
   await vi.waitFor(() => expect(opened).toEqual(["open"]));
   session.sendText("pwd\n");
 
   expect(errors[0]).toContain("已切换到 HTTP 终端流");
-  expect(new URL(fetchState.requests[0].url).pathname).toBe("/api/terminal/session/stream");
-  expect(new URL(fetchState.requests[0].url).searchParams.get("owner_id")).toBe("owner-1");
-  expect(new URL(fetchState.requests[0].url).searchParams.get("from_seq")).toBe("7");
-  expect(fetchState.requests[0].init?.headers).toEqual(expect.objectContaining({ Authorization: "Bearer abc" }));
+  await vi.waitFor(() => expect(errors.some((message) => message.includes("HTTP 探针已到达后端且鉴权通过"))).toBe(true));
+  const streamRequest = fetchState.requests.find((request) => new URL(request.url).pathname === "/api/terminal/session/stream");
+  const probeRequest = fetchState.requests.find((request) => new URL(request.url).pathname === "/terminal/ws-probe");
+  expect(streamRequest).toBeDefined();
+  expect(probeRequest).toBeDefined();
+  expect(new URL(streamRequest!.url).searchParams.get("owner_id")).toBe("owner-1");
+  expect(new URL(streamRequest!.url).searchParams.get("from_seq")).toBe("7");
+  expect(streamRequest!.init?.headers).toEqual(expect.objectContaining({ Authorization: "Bearer abc" }));
+  expect(probeRequest!.init?.headers).toEqual(expect.objectContaining({ Authorization: "Bearer abc" }));
   expect(terminalState.instances[0].writes).toHaveLength(1);
   await vi.waitFor(() => expect(fetchState.inputBodies).toEqual([{ owner_id: "owner-1", data: "pwd\n" }]));
   streamController?.close();
   await vi.waitFor(() => expect(closed).toEqual(["close"]));
+});
+
+test("websocket fallback probe uses runtime base path", async () => {
+  const errors: string[] = [];
+  window.history.replaceState(null, "", "/node/local/");
+  window.__TCB_PUBLIC_ENV__ = {
+    VITE_API_BASE_URL: "/node/local",
+  };
+  vi.stubGlobal("fetch", vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = String(url);
+    fetchState.requests.push({ url: requestUrl, init });
+    if (new URL(requestUrl).pathname === "/node/local/terminal/ws-probe") {
+      return Promise.resolve(new Response(JSON.stringify({
+        ok: true,
+        data: {
+          path: "/node/local/terminal/ws-probe",
+          configured_base_path: "/node/local",
+          auth_status: "ok",
+          origin_allowed: false,
+          forwarded_host: "proxy.example.test",
+          forwarded_proto: "https",
+        },
+      }), { status: 200 }));
+    }
+    return Promise.resolve(createSseResponse([
+      "event: ready\ndata: {\"pty_mode\":true,\"connection_text\":\"运行中\"}\n\n",
+    ]));
+  }));
+  const container = document.createElement("div");
+  const session = createTerminalSession(container, {
+    token: "abc",
+    ownerId: "owner-1",
+    onError: (message) => errors.push(message),
+  });
+
+  session.connect();
+  socketState.instances[0].emitError();
+
+  await vi.waitFor(() => expect(fetchState.requests.some((request) => new URL(request.url).pathname === "/node/local/terminal/ws-probe")).toBe(true));
+  await vi.waitFor(() => expect(errors.some((message) => message.includes("Origin/代理头不匹配"))).toBe(true));
 });
 
 test("reports websocket error with path context", () => {
