@@ -355,10 +355,6 @@ export function useBotManager({
 
     const supportedExecutionModes = draft.nativeAgentEnabled ? ["cli", "native_agent"] as const : ["cli"] as const;
     const defaultExecutionMode = draft.nativeAgentEnabled ? draft.defaultExecutionMode : "cli";
-    if (draft.nativeAgentEnabled && !draft.nativeAgent.command.trim()) {
-      setError("原生 agent 命令不能为空");
-      return { ok: false };
-    }
     const executionChanged = JSON.stringify({
       supportedExecutionModes: nextBot.supportedExecutionModes || ["cli"],
       defaultExecutionMode: nextBot.defaultExecutionMode || "cli",
@@ -369,6 +365,10 @@ export function useBotManager({
       nativeAgent: draft.nativeAgent,
     });
     if (executionChanged) {
+      if (draft.nativeAgentEnabled && !draft.nativeAgent.command.trim()) {
+        setError("原生 agent 命令不能为空");
+        return { ok: false };
+      }
       nextBot = await client.updateBotExecutionConfig(nextBot.alias, {
         supportedExecutionModes: [...supportedExecutionModes],
         defaultExecutionMode,

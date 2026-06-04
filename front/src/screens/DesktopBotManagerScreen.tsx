@@ -337,7 +337,7 @@ function NativeAgentConfigFields({
               disabled={disabled}
               onChange={(event) => onNativeAgentChange({ serverPassword: event.target.value })}
               className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm disabled:opacity-60"
-              placeholder="留空自动生成"
+              placeholder="留空保留/自动生成"
             />
           </label>
         </div>
