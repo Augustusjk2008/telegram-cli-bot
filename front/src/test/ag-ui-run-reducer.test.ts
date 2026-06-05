@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { EventType } from "../services/agUiProtocol";
+import { EventType, type AgUiEvent } from "../services/agUiProtocol";
 import {
   buildAgUiMessageMeta,
   createAgUiRunState,
@@ -110,5 +110,55 @@ describe("agUiRunReducer", () => {
     });
     expect(state.error).toEqual({ message: "boom", code: "bad" });
     expect(state.completed).toBe(true);
+  });
+
+  test("keeps multiple native trace activities visible", () => {
+    const events: AgUiEvent[] = [
+      {
+        type: EventType.ACTIVITY_SNAPSHOT,
+        messageId: "activity-1",
+        activityType: "TCB_NATIVE_AGENT_TRACE",
+        replace: true,
+        content: {
+          summary: "读取目录",
+          rawKind: "tool_call",
+          rawType: "message.part.updated",
+        },
+      },
+      {
+        type: EventType.ACTIVITY_SNAPSHOT,
+        messageId: "activity-2",
+        activityType: "TCB_NATIVE_AGENT_TRACE",
+        replace: true,
+        content: {
+          summary: "写入文件",
+          rawKind: "tool_call",
+          rawType: "message.part.updated",
+        },
+      },
+      {
+        type: EventType.ACTIVITY_SNAPSHOT,
+        messageId: "activity-3",
+        activityType: "TCB_NATIVE_AGENT_TRACE",
+        replace: true,
+        content: {
+          summary: "测试通过",
+          rawKind: "tool_result",
+          rawType: "message.part.updated",
+        },
+      },
+    ];
+    const state = events.reduce(reduceAgUiRunEvent, createAgUiRunState());
+
+    expect(state.activities.map((activity) => activity.summary)).toEqual([
+      "读取目录",
+      "写入文件",
+      "测试通过",
+    ]);
+    expect(state.traceEvents.map((event) => event.kind)).toEqual([
+      "tool_call",
+      "tool_call",
+      "tool_result",
+    ]);
   });
 });

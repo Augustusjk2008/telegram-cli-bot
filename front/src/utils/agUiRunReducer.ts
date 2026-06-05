@@ -253,7 +253,7 @@ export function reduceAgUiRunEvent(state: AgUiRunState, event: AgUiEvent): AgUiR
     const summary = summarizeActivity(event.activityType, content);
     const activityId = event.activityType === "TCB_PERMISSION_REQUEST"
       ? getPermissionId(content) || event.activityType
-      : asString(content.id).trim() || event.activityType;
+      : asString(content.id).trim() || event.messageId || event.activityType;
     const nextActivity: AgUiActivityItem = {
       id: activityId,
       activityType: event.activityType,

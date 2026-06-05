@@ -31,6 +31,7 @@ class AgUiTurnState:
     tool_call_args: dict[str, str] = field(default_factory=dict)
     tool_call_ended: set[str] = field(default_factory=set)
     tool_call_results: dict[str, str] = field(default_factory=dict)
+    trace_activity_count: int = 0
 
 
 def should_filter_event(event: NativeAgentEvent | None) -> bool:
@@ -367,13 +368,19 @@ def _map_trace_events(trace_events: list[dict[str, Any]], state: AgUiTurnState) 
                 )
             )
             continue
+        message_id = f"activity_{state.run_id}_trace_{state.trace_activity_count}"
+        state.trace_activity_count += 1
         mapped.append(
             core.ActivitySnapshotEvent(
                 timestamp=_timestamp_ms(),
-                messageId=f"activity_{state.run_id}_{len(mapped)}",
+                messageId=message_id,
                 activityType="TCB_NATIVE_AGENT_TRACE",
                 content={
+                    "id": message_id,
                     "kind": kind or "event",
+                    "rawKind": kind or "event",
+                    "rawType": str(trace.get("raw_type") or ""),
+                    "source": str(trace.get("source") or "native_agent"),
                     "summary": summary,
                     "payload": payload,
                 },

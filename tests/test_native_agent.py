@@ -180,6 +180,31 @@ def test_native_agent_ag_ui_mapper_emits_reasoning_tool_and_error_outcome():
     assert finished_event.outcome.type == "interrupt"
 
 
+def test_native_agent_ag_ui_mapper_keeps_generic_trace_activities_distinct():
+    state = AgUiTurnState(
+        thread_id="conv-1",
+        run_id="run-1",
+        user_message_id="user-1",
+        assistant_message_id="assistant-1",
+    )
+    aggregator = NativeAgentAggregator(user_message_id="user-1")
+    first_event = unwrap_event({"type": "session.retry", "sessionID": "sess-1"})
+    second_event = unwrap_event({"type": "message.retry", "sessionID": "sess-1"})
+
+    assert first_event is not None
+    assert second_event is not None
+    first_mapped = map_ag_ui_event(event=first_event, result=aggregator.apply(first_event), state=state)
+    second_mapped = map_ag_ui_event(event=second_event, result=aggregator.apply(second_event), state=state)
+
+    first_activity = next(event for event in first_mapped if event.type == core.EventType.ACTIVITY_SNAPSHOT)
+    second_activity = next(event for event in second_mapped if event.type == core.EventType.ACTIVITY_SNAPSHOT)
+
+    assert first_activity.message_id != second_activity.message_id
+    assert first_activity.content["id"] != second_activity.content["id"]
+    assert first_activity.content["rawKind"] == "retry"
+    assert second_activity.content["rawKind"] == "retry"
+
+
 def test_native_agent_client_basic_auth_uses_opencode_username():
     client = NativeAgentClient(NativeAgentServerRef(base_url="http://127.0.0.1:4096", password="secret"))
 
