@@ -15,9 +15,22 @@ from bot.native_agent.client import NativeAgentClient, NativeAgentClientError, N
 from bot.native_agent.events import is_relevant_event, unwrap_event
 from bot.native_agent.service import NativeAgentService, normalize_execution_mode
 from bot.native_agent.turn_state import NativeAgentTurnState
-from bot.native_agent.server_manager import NativeAgentServerManager
+from bot.native_agent.server_manager import NativeAgentServerManager, _is_opencode_serve_process
 from bot.web.chat_history_service import ChatHistoryService
 from bot.web.chat_store import ChatStore
+
+
+@pytest.fixture(autouse=True)
+def clear_native_agent_global_config(monkeypatch: pytest.MonkeyPatch):
+    from bot import config
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_PROVIDER", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_MODEL", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_BASE_URL", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_API_KEY", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_OPENCODE_AGENT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_REASONING_EFFORT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_THINKING_DEPTH", "")
 
 
 async def _collect_native_stream(stream):
@@ -39,6 +52,13 @@ def test_parse_sse_block_and_unwrap_global_event():
     assert is_relevant_event(event, session_id="s1", cwd="/repo")
 
 
+def test_native_agent_server_manager_matches_only_opencode_serve_processes():
+    assert _is_opencode_serve_process("opencode.exe", ["opencode", "serve", "--port", "4750"])
+    assert _is_opencode_serve_process("node.exe", ["node", "opencode", "serve"])
+    assert not _is_opencode_serve_process("opencode.exe", ["opencode", "run"])
+    assert not _is_opencode_serve_process("python.exe", ["python", "-m", "bot"])
+
+
 def test_native_agent_normalizer_accepts_official_properties_part_delta():
     aggregator = NativeAgentAggregator(user_message_id="u1")
     event = unwrap_event({
@@ -57,6 +77,67 @@ def test_native_agent_normalizer_accepts_official_properties_part_delta():
     result = aggregator.apply(event)
     assert result.delta == "ok"
     assert aggregator.text() == "ok"
+
+
+def test_native_agent_aggregator_ignores_user_part_and_streams_opencode_delta():
+    aggregator = NativeAgentAggregator(user_message_id="msg-user")
+
+    user_part = unwrap_event({
+        "directory": "/repo",
+        "payload": {
+            "type": "message.part.updated",
+            "properties": {
+                "sessionID": "sess-1",
+                "part": {
+                    "id": "part-user",
+                    "type": "text",
+                    "text": "收到消息没",
+                    "messageID": "msg-user",
+                    "sessionID": "sess-1",
+                },
+            },
+        },
+    })
+    first_delta = unwrap_event({
+        "directory": "/repo",
+        "payload": {
+            "type": "message.part.delta",
+            "properties": {
+                "sessionID": "sess-1",
+                "messageID": "msg-assistant",
+                "partID": "part-assistant",
+                "field": "text",
+                "delta": "收",
+            },
+        },
+    })
+    second_delta = unwrap_event({
+        "directory": "/repo",
+        "payload": {
+            "type": "message.part.delta",
+            "properties": {
+                "sessionID": "sess-1",
+                "messageID": "msg-assistant",
+                "partID": "part-assistant",
+                "field": "text",
+                "delta": "到了",
+            },
+        },
+    })
+
+    assert user_part is not None
+    assert first_delta is not None
+    assert second_delta is not None
+
+    user_result = aggregator.apply(user_part)
+    first_result = aggregator.apply(first_delta)
+    second_result = aggregator.apply(second_delta)
+
+    assert user_result.delta == ""
+    assert aggregator.assistant_message_id == "msg-assistant"
+    assert first_result.delta == "收"
+    assert second_result.delta == "到了"
+    assert aggregator.text() == "收到了"
 
 
 def test_native_agent_transport_events_are_filtered_before_aggregation():
@@ -337,7 +418,7 @@ async def test_native_agent_server_manager_reuses_single_global_handle_and_falls
 
 
 @pytest.mark.asyncio
-async def test_native_agent_server_manager_scopes_by_bot_config_and_writes_opencode_config(
+async def test_native_agent_server_manager_ignores_bot_provider_config_and_writes_global_opencode_config(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -379,6 +460,13 @@ async def test_native_agent_server_manager_scopes_by_bot_config_and_writes_openc
     monkeypatch.setattr(config, "NATIVE_AGENT_HOST", "127.0.0.1")
     monkeypatch.setattr(config, "NATIVE_AGENT_PORT", 0)
     monkeypatch.setattr(config, "NATIVE_AGENT_SERVER_PASSWORD", "secret")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PROVIDER", "codeflow")
+    monkeypatch.setattr(config, "NATIVE_AGENT_MODEL", "gpt-5.1-codex")
+    monkeypatch.setattr(config, "NATIVE_AGENT_BASE_URL", "https://cdn.codeflow.asia/v1/")
+    monkeypatch.setattr(config, "NATIVE_AGENT_API_KEY", "sk-server-1234")
+    monkeypatch.setattr(config, "NATIVE_AGENT_OPENCODE_AGENT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_REASONING_EFFORT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_THINKING_DEPTH", "")
     monkeypatch.setattr(server_manager_module, "get_app_data_root", lambda: tmp_path / "data")
     monkeypatch.setattr(server_manager_module, "resolve_cli_executable", lambda command, _cwd=None: f"C:/tools/{command}.cmd")
     monkeypatch.setattr(server_manager_module, "build_executable_invocation", lambda path: [path])
@@ -405,13 +493,12 @@ async def test_native_agent_server_manager_scopes_by_bot_config_and_writes_openc
     changed = await manager.ensure_started(changed_profile)
 
     assert same is first
-    assert other is not first
-    assert changed is not first
-    assert created_processes == [first.process, other.process, changed.process]
-    assert created_processes[0].terminated is True
+    assert other is first
+    assert changed is first
+    assert created_processes == [first.process]
+    assert created_processes[0].terminated is False
     assert first.config_path is not None
-    assert first.config_path.exists() is False
-    assert other.config_path is not None and other.config_path.exists()
+    assert first.config_path.exists()
     assert changed.config_path is not None and changed.config_path.exists()
     assert captured_envs[0]["OPENCODE_CONFIG"] == str(first.config_path)
     assert captured_envs[0]["OPENCODE_SERVER_PASSWORD"] == "secret"
@@ -423,17 +510,133 @@ async def test_native_agent_server_manager_scopes_by_bot_config_and_writes_openc
         "baseURL": "https://cdn.codeflow.asia/v1",
         "apiKey": "sk-server-1234",
     }
-    assert provider["models"]["gpt-5.2-codex"]["name"] == "gpt-5.2-codex"
+    assert provider["models"]["gpt-5.1-codex"]["name"] == "gpt-5.1-codex"
     assert "sk-server-1234" not in changed.key
-    assert await manager.get_existing_for_alias("beta") is other
+    assert await manager.get_existing_for_alias("beta") is changed
     assert await manager.get_existing_for_alias("alpha") is changed
 
     await manager.stop_all()
 
-    assert other.config_path.exists() is False
     assert changed.config_path.exists() is False
-    assert created_processes[1].terminated is True
-    assert created_processes[2].terminated is True
+    assert created_processes[0].terminated is True
+
+
+@pytest.mark.asyncio
+async def test_native_agent_server_manager_uses_global_provider_model_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot import config
+    from bot.native_agent import server_manager as server_manager_module
+
+    captured_envs: list[dict[str, str]] = []
+    captured_cwds: list[str] = []
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    class FakeProcess:
+        returncode = None
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = 0
+
+        async def wait(self):
+            return 0
+
+    async def fake_create_subprocess_exec(*_args, **kwargs):
+        captured_envs.append(dict(kwargs["env"]))
+        captured_cwds.append(str(kwargs["cwd"]))
+        return FakeProcess()
+
+    async def fake_health(self):
+        return {"ok": True}
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    monkeypatch.setattr(config, "NATIVE_AGENT_COMMAND", "opencode")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PATH", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_HOST", "127.0.0.1")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PORT", 0)
+    monkeypatch.setattr(config, "NATIVE_AGENT_SERVER_PASSWORD", "secret")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PROVIDER", "jojocode")
+    monkeypatch.setattr(config, "NATIVE_AGENT_MODEL", "gpt-5.4")
+    monkeypatch.setattr(config, "NATIVE_AGENT_BASE_URL", "https://api2.jojocode.com/v1/")
+    monkeypatch.setattr(config, "NATIVE_AGENT_API_KEY", "sk-global-1234")
+    monkeypatch.setattr(config, "NATIVE_AGENT_OPENCODE_AGENT", "planner")
+    monkeypatch.setattr(config, "NATIVE_AGENT_REASONING_EFFORT", "high")
+    monkeypatch.setattr(config, "NATIVE_AGENT_THINKING_DEPTH", "4096")
+    monkeypatch.setattr(config, "WORKING_DIR", str(workspace))
+    monkeypatch.setattr(server_manager_module, "get_app_data_root", lambda: tmp_path / "data")
+    monkeypatch.setattr(server_manager_module, "resolve_cli_executable", lambda command, _cwd=None: f"C:/tools/{command}.cmd")
+    monkeypatch.setattr(server_manager_module, "build_executable_invocation", lambda path: [path])
+    monkeypatch.setattr(server_manager_module.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(server_manager_module.NativeAgentClient, "health", fake_health)
+
+    manager = NativeAgentServerManager()
+    ports = iter([4101, 4102])
+    monkeypatch.setattr(manager, "_pick_port", lambda _host: next(ports))
+    bot_workspace = tmp_path / "bot-workspace"
+    bot_workspace.mkdir()
+
+    handle = await manager.ensure_started(BotProfile(
+        alias="agent-test",
+        working_dir=str(bot_workspace),
+        native_agent={"provider": "old", "model": "old-model"},
+    ))
+    same = await manager.ensure_started()
+
+    assert same is not handle
+    assert captured_cwds == [str(bot_workspace.resolve()), str(workspace.resolve())]
+    assert handle.config_path is not None
+    payload = json.loads(handle.config_path.read_text(encoding="utf-8"))
+    assert payload["model"] == "jojocode/gpt-5.4"
+    provider = payload["provider"]["jojocode"]
+    assert provider["options"] == {
+        "baseURL": "https://api2.jojocode.com/v1",
+        "apiKey": "sk-global-1234",
+    }
+    assert provider["models"]["gpt-5.4"]["options"] == {
+        "reasoningEffort": "high",
+        "thinking": {"type": "enabled", "budgetTokens": 4096},
+    }
+    assert captured_envs[0]["OPENCODE_CONFIG"] == str(handle.config_path)
+
+
+def test_native_agent_global_config_requires_provider_when_model_has_no_provider(monkeypatch: pytest.MonkeyPatch):
+    from bot import config
+    from bot.native_agent.configuration import global_native_agent_config, validate_native_agent_model_config
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_PROVIDER", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_MODEL", "gpt-5.4")
+    monkeypatch.setattr(config, "NATIVE_AGENT_BASE_URL", "https://jojocode.com/v1")
+    monkeypatch.setattr(config, "NATIVE_AGENT_API_KEY", "sk-global-1234")
+    monkeypatch.setattr(config, "NATIVE_AGENT_OPENCODE_AGENT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_REASONING_EFFORT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_THINKING_DEPTH", "")
+
+    with pytest.raises(RuntimeError, match="NATIVE_AGENT_PROVIDER"):
+        validate_native_agent_model_config(global_native_agent_config())
+
+
+def test_native_agent_global_config_splits_provider_from_model(monkeypatch: pytest.MonkeyPatch):
+    from bot import config
+    from bot.native_agent.configuration import global_native_agent_config, validate_native_agent_model_config
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_PROVIDER", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_MODEL", "jojocode/gpt-5.4")
+    monkeypatch.setattr(config, "NATIVE_AGENT_BASE_URL", "https://jojocode.com/v1")
+    monkeypatch.setattr(config, "NATIVE_AGENT_API_KEY", "sk-global-1234")
+    monkeypatch.setattr(config, "NATIVE_AGENT_OPENCODE_AGENT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_REASONING_EFFORT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_THINKING_DEPTH", "")
+
+    native_agent = global_native_agent_config()
+    validate_native_agent_model_config(native_agent)
+
+    assert native_agent["provider"] == "jojocode"
+    assert native_agent["model"] == "gpt-5.4"
 
 
 @pytest.mark.asyncio
@@ -486,6 +689,13 @@ async def test_native_agent_server_manager_starts_serve_in_profile_working_dir(
     monkeypatch.setattr(config, "NATIVE_AGENT_HOST", "127.0.0.1")
     monkeypatch.setattr(config, "NATIVE_AGENT_PORT", 0)
     monkeypatch.setattr(config, "NATIVE_AGENT_SERVER_PASSWORD", "secret")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PROVIDER", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_MODEL", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_BASE_URL", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_API_KEY", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_OPENCODE_AGENT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_REASONING_EFFORT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_THINKING_DEPTH", "")
     monkeypatch.setattr(config, "WORKING_DIR", str(tmp_path / "repo-root"))
     monkeypatch.setattr(server_manager_module, "resolve_cli_executable", fake_resolve_cli_executable)
     monkeypatch.setattr(server_manager_module, "build_executable_invocation", lambda path: [path])
@@ -498,9 +708,12 @@ async def test_native_agent_server_manager_starts_serve_in_profile_working_dir(
 
     first = await manager.ensure_started(BotProfile(alias="alpha", working_dir=str(workspace_one)))
     second = await manager.ensure_started(BotProfile(alias="alpha", working_dir=str(workspace_two)))
+    same_first = await manager.ensure_started(BotProfile(alias="beta", working_dir=str(workspace_one)))
 
     assert second is not first
-    assert created_processes[0].terminated is True
+    assert same_first is first
+    assert created_processes[0].terminated is False
+    assert created_processes[1].terminated is False
     assert captured_cwds == [str(workspace_one.resolve()), str(workspace_two.resolve())]
     assert resolver_cwds == [str(workspace_one.resolve()), str(workspace_two.resolve())]
 
@@ -542,6 +755,13 @@ async def test_native_agent_server_manager_keeps_builtin_provider_adapter(
     monkeypatch.setattr(config, "NATIVE_AGENT_HOST", "127.0.0.1")
     monkeypatch.setattr(config, "NATIVE_AGENT_PORT", 0)
     monkeypatch.setattr(config, "NATIVE_AGENT_SERVER_PASSWORD", "secret")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PROVIDER", "anthropic")
+    monkeypatch.setattr(config, "NATIVE_AGENT_MODEL", "claude-sonnet-4-5")
+    monkeypatch.setattr(config, "NATIVE_AGENT_BASE_URL", "https://api.anthropic.com/v1")
+    monkeypatch.setattr(config, "NATIVE_AGENT_API_KEY", "sk-ant-1234")
+    monkeypatch.setattr(config, "NATIVE_AGENT_OPENCODE_AGENT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_REASONING_EFFORT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_THINKING_DEPTH", "")
     monkeypatch.setattr(server_manager_module, "get_app_data_root", lambda: tmp_path / "data")
     monkeypatch.setattr(server_manager_module, "resolve_cli_executable", lambda command, _cwd=None: f"C:/tools/{command}.cmd")
     monkeypatch.setattr(server_manager_module, "build_executable_invocation", lambda path: [path])
@@ -553,10 +773,10 @@ async def test_native_agent_server_manager_keeps_builtin_provider_adapter(
     handle = await manager.ensure_started(BotProfile(
         alias="anthropic-bot",
         native_agent={
-            "provider": "anthropic",
-            "model": "claude-sonnet-4-5",
-            "base_url": "https://api.anthropic.com/v1",
-            "api_key": "sk-ant-1234",
+            "provider": "ignored",
+            "model": "ignored-model",
+            "base_url": "https://ignored.example/v1",
+            "api_key": "sk-ignored",
         },
     ))
 
@@ -1103,7 +1323,100 @@ async def test_native_agent_stream_starts_separate_conversation_from_cli(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_native_agent_service_recreates_invalid_persisted_session_and_passes_model_agent(tmp_path: Path):
+async def test_native_agent_service_recreates_session_when_working_dir_changes(tmp_path: Path):
+    old_dir = tmp_path / "old"
+    new_dir = tmp_path / "new"
+    old_dir.mkdir()
+    new_dir.mkdir()
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.prompt_called = False
+
+        async def get_session(self, session_id):
+            assert session_id == "sess-old"
+            return {"id": "sess-old", "directory": str(old_dir)}
+
+        async def create_session(self, *, cwd=None):
+            assert cwd == str(new_dir)
+            return {"id": "sess-new", "directory": str(new_dir)}
+
+        async def prompt_async(self, session_id, text, *, message_id=None, model=None, agent=None):
+            assert session_id == "sess-new"
+            self.prompt_called = True
+            return {}
+
+        async def events(self, *, global_events=True, ready_event=None):
+            if ready_event is not None:
+                ready_event.set()
+            while not self.prompt_called:
+                await asyncio.sleep(0)
+            yield {
+                "directory": str(new_dir),
+                "payload": {
+                    "type": "message.part.updated",
+                    "sessionID": "sess-new",
+                    "part": {"id": "p1", "type": "text", "delta": "新目录"},
+                },
+            }
+            yield {"directory": str(new_dir), "payload": {"type": "session.idle", "sessionID": "sess-new"}}
+
+        async def list_messages(self, session_id):
+            assert session_id == "sess-new"
+            return [{"role": "assistant", "content": "新目录"}]
+
+    fake_client = FakeClient()
+
+    class FakeHandle:
+        def client(self):
+            return fake_client
+
+    class FakeManager:
+        async def ensure_started(self):
+            return FakeHandle()
+
+        async def get_existing(self):
+            return FakeHandle()
+
+    service = NativeAgentService()
+    service._server_manager = FakeManager()
+    profile = BotProfile(alias="main", working_dir=str(new_dir))
+    session = UserSession(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        working_dir=str(new_dir),
+        native_agent_session_id="sess-old",
+    )
+    history = ChatHistoryService(ChatStore(new_dir))
+
+    events = [
+        event async for event in service.stream_chat(
+            profile=profile,
+            session=session,
+            user_text="你好",
+            prompt_text="你好",
+            history_service=history,
+        )
+    ]
+
+    done = next(event for event in events if event["type"] == "done")
+    assert done["output"] == "新目录"
+    assert session.native_agent_session_id == "sess-new"
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_recreates_invalid_persisted_session_and_passes_model_agent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from bot import config
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_PROVIDER", "anthropic")
+    monkeypatch.setattr(config, "NATIVE_AGENT_MODEL", "claude-sonnet-4-5")
+    monkeypatch.setattr(config, "NATIVE_AGENT_BASE_URL", "https://api.anthropic.com/v1")
+    monkeypatch.setattr(config, "NATIVE_AGENT_API_KEY", "sk-ant-1234")
+    monkeypatch.setattr(config, "NATIVE_AGENT_OPENCODE_AGENT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_REASONING_EFFORT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_THINKING_DEPTH", "")
+
     class FakeClient:
         def __init__(self) -> None:
             self.prompt_called = False

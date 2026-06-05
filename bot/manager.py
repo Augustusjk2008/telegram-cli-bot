@@ -28,7 +28,6 @@ from bot.models import (
     normalize_execution_mode,
     normalize_execution_mode_config,
     normalize_execution_modes,
-    normalize_native_agent_config,
     normalize_prompt_presets,
 )
 from bot.native_agent.server_manager import SERVER_MANAGER as NATIVE_AGENT_SERVER_MANAGER
@@ -45,6 +44,19 @@ from bot.sessions import clear_bot_sessions, is_bot_processing, terminate_bot_pr
 
 logger = logging.getLogger(__name__)
 REMOVED_LEGACY_CLI_TYPES: set[str] = set()
+
+
+def _normalize_bot_native_agent_config(value: Any, *, existing: dict[str, Any] | None = None) -> dict[str, Any]:
+    data = value if isinstance(value, dict) else {}
+    source = data
+    if not any(key in data for key in ("opencode_agent", "opencodeAgent", "agent")):
+        source = existing if isinstance(existing, dict) else {}
+    opencode_agent = ""
+    for key in ("opencode_agent", "opencodeAgent", "agent"):
+        if isinstance(source, dict) and key in source:
+            opencode_agent = str(source.get(key) or "").strip()
+            break
+    return {"opencode_agent": opencode_agent} if opencode_agent else {}
 
 
 class MultiBotManager:
@@ -421,8 +433,23 @@ class MultiBotManager:
     ) -> None:
         self._assistant_result_executor = result_executor
         self._assistant_stream_executor = stream_executor
+        NATIVE_AGENT_SERVER_MANAGER.terminate_stale_opencode_processes()
         if NATIVE_AGENT_ENABLED:
             await NATIVE_AGENT_SERVER_MANAGER.ensure_started()
+            native_profiles = [
+                profile
+                for profile in [self.main_profile, *self.managed_profiles.values()]
+                if EXECUTION_MODE_NATIVE_AGENT in normalize_execution_modes(
+                    getattr(profile, "supported_execution_modes", None)
+                )
+            ]
+            seen_workdirs = {str(self.main_profile.working_dir or WORKING_DIR)}
+            for profile in native_profiles:
+                working_dir = str(getattr(profile, "working_dir", "") or WORKING_DIR)
+                if working_dir in seen_workdirs:
+                    continue
+                seen_workdirs.add(working_dir)
+                await NATIVE_AGENT_SERVER_MANAGER.ensure_started(profile)
         await self._ensure_assistant_services()
 
     async def start_watchdog(self) -> None:
@@ -498,7 +525,7 @@ class MultiBotManager:
             default_execution_mode,
             bot_mode=resolved_bot_mode,
         )
-        resolved_native_agent = normalize_native_agent_config(native_agent)
+        resolved_native_agent = _normalize_bot_native_agent_config(native_agent)
 
         if resolved_bot_mode == "assistant":
             if working_dir is None or not str(working_dir).strip():
@@ -662,9 +689,9 @@ class MultiBotManager:
                 bot_mode=profile.bot_mode,
             )
             native_agent = (
-                normalize_native_agent_config(raw_native_agent, existing=profile.native_agent)
+                _normalize_bot_native_agent_config(raw_native_agent, existing=profile.native_agent)
                 if has_native_agent_payload
-                else normalize_native_agent_config(profile.native_agent)
+                else _normalize_bot_native_agent_config(profile.native_agent)
             )
             profile.supported_execution_modes = supported
             profile.default_execution_mode = default_mode

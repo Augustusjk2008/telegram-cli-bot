@@ -2319,25 +2319,15 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   private normalizeNativeAgentConfig(input: BotExecutionConfigInput["nativeAgent"] | CreateBotInput["nativeAgent"] | undefined, current?: BotSummary["nativeAgent"]): BotSummary["nativeAgent"] {
-    const provider = String(input?.provider || "").trim();
-    const model = String(input?.model || "").trim();
     const opencodeAgent = String(input?.opencodeAgent || "").trim();
-    const baseUrl = String(input?.baseUrl || "").trim().replace(/\/+$/, "");
-    const apiKey = String(input?.apiKey || "").trim();
-    const clearApiKey = Boolean(input?.clearApiKey);
-    const hasApiKey = clearApiKey ? false : Boolean(apiKey || current?.hasApiKey);
-    const apiKeyMasked = clearApiKey
-      ? ""
-      : apiKey
-        ? `${apiKey.startsWith("sk-") ? "sk-" : ""}****${apiKey.slice(-4)}`
-        : current?.apiKeyMasked || "";
+    void current;
     return {
-      provider,
-      model,
+      provider: "",
+      model: "",
       opencodeAgent,
-      baseUrl,
-      hasApiKey,
-      apiKeyMasked,
+      baseUrl: "",
+      hasApiKey: false,
+      apiKeyMasked: "",
     };
   }
 

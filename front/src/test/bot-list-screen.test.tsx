@@ -57,11 +57,10 @@ test("bot list creates bot with native agent config", async () => {
   await user.type(screen.getByLabelText("新智能体别名"), "native1");
   await user.type(screen.getByLabelText("新智能体工作目录"), "C:\\workspace\\native1");
   await user.selectOptions(screen.getByLabelText("运行后端"), "native_agent");
-  fireEvent.change(screen.getByLabelText("原生 agent Provider"), { target: { value: "https://cdn.codeflow.asia/v1/" } });
-  expect(screen.getByLabelText("原生 agent Provider")).toHaveValue("codeflow");
-  expect(screen.getByLabelText("原生 agent Base URL")).toHaveValue("https://cdn.codeflow.asia/v1/");
-  fireEvent.change(screen.getByLabelText("原生 agent Model"), { target: { value: "claude-sonnet-4-5" } });
-  fireEvent.change(screen.getByLabelText("原生 agent API Key"), { target: { value: "sk-create-1234" } });
+  expect(screen.queryByLabelText("原生 agent Provider")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("原生 agent Model")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("原生 agent Base URL")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("原生 agent API Key")).not.toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("OpenCode agent"), { target: { value: "reviewer" } });
   await user.click(screen.getByRole("button", { name: "创建智能体" }));
 
@@ -73,11 +72,7 @@ test("bot list creates bot with native agent config", async () => {
     supportedExecutionModes: ["native_agent"],
     defaultExecutionMode: "native_agent",
     nativeAgent: {
-      provider: "codeflow",
-      model: "claude-sonnet-4-5",
       opencodeAgent: "reviewer",
-      baseUrl: "https://cdn.codeflow.asia/v1",
-      apiKey: "sk-create-1234",
     },
   });
 });

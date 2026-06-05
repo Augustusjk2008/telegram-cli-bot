@@ -1976,6 +1976,8 @@ function mapNativeAgentConfig(value: unknown): NativeAgentConfig | undefined {
     return undefined;
   }
   const raw = value as Record<string, unknown>;
+  const reasoningEffort = String(raw.reasoning_effort ?? raw.reasoningEffort ?? "").trim();
+  const thinkingDepth = String(raw.thinking_depth ?? raw.thinkingDepth ?? "").trim();
   return {
     provider: String(raw.provider || ""),
     model: String(raw.model || ""),
@@ -1983,18 +1985,15 @@ function mapNativeAgentConfig(value: unknown): NativeAgentConfig | undefined {
     baseUrl: String(raw.base_url ?? raw.baseUrl ?? ""),
     hasApiKey: Boolean(raw.has_api_key ?? raw.hasApiKey ?? raw.api_key_masked ?? raw.apiKeyMasked),
     apiKeyMasked: String(raw.api_key_masked ?? raw.apiKeyMasked ?? ""),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(thinkingDepth ? { thinkingDepth } : {}),
   };
 }
 
 function serializeNativeAgentConfig(input: NativeAgentConfigInput | undefined) {
   const nativeAgent = input || { provider: "", model: "", opencodeAgent: "", baseUrl: "" };
   return {
-    provider: nativeAgent.provider,
-    model: nativeAgent.model,
     opencode_agent: nativeAgent.opencodeAgent,
-    base_url: nativeAgent.baseUrl || "",
-    ...(nativeAgent.apiKey ? { api_key: nativeAgent.apiKey } : {}),
-    ...(nativeAgent.clearApiKey ? { clear_api_key: true } : {}),
   };
 }
 

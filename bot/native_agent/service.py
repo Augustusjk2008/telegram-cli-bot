@@ -4,6 +4,7 @@ import asyncio
 import time
 import uuid
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
 from bot.chat_identity import chat_session_user_id
@@ -14,8 +15,8 @@ from bot.models import (
     UserSession,
     build_native_agent_model_id,
     normalize_execution_mode as _normalize_execution_mode,
-    normalize_native_agent_config,
 )
+from bot.native_agent.configuration import effective_native_agent_config, validate_native_agent_model_config
 from bot.native_agent.ag_ui_mapper import (
     AgUiTurnState,
     build_run_error_event,
@@ -86,7 +87,8 @@ class NativeAgentService:
         return handle.client() if handle is not None else None
 
     def _prompt_options(self, profile: BotProfile) -> tuple[str, str]:
-        native_agent = normalize_native_agent_config(getattr(profile, "native_agent", {}))
+        native_agent = effective_native_agent_config(getattr(profile, "native_agent", {}))
+        validate_native_agent_model_config(native_agent)
         return (
             build_native_agent_model_id(native_agent),
             str(native_agent.get("opencode_agent") or "").strip(),
@@ -97,7 +99,9 @@ class NativeAgentService:
             native_session_id = str(session.native_agent_session_id or "").strip()
         if native_session_id:
             try:
-                await client.get_session(native_session_id)
+                remote_session = await client.get_session(native_session_id)
+                if not _native_session_matches_working_dir(remote_session, session.working_dir):
+                    raise NativeAgentClientError("native session working dir changed")
             except NativeAgentClientError:
                 with session._lock:
                     session.native_agent_session_id = None
@@ -485,6 +489,27 @@ def _extract_session_id(payload: dict[str, Any]) -> str:
             if value:
                 return str(value)
     raise RuntimeError("原生 agent 未返回 session id")
+
+
+def _native_session_matches_working_dir(payload: dict[str, Any], working_dir: str) -> bool:
+    expected = str(Path(working_dir).expanduser().resolve()).lower()
+    candidates = [
+        payload.get("directory"),
+        payload.get("cwd"),
+    ]
+    path_info = payload.get("path")
+    if isinstance(path_info, dict):
+        candidates.extend([path_info.get("cwd"), path_info.get("root")])
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            normalized = str(Path(str(candidate)).expanduser().resolve()).lower()
+        except OSError:
+            normalized = str(candidate).strip().lower()
+        if normalized == expected:
+            return True
+    return not any(candidates)
 
 
 _SERVICE = NativeAgentService()

@@ -163,6 +163,13 @@ NATIVE_AGENT_SERVER_PASSWORD = (
     or _get_project_config("NATIVE_AGENT_PASSWORD", "").strip()
 )
 NATIVE_AGENT_PASSWORD = NATIVE_AGENT_SERVER_PASSWORD
+NATIVE_AGENT_PROVIDER = _get_project_config("NATIVE_AGENT_PROVIDER", "").strip()
+NATIVE_AGENT_MODEL = _get_project_config("NATIVE_AGENT_MODEL", "").strip()
+NATIVE_AGENT_BASE_URL = _get_project_config("NATIVE_AGENT_BASE_URL", "").strip()
+NATIVE_AGENT_API_KEY = _get_project_config("NATIVE_AGENT_API_KEY", "").strip()
+NATIVE_AGENT_OPENCODE_AGENT = _get_project_config("NATIVE_AGENT_OPENCODE_AGENT", "").strip()
+NATIVE_AGENT_REASONING_EFFORT = _get_project_config("NATIVE_AGENT_REASONING_EFFORT", "").strip()
+NATIVE_AGENT_THINKING_DEPTH = _get_project_config("NATIVE_AGENT_THINKING_DEPTH", "").strip()
 CLI_MODEL_OPTIONS = normalize_cli_model_options(_split_csv_env(_get_project_config("CLI_MODEL_OPTIONS", "")))
 CLI_GLOBAL_EXTRA_ARGS = _parse_cli_global_extra_args(_get_project_config("CLI_GLOBAL_EXTRA_ARGS", "{}"))
 WORKING_DIR = os.path.abspath(os.path.expanduser(os.environ.get("WORKING_DIR", os.getcwd())))

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import secrets
 import socket
@@ -12,10 +13,19 @@ from typing import Any
 
 import bot.config as config
 from bot.cli import resolve_cli_executable
-from bot.models import BotProfile, normalize_native_agent_config
+from bot.models import BotProfile, build_native_agent_model_id, normalize_native_agent_config
 from bot.native_agent.client import NativeAgentClient, NativeAgentServerRef
+from bot.native_agent.configuration import global_native_agent_config, validate_native_agent_model_config
 from bot.platform.executables import build_executable_invocation
 from bot.runtime_paths import get_app_data_root
+
+try:  # pragma: no cover - import fallback depends on optional runtime dependency
+    import psutil
+except ImportError:  # pragma: no cover
+    psutil = None  # type: ignore[assignment]
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -45,8 +55,6 @@ class NativeAgentServerManager:
                 "hostname": str(server_config.get("hostname") or "127.0.0.1"),
                 "port": int(server_config.get("port") or 0),
                 "password": str(server_config.get("password") or ""),
-                "bot_alias": str(server_config.get("bot_alias") or "global"),
-                "working_dir": str(server_config.get("working_dir") or ""),
                 "native_agent": normalize_native_agent_config(server_config.get("native_agent")),
             },
             ensure_ascii=False,
@@ -55,9 +63,12 @@ class NativeAgentServerManager:
         )
         return hashlib.sha256(material.encode("utf-8")).hexdigest()[:12]
 
+    def _workspace_hash(self, server_config: dict[str, Any]) -> str:
+        working_dir = self._normalize_working_dir(str(server_config.get("working_dir") or ""))
+        return hashlib.sha256(working_dir.encode("utf-8")).hexdigest()[:12]
+
     def _server_key(self, server_config: dict[str, Any]) -> str:
-        alias = str(server_config.get("bot_alias") or "global").strip().lower() or "global"
-        return f"{alias}:{self._config_hash(server_config)}"
+        return f"workspace-{self._workspace_hash(server_config)}:{self._config_hash(server_config)}"
 
     def _current_config(self, profile: BotProfile | None = None) -> dict[str, Any]:
         command = str(config.NATIVE_AGENT_COMMAND or config.NATIVE_AGENT_PATH or "opencode").strip() or "opencode"
@@ -67,14 +78,14 @@ class NativeAgentServerManager:
         except (TypeError, ValueError):
             configured_port = 0
         password = str(config.NATIVE_AGENT_SERVER_PASSWORD or "").strip()
-        native_agent = normalize_native_agent_config(getattr(profile, "native_agent", {}) if profile is not None else {})
+        native_agent = global_native_agent_config()
+        validate_native_agent_model_config(native_agent)
         working_dir = self._normalize_working_dir(str(getattr(profile, "working_dir", "") or config.WORKING_DIR or ""))
         return {
             "command": command,
             "hostname": hostname,
             "port": configured_port,
             "password": password,
-            "bot_alias": str(getattr(profile, "alias", "") or "global").strip().lower() or "global",
             "working_dir": working_dir,
             "native_agent": native_agent,
         }
@@ -105,10 +116,11 @@ class NativeAgentServerManager:
             existing = self._handles.get(key)
             if existing is not None and existing.key == key and await self._is_healthy(existing):
                 return existing
+            workspace_prefix = key.split(":", 1)[0]
             stale_keys = [
                 item_key
-                for item_key, handle in self._handles.items()
-                if item_key.split(":", 1)[0] == key.split(":", 1)[0]
+                for item_key in self._handles
+                if item_key.split(":", 1)[0] == workspace_prefix
             ]
             for item_key in stale_keys:
                 stale = self._handles.pop(item_key, None)
@@ -155,20 +167,8 @@ class NativeAgentServerManager:
             return None
 
     async def get_existing_for_alias(self, alias: str) -> NativeAgentServerHandle | None:
-        normalized_alias = str(alias or "").strip().lower()
-        if not normalized_alias:
-            return None
-        async with self._lock:
-            healthy: list[NativeAgentServerHandle] = []
-            for key, existing in list(self._handles.items()):
-                if key.split(":", 1)[0] != normalized_alias:
-                    continue
-                if await self._is_healthy(existing):
-                    healthy.append(existing)
-                    continue
-                await self._stop_handle(existing)
-                self._handles.pop(key, None)
-            return healthy[0] if len(healthy) == 1 else None
+        _ = alias
+        return await self.get_existing()
 
     async def _is_healthy(self, handle: NativeAgentServerHandle) -> bool:
         process = handle.process
@@ -217,6 +217,9 @@ class NativeAgentServerManager:
                 },
             },
         }
+        model_options = _model_options(native_agent)
+        if model_options:
+            provider_config["models"][model_name]["options"] = model_options
         if not self._is_builtin_provider(provider):
             provider_config["npm"] = "@ai-sdk/openai-compatible"
             provider_config["name"] = self._provider_name(provider)
@@ -226,10 +229,14 @@ class NativeAgentServerManager:
             provider_config["options"]["apiKey"] = api_key
         payload = {
             "$schema": "https://opencode.ai/config.json",
+            "model": build_native_agent_model_id(native_agent),
             "provider": {
                 provider: provider_config,
             },
         }
+        opencode_agent = str(native_agent.get("opencode_agent") or "").strip()
+        if opencode_agent:
+            payload["agent"] = opencode_agent
         path = self._runtime_config_path(key)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -309,5 +316,76 @@ class NativeAgentServerManager:
         for handle in handles:
             await self._stop_handle(handle)
 
+    def terminate_stale_opencode_processes(self) -> list[int]:
+        killed: list[int] = []
+        if psutil is None:
+            logger.warning("psutil 不可用，跳过旧 opencode serve 进程清理")
+            return killed
+        current_pid = os.getpid()
+        candidates = []
+        for process in psutil.process_iter(["pid", "name", "cmdline"]):
+            try:
+                pid = int(process.info.get("pid") or 0)
+                if pid <= 0 or pid == current_pid:
+                    continue
+                name = str(process.info.get("name") or "")
+                cmdline = process.info.get("cmdline") or []
+                if _is_opencode_serve_process(name, cmdline):
+                    candidates.append(process)
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+        for process in candidates:
+            try:
+                pid = int(process.pid)
+                children = process.children(recursive=True)
+                for child in children:
+                    try:
+                        child.terminate()
+                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                        pass
+                process.terminate()
+                gone, alive = psutil.wait_procs([process, *children], timeout=3)
+                _ = gone
+                for alive_process in alive:
+                    try:
+                        alive_process.kill()
+                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                        pass
+                killed.append(pid)
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+        if killed:
+            logger.info("已清理旧 opencode serve 进程: %s", killed)
+        return killed
+
 
 SERVER_MANAGER = NativeAgentServerManager()
+
+
+def _model_options(native_agent: dict[str, Any]) -> dict[str, Any]:
+    options: dict[str, Any] = {}
+    reasoning_effort = str(native_agent.get("reasoning_effort") or "").strip()
+    if reasoning_effort:
+        options["reasoningEffort"] = reasoning_effort
+    raw_thinking_depth = str(native_agent.get("thinking_depth") or "").strip()
+    if raw_thinking_depth:
+        try:
+            thinking_depth = int(float(raw_thinking_depth))
+        except (TypeError, ValueError):
+            thinking_depth = 0
+        if thinking_depth > 0:
+            options["thinking"] = {
+                "type": "enabled",
+                "budgetTokens": thinking_depth,
+            }
+    return options
+
+
+def _is_opencode_serve_process(name: str, cmdline: Any) -> bool:
+    parts = [str(item) for item in (cmdline or []) if str(item)]
+    lowered_name = str(name or "").lower()
+    lowered_parts = [item.lower() for item in parts]
+    joined = " ".join(lowered_parts)
+    has_opencode = "opencode" in lowered_name or "opencode" in joined
+    has_serve = any(item == "serve" for item in lowered_parts)
+    return has_opencode and has_serve

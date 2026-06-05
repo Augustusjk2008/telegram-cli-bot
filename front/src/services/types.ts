@@ -203,6 +203,8 @@ export type NativeAgentConfigView = {
   baseUrl?: string;
   hasApiKey?: boolean;
   apiKeyMasked?: string;
+  reasoningEffort?: string;
+  thinkingDepth?: string;
 };
 
 export type NativeAgentConfigInput = {
@@ -212,6 +214,8 @@ export type NativeAgentConfigInput = {
   baseUrl?: string;
   apiKey?: string;
   clearApiKey?: boolean;
+  reasoningEffort?: string;
+  thinkingDepth?: string;
 };
 
 export type NativeAgentDraft = NativeAgentConfigView & {

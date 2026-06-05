@@ -122,13 +122,7 @@ class TestManagerLoadSave:
 
         assert profile.supported_execution_modes == ["native_agent"]
         assert profile.default_execution_mode == "native_agent"
-        assert profile.native_agent == {
-            "provider": "anthropic",
-            "model": "claude-sonnet-4-5",
-            "opencode_agent": "reviewer",
-            "base_url": "https://cdn.codeflow.asia/v1",
-            "api_key": "sk-create-1234",
-        }
+        assert profile.native_agent == {"opencode_agent": "reviewer"}
 
 class TestManagerValidation:
     """测试验证逻辑"""
@@ -188,7 +182,7 @@ class TestManagerValidation:
                 },
             },
         )
-        assert manager.main_profile.native_agent["api_key"] == "sk-old-1234"
+        assert manager.main_profile.native_agent == {"opencode_agent": "planner"}
         await manager.set_bot_execution_config(
             "main",
             {
@@ -203,7 +197,7 @@ class TestManagerValidation:
                 },
             },
         )
-        assert manager.main_profile.native_agent["api_key"] == "sk-new-5678"
+        assert manager.main_profile.native_agent == {"opencode_agent": "main"}
         await manager.set_bot_execution_config(
             "main",
             {
@@ -223,32 +217,30 @@ class TestManagerValidation:
 
         assert restored.main_profile.supported_execution_modes == ["native_agent"]
         assert restored.main_profile.default_execution_mode == "native_agent"
-        assert restored.main_profile.native_agent == {
-            "provider": "codeflow",
-            "model": "gpt-5.1-codex",
-            "opencode_agent": "main",
-            "base_url": "https://cdn.codeflow.asia/v1",
-        }
+        assert restored.main_profile.native_agent == {"opencode_agent": "main"}
 
     @pytest.mark.asyncio
-    async def test_native_agent_base_url_requires_http_scheme(self, temp_dir: Path):
+    async def test_native_agent_bot_config_ignores_global_provider_fields(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
         manager = MultiBotManager(BotProfile(alias="main", token="main_tok", working_dir=str(temp_dir)), str(storage))
 
-        with pytest.raises(ValueError, match="Base URL"):
-            await manager.set_bot_execution_config(
-                "main",
-                {
-                    "supported_execution_modes": ["native_agent"],
-                    "default_execution_mode": "native_agent",
-                    "native_agent": {
-                        "provider": "codeflow",
-                        "model": "gpt-5.1-codex",
-                        "base_url": "file:///secret",
-                    },
+        await manager.set_bot_execution_config(
+            "main",
+            {
+                "supported_execution_modes": ["native_agent"],
+                "default_execution_mode": "native_agent",
+                "native_agent": {
+                    "provider": "codeflow",
+                    "model": "gpt-5.1-codex",
+                    "base_url": "file:///secret",
+                    "api_key": "sk-ignored",
+                    "opencode_agent": "reviewer",
                 },
-            )
+            },
+        )
+
+        assert manager.main_profile.native_agent == {"opencode_agent": "reviewer"}
 
     @pytest.mark.asyncio
     async def test_background_services_start_and_shutdown_global_native_agent_server(self, temp_dir: Path):
@@ -257,11 +249,57 @@ class TestManagerValidation:
         manager = MultiBotManager(BotProfile(alias="main", token="main_tok", working_dir=str(temp_dir)), str(storage))
 
         with patch("bot.manager.NATIVE_AGENT_ENABLED", True), \
+             patch("bot.manager.NATIVE_AGENT_SERVER_MANAGER.terminate_stale_opencode_processes", MagicMock(return_value=[])) as cleanup_mock, \
              patch("bot.manager.NATIVE_AGENT_SERVER_MANAGER.ensure_started", AsyncMock()) as start_mock, \
              patch("bot.manager.NATIVE_AGENT_SERVER_MANAGER.stop_all", AsyncMock()) as stop_mock:
             await manager.start_background_services(result_executor=AsyncMock(return_value={}))
             await manager.shutdown_all()
 
+        cleanup_mock.assert_called_once()
         start_mock.assert_awaited_once()
         stop_mock.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_background_services_prewarms_native_bot_workdirs(self, temp_dir: Path):
+        storage = temp_dir / "bots.json"
+        native_dir = temp_dir / "native"
+        native_dir.mkdir()
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        manager = MultiBotManager(BotProfile(alias="main", token="main_tok", working_dir=str(temp_dir)), str(storage))
+        manager.managed_profiles["agent-test"] = BotProfile(
+            alias="agent-test",
+            token="",
+            working_dir=str(native_dir),
+            supported_execution_modes=["native_agent"],
+            default_execution_mode="native_agent",
+        )
+
+        with patch("bot.manager.NATIVE_AGENT_ENABLED", True), \
+             patch("bot.manager.NATIVE_AGENT_SERVER_MANAGER.terminate_stale_opencode_processes", MagicMock(return_value=[])) as cleanup_mock, \
+             patch("bot.manager.NATIVE_AGENT_SERVER_MANAGER.ensure_started", AsyncMock()) as start_mock, \
+             patch("bot.manager.NATIVE_AGENT_SERVER_MANAGER.stop_all", AsyncMock()) as stop_mock:
+            await manager.start_background_services(result_executor=AsyncMock(return_value={}))
+            await manager.shutdown_all()
+
+        cleanup_mock.assert_called_once()
+        assert start_mock.await_count == 2
+        assert start_mock.await_args_list[0].args == ()
+        assert start_mock.await_args_list[1].args[0].alias == "agent-test"
+        stop_mock.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_background_services_cleans_stale_opencode_even_when_native_disabled(self, temp_dir: Path):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        manager = MultiBotManager(BotProfile(alias="main", token="main_tok", working_dir=str(temp_dir)), str(storage))
+
+        with patch("bot.manager.NATIVE_AGENT_ENABLED", False), \
+             patch("bot.manager.NATIVE_AGENT_SERVER_MANAGER.terminate_stale_opencode_processes", MagicMock(return_value=[1234])) as cleanup_mock, \
+             patch("bot.manager.NATIVE_AGENT_SERVER_MANAGER.ensure_started", AsyncMock()) as start_mock, \
+             patch("bot.manager.NATIVE_AGENT_SERVER_MANAGER.stop_all", AsyncMock()) as stop_mock:
+            await manager.start_background_services(result_executor=AsyncMock(return_value={}))
+            await manager.shutdown_all()
+
+        cleanup_mock.assert_called_once()
+        start_mock.assert_not_awaited()
+        stop_mock.assert_awaited_once()

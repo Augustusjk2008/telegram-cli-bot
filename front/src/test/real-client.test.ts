@@ -800,11 +800,7 @@ describe("RealWebBotClient", () => {
       supported_execution_modes: ["native_agent"],
       default_execution_mode: "native_agent",
       native_agent: {
-        provider: "anthropic",
-        model: "claude-sonnet-4-5",
         opencode_agent: "reviewer",
-        base_url: "https://cdn.codeflow.asia/v1",
-        api_key: "sk-route-1234",
       },
     });
     expect(bot.nativeAgent).toEqual({
@@ -817,7 +813,7 @@ describe("RealWebBotClient", () => {
     });
   });
 
-  test("addBot posts native agent base url and clear key action", async () => {
+  test("addBot posts only bot-scoped native agent fields", async () => {
     fetchMock.mockResolvedValueOnce(jsonOk({
       bot: {
         alias: "native1",
@@ -865,11 +861,7 @@ describe("RealWebBotClient", () => {
       expect.objectContaining({ method: "POST" }),
     );
     expect(body.native_agent).toEqual({
-      provider: "codeflow",
-      model: "gpt-5.1-codex",
       opencode_agent: "main",
-      base_url: "https://cdn.codeflow.asia/v1",
-      clear_api_key: true,
     });
   });
 

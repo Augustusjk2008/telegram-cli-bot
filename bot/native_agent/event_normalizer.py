@@ -56,6 +56,9 @@ def normalize_event(raw: dict[str, Any]) -> NormalizedNativeAgentEvent | None:
     normalized_payload = dict(payload)
     if properties and "properties" not in normalized_payload:
         normalized_payload["properties"] = properties
+    for key in ("field", "partID", "part_id", "partId"):
+        if key in properties and key not in normalized_payload:
+            normalized_payload[key] = properties[key]
     if part and "part" not in normalized_payload:
         normalized_payload["part"] = part
     if message and "message" not in normalized_payload:

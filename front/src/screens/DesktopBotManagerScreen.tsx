@@ -1595,8 +1595,7 @@ export function DesktopBotManagerScreen({
                     <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-3">
                       <div className="text-xs font-medium text-[var(--muted)]">原生 agent</div>
                       <div className="mt-1 space-y-1 text-xs text-[var(--muted)]">
-                        <div>Provider: {focusedBot.nativeAgent?.provider || "未设置"}</div>
-                        <div>Model: {focusedBot.nativeAgent?.model || "未设置"}</div>
+                        <div>Provider/Model: 全局配置</div>
                         <div>OpenCode agent: {focusedBot.nativeAgent?.opencodeAgent || "未设置"}</div>
                       </div>
                     </div>

@@ -429,10 +429,10 @@ test("desktop bot manager creates a bot with native agent config", async () => {
   await user.type(screen.getByLabelText("新智能体别名"), "native1");
   await user.type(screen.getByLabelText("新智能体工作目录"), "C:\\workspace\\native1");
   await user.selectOptions(screen.getByLabelText("运行后端"), "native_agent");
-  fireEvent.change(screen.getByLabelText("原生 agent Provider"), { target: { value: "anthropic" } });
-  fireEvent.change(screen.getByLabelText("原生 agent Model"), { target: { value: "claude-sonnet-4-5" } });
-  fireEvent.change(screen.getByLabelText("原生 agent Base URL"), { target: { value: "https://cdn.codeflow.asia/v1" } });
-  fireEvent.change(screen.getByLabelText("原生 agent API Key"), { target: { value: "sk-create-1234" } });
+  expect(screen.queryByLabelText("原生 agent Provider")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("原生 agent Model")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("原生 agent Base URL")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("原生 agent API Key")).not.toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("OpenCode agent"), { target: { value: "reviewer" } });
   await user.click(screen.getByRole("button", { name: "创建智能体" }));
 
@@ -444,11 +444,7 @@ test("desktop bot manager creates a bot with native agent config", async () => {
     supportedExecutionModes: ["native_agent"],
     defaultExecutionMode: "native_agent",
     nativeAgent: {
-      provider: "anthropic",
-      model: "claude-sonnet-4-5",
       opencodeAgent: "reviewer",
-      baseUrl: "https://cdn.codeflow.asia/v1",
-      apiKey: "sk-create-1234",
     },
   });
 });
@@ -464,14 +460,13 @@ test("desktop bot manager edits native agent config", async () => {
 
   expect(screen.getByLabelText("运行后端")).toHaveValue("native_agent");
   expect(screen.queryByLabelText("智能体 CLI 类型")).not.toBeInTheDocument();
-  expect(screen.getByLabelText("原生 agent Provider")).toHaveValue("anthropic");
-  expect(screen.getByLabelText("原生 agent Model")).toHaveValue("claude-sonnet-4-5");
-  expect(screen.getByLabelText("原生 agent Base URL")).toHaveValue("https://cdn.codeflow.asia/v1");
-  expect(screen.getByLabelText("原生 agent API Key")).toHaveValue("");
-  expect(screen.getByText("已保存 sk-****1234")).toBeInTheDocument();
+  expect(screen.queryByLabelText("原生 agent Provider")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("原生 agent Model")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("原生 agent Base URL")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("原生 agent API Key")).not.toBeInTheDocument();
   expect(screen.getByLabelText("OpenCode agent")).toHaveValue("reviewer");
 
-  fireEvent.change(screen.getByLabelText("原生 agent Model"), { target: { value: "claude-opus-4-1" } });
+  fireEvent.change(screen.getByLabelText("OpenCode agent"), { target: { value: "qa" } });
   await user.click(screen.getByRole("button", { name: "保存智能体" }));
 
   await waitFor(() => {
@@ -483,18 +478,13 @@ test("desktop bot manager edits native agent config", async () => {
       supportedExecutionModes: ["native_agent"],
       defaultExecutionMode: "native_agent",
       nativeAgent: {
-        provider: "anthropic",
-        model: "claude-opus-4-1",
-        opencodeAgent: "reviewer",
-        baseUrl: "https://cdn.codeflow.asia/v1",
-        apiKey: "",
-        clearApiKey: false,
+        opencodeAgent: "qa",
       },
     },
   });
 });
 
-test("desktop bot manager clears native agent api key only when clear is clicked", async () => {
+test("desktop bot manager keeps native api key global", async () => {
   const user = userEvent.setup();
   const client = new DesktopManagerClient();
 
@@ -502,22 +492,11 @@ test("desktop bot manager clears native agent api key only when clear is clicked
 
   await screen.findByRole("heading", { name: "智能体管理" });
   await user.click(screen.getByRole("button", { name: "配置" }));
-  await user.click(screen.getByRole("button", { name: "清除" }));
-  expect(screen.getByText("保存后清除")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "清除" })).not.toBeInTheDocument();
+  expect(screen.getByText("Provider、模型、Base URL、API Key 和推理参数在全局环境配置中设置。")).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "保存智能体" }));
 
-  await waitFor(() => {
-    expect(client.updateBotExecutionConfigCalls).toHaveLength(1);
-  });
-  expect(client.updateBotExecutionConfigCalls[0]).toMatchObject({
-    botAlias: "review",
-    input: {
-      nativeAgent: {
-        apiKey: "",
-        clearApiKey: true,
-      },
-    },
-  });
+  expect(client.updateBotExecutionConfigCalls).toHaveLength(0);
 });
 
 test("desktop bot manager switches native bot to cli backend", async () => {

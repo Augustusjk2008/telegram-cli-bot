@@ -30,11 +30,41 @@ def _message_id(message: dict[str, Any]) -> str:
     return ""
 
 
+def _message_id_from_payload(payload: dict[str, Any], part: dict[str, Any] | None = None) -> str:
+    records: list[dict[str, Any]] = [payload]
+    properties = payload.get("properties")
+    if isinstance(properties, dict):
+        records.append(properties)
+    if isinstance(part, dict):
+        records.append(part)
+    for record in records:
+        for key in ("messageID", "message_id", "messageId"):
+            value = record.get(key)
+            if value:
+                return str(value)
+    return ""
+
+
 def _part_id(part: dict[str, Any]) -> str:
     for key in ("id", "partID", "part_id", "partId"):
         value = part.get(key)
         if value:
             return str(value)
+    return ""
+
+
+def _part_id_from_payload(payload: dict[str, Any], part: dict[str, Any] | None = None) -> str:
+    if isinstance(part, dict):
+        part_id = _part_id(part)
+        if part_id:
+            return part_id
+    properties = payload.get("properties")
+    records = [payload, properties] if isinstance(properties, dict) else [payload]
+    for record in records:
+        for key in ("partID", "part_id", "partId", "id"):
+            value = record.get(key)
+            if value:
+                return str(value)
     return ""
 
 
@@ -92,6 +122,8 @@ class NativeAgentAggregator:
             return self._message_updated(payload)
         if event_type == "message.part.updated":
             return self._part_updated(payload)
+        if event_type == "message.part.delta":
+            return self._part_delta(payload)
         if event_type == "message.part.removed":
             return self._part_removed(payload)
         if event_type in {"permission.updated", "permission.replied"}:
@@ -140,7 +172,13 @@ class NativeAgentAggregator:
     def _part_updated(self, payload: dict[str, Any]) -> NativeAgentAggregationResult:
         result = NativeAgentAggregationResult()
         part = payload.get("part") if isinstance(payload.get("part"), dict) else payload
-        part_id = _part_id(part) or str(len(self.parts) + 1)
+        message_id = _message_id_from_payload(payload, part)
+        if message_id == self.user_message_id:
+            return result
+        if message_id:
+            self.assistant_message_id = message_id
+            result.assistant_message_id = message_id
+        part_id = _part_id_from_payload(payload, part) or str(len(self.parts) + 1)
         self.parts[part_id] = dict(part)
         kind = str(part.get("type") or part.get("kind") or "").lower()
         delta = _value_text(payload.get("delta") or part.get("delta"))
@@ -168,6 +206,29 @@ class NativeAgentAggregator:
         trace = self._trace_from_payload(f"part.{kind or 'updated'}", part)
         if trace is not None:
             result.trace.append(trace)
+        return result
+
+    def _part_delta(self, payload: dict[str, Any]) -> NativeAgentAggregationResult:
+        result = NativeAgentAggregationResult()
+        properties = payload.get("properties") if isinstance(payload.get("properties"), dict) else {}
+        part = payload.get("part") if isinstance(payload.get("part"), dict) else {}
+        message_id = _message_id_from_payload(payload, part)
+        if message_id == self.user_message_id:
+            return result
+        if message_id:
+            self.assistant_message_id = message_id
+            result.assistant_message_id = message_id
+        field = str(payload.get("field") or properties.get("field") or "").strip().lower()
+        if field and field != "text":
+            return result
+        delta = _value_text(payload.get("delta") or properties.get("delta"))
+        if not delta:
+            return result
+        part_id = _part_id_from_payload(payload, part) or str(len(self.parts) + 1)
+        if part:
+            self.parts[part_id] = dict(part)
+        self.text_parts[part_id] = self.text_parts.get(part_id, "") + delta
+        result.delta = delta
         return result
 
     def _tool_part_updated(self, part: dict[str, Any]) -> NativeAgentAggregationResult:
@@ -203,7 +264,7 @@ class NativeAgentAggregator:
 
     def _part_removed(self, payload: dict[str, Any]) -> NativeAgentAggregationResult:
         part = payload.get("part") if isinstance(payload.get("part"), dict) else payload
-        part_id = _part_id(part) or str(payload.get("partID") or payload.get("part_id") or "")
+        part_id = _part_id_from_payload(payload, part)
         if part_id:
             self.parts.pop(part_id, None)
             self.text_parts.pop(part_id, None)

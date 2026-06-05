@@ -115,6 +115,16 @@ def normalize_native_agent_config(value: Any, *, existing: dict[str, Any] | None
         or data.get("agent")
         or ""
     ).strip()
+    reasoning_effort = str(
+        data.get("reasoning_effort")
+        or data.get("reasoningEffort")
+        or ""
+    ).strip()
+    thinking_depth = str(
+        data.get("thinking_depth")
+        or data.get("thinkingDepth")
+        or ""
+    ).strip()
     base_url = normalize_native_agent_base_url(_native_agent_value(data, "base_url", "baseUrl"))
     clear_api_key = _native_agent_bool(data, "clear_api_key", "clearApiKey")
     has_api_key_input = "api_key" in data or "apiKey" in data
@@ -126,6 +136,10 @@ def normalize_native_agent_config(value: Any, *, existing: dict[str, Any] | None
         result["model"] = model
     if opencode_agent:
         result["opencode_agent"] = opencode_agent
+    if reasoning_effort:
+        result["reasoning_effort"] = reasoning_effort
+    if thinking_depth:
+        result["thinking_depth"] = thinking_depth
     if base_url:
         result["base_url"] = base_url
     if clear_api_key:
@@ -142,7 +156,11 @@ def normalize_native_agent_config(value: Any, *, existing: dict[str, Any] | None
 
 def public_native_agent_config(value: Any) -> dict[str, Any]:
     config = normalize_native_agent_config(value)
-    result = {key: config[key] for key in ("provider", "model", "opencode_agent", "base_url") if config.get(key)}
+    result = {
+        key: config[key]
+        for key in ("provider", "model", "opencode_agent", "base_url", "reasoning_effort", "thinking_depth")
+        if config.get(key)
+    }
     api_key = str(config.get("api_key") or "")
     if api_key:
         result["has_api_key"] = True

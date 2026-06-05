@@ -129,6 +129,7 @@ from bot.native_agent import (
     get_native_agent_service,
     normalize_execution_mode,
 )
+from bot.native_agent.configuration import effective_native_agent_config
 from bot.platform.output import strip_ansi_escape
 from bot.platform.processes import build_chat_cli_process_kwargs, build_hidden_process_kwargs, terminate_process_tree_sync
 from bot.platform.subprocess_streams import close_process_streams
@@ -737,7 +738,7 @@ def build_bot_summary(
         "cli_path": profile.cli_path,
         "supported_execution_modes": list(profile.supported_execution_modes),
         "default_execution_mode": profile.default_execution_mode,
-        "native_agent": public_native_agent_config(profile.native_agent),
+        "native_agent": public_native_agent_config(effective_native_agent_config(profile.native_agent)),
         "working_dir": working_dir,
         "avatar_name": profile.avatar_name or "",
         "prompt_presets": [dict(item) for item in profile.prompt_presets],

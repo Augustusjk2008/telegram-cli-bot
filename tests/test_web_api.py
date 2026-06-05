@@ -1150,7 +1150,16 @@ async def test_bot_overview_route(web_manager: MultiBotManager, monkeypatch: pyt
     assert payload["data"]["session"]["working_dir"] == web_manager.main_profile.working_dir
 
 
-def test_build_bot_summary_returns_native_agent_config_without_password(web_manager: MultiBotManager):
+def test_build_bot_summary_returns_native_agent_config_without_password(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    import bot.config as config
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_PROVIDER", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_MODEL", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_BASE_URL", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_API_KEY", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_OPENCODE_AGENT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_REASONING_EFFORT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_THINKING_DEPTH", "")
     web_manager.main_profile.default_execution_mode = "native_agent"
     web_manager.main_profile.supported_execution_modes = ["native_agent"]
     web_manager.main_profile.native_agent = {
@@ -1166,19 +1175,28 @@ def test_build_bot_summary_returns_native_agent_config_without_password(web_mana
     assert summary["supported_execution_modes"] == ["native_agent"]
     assert summary["default_execution_mode"] == "native_agent"
     assert summary["native_agent"] == {
-        "provider": "anthropic",
-        "model": "claude-sonnet-4-5",
         "opencode_agent": "reviewer",
-        "base_url": "https://cdn.codeflow.asia/v1",
-        "has_api_key": True,
-        "api_key_masked": "sk-****1234",
+        "has_api_key": False,
+        "api_key_masked": "",
     }
+    assert "provider" not in summary["native_agent"]
+    assert "model" not in summary["native_agent"]
+    assert "base_url" not in summary["native_agent"]
     assert "api_key" not in summary["native_agent"]
     assert "sk-secret-1234" not in json.dumps(summary, ensure_ascii=False)
 
 
 @pytest.mark.asyncio
 async def test_admin_execution_route_updates_native_agent_config_and_hides_password(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    import bot.config as config
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_PROVIDER", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_MODEL", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_BASE_URL", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_API_KEY", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_OPENCODE_AGENT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_REASONING_EFFORT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_THINKING_DEPTH", "")
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
     monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
     monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
@@ -1235,44 +1253,41 @@ async def test_admin_execution_route_updates_native_agent_config_and_hides_passw
     assert payload["data"]["bot"]["default_execution_mode"] == "native_agent"
     assert payload["data"]["bot"]["supported_execution_modes"] == ["native_agent"]
     assert payload["data"]["bot"]["native_agent"] == {
-        "provider": "anthropic",
-        "model": "claude-sonnet-4-5",
         "opencode_agent": "reviewer",
-        "base_url": "https://cdn.codeflow.asia/v1",
-        "has_api_key": True,
-        "api_key_masked": "sk-****1234",
+        "has_api_key": False,
+        "api_key_masked": "",
     }
     assert "api_key" not in payload["data"]["bot"]["native_agent"]
     assert "sk-route-1234" not in json.dumps(payload, ensure_ascii=False)
     assert keep_resp.status == 200
     assert keep_payload["data"]["bot"]["native_agent"] == {
-        "provider": "openai",
-        "model": "gpt-5",
         "opencode_agent": "main",
-        "base_url": "https://api.example.test/v1",
-        "has_api_key": True,
-        "api_key_masked": "sk-****1234",
+        "has_api_key": False,
+        "api_key_masked": "",
     }
     assert "sk-route-1234" not in json.dumps(keep_payload, ensure_ascii=False)
     assert clear_resp.status == 200
     assert clear_payload["data"]["bot"]["native_agent"] == {
-        "provider": "codeflow",
-        "model": "gpt-5.1-codex",
         "opencode_agent": "main",
-        "base_url": "https://cdn.codeflow.asia/v1",
         "has_api_key": False,
         "api_key_masked": "",
     }
     assert web_manager.main_profile.native_agent == {
-        "provider": "codeflow",
-        "model": "gpt-5.1-codex",
         "opencode_agent": "main",
-        "base_url": "https://cdn.codeflow.asia/v1",
     }
 
 
 @pytest.mark.asyncio
-async def test_admin_execution_route_replaces_native_agent_api_key(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+async def test_admin_execution_route_ignores_bot_scoped_native_agent_api_key(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    import bot.config as config
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_PROVIDER", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_MODEL", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_BASE_URL", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_API_KEY", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_OPENCODE_AGENT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_REASONING_EFFORT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_THINKING_DEPTH", "")
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
     monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
     monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
@@ -1304,10 +1319,14 @@ async def test_admin_execution_route_replaces_native_agent_api_key(web_manager: 
             payload = await resp.json()
 
     assert resp.status == 200
-    assert payload["data"]["bot"]["native_agent"]["api_key_masked"] == "sk-****5678"
+    assert payload["data"]["bot"]["native_agent"] == {
+        "opencode_agent": "reviewer",
+        "has_api_key": False,
+        "api_key_masked": "",
+    }
     assert "api_key" not in payload["data"]["bot"]["native_agent"]
     assert "sk-new-5678" not in json.dumps(payload, ensure_ascii=False)
-    assert web_manager.main_profile.native_agent["api_key"] == "sk-new-5678"
+    assert web_manager.main_profile.native_agent == {"opencode_agent": "reviewer"}
 @pytest.mark.asyncio
 async def test_web_api_lists_plugins_and_resolves_vcd_handler(
     web_manager: MultiBotManager,

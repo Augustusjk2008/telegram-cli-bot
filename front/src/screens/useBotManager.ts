@@ -88,31 +88,22 @@ type UseBotManagerArgs = {
 };
 
 function normalizeNativeAgentInput(nativeAgent: CreateBotInput["nativeAgent"] | EditDraft["nativeAgent"] | undefined) {
-  const providerInput = nativeAgent?.provider?.trim() || "";
-  const providerLooksLikeUrl = /^https?:\/\//i.test(providerInput);
-  const baseUrlInput = nativeAgent?.baseUrl?.trim() || "";
   return {
     ...DEFAULT_NATIVE_AGENT_CONFIG,
     ...(nativeAgent || {}),
-    provider: providerLooksLikeUrl ? "codeflow" : providerInput,
-    model: nativeAgent?.model?.trim() || "",
+    provider: "",
+    model: "",
     opencodeAgent: nativeAgent?.opencodeAgent?.trim() || "",
-    baseUrl: providerLooksLikeUrl && !baseUrlInput ? providerInput.replace(/\/+$/, "") : baseUrlInput.replace(/\/+$/, ""),
-    apiKey: nativeAgent?.apiKey?.trim() || "",
-    clearApiKey: Boolean(nativeAgent?.clearApiKey),
+    baseUrl: "",
+    apiKey: "",
+    clearApiKey: false,
   };
 }
 
 function comparableNativeAgentInput(nativeAgent: CreateBotInput["nativeAgent"] | EditDraft["nativeAgent"] | undefined) {
   const normalized = normalizeNativeAgentInput(nativeAgent);
   return {
-    provider: normalized.provider,
-    model: normalized.model,
     opencodeAgent: normalized.opencodeAgent,
-    baseUrl: normalized.baseUrl || "",
-    hasApiKey: Boolean((nativeAgent as EditDraft["nativeAgent"] | undefined)?.hasApiKey),
-    apiKeyMasked: String((nativeAgent as EditDraft["nativeAgent"] | undefined)?.apiKeyMasked || ""),
-    apiKeyAction: normalized.apiKey ? "replace" : normalized.clearApiKey ? "clear" : "",
   };
 }
 
