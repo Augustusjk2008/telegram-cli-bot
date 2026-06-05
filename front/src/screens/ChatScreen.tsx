@@ -1,7 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { LoaderCircle, Maximize2, Minimize2, Paperclip, Trash2 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
-import { BotIdentity } from "../components/BotIdentity";
 import { ChatAvatar } from "../components/ChatAvatar";
 import { ChatActionBar } from "../components/ChatActionBar";
 import { ChatComposer } from "../components/ChatComposer";
@@ -1074,19 +1073,6 @@ const ChatMessageRow = memo(function ChatMessageRow({
         ) : null}
       </div>
     </motion.div>
-  );
-});
-
-const StreamingElapsedBadge = memo(function StreamingElapsedBadge({
-  elapsedSeconds,
-}: {
-  elapsedSeconds: number;
-}) {
-  return (
-    <div className="mt-2 inline-flex items-center gap-2 rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700">
-      <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-      <span>已等待 {elapsedSeconds} 秒</span>
-    </div>
   );
 });
 
@@ -3157,7 +3143,6 @@ export function ChatScreen({
   const clusterAgents = agents.filter((agent) => !agent.isMain && agent.enabled);
   const showAgentSwitcher = agents.length > 1;
   const showClusterToggle = Boolean(botOverview?.cluster) && botOverview?.botMode !== "assistant" && !nativeExecutionMode;
-  const showTopChrome = !embedded && !isImmersive;
   const showActionBar = !isImmersive;
   const showImmersiveButton = !embedded && isVisible && Boolean(onToggleImmersive);
   const canManagePromptPresets = !readOnly && (botOverview?.effectiveCapabilities
@@ -3235,19 +3220,6 @@ export function ChatScreen({
 
   return (
     <main className="relative flex h-full flex-col bg-[var(--workbench-panel-bg)]">
-      {showTopChrome ? (
-        <header className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] p-4">
-          <BotIdentity
-            alias={botAlias}
-            avatarName={assistantAvatarName}
-            size={32}
-            nameClassName="truncate text-lg font-semibold text-[var(--text)]"
-          />
-          {isStreaming ? (
-            <StreamingElapsedBadge elapsedSeconds={elapsedSeconds} />
-          ) : null}
-        </header>
-      ) : null}
       {showActionBar ? (
         <ChatActionBar
           visibleModelOptions={visibleModelOptions}

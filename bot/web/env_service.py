@@ -118,8 +118,6 @@ ENV_SCHEMA: tuple[EnvField, ...] = (
     EnvField("TCB_DIAG_ENABLED", "诊断日志", "开启 Web 诊断日志。", "boolean", "false", "diagnostics"),
     EnvField("TCB_DIAG_SLOW_MS", "慢请求阈值", "慢请求日志阈值毫秒。", "number", "500", "diagnostics", min_value=0, integer=True),
     EnvField("TCB_DIAG_LOOP_LAG_MS", "事件循环卡顿阈值", "事件循环卡顿日志阈值毫秒。", "number", "1000", "diagnostics", min_value=0, integer=True),
-    EnvField("CLI_EXEC_TIMEOUT", "CLI 超时", "单次 CLI 任务最大秒数。", "number", "4000", "advanced", min_value=0, integer=True),
-    EnvField("SESSION_TIMEOUT", "会话超时", "会话空闲超时秒数。", "number", "3600", "advanced", min_value=0, integer=True),
     EnvField("NETWORK_ERROR_LOG_SUPPRESS_WINDOW", "网络错误抑制窗口", "同类网络错误 WARNING 抑制秒数。", "number", "60", "advanced", min_value=0, integer=True),
     EnvField("CLI_PROGRESS_UPDATE_INTERVAL", "CLI 进度间隔", "等待提示更新间隔秒数。", "number", "3", "advanced", min_value=0, integer=True),
     EnvField("MANAGED_BOTS_FILE", "托管 Bot 文件", "托管 Bot 配置文件路径。", "path", "managed_bots.json", "advanced"),
