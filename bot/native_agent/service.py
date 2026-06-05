@@ -16,6 +16,15 @@ from bot.models import (
     normalize_execution_mode as _normalize_execution_mode,
     normalize_native_agent_config,
 )
+from bot.native_agent.ag_ui_mapper import (
+    AgUiTurnState,
+    build_run_error_event,
+    build_run_finished_event,
+    build_run_started_event,
+    build_text_end_event,
+    map_event as map_ag_ui_event,
+    should_filter_event,
+)
 from bot.native_agent.aggregator import NativeAgentAggregator
 from bot.native_agent.client import NativeAgentClient, NativeAgentClientError
 from bot.native_agent.events import is_relevant_event, unwrap_event
@@ -138,6 +147,7 @@ class NativeAgentService:
         prompt_text: str,
         history_service: ChatHistoryService,
         actor: dict[str, Any] | None = None,
+        protocol: str = "",
     ) -> AsyncIterator[dict[str, Any]]:
         loop = asyncio.get_running_loop()
         started_at = loop.time()
@@ -161,6 +171,7 @@ class NativeAgentService:
         last_status_signature = ""
         final_text = ""
         reader_task: asyncio.Task[None] | None = None
+        wants_ag_ui = str(protocol or "").strip().lower() == "ag-ui"
 
         try:
             turn_handle = history_service.start_turn(
@@ -179,6 +190,12 @@ class NativeAgentService:
 
             aggregator = NativeAgentAggregator(user_message_id=f"msg_{uuid.uuid4().hex[:12]}")
             persistence_buffer = StreamingPersistenceBuffer(history_service, turn_handle, loop_time=loop.time)
+            ag_ui_state = AgUiTurnState(
+                thread_id=turn_handle.conversation_id,
+                run_id=run_id,
+                user_message_id=turn_handle.user_message_id,
+                assistant_message_id=turn_handle.assistant_message_id,
+            )
 
             yield {
                 "type": "meta",
@@ -189,6 +206,11 @@ class NativeAgentService:
                 "native_session_id": native_session_id,
                 "working_dir": session.working_dir,
             }
+            if wants_ag_ui:
+                yield {
+                    "type": "ag_ui",
+                    "event": build_run_started_event(state=ag_ui_state, user_text=user_text),
+                }
 
             event_queue: asyncio.Queue[dict[str, Any] | BaseException | None] = asyncio.Queue()
             event_ready = asyncio.Event()
@@ -229,6 +251,9 @@ class NativeAgentService:
                 if event is None or not is_relevant_event(event, session_id=native_session_id, cwd=session.working_dir):
                     continue
                 result = aggregator.apply(event)
+                if wants_ag_ui and not should_filter_event(event):
+                    for ag_ui_event in map_ag_ui_event(event=event, result=result, state=ag_ui_state):
+                        yield {"type": "ag_ui", "event": ag_ui_event}
                 if result.assistant_message_id:
                     yield {
                         "type": "meta",
@@ -261,6 +286,11 @@ class NativeAgentService:
                     error_message = result.error
                     completion_state = "error"
                     returncode = 1
+                    if wants_ag_ui:
+                        text_end = build_text_end_event(state=ag_ui_state)
+                        if text_end is not None:
+                            yield {"type": "ag_ui", "event": text_end}
+                        yield {"type": "ag_ui", "event": build_run_error_event(error_message)}
                     break
                 with session._lock:
                     stop_requested = bool(session.stop_requested)
@@ -302,6 +332,18 @@ class NativeAgentService:
                 error_code=None if completion_state == "completed" else completion_state,
                 error_message=None if completion_state == "completed" else (error_message or final_text),
             )
+            if wants_ag_ui:
+                text_end = build_text_end_event(state=ag_ui_state)
+                if text_end is not None:
+                    yield {"type": "ag_ui", "event": text_end}
+                yield {
+                    "type": "ag_ui",
+                    "event": build_run_finished_event(
+                        state=ag_ui_state,
+                        completion_state=completion_state,
+                        content=final_text,
+                    ),
+                }
             elapsed_seconds = int(loop.time() - started_at)
             yield {
                 "type": "done",
@@ -340,6 +382,8 @@ class NativeAgentService:
                     error_code="native_agent_error",
                     error_message=error_message,
                 )
+            if wants_ag_ui:
+                yield {"type": "ag_ui", "event": build_run_error_event(error_message)}
             yield {"type": "error", "code": "native_agent_error", "message": f"原生 agent 执行失败: {error_message}"}
         finally:
             if reader_task is not None and not reader_task.done():

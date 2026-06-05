@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { RealWebBotClient } from "../services/realWebBotClient";
+import { EventType } from "../services/agUiProtocol";
 import { buildFileDownloadUrl } from "../utils/fileLinks";
 import {
   createClusterBundleDiff,
@@ -286,6 +287,68 @@ describe("RealWebBotClient", () => {
 
     const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
     expect(body.execution_mode).toBe("native_agent");
+    expect(body.protocol).toBe("ag-ui");
+  });
+
+  test("sendMessage parses ag-ui stream and keeps legacy callbacks", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"RUN_STARTED\",\"threadId\":\"thread-1\",\"runId\":\"run-1\"}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"ACTIVITY_SNAPSHOT\",\"messageId\":\"msg-1\",\"activityType\":\"TCB_STATUS\",\"replace\":true,\"content\":{\"elapsedSeconds\":2,\"previewText\":\"处理中\",\"contextUsage\":{\"session_id\":\"thread-1\",\"status_text\":\"74% context left\"}}}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"TEXT_MESSAGE_START\",\"messageId\":\"msg-1\",\"role\":\"assistant\"}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"TEXT_MESSAGE_CONTENT\",\"messageId\":\"msg-1\",\"delta\":\"hello\"}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"TOOL_CALL_START\",\"toolCallId\":\"call-1\",\"toolCallName\":\"shell_command\"}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"TOOL_CALL_ARGS\",\"toolCallId\":\"call-1\",\"delta\":\"{\\\"command\\\":\\\"dir\\\"}\"}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"TOOL_CALL_RESULT\",\"messageId\":\"msg-1\",\"toolCallId\":\"call-1\",\"content\":\"Exit code: 0\"}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"RUN_FINISHED\",\"threadId\":\"thread-1\",\"runId\":\"run-1\",\"outcome\":{\"type\":\"success\"}}\n\n"));
+        controller.close();
+      },
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: stream,
+      json: async () => ({
+        ok: true,
+        data: {},
+      }),
+    });
+
+    const client = new RealWebBotClient();
+    const chunks: string[] = [];
+    const statuses: Array<{ previewText?: string; elapsedSeconds?: number }> = [];
+    const traces: string[] = [];
+    const agUiEvents: string[] = [];
+    const message = await client.sendMessage(
+      "main",
+      "hello",
+      (chunk) => chunks.push(chunk),
+      (status) => statuses.push({ previewText: status.previewText, elapsedSeconds: status.elapsedSeconds }),
+      (trace) => traces.push(`${trace.kind}:${trace.summary}`),
+      undefined,
+      (event) => agUiEvents.push(event.type),
+    );
+
+    expect(chunks).toEqual(["hello"]);
+    expect(statuses).toEqual([{ previewText: "处理中", elapsedSeconds: 2 }]);
+    expect(traces).toEqual([
+      "status:处理中",
+      "tool_call:",
+      "tool_call:{\"command\":\"dir\"}",
+      "tool_result:Exit code: 0",
+    ]);
+    expect(agUiEvents).toEqual([
+      EventType.RUN_STARTED,
+      EventType.ACTIVITY_SNAPSHOT,
+      EventType.TEXT_MESSAGE_START,
+      EventType.TEXT_MESSAGE_CONTENT,
+      EventType.TOOL_CALL_START,
+      EventType.TOOL_CALL_ARGS,
+      EventType.TOOL_CALL_RESULT,
+      EventType.RUN_FINISHED,
+    ]);
+    expect(message.text).toBe("hello");
+    expect(message.meta?.traceCount).toBe(3);
   });
 
   test("killTask includes scoped agent and execution mode", async () => {

@@ -32,7 +32,7 @@ function getNativePermissionId(event: ChatTraceEvent) {
     return "";
   }
   const payload = getPayloadRecord(event);
-  const permissionId = String(payload.id || payload.permissionID || payload.permission_id || "").trim();
+  const permissionId = String(payload.permissionId || payload.id || payload.permissionID || payload.permission_id || "").trim();
   const state = String(payload.state || payload.status || "").trim().toLowerCase();
   if (!permissionId || state.includes("replied")) {
     return "";
@@ -41,6 +41,15 @@ function getNativePermissionId(event: ChatTraceEvent) {
 }
 
 function describeProcessEvent(event: ChatTraceEvent) {
+  if (event.kind === "reasoning") {
+    return "思考";
+  }
+  if (event.kind === "status") {
+    return "状态";
+  }
+  if (event.kind === "permission") {
+    return "权限";
+  }
   if (event.kind === "commentary") {
     return "过程";
   }

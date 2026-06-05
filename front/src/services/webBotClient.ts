@@ -140,6 +140,7 @@ import type {
   WorkspaceQuickOpenResult,
   WorkspaceSearchResult,
 } from "./types";
+import type { AgUiEvent } from "./agUiProtocol";
 
 export interface WebBotClient {
   getPublicHostInfo(): Promise<PublicHostInfo>;
@@ -214,6 +215,7 @@ export interface WebBotClient {
     onStatus?: (status: ChatStatusUpdate) => void,
     onTrace?: (trace: ChatTraceEvent) => void,
     options?: ChatSendOptions,
+    onAgUiEvent?: (event: AgUiEvent) => void,
   ): Promise<ChatMessage>;
   replyNativeAgentPermission(
     botAlias: string,

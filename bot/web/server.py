@@ -26,6 +26,7 @@ from urllib.parse import quote, urlencode, urlparse
 from aiohttp.client_exceptions import ClientConnectionResetError
 from aiohttp.http import WSCloseCode, WSMsgType
 from aiohttp import web
+from ag_ui.encoder import EventEncoder
 
 from bot.app_settings import get_git_proxy_settings, update_git_proxy_address
 from bot.chat_identity import chat_session_user_id
@@ -1947,11 +1948,14 @@ class WebApiServer:
         task_payload = body.get("task_payload")
         visible_text = body.get("visible_text")
         execution_mode = str(body.get("execution_mode") or body.get("executionMode") or "").strip()
+        protocol = str(request.query.get("protocol") or body.get("protocol") or "").strip()
         agent_id = self._request_agent_id(request, body)
         cluster_enabled = bool(body.get("cluster"))
         mentions = body.get("mentions") if isinstance(body.get("mentions"), list) else []
         chat_user_id = self._chat_user_id(auth)
         actor = self._chat_actor(auth)
+        wants_ag_ui = protocol.lower() == "ag-ui"
+        ag_ui_encoder = EventEncoder() if wants_ag_ui else None
 
         response = web.StreamResponse(
             status=200,
@@ -1970,6 +1974,7 @@ class WebApiServer:
                 "task_payload": dict(task_payload) if isinstance(task_payload, dict) else None,
                 "visible_text": str(visible_text) if visible_text is not None else None,
                 "execution_mode": execution_mode,
+                "protocol": protocol,
             }
             if agent_id != "main":
                 stream_kwargs["agent_id"] = agent_id
@@ -1989,9 +1994,12 @@ class WebApiServer:
                 "cluster": cluster_enabled,
                 "mentions": mentions,
                 "execution_mode": execution_mode,
+                "protocol": protocol,
             } if cluster_enabled else {}
             if execution_mode and not cluster_enabled:
-                stream_kwargs = {"execution_mode": execution_mode}
+                stream_kwargs = {"execution_mode": execution_mode, "protocol": protocol}
+            elif protocol and not stream_kwargs:
+                stream_kwargs = {"protocol": protocol}
             if agent_id == "main":
                 event_stream = stream_chat(
                     self.manager,
@@ -2012,6 +2020,19 @@ class WebApiServer:
                     actor=actor,
                 )
         async for event in event_stream:
+            if wants_ag_ui and str(event.get("type") or "") == "ag_ui":
+                if client_disconnected:
+                    continue
+                try:
+                    await response.write(ag_ui_encoder.encode(event["event"]).encode("utf-8"))
+                except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
+                    client_disconnected = True
+                    logger.info(
+                        "Web SSE 客户端已断开，继续在后台完成任务: alias=%s user_id=%s",
+                        alias,
+                        auth.user_id,
+                    )
+                continue
             event = self._decorate_chat_authors(event, auth)
             event_type = str(event.get("type") or "")
             if event_type == "done":
@@ -2032,7 +2053,8 @@ class WebApiServer:
             if client_disconnected:
                 continue
             try:
-                await response.write(_format_sse(event["type"], event))
+                if not wants_ag_ui:
+                    await response.write(_format_sse(event["type"], event))
             except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
                 client_disconnected = True
                 logger.info(

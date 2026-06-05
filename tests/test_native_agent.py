@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 
 import pytest
+from ag_ui import core
+from pydantic import TypeAdapter
 
 from bot.models import BotProfile, UserSession
 from bot.native_agent.aggregator import NativeAgentAggregator
@@ -548,6 +550,108 @@ async def test_native_agent_service_stream_persists_done_message(tmp_path: Path)
     assert done["message"]["meta"]["native_source"]["provider"] == "native_agent"
     assert session.native_agent_session_id == "sess-1"
     assert session.is_processing is False
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_stream_protocol_ag_ui_emits_ag_ui_events_and_filters_heartbeat(tmp_path: Path):
+    event_adapter = TypeAdapter(core.Event)
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.ready = False
+            self.prompt_called = False
+
+        async def create_session(self, *, cwd=None):
+            return {"id": "sess-1"}
+
+        async def prompt_async(self, session_id, text, *, message_id=None, model=None, agent=None):
+            assert session_id == "sess-1"
+            self.prompt_called = True
+            return {}
+
+        async def events(self, *, global_events=True, ready_event=None):
+            self.ready = True
+            if ready_event is not None:
+                ready_event.set()
+            while not self.prompt_called:
+                await asyncio.sleep(0)
+            yield {"directory": str(tmp_path), "payload": {"type": "server.connected"}}
+            yield {"directory": str(tmp_path), "payload": {"type": "server.heartbeat"}}
+            yield {
+                "directory": str(tmp_path),
+                "payload": {
+                    "type": "permission.updated",
+                    "permission": {
+                        "id": "perm-1",
+                        "sessionID": "sess-1",
+                        "title": "允许读取文件？",
+                    },
+                },
+            }
+            yield {
+                "directory": str(tmp_path),
+                "payload": {
+                    "type": "message.part.updated",
+                    "sessionID": "sess-1",
+                    "part": {"id": "p1", "type": "text", "delta": "回"},
+                },
+            }
+            yield {
+                "directory": str(tmp_path),
+                "payload": {
+                    "type": "message.part.updated",
+                    "sessionID": "sess-1",
+                    "part": {"id": "p1", "type": "text", "delta": "答"},
+                },
+            }
+            yield {"directory": str(tmp_path), "payload": {"type": "session.status", "sessionID": "sess-1", "status": "处理中"}}
+            yield {"directory": str(tmp_path), "payload": {"type": "session.idle", "sessionID": "sess-1"}}
+
+        async def list_messages(self, session_id):
+            return [{"role": "assistant", "content": "回答"}]
+
+    class FakeHandle:
+        def client(self):
+            return FakeClient()
+
+    class FakeManager:
+        async def ensure_started(self):
+            return FakeHandle()
+
+        async def get_existing(self):
+            return FakeHandle()
+
+    service = NativeAgentService()
+    service._server_manager = FakeManager()
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    events = [
+        event async for event in service.stream_chat(
+            profile=profile,
+            session=session,
+            user_text="你好",
+            prompt_text="你好",
+            history_service=history,
+            protocol="ag-ui",
+        )
+    ]
+
+    ag_ui_events = [event_adapter.validate_python(item["event"]) for item in events if item["type"] == "ag_ui"]
+    ag_ui_types = [event.type for event in ag_ui_events]
+    done = next(event for event in events if event["type"] == "done")
+
+    assert ag_ui_types[0] == core.EventType.RUN_STARTED
+    assert core.EventType.ACTIVITY_SNAPSHOT in ag_ui_types
+    assert core.EventType.TEXT_MESSAGE_START in ag_ui_types
+    assert ag_ui_types.count(core.EventType.TEXT_MESSAGE_CONTENT) == 2
+    assert core.EventType.TEXT_MESSAGE_END in ag_ui_types
+    assert ag_ui_types[-1] == core.EventType.RUN_FINISHED
+    ag_ui_payload_text = json.dumps([event.model_dump(mode="json", by_alias=True) for event in ag_ui_events], ensure_ascii=False)
+    assert "server.connected" not in ag_ui_payload_text
+    assert "server.heartbeat" not in ag_ui_payload_text
+    assert done["output"] == "回答"
 
 
 @pytest.mark.asyncio

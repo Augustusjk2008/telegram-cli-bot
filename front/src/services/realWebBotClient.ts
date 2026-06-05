@@ -193,6 +193,16 @@ import type {
   WebNotificationEvent,
 } from "./types";
 import type { WebBotClient } from "./webBotClient";
+import { createAgUiStreamAdapter } from "./agUiStreamAdapter";
+import {
+  EventType,
+  type AgUiEvent,
+} from "./agUiProtocol";
+import {
+  buildAgUiMessageMeta,
+  createAgUiRunState,
+  reduceAgUiRunEvent,
+} from "../utils/agUiRunReducer";
 
 type JsonEnvelope<T> = {
   ok: boolean;
@@ -1326,6 +1336,124 @@ type StreamEvent =
       metadata?: RawAssistantPatchMetadata;
     }
   | { type: "error"; message?: string; code?: string };
+
+function mapAgUiTraceEvent(event: AgUiEvent): ChatTraceEvent | null {
+  if (event.type === EventType.TOOL_CALL_START) {
+    return {
+      kind: "tool_call",
+      summary: "",
+      title: event.toolCallName,
+      toolName: event.toolCallName,
+      callId: event.toolCallId,
+      payload: {
+        arguments: "",
+      },
+    };
+  }
+  if (event.type === EventType.TOOL_CALL_ARGS) {
+    return {
+      kind: "tool_call",
+      summary: event.delta,
+      callId: event.toolCallId,
+      payload: {
+        arguments: event.delta,
+      },
+    };
+  }
+  if (event.type === EventType.TOOL_CALL_RESULT) {
+    return {
+      kind: "tool_result",
+      summary: event.content,
+      callId: event.toolCallId,
+      payload: {
+        output: event.content,
+      },
+    };
+  }
+  if (event.type === EventType.ACTIVITY_SNAPSHOT || event.type === EventType.ACTIVITY_DELTA) {
+    const content = (
+      event.type === EventType.ACTIVITY_SNAPSHOT
+        ? event.content
+        : { patch: event.patch }
+    ) as Record<string, unknown>;
+    const summary = String(content.summary || content.previewText || content.message || content.reason || "").trim();
+    const rawKind = String(content.rawKind || "").trim();
+    if (event.activityType === "TCB_META") {
+      return null;
+    }
+    return {
+      kind: event.activityType === "TCB_PERMISSION_REQUEST"
+        ? "permission"
+        : rawKind || (event.activityType === "TCB_STATUS" ? "status" : "event"),
+      summary,
+      source: String(content.source || (event.activityType === "TCB_PERMISSION_REQUEST" ? "native_agent" : "")).trim() || undefined,
+      rawType: String(content.rawType || event.activityType).trim() || undefined,
+      title: String(content.title || "").trim() || undefined,
+      payload: content,
+    };
+  }
+  if (event.type === EventType.REASONING_MESSAGE_CONTENT) {
+    return {
+      kind: "reasoning",
+      summary: event.delta,
+      source: "reasoning",
+      rawType: EventType.REASONING_MESSAGE_CONTENT,
+    };
+  }
+  if (event.type === EventType.RUN_ERROR) {
+    return {
+      kind: "error",
+      summary: event.message,
+      rawType: event.code,
+    };
+  }
+  return null;
+}
+
+function applyAgUiCompatCallbacks(
+  event: AgUiEvent,
+  onChunk: (chunk: string) => void,
+  onStatus?: (status: ChatStatusUpdate) => void,
+  onTrace?: (trace: ChatTraceEvent) => void,
+) {
+  if (event.type === EventType.TEXT_MESSAGE_CONTENT) {
+    onChunk(event.delta);
+    return;
+  }
+  if (event.type === EventType.ACTIVITY_SNAPSHOT || event.type === EventType.ACTIVITY_DELTA) {
+    const content = (
+      event.type === EventType.ACTIVITY_SNAPSHOT
+        ? event.content
+        : { patch: event.patch }
+    ) as Record<string, unknown>;
+    if (event.activityType === "TCB_STATUS") {
+      const statusUpdate: ChatStatusUpdate = {
+        elapsedSeconds: typeof content.elapsedSeconds === "number" ? content.elapsedSeconds : undefined,
+        previewText: typeof content.previewText === "string"
+          ? content.previewText
+          : typeof content.message === "string"
+            ? content.message
+            : undefined,
+      };
+      const contextUsage = mapContextUsage(content.contextUsage ?? content.context_usage);
+      if (contextUsage) {
+        statusUpdate.contextUsage = contextUsage;
+      }
+      onStatus?.(statusUpdate);
+    }
+    if (event.activityType === "TCB_META") {
+      const clusterRunId = typeof content.clusterRunId === "string" ? content.clusterRunId.trim() : "";
+      if (clusterRunId) {
+        onStatus?.({ clusterRunId });
+      }
+      return;
+    }
+  }
+  const traceEvent = mapAgUiTraceEvent(event);
+  if (traceEvent) {
+    onTrace?.(traceEvent);
+  }
+}
 
 function mapStatus(status: string, isProcessing = false): BotStatus {
   if (isProcessing) {
@@ -4353,8 +4481,9 @@ export class RealWebBotClient implements WebBotClient {
     onStatus?: (status: ChatStatusUpdate) => void,
     onTrace?: (trace: ChatTraceEvent) => void,
     options?: ChatSendOptions,
+    onAgUiEvent?: (event: AgUiEvent) => void,
   ): Promise<ChatMessage> {
-    const response = await fetch(withApiBase(`/api/bots/${encodeURIComponent(botAlias)}/chat/stream`), {
+    const response = await fetch(withApiBase(`/api/bots/${encodeURIComponent(botAlias)}/chat/stream?protocol=ag-ui`), {
       method: "POST",
       headers: this.headers({
         "Content-Type": "application/json",
@@ -4366,6 +4495,7 @@ export class RealWebBotClient implements WebBotClient {
         ...(options?.visibleText ? { visible_text: options.visibleText } : {}),
         ...(options?.agentId ? { agent_id: options.agentId } : {}),
         ...(options?.executionMode ? { execution_mode: options.executionMode } : {}),
+        protocol: "ag-ui",
         ...(options?.cluster ? { cluster: true } : {}),
         ...(options?.mentions ? {
           mentions: options.mentions.map((mention) => ({
@@ -4399,6 +4529,9 @@ export class RealWebBotClient implements WebBotClient {
     const streamedTrace: ChatTraceEvent[] = [];
     let streamedContextUsage: ChatMessageContextUsage | undefined;
     let streamFinished = false;
+    const agUiAdapter = createAgUiStreamAdapter();
+    let agUiState = createAgUiRunState();
+    let sawAgUiEvent = false;
 
     while (!streamFinished) {
       const { value, done } = await reader.read();
@@ -4414,6 +4547,62 @@ export class RealWebBotClient implements WebBotClient {
 
         const event = parseSseBlock(block);
         if (!event) {
+          separatorIndex = buffer.indexOf("\n\n");
+          continue;
+        }
+
+        const agUiEvents = agUiAdapter.adapt(event);
+        if (agUiEvents.length > 0) {
+          sawAgUiEvent = true;
+          for (const agUiEvent of agUiEvents) {
+            agUiState = reduceAgUiRunEvent(agUiState, agUiEvent);
+            applyAgUiCompatCallbacks(agUiEvent, onChunk, onStatus, onTrace);
+            onAgUiEvent?.(agUiEvent);
+            const traceEvent = mapAgUiTraceEvent(agUiEvent);
+            if (traceEvent) {
+              const duplicate = streamedTrace.some((item) => (
+                item.kind === traceEvent.kind
+                && item.callId === traceEvent.callId
+                && item.rawType === traceEvent.rawType
+                && item.summary === traceEvent.summary
+              ));
+              if (!duplicate) {
+                streamedTrace.push(traceEvent);
+              }
+            }
+            if (agUiEvent.type === EventType.ACTIVITY_SNAPSHOT || agUiEvent.type === EventType.ACTIVITY_DELTA) {
+              const content = (
+                agUiEvent.type === EventType.ACTIVITY_SNAPSHOT
+                  ? agUiEvent.content
+                  : {}
+              ) as Record<string, unknown>;
+              if (agUiEvent.activityType === "TCB_STATUS") {
+                const contextUsage = mapContextUsage(content.contextUsage ?? content.context_usage);
+                if (contextUsage) {
+                  streamedContextUsage = contextUsage;
+                }
+                if (typeof content.elapsedSeconds === "number") {
+                  finalElapsedSeconds = content.elapsedSeconds;
+                }
+              }
+            }
+            if (agUiEvent.type === EventType.RUN_ERROR) {
+              throw new Error(agUiEvent.message || "流式响应失败");
+            }
+            if (agUiEvent.type === EventType.RUN_FINISHED) {
+              finalText = agUiState.assistantText || finalText || streamedText;
+              finalElapsedSeconds = agUiState.elapsedSeconds ?? finalElapsedSeconds;
+              streamFinished = true;
+              await reader.cancel().catch(() => undefined);
+              break;
+            }
+          }
+          if (streamFinished) {
+            break;
+          }
+        }
+
+        if (sawAgUiEvent) {
           separatorIndex = buffer.indexOf("\n\n");
           continue;
         }
@@ -4475,6 +4664,18 @@ export class RealWebBotClient implements WebBotClient {
     }
 
     if (finalMessage) {
+      if (sawAgUiEvent) {
+        return {
+          ...finalMessage,
+          text: agUiState.assistantText || finalMessage.text,
+          elapsedSeconds: finalMessage.elapsedSeconds ?? agUiState.elapsedSeconds ?? finalElapsedSeconds,
+          meta: mergeMessageMeta(
+            agUiState.contextUsage ? { contextUsage: agUiState.contextUsage } : undefined,
+            finalMessage.meta,
+            buildAgUiMessageMeta(agUiState)?.trace,
+          ),
+        };
+      }
       return {
         ...finalMessage,
         elapsedSeconds: finalMessage.elapsedSeconds ?? finalElapsedSeconds,
@@ -4483,6 +4684,24 @@ export class RealWebBotClient implements WebBotClient {
           finalMessage.meta,
           streamedTrace,
         ),
+      };
+    }
+
+    if (sawAgUiEvent) {
+      const meta = mergeMessageMeta(
+        agUiState.contextUsage ? { contextUsage: agUiState.contextUsage } : undefined,
+        buildAgUiMessageMeta(agUiState),
+      );
+      return {
+        id: agUiState.messageId || `assistant-${Date.now()}`,
+        role: "assistant",
+        text: agUiState.assistantText || finalText || streamedText,
+        createdAt: new Date().toISOString(),
+        state: agUiState.error ? "error" : "done",
+        ...(typeof (agUiState.elapsedSeconds ?? finalElapsedSeconds) === "number"
+          ? { elapsedSeconds: agUiState.elapsedSeconds ?? finalElapsedSeconds }
+          : {}),
+        ...(meta ? { meta } : {}),
       };
     }
 

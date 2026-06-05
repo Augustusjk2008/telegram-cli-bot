@@ -5610,6 +5610,7 @@ async def stream_chat(
     mentions: list[dict[str, Any]] | None = None,
     execution_mode: str = "",
     actor: dict[str, Any] | None = None,
+    protocol: str = "",
 ) -> AsyncIterator[dict[str, Any]]:
     try:
         profile = get_profile_or_raise(manager, alias)
@@ -5663,6 +5664,7 @@ async def stream_chat(
                     prompt_text=prompt_text,
                     history_service=_history_service_for_execution_mode(session, NATIVE_AGENT_PROVIDER),
                     actor=_actor_from_request(request),
+                    protocol=protocol,
                 ):
                     yield event
                 return

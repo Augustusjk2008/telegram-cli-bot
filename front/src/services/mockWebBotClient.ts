@@ -169,6 +169,7 @@ import type {
   WaveformWindowPayload,
 } from "./types";
 import { WebBotClient } from "./webBotClient";
+import { EventType, type AgUiEvent } from "./agUiProtocol";
 import { mockBots } from "../mocks/bots";
 import { mockChatMessages } from "../mocks/chat";
 import { mockFiles } from "../mocks/files";
@@ -3843,6 +3844,7 @@ export class MockWebBotClient implements WebBotClient {
     onStatus?: (status: ChatStatusUpdate) => void,
     onTrace?: (trace: ChatTraceEvent) => void,
     options?: ChatSendOptions,
+    onAgUiEvent?: (event: AgUiEvent) => void,
   ): Promise<ChatMessage> {
     const agentId = options?.agentId || "main";
     const createdAt = new Date().toISOString();
@@ -3862,6 +3864,26 @@ export class MockWebBotClient implements WebBotClient {
         summary: "git worktree add",
         toolName: "git",
         callId: "call_git_worktree_add",
+      });
+      onAgUiEvent?.({
+        type: EventType.RUN_STARTED,
+        threadId: "mock-thread",
+        runId: "mock-run",
+      });
+      onAgUiEvent?.({
+        type: EventType.ACTIVITY_SNAPSHOT,
+        messageId: "mock-message",
+        activityType: "TCB_STATUS",
+        replace: true,
+        content: {
+          elapsedSeconds: 1,
+          previewText: "开始生成 patch",
+        },
+      });
+      onAgUiEvent?.({
+        type: EventType.TOOL_CALL_START,
+        toolCallId: "call_git_worktree_add",
+        toolCallName: "git",
       });
       const proposalId = String(options.taskPayload?.proposalId || options.taskPayload?.proposal_id || "").trim();
       const targetAlias = String(options.taskPayload?.targetAlias || options.taskPayload?.target_alias || "").trim();
@@ -3897,6 +3919,18 @@ export class MockWebBotClient implements WebBotClient {
           }],
         },
       };
+      onAgUiEvent?.({
+        type: EventType.TOOL_CALL_RESULT,
+        messageId: assistantMessage.id,
+        toolCallId: "call_git_worktree_add",
+        content: summary,
+      });
+      onAgUiEvent?.({
+        type: EventType.RUN_FINISHED,
+        threadId: "mock-thread",
+        runId: "mock-run",
+        outcome: { type: "success" },
+      });
       this.appendAgentChatMessage(botAlias, agentId, assistantMessage);
       return assistantMessage;
     }
@@ -3917,6 +3951,31 @@ export class MockWebBotClient implements WebBotClient {
       ].join("\n");
       onChunk(summary);
       onStatus?.({ elapsedSeconds: 1 });
+      onAgUiEvent?.({
+        type: EventType.RUN_STARTED,
+        threadId: "mock-thread",
+        runId: "mock-run",
+      });
+      onAgUiEvent?.({
+        type: EventType.TEXT_MESSAGE_START,
+        messageId: "mock-message",
+        role: "assistant",
+      });
+      onAgUiEvent?.({
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        messageId: "mock-message",
+        delta: summary,
+      });
+      onAgUiEvent?.({
+        type: EventType.TEXT_MESSAGE_END,
+        messageId: "mock-message",
+      });
+      onAgUiEvent?.({
+        type: EventType.RUN_FINISHED,
+        threadId: "mock-thread",
+        runId: "mock-run",
+        outcome: { type: "success" },
+      });
       const assistantMessage: ChatMessage = {
         id: `assistant-${Date.now()}`,
         role: "assistant",
@@ -3930,12 +3989,37 @@ export class MockWebBotClient implements WebBotClient {
     }
 
     let streamed = "";
+    onAgUiEvent?.({
+      type: EventType.RUN_STARTED,
+      threadId: "mock-thread",
+      runId: "mock-run",
+    });
+    onAgUiEvent?.({
+      type: EventType.TEXT_MESSAGE_START,
+      messageId: "mock-message",
+      role: "assistant",
+    });
     await streamAssistantReply((chunk) => {
       streamed += chunk;
       onChunk(chunk);
       onStatus?.({
         elapsedSeconds: streamed.length > 0 ? 1 : 0,
       });
+      onAgUiEvent?.({
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        messageId: "mock-message",
+        delta: chunk,
+      });
+    });
+    onAgUiEvent?.({
+      type: EventType.TEXT_MESSAGE_END,
+      messageId: "mock-message",
+    });
+    onAgUiEvent?.({
+      type: EventType.RUN_FINISHED,
+      threadId: "mock-thread",
+      runId: "mock-run",
+      outcome: { type: "success" },
     });
     const assistantMessage = {
       id: Date.now().toString(),

@@ -21,6 +21,8 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 
 import pytest
+from ag_ui import core
+from pydantic import TypeAdapter
 from aiohttp import WSMsgType, web
 from aiohttp.test_utils import TestClient, TestServer
 from aiohttp.client_exceptions import ClientConnectionResetError, WSServerHandshakeError
@@ -1660,6 +1662,66 @@ async def test_chat_stream_route_returns_sse_events(web_manager: MultiBotManager
                 assert "event: done" in body
 
 @pytest.mark.asyncio
+async def test_chat_stream_route_returns_ag_ui_sse_when_protocol_requested(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    async def fake_stream_chat(manager, alias, user_id, message, **kwargs):
+        assert kwargs["protocol"] == "ag-ui"
+        yield {
+            "type": "ag_ui",
+            "event": core.RunStartedEvent(threadId="conv-1", runId="run-1"),
+        }
+        yield {
+            "type": "ag_ui",
+            "event": core.TextMessageStartEvent(messageId="msg-1"),
+        }
+        yield {
+            "type": "ag_ui",
+            "event": core.TextMessageContentEvent(messageId="msg-1", delta="hello"),
+        }
+        yield {
+            "type": "ag_ui",
+            "event": core.TextMessageEndEvent(messageId="msg-1"),
+        }
+        yield {
+            "type": "done",
+            "output": "hello",
+            "message": {"id": "msg-1", "role": "assistant", "content": "hello", "meta": {}},
+            "elapsed_seconds": 0,
+            "returncode": 0,
+        }
+
+    event_adapter = TypeAdapter(core.Event)
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            with patch("bot.web.server.stream_chat", fake_stream_chat):
+                resp = await client.post("/api/bots/main/chat/stream?protocol=ag-ui", json={"message": "hi"})
+                assert resp.status == 200
+                body = await resp.text()
+
+    assert "event:" not in body
+    payloads = []
+    for block in body.strip().split("\n\n"):
+        if not block.strip():
+            continue
+        assert block.startswith("data: ")
+        payloads.append(json.loads(block[len("data: "):]))
+    events = [event_adapter.validate_python(item) for item in payloads]
+    assert [event.type for event in events] == [
+        core.EventType.RUN_STARTED,
+        core.EventType.TEXT_MESSAGE_START,
+        core.EventType.TEXT_MESSAGE_CONTENT,
+        core.EventType.TEXT_MESSAGE_END,
+    ]
+
+
+@pytest.mark.asyncio
 async def test_terminal_session_routes_and_websocket_attach(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
@@ -2891,6 +2953,32 @@ async def test_stream_chat_routes_native_agent_execution_mode(web_manager: Multi
     assert captured["session"].agent_id == "main"
     assert captured["user_text"] == "你好"
     assert captured["prompt_text"] == "你好"
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_routes_native_agent_protocol_to_service(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, Any] = {}
+
+    class FakeNativeService:
+        async def stream_chat(self, **kwargs):
+            captured.update(kwargs)
+            yield {"type": "done", "output": "原生回复", "message": {"id": "assistant-native", "role": "assistant", "content": "原生回复", "meta": {}}, "elapsed_seconds": 1, "returncode": 0}
+
+    monkeypatch.setattr(api_service, "get_native_agent_service", lambda: FakeNativeService())
+
+    events = [
+        event async for event in api_service.stream_chat(
+            web_manager,
+            "main",
+            1001,
+            "你好",
+            execution_mode="native_agent",
+            protocol="ag-ui",
+        )
+    ]
+
+    assert events[-1]["type"] == "done"
+    assert captured["protocol"] == "ag-ui"
 
 
 def _codex_context_usage(left_percent: int) -> dict[str, object]:

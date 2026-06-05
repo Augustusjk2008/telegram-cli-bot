@@ -59,6 +59,13 @@ import {
 import type { BotActivityChange } from "../app/botActivity";
 import type { ChatWorkbenchStatus } from "../workbench/workbenchTypes";
 import { extractPlanDraft, stripPlanDraftTags } from "../utils/planDraft";
+import type { AgUiEvent } from "../services/agUiProtocol";
+import {
+  buildAgUiMessageMeta,
+  createAgUiRunState,
+  reduceAgUiRunEvent,
+  type AgUiRunState,
+} from "../utils/agUiRunReducer";
 
 type Props = {
   botAlias: string;
@@ -570,11 +577,21 @@ function mergeMessageMeta(base?: ChatMessageMetaInfo, incoming?: ChatMessageMeta
   return Object.values(meta).some((value) => typeof value !== "undefined") ? meta : undefined;
 }
 
+function hasAgUiTrace(meta?: ChatMessageMetaInfo) {
+  return Boolean(meta?.trace?.some((event) => (
+    event.kind === "tool_call"
+    || event.kind === "tool_result"
+    || event.kind === "permission"
+    || event.kind === "status"
+    || event.kind === "reasoning"
+  )));
+}
+
 function isNativePermissionTrace(event: ChatTraceEvent, permissionId: string) {
   const payload = event.payload && typeof event.payload === "object"
     ? event.payload as Record<string, unknown>
     : {};
-  const currentId = String(payload.id || payload.permissionID || payload.permission_id || "").trim();
+  const currentId = String(payload.permissionId || payload.id || payload.permissionID || payload.permission_id || "").trim();
   return event.kind === "permission" && currentId === permissionId;
 }
 
@@ -955,6 +972,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const isStreamingAssistant = item.role === "assistant" && item.state === "streaming";
   const hasStreamingText = isStreamingAssistant && item.text.trim().length > 0;
   const trace = item.meta?.trace;
+  const prefersPlainAssistantText = item.role === "assistant" && hasAgUiTrace(item.meta);
   const traceCount = typeof item.meta?.traceCount === "number" ? item.meta.traceCount : trace?.length ?? 0;
   const hasTracePanel = allowTrace && item.role === "assistant" && traceCount > 0;
   const inlineAvatar = (
@@ -992,7 +1010,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
                 : "min-w-0 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-3 text-[var(--text)] shadow-[var(--shadow-soft)]",
           ].join(" ")}
         >
-          {item.role === "assistant" && item.state !== "streaming" && item.state !== "error" ? (
+          {item.role === "assistant" && item.state !== "streaming" && item.state !== "error" && !prefersPlainAssistantText ? (
             <ChatMarkdownMessage content={item.text} onFileLinkClick={onFileLinkClick} />
           ) : isUser ? (
             <div className={userAttachments.length > 0 && visibleUserText ? "space-y-2" : undefined}>
@@ -2624,12 +2642,14 @@ export function ChatScreen({
     try {
       let usingPreviewReplace = false;
       let usingTracePreview = false;
+      let agUiState: AgUiRunState | null = null;
+      let sawAgUiEvent = false;
       const onChunk = (chunk: string) => {
         if (sendVersion !== assistantSendVersionRef.current) {
           return;
         }
         markSseActivity();
-        if (usingPreviewReplace) {
+        if (sawAgUiEvent || usingPreviewReplace) {
           return;
         }
         setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => ({
@@ -2643,6 +2663,9 @@ export function ChatScreen({
           return;
         }
         markSseActivity();
+        if (sawAgUiEvent) {
+          return;
+        }
         if (typeof status.elapsedSeconds === "number") {
           setStreamStartedAtMs(resolveStreamStartMs(itemsRef.current, status.elapsedSeconds));
         }
@@ -2673,6 +2696,9 @@ export function ChatScreen({
           return;
         }
         markSseActivity();
+        if (sawAgUiEvent) {
+          return;
+        }
         if (hideProcessPreview) {
           return;
         }
@@ -2698,6 +2724,41 @@ export function ChatScreen({
           },
         ));
       };
+      const onAgUiEvent = (event: AgUiEvent) => {
+        if (sendVersion !== assistantSendVersionRef.current) {
+          return;
+        }
+        markSseActivity();
+        sawAgUiEvent = true;
+        agUiState = reduceAgUiRunEvent(agUiState || createAgUiRunState(), event);
+        const nextAgUiState = agUiState;
+        if (typeof nextAgUiState.elapsedSeconds === "number") {
+          setStreamStartedAtMs(resolveStreamStartMs(itemsRef.current, nextAgUiState.elapsedSeconds));
+        }
+        if (nextAgUiState.clusterRunId && nextAgUiState.clusterRunId !== clusterRunIdRef.current) {
+          clusterRunIdRef.current = nextAgUiState.clusterRunId;
+          setClusterRunId(nextAgUiState.clusterRunId);
+          setClusterTaskStatus(null);
+          setClusterTaskError("");
+          void pollClusterTasks();
+        }
+        setItems((prev) => updateLatestAssistantMessage(
+          prev,
+          assistantId,
+          localStartedAtMs,
+          (item) => {
+            const nextMeta = mergeMessageMeta(item.meta, buildAgUiMessageMeta(nextAgUiState));
+            return {
+              ...item,
+              text: nextAgUiState.assistantText,
+              state: nextAgUiState.error ? "error" : (nextAgUiState.completed ? "done" : "streaming"),
+              meta: nextAgUiState.contextUsage
+                ? mergeMessageMeta(nextMeta, { contextUsage: nextAgUiState.contextUsage })
+                : nextMeta,
+            };
+          },
+        ));
+      };
       const finalMessage = options.sendOptions
         ? await client.sendMessage(
           botAlias,
@@ -2708,13 +2769,14 @@ export function ChatScreen({
           options.sendOptions.cluster || activeAgentIdRef.current === "main"
             ? options.sendOptions
             : { ...options.sendOptions, agentId: activeAgentIdRef.current },
+          onAgUiEvent,
         )
         : (
           activeAgentIdRef.current === "main"
-            ? await client.sendMessage(botAlias, composedText, onChunk, onStatus, onTrace)
+            ? await client.sendMessage(botAlias, composedText, onChunk, onStatus, onTrace, undefined, onAgUiEvent)
             : await client.sendMessage(botAlias, composedText, onChunk, onStatus, onTrace, {
               agentId: activeAgentIdRef.current,
-            })
+            }, onAgUiEvent)
         );
 
       if (sendVersion !== assistantSendVersionRef.current) {
@@ -2726,7 +2788,15 @@ export function ChatScreen({
         : Math.max(0, Math.floor((Date.now() - localStartedAtMs) / 1000));
       const finalizedMessage: ChatMessage = {
         ...finalMessage,
+        ...(sawAgUiEvent && agUiState?.assistantText
+          ? { text: agUiState.assistantText }
+          : {}),
         elapsedSeconds,
+        ...(sawAgUiEvent && agUiState
+          ? {
+              meta: mergeMessageMeta(finalMessage.meta, buildAgUiMessageMeta(agUiState)),
+            }
+          : {}),
       };
 
       setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => ({
