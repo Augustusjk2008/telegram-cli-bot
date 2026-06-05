@@ -3458,8 +3458,8 @@ function mapNotificationSettings(data: RawNotificationSettings | null | undefine
   };
 }
 
-function buildWebSocketUrl(path: string, token: string) {
-  return buildWsUrl(path, token ? { token } : undefined);
+function buildWebSocketUrl(path: string) {
+  return buildWsUrl(path);
 }
 
 function isWebNotificationEvent(value: unknown): value is WebNotificationEvent {
@@ -3482,6 +3482,7 @@ export class RealWebBotClient implements WebBotClient {
     const response = await fetch(withApiBase(path), {
       ...init,
       cache: "no-store",
+      credentials: "same-origin",
       headers: this.headers(init.headers),
     });
     const responseClone = typeof response.clone === "function" ? response.clone() : null;
@@ -3523,6 +3524,7 @@ export class RealWebBotClient implements WebBotClient {
   ): Promise<AppUpdateStatus> {
     const response = await fetch(withApiBase(path), {
       method: "POST",
+      credentials: "same-origin",
       headers: this.headers({
         "Content-Type": "application/json",
       }),
@@ -3590,6 +3592,7 @@ export class RealWebBotClient implements WebBotClient {
   async getPublicHostInfo(): Promise<PublicHostInfo> {
     const response = await fetch(withApiBase("/api/health"), {
       cache: "no-store",
+      credentials: "same-origin",
       headers: this.headers(),
     });
     if (!response.ok) {
@@ -3699,7 +3702,7 @@ export class RealWebBotClient implements WebBotClient {
         }
       }
       notifyStatus(reconnectAttempt === 0 ? "connecting" : "reconnecting");
-      socket = new WebSocket(buildWebSocketUrl("/api/notifications/ws", this.token));
+      socket = new WebSocket(buildWebSocketUrl("/api/notifications/ws"));
       socket.addEventListener("open", () => {
         reconnectAttempt = 0;
         notifyStatus("open");
@@ -3771,7 +3774,7 @@ export class RealWebBotClient implements WebBotClient {
       },
       body: JSON.stringify(input),
     });
-    this.token = String(data.token || "").trim();
+    this.token = "";
     return mapSessionState(data);
   }
 
@@ -3787,7 +3790,7 @@ export class RealWebBotClient implements WebBotClient {
         register_code: input.registerCode,
       }),
     });
-    this.token = String(data.token || "").trim();
+    this.token = "";
     return mapSessionState(data);
   }
 
@@ -3795,14 +3798,22 @@ export class RealWebBotClient implements WebBotClient {
     const data = await this.requestJson<RawAuthSession>("/api/auth/guest", {
       method: "POST",
     });
-    this.token = String(data.token || "").trim();
+    this.token = "";
     return mapSessionState(data);
   }
 
   async restoreSession(token = ""): Promise<SessionState> {
-    this.token = token.trim();
-    const data = await this.requestJson<RawAuthSession>("/api/auth/me");
-    return mapSessionState(data);
+    const legacyToken = token.trim();
+    this.token = legacyToken;
+    try {
+      const data = await this.requestJson<RawAuthSession>("/api/auth/me");
+      return {
+        ...mapSessionState(data),
+        token: "",
+      };
+    } finally {
+      this.token = "";
+    }
   }
 
   async logout(): Promise<void> {
@@ -4356,6 +4367,7 @@ export class RealWebBotClient implements WebBotClient {
   ): Promise<ChatMessage> {
     const response = await fetch(withApiBase(`/api/bots/${encodeURIComponent(botAlias)}/chat/stream`), {
       method: "POST",
+      credentials: "same-origin",
       headers: this.headers({
         "Content-Type": "application/json",
       }),
@@ -4894,6 +4906,7 @@ export class RealWebBotClient implements WebBotClient {
     const response = await fetch(
       withApiBase(`/api/bots/${encodeURIComponent(botAlias)}/plugins/artifacts/${encodeURIComponent(artifactId)}`),
       {
+        credentials: "same-origin",
         headers: this.headers(),
       },
     );
@@ -4907,6 +4920,7 @@ export class RealWebBotClient implements WebBotClient {
     const response = await fetch(
       withApiBase(`/api/bots/${encodeURIComponent(botAlias)}/plugins/artifacts/${encodeURIComponent(artifactId)}`),
       {
+        credentials: "same-origin",
         headers: this.headers(),
       },
     );
@@ -5105,6 +5119,7 @@ export class RealWebBotClient implements WebBotClient {
     formData.append("file", file);
     const response = await fetch(withApiBase(`/api/bots/${encodeURIComponent(botAlias)}/files/upload`), {
       method: "POST",
+      credentials: "same-origin",
       headers: this.headers(),
       body: formData,
     });
@@ -5116,6 +5131,7 @@ export class RealWebBotClient implements WebBotClient {
   async downloadFile(botAlias: string, filename: string, onProgress?: (progress: FileDownloadProgress) => void): Promise<void> {
     const params = new URLSearchParams({ filename });
     const response = await fetch(withApiBase(`/api/bots/${encodeURIComponent(botAlias)}/files/download?${params.toString()}`), {
+      credentials: "same-origin",
       headers: this.headers(),
     });
     if (!response.ok) {
@@ -5158,6 +5174,7 @@ export class RealWebBotClient implements WebBotClient {
       const response = await fetch(withApiBase("/api/admin/restart"), {
         method: "POST",
         cache: "no-store",
+        credentials: "same-origin",
         keepalive: true,
         headers: this.headers(),
         signal: controller?.signal,
@@ -5639,7 +5656,7 @@ export class RealWebBotClient implements WebBotClient {
   }
 
   openLanChatSocket(onEvent: (event: LanChatEvent) => void): () => void {
-    const socket = new WebSocket(buildWsUrl("/lan-chat/ws", this.token ? { token: this.token } : undefined));
+    const socket = new WebSocket(buildWsUrl("/lan-chat/ws"));
     socket.addEventListener("message", (event) => {
       try {
         const mapped = mapLanChatEvent(JSON.parse(event.data));
@@ -5804,6 +5821,7 @@ export class RealWebBotClient implements WebBotClient {
       withApiBase(`/api/admin/bots/${encodeURIComponent(botAlias)}/assistant/proposals/${encodeURIComponent(proposalId)}/patch/stream`),
       {
         method: "POST",
+        credentials: "same-origin",
         headers: this.headers({
           "Content-Type": "application/json",
         }),

@@ -5,7 +5,15 @@ from pathlib import Path
 
 import pytest
 
-from bot.web.auth_store import AuthStoreError, CAP_TERMINAL_EXEC, MEMBER_CAPABILITIES, WebAuthStore
+from bot.web.auth_store import (
+    CAPABILITIES_SCHEMA_VERSION,
+    CAP_CHAT_SEND,
+    CAP_MANAGE_BOTS,
+    CAP_RUN_UNSAFE_CLI,
+    CAP_TERMINAL_EXEC,
+    MEMBER_CAPABILITIES,
+    WebAuthStore,
+)
 from bot.web.permission_store import BotPermissionStore
 
 
@@ -28,9 +36,79 @@ def test_register_member_consumes_register_code(tmp_path: Path):
     data = json.loads(codes_path.read_text(encoding="utf-8"))
     users_data = json.loads(users_text)
     assert isinstance(users_data["items"][0]["session_user_id"], int)
+    assert users_data["items"][0]["capabilities_schema_version"] == CAPABILITIES_SCHEMA_VERSION
     assert set(users_data["items"][0]["capabilities"]) == set(MEMBER_CAPABILITIES)
+    assert CAP_CHAT_SEND not in MEMBER_CAPABILITIES
+    assert CAP_MANAGE_BOTS not in MEMBER_CAPABILITIES
+    assert CAP_RUN_UNSAFE_CLI not in MEMBER_CAPABILITIES
     assert data["items"][0]["used_count"] == 1
     assert data["items"][0]["usage"][0]["used_by_enc"].startswith("v1:")
+
+
+def test_legacy_member_capabilities_migrate_to_safe_schema_v2(tmp_path: Path):
+    users_path = tmp_path / ".web_users.json"
+    codes_path = tmp_path / ".web_register_codes.json"
+    store = WebAuthStore(users_path=users_path, register_codes_path=codes_path)
+    legacy_item = {
+        "account_id": "member_legacy",
+        "username": "alice",
+        "role": "member",
+        "disabled": False,
+        "capabilities_schema_version": 1,
+        "capabilities": [
+            CAP_CHAT_SEND,
+            CAP_MANAGE_BOTS,
+            CAP_RUN_UNSAFE_CLI,
+            CAP_TERMINAL_EXEC,
+            *MEMBER_CAPABILITIES,
+        ],
+        "password_salt": "00" * 16,
+        "password_hash": store._hash_password("pw-123", bytes.fromhex("00" * 16), 120_000),
+        "password_iterations": 120_000,
+    }
+    users_path.write_text(json.dumps({"items": [legacy_item]}), encoding="utf-8")
+
+    session = store.login_member("alice", "pw-123")
+    data = json.loads(users_path.read_text(encoding="utf-8"))
+
+    assert set(session.capabilities) == set(MEMBER_CAPABILITIES)
+    assert data["items"][0]["capabilities_schema_version"] == CAPABILITIES_SCHEMA_VERSION
+    assert set(data["items"][0]["capabilities"]) == set(MEMBER_CAPABILITIES)
+
+
+def test_admin_capability_update_marks_legacy_account_schema_v2(tmp_path: Path):
+    users_path = tmp_path / ".web_users.json"
+    codes_path = tmp_path / ".web_register_codes.json"
+    store = WebAuthStore(users_path=users_path, register_codes_path=codes_path)
+    legacy_item = {
+        "account_id": "member_legacy",
+        "username": "alice",
+        "role": "member",
+        "disabled": False,
+        "capabilities_schema_version": 1,
+        "capabilities": [
+            CAP_CHAT_SEND,
+            CAP_MANAGE_BOTS,
+            CAP_RUN_UNSAFE_CLI,
+            CAP_TERMINAL_EXEC,
+            *MEMBER_CAPABILITIES,
+        ],
+        "password_salt": "00" * 16,
+        "password_hash": store._hash_password("pw-123", bytes.fromhex("00" * 16), 120_000),
+        "password_iterations": 120_000,
+    }
+    users_path.write_text(json.dumps({"items": [legacy_item]}), encoding="utf-8")
+
+    updated = store.update_member(
+        "member_legacy",
+        capabilities=[*MEMBER_CAPABILITIES, CAP_CHAT_SEND],
+    )
+    session = store.login_member("alice", "pw-123")
+    data = json.loads(users_path.read_text(encoding="utf-8"))
+
+    assert CAP_CHAT_SEND in updated["capabilities"]
+    assert CAP_CHAT_SEND in session.capabilities
+    assert data["items"][0]["capabilities_schema_version"] == CAPABILITIES_SCHEMA_VERSION
 
 
 def test_guest_account_is_builtin_and_never_requires_register_code(tmp_path: Path):
@@ -90,5 +168,3 @@ def test_permission_store_tracks_bot_owners_and_quota(tmp_path: Path):
     with pytest.raises(ValueError, match="最多只能创建 3 个 Bot"):
         store.assert_can_create_bot("member_1", is_local_admin=False)
     store.assert_can_create_bot("local-admin", is_local_admin=True)
-
-

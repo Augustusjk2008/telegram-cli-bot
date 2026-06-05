@@ -10,6 +10,17 @@ import pytest
 from bot import app_settings, updater
 from bot.version import APP_VERSION
 
+INVALID_UPDATE_PACKAGE_PATHS = [
+    "../evil.txt",
+    "/etc/passwd",
+    "C:/evil.txt",
+    r"C:\evil.txt",
+    "C:evil.txt",
+    r"\\server\share\evil.txt",
+    r"\evil.txt",
+    "nested/na:me.txt",
+]
+
 
 def _windows_release_assets() -> list[dict[str, str]]:
     package_assets = [
@@ -58,21 +69,63 @@ def _mock_sha256_download(monkeypatch, payloads: dict[str, bytes]) -> None:
 def _write_distribution_marker(
     archive: zipfile.ZipFile,
     *,
-    package_kind: str = "installer",
-    platform: str = "windows-x64",
+    package_kind: str = "",
+    platform: str = "",
     version: str = "1.0.1",
 ) -> None:
     archive.writestr(
         ".distribution.json",
-        json.dumps(
-            {
-                "packageKind": package_kind,
-                "platform": platform,
-                "version": version,
-            },
-            ensure_ascii=False,
-        ),
+        _distribution_marker_bytes(package_kind=package_kind, platform=platform, version=version),
     )
+
+
+def _distribution_marker_bytes(
+    *,
+    package_kind: str = "",
+    platform: str = "",
+    version: str = "1.0.1",
+) -> bytes:
+    effective_kind = package_kind or updater.detect_update_package_kind()
+    effective_platform = platform or updater._expected_distribution_platform(effective_kind)
+    return json.dumps(
+        {
+            "packageKind": effective_kind,
+            "platform": effective_platform,
+            "version": version,
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+
+def _write_tar_member(archive: tarfile.TarFile, name: str, data: bytes) -> None:
+    info = tarfile.TarInfo(name=name)
+    info.size = len(data)
+    archive.addfile(info, io.BytesIO(data))
+
+
+def _create_update_package(
+    package_path: Path,
+    *,
+    package_format: str,
+    invalid_path: str = "",
+    version: str = "1.0.1",
+) -> None:
+    marker_bytes = _distribution_marker_bytes(version=version)
+    if package_format == "zip":
+        with zipfile.ZipFile(package_path, "w") as archive:
+            archive.writestr(updater.DISTRIBUTION_MARKER_FILE, marker_bytes)
+            if invalid_path:
+                archive.writestr(invalid_path, b"bad")
+            archive.writestr("README.md", "# updated\n")
+        return
+    if package_format == "tar":
+        with tarfile.open(package_path, "w:gz") as archive:
+            _write_tar_member(archive, updater.DISTRIBUTION_MARKER_FILE, marker_bytes)
+            if invalid_path:
+                _write_tar_member(archive, invalid_path, b"bad")
+            _write_tar_member(archive, "README.md", b"# updated\n")
+        return
+    raise AssertionError(f"unsupported package format: {package_format}")
 
 
 def test_get_update_status_defaults_to_current_version(monkeypatch, tmp_path: Path):
@@ -283,3 +336,64 @@ def test_prepare_offline_update_sets_pending_update(monkeypatch, tmp_path: Path)
     assert status["pending_update_package_kind"] == updater.detect_update_package_kind(repo_root)
 
 
+@pytest.mark.parametrize("package_format", ["zip", "tar"])
+@pytest.mark.parametrize("invalid_path", INVALID_UPDATE_PACKAGE_PATHS)
+def test_prepare_offline_update_rejects_invalid_archive_paths(
+    monkeypatch,
+    tmp_path: Path,
+    package_format: str,
+    invalid_path: str,
+):
+    settings_file = tmp_path / ".web_admin_settings.json"
+    monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    package_name = f"invalid.{ 'zip' if package_format == 'zip' else 'tar.gz'}"
+    package_path = tmp_path / package_name
+    _create_update_package(package_path, package_format=package_format, invalid_path=invalid_path)
+
+    with pytest.raises(RuntimeError, match="非法归档路径"):
+        updater.prepare_offline_update(repo_root, package_path, version="1.0.1", log_callback=lambda _line: None)
+
+    saved_settings = app_settings._load_settings()
+    assert saved_settings["pending_update_version"] == ""
+    assert saved_settings["pending_update_path"] == ""
+
+
+@pytest.mark.parametrize(
+    ("package_format", "invalid_path"),
+    [
+        ("zip", "README:evil.md"),
+        ("tar", r"\\server\share\evil.txt"),
+    ],
+)
+def test_apply_pending_update_rejects_invalid_archive_paths(
+    monkeypatch,
+    tmp_path: Path,
+    package_format: str,
+    invalid_path: str,
+):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    settings_file = repo_root / ".web_admin_settings.json"
+    monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
+
+    package_name = f"invalid.{ 'zip' if package_format == 'zip' else 'tar.gz'}"
+    package_path = tmp_path / package_name
+    _create_update_package(package_path, package_format=package_format, invalid_path=invalid_path, version="2.0.0")
+
+    current_settings = app_settings._load_settings()
+    current_settings["pending_update_version"] = "2.0.0"
+    current_settings["pending_update_path"] = str(package_path)
+    current_settings["pending_update_platform"] = "windows-x64"
+    app_settings._save_settings(current_settings)
+
+    result = updater.apply_pending_update(repo_root)
+
+    assert result["applied"] is False
+    assert result["reason"] == "invalid_package"
+    assert not (repo_root / "README.md").exists()
+    saved_settings = app_settings._load_settings()
+    assert saved_settings["pending_update_version"] == ""
+    assert saved_settings["pending_update_path"] == ""
+    assert "非法归档路径" in saved_settings["update_last_error"]

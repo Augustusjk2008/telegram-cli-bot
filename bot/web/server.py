@@ -18,6 +18,7 @@ import threading
 import time
 import uuid
 import zlib
+from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
 from typing import Any
@@ -107,6 +108,7 @@ from .auth_store import (
     CAP_MUTATE_BROWSE_STATE,
     CAP_READ_FILE_CONTENT,
     CAP_RUN_PLUGINS,
+    CAP_RUN_UNSAFE_CLI,
     CAP_TERMINAL_EXEC,
     CAP_VIEW_BOTS,
     CAP_VIEW_BOT_STATUS,
@@ -389,14 +391,39 @@ def _auth_error(exc: AuthStoreError) -> WebApiError:
     return WebApiError(exc.status, exc.code, exc.message, exc.data)
 
 
-def _extract_auth_token(request: web.Request) -> str:
+AUTH_SESSION_COOKIE_NAME = "tcb_web_session"
+UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+AUTH_TOKEN_SOURCE_AUTHORIZATION = "authorization"
+AUTH_TOKEN_SOURCE_X_API_TOKEN = "x-api-token"
+AUTH_TOKEN_SOURCE_QUERY = "query"
+AUTH_TOKEN_SOURCE_COOKIE = "cookie"
+AUTH_TOKEN_SOURCE_NONE = "none"
+
+
+@dataclass(frozen=True)
+class AuthToken:
+    token: str
+    source: str = AUTH_TOKEN_SOURCE_NONE
+
+
+def _extract_auth_token_info(request: web.Request) -> AuthToken:
     auth_header = request.headers.get("Authorization", "").strip()
     if auth_header.lower().startswith("bearer "):
-        return auth_header[7:].strip()
-    return (
-        request.headers.get("X-API-Token", "").strip()
-        or request.query.get("token", "").strip()
-    )
+        return AuthToken(auth_header[7:].strip(), AUTH_TOKEN_SOURCE_AUTHORIZATION)
+    x_api_token = request.headers.get("X-API-Token", "").strip()
+    if x_api_token:
+        return AuthToken(x_api_token, AUTH_TOKEN_SOURCE_X_API_TOKEN)
+    query_token = request.query.get("token", "").strip()
+    if query_token:
+        return AuthToken(query_token, AUTH_TOKEN_SOURCE_QUERY)
+    cookie_token = request.cookies.get(AUTH_SESSION_COOKIE_NAME, "").strip()
+    if cookie_token:
+        return AuthToken(cookie_token, AUTH_TOKEN_SOURCE_COOKIE)
+    return AuthToken("", AUTH_TOKEN_SOURCE_NONE)
+
+
+def _extract_auth_token(request: web.Request) -> str:
+    return _extract_auth_token_info(request).token
 
 
 def _is_loopback_value(value: object) -> bool:
@@ -472,6 +499,36 @@ def _serialize_auth_context(auth: AuthContext, *, token: str = "") -> dict[str, 
     return payload
 
 
+def _auth_cookie_path() -> str:
+    base_path = str(WEB_BASE_PATH or "").strip()
+    if not base_path or base_path == "/":
+        return "/"
+    return "/" + base_path.strip("/")
+
+
+def _request_is_secure(request: web.Request) -> bool:
+    if request.secure:
+        return True
+    forwarded_proto = str(request.headers.get("X-Forwarded-Proto") or "").split(",", 1)[0].strip().lower()
+    return forwarded_proto == "https"
+
+
+def _set_auth_cookie(request: web.Request, response: web.Response, token: str, *, remember: bool = False) -> None:
+    kwargs: dict[str, Any] = {
+        "path": _auth_cookie_path(),
+        "httponly": True,
+        "samesite": "Strict",
+        "secure": _request_is_secure(request),
+    }
+    if remember:
+        kwargs["max_age"] = 60 * 60 * 24 * 30
+    response.set_cookie(AUTH_SESSION_COOKIE_NAME, token, **kwargs)
+
+
+def _clear_auth_cookie(request: web.Request, response: web.Response) -> None:
+    response.del_cookie(AUTH_SESSION_COOKIE_NAME, path=_auth_cookie_path())
+
+
 def _session_user_id_for_account(account_id: str, session_user_id: int | None = None) -> int:
     if str(account_id or "").strip() == "local-admin":
         return WEB_DEFAULT_USER_ID
@@ -524,6 +581,21 @@ def _is_request_origin_allowed(request: web.Request) -> bool:
     )
 
 
+def _cookie_auth_requires_origin(request: web.Request, token_info: AuthToken) -> bool:
+    return token_info.source == AUTH_TOKEN_SOURCE_COOKIE and request.method.upper() in UNSAFE_METHODS
+
+
+def _is_cookie_write_origin_allowed(request: web.Request) -> bool:
+    if not str(request.headers.get("Origin") or "").strip():
+        return False
+    return _is_request_origin_allowed(request)
+
+
+def _require_auth_cookie_issue_origin(request: web.Request) -> None:
+    if str(request.headers.get("Origin") or "").strip() and not _is_request_origin_allowed(request):
+        raise WebApiError(403, "csrf_origin_rejected", "请求来源不被允许")
+
+
 def _is_loopback_auto_auth_allowed(request: web.Request) -> bool:
     return _is_loopback_request(request) and _is_request_origin_allowed(request)
 
@@ -538,7 +610,7 @@ def _iter_field_chunks(field, *, chunk_size: int = 64 * 1024):
 
     return iterator()
 
-def _serialize_auth_session(session: WebAuthSession) -> dict[str, Any]:
+def _serialize_auth_session(session: WebAuthSession, *, include_token: bool = False) -> dict[str, Any]:
     auth = AuthContext(
         user_id=_session_user_id_for_account(session.account.account_id, session.account.session_user_id),
         token_used=True,
@@ -550,7 +622,7 @@ def _serialize_auth_session(session: WebAuthSession) -> dict[str, Any]:
         owned_bot_aliases=_BOT_PERMISSION_STORE.owned_bot_aliases(session.account.account_id),
         is_local_admin=session.account.account_id == "local-admin",
     )
-    return _serialize_auth_context(auth, token=session.token)
+    return _serialize_auth_context(auth, token=session.token if include_token else "")
 
 
 def _parse_optional_int(value: object, *, field_name: str) -> int | None:
@@ -929,14 +1001,19 @@ class WebApiServer:
         )
 
     def _auth_context(self, request: web.Request) -> AuthContext:
-        raw_token = _extract_auth_token(request)
+        token_info = _extract_auth_token_info(request)
+        raw_token = token_info.token
+        if _cookie_auth_requires_origin(request, token_info) and not _is_cookie_write_origin_allowed(request):
+            raise WebApiError(403, "csrf_origin_rejected", "请求来源不被允许")
         if raw_token:
+            if token_info.source == AUTH_TOKEN_SOURCE_QUERY:
+                raise WebApiError(401, "query_token_disabled", "URL token 已禁用")
             session = _WEB_AUTH_STORE.get_session(raw_token)
             if session is not None:
                 return self._session_auth_context(session)
             if _is_loopback_auto_auth_allowed(request):
                 return self._local_admin_auth_context()
-            if WEB_API_TOKEN and raw_token == WEB_API_TOKEN:
+            if token_info.source in {AUTH_TOKEN_SOURCE_AUTHORIZATION, AUTH_TOKEN_SOURCE_X_API_TOKEN} and WEB_API_TOKEN and raw_token == WEB_API_TOKEN:
                 return self._legacy_auth_context(request, token_used=True)
             raise WebApiError(401, "unauthorized", "访问令牌无效")
 
@@ -945,7 +1022,7 @@ class WebApiServer:
         if WEB_API_TOKEN:
             raise WebApiError(401, "unauthorized", "访问令牌无效")
         if _WEB_AUTH_STORE.can_bootstrap_without_auth():
-            return self._legacy_auth_context(request, token_used=False, username="bootstrap")
+            raise WebApiError(401, "setup_required", "请从本机完成初始化")
         raise WebApiError(401, "unauthorized", "请先登录")
 
     def _legacy_user_id(self, request: web.Request) -> int:
@@ -1081,16 +1158,16 @@ class WebApiServer:
         raise web.HTTPForbidden(text="WebSocket Origin 不被允许")
 
     async def _with_websocket_auth(self, request: web.Request) -> AuthContext:
-        has_explicit_token = bool(_extract_auth_token(request))
+        token_info = _extract_auth_token_info(request)
         auth = await self._with_auth(request)
-        if not has_explicit_token:
+        if token_info.source in {AUTH_TOKEN_SOURCE_COOKIE, AUTH_TOKEN_SOURCE_NONE}:
             self._require_websocket_origin(request)
         return auth
 
     async def _with_websocket_capability(self, request: web.Request, capability: str) -> AuthContext:
-        has_explicit_token = bool(_extract_auth_token(request))
+        token_info = _extract_auth_token_info(request)
         auth = await self._with_capability(request, capability)
-        if not has_explicit_token:
+        if token_info.source in {AUTH_TOKEN_SOURCE_COOKIE, AUTH_TOKEN_SOURCE_NONE}:
             self._require_websocket_origin(request)
         return auth
 
@@ -1101,43 +1178,65 @@ class WebApiServer:
     def _bot_auth(self, auth: AuthContext, alias: str) -> AuthContext:
         if self._can_operate_bot(auth, alias):
             return auth
-        return auth.with_capabilities(GUEST_CAPABILITIES)
+        raise WebApiError(403, "bot_forbidden", "无权访问该 Bot")
 
     def _allows_readonly_bot_capability(self, request: web.Request, capability: str, auth: AuthContext) -> bool:
         if capability in auth.capabilities:
             return True
-        raw_alias = request.match_info.get("alias")
-        alias = str(raw_alias or "").strip().lower() if isinstance(raw_alias, str) else ""
-        if not alias or self._can_operate_bot(auth, alias):
-            return False
-        method = request.method.upper()
-        path = request.path
-        if capability == CAP_VIEW_CHAT_TRACE and method == "GET":
-            return True
-        if capability == CAP_GIT_OPS and method == "GET":
-            return True
-        if capability == CAP_VIEW_PLUGINS:
-            return path.endswith("/plugins/resolve-file-target")
-        if capability != CAP_RUN_PLUGINS:
-            return False
-        if method == "GET":
-            return True
-        if path.endswith("/render") or path.endswith("/open") or path.endswith("/window"):
-            return True
-        return method == "DELETE" and "/plugins/" in path and "/sessions/" in path
+        return False
 
     def _decorate_bot_for_auth(self, auth: AuthContext, item: dict[str, Any]) -> dict[str, Any]:
         alias = self._normalize_bot_alias(str(item.get("alias") or ""))
-        effective = self._bot_auth(auth, alias)
+        can_operate = self._can_operate_bot(auth, alias)
+        if can_operate:
+            effective = auth
+            bot_item = dict(item)
+        else:
+            effective = auth.with_capabilities(set())
+            bot_item = self._redact_bot_summary(item)
         return {
-            **item,
-            "can_operate": self._can_operate_bot(auth, alias),
+            **bot_item,
+            "can_operate": can_operate,
             "effective_capabilities": sorted(effective.capabilities),
             "owner_account_id": _BOT_PERMISSION_STORE.bot_owner(alias),
         }
 
     def _decorate_bots_for_auth(self, auth: AuthContext, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [self._decorate_bot_for_auth(auth, item) for item in items]
+
+    def _redact_bot_summary(self, item: dict[str, Any]) -> dict[str, Any]:
+        redacted = dict(item)
+        for key in (
+            "cli_path",
+            "working_dir",
+            "prompt_presets",
+            "global_prompt_presets",
+            "cluster",
+            "assistant_runtime",
+            "active_cluster_run",
+            "agents",
+        ):
+            redacted.pop(key, None)
+        return redacted
+
+    def _authorized_bot_aliases(self, auth: AuthContext) -> set[str]:
+        if self._is_local_admin(auth):
+            return {self._normalize_bot_alias(self.manager.main_profile.alias), *self.manager.managed_profiles.keys()}
+        return {
+            alias
+            for alias in set(auth.allowed_bot_aliases) | set(auth.owned_bot_aliases)
+            if self._normalize_bot_alias(alias)
+        }
+
+    def _filter_bots_for_auth(self, auth: AuthContext, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if self._is_local_admin(auth):
+            return items
+        allowed = self._authorized_bot_aliases(auth)
+        return [
+            item
+            for item in items
+            if self._normalize_bot_alias(str(item.get("alias") or "")) in allowed
+        ]
 
     def _assistant_admin_action(self, request: web.Request) -> tuple[str, dict[str, str]] | None:
         method = request.method.upper()
@@ -1462,9 +1561,15 @@ class WebApiServer:
 
     async def auth_me(self, request: web.Request) -> web.Response:
         auth = await self._with_auth(request)
-        return _json({"ok": True, "data": _serialize_auth_context(auth, token=_extract_auth_token(request) if auth.token_used else "")})
+        token_info = _extract_auth_token_info(request)
+        include_token = auth.token_used and token_info.source in {AUTH_TOKEN_SOURCE_AUTHORIZATION, AUTH_TOKEN_SOURCE_X_API_TOKEN}
+        response = _json({"ok": True, "data": _serialize_auth_context(auth, token=token_info.token if include_token else "")})
+        if include_token and _WEB_AUTH_STORE.get_session(token_info.token) is not None:
+            _set_auth_cookie(request, response, token_info.token, remember=False)
+        return response
 
     async def auth_login(self, request: web.Request) -> web.Response:
+        _require_auth_cookie_issue_origin(request)
         if _is_loopback_auto_auth_allowed(request):
             return _json({"ok": True, "data": _serialize_auth_context(self._local_admin_auth_context())})
         body = await self._parse_json(request)
@@ -1475,9 +1580,12 @@ class WebApiServer:
             )
         except AuthStoreError as exc:
             raise _auth_error(exc) from exc
-        return _json({"ok": True, "data": _serialize_auth_session(session)})
+        response = _json({"ok": True, "data": _serialize_auth_session(session)})
+        _set_auth_cookie(request, response, session.token, remember=bool(body.get("remember")))
+        return response
 
     async def auth_register(self, request: web.Request) -> web.Response:
+        _require_auth_cookie_issue_origin(request)
         body = await self._parse_json(request)
         try:
             session = _WEB_AUTH_STORE.register_member(
@@ -1487,18 +1595,25 @@ class WebApiServer:
             )
         except AuthStoreError as exc:
             raise _auth_error(exc) from exc
-        return _json({"ok": True, "data": _serialize_auth_session(session)})
+        response = _json({"ok": True, "data": _serialize_auth_session(session)})
+        _set_auth_cookie(request, response, session.token, remember=bool(body.get("remember")))
+        return response
 
     async def auth_guest(self, request: web.Request) -> web.Response:
+        _require_auth_cookie_issue_origin(request)
         session = _WEB_AUTH_STORE.create_guest_session()
-        return _json({"ok": True, "data": _serialize_auth_session(session)})
+        response = _json({"ok": True, "data": _serialize_auth_session(session)})
+        _set_auth_cookie(request, response, session.token, remember=False)
+        return response
 
     async def auth_logout(self, request: web.Request) -> web.Response:
         auth = await self._with_auth(request)
         raw_token = _extract_auth_token(request)
         if raw_token and _WEB_AUTH_STORE.get_session(raw_token) is not None:
             _WEB_AUTH_STORE.delete_session(raw_token)
-        return _json({"ok": True, "data": {"username": auth.username}})
+        response = _json({"ok": True, "data": {"username": auth.username}})
+        _clear_auth_cookie(request, response)
+        return response
 
     async def admin_register_codes(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_MANAGE_REGISTER_CODES)
@@ -1585,7 +1700,8 @@ class WebApiServer:
 
     async def get_bots(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_VIEW_BOTS)
-        return _json({"ok": True, "data": self._decorate_bots_for_auth(auth, list_bots(self.manager, auth.user_id))})
+        items = self._filter_bots_for_auth(auth, list_bots(self.manager, auth.user_id))
+        return _json({"ok": True, "data": self._decorate_bots_for_auth(auth, items)})
 
     async def get_plugins(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_VIEW_PLUGINS)
@@ -1899,6 +2015,7 @@ class WebApiServer:
         mentions = body.get("mentions") if isinstance(body.get("mentions"), list) else []
         chat_user_id = self._chat_user_id(auth)
         actor = self._chat_actor(auth)
+        allow_unsafe_cli = CAP_RUN_UNSAFE_CLI in auth.capabilities
         try:
             if task_mode or isinstance(task_payload, dict) or visible_text is not None:
                 data = await run_chat(
@@ -1914,6 +2031,7 @@ class WebApiServer:
                     mentions=mentions,
                     execution_mode=execution_mode,
                     actor=actor,
+                    allow_unsafe_cli=allow_unsafe_cli,
                 )
             else:
                 data = await run_chat(
@@ -1926,6 +2044,7 @@ class WebApiServer:
                     mentions=mentions,
                     execution_mode=execution_mode,
                     actor=actor,
+                    allow_unsafe_cli=allow_unsafe_cli,
                 )
         except Exception as exc:
             self._schedule_chat_terminal_event(
@@ -1952,6 +2071,7 @@ class WebApiServer:
         mentions = body.get("mentions") if isinstance(body.get("mentions"), list) else []
         chat_user_id = self._chat_user_id(auth)
         actor = self._chat_actor(auth)
+        allow_unsafe_cli = CAP_RUN_UNSAFE_CLI in auth.capabilities
 
         response = web.StreamResponse(
             status=200,
@@ -1976,6 +2096,7 @@ class WebApiServer:
             if cluster_enabled:
                 stream_kwargs["cluster"] = True
                 stream_kwargs["mentions"] = mentions
+            stream_kwargs["allow_unsafe_cli"] = allow_unsafe_cli
             event_stream = stream_chat(
                 self.manager,
                 alias,
@@ -1992,6 +2113,7 @@ class WebApiServer:
             } if cluster_enabled else {}
             if execution_mode and not cluster_enabled:
                 stream_kwargs = {"execution_mode": execution_mode}
+            stream_kwargs["allow_unsafe_cli"] = allow_unsafe_cli
             if agent_id == "main":
                 event_stream = stream_chat(
                     self.manager,
@@ -2085,7 +2207,8 @@ class WebApiServer:
 
     async def get_terminal_ws_probe(self, request: web.Request) -> web.Response:
         origin_allowed = _is_request_origin_allowed(request)
-        has_token = bool(_extract_auth_token(request))
+        token_info = _extract_auth_token_info(request)
+        has_token = bool(token_info.token and token_info.source != AUTH_TOKEN_SOURCE_QUERY)
         auth_status = "not_checked"
         auth_error = ""
         try:
@@ -2103,6 +2226,7 @@ class WebApiServer:
             "path": self._request_log_path(request),
             "configured_base_path": self._web_base_path(),
             "has_token": has_token,
+            "token_source": token_info.source,
             "auth_status": auth_status,
             "auth_error": auth_error,
             "origin_allowed": origin_allowed,
@@ -2339,7 +2463,7 @@ class WebApiServer:
             request.headers.get("X-Forwarded-Host", ""),
             request.headers.get("X-Forwarded-Proto", ""),
             request.headers.get("Upgrade", ""),
-            bool(_extract_auth_token(request)),
+            bool(_extract_auth_token_info(request).token),
             request.remote or "",
         )
         auth = await self._with_websocket_capability(request, CAP_TERMINAL_EXEC)
@@ -2907,6 +3031,8 @@ class WebApiServer:
         alias = str(request.query.get("alias") or "").strip().lower()
         if not alias:
             raise WebApiError(400, "missing_alias", "缺少 Bot 别名")
+        auth = self._bot_auth(auth, alias)
+        request["auth"] = auth
         ws = web.WebSocketResponse(heartbeat=30.0)
         await ws.prepare(request)
 
@@ -3462,7 +3588,8 @@ class WebApiServer:
 
     async def admin_bots(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_MANAGE_BOTS)
-        return _json({"ok": True, "data": self._decorate_bots_for_auth(auth, list_bots(self.manager, auth.user_id))})
+        items = self._filter_bots_for_auth(auth, list_bots(self.manager, auth.user_id))
+        return _json({"ok": True, "data": self._decorate_bots_for_auth(auth, items)})
 
     async def admin_cli_error_stats(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)

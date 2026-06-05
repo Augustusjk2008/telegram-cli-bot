@@ -22,8 +22,8 @@ export type DebugSessionHandle = {
 };
 
 function buildDebugSessionUrl({ token = "", botAlias }: Pick<DebugSessionOptions, "token" | "botAlias">) {
+  void token;
   return buildWsUrl("/debug/ws", {
-    token: token.trim(),
     alias: botAlias,
   });
 }

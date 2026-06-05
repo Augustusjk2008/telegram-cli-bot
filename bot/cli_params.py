@@ -23,7 +23,7 @@ REQUIRED_CLI_MODEL_OPTIONS = [MODEL_OPTION_NONE]
 
 DEFAULT_CLAUDE_PARAMS = {
     # 基础参数
-    "yolo": True,                    # --dangerously-skip-permissions
+    "yolo": False,                   # --dangerously-skip-permissions
     "effort": "max",                 # --effort: max/high/medium/low
     "disable_prompts": True,         # CLAUDE_CODE_DISABLE_PROMPTS=1
     "stream_json": True,             # --output-format stream-json --verbose --include-partial-messages
@@ -36,7 +36,7 @@ DEFAULT_CLAUDE_PARAMS = {
 
 DEFAULT_CODEX_PARAMS = {
     # 基础参数 (exec 子命令)
-    "yolo": True,                    # --dangerously-bypass-approvals-and-sandbox
+    "yolo": False,                   # --dangerously-bypass-approvals-and-sandbox
     "skip_git_check": True,          # --skip-git-repo-check
     "reasoning_effort": "xhigh",     # -c model_reasoning_effort
     # 可选参数
@@ -47,7 +47,7 @@ DEFAULT_CODEX_PARAMS = {
 }
 
 DEFAULT_KIMI_PARAMS = {
-    "yolo": True,
+    "yolo": False,
     "stream_json": True,
     "model": None,
     "thinking": None,
@@ -232,6 +232,16 @@ def with_global_extra_args(
                 *[str(x) for x in args if str(x).strip()],
             ]
     return merged
+
+
+def clamp_unsafe_cli_params(params_config: CliParamsConfig, *, allow_unsafe_cli: bool) -> CliParamsConfig:
+    """Return a copy with yolo disabled unless the caller may run unsafe CLI flags."""
+    data = params_config.to_dict()
+    if not allow_unsafe_cli:
+        for params in data.values():
+            if isinstance(params, dict):
+                params["yolo"] = False
+    return CliParamsConfig.from_dict(data)
 
 
 def normalize_codex_project_path(working_dir: Optional[str]) -> Optional[str]:

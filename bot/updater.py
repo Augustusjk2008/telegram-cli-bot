@@ -380,7 +380,21 @@ def apply_pending_update(repo_root: Path, log_callback: Any | None = None) -> di
             "version": pending_version or _normalize_tag_name(settings.get("last_available_version")),
         }
 
-    write_plan = _build_update_write_plan(repo_root, package_entry_paths)
+    try:
+        write_plan = _build_update_write_plan(repo_root, package_entry_paths)
+    except RuntimeError as exc:
+        settings["update_last_error"] = str(exc)
+        _clear_pending_update(settings)
+        app_settings._save_settings(settings)
+        _emit_apply_log(log_callback, settings["update_last_error"])
+        return {
+            "applied": False,
+            "reason": "invalid_package",
+            "package_path": str(package_path),
+            "version": pending_version or _normalize_tag_name(settings.get("last_available_version")),
+        }
+
+    write_targets = {relative_path: target_path for target_path, relative_path in write_plan}
     _preserve_legacy_announcement_reads(
         repo_root,
         [relative_path for _target_path, relative_path in write_plan],
@@ -403,7 +417,9 @@ def apply_pending_update(repo_root: Path, log_callback: Any | None = None) -> di
                     nonlocal extracted_files
                     if _is_protected_update_path(relative_path):
                         return
-                    target_path = repo_root / relative_path
+                    target_path = write_targets.get(relative_path)
+                    if target_path is None:
+                        raise _PackageStreamError(_format_invalid_package_message(package_path, f"非法归档路径: {relative_path}"))
                     _emit_apply_log(log_callback, f"正在更新: {relative_path}")
                     _replace_target_from_stream(
                         target_path,
@@ -860,35 +876,22 @@ def _read_package_distribution_from_package(package_path: Path) -> dict[str, str
 
 
 def _read_distribution_marker_from_package(package_path: Path) -> bytes:
-    if _is_zip_package(package_path):
-        if not zipfile.is_zipfile(package_path):
-            raise RuntimeError(_format_invalid_package_message(package_path))
-        try:
-            with zipfile.ZipFile(package_path) as archive:
-                for member in archive.infolist():
-                    if member.is_dir():
-                        continue
-                    if _normalize_archive_path(member.filename) == DISTRIBUTION_MARKER_FILE:
-                        return archive.read(member)
-        except (OSError, zipfile.BadZipFile, zipfile.LargeZipFile) as exc:
-            raise RuntimeError(_format_invalid_package_message(package_path, exc)) from exc
+    marker_bytes: bytes | None = None
+
+    def _capture_marker(relative_path: str, stream) -> None:
+        nonlocal marker_bytes
+        if relative_path != DISTRIBUTION_MARKER_FILE or marker_bytes is not None or stream is None:
+            return
+        marker_bytes = stream.read()
+
+    try:
+        _stream_package_entries(package_path, _capture_marker)
+    except _PackageStreamError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+    if marker_bytes is None:
         raise RuntimeError(f"更新包缺少分发标记: {package_path.name}")
-    if _is_tar_gz_package(package_path):
-        try:
-            with tarfile.open(package_path, "r:gz") as archive:
-                for member in archive:
-                    if not member.isfile():
-                        continue
-                    if _normalize_archive_path(member.name) != DISTRIBUTION_MARKER_FILE:
-                        continue
-                    extracted = archive.extractfile(member)
-                    if extracted is None:
-                        break
-                    return extracted.read()
-        except (OSError, tarfile.TarError) as exc:
-            raise RuntimeError(_format_invalid_package_message(package_path, exc)) from exc
-        raise RuntimeError(f"更新包缺少分发标记: {package_path.name}")
-    raise RuntimeError(f"不支持的更新包格式: {package_path.name}")
+    return marker_bytes
 
 
 def _read_package_distribution_from_entries(
@@ -954,10 +957,27 @@ def _build_update_write_plan(
 ) -> list[tuple[Path, str]]:
     plan: list[tuple[Path, str]] = []
     for relative_path in package_entries:
+        target_path = _resolve_update_target_path(repo_root, relative_path)
         if _is_protected_update_path(relative_path):
             continue
-        plan.append((repo_root / relative_path, relative_path))
+        plan.append((target_path, relative_path))
     return plan
+
+
+def _resolve_update_target_path(repo_root: Path, relative_path: str) -> Path:
+    root = Path(repo_root).resolve()
+    try:
+        normalized_path = _normalize_archive_path(relative_path)
+    except ValueError as exc:
+        raise RuntimeError(f"更新包包含非法路径: {relative_path}") from exc
+    if not normalized_path:
+        raise RuntimeError(f"更新包包含非法路径: {relative_path}")
+    target_path = (root / normalized_path).resolve(strict=False)
+    try:
+        target_path.relative_to(root)
+    except ValueError as exc:
+        raise RuntimeError(f"更新包包含非法路径: {relative_path}") from exc
+    return target_path
 
 
 def _preserve_legacy_announcement_reads(
@@ -1144,7 +1164,7 @@ def _iter_zip_entries(package_path: Path) -> list[tuple[str, bytes]]:
         for member in archive.infolist():
             if member.is_dir():
                 continue
-            relative_path = _normalize_archive_path(member.filename)
+            relative_path = _normalize_archive_path_for_package(package_path, member.filename)
             if not relative_path:
                 continue
             entries.append((relative_path, archive.read(member)))
@@ -1157,7 +1177,7 @@ def _iter_tar_entries(package_path: Path) -> list[tuple[str, bytes]]:
         for member in archive.getmembers():
             if not member.isfile():
                 continue
-            relative_path = _normalize_archive_path(member.name)
+            relative_path = _normalize_archive_path_for_package(package_path, member.name)
             if not relative_path:
                 continue
             extracted = archive.extractfile(member)
@@ -1181,7 +1201,7 @@ def _stream_package_entries(
                 for member in archive.infolist():
                     if member.is_dir():
                         continue
-                    relative_path = _normalize_archive_path(member.filename)
+                    relative_path = _normalize_archive_path_for_stream(package_path, member.filename)
                     if not relative_path:
                         continue
                     if not open_files:
@@ -1199,7 +1219,7 @@ def _stream_package_entries(
                 for member in archive:
                     if not member.isfile():
                         continue
-                    relative_path = _normalize_archive_path(member.name)
+                    relative_path = _normalize_archive_path_for_stream(package_path, member.name)
                     if not relative_path:
                         continue
                     if not open_files:
@@ -1276,14 +1296,37 @@ def _format_invalid_package_message(
 
 
 def _normalize_archive_path(raw_path: str) -> str:
+    raw_value = str(raw_path or "")
+    if not raw_value:
+        return ""
+    if raw_value.startswith(("/", "\\")):
+        raise ValueError(f"非法归档路径: {raw_value}")
     parts: list[str] = []
-    for part in str(raw_path or "").replace("\\", "/").split("/"):
+    for part in raw_value.replace("\\", "/").split("/"):
         if not part or part == ".":
             continue
-        if part == "..":
-            return ""
+        if part == ".." or ":" in part:
+            raise ValueError(f"非法归档路径: {raw_value}")
         parts.append(part)
     return "/".join(parts)
+
+
+def _normalize_archive_path_for_package(package_path: Path, raw_path: str) -> str:
+    try:
+        return _normalize_archive_path(raw_path)
+    except ValueError as exc:
+        raise RuntimeError(
+            _format_invalid_package_message(package_path, f"非法归档路径: {raw_path}")
+        ) from exc
+
+
+def _normalize_archive_path_for_stream(package_path: Path, raw_path: str) -> str:
+    try:
+        return _normalize_archive_path(raw_path)
+    except ValueError as exc:
+        raise _PackageStreamError(
+            _format_invalid_package_message(package_path, f"非法归档路径: {raw_path}")
+        ) from exc
 
 
 def _is_protected_update_path(relative_path: str) -> bool:
