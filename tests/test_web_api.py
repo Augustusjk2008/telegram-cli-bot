@@ -809,6 +809,8 @@ def test_build_bot_summary_returns_native_agent_config_without_password(web_mana
         "provider": "anthropic",
         "model": "claude-sonnet-4-5",
         "opencode_agent": "reviewer",
+        "base_url": "https://cdn.codeflow.asia/v1",
+        "api_key": "sk-secret-1234",
     }
 
     summary = build_bot_summary(web_manager, "main")
@@ -819,7 +821,12 @@ def test_build_bot_summary_returns_native_agent_config_without_password(web_mana
         "provider": "anthropic",
         "model": "claude-sonnet-4-5",
         "opencode_agent": "reviewer",
+        "base_url": "https://cdn.codeflow.asia/v1",
+        "has_api_key": True,
+        "api_key_masked": "sk-****1234",
     }
+    assert "api_key" not in summary["native_agent"]
+    assert "sk-secret-1234" not in json.dumps(summary, ensure_ascii=False)
 
 
 @pytest.mark.asyncio
@@ -840,10 +847,41 @@ async def test_admin_execution_route_updates_native_agent_config_and_hides_passw
                         "provider": "anthropic",
                         "model": "claude-sonnet-4-5",
                         "opencode_agent": "reviewer",
+                        "base_url": "https://cdn.codeflow.asia/v1/",
+                        "api_key": "sk-route-1234",
                     },
                 },
             )
             payload = await resp.json()
+            keep_resp = await client.patch(
+                "/api/admin/bots/main/execution",
+                json={
+                    "supported_execution_modes": ["native_agent"],
+                    "default_execution_mode": "native_agent",
+                    "nativeAgent": {
+                        "provider": "openai",
+                        "model": "gpt-5",
+                        "opencodeAgent": "main",
+                        "baseUrl": "https://api.example.test/v1/",
+                    },
+                },
+            )
+            keep_payload = await keep_resp.json()
+            clear_resp = await client.patch(
+                "/api/admin/bots/main/execution",
+                json={
+                    "supportedExecutionModes": ["native_agent"],
+                    "defaultExecutionMode": "native_agent",
+                    "nativeAgent": {
+                        "provider": "codeflow",
+                        "model": "gpt-5.1-codex",
+                        "opencodeAgent": "main",
+                        "baseUrl": "https://cdn.codeflow.asia/v1",
+                        "clearApiKey": True,
+                    },
+                },
+            )
+            clear_payload = await clear_resp.json()
 
     assert resp.status == 200
     assert payload["data"]["bot"]["default_execution_mode"] == "native_agent"
@@ -852,13 +890,76 @@ async def test_admin_execution_route_updates_native_agent_config_and_hides_passw
         "provider": "anthropic",
         "model": "claude-sonnet-4-5",
         "opencode_agent": "reviewer",
+        "base_url": "https://cdn.codeflow.asia/v1",
+        "has_api_key": True,
+        "api_key_masked": "sk-****1234",
+    }
+    assert "api_key" not in payload["data"]["bot"]["native_agent"]
+    assert "sk-route-1234" not in json.dumps(payload, ensure_ascii=False)
+    assert keep_resp.status == 200
+    assert keep_payload["data"]["bot"]["native_agent"] == {
+        "provider": "openai",
+        "model": "gpt-5",
+        "opencode_agent": "main",
+        "base_url": "https://api.example.test/v1",
+        "has_api_key": True,
+        "api_key_masked": "sk-****1234",
+    }
+    assert "sk-route-1234" not in json.dumps(keep_payload, ensure_ascii=False)
+    assert clear_resp.status == 200
+    assert clear_payload["data"]["bot"]["native_agent"] == {
+        "provider": "codeflow",
+        "model": "gpt-5.1-codex",
+        "opencode_agent": "main",
+        "base_url": "https://cdn.codeflow.asia/v1",
+        "has_api_key": False,
+        "api_key_masked": "",
     }
     assert web_manager.main_profile.native_agent == {
+        "provider": "codeflow",
+        "model": "gpt-5.1-codex",
+        "opencode_agent": "main",
+        "base_url": "https://cdn.codeflow.asia/v1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_admin_execution_route_replaces_native_agent_api_key(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    web_manager.main_profile.native_agent = {
         "provider": "anthropic",
         "model": "claude-sonnet-4-5",
         "opencode_agent": "reviewer",
+        "base_url": "https://cdn.codeflow.asia/v1",
+        "api_key": "sk-old-1234",
     }
 
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.patch(
+                "/api/admin/bots/main/execution",
+                json={
+                    "supported_execution_modes": ["native_agent"],
+                    "default_execution_mode": "native_agent",
+                    "native_agent": {
+                        "provider": "anthropic",
+                        "model": "claude-sonnet-4-5",
+                        "opencode_agent": "reviewer",
+                        "base_url": "https://cdn.codeflow.asia/v1",
+                        "api_key": "sk-new-5678",
+                    },
+                },
+            )
+            payload = await resp.json()
+
+    assert resp.status == 200
+    assert payload["data"]["bot"]["native_agent"]["api_key_masked"] == "sk-****5678"
+    assert "api_key" not in payload["data"]["bot"]["native_agent"]
+    assert "sk-new-5678" not in json.dumps(payload, ensure_ascii=False)
+    assert web_manager.main_profile.native_agent["api_key"] == "sk-new-5678"
 @pytest.mark.asyncio
 async def test_web_api_lists_plugins_and_resolves_vcd_handler(
     web_manager: MultiBotManager,

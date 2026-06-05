@@ -7,6 +7,7 @@ import type {
   CliType,
   EnvConfigSnapshot,
   NativeAgentConfig,
+  NativeAgentDraft,
 } from "../services/types";
 
 export type ManagerViewFilter = "all" | BotStatus | "attention";
@@ -20,7 +21,7 @@ export type EditDraft = {
   workingDir: string;
   avatarName: string;
   runtimeBackend: ChatExecutionMode;
-  nativeAgent: NativeAgentConfig;
+  nativeAgent: NativeAgentDraft;
 };
 
 export type BotIssueCode =
@@ -61,7 +62,7 @@ export type BotConfigSnapshot = {
   workingDir: string;
   avatarName: string;
   runtimeBackend: ChatExecutionMode;
-  nativeAgent: NativeAgentConfig;
+  nativeAgent: NativeAgentDraft;
   agents: AgentSummary[];
 };
 
@@ -69,6 +70,18 @@ export const DEFAULT_NATIVE_AGENT_CONFIG: NativeAgentConfig = {
   provider: "",
   model: "",
   opencodeAgent: "",
+  baseUrl: "",
+  hasApiKey: false,
+  apiKeyMasked: "",
+};
+
+export const DEFAULT_NATIVE_AGENT_DRAFT: NativeAgentDraft = {
+  ...DEFAULT_NATIVE_AGENT_CONFIG,
+  baseUrl: "",
+  hasApiKey: false,
+  apiKeyMasked: "",
+  apiKey: "",
+  clearApiKey: false,
 };
 
 type ExecutionModeSource =
@@ -117,6 +130,15 @@ export function nativeAgentConfigFromBot(bot: BotSummary): NativeAgentConfig {
   return {
     ...DEFAULT_NATIVE_AGENT_CONFIG,
     ...(bot.nativeAgent || {}),
+  };
+}
+
+export function nativeAgentDraftFromBot(bot: BotSummary): NativeAgentDraft {
+  return {
+    ...DEFAULT_NATIVE_AGENT_DRAFT,
+    ...(bot.nativeAgent || {}),
+    apiKey: "",
+    clearApiKey: false,
   };
 }
 
@@ -232,7 +254,7 @@ export function draftFromBot(bot: BotSummary): EditDraft {
     workingDir: bot.workingDir,
     avatarName: bot.avatarName || "",
     runtimeBackend: getRuntimeBackend(bot),
-    nativeAgent: nativeAgentConfigFromBot(bot),
+    nativeAgent: nativeAgentDraftFromBot(bot),
   };
 }
 
@@ -355,7 +377,7 @@ export function getBotConfigSnapshot(bot: BotSummary): BotConfigSnapshot {
     workingDir: bot.workingDir,
     avatarName: bot.avatarName || "",
     runtimeBackend: getRuntimeBackend(bot),
-    nativeAgent: nativeAgentConfigFromBot(bot),
+    nativeAgent: nativeAgentDraftFromBot(bot),
     agents: bot.agents || [],
   };
 }

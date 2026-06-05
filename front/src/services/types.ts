@@ -195,16 +195,38 @@ export type CliErrorStatsFilters = {
   limit?: number;
 };
 
-export type NativeAgentConfig = {
+export type NativeAgentConfigView = {
   provider: string;
   model: string;
   opencodeAgent: string;
+  baseUrl?: string;
+  hasApiKey?: boolean;
+  apiKeyMasked?: string;
 };
+
+export type NativeAgentConfigInput = {
+  provider: string;
+  model: string;
+  opencodeAgent: string;
+  baseUrl?: string;
+  apiKey?: string;
+  clearApiKey?: boolean;
+};
+
+export type NativeAgentDraft = NativeAgentConfigView & {
+  baseUrl: string;
+  hasApiKey: boolean;
+  apiKeyMasked: string;
+  apiKey: string;
+  clearApiKey: boolean;
+};
+
+export type NativeAgentConfig = NativeAgentConfigView;
 
 export type BotExecutionConfigInput = {
   supportedExecutionModes: ChatExecutionMode[];
   defaultExecutionMode: ChatExecutionMode;
-  nativeAgent: NativeAgentConfig;
+  nativeAgent: NativeAgentConfigInput;
 };
 
 export type BotSummary = {
@@ -235,7 +257,7 @@ export type BotSummary = {
   supportedExecutionModes?: ChatExecutionMode[];
   defaultExecutionMode?: ChatExecutionMode;
   executionMode?: ChatExecutionMode;
-  nativeAgent?: NativeAgentConfig;
+  nativeAgent?: NativeAgentConfigView;
 };
 
 export type PromptPreset = {
@@ -559,7 +581,7 @@ export type BotOverview = {
   supportedExecutionModes?: ChatExecutionMode[];
   defaultExecutionMode?: ChatExecutionMode;
   executionMode?: ChatExecutionMode;
-  nativeAgent?: NativeAgentConfig;
+  nativeAgent?: NativeAgentConfigView;
 };
 
 export type ChatTraceEvent = {
@@ -1672,7 +1694,7 @@ export type CreateBotInput = {
   avatarName: string;
   supportedExecutionModes?: ChatExecutionMode[];
   defaultExecutionMode?: ChatExecutionMode;
-  nativeAgent?: NativeAgentConfig;
+  nativeAgent?: NativeAgentConfigInput;
 };
 
 export type AvatarAsset = {

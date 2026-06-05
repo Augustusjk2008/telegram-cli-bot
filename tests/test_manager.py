@@ -112,6 +112,8 @@ class TestManagerLoadSave:
                     "provider": "anthropic",
                     "model": "claude-sonnet-4-5",
                     "opencode_agent": "reviewer",
+                    "base_url": "https://cdn.codeflow.asia/v1",
+                    "api_key": "sk-create-1234",
                 },
             )
 
@@ -124,6 +126,8 @@ class TestManagerLoadSave:
             "provider": "anthropic",
             "model": "claude-sonnet-4-5",
             "opencode_agent": "reviewer",
+            "base_url": "https://cdn.codeflow.asia/v1",
+            "api_key": "sk-create-1234",
         }
 
 class TestManagerValidation:
@@ -164,6 +168,8 @@ class TestManagerValidation:
                     "provider": "anthropic",
                     "model": "claude-sonnet-4-5",
                     "opencode_agent": "reviewer",
+                    "baseUrl": "https://cdn.codeflow.asia/v1",
+                    "apiKey": "sk-old-1234",
                 },
             },
         )
@@ -178,19 +184,71 @@ class TestManagerValidation:
                     "provider": "openai",
                     "model": "gpt-5",
                     "opencode_agent": "planner",
+                    "base_url": "https://api.example.test/v1",
+                },
+            },
+        )
+        assert manager.main_profile.native_agent["api_key"] == "sk-old-1234"
+        await manager.set_bot_execution_config(
+            "main",
+            {
+                "supported_execution_modes": ["native_agent"],
+                "default_execution_mode": "native_agent",
+                "native_agent": {
+                    "provider": "codeflow",
+                    "model": "gpt-5.1-codex",
+                    "opencode_agent": "main",
+                    "base_url": "https://cdn.codeflow.asia/v1",
+                    "api_key": "sk-new-5678",
+                },
+            },
+        )
+        assert manager.main_profile.native_agent["api_key"] == "sk-new-5678"
+        await manager.set_bot_execution_config(
+            "main",
+            {
+                "supported_execution_modes": ["native_agent"],
+                "default_execution_mode": "native_agent",
+                "native_agent": {
+                    "provider": "codeflow",
+                    "model": "gpt-5.1-codex",
+                    "opencode_agent": "main",
+                    "base_url": "https://cdn.codeflow.asia/v1",
+                    "clear_api_key": True,
                 },
             },
         )
 
         restored = MultiBotManager(BotProfile(alias="main", token="main_tok", working_dir=str(temp_dir)), str(storage))
 
-        assert restored.main_profile.supported_execution_modes == ["cli"]
-        assert restored.main_profile.default_execution_mode == "cli"
+        assert restored.main_profile.supported_execution_modes == ["native_agent"]
+        assert restored.main_profile.default_execution_mode == "native_agent"
         assert restored.main_profile.native_agent == {
-            "provider": "openai",
-            "model": "gpt-5",
-            "opencode_agent": "planner",
+            "provider": "codeflow",
+            "model": "gpt-5.1-codex",
+            "opencode_agent": "main",
+            "base_url": "https://cdn.codeflow.asia/v1",
         }
+
+    @pytest.mark.asyncio
+    async def test_native_agent_base_url_requires_http_scheme(self, temp_dir: Path):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        manager = MultiBotManager(BotProfile(alias="main", token="main_tok", working_dir=str(temp_dir)), str(storage))
+
+        with pytest.raises(ValueError, match="Base URL"):
+            await manager.set_bot_execution_config(
+                "main",
+                {
+                    "supported_execution_modes": ["native_agent"],
+                    "default_execution_mode": "native_agent",
+                    "native_agent": {
+                        "provider": "codeflow",
+                        "model": "gpt-5.1-codex",
+                        "base_url": "file:///secret",
+                    },
+                },
+            )
 
     @pytest.mark.asyncio
     async def test_background_services_start_and_shutdown_global_native_agent_server(self, temp_dir: Path):

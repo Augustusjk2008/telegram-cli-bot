@@ -1463,7 +1463,7 @@ export class MockWebBotClient implements WebBotClient {
         promptPresets: clonePromptPresets(item.promptPresets),
         supportedExecutionModes: ["cli"],
         defaultExecutionMode: "cli",
-        nativeAgent: { provider: "", model: "", opencodeAgent: "" },
+        nativeAgent: { provider: "", model: "", opencodeAgent: "", baseUrl: "", hasApiKey: false, apiKeyMasked: "" },
         cluster: {
           ...DEFAULT_CLUSTER,
           modelTiers: { ...DEFAULT_CLUSTER.modelTiers },
@@ -2331,6 +2331,29 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
+  private normalizeNativeAgentConfig(input: BotExecutionConfigInput["nativeAgent"] | CreateBotInput["nativeAgent"] | undefined, current?: BotSummary["nativeAgent"]): BotSummary["nativeAgent"] {
+    const provider = String(input?.provider || "").trim();
+    const model = String(input?.model || "").trim();
+    const opencodeAgent = String(input?.opencodeAgent || "").trim();
+    const baseUrl = String(input?.baseUrl || "").trim().replace(/\/+$/, "");
+    const apiKey = String(input?.apiKey || "").trim();
+    const clearApiKey = Boolean(input?.clearApiKey);
+    const hasApiKey = clearApiKey ? false : Boolean(apiKey || current?.hasApiKey);
+    const apiKeyMasked = clearApiKey
+      ? ""
+      : apiKey
+        ? `${apiKey.startsWith("sk-") ? "sk-" : ""}****${apiKey.slice(-4)}`
+        : current?.apiKeyMasked || "";
+    return {
+      provider,
+      model,
+      opencodeAgent,
+      baseUrl,
+      hasApiKey,
+      apiKeyMasked,
+    };
+  }
+
   private getBotSummary(botAlias: string): BotSummary {
     const fallback = this.bots.get("main") || Array.from(this.bots.values())[0];
     const base = this.bots.get(botAlias) || fallback;
@@ -2372,6 +2395,7 @@ export class MockWebBotClient implements WebBotClient {
       isOwnedByCurrentUser: ownerAccountId !== "" && ownerAccountId === this.currentAccountId(),
       promptPresets: clonePromptPresets(base.promptPresets),
       globalPromptPresets: clonePromptPresets(this.globalPromptPresets),
+      nativeAgent: this.normalizeNativeAgentConfig(base.nativeAgent, base.nativeAgent),
       cluster: base.cluster
         ? { ...base.cluster, modelTiers: { ...base.cluster.modelTiers } }
         : { ...DEFAULT_CLUSTER, modelTiers: { ...DEFAULT_CLUSTER.modelTiers } },
@@ -5755,7 +5779,7 @@ export class MockWebBotClient implements WebBotClient {
       ...current,
       supportedExecutionModes: input.supportedExecutionModes,
       defaultExecutionMode: input.defaultExecutionMode,
-      nativeAgent: input.nativeAgent,
+      nativeAgent: this.normalizeNativeAgentConfig(input.nativeAgent, current.nativeAgent),
     });
     return this.getBotSummary(botAlias);
   }
@@ -6539,7 +6563,7 @@ export class MockWebBotClient implements WebBotClient {
       busyAgentCount: 0,
       supportedExecutionModes: input.supportedExecutionModes || ["cli"],
       defaultExecutionMode: input.defaultExecutionMode || "cli",
-      nativeAgent: input.nativeAgent || { provider: "", model: "", opencodeAgent: "" },
+      nativeAgent: this.normalizeNativeAgentConfig(input.nativeAgent),
       cluster: { ...DEFAULT_CLUSTER, modelTiers: { ...DEFAULT_CLUSTER.modelTiers } },
     };
     this.bots.set(alias, bot);

@@ -54,7 +54,14 @@ class DesktopManagerClient extends MockWebBotClient {
         avatarName: "avatar_02.png",
         supportedExecutionModes: ["native_agent"],
         defaultExecutionMode: "native_agent",
-        nativeAgent: { provider: "anthropic", model: "claude-sonnet-4-5", opencodeAgent: "reviewer" },
+        nativeAgent: {
+          provider: "anthropic",
+          model: "claude-sonnet-4-5",
+          opencodeAgent: "reviewer",
+          baseUrl: "https://cdn.codeflow.asia/v1",
+          hasApiKey: true,
+          apiKeyMasked: "sk-****1234",
+        },
       },
       {
         alias: "offline-team",
@@ -424,6 +431,8 @@ test("desktop bot manager creates a bot with native agent config", async () => {
   await user.selectOptions(screen.getByLabelText("运行后端"), "native_agent");
   fireEvent.change(screen.getByLabelText("原生 agent Provider"), { target: { value: "anthropic" } });
   fireEvent.change(screen.getByLabelText("原生 agent Model"), { target: { value: "claude-sonnet-4-5" } });
+  fireEvent.change(screen.getByLabelText("原生 agent Base URL"), { target: { value: "https://cdn.codeflow.asia/v1" } });
+  fireEvent.change(screen.getByLabelText("原生 agent API Key"), { target: { value: "sk-create-1234" } });
   fireEvent.change(screen.getByLabelText("OpenCode agent"), { target: { value: "reviewer" } });
   await user.click(screen.getByRole("button", { name: "创建智能体" }));
 
@@ -438,6 +447,8 @@ test("desktop bot manager creates a bot with native agent config", async () => {
       provider: "anthropic",
       model: "claude-sonnet-4-5",
       opencodeAgent: "reviewer",
+      baseUrl: "https://cdn.codeflow.asia/v1",
+      apiKey: "sk-create-1234",
     },
   });
 });
@@ -455,6 +466,9 @@ test("desktop bot manager edits native agent config", async () => {
   expect(screen.queryByLabelText("智能体 CLI 类型")).not.toBeInTheDocument();
   expect(screen.getByLabelText("原生 agent Provider")).toHaveValue("anthropic");
   expect(screen.getByLabelText("原生 agent Model")).toHaveValue("claude-sonnet-4-5");
+  expect(screen.getByLabelText("原生 agent Base URL")).toHaveValue("https://cdn.codeflow.asia/v1");
+  expect(screen.getByLabelText("原生 agent API Key")).toHaveValue("");
+  expect(screen.getByText("已保存 sk-****1234")).toBeInTheDocument();
   expect(screen.getByLabelText("OpenCode agent")).toHaveValue("reviewer");
 
   fireEvent.change(screen.getByLabelText("原生 agent Model"), { target: { value: "claude-opus-4-1" } });
@@ -463,7 +477,7 @@ test("desktop bot manager edits native agent config", async () => {
   await waitFor(() => {
     expect(client.updateBotExecutionConfigCalls).toHaveLength(1);
   });
-  expect(client.updateBotExecutionConfigCalls[0]).toEqual({
+  expect(client.updateBotExecutionConfigCalls[0]).toMatchObject({
     botAlias: "review",
     input: {
       supportedExecutionModes: ["native_agent"],
@@ -472,6 +486,35 @@ test("desktop bot manager edits native agent config", async () => {
         provider: "anthropic",
         model: "claude-opus-4-1",
         opencodeAgent: "reviewer",
+        baseUrl: "https://cdn.codeflow.asia/v1",
+        apiKey: "",
+        clearApiKey: false,
+      },
+    },
+  });
+});
+
+test("desktop bot manager clears native agent api key only when clear is clicked", async () => {
+  const user = userEvent.setup();
+  const client = new DesktopManagerClient();
+
+  render(<DesktopBotManagerScreen client={client} currentAlias="review" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
+
+  await screen.findByRole("heading", { name: "智能体管理" });
+  await user.click(screen.getByRole("button", { name: "配置" }));
+  await user.click(screen.getByRole("button", { name: "清除" }));
+  expect(screen.getByText("保存后清除")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "保存智能体" }));
+
+  await waitFor(() => {
+    expect(client.updateBotExecutionConfigCalls).toHaveLength(1);
+  });
+  expect(client.updateBotExecutionConfigCalls[0]).toMatchObject({
+    botAlias: "review",
+    input: {
+      nativeAgent: {
+        apiKey: "",
+        clearApiKey: true,
       },
     },
   });

@@ -612,6 +612,9 @@ describe("RealWebBotClient", () => {
           provider: "anthropic",
           model: "claude-sonnet-4-5",
           opencode_agent: "reviewer",
+          base_url: "https://cdn.codeflow.asia/v1",
+          has_api_key: true,
+          api_key_masked: "sk-****1234",
         },
       },
     }));
@@ -624,6 +627,8 @@ describe("RealWebBotClient", () => {
         provider: "anthropic",
         model: "claude-sonnet-4-5",
         opencodeAgent: "reviewer",
+        baseUrl: "https://cdn.codeflow.asia/v1",
+        apiKey: "sk-route-1234",
       },
     });
     const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
@@ -639,12 +644,73 @@ describe("RealWebBotClient", () => {
         provider: "anthropic",
         model: "claude-sonnet-4-5",
         opencode_agent: "reviewer",
+        base_url: "https://cdn.codeflow.asia/v1",
+        api_key: "sk-route-1234",
       },
     });
     expect(bot.nativeAgent).toEqual({
       provider: "anthropic",
       model: "claude-sonnet-4-5",
       opencodeAgent: "reviewer",
+      baseUrl: "https://cdn.codeflow.asia/v1",
+      hasApiKey: true,
+      apiKeyMasked: "sk-****1234",
+    });
+  });
+
+  test("addBot posts native agent base url and clear key action", async () => {
+    fetchMock.mockResolvedValueOnce(jsonOk({
+      bot: {
+        alias: "native1",
+        cli_type: "codex",
+        bot_mode: "cli",
+        status: "running",
+        service_status: "online",
+        activity_status: "idle",
+        working_dir: "C:\\workspace\\native1",
+        supported_execution_modes: ["native_agent"],
+        default_execution_mode: "native_agent",
+        native_agent: {
+          provider: "codeflow",
+          model: "gpt-5.1-codex",
+          opencode_agent: "main",
+          base_url: "https://cdn.codeflow.asia/v1",
+          has_api_key: false,
+          api_key_masked: "",
+        },
+      },
+    }));
+
+    const client = new RealWebBotClient();
+    await client.addBot({
+      alias: "native1",
+      botMode: "cli",
+      cliType: "codex",
+      cliPath: "codex",
+      workingDir: "C:\\workspace\\native1",
+      avatarName: "",
+      supportedExecutionModes: ["native_agent"],
+      defaultExecutionMode: "native_agent",
+      nativeAgent: {
+        provider: "codeflow",
+        model: "gpt-5.1-codex",
+        opencodeAgent: "main",
+        baseUrl: "https://cdn.codeflow.asia/v1",
+        clearApiKey: true,
+      },
+    });
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/admin/bots",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(body.native_agent).toEqual({
+      provider: "codeflow",
+      model: "gpt-5.1-codex",
+      opencode_agent: "main",
+      base_url: "https://cdn.codeflow.asia/v1",
+      clear_api_key: true,
     });
   });
 
@@ -734,6 +800,9 @@ describe("RealWebBotClient", () => {
                 provider: "anthropic",
                 model: "claude-sonnet-4-5",
                 opencode_agent: "reviewer",
+                base_url: "https://cdn.codeflow.asia/v1",
+                has_api_key: true,
+                api_key_masked: "sk-****abcd",
               },
               assistant_runtime: {
                 pending_count: 2,
@@ -790,6 +859,9 @@ describe("RealWebBotClient", () => {
       provider: "anthropic",
       model: "claude-sonnet-4-5",
       opencodeAgent: "reviewer",
+      baseUrl: "https://cdn.codeflow.asia/v1",
+      hasApiKey: true,
+      apiKeyMasked: "sk-****abcd",
     });
     expect(overview.runningReply).toEqual({
       previewText: "处理中预览",

@@ -67,9 +67,47 @@ def normalize_execution_mode_config(
     return [EXECUTION_MODE_CLI], EXECUTION_MODE_CLI
 
 
-def normalize_native_agent_config(value: Any) -> dict[str, Any]:
+def _native_agent_value(data: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in data:
+            return data.get(key)
+    return None
+
+
+def _native_agent_bool(data: dict[str, Any], *keys: str) -> bool:
+    value = _native_agent_value(data, *keys)
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def normalize_native_agent_provider(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def normalize_native_agent_base_url(value: Any) -> str:
+    base_url = str(value or "").strip()
+    if not base_url:
+        return ""
+    lowered = base_url.lower()
+    if not (lowered.startswith("http://") or lowered.startswith("https://")):
+        raise ValueError("Base URL 必须以 http:// 或 https:// 开头")
+    return base_url.rstrip("/")
+
+
+def mask_secret(value: Any) -> str:
+    secret = str(value or "")
+    if not secret:
+        return ""
+    suffix = secret[-4:] if len(secret) >= 4 else secret
+    prefix = secret[:3] if secret.startswith("sk-") else ""
+    return f"{prefix}****{suffix}"
+
+
+def normalize_native_agent_config(value: Any, *, existing: dict[str, Any] | None = None) -> dict[str, Any]:
     data = value if isinstance(value, dict) else {}
-    provider = str(data.get("provider") or "").strip().lower()
+    existing_config = dict(existing or {})
+    provider = normalize_native_agent_provider(data.get("provider"))
     model = str(data.get("model") or data.get("modelId") or data.get("model_id") or "").strip()
     opencode_agent = str(
         data.get("opencode_agent")
@@ -77,6 +115,10 @@ def normalize_native_agent_config(value: Any) -> dict[str, Any]:
         or data.get("agent")
         or ""
     ).strip()
+    base_url = normalize_native_agent_base_url(_native_agent_value(data, "base_url", "baseUrl"))
+    clear_api_key = _native_agent_bool(data, "clear_api_key", "clearApiKey")
+    has_api_key_input = "api_key" in data or "apiKey" in data
+    api_key = str(_native_agent_value(data, "api_key", "apiKey") or "").strip() if has_api_key_input else ""
     result: dict[str, Any] = {}
     if provider:
         result["provider"] = provider
@@ -84,6 +126,30 @@ def normalize_native_agent_config(value: Any) -> dict[str, Any]:
         result["model"] = model
     if opencode_agent:
         result["opencode_agent"] = opencode_agent
+    if base_url:
+        result["base_url"] = base_url
+    if clear_api_key:
+        pass
+    elif has_api_key_input:
+        if api_key:
+            result["api_key"] = api_key
+        elif existing_config.get("api_key"):
+            result["api_key"] = str(existing_config.get("api_key") or "")
+    elif existing_config.get("api_key"):
+        result["api_key"] = str(existing_config.get("api_key") or "")
+    return result
+
+
+def public_native_agent_config(value: Any) -> dict[str, Any]:
+    config = normalize_native_agent_config(value)
+    result = {key: config[key] for key in ("provider", "model", "opencode_agent", "base_url") if config.get(key)}
+    api_key = str(config.get("api_key") or "")
+    if api_key:
+        result["has_api_key"] = True
+        result["api_key_masked"] = mask_secret(api_key)
+    else:
+        result["has_api_key"] = False
+        result["api_key_masked"] = ""
     return result
 
 
@@ -332,6 +398,7 @@ class UserSession:
     kimi_session_id: Optional[str] = None
     native_agent_session_id: Optional[str] = None
     native_agent_run_id: Optional[str] = None
+    native_agent_server_key: Optional[str] = None
     claude_session_initialized: bool = False
     process: Optional[subprocess.Popen] = None
     is_processing: bool = False
@@ -429,6 +496,7 @@ class UserSession:
         with self._lock:
             self.process = None
             self.native_agent_run_id = None
+            self.native_agent_server_key = None
             self.stop_requested = False
             self.is_processing = False
             self.running_user_text = None
@@ -503,6 +571,7 @@ class UserSession:
             self.kimi_session_id = None
             self.native_agent_session_id = None
             self.native_agent_run_id = None
+            self.native_agent_server_key = None
             self.claude_session_initialized = False
             self.active_conversation_id = None
         self.persist()

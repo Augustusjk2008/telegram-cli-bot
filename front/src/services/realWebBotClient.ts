@@ -83,6 +83,7 @@ import type {
   ChatTraceEvent,
   NativeAgentPermissionReplyOptions,
   NativeAgentConfig,
+  NativeAgentConfigInput,
   CliErrorStatsFilters,
   CliErrorStatsItem,
   CliErrorStatsResult,
@@ -1896,6 +1897,21 @@ function mapNativeAgentConfig(value: unknown): NativeAgentConfig | undefined {
     provider: String(raw.provider || ""),
     model: String(raw.model || ""),
     opencodeAgent: String(raw.opencode_agent ?? raw.opencodeAgent ?? raw.agent ?? ""),
+    baseUrl: String(raw.base_url ?? raw.baseUrl ?? ""),
+    hasApiKey: Boolean(raw.has_api_key ?? raw.hasApiKey ?? raw.api_key_masked ?? raw.apiKeyMasked),
+    apiKeyMasked: String(raw.api_key_masked ?? raw.apiKeyMasked ?? ""),
+  };
+}
+
+function serializeNativeAgentConfig(input: NativeAgentConfigInput | undefined) {
+  const nativeAgent = input || { provider: "", model: "", opencodeAgent: "", baseUrl: "" };
+  return {
+    provider: nativeAgent.provider,
+    model: nativeAgent.model,
+    opencode_agent: nativeAgent.opencodeAgent,
+    base_url: nativeAgent.baseUrl || "",
+    ...(nativeAgent.apiKey ? { api_key: nativeAgent.apiKey } : {}),
+    ...(nativeAgent.clearApiKey ? { clear_api_key: true } : {}),
   };
 }
 
@@ -5657,11 +5673,7 @@ export class RealWebBotClient implements WebBotClient {
       body: JSON.stringify({
         supported_execution_modes: input.supportedExecutionModes,
         default_execution_mode: input.defaultExecutionMode,
-        native_agent: {
-          provider: input.nativeAgent.provider,
-          model: input.nativeAgent.model,
-          opencode_agent: input.nativeAgent.opencodeAgent,
-        },
+        native_agent: serializeNativeAgentConfig(input.nativeAgent),
       }),
     });
     return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
@@ -6237,11 +6249,7 @@ export class RealWebBotClient implements WebBotClient {
         ...(input.supportedExecutionModes ? { supported_execution_modes: input.supportedExecutionModes } : {}),
         ...(input.defaultExecutionMode ? { default_execution_mode: input.defaultExecutionMode } : {}),
         ...(input.nativeAgent ? {
-          native_agent: {
-            provider: input.nativeAgent.provider,
-            model: input.nativeAgent.model,
-            opencode_agent: input.nativeAgent.opencodeAgent,
-          },
+          native_agent: serializeNativeAgentConfig(input.nativeAgent),
         } : {}),
       }),
     });

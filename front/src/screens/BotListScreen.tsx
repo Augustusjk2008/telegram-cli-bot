@@ -13,7 +13,7 @@ import {
   useBotManager,
   type CreateDraft,
 } from "./useBotManager";
-import { DEFAULT_NATIVE_AGENT_CONFIG, isBotOffline, isMainBot, isNativeAgentGloballyEnabled } from "./botManagerModel";
+import { DEFAULT_NATIVE_AGENT_DRAFT, isBotOffline, isMainBot, isNativeAgentGloballyEnabled } from "./botManagerModel";
 
 type Props = {
   client?: WebBotClient;
@@ -291,14 +291,16 @@ export function BotListScreen({
           ) : null}
           {createDraft.runtimeBackend === "native_agent" ? (
             <NativeAgentConfigFields
-              provider={createDraft.nativeAgent?.provider || DEFAULT_NATIVE_AGENT_CONFIG.provider}
-              model={createDraft.nativeAgent?.model || DEFAULT_NATIVE_AGENT_CONFIG.model}
-              opencodeAgent={createDraft.nativeAgent?.opencodeAgent || DEFAULT_NATIVE_AGENT_CONFIG.opencodeAgent}
+              provider={createDraft.nativeAgent?.provider || DEFAULT_NATIVE_AGENT_DRAFT.provider}
+              model={createDraft.nativeAgent?.model || DEFAULT_NATIVE_AGENT_DRAFT.model}
+              opencodeAgent={createDraft.nativeAgent?.opencodeAgent || DEFAULT_NATIVE_AGENT_DRAFT.opencodeAgent}
+              baseUrl={createDraft.nativeAgent?.baseUrl || DEFAULT_NATIVE_AGENT_DRAFT.baseUrl}
+              apiKey={createDraft.nativeAgent?.apiKey || ""}
               disabled={!canManage || savingAction !== ""}
               onNativeAgentChange={(patch) => setCreateDraft((prev) => ({
                 ...prev,
                 nativeAgent: {
-                  ...DEFAULT_NATIVE_AGENT_CONFIG,
+                  ...DEFAULT_NATIVE_AGENT_DRAFT,
                   ...(prev.nativeAgent || {}),
                   ...patch,
                 },

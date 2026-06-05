@@ -122,7 +122,7 @@ from bot.cli import (
 )
 from bot.manager import MultiBotManager
 from bot.messages import msg
-from bot.models import AgentProfile, BotProfile, EXECUTION_MODE_CLI, UserSession, normalize_native_agent_config
+from bot.models import AgentProfile, BotProfile, EXECUTION_MODE_CLI, UserSession, public_native_agent_config
 from bot.native_agent import (
     NATIVE_AGENT_PROVIDER,
     get_native_agent_service,
@@ -736,7 +736,7 @@ def build_bot_summary(
         "cli_path": profile.cli_path,
         "supported_execution_modes": list(profile.supported_execution_modes),
         "default_execution_mode": profile.default_execution_mode,
-        "native_agent": normalize_native_agent_config(profile.native_agent),
+        "native_agent": public_native_agent_config(profile.native_agent),
         "working_dir": working_dir,
         "avatar_name": profile.avatar_name or "",
         "prompt_presets": [dict(item) for item in profile.prompt_presets],

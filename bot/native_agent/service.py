@@ -49,11 +49,29 @@ class NativeAgentService:
     def __init__(self) -> None:
         self._server_manager = SERVER_MANAGER
 
-    async def _server_for(self) -> NativeAgentServerHandle:
-        return await self._server_manager.ensure_started()
+    async def _server_for(self, profile: BotProfile) -> NativeAgentServerHandle:
+        try:
+            return await self._server_manager.ensure_started(profile)
+        except TypeError:
+            return await self._server_manager.ensure_started()
 
     async def _client_for_active_run(self, session: UserSession) -> NativeAgentClient | None:
-        handle = await self._server_manager.get_existing()
+        with session._lock:
+            server_key = str(getattr(session, "native_agent_server_key", "") or "").strip()
+        handle = None
+        get_existing_by_key = getattr(self._server_manager, "get_existing_by_key", None)
+        if server_key and callable(get_existing_by_key):
+            handle = await get_existing_by_key(server_key)
+        get_existing_for = getattr(self._server_manager, "get_existing_for", None)
+        if callable(get_existing_for):
+            profile = BotProfile(alias=session.bot_alias, working_dir=session.working_dir)
+            handle = handle or await get_existing_for(profile)
+        get_existing_for_alias = getattr(self._server_manager, "get_existing_for_alias", None)
+        has_alias_lookup = callable(get_existing_for_alias)
+        if has_alias_lookup:
+            handle = handle or await get_existing_for_alias(session.bot_alias)
+        if handle is None and not has_alias_lookup:
+            handle = await self._server_manager.get_existing()
         return handle.client() if handle is not None else None
 
     def _prompt_options(self, profile: BotProfile) -> tuple[str, str]:
@@ -145,7 +163,9 @@ class NativeAgentService:
         reader_task: asyncio.Task[None] | None = None
 
         try:
-            server = await self._server_for()
+            server = await self._server_for(profile)
+            with session._lock:
+                session.native_agent_server_key = str(getattr(server, "key", "") or "")
             client = server.client()
             native_session_id = await self._ensure_session_id(client, session)
             model_id, agent_id = self._prompt_options(profile)
@@ -330,6 +350,7 @@ class NativeAgentService:
                     pass
             with session._lock:
                 session.native_agent_run_id = None
+                session.native_agent_server_key = None
                 session.is_processing = False
                 session.stop_requested = False
                 session.process = None

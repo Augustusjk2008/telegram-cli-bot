@@ -859,6 +859,8 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 ) : null}
                 {nativeRuntime ? <p><span className="font-medium text-[var(--text)]">Provider:</span> {overview.nativeAgent?.provider || "未设置"}</p> : null}
                 {nativeRuntime ? <p><span className="font-medium text-[var(--text)]">Model:</span> {overview.nativeAgent?.model || "未设置"}</p> : null}
+                {nativeRuntime ? <p className="break-all"><span className="font-medium text-[var(--text)]">Base URL:</span> {overview.nativeAgent?.baseUrl || "未设置"}</p> : null}
+                {nativeRuntime ? <p><span className="font-medium text-[var(--text)]">API Key:</span> {overview.nativeAgent?.hasApiKey ? `已保存 ${overview.nativeAgent.apiKeyMasked || ""}`.trim() : "未保存"}</p> : null}
                 {nativeRuntime ? <p><span className="font-medium text-[var(--text)]">OpenCode agent:</span> {overview.nativeAgent?.opencodeAgent || "未设置"}</p> : null}
                 <p><span className="font-medium text-[var(--text)]">状态:</span> {overview.status}</p>
                 <p className="break-all"><span className="font-medium text-[var(--text)]">目录:</span> {overview.workingDir}</p>

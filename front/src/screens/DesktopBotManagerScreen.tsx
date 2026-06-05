@@ -41,7 +41,7 @@ import {
   buildExecutionConfig,
   buildBulkActionPlan,
   countBotManagerStats,
-  DEFAULT_NATIVE_AGENT_CONFIG,
+  DEFAULT_NATIVE_AGENT_DRAFT,
   detectBotIssues,
   draftFromBot,
   getRuntimeBackend,
@@ -104,12 +104,18 @@ function managerPillStatus(bot: BotSummary) {
 
 function normalizeCreateDraft(draft: CreateDraft): CreateDraft {
   const executionConfig = buildExecutionConfig(draft.runtimeBackend);
+  const providerInput = draft.nativeAgent?.provider?.trim() || "";
+  const providerLooksLikeUrl = /^https?:\/\//i.test(providerInput);
+  const baseUrlInput = draft.nativeAgent?.baseUrl?.trim() || "";
   const nativeAgent = {
-    ...DEFAULT_NATIVE_AGENT_CONFIG,
+    ...DEFAULT_NATIVE_AGENT_DRAFT,
     ...(draft.nativeAgent || {}),
-    provider: draft.nativeAgent?.provider?.trim() || "",
+    provider: providerLooksLikeUrl ? "codeflow" : providerInput,
     model: draft.nativeAgent?.model?.trim() || "",
     opencodeAgent: draft.nativeAgent?.opencodeAgent?.trim() || "",
+    baseUrl: providerLooksLikeUrl && !baseUrlInput ? providerInput.replace(/\/+$/, "") : baseUrlInput.replace(/\/+$/, ""),
+    apiKey: draft.nativeAgent?.apiKey?.trim() || "",
+    clearApiKey: Boolean(draft.nativeAgent?.clearApiKey),
   };
   return {
     alias: draft.alias.trim(),
@@ -126,6 +132,9 @@ function normalizeCreateDraft(draft: CreateDraft): CreateDraft {
 }
 
 function normalizeEditDraft(draft: EditDraft): EditDraft {
+  const providerInput = draft.nativeAgent.provider.trim();
+  const providerLooksLikeUrl = /^https?:\/\//i.test(providerInput);
+  const baseUrlInput = draft.nativeAgent.baseUrl.trim();
   return {
     alias: draft.alias.trim(),
     botMode: draft.botMode,
@@ -135,11 +144,14 @@ function normalizeEditDraft(draft: EditDraft): EditDraft {
     avatarName: draft.avatarName.trim(),
     runtimeBackend: draft.runtimeBackend,
     nativeAgent: {
-      ...DEFAULT_NATIVE_AGENT_CONFIG,
+      ...DEFAULT_NATIVE_AGENT_DRAFT,
       ...draft.nativeAgent,
-      provider: draft.nativeAgent.provider.trim(),
+      provider: providerLooksLikeUrl ? "codeflow" : providerInput,
       model: draft.nativeAgent.model.trim(),
       opencodeAgent: draft.nativeAgent.opencodeAgent.trim(),
+      baseUrl: providerLooksLikeUrl && !baseUrlInput ? providerInput.replace(/\/+$/, "") : baseUrlInput.replace(/\/+$/, ""),
+      apiKey: draft.nativeAgent.apiKey.trim(),
+      clearApiKey: Boolean(draft.nativeAgent.clearApiKey),
     },
   };
 }
@@ -401,14 +413,16 @@ function CreatePanel({
       </div>
       {draft.runtimeBackend === "native_agent" ? (
         <NativeAgentConfigFields
-          provider={draft.nativeAgent?.provider || DEFAULT_NATIVE_AGENT_CONFIG.provider}
-          model={draft.nativeAgent?.model || DEFAULT_NATIVE_AGENT_CONFIG.model}
-          opencodeAgent={draft.nativeAgent?.opencodeAgent || DEFAULT_NATIVE_AGENT_CONFIG.opencodeAgent}
+          provider={draft.nativeAgent?.provider || DEFAULT_NATIVE_AGENT_DRAFT.provider}
+          model={draft.nativeAgent?.model || DEFAULT_NATIVE_AGENT_DRAFT.model}
+          opencodeAgent={draft.nativeAgent?.opencodeAgent || DEFAULT_NATIVE_AGENT_DRAFT.opencodeAgent}
+          baseUrl={draft.nativeAgent?.baseUrl || DEFAULT_NATIVE_AGENT_DRAFT.baseUrl}
+          apiKey={draft.nativeAgent?.apiKey || ""}
           disabled={!canManage || manager.savingAction !== ""}
           onNativeAgentChange={(patch) => setDraft((prev) => ({
             ...prev,
             nativeAgent: {
-              ...DEFAULT_NATIVE_AGENT_CONFIG,
+              ...DEFAULT_NATIVE_AGENT_DRAFT,
               ...(prev.nativeAgent || {}),
               ...patch,
             },
@@ -681,6 +695,12 @@ function EditPanel({
           provider={draft.nativeAgent.provider}
           model={draft.nativeAgent.model}
           opencodeAgent={draft.nativeAgent.opencodeAgent}
+          baseUrl={draft.nativeAgent.baseUrl}
+          apiKey={draft.nativeAgent.apiKey}
+          hasApiKey={draft.nativeAgent.hasApiKey}
+          apiKeyMasked={draft.nativeAgent.apiKeyMasked}
+          clearApiKey={draft.nativeAgent.clearApiKey}
+          editing
           disabled={!canManage || manager.savingAction !== ""}
           onNativeAgentChange={(patch) => setDraft((prev) => ({
             ...prev,

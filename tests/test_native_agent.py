@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -171,6 +172,173 @@ async def test_native_agent_server_manager_reuses_single_global_handle_and_falls
         "--port",
         "4096",
     )
+
+
+@pytest.mark.asyncio
+async def test_native_agent_server_manager_scopes_by_bot_config_and_writes_opencode_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot import config
+    from bot.native_agent import server_manager as server_manager_module
+
+    created_processes = []
+    captured_envs: list[dict[str, str]] = []
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.returncode = None
+            self.terminated = False
+            self.killed = False
+
+        def terminate(self):
+            self.terminated = True
+            self.returncode = 0
+
+        def kill(self):
+            self.killed = True
+            self.returncode = 0
+
+        async def wait(self):
+            return 0
+
+    async def fake_create_subprocess_exec(*_args, **kwargs):
+        process = FakeProcess()
+        created_processes.append(process)
+        captured_envs.append(dict(kwargs["env"]))
+        return process
+
+    async def fake_health(self):
+        return {"ok": True}
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    monkeypatch.setattr(config, "NATIVE_AGENT_COMMAND", "opencode")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PATH", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_HOST", "127.0.0.1")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PORT", 0)
+    monkeypatch.setattr(config, "NATIVE_AGENT_SERVER_PASSWORD", "secret")
+    monkeypatch.setattr(server_manager_module, "get_app_data_root", lambda: tmp_path / "data")
+    monkeypatch.setattr(server_manager_module, "resolve_cli_executable", lambda command, _cwd=None: f"C:/tools/{command}.cmd")
+    monkeypatch.setattr(server_manager_module, "build_executable_invocation", lambda path: [path])
+    monkeypatch.setattr(server_manager_module.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(server_manager_module.NativeAgentClient, "health", fake_health)
+
+    manager = NativeAgentServerManager()
+    ports = iter([4101, 4102, 4103])
+    monkeypatch.setattr(manager, "_pick_port", lambda _host: next(ports))
+    native_agent = {
+        "provider": "codeflow",
+        "model": "gpt-5.1-codex",
+        "base_url": "https://cdn.codeflow.asia/v1/",
+        "api_key": "sk-server-1234",
+    }
+    first_profile = BotProfile(alias="alpha", native_agent=native_agent)
+    same_profile = BotProfile(alias="alpha", native_agent=dict(native_agent))
+    other_profile = BotProfile(alias="beta", native_agent=dict(native_agent))
+    changed_profile = BotProfile(alias="alpha", native_agent={**native_agent, "model": "gpt-5.2-codex"})
+
+    first = await manager.ensure_started(first_profile)
+    same = await manager.ensure_started(same_profile)
+    other = await manager.ensure_started(other_profile)
+    changed = await manager.ensure_started(changed_profile)
+
+    assert same is first
+    assert other is not first
+    assert changed is not first
+    assert created_processes == [first.process, other.process, changed.process]
+    assert created_processes[0].terminated is True
+    assert first.config_path is not None
+    assert first.config_path.exists() is False
+    assert other.config_path is not None and other.config_path.exists()
+    assert changed.config_path is not None and changed.config_path.exists()
+    assert captured_envs[0]["OPENCODE_CONFIG"] == str(first.config_path)
+    assert captured_envs[0]["OPENCODE_SERVER_PASSWORD"] == "secret"
+
+    payload = json.loads(changed.config_path.read_text(encoding="utf-8"))
+    provider = payload["provider"]["codeflow"]
+    assert provider["npm"] == "@ai-sdk/openai-compatible"
+    assert provider["options"] == {
+        "baseURL": "https://cdn.codeflow.asia/v1",
+        "apiKey": "sk-server-1234",
+    }
+    assert provider["models"]["gpt-5.2-codex"]["name"] == "gpt-5.2-codex"
+    assert "sk-server-1234" not in changed.key
+    assert await manager.get_existing_for_alias("beta") is other
+    assert await manager.get_existing_for_alias("alpha") is changed
+
+    await manager.stop_all()
+
+    assert other.config_path.exists() is False
+    assert changed.config_path.exists() is False
+    assert created_processes[1].terminated is True
+    assert created_processes[2].terminated is True
+
+
+@pytest.mark.asyncio
+async def test_native_agent_server_manager_keeps_builtin_provider_adapter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot import config
+    from bot.native_agent import server_manager as server_manager_module
+
+    captured_envs: list[dict[str, str]] = []
+
+    class FakeProcess:
+        returncode = None
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = 0
+
+        async def wait(self):
+            return 0
+
+    async def fake_create_subprocess_exec(*_args, **kwargs):
+        captured_envs.append(dict(kwargs["env"]))
+        return FakeProcess()
+
+    async def fake_health(self):
+        return {"ok": True}
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    monkeypatch.setattr(config, "NATIVE_AGENT_COMMAND", "opencode")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PATH", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_HOST", "127.0.0.1")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PORT", 0)
+    monkeypatch.setattr(config, "NATIVE_AGENT_SERVER_PASSWORD", "secret")
+    monkeypatch.setattr(server_manager_module, "get_app_data_root", lambda: tmp_path / "data")
+    monkeypatch.setattr(server_manager_module, "resolve_cli_executable", lambda command, _cwd=None: f"C:/tools/{command}.cmd")
+    monkeypatch.setattr(server_manager_module, "build_executable_invocation", lambda path: [path])
+    monkeypatch.setattr(server_manager_module.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(server_manager_module.NativeAgentClient, "health", fake_health)
+
+    manager = NativeAgentServerManager()
+    monkeypatch.setattr(manager, "_pick_port", lambda _host: 4101)
+    handle = await manager.ensure_started(BotProfile(
+        alias="anthropic-bot",
+        native_agent={
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-5",
+            "base_url": "https://api.anthropic.com/v1",
+            "api_key": "sk-ant-1234",
+        },
+    ))
+
+    assert handle.config_path is not None
+    payload = json.loads(handle.config_path.read_text(encoding="utf-8"))
+    provider = payload["provider"]["anthropic"]
+    assert "npm" not in provider
+    assert provider["options"] == {
+        "baseURL": "https://api.anthropic.com/v1",
+        "apiKey": "sk-ant-1234",
+    }
+    assert provider["models"]["claude-sonnet-4-5"]["name"] == "claude-sonnet-4-5"
+    assert captured_envs[0]["OPENCODE_CONFIG"] == str(handle.config_path)
+
+    await manager.stop_all()
 
 
 @pytest.mark.asyncio

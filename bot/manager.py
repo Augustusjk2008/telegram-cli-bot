@@ -646,7 +646,8 @@ class MultiBotManager:
             data.get("default_execution_mode", data.get("defaultExecutionMode")),
             default=requested_supported_execution_modes[0],
         )
-        raw_native_agent = data.get("native_agent", data.get("nativeAgent"))
+        has_native_agent_payload = "native_agent" in data or "nativeAgent" in data
+        raw_native_agent = data.get("native_agent", data.get("nativeAgent")) if has_native_agent_payload else None
 
         async with self._lock:
             profile = self._get_profile_for_update(normalized_alias)
@@ -660,7 +661,11 @@ class MultiBotManager:
                 requested_default_execution_mode,
                 bot_mode=profile.bot_mode,
             )
-            native_agent = normalize_native_agent_config(raw_native_agent)
+            native_agent = (
+                normalize_native_agent_config(raw_native_agent, existing=profile.native_agent)
+                if has_native_agent_payload
+                else normalize_native_agent_config(profile.native_agent)
+            )
             profile.supported_execution_modes = supported
             profile.default_execution_mode = default_mode
             profile.native_agent = native_agent

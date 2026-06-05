@@ -17,6 +17,7 @@ import { normalizePathInput } from "../utils/pathInput";
 import {
   buildExecutionConfig,
   DEFAULT_NATIVE_AGENT_CONFIG,
+  DEFAULT_NATIVE_AGENT_DRAFT,
   getErrorMessage,
   getRuntimeBackend,
   isBotOffline,
@@ -39,7 +40,7 @@ export const EMPTY_CREATE_DRAFT: CreateDraft = {
   supportedExecutionModes: ["cli"],
   defaultExecutionMode: "cli",
   runtimeBackend: "cli",
-  nativeAgent: { ...DEFAULT_NATIVE_AGENT_CONFIG },
+  nativeAgent: { ...DEFAULT_NATIVE_AGENT_DRAFT },
 };
 
 export function defaultCliPathForType(cliType: CliType) {
@@ -69,7 +70,7 @@ export function buildCreateDraft(cliType: CliType = "codex", bots: BotSummary[] 
     cliType,
     cliPath: resolveDefaultCliPath(cliType, bots),
     runtimeBackend: "cli",
-    nativeAgent: { ...DEFAULT_NATIVE_AGENT_CONFIG },
+    nativeAgent: { ...DEFAULT_NATIVE_AGENT_DRAFT },
   };
 }
 
@@ -85,6 +86,35 @@ type UseBotManagerArgs = {
   client?: WebBotClient;
   onBotsChange?: (bots: BotSummary[]) => void;
 };
+
+function normalizeNativeAgentInput(nativeAgent: CreateBotInput["nativeAgent"] | EditDraft["nativeAgent"] | undefined) {
+  const providerInput = nativeAgent?.provider?.trim() || "";
+  const providerLooksLikeUrl = /^https?:\/\//i.test(providerInput);
+  const baseUrlInput = nativeAgent?.baseUrl?.trim() || "";
+  return {
+    ...DEFAULT_NATIVE_AGENT_CONFIG,
+    ...(nativeAgent || {}),
+    provider: providerLooksLikeUrl ? "codeflow" : providerInput,
+    model: nativeAgent?.model?.trim() || "",
+    opencodeAgent: nativeAgent?.opencodeAgent?.trim() || "",
+    baseUrl: providerLooksLikeUrl && !baseUrlInput ? providerInput.replace(/\/+$/, "") : baseUrlInput.replace(/\/+$/, ""),
+    apiKey: nativeAgent?.apiKey?.trim() || "",
+    clearApiKey: Boolean(nativeAgent?.clearApiKey),
+  };
+}
+
+function comparableNativeAgentInput(nativeAgent: CreateBotInput["nativeAgent"] | EditDraft["nativeAgent"] | undefined) {
+  const normalized = normalizeNativeAgentInput(nativeAgent);
+  return {
+    provider: normalized.provider,
+    model: normalized.model,
+    opencodeAgent: normalized.opencodeAgent,
+    baseUrl: normalized.baseUrl || "",
+    hasApiKey: Boolean((nativeAgent as EditDraft["nativeAgent"] | undefined)?.hasApiKey),
+    apiKeyMasked: String((nativeAgent as EditDraft["nativeAgent"] | undefined)?.apiKeyMasked || ""),
+    apiKeyAction: normalized.apiKey ? "replace" : normalized.clearApiKey ? "clear" : "",
+  };
+}
 
 export function useBotManager({
   client = new MockWebBotClient(),
@@ -146,13 +176,7 @@ export function useBotManager({
         cliPath: normalizePathInput(draft.cliPath),
         workingDir: normalizePathInput(draft.workingDir),
         avatarName: pickAvailableAvatarName(draft.avatarName, resolvedAvatarAssets, "bot"),
-        nativeAgent: {
-          ...DEFAULT_NATIVE_AGENT_CONFIG,
-          ...(draft.nativeAgent || {}),
-          provider: draft.nativeAgent?.provider?.trim() || "",
-          model: draft.nativeAgent?.model?.trim() || "",
-          opencodeAgent: draft.nativeAgent?.opencodeAgent?.trim() || "",
-        },
+        nativeAgent: normalizeNativeAgentInput(draft.nativeAgent),
       });
       setNotice("智能体已创建");
       await loadBots();
@@ -362,21 +386,17 @@ export function useBotManager({
     const executionConfig = buildExecutionConfig(draft.runtimeBackend);
     const executionChanged = JSON.stringify({
       runtimeBackend: getRuntimeBackend(nextBot),
-      nativeAgent: nextBot.nativeAgent || DEFAULT_NATIVE_AGENT_CONFIG,
+      nativeAgent: comparableNativeAgentInput(nextBot.nativeAgent),
     }) !== JSON.stringify({
       runtimeBackend: draft.runtimeBackend,
-      nativeAgent: draft.nativeAgent,
+      nativeAgent: comparableNativeAgentInput(draft.nativeAgent),
     });
     if (executionChanged) {
       nextBot = await client.updateBotExecutionConfig(nextBot.alias, {
         supportedExecutionModes: executionConfig.supportedExecutionModes,
         defaultExecutionMode: executionConfig.defaultExecutionMode,
         nativeAgent: {
-          ...DEFAULT_NATIVE_AGENT_CONFIG,
-          ...draft.nativeAgent,
-          provider: draft.nativeAgent.provider.trim(),
-          model: draft.nativeAgent.model.trim(),
-          opencodeAgent: draft.nativeAgent.opencodeAgent.trim(),
+          ...normalizeNativeAgentInput(draft.nativeAgent),
         },
       });
       setNotice("执行模式配置已更新");

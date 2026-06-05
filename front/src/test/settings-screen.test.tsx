@@ -89,6 +89,8 @@ test("native bots hide cli settings and params", async () => {
       provider: "anthropic",
       model: "claude-sonnet-4-5",
       opencodeAgent: "reviewer",
+      baseUrl: "https://cdn.codeflow.asia/v1",
+      apiKey: "sk-settings-1234",
     },
   });
 
@@ -103,6 +105,11 @@ test("native bots hide cli settings and params", async () => {
   expect(screen.getByText("anthropic")).toBeInTheDocument();
   expect(screen.getByText("Model:")).toBeInTheDocument();
   expect(screen.getByText("claude-sonnet-4-5")).toBeInTheDocument();
+  expect(screen.getByText("Base URL:")).toBeInTheDocument();
+  expect(screen.getByText("https://cdn.codeflow.asia/v1")).toBeInTheDocument();
+  expect(screen.getByText("API Key:")).toBeInTheDocument();
+  expect(screen.getByText("已保存 sk-****1234")).toBeInTheDocument();
+  expect(screen.queryByText("sk-settings-1234")).not.toBeInTheDocument();
   expect(screen.getByText("OpenCode agent:")).toBeInTheDocument();
   expect(screen.getByText("reviewer")).toBeInTheDocument();
 });
