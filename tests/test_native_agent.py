@@ -412,6 +412,77 @@ async def test_native_agent_server_manager_scopes_by_bot_config_and_writes_openc
 
 
 @pytest.mark.asyncio
+async def test_native_agent_server_manager_starts_serve_in_profile_working_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot import config
+    from bot.native_agent import server_manager as server_manager_module
+
+    workspace_one = tmp_path / "workspace-one"
+    workspace_two = tmp_path / "workspace-two"
+    workspace_one.mkdir()
+    workspace_two.mkdir()
+    captured_cwds: list[str] = []
+    resolver_cwds: list[str] = []
+    created_processes = []
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.returncode = None
+            self.terminated = False
+
+        def terminate(self):
+            self.terminated = True
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = 0
+
+        async def wait(self):
+            return 0
+
+    async def fake_create_subprocess_exec(*_args, **kwargs):
+        process = FakeProcess()
+        created_processes.append(process)
+        captured_cwds.append(str(kwargs["cwd"]))
+        return process
+
+    async def fake_health(self):
+        return {"ok": True}
+
+    def fake_resolve_cli_executable(command, cwd=None):
+        resolver_cwds.append(str(cwd))
+        return f"C:/tools/{command}.cmd"
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    monkeypatch.setattr(config, "NATIVE_AGENT_COMMAND", "opencode")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PATH", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_HOST", "127.0.0.1")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PORT", 0)
+    monkeypatch.setattr(config, "NATIVE_AGENT_SERVER_PASSWORD", "secret")
+    monkeypatch.setattr(config, "WORKING_DIR", str(tmp_path / "repo-root"))
+    monkeypatch.setattr(server_manager_module, "resolve_cli_executable", fake_resolve_cli_executable)
+    monkeypatch.setattr(server_manager_module, "build_executable_invocation", lambda path: [path])
+    monkeypatch.setattr(server_manager_module.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(server_manager_module.NativeAgentClient, "health", fake_health)
+
+    manager = NativeAgentServerManager()
+    ports = iter([4201, 4202])
+    monkeypatch.setattr(manager, "_pick_port", lambda _host: next(ports))
+
+    first = await manager.ensure_started(BotProfile(alias="alpha", working_dir=str(workspace_one)))
+    second = await manager.ensure_started(BotProfile(alias="alpha", working_dir=str(workspace_two)))
+
+    assert second is not first
+    assert created_processes[0].terminated is True
+    assert captured_cwds == [str(workspace_one.resolve()), str(workspace_two.resolve())]
+    assert resolver_cwds == [str(workspace_one.resolve()), str(workspace_two.resolve())]
+
+    await manager.stop_all()
+
+
+@pytest.mark.asyncio
 async def test_native_agent_server_manager_keeps_builtin_provider_adapter(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

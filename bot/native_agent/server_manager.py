@@ -46,6 +46,7 @@ class NativeAgentServerManager:
                 "port": int(server_config.get("port") or 0),
                 "password": str(server_config.get("password") or ""),
                 "bot_alias": str(server_config.get("bot_alias") or "global"),
+                "working_dir": str(server_config.get("working_dir") or ""),
                 "native_agent": normalize_native_agent_config(server_config.get("native_agent")),
             },
             ensure_ascii=False,
@@ -67,14 +68,20 @@ class NativeAgentServerManager:
             configured_port = 0
         password = str(config.NATIVE_AGENT_SERVER_PASSWORD or "").strip()
         native_agent = normalize_native_agent_config(getattr(profile, "native_agent", {}) if profile is not None else {})
+        working_dir = self._normalize_working_dir(str(getattr(profile, "working_dir", "") or config.WORKING_DIR or ""))
         return {
             "command": command,
             "hostname": hostname,
             "port": configured_port,
             "password": password,
             "bot_alias": str(getattr(profile, "alias", "") or "global").strip().lower() or "global",
+            "working_dir": working_dir,
             "native_agent": native_agent,
         }
+
+    def _normalize_working_dir(self, working_dir: str) -> str:
+        candidate = str(working_dir or config.WORKING_DIR or ".").strip() or "."
+        return str(Path(candidate).expanduser().resolve())
 
     def _pick_port(self, hostname: str) -> int:
         bind_host = str(hostname or "127.0.0.1").strip() or "127.0.0.1"
@@ -173,8 +180,8 @@ class NativeAgentServerManager:
         except Exception:
             return False
 
-    def _resolve_command(self, command: str) -> list[str]:
-        resolved = resolve_cli_executable(command, config.WORKING_DIR)
+    def _resolve_command(self, command: str, cwd: str) -> list[str]:
+        resolved = resolve_cli_executable(command, cwd)
         if resolved:
             return build_executable_invocation(resolved)
         return [command]
@@ -239,13 +246,14 @@ class NativeAgentServerManager:
         port = configured_port if configured_port > 0 else self._pick_port(hostname)
         password = str(server_config.get("password") or "").strip() or secrets.token_urlsafe(24)
         username = "opencode"
+        working_dir = self._normalize_working_dir(str(server_config.get("working_dir") or ""))
         env = os.environ.copy()
         env["OPENCODE_SERVER_USERNAME"] = username
         env["OPENCODE_SERVER_PASSWORD"] = password
         opencode_config_path = self._write_opencode_config(key, normalize_native_agent_config(server_config.get("native_agent")))
         if opencode_config_path is not None:
             env["OPENCODE_CONFIG"] = str(opencode_config_path)
-        invocation = self._resolve_command(command)
+        invocation = self._resolve_command(command, working_dir)
         process = await asyncio.create_subprocess_exec(
             *invocation,
             "serve",
@@ -253,7 +261,7 @@ class NativeAgentServerManager:
             hostname,
             "--port",
             str(port),
-            cwd=str(Path(config.WORKING_DIR).expanduser().resolve()),
+            cwd=working_dir,
             env=env,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
