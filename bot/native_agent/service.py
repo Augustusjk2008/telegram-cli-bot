@@ -163,13 +163,6 @@ class NativeAgentService:
         reader_task: asyncio.Task[None] | None = None
 
         try:
-            server = await self._server_for(profile)
-            with session._lock:
-                session.native_agent_server_key = str(getattr(server, "key", "") or "")
-            client = server.client()
-            native_session_id = await self._ensure_session_id(client, session)
-            model_id, agent_id = self._prompt_options(profile)
-
             turn_handle = history_service.start_turn(
                 profile=profile,
                 session=session,
@@ -177,6 +170,13 @@ class NativeAgentService:
                 native_provider=NATIVE_AGENT_PROVIDER,
                 actor=actor,
             )
+            server = await self._server_for(profile)
+            with session._lock:
+                session.native_agent_server_key = str(getattr(server, "key", "") or "")
+            client = server.client()
+            native_session_id = await self._ensure_session_id(client, session)
+            model_id, agent_id = self._prompt_options(profile)
+
             aggregator = NativeAgentAggregator(user_message_id=f"msg_{uuid.uuid4().hex[:12]}")
             persistence_buffer = StreamingPersistenceBuffer(history_service, turn_handle, loop_time=loop.time)
 

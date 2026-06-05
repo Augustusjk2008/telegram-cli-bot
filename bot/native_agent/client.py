@@ -102,8 +102,9 @@ class NativeAgentClient:
             "messageID": str(message_id or f"msg_{uuid.uuid4().hex}"),
             "parts": [{"type": "text", "text": text}],
         }
-        if str(model or "").strip():
-            body["model"] = str(model).strip()
+        model_payload = _model_payload(model)
+        if model_payload is not None:
+            body["model"] = model_payload
         if str(agent or "").strip():
             body["agent"] = str(agent).strip()
         return await self._request_json("POST", f"/session/{session_id}/prompt_async", json_body=body)
@@ -181,6 +182,16 @@ def parse_sse_block(block: str) -> dict[str, Any] | None:
 
 def _normalize_sse_newlines(value: str) -> str:
     return value.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _model_payload(value: Any) -> dict[str, str] | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    provider, separator, model_id = text.partition("/")
+    if separator and provider.strip() and model_id.strip():
+        return {"providerID": provider.strip(), "modelID": model_id.strip()}
+    return {"modelID": text}
 
 
 def _part_text(part: Any) -> str:

@@ -108,8 +108,30 @@ async def test_native_agent_client_prompt_async_uses_parts_shape(monkeypatch: py
     assert captured["json_body"] == {
         "messageID": "msg-1",
         "parts": [{"type": "text", "text": "你好"}],
-        "model": "anthropic/claude-sonnet-4-5",
+        "model": {
+            "providerID": "anthropic",
+            "modelID": "claude-sonnet-4-5",
+        },
         "agent": "reviewer",
+    }
+
+
+@pytest.mark.asyncio
+async def test_native_agent_client_prompt_async_keeps_slash_in_model_id(monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, object] = {}
+
+    async def fake_request_json(self, method, path, *, json_body=None):
+        captured["json_body"] = json_body
+        return {}
+
+    monkeypatch.setattr(NativeAgentClient, "_request_json", fake_request_json)
+    client = NativeAgentClient(NativeAgentServerRef(base_url="http://127.0.0.1:4096"))
+
+    await client.prompt_async("sess-1", "你好", model="openrouter/openai/gpt-4o-mini")
+
+    assert captured["json_body"]["model"] == {
+        "providerID": "openrouter",
+        "modelID": "openai/gpt-4o-mini",
     }
 
 
@@ -770,3 +792,35 @@ async def test_native_agent_service_recreates_invalid_persisted_session_and_pass
     assert fake_client.prompt_payload[1] == "你好"
     assert fake_client.prompt_payload[3] == "anthropic/claude-sonnet-4-5"
     assert fake_client.prompt_payload[4] == "reviewer"
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_persists_turn_when_server_start_fails(tmp_path: Path):
+    class FailingManager:
+        async def ensure_started(self, profile):
+            raise RuntimeError("serve failed")
+
+    service = NativeAgentService()
+    service._server_manager = FailingManager()
+    profile = BotProfile(alias="agent_test", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="agent_test", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    events = [
+        event async for event in service.stream_chat(
+            profile=profile,
+            session=session,
+            user_text="你好",
+            prompt_text="你好",
+            history_service=history,
+        )
+    ]
+
+    assert events == [{"type": "error", "code": "native_agent_error", "message": "原生 agent 执行失败: serve failed"}]
+    assert session.is_processing is False
+
+    messages = history.list_history(profile, session)
+    assert [message["role"] for message in messages] == ["user", "assistant"]
+    assert messages[0]["content"] == "你好"
+    assert messages[1]["state"] == "error"
+    assert messages[1]["content"] == "serve failed"
