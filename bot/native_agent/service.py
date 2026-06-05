@@ -21,6 +21,7 @@ from bot.native_agent.ag_ui_mapper import (
     build_run_error_event,
     build_run_finished_event,
     build_run_started_event,
+    build_text_message_events,
     build_text_end_event,
     map_event as map_ag_ui_event,
     should_filter_event,
@@ -29,6 +30,7 @@ from bot.native_agent.aggregator import NativeAgentAggregator
 from bot.native_agent.client import NativeAgentClient, NativeAgentClientError
 from bot.native_agent.events import is_relevant_event, unwrap_event
 from bot.native_agent.server_manager import SERVER_MANAGER, NativeAgentServerHandle
+from bot.native_agent.turn_state import NativeAgentTurnState
 from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenceBuffer
 
 NATIVE_AGENT_PROVIDER = EXECUTION_MODE_NATIVE_AGENT
@@ -187,8 +189,25 @@ class NativeAgentService:
             client = server.client()
             native_session_id = await self._ensure_session_id(client, session)
             model_id, agent_id = self._prompt_options(profile)
+            baseline_message_count = 0
+            baseline_known = False
+            try:
+                baseline_messages = await asyncio.wait_for(client.list_messages(native_session_id), timeout=1.0)
+                if isinstance(baseline_messages, list):
+                    baseline_message_count = len(baseline_messages)
+                    baseline_known = True
+            except Exception:
+                baseline_message_count = 0
+                baseline_known = False
 
             aggregator = NativeAgentAggregator(user_message_id=f"msg_{uuid.uuid4().hex[:12]}")
+            turn_state = NativeAgentTurnState(
+                native_session_id=native_session_id,
+                user_message_id=aggregator.user_message_id,
+                assistant_message_id=turn_handle.assistant_message_id,
+                baseline_message_count=baseline_message_count,
+                baseline_known=baseline_known,
+            )
             persistence_buffer = StreamingPersistenceBuffer(history_service, turn_handle, loop_time=loop.time)
             ag_ui_state = AgUiTurnState(
                 thread_id=turn_handle.conversation_id,
@@ -241,20 +260,51 @@ class NativeAgentService:
                 agent=agent_id or None,
             )
             while True:
-                queued_event = await event_queue.get()
+                try:
+                    queued_event = await asyncio.wait_for(event_queue.get(), timeout=0.5)
+                except asyncio.TimeoutError:
+                    if turn_state.should_reconcile(now=loop.time(), force=True):
+                        try:
+                            reconciled = await turn_state.maybe_reconcile(client.list_messages, aggregator, now=loop.time())
+                        except Exception:
+                            reconciled = {"done": False, "text": ""}
+                        reconciled_text = str(reconciled.get("text") or "")
+                        if reconciled_text:
+                            final_text = reconciled_text
+                            history_service.replace_assistant_content(turn_handle, final_text, state="streaming")
+                        if reconciled.get("done"):
+                            break
+                    continue
                 if queued_event is None:
                     break
                 if isinstance(queued_event, BaseException):
                     raise queued_event
                 raw_event = queued_event
                 event = unwrap_event(raw_event)
-                if event is None or not is_relevant_event(event, session_id=native_session_id, cwd=session.working_dir):
+                if event is None:
+                    continue
+                if event.transport:
+                    if turn_state.should_reconcile(now=loop.time()):
+                        try:
+                            reconciled = await turn_state.maybe_reconcile(client.list_messages, aggregator, now=loop.time())
+                        except Exception:
+                            reconciled = {"done": False, "text": ""}
+                        reconciled_text = str(reconciled.get("text") or "")
+                        if reconciled_text:
+                            final_text = reconciled_text
+                            history_service.replace_assistant_content(turn_handle, final_text, state="streaming")
+                        if reconciled.get("done"):
+                            break
+                    continue
+                if not is_relevant_event(event, session_id=native_session_id, cwd=session.working_dir):
                     continue
                 result = aggregator.apply(event)
+                turn_state.observe(event, result, now=loop.time())
                 if wants_ag_ui and not should_filter_event(event):
                     for ag_ui_event in map_ag_ui_event(event=event, result=result, state=ag_ui_state):
                         yield {"type": "ag_ui", "event": ag_ui_event}
                 if result.assistant_message_id:
+                    ag_ui_state.assistant_message_id = result.assistant_message_id
                     yield {
                         "type": "meta",
                         "native_session_id": native_session_id,
@@ -308,7 +358,7 @@ class NativeAgentService:
 
             try:
                 messages = await client.list_messages(native_session_id)
-                reconciled = aggregator.reconcile_messages(messages)
+                reconciled = aggregator.reconcile_messages(turn_state.current_turn_messages(messages))
                 if reconciled:
                     final_text = reconciled
             except Exception:
@@ -333,6 +383,9 @@ class NativeAgentService:
                 error_message=None if completion_state == "completed" else (error_message or final_text),
             )
             if wants_ag_ui:
+                if final_text and not ag_ui_state.text_started:
+                    for ag_ui_event in build_text_message_events(state=ag_ui_state, content=final_text):
+                        yield {"type": "ag_ui", "event": ag_ui_event}
                 text_end = build_text_end_event(state=ag_ui_state)
                 if text_end is not None:
                     yield {"type": "ag_ui", "event": text_end}

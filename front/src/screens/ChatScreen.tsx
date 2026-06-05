@@ -1,7 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { LoaderCircle, Maximize2, Minimize2, Paperclip, Trash2 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
-import { BotIdentity } from "../components/BotIdentity";
 import { ChatAvatar } from "../components/ChatAvatar";
 import { ChatActionBar } from "../components/ChatActionBar";
 import { ChatComposer } from "../components/ChatComposer";
@@ -11,6 +10,7 @@ import { ChatPlainTextMessage } from "../components/ChatPlainTextMessage";
 import { ChatTracePanel } from "../components/ChatTracePanel";
 import { ConversationHistoryPanel } from "../components/ConversationHistoryPanel";
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
+import { NativeAgentRunTimeline } from "../components/NativeAgentRunTimeline";
 import { PlanDraftCard } from "../components/PlanDraftCard";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { WebApiClientError } from "../services/types";
@@ -571,20 +571,36 @@ function mergeMessageMeta(base?: ChatMessageMetaInfo, incoming?: ChatMessageMeta
     ),
     nativeSource: incoming?.nativeSource || base?.nativeSource,
     contextUsage: incoming?.contextUsage || base?.contextUsage,
+    agUiRunState: incoming?.agUiRunState || base?.agUiRunState,
     trace,
   };
 
   return Object.values(meta).some((value) => typeof value !== "undefined") ? meta : undefined;
 }
 
-function hasAgUiTrace(meta?: ChatMessageMetaInfo) {
-  return Boolean(meta?.trace?.some((event) => (
-    event.kind === "tool_call"
-    || event.kind === "tool_result"
-    || event.kind === "permission"
-    || event.kind === "status"
-    || event.kind === "reasoning"
-  )));
+function getAgUiRunState(meta?: ChatMessageMetaInfo): AgUiRunState | null {
+  const value = meta?.agUiRunState;
+  return value && typeof value === "object" ? value as AgUiRunState : null;
+}
+
+function buildLiveAgUiMessageMeta(state: AgUiRunState): ChatMessageMetaInfo {
+  return {
+    ...(buildAgUiMessageMeta(state) || {}),
+    agUiRunState: state,
+  };
+}
+
+function hasPendingAgUiPermission(state: AgUiRunState | null) {
+  return Boolean(state && !state.completed && state.permissionRequests.some((permission) => {
+    const value = permission.state.trim().toLowerCase();
+    return !value || (
+      !value.includes("replied")
+      && !value.includes("approved")
+      && !value.includes("reject")
+      && !value.includes("denied")
+      && !value.includes("allow")
+    );
+  }));
 }
 
 function isNativePermissionTrace(event: ChatTraceEvent, permissionId: string) {
@@ -972,9 +988,9 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const isStreamingAssistant = item.role === "assistant" && item.state === "streaming";
   const hasStreamingText = isStreamingAssistant && item.text.trim().length > 0;
   const trace = item.meta?.trace;
-  const prefersPlainAssistantText = item.role === "assistant" && hasAgUiTrace(item.meta);
+  const agUiRunState = item.role === "assistant" ? getAgUiRunState(item.meta) : null;
   const traceCount = typeof item.meta?.traceCount === "number" ? item.meta.traceCount : trace?.length ?? 0;
-  const hasTracePanel = allowTrace && item.role === "assistant" && traceCount > 0;
+  const hasTracePanel = allowTrace && item.role === "assistant" && traceCount > 0 && !agUiRunState;
   const inlineAvatar = (
     <ChatAvatar
       alt={`${messageName} 头像`}
@@ -1010,7 +1026,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
                 : "min-w-0 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-3 text-[var(--text)] shadow-[var(--shadow-soft)]",
           ].join(" ")}
         >
-          {item.role === "assistant" && item.state !== "streaming" && item.state !== "error" && !prefersPlainAssistantText ? (
+          {item.role === "assistant" && item.state !== "streaming" && item.state !== "error" ? (
             <ChatMarkdownMessage content={item.text} onFileLinkClick={onFileLinkClick} />
           ) : isUser ? (
             <div className={userAttachments.length > 0 && visibleUserText ? "space-y-2" : undefined}>
@@ -1074,6 +1090,12 @@ const ChatMessageRow = memo(function ChatMessageRow({
             />
           )}
         </div>
+        {agUiRunState ? (
+          <NativeAgentRunTimeline
+            state={agUiRunState}
+            onReplyPermission={onReplyNativePermission}
+          />
+        ) : null}
         {hasTracePanel ? (
           <ChatTracePanel
             messageId={item.id}
@@ -1092,19 +1114,6 @@ const ChatMessageRow = memo(function ChatMessageRow({
         ) : null}
       </div>
     </motion.div>
-  );
-});
-
-const StreamingElapsedBadge = memo(function StreamingElapsedBadge({
-  elapsedSeconds,
-}: {
-  elapsedSeconds: number;
-}) {
-  return (
-    <div className="mt-2 inline-flex items-center gap-2 rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700">
-      <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-      <span>已等待 {elapsedSeconds} 秒</span>
-    </div>
   );
 });
 
@@ -1245,6 +1254,7 @@ export function ChatScreen({
   const [clusterSaving, setClusterSaving] = useState(false);
   const [planMode, setPlanModeState] = useState(() => readStoredPlanMode(botAlias, storageScope));
   const [executionMode, setExecutionModeState] = useState<ChatExecutionMode>(() => readStoredExecutionMode(botAlias, storageScope) ?? "cli");
+  const [nativePermissionPending, setNativePermissionPending] = useState(false);
   const [executingPlanMessageId, setExecutingPlanMessageId] = useState("");
   const [planExecuteError, setPlanExecuteError] = useState("");
   const [composerPulseKey, setComposerPulseKey] = useState(0);
@@ -1350,6 +1360,7 @@ export function ChatScreen({
     setClusterRunId("");
     setClusterTaskStatus(null);
     setClusterTaskError("");
+    setNativePermissionPending(false);
     clusterRunIdRef.current = "";
     setQueuedMessage(null);
     queuedMessageRef.current = null;
@@ -2747,7 +2758,7 @@ export function ChatScreen({
           assistantId,
           localStartedAtMs,
           (item) => {
-            const nextMeta = mergeMessageMeta(item.meta, buildAgUiMessageMeta(nextAgUiState));
+            const nextMeta = mergeMessageMeta(item.meta, buildLiveAgUiMessageMeta(nextAgUiState));
             return {
               ...item,
               text: nextAgUiState.assistantText,
@@ -2758,6 +2769,7 @@ export function ChatScreen({
             };
           },
         ));
+        setNativePermissionPending(hasPendingAgUiPermission(nextAgUiState));
       };
       const finalMessage = options.sendOptions
         ? await client.sendMessage(
@@ -2794,7 +2806,7 @@ export function ChatScreen({
         elapsedSeconds,
         ...(sawAgUiEvent && agUiState
           ? {
-              meta: mergeMessageMeta(finalMessage.meta, buildAgUiMessageMeta(agUiState)),
+              meta: mergeMessageMeta(finalMessage.meta, buildLiveAgUiMessageMeta(agUiState)),
             }
           : {}),
       };
@@ -2833,6 +2845,7 @@ export function ChatScreen({
       setIsStreaming(false);
       setStreamMode("");
       setStreamStartedAtMs(null);
+      setNativePermissionPending(false);
       emitBotActivityForActiveAgent("idle");
       void drainQueuedMessageIfIdleRef.current?.({ botAlias: sendBotAlias, agentId: sendAgentId });
     }
@@ -3218,7 +3231,9 @@ export function ChatScreen({
   const activeClusterChildReadOnly = clusterMode && activeAgentId !== "main";
   const activeNativeReadOnly = nativeExecutionMode && activeAgentId !== "main";
   const chatMutationsDisabled = readOnly || activeClusterChildReadOnly || activeNativeReadOnly;
-  const chatDisabledReason = activeNativeReadOnly
+  const chatDisabledReason = nativePermissionPending
+    ? "等待权限处理"
+    : activeNativeReadOnly
     ? "原生 agent 模式暂不支持子 agent，请切回主 agent"
     : activeClusterChildReadOnly
     ? "集群子智能体只读，请切回主智能体发送消息"
@@ -3227,7 +3242,6 @@ export function ChatScreen({
   const clusterAgents = agents.filter((agent) => !agent.isMain && agent.enabled);
   const showAgentSwitcher = agents.length > 1;
   const showClusterToggle = Boolean(botOverview?.cluster) && botOverview?.botMode !== "assistant" && !nativeExecutionMode;
-  const showTopChrome = !embedded && !isImmersive;
   const showActionBar = !isImmersive;
   const showImmersiveButton = !embedded && isVisible && Boolean(onToggleImmersive);
   const canManagePromptPresets = !readOnly && (botOverview?.effectiveCapabilities
@@ -3305,19 +3319,6 @@ export function ChatScreen({
 
   return (
     <main className="relative flex h-full flex-col bg-[var(--workbench-panel-bg)]">
-      {showTopChrome ? (
-        <header className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] p-4">
-          <BotIdentity
-            alias={botAlias}
-            avatarName={assistantAvatarName}
-            size={32}
-            nameClassName="truncate text-lg font-semibold text-[var(--text)]"
-          />
-          {isStreaming ? (
-            <StreamingElapsedBadge elapsedSeconds={elapsedSeconds} />
-          ) : null}
-        </header>
-      ) : null}
       {showActionBar ? (
         <ChatActionBar
           visibleModelOptions={visibleModelOptions}
@@ -3476,7 +3477,7 @@ export function ChatScreen({
         </button>
       ) : null}
       <div className="border-t border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)]">
-        {chatMutationsDisabled ? (
+        {chatMutationsDisabled || nativePermissionPending ? (
           <p className="px-4 pt-3 text-xs font-medium text-amber-700">{chatDisabledReason || "只读模式"}</p>
         ) : null}
         {queuedMessage ? (
@@ -3496,7 +3497,7 @@ export function ChatScreen({
           pulse={composerPulseKey > 0}
           agents={clusterAgents}
           clusterMode={clusterMode}
-          disabled={chatMutationsDisabled || loading}
+          disabled={chatMutationsDisabled || nativePermissionPending || loading}
           compact={isImmersive || embedded}
           uploadingAttachments={uploadingAttachments}
           placeholder={composerPlaceholder}

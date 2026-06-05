@@ -1,44 +1,20 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
+from bot.native_agent.event_normalizer import NormalizedNativeAgentEvent, normalize_event
 
-@dataclass(frozen=True)
-class NativeAgentEvent:
-    type: str
-    payload: dict[str, Any]
-    directory: str = ""
-    raw: dict[str, Any] | None = None
+
+NativeAgentEvent = NormalizedNativeAgentEvent
 
 
 def unwrap_event(raw: dict[str, Any]) -> NativeAgentEvent | None:
-    if not isinstance(raw, dict):
-        return None
-    directory = str(raw.get("directory") or raw.get("cwd") or "").strip()
-    payload = raw.get("payload")
-    if not isinstance(payload, dict):
-        payload = raw
-    event_type = (
-        payload.get("type")
-        or payload.get("event")
-        or payload.get("name")
-        or raw.get("type")
-        or raw.get("event")
-        or ""
-    )
-    normalized_type = str(event_type or "").strip()
-    if not normalized_type:
-        return None
-    return NativeAgentEvent(
-        type=normalized_type,
-        payload=dict(payload),
-        directory=directory,
-        raw=dict(raw),
-    )
+    return normalize_event(raw)
 
 
 def event_session_id(event: NativeAgentEvent) -> str:
+    if event.session_id:
+        return event.session_id
     payload = event.payload
     for key in ("sessionID", "session_id", "sessionId"):
         value = payload.get(key)
@@ -66,6 +42,8 @@ def event_session_id(event: NativeAgentEvent) -> str:
 
 
 def is_relevant_event(event: NativeAgentEvent, *, session_id: str, cwd: str) -> bool:
+    if event.transport:
+        return False
     event_session = event_session_id(event)
     if event_session and event_session != session_id:
         return False

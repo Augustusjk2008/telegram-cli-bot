@@ -12,6 +12,33 @@ import {
 
 describe("RealWebBotClient", () => {
   const fetchMock = vi.fn();
+  const socketState = {
+    instances: [] as Array<{ url: string; readyState: number; close: () => void; addEventListener: (type: string, handler: (event: Event) => void) => void }>,
+  };
+
+  class MockSocket {
+    static CONNECTING = 0;
+    static OPEN = 1;
+    static CLOSING = 2;
+    static CLOSED = 3;
+
+    readyState = MockSocket.CONNECTING;
+    private readonly listeners = new Map<string, Set<(event: Event) => void>>();
+
+    constructor(public readonly url: string) {
+      socketState.instances.push(this);
+    }
+
+    addEventListener(type: string, handler: (event: Event) => void) {
+      const handlers = this.listeners.get(type) ?? new Set<(event: Event) => void>();
+      handlers.add(handler);
+      this.listeners.set(type, handlers);
+    }
+
+    close() {
+      this.readyState = MockSocket.CLOSED;
+    }
+  }
 
   function jsonOk(data: unknown) {
     return {
@@ -27,6 +54,8 @@ describe("RealWebBotClient", () => {
     window.history.replaceState(null, "", "/");
     vi.stubGlobal("__PUBLIC_ENV__", {});
     vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("WebSocket", MockSocket as unknown as typeof WebSocket);
+    socketState.instances = [];
   });
 
   afterEach(() => {
@@ -42,6 +71,7 @@ describe("RealWebBotClient", () => {
         ok: true,
         data: {
           user_id: 1001,
+          token: "secret-token",
         },
       }),
     });
@@ -52,12 +82,14 @@ describe("RealWebBotClient", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/auth/me",
       expect.objectContaining({
+        credentials: "same-origin",
         headers: expect.objectContaining({
           Authorization: "Bearer secret-token",
         }),
       }),
     );
     expect(session.isLoggedIn).toBe(true);
+    expect(session.token).toBe("");
     expect(session.currentBotAlias).toBe("");
   });
 
@@ -82,6 +114,7 @@ describe("RealWebBotClient", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "/node/nanjing-laptop/api/auth/me",
       expect.objectContaining({
+        credentials: "same-origin",
         headers: expect.objectContaining({
           Authorization: "Bearer secret-token",
         }),
@@ -109,6 +142,7 @@ describe("RealWebBotClient", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/auth/me",
       expect.objectContaining({
+        credentials: "same-origin",
         headers: expect.objectContaining({
           Authorization: "Bearer secret-token",
         }),
@@ -290,7 +324,7 @@ describe("RealWebBotClient", () => {
     expect(body.protocol).toBe("ag-ui");
   });
 
-  test("sendMessage parses ag-ui stream and keeps legacy callbacks", async () => {
+  test("sendMessage parses ag-ui stream without legacy trace callbacks", async () => {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       start(controller) {
@@ -329,14 +363,9 @@ describe("RealWebBotClient", () => {
       (event) => agUiEvents.push(event.type),
     );
 
-    expect(chunks).toEqual(["hello"]);
-    expect(statuses).toEqual([{ previewText: "处理中", elapsedSeconds: 2 }]);
-    expect(traces).toEqual([
-      "status:处理中",
-      "tool_call:",
-      "tool_call:{\"command\":\"dir\"}",
-      "tool_result:Exit code: 0",
-    ]);
+    expect(chunks).toEqual([]);
+    expect(statuses).toEqual([]);
+    expect(traces).toEqual([]);
     expect(agUiEvents).toEqual([
       EventType.RUN_STARTED,
       EventType.ACTIVITY_SNAPSHOT,
@@ -524,6 +553,7 @@ describe("RealWebBotClient", () => {
       "/api/auth/login",
       expect.objectContaining({
         method: "POST",
+        credentials: "same-origin",
         headers: expect.objectContaining({
           "Content-Type": "application/json",
         }),
@@ -542,6 +572,39 @@ describe("RealWebBotClient", () => {
       currentBotAlias: "main",
       currentPath: "C:\\workspace",
     }));
+  });
+
+  test("login does not reuse returned token for later authenticated requests", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            token: "web_sess_123",
+            username: "alice",
+            role: "member",
+            capabilities: ["view_bots"],
+          },
+        }),
+      })
+      .mockResolvedValueOnce(jsonOk([]));
+
+    const client = new RealWebBotClient();
+    await client.login({ username: "alice", password: "pw-123" });
+    await client.listBots();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/bots",
+      expect.objectContaining({
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: expect.not.objectContaining({
+          Authorization: expect.any(String),
+        }),
+      }),
+    );
   });
 
   
@@ -576,15 +639,14 @@ describe("RealWebBotClient", () => {
       "/api/auth/guest",
       expect.objectContaining({
         method: "POST",
+        credentials: "same-origin",
       }),
     );
     expect(fetchMock).toHaveBeenLastCalledWith(
       "/api/auth/logout",
       expect.objectContaining({
         method: "POST",
-        headers: expect.objectContaining({
-          Authorization: "Bearer web_sess_guest",
-        }),
+        credentials: "same-origin",
       }),
     );
     expect(session).toEqual(expect.objectContaining({
@@ -593,6 +655,41 @@ describe("RealWebBotClient", () => {
       role: "guest",
       capabilities: ["view_file_tree"],
     }));
+  });
+
+  test("notification websocket url does not include token query", () => {
+    const client = new RealWebBotClient();
+    const subscription = client.subscribeNotifications(() => undefined);
+    const socket = socketState.instances[0];
+
+    expect(socket).toBeDefined();
+    expect(socket.url).toContain("/api/notifications/ws");
+    expect(socket.url).not.toContain("token=");
+
+    subscription.close();
+  });
+
+  test("lan chat websocket url does not include token query", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        data: {
+          user_id: 1001,
+        },
+      }),
+    });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const close = client.openLanChatSocket(() => undefined);
+    const socket = socketState.instances[0];
+
+    expect(socket).toBeDefined();
+    expect(socket.url).toContain("/lan-chat/ws");
+    expect(socket.url).not.toContain("token=");
+
+    close();
   });
 
   
@@ -653,9 +750,8 @@ describe("RealWebBotClient", () => {
       "/api/bots",
       expect.objectContaining({
         cache: "no-store",
-        headers: expect.objectContaining({
-          Authorization: "Bearer secret-token",
-        }),
+        credentials: "same-origin",
+        headers: {},
       }),
     );
   });
@@ -1278,9 +1374,8 @@ describe("RealWebBotClient", () => {
       "/api/bots/main/history/codex-thread-1-0/trace",
       expect.objectContaining({
         cache: "no-store",
-        headers: expect.objectContaining({
-          Authorization: "Bearer secret-token",
-        }),
+        credentials: "same-origin",
+        headers: {},
       }),
     );
     expect(traceDetails).toEqual({
@@ -1361,7 +1456,9 @@ describe("RealWebBotClient", () => {
     expect(fetchMock).toHaveBeenLastCalledWith(
       "/api/admin/update",
       expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: "Bearer secret-token" }),
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: {},
       }),
     );
     expect(status.currentVersion).toBe("1.0.0");
@@ -1427,8 +1524,8 @@ describe("RealWebBotClient", () => {
       "/api/admin/update/download/stream",
       expect.objectContaining({
         method: "POST",
+        credentials: "same-origin",
         headers: expect.objectContaining({
-          Authorization: "Bearer secret-token",
           "Content-Type": "application/json",
         }),
         body: JSON.stringify({}),
@@ -1483,9 +1580,9 @@ describe("RealWebBotClient", () => {
     expect(fetchMock).toHaveBeenLastCalledWith(
       "/api/bots/main/files/read?filename=README.md&mode=cat&lines=0",
       expect.objectContaining({
-        headers: expect.objectContaining({
-          Authorization: "Bearer secret-token",
-        }),
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: {},
       }),
     );
     expect(content).toEqual({
@@ -1566,8 +1663,9 @@ describe("RealWebBotClient", () => {
       "/api/bots/main/files/write",
       expect.objectContaining({
         method: "POST",
+        cache: "no-store",
+        credentials: "same-origin",
         headers: expect.objectContaining({
-          Authorization: "Bearer secret-token",
           "Content-Type": "application/json",
         }),
         body: JSON.stringify({
@@ -1710,7 +1808,7 @@ describe("RealWebBotClient", () => {
   });
 
   
-  test("sendMessage forwards status events before final output", async () => {
+  test("sendMessage maps status events into ag-ui message metadata", async () => {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       start(controller) {
@@ -1748,19 +1846,14 @@ describe("RealWebBotClient", () => {
       statuses.push(status);
     });
 
-    expect(statuses).toEqual([
-      {
-        elapsedSeconds: 2,
-        previewText: "处理中预览",
-        contextUsage: expect.objectContaining({
-          sessionId: "thread-1",
-          statusText: "74% context left · 76.6K / 258K",
-          compactionCount: 1,
-        }),
-      },
-    ]);
+    expect(statuses).toEqual([]);
     expect(message.text).toBe("最终结果");
     expect(message.elapsedSeconds).toBe(4);
+    expect(message.meta?.contextUsage).toEqual(expect.objectContaining({
+      sessionId: "thread-1",
+      statusText: "74% context left · 76.6K / 258K",
+      compactionCount: 1,
+    }));
   });
 
   
@@ -1822,9 +1915,9 @@ describe("RealWebBotClient", () => {
     expect(fetchMock).toHaveBeenLastCalledWith(
       "/api/bots/main/git",
       expect.objectContaining({
-        headers: expect.objectContaining({
-          Authorization: "Bearer secret-token",
-        }),
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: {},
       }),
     );
     expect(overview.repoFound).toBe(true);
@@ -1871,9 +1964,9 @@ describe("RealWebBotClient", () => {
     expect(fetchMock).toHaveBeenLastCalledWith(
       "/api/bots/main/git/tree-status",
       expect.objectContaining({
-        headers: expect.objectContaining({
-          Authorization: "Bearer secret-token",
-        }),
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: {},
       }),
     );
     expect(status).toEqual({
@@ -2276,9 +2369,9 @@ describe("RealWebBotClient", () => {
       2,
       "/api/admin/bots/assistant1/assistant/proposals?status=proposed",
       expect.objectContaining({
-        headers: expect.objectContaining({
-          Authorization: "Bearer secret-token",
-        }),
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: {},
       }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(

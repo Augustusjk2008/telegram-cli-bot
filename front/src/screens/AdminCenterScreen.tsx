@@ -86,6 +86,7 @@ const ACCOUNT_CAPABILITY_OPTIONS: Array<{ id: Capability; label: string }> = [
   { id: "manage_bots", label: "管理智能体" },
   { id: "create_workdir_directory", label: "新建工作目录" },
   { id: "run_plugins", label: "运行插件" },
+  { id: "run_unsafe_cli", label: "高风险 CLI" },
   { id: "admin_ops", label: "管理操作" },
   { id: "manage_register_codes", label: "邀请码/用户" },
 ];

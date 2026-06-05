@@ -70,6 +70,23 @@ test("admin center updates account capabilities separately from bot grants", asy
 
 
 
+test("admin center can grant unsafe cli capability", async () => {
+  const user = userEvent.setup();
+  const { client, updateUser } = createClient();
+  await client.login({ username: "127.0.0.1", password: "test" });
+
+  render(<AdminCenterScreen client={client} onClose={() => {}} />);
+
+  const unsafeCliCapability = await screen.findByRole("checkbox", { name: "demo 账号能力 高风险 CLI" });
+  await user.click(unsafeCliCapability);
+
+  await waitFor(() => {
+    expect(updateUser).toHaveBeenCalledWith("demo", expect.objectContaining({
+      capabilities: expect.arrayContaining(["run_unsafe_cli"]),
+    }));
+  });
+});
+
 test("admin center edits env config with diff confirmation and restart hint", async () => {
   const user = userEvent.setup();
   const { client, previewEnvConfig, updateEnvConfig } = createClient();
@@ -156,7 +173,6 @@ test("admin center shows native agent global fields", async () => {
   expect(screen.getByText("原生 agent 命令")).toBeInTheDocument();
   expect(screen.getByText("NATIVE_AGENT_COMMAND")).toBeInTheDocument();
 });
-
 
 
 

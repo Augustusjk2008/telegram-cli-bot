@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
+import { EventType } from "../services/agUiProtocol";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { BotOverview, ChatMessage, ChatTraceDetails, CliParamsPayload, ClusterTaskStatus, ConversationBulkDeleteResult, ConversationDeleteResult, ConversationListResult, ConversationSelectResult, GitActionResult, GitDiffPayload, GitOverview, PromptPreset } from "../services/types";
 import { WebApiClientError } from "../services/types";
@@ -731,6 +732,145 @@ test("non-native permission trace hides native permission actions", async () => 
 });
 
 
+test("live ag-ui stream renders answer and native timeline separately", async () => {
+  const user = userEvent.setup();
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias,
+    _text,
+    _onChunk,
+    _onStatus,
+    _onTrace,
+    _options,
+    onAgUiEvent,
+  ) => {
+    onAgUiEvent?.({ type: EventType.RUN_STARTED, threadId: "thread-1", runId: "run-1" });
+    onAgUiEvent?.({
+      type: EventType.ACTIVITY_SNAPSHOT,
+      messageId: "activity-1",
+      activityType: "TCB_STATUS",
+      replace: true,
+      content: { previewText: "运行中" },
+    });
+    onAgUiEvent?.({ type: EventType.REASONING_START, messageId: "reason-1" });
+    onAgUiEvent?.({ type: EventType.REASONING_MESSAGE_CONTENT, messageId: "reason-1", delta: "检查上下文" });
+    onAgUiEvent?.({ type: EventType.REASONING_END, messageId: "reason-1" });
+    onAgUiEvent?.({ type: EventType.TOOL_CALL_START, toolCallId: "tool-1", toolCallName: "shell_command" });
+    onAgUiEvent?.({ type: EventType.TOOL_CALL_ARGS, toolCallId: "tool-1", delta: "{\"command\":\"dir\"}" });
+    onAgUiEvent?.({ type: EventType.TOOL_CALL_RESULT, messageId: "tool-result-1", toolCallId: "tool-1", content: "Exit code: 0" });
+    onAgUiEvent?.({ type: EventType.TEXT_MESSAGE_START, messageId: "assistant-live", role: "assistant" });
+    onAgUiEvent?.({ type: EventType.TEXT_MESSAGE_CONTENT, messageId: "assistant-live", delta: "**answer**" });
+    onAgUiEvent?.({ type: EventType.TEXT_MESSAGE_END, messageId: "assistant-live" });
+    onAgUiEvent?.({ type: EventType.RUN_FINISHED, threadId: "thread-1", runId: "run-1", outcome: { type: "success" } });
+    return {
+      id: "assistant-live",
+      role: "assistant",
+      text: "**answer**",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    };
+  });
+  const client = createClient({ sendMessage });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  await screen.findByText("暂无消息，开始聊天吧");
+  await user.type(screen.getByPlaceholderText("输入消息"), "hi");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+  expect(within(await screen.findByTestId("assistant-markdown-message")).getByText("answer")).toBeInTheDocument();
+  const timeline = await screen.findByTestId("native-agent-run-timeline");
+  expect(within(timeline).getByText("运行中")).toBeInTheDocument();
+  expect(within(timeline).getByText("shell_command")).toBeInTheDocument();
+  expect(within(timeline).getByText("思考")).toBeInTheDocument();
+  expect(screen.queryByTestId("chat-trace-panel-assistant-live")).not.toBeInTheDocument();
+});
+
+
+test("live ag-ui permission can be approved from timeline", async () => {
+  const user = userEvent.setup();
+  const replyNativeAgentPermission = vi.fn(async () => ({ permissionId: "perm-1", approved: true }));
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias,
+    _text,
+    _onChunk,
+    _onStatus,
+    _onTrace,
+    _options,
+    onAgUiEvent,
+  ) => {
+    onAgUiEvent?.({ type: EventType.RUN_STARTED, threadId: "thread-1", runId: "run-1" });
+    onAgUiEvent?.({
+      type: EventType.ACTIVITY_SNAPSHOT,
+      messageId: "activity-perm-1",
+      activityType: "TCB_PERMISSION_REQUEST",
+      replace: true,
+      content: {
+        id: "perm-1",
+        permissionId: "perm-1",
+        title: "允许读取文件？",
+        state: "permission.updated",
+        source: "native_agent",
+      },
+    });
+    return {
+      id: "assistant-perm",
+      role: "assistant",
+      text: "",
+      createdAt: new Date().toISOString(),
+      state: "streaming",
+    };
+  });
+  const client = createClient({ sendMessage, replyNativeAgentPermission });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  await screen.findByText("暂无消息，开始聊天吧");
+  await user.type(screen.getByPlaceholderText("输入消息"), "hi");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+  await user.click(await screen.findByRole("button", { name: "允许一次" }));
+
+  await waitFor(() => expect(replyNativeAgentPermission).toHaveBeenCalledWith(
+    "main",
+    "perm-1",
+    expect.objectContaining({ approved: true }),
+  ));
+});
+
+
+test("live ag-ui run error renders native timeline error card", async () => {
+  const user = userEvent.setup();
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias,
+    _text,
+    _onChunk,
+    _onStatus,
+    _onTrace,
+    _options,
+    onAgUiEvent,
+  ) => {
+    onAgUiEvent?.({ type: EventType.RUN_STARTED, threadId: "thread-1", runId: "run-1" });
+    onAgUiEvent?.({ type: EventType.RUN_ERROR, message: "OpenCode failed", code: "session.error" });
+    onAgUiEvent?.({ type: EventType.RUN_FINISHED, threadId: "thread-1", runId: "run-1", outcome: { type: "interrupt", interrupts: [] } });
+    return {
+      id: "assistant-error",
+      role: "assistant",
+      text: "",
+      createdAt: new Date().toISOString(),
+      state: "error",
+    };
+  });
+  const client = createClient({ sendMessage });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  await screen.findByText("暂无消息，开始聊天吧");
+  await user.type(screen.getByPlaceholderText("输入消息"), "hi");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  const timeline = await screen.findByTestId("native-agent-run-timeline");
+  expect(within(timeline).getByText("运行异常")).toBeInTheDocument();
+  expect(within(timeline).getByText("OpenCode failed")).toBeInTheDocument();
+});
+
+
 test("kill button is hidden while idle and shown while streaming", async () => {
   const user = userEvent.setup();
   const client = createClient({
@@ -1261,4 +1401,3 @@ test("assistant proposal patch request event sends structured chat task and disp
     summary: "patch 已生成\n目标工程: main",
   });
 });
-

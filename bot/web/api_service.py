@@ -79,6 +79,7 @@ from bot.agents import build_agent_prompt_input
 from bot.chat_identity import chat_session_user_id
 from bot.cli_params import (
     CliParamsConfig,
+    clamp_unsafe_cli_params,
     get_default_params,
     get_params_schema,
     normalize_cli_model_options,
@@ -2688,8 +2689,15 @@ def _cluster_mcp_injected_params(profile: BotProfile, params_config: CliParamsCo
     return CliParamsConfig.from_dict(params)
 
 
-def _effective_cli_params(profile: BotProfile, params_config: CliParamsConfig, cluster_run_id: str) -> CliParamsConfig:
+def _effective_cli_params(
+    profile: BotProfile,
+    params_config: CliParamsConfig,
+    cluster_run_id: str,
+    *,
+    allow_unsafe_cli: bool = False,
+) -> CliParamsConfig:
     params = with_global_extra_args(params_config, config.CLI_GLOBAL_EXTRA_ARGS)
+    params = clamp_unsafe_cli_params(params, allow_unsafe_cli=allow_unsafe_cli)
     if cluster_run_id:
         params = _cluster_mcp_injected_params(profile, params)
     return params
@@ -4362,6 +4370,7 @@ async def _stream_cli_chat(
     request: AssistantRunRequest | None = None,
     agent_id: str = "main",
     cli_params_override: CliParamsConfig | None = None,
+    allow_unsafe_cli: bool = False,
     cluster_run_id: str = "",
     cluster_mentions: list[dict[str, Any]] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
@@ -4472,7 +4481,12 @@ async def _stream_cli_chat(
 
         for attempt_index in range(max_attempts):
             attempt = _prepare_cli_attempt_state(session, cli_type)
-            params_for_attempt = _effective_cli_params(profile, cli_params_override or profile.cli_params, cluster_run_id)
+            params_for_attempt = _effective_cli_params(
+                profile,
+                cli_params_override or profile.cli_params,
+                cluster_run_id,
+                allow_unsafe_cli=allow_unsafe_cli,
+            )
             try:
                 cmd, use_stdin = build_cli_command(
                     cli_type=cli_type,
@@ -5061,6 +5075,7 @@ async def run_cli_chat(
     request: AssistantRunRequest | None = None,
     agent_id: str = "main",
     cli_params_override: CliParamsConfig | None = None,
+    allow_unsafe_cli: bool = False,
     cluster_run_id: str = "",
     cluster_mentions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -5183,7 +5198,12 @@ async def run_cli_chat(
 
         for attempt_index in range(max_attempts):
             attempt = _prepare_cli_attempt_state(session, cli_type)
-            params_for_attempt = _effective_cli_params(profile, cli_params_override or profile.cli_params, cluster_run_id)
+            params_for_attempt = _effective_cli_params(
+                profile,
+                cli_params_override or profile.cli_params,
+                cluster_run_id,
+                allow_unsafe_cli=allow_unsafe_cli,
+            )
             try:
                 cmd, use_stdin = build_cli_command(
                     cli_type=cli_type,
@@ -5502,6 +5522,7 @@ async def run_chat(
     mentions: list[dict[str, Any]] | None = None,
     execution_mode: str = "",
     actor: dict[str, Any] | None = None,
+    allow_unsafe_cli: bool = False,
 ) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     shared_user_id = chat_session_user_id(user_id)
@@ -5585,6 +5606,7 @@ async def run_chat(
                 agent_id=agent_id,
                 cluster_run_id=cluster_run.run_id if cluster_run else "",
                 cluster_mentions=list(mentions or []),
+                allow_unsafe_cli=allow_unsafe_cli,
             )
         except Exception:
             run_status = "error"
@@ -5611,6 +5633,7 @@ async def stream_chat(
     execution_mode: str = "",
     actor: dict[str, Any] | None = None,
     protocol: str = "",
+    allow_unsafe_cli: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
     try:
         profile = get_profile_or_raise(manager, alias)
@@ -5700,6 +5723,7 @@ async def stream_chat(
                     agent_id=agent_id,
                     cluster_run_id=cluster_run.run_id if cluster_run else "",
                     cluster_mentions=list(mentions or []),
+                    allow_unsafe_cli=allow_unsafe_cli,
                 ):
                     if event.get("type") == "error":
                         run_status = "error"

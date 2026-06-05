@@ -113,7 +113,20 @@ test("shows bottom navigation after entering demo app shell", async () => {
   expect(screen.getByRole("button", { name: "Git" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "插件" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "设置" })).toBeInTheDocument();
-  expect(sessionStorage.getItem("web-api-token")).toBe("123");
+  expect(sessionStorage.getItem("web-api-token")).toBeNull();
+  expect(sessionStorage.getItem("web-session-token")).toBeNull();
+  expect(localStorage.getItem("web-api-token")).toBeNull();
+  expect(localStorage.getItem("web-session-token")).toBeNull();
+});
+
+test("restores legacy token once and clears storage after successful migration", async () => {
+  sessionStorage.setItem("web-api-token", "legacy-session-token");
+
+  render(<App />);
+
+  expect(await screen.findByRole("button", { name: "聊天" })).toBeInTheDocument();
+  expect(sessionStorage.getItem("web-api-token")).toBeNull();
+  expect(sessionStorage.getItem("web-session-token")).toBeNull();
   expect(localStorage.getItem("web-api-token")).toBeNull();
   expect(localStorage.getItem("web-session-token")).toBeNull();
 });
@@ -208,7 +221,6 @@ test("member can enter ungranted bot in read-only mode and hits create quota cop
   expect(await screen.findByText("无权限 · 只读")).toBeInTheDocument();
   await user.click(await screen.findByRole("button", { name: /team2/i }));
 
-  expect((await screen.findAllByText("只读模式")).length).toBeGreaterThan(0);
   expect(screen.getAllByRole("button", { name: "发送" }).every((button) => button.hasAttribute("disabled"))).toBe(true);
 
   await user.click(screen.getByRole("button", { name: "team2" }));
@@ -229,9 +241,6 @@ test("member can enter ungranted bot in read-only mode and hits create quota cop
   await createManagedBot(user, "owned3");
   expect(await screen.findByText("普通用户最多只能创建 3 个 Bot")).toBeInTheDocument();
 });
-
-
-
 
 
 

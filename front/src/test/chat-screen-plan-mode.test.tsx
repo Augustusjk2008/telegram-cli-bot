@@ -92,6 +92,7 @@ test("sends chat with plan task mode when plan mode is active", async () => {
       expect.any(Function),
       expect.any(Function),
       expect.objectContaining({ taskMode: "plan" }),
+      expect.any(Function),
     );
   });
 });
@@ -129,6 +130,7 @@ test("execute plan creates a fresh conversation and auto-sends execution prompt"
       expect.any(Function),
       expect.any(Function),
       expect.objectContaining({ taskMode: "standard" }),
+      expect.any(Function),
     );
   });
 });

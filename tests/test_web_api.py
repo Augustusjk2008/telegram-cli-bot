@@ -44,7 +44,18 @@ from bot.messages import msg
 from bot.models import AgentProfile, BotProfile, UserSession
 from bot.plugins.service import PluginService
 from bot.session_store import load_session, save_session
-from bot.web.auth_store import CAP_CREATE_WORKDIR_DIRECTORY, CAP_MANAGE_BOTS, CAP_VIEW_FILE_TREE, WebAuthStore
+from bot.web.auth_store import (
+    CAP_CHAT_SEND,
+    CAP_CREATE_WORKDIR_DIRECTORY,
+    CAP_DEBUG_EXEC,
+    CAP_MANAGE_BOTS,
+    CAP_MANAGE_CLI_PARAMS,
+    CAP_RUN_UNSAFE_CLI,
+    CAP_VIEW_BOTS,
+    CAP_VIEW_FILE_TREE,
+    MEMBER_CAPABILITIES,
+    WebAuthStore,
+)
 from bot.web.server import WebApiServer
 from bot.web.api_service import (
     AuthContext,
@@ -787,6 +798,341 @@ async def test_auth_route_requires_token(web_manager: MultiBotManager, monkeypat
             assert resp.status == 200
             payload = await resp.json()
             assert payload["data"]["user_id"] == 1001
+
+
+@pytest.mark.asyncio
+async def test_remote_empty_account_store_requires_setup_without_bootstrap_admin(
+    web_manager: MultiBotManager,
+    isolated_web_auth_store: WebAuthStore,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: False)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get("/api/auth/me")
+            payload = await resp.json()
+
+    assert resp.status == 401
+    assert payload["error"]["code"] == "setup_required"
+
+
+@pytest.mark.asyncio
+async def test_loopback_empty_account_store_keeps_local_bootstrap(
+    web_manager: MultiBotManager,
+    isolated_web_auth_store: WebAuthStore,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: True)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get("/api/auth/me")
+            payload = await resp.json()
+
+    assert resp.status == 200
+    assert payload["data"]["is_local_admin"] is True
+
+
+@pytest.mark.asyncio
+async def test_query_token_is_rejected(
+    web_manager: MultiBotManager,
+    isolated_web_auth_store: WebAuthStore,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "secret")
+    monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: False)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get("/api/auth/me?token=secret")
+            payload = await resp.json()
+
+    assert resp.status == 401
+    assert payload["error"]["code"] == "query_token_disabled"
+
+
+@pytest.mark.asyncio
+async def test_login_sets_http_only_cookie_without_token_payload(
+    web_manager: MultiBotManager,
+    isolated_web_auth_store: WebAuthStore,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: False)
+    isolated_web_auth_store.register_codes_path.write_text(
+        json.dumps({"items": [{"code": "INVITE-001", "disabled": False}]}),
+        encoding="utf-8",
+    )
+    isolated_web_auth_store.register_member("alice", "pw-123", "INVITE-001")
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.post("/api/auth/login", json={"username": "alice", "password": "pw-123"})
+            payload = await resp.json()
+
+    cookie = resp.cookies.get("tcb_web_session")
+    assert resp.status == 200
+    assert "token" not in payload["data"]
+    assert cookie is not None
+    assert cookie["httponly"]
+
+
+@pytest.mark.asyncio
+async def test_cookie_auth_write_requires_origin(
+    web_manager: MultiBotManager,
+    isolated_web_auth_store: WebAuthStore,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: False)
+    isolated_web_auth_store.register_codes_path.write_text(
+        json.dumps({"items": [{"code": "INVITE-001", "disabled": False}]}),
+        encoding="utf-8",
+    )
+    session = isolated_web_auth_store.register_member("alice", "pw-123", "INVITE-001")
+    isolated_web_auth_store.update_member(session.account.account_id, capabilities=[CAP_CHAT_SEND])
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            client.session.cookie_jar.update_cookies({"tcb_web_session": session.token})
+            resp = await client.post("/api/bots/main/chat", json={"message": "hi"})
+            payload = await resp.json()
+
+    assert resp.status == 403
+    assert payload["error"]["code"] == "csrf_origin_rejected"
+
+
+@pytest.mark.asyncio
+async def test_auth_cookie_issue_rejects_cross_origin(
+    web_manager: MultiBotManager,
+    isolated_web_auth_store: WebAuthStore,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: False)
+    isolated_web_auth_store.register_codes_path.write_text(
+        json.dumps({"items": [{"code": "INVITE-001", "disabled": False}]}),
+        encoding="utf-8",
+    )
+    isolated_web_auth_store.register_member("alice", "pw-123", "INVITE-001")
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            login_resp = await client.post(
+                "/api/auth/login",
+                json={"username": "alice", "password": "pw-123"},
+                headers={"Origin": "https://evil.example.test"},
+            )
+            guest_resp = await client.post(
+                "/api/auth/guest",
+                headers={"Origin": "https://evil.example.test"},
+            )
+            login_payload = await login_resp.json()
+            guest_payload = await guest_resp.json()
+
+    assert login_resp.status == 403
+    assert login_payload["error"]["code"] == "csrf_origin_rejected"
+    assert "tcb_web_session" not in login_resp.cookies
+    assert guest_resp.status == 403
+    assert guest_payload["error"]["code"] == "csrf_origin_rejected"
+    assert "tcb_web_session" not in guest_resp.cookies
+
+
+@pytest.mark.asyncio
+async def test_guest_cannot_list_bots(
+    web_manager: MultiBotManager,
+    isolated_web_auth_store: WebAuthStore,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: False)
+    session = isolated_web_auth_store.create_guest_session()
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get("/api/bots", headers={"Authorization": f"Bearer {session.token}"})
+            payload = await resp.json()
+
+    assert resp.status == 403
+    assert payload["error"]["code"] == "forbidden"
+
+
+@pytest.mark.asyncio
+async def test_default_member_cannot_execute_host_level_actions(
+    web_manager: MultiBotManager,
+    isolated_web_auth_store: WebAuthStore,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: False)
+    isolated_web_auth_store.register_codes_path.write_text(
+        json.dumps({"items": [{"code": "INVITE-001", "disabled": False}]}),
+        encoding="utf-8",
+    )
+    session = isolated_web_auth_store.register_member("alice", "pw-123", "INVITE-001")
+    from bot.web.permission_store import BotPermissionStore
+
+    permission_store = BotPermissionStore(temp_dir / ".web_permissions.json")
+    permission_store.grant_bot_to_account(session.account.account_id, "main")
+    monkeypatch.setattr("bot.web.server._BOT_PERMISSION_STORE", permission_store)
+    headers = {"Authorization": f"Bearer {session.token}"}
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            chat_resp = await client.post("/api/bots/main/chat", json={"message": "hi"}, headers=headers)
+            add_bot_resp = await client.post(
+                "/api/admin/bots",
+                json={"alias": "memberbot", "working_dir": str(temp_dir)},
+                headers=headers,
+            )
+            cli_resp = await client.patch(
+                "/api/bots/main/cli-params",
+                json={"cli_type": "codex", "key": "yolo", "value": True},
+                headers=headers,
+            )
+            workdir_resp = await client.post(
+                "/api/bots/main/workdir/mkdir",
+                json={"parent_path": str(temp_dir), "name": "member-workdir"},
+                headers=headers,
+            )
+
+    assert chat_resp.status == 403
+    assert add_bot_resp.status == 403
+    assert cli_resp.status == 403
+    assert workdir_resp.status == 403
+
+
+@pytest.mark.asyncio
+async def test_member_explicit_capabilities_restore_host_level_actions(
+    web_manager: MultiBotManager,
+    isolated_web_auth_store: WebAuthStore,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: False)
+    isolated_web_auth_store.register_codes_path.write_text(
+        json.dumps({"items": [{"code": "INVITE-001", "disabled": False}]}),
+        encoding="utf-8",
+    )
+    session = isolated_web_auth_store.register_member("alice", "pw-123", "INVITE-001")
+    isolated_web_auth_store.update_member(
+        session.account.account_id,
+        capabilities=[*MEMBER_CAPABILITIES, CAP_CHAT_SEND, CAP_MANAGE_BOTS, CAP_MANAGE_CLI_PARAMS, CAP_CREATE_WORKDIR_DIRECTORY],
+    )
+    refreshed = isolated_web_auth_store.login_member("alice", "pw-123")
+    from bot.web.permission_store import BotPermissionStore
+
+    permission_store = BotPermissionStore(temp_dir / ".web_permissions.json")
+    permission_store.grant_bot_to_account(refreshed.account.account_id, "main")
+    monkeypatch.setattr("bot.web.server._BOT_PERMISSION_STORE", permission_store)
+    monkeypatch.setattr("bot.web.server.run_chat", AsyncMock(return_value={"id": "msg-1", "content": "ok"}))
+    headers = {"Authorization": f"Bearer {refreshed.token}"}
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            chat_resp = await client.post("/api/bots/main/chat", json={"message": "hi"}, headers=headers)
+            add_bot_resp = await client.post(
+                "/api/admin/bots",
+                json={"alias": "memberbot", "working_dir": str(temp_dir)},
+                headers=headers,
+            )
+            cli_resp = await client.patch(
+                "/api/bots/main/cli-params",
+                json={"cli_type": "codex", "key": "yolo", "value": True},
+                headers=headers,
+            )
+            workdir_resp = await client.post(
+                "/api/bots/main/workdir/mkdir",
+                json={"parent_path": str(temp_dir), "name": "member-workdir"},
+                headers=headers,
+            )
+
+    assert chat_resp.status == 200
+    assert add_bot_resp.status == 200
+    assert cli_resp.status == 200
+    assert workdir_resp.status == 200
+
+
+@pytest.mark.asyncio
+async def test_member_cannot_read_unallowed_bot(
+    web_manager: MultiBotManager,
+    isolated_web_auth_store: WebAuthStore,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: False)
+    await web_manager.add_bot("team", "", "codex", "codex", str(temp_dir), "cli")
+    isolated_web_auth_store.register_codes_path.write_text(
+        json.dumps({"items": [{"code": "INVITE-001", "disabled": False}]}),
+        encoding="utf-8",
+    )
+    session = isolated_web_auth_store.register_member("alice", "pw-123", "INVITE-001")
+    from bot.web.permission_store import BotPermissionStore
+
+    permission_store = BotPermissionStore(temp_dir / ".web_permissions.json")
+    permission_store.grant_bot_to_account(session.account.account_id, "main")
+    monkeypatch.setattr("bot.web.server._BOT_PERMISSION_STORE", permission_store)
+    headers = {"Authorization": f"Bearer {session.token}"}
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            list_resp = await client.get("/api/bots", headers=headers)
+            list_payload = await list_resp.json()
+            team_resp = await client.get("/api/bots/team/history", headers=headers)
+            team_payload = await team_resp.json()
+
+    assert list_resp.status == 200
+    assert [item["alias"] for item in list_payload["data"]] == ["main"]
+    assert team_resp.status == 403
+    assert team_payload["error"]["code"] == "bot_forbidden"
+
+
+@pytest.mark.asyncio
+async def test_debug_websocket_rejects_unallowed_bot_alias(
+    web_manager: MultiBotManager,
+    isolated_web_auth_store: WebAuthStore,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: False)
+    await web_manager.add_bot("team", "", "codex", "codex", str(temp_dir), "cli")
+    isolated_web_auth_store.register_codes_path.write_text(
+        json.dumps({"items": [{"code": "INVITE-001", "disabled": False}]}),
+        encoding="utf-8",
+    )
+    session = isolated_web_auth_store.register_member("alice", "pw-123", "INVITE-001")
+    isolated_web_auth_store.update_member(
+        session.account.account_id,
+        capabilities=[*MEMBER_CAPABILITIES, CAP_DEBUG_EXEC],
+    )
+    refreshed = isolated_web_auth_store.login_member("alice", "pw-123")
+    from bot.web.permission_store import BotPermissionStore
+
+    permission_store = BotPermissionStore(temp_dir / ".web_permissions.json")
+    permission_store.grant_bot_to_account(refreshed.account.account_id, "main")
+    monkeypatch.setattr("bot.web.server._BOT_PERMISSION_STORE", permission_store)
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            with pytest.raises(WSServerHandshakeError) as exc_info:
+                await client.ws_connect(
+                    "/debug/ws?alias=team",
+                    headers={"Authorization": f"Bearer {refreshed.token}"},
+                )
+
+    assert exc_info.value.status == 403
+
 
 @pytest.mark.asyncio
 async def test_bot_overview_route(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
@@ -1630,11 +1976,11 @@ async def test_ungranted_bot_file_read_write_and_terminal_rebuild_are_forbidden(
             rebuild_payload = await rebuild_resp.json()
 
     assert read_resp.status == 403
-    assert read_payload["error"]["code"] == "forbidden"
+    assert read_payload["error"]["code"] == "bot_forbidden"
     assert write_resp.status == 403
-    assert write_payload["error"]["code"] == "forbidden"
+    assert write_payload["error"]["code"] == "bot_forbidden"
     assert rebuild_resp.status == 403
-    assert rebuild_payload["error"]["code"] == "forbidden"
+    assert rebuild_payload["error"]["code"] == "bot_forbidden"
     assert (temp_dir / "notes.md").read_text(encoding="utf-8") == "# hello\n"
 
 @pytest.mark.asyncio
@@ -1721,6 +2067,56 @@ async def test_chat_stream_route_returns_ag_ui_sse_when_protocol_requested(
     ]
 
 
+@pytest.mark.parametrize(
+    ("capabilities", "expected_allow_unsafe"),
+    [
+        ({CAP_CHAT_SEND}, False),
+        ({CAP_CHAT_SEND, CAP_RUN_UNSAFE_CLI}, True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_chat_stream_route_passes_ag_ui_protocol_and_unsafe_capability(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    capabilities: set[str],
+    expected_allow_unsafe: bool,
+):
+    captured: dict[str, Any] = {}
+
+    def fake_auth(_self, _request):
+        return AuthContext(
+            user_id=1001,
+            token_used=True,
+            account_id="local-admin",
+            username="local-admin",
+            role="owner",
+            capabilities=set(capabilities),
+            is_local_admin=True,
+        )
+
+    async def fake_stream_chat(manager, alias, user_id, message, **kwargs):
+        captured.update(kwargs)
+        yield {
+            "type": "done",
+            "output": "hello",
+            "message": {"id": "msg-1", "role": "assistant", "content": "hello", "meta": {}},
+            "elapsed_seconds": 0,
+            "returncode": 0,
+        }
+
+    monkeypatch.setattr("bot.web.server.WebApiServer._auth_context", fake_auth)
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            with patch("bot.web.server.stream_chat", fake_stream_chat):
+                resp = await client.post("/api/bots/main/chat/stream?protocol=ag-ui", json={"message": "hi"})
+                await resp.text()
+
+    assert resp.status == 200
+    assert captured["protocol"] == "ag-ui"
+    assert captured["allow_unsafe_cli"] is expected_allow_unsafe
+
+
 @pytest.mark.asyncio
 async def test_terminal_session_routes_and_websocket_attach(
     web_manager: MultiBotManager,
@@ -1777,22 +2173,24 @@ async def test_terminal_session_routes_and_websocket_attach(
             with patch("bot.web.terminal_manager.create_shell_process", side_effect=fake_create_shell_process), \
                  patch("bot.web.server.get_default_shell", return_value="bash"):
                 owner_id = "shared-terminal"
-                resp = await client.get(f"/api/terminal/session?token=secret&owner_id={owner_id}")
+                headers = {"Authorization": "Bearer secret"}
+                resp = await client.get(f"/api/terminal/session?owner_id={owner_id}", headers=headers)
                 assert resp.status == 200
                 payload = await resp.json()
                 assert payload["data"]["started"] is False
                 assert payload["data"]["connection_text"] == "未启动"
 
                 rebuild_resp = await client.post(
-                    "/api/terminal/session/rebuild?token=secret",
+                    "/api/terminal/session/rebuild",
                     json={"owner_id": owner_id, "cwd": str(temp_dir), "shell": "bash"},
+                    headers=headers,
                 )
                 assert rebuild_resp.status == 200
                 rebuild_payload = await rebuild_resp.json()
                 assert rebuild_payload["data"]["started"] is True
                 assert rebuild_payload["data"]["connection_text"] == "运行中"
 
-                ws = await client.ws_connect("/terminal/ws?token=secret")
+                ws = await client.ws_connect("/terminal/ws", headers=headers)
                 await ws.send_json({"owner_id": owner_id})
                 first_message = await ws.receive_json()
                 assert first_message == {"pty_mode": False, "connection_text": "运行中"}
@@ -1864,8 +2262,9 @@ async def test_terminal_rebuild_uses_configured_shell_path(
         async with TestClient(test_server) as client:
             with patch("bot.web.terminal_manager.create_shell_process", side_effect=fake_create_shell_process):
                 resp = await client.post(
-                    "/api/terminal/session/rebuild?token=secret",
+                    "/api/terminal/session/rebuild",
                     json={"owner_id": "configured-shell", "cwd": str(temp_dir), "shell": "bash"},
+                    headers={"Authorization": "Bearer secret"},
                 )
 
                 assert resp.status == 200
@@ -1917,17 +2316,20 @@ async def test_terminal_websocket_closes_when_terminal_session_closes(
             with patch("bot.web.terminal_manager.create_shell_process", side_effect=fake_create_shell_process), \
                  patch("bot.web.server.get_default_shell", return_value="bash"):
                 owner_id = "close-ws-terminal"
+                headers = {"Authorization": "Bearer secret"}
                 rebuild_resp = await client.post(
-                    "/api/terminal/session/rebuild?token=secret",
+                    "/api/terminal/session/rebuild",
                     json={"owner_id": owner_id, "cwd": str(temp_dir), "shell": "auto"},
+                    headers=headers,
                 )
-                ws = await client.ws_connect("/terminal/ws?token=secret")
+                ws = await client.ws_connect("/terminal/ws", headers=headers)
                 await ws.send_json({"owner_id": owner_id})
                 first_message = await ws.receive_json()
 
                 close_resp = await client.post(
-                    "/api/terminal/session/close?token=secret",
+                    "/api/terminal/session/close",
                     json={"owner_id": owner_id},
+                    headers=headers,
                 )
                 close_message = await asyncio.wait_for(ws.receive(), timeout=2)
 
@@ -1959,13 +2361,14 @@ async def test_diag_slow_request_skips_websocket_connections(
     caplog.set_level(logging.WARNING, logger="bot.web.server")
     async with TestServer(app) as test_server:
         async with TestClient(test_server) as client:
-            ws = await client.ws_connect("/api/notifications/ws?token=secret")
+            headers = {"Authorization": "Bearer secret"}
+            ws = await client.ws_connect("/api/notifications/ws", headers=headers)
             hello = await ws.receive_json()
             assert hello["type"] == "hello"
             await asyncio.sleep(0.01)
             await ws.close()
 
-            response = await client.get("/__test/slow-http?token=secret")
+            response = await client.get("/__test/slow-http", headers=headers)
             assert response.status == 200
 
     messages = [record.getMessage() for record in caplog.records]
@@ -2021,8 +2424,9 @@ async def test_terminal_rebuild_auto_uses_default_shell_without_configured_path(
             with patch("bot.web.terminal_manager.create_shell_process", side_effect=fake_create_shell_process), \
                  patch("bot.web.server.get_default_shell", return_value="bash"):
                 resp = await client.post(
-                    "/api/terminal/session/rebuild?token=secret",
+                    "/api/terminal/session/rebuild",
                     json={"owner_id": "default-shell", "cwd": str(temp_dir), "shell": "auto"},
+                    headers={"Authorization": "Bearer secret"},
                 )
 
                 assert resp.status == 200
@@ -2044,12 +2448,14 @@ async def test_terminal_rebuild_reports_invalid_shell_without_starting_session(
     async with TestServer(app) as test_server:
         async with TestClient(test_server) as client:
             owner_id = "missing-shell"
+            headers = {"Authorization": "Bearer secret"}
             resp = await client.post(
-                "/api/terminal/session/rebuild?token=secret",
+                "/api/terminal/session/rebuild",
                 json={"owner_id": owner_id, "cwd": str(temp_dir), "shell": "definitely-missing-shell"},
+                headers=headers,
             )
             payload = await resp.json()
-            session_resp = await client.get(f"/api/terminal/session?token=secret&owner_id={owner_id}")
+            session_resp = await client.get(f"/api/terminal/session?owner_id={owner_id}", headers=headers)
             session_payload = await session_resp.json()
 
     assert resp.status == 400
@@ -2070,7 +2476,7 @@ async def test_terminal_websocket_reports_not_running_before_attach(
     app = WebApiServer(web_manager)._build_app()
     async with TestServer(app) as test_server:
         async with TestClient(test_server) as client:
-            ws = await client.ws_connect("/terminal/ws?token=secret")
+            ws = await client.ws_connect("/terminal/ws", headers={"Authorization": "Bearer secret"})
             await ws.send_json({"owner_id": "not-started"})
             message = await ws.receive_json()
             await ws.close()
@@ -2091,7 +2497,7 @@ async def test_terminal_websocket_accepts_configured_node_base_path(
     app = WebApiServer(web_manager)._build_app()
     async with TestServer(app) as test_server:
         async with TestClient(test_server) as client:
-            ws = await client.ws_connect("/node/local/terminal/ws?token=secret")
+            ws = await client.ws_connect("/node/local/terminal/ws", headers={"Authorization": "Bearer secret"})
             await ws.send_json({"owner_id": "not-started"})
             message = await ws.receive_json()
             await ws.close()
@@ -2120,8 +2526,9 @@ async def test_terminal_websocket_probe_reports_base_path_and_origin(
     async with TestServer(app) as test_server:
         async with TestClient(test_server) as client:
             response = await client.get(
-                "/node/local/terminal/ws-probe?token=secret",
+                "/node/local/terminal/ws-probe",
                 headers={
+                    "Authorization": "Bearer secret",
                     "Origin": "https://proxy.example.test",
                     "Host": "127.0.0.1:8765",
                     "X-Forwarded-Host": "proxy.example.test",
@@ -2197,12 +2604,15 @@ async def test_terminal_http_stream_and_input_fallback(
             with patch("bot.web.terminal_manager.create_shell_process", side_effect=fake_create_shell_process), \
                  patch("bot.web.server.get_default_shell", return_value="bash"):
                 owner_id = "http-fallback"
+                headers = {"Authorization": "Bearer secret"}
                 rebuild_resp = await client.post(
-                    "/api/terminal/session/rebuild?token=secret",
+                    "/api/terminal/session/rebuild",
                     json={"owner_id": owner_id, "cwd": str(temp_dir), "shell": "auto"},
+                    headers=headers,
                 )
                 stream_resp = await client.get(
-                    f"/api/terminal/session/stream?token=secret&owner_id={owner_id}",
+                    f"/api/terminal/session/stream?owner_id={owner_id}",
+                    headers=headers,
                     timeout=5,
                 )
                 ready = await stream_resp.content.readline()
@@ -2210,12 +2620,14 @@ async def test_terminal_http_stream_and_input_fallback(
                 await stream_resp.content.readline()
 
                 input_resp = await client.post(
-                    "/api/terminal/session/input?token=secret",
+                    "/api/terminal/session/input",
                     json={"owner_id": owner_id, "data": "echo hi\r\n"},
+                    headers=headers,
                 )
                 resize_resp = await client.post(
-                    "/api/terminal/session/input?token=secret",
+                    "/api/terminal/session/input",
                     json={"owner_id": owner_id, "type": "resize", "cols": 120, "rows": 32},
+                    headers=headers,
                 )
 
                 output_queue.put(b"hello\n")
@@ -2283,13 +2695,15 @@ async def test_terminal_websocket_allows_configured_public_url_origin(
             with patch("bot.web.terminal_manager.create_shell_process", side_effect=fake_create_shell_process), \
                  patch("bot.web.server.get_default_shell", return_value="bash"):
                 owner_id = "public-origin"
+                headers = {"Authorization": "Bearer secret"}
                 rebuild_resp = await client.post(
-                    "/api/terminal/session/rebuild?token=secret",
+                    "/api/terminal/session/rebuild",
                     json={"owner_id": owner_id, "cwd": str(temp_dir), "shell": "auto"},
+                    headers=headers,
                 )
                 ws = await client.ws_connect(
-                    "/terminal/ws?token=secret",
-                    headers={"Origin": "http://proxy.example.test"},
+                    "/terminal/ws",
+                    headers={**headers, "Origin": "http://proxy.example.test"},
                 )
                 await ws.send_json({"owner_id": owner_id})
                 first_message = await ws.receive_json()
@@ -2314,8 +2728,9 @@ async def test_terminal_websocket_allows_forwarded_host_origin(
     async with TestServer(app) as test_server:
         async with TestClient(test_server) as client:
             ws = await client.ws_connect(
-                "/terminal/ws?token=secret",
+                "/terminal/ws",
                 headers={
+                    "Authorization": "Bearer secret",
                     "Origin": "https://proxy.example.test",
                     "Host": "127.0.0.1:8765",
                     "X-Forwarded-Host": "proxy.example.test",
@@ -2344,8 +2759,9 @@ async def test_terminal_websocket_rejects_unmatched_forwarded_host_origin(
     async with TestServer(app) as test_server:
         async with TestClient(test_server) as client:
             ws = await client.ws_connect(
-                "/terminal/ws?token=secret",
+                "/terminal/ws",
                 headers={
+                    "Authorization": "Bearer secret",
                     "Origin": "https://proxy.example.test",
                     "Host": "127.0.0.1:8765",
                     "X-Forwarded-Host": "other.example.test",
@@ -2384,7 +2800,7 @@ async def test_terminal_websocket_rejects_unmatched_forwarded_host_without_token
                     },
                 )
 
-    assert exc_info.value.status == 403
+    assert exc_info.value.status == 401
 
 
 @pytest.mark.asyncio
@@ -3346,6 +3762,34 @@ async def test_cli_chat_popen_uses_chat_cli_process_kwargs(
     assert run_result["output"] == "完成"
     assert captured_kwargs[0]["creationflags"] == 0x08000200
     assert captured_kwargs[1]["creationflags"] == 0x08000200
+
+
+@pytest.mark.asyncio
+async def test_run_cli_chat_clamps_yolo_without_unsafe_capability(web_manager: MultiBotManager):
+    web_manager.main_profile.cli_type = "codex"
+    web_manager.main_profile.cli_params.codex["yolo"] = True
+    captured_yolo: list[bool] = []
+
+    def fake_build_cli_command(**kwargs):
+        captured_yolo.append(bool(kwargs["params_config"].codex.get("yolo")))
+        return ["codex"], False
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", side_effect=fake_build_cli_command), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=RecordingProcess(['{"type":"item.completed","item":{"type":"assistant_message","text":"完成"}}\n'])):
+        result = await asyncio.wait_for(run_cli_chat(web_manager, "main", 1001, "执行"), timeout=2)
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", side_effect=fake_build_cli_command), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=RecordingProcess(['{"type":"item.completed","item":{"type":"assistant_message","text":"完成"}}\n'])):
+        unsafe_result = await asyncio.wait_for(
+            run_cli_chat(web_manager, "main", 1001, "执行", allow_unsafe_cli=True),
+            timeout=2,
+        )
+
+    assert result["output"] == "完成"
+    assert unsafe_result["output"] == "完成"
+    assert captured_yolo == [False, True]
 
 
 @pytest.mark.asyncio

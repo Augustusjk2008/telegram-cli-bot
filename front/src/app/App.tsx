@@ -68,8 +68,6 @@ import "../styles/global.css";
 
 const SESSION_TOKEN_STORAGE_KEY = "web-session-token";
 const LEGACY_TOKEN_STORAGE_KEY = "web-api-token";
-const BOT_STORAGE_KEY = "web-current-bot";
-const UNREAD_STORAGE_KEY = "web-unread-bots";
 const MAX_CACHED_CHAT_SCREENS = 3;
 const EMPTY_ANNOUNCEMENT_STATE: AnnouncementListResult = {
   items: [],
@@ -95,34 +93,6 @@ function readStoredToken() {
   }
 }
 
-function storeToken(token: string, remember = false) {
-  const trimmed = token.trim();
-  if (!trimmed) {
-    try {
-      sessionStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
-      sessionStorage.removeItem(LEGACY_TOKEN_STORAGE_KEY);
-      localStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
-      localStorage.removeItem(LEGACY_TOKEN_STORAGE_KEY);
-    } catch {
-      // Ignore storage failures and keep the in-memory state.
-    }
-    return;
-  }
-  try {
-    sessionStorage.setItem(SESSION_TOKEN_STORAGE_KEY, trimmed);
-    sessionStorage.setItem(LEGACY_TOKEN_STORAGE_KEY, trimmed);
-    if (remember) {
-      localStorage.setItem(SESSION_TOKEN_STORAGE_KEY, trimmed);
-      localStorage.setItem(LEGACY_TOKEN_STORAGE_KEY, trimmed);
-    } else {
-      localStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
-      localStorage.removeItem(LEGACY_TOKEN_STORAGE_KEY);
-    }
-  } catch {
-    // Ignore storage failures and keep the in-memory state.
-  }
-}
-
 function clearStoredToken() {
   try {
     sessionStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
@@ -136,58 +106,6 @@ function clearStoredToken() {
 
 function sessionAccountKey(session: SessionState | null) {
   return (session?.accountId || session?.username || "").trim();
-}
-
-function scopedStorageKey(baseKey: string, accountKey?: string) {
-  const normalized = accountKey?.trim();
-  return normalized ? `${baseKey}.${normalized}` : baseKey;
-}
-
-function readStoredBotAlias(accountKey?: string) {
-  try {
-    return localStorage.getItem(scopedStorageKey(BOT_STORAGE_KEY, accountKey))?.trim() || "";
-  } catch {
-    return "";
-  }
-}
-
-function storeBotAlias(alias: string | null, accountKey?: string) {
-  const trimmed = alias?.trim() || "";
-  try {
-    if (!trimmed) {
-      localStorage.removeItem(scopedStorageKey(BOT_STORAGE_KEY, accountKey));
-      return;
-    }
-    localStorage.setItem(scopedStorageKey(BOT_STORAGE_KEY, accountKey), trimmed);
-  } catch {
-    // Ignore storage failures and keep the in-memory state.
-  }
-}
-
-function readUnreadBots(accountKey?: string) {
-  try {
-    const raw = localStorage.getItem(scopedStorageKey(UNREAD_STORAGE_KEY, accountKey));
-    if (!raw) {
-      return [];
-    }
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
-  } catch {
-    return [];
-  }
-}
-
-function storeUnreadBots(items: string[], accountKey?: string) {
-  try {
-    const key = scopedStorageKey(UNREAD_STORAGE_KEY, accountKey);
-    if (items.length === 0) {
-      localStorage.removeItem(key);
-      return;
-    }
-    localStorage.setItem(key, JSON.stringify(items));
-  } catch {
-    // Ignore storage failures and keep the in-memory state.
-  }
 }
 
 function applyUnreadStatus(bots: BotSummary[], unreadBots: string[]) {
@@ -282,8 +200,7 @@ async function resolveVisibleBotSelection(
     return { bots: [], alias: null };
   }
   const aliases = new Set(visibleBots.map((bot) => bot.alias));
-  const accountKey = sessionAccountKey(session);
-  const preferredAlias = readStoredBotAlias(accountKey) || session.currentBotAlias || "";
+  const preferredAlias = session.currentBotAlias || "";
   const alias = preferredAlias && aliases.has(preferredAlias)
     ? preferredAlias
     : visibleBots[0]?.alias || null;
@@ -309,7 +226,7 @@ export function App() {
   const [botSwitcherAnchorRect, setBotSwitcherAnchorRect] = useState<DOMRect | null>(null);
   const [desktopHasDirtyTabs, setDesktopHasDirtyTabs] = useState(false);
   const [bots, setBots] = useState<BotSummary[]>([]);
-  const [unreadBots, setUnreadBots] = useState<string[]>(() => readUnreadBots());
+  const [unreadBots, setUnreadBots] = useState<string[]>([]);
   const [botActivityOverrides, setBotActivityOverrides] = useState<BotAgentActivityOverrides>({});
   const [loginError, setLoginError] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
@@ -387,7 +304,6 @@ export function App() {
     setCurrentBot(alias);
     setShowBotManager(false);
     setShowAdminCenter(false);
-    storeBotAlias(alias, accountKey);
     setIsChatImmersive(false);
     setIsTerminalImmersive(false);
   }
@@ -468,10 +384,6 @@ export function App() {
     }
     client.listBots().then(setBots).catch(() => setBots([]));
   }, [bots.length, client, isLoggedIn]);
-
-  useEffect(() => {
-    setUnreadBots(readUnreadBots(accountKey));
-  }, [accountKey]);
 
   const allowedTabs = useMemo(() => {
     const nextTabs: AppTab[] = ["chat", "files"];
@@ -591,10 +503,6 @@ export function App() {
   }, [canOpenAdminCenter, showAdminCenter]);
 
   useEffect(() => {
-    storeUnreadBots(unreadBots, accountKey);
-  }, [accountKey, unreadBots]);
-
-  useEffect(() => {
     if (!isLoggedIn || bots.length === 0) {
       return;
     }
@@ -606,14 +514,7 @@ export function App() {
     if (currentBot && bots.some((bot) => bot.alias === currentBot)) {
       return;
     }
-
-    const storedAlias = readStoredBotAlias(accountKey);
-    if (storedAlias && bots.some((bot) => bot.alias === storedAlias)) {
-      setCurrentBot(storedAlias);
-      return;
-    }
-
-    setCurrentBot(null);
+    setCurrentBot(bots[0]?.alias || null);
   }, [accountKey, bots, currentBot, isLoggedIn, showAdminCenter, showBotManager]);
 
   useEffect(() => {
@@ -625,11 +526,14 @@ export function App() {
     setLoginLoading(true);
     nextClient.restoreSession(storedToken)
       .then(async (nextSession) => {
+        if (storedToken) {
+          clearStoredToken();
+        }
         const { bots: visibleBots, alias: restoredAlias } = await resolveVisibleBotSelection(nextClient, nextSession);
         setClient(nextClient);
         setSession(nextSession);
         setBots(visibleBots);
-        setUnreadBots(readUnreadBots(sessionAccountKey(nextSession)));
+        setUnreadBots([]);
         setCurrentBot(restoredAlias || null);
         setShowBotManager(false);
         setShowAdminCenter(false);
@@ -657,11 +561,10 @@ export function App() {
     try {
       const nextSession = await nextClient.login(input);
       const { bots: visibleBots, alias: restoredAlias } = await resolveVisibleBotSelection(nextClient, nextSession);
-      storeToken(nextSession.token || "", Boolean(input.remember));
       setClient(nextClient);
       setSession(nextSession);
       setBots(visibleBots);
-      setUnreadBots(readUnreadBots(sessionAccountKey(nextSession)));
+      setUnreadBots([]);
       setCurrentBot(restoredAlias || null);
       setShowBotManager(false);
       setShowAdminCenter(false);
@@ -683,11 +586,10 @@ export function App() {
     try {
       const nextSession = await nextClient.register(input);
       const { bots: visibleBots, alias: restoredAlias } = await resolveVisibleBotSelection(nextClient, nextSession);
-      storeToken(nextSession.token || "", Boolean(input.remember));
       setClient(nextClient);
       setSession(nextSession);
       setBots(visibleBots);
-      setUnreadBots(readUnreadBots(sessionAccountKey(nextSession)));
+      setUnreadBots([]);
       setCurrentBot(restoredAlias || null);
       setShowBotManager(false);
       setShowAdminCenter(false);
@@ -709,11 +611,10 @@ export function App() {
     try {
       const nextSession = await nextClient.loginGuest();
       const { bots: visibleBots, alias: restoredAlias } = await resolveVisibleBotSelection(nextClient, nextSession);
-      storeToken(nextSession.token || "", Boolean(input?.remember));
       setClient(nextClient);
       setSession(nextSession);
       setBots(visibleBots);
-      setUnreadBots(readUnreadBots(sessionAccountKey(nextSession)));
+      setUnreadBots([]);
       setCurrentBot(restoredAlias || null);
       setShowBotManager(false);
       setShowAdminCenter(false);
@@ -731,7 +632,6 @@ export function App() {
   function handleLogout() {
     void client.logout().catch(() => undefined);
     clearStoredToken();
-    storeUnreadBots([], accountKey);
     setClient(useMockClient ? new MockWebBotClient() : new RealWebBotClient());
     setSession(null);
     setCurrentBot(null);
@@ -941,7 +841,7 @@ export function App() {
     activeScreen = (
       <div className="absolute inset-0">
         <MobileDebugScreen
-          authToken={readStoredToken()}
+          authToken={session?.token || ""}
           botAlias={currentBot}
           client={client}
         />
@@ -952,7 +852,7 @@ export function App() {
       <div className="absolute inset-0">
         <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">加载终端...</div>}>
           <TerminalScreen
-            authToken={readStoredToken()}
+            authToken={session?.token || ""}
             botAlias={currentBot}
             client={client}
             isVisible
@@ -1066,7 +966,7 @@ export function App() {
       <>
         <PersistentTerminalProvider client={client}>
           <DesktopWorkbench
-            authToken={readStoredToken()}
+            authToken={session?.token || ""}
             accountId={accountKey}
             botAlias={currentBot}
             botAvatarName={currentBotSummary?.avatarName}

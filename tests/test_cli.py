@@ -71,10 +71,10 @@ class TestBuildCliCommand:
         assert ("--permission-mode", "plan") not in plan_arg_pairs
         assert "--permission-mode=plan" not in cmd
         permission_mode_index = cmd.index("--permission-mode")
-        assert cmd[permission_mode_index + 1] == "bypassPermissions"
+        assert cmd[permission_mode_index + 1] == "default"
         assert cmd.count("--permission-mode") == 1
 
-    def test_codex_defaults_include_model_yolo_and_reasoning_effort(self):
+    def test_codex_defaults_include_model_and_reasoning_effort_without_yolo(self):
         env = {}
         cmd, use_stdin = build_cli_command(
             cli_type="codex",
@@ -83,13 +83,46 @@ class TestBuildCliCommand:
             env=env,
             params_config=CliParamsConfig(),
         )
-        assert "--dangerously-bypass-approvals-and-sandbox" in cmd
+        assert "--dangerously-bypass-approvals-and-sandbox" not in cmd
         assert "--model" in cmd
         model_index = cmd.index("--model")
         assert cmd[model_index + 1] == "gpt-5.4"
         assert '-c' in cmd
         config_index = cmd.index("-c")
         assert cmd[config_index + 1] == 'model_reasoning_effort="xhigh"'
+
+    def test_cli_yolo_flags_require_explicit_config(self):
+        env = {}
+        params_config = CliParamsConfig()
+        params_config.codex["yolo"] = True
+        params_config.claude["yolo"] = True
+        params_config.kimi["yolo"] = True
+
+        codex_cmd, _ = build_cli_command(
+            cli_type="codex",
+            resolved_cli="codex",
+            user_text="hello",
+            env=env,
+            params_config=params_config,
+        )
+        claude_cmd, _ = build_cli_command(
+            cli_type="claude",
+            resolved_cli="claude",
+            user_text="hello",
+            env=env,
+            params_config=params_config,
+        )
+        kimi_cmd, _ = build_cli_command(
+            cli_type="kimi",
+            resolved_cli="kimi",
+            user_text="hello",
+            env=env,
+            params_config=params_config,
+        )
+
+        assert "--dangerously-bypass-approvals-and-sandbox" in codex_cmd
+        assert "--dangerously-skip-permissions" in claude_cmd
+        assert "--yolo" in kimi_cmd
 
     def test_kimi_command_uses_print_stream_json_stdin_and_session(self, temp_dir: Path):
         env = {}
@@ -185,4 +218,3 @@ class TestParseKimiStreamJson:
         text = parse_kimi_stream_json_output(raw)
 
         assert text == "目录里有 README.md 和 bot。"
-

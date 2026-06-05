@@ -34,39 +34,39 @@ CAP_MANAGE_BOTS = "manage_bots"
 CAP_CREATE_WORKDIR_DIRECTORY = "create_workdir_directory"
 CAP_VIEW_PLUGINS = "view_plugins"
 CAP_RUN_PLUGINS = "run_plugins"
+CAP_RUN_UNSAFE_CLI = "run_unsafe_cli"
 CAP_ADMIN_OPS = "admin_ops"
 CAP_MANAGE_REGISTER_CODES = "manage_register_codes"
+CAPABILITIES_SCHEMA_VERSION = 2
 
 _HIGH_RISK_MEMBER_CAPABILITIES = frozenset(
     {
         CAP_ADMIN_OPS,
+        CAP_CHAT_SEND,
+        CAP_CREATE_WORKDIR_DIRECTORY,
         CAP_DEBUG_EXEC,
         CAP_GIT_OPS,
+        CAP_MANAGE_BOTS,
+        CAP_MANAGE_CLI_PARAMS,
+        CAP_RUN_UNSAFE_CLI,
         CAP_RUN_PLUGINS,
         CAP_TERMINAL_EXEC,
         CAP_WRITE_FILES,
     }
 )
 
-GUEST_CAPABILITIES = frozenset(
-    {
-        CAP_VIEW_BOTS,
-        CAP_VIEW_BOT_STATUS,
-        CAP_VIEW_FILE_TREE,
-        CAP_VIEW_CHAT_HISTORY,
-    }
-)
+GUEST_CAPABILITIES = frozenset()
 
 MEMBER_CAPABILITIES = frozenset(
     {
         *GUEST_CAPABILITIES,
+        CAP_VIEW_BOTS,
+        CAP_VIEW_BOT_STATUS,
+        CAP_VIEW_FILE_TREE,
         CAP_MUTATE_BROWSE_STATE,
+        CAP_VIEW_CHAT_HISTORY,
         CAP_VIEW_CHAT_TRACE,
         CAP_READ_FILE_CONTENT,
-        CAP_CHAT_SEND,
-        CAP_MANAGE_CLI_PARAMS,
-        CAP_MANAGE_BOTS,
-        CAP_CREATE_WORKDIR_DIRECTORY,
         CAP_VIEW_PLUGINS,
     }
 )
@@ -192,6 +192,7 @@ class WebAuthStore:
                     "role": ROLE_MEMBER,
                     "disabled": False,
                     "session_user_id": session_user_id,
+                    "capabilities_schema_version": CAPABILITIES_SCHEMA_VERSION,
                     "capabilities": sorted(MEMBER_CAPABILITIES),
                     "password_salt": salt.hex(),
                     "password_hash": hashed_password,
@@ -314,6 +315,12 @@ class WebAuthStore:
     def list_members(self) -> dict[str, Any]:
         with self._lock:
             data = self._read_json(self.users_path)
+            user_items = self._items(data)
+            changed = False
+            for item in user_items:
+                changed = self._ensure_account_defaults(item, user_items) or changed
+            if changed:
+                self._write_json(self.users_path, data)
             items = [
                 {
                     "account_id": str(item.get("account_id") or ""),
@@ -323,7 +330,7 @@ class WebAuthStore:
                     "capabilities": sorted(self._capabilities_for_item(item)),
                     "created_at": str(item.get("created_at") or ""),
                 }
-                for item in self._items(data)
+                for item in user_items
                 if str(item.get("role") or ROLE_MEMBER) == ROLE_MEMBER
             ]
         items.sort(key=lambda item: item["username"].casefold())
@@ -341,17 +348,20 @@ class WebAuthStore:
             self._raise(400, "invalid_account_id", "账号 ID 不能为空")
         with self._lock:
             data = self._read_json(self.users_path)
+            user_items = self._items(data)
             target = None
-            for item in self._items(data):
+            for item in user_items:
                 if str(item.get("account_id") or "").strip() == resolved_id:
                     target = item
                     break
             if target is None:
                 self._raise(404, "account_not_found", "账号不存在")
+            self._ensure_account_defaults(target, user_items)
             if disabled is not None:
                 target["disabled"] = bool(disabled)
             if capabilities is not None:
                 target["capabilities"] = sorted(self._sanitize_capabilities(capabilities))
+                target["capabilities_schema_version"] = CAPABILITIES_SCHEMA_VERSION
             self._write_json(self.users_path, data)
             self._refresh_account_sessions(target)
             return {
@@ -537,10 +547,24 @@ class WebAuthStore:
         if self._parse_session_user_id(item.get("session_user_id")) is None:
             item["session_user_id"] = self._generate_session_user_id(items, str(item.get("account_id") or ""))
             changed = True
-        if not isinstance(item.get("capabilities"), list):
-            item["capabilities"] = sorted(capabilities_for_role(str(item.get("role") or ROLE_MEMBER)))
+        role = str(item.get("role") or ROLE_MEMBER)
+        schema_version = self._parse_capabilities_schema_version(item.get("capabilities_schema_version"))
+        if schema_version < CAPABILITIES_SCHEMA_VERSION:
+            item["capabilities"] = sorted(capabilities_for_role(role))
+            item["capabilities_schema_version"] = CAPABILITIES_SCHEMA_VERSION
+            changed = True
+        elif not isinstance(item.get("capabilities"), list):
+            item["capabilities"] = sorted(capabilities_for_role(role))
+            item["capabilities_schema_version"] = CAPABILITIES_SCHEMA_VERSION
             changed = True
         return changed
+
+    def _parse_capabilities_schema_version(self, value: Any) -> int:
+        try:
+            resolved = int(value)
+        except (TypeError, ValueError):
+            return 1
+        return resolved if resolved > 0 else 1
 
     def _sanitize_capabilities(self, values: list[str]) -> frozenset[str]:
         return frozenset(str(value).strip() for value in values if str(value).strip() in _KNOWN_CAPABILITIES)
@@ -831,15 +855,18 @@ class WebAuthStore:
 
 __all__ = [
     "AuthStoreError",
+    "CAPABILITIES_SCHEMA_VERSION",
     "CAP_ADMIN_OPS",
     "CAP_CHAT_SEND",
     "CAP_DEBUG_EXEC",
     "CAP_GIT_OPS",
+    "CAP_CREATE_WORKDIR_DIRECTORY",
     "CAP_MANAGE_CLI_PARAMS",
     "CAP_MANAGE_REGISTER_CODES",
     "CAP_MUTATE_BROWSE_STATE",
     "CAP_READ_FILE_CONTENT",
     "CAP_RUN_PLUGINS",
+    "CAP_RUN_UNSAFE_CLI",
     "CAP_TERMINAL_EXEC",
     "CAP_VIEW_BOTS",
     "CAP_VIEW_BOT_STATUS",

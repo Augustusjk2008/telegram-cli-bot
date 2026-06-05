@@ -121,6 +121,7 @@ async function fetchWsProbe(token: string, ownerId: string, diagnostics: PublicB
   });
   const response = await fetch(probeUrl, {
     cache: "no-store",
+    credentials: "same-origin",
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   if (!response.ok) {
@@ -133,6 +134,11 @@ async function fetchWsProbe(token: string, ownerId: string, diagnostics: PublicB
     return "诊断：HTTP 探针已返回，但内容无法解析，请查看后端日志中的终端 WebSocket 探针记录。";
   }
   return formatProbeDiagnostics(payload.data, diagnostics);
+}
+
+function authHeaders(token: string): Record<string, string> {
+  const trimmed = token.trim();
+  return trimmed ? { Authorization: `Bearer ${trimmed}` } : {};
 }
 
 export function createTerminalSession(container: HTMLElement, options: TerminalSessionOptions): TerminalSession {
@@ -253,8 +259,9 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
       await fetch(buildApiUrl("/api/terminal/session/input"), {
         method: "POST",
         cache: "no-store",
+        credentials: "same-origin",
         headers: {
-          Authorization: `Bearer ${options.token}`,
+          ...authHeaders(options.token),
           "Content-Type": "application/json",
         },
         body: JSON.stringify(body),
@@ -341,9 +348,8 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
     options.onError?.(`${reason}，已切换到 HTTP 终端流`);
     void fetch(streamUrl, {
       cache: "no-store",
-      headers: {
-        Authorization: `Bearer ${options.token}`,
-      },
+      credentials: "same-origin",
+      headers: authHeaders(options.token),
       signal: controller.signal,
     })
       .then(async (response) => {
@@ -389,7 +395,6 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
     }
 
     const params = new URLSearchParams({
-      token: options.token,
       owner_id: options.ownerId,
     });
     const wsDiagnostics = publicApiBaseDiagnostics();

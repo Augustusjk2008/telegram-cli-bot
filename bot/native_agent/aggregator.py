@@ -77,6 +77,7 @@ class NativeAgentAggregator:
         self.reasoning_parts: dict[str, str] = {}
         self.final_text = ""
         self.permission_pending: dict[str, dict[str, Any]] = {}
+        self.assistant_completed = False
 
     def text(self) -> str:
         if self.text_parts:
@@ -96,7 +97,7 @@ class NativeAgentAggregator:
         if event_type in {"permission.updated", "permission.replied"}:
             return self._permission_updated(event_type, payload)
         if event_type in {"session.status", "session.idle"}:
-            result.status = _value_text(payload.get("status") or payload.get("state") or event_type)
+            result.status = event.status or _value_text(payload.get("status") or payload.get("state") or event_type)
             result.done = event_type == "session.idle" or result.status == "idle"
             return result
         if event_type == "session.error":
@@ -132,6 +133,7 @@ class NativeAgentAggregator:
             result.error = error
         completed = message.get("time", {}).get("completed") if isinstance(message.get("time"), dict) else None
         if completed:
+            self.assistant_completed = True
             result.done = True
         return result
 
@@ -161,9 +163,42 @@ class NativeAgentAggregator:
                 self.reasoning_parts[part_id] = self.reasoning_parts.get(part_id, "") + text
                 result.trace.append(self._trace("reasoning", text, part))
             return result
+        if _is_tool_part(part):
+            return self._tool_part_updated(part)
         trace = self._trace_from_payload(f"part.{kind or 'updated'}", part)
         if trace is not None:
             result.trace.append(trace)
+        return result
+
+    def _tool_part_updated(self, part: dict[str, Any]) -> NativeAgentAggregationResult:
+        result = NativeAgentAggregationResult()
+        call_id = _tool_call_id(part) or _part_id(part) or str(len(self.parts))
+        tool_name = str(part.get("tool") or part.get("toolName") or part.get("name") or part.get("command") or "tool").strip()
+        state = str(part.get("state") or part.get("status") or "").strip().lower()
+        args_text = _value_text(
+            part.get("arguments")
+            or part.get("raw_arguments")
+            or part.get("args")
+            or part.get("input")
+            or part.get("params")
+        )
+        result_text = _value_text(part.get("result") or part.get("output") or part.get("error"))
+        payload = {
+            **part,
+            "callID": call_id,
+            "toolName": tool_name,
+            "arguments": args_text,
+        }
+        result.trace.append(self._trace("tool_call", args_text or tool_name, payload, raw_type="message.part.updated"))
+        if result_text or state in {"completed", "done", "finished", "success", "error", "failed"}:
+            result.trace.append(
+                self._trace(
+                    "tool_result",
+                    result_text or state or "已返回，无可显示内容",
+                    {**payload, "output": result_text, "state": state},
+                    raw_type="message.part.updated",
+                )
+            )
         return result
 
     def _part_removed(self, payload: dict[str, Any]) -> NativeAgentAggregationResult:
@@ -229,7 +264,7 @@ class NativeAgentAggregator:
         raw_type: str = "",
     ) -> dict[str, Any]:
         tool_name = str(payload.get("tool") or payload.get("toolName") or payload.get("name") or "")
-        call_id = str(payload.get("callID") or payload.get("call_id") or payload.get("id") or "")
+        call_id = str(payload.get("callID") or payload.get("toolCallId") or payload.get("tool_call_id") or payload.get("call_id") or payload.get("id") or "")
         return {
             "kind": kind,
             "source": "native_agent",
@@ -248,4 +283,20 @@ class NativeAgentAggregator:
             text = _message_parts_text(message.get("parts")) or _value_text(message.get("text") or message.get("content"))
             if text:
                 self.final_text = text
+                self.text_parts.clear()
         return self.text()
+
+
+def _tool_call_id(part: dict[str, Any]) -> str:
+    for key in ("callID", "toolCallId", "tool_call_id", "call_id"):
+        value = part.get(key)
+        if value:
+            return str(value)
+    return ""
+
+
+def _is_tool_part(part: dict[str, Any]) -> bool:
+    kind = str(part.get("type") or part.get("kind") or "").strip().lower()
+    if kind in {"tool", "tool_call", "tool-call", "tool_use", "tool_use_delta"}:
+        return True
+    return any(key in part for key in ("tool", "toolName", "callID", "toolCallId", "arguments", "raw_arguments"))

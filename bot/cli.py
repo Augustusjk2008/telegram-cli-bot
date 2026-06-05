@@ -50,7 +50,7 @@ def build_cli_command(
     working_dir: Optional[str] = None,
     task_mode: str = "standard",
 ) -> Tuple[List[str], bool]:
-    """构建不同 CLI 的命令行。所有支持的 CLI 均强制 yolo 模式。
+    """构建不同 CLI 的命令行，按传入参数配置决定是否启用危险执行选项。
 
     Args:
         cli_type: CLI 类型 (claude/codex)

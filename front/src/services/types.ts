@@ -22,6 +22,7 @@ export type Capability =
   | "create_workdir_directory"
   | "view_plugins"
   | "run_plugins"
+  | "run_unsafe_cli"
   | "manage_register_codes"
   | "admin_ops";
 
@@ -623,6 +624,7 @@ export type ChatMessageMetaInfo = {
   trace?: ChatTraceEvent[];
   nativeSource?: ChatMessageNativeSource;
   contextUsage?: ChatMessageContextUsage;
+  agUiRunState?: unknown;
 };
 
 export type ChatMessageAuthor = {

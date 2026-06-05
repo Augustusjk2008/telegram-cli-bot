@@ -195,7 +195,8 @@ test("connect sends initial geometry and fit sends resize payload", () => {
 
   session.connect();
   const socket = socketState.instances[0];
-  expect(socket?.url).toContain("/terminal/ws?token=abc&owner_id=owner-1");
+  expect(socket?.url).toContain("/terminal/ws?owner_id=owner-1");
+  expect(socket?.url).not.toContain("token=");
   socket.open();
 
   expect(JSON.parse(socket.sent[0] ?? "{}")).toEqual({
@@ -402,12 +403,40 @@ test("falls back to http terminal stream when websocket fails before attach", as
   expect(probeRequest).toBeDefined();
   expect(new URL(streamRequest!.url).searchParams.get("owner_id")).toBe("owner-1");
   expect(new URL(streamRequest!.url).searchParams.get("from_seq")).toBe("7");
+  expect(streamRequest!.init?.credentials).toBe("same-origin");
+  expect(probeRequest!.init?.credentials).toBe("same-origin");
   expect(streamRequest!.init?.headers).toEqual(expect.objectContaining({ Authorization: "Bearer abc" }));
   expect(probeRequest!.init?.headers).toEqual(expect.objectContaining({ Authorization: "Bearer abc" }));
   expect(terminalState.instances[0].writes).toHaveLength(1);
   await vi.waitFor(() => expect(fetchState.inputBodies).toEqual([{ owner_id: "owner-1", data: "pwd\n" }]));
   streamController?.close();
   await vi.waitFor(() => expect(closed).toEqual(["close"]));
+});
+
+test("http terminal fallback omits authorization header for cookie-only sessions", async () => {
+  vi.stubGlobal("fetch", vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+    fetchState.requests.push({ url: String(url), init });
+    return Promise.resolve(createSseResponse([
+      "event: ready\ndata: {\"pty_mode\":true,\"connection_text\":\"运行中\"}\n\n",
+    ]));
+  }));
+  const container = document.createElement("div");
+  const session = createTerminalSession(container, {
+    token: "",
+    ownerId: "owner-1",
+  });
+
+  session.connect();
+  socketState.instances[0].emitError();
+
+  await vi.waitFor(() => expect(fetchState.requests.length).toBeGreaterThanOrEqual(2));
+  const streamRequest = fetchState.requests.find((request) => new URL(request.url).pathname === "/api/terminal/session/stream");
+  const probeRequest = fetchState.requests.find((request) => new URL(request.url).pathname === "/terminal/ws-probe");
+  expect(streamRequest?.init?.credentials).toBe("same-origin");
+  expect(probeRequest?.init?.credentials).toBe("same-origin");
+  expect(streamRequest?.init?.headers).not.toEqual(expect.objectContaining({ Authorization: expect.any(String) }));
+  expect(probeRequest?.init?.headers).not.toEqual(expect.objectContaining({ Authorization: expect.any(String) }));
+  session.dispose();
 });
 
 test("websocket fallback probe uses runtime base path", async () => {
