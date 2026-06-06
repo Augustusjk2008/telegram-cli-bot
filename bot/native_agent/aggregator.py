@@ -117,6 +117,8 @@ class NativeAgentAggregator:
         self.user_message_id = user_message_id
         self.assistant_message_id = ""
         self.parts: dict[str, dict[str, Any]] = {}
+        self.part_orders: dict[str, int] = {}
+        self.next_part_order = 1
         self.part_message_ids: dict[str, str] = {}
         self.text_parts: dict[str, str] = {}
         self.reasoning_parts: dict[str, str] = {}
@@ -128,13 +130,14 @@ class NativeAgentAggregator:
         self.final_message_id = ""
         self.tool_call_emitted: set[str] = set()
         self.tool_result_signatures: dict[str, str] = {}
+        self.commentary_trace_signatures: set[tuple[str, str, str]] = set()
         self.final_text = ""
         self.permission_pending: dict[str, dict[str, Any]] = {}
         self.assistant_completed = False
 
     def text(self) -> str:
         if self.text_parts:
-            return "".join(self.text_parts[key] for key in sorted(self.text_parts))
+            return "".join(self.text_parts[key] for key in self._ordered_part_ids(self.text_parts))
         return self.final_text
 
     def apply(self, event: NativeAgentEvent) -> NativeAgentAggregationResult:
@@ -191,18 +194,37 @@ class NativeAgentAggregator:
         message_id = _message_id(message)
         switched_message = False
         if role == "assistant" and message_id:
-            if self._switch_assistant_message(message_id):
+            previous_message_id = self.assistant_message_id
+            switched, discarded_text = self._switch_assistant_message(message_id)
+            if switched:
                 switched_message = True
                 result.snapshot = ""
                 result.replace_text = True
+                trace = self._build_commentary_trace(
+                    message_id=previous_message_id,
+                    text=discarded_text,
+                    reason="assistant-message-switched",
+                    payload=payload,
+                )
+                if trace is not None:
+                    result.trace.append(trace)
             self.assistant_message_id = message_id
             result.assistant_message_id = message_id
         if role == "assistant" and message_id and _message_expects_followup(message):
             self.followup_message_ids.add(message_id)
             self.pending_followup = True
-            if self._discard_message_text(message_id):
+            changed, discarded_text = self._discard_message_text(message_id)
+            if changed:
                 result.snapshot = self.text()
                 result.replace_text = True
+                trace = self._build_commentary_trace(
+                    message_id=message_id,
+                    text=discarded_text,
+                    reason="tool-calls",
+                    payload=payload,
+                )
+                if trace is not None:
+                    result.trace.append(trace)
             return result
         text = _value_text(message.get("text") or message.get("content")) or _message_parts_text(message.get("parts"))
         if role == "assistant" and text:
@@ -235,13 +257,24 @@ class NativeAgentAggregator:
             return result
         switched_message = False
         if message_id and self._part_belongs_to_current_turn(message_id):
-            if self._switch_assistant_message(message_id):
+            previous_message_id = self.assistant_message_id
+            switched, discarded_text = self._switch_assistant_message(message_id)
+            if switched:
                 switched_message = True
                 result.snapshot = ""
                 result.replace_text = True
+                trace = self._build_commentary_trace(
+                    message_id=previous_message_id,
+                    text=discarded_text,
+                    reason="assistant-message-switched",
+                    payload=payload,
+                )
+                if trace is not None:
+                    result.trace.append(trace)
             self.assistant_message_id = message_id
             result.assistant_message_id = message_id
         part_id = _part_id_from_payload(payload, part) or str(len(self.parts) + 1)
+        self._remember_part_order(part_id)
         self.parts[part_id] = dict(part)
         if message_id:
             self.part_message_ids[part_id] = message_id
@@ -252,9 +285,18 @@ class NativeAgentAggregator:
         full_text = _value_text(part.get("text") or part.get("content"))
         if kind in {"text", "assistant_text", "message"} or (not kind and (delta or full_text)):
             if message_id in self.followup_message_ids:
-                if self._discard_message_text(message_id):
+                changed, discarded_text = self._discard_message_text(message_id)
+                if changed:
                     result.snapshot = self.text()
                     result.replace_text = True
+                    trace = self._build_commentary_trace(
+                        message_id=message_id,
+                        text=discarded_text,
+                        reason="followup-part-updated",
+                        payload=payload,
+                    )
+                    if trace is not None:
+                        result.trace.append(trace)
                 return result
             if delta:
                 self.text_parts[part_id] = self.text_parts.get(part_id, "") + delta
@@ -292,10 +334,20 @@ class NativeAgentAggregator:
             return result
         switched_message = False
         if message_id and self._part_belongs_to_current_turn(message_id):
-            if self._switch_assistant_message(message_id):
+            previous_message_id = self.assistant_message_id
+            switched, discarded_text = self._switch_assistant_message(message_id)
+            if switched:
                 switched_message = True
                 result.snapshot = ""
                 result.replace_text = True
+                trace = self._build_commentary_trace(
+                    message_id=previous_message_id,
+                    text=discarded_text,
+                    reason="assistant-message-switched",
+                    payload=payload,
+                )
+                if trace is not None:
+                    result.trace.append(trace)
             self.assistant_message_id = message_id
             result.assistant_message_id = message_id
         field = str(payload.get("field") or properties.get("field") or "").strip().lower()
@@ -305,15 +357,25 @@ class NativeAgentAggregator:
         if not delta:
             return result
         part_id = _part_id_from_payload(payload, part) or str(len(self.parts) + 1)
+        self._remember_part_order(part_id)
         existing_part = self.parts.get(part_id, {})
         effective_part = part or existing_part
         kind = str(effective_part.get("type") or effective_part.get("kind") or "").strip().lower()
         if kind in {"reasoning", "thinking"} or _is_noise_part_kind(kind) or _is_tool_part(effective_part):
             return result
         if message_id in self.followup_message_ids:
-            if self._discard_message_text(message_id):
+            changed, discarded_text = self._discard_message_text(message_id)
+            if changed:
                 result.snapshot = self.text()
                 result.replace_text = True
+                trace = self._build_commentary_trace(
+                    message_id=message_id,
+                    text=discarded_text,
+                    reason="followup-part-delta",
+                    payload=payload,
+                )
+                if trace is not None:
+                    result.trace.append(trace)
             return result
         if part:
             self.parts[part_id] = dict(part)
@@ -392,6 +454,7 @@ class NativeAgentAggregator:
         part_id = _part_id_from_payload(payload, part)
         if part_id:
             self.parts.pop(part_id, None)
+            self.part_orders.pop(part_id, None)
             self.text_parts.pop(part_id, None)
             self.reasoning_parts.pop(part_id, None)
             self.part_message_ids.pop(part_id, None)
@@ -464,6 +527,32 @@ class NativeAgentAggregator:
             "payload": payload,
         }
 
+    def _build_commentary_trace(
+        self,
+        *,
+        message_id: str,
+        text: str,
+        reason: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        summary = " ".join(str(text or "").split())
+        if not summary:
+            return None
+        signature = (str(message_id or ""), str(reason or ""), summary)
+        if signature in self.commentary_trace_signatures:
+            return None
+        self.commentary_trace_signatures.add(signature)
+        return self._trace(
+            "commentary",
+            summary,
+            {
+                **payload,
+                "messageID": str(message_id or ""),
+                "reason": str(reason or ""),
+            },
+            raw_type="message.text.reclassified",
+        )
+
     def reconcile_messages(self, messages: list[dict[str, Any]]) -> str:
         selected_text = ""
         selected_message_id = ""
@@ -498,35 +587,61 @@ class NativeAgentAggregator:
         normalized = str(message_id or "").strip()
         if not normalized:
             return False
+        if normalized.startswith("evt_"):
+            return False
         current = str(self.assistant_message_id or "").strip()
         if current and normalized != current:
-            return current in self.followup_message_ids or self.assistant_completed
-        return not normalized.startswith("evt_")
+            return current in self.followup_message_ids or self.assistant_completed or bool(self.text())
+        return True
 
-    def _discard_message_text(self, message_id: str) -> bool:
+    def _remember_part_order(self, part_id: str) -> None:
+        normalized = str(part_id or "").strip()
+        if not normalized or normalized in self.part_orders:
+            return
+        self.part_orders[normalized] = self.next_part_order
+        self.next_part_order += 1
+
+    def _ordered_part_ids(self, values: dict[str, Any] | list[str]) -> list[str]:
+        part_ids = list(values.keys()) if isinstance(values, dict) else list(values)
+        return sorted(part_ids, key=lambda part_id: (self.part_orders.get(part_id, 1_000_000), part_id))
+
+    def _discard_message_text(self, message_id: str) -> tuple[bool, str]:
         target = str(message_id or "").strip()
         if not target:
-            return False
+            return False, ""
         changed = False
-        for part_id, part_message_id in list(self.part_message_ids.items()):
-            if part_message_id == target:
-                changed = self.text_parts.pop(part_id, None) is not None or changed
+        discarded_chunks: list[str] = []
+        target_part_ids = [
+            part_id
+            for part_id, part_message_id in self.part_message_ids.items()
+            if part_message_id == target
+        ]
+        for part_id in self._ordered_part_ids(target_part_ids):
+            discarded = self.text_parts.pop(part_id, None)
+            if discarded is not None:
+                changed = True
+                discarded_chunks.append(discarded)
         if target == self.assistant_message_id:
             changed = bool(self.final_text) or changed
+            if self.final_text:
+                part_text = "".join(discarded_chunks)
+                if self.final_text != part_text:
+                    discarded_chunks.append(self.final_text)
             self.final_text = ""
-        return changed
+        return changed, "".join(discarded_chunks)
 
-    def _switch_assistant_message(self, message_id: str) -> bool:
+    def _switch_assistant_message(self, message_id: str) -> tuple[bool, str]:
         target = str(message_id or "").strip()
         current = str(self.assistant_message_id or "").strip()
-        if not target or not current or target == current or not self.assistant_completed:
-            return False
-        changed = bool(self.text_parts or self.final_text)
+        if not target or not current or target == current:
+            return False, ""
+        discarded_text = self.text()
+        changed = bool(discarded_text)
         self.text_parts.clear()
         self.final_text = ""
         self.assistant_completed = False
         self.final_message_id = ""
-        return changed
+        return changed, discarded_text
 
 
 def _tool_call_id(part: dict[str, Any]) -> str:

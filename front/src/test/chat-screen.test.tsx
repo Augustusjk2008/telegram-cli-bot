@@ -672,7 +672,7 @@ test("lazy-loads trace details and groups tool call/result into one trace card",
 });
 
 
-test("native permission trace can be approved from trace panel", async () => {
+test("native permission trace can be approved from flat transcript", async () => {
   const user = userEvent.setup();
   const replyNativeAgentPermission = vi.fn(async () => ({ permissionId: "perm-1", approved: true }));
   const client = createClient({
@@ -693,6 +693,8 @@ test("native permission trace can be approved from trace panel", async () => {
         createdAt: new Date().toISOString(),
         state: "streaming",
         meta: {
+          tracePresentation: "native_agent_flat",
+          nativeSource: { provider: "原生 agent", sessionId: "sess-1" },
           traceCount: 1,
           processCount: 1,
           trace: [{
@@ -713,7 +715,8 @@ test("native permission trace can be approved from trace panel", async () => {
   render(<ChatScreen botAlias="main" client={client} />);
 
   expect(await screen.findByRole("button", { name: "原生 agent" })).toBeDisabled();
-  await user.click(screen.getByRole("button", { name: "展开过程详情" }));
+  expect(await screen.findByTestId("native-agent-transcript")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "展开过程详情" })).not.toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "允许一次" }));
 
   await waitFor(() => expect(replyNativeAgentPermission).toHaveBeenCalledWith(
@@ -722,6 +725,101 @@ test("native permission trace can be approved from trace panel", async () => {
     expect.objectContaining({ approved: true, executionMode: "native_agent" }),
   ));
   expect(await screen.findByText("原生 agent 权限已允许")).toBeInTheDocument();
+});
+
+test("native history auto-loads flat trace details", async () => {
+  const getMessageTrace = vi.fn(async () => ({
+    trace: [
+      {
+        id: "trace-1",
+        ordinal: 1,
+        kind: "commentary",
+        source: "native_agent",
+        summary: "我先检查目录结构。",
+      },
+      {
+        id: "trace-2",
+        ordinal: 2,
+        kind: "tool_call",
+        source: "native_agent",
+        toolName: "shell_command",
+        summary: "Get-ChildItem",
+        payload: { arguments: "Get-ChildItem" },
+      },
+      {
+        id: "trace-3",
+        ordinal: 3,
+        kind: "tool_result",
+        source: "native_agent",
+        summary: "Exit code: 0",
+        payload: { output: "Exit code: 0" },
+      },
+    ],
+    traceCount: 3,
+    toolCallCount: 1,
+    processCount: 1,
+  }));
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "assistant-native-history",
+        role: "assistant",
+        text: "最终答复",
+        createdAt: new Date().toISOString(),
+        state: "done",
+        meta: {
+          tracePresentation: "native_agent_flat",
+          nativeSource: { provider: "原生 agent", sessionId: "sess-1" },
+          traceCount: 3,
+          toolCallCount: 1,
+          processCount: 1,
+        },
+      },
+    ],
+    getMessageTrace: getMessageTrace as never,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  await waitFor(() => expect(getMessageTrace).toHaveBeenCalledWith("main", "assistant-native-history"));
+  expect(await within(transcript).findByText("我先检查目录结构。")).toBeInTheDocument();
+  expect(within(transcript).getAllByText("shell_command").length).toBeGreaterThan(0);
+  expect(within(transcript).getAllByText("Exit code: 0").length).toBeGreaterThan(0);
+  expect(within(transcript).getByTestId("native-agent-final-result").textContent).toContain("最终答复");
+  expect(screen.queryByRole("button", { name: "展开过程详情" })).not.toBeInTheDocument();
+});
+
+test("native history trace auto-load does not retry immediately after failure", async () => {
+  const getMessageTrace = vi.fn(async () => {
+    throw new Error("trace unavailable");
+  });
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "assistant-native-history-error",
+        role: "assistant",
+        text: "最终答复",
+        createdAt: new Date().toISOString(),
+        state: "done",
+        meta: {
+          tracePresentation: "native_agent_flat",
+          nativeSource: { provider: "原生 agent", sessionId: "sess-1" },
+          traceCount: 3,
+        },
+      },
+    ],
+    getMessageTrace: getMessageTrace as never,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await screen.findByTestId("native-agent-transcript");
+  await waitFor(() => expect(getMessageTrace).toHaveBeenCalledTimes(1));
+  await act(async () => {
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+  });
+  expect(getMessageTrace).toHaveBeenCalledTimes(1);
 });
 
 test("non-native permission trace hides native permission actions", async () => {
@@ -768,7 +866,84 @@ test("non-native permission trace hides native permission actions", async () => 
 });
 
 
-test("live ag-ui stream renders answer and native timeline separately", async () => {
+test("live non-native ag-ui stream renders regular assistant message", async () => {
+  const user = userEvent.setup();
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias,
+    _text,
+    _onChunk,
+    _onStatus,
+    _onTrace,
+    _options,
+    onAgUiEvent,
+  ) => {
+    onAgUiEvent?.({ type: EventType.RUN_STARTED, threadId: "thread-1", runId: "run-1" });
+    onAgUiEvent?.({
+      type: EventType.ACTIVITY_SNAPSHOT,
+      messageId: "activity-1",
+      activityType: "TCB_STATUS",
+      replace: true,
+      content: { previewText: "运行中" },
+    });
+    onAgUiEvent?.({ type: EventType.TEXT_MESSAGE_START, messageId: "assistant-live", role: "assistant" });
+    onAgUiEvent?.({ type: EventType.TEXT_MESSAGE_CONTENT, messageId: "assistant-live", delta: "**answer**" });
+    onAgUiEvent?.({ type: EventType.TEXT_MESSAGE_END, messageId: "assistant-live" });
+    onAgUiEvent?.({ type: EventType.RUN_FINISHED, threadId: "thread-1", runId: "run-1", outcome: { type: "success" } });
+    return {
+      id: "assistant-live",
+      role: "assistant",
+      text: "**answer**",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    };
+  });
+  const client = createClient({ sendMessage });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  await screen.findByText("暂无消息，开始聊天吧");
+  await user.type(screen.getByPlaceholderText("输入消息"), "hi");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+  expect(await screen.findByTestId("assistant-markdown-message")).toHaveTextContent("answer");
+  expect(screen.queryByTestId("native-agent-transcript")).not.toBeInTheDocument();
+});
+
+test("live non-native ag-ui session error stays in regular error bubble", async () => {
+  const user = userEvent.setup();
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias,
+    _text,
+    _onChunk,
+    _onStatus,
+    _onTrace,
+    _options,
+    onAgUiEvent,
+  ) => {
+    onAgUiEvent?.({ type: EventType.RUN_STARTED, threadId: "thread-1", runId: "run-1" });
+    onAgUiEvent?.({ type: EventType.RUN_ERROR, message: "OpenCode failed", code: "session.error" });
+    return {
+      id: "assistant-error",
+      role: "assistant",
+      text: "OpenCode failed",
+      createdAt: new Date().toISOString(),
+      state: "error",
+    };
+  });
+  const client = createClient({ sendMessage });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  await screen.findByText("暂无消息，开始聊天吧");
+  await user.type(screen.getByPlaceholderText("输入消息"), "hi");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+  expect(await screen.findByText("OpenCode failed")).toBeInTheDocument();
+  expect(screen.queryByTestId("native-agent-transcript")).not.toBeInTheDocument();
+});
+
+
+test("live ag-ui stream renders flat transcript and final result last", async () => {
   const user = userEvent.setup();
   const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
     _botAlias,
@@ -805,7 +980,18 @@ test("live ag-ui stream renders answer and native timeline separately", async ()
       state: "done",
     };
   });
-  const client = createClient({ sendMessage });
+  const client = createClient({
+    getBotOverview: async (): Promise<BotOverview> => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+      supportedExecutionModes: ["native_agent"],
+      defaultExecutionMode: "native_agent",
+    }),
+    sendMessage,
+  });
 
   render(<ChatScreen botAlias="main" client={client} />);
   await screen.findByText("暂无消息，开始聊天吧");
@@ -813,11 +999,14 @@ test("live ag-ui stream renders answer and native timeline separately", async ()
   await user.click(screen.getByRole("button", { name: "发送" }));
 
   await waitFor(() => expect(sendMessage).toHaveBeenCalled());
-  expect(within(await screen.findByTestId("assistant-markdown-message")).getByText("answer")).toBeInTheDocument();
-  const timeline = await screen.findByTestId("native-agent-run-timeline");
-  expect(within(timeline).getByText("运行中")).toBeInTheDocument();
-  expect(within(timeline).getByText("shell_command")).toBeInTheDocument();
-  expect(within(timeline).getByText("思考")).toBeInTheDocument();
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(within(transcript).getByText("运行中")).toBeInTheDocument();
+  expect(within(transcript).getByText("检查上下文")).toBeInTheDocument();
+  expect(within(transcript).getAllByText("shell_command").length).toBeGreaterThan(0);
+  expect(within(transcript).getAllByText("Exit code: 0").length).toBeGreaterThan(0);
+  expect(within(transcript).getByTestId("native-agent-final-result").textContent).toContain("answer");
+  expect(transcript.textContent?.trim().endsWith("answer")).toBe(true);
+  expect(screen.queryByTestId("native-agent-run-timeline")).not.toBeInTheDocument();
   expect(screen.queryByTestId("chat-trace-panel-assistant-live")).not.toBeInTheDocument();
 });
 
@@ -855,7 +1044,7 @@ test("final ag-ui message replaces polluted live assistant text", async () => {
 });
 
 
-test("live ag-ui permission can be approved from timeline", async () => {
+test("live ag-ui permission can be approved from flat transcript", async () => {
   const user = userEvent.setup();
   const replyNativeAgentPermission = vi.fn(async () => ({ permissionId: "perm-1", approved: true }));
   const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
@@ -902,10 +1091,59 @@ test("live ag-ui permission can be approved from timeline", async () => {
     "perm-1",
     expect.objectContaining({ approved: true }),
   ));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "允许一次" })).not.toBeInTheDocument());
+  expect(screen.queryByRole("button", { name: "拒绝" })).not.toBeInTheDocument();
+  expect(await screen.findByText("原生 agent 权限已允许")).toBeInTheDocument();
+});
+
+test("live non-native permission activity hides native permission actions", async () => {
+  const user = userEvent.setup();
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias,
+    _text,
+    _onChunk,
+    _onStatus,
+    _onTrace,
+    _options,
+    onAgUiEvent,
+  ) => {
+    onAgUiEvent?.({ type: EventType.RUN_STARTED, threadId: "thread-1", runId: "run-1" });
+    onAgUiEvent?.({
+      type: EventType.ACTIVITY_SNAPSHOT,
+      messageId: "activity-perm-cli",
+      activityType: "TCB_PERMISSION_REQUEST",
+      replace: true,
+      content: {
+        id: "perm-cli",
+        permissionId: "perm-cli",
+        title: "CLI 请求确认",
+        state: "permission.updated",
+        source: "codex",
+      },
+    });
+    return {
+      id: "assistant-perm-cli",
+      role: "assistant",
+      text: "",
+      createdAt: new Date().toISOString(),
+      state: "streaming",
+    };
+  });
+  const client = createClient({ sendMessage });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  await screen.findByText("暂无消息，开始聊天吧");
+  await user.type(screen.getByPlaceholderText("输入消息"), "hi");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+  expect(screen.queryByRole("button", { name: "允许一次" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "拒绝" })).not.toBeInTheDocument();
+  expect(screen.queryByTestId("native-agent-transcript")).not.toBeInTheDocument();
 });
 
 
-test("live ag-ui run error renders native timeline error card", async () => {
+test("live ag-ui run error renders flat transcript error row", async () => {
   const user = userEvent.setup();
   const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
     _botAlias,
@@ -927,16 +1165,27 @@ test("live ag-ui run error renders native timeline error card", async () => {
       state: "error",
     };
   });
-  const client = createClient({ sendMessage });
+  const client = createClient({
+    getBotOverview: async (): Promise<BotOverview> => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+      supportedExecutionModes: ["native_agent"],
+      defaultExecutionMode: "native_agent",
+    }),
+    sendMessage,
+  });
 
   render(<ChatScreen botAlias="main" client={client} />);
   await screen.findByText("暂无消息，开始聊天吧");
   await user.type(screen.getByPlaceholderText("输入消息"), "hi");
   await user.click(screen.getByRole("button", { name: "发送" }));
 
-  const timeline = await screen.findByTestId("native-agent-run-timeline");
-  expect(within(timeline).getByText("运行异常")).toBeInTheDocument();
-  expect(within(timeline).getByText("OpenCode failed")).toBeInTheDocument();
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(within(transcript).getByText("OpenCode failed")).toBeInTheDocument();
+  expect(screen.queryByTestId("native-agent-run-timeline")).not.toBeInTheDocument();
 });
 
 

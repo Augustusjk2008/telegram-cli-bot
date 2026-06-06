@@ -380,6 +380,142 @@ describe("RealWebBotClient", () => {
     expect(message.meta?.traceCount).toBe(3);
   });
 
+  test("sendMessage keeps duplicate native process events in flat trace", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"RUN_STARTED\",\"threadId\":\"thread-1\",\"runId\":\"run-1\"}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"ACTIVITY_SNAPSHOT\",\"messageId\":\"trace-1\",\"activityType\":\"TCB_NATIVE_AGENT_TRACE\",\"replace\":true,\"content\":{\"summary\":\"重复过程\",\"rawKind\":\"commentary\",\"rawType\":\"message.text.reclassified\"}}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"ACTIVITY_SNAPSHOT\",\"messageId\":\"trace-2\",\"activityType\":\"TCB_NATIVE_AGENT_TRACE\",\"replace\":true,\"content\":{\"summary\":\"重复过程\",\"rawKind\":\"commentary\",\"rawType\":\"message.text.reclassified\"}}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"RUN_FINISHED\",\"threadId\":\"thread-1\",\"runId\":\"run-1\",\"result\":{\"content\":\"ok\"},\"outcome\":{\"type\":\"success\"}}\n\n"));
+        controller.close();
+      },
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: stream,
+      json: async () => ({ ok: true, data: {} }),
+    });
+
+    const client = new RealWebBotClient();
+    const message = await client.sendMessage("main", "hi", vi.fn());
+
+    expect(message.text).toBe("ok");
+    expect(message.meta?.tracePresentation).toBe("native_agent_flat");
+    expect(message.meta?.trace).toEqual([
+      expect.objectContaining({ kind: "commentary", summary: "重复过程", sequence: 1 }),
+      expect.objectContaining({ kind: "commentary", summary: "重复过程", sequence: 2 }),
+    ]);
+  });
+
+  test("sendMessage does not mark non-native permission activity as native flat", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"RUN_STARTED\",\"threadId\":\"thread-1\",\"runId\":\"run-1\"}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"ACTIVITY_SNAPSHOT\",\"messageId\":\"perm-1\",\"activityType\":\"TCB_PERMISSION_REQUEST\",\"replace\":true,\"content\":{\"id\":\"perm-1\",\"permissionId\":\"perm-1\",\"summary\":\"CLI 请求确认\",\"source\":\"codex\"}}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"RUN_FINISHED\",\"threadId\":\"thread-1\",\"runId\":\"run-1\",\"result\":{\"content\":\"ok\"},\"outcome\":{\"type\":\"success\"}}\n\n"));
+        controller.close();
+      },
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: stream,
+      json: async () => ({ ok: true, data: {} }),
+    });
+
+    const client = new RealWebBotClient();
+    const message = await client.sendMessage("main", "hi", vi.fn());
+
+    expect(message.meta?.tracePresentation).toBeUndefined();
+    expect(message.meta?.trace).toEqual([
+      expect.objectContaining({ kind: "permission", source: "codex", summary: "CLI 请求确认" }),
+    ]);
+  });
+
+  test("sendMessage does not mark session error as native flat without native mode", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"RUN_STARTED\",\"threadId\":\"thread-1\",\"runId\":\"run-1\"}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"RUN_ERROR\",\"message\":\"OpenCode failed\",\"code\":\"session.error\"}\n\n"));
+        controller.close();
+      },
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: stream,
+      json: async () => ({ ok: true, data: {} }),
+    });
+
+    const client = new RealWebBotClient();
+    const message = await client.sendMessage("main", "hi", vi.fn());
+
+    expect(message.state).toBe("error");
+    expect(message.meta?.tracePresentation).toBeUndefined();
+    expect(message.meta?.trace).toEqual([
+      expect.objectContaining({ kind: "error", rawType: "session.error", summary: "OpenCode failed" }),
+    ]);
+  });
+
+  test("sendMessage keeps session error native flat in native mode", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"RUN_STARTED\",\"threadId\":\"thread-1\",\"runId\":\"run-1\"}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"RUN_ERROR\",\"message\":\"OpenCode failed\",\"code\":\"session.error\"}\n\n"));
+        controller.close();
+      },
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: stream,
+      json: async () => ({ ok: true, data: {} }),
+    });
+
+    const client = new RealWebBotClient();
+    const message = await client.sendMessage("main", "hi", vi.fn(), undefined, undefined, {
+      executionMode: "native_agent",
+    });
+
+    expect(message.state).toBe("error");
+    expect(message.meta?.tracePresentation).toBe("native_agent_flat");
+    expect(message.meta?.trace).toEqual([
+      expect.objectContaining({ kind: "error", rawType: "session.error", summary: "OpenCode failed" }),
+    ]);
+  });
+
+  test("sendMessage preserves ag-ui native trace stable metadata", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"RUN_STARTED\",\"threadId\":\"thread-1\",\"runId\":\"run-1\"}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"ACTIVITY_SNAPSHOT\",\"messageId\":\"trace-1\",\"activityType\":\"TCB_NATIVE_AGENT_TRACE\",\"replace\":true,\"content\":{\"id\":\"trace-1\",\"ordinal\":7,\"sequence\":9,\"createdAt\":\"2026-06-06T00:00:00Z\",\"summary\":\"先检查目录。\",\"source\":\"native_agent\",\"rawKind\":\"commentary\",\"rawType\":\"message.text.reclassified\"}}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"RUN_FINISHED\",\"threadId\":\"thread-1\",\"runId\":\"run-1\",\"result\":{\"content\":\"ok\"},\"outcome\":{\"type\":\"success\"}}\n\n"));
+        controller.close();
+      },
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: stream,
+      json: async () => ({ ok: true, data: {} }),
+    });
+
+    const client = new RealWebBotClient();
+    const message = await client.sendMessage("main", "hi", vi.fn());
+
+    expect(message.meta?.trace).toEqual([
+      expect.objectContaining({
+        id: "trace-1",
+        ordinal: 7,
+        sequence: 9,
+        createdAt: "2026-06-06T00:00:00Z",
+        kind: "commentary",
+        summary: "先检查目录。",
+      }),
+    ]);
+  });
+
   test("sendMessage applies ag-ui message snapshot before final content", async () => {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
@@ -1414,6 +1550,9 @@ describe("RealWebBotClient", () => {
             process_count: 1,
             trace: [
               {
+                id: "trace-1",
+                ordinal: 1,
+                created_at: "2026-06-06T00:00:00Z",
                 kind: "commentary",
                 source: "native",
                 raw_type: "agent_message",
@@ -1466,6 +1605,9 @@ describe("RealWebBotClient", () => {
       processCount: 1,
       trace: [
         {
+          id: "trace-1",
+          ordinal: 1,
+          createdAt: "2026-06-06T00:00:00Z",
           kind: "commentary",
           rawType: "agent_message",
           summary: "我先检查目录结构。",

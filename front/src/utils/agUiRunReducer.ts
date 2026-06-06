@@ -33,6 +33,19 @@ export type AgUiReasoningItem = {
   text: string;
 };
 
+export type NativeAgentTranscriptEntry = {
+  id: string;
+  seq: number;
+  kind: "process" | "tool" | "event" | "permission" | "error" | "cancelled";
+  label: string;
+  summary: string;
+  body?: string;
+  collapsedByDefault: boolean;
+  trace?: ChatTraceEvent;
+  permissionId?: string;
+  pending?: boolean;
+};
+
 export type AgUiRunState = {
   threadId: string;
   runId: string;
@@ -45,6 +58,9 @@ export type AgUiRunState = {
   permissionRequests: AgUiPermissionRequest[];
   reasoning: AgUiReasoningItem[];
   traceEvents: ChatTraceEvent[];
+  entries: NativeAgentTranscriptEntry[];
+  nextEntrySeq: number;
+  nativeAgent: boolean;
   previewText?: string;
   clusterRunId?: string;
   elapsedSeconds?: number;
@@ -92,7 +108,7 @@ function interruptReason(value: unknown) {
   return "";
 }
 
-function completionStateFromRunFinished(event: Extract<AgUiEvent, { type: EventType.RUN_FINISHED }>, result: Record<string, unknown>) {
+function completionStateFromRunFinished(event: { outcome?: unknown }, result: Record<string, unknown>) {
   const explicit = asString(result.completion_state || result.completionState).trim();
   if (explicit) {
     return explicit;
@@ -224,6 +240,119 @@ function getPermissionId(content: Record<string, unknown>) {
   return asString(content.permissionId || content.id || content.permissionID || content.permission_id).trim();
 }
 
+function isPermissionPending(content: Record<string, unknown>) {
+  const state = asString(content.state || content.status).trim().toLowerCase();
+  return !state || (
+    !state.includes("replied")
+    && !state.includes("approved")
+    && !state.includes("reject")
+    && !state.includes("denied")
+    && !state.includes("allow")
+  );
+}
+
+function nativeEntryKindForTrace(event: ChatTraceEvent): NativeAgentTranscriptEntry["kind"] {
+  if (event.kind === "commentary" || event.kind === "reasoning" || event.kind === "status") {
+    return "process";
+  }
+  if (event.kind === "tool_call") {
+    return "tool";
+  }
+  if (event.kind === "permission") {
+    return "permission";
+  }
+  if (event.kind === "error") {
+    return "error";
+  }
+  if (event.kind === "cancelled") {
+    return "cancelled";
+  }
+  return "event";
+}
+
+function nativeEntryLabel(kind: NativeAgentTranscriptEntry["kind"], trace?: ChatTraceEvent) {
+  if (kind === "process") return "过程";
+  if (kind === "tool") return trace?.toolName || trace?.title || "工具";
+  if (kind === "permission") return "权限";
+  if (kind === "error") return "错误";
+  if (kind === "cancelled") return "已取消";
+  return trace?.kind === "tool_result" ? "工具结果" : "事件";
+}
+
+function appendNativeEntry(
+  state: AgUiRunState,
+  entry: Omit<NativeAgentTranscriptEntry, "id" | "seq"> & { id?: string },
+): AgUiRunState {
+  const seq = state.nextEntrySeq;
+  const nextEntry: NativeAgentTranscriptEntry = {
+    ...entry,
+    id: entry.id || `native-entry-${seq}`,
+    seq,
+  };
+  return {
+    ...state,
+    entries: [...state.entries, nextEntry],
+    nextEntrySeq: seq + 1,
+  };
+}
+
+function appendTraceEntry(
+  state: AgUiRunState,
+  trace: ChatTraceEvent,
+  options: Partial<Omit<NativeAgentTranscriptEntry, "id" | "seq" | "trace">> = {},
+): AgUiRunState {
+  const kind = options.kind || nativeEntryKindForTrace(trace);
+  const summary = options.summary ?? trace.summary ?? "";
+  const entry = {
+    kind,
+    label: options.label || nativeEntryLabel(kind, trace),
+    summary,
+    body: options.body,
+    collapsedByDefault: options.collapsedByDefault ?? !["process", "permission", "error", "cancelled"].includes(kind),
+    trace,
+    permissionId: options.permissionId,
+    pending: options.pending,
+  };
+  if (kind === "permission" && options.permissionId) {
+    const entryIndex = state.entries.findIndex((item) => item.kind === "permission" && item.permissionId === options.permissionId);
+    if (entryIndex >= 0) {
+      return {
+        ...state,
+        entries: state.entries.map((item, index) => (
+          index === entryIndex
+            ? { ...item, ...entry, id: item.id, seq: item.seq }
+            : item
+        )),
+      };
+    }
+  }
+  return appendNativeEntry(state, entry);
+}
+
+function updateNativeToolEntryBody(state: AgUiRunState, toolCallId: string, body: string): AgUiRunState {
+  return {
+    ...state,
+    entries: state.entries.map((entry) => (
+      entry.kind === "tool" && entry.trace?.callId === toolCallId
+        ? {
+            ...entry,
+            body,
+            trace: entry.trace
+              ? {
+                  ...entry.trace,
+                  summary: body || entry.trace.summary,
+                  payload: {
+                    ...asRecord(entry.trace.payload),
+                    arguments: body,
+                  },
+                }
+              : entry.trace,
+          }
+        : entry
+    )),
+  };
+}
+
 export function createAgUiRunState(): AgUiRunState {
   return {
     threadId: "",
@@ -237,12 +366,15 @@ export function createAgUiRunState(): AgUiRunState {
     permissionRequests: [],
     reasoning: [],
     traceEvents: [],
+    entries: [],
+    nextEntrySeq: 1,
+    nativeAgent: false,
   };
 }
 
 export function reduceAgUiRunEvent(state: AgUiRunState, event: AgUiEvent): AgUiRunState {
   if (event.type === EventType.RUN_STARTED) {
-    return {
+    const nextState: AgUiRunState = {
       ...state,
       threadId: event.threadId,
       runId: event.runId,
@@ -250,6 +382,7 @@ export function reduceAgUiRunEvent(state: AgUiRunState, event: AgUiEvent): AgUiR
       completed: false,
       error: undefined,
     };
+    return nextState;
   }
 
   if (event.type === EventType.TEXT_MESSAGE_START) {
@@ -310,24 +443,23 @@ export function reduceAgUiRunEvent(state: AgUiRunState, event: AgUiEvent): AgUiR
       : state.activities.map((item, index) => index === activityIndex ? nextActivity : item);
 
     const traceKind = resolveActivityTraceKind(event.activityType, content);
-    const traceEvents = traceKind
-      ? upsertTraceEvent(
-        state.traceEvents,
-        {
+    const activityTraceEvent: ChatTraceEvent | null = traceKind
+      ? {
+          ...(asString(content.id).trim() ? { id: asString(content.id).trim() } : {}),
+          ...(typeof content.ordinal === "number" ? { ordinal: content.ordinal } : {}),
+          ...(typeof content.sequence === "number" ? { sequence: content.sequence } : {}),
+          ...(asString(content.createdAt || content.created_at).trim()
+            ? { createdAt: asString(content.createdAt || content.created_at).trim() }
+            : {}),
           kind: traceKind,
           summary,
-          source: asString(content.source).trim() || (traceKind === "permission" ? "native_agent" : ""),
+          source: asString(content.source).trim(),
           rawType: asString(content.rawType).trim() || event.activityType,
           title: asString(content.title).trim() || undefined,
           payload: content,
-        },
-        (item) => (
-          traceKind === "permission"
-            ? item.kind === "permission" && getPermissionId(asRecord(item.payload)) === getPermissionId(content)
-            : item.kind === traceKind && item.rawType === (asString(content.rawType).trim() || event.activityType) && item.summary === summary
-        ),
-      )
-      : state.traceEvents;
+        }
+      : null;
+    const traceEvents = activityTraceEvent ? [...state.traceEvents, activityTraceEvent] : state.traceEvents;
 
     const permissionId = getPermissionId(content);
     const permissionRequests = event.activityType === "TCB_PERMISSION_REQUEST" && permissionId
@@ -337,7 +469,7 @@ export function reduceAgUiRunEvent(state: AgUiRunState, event: AgUiEvent): AgUiR
             summary,
             state: asString(content.state || content.status).trim(),
             content,
-            source: asString(content.source).trim() || "native_agent",
+            source: asString(content.source).trim(),
           };
           const permissionIndex = state.permissionRequests.findIndex((item) => item.permissionId === permissionId);
           return permissionIndex < 0
@@ -346,12 +478,15 @@ export function reduceAgUiRunEvent(state: AgUiRunState, event: AgUiEvent): AgUiR
         })()
       : state.permissionRequests;
 
-    return {
+    const nextState: AgUiRunState = {
       ...state,
       messageId: event.messageId,
       activities,
       permissionRequests,
       traceEvents,
+      nativeAgent: state.nativeAgent
+        || event.activityType === "TCB_NATIVE_AGENT_TRACE"
+        || asString(content.source).trim().toLowerCase() === "native_agent",
       ...(event.activityType === "TCB_STATUS"
         ? {
             previewText: asString(content.previewText).trim() || asString(content.message).trim() || state.previewText,
@@ -365,6 +500,18 @@ export function reduceAgUiRunEvent(state: AgUiRunState, event: AgUiEvent): AgUiR
           }
         : {}),
     };
+    if (!activityTraceEvent?.summary.trim()) {
+      return nextState;
+    }
+    return appendTraceEntry(nextState, activityTraceEvent, {
+      ...(activityTraceEvent.kind === "permission"
+        ? {
+            permissionId,
+            pending: isPermissionPending(content),
+            collapsedByDefault: false,
+          }
+        : {}),
+    });
   }
 
   if (event.type === EventType.TOOL_CALL_START) {
@@ -375,26 +522,34 @@ export function reduceAgUiRunEvent(state: AgUiRunState, event: AgUiEvent): AgUiR
       resultText: "",
       status: "running",
     };
-    return {
+    const traceEvent: ChatTraceEvent = {
+      kind: "tool_call",
+      summary: "",
+      title: event.toolCallName,
+      toolName: event.toolCallName,
+      callId: event.toolCallId,
+      payload: {
+        arguments: "",
+      },
+    };
+    const nextState: AgUiRunState = {
       ...state,
       toolCalls: [...state.toolCalls.filter((item) => item.toolCallId !== event.toolCallId), nextToolCall],
-      traceEvents: upsertTraceEvent(state.traceEvents, {
-        kind: "tool_call",
-        summary: "",
-        title: event.toolCallName,
-        toolName: event.toolCallName,
-        callId: event.toolCallId,
-        payload: {
-          arguments: "",
-        },
-      }, (item) => item.kind === "tool_call" && item.callId === event.toolCallId),
+      traceEvents: upsertTraceEvent(state.traceEvents, traceEvent, (item) => item.kind === "tool_call" && item.callId === event.toolCallId),
     };
+    return appendTraceEntry(nextState, traceEvent, {
+      kind: "tool",
+      label: event.toolCallName || "工具",
+      summary: event.toolCallName || "工具调用",
+      body: "",
+      collapsedByDefault: true,
+    });
   }
 
   if (event.type === EventType.TOOL_CALL_ARGS) {
     const currentToolCall = state.toolCalls.find((item) => item.toolCallId === event.toolCallId);
     const nextArgsText = `${currentToolCall?.argsText || ""}${event.delta}`;
-    return {
+    const nextState: AgUiRunState = {
       ...state,
       toolCalls: state.toolCalls.map((item) => item.toolCallId === event.toolCallId ? {
         ...item,
@@ -411,6 +566,7 @@ export function reduceAgUiRunEvent(state: AgUiRunState, event: AgUiEvent): AgUiR
         },
       }, (item) => item.kind === "tool_call" && item.callId === event.toolCallId),
     };
+    return updateNativeToolEntryBody(nextState, event.toolCallId, nextArgsText);
   }
 
   if (event.type === EventType.TOOL_CALL_END) {
@@ -425,7 +581,17 @@ export function reduceAgUiRunEvent(state: AgUiRunState, event: AgUiEvent): AgUiR
 
   if (event.type === EventType.TOOL_CALL_RESULT) {
     const currentToolCall = state.toolCalls.find((item) => item.toolCallId === event.toolCallId);
-    return {
+    const traceEvent: ChatTraceEvent = {
+      kind: "tool_result",
+      summary: event.content,
+      title: currentToolCall?.toolCallName,
+      toolName: currentToolCall?.toolCallName,
+      callId: event.toolCallId,
+      payload: {
+        output: event.content,
+      },
+    };
+    const nextState: AgUiRunState = {
       ...state,
       messageId: event.messageId,
       toolCalls: state.toolCalls.map((item) => item.toolCallId === event.toolCallId ? {
@@ -435,18 +601,16 @@ export function reduceAgUiRunEvent(state: AgUiRunState, event: AgUiEvent): AgUiR
       } : item),
       traceEvents: [
         ...state.traceEvents,
-        {
-          kind: "tool_result",
-          summary: event.content,
-          title: currentToolCall?.toolCallName,
-          toolName: currentToolCall?.toolCallName,
-          callId: event.toolCallId,
-          payload: {
-            output: event.content,
-          },
-        },
+        traceEvent,
       ],
     };
+    return appendTraceEntry(nextState, traceEvent, {
+      kind: "event",
+      label: "工具结果",
+      summary: event.content || currentToolCall?.toolCallName || "工具结果",
+      body: event.content,
+      collapsedByDefault: true,
+    });
   }
 
   if (event.type === EventType.REASONING_START || event.type === EventType.REASONING_MESSAGE_START) {
@@ -482,15 +646,26 @@ export function reduceAgUiRunEvent(state: AgUiRunState, event: AgUiEvent): AgUiR
     if (!reasoningItem?.text.trim()) {
       return state;
     }
-    return {
-      ...state,
-      traceEvents: upsertTraceEvent(state.traceEvents, {
-        kind: "reasoning",
-        summary: reasoningItem.text,
-        source: "reasoning",
-        rawType: EventType.REASONING_MESSAGE_END,
-      }, (item) => item.kind === "reasoning" && item.rawType === EventType.REASONING_MESSAGE_END && item.summary === reasoningItem.text),
+    const traceEvent: ChatTraceEvent = {
+      kind: "reasoning",
+      summary: reasoningItem.text,
+      source: "reasoning",
+      rawType: EventType.REASONING_MESSAGE_END,
     };
+    const nextState: AgUiRunState = {
+      ...state,
+      traceEvents: upsertTraceEvent(
+        state.traceEvents,
+        traceEvent,
+        (item) => item.kind === "reasoning" && item.rawType === EventType.REASONING_MESSAGE_END && item.summary === reasoningItem.text,
+      ),
+    };
+    return appendTraceEntry(nextState, traceEvent, {
+      kind: "process",
+      label: "思考",
+      summary: reasoningItem.text,
+      collapsedByDefault: false,
+    });
   }
 
   if (event.type === EventType.RUN_FINISHED) {
@@ -517,7 +692,7 @@ export function reduceAgUiRunEvent(state: AgUiRunState, event: AgUiEvent): AgUiR
         rawType: EventType.RUN_FINISHED,
       } satisfies ChatTraceEvent]
       : [];
-    return {
+    const nextState: AgUiRunState = {
       ...state,
       threadId: event.threadId,
       runId: event.runId,
@@ -534,30 +709,56 @@ export function reduceAgUiRunEvent(state: AgUiRunState, event: AgUiEvent): AgUiR
         )
         : state.traceEvents,
     };
+    return cancelledTrace.length
+      ? appendTraceEntry(nextState, cancelledTrace[0], {
+          kind: "cancelled",
+          label: "已取消",
+          summary: "用户终止输出",
+          collapsedByDefault: false,
+        })
+      : nextState;
   }
 
   if (event.type === EventType.RUN_ERROR) {
-    return {
+    const errorCode = event.code || "";
+    const traceEvent: ChatTraceEvent = {
+      kind: "error",
+      summary: event.message,
+      rawType: errorCode,
+    };
+    const nextState: AgUiRunState = {
       ...state,
       running: false,
       completed: true,
       error: {
         message: event.message,
-        ...(event.code ? { code: event.code } : {}),
+          ...(errorCode ? { code: errorCode } : {}),
       },
-      traceEvents: [...state.traceEvents, {
-        kind: "error",
-        summary: event.message,
-        rawType: event.code,
-      }],
+      traceEvents: [...state.traceEvents, traceEvent],
     };
+    return appendTraceEntry(nextState, traceEvent, {
+      kind: "error",
+      label: "错误",
+      summary: event.message,
+      collapsedByDefault: false,
+    });
   }
 
   return state;
 }
 
-export function buildAgUiMessageMeta(state: AgUiRunState): ChatMessageMetaInfo | undefined {
-  const trace = state.traceEvents.length > 0 ? state.traceEvents : undefined;
+export function buildAgUiMessageMeta(state: AgUiRunState, options: { nativeAgent?: boolean } = {}): ChatMessageMetaInfo | undefined {
+  const entryTrace = state.entries
+    .filter((entry) => entry.trace)
+    .map((entry) => ({
+      ...entry.trace!,
+      sequence: typeof entry.trace!.sequence === "number" ? entry.trace!.sequence : entry.seq,
+    }));
+  const trace = entryTrace.length > 0
+    ? entryTrace
+    : state.traceEvents.length > 0
+      ? state.traceEvents
+      : undefined;
   const toolCallCount = trace?.filter((event) => event.kind === "tool_call").length;
   const processCount = trace?.filter((event) => event.kind !== "tool_call" && event.kind !== "tool_result").length;
   const meta: ChatMessageMetaInfo = {
@@ -568,6 +769,7 @@ export function buildAgUiMessageMeta(state: AgUiRunState): ChatMessageMetaInfo |
     processCount,
     contextUsage: state.contextUsage,
     trace,
+    ...(options.nativeAgent || state.nativeAgent ? { tracePresentation: "native_agent_flat" as const } : {}),
   };
   return Object.values(meta).some((value) => typeof value !== "undefined") ? meta : undefined;
 }

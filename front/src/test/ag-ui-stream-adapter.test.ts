@@ -123,4 +123,32 @@ describe("agUiStreamAdapter", () => {
       }),
     ]);
   });
+
+  test("preserves legacy trace stable ordering metadata", () => {
+    const adapter = createAgUiStreamAdapter();
+    const events = adapter.adapt({
+      type: "trace",
+      event: {
+        id: "trace-1",
+        ordinal: 7,
+        created_at: "2026-06-06T00:00:00Z",
+        kind: "commentary",
+        source: "native_agent",
+        summary: "先检查目录。",
+      },
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({ type: EventType.RUN_STARTED }),
+      expect.objectContaining({
+        type: EventType.ACTIVITY_SNAPSHOT,
+        content: expect.objectContaining({
+          id: "trace-1",
+          ordinal: 7,
+          createdAt: "2026-06-06T00:00:00Z",
+          rawKind: "commentary",
+        }),
+      }),
+    ]);
+  });
 });

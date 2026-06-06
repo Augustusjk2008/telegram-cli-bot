@@ -10,7 +10,7 @@ import { ChatPlainTextMessage } from "../components/ChatPlainTextMessage";
 import { ChatTracePanel } from "../components/ChatTracePanel";
 import { ConversationHistoryPanel } from "../components/ConversationHistoryPanel";
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
-import { NativeAgentRunTimeline } from "../components/NativeAgentRunTimeline";
+import { NativeAgentTranscript } from "../components/NativeAgentTranscript";
 import { PlanDraftCard } from "../components/PlanDraftCard";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { WebApiClientError } from "../services/types";
@@ -66,6 +66,7 @@ import {
   reduceAgUiRunEvent,
   type AgUiRunState,
 } from "../utils/agUiRunReducer";
+import { buildNativeAgentTranscriptEntries, isNativeAgentMessage } from "../utils/nativeAgentTranscript";
 
 type Props = {
   botAlias: string;
@@ -519,6 +520,15 @@ function resolveStreamStartMs(items: ChatMessage[], elapsedSeconds?: number) {
 }
 
 function traceEventKey(event: ChatTraceEvent) {
+  if (event.id) {
+    return `id:${event.id}`;
+  }
+  if (typeof event.ordinal === "number") {
+    return `ordinal:${event.ordinal}`;
+  }
+  if (typeof event.sequence === "number") {
+    return `sequence:${event.sequence}`;
+  }
   return [
     event.kind || "",
     event.rawType || "",
@@ -545,6 +555,32 @@ function mergeTraceEvents(...sources: Array<ChatTraceEvent[] | undefined>) {
   return merged.length > 0 ? merged : undefined;
 }
 
+function mergeNativeFlatTraceEvents(...sources: Array<ChatTraceEvent[] | undefined>) {
+  const merged: ChatTraceEvent[] = [];
+  const seen = new Set<string>();
+
+  for (const source of sources) {
+    for (const event of source || []) {
+      const stableKey = event.id
+        ? `id:${event.id}`
+        : typeof event.ordinal === "number"
+          ? `ordinal:${event.ordinal}`
+          : typeof event.sequence === "number"
+            ? `sequence:${event.sequence}`
+            : "";
+      if (stableKey && seen.has(stableKey)) {
+        continue;
+      }
+      if (stableKey) {
+        seen.add(stableKey);
+      }
+      merged.push(event);
+    }
+  }
+
+  return merged.length > 0 ? merged : undefined;
+}
+
 function maxDefinedNumber(...values: Array<number | undefined>) {
   const definedValues = values.filter((value): value is number => (
     typeof value === "number" && Number.isFinite(value)
@@ -553,7 +589,11 @@ function maxDefinedNumber(...values: Array<number | undefined>) {
 }
 
 function mergeMessageMeta(base?: ChatMessageMetaInfo, incoming?: ChatMessageMetaInfo): ChatMessageMetaInfo | undefined {
-  const trace = mergeTraceEvents(base?.trace, incoming?.trace);
+  const isNativeSource = isNativeAgentMessage(incoming) || isNativeAgentMessage(base);
+  const tracePresentation = incoming?.tracePresentation || base?.tracePresentation || (isNativeSource ? "native_agent_flat" : undefined);
+  const trace = tracePresentation === "native_agent_flat"
+    ? mergeNativeFlatTraceEvents(base?.trace, incoming?.trace)
+    : mergeTraceEvents(base?.trace, incoming?.trace);
   const meta: ChatMessageMetaInfo = {
     completionState: incoming?.completionState || base?.completionState,
     summaryKind: incoming?.summaryKind || base?.summaryKind,
@@ -572,6 +612,7 @@ function mergeMessageMeta(base?: ChatMessageMetaInfo, incoming?: ChatMessageMeta
     nativeSource: incoming?.nativeSource || base?.nativeSource,
     contextUsage: incoming?.contextUsage || base?.contextUsage,
     agUiRunState: incoming?.agUiRunState || base?.agUiRunState,
+    tracePresentation,
     trace,
   };
 
@@ -583,9 +624,9 @@ function getAgUiRunState(meta?: ChatMessageMetaInfo): AgUiRunState | null {
   return value && typeof value === "object" ? value as AgUiRunState : null;
 }
 
-function buildLiveAgUiMessageMeta(state: AgUiRunState): ChatMessageMetaInfo {
+function buildLiveAgUiMessageMeta(state: AgUiRunState, nativeAgent = false): ChatMessageMetaInfo {
   return {
-    ...(buildAgUiMessageMeta(state) || {}),
+    ...(buildAgUiMessageMeta(state, { nativeAgent }) || {}),
     agUiRunState: state,
   };
 }
@@ -612,28 +653,63 @@ function isNativePermissionTrace(event: ChatTraceEvent, permissionId: string) {
 }
 
 function markNativePermissionTraceReplied(meta: ChatMessageMetaInfo | undefined, permissionId: string, approved: boolean): ChatMessageMetaInfo | undefined {
-  if (!meta?.trace?.length) {
+  if (!meta?.trace?.length && !getAgUiRunState(meta)?.entries.length) {
     return meta;
   }
+  const summary = approved ? "原生 agent 权限已允许" : "原生 agent 权限已拒绝";
+  const response = approved ? "once" : "reject";
+  const patchTrace = (event: ChatTraceEvent): ChatTraceEvent => {
+    if (!isNativePermissionTrace(event, permissionId)) {
+      return event;
+    }
+    const payload = event.payload && typeof event.payload === "object"
+      ? event.payload as Record<string, unknown>
+      : {};
+    return {
+      ...event,
+      summary,
+      payload: {
+        ...payload,
+        state: "permission.replied",
+        response,
+      },
+    };
+  };
+  const agUiRunState = getAgUiRunState(meta);
+  const nextAgUiRunState = agUiRunState
+    ? {
+        ...agUiRunState,
+        permissionRequests: agUiRunState.permissionRequests.map((permission) => (
+          permission.permissionId === permissionId
+            ? {
+                ...permission,
+                summary,
+                state: "permission.replied",
+                content: {
+                  ...permission.content,
+                  state: "permission.replied",
+                  response,
+                },
+              }
+            : permission
+        )),
+        traceEvents: agUiRunState.traceEvents.map(patchTrace),
+        entries: agUiRunState.entries.map((entry) => (
+          entry.kind === "permission" && entry.permissionId === permissionId
+            ? {
+                ...entry,
+                summary,
+                pending: false,
+                trace: entry.trace ? patchTrace(entry.trace) : entry.trace,
+              }
+            : entry
+        )),
+      }
+    : undefined;
   return {
     ...meta,
-    trace: meta.trace.map((event) => {
-      if (!isNativePermissionTrace(event, permissionId)) {
-        return event;
-      }
-      const payload = event.payload && typeof event.payload === "object"
-        ? event.payload as Record<string, unknown>
-        : {};
-      return {
-        ...event,
-        summary: approved ? "原生 agent 权限已允许" : "原生 agent 权限已拒绝",
-        payload: {
-          ...payload,
-          state: "permission.replied",
-          response: approved ? "once" : "reject",
-        },
-      };
-    }),
+    ...(meta.trace?.length ? { trace: meta.trace.map(patchTrace) } : {}),
+    ...(nextAgUiRunState ? { agUiRunState: nextAgUiRunState } : {}),
   };
 }
 
@@ -739,12 +815,13 @@ function getMessageClientStateKey(item: ChatMessage) {
   return `${item.role}|${item.id}`;
 }
 
-function appendTraceToMessage(item: ChatMessage, traceEvent: ChatTraceEvent): ChatMessage {
+function appendTraceToMessage(item: ChatMessage, traceEvent: ChatTraceEvent, tracePresentation?: ChatMessageMetaInfo["tracePresentation"]): ChatMessage {
   return {
     ...item,
     meta: mergeMessageMeta(item.meta, {
       trace: [traceEvent],
       traceVersion: 1,
+      tracePresentation,
     }),
   };
 }
@@ -989,8 +1066,13 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const hasStreamingText = isStreamingAssistant && item.text.trim().length > 0;
   const trace = item.meta?.trace;
   const agUiRunState = item.role === "assistant" ? getAgUiRunState(item.meta) : null;
+  const isNativeAgentAssistant = item.role === "assistant" && isNativeAgentMessage(item.meta);
+  const nativeTranscriptEntries = buildNativeAgentTranscriptEntries({
+    trace,
+    agUiState: agUiRunState,
+  });
   const traceCount = typeof item.meta?.traceCount === "number" ? item.meta.traceCount : trace?.length ?? 0;
-  const hasTracePanel = allowTrace && item.role === "assistant" && traceCount > 0 && !agUiRunState;
+  const hasTracePanel = allowTrace && item.role === "assistant" && traceCount > 0 && !agUiRunState && !isNativeAgentAssistant;
   const inlineAvatar = (
     <ChatAvatar
       alt={`${messageName} 头像`}
@@ -1015,18 +1097,28 @@ const ChatMessageRow = memo(function ChatMessageRow({
         />
         <div
           data-streaming={isStreamingAssistant ? "true" : "false"}
-          className={[
-            "chat-message-bubble-delight",
-            isUser && isCurrentUserMessage
-              ? "rounded-lg bg-[var(--accent)] px-4 py-2 text-[var(--accent-foreground)] shadow-[var(--shadow-soft)]"
-              : isStreamingAssistant
-                ? "min-w-0 overflow-hidden rounded-lg border border-[var(--accent)]/45 bg-[var(--workbench-panel-elevated-bg)] px-4 py-3 text-[var(--text)] shadow-[var(--shadow-soft)]"
-              : item.state === "error"
-                ? "rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-red-700 shadow-[var(--shadow-soft)]"
-                : "min-w-0 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-3 text-[var(--text)] shadow-[var(--shadow-soft)]",
-          ].join(" ")}
+          className={isNativeAgentAssistant
+            ? "min-w-0 overflow-hidden text-[var(--text)]"
+            : [
+                "chat-message-bubble-delight",
+                isUser && isCurrentUserMessage
+                  ? "rounded-lg bg-[var(--accent)] px-4 py-2 text-[var(--accent-foreground)] shadow-[var(--shadow-soft)]"
+                  : isStreamingAssistant
+                    ? "min-w-0 overflow-hidden rounded-lg border border-[var(--accent)]/45 bg-[var(--workbench-panel-elevated-bg)] px-4 py-3 text-[var(--text)] shadow-[var(--shadow-soft)]"
+                  : item.state === "error"
+                    ? "rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-red-700 shadow-[var(--shadow-soft)]"
+                    : "min-w-0 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-3 text-[var(--text)] shadow-[var(--shadow-soft)]",
+              ].join(" ")}
         >
-          {item.role === "assistant" && item.state !== "streaming" && item.state !== "error" ? (
+          {isNativeAgentAssistant ? (
+            <NativeAgentTranscript
+              entries={nativeTranscriptEntries}
+              resultText={item.text}
+              state={item.state}
+              onReplyPermission={onReplyNativePermission}
+              onFileLinkClick={onFileLinkClick}
+            />
+          ) : item.role === "assistant" && item.state !== "streaming" && item.state !== "error" ? (
             <ChatMarkdownMessage content={item.text} onFileLinkClick={onFileLinkClick} />
           ) : isUser ? (
             <div className={userAttachments.length > 0 && visibleUserText ? "space-y-2" : undefined}>
@@ -1090,12 +1182,6 @@ const ChatMessageRow = memo(function ChatMessageRow({
             />
           )}
         </div>
-        {agUiRunState ? (
-          <NativeAgentRunTimeline
-            state={agUiRunState}
-            onReplyPermission={onReplyNativePermission}
-          />
-        ) : null}
         {hasTracePanel ? (
           <ChatTracePanel
             messageId={item.id}
@@ -2270,6 +2356,7 @@ export function ChatScreen({
           toolCallCount: traceDetails.toolCallCount,
           processCount: traceDetails.processCount,
           traceVersion: 1,
+          ...(isNativeAgentMessage(item.meta) ? { tracePresentation: "native_agent_flat" as const } : {}),
         }),
       })));
       setTraceLoadState((prev) => ({
@@ -2288,6 +2375,28 @@ export function ChatScreen({
       }));
     }
   }, [botAlias, client]);
+
+  useEffect(() => {
+    if (loading) {
+      return;
+    }
+    for (const item of items) {
+      if (item.role !== "assistant" || !isNativeAgentMessage(item.meta)) {
+        continue;
+      }
+      const expectedTraceCount = item.meta?.traceCount || 0;
+      const loadedTraceCount = (item.meta?.trace || []).length;
+      if (expectedTraceCount <= 0 || loadedTraceCount >= expectedTraceCount) {
+        continue;
+      }
+      const messageClientStateKey = getMessageClientStateKey(item);
+      if (traceLoadState[messageClientStateKey]?.loading || traceLoadState[messageClientStateKey]?.error) {
+        continue;
+      }
+      void loadMessageTrace(item.id);
+      break;
+    }
+  }, [items, loadMessageTrace, loading, traceLoadState]);
 
   const loadConversations = useCallback(async (query = "") => {
     setConversationLoading(true);
@@ -2652,7 +2761,6 @@ export function ChatScreen({
 
     try {
       let usingPreviewReplace = false;
-      let usingTracePreview = false;
       let agUiState: AgUiRunState | null = null;
       let sawAgUiEvent = false;
       const onChunk = (chunk: string) => {
@@ -2696,7 +2804,6 @@ export function ChatScreen({
         }
         if (typeof status.replaceText === "string") {
           usingPreviewReplace = true;
-          usingTracePreview = false;
           setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => ({
             ...item,
             text: status.replaceText || "",
@@ -2720,15 +2827,23 @@ export function ChatScreen({
           assistantId,
           localStartedAtMs,
           (item) => {
-            const nextItem = appendTraceToMessage(item, traceEvent);
+            const isNativeTrace = executionModeRef.current === "native_agent"
+              || String(traceEvent.source || "").trim().toLowerCase() === "native_agent";
+            const nextItem = appendTraceToMessage(
+              item,
+              traceEvent,
+              isNativeTrace ? "native_agent_flat" : undefined,
+            );
+            if (isNativeTrace) {
+              return nextItem;
+            }
             const canUseTracePreview = traceEvent.kind === "commentary"
               && Boolean(traceEvent.summary.trim())
               && !usingPreviewReplace
-              && (!item.text.trim() || usingTracePreview);
+              && !item.text.trim();
             if (!canUseTracePreview) {
               return nextItem;
             }
-            usingTracePreview = true;
             return {
               ...nextItem,
               text: traceEvent.summary,
@@ -2760,7 +2875,10 @@ export function ChatScreen({
           assistantId,
           localStartedAtMs,
           (item) => {
-            const nextMeta = mergeMessageMeta(item.meta, buildLiveAgUiMessageMeta(nextAgUiState));
+            const nextMeta = mergeMessageMeta(
+              item.meta,
+              buildLiveAgUiMessageMeta(nextAgUiState, executionModeRef.current === "native_agent"),
+            );
             const completionState = nextMeta?.completionState || "";
             return {
               ...item,
@@ -2808,7 +2926,10 @@ export function ChatScreen({
         elapsedSeconds,
         ...(sawAgUiEvent && agUiState
           ? {
-              meta: mergeMessageMeta(finalMessage.meta, buildLiveAgUiMessageMeta(agUiState)),
+              meta: mergeMessageMeta(
+                finalMessage.meta,
+                buildLiveAgUiMessageMeta(agUiState, executionModeRef.current === "native_agent"),
+              ),
             }
           : {}),
       };

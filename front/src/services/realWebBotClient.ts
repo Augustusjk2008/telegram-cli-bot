@@ -386,6 +386,11 @@ type RawConversationBulkDeleteResult = {
 };
 
 type RawChatTraceEvent = {
+  id?: string;
+  ordinal?: number;
+  sequence?: number;
+  created_at?: string;
+  createdAt?: string;
   kind?: string;
   summary?: string;
   source?: string;
@@ -1383,11 +1388,17 @@ function mapAgUiTraceEvent(event: AgUiEvent): ChatTraceEvent | null {
       return null;
     }
     return {
+      ...(String(content.id || "").trim() ? { id: String(content.id || "").trim() } : {}),
+      ...(typeof content.ordinal === "number" ? { ordinal: content.ordinal } : {}),
+      ...(typeof content.sequence === "number" ? { sequence: content.sequence } : {}),
+      ...(String(content.createdAt || content.created_at || "").trim()
+        ? { createdAt: String(content.createdAt || content.created_at || "").trim() }
+        : {}),
       kind: event.activityType === "TCB_PERMISSION_REQUEST"
         ? "permission"
         : rawKind || (event.activityType === "TCB_STATUS" ? "status" : "event"),
       summary,
-      source: String(content.source || (event.activityType === "TCB_PERMISSION_REQUEST" ? "native_agent" : "")).trim() || undefined,
+      source: String(content.source || "").trim() || undefined,
       rawType: String(content.rawType || event.activityType).trim() || undefined,
       title: String(content.title || "").trim() || undefined,
       payload: content,
@@ -1933,6 +1944,18 @@ function mapTraceEvent(raw?: RawChatTraceEvent | null): ChatTraceEvent | null {
     kind: kind || "unknown",
     summary,
   };
+  if (raw.id) {
+    event.id = raw.id;
+  }
+  if (typeof raw.ordinal === "number") {
+    event.ordinal = raw.ordinal;
+  }
+  if (typeof raw.sequence === "number") {
+    event.sequence = raw.sequence;
+  }
+  if (raw.created_at || raw.createdAt) {
+    event.createdAt = raw.created_at || raw.createdAt;
+  }
   if (raw.source) {
     event.source = raw.source;
   }
@@ -2083,6 +2106,9 @@ function mapMessageMeta(raw?: RawChatMessageMeta | null): ChatMessageMetaInfo | 
     meta.trace = trace;
   }
   if (raw.native_source?.provider || raw.native_source?.session_id) {
+    if (String(raw.native_source.provider || "").trim().toLowerCase() === "native_agent") {
+      meta.tracePresentation = "native_agent_flat";
+    }
     meta.nativeSource = {
       provider: displayNativeProvider(raw.native_source.provider),
       sessionId: raw.native_source.session_id || undefined,
@@ -2105,6 +2131,15 @@ function summarizeTrace(trace?: ChatTraceEvent[]) {
 }
 
 function traceEventKey(event: ChatTraceEvent): string {
+  if (event.id) {
+    return `id:${event.id}`;
+  }
+  if (typeof event.ordinal === "number") {
+    return `ordinal:${event.ordinal}`;
+  }
+  if (typeof event.sequence === "number") {
+    return `sequence:${event.sequence}`;
+  }
   return [
     event.kind || "",
     event.rawType || "",
@@ -2131,6 +2166,32 @@ function mergeTraceEvents(...sources: Array<ChatTraceEvent[] | undefined>): Chat
   return merged.length > 0 ? merged : undefined;
 }
 
+function mergeNativeFlatTraceEvents(...sources: Array<ChatTraceEvent[] | undefined>): ChatTraceEvent[] | undefined {
+  const merged: ChatTraceEvent[] = [];
+  const seen = new Set<string>();
+
+  for (const source of sources) {
+    for (const item of source || []) {
+      const stableKey = item.id
+        ? `id:${item.id}`
+        : typeof item.ordinal === "number"
+          ? `ordinal:${item.ordinal}`
+          : typeof item.sequence === "number"
+            ? `sequence:${item.sequence}`
+            : "";
+      if (stableKey && seen.has(stableKey)) {
+        continue;
+      }
+      if (stableKey) {
+        seen.add(stableKey);
+      }
+      merged.push(item);
+    }
+  }
+
+  return merged.length > 0 ? merged : undefined;
+}
+
 function maxDefinedNumber(...values: Array<number | undefined>) {
   const definedValues = values.filter((value): value is number => (
     typeof value === "number" && Number.isFinite(value)
@@ -2143,7 +2204,16 @@ function mergeMessageMeta(
   incoming?: ChatMessageMetaInfo,
   streamedTrace?: ChatTraceEvent[],
 ): ChatMessageMetaInfo | undefined {
-  const trace = mergeTraceEvents(base?.trace, incoming?.trace, streamedTrace);
+  const isNativeSource = (
+    incoming?.tracePresentation === "native_agent_flat"
+    || base?.tracePresentation === "native_agent_flat"
+    || String(incoming?.nativeSource?.provider || base?.nativeSource?.provider || "").trim().toLowerCase() === "原生 agent"
+  );
+  const tracePresentation = incoming?.tracePresentation || base?.tracePresentation || (isNativeSource ? "native_agent_flat" : undefined);
+  const isNativeFlat = tracePresentation === "native_agent_flat";
+  const trace = isNativeFlat
+    ? mergeNativeFlatTraceEvents(base?.trace, incoming?.trace, streamedTrace)
+    : mergeTraceEvents(base?.trace, incoming?.trace, streamedTrace);
   const traceSummary = trace ? summarizeTrace(trace) : undefined;
   const meta: ChatMessageMetaInfo = {
     completionState: incoming?.completionState || base?.completionState,
@@ -2154,6 +2224,7 @@ function mergeMessageMeta(
     processCount: maxDefinedNumber(incoming?.processCount, base?.processCount, traceSummary?.processCount),
     nativeSource: incoming?.nativeSource || base?.nativeSource,
     contextUsage: incoming?.contextUsage || base?.contextUsage,
+    tracePresentation,
     trace,
   };
 
@@ -4648,8 +4719,10 @@ export class RealWebBotClient implements WebBotClient {
           elapsedSeconds: finalMessage.elapsedSeconds ?? agUiState.elapsedSeconds ?? finalElapsedSeconds,
           meta: mergeMessageMeta(
             agUiState.contextUsage ? { contextUsage: agUiState.contextUsage } : undefined,
-            finalMessage.meta,
-            buildAgUiMessageMeta(agUiState)?.trace,
+            mergeMessageMeta(
+              finalMessage.meta,
+              buildAgUiMessageMeta(agUiState, { nativeAgent: options?.executionMode === "native_agent" }),
+            ),
           ),
         };
       }
@@ -4667,7 +4740,7 @@ export class RealWebBotClient implements WebBotClient {
     if (sawAgUiEvent) {
       const meta = mergeMessageMeta(
         agUiState.contextUsage ? { contextUsage: agUiState.contextUsage } : undefined,
-        buildAgUiMessageMeta(agUiState),
+        buildAgUiMessageMeta(agUiState, { nativeAgent: options?.executionMode === "native_agent" }),
       );
       const completionState = meta?.completionState || "";
       return {

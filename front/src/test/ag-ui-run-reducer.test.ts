@@ -100,6 +100,13 @@ describe("agUiRunReducer", () => {
     expect(meta?.toolCallCount).toBe(1);
     expect(meta?.processCount).toBe(2);
     expect(meta?.contextUsage?.sessionId).toBe("thread-ctx");
+    expect(state.entries.map((entry) => entry.kind)).toEqual(["process", "tool", "event", "permission"]);
+    expect(state.entries.map((entry) => entry.summary)).toEqual([
+      "处理中",
+      "shell_command",
+      "Exit code: 0",
+      "请求读取文件",
+    ]);
   });
 
   test("captures run error", () => {
@@ -110,6 +117,20 @@ describe("agUiRunReducer", () => {
     });
     expect(state.error).toEqual({ message: "boom", code: "bad" });
     expect(state.completed).toBe(true);
+    expect(state.entries.at(-1)).toEqual(expect.objectContaining({
+      kind: "error",
+      summary: "boom",
+    }));
+  });
+
+  test("does not infer native flat presentation from session error alone", () => {
+    const state = reduceAgUiRunEvent(createAgUiRunState(), {
+      type: EventType.RUN_ERROR,
+      message: "OpenCode failed",
+      code: "session.error",
+    });
+
+    expect(buildAgUiMessageMeta(state)?.tracePresentation).toBeUndefined();
   });
 
   test("captures cancelled run finish as interrupt trace", () => {
@@ -129,6 +150,10 @@ describe("agUiRunReducer", () => {
     expect(meta?.trace).toEqual([
       expect.objectContaining({ kind: "cancelled", summary: "用户终止输出" }),
     ]);
+    expect(state.entries.at(-1)).toEqual(expect.objectContaining({
+      kind: "cancelled",
+      summary: "用户终止输出",
+    }));
   });
 
   test("replaces assistant text from message snapshot", () => {
@@ -209,5 +234,93 @@ describe("agUiRunReducer", () => {
       "tool_call",
       "tool_result",
     ]);
+    expect(state.entries.map((entry) => entry.summary)).toEqual([
+      "读取目录",
+      "写入文件",
+      "测试通过",
+    ]);
+  });
+
+  test("keeps duplicate native trace entries append-only", () => {
+    const events: AgUiEvent[] = [
+      {
+        type: EventType.ACTIVITY_SNAPSHOT,
+        messageId: "activity-1",
+        activityType: "TCB_NATIVE_AGENT_TRACE",
+        replace: true,
+        content: {
+          summary: "重复过程",
+          rawKind: "commentary",
+          rawType: "message.text.reclassified",
+        },
+      },
+      {
+        type: EventType.ACTIVITY_SNAPSHOT,
+        messageId: "activity-2",
+        activityType: "TCB_NATIVE_AGENT_TRACE",
+        replace: true,
+        content: {
+          summary: "重复过程",
+          rawKind: "commentary",
+          rawType: "message.text.reclassified",
+        },
+      },
+    ];
+
+    const state = events.reduce(reduceAgUiRunEvent, createAgUiRunState());
+
+    expect(state.entries).toHaveLength(2);
+    expect(buildAgUiMessageMeta(state)?.trace).toEqual([
+      expect.objectContaining({ kind: "commentary", summary: "重复过程", sequence: 1 }),
+      expect.objectContaining({ kind: "commentary", summary: "重复过程", sequence: 2 }),
+    ]);
+  });
+
+  test("does not mark handled native permissions as pending", () => {
+    const state = reduceAgUiRunEvent(createAgUiRunState(), {
+      type: EventType.ACTIVITY_SNAPSHOT,
+      messageId: "activity-perm-1",
+      activityType: "TCB_PERMISSION_REQUEST",
+      replace: true,
+      content: {
+        id: "perm-1",
+        permissionId: "perm-1",
+        summary: "原生 agent 权限已允许",
+        state: "permission.replied",
+        source: "native_agent",
+      },
+    });
+
+    expect(state.permissionRequests).toEqual([expect.objectContaining({
+      permissionId: "perm-1",
+      state: "permission.replied",
+    })]);
+    expect(state.entries).toEqual([expect.objectContaining({
+      kind: "permission",
+      permissionId: "perm-1",
+      pending: false,
+    })]);
+  });
+
+  test("does not infer native flat presentation from non-native permission activity", () => {
+    const state = reduceAgUiRunEvent(createAgUiRunState(), {
+      type: EventType.ACTIVITY_SNAPSHOT,
+      messageId: "activity-perm-2",
+      activityType: "TCB_PERMISSION_REQUEST",
+      replace: true,
+      content: {
+        id: "perm-2",
+        permissionId: "perm-2",
+        summary: "CLI 请求确认",
+        state: "permission.updated",
+        source: "codex",
+      },
+    });
+
+    expect(state.entries).toEqual([expect.objectContaining({
+      kind: "permission",
+      permissionId: "perm-2",
+    })]);
+    expect(buildAgUiMessageMeta(state)?.tracePresentation).toBeUndefined();
   });
 });

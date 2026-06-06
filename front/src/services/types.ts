@@ -590,6 +590,10 @@ export type BotOverview = {
 };
 
 export type ChatTraceEvent = {
+  id?: string;
+  ordinal?: number;
+  sequence?: number;
+  createdAt?: string;
   kind: string;
   summary: string;
   source?: string;
@@ -629,6 +633,7 @@ export type ChatMessageMetaInfo = {
   nativeSource?: ChatMessageNativeSource;
   contextUsage?: ChatMessageContextUsage;
   agUiRunState?: unknown;
+  tracePresentation?: "native_agent_flat" | "generic";
 };
 
 export type ChatMessageAuthor = {

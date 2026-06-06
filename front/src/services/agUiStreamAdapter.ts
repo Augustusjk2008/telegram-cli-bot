@@ -3,6 +3,11 @@ import { EventType, parseAgUiEvent, type AgUiEvent } from "./agUiProtocol";
 const AG_UI_EVENT_TYPES = new Set<string>(Object.values(EventType));
 
 type LegacyTraceEvent = {
+  id?: unknown;
+  ordinal?: unknown;
+  sequence?: unknown;
+  created_at?: unknown;
+  createdAt?: unknown;
   kind?: unknown;
   summary?: unknown;
   source?: unknown;
@@ -185,6 +190,10 @@ export function createAgUiStreamAdapter() {
         replace: kind === "permission",
         content: {
           ...payload,
+          id: asString(trace.id).trim() || payload.id,
+          ordinal: typeof trace.ordinal === "number" ? trace.ordinal : payload.ordinal,
+          sequence: typeof trace.sequence === "number" ? trace.sequence : payload.sequence,
+          createdAt: asString(trace.created_at || trace.createdAt).trim() || payload.createdAt,
           summary,
           source,
           rawType,
@@ -310,6 +319,12 @@ export function createAgUiStreamAdapter() {
         const output = asString(doneMessage.content).trim() || asString(directRecord.output).trim();
         const elapsedSeconds = typeof directRecord.elapsed_seconds === "number" ? directRecord.elapsed_seconds : undefined;
         const contextUsage = asRecord(doneMeta.context_usage || doneMeta.contextUsage || directRecord.context_usage);
+        const messageState = asString(doneMessage.state).trim().toLowerCase();
+        const completionState = (
+          asString(doneMeta.completion_state || doneMeta.completionState).trim()
+          || asString(doneMessage.completion_state || doneMessage.completionState).trim()
+          || (["cancelled", "canceled", "error", "failed"].includes(messageState) ? messageState : "")
+        );
         if (output && !textStarted) {
           events.push(...ensureTextStarted());
           events.push({
@@ -328,8 +343,11 @@ export function createAgUiStreamAdapter() {
             content: output,
             elapsedSeconds,
             contextUsage,
+            ...(completionState ? { completion_state: completionState } : {}),
           },
-          outcome: { type: "success" },
+          outcome: completionState && completionState !== "completed"
+            ? { type: "interrupt", interrupts: [{ id: `completion-${completionState}`, reason: completionState }] }
+            : { type: "success" },
         });
         return events;
       }
