@@ -121,7 +121,7 @@ def map_event(
                 delta=result.delta,
             )
         )
-    if result.snapshot:
+    if result.snapshot or result.replace_text:
         if not state.text_started:
             mapped.append(
                 core.TextMessageStartEvent(

@@ -49,6 +49,7 @@ export type AgUiRunState = {
   clusterRunId?: string;
   elapsedSeconds?: number;
   contextUsage?: ChatMessageContextUsage;
+  completionState?: string;
   error?: {
     message: string;
     code?: string;
@@ -77,6 +78,37 @@ function stringifyValue(value: unknown) {
   } catch {
     return String(value);
   }
+}
+
+function interruptReason(value: unknown) {
+  const record = asRecord(value);
+  const interrupts = Array.isArray(record.interrupts) ? record.interrupts : [];
+  for (const item of interrupts) {
+    const reason = asString(asRecord(item).reason).trim();
+    if (reason) {
+      return reason;
+    }
+  }
+  return "";
+}
+
+function completionStateFromRunFinished(event: Extract<AgUiEvent, { type: EventType.RUN_FINISHED }>, result: Record<string, unknown>) {
+  const explicit = asString(result.completion_state || result.completionState).trim();
+  if (explicit) {
+    return explicit;
+  }
+  const outcome = asRecord(event.outcome);
+  if (asString(outcome.type).trim().toLowerCase() === "interrupt") {
+    const reason = interruptReason(outcome).trim().toLowerCase();
+    if (reason.includes("cancel")) {
+      return "cancelled";
+    }
+    if (reason.includes("error") || reason.includes("fail")) {
+      return "error";
+    }
+    return reason || "interrupted";
+  }
+  return "completed";
 }
 
 function traceEventKey(event: ChatTraceEvent) {
@@ -251,7 +283,7 @@ export function reduceAgUiRunEvent(state: AgUiRunState, event: AgUiEvent): AgUiR
     return {
       ...state,
       messageId,
-      ...(content ? { assistantText: content } : {}),
+      ...(assistantMessage ? { assistantText: content } : {}),
       running: true,
     };
   }
@@ -465,6 +497,7 @@ export function reduceAgUiRunEvent(state: AgUiRunState, event: AgUiEvent): AgUiR
     const result = asRecord(event.result);
     const resultMessage = asRecord(result.message);
     const resultMeta = asRecord(resultMessage.meta);
+    const completionState = completionStateFromRunFinished(event, result);
     const elapsedSeconds = typeof result.elapsedSeconds === "number"
       ? result.elapsedSeconds
       : typeof result.elapsed_seconds === "number"
@@ -477,14 +510,29 @@ export function reduceAgUiRunEvent(state: AgUiRunState, event: AgUiEvent): AgUiR
       || mapContextUsage(resultMeta.context_usage)
       || state.contextUsage
     );
+    const cancelledTrace = completionState === "cancelled"
+      ? [{
+        kind: "cancelled",
+        summary: "用户终止输出",
+        rawType: EventType.RUN_FINISHED,
+      } satisfies ChatTraceEvent]
+      : [];
     return {
       ...state,
       threadId: event.threadId,
       runId: event.runId,
       running: false,
       completed: true,
+      completionState,
       elapsedSeconds,
       contextUsage,
+      traceEvents: cancelledTrace.length
+        ? upsertTraceEvent(
+          state.traceEvents,
+          cancelledTrace[0],
+          (item) => item.kind === "cancelled" && item.rawType === EventType.RUN_FINISHED,
+        )
+        : state.traceEvents,
     };
   }
 
@@ -513,7 +561,7 @@ export function buildAgUiMessageMeta(state: AgUiRunState): ChatMessageMetaInfo |
   const toolCallCount = trace?.filter((event) => event.kind === "tool_call").length;
   const processCount = trace?.filter((event) => event.kind !== "tool_call" && event.kind !== "tool_result").length;
   const meta: ChatMessageMetaInfo = {
-    completionState: state.error ? "error" : state.completed ? "completed" : state.running ? "streaming" : undefined,
+    completionState: state.error ? "error" : state.completionState || (state.completed ? "completed" : state.running ? "streaming" : undefined),
     traceVersion: trace ? 1 : undefined,
     traceCount: trace?.length,
     toolCallCount,

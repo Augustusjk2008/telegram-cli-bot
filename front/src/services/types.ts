@@ -709,6 +709,7 @@ export type ConversationBulkDeleteResult = {
 export type ChatStatusUpdate = {
   elapsedSeconds?: number;
   previewText?: string;
+  replaceText?: string;
   clusterRunId?: string;
   contextUsage?: ChatMessageContextUsage;
 };

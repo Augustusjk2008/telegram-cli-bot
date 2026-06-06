@@ -112,6 +112,25 @@ describe("agUiRunReducer", () => {
     expect(state.completed).toBe(true);
   });
 
+  test("captures cancelled run finish as interrupt trace", () => {
+    const state = reduceAgUiRunEvent(createAgUiRunState(), {
+      type: EventType.RUN_FINISHED,
+      threadId: "thread-1",
+      runId: "run-1",
+      outcome: {
+        type: "interrupt",
+        interrupts: [{ id: "interrupt-1", reason: "cancelled" }],
+      },
+    });
+
+    expect(state.completed).toBe(true);
+    const meta = buildAgUiMessageMeta(state);
+    expect(meta?.completionState).toBe("cancelled");
+    expect(meta?.trace).toEqual([
+      expect.objectContaining({ kind: "cancelled", summary: "用户终止输出" }),
+    ]);
+  });
+
   test("replaces assistant text from message snapshot", () => {
     const state = reduceAgUiRunEvent(createAgUiRunState(), {
       type: EventType.MESSAGES_SNAPSHOT,
@@ -123,6 +142,23 @@ describe("agUiRunReducer", () => {
 
     expect(state.messageId).toBe("assistant-1");
     expect(state.assistantText).toBe("ok");
+  });
+
+  test("clears assistant text from empty message snapshot", () => {
+    const withText = reduceAgUiRunEvent(createAgUiRunState(), {
+      type: EventType.TEXT_MESSAGE_CONTENT,
+      messageId: "assistant-1",
+      delta: "先查一下...",
+    });
+    const state = reduceAgUiRunEvent(withText, {
+      type: EventType.MESSAGES_SNAPSHOT,
+      messages: [
+        { id: "assistant-1", role: "assistant", content: "" },
+      ],
+    });
+
+    expect(state.messageId).toBe("assistant-1");
+    expect(state.assistantText).toBe("");
   });
 
   test("keeps multiple native trace activities visible", () => {

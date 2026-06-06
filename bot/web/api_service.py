@@ -2144,6 +2144,8 @@ def _create_agent_conversation(
     with session._lock:
         session.active_conversation_id = conversation_id
         _clear_all_native_sessions_locked(session)
+        if resolved_execution_mode == NATIVE_AGENT_PROVIDER:
+            _clear_native_agent_session_locked(session)
     session.persist()
     return store, conversation_id
 

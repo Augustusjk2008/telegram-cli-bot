@@ -19,6 +19,7 @@ type LegacyTraceEvent = {
 type LegacyStreamEvent = {
   type?: unknown;
   text?: unknown;
+  snapshot?: unknown;
   elapsed_seconds?: unknown;
   preview_text?: unknown;
   context_usage?: unknown;
@@ -238,6 +239,23 @@ export function createAgUiStreamAdapter() {
             type: EventType.TEXT_MESSAGE_CONTENT,
             messageId,
             delta: text,
+          },
+        ];
+      }
+
+      if (rawType === "snapshot") {
+        const text = asString(legacyEvent.text) || asString(legacyEvent.snapshot);
+        return [
+          ...ensureRunStarted(),
+          {
+            type: EventType.MESSAGES_SNAPSHOT,
+            messages: [
+              {
+                id: messageId,
+                role: "assistant",
+                content: text,
+              },
+            ],
           },
         ];
       }

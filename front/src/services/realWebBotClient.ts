@@ -1313,6 +1313,7 @@ type RawAssistantAdminAuditItem = {
 type StreamEvent =
   | { type: "meta"; [key: string]: unknown }
   | { type: "delta"; text?: string }
+  | { type: "snapshot"; text?: string; elapsed_seconds?: number }
   | RawAppUpdateDownloadProgress & { type: "progress" }
   | {
       type: "status";
@@ -4579,6 +4580,13 @@ export class RealWebBotClient implements WebBotClient {
         if (event.type === "delta" && event.text) {
           streamedText += event.text;
           onChunk(event.text);
+        } else if (event.type === "snapshot") {
+          streamedText = typeof event.text === "string" ? event.text : "";
+          onStatus?.({
+            elapsedSeconds: event.elapsed_seconds,
+            previewText: streamedText,
+            replaceText: streamedText,
+          });
         } else if (event.type === "meta") {
           const clusterRunId = typeof event.cluster_run_id === "string" ? event.cluster_run_id : "";
           if (clusterRunId) {
@@ -4661,12 +4669,13 @@ export class RealWebBotClient implements WebBotClient {
         agUiState.contextUsage ? { contextUsage: agUiState.contextUsage } : undefined,
         buildAgUiMessageMeta(agUiState),
       );
+      const completionState = meta?.completionState || "";
       return {
         id: agUiState.messageId || `assistant-${Date.now()}`,
         role: "assistant",
         text: finalText || agUiState.assistantText || streamedText,
         createdAt: new Date().toISOString(),
-        state: agUiState.error ? "error" : "done",
+        state: agUiState.error || (completionState && completionState !== "completed") ? "error" : "done",
         ...(typeof (agUiState.elapsedSeconds ?? finalElapsedSeconds) === "number"
           ? { elapsedSeconds: agUiState.elapsedSeconds ?? finalElapsedSeconds }
           : {}),

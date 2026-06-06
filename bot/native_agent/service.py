@@ -93,7 +93,14 @@ class NativeAgentService:
             str(native_agent.get("opencode_agent") or "").strip(),
         )
 
-    async def _ensure_session_id(self, client: NativeAgentClient, session: UserSession) -> str:
+    async def _ensure_session_id(
+        self,
+        client: NativeAgentClient,
+        session: UserSession,
+        history_service: ChatHistoryService,
+        conversation_id: str,
+    ) -> str:
+        _ = history_service, conversation_id
         created = await client.create_session(cwd=session.working_dir)
         native_session_id = _extract_session_id(created)
         with session._lock:
@@ -164,8 +171,16 @@ class NativeAgentService:
         final_text = ""
         reader_task: asyncio.Task[None] | None = None
         wants_ag_ui = str(protocol or "").strip().lower() == "ag-ui"
+        prompt_started = False
+        should_abort_prompt = False
+        assistant_completed_at = 0.0
 
         try:
+            try:
+                history_items = history_service.list_history(profile, session, limit=12)
+            except Exception:
+                history_items = []
+            native_prompt_text = _build_native_prompt_with_history(history_items, prompt_text)
             turn_handle = history_service.start_turn(
                 profile=profile,
                 session=session,
@@ -177,7 +192,7 @@ class NativeAgentService:
             with session._lock:
                 session.native_agent_server_key = str(getattr(server, "key", "") or "")
             client = server.client()
-            native_session_id = await self._ensure_session_id(client, session)
+            native_session_id = await self._ensure_session_id(client, session, history_service, turn_handle.conversation_id)
             model_id, agent_id = self._prompt_options(profile)
             baseline_message_count = 0
             baseline_known = False
@@ -244,18 +259,26 @@ class NativeAgentService:
             await event_ready.wait()
             await client.prompt_async(
                 native_session_id,
-                prompt_text,
+                native_prompt_text,
                 message_id=aggregator.user_message_id,
                 model=model_id or None,
                 agent=agent_id or None,
             )
+            prompt_started = True
             while True:
                 try:
                     queued_event = await asyncio.wait_for(event_queue.get(), timeout=0.5)
                 except asyncio.TimeoutError:
-                    if turn_state.should_reconcile(now=loop.time(), force=True):
+                    now = loop.time()
+                    if _defer_reconciled_done(
+                        aggregator,
+                        completed_at=assistant_completed_at,
+                        now=now,
+                    ):
+                        continue
+                    if turn_state.should_reconcile(now=now, force=True):
                         try:
-                            reconciled = await turn_state.maybe_reconcile(client.list_messages, aggregator, now=loop.time())
+                            reconciled = await turn_state.maybe_reconcile(client.list_messages, aggregator, now=now)
                         except Exception:
                             reconciled = {"done": False, "text": ""}
                         reconciled_text = str(reconciled.get("text") or "")
@@ -263,6 +286,12 @@ class NativeAgentService:
                             final_text = reconciled_text
                             history_service.replace_assistant_content(turn_handle, final_text, state="streaming")
                         if reconciled.get("done"):
+                            if _defer_reconciled_done(
+                                aggregator,
+                                completed_at=assistant_completed_at,
+                                now=loop.time(),
+                            ):
+                                continue
                             break
                     continue
                 if queued_event is None:
@@ -274,9 +303,16 @@ class NativeAgentService:
                 if event is None:
                     continue
                 if event.transport:
-                    if turn_state.should_reconcile(now=loop.time()):
+                    now = loop.time()
+                    if _defer_reconciled_done(
+                        aggregator,
+                        completed_at=assistant_completed_at,
+                        now=now,
+                    ):
+                        continue
+                    if turn_state.should_reconcile(now=now):
                         try:
-                            reconciled = await turn_state.maybe_reconcile(client.list_messages, aggregator, now=loop.time())
+                            reconciled = await turn_state.maybe_reconcile(client.list_messages, aggregator, now=now)
                         except Exception:
                             reconciled = {"done": False, "text": ""}
                         reconciled_text = str(reconciled.get("text") or "")
@@ -284,12 +320,20 @@ class NativeAgentService:
                             final_text = reconciled_text
                             history_service.replace_assistant_content(turn_handle, final_text, state="streaming")
                         if reconciled.get("done"):
+                            if _defer_reconciled_done(
+                                aggregator,
+                                completed_at=assistant_completed_at,
+                                now=loop.time(),
+                            ):
+                                continue
                             break
                     continue
                 if not is_relevant_event(event, session_id=native_session_id, cwd=session.working_dir):
                     continue
                 result = aggregator.apply(event)
                 turn_state.observe(event, result, now=loop.time())
+                if aggregator.assistant_completed and not assistant_completed_at:
+                    assistant_completed_at = loop.time()
                 if wants_ag_ui and not should_filter_event(event):
                     for ag_ui_event in map_ag_ui_event(event=event, result=result, state=ag_ui_state):
                         yield {"type": "ag_ui", "event": ag_ui_event}
@@ -304,10 +348,14 @@ class NativeAgentService:
                     final_text = aggregator.text()
                     history_service.replace_assistant_content(turn_handle, final_text, state="streaming")
                     yield {"type": "delta", "text": result.delta}
-                if result.snapshot:
+                if result.snapshot or result.replace_text:
                     final_text = result.snapshot
                     history_service.replace_assistant_content(turn_handle, final_text, state="streaming")
-                    yield {"type": "status", "elapsed_seconds": int(loop.time() - started_at), "preview_text": final_text[-800:]}
+                    yield {
+                        "type": "snapshot",
+                        "text": final_text,
+                        "elapsed_seconds": int(loop.time() - started_at),
+                    }
                 for trace_event in result.trace:
                     live_trace.append(trace_event)
                     persistence_buffer.queue_trace(trace_event)
@@ -326,6 +374,7 @@ class NativeAgentService:
                     error_message = result.error
                     completion_state = "error"
                     returncode = 1
+                    should_abort_prompt = True
                     if wants_ag_ui:
                         text_end = build_text_end_event(state=ag_ui_state)
                         if text_end is not None:
@@ -336,9 +385,17 @@ class NativeAgentService:
                     stop_requested = bool(session.stop_requested)
                 if stop_requested:
                     completion_state = "cancelled"
+                    should_abort_prompt = True
                     break
                 if result.done:
                     break
+
+            if prompt_started and should_abort_prompt:
+                await _abort_native_prompt(
+                    client,
+                    native_session_id,
+                    assistant_message_id=aggregator.assistant_message_id,
+                )
 
             reader_task.cancel()
             try:
@@ -354,6 +411,10 @@ class NativeAgentService:
             except Exception:
                 pass
             final_text = final_text or aggregator.text()
+            if completion_state == "completed" and aggregator.saw_tool_failure:
+                completion_state = "error"
+                returncode = 1
+                error_message = aggregator.tool_failure_message or "原生 agent 工具执行失败"
             if completion_state == "cancelled":
                 live_trace.append({"kind": "cancelled", "source": "native_agent", "summary": "用户终止输出"})
             if not final_text and completion_state == "completed":
@@ -475,6 +536,195 @@ def _extract_session_id(payload: dict[str, Any]) -> str:
             if value:
                 return str(value)
     raise RuntimeError("原生 agent 未返回 session id")
+
+
+def _build_native_prompt_with_history(history_items: list[dict[str, Any]], prompt_text: str) -> str:
+    rows: list[str] = []
+    for item in history_items[-12:]:
+        if not isinstance(item, dict):
+            continue
+        meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+        if str(meta.get("completion_state") or "").strip().lower() not in {"", "completed"}:
+            continue
+        role = str(item.get("role") or "").strip().lower()
+        if role not in {"user", "assistant"}:
+            continue
+        if role == "assistant" and str(item.get("state") or "").strip().lower() != "done":
+            continue
+        content = _history_item_content(item)
+        if not content:
+            continue
+        label = "用户" if role == "user" else "助手"
+        rows.append(f"{label}: {content[:2000]}")
+    if not rows:
+        return prompt_text
+    context = "\n\n".join(rows)
+    return (
+        "以下是本 Web 会话最近上下文，请据此回答当前用户消息。\n\n"
+        f"{context}\n\n"
+        "当前用户消息:\n"
+        f"{prompt_text}"
+    )
+
+
+def _history_item_content(item: dict[str, Any]) -> str:
+    for key in ("content", "text", "output", "message"):
+        value = item.get(key)
+        if value:
+            return str(value).strip()
+    return ""
+
+
+def _defer_reconciled_done(
+    aggregator: NativeAgentAggregator,
+    *,
+    completed_at: float,
+    now: float,
+    window_seconds: float = 2.0,
+) -> bool:
+    if not aggregator.assistant_completed or not completed_at:
+        return False
+    return now - completed_at < window_seconds
+
+
+async def _abort_native_prompt(
+    client: NativeAgentClient,
+    session_id: str,
+    *,
+    assistant_message_id: str = "",
+) -> None:
+    if not callable(getattr(client, "abort", None)):
+        return
+    await _wait_for_abort_checkpoint(client, session_id, assistant_message_id=assistant_message_id)
+    try:
+        await client.abort(session_id)
+    except Exception:
+        pass
+    await _wait_until_session_can_continue(client, session_id)
+
+
+async def _wait_for_abort_checkpoint(
+    client: NativeAgentClient,
+    session_id: str,
+    *,
+    assistant_message_id: str = "",
+    timeout_seconds: float = 0.8,
+) -> None:
+    target = str(assistant_message_id or "").strip()
+    if not target or not callable(getattr(client, "list_messages", None)):
+        await asyncio.sleep(min(0.2, max(0.0, timeout_seconds)))
+        return
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(0.0, timeout_seconds)
+    while loop.time() < deadline:
+        try:
+            messages = await client.list_messages(session_id)
+        except Exception:
+            return
+        if _has_message_after(messages, target):
+            return
+        await asyncio.sleep(0.05)
+
+
+async def _wait_until_session_can_continue(
+    client: NativeAgentClient,
+    session_id: str,
+    *,
+    timeout_seconds: float = 1.2,
+) -> None:
+    if not callable(getattr(client, "list_messages", None)):
+        return
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(0.0, timeout_seconds)
+    while loop.time() < deadline:
+        if await _session_can_continue(client, session_id):
+            return
+        await asyncio.sleep(0.05)
+
+
+def _has_message_after(messages: list[dict[str, Any]], message_id: str) -> bool:
+    target = str(message_id or "").strip()
+    if not target or not isinstance(messages, list):
+        return False
+    for index, message in enumerate(messages):
+        if not isinstance(message, dict):
+            continue
+        if _message_id_from_service_message(message) == target:
+            return any(isinstance(item, dict) for item in messages[index + 1 :])
+    return False
+
+
+async def _session_can_continue(client: NativeAgentClient, session_id: str) -> bool:
+    try:
+        messages = await client.list_messages(session_id)
+    except Exception:
+        return True
+    if not isinstance(messages, list) or not messages:
+        return True
+    last_message = {}
+    for item in reversed(messages):
+        if isinstance(item, dict):
+            role = str(item.get("role") or "").strip().lower()
+            if role in {"user", "assistant"}:
+                last_message = item
+                break
+    role = str(last_message.get("role") or "").strip().lower()
+    if role == "user":
+        return False
+    if role == "assistant":
+        if _service_message_expects_followup(last_message):
+            return False
+        return _service_message_completed(last_message) or bool(_service_message_text(last_message))
+    return True
+
+
+def _service_message_completed(message: dict[str, Any]) -> bool:
+    time_payload = message.get("time")
+    if isinstance(time_payload, dict) and time_payload.get("completed"):
+        return True
+    for key in ("completed", "completed_at", "completedAt"):
+        if message.get(key):
+            return True
+    state = str(message.get("state") or message.get("status") or "").strip().lower()
+    return state in {"completed", "done", "idle", "success"}
+
+
+def _service_message_expects_followup(message: dict[str, Any]) -> bool:
+    finish = str(message.get("finish") or message.get("finish_reason") or message.get("finishReason") or "").strip().lower()
+    return finish in {"tool-calls", "tool_calls", "tool-call", "tool_call"}
+
+
+def _service_message_text(message: dict[str, Any]) -> str:
+    text = str(message.get("content") or message.get("text") or "").strip()
+    if text:
+        return text
+    parts = message.get("parts")
+    if not isinstance(parts, list):
+        return ""
+    values: list[str] = []
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        if str(part.get("type") or "").strip().lower() not in {"text", "assistant_text", "message", ""}:
+            continue
+        value = str(part.get("text") or part.get("content") or part.get("delta") or "").strip()
+        if value:
+            values.append(value)
+    return "".join(values).strip()
+
+
+def _message_id_from_service_message(message: dict[str, Any]) -> str:
+    for key in ("id", "messageID", "message_id", "messageId"):
+        value = message.get(key)
+        if value:
+            return str(value)
+    info = message.get("info")
+    if isinstance(info, dict):
+        for key in ("id", "messageID", "message_id", "messageId"):
+            value = info.get(key)
+            if value:
+                return str(value)
+    return ""
 
 
 _SERVICE = NativeAgentService()

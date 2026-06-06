@@ -23,9 +23,6 @@ class NativeAgentTurnState:
     last_non_transport_at: float = 0.0
     last_reconcile_at: float = 0.0
     reconcile_attempts: int = 0
-    stable_reconcile_count: int = 0
-    last_reconcile_text: str = ""
-    max_stable_reconciles: int = 2
 
     def observe(self, event: NativeAgentEvent, result: NativeAgentAggregationResult, *, now: float) -> None:
         if not event.transport:
@@ -79,23 +76,6 @@ class NativeAgentTurnState:
         if assistant and _message_completed(assistant):
             self.done = True
             return {"done": True, "text": text}
-
-        if not text:
-            self.last_reconcile_text = ""
-            self.stable_reconcile_count = 0
-            return {"done": False, "text": ""}
-        if assistant and _message_expects_followup(assistant):
-            self.last_reconcile_text = text
-            self.stable_reconcile_count = 0
-            return {"done": False, "text": ""}
-
-        if text == self.last_reconcile_text:
-            self.stable_reconcile_count += 1
-        else:
-            self.last_reconcile_text = text
-            self.stable_reconcile_count = 1
-        if self.has_text and self.stable_reconcile_count >= self.max_stable_reconciles:
-            self.done = True
         return {"done": self.done, "text": text}
 
     def current_turn_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

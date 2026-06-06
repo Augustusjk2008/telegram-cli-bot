@@ -86,4 +86,41 @@ describe("agUiStreamAdapter", () => {
       content: expect.objectContaining({ id: "perm-1" }),
     }));
   });
+
+  test("maps legacy snapshot to message snapshot", () => {
+    const adapter = createAgUiStreamAdapter();
+    const events = [
+      ...adapter.adapt({ type: "delta", text: "先查一下..." }),
+      ...adapter.adapt({ type: "snapshot", text: "" }),
+      ...adapter.adapt({ type: "delta", text: "最终答复" }),
+    ];
+
+    expect(events.map((item) => item.type)).toEqual([
+      EventType.RUN_STARTED,
+      EventType.TEXT_MESSAGE_START,
+      EventType.TEXT_MESSAGE_CONTENT,
+      EventType.MESSAGES_SNAPSHOT,
+      EventType.TEXT_MESSAGE_CONTENT,
+    ]);
+    expect(events[3]).toEqual(expect.objectContaining({
+      type: EventType.MESSAGES_SNAPSHOT,
+      messages: [expect.objectContaining({
+        role: "assistant",
+        content: "",
+      })],
+    }));
+  });
+
+  test("uses legacy snapshot field when text is absent", () => {
+    const adapter = createAgUiStreamAdapter();
+    const events = adapter.adapt({ type: "snapshot", snapshot: "最终快照" });
+
+    expect(events).toEqual([
+      expect.objectContaining({ type: EventType.RUN_STARTED }),
+      expect.objectContaining({
+        type: EventType.MESSAGES_SNAPSHOT,
+        messages: [expect.objectContaining({ content: "最终快照" })],
+      }),
+    ]);
+  });
 });

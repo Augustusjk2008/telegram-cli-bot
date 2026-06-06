@@ -343,6 +343,42 @@ test("shows streaming state before assistant message completes", async () => {
   expect(await screen.findByText("稍后完成")).toBeInTheDocument();
 });
 
+test("replaces snapshot text and appends later stream chunks", async () => {
+  let resolveFinal!: (message: ChatMessage) => void;
+  const client = createClient({
+    sendMessage: async (
+      _botAlias: string,
+      _text: string,
+      onChunk: (chunk: string) => void,
+      onStatus?: (status: { replaceText?: string }) => void,
+    ) => {
+      onChunk("先查一下...");
+      onStatus?.({ replaceText: "" });
+      onChunk("最终答复");
+      return new Promise<ChatMessage>((resolve) => {
+        resolveFinal = resolve;
+      });
+    },
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+  await userEvent.type(screen.getByPlaceholderText("输入消息"), "查");
+  await userEvent.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(await screen.findByText("最终答复")).toBeInTheDocument();
+  expect(screen.queryByText("先查一下...最终答复")).not.toBeInTheDocument();
+  await act(async () => {
+    resolveFinal({
+      id: "assistant-snapshot",
+      role: "assistant",
+      text: "最终答复",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    });
+  });
+});
+
 test("uses full width chat content outside embedded workbench", async () => {
   render(<ChatScreen botAlias="main" client={createClient()} />);
 

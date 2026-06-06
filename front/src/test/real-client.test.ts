@@ -380,6 +380,74 @@ describe("RealWebBotClient", () => {
     expect(message.meta?.traceCount).toBe(3);
   });
 
+  test("sendMessage applies ag-ui message snapshot before final content", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"TEXT_MESSAGE_START\",\"messageId\":\"msg-1\",\"role\":\"assistant\"}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"TEXT_MESSAGE_CONTENT\",\"messageId\":\"msg-1\",\"delta\":\"先查一下...\"}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"MESSAGES_SNAPSHOT\",\"messages\":[{\"id\":\"msg-1\",\"role\":\"assistant\",\"content\":\"\"}]}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"TEXT_MESSAGE_CONTENT\",\"messageId\":\"msg-1\",\"delta\":\"最终答复\"}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"RUN_FINISHED\",\"threadId\":\"thread-1\",\"runId\":\"run-1\",\"result\":{\"content\":\"最终答复\"},\"outcome\":{\"type\":\"success\"}}\n\n"));
+        controller.close();
+      },
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: stream,
+      json: async () => ({ ok: true, data: {} }),
+    });
+
+    const client = new RealWebBotClient();
+    const agUiTexts: string[] = [];
+    const message = await client.sendMessage(
+      "main",
+      "hi",
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      (event) => {
+        if (event.type === EventType.TEXT_MESSAGE_CONTENT) {
+          agUiTexts.push(event.delta);
+        }
+        if (event.type === EventType.MESSAGES_SNAPSHOT) {
+          const assistant = event.messages.find((item) => item.role === "assistant");
+          agUiTexts.push(String(assistant?.content ?? ""));
+        }
+      },
+    );
+
+    expect(agUiTexts).toEqual(["先查一下...", "", "最终答复"]);
+    expect(message.text).toBe("最终答复");
+  });
+
+  test("sendMessage maps ag-ui cancelled finish into message meta", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"TEXT_MESSAGE_START\",\"messageId\":\"msg-1\",\"role\":\"assistant\"}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"TEXT_MESSAGE_CONTENT\",\"messageId\":\"msg-1\",\"delta\":\"半截\"}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"RUN_FINISHED\",\"threadId\":\"thread-1\",\"runId\":\"run-1\",\"result\":{\"content\":\"半截\",\"completion_state\":\"cancelled\"},\"outcome\":{\"type\":\"interrupt\",\"interrupts\":[{\"id\":\"interrupt-1\",\"reason\":\"cancelled\"}]}}\n\n"));
+        controller.close();
+      },
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: stream,
+      json: async () => ({ ok: true, data: {} }),
+    });
+
+    const client = new RealWebBotClient();
+    const message = await client.sendMessage("main", "hi", vi.fn());
+
+    expect(message.state).toBe("error");
+    expect(message.meta?.completionState).toBe("cancelled");
+    expect(message.meta?.trace).toEqual([
+      expect.objectContaining({ kind: "cancelled", summary: "用户终止输出" }),
+    ]);
+  });
+
   test("sendMessage prefers done content over live ag-ui text", async () => {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({

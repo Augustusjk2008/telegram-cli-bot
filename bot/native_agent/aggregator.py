@@ -104,6 +104,7 @@ def _message_parts_text(parts: Any) -> str:
 class NativeAgentAggregationResult:
     delta: str = ""
     snapshot: str = ""
+    replace_text: bool = False
     trace: list[dict[str, Any]] = field(default_factory=list)
     status: str = ""
     done: bool = False
@@ -116,8 +117,15 @@ class NativeAgentAggregator:
         self.user_message_id = user_message_id
         self.assistant_message_id = ""
         self.parts: dict[str, dict[str, Any]] = {}
+        self.part_message_ids: dict[str, str] = {}
         self.text_parts: dict[str, str] = {}
         self.reasoning_parts: dict[str, str] = {}
+        self.followup_message_ids: set[str] = set()
+        self.saw_tool_activity = False
+        self.saw_tool_failure = False
+        self.tool_failure_message = ""
+        self.pending_followup = False
+        self.final_message_id = ""
         self.tool_call_emitted: set[str] = set()
         self.tool_result_signatures: dict[str, str] = {}
         self.final_text = ""
@@ -145,7 +153,14 @@ class NativeAgentAggregator:
             return self._permission_updated(event_type, payload)
         if event_type in {"session.status", "session.idle"}:
             result.status = event.status or _value_text(payload.get("status") or payload.get("state") or event_type)
-            result.done = event_type == "session.idle" or result.status == "idle"
+            has_non_followup_text = bool(
+                self.assistant_message_id
+                and self.assistant_message_id not in self.followup_message_ids
+                and self.text()
+            )
+            result.done = event_type == "session.idle" and (
+                not self.pending_followup or self.assistant_completed or has_non_followup_text
+            )
             return result
         if event_type == "session.error":
             result.error = _value_text(payload.get("error") or payload.get("message") or payload)
@@ -174,14 +189,30 @@ class NativeAgentAggregator:
             message = payload
         role = str(message.get("role") or "").lower()
         message_id = _message_id(message)
+        switched_message = False
         if role == "assistant" and message_id:
+            if self._switch_assistant_message(message_id):
+                switched_message = True
+                result.snapshot = ""
+                result.replace_text = True
             self.assistant_message_id = message_id
             result.assistant_message_id = message_id
+        if role == "assistant" and message_id and _message_expects_followup(message):
+            self.followup_message_ids.add(message_id)
+            self.pending_followup = True
+            if self._discard_message_text(message_id):
+                result.snapshot = self.text()
+                result.replace_text = True
+            return result
         text = _value_text(message.get("text") or message.get("content")) or _message_parts_text(message.get("parts"))
         if role == "assistant" and text:
             previous = self.final_text
             self.final_text = text
-            if text.startswith(previous):
+            if switched_message:
+                result.delta = ""
+                result.snapshot = text
+                result.replace_text = True
+            elif text.startswith(previous):
                 result.delta = text[len(previous):]
             else:
                 result.snapshot = text
@@ -191,7 +222,9 @@ class NativeAgentAggregator:
         completed = message.get("time", {}).get("completed") if isinstance(message.get("time"), dict) else None
         if completed and not _message_expects_followup(message):
             self.assistant_completed = True
-            result.done = True
+            self.pending_followup = False
+            if message_id:
+                self.final_message_id = message_id
         return result
 
     def _part_updated(self, payload: dict[str, Any]) -> NativeAgentAggregationResult:
@@ -200,24 +233,43 @@ class NativeAgentAggregator:
         message_id = _message_id_from_payload(payload, part)
         if message_id == self.user_message_id:
             return result
-        if message_id and _part_belongs_to_assistant(message_id, self.assistant_message_id):
+        switched_message = False
+        if message_id and self._part_belongs_to_current_turn(message_id):
+            if self._switch_assistant_message(message_id):
+                switched_message = True
+                result.snapshot = ""
+                result.replace_text = True
             self.assistant_message_id = message_id
             result.assistant_message_id = message_id
         part_id = _part_id_from_payload(payload, part) or str(len(self.parts) + 1)
         self.parts[part_id] = dict(part)
+        if message_id:
+            self.part_message_ids[part_id] = message_id
         kind = str(part.get("type") or part.get("kind") or "").lower()
         if _is_noise_part_kind(kind):
             return result
         delta = _value_text(payload.get("delta") or part.get("delta"))
         full_text = _value_text(part.get("text") or part.get("content"))
         if kind in {"text", "assistant_text", "message"} or (not kind and (delta or full_text)):
+            if message_id in self.followup_message_ids:
+                if self._discard_message_text(message_id):
+                    result.snapshot = self.text()
+                    result.replace_text = True
+                return result
             if delta:
                 self.text_parts[part_id] = self.text_parts.get(part_id, "") + delta
-                result.delta = delta
+                if switched_message:
+                    result.snapshot = self.text()
+                    result.replace_text = True
+                else:
+                    result.delta = delta
             elif full_text:
                 previous = self.text_parts.get(part_id, "")
                 self.text_parts[part_id] = full_text
-                if full_text.startswith(previous):
+                if switched_message:
+                    result.snapshot = self.text()
+                    result.replace_text = True
+                elif full_text.startswith(previous):
                     result.delta = full_text[len(previous):]
                 else:
                     result.snapshot = self.text()
@@ -238,7 +290,12 @@ class NativeAgentAggregator:
         message_id = _message_id_from_payload(payload, part)
         if message_id == self.user_message_id:
             return result
-        if message_id and _part_belongs_to_assistant(message_id, self.assistant_message_id):
+        switched_message = False
+        if message_id and self._part_belongs_to_current_turn(message_id):
+            if self._switch_assistant_message(message_id):
+                switched_message = True
+                result.snapshot = ""
+                result.replace_text = True
             self.assistant_message_id = message_id
             result.assistant_message_id = message_id
         field = str(payload.get("field") or properties.get("field") or "").strip().lower()
@@ -253,14 +310,26 @@ class NativeAgentAggregator:
         kind = str(effective_part.get("type") or effective_part.get("kind") or "").strip().lower()
         if kind in {"reasoning", "thinking"} or _is_noise_part_kind(kind) or _is_tool_part(effective_part):
             return result
+        if message_id in self.followup_message_ids:
+            if self._discard_message_text(message_id):
+                result.snapshot = self.text()
+                result.replace_text = True
+            return result
         if part:
             self.parts[part_id] = dict(part)
+        if message_id:
+            self.part_message_ids[part_id] = message_id
         self.text_parts[part_id] = self.text_parts.get(part_id, "") + delta
-        result.delta = delta
+        if switched_message:
+            result.snapshot = self.text()
+            result.replace_text = True
+        else:
+            result.delta = delta
         return result
 
     def _tool_part_updated(self, part: dict[str, Any]) -> NativeAgentAggregationResult:
         result = NativeAgentAggregationResult()
+        self.saw_tool_activity = True
         call_id = _tool_call_id(part) or _part_id(part) or str(len(self.parts))
         tool_name = str(part.get("tool") or part.get("toolName") or part.get("name") or part.get("command") or "tool").strip()
         state_payload = part.get("state") if isinstance(part.get("state"), dict) else {}
@@ -313,6 +382,9 @@ class NativeAgentAggregator:
                     raw_type="message.part.updated",
                 )
             )
+        if state in {"error", "failed", "failure", "cancelled", "canceled", "aborted", "abort"} or _value_text(part.get("error") or state_payload.get("error")):
+            self.saw_tool_failure = True
+            self.tool_failure_message = result_text or state or "工具执行失败"
         return result
 
     def _part_removed(self, payload: dict[str, Any]) -> NativeAgentAggregationResult:
@@ -322,6 +394,7 @@ class NativeAgentAggregator:
             self.parts.pop(part_id, None)
             self.text_parts.pop(part_id, None)
             self.reasoning_parts.pop(part_id, None)
+            self.part_message_ids.pop(part_id, None)
         return NativeAgentAggregationResult(snapshot=self.text())
 
     def _permission_updated(self, event_type: str, payload: dict[str, Any]) -> NativeAgentAggregationResult:
@@ -393,24 +466,67 @@ class NativeAgentAggregator:
 
     def reconcile_messages(self, messages: list[dict[str, Any]]) -> str:
         selected_text = ""
-        selected_is_final = False
+        selected_message_id = ""
+        selected_completed = False
         for message in messages:
             role = str(message.get("role") or "").lower()
             if role != "assistant":
                 continue
             is_followup = _message_expects_followup(message)
+            message_id = _message_id(message)
+            if is_followup and message_id:
+                self.followup_message_ids.add(message_id)
+                self._discard_message_text(message_id)
             text = _message_parts_text(message.get("parts")) or _value_text(message.get("text") or message.get("content"))
-            if not text:
+            if is_followup or not text:
                 continue
-            if not is_followup:
-                selected_text = text
-                selected_is_final = True
-            elif not selected_text and self.assistant_completed:
-                selected_text = text
-        if selected_text and (selected_is_final or self.assistant_completed):
+            selected_text = text
+            selected_message_id = message_id
+            selected_completed = _message_completed(message)
+        if selected_text:
             self.final_text = selected_text
             self.text_parts.clear()
+            self.pending_followup = False
+            if selected_message_id:
+                self.assistant_message_id = selected_message_id
+                self.final_message_id = selected_message_id
+            if selected_completed:
+                self.assistant_completed = True
         return self.text()
+
+    def _part_belongs_to_current_turn(self, message_id: str) -> bool:
+        normalized = str(message_id or "").strip()
+        if not normalized:
+            return False
+        current = str(self.assistant_message_id or "").strip()
+        if current and normalized != current:
+            return current in self.followup_message_ids or self.assistant_completed
+        return not normalized.startswith("evt_")
+
+    def _discard_message_text(self, message_id: str) -> bool:
+        target = str(message_id or "").strip()
+        if not target:
+            return False
+        changed = False
+        for part_id, part_message_id in list(self.part_message_ids.items()):
+            if part_message_id == target:
+                changed = self.text_parts.pop(part_id, None) is not None or changed
+        if target == self.assistant_message_id:
+            changed = bool(self.final_text) or changed
+            self.final_text = ""
+        return changed
+
+    def _switch_assistant_message(self, message_id: str) -> bool:
+        target = str(message_id or "").strip()
+        current = str(self.assistant_message_id or "").strip()
+        if not target or not current or target == current or not self.assistant_completed:
+            return False
+        changed = bool(self.text_parts or self.final_text)
+        self.text_parts.clear()
+        self.final_text = ""
+        self.assistant_completed = False
+        self.final_message_id = ""
+        return changed
 
 
 def _tool_call_id(part: dict[str, Any]) -> str:
@@ -438,11 +554,14 @@ def _message_expects_followup(message: dict[str, Any]) -> bool:
     return finish in {"tool-calls", "tool_calls", "tool-call", "tool_call"}
 
 
-def _part_belongs_to_assistant(message_id: str, assistant_message_id: str) -> bool:
-    normalized = str(message_id or "").strip()
-    if not normalized:
+def _message_completed(message: dict[str, Any]) -> bool:
+    if _message_expects_followup(message):
         return False
-    current = str(assistant_message_id or "").strip()
-    if current:
-        return normalized == current
-    return not normalized.startswith("evt_")
+    time_payload = message.get("time")
+    if isinstance(time_payload, dict) and time_payload.get("completed"):
+        return True
+    for key in ("completed", "completed_at", "completedAt"):
+        if message.get(key):
+            return True
+    state = str(message.get("state") or message.get("status") or "").strip().lower()
+    return state in {"completed", "done", "idle", "success"}

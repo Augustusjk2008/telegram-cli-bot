@@ -2660,7 +2660,7 @@ export function ChatScreen({
           return;
         }
         markSseActivity();
-        if (sawAgUiEvent || usingPreviewReplace) {
+        if (sawAgUiEvent) {
           return;
         }
         setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => ({
@@ -2692,6 +2692,15 @@ export function ChatScreen({
             ...item,
             state: "streaming",
             meta: mergeMessageMeta(item.meta, { contextUsage: status.contextUsage }),
+          })));
+        }
+        if (typeof status.replaceText === "string") {
+          usingPreviewReplace = true;
+          usingTracePreview = false;
+          setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => ({
+            ...item,
+            text: status.replaceText || "",
+            state: "streaming",
           })));
         }
       };
@@ -2752,10 +2761,13 @@ export function ChatScreen({
           localStartedAtMs,
           (item) => {
             const nextMeta = mergeMessageMeta(item.meta, buildLiveAgUiMessageMeta(nextAgUiState));
+            const completionState = nextMeta?.completionState || "";
             return {
               ...item,
               text: nextAgUiState.assistantText,
-              state: nextAgUiState.error ? "error" : (nextAgUiState.completed ? "done" : "streaming"),
+              state: nextAgUiState.error || (completionState && completionState !== "completed" && completionState !== "streaming")
+                ? "error"
+                : (nextAgUiState.completed ? "done" : "streaming"),
               meta: nextAgUiState.contextUsage
                 ? mergeMessageMeta(nextMeta, { contextUsage: nextAgUiState.contextUsage })
                 : nextMeta,
