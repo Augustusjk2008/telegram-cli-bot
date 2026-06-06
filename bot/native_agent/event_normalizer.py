@@ -45,13 +45,7 @@ def normalize_event(raw: dict[str, Any]) -> NormalizedNativeAgentEvent | None:
         permission,
         keys=("sessionID", "session_id", "sessionId"),
     )
-    message_id = _first_text(
-        payload,
-        properties,
-        message,
-        part,
-        keys=("messageID", "message_id", "messageId", "id"),
-    )
+    message_id = _message_id(payload, properties, message, part)
 
     normalized_payload = dict(payload)
     if properties and "properties" not in normalized_payload:
@@ -116,3 +110,15 @@ def _permission_payload(event_type: str, payload: dict[str, Any], properties: di
     if event_type in {"permission.updated", "permission.replied"}:
         return dict(properties or payload)
     return {}
+
+
+def _message_id(
+    payload: dict[str, Any],
+    properties: dict[str, Any],
+    message: dict[str, Any],
+    part: dict[str, Any],
+) -> str:
+    text = _first_text(payload, properties, message, part, keys=("messageID", "message_id", "messageId"))
+    if text:
+        return text
+    return _first_text(message, part, keys=("id",))

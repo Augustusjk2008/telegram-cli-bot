@@ -112,6 +112,19 @@ describe("agUiRunReducer", () => {
     expect(state.completed).toBe(true);
   });
 
+  test("replaces assistant text from message snapshot", () => {
+    const state = reduceAgUiRunEvent(createAgUiRunState(), {
+      type: EventType.MESSAGES_SNAPSHOT,
+      messages: [
+        { id: "user-1", role: "user", content: "hi" },
+        { id: "assistant-1", role: "assistant", content: "ok" },
+      ],
+    });
+
+    expect(state.messageId).toBe("assistant-1");
+    expect(state.assistantText).toBe("ok");
+  });
+
   test("keeps multiple native trace activities visible", () => {
     const events: AgUiEvent[] = [
       {

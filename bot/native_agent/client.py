@@ -251,10 +251,13 @@ def _flatten_message(message: dict[str, Any]) -> dict[str, Any]:
     )
     role = flattened.get("role") or info.get("role")
     content = flattened.get("content") or flattened.get("text") or _parts_text(parts)
+    finish = flattened.get("finish") or info.get("finish") or info.get("finishReason") or info.get("finish_reason")
     if message_id:
         flattened["id"] = str(message_id)
     if role:
         flattened["role"] = str(role)
+    if finish:
+        flattened["finish"] = str(finish)
     flattened["content"] = str(content or "")
     flattened["parts"] = parts
     return flattened

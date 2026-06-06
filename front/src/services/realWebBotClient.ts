@@ -4559,7 +4559,7 @@ export class RealWebBotClient implements WebBotClient {
                 ? agUiEvent.result as Record<string, unknown>
                 : {};
               const resultContent = typeof result.content === "string" ? result.content.trim() : "";
-              finalText = agUiState.assistantText || resultContent || finalText || streamedText;
+              finalText = resultContent || finalText || agUiState.assistantText || streamedText;
               finalElapsedSeconds = agUiState.elapsedSeconds ?? finalElapsedSeconds;
               streamFinished = true;
               await reader.cancel().catch(() => undefined);
@@ -4636,7 +4636,7 @@ export class RealWebBotClient implements WebBotClient {
       if (sawAgUiEvent) {
         return {
           ...finalMessage,
-          text: agUiState.assistantText || finalMessage.text,
+          text: finalMessage.text || finalText || agUiState.assistantText,
           elapsedSeconds: finalMessage.elapsedSeconds ?? agUiState.elapsedSeconds ?? finalElapsedSeconds,
           meta: mergeMessageMeta(
             agUiState.contextUsage ? { contextUsage: agUiState.contextUsage } : undefined,
@@ -4664,7 +4664,7 @@ export class RealWebBotClient implements WebBotClient {
       return {
         id: agUiState.messageId || `assistant-${Date.now()}`,
         role: "assistant",
-        text: agUiState.assistantText || finalText || streamedText,
+        text: finalText || agUiState.assistantText || streamedText,
         createdAt: new Date().toISOString(),
         state: agUiState.error ? "error" : "done",
         ...(typeof (agUiState.elapsedSeconds ?? finalElapsedSeconds) === "number"

@@ -380,6 +380,28 @@ describe("RealWebBotClient", () => {
     expect(message.meta?.traceCount).toBe(3);
   });
 
+  test("sendMessage prefers done content over live ag-ui text", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"TEXT_MESSAGE_START\",\"messageId\":\"msg-1\",\"role\":\"assistant\"}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"TEXT_MESSAGE_CONTENT\",\"messageId\":\"msg-1\",\"delta\":\"internal thinking\"}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"done\",\"output\":\"ok\",\"message\":{\"id\":\"msg-final\",\"role\":\"assistant\",\"content\":\"ok\",\"state\":\"done\",\"created_at\":\"2026-06-06T00:00:00Z\",\"updated_at\":\"2026-06-06T00:00:01Z\"}}\n\n"));
+        controller.close();
+      },
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: stream,
+      json: async () => ({ ok: true, data: {} }),
+    });
+
+    const client = new RealWebBotClient();
+    const message = await client.sendMessage("main", "回复 ok", vi.fn());
+
+    expect(message.text).toBe("ok");
+  });
+
   test("killTask includes scoped agent and execution mode", async () => {
     fetchMock.mockResolvedValue(jsonOk({ message: "已请求原生 agent 停止" }));
 

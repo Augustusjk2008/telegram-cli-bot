@@ -244,6 +244,18 @@ export function reduceAgUiRunEvent(state: AgUiRunState, event: AgUiEvent): AgUiR
     };
   }
 
+  if (event.type === EventType.MESSAGES_SNAPSHOT) {
+    const assistantMessage = [...event.messages].reverse().find((message) => message.role === "assistant");
+    const messageId = asString(assistantMessage?.id).trim() || state.messageId;
+    const content = asString(assistantMessage?.content);
+    return {
+      ...state,
+      messageId,
+      ...(content ? { assistantText: content } : {}),
+      running: true,
+    };
+  }
+
   if (event.type === EventType.ACTIVITY_SNAPSHOT || event.type === EventType.ACTIVITY_DELTA) {
     const content = event.type === EventType.ACTIVITY_SNAPSHOT
       ? asRecord(event.content)

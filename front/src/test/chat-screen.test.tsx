@@ -785,6 +785,39 @@ test("live ag-ui stream renders answer and native timeline separately", async ()
   expect(screen.queryByTestId("chat-trace-panel-assistant-live")).not.toBeInTheDocument();
 });
 
+test("final ag-ui message replaces polluted live assistant text", async () => {
+  const user = userEvent.setup();
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias,
+    _text,
+    _onChunk,
+    _onStatus,
+    _onTrace,
+    _options,
+    onAgUiEvent,
+  ) => {
+    onAgUiEvent?.({ type: EventType.TEXT_MESSAGE_START, messageId: "assistant-live", role: "assistant" });
+    onAgUiEvent?.({ type: EventType.TEXT_MESSAGE_CONTENT, messageId: "assistant-live", delta: "internal thinking" });
+    return {
+      id: "assistant-final",
+      role: "assistant",
+      text: "ok",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    };
+  });
+  const client = createClient({ sendMessage });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  await screen.findByText("暂无消息，开始聊天吧");
+  await user.type(screen.getByPlaceholderText("输入消息"), "回复 ok");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+  expect(await screen.findByText("ok")).toBeInTheDocument();
+  expect(screen.queryByText("internal thinking")).not.toBeInTheDocument();
+});
+
 
 test("live ag-ui permission can be approved from timeline", async () => {
   const user = userEvent.setup();

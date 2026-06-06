@@ -17,6 +17,22 @@ describe("agUiStreamAdapter", () => {
     })]);
   });
 
+  test("does not append legacy done output after direct ag-ui text", () => {
+    const adapter = createAgUiStreamAdapter();
+    const events = [
+      ...adapter.adapt({ type: EventType.TEXT_MESSAGE_START, messageId: "msg-1", role: "assistant" }),
+      ...adapter.adapt({ type: EventType.TEXT_MESSAGE_CONTENT, messageId: "msg-1", delta: "internal thinking" }),
+      ...adapter.adapt({ type: "done", output: "ok" }),
+    ];
+
+    expect(events.map((item) => item.type)).toEqual([
+      EventType.TEXT_MESSAGE_START,
+      EventType.TEXT_MESSAGE_CONTENT,
+      EventType.TEXT_MESSAGE_END,
+      EventType.RUN_FINISHED,
+    ]);
+  });
+
   test("maps legacy stream events to ag-ui sequence", () => {
     const adapter = createAgUiStreamAdapter();
     const events = [

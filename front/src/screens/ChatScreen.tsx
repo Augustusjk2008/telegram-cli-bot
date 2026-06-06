@@ -2687,18 +2687,11 @@ export function ChatScreen({
           setClusterTaskError("");
           void pollClusterTasks();
         }
-        if ((status.previewText && !hideProcessPreview) || status.contextUsage) {
-          if (status.previewText && !hideProcessPreview) {
-            usingPreviewReplace = true;
-            usingTracePreview = false;
-          }
+        if (status.contextUsage) {
           setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => ({
             ...item,
-            text: hideProcessPreview ? item.text : (status.previewText || item.text),
             state: "streaming",
-            meta: status.contextUsage
-              ? mergeMessageMeta(item.meta, { contextUsage: status.contextUsage })
-              : item.meta,
+            meta: mergeMessageMeta(item.meta, { contextUsage: status.contextUsage }),
           })));
         }
       };
@@ -2800,9 +2793,6 @@ export function ChatScreen({
         : Math.max(0, Math.floor((Date.now() - localStartedAtMs) / 1000));
       const finalizedMessage: ChatMessage = {
         ...finalMessage,
-        ...(sawAgUiEvent && agUiState?.assistantText
-          ? { text: agUiState.assistantText }
-          : {}),
         elapsedSeconds,
         ...(sawAgUiEvent && agUiState
           ? {

@@ -84,6 +84,10 @@ class NativeAgentTurnState:
             self.last_reconcile_text = ""
             self.stable_reconcile_count = 0
             return {"done": False, "text": ""}
+        if assistant and _message_expects_followup(assistant):
+            self.last_reconcile_text = text
+            self.stable_reconcile_count = 0
+            return {"done": False, "text": ""}
 
         if text == self.last_reconcile_text:
             self.stable_reconcile_count += 1
@@ -117,6 +121,8 @@ def _last_assistant_message(messages: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _message_completed(message: dict[str, Any]) -> bool:
+    if _message_expects_followup(message):
+        return False
     time_payload = message.get("time")
     if isinstance(time_payload, dict) and time_payload.get("completed"):
         return True
@@ -125,6 +131,11 @@ def _message_completed(message: dict[str, Any]) -> bool:
             return True
     state = str(message.get("state") or message.get("status") or "").strip().lower()
     return state in {"completed", "done", "idle", "success"}
+
+
+def _message_expects_followup(message: dict[str, Any]) -> bool:
+    finish = str(message.get("finish") or message.get("finish_reason") or message.get("finishReason") or "").strip().lower()
+    return finish in {"tool-calls", "tool_calls", "tool-call", "tool_call"}
 
 
 def _message_id(message: dict[str, Any]) -> str:

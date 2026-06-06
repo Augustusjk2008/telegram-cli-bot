@@ -208,6 +208,20 @@ export function createAgUiStreamAdapter() {
 
       if (AG_UI_EVENT_TYPES.has(rawType)) {
         const parsed = parseAgUiEvent(raw);
+        if (parsed) {
+          runStarted = true;
+        }
+        if (parsed?.type === EventType.TEXT_MESSAGE_START || parsed?.type === EventType.TEXT_MESSAGE_CONTENT) {
+          textStarted = true;
+          textEnded = false;
+        }
+        if (parsed?.type === EventType.TEXT_MESSAGE_END) {
+          textStarted = true;
+          textEnded = true;
+        }
+        if (parsed?.type === EventType.RUN_FINISHED) {
+          textEnded = textStarted || textEnded;
+        }
         return parsed ? [parsed] : [];
       }
 

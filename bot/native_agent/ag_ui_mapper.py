@@ -142,18 +142,6 @@ def map_event(
                 ],
             )
         )
-    if result.status:
-        mapped.append(
-            _build_status_event(
-                state=state,
-                activity_type="TCB_STATUS",
-                content={
-                    "previewText": result.status,
-                    "rawType": event.type,
-                    "source": "native_agent",
-                },
-            )
-        )
     if result.trace and not structured_events:
         mapped.extend(_map_trace_events(result.trace, state))
     return mapped
@@ -250,7 +238,9 @@ def _map_structured_part_event(event: NativeAgentEvent, state: AgUiTurnState) ->
         return []
     kind = str(part.get("type") or part.get("kind") or "").strip().lower()
     if kind in {"reasoning", "thinking"}:
-        return _map_reasoning_part(event, part, state)
+        return []
+    if kind in {"step-start", "step-finish"} or kind.startswith("step-"):
+        return []
     if _is_tool_part(part):
         return _map_tool_part(part, state)
     return []
