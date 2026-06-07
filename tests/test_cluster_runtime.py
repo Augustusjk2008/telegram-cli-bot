@@ -17,6 +17,7 @@ def test_cluster_runtime_starts_run():
             user_id=1001,
             profile=profile,
             mentions=[{"agent_id": "reviewer"}],
+            allow_unsafe_cli=True,
         )
     )
 
@@ -24,6 +25,7 @@ def test_cluster_runtime_starts_run():
     assert run.status == "running"
     assert run.bot_alias == "main"
     assert run.mentions == [{"agent_id": "reviewer"}]
+    assert run.allow_unsafe_cli is True
     assert runtime.get_run(run.run_id) is run
 
 

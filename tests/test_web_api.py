@@ -467,6 +467,46 @@ async def test_cluster_ask_agent_returns_task_without_waiting(web_manager: Multi
 
 
 @pytest.mark.asyncio
+async def test_cluster_agent_task_inherits_unsafe_cli_permission(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    from bot.cluster.config import BotClusterConfig
+
+    profile = web_manager.main_profile
+    profile.cluster = BotClusterConfig(enabled=True, max_parallel_agents=1)
+    await web_manager.create_bot_agent("main", {"id": "tester", "name": "测试专家"})
+    run = api_service._CLUSTER_RUNTIME.start_run(
+        api_service.ClusterRunRequest(
+            bot_alias="main",
+            user_id=1001,
+            profile=profile,
+            allow_unsafe_cli=True,
+        )
+    )
+    captured: dict[str, Any] = {}
+
+    async def fake_stream_cli_chat(*_args, **kwargs):
+        captured["allow_unsafe_cli"] = kwargs.get("allow_unsafe_cli")
+        yield {"type": "done", "output": "done", "returncode": 0}
+
+    monkeypatch.setattr(api_service, "_stream_cli_chat", fake_stream_cli_chat)
+
+    result = await api_service.handle_cluster_mcp_tool(
+        web_manager,
+        run.run_id,
+        "ask_agent",
+        {"agent_id": "tester", "message": "跑测试"},
+    )
+    task_id = result["data"]["task_id"]
+    await api_service.handle_cluster_mcp_tool(
+        web_manager,
+        run.run_id,
+        "poll_agent_tasks",
+        {"task_ids": [task_id], "wait_seconds": 1, "include_output": True},
+    )
+
+    assert captured["allow_unsafe_cli"] is True
+
+
+@pytest.mark.asyncio
 async def test_cluster_mcp_tools_report_effective_agent_timeout(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     from bot.cluster.config import BotClusterConfig
 

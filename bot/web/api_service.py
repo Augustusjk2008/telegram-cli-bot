@@ -2777,6 +2777,7 @@ async def _run_cluster_agent_task(
                     live_task.message,
                     agent_id=live_task.agent_id,
                     cli_params_override=cli_params_override,
+                    allow_unsafe_cli=live_run.allow_unsafe_cli,
                 ):
                     event_type = str(event.get("type") or "")
                     if event_type == "status":
@@ -5587,6 +5588,7 @@ async def run_chat(
                     user_id=shared_user_id,
                     profile=profile,
                     mentions=list(mentions or []),
+                    allow_unsafe_cli=allow_unsafe_cli,
                 )
             )
         run_status = "completed"
@@ -5704,6 +5706,7 @@ async def stream_chat(
                         user_id=shared_user_id,
                         profile=profile,
                         mentions=list(mentions or []),
+                        allow_unsafe_cli=allow_unsafe_cli,
                     )
                 )
             run_status = "completed"

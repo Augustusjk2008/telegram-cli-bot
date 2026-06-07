@@ -15,6 +15,7 @@ class ClusterRunRequest:
     user_id: int
     profile: BotProfile
     mentions: list[dict[str, Any]] = field(default_factory=list)
+    allow_unsafe_cli: bool = False
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,7 @@ class ClusterRun:
     status: str
     profile: BotProfile
     mentions: list[dict[str, Any]]
+    allow_unsafe_cli: bool
     started_at: str
     updated_at: str
     events: list[dict[str, Any]] = field(default_factory=list)
@@ -112,6 +114,7 @@ class ClusterRuntime:
             status="running",
             profile=request.profile,
             mentions=[dict(item) for item in request.mentions],
+            allow_unsafe_cli=bool(request.allow_unsafe_cli),
             started_at=now,
             updated_at=now,
             events=[{"kind": "run_started", "created_at": now}],
