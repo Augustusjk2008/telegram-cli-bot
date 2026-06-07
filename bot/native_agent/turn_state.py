@@ -103,6 +103,9 @@ def _last_assistant_message(messages: list[dict[str, Any]]) -> dict[str, Any]:
 def _message_completed(message: dict[str, Any]) -> bool:
     if _message_expects_followup(message):
         return False
+    finish = str(message.get("finish") or message.get("finish_reason") or message.get("finishReason") or "").strip().lower()
+    if finish in {"stop", "stopped", "complete", "completed", "done", "success", "end", "finished"}:
+        return True
     time_payload = message.get("time")
     if isinstance(time_payload, dict) and time_payload.get("completed"):
         return True

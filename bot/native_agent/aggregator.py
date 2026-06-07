@@ -134,6 +134,8 @@ class NativeAgentAggregator:
         self.final_text = ""
         self.permission_pending: dict[str, dict[str, Any]] = {}
         self.assistant_completed = False
+        self.has_followup_activity = False
+        self.completed_message_ids: set[str] = set()
 
     def text(self) -> str:
         if self.text_parts:
@@ -213,6 +215,7 @@ class NativeAgentAggregator:
         if role == "assistant" and message_id and _message_expects_followup(message):
             self.followup_message_ids.add(message_id)
             self.pending_followup = True
+            self.has_followup_activity = True
             changed, discarded_text = self._discard_message_text(message_id)
             if changed:
                 result.snapshot = self.text()
@@ -241,12 +244,14 @@ class NativeAgentAggregator:
         error = _value_text(message.get("error"))
         if error:
             result.error = error
-        completed = message.get("time", {}).get("completed") if isinstance(message.get("time"), dict) else None
-        if completed and not _message_expects_followup(message):
+        if _message_completed(message):
             self.assistant_completed = True
             self.pending_followup = False
             if message_id:
                 self.final_message_id = message_id
+                self.completed_message_ids.add(message_id)
+            if not self.has_followup_activity and len(self.completed_message_ids) >= 2:
+                result.done = True
         return result
 
     def _part_updated(self, payload: dict[str, Any]) -> NativeAgentAggregationResult:
@@ -565,6 +570,7 @@ class NativeAgentAggregator:
             message_id = _message_id(message)
             if is_followup and message_id:
                 self.followup_message_ids.add(message_id)
+                self.has_followup_activity = True
                 self._discard_message_text(message_id)
             text = _message_parts_text(message.get("parts")) or _value_text(message.get("text") or message.get("content"))
             if is_followup or not text:
@@ -591,7 +597,7 @@ class NativeAgentAggregator:
             return False
         current = str(self.assistant_message_id or "").strip()
         if current and normalized != current:
-            return current in self.followup_message_ids or self.assistant_completed or bool(self.text())
+            return current in self.followup_message_ids or self.has_followup_activity or bool(self.text())
         return True
 
     def _remember_part_order(self, part_id: str) -> None:
@@ -672,6 +678,9 @@ def _message_expects_followup(message: dict[str, Any]) -> bool:
 def _message_completed(message: dict[str, Any]) -> bool:
     if _message_expects_followup(message):
         return False
+    finish = str(message.get("finish") or message.get("finish_reason") or message.get("finishReason") or "").strip().lower()
+    if finish in {"stop", "stopped", "complete", "completed", "done", "success", "end", "finished"}:
+        return True
     time_payload = message.get("time")
     if isinstance(time_payload, dict) and time_payload.get("completed"):
         return True

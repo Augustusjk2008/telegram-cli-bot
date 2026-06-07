@@ -600,6 +600,56 @@ def test_native_agent_aggregator_does_not_trace_final_answer_as_commentary():
     assert aggregator.text() == "这是最终答复。"
 
 
+def test_native_agent_aggregator_completes_on_stop_finish_without_completed_time():
+    aggregator = NativeAgentAggregator(user_message_id="u-new")
+    delta = unwrap_event({
+        "type": "message.part.delta",
+        "sessionID": "sess-1",
+        "messageID": "a-final",
+        "partID": "p-final",
+        "field": "text",
+        "delta": "这是最终答复。",
+    })
+    completed = unwrap_event({
+        "type": "message.updated",
+        "sessionID": "sess-1",
+        "message": {
+            "id": "a-final",
+            "role": "assistant",
+            "finish": "stop",
+            "content": "这是最终答复。",
+        },
+    })
+
+    assert delta is not None
+    assert completed is not None
+
+    assert aggregator.apply(delta).delta == "这是最终答复。"
+    result = aggregator.apply(completed)
+
+    assert result.done is False
+    assert aggregator.assistant_completed is True
+    assert aggregator.text() == "这是最终答复。"
+
+
+@pytest.mark.asyncio
+async def test_native_agent_turn_state_completes_on_stop_finish_without_completed_time():
+    aggregator = NativeAgentAggregator(user_message_id="u-new")
+    state = NativeAgentTurnState(native_session_id="sess-1", user_message_id="u-new", baseline_message_count=0)
+
+    result = await state.maybe_reconcile(
+        lambda _session_id: [
+            {"id": "u-new", "role": "user", "content": "继续"},
+            {"id": "a-final", "role": "assistant", "finish": "stop", "content": "这是最终答复。"},
+        ],
+        aggregator,
+        now=1.0,
+    )
+
+    assert result == {"done": True, "text": "这是最终答复。"}
+    assert state.done is True
+
+
 @pytest.mark.asyncio
 async def test_native_agent_turn_state_does_not_complete_from_stable_text_without_final_signal():
     aggregator = NativeAgentAggregator(user_message_id="u-new")
@@ -1729,6 +1779,225 @@ async def test_native_agent_service_completes_from_list_messages_without_idle(tm
     done = next(event for event in events if event["type"] == "done")
     assert done["output"] == "回答"
     assert fake_client.list_calls >= 1
+    assert fake_client.cancelled is True
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_completes_from_stop_finish_without_idle(tmp_path: Path):
+    blocker = asyncio.Event()
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.prompt_called = False
+            self.cancelled = False
+            self.list_calls = 0
+            self.prompt_message_id = ""
+
+        async def create_session(self, *, cwd=None):
+            return {"id": "sess-1"}
+
+        async def prompt_async(self, session_id, text, *, message_id=None, model=None, agent=None):
+            self.prompt_called = True
+            self.prompt_message_id = str(message_id or "")
+            return {}
+
+        async def events(self, *, global_events=True, ready_event=None):
+            if ready_event is not None:
+                ready_event.set()
+            while not self.prompt_called:
+                await asyncio.sleep(0)
+            yield {
+                "directory": str(tmp_path),
+                "payload": {
+                    "type": "message.part.delta",
+                    "sessionID": "sess-1",
+                    "messageID": "assistant-1",
+                    "partID": "answer",
+                    "field": "text",
+                    "delta": "不能确认上轮实际调用次数。",
+                },
+            }
+            try:
+                await blocker.wait()
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+
+        async def list_messages(self, session_id):
+            self.list_calls += 1
+            if not self.prompt_called:
+                return []
+            return [
+                {"id": self.prompt_message_id, "role": "user", "content": "你上轮对话是调用了一次还是两次"},
+                {
+                    "id": "assistant-1",
+                    "role": "assistant",
+                    "finish": "stop",
+                    "content": "不能确认上轮实际调用次数。",
+                },
+            ]
+
+    fake_client = FakeClient()
+
+    class FakeHandle:
+        def client(self):
+            return fake_client
+
+    class FakeManager:
+        async def ensure_started(self):
+            return FakeHandle()
+
+        async def get_existing(self):
+            return FakeHandle()
+
+    service = NativeAgentService()
+    service._server_manager = FakeManager()
+    profile = BotProfile(alias="agent-test", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="agent-test", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    events = await asyncio.wait_for(
+        _collect_native_stream(
+            service.stream_chat(
+                profile=profile,
+                session=session,
+                user_text="你上轮对话是调用了一次还是两次",
+                prompt_text="你上轮对话是调用了一次还是两次",
+                history_service=history,
+            )
+        ),
+        timeout=3,
+    )
+
+    done = next(event for event in events if event["type"] == "done")
+    assert done["output"] == "不能确认上轮实际调用次数。"
+    assert done["message"]["meta"]["completion_state"] == "completed"
+    assert fake_client.list_calls >= 1
+    assert fake_client.cancelled is True
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_finalizes_completed_answer_before_duplicate_loop(tmp_path: Path):
+    blocker = asyncio.Event()
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.prompt_called = False
+            self.cancelled = False
+            self.abort_calls: list[str] = []
+            self.prompt_message_id = ""
+
+        async def create_session(self, *, cwd=None):
+            return {"id": "sess-1"}
+
+        async def prompt_async(self, session_id, text, *, message_id=None, model=None, agent=None):
+            self.prompt_called = True
+            self.prompt_message_id = str(message_id or "")
+            return {}
+
+        async def abort(self, session_id):
+            self.abort_calls.append(session_id)
+            return True
+
+        async def events(self, *, global_events=True, ready_event=None):
+            if ready_event is not None:
+                ready_event.set()
+            while not self.prompt_called:
+                await asyncio.sleep(0)
+            for index, text in enumerate(["第一次完整答复。", "第二次重复答复。", "第三次重复答复。"], start=1):
+                message_id = f"assistant-{index}"
+                yield {
+                    "directory": str(tmp_path),
+                    "payload": {
+                        "type": "message.part.delta",
+                        "sessionID": "sess-1",
+                        "messageID": message_id,
+                        "partID": f"text-{index}",
+                        "field": "text",
+                        "delta": text,
+                    },
+                }
+                yield {
+                    "directory": str(tmp_path),
+                    "payload": {
+                        "type": "message.updated",
+                        "sessionID": "sess-1",
+                        "message": {
+                            "id": message_id,
+                            "role": "assistant",
+                            "finish": "stop",
+                            "content": text,
+                            "time": {"completed": index},
+                        },
+                    },
+                }
+            try:
+                await blocker.wait()
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+
+        async def list_messages(self, session_id):
+            return [
+                {"id": self.prompt_message_id, "role": "user", "content": "你上轮对话是调用了一次还是两次"},
+                {
+                    "id": "assistant-1",
+                    "role": "assistant",
+                    "finish": "stop",
+                    "content": "第一次完整答复。",
+                    "time": {"completed": 1},
+                },
+                {
+                    "id": "assistant-2",
+                    "role": "assistant",
+                    "finish": "stop",
+                    "content": "第二次重复答复。",
+                    "time": {"completed": 2},
+                },
+                {
+                    "id": "assistant-3",
+                    "role": "assistant",
+                    "finish": "stop",
+                    "content": "第三次重复答复。",
+                    "time": {"completed": 3},
+                },
+            ]
+
+    fake_client = FakeClient()
+
+    class FakeHandle:
+        def client(self):
+            return fake_client
+
+    class FakeManager:
+        async def ensure_started(self):
+            return FakeHandle()
+
+        async def get_existing(self):
+            return FakeHandle()
+
+    service = NativeAgentService()
+    service._server_manager = FakeManager()
+    profile = BotProfile(alias="agent-test", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="agent-test", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    events = await asyncio.wait_for(
+        _collect_native_stream(
+            service.stream_chat(
+                profile=profile,
+                session=session,
+                user_text="你上轮对话是调用了一次还是两次",
+                prompt_text="你上轮对话是调用了一次还是两次",
+                history_service=history,
+            )
+        ),
+        timeout=1.5,
+    )
+
+    done = next(event for event in events if event["type"] == "done")
+    assert done["output"] == "第二次重复答复。"
+    assert done["message"]["meta"]["completion_state"] == "completed"
     assert fake_client.cancelled is True
 
 

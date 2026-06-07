@@ -174,6 +174,7 @@ class NativeAgentService:
         prompt_started = False
         should_abort_prompt = False
         assistant_completed_at = 0.0
+        completed_without_idle = False
 
         try:
             try:
@@ -388,6 +389,10 @@ class NativeAgentService:
                     should_abort_prompt = True
                     break
                 if result.done:
+                    if event.type != "session.idle":
+                        completed_without_idle = True
+                        should_abort_prompt = True
+                        final_text = aggregator.text()
                     break
 
             if prompt_started and should_abort_prompt:
@@ -403,13 +408,14 @@ class NativeAgentService:
             except asyncio.CancelledError:
                 pass
 
-            try:
-                messages = await client.list_messages(native_session_id)
-                reconciled = aggregator.reconcile_messages(turn_state.current_turn_messages(messages))
-                if reconciled:
-                    final_text = reconciled
-            except Exception:
-                pass
+            if not completed_without_idle:
+                try:
+                    messages = await client.list_messages(native_session_id)
+                    reconciled = aggregator.reconcile_messages(turn_state.current_turn_messages(messages))
+                    if reconciled:
+                        final_text = reconciled
+                except Exception:
+                    pass
             final_text = final_text or aggregator.text()
             if completion_state == "completed" and aggregator.saw_tool_failure:
                 completion_state = "error"
@@ -679,6 +685,11 @@ async def _session_can_continue(client: NativeAgentClient, session_id: str) -> b
 
 
 def _service_message_completed(message: dict[str, Any]) -> bool:
+    if _service_message_expects_followup(message):
+        return False
+    finish = str(message.get("finish") or message.get("finish_reason") or message.get("finishReason") or "").strip().lower()
+    if finish in {"stop", "stopped", "complete", "completed", "done", "success", "end", "finished"}:
+        return True
     time_payload = message.get("time")
     if isinstance(time_payload, dict) and time_payload.get("completed"):
         return True
