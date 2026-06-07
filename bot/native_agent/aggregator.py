@@ -398,6 +398,12 @@ class NativeAgentAggregator:
         result = NativeAgentAggregationResult()
         self.saw_tool_activity = True
         call_id = _tool_call_id(part) or _part_id(part) or str(len(self.parts))
+        part_id = _part_id(part)
+        message_id = (
+            self.part_message_ids.get(part_id or "", "")
+            or str(part.get("messageID") or part.get("message_id") or part.get("messageId") or "").strip()
+            or self.assistant_message_id
+        )
         tool_name = str(part.get("tool") or part.get("toolName") or part.get("name") or part.get("command") or "tool").strip()
         state_payload = part.get("state") if isinstance(part.get("state"), dict) else {}
         state = str(
@@ -434,9 +440,18 @@ class NativeAgentAggregator:
             "arguments": args_text,
         }
         if call_id not in self.tool_call_emitted and (args_text or state not in {"", "pending"}):
+            trace = self._flush_message_text_as_commentary(
+                message_id=message_id,
+                reason="tool-call",
+                payload=payload,
+            )
+            if trace is not None:
+                result.snapshot = self.text()
+                result.replace_text = True
+                result.trace.append(trace)
             self.tool_call_emitted.add(call_id)
             result.trace.append(self._trace("tool_call", args_text or tool_name, payload, raw_type="message.part.updated"))
-        result_signature = f"{state}\n{result_text}"
+        result_signature = result_text.strip() if result_text else f"<empty:{state}>"
         if (
             result_text or state in {"completed", "done", "finished", "success", "error", "failed"}
         ) and self.tool_result_signatures.get(call_id) != result_signature:
@@ -648,6 +663,23 @@ class NativeAgentAggregator:
         self.assistant_completed = False
         self.final_message_id = ""
         return changed, discarded_text
+
+    def _flush_message_text_as_commentary(
+        self,
+        *,
+        message_id: str,
+        reason: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        changed, discarded_text = self._discard_message_text(message_id)
+        if not changed:
+            return None
+        return self._build_commentary_trace(
+            message_id=message_id,
+            text=discarded_text,
+            reason=reason,
+            payload=payload,
+        )
 
 
 def _tool_call_id(part: dict[str, Any]) -> str:

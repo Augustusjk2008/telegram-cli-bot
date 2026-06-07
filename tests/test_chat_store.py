@@ -476,6 +476,139 @@ def test_finalize_turn_reuses_same_assistant_message_and_exposes_trace(monkeypat
     assert trace["trace"][0]["summary"] == "Get-ChildItem -Force"
 
 
+def test_chat_store_upserts_tool_result_by_call_id(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    store = ChatStore(workspace)
+    handle = store.begin_turn(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        user_text="列出当前目录",
+        native_provider="codex",
+    )
+
+    store.append_trace_events(handle.turn_id, [
+        {"kind": "tool_call", "summary": "dir", "tool_name": "bash", "call_id": "call_1"},
+        {"kind": "tool_result", "summary": "半截", "call_id": "call_1", "payload": {"output": "半截"}},
+        {"kind": "tool_result", "summary": "完整结果", "call_id": "call_1", "payload": {"output": "完整结果"}},
+    ])
+    store.complete_turn(
+        handle,
+        content="目录已读取完成。",
+        completion_state="completed",
+        native_session_id="thread-1",
+    )
+
+    trace = store.get_message_trace(handle.assistant_message_id)
+
+    assert [item["kind"] for item in trace["trace"]] == ["tool_call", "tool_result"]
+    assert [item["ordinal"] for item in trace["trace"]] == [1, 2]
+    assert trace["trace"][1]["summary"] == "完整结果"
+    assert trace["trace"][1]["payload"] == {"output": "完整结果"}
+
+
+def test_chat_store_normalizes_legacy_duplicate_tool_results_and_commentary_order(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    store = ChatStore(workspace)
+    handle = store.begin_turn(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        user_text="列出当前目录",
+        native_provider="codex",
+    )
+    store.append_trace_event(handle.turn_id, kind="tool_call", summary="dir", tool_name="bash", call_id="call_1")
+    store.append_trace_event(
+        handle.turn_id,
+        kind="tool_result",
+        summary="半截",
+        call_id="call_1",
+        payload={"output": "半截", "state": "running"},
+    )
+    store.append_trace_event(
+        handle.turn_id,
+        kind="tool_result",
+        summary="完整结果",
+        call_id="call_1",
+        payload={"output": "完整结果", "state": "completed"},
+    )
+    store.append_trace_event(
+        handle.turn_id,
+        kind="commentary",
+        raw_type="message.text.reclassified",
+        summary="我先读取文件。",
+    )
+    store.complete_turn(
+        handle,
+        content="目录已读取完成。",
+        completion_state="completed",
+        native_session_id="thread-1",
+    )
+
+    trace = store.get_message_trace(handle.assistant_message_id)
+
+    assert [item["kind"] for item in trace["trace"]] == ["commentary", "tool_call", "tool_result"]
+    assert trace["trace"][0]["summary"] == "我先读取文件。"
+    assert trace["trace"][2]["summary"] == "完整结果"
+    assert trace["trace_count"] == 3
+
+
+def test_user_message_does_not_expose_native_trace_meta(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    store = ChatStore(workspace)
+    handle = store.begin_turn(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        user_text="列出当前目录",
+        native_provider="native_agent",
+    )
+    store.append_trace_event(handle.turn_id, kind="tool_call", summary="dir", tool_name="bash", call_id="call_1")
+    store.complete_turn(
+        handle,
+        content="目录已读取完成。",
+        completion_state="completed",
+        native_session_id="native-1",
+    )
+
+    user_message, assistant_message = store.list_messages(handle.conversation_id)
+
+    assert user_message["role"] == "user"
+    assert "trace_count" not in user_message["meta"]
+    assert "tool_call_count" not in user_message["meta"]
+    assert "process_count" not in user_message["meta"]
+    assert "native_source" not in user_message["meta"]
+    assert assistant_message["meta"]["trace_count"] == 1
+    assert assistant_message["meta"]["native_source"]["provider"] == "native_agent"
+
+
 def test_get_trace_recovery_context_returns_turn_native_context(monkeypatch, tmp_path: Path):
     home = tmp_path / "home"
     home.mkdir()

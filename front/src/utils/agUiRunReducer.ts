@@ -4,6 +4,7 @@ import type {
   ChatMessageMetaInfo,
   ChatTraceEvent,
 } from "../services/types";
+import { mergeChatTraceEvents } from "./nativeAgentTranscript";
 
 export type AgUiActivityItem = {
   id: string;
@@ -137,6 +138,10 @@ function traceEventKey(event: ChatTraceEvent) {
 }
 
 function upsertTraceEvent(traceEvents: ChatTraceEvent[], nextEvent: ChatTraceEvent, match?: (event: ChatTraceEvent) => boolean) {
+  if (!match) {
+    const merged = mergeChatTraceEvents([traceEvents, [nextEvent]], { nativeFlat: true });
+    return merged || [];
+  }
   const index = match
     ? traceEvents.findIndex(match)
     : traceEvents.findIndex((item) => traceEventKey(item) === traceEventKey(nextEvent));
@@ -326,6 +331,19 @@ function appendTraceEntry(
       };
     }
   }
+  if (trace.kind === "tool_result" && trace.callId) {
+    const entryIndex = state.entries.findIndex((item) => item.trace?.kind === "tool_result" && item.trace.callId === trace.callId);
+    if (entryIndex >= 0) {
+      return {
+        ...state,
+        entries: state.entries.map((item, index) => (
+          index === entryIndex
+            ? { ...item, ...entry, id: item.id, seq: item.seq }
+            : item
+        )),
+      };
+    }
+  }
   return appendNativeEntry(state, entry);
 }
 
@@ -456,10 +474,14 @@ export function reduceAgUiRunEvent(state: AgUiRunState, event: AgUiEvent): AgUiR
           source: asString(content.source).trim(),
           rawType: asString(content.rawType).trim() || event.activityType,
           title: asString(content.title).trim() || undefined,
+          toolName: asString(content.toolName || content.tool_name).trim() || undefined,
+          callId: asString(content.callId || content.call_id).trim() || undefined,
           payload: content,
         }
       : null;
-    const traceEvents = activityTraceEvent ? [...state.traceEvents, activityTraceEvent] : state.traceEvents;
+    const traceEvents = activityTraceEvent
+      ? upsertTraceEvent(state.traceEvents, activityTraceEvent)
+      : state.traceEvents;
 
     const permissionId = getPermissionId(content);
     const permissionRequests = event.activityType === "TCB_PERMISSION_REQUEST" && permissionId
@@ -599,10 +621,11 @@ export function reduceAgUiRunEvent(state: AgUiRunState, event: AgUiEvent): AgUiR
         resultText: event.content,
         status: "completed",
       } : item),
-      traceEvents: [
-        ...state.traceEvents,
+      traceEvents: upsertTraceEvent(
+        state.traceEvents,
         traceEvent,
-      ],
+        (item) => item.kind === "tool_result" && item.callId === event.toolCallId,
+      ),
     };
     return appendTraceEntry(nextState, traceEvent, {
       kind: "event",

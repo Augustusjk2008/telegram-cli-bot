@@ -203,6 +203,7 @@ import {
   createAgUiRunState,
   reduceAgUiRunEvent,
 } from "../utils/agUiRunReducer";
+import { mergeChatTraceEvents } from "../utils/nativeAgentTranscript";
 
 type JsonEnvelope<T> = {
   ok: boolean;
@@ -1401,6 +1402,8 @@ function mapAgUiTraceEvent(event: AgUiEvent): ChatTraceEvent | null {
       source: String(content.source || "").trim() || undefined,
       rawType: String(content.rawType || event.activityType).trim() || undefined,
       title: String(content.title || "").trim() || undefined,
+      toolName: String(content.toolName || content.tool_name || "").trim() || undefined,
+      callId: String(content.callId || content.call_id || "").trim() || undefined,
       payload: content,
     };
   }
@@ -2072,9 +2075,11 @@ function mapMessageMeta(raw?: RawChatMessageMeta | null): ChatMessageMetaInfo | 
     return undefined;
   }
 
-  const trace = (raw.trace || [])
+  const rawTrace = (raw.trace || [])
     .map((item) => mapTraceEvent(item))
     .filter((item): item is ChatTraceEvent => Boolean(item));
+  const isNativeFlat = String(raw.native_source?.provider || "").trim().toLowerCase() === "native_agent";
+  const trace = mergeChatTraceEvents([rawTrace], { nativeFlat: isNativeFlat });
   const traceSummary = summarizeTrace(trace);
 
   const meta: ChatMessageMetaInfo = {};
@@ -2087,26 +2092,27 @@ function mapMessageMeta(raw?: RawChatMessageMeta | null): ChatMessageMetaInfo | 
   if (typeof raw.trace_version === "number") {
     meta.traceVersion = raw.trace_version;
   }
-  if (typeof raw.trace_count === "number") {
-    meta.traceCount = raw.trace_count;
-  } else if (trace.length > 0) {
+  if (traceSummary.traceCount > 0) {
     meta.traceCount = traceSummary.traceCount;
+  } else if (typeof raw.trace_count === "number") {
+    meta.traceCount = raw.trace_count;
   }
-  if (typeof raw.tool_call_count === "number") {
-    meta.toolCallCount = raw.tool_call_count;
-  } else if (trace.length > 0) {
+  if (traceSummary.traceCount > 0) {
     meta.toolCallCount = traceSummary.toolCallCount;
-  }
-  if (typeof raw.process_count === "number") {
-    meta.processCount = raw.process_count;
-  } else if (trace.length > 0) {
     meta.processCount = traceSummary.processCount;
+  } else {
+    if (typeof raw.tool_call_count === "number") {
+      meta.toolCallCount = raw.tool_call_count;
+    }
+    if (typeof raw.process_count === "number") {
+      meta.processCount = raw.process_count;
+    }
   }
-  if (trace.length > 0) {
+  if ((trace || []).length > 0) {
     meta.trace = trace;
   }
   if (raw.native_source?.provider || raw.native_source?.session_id) {
-    if (String(raw.native_source.provider || "").trim().toLowerCase() === "native_agent") {
+    if (isNativeFlat) {
       meta.tracePresentation = "native_agent_flat";
     }
     meta.nativeSource = {
@@ -2130,68 +2136,6 @@ function summarizeTrace(trace?: ChatTraceEvent[]) {
   };
 }
 
-function traceEventKey(event: ChatTraceEvent): string {
-  if (event.id) {
-    return `id:${event.id}`;
-  }
-  if (typeof event.ordinal === "number") {
-    return `ordinal:${event.ordinal}`;
-  }
-  if (typeof event.sequence === "number") {
-    return `sequence:${event.sequence}`;
-  }
-  return [
-    event.kind || "",
-    event.rawType || "",
-    event.callId || "",
-    event.summary || "",
-  ].join("|");
-}
-
-function mergeTraceEvents(...sources: Array<ChatTraceEvent[] | undefined>): ChatTraceEvent[] | undefined {
-  const merged: ChatTraceEvent[] = [];
-  const seen = new Set<string>();
-
-  for (const source of sources) {
-    for (const item of source || []) {
-      const key = traceEventKey(item);
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      merged.push(item);
-    }
-  }
-
-  return merged.length > 0 ? merged : undefined;
-}
-
-function mergeNativeFlatTraceEvents(...sources: Array<ChatTraceEvent[] | undefined>): ChatTraceEvent[] | undefined {
-  const merged: ChatTraceEvent[] = [];
-  const seen = new Set<string>();
-
-  for (const source of sources) {
-    for (const item of source || []) {
-      const stableKey = item.id
-        ? `id:${item.id}`
-        : typeof item.ordinal === "number"
-          ? `ordinal:${item.ordinal}`
-          : typeof item.sequence === "number"
-            ? `sequence:${item.sequence}`
-            : "";
-      if (stableKey && seen.has(stableKey)) {
-        continue;
-      }
-      if (stableKey) {
-        seen.add(stableKey);
-      }
-      merged.push(item);
-    }
-  }
-
-  return merged.length > 0 ? merged : undefined;
-}
-
 function maxDefinedNumber(...values: Array<number | undefined>) {
   const definedValues = values.filter((value): value is number => (
     typeof value === "number" && Number.isFinite(value)
@@ -2210,10 +2154,10 @@ function mergeMessageMeta(
     || String(incoming?.nativeSource?.provider || base?.nativeSource?.provider || "").trim().toLowerCase() === "原生 agent"
   );
   const tracePresentation = incoming?.tracePresentation || base?.tracePresentation || (isNativeSource ? "native_agent_flat" : undefined);
-  const isNativeFlat = tracePresentation === "native_agent_flat";
-  const trace = isNativeFlat
-    ? mergeNativeFlatTraceEvents(base?.trace, incoming?.trace, streamedTrace)
-    : mergeTraceEvents(base?.trace, incoming?.trace, streamedTrace);
+  const trace = mergeChatTraceEvents(
+    [base?.trace, incoming?.trace, streamedTrace],
+    { nativeFlat: tracePresentation === "native_agent_flat" },
+  );
   const traceSummary = trace ? summarizeTrace(trace) : undefined;
   const meta: ChatMessageMetaInfo = {
     completionState: incoming?.completionState || base?.completionState,
@@ -3468,14 +3412,17 @@ function mapAssistantAdminAuditResult(raw: { items?: RawAssistantAdminAuditItem[
 }
 
 function mapChatTraceDetails(raw: RawChatTraceDetails): ChatTraceDetails {
-  const trace = (raw.trace || [])
+  const rawTrace = (raw.trace || [])
     .map((item) => mapTraceEvent(item))
     .filter((item): item is ChatTraceEvent => Boolean(item));
+  const trace = mergeChatTraceEvents([rawTrace], {
+    nativeFlat: rawTrace.some((item) => String(item.source || "").trim().toLowerCase() === "native_agent"),
+  }) || [];
   const summary = summarizeTrace(trace);
   return {
-    traceCount: typeof raw.trace_count === "number" ? raw.trace_count : summary.traceCount,
-    toolCallCount: typeof raw.tool_call_count === "number" ? raw.tool_call_count : summary.toolCallCount,
-    processCount: typeof raw.process_count === "number" ? raw.process_count : summary.processCount,
+    traceCount: summary.traceCount,
+    toolCallCount: summary.toolCallCount,
+    processCount: summary.processCount,
     trace,
   };
 }
@@ -4597,15 +4544,10 @@ export class RealWebBotClient implements WebBotClient {
             onAgUiEvent?.(agUiEvent);
             const traceEvent = mapAgUiTraceEvent(agUiEvent);
             if (traceEvent) {
-              const duplicate = streamedTrace.some((item) => (
-                item.kind === traceEvent.kind
-                && item.callId === traceEvent.callId
-                && item.rawType === traceEvent.rawType
-                && item.summary === traceEvent.summary
-              ));
-              if (!duplicate) {
-                streamedTrace.push(traceEvent);
-              }
+              const mergedTrace = mergeChatTraceEvents([streamedTrace, [traceEvent]], {
+                nativeFlat: options?.executionMode === "native_agent",
+              });
+              streamedTrace.splice(0, streamedTrace.length, ...(mergedTrace || []));
             }
             if (agUiEvent.type === EventType.ACTIVITY_SNAPSHOT || agUiEvent.type === EventType.ACTIVITY_DELTA) {
               const content = (
@@ -4682,7 +4624,10 @@ export class RealWebBotClient implements WebBotClient {
         } else if (event.type === "trace") {
           const traceEvent = mapTraceEvent(event.event);
           if (traceEvent) {
-            streamedTrace.push(traceEvent);
+            const mergedTrace = mergeChatTraceEvents([streamedTrace, [traceEvent]], {
+              nativeFlat: options?.executionMode === "native_agent",
+            });
+            streamedTrace.splice(0, streamedTrace.length, ...(mergedTrace || []));
             onTrace?.(traceEvent);
           }
         } else if (event.type === "done") {

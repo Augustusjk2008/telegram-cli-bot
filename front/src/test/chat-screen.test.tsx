@@ -790,6 +790,76 @@ test("native history auto-loads flat trace details", async () => {
   expect(screen.queryByRole("button", { name: "展开过程详情" })).not.toBeInTheDocument();
 });
 
+test("native history folds duplicate tool results and keeps commentary before tool call", async () => {
+  const getMessageTrace = vi.fn(async () => ({
+    trace: [
+      {
+        kind: "tool_call",
+        ordinal: 2,
+        source: "native_agent",
+        toolName: "shell_command",
+        callId: "call-1",
+        summary: "Get-ChildItem",
+        payload: { arguments: "Get-ChildItem" },
+      },
+      {
+        kind: "tool_result",
+        ordinal: 3,
+        source: "native_agent",
+        callId: "call-1",
+        summary: "partial",
+        payload: { output: "partial" },
+      },
+      {
+        kind: "commentary",
+        ordinal: 4,
+        source: "native_agent",
+        rawType: "message.text.reclassified",
+        summary: "我先检查目录结构。",
+      },
+      {
+        kind: "tool_result",
+        ordinal: 5,
+        source: "native_agent",
+        callId: "call-1",
+        summary: "final",
+        payload: { output: "final" },
+      },
+    ],
+    traceCount: 4,
+    toolCallCount: 1,
+    processCount: 2,
+  }));
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "assistant-native-history",
+        role: "assistant",
+        text: "最终答复",
+        createdAt: new Date().toISOString(),
+        state: "done",
+        meta: {
+          tracePresentation: "native_agent_flat",
+          nativeSource: { provider: "原生 agent", sessionId: "sess-1" },
+          traceCount: 4,
+          toolCallCount: 1,
+          processCount: 2,
+        },
+      },
+    ],
+    getMessageTrace: getMessageTrace as never,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  await waitFor(() => expect(getMessageTrace).toHaveBeenCalledWith("main", "assistant-native-history"));
+  const firstVisibleRow = transcript.firstElementChild as HTMLElement | null;
+  expect(firstVisibleRow?.textContent).toContain("我先检查目录结构。");
+  expect(within(transcript).queryByText("partial")).not.toBeInTheDocument();
+  expect(within(transcript).getAllByText("final").length).toBeGreaterThan(0);
+});
+
 test("native history trace auto-load does not retry immediately after failure", async () => {
   const getMessageTrace = vi.fn(async () => {
     throw new Error("trace unavailable");
@@ -863,6 +933,37 @@ test("non-native permission trace hides native permission actions", async () => 
   await user.click(await screen.findByRole("button", { name: "展开过程详情" }));
   expect(screen.queryByRole("button", { name: "允许一次" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "拒绝" })).not.toBeInTheDocument();
+});
+
+test("user message does not show native transcript entry", async () => {
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "user-1",
+        role: "user",
+        text: "hi",
+        createdAt: new Date().toISOString(),
+        state: "done",
+        meta: {
+          tracePresentation: "native_agent_flat",
+          nativeSource: { provider: "原生 agent", sessionId: "sess-1" },
+          traceCount: 1,
+          trace: [{
+            kind: "commentary",
+            summary: "不应显示",
+            source: "native_agent",
+          }],
+        },
+      },
+    ],
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByText("hi")).toBeInTheDocument();
+  expect(screen.queryByTestId("native-agent-transcript")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "展开过程详情" })).not.toBeInTheDocument();
+  expect(screen.queryByText("不应显示")).not.toBeInTheDocument();
 });
 
 

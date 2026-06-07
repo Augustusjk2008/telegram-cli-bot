@@ -31,6 +31,104 @@ function payloadText(trace: ChatTraceEvent) {
   );
 }
 
+function pickString(...values: Array<unknown>) {
+  for (const value of values) {
+    const text = asString(value).trim();
+    if (text) {
+      return text;
+    }
+  }
+  return undefined;
+}
+
+function traceStableKey(trace: ChatTraceEvent) {
+  if (trace.id) {
+    return `id:${trace.id}`;
+  }
+  if (typeof trace.ordinal === "number") {
+    return `ordinal:${trace.ordinal}`;
+  }
+  if (typeof trace.sequence === "number") {
+    return `sequence:${trace.sequence}`;
+  }
+  return "";
+}
+
+function traceCallKey(trace: ChatTraceEvent) {
+  const callId = asString(trace.callId).trim();
+  return callId ? `${trace.kind}:${callId}` : "";
+}
+
+function traceRichness(trace: ChatTraceEvent) {
+  return (
+    payloadText(trace).length * 10
+    + trace.summary.trim().length * 5
+    + (pickString(trace.toolName, trace.title) ? 2 : 0)
+    + (typeof trace.payload !== "undefined" ? 1 : 0)
+  );
+}
+
+function shouldReplaceTraceEvent(current: ChatTraceEvent, incoming: ChatTraceEvent) {
+  if (current.kind === incoming.kind && current.kind === "tool_result" && current.callId && current.callId === incoming.callId) {
+    return true;
+  }
+  const currentScore = traceRichness(current);
+  const incomingScore = traceRichness(incoming);
+  if (incomingScore !== currentScore) {
+    return incomingScore > currentScore;
+  }
+  return true;
+}
+
+function mergeTraceEvent(current: ChatTraceEvent, incoming: ChatTraceEvent): ChatTraceEvent {
+  const primary = shouldReplaceTraceEvent(current, incoming) ? incoming : current;
+  const secondary = primary === incoming ? current : incoming;
+  const merged: ChatTraceEvent = {
+    kind: primary.kind || secondary.kind || "event",
+    summary: primary.summary || secondary.summary || "",
+  };
+  const id = pickString(current.id, incoming.id);
+  const source = pickString(primary.source, secondary.source);
+  const rawType = pickString(primary.rawType, secondary.rawType);
+  const title = pickString(primary.title, secondary.title);
+  const toolName = pickString(primary.toolName, secondary.toolName);
+  const callId = pickString(primary.callId, secondary.callId);
+  const createdAt = pickString(current.createdAt, incoming.createdAt);
+  const payload = typeof primary.payload !== "undefined" ? primary.payload : secondary.payload;
+
+  if (id) {
+    merged.id = id;
+  }
+  if (typeof current.ordinal === "number" || typeof incoming.ordinal === "number") {
+    merged.ordinal = typeof current.ordinal === "number" ? current.ordinal : incoming.ordinal;
+  }
+  if (typeof current.sequence === "number" || typeof incoming.sequence === "number") {
+    merged.sequence = typeof current.sequence === "number" ? current.sequence : incoming.sequence;
+  }
+  if (createdAt) {
+    merged.createdAt = createdAt;
+  }
+  if (source) {
+    merged.source = source;
+  }
+  if (rawType) {
+    merged.rawType = rawType;
+  }
+  if (title) {
+    merged.title = title;
+  }
+  if (toolName) {
+    merged.toolName = toolName;
+  }
+  if (callId) {
+    merged.callId = callId;
+  }
+  if (typeof payload !== "undefined") {
+    merged.payload = payload;
+  }
+  return merged;
+}
+
 function permissionId(trace: ChatTraceEvent) {
   const payload = asRecord(trace.payload);
   return asString(payload.permissionId || payload.id || payload.permissionID || payload.permission_id).trim();
@@ -72,8 +170,100 @@ function traceOrder(trace: ChatTraceEvent, index: number) {
   return index + 1;
 }
 
-function traceToEntry(trace: ChatTraceEvent, index: number): NativeAgentTranscriptEntry {
-  const seq = traceOrder(trace, index);
+function normalizeNativeAgentTrace(trace: ChatTraceEvent[]) {
+  const ordered = trace
+    .map((event, index) => ({ event, index }))
+    .sort((left, right) => traceOrder(left.event, left.index) - traceOrder(right.event, right.index))
+    .map((item) => item.event);
+  const firstToolIndex = ordered.findIndex((event) => event.kind === "tool_call");
+  if (firstToolIndex < 0) {
+    return ordered;
+  }
+  const movedCommentary = ordered.filter((event, index) => (
+    index > firstToolIndex
+    && event.kind === "commentary"
+    && asString(event.rawType).trim() === "message.text.reclassified"
+  ));
+  if (movedCommentary.length === 0) {
+    return ordered;
+  }
+  const retained = ordered.filter((event, index) => !(
+    index > firstToolIndex
+    && event.kind === "commentary"
+    && asString(event.rawType).trim() === "message.text.reclassified"
+  ));
+  const insertAt = retained.findIndex((event) => event.kind === "tool_call");
+  if (insertAt < 0) {
+    return retained;
+  }
+  return [
+    ...retained.slice(0, insertAt),
+    ...movedCommentary,
+    ...retained.slice(insertAt),
+  ];
+}
+
+function shouldNormalizeAsNativeFlat(trace: ChatTraceEvent[]) {
+  const hasNativeSource = trace.some((event) => {
+    const source = asString(event.source).trim().toLowerCase();
+    return source === "native_agent" || source === "native" || source === "opencode";
+  });
+  if (hasNativeSource) {
+    return true;
+  }
+  const hasToolCall = trace.some((event) => event.kind === "tool_call" && asString(event.callId).trim());
+  const hasReclassifiedCommentary = trace.some((event) => (
+    event.kind === "commentary" && asString(event.rawType).trim() === "message.text.reclassified"
+  ));
+  return hasToolCall && hasReclassifiedCommentary;
+}
+
+export function mergeChatTraceEvents(
+  sources: Array<ChatTraceEvent[] | undefined>,
+  options: { nativeFlat?: boolean } = {},
+): ChatTraceEvent[] | undefined {
+  const merged: ChatTraceEvent[] = [];
+  const stableIndexMap = new Map<string, number>();
+  const callIndexMap = new Map<string, number>();
+
+  for (const source of sources) {
+    for (const event of source || []) {
+      const stableKey = traceStableKey(event);
+      const callKey = traceCallKey(event);
+      const existingIndex = (
+        (callKey ? callIndexMap.get(callKey) : undefined)
+        ?? (stableKey ? stableIndexMap.get(stableKey) : undefined)
+      );
+      if (typeof existingIndex === "number") {
+        merged[existingIndex] = mergeTraceEvent(merged[existingIndex], event);
+        const nextStableKey = traceStableKey(merged[existingIndex]);
+        const nextCallKey = traceCallKey(merged[existingIndex]);
+        if (nextStableKey) {
+          stableIndexMap.set(nextStableKey, existingIndex);
+        }
+        if (nextCallKey) {
+          callIndexMap.set(nextCallKey, existingIndex);
+        }
+        continue;
+      }
+      const nextIndex = merged.length;
+      merged.push(event);
+      if (stableKey) {
+        stableIndexMap.set(stableKey, nextIndex);
+      }
+      if (callKey) {
+        callIndexMap.set(callKey, nextIndex);
+      }
+    }
+  }
+
+  const normalized = options.nativeFlat || shouldNormalizeAsNativeFlat(merged)
+    ? normalizeNativeAgentTrace(merged)
+    : merged;
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function traceToEntry(trace: ChatTraceEvent, index: number, seq = traceOrder(trace, index)): NativeAgentTranscriptEntry {
   const kind = entryKind(trace);
   const body = kind === "tool" || trace.kind === "tool_result" ? payloadText(trace) : undefined;
   return {
@@ -105,7 +295,6 @@ export function buildNativeAgentTranscriptEntries(input: {
   if (input.agUiState?.entries?.length) {
     return [...input.agUiState.entries].sort((left, right) => left.seq - right.seq);
   }
-  return (input.trace || [])
-    .map(traceToEntry)
-    .sort((left, right) => left.seq - right.seq);
+  return (mergeChatTraceEvents([input.trace], { nativeFlat: true }) || [])
+    .map((trace, index) => traceToEntry(trace, index, index + 1));
 }

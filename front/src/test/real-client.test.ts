@@ -408,6 +408,36 @@ describe("RealWebBotClient", () => {
     ]);
   });
 
+  test("sendMessage upserts ag-ui tool results by toolCallId", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"RUN_STARTED\",\"threadId\":\"thread-1\",\"runId\":\"run-1\"}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"TOOL_CALL_START\",\"toolCallId\":\"call-1\",\"toolCallName\":\"shell_command\"}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"TOOL_CALL_RESULT\",\"messageId\":\"msg-1\",\"toolCallId\":\"call-1\",\"content\":\"partial\"}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"TOOL_CALL_RESULT\",\"messageId\":\"msg-1\",\"toolCallId\":\"call-1\",\"content\":\"final\"}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"RUN_FINISHED\",\"threadId\":\"thread-1\",\"runId\":\"run-1\",\"result\":{\"content\":\"ok\"},\"outcome\":{\"type\":\"success\"}}\n\n"));
+        controller.close();
+      },
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: stream,
+      json: async () => ({ ok: true, data: {} }),
+    });
+
+    const client = new RealWebBotClient();
+    const message = await client.sendMessage("main", "hi", vi.fn(), undefined, undefined, {
+      executionMode: "native_agent",
+    });
+
+    expect(message.meta?.traceCount).toBe(2);
+    expect(message.meta?.trace).toEqual([
+      expect.objectContaining({ kind: "tool_call", callId: "call-1" }),
+      expect.objectContaining({ kind: "tool_result", callId: "call-1", summary: "final" }),
+    ]);
+  });
+
   test("sendMessage does not mark non-native permission activity as native flat", async () => {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
@@ -702,6 +732,36 @@ describe("RealWebBotClient", () => {
     expect(sent.meta?.contextUsage?.sessionId).toBe("thread-2");
     expect(sent.meta?.contextUsage?.usedTokens).toBe(76593);
     expect(sent.meta?.contextUsage?.compactionCount).toBe(1);
+  });
+
+  test("preserves native history trace count when trace payload is not embedded", async () => {
+    fetchMock.mockResolvedValueOnce(jsonOk({
+      items: [{
+        id: "assistant-history",
+        role: "assistant",
+        content: "历史回复",
+        created_at: "2026-05-08T09:05:00+08:00",
+        state: "done",
+        meta: {
+          trace_count: 3,
+          tool_call_count: 1,
+          process_count: 1,
+          native_source: {
+            provider: "native_agent",
+            session_id: "native-1",
+          },
+        },
+      }],
+    }));
+
+    const client = new RealWebBotClient();
+    const history = await client.listMessages("main");
+
+    expect(history[0].meta?.traceCount).toBe(3);
+    expect(history[0].meta?.toolCallCount).toBe(1);
+    expect(history[0].meta?.processCount).toBe(1);
+    expect(history[0].meta?.tracePresentation).toBe("native_agent_flat");
+    expect(history[0].meta?.nativeSource?.provider).toBe("原生 agent");
   });
 
   test("executePlan posts plan content and maps execution payload", async () => {
@@ -1639,6 +1699,77 @@ describe("RealWebBotClient", () => {
         },
       ],
     });
+  });
+
+  test("getMessageTrace folds duplicate tool results and reorders commentary before tool call", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            trace_count: 5,
+            tool_call_count: 1,
+            process_count: 2,
+            trace: [
+              {
+                kind: "tool_call",
+                ordinal: 2,
+                tool_name: "shell_command",
+                call_id: "call_1",
+                summary: "Get-ChildItem",
+                payload: { arguments: "Get-ChildItem" },
+              },
+              {
+                kind: "tool_result",
+                ordinal: 3,
+                call_id: "call_1",
+                summary: "partial",
+                payload: { output: "partial" },
+              },
+              {
+                kind: "commentary",
+                ordinal: 4,
+                raw_type: "message.text.reclassified",
+                summary: "我先检查目录结构。",
+              },
+              {
+                kind: "tool_result",
+                ordinal: 5,
+                call_id: "call_1",
+                summary: "final",
+                payload: { output: "final" },
+              },
+            ],
+          },
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const traceDetails = await client.getMessageTrace("main", "assistant-1");
+
+    expect(traceDetails.traceCount).toBe(3);
+    expect(traceDetails.toolCallCount).toBe(1);
+    expect(traceDetails.processCount).toBe(1);
+    expect(traceDetails.trace.map((item) => item.kind)).toEqual([
+      "commentary",
+      "tool_call",
+      "tool_result",
+    ]);
+    expect(traceDetails.trace[2]).toEqual(expect.objectContaining({
+      callId: "call_1",
+      summary: "final",
+    }));
   });
 
   

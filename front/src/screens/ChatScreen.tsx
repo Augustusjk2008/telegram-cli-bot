@@ -66,7 +66,11 @@ import {
   reduceAgUiRunEvent,
   type AgUiRunState,
 } from "../utils/agUiRunReducer";
-import { buildNativeAgentTranscriptEntries, isNativeAgentMessage } from "../utils/nativeAgentTranscript";
+import {
+  buildNativeAgentTranscriptEntries,
+  isNativeAgentMessage,
+  mergeChatTraceEvents,
+} from "../utils/nativeAgentTranscript";
 
 type Props = {
   botAlias: string;
@@ -519,68 +523,6 @@ function resolveStreamStartMs(items: ChatMessage[], elapsedSeconds?: number) {
   return Date.now();
 }
 
-function traceEventKey(event: ChatTraceEvent) {
-  if (event.id) {
-    return `id:${event.id}`;
-  }
-  if (typeof event.ordinal === "number") {
-    return `ordinal:${event.ordinal}`;
-  }
-  if (typeof event.sequence === "number") {
-    return `sequence:${event.sequence}`;
-  }
-  return [
-    event.kind || "",
-    event.rawType || "",
-    event.callId || "",
-    event.summary || "",
-  ].join("|");
-}
-
-function mergeTraceEvents(...sources: Array<ChatTraceEvent[] | undefined>) {
-  const merged: ChatTraceEvent[] = [];
-  const seen = new Set<string>();
-
-  for (const source of sources) {
-    for (const event of source || []) {
-      const key = traceEventKey(event);
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      merged.push(event);
-    }
-  }
-
-  return merged.length > 0 ? merged : undefined;
-}
-
-function mergeNativeFlatTraceEvents(...sources: Array<ChatTraceEvent[] | undefined>) {
-  const merged: ChatTraceEvent[] = [];
-  const seen = new Set<string>();
-
-  for (const source of sources) {
-    for (const event of source || []) {
-      const stableKey = event.id
-        ? `id:${event.id}`
-        : typeof event.ordinal === "number"
-          ? `ordinal:${event.ordinal}`
-          : typeof event.sequence === "number"
-            ? `sequence:${event.sequence}`
-            : "";
-      if (stableKey && seen.has(stableKey)) {
-        continue;
-      }
-      if (stableKey) {
-        seen.add(stableKey);
-      }
-      merged.push(event);
-    }
-  }
-
-  return merged.length > 0 ? merged : undefined;
-}
-
 function maxDefinedNumber(...values: Array<number | undefined>) {
   const definedValues = values.filter((value): value is number => (
     typeof value === "number" && Number.isFinite(value)
@@ -591,23 +533,27 @@ function maxDefinedNumber(...values: Array<number | undefined>) {
 function mergeMessageMeta(base?: ChatMessageMetaInfo, incoming?: ChatMessageMetaInfo): ChatMessageMetaInfo | undefined {
   const isNativeSource = isNativeAgentMessage(incoming) || isNativeAgentMessage(base);
   const tracePresentation = incoming?.tracePresentation || base?.tracePresentation || (isNativeSource ? "native_agent_flat" : undefined);
-  const trace = tracePresentation === "native_agent_flat"
-    ? mergeNativeFlatTraceEvents(base?.trace, incoming?.trace)
-    : mergeTraceEvents(base?.trace, incoming?.trace);
+  const trace = mergeChatTraceEvents(
+    [base?.trace, incoming?.trace],
+    { nativeFlat: tracePresentation === "native_agent_flat" },
+  );
+  const traceCount = trace?.length;
+  const toolCallCount = trace?.filter((event) => event.kind === "tool_call").length;
+  const processCount = trace?.filter((event) => event.kind !== "tool_call" && event.kind !== "tool_result").length;
   const meta: ChatMessageMetaInfo = {
     completionState: incoming?.completionState || base?.completionState,
     summaryKind: incoming?.summaryKind || base?.summaryKind,
     traceVersion: incoming?.traceVersion ?? base?.traceVersion ?? (trace ? 1 : undefined),
-    traceCount: maxDefinedNumber(incoming?.traceCount, base?.traceCount, trace?.length),
+    traceCount: typeof traceCount === "number" ? traceCount : maxDefinedNumber(incoming?.traceCount, base?.traceCount),
     toolCallCount: maxDefinedNumber(
+      typeof toolCallCount === "number" ? toolCallCount : undefined,
       incoming?.toolCallCount,
       base?.toolCallCount,
-      trace?.filter((event) => event.kind === "tool_call").length,
     ),
     processCount: maxDefinedNumber(
+      typeof processCount === "number" ? processCount : undefined,
       incoming?.processCount,
       base?.processCount,
-      trace?.filter((event) => event.kind !== "tool_call" && event.kind !== "tool_result").length,
     ),
     nativeSource: incoming?.nativeSource || base?.nativeSource,
     contextUsage: incoming?.contextUsage || base?.contextUsage,

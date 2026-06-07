@@ -63,6 +63,103 @@ def _duration_ms(started_at: str, completed_at: str | None) -> int | None:
     return max(0, int(round((completed - started).total_seconds() * 1000)))
 
 
+def _payload_text(payload: Any) -> str:
+    if payload is None:
+        return ""
+    if isinstance(payload, str):
+        return payload
+    if isinstance(payload, (int, float, bool)):
+        return str(payload)
+    if isinstance(payload, list):
+        return "".join(_payload_text(item) for item in payload)
+    if isinstance(payload, dict):
+        for key in ("output", "result", "content", "text", "message", "summary"):
+            if key in payload:
+                text = _payload_text(payload.get(key))
+                if text:
+                    return text
+    return ""
+
+
+def _trace_payload_state(trace: dict[str, Any]) -> str:
+    payload = trace.get("payload")
+    if not isinstance(payload, dict):
+        return ""
+    return str(payload.get("state") or payload.get("status") or "").strip().lower()
+
+
+def _tool_result_rank(trace: dict[str, Any]) -> tuple[int, int, int]:
+    state = _trace_payload_state(trace)
+    payload_text = _payload_text(trace.get("payload")).strip()
+    summary = str(trace.get("summary") or "").strip()
+    terminal = state in {"completed", "done", "finished", "success", "error", "failed"}
+    return (1 if terminal else 0, max(len(payload_text), len(summary)), int(trace.get("ordinal") or 0))
+
+
+def _normalize_trace_events(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not trace:
+        return []
+
+    kept: list[dict[str, Any]] = []
+    result_indexes_by_call_id: dict[str, int] = {}
+    for item in trace:
+        event = dict(item)
+        kind = str(event.get("kind") or "").strip()
+        call_id = str(event.get("call_id") or "").strip()
+        if kind == "tool_result" and call_id:
+            existing_index = result_indexes_by_call_id.get(call_id)
+            if existing_index is None:
+                result_indexes_by_call_id[call_id] = len(kept)
+                kept.append(event)
+            elif _tool_result_rank(event) >= _tool_result_rank(kept[existing_index]):
+                original = kept[existing_index]
+                event["ordinal"] = original.get("ordinal")
+                event["id"] = original.get("id")
+                event["created_at"] = original.get("created_at")
+                kept[existing_index] = event
+            continue
+        kept.append(event)
+
+    first_tool_index = next(
+        (
+            index
+            for index, item in enumerate(kept)
+            if str(item.get("kind") or "") == "tool_call"
+        ),
+        -1,
+    )
+    if first_tool_index >= 0:
+        leading_commentary: list[dict[str, Any]] = []
+        remaining: list[dict[str, Any]] = []
+        for index, item in enumerate(kept):
+            raw_type = str(item.get("raw_type") or "")
+            if (
+                index > first_tool_index
+                and str(item.get("kind") or "") == "commentary"
+                and raw_type == "message.text.reclassified"
+            ):
+                leading_commentary.append(item)
+            else:
+                remaining.append(item)
+        if leading_commentary:
+            insert_at = next(
+                (
+                    index
+                    for index, item in enumerate(remaining)
+                    if str(item.get("kind") or "") == "tool_call"
+                ),
+                len(remaining),
+            )
+            kept = [*remaining[:insert_at], *leading_commentary, *remaining[insert_at:]]
+
+    normalized: list[dict[str, Any]] = []
+    for ordinal, item in enumerate(kept, start=1):
+        normalized_item = dict(item)
+        normalized_item["ordinal"] = ordinal
+        normalized.append(normalized_item)
+    return normalized
+
+
 def clear_chat_store_prepare_cache() -> None:
     with _STORE_PREPARE_LOCK:
         _PREPARED_STORES.clear()
@@ -1091,9 +1188,45 @@ class ChatStore:
                 (turn_id,),
             ).fetchone()
             next_ordinal = int(row["next_ordinal"])
-            for offset, event in enumerate(normalized_events):
+            for event in normalized_events:
                 payload = event.get("payload")
                 payload_json = json.dumps(payload, ensure_ascii=False) if payload is not None else None
+                kind = str(event.get("kind") or "unknown")
+                call_id = str(event.get("call_id") or "")
+                if kind == "tool_result" and call_id:
+                    existing = conn.execute(
+                        """
+                        SELECT id
+                        FROM trace_events
+                        WHERE turn_id = ? AND kind = ? AND call_id = ?
+                        ORDER BY ordinal ASC, created_at ASC, id ASC
+                        LIMIT 1
+                        """,
+                        (turn_id, kind, call_id),
+                    ).fetchone()
+                    if existing is not None:
+                        conn.execute(
+                            """
+                            UPDATE trace_events
+                            SET raw_type = ?,
+                                title = ?,
+                                tool_name = ?,
+                                summary = ?,
+                                payload_json = ?,
+                                created_at = ?
+                            WHERE id = ?
+                            """,
+                            (
+                                str(event.get("raw_type") or ""),
+                                str(event.get("title") or ""),
+                                str(event.get("tool_name") or ""),
+                                str(event.get("summary") or ""),
+                                payload_json,
+                                now,
+                                str(existing["id"]),
+                            ),
+                        )
+                        continue
                 conn.execute(
                     """
                     INSERT INTO trace_events (
@@ -1113,17 +1246,18 @@ class ChatStore:
                     (
                         f"trace_{uuid.uuid4().hex}",
                         turn_id,
-                        next_ordinal + offset,
-                        str(event.get("kind") or "unknown"),
+                        next_ordinal,
+                        kind,
                         str(event.get("raw_type") or ""),
                         str(event.get("title") or ""),
                         str(event.get("tool_name") or ""),
-                        str(event.get("call_id") or ""),
+                        call_id,
                         str(event.get("summary") or ""),
                         payload_json,
                         now,
                     ),
                 )
+                next_ordinal += 1
             conn.execute("UPDATE turns SET updated_at = ? WHERE id = ?", (now, turn_id))
         elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
         diag_log_slow(
@@ -1383,24 +1517,47 @@ class ChatStore:
         rows = conn.execute(
             f"""
             SELECT
+                id,
                 turn_id,
-                COUNT(*) AS trace_count,
-                SUM(CASE WHEN kind = ? THEN 1 ELSE 0 END) AS tool_call_count,
-                SUM(CASE WHEN kind NOT IN (?, ?) THEN 1 ELSE 0 END) AS process_count
+                ordinal,
+                kind,
+                raw_type,
+                title,
+                tool_name,
+                call_id,
+                summary,
+                payload_json,
+                created_at
             FROM trace_events
             WHERE turn_id IN ({placeholders})
-            GROUP BY turn_id
+            ORDER BY turn_id ASC, ordinal ASC, created_at ASC, id ASC
             """,
-            ("tool_call", "tool_call", "tool_result", *normalized_turn_ids),
+            normalized_turn_ids,
         ).fetchall()
 
-        stats: dict[str, dict[str, int]] = {}
+        grouped: dict[str, list[dict[str, Any]]] = {}
         for item in rows:
             turn_id = str(item["turn_id"])
+            grouped.setdefault(turn_id, []).append({
+                "id": item["id"],
+                "ordinal": int(item["ordinal"]),
+                "kind": item["kind"],
+                "raw_type": item["raw_type"],
+                "title": item["title"],
+                "tool_name": item["tool_name"],
+                "call_id": item["call_id"],
+                "summary": item["summary"],
+                "payload": _parse_json(item["payload_json"]),
+                "created_at": item["created_at"],
+            })
+
+        stats: dict[str, dict[str, int]] = {}
+        for turn_id, trace in grouped.items():
+            normalized = _normalize_trace_events(trace)
             stats[turn_id] = {
-                "trace_count": int(item["trace_count"] or 0),
-                "tool_call_count": int(item["tool_call_count"] or 0),
-                "process_count": int(item["process_count"] or 0),
+                "trace_count": len(normalized),
+                "tool_call_count": sum(1 for item in normalized if str(item.get("kind") or "") == "tool_call"),
+                "process_count": sum(1 for item in normalized if str(item.get("kind") or "") not in {"tool_call", "tool_result"}),
             }
         return stats
 
@@ -1418,18 +1575,21 @@ class ChatStore:
             "completion_state": row["completion_state"],
             "native_provider": row["native_provider"],
             "native_session_id": row["native_session_id"],
-            "trace_count": int(trace_stats.get("trace_count", 0) or 0),
-            "tool_call_count": int(trace_stats.get("tool_call_count", 0) or 0),
-            "process_count": int(trace_stats.get("process_count", 0) or 0),
         }
-        native_provider = str(row["native_provider"] or "").strip()
-        native_session_id = str(row["native_session_id"] or "").strip()
-        if native_provider or native_session_id:
-            meta["native_source"] = {
-                "provider": native_provider,
-                "session_id": native_session_id,
-            }
-        if str(row["role"] or "") == "assistant":
+        is_assistant = str(row["role"] or "") == "assistant"
+        if is_assistant:
+            meta.update({
+                "trace_count": int(trace_stats.get("trace_count", 0) or 0),
+                "tool_call_count": int(trace_stats.get("tool_call_count", 0) or 0),
+                "process_count": int(trace_stats.get("process_count", 0) or 0),
+            })
+            native_provider = str(row["native_provider"] or "").strip()
+            native_session_id = str(row["native_session_id"] or "").strip()
+            if native_provider or native_session_id:
+                meta["native_source"] = {
+                    "provider": native_provider,
+                    "session_id": native_session_id,
+                }
             try:
                 parsed_context_usage = _parse_json(row["context_usage_json"])
             except (KeyError, TypeError, json.JSONDecodeError):
@@ -2118,6 +2278,7 @@ class ChatStore:
                     }
                     for trace_row in trace_rows
                 ]
+                trace = _normalize_trace_events(trace)
                 tool_call_count = sum(1 for item in trace if str(item["kind"] or "") == "tool_call")
                 process_count = sum(1 for item in trace if str(item["kind"] or "") not in {"tool_call", "tool_result"})
                 return {

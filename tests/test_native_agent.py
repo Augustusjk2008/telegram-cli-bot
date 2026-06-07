@@ -493,6 +493,90 @@ def test_native_agent_aggregator_reclassifies_followup_preview_as_commentary_tra
     assert aggregator.text() == ""
 
 
+def test_native_agent_trace_keeps_commentary_before_tool_call():
+    aggregator = NativeAgentAggregator(user_message_id="u-new")
+    preview = unwrap_event({
+        "type": "message.part.delta",
+        "sessionID": "sess-1",
+        "messageID": "assistant-tool",
+        "partID": "preview",
+        "field": "text",
+        "delta": "我先读取文件。",
+    })
+    tool = unwrap_event({
+        "type": "message.part.updated",
+        "sessionID": "sess-1",
+        "part": {
+            "id": "tool-1",
+            "type": "tool",
+            "messageID": "assistant-tool",
+            "tool": "bash",
+            "arguments": {"command": "pwd"},
+            "state": {"status": "running"},
+        },
+    })
+
+    assert preview is not None
+    assert tool is not None
+    assert aggregator.apply(preview).delta == "我先读取文件。"
+    result = aggregator.apply(tool)
+
+    assert [item["kind"] for item in result.trace] == ["commentary", "tool_call"]
+    assert result.trace[0]["summary"] == "我先读取文件。"
+    assert result.trace[1]["call_id"] == "tool-1"
+    assert aggregator.text() == ""
+
+
+def test_native_agent_trace_collapses_running_and_completed_tool_results():
+    aggregator = NativeAgentAggregator(user_message_id="u-new")
+    running_empty = unwrap_event({
+        "type": "message.part.updated",
+        "sessionID": "sess-1",
+        "part": {
+            "id": "tool-1",
+            "type": "tool",
+            "tool": "bash",
+            "arguments": {"command": "pwd"},
+            "state": {"status": "running"},
+        },
+    })
+    running_output = unwrap_event({
+        "type": "message.part.updated",
+        "sessionID": "sess-1",
+        "part": {
+            "id": "tool-1",
+            "type": "tool",
+            "tool": "bash",
+            "arguments": {"command": "pwd"},
+            "state": {"status": "running", "output": "C:/repo"},
+        },
+    })
+    completed_same_output = unwrap_event({
+        "type": "message.part.updated",
+        "sessionID": "sess-1",
+        "part": {
+            "id": "tool-1",
+            "type": "tool",
+            "tool": "bash",
+            "arguments": {"command": "pwd"},
+            "state": {"status": "completed", "output": "C:/repo"},
+        },
+    })
+
+    assert running_empty is not None
+    assert running_output is not None
+    assert completed_same_output is not None
+
+    first = aggregator.apply(running_empty)
+    second = aggregator.apply(running_output)
+    third = aggregator.apply(completed_same_output)
+
+    assert [item["kind"] for item in first.trace] == ["tool_call"]
+    assert [item["kind"] for item in second.trace] == ["tool_result"]
+    assert second.trace[0]["summary"] == "C:/repo"
+    assert third.trace == []
+
+
 def test_native_agent_aggregator_reclassifies_multipart_preview_in_display_order():
     aggregator = NativeAgentAggregator(user_message_id="u-new")
     later = unwrap_event({

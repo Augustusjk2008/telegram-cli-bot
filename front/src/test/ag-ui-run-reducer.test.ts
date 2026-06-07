@@ -323,4 +323,40 @@ describe("agUiRunReducer", () => {
     })]);
     expect(buildAgUiMessageMeta(state)?.tracePresentation).toBeUndefined();
   });
+
+  test("upserts tool call result by toolCallId", () => {
+    const events: AgUiEvent[] = [
+      {
+        type: EventType.TOOL_CALL_START,
+        toolCallId: "call-1",
+        toolCallName: "shell_command",
+      },
+      {
+        type: EventType.TOOL_CALL_RESULT,
+        messageId: "msg-1",
+        toolCallId: "call-1",
+        content: "partial",
+      },
+      {
+        type: EventType.TOOL_CALL_RESULT,
+        messageId: "msg-1",
+        toolCallId: "call-1",
+        content: "final",
+      },
+    ];
+
+    const state = events.reduce(reduceAgUiRunEvent, createAgUiRunState());
+
+    expect(state.toolCalls).toEqual([expect.objectContaining({
+      toolCallId: "call-1",
+      resultText: "final",
+      status: "completed",
+    })]);
+    expect(state.traceEvents.filter((item) => item.kind === "tool_result")).toEqual([
+      expect.objectContaining({ callId: "call-1", summary: "final" }),
+    ]);
+    expect(state.entries.filter((item) => item.trace?.kind === "tool_result")).toEqual([
+      expect.objectContaining({ summary: "final", body: "final" }),
+    ]);
+  });
 });

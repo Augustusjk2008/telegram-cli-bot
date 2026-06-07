@@ -3109,6 +3109,36 @@ def test_history_and_trace_are_isolated_by_execution_mode(web_manager: MultiBotM
     ]
 
 
+def test_history_user_message_does_not_expose_native_trace_meta(web_manager: MultiBotManager, tmp_path: Path):
+    web_manager.main_profile.working_dir = str(tmp_path)
+    profile = web_manager.main_profile
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+    history = ChatHistoryService(ChatStore(tmp_path), native_provider_filter="native_agent")
+
+    handle = history.start_turn(
+        profile=profile,
+        session=session,
+        user_text="Native",
+        native_provider="native_agent",
+    )
+    history.append_trace_event(handle, {"kind": "tool_call", "summary": "native trace", "call_id": "call_1"})
+    history.complete_turn(
+        handle,
+        content="原生回复",
+        completion_state="completed",
+        native_session_id="native-1",
+    )
+
+    user_message, assistant_message = get_history(web_manager, "main", 1001, execution_mode="native_agent")["items"]
+
+    assert user_message["role"] == "user"
+    assert "trace_count" not in user_message["meta"]
+    assert "native_source" not in user_message["meta"]
+    assert assistant_message["meta"]["trace_count"] == 1
+    assert assistant_message["meta"]["native_source"]["provider"] == "native_agent"
+
+
 def test_delete_all_conversations_scopes_agent_and_execution_mode(web_manager: MultiBotManager, tmp_path: Path):
     web_manager.main_profile.working_dir = str(tmp_path)
     web_manager.main_profile.agents = [AgentProfile(id="reviewer", name="审查")]
