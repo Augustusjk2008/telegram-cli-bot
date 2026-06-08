@@ -171,36 +171,10 @@ function traceOrder(trace: ChatTraceEvent, index: number) {
 }
 
 function normalizeNativeAgentTrace(trace: ChatTraceEvent[]) {
-  const ordered = trace
+  return trace
     .map((event, index) => ({ event, index }))
     .sort((left, right) => traceOrder(left.event, left.index) - traceOrder(right.event, right.index))
     .map((item) => item.event);
-  const firstToolIndex = ordered.findIndex((event) => event.kind === "tool_call");
-  if (firstToolIndex < 0) {
-    return ordered;
-  }
-  const movedCommentary = ordered.filter((event, index) => (
-    index > firstToolIndex
-    && event.kind === "commentary"
-    && asString(event.rawType).trim() === "message.text.reclassified"
-  ));
-  if (movedCommentary.length === 0) {
-    return ordered;
-  }
-  const retained = ordered.filter((event, index) => !(
-    index > firstToolIndex
-    && event.kind === "commentary"
-    && asString(event.rawType).trim() === "message.text.reclassified"
-  ));
-  const insertAt = retained.findIndex((event) => event.kind === "tool_call");
-  if (insertAt < 0) {
-    return retained;
-  }
-  return [
-    ...retained.slice(0, insertAt),
-    ...movedCommentary,
-    ...retained.slice(insertAt),
-  ];
 }
 
 function shouldNormalizeAsNativeFlat(trace: ChatTraceEvent[]) {

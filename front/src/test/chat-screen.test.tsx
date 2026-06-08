@@ -786,8 +786,8 @@ test("native history auto-loads flat trace details", async () => {
   expect(await within(transcript).findByText("我先检查目录结构。")).toBeInTheDocument();
   const eventGroup = within(transcript).getByTestId("native-agent-event-group");
   expect(eventGroup.textContent).toContain("过程 1");
-  expect(eventGroup.textContent).toContain("3 条事件 · 1 次工具");
-  expect(eventGroup.textContent).toContain("我先检查目录结构。");
+  expect(eventGroup.textContent).toContain("2 条事件 · 1 次工具");
+  expect(eventGroup.textContent).not.toContain("我先检查目录结构。");
   expect(eventGroup.textContent).toContain("shell_command");
   expect(eventGroup.textContent).toContain("Exit code: 0");
   expect(within(transcript).getAllByText("shell_command").length).toBeGreaterThan(0);
@@ -796,7 +796,7 @@ test("native history auto-loads flat trace details", async () => {
   expect(screen.queryByRole("button", { name: "展开过程详情" })).not.toBeInTheDocument();
 });
 
-test("native history folds duplicate tool results and keeps commentary before tool call", async () => {
+test("native history folds duplicate tool results and keeps commentary in trace order", async () => {
   const getMessageTrace = vi.fn(async () => ({
     trace: [
       {
@@ -861,8 +861,9 @@ test("native history folds duplicate tool results and keeps commentary before to
   const transcript = await screen.findByTestId("native-agent-transcript");
   await waitFor(() => expect(getMessageTrace).toHaveBeenCalledWith("main", "assistant-native-history"));
   const firstVisibleRow = transcript.firstElementChild as HTMLElement | null;
-  expect(firstVisibleRow?.textContent).toContain("我先检查目录结构。");
+  expect(firstVisibleRow?.textContent).toContain("Get-ChildItem");
   expect(within(transcript).queryByText("partial")).not.toBeInTheDocument();
+  expect(within(transcript).getByText("我先检查目录结构。")).toBeInTheDocument();
   expect(within(transcript).getAllByText("final").length).toBeGreaterThan(0);
 });
 
@@ -1111,7 +1112,7 @@ test("live ag-ui stream renders flat transcript and final result last", async ()
   expect(within(transcript).getByText("检查上下文")).toBeInTheDocument();
   const eventGroup = within(transcript).getByTestId("native-agent-event-group");
   expect(eventGroup.textContent).toContain("过程 1");
-  expect(eventGroup.textContent).toContain("3 条事件 · 1 次工具");
+  expect(eventGroup.textContent).toContain("4 条事件 · 1 次工具");
   expect(eventGroup.textContent).toContain("检查上下文");
   expect(eventGroup.textContent).toContain("shell_command");
   expect(eventGroup.textContent).toContain("Exit code: 0");

@@ -3,7 +3,7 @@ import type { ChatTraceEvent } from "../services/types";
 import type { AgUiRunState } from "../utils/agUiRunReducer";
 import { buildNativeAgentTranscriptEntries } from "../utils/nativeAgentTranscript";
 
-test("normalizes live native transcript commentary before tool group", () => {
+test("keeps native transcript events in real order around commentary", () => {
   const trace: ChatTraceEvent[] = [
     { kind: "tool_call", summary: "bash", callId: "call-1", toolName: "bash" },
     { kind: "tool_result", summary: "Exit code: 0", callId: "call-1" },
@@ -29,9 +29,9 @@ test("normalizes live native transcript commentary before tool group", () => {
   const entries = buildNativeAgentTranscriptEntries({ trace, agUiState });
 
   expect(entries.map((entry) => entry.summary)).toEqual([
-    "先按仓库源码文件做一次统计，给你总行数和一个按语言的大致拆分。",
     "bash",
     "Exit code: 0",
+    "先按仓库源码文件做一次统计，给你总行数和一个按语言的大致拆分。",
   ]);
 });
 
@@ -58,5 +58,5 @@ test("uses live entry trace when message trace is not available", () => {
 
   const entries = buildNativeAgentTranscriptEntries({ agUiState });
 
-  expect(entries.map((entry) => entry.summary)).toEqual(["准备统计。", "bash"]);
+  expect(entries.map((entry) => entry.summary)).toEqual(["bash", "准备统计。"]);
 });

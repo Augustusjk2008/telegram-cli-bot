@@ -80,6 +80,7 @@ class Recorder:
 class MonitorState:
     recorder: Recorder
     seen_message_ids: set[str] = field(default_factory=set)
+    web_message_signatures: dict[str, str] = field(default_factory=dict)
     trace_counts: dict[str, int] = field(default_factory=dict)
     trace_signatures: dict[str, str] = field(default_factory=dict)
     current_opencode_text: dict[str, str] = field(default_factory=dict)
@@ -295,11 +296,17 @@ def poll_web_history(args: argparse.Namespace, state: MonitorState, *, initial: 
             message_id = str(item.get("id") or "").strip()
             if not message_id:
                 continue
+            signature = web_message_print_signature(item)
             with state.lock:
+                previous_signature = state.web_message_signatures.get(message_id, "")
+                changed = previous_signature != signature
+                state.web_message_signatures[message_id] = signature
                 already_seen = message_id in state.seen_message_ids
                 if not already_seen:
                     state.seen_message_ids.add(message_id)
             if already_seen:
+                if changed and should_print_seen_message_update(item):
+                    print_web_message(alias, item)
                 maybe_print_trace(args, state, alias, item)
                 continue
             if initial and not args.include_existing:
@@ -307,6 +314,23 @@ def poll_web_history(args: argparse.Namespace, state: MonitorState, *, initial: 
                 continue
             print_web_message(alias, item)
             maybe_print_trace(args, state, alias, item)
+
+
+def web_message_print_signature(item: dict[str, Any]) -> str:
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    return stable_json_signature(
+        {
+            "role": str(item.get("role") or ""),
+            "state": str(item.get("state") or ""),
+            "completion_state": str(meta.get("completion_state") or ""),
+            "native_session_id": native_session_id_from_web_message(item),
+            "content": str(item.get("content") or item.get("text") or ""),
+        }
+    )
+
+
+def should_print_seen_message_update(item: dict[str, Any]) -> bool:
+    return str(item.get("role") or "").strip().lower() == "assistant"
 
 
 def record_web_history_snapshot(state: MonitorState, alias: str, items: list[Any]) -> None:

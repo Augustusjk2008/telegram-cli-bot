@@ -1701,7 +1701,7 @@ describe("RealWebBotClient", () => {
     });
   });
 
-  test("getMessageTrace folds duplicate tool results and reorders commentary before tool call", async () => {
+  test("getMessageTrace folds duplicate tool results and keeps commentary in trace order", async () => {
     fetchMock
       .mockResolvedValueOnce({
         ok: true,
@@ -1762,11 +1762,11 @@ describe("RealWebBotClient", () => {
     expect(traceDetails.toolCallCount).toBe(1);
     expect(traceDetails.processCount).toBe(1);
     expect(traceDetails.trace.map((item) => item.kind)).toEqual([
-      "commentary",
       "tool_call",
       "tool_result",
+      "commentary",
     ]);
-    expect(traceDetails.trace[2]).toEqual(expect.objectContaining({
+    expect(traceDetails.trace[1]).toEqual(expect.objectContaining({
       callId: "call_1",
       summary: "final",
     }));

@@ -34,12 +34,11 @@ type TranscriptRenderItem =
   | { kind: "entry"; entry: NativeAgentTranscriptEntry }
   | { kind: "group"; groupIndex: number; entries: NativeAgentTranscriptEntry[] };
 
-function startsTranscriptGroup(entry: NativeAgentTranscriptEntry) {
-  return entry.kind === "process";
-}
-
 function cutsTranscriptGroup(entry: NativeAgentTranscriptEntry) {
-  return ["permission", "error", "cancelled"].includes(entry.kind);
+  return (
+    entry.trace?.kind === "commentary"
+    || ["permission", "error", "cancelled"].includes(entry.kind)
+  );
 }
 
 function isToolResultEntry(entry: NativeAgentTranscriptEntry) {
@@ -76,9 +75,6 @@ function groupTranscriptEntries(entries: NativeAgentTranscriptEntry[]): Transcri
       flushCurrent();
       grouped.push({ kind: "entry", entry });
       continue;
-    }
-    if (startsTranscriptGroup(entry) && current.length > 0) {
-      flushCurrent();
     }
     current.push(entry);
   }
