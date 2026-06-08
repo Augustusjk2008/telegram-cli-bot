@@ -4,6 +4,7 @@ import type {
   ChatMessageMetaInfo,
   ChatTraceEvent,
 } from "../services/types";
+import { mapChatMessageContextUsage } from "./contextUsage";
 import { mergeChatTraceEvents } from "./nativeAgentTranscript";
 
 export type AgUiActivityItem = {
@@ -196,49 +197,6 @@ function resolveActivityTraceKind(activityType: string, content: Record<string, 
   }
   const rawKind = asString(content.rawKind).trim();
   return rawKind || "event";
-}
-
-function mapContextUsage(value: unknown): ChatMessageContextUsage | undefined {
-  const raw = asRecord(value);
-  const provider = asString(raw.provider);
-  const source = asString(raw.source);
-  const sessionId = asString(raw.sessionId || raw.session_id);
-  const usedTokens = typeof raw.usedTokens === "number"
-    ? raw.usedTokens
-    : typeof raw.used_tokens === "number"
-      ? raw.used_tokens
-      : undefined;
-  const contextWindow = typeof raw.contextWindow === "number"
-    ? raw.contextWindow
-    : typeof raw.context_window === "number"
-      ? raw.context_window
-      : undefined;
-  const contextLeftPercent = typeof raw.contextLeftPercent === "number"
-    ? raw.contextLeftPercent
-    : typeof raw.context_left_percent === "number"
-      ? raw.context_left_percent
-      : undefined;
-  const usedDisplay = asString(raw.usedDisplay || raw.used_display);
-  const windowDisplay = asString(raw.windowDisplay || raw.window_display);
-  const statusText = asString(raw.statusText || raw.status_text);
-  const compactionCount = typeof raw.compactionCount === "number"
-    ? raw.compactionCount
-    : typeof raw.compaction_count === "number"
-      ? raw.compaction_count
-      : undefined;
-  const nextValue: ChatMessageContextUsage = {
-    ...(provider ? { provider } : {}),
-    ...(source ? { source } : {}),
-    ...(sessionId ? { sessionId } : {}),
-    ...(typeof usedTokens === "number" ? { usedTokens } : {}),
-    ...(typeof contextWindow === "number" ? { contextWindow } : {}),
-    ...(typeof contextLeftPercent === "number" ? { contextLeftPercent } : {}),
-    ...(usedDisplay ? { usedDisplay } : {}),
-    ...(windowDisplay ? { windowDisplay } : {}),
-    ...(statusText ? { statusText } : {}),
-    ...(typeof compactionCount === "number" ? { compactionCount } : {}),
-  };
-  return Object.keys(nextValue).length > 0 ? nextValue : undefined;
 }
 
 function getPermissionId(content: Record<string, unknown>) {
@@ -513,7 +471,7 @@ export function reduceAgUiRunEvent(state: AgUiRunState, event: AgUiEvent): AgUiR
         ? {
             previewText: asString(content.previewText).trim() || asString(content.message).trim() || state.previewText,
             elapsedSeconds: typeof content.elapsedSeconds === "number" ? content.elapsedSeconds : state.elapsedSeconds,
-            contextUsage: mapContextUsage(content.contextUsage) || state.contextUsage,
+            contextUsage: mapChatMessageContextUsage(content.contextUsage ?? content.context_usage) || state.contextUsage,
           }
         : {}),
       ...(event.activityType === "TCB_META"
@@ -702,10 +660,10 @@ export function reduceAgUiRunEvent(state: AgUiRunState, event: AgUiEvent): AgUiR
         ? result.elapsed_seconds
         : state.elapsedSeconds;
     const contextUsage = (
-      mapContextUsage(result.contextUsage)
-      || mapContextUsage(result.context_usage)
-      || mapContextUsage(resultMeta.contextUsage)
-      || mapContextUsage(resultMeta.context_usage)
+      mapChatMessageContextUsage(result.contextUsage)
+      || mapChatMessageContextUsage(result.context_usage)
+      || mapChatMessageContextUsage(resultMeta.contextUsage)
+      || mapChatMessageContextUsage(resultMeta.context_usage)
       || state.contextUsage
     );
     const cancelledTrace = completionState === "cancelled"

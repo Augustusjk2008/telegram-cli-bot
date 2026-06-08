@@ -207,6 +207,7 @@ import {
   createAgUiRunState,
   reduceAgUiRunEvent,
 } from "../utils/agUiRunReducer";
+import { mapChatMessageContextUsage } from "../utils/contextUsage";
 import { mergeChatTraceEvents } from "../utils/nativeAgentTranscript";
 
 type JsonEnvelope<T> = {
@@ -2080,66 +2081,8 @@ function displayNativeProvider(provider?: string) {
   return provider || undefined;
 }
 
-function mapContextUsage(raw?: RawChatMessageContextUsage | null): ChatMessageContextUsage | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  const contextUsage: ChatMessageContextUsage = {};
-  if (raw.provider) {
-    contextUsage.provider = displayNativeProvider(raw.provider);
-  }
-  if (raw.source) {
-    contextUsage.source = raw.source;
-  }
-  if (raw.session_id) {
-    contextUsage.sessionId = raw.session_id;
-  }
-  if (typeof raw.used_tokens === "number") {
-    contextUsage.usedTokens = raw.used_tokens;
-  }
-  if (typeof raw.context_window === "number") {
-    contextUsage.contextWindow = raw.context_window;
-  }
-  if (typeof raw.context_left_percent === "number") {
-    contextUsage.contextLeftPercent = raw.context_left_percent;
-  }
-  if (typeof raw.context_used === "number") {
-    contextUsage.contextUsed = raw.context_used;
-  }
-  if (typeof raw.context_used_percent === "number") {
-    contextUsage.contextUsedPercent = raw.context_used_percent;
-  }
-  if (typeof raw.input_tokens === "number") {
-    contextUsage.inputTokens = raw.input_tokens;
-  }
-  if (typeof raw.cache_read_tokens === "number") {
-    contextUsage.cacheReadTokens = raw.cache_read_tokens;
-  }
-  if (typeof raw.cache_write_tokens === "number") {
-    contextUsage.cacheWriteTokens = raw.cache_write_tokens;
-  }
-  if (typeof raw.output_tokens === "number") {
-    contextUsage.outputTokens = raw.output_tokens;
-  }
-  if (typeof raw.reasoning_tokens === "number") {
-    contextUsage.reasoningTokens = raw.reasoning_tokens;
-  }
-  if (raw.model) {
-    contextUsage.model = raw.model;
-  }
-  if (raw.used_display) {
-    contextUsage.usedDisplay = raw.used_display;
-  }
-  if (raw.window_display) {
-    contextUsage.windowDisplay = raw.window_display;
-  }
-  if (raw.status_text) {
-    contextUsage.statusText = raw.status_text;
-  }
-  if (typeof raw.compaction_count === "number" && raw.compaction_count > 0) {
-    contextUsage.compactionCount = raw.compaction_count;
-  }
-  return Object.keys(contextUsage).length > 0 ? contextUsage : undefined;
+function mapContextUsage(raw?: unknown): ChatMessageContextUsage | undefined {
+  return mapChatMessageContextUsage(raw);
 }
 
 function mapMessageMeta(raw?: RawChatMessageMeta | null): ChatMessageMetaInfo | undefined {
@@ -2245,6 +2188,23 @@ function mergeMessageMeta(
   };
 
   return Object.values(meta).some((value) => typeof value !== "undefined") ? meta : undefined;
+}
+
+function normalizeResolvedFinalMessage(message: ChatMessage): ChatMessage {
+  if (message.state === "error") {
+    return message;
+  }
+  const completionState = String(message.meta?.completionState || "").trim().toLowerCase();
+  if (["cancelled", "canceled", "error", "failed"].includes(completionState)) {
+    return {
+      ...message,
+      state: "error",
+    };
+  }
+  return {
+    ...message,
+    state: "done",
+  };
 }
 
 function mapChatMessageAuthor(raw?: RawChatMessageAuthor | null): ChatMessage["author"] | undefined {
@@ -3623,6 +3583,21 @@ function parseSseBlock(block: string): StreamEvent | null {
   }
 }
 
+function findSseSeparator(buffer: string): { index: number; length: number } | null {
+  const lfIndex = buffer.indexOf("\n\n");
+  const crlfIndex = buffer.indexOf("\r\n\r\n");
+  if (lfIndex < 0 && crlfIndex < 0) {
+    return null;
+  }
+  if (lfIndex < 0) {
+    return { index: crlfIndex, length: 4 };
+  }
+  if (crlfIndex < 0 || lfIndex < crlfIndex) {
+    return { index: lfIndex, length: 2 };
+  }
+  return { index: crlfIndex, length: 4 };
+}
+
 function mapNotificationSettings(data: RawNotificationSettings | null | undefined): NotificationSettingsStatus {
   return {
     pushPlusEnabled: Boolean(data?.pushplus_enabled ?? data?.pushPlusEnabled),
@@ -3727,14 +3702,14 @@ export class RealWebBotClient implements WebBotClient {
       }
       buffer += decoder.decode(value, { stream: true });
 
-      let separatorIndex = buffer.indexOf("\n\n");
-      while (separatorIndex >= 0) {
-        const block = buffer.slice(0, separatorIndex);
-        buffer = buffer.slice(separatorIndex + 2);
+      let separator = findSseSeparator(buffer);
+      while (separator) {
+        const block = buffer.slice(0, separator.index);
+        buffer = buffer.slice(separator.index + separator.length);
 
         const event = parseSseBlock(block);
         if (!event) {
-          separatorIndex = buffer.indexOf("\n\n");
+          separator = findSseSeparator(buffer);
           continue;
         }
 
@@ -3752,7 +3727,7 @@ export class RealWebBotClient implements WebBotClient {
           throw new Error(event.message || fallbackMessage);
         }
 
-        separatorIndex = buffer.indexOf("\n\n");
+        separator = findSseSeparator(buffer);
       }
     }
 
@@ -4539,7 +4514,9 @@ export class RealWebBotClient implements WebBotClient {
     options?: ChatSendOptions,
     onAgUiEvent?: (event: AgUiEvent) => void,
   ): Promise<ChatMessage> {
-    const response = await fetch(withApiBase(`/api/bots/${encodeURIComponent(botAlias)}/chat/stream?protocol=ag-ui`), {
+    const useAgUiProtocol = options?.executionMode === "native_agent";
+    const streamUrl = `/api/bots/${encodeURIComponent(botAlias)}/chat/stream${useAgUiProtocol ? "?protocol=ag-ui" : ""}`;
+    const response = await fetch(withApiBase(streamUrl), {
       method: "POST",
       credentials: "same-origin",
       headers: this.headers({
@@ -4552,7 +4529,7 @@ export class RealWebBotClient implements WebBotClient {
         ...(options?.visibleText ? { visible_text: options.visibleText } : {}),
         ...(options?.agentId ? { agent_id: options.agentId } : {}),
         ...(options?.executionMode ? { execution_mode: options.executionMode } : {}),
-        protocol: "ag-ui",
+        ...(useAgUiProtocol ? { protocol: "ag-ui" } : {}),
         ...(options?.cluster ? { cluster: true } : {}),
         ...(options?.mentions ? {
           mentions: options.mentions.map((mention) => ({
@@ -4597,14 +4574,14 @@ export class RealWebBotClient implements WebBotClient {
       }
       buffer += decoder.decode(value, { stream: true });
 
-      let separatorIndex = buffer.indexOf("\n\n");
-      while (separatorIndex >= 0) {
-        const block = buffer.slice(0, separatorIndex);
-        buffer = buffer.slice(separatorIndex + 2);
+      let separator = findSseSeparator(buffer);
+      while (separator) {
+        const block = buffer.slice(0, separator.index);
+        buffer = buffer.slice(separator.index + separator.length);
 
         const event = parseSseBlock(block);
         if (!event) {
-          separatorIndex = buffer.indexOf("\n\n");
+          separator = findSseSeparator(buffer);
           continue;
         }
 
@@ -4658,7 +4635,7 @@ export class RealWebBotClient implements WebBotClient {
         }
 
         if (sawAgUiEvent) {
-          separatorIndex = buffer.indexOf("\n\n");
+          separator = findSseSeparator(buffer);
           continue;
         }
 
@@ -4724,13 +4701,13 @@ export class RealWebBotClient implements WebBotClient {
           throw new Error(event.message || "流式响应失败");
         }
 
-        separatorIndex = buffer.indexOf("\n\n");
+        separator = findSseSeparator(buffer);
       }
     }
 
     if (finalMessage) {
       if (sawAgUiEvent) {
-        return {
+        return normalizeResolvedFinalMessage({
           ...finalMessage,
           text: finalMessage.text || finalText || agUiState.assistantText,
           elapsedSeconds: finalMessage.elapsedSeconds ?? agUiState.elapsedSeconds ?? finalElapsedSeconds,
@@ -4741,9 +4718,9 @@ export class RealWebBotClient implements WebBotClient {
               buildAgUiMessageMeta(agUiState, { nativeAgent: options?.executionMode === "native_agent" }),
             ),
           ),
-        };
+        });
       }
-      return {
+      return normalizeResolvedFinalMessage({
         ...finalMessage,
         elapsedSeconds: finalMessage.elapsedSeconds ?? finalElapsedSeconds,
         meta: mergeMessageMeta(
@@ -4751,7 +4728,7 @@ export class RealWebBotClient implements WebBotClient {
           finalMessage.meta,
           streamedTrace,
         ),
-      };
+      });
     }
 
     if (sawAgUiEvent) {
@@ -6130,14 +6107,14 @@ export class RealWebBotClient implements WebBotClient {
       }
       buffer += decoder.decode(value, { stream: true });
 
-      let separatorIndex = buffer.indexOf("\n\n");
-      while (separatorIndex >= 0) {
-        const block = buffer.slice(0, separatorIndex);
-        buffer = buffer.slice(separatorIndex + 2);
+      let separator = findSseSeparator(buffer);
+      while (separator) {
+        const block = buffer.slice(0, separator.index);
+        buffer = buffer.slice(separator.index + separator.length);
 
         const event = parseSseBlock(block);
         if (!event) {
-          separatorIndex = buffer.indexOf("\n\n");
+          separator = findSseSeparator(buffer);
           continue;
         }
 
@@ -6160,7 +6137,7 @@ export class RealWebBotClient implements WebBotClient {
           throw new Error(event.message || "生成 patch 失败");
         }
 
-        separatorIndex = buffer.indexOf("\n\n");
+        separator = findSseSeparator(buffer);
       }
     }
 

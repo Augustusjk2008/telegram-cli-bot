@@ -343,6 +343,27 @@ test("shows streaming state before assistant message completes", async () => {
   expect(await screen.findByText("稍后完成")).toBeInTheDocument();
 });
 
+test("final resolved assistant message does not keep streaming state", async () => {
+  const client = createClient({
+    sendMessage: async () => ({
+      id: "assistant-final-streaming",
+      role: "assistant",
+      text: "已完成",
+      createdAt: new Date().toISOString(),
+      state: "streaming",
+    }),
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+  await userEvent.type(screen.getByPlaceholderText("输入消息"), "继续");
+  await userEvent.click(screen.getByRole("button", { name: "发送" }));
+
+  const finalText = await screen.findByText("已完成");
+  expect(finalText.closest("[data-streaming]")).toHaveAttribute("data-streaming", "false");
+  expect(screen.queryByText("正在输出...")).not.toBeInTheDocument();
+});
+
 test("replaces snapshot text and appends later stream chunks", async () => {
   let resolveFinal!: (message: ChatMessage) => void;
   const client = createClient({
@@ -1682,12 +1703,50 @@ test("native agent model select is enabled and saves bot model", async () => {
 
   const modelSelect = await screen.findByLabelText("模型");
   expect(modelSelect).toBeEnabled();
-  expect(within(modelSelect).getByRole("option", { name: "jojocode_max / gpt-5.4" })).toBeInTheDocument();
+  await waitFor(() => {
+    expect(within(modelSelect).getByRole("option", { name: "jojocode_max / gpt-5.4" })).toBeInTheDocument();
+  });
 
   await user.selectOptions(modelSelect, "jojocode_max/gpt-5.5");
 
   await waitFor(() => expect(updateNativeAgentModel).toHaveBeenCalledWith("main", "jojocode_max/gpt-5.5"));
   expect(updateCliParam).not.toHaveBeenCalled();
+});
+
+test("shows CLI context usage as text badge without ring", async () => {
+  const now = new Date().toISOString();
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "assistant-cli-context",
+        role: "assistant",
+        text: "完成",
+        createdAt: now,
+        state: "done",
+        meta: {
+          contextUsage: {
+            provider: "codex",
+            source: "codex_session_token_count",
+            contextUsed: 36565,
+            contextWindow: 1000000,
+            contextLeftPercent: 74,
+            usedDisplay: "36.6K",
+            windowDisplay: "1M",
+            statusText: "74% context left · 36.6K / 1M",
+            compactionCount: 1,
+          },
+        },
+      },
+    ],
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByText("完成")).toBeInTheDocument();
+  const textBadge = await screen.findByTestId("chat-message-context-usage-text");
+  expect(textBadge).toHaveTextContent("74% left · 36.6K / 1M (compacted once)");
+  expect(textBadge).toHaveAttribute("title", "36.6K used / 1M window (compacted once)");
+  expect(screen.queryByTestId("chat-message-context-usage")).not.toBeInTheDocument();
 });
 
 test("shows context usage ring with native token details", async () => {
@@ -1701,7 +1760,9 @@ test("shows context usage ring with native token details", async () => {
         createdAt: now,
         state: "done",
         meta: {
+          tracePresentation: "native_agent_flat",
           contextUsage: {
+            provider: "原生 agent",
             contextUsed: 36565,
             contextWindow: 1000000,
             contextUsedPercent: 4,
@@ -1719,7 +1780,8 @@ test("shows context usage ring with native token details", async () => {
 
   render(<ChatScreen botAlias="main" client={client} />);
 
-  const ring = await screen.findByLabelText("context 已用 4%");
+  const ring = await screen.findByTestId("chat-message-context-usage");
+  expect(ring).toHaveAttribute("aria-label", "context 已用 4%");
   expect(ring).toHaveAttribute("title", expect.stringContaining("context window: 1,000,000"));
   expect(ring).toHaveAttribute("title", expect.stringContaining("cache read: 35,328"));
 });

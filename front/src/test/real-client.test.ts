@@ -293,8 +293,65 @@ describe("RealWebBotClient", () => {
     });
 
     const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/bots/main/chat/stream");
+    expect(body.protocol).toBeUndefined();
     expect(body.cluster).toBe(true);
     expect(body.mentions[0]).toMatchObject({ agent_id: "reviewer", label: "代码审查" });
+  });
+
+  test("sendMessage uses plain stream protocol for CLI messages", async () => {
+    const encoder = new TextEncoder();
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: vi.fn()
+            .mockResolvedValueOnce({
+              value: encoder.encode("data: {\"type\":\"done\",\"output\":\"ok\"}\n\n"),
+              done: false,
+            })
+            .mockResolvedValueOnce({ value: undefined, done: true }),
+          cancel: vi.fn().mockResolvedValue(undefined),
+        }),
+      },
+    });
+
+    const client = new RealWebBotClient();
+    await client.sendMessage("main", "hi", vi.fn());
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/bots/main/chat/stream");
+    expect(body.protocol).toBeUndefined();
+  });
+
+  test("sendMessage keeps task mode on plain stream protocol", async () => {
+    const encoder = new TextEncoder();
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: vi.fn()
+            .mockResolvedValueOnce({
+              value: encoder.encode("data: {\"type\":\"done\",\"output\":\"ok\"}\n\n"),
+              done: false,
+            })
+            .mockResolvedValueOnce({ value: undefined, done: true }),
+          cancel: vi.fn().mockResolvedValue(undefined),
+        }),
+      },
+    });
+
+    const client = new RealWebBotClient();
+    await client.sendMessage("main", "run plan", vi.fn(), undefined, undefined, {
+      taskMode: "plan",
+      taskPayload: { path: "docs/plan.md" },
+    });
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/bots/main/chat/stream");
+    expect(body.protocol).toBeUndefined();
+    expect(body.task_mode).toBe("plan");
+    expect(body.task_payload).toEqual({ path: "docs/plan.md" });
   });
 
   test("sendMessage includes native agent execution mode", async () => {
@@ -320,8 +377,33 @@ describe("RealWebBotClient", () => {
     });
 
     const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/bots/main/chat/stream?protocol=ag-ui");
     expect(body.execution_mode).toBe("native_agent");
     expect(body.protocol).toBe("ag-ui");
+  });
+
+  test("sendMessage parses legacy CRLF SSE delta and done as completed", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode("data: {\"type\":\"delta\",\"text\":\"he\"}\r\n\r\n"));
+        controller.enqueue(encoder.encode("data: {\"type\":\"delta\",\"text\":\"llo\"}\r\n\r\n"));
+        controller.enqueue(encoder.encode("data: {\"type\":\"done\",\"output\":\"hello\",\"elapsed_seconds\":2,\"message\":{\"id\":\"msg-final\",\"role\":\"assistant\",\"content\":\"hello\",\"state\":\"streaming\",\"created_at\":\"2026-06-06T00:00:00Z\"}}\r\n\r\n"));
+        controller.close();
+      },
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: stream,
+      json: async () => ({ ok: true, data: {} }),
+    });
+
+    const client = new RealWebBotClient();
+    const message = await client.sendMessage("main", "hi", vi.fn());
+
+    expect(message.text).toBe("hello");
+    expect(message.state).toBe("done");
+    expect(message.elapsedSeconds).toBe(2);
   });
 
   test("sendMessage parses ag-ui stream without legacy trace callbacks", async () => {

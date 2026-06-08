@@ -7,6 +7,7 @@ type Props = {
   align?: "left" | "right";
   avatar?: ReactNode;
   contextUsage?: ChatMessageContextUsage;
+  contextVariant?: "text" | "ring";
 };
 
 function formatTime(createdAt: string) {
@@ -63,7 +64,38 @@ function clampPercent(value: number) {
   return Math.max(0, Math.min(100, value));
 }
 
-function formatContextUsage(contextUsage?: ChatMessageContextUsage) {
+function formatTextContextUsage(contextUsage?: ChatMessageContextUsage) {
+  if (!contextUsage) {
+    return null;
+  }
+  const percent = typeof contextUsage.contextLeftPercent === "number"
+    ? `${contextUsage.contextLeftPercent}% left`
+    : "";
+  const usage = contextUsage.usedDisplay && contextUsage.windowDisplay
+    ? `${contextUsage.usedDisplay} / ${contextUsage.windowDisplay}`
+    : "";
+  const baseText = (contextUsage.statusText || [percent, usage].filter(Boolean).join(" · "))
+    .replace(/\bcontext left\b/g, "left");
+  if (!baseText) {
+    return null;
+  }
+  const compactionText = formatCompactionCount(contextUsage.compactionCount);
+  const text = [baseText, compactionText ? `(${compactionText})` : ""].filter(Boolean).join(" ");
+  if (!text) {
+    return null;
+  }
+  const baseTitle = contextUsage.usedDisplay && contextUsage.windowDisplay
+    ? `${contextUsage.usedDisplay} used / ${contextUsage.windowDisplay} window`
+    : baseText;
+  const title = compactionText ? `${baseTitle} (${compactionText})` : baseTitle;
+  return {
+    text,
+    title,
+    isLow: typeof contextUsage.contextLeftPercent === "number" && contextUsage.contextLeftPercent < 25,
+  };
+}
+
+function formatRingContextUsage(contextUsage?: ChatMessageContextUsage) {
   if (!contextUsage) {
     return null;
   }
@@ -100,22 +132,35 @@ function formatContextUsage(contextUsage?: ChatMessageContextUsage) {
   };
 }
 
-export function ChatMessageMeta({ name, createdAt, align = "left", avatar, contextUsage }: Props) {
-  const context = formatContextUsage(contextUsage);
+export function ChatMessageMeta({ name, createdAt, align = "left", avatar, contextUsage, contextVariant = "text" }: Props) {
+  const textContext = contextVariant === "text" ? formatTextContextUsage(contextUsage) : null;
+  const ringContext = contextVariant === "ring" ? formatRingContextUsage(contextUsage) : null;
   return (
     <div
       className={align === "right"
-        ? "mb-1.5 flex items-center justify-end gap-2 text-xs"
-        : "mb-1.5 flex items-center gap-2 text-xs"}
+        ? "mb-1.5 flex min-w-0 items-center justify-end gap-2 text-xs"
+        : "mb-1.5 flex min-w-0 items-center gap-2 text-xs"}
     >
-      {align === "left" ? avatar : null}
-      <span className="max-w-[12rem] truncate font-medium text-[var(--text)]">{name}</span>
-      <span className="text-[var(--muted)]">{formatTime(createdAt)}</span>
-      {context ? (
+      {align === "left" && avatar ? <span className="shrink-0">{avatar}</span> : null}
+      <span className="min-w-0 max-w-[12rem] truncate font-medium text-[var(--text)]">{name}</span>
+      <span className="shrink-0 text-[var(--muted)]">{formatTime(createdAt)}</span>
+      {textContext ? (
         <span
-          aria-label={context.label}
-          className="inline-flex h-4 w-4 items-center justify-center text-[var(--muted)]"
-          title={context.title}
+          className={textContext.isLow
+            ? "rounded-md border border-red-200 bg-red-50 px-1.5 py-0.5 font-medium text-red-600"
+            : "rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-1.5 py-0.5 text-[var(--muted)]"}
+          data-testid="chat-message-context-usage-text"
+          title={textContext.title}
+        >
+          {textContext.text}
+        </span>
+      ) : null}
+      {ringContext ? (
+        <span
+          aria-label={ringContext.label}
+          className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-[var(--muted)]"
+          data-testid="chat-message-context-usage"
+          title={ringContext.title}
         >
           <svg viewBox="0 0 20 20" className="h-4 w-4" aria-hidden="true">
             <circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" />
@@ -127,14 +172,14 @@ export function ChatMessageMeta({ name, createdAt, align = "left", avatar, conte
               stroke="currentColor"
               strokeWidth="2"
               strokeDasharray={43.98}
-              strokeDashoffset={43.98 - (43.98 * context.percent) / 100}
+              strokeDashoffset={43.98 - (43.98 * ringContext.percent) / 100}
               strokeLinecap="round"
               transform="rotate(-90 10 10)"
             />
           </svg>
         </span>
       ) : null}
-      {align === "right" ? avatar : null}
+      {align === "right" && avatar ? <span className="shrink-0">{avatar}</span> : null}
     </div>
   );
 }

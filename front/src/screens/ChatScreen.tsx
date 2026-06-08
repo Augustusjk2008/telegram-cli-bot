@@ -483,6 +483,23 @@ function normalizeInactiveStreamingRows(items: ChatMessage[], runtimeActive: boo
     });
 }
 
+function normalizeResolvedFinalMessage(message: ChatMessage): ChatMessage {
+  if (message.state === "error") {
+    return message;
+  }
+  const completionState = String(message.meta?.completionState || "").trim().toLowerCase();
+  if (["cancelled", "canceled", "error", "failed"].includes(completionState)) {
+    return {
+      ...message,
+      state: "error",
+    };
+  }
+  return {
+    ...message,
+    state: "done",
+  };
+}
+
 function countPersistedHistoryItems(items: ChatMessage[]) {
   return items.filter((item) => !item.id.startsWith("assistant-cron-")).length;
 }
@@ -769,6 +786,16 @@ function getMessageClientStateKey(item: ChatMessage) {
   return `${item.role}|${item.id}`;
 }
 
+function shouldShowContextRing(meta?: ChatMessageMetaInfo) {
+  const provider = String(meta?.contextUsage?.provider || "").trim().toLowerCase();
+  return (
+    isNativeAgentMessage(meta)
+    || provider === "native_agent"
+    || provider === "opencode"
+    || provider === "原生 agent"
+  );
+}
+
 function appendTraceToMessage(item: ChatMessage, traceEvent: ChatTraceEvent, tracePresentation?: ChatMessageMetaInfo["tracePresentation"]): ChatMessage {
   return {
     ...item,
@@ -1021,6 +1048,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const trace = item.meta?.trace;
   const agUiRunState = item.role === "assistant" ? getAgUiRunState(item.meta) : null;
   const isNativeAgentAssistant = item.role === "assistant" && isNativeAgentMessage(item.meta);
+  const showContextRing = item.role === "assistant" && shouldShowContextRing(item.meta);
   const nativeTranscriptEntries = buildNativeAgentTranscriptEntries({
     trace,
     agUiState: agUiRunState,
@@ -1048,6 +1076,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
           align={messageAlign}
           avatar={inlineAvatar}
           contextUsage={!isUser ? item.meta?.contextUsage : undefined}
+          contextVariant={showContextRing ? "ring" : "text"}
         />
         <div
           data-streaming={isStreamingAssistant ? "true" : "false"}
@@ -2908,7 +2937,7 @@ export function ChatScreen({
       const elapsedSeconds = typeof finalMessage.elapsedSeconds === "number"
         ? finalMessage.elapsedSeconds
         : Math.max(0, Math.floor((Date.now() - localStartedAtMs) / 1000));
-      const finalizedMessage: ChatMessage = {
+      const finalizedMessage: ChatMessage = normalizeResolvedFinalMessage({
         ...finalMessage,
         elapsedSeconds,
         ...(sawAgUiEvent && agUiState
@@ -2919,7 +2948,7 @@ export function ChatScreen({
               ),
             }
           : {}),
-      };
+      });
 
       setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => ({
         ...finalizedMessage,

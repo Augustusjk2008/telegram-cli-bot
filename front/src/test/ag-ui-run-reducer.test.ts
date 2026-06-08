@@ -123,6 +123,92 @@ describe("agUiRunReducer", () => {
     }));
   });
 
+  test("maps snake case TCB_STATUS context usage fields", () => {
+    const state = reduceAgUiRunEvent(createAgUiRunState(), {
+      type: EventType.ACTIVITY_SNAPSHOT,
+      messageId: "msg-ctx",
+      activityType: "TCB_STATUS",
+      replace: true,
+      content: {
+        context_usage: {
+          provider: "native_agent",
+          source: "status",
+          session_id: "thread-ctx",
+          context_window: 1000000,
+          context_used: 36565,
+          context_used_percent: 4,
+          input_tokens: 1237,
+          cache_read_tokens: 35328,
+          cache_write_tokens: 0,
+          output_tokens: 512,
+          reasoning_tokens: 128,
+          model: "jojocode_max/gpt-5.4",
+        },
+      },
+    });
+
+    expect(state.contextUsage).toEqual(expect.objectContaining({
+      provider: "原生 agent",
+      source: "status",
+      sessionId: "thread-ctx",
+      contextWindow: 1000000,
+      contextUsed: 36565,
+      contextUsedPercent: 4,
+      inputTokens: 1237,
+      cacheReadTokens: 35328,
+      cacheWriteTokens: 0,
+      outputTokens: 512,
+      reasoningTokens: 128,
+      model: "jojocode_max/gpt-5.4",
+    }));
+  });
+
+  test("maps run finished context usage from result and message meta", () => {
+    const fromResult = reduceAgUiRunEvent(createAgUiRunState(), {
+      type: EventType.RUN_FINISHED,
+      threadId: "thread-1",
+      runId: "run-1",
+      result: {
+        context_usage: {
+          context_used: 100,
+          input_tokens: 40,
+          model: "result-model",
+        },
+      },
+      outcome: { type: "success" },
+    });
+    const fromMessageMeta = reduceAgUiRunEvent(createAgUiRunState(), {
+      type: EventType.RUN_FINISHED,
+      threadId: "thread-2",
+      runId: "run-2",
+      result: {
+        message: {
+          meta: {
+            context_usage: {
+              context_used_percent: 8,
+              output_tokens: 12,
+              reasoning_tokens: 3,
+              model: "message-model",
+            },
+          },
+        },
+      },
+      outcome: { type: "success" },
+    });
+
+    expect(fromResult.contextUsage).toEqual(expect.objectContaining({
+      contextUsed: 100,
+      inputTokens: 40,
+      model: "result-model",
+    }));
+    expect(fromMessageMeta.contextUsage).toEqual(expect.objectContaining({
+      contextUsedPercent: 8,
+      outputTokens: 12,
+      reasoningTokens: 3,
+      model: "message-model",
+    }));
+  });
+
   test("does not infer native flat presentation from session error alone", () => {
     const state = reduceAgUiRunEvent(createAgUiRunState(), {
       type: EventType.RUN_ERROR,
