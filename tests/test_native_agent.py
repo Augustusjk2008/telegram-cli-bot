@@ -287,6 +287,29 @@ def test_native_agent_aggregator_suppresses_reasoning_delta_and_step_noise():
     assert aggregator.text() == "最终回答"
 
 
+def test_native_agent_aggregator_classifies_file_change_events_as_process_events():
+    aggregator = NativeAgentAggregator(user_message_id="msg-user")
+    edited = unwrap_event({
+        "type": "file.edited",
+        "id": "evt-file-edited",
+        "path": "docs/runtime-environment-note.md",
+    })
+    watcher = unwrap_event({
+        "type": "file.watcher.updated",
+        "id": "evt-file-watcher",
+        "path": "docs/runtime-environment-note.md",
+    })
+
+    assert edited is not None
+    assert watcher is not None
+
+    edited_result = aggregator.apply(edited)
+    watcher_result = aggregator.apply(watcher)
+
+    assert edited_result.trace[0]["kind"] == "event"
+    assert watcher_result.trace[0]["kind"] == "event"
+
+
 @pytest.mark.asyncio
 async def test_native_agent_turn_state_waits_past_tool_calls_message_for_final_answer():
     aggregator = NativeAgentAggregator(user_message_id="u-new")
@@ -525,6 +548,64 @@ def test_native_agent_trace_keeps_commentary_before_tool_call():
     assert result.trace[0]["summary"] == "我先读取文件。"
     assert result.trace[1]["call_id"] == "tool-1"
     assert aggregator.text() == ""
+
+
+def test_native_agent_aggregator_deduplicates_commentary_reclassified_after_tool_flush():
+    aggregator = NativeAgentAggregator(user_message_id="u-new")
+    preview = unwrap_event({
+        "type": "message.updated",
+        "sessionID": "sess-1",
+        "message": {
+            "id": "assistant-tool",
+            "role": "assistant",
+            "content": "我先读取文件。",
+        },
+    })
+    tool = unwrap_event({
+        "type": "message.part.updated",
+        "sessionID": "sess-1",
+        "part": {
+            "id": "tool-1",
+            "type": "tool",
+            "messageID": "assistant-tool",
+            "tool": "bash",
+            "arguments": {"command": "pwd"},
+            "state": {"status": "running"},
+        },
+    })
+    replayed_preview = unwrap_event({
+        "type": "message.updated",
+        "sessionID": "sess-1",
+        "message": {
+            "id": "assistant-tool",
+            "role": "assistant",
+            "content": "我先读取文件。",
+        },
+    })
+    followup = unwrap_event({
+        "type": "message.updated",
+        "sessionID": "sess-1",
+        "message": {
+            "id": "assistant-tool",
+            "role": "assistant",
+            "finish": "tool-calls",
+            "content": "我先读取文件。",
+        },
+    })
+
+    assert preview is not None
+    assert tool is not None
+    assert replayed_preview is not None
+    assert followup is not None
+
+    aggregator.apply(preview)
+    tool_result = aggregator.apply(tool)
+    aggregator.apply(replayed_preview)
+    followup_result = aggregator.apply(followup)
+
+    assert [item["kind"] for item in tool_result.trace] == ["commentary", "tool_call"]
+    assert tool_result.trace[0]["summary"] == "我先读取文件。"
+    assert followup_result.trace == []
 
 
 def test_native_agent_trace_collapses_running_and_completed_tool_results():

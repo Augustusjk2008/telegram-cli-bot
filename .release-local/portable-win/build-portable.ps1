@@ -49,6 +49,23 @@ function Invoke-CheckedCommand {
     }
 }
 
+function Invoke-FrontDistAssetCheck {
+    Write-Step "校验前端构建资源路径"
+    Invoke-CheckedCommand -FilePath "node" -Arguments @("scripts/verify-build-assets.mjs") -FailureMessage "前端构建资源路径校验失败" -WorkingDirectory $script:FrontDir
+}
+
+function Invoke-PortableFrontBuild {
+    Write-Step "构建前端（绿色版根路径资源）"
+    $originalValue = [Environment]::GetEnvironmentVariable("TCB_FRONT_BUILD_ROOT_BASE", "Process")
+    try {
+        [Environment]::SetEnvironmentVariable("TCB_FRONT_BUILD_ROOT_BASE", "1", "Process")
+        Invoke-CheckedCommand -FilePath "npm.cmd" -Arguments @("run", "build") -FailureMessage "前端构建失败" -WorkingDirectory $script:FrontDir
+    } finally {
+        [Environment]::SetEnvironmentVariable("TCB_FRONT_BUILD_ROOT_BASE", $originalValue, "Process")
+    }
+    Invoke-FrontDistAssetCheck
+}
+
 function Get-AppVersion {
     if (Test-Path -LiteralPath $script:VersionFile) {
         return (Get-Content -LiteralPath $script:VersionFile -Raw -Encoding UTF8).Trim()
@@ -654,8 +671,9 @@ try {
     Reset-Directory -Path $packageRoot
 
     if (-not $SkipFrontBuild) {
-        Write-Step "构建前端"
-        Invoke-CheckedCommand -FilePath "npm.cmd" -Arguments @("run", "build") -FailureMessage "前端构建失败" -WorkingDirectory $script:FrontDir
+        Invoke-PortableFrontBuild
+    } else {
+        Invoke-FrontDistAssetCheck
     }
 
     Copy-WorktreeFiles -DestinationRoot $packageRoot

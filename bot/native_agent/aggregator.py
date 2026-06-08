@@ -6,6 +6,8 @@ from typing import Any
 
 from bot.native_agent.events import NativeAgentEvent
 
+PROCESS_EVENT_KINDS = {"file.edited", "file.watcher.updated"}
+
 
 def _value_text(value: Any) -> str:
     if value is None:
@@ -100,6 +102,19 @@ def _message_parts_text(parts: Any) -> str:
     return "".join(texts)
 
 
+def _normalized_commentary_summary(text: str) -> str:
+    return " ".join(str(text or "").split())
+
+
+def _commentary_summary_key(text: str) -> str:
+    return "".join(str(text or "").split())
+
+
+def _is_unstable_commentary_message_id(message_id: str) -> bool:
+    normalized = str(message_id or "").strip()
+    return not normalized or normalized.startswith("evt_")
+
+
 @dataclass
 class NativeAgentAggregationResult:
     delta: str = ""
@@ -130,7 +145,7 @@ class NativeAgentAggregator:
         self.final_message_id = ""
         self.tool_call_emitted: set[str] = set()
         self.tool_result_signatures: dict[str, str] = {}
-        self.commentary_trace_signatures: set[tuple[str, str, str]] = set()
+        self.commentary_trace_summary_message_ids: dict[str, set[str]] = {}
         self.final_text = ""
         self.permission_pending: dict[str, dict[str, Any]] = {}
         self.assistant_completed = False
@@ -524,7 +539,10 @@ class NativeAgentAggregator:
             summary = raw_type
         if not summary:
             return None
-        trace_kind = "tool_call" if any(token in kind for token in ("tool", "bash", "file", "patch")) else "event"
+        is_tool_like_event = kind not in PROCESS_EVENT_KINDS and any(
+            token in kind for token in ("tool", "bash", "file", "patch")
+        )
+        trace_kind = "tool_call" if is_tool_like_event else "event"
         return self._trace(trace_kind, summary, payload, raw_type=raw_type)
 
     def _trace(
@@ -555,13 +573,20 @@ class NativeAgentAggregator:
         reason: str,
         payload: dict[str, Any],
     ) -> dict[str, Any] | None:
-        summary = " ".join(str(text or "").split())
+        summary = _normalized_commentary_summary(text)
         if not summary:
             return None
-        signature = (str(message_id or ""), str(reason or ""), summary)
-        if signature in self.commentary_trace_signatures:
+        message_key = str(message_id or "").strip()
+        summary_key = _commentary_summary_key(summary)
+        seen_message_ids = self.commentary_trace_summary_message_ids.setdefault(summary_key, set())
+        if message_key in seen_message_ids:
             return None
-        self.commentary_trace_signatures.add(signature)
+        unstable_message_id = _is_unstable_commentary_message_id(message_key)
+        if unstable_message_id and seen_message_ids:
+            return None
+        if not unstable_message_id and any(_is_unstable_commentary_message_id(seen) for seen in seen_message_ids):
+            return None
+        seen_message_ids.add(message_key)
         return self._trace(
             "commentary",
             summary,

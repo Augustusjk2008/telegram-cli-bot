@@ -192,13 +192,19 @@ export default defineConfig(({mode}) => {
   const publicEnv = Object.fromEntries(
     Object.entries(env).filter(([key]) => key.startsWith('VITE_')),
   );
-  if (!publicEnv.VITE_BASE_PATH && env.WEB_BASE_PATH) {
+  const useRootBuildBase = env.TCB_FRONT_BUILD_ROOT_BASE === '1';
+  if (useRootBuildBase) {
+    delete publicEnv.VITE_BASE_PATH;
+    delete publicEnv.VITE_API_BASE_URL;
+  } else if (!publicEnv.VITE_BASE_PATH && env.WEB_BASE_PATH) {
     publicEnv.VITE_BASE_PATH = env.WEB_BASE_PATH;
   }
-  if (!publicEnv.VITE_API_BASE_URL && env.WEB_BASE_PATH) {
+  if (!useRootBuildBase && !publicEnv.VITE_API_BASE_URL && env.WEB_BASE_PATH) {
     publicEnv.VITE_API_BASE_URL = env.WEB_BASE_PATH;
   }
-  const viteBasePath = normalizeBasePath(env.VITE_BASE_PATH || env.WEB_BASE_PATH);
+  const viteBasePath = useRootBuildBase
+    ? '/'
+    : normalizeBasePath(env.VITE_BASE_PATH || env.WEB_BASE_PATH);
   return {
     base: viteBasePath,
     plugins: [react(), tailwindcss()],

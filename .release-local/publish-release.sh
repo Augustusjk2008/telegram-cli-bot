@@ -544,7 +544,6 @@ new_release_archives() {
       -NoProfile \
       -ExecutionPolicy Bypass \
       -File "$portable_build_script" \
-      -SkipFrontBuild \
       -PackageName "${package_base_name}-windows-x64-${normalized_version}" \
       -ArtifactPath "$windows_archive"
   fi

@@ -24,6 +24,7 @@ from bot.web.diagnostics import diag_log_slow
 
 LOCAL_HISTORY_BACKEND = "local_v1"
 LEGACY_PROJECT_CHAT_DB_RELATIVE_PATH = Path(".tcb") / "state" / "chat.sqlite"
+PROCESS_TRACE_RAW_TYPES = {"file.edited", "file.watcher.updated"}
 _STORE_PREPARE_LOCK = Lock()
 _PREPARED_STORES: set[Path] = set()
 _SCHEMA_READY_STORES: set[Path] = set()
@@ -81,6 +82,21 @@ def _payload_text(payload: Any) -> str:
     return ""
 
 
+def _trace_summary_key(trace: dict[str, Any]) -> str:
+    return "".join(str(trace.get("summary") or "").split())
+
+
+def _trace_payload_message_id(trace: dict[str, Any]) -> str:
+    payload = trace.get("payload")
+    if not isinstance(payload, dict):
+        return ""
+    for key in ("messageID", "message_id", "messageId"):
+        value = payload.get(key)
+        if value:
+            return str(value).strip()
+    return ""
+
+
 def _trace_payload_state(trace: dict[str, Any]) -> str:
     payload = trace.get("payload")
     if not isinstance(payload, dict):
@@ -102,10 +118,21 @@ def _normalize_trace_events(trace: list[dict[str, Any]]) -> list[dict[str, Any]]
 
     kept: list[dict[str, Any]] = []
     result_indexes_by_call_id: dict[str, int] = {}
+    commentary_signatures: set[tuple[str, str]] = set()
     for item in trace:
         event = dict(item)
         kind = str(event.get("kind") or "").strip()
         call_id = str(event.get("call_id") or "").strip()
+        raw_type = str(event.get("raw_type") or "")
+        if kind == "tool_call" and raw_type in PROCESS_TRACE_RAW_TYPES:
+            event["kind"] = "event"
+            kind = "event"
+        if kind == "commentary" and raw_type == "message.text.reclassified":
+            summary_key = _trace_summary_key(event)
+            signature = (_trace_payload_message_id(event), summary_key)
+            if summary_key and signature in commentary_signatures:
+                continue
+            commentary_signatures.add(signature)
         if kind == "tool_result" and call_id:
             existing_index = result_indexes_by_call_id.get(call_id)
             if existing_index is None:
@@ -120,37 +147,37 @@ def _normalize_trace_events(trace: list[dict[str, Any]]) -> list[dict[str, Any]]
             continue
         kept.append(event)
 
-    first_tool_index = next(
-        (
-            index
-            for index, item in enumerate(kept)
-            if str(item.get("kind") or "") == "tool_call"
-        ),
-        -1,
-    )
-    if first_tool_index >= 0:
-        leading_commentary: list[dict[str, Any]] = []
-        remaining: list[dict[str, Any]] = []
+    seen_tool_call_ids: set[str] = set()
+    late_commentary_by_call_id: dict[str, list[dict[str, Any]]] = {}
+    late_commentary_indexes: set[int] = set()
+    for index, item in enumerate(kept):
+        kind = str(item.get("kind") or "").strip()
+        call_id = str(item.get("call_id") or "").strip()
+        if kind == "tool_call" and call_id:
+            seen_tool_call_ids.add(call_id)
+            continue
+        if (
+            kind == "commentary"
+            and call_id
+            and call_id in seen_tool_call_ids
+            and str(item.get("raw_type") or "") == "message.text.reclassified"
+        ):
+            late_commentary_by_call_id.setdefault(call_id, []).append(item)
+            late_commentary_indexes.add(index)
+
+    if late_commentary_indexes:
+        adjusted: list[dict[str, Any]] = []
+        inserted_call_ids: set[str] = set()
         for index, item in enumerate(kept):
-            raw_type = str(item.get("raw_type") or "")
-            if (
-                index > first_tool_index
-                and str(item.get("kind") or "") == "commentary"
-                and raw_type == "message.text.reclassified"
-            ):
-                leading_commentary.append(item)
-            else:
-                remaining.append(item)
-        if leading_commentary:
-            insert_at = next(
-                (
-                    index
-                    for index, item in enumerate(remaining)
-                    if str(item.get("kind") or "") == "tool_call"
-                ),
-                len(remaining),
-            )
-            kept = [*remaining[:insert_at], *leading_commentary, *remaining[insert_at:]]
+            if index in late_commentary_indexes:
+                continue
+            kind = str(item.get("kind") or "").strip()
+            call_id = str(item.get("call_id") or "").strip()
+            if kind == "tool_call" and call_id and call_id not in inserted_call_ids:
+                adjusted.extend(late_commentary_by_call_id.get(call_id, []))
+                inserted_call_ids.add(call_id)
+            adjusted.append(item)
+        kept = adjusted
 
     normalized: list[dict[str, Any]] = []
     for ordinal, item in enumerate(kept, start=1):

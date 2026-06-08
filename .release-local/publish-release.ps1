@@ -475,7 +475,6 @@ function New-ReleaseArchives {
             "-NoProfile",
             "-ExecutionPolicy", "Bypass",
             "-File", $script:PortableBuildScript,
-            "-SkipFrontBuild",
             "-PackageName", ("{0}-windows-x64-{1}" -f $script:PackageBaseName, $NormalizedVersion),
             "-ArtifactPath", $windowsPortableArchive
         ) -FailureMessage "创建 Windows 绿色版包失败"

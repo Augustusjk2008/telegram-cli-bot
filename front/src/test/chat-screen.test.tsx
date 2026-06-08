@@ -784,6 +784,12 @@ test("native history auto-loads flat trace details", async () => {
   const transcript = await screen.findByTestId("native-agent-transcript");
   await waitFor(() => expect(getMessageTrace).toHaveBeenCalledWith("main", "assistant-native-history"));
   expect(await within(transcript).findByText("我先检查目录结构。")).toBeInTheDocument();
+  const eventGroup = within(transcript).getByTestId("native-agent-event-group");
+  expect(eventGroup.textContent).toContain("阶段 1");
+  expect(eventGroup.textContent).toContain("3 条事件 · 1 次工具");
+  expect(eventGroup.textContent).toContain("我先检查目录结构。");
+  expect(eventGroup.textContent).toContain("shell_command");
+  expect(eventGroup.textContent).toContain("Exit code: 0");
   expect(within(transcript).getAllByText("shell_command").length).toBeGreaterThan(0);
   expect(within(transcript).getAllByText("Exit code: 0").length).toBeGreaterThan(0);
   expect(within(transcript).getByTestId("native-agent-final-result").textContent).toContain("最终答复");
@@ -1103,12 +1109,63 @@ test("live ag-ui stream renders flat transcript and final result last", async ()
   const transcript = await screen.findByTestId("native-agent-transcript");
   expect(within(transcript).getByText("运行中")).toBeInTheDocument();
   expect(within(transcript).getByText("检查上下文")).toBeInTheDocument();
+  const eventGroup = within(transcript).getByTestId("native-agent-event-group");
+  expect(eventGroup.textContent).toContain("阶段 1");
+  expect(eventGroup.textContent).toContain("3 条事件 · 1 次工具");
+  expect(eventGroup.textContent).toContain("检查上下文");
+  expect(eventGroup.textContent).toContain("shell_command");
+  expect(eventGroup.textContent).toContain("Exit code: 0");
   expect(within(transcript).getAllByText("shell_command").length).toBeGreaterThan(0);
   expect(within(transcript).getAllByText("Exit code: 0").length).toBeGreaterThan(0);
   expect(within(transcript).getByTestId("native-agent-final-result").textContent).toContain("answer");
   expect(transcript.textContent?.trim().endsWith("answer")).toBe(true);
   expect(screen.queryByTestId("native-agent-run-timeline")).not.toBeInTheDocument();
   expect(screen.queryByTestId("chat-trace-panel-assistant-live")).not.toBeInTheDocument();
+});
+
+test("native send renders streaming transcript immediately without cli bubble chrome", async () => {
+  const user = userEvent.setup();
+  let resolveFinal!: (message: ChatMessage) => void;
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(() => new Promise<ChatMessage>((resolve) => {
+    resolveFinal = resolve;
+  }));
+  const client = createClient({
+    getBotOverview: async (): Promise<BotOverview> => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+      supportedExecutionModes: ["native_agent"],
+      defaultExecutionMode: "native_agent",
+    }),
+    sendMessage,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  await screen.findByText("暂无消息，开始聊天吧");
+  await user.type(screen.getByPlaceholderText("输入消息"), "hi");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(screen.getByTestId("native-agent-streaming-status")).toBeInTheDocument();
+  const messageChrome = transcript.closest("[data-streaming='true']");
+  expect(messageChrome).not.toHaveClass("chat-message-bubble-delight");
+
+  await act(async () => {
+    resolveFinal({
+      id: "assistant-native-final",
+      role: "assistant",
+      text: "final answer",
+      createdAt: new Date().toISOString(),
+      state: "done",
+      meta: { tracePresentation: "native_agent_flat" },
+    });
+  });
+
+  expect(screen.queryByTestId("native-agent-streaming-status")).not.toBeInTheDocument();
+  expect(await screen.findByText("final answer")).toBeInTheDocument();
 });
 
 test("final ag-ui message replaces polluted live assistant text", async () => {

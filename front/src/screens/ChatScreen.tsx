@@ -2667,6 +2667,7 @@ export function ChatScreen({
     assistantSendVersionRef.current += 1;
     const sendVersion = assistantSendVersionRef.current;
     const displayUserText = options.sendOptions?.visibleText || composedText;
+    const nativeStreaming = options.sendOptions?.executionMode === "native_agent" || executionModeRef.current === "native_agent";
     const userMessage: ChatMessage = {
       id: `user-${Date.now()}`,
       role: "user",
@@ -2681,6 +2682,9 @@ export function ChatScreen({
       text: "",
       createdAt: new Date().toISOString(),
       state: "streaming",
+      meta: nativeStreaming
+        ? { tracePresentation: "native_agent_flat" }
+        : undefined,
     };
 
     setError("");
