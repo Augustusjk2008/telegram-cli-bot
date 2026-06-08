@@ -765,6 +765,43 @@ def test_native_agent_aggregator_does_not_trace_final_answer_as_commentary():
     assert aggregator.text() == "这是最终答复。"
 
 
+def test_native_agent_aggregator_does_not_reclassify_final_answer_on_completed_message_switch():
+    aggregator = NativeAgentAggregator(user_message_id="u-new")
+
+    streamed_final = unwrap_event({
+        "type": "message.part.delta",
+        "sessionID": "sess-1",
+        "messageID": "assistant-stream",
+        "partID": "final-part",
+        "field": "text",
+        "delta": "这是最终答复。",
+    })
+    completed_final = unwrap_event({
+        "type": "message.updated",
+        "sessionID": "sess-1",
+        "properties": {
+            "sessionID": "sess-1",
+            "info": {
+                "id": "assistant-final",
+                "role": "assistant",
+                "finish": "stop",
+                "content": "这是最终答复。",
+                "time": {"completed": 1},
+            },
+        },
+    })
+
+    assert streamed_final is not None
+    assert completed_final is not None
+
+    assert aggregator.apply(streamed_final).delta == "这是最终答复。"
+    result = aggregator.apply(completed_final)
+
+    assert result.trace == []
+    assert result.snapshot == "这是最终答复。"
+    assert aggregator.text() == "这是最终答复。"
+
+
 def test_native_agent_aggregator_completes_on_stop_finish_without_completed_time():
     aggregator = NativeAgentAggregator(user_message_id="u-new")
     delta = unwrap_event({

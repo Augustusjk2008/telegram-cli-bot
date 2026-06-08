@@ -209,6 +209,13 @@ class NativeAgentAggregator:
             message = payload
         role = str(message.get("role") or "").lower()
         message_id = _message_id(message)
+        text = _value_text(message.get("text") or message.get("content")) or _message_parts_text(message.get("parts"))
+        is_completed_final_message = role == "assistant" and bool(message_id) and _message_completed(message)
+        should_suppress_switch_trace = (
+            is_completed_final_message
+            and bool(text)
+            and _normalized_commentary_summary(text) == _normalized_commentary_summary(self.text())
+        )
         switched_message = False
         if role == "assistant" and message_id:
             previous_message_id = self.assistant_message_id
@@ -217,14 +224,15 @@ class NativeAgentAggregator:
                 switched_message = True
                 result.snapshot = ""
                 result.replace_text = True
-                trace = self._build_commentary_trace(
-                    message_id=previous_message_id,
-                    text=discarded_text,
-                    reason="assistant-message-switched",
-                    payload=payload,
-                )
-                if trace is not None:
-                    result.trace.append(trace)
+                if not should_suppress_switch_trace:
+                    trace = self._build_commentary_trace(
+                        message_id=previous_message_id,
+                        text=discarded_text,
+                        reason="assistant-message-switched",
+                        payload=payload,
+                    )
+                    if trace is not None:
+                        result.trace.append(trace)
             self.assistant_message_id = message_id
             result.assistant_message_id = message_id
         if role == "assistant" and message_id and _message_expects_followup(message):
@@ -244,7 +252,6 @@ class NativeAgentAggregator:
                 if trace is not None:
                     result.trace.append(trace)
             return result
-        text = _value_text(message.get("text") or message.get("content")) or _message_parts_text(message.get("parts"))
         if role == "assistant" and text:
             previous = self.final_text
             self.final_text = text
