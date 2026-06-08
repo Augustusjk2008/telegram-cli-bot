@@ -3,8 +3,14 @@ import { AgentSwitcher } from "./AgentSwitcher";
 import { toolbarButtonClass } from "./ToolbarButton";
 import type { AgentSummary, ChatExecutionMode } from "../services/types";
 
+export type ChatModelOption = {
+  value: string;
+  label: string;
+  title?: string;
+};
+
 type Props = {
-  visibleModelOptions: string[];
+  visibleModelOptions: ChatModelOption[];
   selectedModel: string;
   modelDisabled?: boolean;
   onModelChange: (model: string) => void;
@@ -108,7 +114,9 @@ export function ChatActionBar({
               className="h-8 max-w-[10rem] shrink-0 truncate rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-2.5 text-xs font-medium text-[var(--text)] hover:bg-[var(--workbench-hover-bg)] focus:outline-none focus:ring-2 focus:ring-[var(--workbench-focus-ring)] disabled:opacity-60"
             >
               {visibleModelOptions.map((model) => (
-                <option key={model} value={model}>{model}</option>
+                <option key={model.value} value={model.value} title={model.title}>
+                  {model.label}
+                </option>
               ))}
             </select>
           ) : null}

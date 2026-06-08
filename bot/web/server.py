@@ -186,6 +186,8 @@ from .api_service import (
     get_history_delta,
     get_history_trace,
     get_assistant_diagnostics,
+    get_native_agent_config_payload,
+    get_native_agent_models_payload,
     get_overview,
     get_cluster_task_status,
     get_terminal_actions_config,
@@ -250,6 +252,8 @@ from .api_service import (
     update_bot_cli,
     update_bot_execution_config,
     update_global_prompt_presets,
+    update_native_agent_config_payload,
+    update_bot_native_agent_model,
     update_bot_prompt_presets,
     update_plugin,
     rename_managed_bot,
@@ -2845,6 +2849,22 @@ class WebApiServer:
         cli_type = request.query.get("cli_type") or None
         return _json({"ok": True, "data": get_cli_params_payload(self.manager, alias, cli_type)})
 
+    async def get_native_agent_models(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_VIEW_BOTS)
+        alias = self._manager_alias(request)
+        return _json({"ok": True, "data": get_native_agent_models_payload(self.manager, alias)})
+
+    async def patch_native_agent_model(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_MANAGE_BOTS)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        data = await update_bot_native_agent_model(
+            self.manager,
+            alias,
+            body.get("model", body.get("native_agent_model", body.get("nativeAgentModel"))),
+        )
+        return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})
+
     async def patch_cli_params(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_MANAGE_CLI_PARAMS)
         alias = self._manager_alias(request)
@@ -3872,6 +3892,15 @@ class WebApiServer:
     async def admin_env_get(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
         return _json({"ok": True, "data": self.env_config_service.snapshot()})
+
+    async def admin_native_agent_config_get(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        return _json({"ok": True, "data": get_native_agent_config_payload()})
+
+    async def admin_native_agent_config_patch(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        body = await self._parse_json(request)
+        return _json({"ok": True, "data": update_native_agent_config_payload(body)})
 
     async def admin_env_patch(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)

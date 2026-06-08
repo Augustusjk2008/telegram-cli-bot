@@ -243,6 +243,29 @@ class TestManagerValidation:
         assert manager.main_profile.native_agent == {"opencode_agent": "reviewer"}
 
     @pytest.mark.asyncio
+    async def test_native_agent_model_selection_persists(self, temp_dir: Path):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        manager = MultiBotManager(
+            BotProfile(
+                alias="main",
+                token="main_tok",
+                working_dir=str(temp_dir),
+                supported_execution_modes=["native_agent"],
+                default_execution_mode="native_agent",
+            ),
+            str(storage),
+        )
+
+        await manager.set_bot_native_agent_model("main", "jojocode/gpt-5.4")
+        restored = MultiBotManager(
+            BotProfile(alias="main", token="main_tok", working_dir=str(temp_dir)),
+            str(storage),
+        )
+
+        assert restored.main_profile.native_agent == {"native_agent_model": "jojocode/gpt-5.4"}
+
+    @pytest.mark.asyncio
     async def test_background_services_start_and_shutdown_global_native_agent_server(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({"bots": []}), encoding="utf-8")

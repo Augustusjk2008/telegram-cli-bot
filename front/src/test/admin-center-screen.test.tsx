@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { AdminCenterScreen } from "../screens/AdminCenterScreen";
@@ -15,6 +15,8 @@ function createClient() {
     getUpdateStatus: vi.spyOn(client, "getUpdateStatus"),
     listOfflineUpdatePackages: vi.spyOn(client, "listOfflineUpdatePackages"),
     upsertAnnouncement: vi.spyOn(client, "upsertAnnouncement"),
+    getNativeAgentConfig: vi.spyOn(client, "getNativeAgentConfig"),
+    updateNativeAgentConfig: vi.spyOn(client, "updateNativeAgentConfig"),
     previewEnvConfig: vi.spyOn(client, "previewEnvConfig"),
     updateEnvConfig: vi.spyOn(client, "updateEnvConfig"),
     updateUser: vi.spyOn(client, "updateUser"),
@@ -159,20 +161,21 @@ test("admin center shows fixed forward hub token and frps port fields", async ()
 
 test("admin center shows native agent global fields", async () => {
   const user = userEvent.setup();
-  const { client } = createClient();
+  const { client, updateNativeAgentConfig } = createClient();
   await client.login({ username: "127.0.0.1", password: "test" });
 
   render(<AdminCenterScreen client={client} onClose={() => {}} />);
 
-  await user.click(await screen.findByRole("tab", { name: "环境配置" }));
-  await screen.findByRole("heading", { name: "环境配置" });
-  await user.click(screen.getByRole("button", { name: /原生/i }));
+  await user.click(await screen.findByRole("tab", { name: "原生 Agent" }));
+  await screen.findByRole("heading", { name: "原生 Agent" });
 
-  expect(screen.getByText("启用原生 agent")).toBeInTheDocument();
-  expect(screen.getByText("NATIVE_AGENT_ENABLED")).toBeInTheDocument();
-  expect(screen.getByText("原生 agent 命令")).toBeInTheDocument();
-  expect(screen.getByText("NATIVE_AGENT_COMMAND")).toBeInTheDocument();
+  expect(screen.getByText(/OpenCode:/)).toBeInTheDocument();
+  expect(screen.getByText("jojocode_max / gpt-5.4")).toBeInTheDocument();
+  const editor = screen.getByLabelText("原生 Agent 配置 JSON");
+  fireEvent.change(editor, { target: { value: JSON.stringify({ provider: {} }) } });
+  await user.click(screen.getByRole("button", { name: "保存配置" }));
+
+  await waitFor(() => expect(updateNativeAgentConfig).toHaveBeenCalledWith({ provider: {} }));
+  expect(await screen.findByText("配置已保存，重启原生 agent 后生效")).toBeInTheDocument();
 });
-
-
 

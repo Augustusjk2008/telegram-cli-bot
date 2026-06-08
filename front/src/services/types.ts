@@ -218,6 +218,33 @@ export type NativeAgentConfigInput = {
   thinkingDepth?: string;
 };
 
+export type NativeAgentModelOption = {
+  id: string;
+  provider: string;
+  model: string;
+  name: string;
+  label: string;
+  contextWindow?: number;
+  outputLimit?: number;
+};
+
+export type NativeAgentConfigPayload = {
+  config: Record<string, unknown>;
+  opencodeConfigPath: string;
+  backupPath: string;
+  models: NativeAgentModelOption[];
+  needsRestart?: boolean;
+};
+
+export type NativeAgentModelsPayload = {
+  items: NativeAgentModelOption[];
+  selectedModel: string;
+};
+
+export type NativeAgentModelUpdateResult = NativeAgentModelsPayload & {
+  bot?: BotSummary;
+};
+
 export type NativeAgentDraft = NativeAgentConfigView & {
   baseUrl: string;
   hasApiKey: boolean;
@@ -620,6 +647,14 @@ export type ChatMessageContextUsage = {
   windowDisplay?: string;
   statusText?: string;
   compactionCount?: number;
+  contextUsed?: number;
+  contextUsedPercent?: number;
+  inputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  outputTokens?: number;
+  reasoningTokens?: number;
+  model?: string;
 };
 
 export type ChatMessageMetaInfo = {

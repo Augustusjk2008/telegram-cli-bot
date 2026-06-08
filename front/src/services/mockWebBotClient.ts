@@ -62,6 +62,10 @@ import type {
   ChatTraceDetails,
   ChatTraceEvent,
   NativeAgentPermissionReplyOptions,
+  NativeAgentConfigPayload,
+  NativeAgentModelOption,
+  NativeAgentModelsPayload,
+  NativeAgentModelUpdateResult,
   CliErrorStatsFilters,
   CliErrorStatsResult,
   CliType,
@@ -1459,6 +1463,33 @@ export class MockWebBotClient implements WebBotClient {
     ]),
   );
   private globalPromptPresets: PromptPreset[] = [];
+  private nativeAgentConfig: Record<string, unknown> = {
+    "$schema": "https://opencode.ai/config.json",
+    provider: {
+      jojocode_max: {
+        models: {
+          "gpt-5.4": {
+            name: "gpt-5.4",
+            limit: {
+              context: 1000000,
+              output: 128000,
+            },
+          },
+        },
+      },
+    },
+  };
+  private nativeAgentModels: NativeAgentModelOption[] = [
+    {
+      id: "jojocode_max/gpt-5.4",
+      provider: "jojocode_max",
+      model: "gpt-5.4",
+      name: "gpt-5.4",
+      label: "jojocode_max / gpt-5.4",
+      contextWindow: 1000000,
+      outputLimit: 128000,
+    },
+  ];
   private currentPaths = new Map<string, string>();
   private pluginSessions = new Map<
     string,
@@ -2320,15 +2351,42 @@ export class MockWebBotClient implements WebBotClient {
 
   private normalizeNativeAgentConfig(input: BotExecutionConfigInput["nativeAgent"] | CreateBotInput["nativeAgent"] | undefined, current?: BotSummary["nativeAgent"]): BotSummary["nativeAgent"] {
     const opencodeAgent = String(input?.opencodeAgent || "").trim();
-    void current;
+    const model = String(input?.model || current?.model || "").trim();
     return {
       provider: "",
-      model: "",
+      model,
       opencodeAgent,
       baseUrl: "",
       hasApiKey: false,
       apiKeyMasked: "",
     };
+  }
+
+  private extractNativeAgentModels(config: Record<string, unknown>): NativeAgentModelOption[] {
+    const providerMap = config.provider && typeof config.provider === "object"
+      ? config.provider as Record<string, unknown>
+      : {};
+    const items: NativeAgentModelOption[] = [];
+    for (const [provider, providerValue] of Object.entries(providerMap)) {
+      if (!providerValue || typeof providerValue !== "object") continue;
+      const models = (providerValue as Record<string, unknown>).models;
+      if (!models || typeof models !== "object") continue;
+      for (const [model, modelValue] of Object.entries(models as Record<string, unknown>)) {
+        const modelRecord = modelValue && typeof modelValue === "object" ? modelValue as Record<string, unknown> : {};
+        const limit = modelRecord.limit && typeof modelRecord.limit === "object" ? modelRecord.limit as Record<string, unknown> : {};
+        const name = String(modelRecord.name || model);
+        items.push({
+          id: `${provider}/${model}`,
+          provider,
+          model,
+          name,
+          label: `${provider} / ${name}`,
+          ...(typeof limit.context === "number" ? { contextWindow: limit.context } : {}),
+          ...(typeof limit.output === "number" ? { outputLimit: limit.output } : {}),
+        });
+      }
+    }
+    return items;
   }
 
   private getBotSummary(botAlias: string): BotSummary {
@@ -3033,6 +3091,34 @@ export class MockWebBotClient implements WebBotClient {
       envPath: ".env",
       examplePath: ".env.example",
       items: this.envItems.map(cloneEnvItem),
+    };
+  }
+
+  async getNativeAgentConfig(): Promise<NativeAgentConfigPayload> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权查看原生 Agent 配置", { status: 403, code: "forbidden" });
+    }
+    return {
+      config: JSON.parse(JSON.stringify(this.nativeAgentConfig)) as Record<string, unknown>,
+      opencodeConfigPath: "~/.config/opencode/opencode.json",
+      backupPath: "~/.tcb/native_agent/opencode.config.backup.json",
+      models: this.nativeAgentModels.map((item) => ({ ...item })),
+      needsRestart: false,
+    };
+  }
+
+  async updateNativeAgentConfig(config: Record<string, unknown>): Promise<NativeAgentConfigPayload> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权保存原生 Agent 配置", { status: 403, code: "forbidden" });
+    }
+    this.nativeAgentConfig = JSON.parse(JSON.stringify(config)) as Record<string, unknown>;
+    this.nativeAgentModels = this.extractNativeAgentModels(this.nativeAgentConfig);
+    return {
+      config: JSON.parse(JSON.stringify(this.nativeAgentConfig)) as Record<string, unknown>,
+      opencodeConfigPath: "~/.config/opencode/opencode.json",
+      backupPath: "~/.tcb/native_agent/opencode.config.backup.json",
+      models: this.nativeAgentModels.map((item) => ({ ...item })),
+      needsRestart: true,
     };
   }
 
@@ -6819,6 +6905,31 @@ export class MockWebBotClient implements WebBotClient {
 
   async getCliParams(botAlias: string): Promise<CliParamsPayload> {
     return buildMockCliParams(this.getBotSummary(botAlias).cliType);
+  }
+
+  async getNativeAgentModels(botAlias: string): Promise<NativeAgentModelsPayload> {
+    const bot = this.getBotSummary(botAlias);
+    return {
+      items: this.nativeAgentModels.map((item) => ({ ...item })),
+      selectedModel: bot.nativeAgent?.model || this.nativeAgentModels[0]?.id || "",
+    };
+  }
+
+  async updateNativeAgentModel(botAlias: string, model: string): Promise<NativeAgentModelUpdateResult> {
+    const bot = this.getBotSummary(botAlias);
+    const nextNativeAgent = {
+      ...(bot.nativeAgent || { provider: "", model: "", opencodeAgent: "" }),
+      model,
+    };
+    this.bots.set(bot.alias, {
+      ...bot,
+      nativeAgent: nextNativeAgent,
+    });
+    return {
+      items: this.nativeAgentModels.map((item) => ({ ...item })),
+      selectedModel: model,
+      bot: this.getBotSummary(bot.alias),
+    };
   }
 
   async updateCliParam(botAlias: string, key: string, value: unknown): Promise<CliParamsPayload> {

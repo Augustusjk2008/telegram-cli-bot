@@ -96,6 +96,9 @@ import type {
   ChatAttachmentUploadResult,
   ChatAttachmentDeleteResult,
   NativeAgentPermissionReplyOptions,
+  NativeAgentConfigPayload,
+  NativeAgentModelUpdateResult,
+  NativeAgentModelsPayload,
   ChatSendOptions,
   ClusterConfigUpdateInput,
   ClusterConfigUpdateResult,
@@ -163,6 +166,8 @@ export interface WebBotClient {
   getEnvConfig(): Promise<EnvConfigSnapshot>;
   previewEnvConfig(input: EnvConfigPatchInput): Promise<EnvConfigPatchResult>;
   updateEnvConfig(input: EnvConfigPatchInput): Promise<EnvConfigPatchResult>;
+  getNativeAgentConfig(): Promise<NativeAgentConfigPayload>;
+  updateNativeAgentConfig(config: Record<string, unknown>): Promise<NativeAgentConfigPayload>;
   getCliErrorStats(filters?: CliErrorStatsFilters): Promise<CliErrorStatsResult>;
   listBots(): Promise<BotSummary[]>;
   listPlugins(refresh?: boolean): Promise<PluginSummary[]>;
@@ -222,6 +227,8 @@ export interface WebBotClient {
     permissionId: string,
     options: NativeAgentPermissionReplyOptions,
   ): Promise<{ permissionId: string; approved: boolean }>;
+  getNativeAgentModels(botAlias: string): Promise<NativeAgentModelsPayload>;
+  updateNativeAgentModel(botAlias: string, model: string): Promise<NativeAgentModelUpdateResult>;
   getDebugProfile(botAlias: string): Promise<DebugProfile | null>;
   getDebugState(botAlias: string): Promise<DebugState>;
   getTerminalSession(ownerId: string): Promise<PersistentTerminalSnapshot>;

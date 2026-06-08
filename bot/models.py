@@ -109,6 +109,15 @@ def normalize_native_agent_config(value: Any, *, existing: dict[str, Any] | None
     existing_config = dict(existing or {})
     provider = normalize_native_agent_provider(data.get("provider"))
     model = str(data.get("model") or data.get("modelId") or data.get("model_id") or "").strip()
+    native_agent_model = str(
+        data.get("native_agent_model")
+        or data.get("nativeAgentModel")
+        or data.get("selected_model")
+        or data.get("selectedModel")
+        or ""
+    ).strip()
+    if not native_agent_model and "/" in model:
+        native_agent_model = model
     opencode_agent = str(
         data.get("opencode_agent")
         or data.get("opencodeAgent")
@@ -130,6 +139,8 @@ def normalize_native_agent_config(value: Any, *, existing: dict[str, Any] | None
     has_api_key_input = "api_key" in data or "apiKey" in data
     api_key = str(_native_agent_value(data, "api_key", "apiKey") or "").strip() if has_api_key_input else ""
     result: dict[str, Any] = {}
+    if native_agent_model:
+        result["native_agent_model"] = native_agent_model
     if provider:
         result["provider"] = provider
     if model:
@@ -161,6 +172,9 @@ def public_native_agent_config(value: Any) -> dict[str, Any]:
         for key in ("provider", "model", "opencode_agent", "base_url", "reasoning_effort", "thinking_depth")
         if config.get(key)
     }
+    if config.get("native_agent_model"):
+        result["native_agent_model"] = config["native_agent_model"]
+        result["model"] = config["native_agent_model"]
     api_key = str(config.get("api_key") or "")
     if api_key:
         result["has_api_key"] = True
@@ -173,6 +187,9 @@ def public_native_agent_config(value: Any) -> dict[str, Any]:
 
 def build_native_agent_model_id(value: Any) -> str:
     config = normalize_native_agent_config(value)
+    native_agent_model = str(config.get("native_agent_model") or "").strip()
+    if native_agent_model:
+        return native_agent_model
     provider = str(config.get("provider") or "").strip().lower()
     model = str(config.get("model") or "").strip()
     if not model:

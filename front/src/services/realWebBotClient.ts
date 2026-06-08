@@ -84,6 +84,10 @@ import type {
   NativeAgentPermissionReplyOptions,
   NativeAgentConfig,
   NativeAgentConfigInput,
+  NativeAgentConfigPayload,
+  NativeAgentModelOption,
+  NativeAgentModelsPayload,
+  NativeAgentModelUpdateResult,
   CliErrorStatsFilters,
   CliErrorStatsItem,
   CliErrorStatsResult,
@@ -424,6 +428,14 @@ type RawChatMessageContextUsage = {
   used_tokens?: number;
   context_window?: number;
   context_left_percent?: number;
+  context_used?: number;
+  context_used_percent?: number;
+  input_tokens?: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+  output_tokens?: number;
+  reasoning_tokens?: number;
+  model?: string;
   used_display?: string;
   window_display?: string;
   status_text?: string;
@@ -2017,6 +2029,42 @@ function mapNativeAgentConfig(value: unknown): NativeAgentConfig | undefined {
   };
 }
 
+function mapNativeAgentModelOption(raw: unknown): NativeAgentModelOption {
+  const item = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  return {
+    id: String(item.id || ""),
+    provider: String(item.provider || ""),
+    model: String(item.model || ""),
+    name: String(item.name || item.model || ""),
+    label: String(item.label || item.id || ""),
+    ...(typeof item.context_window === "number" ? { contextWindow: item.context_window } : {}),
+    ...(typeof item.contextWindow === "number" ? { contextWindow: item.contextWindow } : {}),
+    ...(typeof item.output_limit === "number" ? { outputLimit: item.output_limit } : {}),
+    ...(typeof item.outputLimit === "number" ? { outputLimit: item.outputLimit } : {}),
+  };
+}
+
+function mapNativeAgentConfigPayload(raw: unknown): NativeAgentConfigPayload {
+  const item = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const models = Array.isArray(item.models) ? item.models.map(mapNativeAgentModelOption) : [];
+  return {
+    config: item.config && typeof item.config === "object" ? item.config as Record<string, unknown> : {},
+    opencodeConfigPath: String(item.opencode_config_path ?? item.opencodeConfigPath ?? ""),
+    backupPath: String(item.backup_path ?? item.backupPath ?? ""),
+    models,
+    needsRestart: Boolean(item.needs_restart ?? item.needsRestart),
+  };
+}
+
+function mapNativeAgentModelsPayload(raw: unknown): NativeAgentModelsPayload {
+  const item = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const items = Array.isArray(item.items) ? item.items.map(mapNativeAgentModelOption) : [];
+  return {
+    items,
+    selectedModel: String(item.selected_model ?? item.selectedModel ?? ""),
+  };
+}
+
 function serializeNativeAgentConfig(input: NativeAgentConfigInput | undefined) {
   const nativeAgent = input || { provider: "", model: "", opencodeAgent: "", baseUrl: "" };
   return {
@@ -2054,6 +2102,30 @@ function mapContextUsage(raw?: RawChatMessageContextUsage | null): ChatMessageCo
   }
   if (typeof raw.context_left_percent === "number") {
     contextUsage.contextLeftPercent = raw.context_left_percent;
+  }
+  if (typeof raw.context_used === "number") {
+    contextUsage.contextUsed = raw.context_used;
+  }
+  if (typeof raw.context_used_percent === "number") {
+    contextUsage.contextUsedPercent = raw.context_used_percent;
+  }
+  if (typeof raw.input_tokens === "number") {
+    contextUsage.inputTokens = raw.input_tokens;
+  }
+  if (typeof raw.cache_read_tokens === "number") {
+    contextUsage.cacheReadTokens = raw.cache_read_tokens;
+  }
+  if (typeof raw.cache_write_tokens === "number") {
+    contextUsage.cacheWriteTokens = raw.cache_write_tokens;
+  }
+  if (typeof raw.output_tokens === "number") {
+    contextUsage.outputTokens = raw.output_tokens;
+  }
+  if (typeof raw.reasoning_tokens === "number") {
+    contextUsage.reasoningTokens = raw.reasoning_tokens;
+  }
+  if (raw.model) {
+    contextUsage.model = raw.model;
   }
   if (raw.used_display) {
     contextUsage.usedDisplay = raw.used_display;
@@ -6521,6 +6593,37 @@ export class RealWebBotClient implements WebBotClient {
   async getCliParams(botAlias: string): Promise<CliParamsPayload> {
     const data = await this.requestJson<RawCliParamsPayload>(`/api/bots/${encodeURIComponent(botAlias)}/cli-params`);
     return mapCliParamsPayload(data);
+  }
+
+  async getNativeAgentConfig(): Promise<NativeAgentConfigPayload> {
+    return mapNativeAgentConfigPayload(await this.requestJson("/api/admin/native-agent/config"));
+  }
+
+  async updateNativeAgentConfig(config: Record<string, unknown>): Promise<NativeAgentConfigPayload> {
+    return mapNativeAgentConfigPayload(await this.requestJson("/api/admin/native-agent/config", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ config }),
+    }));
+  }
+
+  async getNativeAgentModels(botAlias: string): Promise<NativeAgentModelsPayload> {
+    return mapNativeAgentModelsPayload(await this.requestJson(`/api/bots/${encodeURIComponent(botAlias)}/native-agent/models`));
+  }
+
+  async updateNativeAgentModel(botAlias: string, model: string): Promise<NativeAgentModelUpdateResult> {
+    const raw = await this.requestJson<Record<string, unknown>>(`/api/bots/${encodeURIComponent(botAlias)}/native-agent/model`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ model }),
+    });
+    const mapped = mapNativeAgentModelsPayload(raw);
+    const bot = raw.bot ? mapBotSummary(raw.bot as RawBotSummary, Boolean((raw.bot as RawBotSummary).is_processing)) : undefined;
+    return { ...mapped, ...(bot ? { bot } : {}) };
   }
 
   async updateCliParam(botAlias: string, key: string, value: unknown, cliType?: string): Promise<CliParamsPayload> {

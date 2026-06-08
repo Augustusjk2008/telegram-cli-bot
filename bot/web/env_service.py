@@ -83,10 +83,6 @@ ENV_SCHEMA: tuple[EnvField, ...] = (
     EnvField("NATIVE_AGENT_HOST", "原生 agent 地址", "全局原生 agent 服务监听地址。", "string", "127.0.0.1", "advanced"),
     EnvField("NATIVE_AGENT_PORT", "原生 agent 端口", "全局原生 agent 服务监听端口；0 表示自动分配。", "number", "0", "advanced", min_value=0, max_value=65535, integer=True),
     EnvField("NATIVE_AGENT_SERVER_PASSWORD", "原生 agent 密码", "全局原生 agent 服务 Basic Auth 密码。", "password", "", "advanced", sensitive=True, max_length=8192),
-    EnvField("NATIVE_AGENT_PROVIDER", "原生 agent Provider", "全局 OpenCode provider ID。", "string", "", "advanced"),
-    EnvField("NATIVE_AGENT_MODEL", "原生 agent 模型", "全局 OpenCode 模型 ID。", "string", "", "advanced"),
-    EnvField("NATIVE_AGENT_BASE_URL", "原生 agent Base URL", "OpenAI-compatible provider API 地址。", "string", "", "advanced"),
-    EnvField("NATIVE_AGENT_API_KEY", "原生 agent API Key", "全局 provider API key。", "password", "", "advanced", sensitive=True, max_length=8192),
     EnvField("NATIVE_AGENT_OPENCODE_AGENT", "OpenCode agent", "全局 OpenCode agent 名称；留空使用默认。", "string", "", "advanced"),
     EnvField(
         "NATIVE_AGENT_REASONING_EFFORT",

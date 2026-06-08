@@ -73,10 +73,10 @@ def test_env_service_exposes_native_agent_global_fields(tmp_path: Path) -> None:
     assert items["NATIVE_AGENT_HOST"]["type"] == "string"
     assert items["NATIVE_AGENT_PORT"]["type"] == "number"
     assert items["NATIVE_AGENT_SERVER_PASSWORD"]["type"] == "password"
-    assert items["NATIVE_AGENT_PROVIDER"]["type"] == "string"
-    assert items["NATIVE_AGENT_MODEL"]["type"] == "string"
-    assert items["NATIVE_AGENT_BASE_URL"]["type"] == "string"
-    assert items["NATIVE_AGENT_API_KEY"]["type"] == "password"
+    assert "NATIVE_AGENT_PROVIDER" not in items
+    assert "NATIVE_AGENT_MODEL" not in items
+    assert "NATIVE_AGENT_BASE_URL" not in items
+    assert "NATIVE_AGENT_API_KEY" not in items
     assert items["NATIVE_AGENT_OPENCODE_AGENT"]["type"] == "string"
     assert items["NATIVE_AGENT_REASONING_EFFORT"]["type"] == "select"
     assert items["NATIVE_AGENT_THINKING_DEPTH"]["type"] == "number"

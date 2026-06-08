@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { LoaderCircle, Maximize2, Minimize2, Paperclip, Trash2 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { ChatAvatar } from "../components/ChatAvatar";
-import { ChatActionBar } from "../components/ChatActionBar";
+import { ChatActionBar, type ChatModelOption } from "../components/ChatActionBar";
 import { ChatComposer } from "../components/ChatComposer";
 import { ChatMessageMeta } from "../components/ChatMessageMeta";
 import { ChatMarkdownMessage } from "../components/ChatMarkdownMessage";
@@ -34,6 +34,7 @@ import type {
   FileDownloadProgress,
   FileReadResult,
   PromptPreset,
+  NativeAgentModelsPayload,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import {
@@ -381,6 +382,13 @@ function toModelOptionValue(value: unknown, options: string[]) {
     return value;
   }
   return options.includes(MODEL_OPTION_NONE) ? MODEL_OPTION_NONE : "";
+}
+
+function modelLimitTitle(contextWindow?: number, outputLimit?: number) {
+  return [
+    typeof contextWindow === "number" ? `context ${contextWindow.toLocaleString()}` : "",
+    typeof outputLimit === "number" ? `output ${outputLimit.toLocaleString()}` : "",
+  ].filter(Boolean).join(", ");
 }
 
 function pendingCronAssistantId(runId: string) {
@@ -1256,6 +1264,7 @@ export function ChatScreen({
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [actionLoading, setActionLoading] = useState<"" | "kill">("");
   const [cliParams, setCliParams] = useState<CliParamsPayload | null>(null);
+  const [nativeAgentModels, setNativeAgentModels] = useState<NativeAgentModelsPayload | null>(null);
   const [modelSaving, setModelSaving] = useState(false);
   const [pendingAttachments, setPendingAttachments] = useState<PendingChatAttachment[]>([]);
   const [queuedMessage, setQueuedMessage] = useState<QueuedChatMessage | null>(null);
@@ -1495,6 +1504,34 @@ export function ChatScreen({
       active = false;
     };
   }, [botAlias, client]);
+
+  useEffect(() => {
+    const supported = getSupportedExecutionModes(botOverview);
+    const shouldLoad = isVisible && supported.includes("native_agent");
+    let active = true;
+    if (!shouldLoad) {
+      setNativeAgentModels(null);
+      return () => {
+        active = false;
+      };
+    }
+
+    void client.getNativeAgentModels(botAlias)
+      .then((payload) => {
+        if (active) {
+          setNativeAgentModels(payload);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setNativeAgentModels(null);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [botAlias, botOverview?.defaultExecutionMode, botOverview?.supportedExecutionModes, client, isVisible]);
 
   const applyHistoryView = useCallback((
     messages: ChatMessage[],
@@ -3163,15 +3200,29 @@ export function ChatScreen({
     }
   }
   async function handleModelChange(nextModel: string) {
-    if (!cliParams || !nextModel || nextModel === selectedModel) {
+    if (!nextModel || nextModel === selectedModel) {
       return;
     }
 
     setModelSaving(true);
     setError("");
     try {
-      const next = await client.updateCliParam(botAlias, "model", nextModel, cliParams.cliType);
-      setCliParams(next);
+      if (nativeExecutionMode) {
+        const next = await client.updateNativeAgentModel(botAlias, nextModel);
+        setNativeAgentModels({
+          items: next.items,
+          selectedModel: next.selectedModel,
+        });
+        if (next.bot) {
+          const current = botOverviewRef.current;
+          const overview = (current ? { ...current, ...next.bot } : { ...next.bot }) as BotOverview;
+          botOverviewRef.current = overview;
+          setBotOverview(overview);
+        }
+      } else if (cliParams) {
+        const next = await client.updateCliParam(botAlias, "model", nextModel, cliParams.cliType);
+        setCliParams(next);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "模型切换失败");
     } finally {
@@ -3320,11 +3371,33 @@ export function ChatScreen({
   const canManagePromptPresets = !readOnly && (botOverview?.effectiveCapabilities
     ? botOverview.effectiveCapabilities.includes("admin_ops")
     : true);
-  const modelOptions = cliParams?.schema.model?.enum ?? [];
-  const selectedModel = toModelOptionValue(cliParams?.params.model, modelOptions);
-  const visibleModelOptions = selectedModel && !modelOptions.includes(selectedModel)
-    ? [selectedModel, ...modelOptions]
-    : modelOptions;
+  const cliModelOptions = cliParams?.schema.model?.enum ?? [];
+  const nativeModelOptions = nativeAgentModels?.items ?? [];
+  const nativeSelectedModel = nativeAgentModels?.selectedModel
+    || botOverview?.nativeAgent?.model
+    || nativeModelOptions[0]?.id
+    || "";
+  const selectedModel = nativeExecutionMode
+    ? nativeSelectedModel
+    : toModelOptionValue(cliParams?.params.model, cliModelOptions);
+  const visibleModelOptions = useMemo<ChatModelOption[]>(() => {
+    if (nativeExecutionMode) {
+      const options = nativeModelOptions.map((model) => ({
+        value: model.id,
+        label: model.label || `${model.provider} / ${model.name || model.model}`,
+        title: modelLimitTitle(model.contextWindow, model.outputLimit),
+      }));
+      if (nativeSelectedModel && !options.some((item) => item.value === nativeSelectedModel)) {
+        return [{ value: nativeSelectedModel, label: nativeSelectedModel }, ...options];
+      }
+      return options;
+    }
+    const options = cliModelOptions.map((model) => ({ value: model, label: model }));
+    if (selectedModel && !cliModelOptions.includes(selectedModel)) {
+      return [{ value: selectedModel, label: selectedModel }, ...options];
+    }
+    return options;
+  }, [cliModelOptions, nativeExecutionMode, nativeModelOptions, nativeSelectedModel, selectedModel]);
   const messageContentWidthClass = embedded ? "mx-auto w-full max-w-5xl space-y-4" : "w-full space-y-4";
   const composerPlaceholder = chatDisabledReason
     || (nativeExecutionMode
@@ -3396,7 +3469,7 @@ export function ChatScreen({
         <ChatActionBar
           visibleModelOptions={visibleModelOptions}
           selectedModel={selectedModel}
-          modelDisabled={modelSaving || readOnly || nativeExecutionMode}
+          modelDisabled={modelSaving || readOnly || visibleModelOptions.length === 0 || (!nativeExecutionMode && !cliParams)}
           onModelChange={(model) => void handleModelChange(model)}
           executionMode={effectiveExecutionMode}
           supportedExecutionModes={supportedExecutionModes}

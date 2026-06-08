@@ -130,6 +130,14 @@ from bot.native_agent import (
     normalize_execution_mode,
 )
 from bot.native_agent.configuration import effective_native_agent_config
+from bot.native_agent.config_store import (
+    find_configured_model,
+    get_native_agent_backup_path,
+    get_opencode_config_path,
+    list_configured_models,
+    load_native_agent_config,
+    save_native_agent_config,
+)
 from bot.platform.output import strip_ansi_escape
 from bot.platform.processes import build_chat_cli_process_kwargs, build_hidden_process_kwargs, terminate_process_tree_sync
 from bot.platform.subprocess_streams import close_process_streams
@@ -2004,6 +2012,58 @@ def get_cli_params_payload(manager: MultiBotManager, alias: str, cli_type: Optio
         "params": copy.deepcopy(params),
         "schema": schema,
         "defaults": defaults,
+    }
+
+
+def get_native_agent_config_payload() -> dict[str, Any]:
+    try:
+        native_config = load_native_agent_config()
+    except ValueError as exc:
+        _raise(400, "invalid_native_agent_config", str(exc))
+    return {
+        "config": native_config,
+        "opencode_config_path": str(get_opencode_config_path()),
+        "backup_path": str(get_native_agent_backup_path()),
+        "models": list_configured_models(native_config),
+        "needs_restart": False,
+    }
+
+
+def update_native_agent_config_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    raw_config = payload.get("config", payload)
+    if not isinstance(raw_config, dict):
+        _raise(400, "invalid_native_agent_config", "原生 Agent 配置必须是 JSON 对象")
+    try:
+        return save_native_agent_config(raw_config)
+    except ValueError as exc:
+        _raise(400, "invalid_native_agent_config", str(exc))
+
+
+def get_native_agent_models_payload(manager: MultiBotManager, alias: str) -> dict[str, Any]:
+    profile = get_profile_or_raise(manager, alias)
+    models = list_configured_models()
+    selected_model = str(profile.native_agent.get("native_agent_model") or "").strip()
+    if not selected_model and models:
+        selected_model = str(models[0].get("id") or "")
+    return {
+        "items": models,
+        "selected_model": selected_model,
+    }
+
+
+async def update_bot_native_agent_model(manager: MultiBotManager, alias: str, model: Any) -> dict[str, Any]:
+    selected_model = str(model or "").strip()
+    if not selected_model:
+        _raise(400, "missing_native_agent_model", "模型不能为空")
+    if find_configured_model(selected_model) is None:
+        _raise(400, "invalid_native_agent_model", f"模型未在原生 Agent 配置中找到: {selected_model}")
+    try:
+        await manager.set_bot_native_agent_model(alias, selected_model)
+    except ValueError as exc:
+        _raise(400, "invalid_native_agent_model", str(exc))
+    return {
+        **get_native_agent_models_payload(manager, alias),
+        "bot": build_bot_summary(manager, alias),
     }
 
 

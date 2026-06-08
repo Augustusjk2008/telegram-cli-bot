@@ -56,7 +56,24 @@ def _normalize_bot_native_agent_config(value: Any, *, existing: dict[str, Any] |
         if isinstance(source, dict) and key in source:
             opencode_agent = str(source.get(key) or "").strip()
             break
-    return {"opencode_agent": opencode_agent} if opencode_agent else {}
+    model_source = data
+    if not any(key in data for key in ("native_agent_model", "nativeAgentModel", "selected_model", "selectedModel", "model")):
+        model_source = existing if isinstance(existing, dict) else {}
+    native_agent_model = ""
+    for key in ("native_agent_model", "nativeAgentModel", "selected_model", "selectedModel"):
+        if isinstance(model_source, dict) and key in model_source:
+            native_agent_model = str(model_source.get(key) or "").strip()
+            break
+    if not native_agent_model and isinstance(model_source, dict) and "model" in model_source:
+        legacy_model = str(model_source.get("model") or "").strip()
+        if "/" in legacy_model:
+            native_agent_model = legacy_model
+    result: dict[str, Any] = {}
+    if opencode_agent:
+        result["opencode_agent"] = opencode_agent
+    if native_agent_model:
+        result["native_agent_model"] = native_agent_model
+    return result
 
 
 class MultiBotManager:
@@ -695,6 +712,26 @@ class MultiBotManager:
             )
             profile.supported_execution_modes = supported
             profile.default_execution_mode = default_mode
+            profile.native_agent = native_agent
+            if normalized_alias == self.main_profile.alias:
+                self._persist_main_profile()
+            else:
+                self._save_profiles()
+
+    async def set_bot_native_agent_model(self, alias: str, model: str) -> None:
+        normalized_alias = str(alias or "").strip().lower()
+        selected_model = str(model or "").strip()
+        if not selected_model:
+            raise ValueError("模型不能为空")
+        if "/" not in selected_model:
+            raise ValueError("模型必须使用 provider/model 格式")
+
+        async with self._lock:
+            profile = self._get_profile_for_update(normalized_alias)
+            if profile.bot_mode != "cli" or EXECUTION_MODE_NATIVE_AGENT not in profile.supported_execution_modes:
+                raise ValueError("仅原生 agent Bot 支持模型选择")
+            native_agent = _normalize_bot_native_agent_config(profile.native_agent)
+            native_agent["native_agent_model"] = selected_model
             profile.native_agent = native_agent
             if normalized_alias == self.main_profile.alias:
                 self._persist_main_profile()

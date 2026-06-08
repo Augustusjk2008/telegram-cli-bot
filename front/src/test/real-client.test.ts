@@ -679,6 +679,72 @@ describe("RealWebBotClient", () => {
     );
   });
 
+  test("native agent config and model APIs map payloads", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonOk({
+        config: { provider: { jojocode_max: { models: {} } } },
+        opencode_config_path: "C:\\Users\\me\\.config\\opencode\\opencode.json",
+        backup_path: "C:\\Users\\me\\.tcb\\native_agent\\opencode.config.backup.json",
+        models: [{
+          id: "jojocode_max/gpt-5.4",
+          provider: "jojocode_max",
+          model: "gpt-5.4",
+          name: "gpt-5.4",
+          label: "jojocode_max / gpt-5.4",
+          context_window: 1000000,
+          output_limit: 128000,
+        }],
+        needs_restart: false,
+      }))
+      .mockResolvedValueOnce(jsonOk({
+        config: { provider: {} },
+        opencode_config_path: "opencode.json",
+        backup_path: "backup.json",
+        models: [],
+        needs_restart: true,
+      }))
+      .mockResolvedValueOnce(jsonOk({
+        items: [{
+          id: "jojocode_max/gpt-5.4",
+          provider: "jojocode_max",
+          model: "gpt-5.4",
+          name: "gpt-5.4",
+          label: "jojocode_max / gpt-5.4",
+          context_window: 1000000,
+        }],
+        selected_model: "jojocode_max/gpt-5.4",
+      }))
+      .mockResolvedValueOnce(jsonOk({
+        items: [],
+        selected_model: "jojocode_max/gpt-5.5",
+        bot: {
+          alias: "main",
+          cli_type: "codex",
+          status: "running",
+          working_dir: "C:\\workspace",
+          native_agent: { model: "jojocode_max/gpt-5.5" },
+        },
+      }));
+
+    const client = new RealWebBotClient();
+    const config = await client.getNativeAgentConfig();
+    const saved = await client.updateNativeAgentConfig({ provider: {} });
+    const models = await client.getNativeAgentModels("main");
+    const updated = await client.updateNativeAgentModel("main", "jojocode_max/gpt-5.5");
+
+    expect(config.models[0]).toMatchObject({
+      id: "jojocode_max/gpt-5.4",
+      contextWindow: 1000000,
+      outputLimit: 128000,
+    });
+    expect(saved.needsRestart).toBe(true);
+    expect(models.selectedModel).toBe("jojocode_max/gpt-5.4");
+    expect(updated.selectedModel).toBe("jojocode_max/gpt-5.5");
+    expect(updated.bot?.nativeAgent?.model).toBe("jojocode_max/gpt-5.5");
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({ config: { provider: {} } });
+    expect(JSON.parse(String(fetchMock.mock.calls[3][1]?.body))).toEqual({ model: "jojocode_max/gpt-5.5" });
+  });
+
   test("maps context_usage from history and stream done message", async () => {
     const encoder = new TextEncoder();
     fetchMock
@@ -697,6 +763,14 @@ describe("RealWebBotClient", () => {
               used_tokens: 76593,
               context_window: 258400,
               context_left_percent: 74,
+              context_used: 76593,
+              context_used_percent: 30,
+              input_tokens: 1237,
+              cache_read_tokens: 35328,
+              cache_write_tokens: 0,
+              output_tokens: 512,
+              reasoning_tokens: 128,
+              model: "jojocode/gpt-5.4",
               used_display: "76.6K",
               window_display: "258K",
               status_text: "74% context left · 76.6K / 258K",
@@ -729,6 +803,16 @@ describe("RealWebBotClient", () => {
     expect(history[0].meta?.contextUsage?.sessionId).toBe("thread-1");
     expect(history[0].meta?.contextUsage?.statusText).toBe("74% context left · 76.6K / 258K");
     expect(history[0].meta?.contextUsage?.compactionCount).toBe(2);
+    expect(history[0].meta?.contextUsage).toEqual(expect.objectContaining({
+      contextUsed: 76593,
+      contextUsedPercent: 30,
+      inputTokens: 1237,
+      cacheReadTokens: 35328,
+      cacheWriteTokens: 0,
+      outputTokens: 512,
+      reasoningTokens: 128,
+      model: "jojocode/gpt-5.4",
+    }));
     expect(sent.meta?.contextUsage?.sessionId).toBe("thread-2");
     expect(sent.meta?.contextUsage?.usedTokens).toBe(76593);
     expect(sent.meta?.contextUsage?.compactionCount).toBe(1);

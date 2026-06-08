@@ -1166,6 +1166,8 @@ async def test_native_agent_client_prompt_async_keeps_slash_in_model_id(monkeypa
 async def test_native_agent_server_manager_reuses_single_global_handle_and_falls_back_to_legacy_path(monkeypatch: pytest.MonkeyPatch):
     from bot import config
     from bot.native_agent import server_manager as server_manager_module
+    from bot.native_agent import config_store
+    from bot.native_agent import config_store
 
     captured: dict[str, object] = {}
 
@@ -1230,6 +1232,7 @@ async def test_native_agent_server_manager_ignores_bot_provider_config_and_write
 ):
     from bot import config
     from bot.native_agent import server_manager as server_manager_module
+    from bot.native_agent import config_store
 
     created_processes = []
     captured_envs: list[dict[str, str]] = []
@@ -1273,7 +1276,8 @@ async def test_native_agent_server_manager_ignores_bot_provider_config_and_write
     monkeypatch.setattr(config, "NATIVE_AGENT_OPENCODE_AGENT", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_REASONING_EFFORT", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_THINKING_DEPTH", "")
-    monkeypatch.setattr(server_manager_module, "get_app_data_root", lambda: tmp_path / "data")
+    monkeypatch.setenv("OPENCODE_CONFIG", str(tmp_path / "opencode.json"))
+    monkeypatch.setattr(config_store, "get_app_data_root", lambda: tmp_path / "data")
     monkeypatch.setattr(server_manager_module, "resolve_cli_executable", lambda command, _cwd=None: f"C:/tools/{command}.cmd")
     monkeypatch.setattr(server_manager_module, "build_executable_invocation", lambda path: [path])
     monkeypatch.setattr(server_manager_module.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
@@ -1323,7 +1327,7 @@ async def test_native_agent_server_manager_ignores_bot_provider_config_and_write
 
     await manager.stop_all()
 
-    assert changed.config_path.exists() is False
+    assert changed.config_path.exists() is True
     assert created_processes[0].terminated is True
 
 
@@ -1334,6 +1338,7 @@ async def test_native_agent_server_manager_uses_global_provider_model_config(
 ):
     from bot import config
     from bot.native_agent import server_manager as server_manager_module
+    from bot.native_agent import config_store
 
     captured_envs: list[dict[str, str]] = []
     captured_cwds: list[str] = []
@@ -1374,7 +1379,8 @@ async def test_native_agent_server_manager_uses_global_provider_model_config(
     monkeypatch.setattr(config, "NATIVE_AGENT_REASONING_EFFORT", "high")
     monkeypatch.setattr(config, "NATIVE_AGENT_THINKING_DEPTH", "4096")
     monkeypatch.setattr(config, "WORKING_DIR", str(workspace))
-    monkeypatch.setattr(server_manager_module, "get_app_data_root", lambda: tmp_path / "data")
+    monkeypatch.setenv("OPENCODE_CONFIG", str(tmp_path / "opencode.json"))
+    monkeypatch.setattr(config_store, "get_app_data_root", lambda: tmp_path / "data")
     monkeypatch.setattr(server_manager_module, "resolve_cli_executable", lambda command, _cwd=None: f"C:/tools/{command}.cmd")
     monkeypatch.setattr(server_manager_module, "build_executable_invocation", lambda path: [path])
     monkeypatch.setattr(server_manager_module.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
@@ -1452,6 +1458,7 @@ async def test_native_agent_server_manager_starts_serve_in_profile_working_dir(
 ):
     from bot import config
     from bot.native_agent import server_manager as server_manager_module
+    from bot.native_agent import config_store
 
     workspace_one = tmp_path / "workspace-one"
     workspace_two = tmp_path / "workspace-two"
@@ -1503,6 +1510,8 @@ async def test_native_agent_server_manager_starts_serve_in_profile_working_dir(
     monkeypatch.setattr(config, "NATIVE_AGENT_REASONING_EFFORT", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_THINKING_DEPTH", "")
     monkeypatch.setattr(config, "WORKING_DIR", str(tmp_path / "repo-root"))
+    monkeypatch.setenv("OPENCODE_CONFIG", str(tmp_path / "opencode.json"))
+    monkeypatch.setattr(config_store, "get_app_data_root", lambda: tmp_path / "data")
     monkeypatch.setattr(server_manager_module, "resolve_cli_executable", fake_resolve_cli_executable)
     monkeypatch.setattr(server_manager_module, "build_executable_invocation", lambda path: [path])
     monkeypatch.setattr(server_manager_module.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
@@ -1533,6 +1542,7 @@ async def test_native_agent_server_manager_keeps_builtin_provider_adapter(
 ):
     from bot import config
     from bot.native_agent import server_manager as server_manager_module
+    from bot.native_agent import config_store
 
     captured_envs: list[dict[str, str]] = []
 
@@ -1568,7 +1578,8 @@ async def test_native_agent_server_manager_keeps_builtin_provider_adapter(
     monkeypatch.setattr(config, "NATIVE_AGENT_OPENCODE_AGENT", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_REASONING_EFFORT", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_THINKING_DEPTH", "")
-    monkeypatch.setattr(server_manager_module, "get_app_data_root", lambda: tmp_path / "data")
+    monkeypatch.setenv("OPENCODE_CONFIG", str(tmp_path / "opencode.json"))
+    monkeypatch.setattr(config_store, "get_app_data_root", lambda: tmp_path / "data")
     monkeypatch.setattr(server_manager_module, "resolve_cli_executable", lambda command, _cwd=None: f"C:/tools/{command}.cmd")
     monkeypatch.setattr(server_manager_module, "build_executable_invocation", lambda path: [path])
     monkeypatch.setattr(server_manager_module.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
@@ -1608,7 +1619,12 @@ async def test_native_agent_client_list_messages_flattens_info_parts(monkeypatch
         return {
             "data": [
                 {
-                    "info": {"id": "assistant-1", "role": "assistant", "finish": "stop"},
+                    "info": {
+                        "id": "assistant-1",
+                        "role": "assistant",
+                        "finish": "stop",
+                        "tokens": {"input": 10, "cache": {"read": 20, "write": 3}, "output": 4},
+                    },
                     "parts": [
                         {"type": "step-start"},
                         {"type": "reasoning", "text": "internal"},
@@ -1630,8 +1646,14 @@ async def test_native_agent_client_list_messages_flattens_info_parts(monkeypatch
             "id": "assistant-1",
             "role": "assistant",
             "finish": "stop",
+            "tokens": {"input": 10, "cache": {"read": 20, "write": 3}, "output": 4},
             "content": "回答",
-            "info": {"id": "assistant-1", "role": "assistant", "finish": "stop"},
+            "info": {
+                "id": "assistant-1",
+                "role": "assistant",
+                "finish": "stop",
+                "tokens": {"input": 10, "cache": {"read": 20, "write": 3}, "output": 4},
+            },
             "parts": [
                 {"type": "step-start"},
                 {"type": "reasoning", "text": "internal"},

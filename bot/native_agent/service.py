@@ -28,6 +28,7 @@ from bot.native_agent.ag_ui_mapper import (
 )
 from bot.native_agent.aggregator import NativeAgentAggregator
 from bot.native_agent.client import NativeAgentClient, NativeAgentClientError
+from bot.native_agent.context_usage import resolve_native_agent_context_usage
 from bot.native_agent.events import is_relevant_event, unwrap_event
 from bot.native_agent.server_manager import SERVER_MANAGER, NativeAgentServerHandle
 from bot.native_agent.turn_state import NativeAgentTurnState
@@ -409,13 +410,20 @@ class NativeAgentService:
                 pass
 
             if not completed_without_idle:
+                messages = []
                 try:
                     messages = await client.list_messages(native_session_id)
                     reconciled = aggregator.reconcile_messages(turn_state.current_turn_messages(messages))
                     if reconciled:
                         final_text = reconciled
                 except Exception:
+                    messages = []
                     pass
+            else:
+                try:
+                    messages = await client.list_messages(native_session_id)
+                except Exception:
+                    messages = []
             final_text = final_text or aggregator.text()
             if completion_state == "completed" and aggregator.saw_tool_failure:
                 completion_state = "error"
@@ -431,6 +439,11 @@ class NativeAgentService:
             for trace_event in live_trace:
                 if trace_event.get("kind") == "cancelled":
                     history_service.append_trace_event(turn_handle, trace_event)
+            context_usage = resolve_native_agent_context_usage(
+                session_id=native_session_id,
+                model_id=model_id,
+                messages=messages,
+            )
             done_message = history_service.complete_turn(
                 turn_handle,
                 content=final_text,
@@ -438,6 +451,7 @@ class NativeAgentService:
                 native_session_id=native_session_id,
                 error_code=None if completion_state == "completed" else completion_state,
                 error_message=None if completion_state == "completed" else (error_message or final_text),
+                context_usage=context_usage,
             )
             if wants_ag_ui:
                 if final_text and not ag_ui_state.text_started:
@@ -461,6 +475,7 @@ class NativeAgentService:
                 "message": done_message,
                 "elapsed_seconds": elapsed_seconds,
                 "returncode": returncode,
+                "context_usage": context_usage,
                 "session": {
                     "bot_alias": profile.alias,
                     "bot_mode": profile.bot_mode,

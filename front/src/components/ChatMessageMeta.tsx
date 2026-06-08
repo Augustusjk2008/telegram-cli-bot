@@ -49,31 +49,55 @@ function formatCompactionCount(count?: number) {
   return `compacted ${value} times`;
 }
 
+function formatTokenNumber(value?: number) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "";
+  }
+  return Math.max(0, Math.floor(value)).toLocaleString("zh-CN");
+}
+
+function clampPercent(value: number) {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, value));
+}
+
 function formatContextUsage(contextUsage?: ChatMessageContextUsage) {
   if (!contextUsage) {
     return null;
   }
-  const percent = typeof contextUsage.contextLeftPercent === "number"
-    ? `${contextUsage.contextLeftPercent}% left`
-    : "";
-  const usage = contextUsage.usedDisplay && contextUsage.windowDisplay
-    ? `${contextUsage.usedDisplay} / ${contextUsage.windowDisplay}`
-    : "";
-  const baseText = (contextUsage.statusText || [percent, usage].filter(Boolean).join(" · "))
-    .replace(/\bcontext left\b/g, "left");
-  if (!baseText) {
-    return null;
-  }
+  const contextUsed = typeof contextUsage.contextUsed === "number"
+    ? contextUsage.contextUsed
+    : contextUsage.usedTokens;
+  const contextWindow = contextUsage.contextWindow;
+  const hasWindow = typeof contextWindow === "number" && contextWindow > 0;
+  const usedPercent = typeof contextUsage.contextUsedPercent === "number"
+    ? contextUsage.contextUsedPercent
+    : hasWindow && typeof contextUsed === "number"
+      ? (contextUsed / contextWindow) * 100
+      : typeof contextUsage.contextLeftPercent === "number"
+        ? 100 - contextUsage.contextLeftPercent
+        : 0;
+  const detailRows = [
+    hasWindow ? `context window: ${formatTokenNumber(contextWindow)}` : "未配置 context window",
+    typeof contextUsed === "number" ? `context used: ${formatTokenNumber(contextUsed)}` : "",
+    typeof contextUsage.inputTokens === "number" ? `input: ${formatTokenNumber(contextUsage.inputTokens)}` : "",
+    typeof contextUsage.cacheReadTokens === "number" ? `cache read: ${formatTokenNumber(contextUsage.cacheReadTokens)}` : "",
+    typeof contextUsage.cacheWriteTokens === "number" ? `cache write: ${formatTokenNumber(contextUsage.cacheWriteTokens)}` : "",
+    typeof contextUsage.outputTokens === "number" ? `output: ${formatTokenNumber(contextUsage.outputTokens)}` : "",
+    typeof contextUsage.reasoningTokens === "number" ? `reasoning: ${formatTokenNumber(contextUsage.reasoningTokens)}` : "",
+    contextUsage.model ? `model: ${contextUsage.model}` : "",
+  ].filter(Boolean);
   const compactionText = formatCompactionCount(contextUsage.compactionCount);
-  const text = [baseText, compactionText ? `(${compactionText})` : ""].filter(Boolean).join(" ");
-  if (!text) {
-    return null;
+  if (compactionText) {
+    detailRows.push(compactionText);
   }
-  const baseTitle = contextUsage.usedDisplay && contextUsage.windowDisplay
-    ? `${contextUsage.usedDisplay} used / ${contextUsage.windowDisplay} window`
-    : baseText;
-  const title = compactionText ? `${baseTitle} (${compactionText})` : baseTitle;
-  return { text, title, isLow: typeof contextUsage.contextLeftPercent === "number" && contextUsage.contextLeftPercent < 25 };
+  return {
+    percent: hasWindow ? clampPercent(usedPercent) : 0,
+    title: detailRows.join("\n"),
+    label: hasWindow ? `context 已用 ${Math.round(clampPercent(usedPercent))}%` : "未配置 context window",
+  };
 }
 
 export function ChatMessageMeta({ name, createdAt, align = "left", avatar, contextUsage }: Props) {
@@ -89,12 +113,25 @@ export function ChatMessageMeta({ name, createdAt, align = "left", avatar, conte
       <span className="text-[var(--muted)]">{formatTime(createdAt)}</span>
       {context ? (
         <span
-          className={context.isLow
-            ? "rounded-md border border-red-200 bg-red-50 px-1.5 py-0.5 font-medium text-red-600"
-            : "rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-1.5 py-0.5 text-[var(--muted)]"}
+          aria-label={context.label}
+          className="inline-flex h-4 w-4 items-center justify-center text-[var(--muted)]"
           title={context.title}
         >
-          {context.text}
+          <svg viewBox="0 0 20 20" className="h-4 w-4" aria-hidden="true">
+            <circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" />
+            <circle
+              cx="10"
+              cy="10"
+              r="7"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeDasharray={43.98}
+              strokeDashoffset={43.98 - (43.98 * context.percent) / 100}
+              strokeLinecap="round"
+              transform="rotate(-90 10 10)"
+            />
+          </svg>
         </span>
       ) : null}
       {align === "right" ? avatar : null}

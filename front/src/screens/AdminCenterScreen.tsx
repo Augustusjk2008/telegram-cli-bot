@@ -18,6 +18,7 @@ import type {
   EnvConfigValue,
   LanChatConfig,
   LanChatConfigInput,
+  NativeAgentConfigPayload,
   OfflineUpdatePackageList,
   RegisterCodeCreateResult,
   RegisterCodeItem,
@@ -33,7 +34,7 @@ type Props = {
   canManageEnvConfig?: boolean;
 };
 
-type AdminCenterTab = "users" | "invites" | "cli-errors" | "updates" | "announcements" | "lan-chat" | "env";
+type AdminCenterTab = "users" | "invites" | "cli-errors" | "updates" | "announcements" | "lan-chat" | "native-agent" | "env";
 
 const ENV_CATEGORY_LABELS: Record<string, string> = {
   basic: "基础",
@@ -173,6 +174,9 @@ export function AdminCenterScreen({
   const [lanChatConfig, setLanChatConfig] = useState<LanChatConfig | null>(null);
   const [lanChatDraft, setLanChatDraft] = useState<LanChatConfigInput>({});
   const [lanChatSaving, setLanChatSaving] = useState(false);
+  const [nativeAgentConfig, setNativeAgentConfig] = useState<NativeAgentConfigPayload | null>(null);
+  const [nativeAgentDraft, setNativeAgentDraft] = useState("");
+  const [nativeAgentSaving, setNativeAgentSaving] = useState(false);
   const [envConfig, setEnvConfig] = useState<EnvConfigSnapshot | null>(null);
   const [envDraft, setEnvDraft] = useState<Record<string, EnvConfigValue>>({});
   const [envVisibleSecrets, setEnvVisibleSecrets] = useState<Record<string, boolean>>({});
@@ -189,6 +193,7 @@ export function AdminCenterScreen({
     updates: false,
     announcements: false,
     "lan-chat": false,
+    "native-agent": false,
     env: false,
   });
   const [manualPackagePath, setManualPackagePath] = useState("");
@@ -212,6 +217,7 @@ export function AdminCenterScreen({
       "updates",
       "announcements",
       "lan-chat",
+      "native-agent",
       ...(canManageEnvConfig ? (["env"] as AdminCenterTab[]) : []),
     ],
     [canManageEnvConfig, canManageRegisterCodes],
@@ -419,6 +425,32 @@ export function AdminCenterScreen({
     }
   }
 
+  async function loadNativeAgentConfig(nextNotice = "", refresh = false) {
+    if (refresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+    setError("");
+    if (!nextNotice) {
+      setNotice("");
+    }
+    try {
+      const config = await client.getNativeAgentConfig();
+      setNativeAgentConfig(config);
+      setNativeAgentDraft(JSON.stringify(config.config || {}, null, 2));
+      setLoadedTabs((prev) => ({ ...prev, "native-agent": true }));
+      if (nextNotice) {
+        setNotice(nextNotice);
+      }
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "加载原生 Agent 配置失败"));
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }
+
   async function loadEnvConfig(nextNotice = "", refresh = false) {
     if (refresh) {
       setRefreshing(true);
@@ -465,6 +497,8 @@ export function AdminCenterScreen({
       await loadUpdates(nextNotice, refresh);
     } else if (activeTab === "lan-chat") {
       await loadLanChat(nextNotice, refresh);
+    } else if (activeTab === "native-agent") {
+      await loadNativeAgentConfig(nextNotice, refresh);
     } else if (activeTab === "env" && canManageEnvConfig) {
       await loadEnvConfig(nextNotice, refresh);
     } else {
@@ -730,6 +764,27 @@ export function AdminCenterScreen({
     }
   };
 
+  const saveNativeAgentConfig = async () => {
+    setNativeAgentSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      const parsed = JSON.parse(nativeAgentDraft || "{}");
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        setError("配置必须是 JSON 对象");
+        return;
+      }
+      const saved = await client.updateNativeAgentConfig(parsed as Record<string, unknown>);
+      setNativeAgentConfig(saved);
+      setNativeAgentDraft(JSON.stringify(saved.config || {}, null, 2));
+      setNotice(saved.needsRestart ? "配置已保存，重启原生 agent 后生效" : "原生 Agent 配置已保存");
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "保存原生 Agent 配置失败"));
+    } finally {
+      setNativeAgentSaving(false);
+    }
+  };
+
   const buildEnvPatchInput = (): EnvConfigPatchInput => {
     const values: Record<string, EnvConfigPatchValue> = {};
     for (const item of envChangedItems) {
@@ -859,6 +914,8 @@ export function AdminCenterScreen({
                       ? "CLI 错误"
                     : tab === "announcements"
                       ? "公告"
+                    : tab === "native-agent"
+                      ? "原生 Agent"
                       : tab === "env"
                         ? "环境配置"
                         : "联机聊天"}
@@ -1165,6 +1222,70 @@ export function AdminCenterScreen({
               <Save className="h-4 w-4" />
               {lanChatSaving ? "保存中..." : "保存联机聊天配置"}
             </button>
+          </section>
+        ) : null}
+
+        {!loading && activeTab === "native-agent" ? (
+          <section className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold text-[var(--text)]">原生 Agent</h2>
+                <p className="text-sm text-[var(--muted)]">OpenCode provider/model 配置。保存后需重启原生 agent。</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void saveNativeAgentConfig()}
+                disabled={nativeAgentSaving}
+                className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm tcb-solid-accent hover:opacity-90 disabled:opacity-60"
+              >
+                <Save className="h-4 w-4" />
+                {nativeAgentSaving ? "保存中..." : "保存配置"}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 text-xs text-[var(--muted)] lg:grid-cols-2">
+              <p className="break-all rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                OpenCode: {nativeAgentConfig?.opencodeConfigPath || "-"}
+              </p>
+              <p className="break-all rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                备份: {nativeAgentConfig?.backupPath || "-"}
+              </p>
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
+              <label className="space-y-2">
+                <span className="text-sm font-medium text-[var(--text)]">配置 JSON</span>
+                <textarea
+                  aria-label="原生 Agent 配置 JSON"
+                  value={nativeAgentDraft}
+                  onChange={(event) => setNativeAgentDraft(event.target.value)}
+                  spellCheck={false}
+                  rows={22}
+                  className="min-h-[28rem] w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 font-mono text-xs text-[var(--text)]"
+                />
+              </label>
+
+              <div className="space-y-2">
+                <h3 className="text-sm font-medium text-[var(--text)]">模型预览</h3>
+                {(nativeAgentConfig?.models || []).length ? (
+                  <div className="space-y-2">
+                    {nativeAgentConfig?.models.map((model) => (
+                      <div key={model.id} className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm">
+                        <p className="font-medium text-[var(--text)]">{model.provider} / {model.name}</p>
+                        <p className="text-xs text-[var(--muted)]">
+                          context {model.contextWindow?.toLocaleString() || "未配置"}
+                          {model.outputLimit ? ` · output ${model.outputLimit.toLocaleString()}` : ""}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--muted)]">
+                    暂无模型
+                  </p>
+                )}
+              </div>
+            </div>
           </section>
         ) : null}
 

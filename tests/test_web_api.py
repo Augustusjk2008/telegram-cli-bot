@@ -1227,6 +1227,98 @@ def test_build_bot_summary_returns_native_agent_config_without_password(web_mana
 
 
 @pytest.mark.asyncio
+async def test_admin_native_agent_config_routes_save_config(
+    web_manager: MultiBotManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot.native_agent import config_store
+
+    opencode_path = tmp_path / "opencode.json"
+    monkeypatch.setenv("OPENCODE_CONFIG", str(opencode_path))
+    monkeypatch.setattr(config_store, "get_app_data_root", lambda: tmp_path / "data")
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            patch_resp = await client.patch(
+                "/api/admin/native-agent/config",
+                json={
+                    "config": {
+                        "provider": {
+                            "jojocode_max": {
+                                "models": {
+                                    "gpt-5.4": {
+                                        "name": "gpt-5.4",
+                                        "limit": {"context": 1_000_000, "output": 128_000},
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+            )
+            patch_payload = await patch_resp.json()
+            get_resp = await client.get("/api/admin/native-agent/config")
+            get_payload = await get_resp.json()
+
+    assert patch_resp.status == 200
+    assert patch_payload["data"]["needs_restart"] is True
+    assert patch_payload["data"]["opencode_config_path"] == str(opencode_path)
+    assert patch_payload["data"]["models"][0]["id"] == "jojocode_max/gpt-5.4"
+    assert json.loads(opencode_path.read_text(encoding="utf-8")) == patch_payload["data"]["config"]
+    assert get_resp.status == 200
+    assert get_payload["data"]["models"][0]["context_window"] == 1_000_000
+
+
+@pytest.mark.asyncio
+async def test_bot_native_agent_model_routes_save_selection(
+    web_manager: MultiBotManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot.native_agent import config_store
+
+    monkeypatch.setenv("OPENCODE_CONFIG", str(tmp_path / "opencode.json"))
+    monkeypatch.setattr(config_store, "get_app_data_root", lambda: tmp_path / "data")
+    config_store.save_native_agent_config({
+        "provider": {
+            "jojocode_max": {
+                "models": {
+                    "gpt-5.4": {"name": "gpt-5.4", "limit": {"context": 1_000_000}},
+                }
+            }
+        }
+    })
+    web_manager.main_profile.supported_execution_modes = ["native_agent"]
+    web_manager.main_profile.default_execution_mode = "native_agent"
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            list_resp = await client.get("/api/bots/main/native-agent/models")
+            list_payload = await list_resp.json()
+            patch_resp = await client.patch(
+                "/api/bots/main/native-agent/model",
+                json={"model": "jojocode_max/gpt-5.4"},
+            )
+            patch_payload = await patch_resp.json()
+
+    assert list_resp.status == 200
+    assert list_payload["data"]["selected_model"] == "jojocode_max/gpt-5.4"
+    assert patch_resp.status == 200
+    assert patch_payload["data"]["selected_model"] == "jojocode_max/gpt-5.4"
+    assert patch_payload["data"]["bot"]["native_agent"]["model"] == "jojocode_max/gpt-5.4"
+    assert web_manager.main_profile.native_agent == {"native_agent_model": "jojocode_max/gpt-5.4"}
+
+
+@pytest.mark.asyncio
 async def test_admin_execution_route_updates_native_agent_config_and_hides_password(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     import bot.config as config
 

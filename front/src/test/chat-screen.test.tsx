@@ -1614,6 +1614,116 @@ test("sends native agent execution mode from action bar", async () => {
   expect(sendMessage.mock.calls[0][5]).toMatchObject({ executionMode: "native_agent" });
 });
 
+test("native agent model select is enabled and saves bot model", async () => {
+  const user = userEvent.setup();
+  const updateNativeAgentModel = vi.fn<WebBotClient["updateNativeAgentModel"]>(async () => ({
+    items: [
+      {
+        id: "jojocode_max/gpt-5.4",
+        provider: "jojocode_max",
+        model: "gpt-5.4",
+        name: "gpt-5.4",
+        label: "jojocode_max / gpt-5.4",
+        contextWindow: 1000000,
+        outputLimit: 128000,
+      },
+      {
+        id: "jojocode_max/gpt-5.5",
+        provider: "jojocode_max",
+        model: "gpt-5.5",
+        name: "gpt-5.5",
+        label: "jojocode_max / gpt-5.5",
+        contextWindow: 1000000,
+        outputLimit: 128000,
+      },
+    ],
+    selectedModel: "jojocode_max/gpt-5.5",
+  }));
+  const updateCliParam = vi.fn<WebBotClient["updateCliParam"]>(async () => modelCliParams("gpt-5.4"));
+  const client = createClient({
+    getBotOverview: async () => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+      supportedExecutionModes: ["native_agent"],
+      defaultExecutionMode: "native_agent",
+      nativeAgent: { provider: "", model: "jojocode_max/gpt-5.4", opencodeAgent: "" },
+    }),
+    getNativeAgentModels: async () => ({
+      items: [
+        {
+          id: "jojocode_max/gpt-5.4",
+          provider: "jojocode_max",
+          model: "gpt-5.4",
+          name: "gpt-5.4",
+          label: "jojocode_max / gpt-5.4",
+          contextWindow: 1000000,
+          outputLimit: 128000,
+        },
+        {
+          id: "jojocode_max/gpt-5.5",
+          provider: "jojocode_max",
+          model: "gpt-5.5",
+          name: "gpt-5.5",
+          label: "jojocode_max / gpt-5.5",
+          contextWindow: 1000000,
+          outputLimit: 128000,
+        },
+      ],
+      selectedModel: "jojocode_max/gpt-5.4",
+    }),
+    updateNativeAgentModel,
+    updateCliParam,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  const modelSelect = await screen.findByLabelText("模型");
+  expect(modelSelect).toBeEnabled();
+  expect(within(modelSelect).getByRole("option", { name: "jojocode_max / gpt-5.4" })).toBeInTheDocument();
+
+  await user.selectOptions(modelSelect, "jojocode_max/gpt-5.5");
+
+  await waitFor(() => expect(updateNativeAgentModel).toHaveBeenCalledWith("main", "jojocode_max/gpt-5.5"));
+  expect(updateCliParam).not.toHaveBeenCalled();
+});
+
+test("shows context usage ring with native token details", async () => {
+  const now = new Date().toISOString();
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "assistant-context",
+        role: "assistant",
+        text: "完成",
+        createdAt: now,
+        state: "done",
+        meta: {
+          contextUsage: {
+            contextUsed: 36565,
+            contextWindow: 1000000,
+            contextUsedPercent: 4,
+            inputTokens: 1237,
+            cacheReadTokens: 35328,
+            cacheWriteTokens: 0,
+            outputTokens: 512,
+            reasoningTokens: 128,
+            model: "jojocode_max/gpt-5.4",
+          },
+        },
+      },
+    ],
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  const ring = await screen.findByLabelText("context 已用 4%");
+  expect(ring).toHaveAttribute("title", expect.stringContaining("context window: 1,000,000"));
+  expect(ring).toHaveAttribute("title", expect.stringContaining("cache read: 35,328"));
+});
+
 test("execution mode switch reloads scoped history", async () => {
   const user = userEvent.setup();
   const getBotOverview = vi.fn<WebBotClient["getBotOverview"]>(async (_botAlias, options) => ({

@@ -258,6 +258,15 @@ def _flatten_message(message: dict[str, Any]) -> dict[str, Any]:
         flattened["role"] = str(role)
     if finish:
         flattened["finish"] = str(finish)
+    for key in ("tokens", "usage", "tokenUsage", "token_usage"):
+        value = flattened.get(key)
+        if isinstance(value, dict):
+            flattened[key] = value
+            break
+        info_value = info.get(key)
+        if isinstance(info_value, dict):
+            flattened[key] = info_value
+            break
     flattened["content"] = str(content or "")
     flattened["parts"] = parts
     return flattened

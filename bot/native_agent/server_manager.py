@@ -14,6 +14,7 @@ from typing import Any
 import bot.config as config
 from bot.cli import resolve_cli_executable
 from bot.models import BotProfile, build_native_agent_model_id, normalize_native_agent_config
+from bot.native_agent.config_store import ensure_opencode_config
 from bot.native_agent.client import NativeAgentClient, NativeAgentServerRef
 from bot.native_agent.configuration import global_native_agent_config, validate_native_agent_model_config
 from bot.platform.executables import build_executable_invocation
@@ -257,9 +258,8 @@ class NativeAgentServerManager:
         env = os.environ.copy()
         env["OPENCODE_SERVER_USERNAME"] = username
         env["OPENCODE_SERVER_PASSWORD"] = password
-        opencode_config_path = self._write_opencode_config(key, normalize_native_agent_config(server_config.get("native_agent")))
-        if opencode_config_path is not None:
-            env["OPENCODE_CONFIG"] = str(opencode_config_path)
+        opencode_config_path = ensure_opencode_config(normalize_native_agent_config(server_config.get("native_agent")))
+        env["OPENCODE_CONFIG"] = str(opencode_config_path)
         invocation = self._resolve_command(command, working_dir)
         process = await asyncio.create_subprocess_exec(
             *invocation,
@@ -303,11 +303,6 @@ class NativeAgentServerManager:
             except asyncio.TimeoutError:
                 process.kill()
                 await process.wait()
-        if handle.config_path is not None:
-            try:
-                handle.config_path.unlink(missing_ok=True)
-            except OSError:
-                pass
 
     async def stop_all(self) -> None:
         async with self._lock:
