@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, LoaderCircle, X } from "lucide-react";
+import { Check, ChevronRight, LoaderCircle, X } from "lucide-react";
 import { ChatMarkdownMessage } from "./ChatMarkdownMessage";
 import { ChatPlainTextMessage } from "./ChatPlainTextMessage";
 import type { ChatMessage } from "../services/types";
@@ -181,16 +181,18 @@ export function NativeAgentTranscript({
           <details
             key={`native-agent-event-group-${item.groupIndex}-${item.entries[0]?.id || "empty"}`}
             data-testid="native-agent-event-group"
-            className="border-t border-[var(--workbench-hairline)] py-1"
+            className="group border-t border-[var(--workbench-hairline)] py-1"
           >
-            <summary className="cursor-pointer marker:text-[var(--muted)]">
-              <span className="inline-flex w-full flex-wrap items-center justify-between gap-2 py-1">
-                <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--accent)]">
-                  阶段 {item.groupIndex}
-                </span>
-                <span className="rounded-md border border-[var(--workbench-hairline)] px-2 py-0.5 text-[11px] text-[var(--muted)]">
-                  {describeTranscriptGroup(item.entries)}
-                </span>
+            <summary className="flex cursor-pointer list-none items-center gap-2 py-1 text-[var(--muted)] marker:hidden [&::-webkit-details-marker]:hidden">
+              <ChevronRight
+                className="h-3.5 w-3.5 shrink-0 text-[var(--muted)] transition-transform group-open:rotate-90"
+                aria-hidden="true"
+              />
+              <span className="shrink-0 text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--accent)]">
+                过程 {item.groupIndex}
+              </span>
+              <span className="min-w-0 truncate text-[11px] text-[var(--muted)]">
+                {describeTranscriptGroup(item.entries)}
               </span>
             </summary>
             <div className="border-l-2 border-[var(--accent-outline)] pl-3">

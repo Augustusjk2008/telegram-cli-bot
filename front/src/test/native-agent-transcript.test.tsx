@@ -44,9 +44,12 @@ test("native transcript groups sequential process, tool, result, and event entri
   const group = screen.getByTestId("native-agent-event-group") as HTMLDetailsElement;
   expect(group.tagName).toBe("DETAILS");
   expect(group).not.toHaveAttribute("open");
-  expect(group.textContent).toContain("阶段 1");
+  expect(group.textContent).toContain("过程 1");
   expect(group.textContent).toContain("4 条事件 · 1 次工具");
-  await user.click(within(group).getByText("阶段 1"));
+  const summary = within(group).getByText("过程 1").closest("summary");
+  expect(summary).toHaveTextContent("过程 1");
+  expect(summary).toHaveTextContent("4 条事件 · 1 次工具");
+  await user.click(within(group).getByText("过程 1"));
   expect(group).toHaveAttribute("open");
   expect(group.textContent).toContain("准备执行");
   expect(group.textContent).toContain("shell_command");

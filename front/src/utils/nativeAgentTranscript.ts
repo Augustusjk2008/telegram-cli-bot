@@ -292,9 +292,19 @@ export function buildNativeAgentTranscriptEntries(input: {
   trace?: ChatTraceEvent[];
   agUiState?: AgUiRunState | null;
 }): NativeAgentTranscriptEntry[] {
+  const liveTrace = input.agUiState?.entries
+    ?.map((entry) => entry.trace)
+    .filter((trace): trace is ChatTraceEvent => Boolean(trace));
+  const traceSource = input.trace?.length ? input.trace : liveTrace;
+  const normalizedTrace = mergeChatTraceEvents([traceSource], { nativeFlat: true });
+
+  if (normalizedTrace?.length) {
+    return normalizedTrace.map((trace, index) => traceToEntry(trace, index, index + 1));
+  }
+
   if (input.agUiState?.entries?.length) {
     return [...input.agUiState.entries].sort((left, right) => left.seq - right.seq);
   }
-  return (mergeChatTraceEvents([input.trace], { nativeFlat: true }) || [])
-    .map((trace, index) => traceToEntry(trace, index, index + 1));
+
+  return [];
 }

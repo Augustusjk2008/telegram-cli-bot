@@ -785,7 +785,7 @@ test("native history auto-loads flat trace details", async () => {
   await waitFor(() => expect(getMessageTrace).toHaveBeenCalledWith("main", "assistant-native-history"));
   expect(await within(transcript).findByText("我先检查目录结构。")).toBeInTheDocument();
   const eventGroup = within(transcript).getByTestId("native-agent-event-group");
-  expect(eventGroup.textContent).toContain("阶段 1");
+  expect(eventGroup.textContent).toContain("过程 1");
   expect(eventGroup.textContent).toContain("3 条事件 · 1 次工具");
   expect(eventGroup.textContent).toContain("我先检查目录结构。");
   expect(eventGroup.textContent).toContain("shell_command");
@@ -1110,7 +1110,7 @@ test("live ag-ui stream renders flat transcript and final result last", async ()
   expect(within(transcript).getByText("运行中")).toBeInTheDocument();
   expect(within(transcript).getByText("检查上下文")).toBeInTheDocument();
   const eventGroup = within(transcript).getByTestId("native-agent-event-group");
-  expect(eventGroup.textContent).toContain("阶段 1");
+  expect(eventGroup.textContent).toContain("过程 1");
   expect(eventGroup.textContent).toContain("3 条事件 · 1 次工具");
   expect(eventGroup.textContent).toContain("检查上下文");
   expect(eventGroup.textContent).toContain("shell_command");
