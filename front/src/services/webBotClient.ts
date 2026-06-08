@@ -98,6 +98,7 @@ import type {
   NativeAgentPermissionReplyOptions,
   NativeAgentConfigPayload,
   NativeAgentModelUpdateResult,
+  NativeAgentModelUpdateOptions,
   NativeAgentModelsPayload,
   ChatSendOptions,
   ClusterConfigUpdateInput,
@@ -228,7 +229,7 @@ export interface WebBotClient {
     options: NativeAgentPermissionReplyOptions,
   ): Promise<{ permissionId: string; approved: boolean }>;
   getNativeAgentModels(botAlias: string): Promise<NativeAgentModelsPayload>;
-  updateNativeAgentModel(botAlias: string, model: string): Promise<NativeAgentModelUpdateResult>;
+  updateNativeAgentModel(botAlias: string, model: string, options?: NativeAgentModelUpdateOptions): Promise<NativeAgentModelUpdateResult>;
   getDebugProfile(botAlias: string): Promise<DebugProfile | null>;
   getDebugState(botAlias: string): Promise<DebugState>;
   getTerminalSession(ownerId: string): Promise<PersistentTerminalSnapshot>;

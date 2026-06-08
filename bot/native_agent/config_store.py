@@ -141,6 +141,7 @@ def list_configured_models(config: dict[str, Any] | None = None) -> list[dict[st
             output = _positive_int_or_none(limit.get("output")) if isinstance(limit, dict) else None
             model_name = str(model_config.get("name") or model).strip() or model
             model_key = f"{provider}/{model}"
+            reasoning_efforts, default_reasoning_effort = _model_reasoning_efforts(model_config)
             items.append(
                 {
                     "id": model_key,
@@ -150,6 +151,8 @@ def list_configured_models(config: dict[str, Any] | None = None) -> list[dict[st
                     "label": f"{provider} / {model_name}",
                     "context_window": context,
                     "output_limit": output,
+                    "reasoning_efforts": reasoning_efforts,
+                    "default_reasoning_effort": default_reasoning_effort,
                 }
             )
     return items
@@ -231,6 +234,46 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
         os.chmod(path, 0o600)
     except OSError:
         pass
+
+
+def _model_reasoning_efforts(model_config: dict[str, Any]) -> tuple[list[str], str]:
+    options = model_config.get("options") if isinstance(model_config.get("options"), dict) else {}
+    efforts = _string_list(
+        model_config.get(
+            "reasoningEfforts",
+            model_config.get("reasoning_efforts"),
+        )
+    )
+    if not efforts:
+        efforts = _string_list(
+            options.get(
+                "reasoningEfforts",
+                options.get("reasoning_efforts"),
+            )
+        )
+    if not efforts:
+        variants = model_config.get("variants")
+        if isinstance(variants, dict):
+            efforts = _string_list(list(variants.keys()))
+    default_effort = str(options.get("reasoningEffort") or "").strip() if isinstance(options, dict) else ""
+    if default_effort and not efforts:
+        efforts = [default_effort]
+    return efforts, default_effort
+
+
+def _string_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        candidates = [value]
+    elif isinstance(value, (list, tuple, set)):
+        candidates = value
+    else:
+        return []
+    result: list[str] = []
+    for item in candidates:
+        normalized = str(item or "").strip()
+        if normalized and normalized not in result:
+            result.append(normalized)
+    return result
 
 
 def _model_options(native_agent: dict[str, Any]) -> dict[str, Any]:

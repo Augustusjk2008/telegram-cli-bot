@@ -66,6 +66,7 @@ import type {
   NativeAgentModelOption,
   NativeAgentModelsPayload,
   NativeAgentModelUpdateResult,
+  NativeAgentModelUpdateOptions,
   CliErrorStatsFilters,
   CliErrorStatsResult,
   CliType,
@@ -1470,6 +1471,10 @@ export class MockWebBotClient implements WebBotClient {
         models: {
           "gpt-5.4": {
             name: "gpt-5.4",
+            reasoningEfforts: ["low", "medium", "high"],
+            options: {
+              reasoningEffort: "medium",
+            },
             limit: {
               context: 1000000,
               output: 128000,
@@ -1488,6 +1493,8 @@ export class MockWebBotClient implements WebBotClient {
       label: "jojocode_max / gpt-5.4",
       contextWindow: 1000000,
       outputLimit: 128000,
+      reasoningEfforts: ["low", "medium", "high"],
+      defaultReasoningEffort: "medium",
     },
   ];
   private currentPaths = new Map<string, string>();
@@ -2352,6 +2359,7 @@ export class MockWebBotClient implements WebBotClient {
   private normalizeNativeAgentConfig(input: BotExecutionConfigInput["nativeAgent"] | CreateBotInput["nativeAgent"] | undefined, current?: BotSummary["nativeAgent"]): BotSummary["nativeAgent"] {
     const opencodeAgent = String(input?.opencodeAgent || "").trim();
     const model = String(input?.model || current?.model || "").trim();
+    const reasoningEffort = String(input?.reasoningEffort || current?.reasoningEffort || "").trim();
     return {
       provider: "",
       model,
@@ -2359,6 +2367,7 @@ export class MockWebBotClient implements WebBotClient {
       baseUrl: "",
       hasApiKey: false,
       apiKeyMasked: "",
+      ...(reasoningEffort ? { reasoningEffort } : {}),
     };
   }
 
@@ -2374,7 +2383,10 @@ export class MockWebBotClient implements WebBotClient {
       for (const [model, modelValue] of Object.entries(models as Record<string, unknown>)) {
         const modelRecord = modelValue && typeof modelValue === "object" ? modelValue as Record<string, unknown> : {};
         const limit = modelRecord.limit && typeof modelRecord.limit === "object" ? modelRecord.limit as Record<string, unknown> : {};
+        const options = modelRecord.options && typeof modelRecord.options === "object" ? modelRecord.options as Record<string, unknown> : {};
         const name = String(modelRecord.name || model);
+        const reasoningEfforts = this.extractReasoningEfforts(modelRecord, options);
+        const defaultReasoningEffort = String(options.reasoningEffort || "").trim();
         items.push({
           id: `${provider}/${model}`,
           provider,
@@ -2383,10 +2395,24 @@ export class MockWebBotClient implements WebBotClient {
           label: `${provider} / ${name}`,
           ...(typeof limit.context === "number" ? { contextWindow: limit.context } : {}),
           ...(typeof limit.output === "number" ? { outputLimit: limit.output } : {}),
+          ...(reasoningEfforts.length ? { reasoningEfforts } : {}),
+          ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
         });
       }
     }
     return items;
+  }
+
+  private extractReasoningEfforts(modelRecord: Record<string, unknown>, options: Record<string, unknown>): string[] {
+    const raw = modelRecord.reasoningEfforts
+      ?? modelRecord.reasoning_efforts
+      ?? options.reasoningEfforts
+      ?? options.reasoning_efforts;
+    const efforts = Array.isArray(raw)
+      ? Array.from(new Set(raw.map((item) => String(item || "").trim()).filter(Boolean)))
+      : [];
+    const defaultReasoningEffort = String(options.reasoningEffort || "").trim();
+    return efforts.length > 0 ? efforts : (defaultReasoningEffort ? [defaultReasoningEffort] : []);
   }
 
   private getBotSummary(botAlias: string): BotSummary {
@@ -6909,17 +6935,23 @@ export class MockWebBotClient implements WebBotClient {
 
   async getNativeAgentModels(botAlias: string): Promise<NativeAgentModelsPayload> {
     const bot = this.getBotSummary(botAlias);
+    const selectedModel = bot.nativeAgent?.model || this.nativeAgentModels[0]?.id || "";
+    const selectedItem = this.nativeAgentModels.find((item) => item.id === selectedModel);
     return {
       items: this.nativeAgentModels.map((item) => ({ ...item })),
-      selectedModel: bot.nativeAgent?.model || this.nativeAgentModels[0]?.id || "",
+      selectedModel,
+      selectedReasoningEffort: this.resolveSelectedReasoningEffort(selectedItem, bot.nativeAgent?.reasoningEffort),
     };
   }
 
-  async updateNativeAgentModel(botAlias: string, model: string): Promise<NativeAgentModelUpdateResult> {
+  async updateNativeAgentModel(botAlias: string, model: string, options: NativeAgentModelUpdateOptions = {}): Promise<NativeAgentModelUpdateResult> {
     const bot = this.getBotSummary(botAlias);
+    const selectedItem = this.nativeAgentModels.find((item) => item.id === model);
+    const reasoningEffort = this.resolveSelectedReasoningEffort(selectedItem, options.reasoningEffort);
     const nextNativeAgent = {
       ...(bot.nativeAgent || { provider: "", model: "", opencodeAgent: "" }),
       model,
+      ...(reasoningEffort ? { reasoningEffort } : {}),
     };
     this.bots.set(bot.alias, {
       ...bot,
@@ -6928,8 +6960,24 @@ export class MockWebBotClient implements WebBotClient {
     return {
       items: this.nativeAgentModels.map((item) => ({ ...item })),
       selectedModel: model,
+      selectedReasoningEffort: reasoningEffort,
       bot: this.getBotSummary(bot.alias),
     };
+  }
+
+  private resolveSelectedReasoningEffort(model: NativeAgentModelOption | undefined, selected: string | undefined): string {
+    const efforts = model?.reasoningEfforts || [];
+    if (efforts.length === 0) {
+      return "";
+    }
+    const normalized = String(selected || "").trim();
+    if (normalized && efforts.includes(normalized)) {
+      return normalized;
+    }
+    if (model?.defaultReasoningEffort && efforts.includes(model.defaultReasoningEffort)) {
+      return model.defaultReasoningEffort;
+    }
+    return efforts[0] || "";
   }
 
   async updateCliParam(botAlias: string, key: string, value: unknown): Promise<CliParamsPayload> {

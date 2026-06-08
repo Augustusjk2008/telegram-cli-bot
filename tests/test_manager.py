@@ -257,13 +257,13 @@ class TestManagerValidation:
             str(storage),
         )
 
-        await manager.set_bot_native_agent_model("main", "jojocode/gpt-5.4")
+        await manager.set_bot_native_agent_model("main", "jojocode/gpt-5.4", "high")
         restored = MultiBotManager(
             BotProfile(alias="main", token="main_tok", working_dir=str(temp_dir)),
             str(storage),
         )
 
-        assert restored.main_profile.native_agent == {"native_agent_model": "jojocode/gpt-5.4"}
+        assert restored.main_profile.native_agent == {"native_agent_model": "jojocode/gpt-5.4", "reasoning_effort": "high"}
 
     @pytest.mark.asyncio
     async def test_background_services_start_and_shutdown_global_native_agent_server(self, temp_dir: Path):

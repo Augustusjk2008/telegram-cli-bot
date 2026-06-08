@@ -88,6 +88,7 @@ import type {
   NativeAgentModelOption,
   NativeAgentModelsPayload,
   NativeAgentModelUpdateResult,
+  NativeAgentModelUpdateOptions,
   CliErrorStatsFilters,
   CliErrorStatsItem,
   CliErrorStatsResult,
@@ -2032,6 +2033,8 @@ function mapNativeAgentConfig(value: unknown): NativeAgentConfig | undefined {
 
 function mapNativeAgentModelOption(raw: unknown): NativeAgentModelOption {
   const item = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const reasoningEfforts = toStringArray(item.reasoning_efforts ?? item.reasoningEfforts);
+  const defaultReasoningEffort = String(item.default_reasoning_effort ?? item.defaultReasoningEffort ?? "").trim();
   return {
     id: String(item.id || ""),
     provider: String(item.provider || ""),
@@ -2042,6 +2045,8 @@ function mapNativeAgentModelOption(raw: unknown): NativeAgentModelOption {
     ...(typeof item.contextWindow === "number" ? { contextWindow: item.contextWindow } : {}),
     ...(typeof item.output_limit === "number" ? { outputLimit: item.output_limit } : {}),
     ...(typeof item.outputLimit === "number" ? { outputLimit: item.outputLimit } : {}),
+    ...(reasoningEfforts.length ? { reasoningEfforts } : {}),
+    ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
   };
 }
 
@@ -2063,7 +2068,19 @@ function mapNativeAgentModelsPayload(raw: unknown): NativeAgentModelsPayload {
   return {
     items,
     selectedModel: String(item.selected_model ?? item.selectedModel ?? ""),
+    selectedReasoningEffort: String(item.selected_reasoning_effort ?? item.selectedReasoningEffort ?? "").trim(),
   };
+}
+
+function toStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return Array.from(new Set(
+    value
+      .map((item) => String(item || "").trim())
+      .filter(Boolean),
+  ));
 }
 
 function serializeNativeAgentConfig(input: NativeAgentConfigInput | undefined) {
@@ -6590,13 +6607,17 @@ export class RealWebBotClient implements WebBotClient {
     return mapNativeAgentModelsPayload(await this.requestJson(`/api/bots/${encodeURIComponent(botAlias)}/native-agent/models`));
   }
 
-  async updateNativeAgentModel(botAlias: string, model: string): Promise<NativeAgentModelUpdateResult> {
+  async updateNativeAgentModel(botAlias: string, model: string, options: NativeAgentModelUpdateOptions = {}): Promise<NativeAgentModelUpdateResult> {
+    const body: Record<string, unknown> = { model };
+    if (Object.prototype.hasOwnProperty.call(options, "reasoningEffort")) {
+      body.reasoning_effort = options.reasoningEffort || "";
+    }
     const raw = await this.requestJson<Record<string, unknown>>(`/api/bots/${encodeURIComponent(botAlias)}/native-agent/model`, {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ model }),
+      body: JSON.stringify(body),
     });
     const mapped = mapNativeAgentModelsPayload(raw);
     const bot = raw.bot ? mapBotSummary(raw.bot as RawBotSummary, Boolean((raw.bot as RawBotSummary).is_processing)) : undefined;

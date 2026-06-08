@@ -2045,26 +2045,70 @@ def get_native_agent_models_payload(manager: MultiBotManager, alias: str) -> dic
     selected_model = str(profile.native_agent.get("native_agent_model") or "").strip()
     if not selected_model and models:
         selected_model = str(models[0].get("id") or "")
+    selected_item = _find_native_agent_model_item(models, selected_model)
+    effective_config = effective_native_agent_config(profile.native_agent)
+    selected_reasoning_effort = str(
+        profile.native_agent.get("reasoning_effort")
+        or effective_config.get("reasoning_effort")
+        or ""
+    ).strip()
+    selected_reasoning_effort = _normalize_selected_reasoning_effort(selected_item, selected_reasoning_effort)
     return {
         "items": models,
         "selected_model": selected_model,
+        "selected_reasoning_effort": selected_reasoning_effort,
     }
 
 
-async def update_bot_native_agent_model(manager: MultiBotManager, alias: str, model: Any) -> dict[str, Any]:
+async def update_bot_native_agent_model(
+    manager: MultiBotManager,
+    alias: str,
+    model: Any,
+    reasoning_effort: Any = None,
+) -> dict[str, Any]:
     selected_model = str(model or "").strip()
+    selected_reasoning_effort = str(reasoning_effort or "").strip()
     if not selected_model:
         _raise(400, "missing_native_agent_model", "模型不能为空")
-    if find_configured_model(selected_model) is None:
+    configured_model = find_configured_model(selected_model)
+    if configured_model is None:
         _raise(400, "invalid_native_agent_model", f"模型未在原生 Agent 配置中找到: {selected_model}")
+    reasoning_efforts = [
+        str(item or "").strip()
+        for item in configured_model.get("reasoning_efforts", [])
+        if str(item or "").strip()
+    ]
+    if selected_reasoning_effort and selected_reasoning_effort not in reasoning_efforts:
+        _raise(400, "invalid_native_agent_reasoning_effort", f"推理强度不可用于模型: {selected_reasoning_effort}")
     try:
-        await manager.set_bot_native_agent_model(alias, selected_model)
+        await manager.set_bot_native_agent_model(alias, selected_model, selected_reasoning_effort)
     except ValueError as exc:
         _raise(400, "invalid_native_agent_model", str(exc))
     return {
         **get_native_agent_models_payload(manager, alias),
         "bot": build_bot_summary(manager, alias),
     }
+
+
+def _find_native_agent_model_item(models: list[dict[str, Any]], model_id: str) -> dict[str, Any] | None:
+    for item in models:
+        if str(item.get("id") or "") == model_id:
+            return item
+    return None
+
+
+def _normalize_selected_reasoning_effort(model: dict[str, Any] | None, selected: str) -> str:
+    if model is None:
+        return ""
+    efforts = [str(item or "").strip() for item in model.get("reasoning_efforts", []) if str(item or "").strip()]
+    if not efforts:
+        return ""
+    if selected in efforts:
+        return selected
+    default_effort = str(model.get("default_reasoning_effort") or "").strip()
+    if default_effort in efforts:
+        return default_effort
+    return efforts[0]
 
 
 async def update_cli_params(

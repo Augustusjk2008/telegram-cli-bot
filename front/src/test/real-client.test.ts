@@ -775,6 +775,8 @@ describe("RealWebBotClient", () => {
           label: "jojocode_max / gpt-5.4",
           context_window: 1000000,
           output_limit: 128000,
+          reasoning_efforts: ["low", "medium", "high"],
+          default_reasoning_effort: "medium",
         }],
         needs_restart: false,
       }))
@@ -793,18 +795,22 @@ describe("RealWebBotClient", () => {
           name: "gpt-5.4",
           label: "jojocode_max / gpt-5.4",
           context_window: 1000000,
+          reasoning_efforts: ["low", "medium", "high"],
+          default_reasoning_effort: "medium",
         }],
         selected_model: "jojocode_max/gpt-5.4",
+        selected_reasoning_effort: "medium",
       }))
       .mockResolvedValueOnce(jsonOk({
         items: [],
         selected_model: "jojocode_max/gpt-5.5",
+        selected_reasoning_effort: "high",
         bot: {
           alias: "main",
           cli_type: "codex",
           status: "running",
           working_dir: "C:\\workspace",
-          native_agent: { model: "jojocode_max/gpt-5.5" },
+          native_agent: { model: "jojocode_max/gpt-5.5", reasoning_effort: "high" },
         },
       }));
 
@@ -812,19 +818,27 @@ describe("RealWebBotClient", () => {
     const config = await client.getNativeAgentConfig();
     const saved = await client.updateNativeAgentConfig({ provider: {} });
     const models = await client.getNativeAgentModels("main");
-    const updated = await client.updateNativeAgentModel("main", "jojocode_max/gpt-5.5");
+    const updated = await client.updateNativeAgentModel("main", "jojocode_max/gpt-5.5", { reasoningEffort: "high" });
 
     expect(config.models[0]).toMatchObject({
       id: "jojocode_max/gpt-5.4",
       contextWindow: 1000000,
       outputLimit: 128000,
+      reasoningEfforts: ["low", "medium", "high"],
+      defaultReasoningEffort: "medium",
     });
     expect(saved.needsRestart).toBe(true);
     expect(models.selectedModel).toBe("jojocode_max/gpt-5.4");
+    expect(models.selectedReasoningEffort).toBe("medium");
     expect(updated.selectedModel).toBe("jojocode_max/gpt-5.5");
+    expect(updated.selectedReasoningEffort).toBe("high");
     expect(updated.bot?.nativeAgent?.model).toBe("jojocode_max/gpt-5.5");
+    expect(updated.bot?.nativeAgent?.reasoningEffort).toBe("high");
     expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({ config: { provider: {} } });
-    expect(JSON.parse(String(fetchMock.mock.calls[3][1]?.body))).toEqual({ model: "jojocode_max/gpt-5.5" });
+    expect(JSON.parse(String(fetchMock.mock.calls[3][1]?.body))).toEqual({
+      model: "jojocode_max/gpt-5.5",
+      reasoning_effort: "high",
+    });
   });
 
   test("maps context_usage from history and stream done message", async () => {

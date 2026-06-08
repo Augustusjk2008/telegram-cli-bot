@@ -68,11 +68,21 @@ def _normalize_bot_native_agent_config(value: Any, *, existing: dict[str, Any] |
         legacy_model = str(model_source.get("model") or "").strip()
         if "/" in legacy_model:
             native_agent_model = legacy_model
+    reasoning_source = data
+    if not any(key in data for key in ("reasoning_effort", "reasoningEffort")):
+        reasoning_source = existing if isinstance(existing, dict) else {}
+    reasoning_effort = ""
+    for key in ("reasoning_effort", "reasoningEffort"):
+        if isinstance(reasoning_source, dict) and key in reasoning_source:
+            reasoning_effort = str(reasoning_source.get(key) or "").strip()
+            break
     result: dict[str, Any] = {}
     if opencode_agent:
         result["opencode_agent"] = opencode_agent
     if native_agent_model:
         result["native_agent_model"] = native_agent_model
+    if reasoning_effort:
+        result["reasoning_effort"] = reasoning_effort
     return result
 
 
@@ -718,9 +728,10 @@ class MultiBotManager:
             else:
                 self._save_profiles()
 
-    async def set_bot_native_agent_model(self, alias: str, model: str) -> None:
+    async def set_bot_native_agent_model(self, alias: str, model: str, reasoning_effort: str | None = None) -> None:
         normalized_alias = str(alias or "").strip().lower()
         selected_model = str(model or "").strip()
+        selected_reasoning_effort = str(reasoning_effort or "").strip()
         if not selected_model:
             raise ValueError("模型不能为空")
         if "/" not in selected_model:
@@ -732,6 +743,10 @@ class MultiBotManager:
                 raise ValueError("仅原生 agent Bot 支持模型选择")
             native_agent = _normalize_bot_native_agent_config(profile.native_agent)
             native_agent["native_agent_model"] = selected_model
+            if selected_reasoning_effort:
+                native_agent["reasoning_effort"] = selected_reasoning_effort
+            else:
+                native_agent.pop("reasoning_effort", None)
             profile.native_agent = native_agent
             if normalized_alias == self.main_profile.alias:
                 self._persist_main_profile()

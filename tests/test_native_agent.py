@@ -1431,6 +1431,171 @@ async def test_native_agent_server_manager_uses_global_provider_model_config(
     assert captured_envs[0]["OPENCODE_CONFIG"] == str(handle.config_path)
 
 
+@pytest.mark.asyncio
+async def test_native_agent_server_manager_writes_profile_reasoning_effort(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot import config
+    from bot.native_agent import config_store
+    from bot.native_agent import server_manager as server_manager_module
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    opencode_path = tmp_path / "opencode.json"
+    monkeypatch.setenv("OPENCODE_CONFIG", str(opencode_path))
+    monkeypatch.setattr(config_store, "get_app_data_root", lambda: tmp_path / "data")
+    config_store.save_native_agent_config({
+        "provider": {
+            "jojocode": {
+                "models": {
+                    "gpt-5.4": {
+                        "name": "gpt-5.4",
+                        "reasoningEfforts": ["low", "medium", "high"],
+                        "options": {"reasoningEffort": "medium"},
+                    }
+                }
+            }
+        }
+    })
+
+    class FakeProcess:
+        returncode = None
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = 0
+
+        async def wait(self):
+            return 0
+
+    async def fake_create_subprocess_exec(*_args, **kwargs):
+        return FakeProcess()
+
+    async def fake_health(self):
+        return {"ok": True}
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    monkeypatch.setattr(config, "NATIVE_AGENT_COMMAND", "opencode")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PATH", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_HOST", "127.0.0.1")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PORT", 0)
+    monkeypatch.setattr(config, "NATIVE_AGENT_SERVER_PASSWORD", "secret")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PROVIDER", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_MODEL", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_BASE_URL", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_API_KEY", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_OPENCODE_AGENT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_REASONING_EFFORT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_THINKING_DEPTH", "")
+    monkeypatch.setattr(config, "WORKING_DIR", str(workspace))
+    monkeypatch.setattr(server_manager_module, "resolve_cli_executable", lambda command, _cwd=None: f"C:/tools/{command}.cmd")
+    monkeypatch.setattr(server_manager_module, "build_executable_invocation", lambda path: [path])
+    monkeypatch.setattr(server_manager_module.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(server_manager_module.NativeAgentClient, "health", fake_health)
+
+    manager = NativeAgentServerManager()
+    monkeypatch.setattr(manager, "_pick_port", lambda _host: 4101)
+
+    handle = await manager.ensure_started(BotProfile(
+        alias="agent-test",
+        working_dir=str(workspace),
+        supported_execution_modes=["native_agent"],
+        default_execution_mode="native_agent",
+        native_agent={
+            "native_agent_model": "jojocode/gpt-5.4",
+            "reasoning_effort": "high",
+        },
+    ))
+
+    assert handle.config_path is not None
+    payload = json.loads(handle.config_path.read_text(encoding="utf-8"))
+    assert payload["model"] == "jojocode/gpt-5.4"
+    assert payload["provider"]["jojocode"]["models"]["gpt-5.4"]["options"]["reasoningEffort"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_native_agent_server_manager_defaults_reasoning_effort_to_first_option(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot import config
+    from bot.native_agent import config_store
+    from bot.native_agent import server_manager as server_manager_module
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    opencode_path = tmp_path / "opencode.json"
+    monkeypatch.setenv("OPENCODE_CONFIG", str(opencode_path))
+    monkeypatch.setattr(config_store, "get_app_data_root", lambda: tmp_path / "data")
+    config_store.save_native_agent_config({
+        "provider": {
+            "jojocode": {
+                "models": {
+                    "gpt-5.4": {
+                        "name": "gpt-5.4",
+                        "reasoningEfforts": ["low", "high"],
+                    }
+                }
+            }
+        }
+    })
+
+    class FakeProcess:
+        returncode = None
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = 0
+
+        async def wait(self):
+            return 0
+
+    async def fake_create_subprocess_exec(*_args, **kwargs):
+        return FakeProcess()
+
+    async def fake_health(self):
+        return {"ok": True}
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    monkeypatch.setattr(config, "NATIVE_AGENT_COMMAND", "opencode")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PATH", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_HOST", "127.0.0.1")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PORT", 0)
+    monkeypatch.setattr(config, "NATIVE_AGENT_SERVER_PASSWORD", "secret")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PROVIDER", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_MODEL", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_BASE_URL", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_API_KEY", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_OPENCODE_AGENT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_REASONING_EFFORT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_THINKING_DEPTH", "")
+    monkeypatch.setattr(config, "WORKING_DIR", str(workspace))
+    monkeypatch.setattr(server_manager_module, "resolve_cli_executable", lambda command, _cwd=None: f"C:/tools/{command}.cmd")
+    monkeypatch.setattr(server_manager_module, "build_executable_invocation", lambda path: [path])
+    monkeypatch.setattr(server_manager_module.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(server_manager_module.NativeAgentClient, "health", fake_health)
+
+    manager = NativeAgentServerManager()
+    monkeypatch.setattr(manager, "_pick_port", lambda _host: 4101)
+
+    handle = await manager.ensure_started(BotProfile(
+        alias="agent-test",
+        working_dir=str(workspace),
+        supported_execution_modes=["native_agent"],
+        default_execution_mode="native_agent",
+        native_agent={"native_agent_model": "jojocode/gpt-5.4"},
+    ))
+
+    assert handle.config_path is not None
+    payload = json.loads(handle.config_path.read_text(encoding="utf-8"))
+    assert payload["provider"]["jojocode"]["models"]["gpt-5.4"]["options"]["reasoningEffort"] == "low"
+
+
 def test_native_agent_global_config_requires_provider_when_model_has_no_provider(monkeypatch: pytest.MonkeyPatch):
     from bot import config
     from bot.native_agent.configuration import global_native_agent_config, validate_native_agent_model_config

@@ -226,6 +226,8 @@ export type NativeAgentModelOption = {
   label: string;
   contextWindow?: number;
   outputLimit?: number;
+  reasoningEfforts?: string[];
+  defaultReasoningEffort?: string;
 };
 
 export type NativeAgentConfigPayload = {
@@ -239,10 +241,15 @@ export type NativeAgentConfigPayload = {
 export type NativeAgentModelsPayload = {
   items: NativeAgentModelOption[];
   selectedModel: string;
+  selectedReasoningEffort?: string;
 };
 
 export type NativeAgentModelUpdateResult = NativeAgentModelsPayload & {
   bot?: BotSummary;
+};
+
+export type NativeAgentModelUpdateOptions = {
+  reasoningEffort?: string;
 };
 
 export type NativeAgentDraft = NativeAgentConfigView & {

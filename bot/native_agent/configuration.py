@@ -49,6 +49,10 @@ def effective_native_agent_config(fallback: Any = None) -> dict[str, Any]:
         fallback_agent = str(fallback_config.get("opencode_agent") or "").strip()
         if fallback_agent:
             resolved["opencode_agent"] = fallback_agent
+    fallback_reasoning_effort = str(fallback_config.get("reasoning_effort") or "").strip()
+    if fallback_reasoning_effort:
+        resolved["reasoning_effort"] = fallback_reasoning_effort
+    _normalize_reasoning_effort_for_selected_model(resolved)
     return {key: value for key, value in resolved.items() if value}
 
 
@@ -67,3 +71,28 @@ def validate_native_agent_model_config(native_agent: dict[str, Any]) -> None:
             "原生 agent 全局配置缺少 NATIVE_AGENT_PROVIDER；请设置 provider，"
             "或把 NATIVE_AGENT_MODEL 写成 provider/model 格式"
         )
+
+
+def _normalize_reasoning_effort_for_selected_model(native_agent: dict[str, Any]) -> None:
+    selected_model = str(
+        native_agent.get("native_agent_model")
+        or native_agent.get("model")
+        or ""
+    ).strip()
+    if not selected_model:
+        return
+    configured_model = find_configured_model(selected_model)
+    if configured_model is None:
+        return
+    efforts = [
+        str(item or "").strip()
+        for item in configured_model.get("reasoning_efforts", [])
+        if str(item or "").strip()
+    ]
+    if not efforts:
+        return
+    current_effort = str(native_agent.get("reasoning_effort") or "").strip()
+    if current_effort in efforts:
+        return
+    default_effort = str(configured_model.get("default_reasoning_effort") or "").strip()
+    native_agent["reasoning_effort"] = default_effort if default_effort in efforts else efforts[0]

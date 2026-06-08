@@ -1647,6 +1647,8 @@ test("native agent model select is enabled and saves bot model", async () => {
         label: "jojocode_max / gpt-5.4",
         contextWindow: 1000000,
         outputLimit: 128000,
+        reasoningEfforts: ["low", "medium", "high"],
+        defaultReasoningEffort: "medium",
       },
       {
         id: "jojocode_max/gpt-5.5",
@@ -1656,9 +1658,12 @@ test("native agent model select is enabled and saves bot model", async () => {
         label: "jojocode_max / gpt-5.5",
         contextWindow: 1000000,
         outputLimit: 128000,
+        reasoningEfforts: ["low", "medium", "high"],
+        defaultReasoningEffort: "medium",
       },
     ],
     selectedModel: "jojocode_max/gpt-5.5",
+    selectedReasoningEffort: "medium",
   }));
   const updateCliParam = vi.fn<WebBotClient["updateCliParam"]>(async () => modelCliParams("gpt-5.4"));
   const client = createClient({
@@ -1682,6 +1687,8 @@ test("native agent model select is enabled and saves bot model", async () => {
           label: "jojocode_max / gpt-5.4",
           contextWindow: 1000000,
           outputLimit: 128000,
+          reasoningEfforts: ["low", "medium", "high"],
+          defaultReasoningEffort: "medium",
         },
         {
           id: "jojocode_max/gpt-5.5",
@@ -1691,9 +1698,12 @@ test("native agent model select is enabled and saves bot model", async () => {
           label: "jojocode_max / gpt-5.5",
           contextWindow: 1000000,
           outputLimit: 128000,
+          reasoningEfforts: ["low", "medium", "high"],
+          defaultReasoningEffort: "medium",
         },
       ],
       selectedModel: "jojocode_max/gpt-5.4",
+      selectedReasoningEffort: "medium",
     }),
     updateNativeAgentModel,
     updateCliParam,
@@ -1706,10 +1716,14 @@ test("native agent model select is enabled and saves bot model", async () => {
   await waitFor(() => {
     expect(within(modelSelect).getByRole("option", { name: "jojocode_max / gpt-5.4" })).toBeInTheDocument();
   });
+  const reasoningSelect = screen.getByLabelText("推理强度");
+  expect(reasoningSelect).toBeEnabled();
 
   await user.selectOptions(modelSelect, "jojocode_max/gpt-5.5");
 
-  await waitFor(() => expect(updateNativeAgentModel).toHaveBeenCalledWith("main", "jojocode_max/gpt-5.5"));
+  await waitFor(() => expect(updateNativeAgentModel).toHaveBeenCalledWith("main", "jojocode_max/gpt-5.5", { reasoningEffort: "medium" }));
+  await user.selectOptions(reasoningSelect, "high");
+  await waitFor(() => expect(updateNativeAgentModel).toHaveBeenCalledWith("main", "jojocode_max/gpt-5.5", { reasoningEffort: "high" }));
   expect(updateCliParam).not.toHaveBeenCalled();
 });
 

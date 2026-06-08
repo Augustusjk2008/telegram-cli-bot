@@ -35,6 +35,7 @@ import type {
   FileReadResult,
   PromptPreset,
   NativeAgentModelsPayload,
+  NativeAgentModelOption,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import {
@@ -389,6 +390,22 @@ function modelLimitTitle(contextWindow?: number, outputLimit?: number) {
     typeof contextWindow === "number" ? `context ${contextWindow.toLocaleString()}` : "",
     typeof outputLimit === "number" ? `output ${outputLimit.toLocaleString()}` : "",
   ].filter(Boolean).join(", ");
+}
+
+function resolveNativeReasoningEffort(model: NativeAgentModelOption | undefined, selected?: string) {
+  const efforts = model?.reasoningEfforts || [];
+  if (efforts.length === 0) {
+    return "";
+  }
+  const normalized = String(selected || "").trim();
+  if (normalized && efforts.includes(normalized)) {
+    return normalized;
+  }
+  const defaultEffort = String(model?.defaultReasoningEffort || "").trim();
+  if (defaultEffort && efforts.includes(defaultEffort)) {
+    return defaultEffort;
+  }
+  return efforts[0] || "";
 }
 
 function pendingCronAssistantId(runId: string) {
@@ -3237,10 +3254,13 @@ export function ChatScreen({
     setError("");
     try {
       if (nativeExecutionMode) {
-        const next = await client.updateNativeAgentModel(botAlias, nextModel);
+        const nextModelItem = nativeModelOptions.find((model) => model.id === nextModel);
+        const nextReasoningEffort = resolveNativeReasoningEffort(nextModelItem, nativeSelectedReasoningEffort);
+        const next = await client.updateNativeAgentModel(botAlias, nextModel, { reasoningEffort: nextReasoningEffort });
         setNativeAgentModels({
           items: next.items,
           selectedModel: next.selectedModel,
+          selectedReasoningEffort: next.selectedReasoningEffort,
         });
         if (next.bot) {
           const current = botOverviewRef.current;
@@ -3254,6 +3274,33 @@ export function ChatScreen({
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "模型切换失败");
+    } finally {
+      setModelSaving(false);
+    }
+  }
+
+  async function handleReasoningEffortChange(nextReasoningEffort: string) {
+    if (!nativeExecutionMode || !nativeSelectedModel || nextReasoningEffort === nativeSelectedReasoningEffort) {
+      return;
+    }
+
+    setModelSaving(true);
+    setError("");
+    try {
+      const next = await client.updateNativeAgentModel(botAlias, nativeSelectedModel, { reasoningEffort: nextReasoningEffort });
+      setNativeAgentModels({
+        items: next.items,
+        selectedModel: next.selectedModel,
+        selectedReasoningEffort: next.selectedReasoningEffort,
+      });
+      if (next.bot) {
+        const current = botOverviewRef.current;
+        const overview = (current ? { ...current, ...next.bot } : { ...next.bot }) as BotOverview;
+        botOverviewRef.current = overview;
+        setBotOverview(overview);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "推理强度切换失败");
     } finally {
       setModelSaving(false);
     }
@@ -3406,6 +3453,12 @@ export function ChatScreen({
     || botOverview?.nativeAgent?.model
     || nativeModelOptions[0]?.id
     || "";
+  const nativeSelectedModelItem = nativeModelOptions.find((model) => model.id === nativeSelectedModel);
+  const nativeReasoningEffortOptions = nativeSelectedModelItem?.reasoningEfforts || [];
+  const nativeSelectedReasoningEffort = resolveNativeReasoningEffort(
+    nativeSelectedModelItem,
+    nativeAgentModels?.selectedReasoningEffort || botOverview?.nativeAgent?.reasoningEffort,
+  );
   const selectedModel = nativeExecutionMode
     ? nativeSelectedModel
     : toModelOptionValue(cliParams?.params.model, cliModelOptions);
@@ -3500,6 +3553,10 @@ export function ChatScreen({
           selectedModel={selectedModel}
           modelDisabled={modelSaving || readOnly || visibleModelOptions.length === 0 || (!nativeExecutionMode && !cliParams)}
           onModelChange={(model) => void handleModelChange(model)}
+          reasoningEffortOptions={nativeReasoningEffortOptions}
+          selectedReasoningEffort={nativeSelectedReasoningEffort}
+          reasoningEffortDisabled={modelSaving || readOnly || !nativeExecutionMode}
+          onReasoningEffortChange={(effort) => void handleReasoningEffortChange(effort)}
           executionMode={effectiveExecutionMode}
           supportedExecutionModes={supportedExecutionModes}
           executionModeDisabled={loading || isStreaming || readOnly}

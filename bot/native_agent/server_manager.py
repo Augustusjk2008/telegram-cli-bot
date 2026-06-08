@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import logging
@@ -16,7 +17,7 @@ from bot.cli import resolve_cli_executable
 from bot.models import BotProfile, build_native_agent_model_id, normalize_native_agent_config
 from bot.native_agent.config_store import ensure_opencode_config
 from bot.native_agent.client import NativeAgentClient, NativeAgentServerRef
-from bot.native_agent.configuration import global_native_agent_config, validate_native_agent_model_config
+from bot.native_agent.configuration import effective_native_agent_config, validate_native_agent_model_config
 from bot.platform.executables import build_executable_invocation
 from bot.runtime_paths import get_app_data_root
 
@@ -79,7 +80,7 @@ class NativeAgentServerManager:
         except (TypeError, ValueError):
             configured_port = 0
         password = str(config.NATIVE_AGENT_SERVER_PASSWORD or "").strip()
-        native_agent = global_native_agent_config()
+        native_agent = effective_native_agent_config(getattr(profile, "native_agent", {}) if profile is not None else {})
         validate_native_agent_model_config(native_agent)
         working_dir = self._normalize_working_dir(str(getattr(profile, "working_dir", "") or config.WORKING_DIR or ""))
         return {
@@ -202,50 +203,52 @@ class NativeAgentServerManager:
     def _is_builtin_provider(self, provider: str) -> bool:
         return provider in self.BUILTIN_PROVIDER_IDS
 
-    def _write_opencode_config(self, key: str, native_agent: dict[str, Any]) -> Path | None:
-        provider = str(native_agent.get("provider") or "").strip().lower()
-        model = str(native_agent.get("model") or "").strip()
-        base_url = str(native_agent.get("base_url") or "").strip()
-        api_key = str(native_agent.get("api_key") or "").strip()
-        if not (provider and model and (base_url or api_key)):
-            return None
-        model_name = model.split("/", 1)[1] if "/" in model else model
-        provider_config: dict[str, Any] = {
-            "options": {},
-            "models": {
-                model_name: {
-                    "name": model_name,
-                },
-            },
-        }
-        model_options = _model_options(native_agent)
-        if model_options:
-            provider_config["models"][model_name]["options"] = model_options
-        if not self._is_builtin_provider(provider):
-            provider_config["npm"] = "@ai-sdk/openai-compatible"
-            provider_config["name"] = self._provider_name(provider)
-        if base_url:
-            provider_config["options"]["baseURL"] = base_url
-        if api_key:
-            provider_config["options"]["apiKey"] = api_key
-        payload = {
-            "$schema": "https://opencode.ai/config.json",
-            "model": build_native_agent_model_id(native_agent),
-            "provider": {
-                provider: provider_config,
-            },
-        }
+    def _write_opencode_config(self, key: str, native_agent: dict[str, Any]) -> Path:
+        base_path = ensure_opencode_config(native_agent)
+        try:
+            payload = json.loads(base_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return base_path
+        if not isinstance(payload, dict):
+            return base_path
+        runtime_payload = copy.deepcopy(payload)
+        selected_model = build_native_agent_model_id(native_agent)
+        if selected_model:
+            runtime_payload["model"] = selected_model
+            self._apply_model_options(runtime_payload, selected_model, _model_options(native_agent))
         opencode_agent = str(native_agent.get("opencode_agent") or "").strip()
         if opencode_agent:
-            payload["agent"] = opencode_agent
+            runtime_payload["agent"] = opencode_agent
         path = self._runtime_config_path(key)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        path.write_text(json.dumps(runtime_payload, ensure_ascii=False, indent=2), encoding="utf-8")
         try:
             os.chmod(path, 0o600)
         except OSError:
             pass
         return path
+
+    def _apply_model_options(self, payload: dict[str, Any], model_id: str, options: dict[str, Any]) -> None:
+        if not options or "/" not in model_id:
+            return
+        provider_id, model_name = model_id.split("/", 1)
+        provider_map = payload.get("provider")
+        if not isinstance(provider_map, dict):
+            return
+        provider_config = provider_map.get(provider_id)
+        if not isinstance(provider_config, dict):
+            return
+        models = provider_config.get("models")
+        if not isinstance(models, dict):
+            return
+        model_config = models.get(model_name)
+        if not isinstance(model_config, dict):
+            return
+        model_options = model_config.get("options")
+        if not isinstance(model_options, dict):
+            model_options = {}
+            model_config["options"] = model_options
+        model_options.update(options)
 
     async def _start_server(self, *, key: str, server_config: dict[str, Any]) -> NativeAgentServerHandle:
         command = str(server_config.get("command") or "opencode").strip() or "opencode"
@@ -258,7 +261,7 @@ class NativeAgentServerManager:
         env = os.environ.copy()
         env["OPENCODE_SERVER_USERNAME"] = username
         env["OPENCODE_SERVER_PASSWORD"] = password
-        opencode_config_path = ensure_opencode_config(normalize_native_agent_config(server_config.get("native_agent")))
+        opencode_config_path = self._write_opencode_config(key, normalize_native_agent_config(server_config.get("native_agent")))
         env["OPENCODE_CONFIG"] = str(opencode_config_path)
         invocation = self._resolve_command(command, working_dir)
         process = await asyncio.create_subprocess_exec(

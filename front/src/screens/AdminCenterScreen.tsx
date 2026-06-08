@@ -1275,6 +1275,7 @@ export function AdminCenterScreen({
                         <p className="text-xs text-[var(--muted)]">
                           context {model.contextWindow?.toLocaleString() || "未配置"}
                           {model.outputLimit ? ` · output ${model.outputLimit.toLocaleString()}` : ""}
+                          {model.reasoningEfforts?.length ? ` · reasoning ${model.reasoningEfforts.join(" / ")}` : ""}
                         </p>
                       </div>
                     ))}

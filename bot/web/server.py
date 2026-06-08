@@ -2862,6 +2862,7 @@ class WebApiServer:
             self.manager,
             alias,
             body.get("model", body.get("native_agent_model", body.get("nativeAgentModel"))),
+            body.get("reasoning_effort", body.get("reasoningEffort")),
         )
         return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})
 

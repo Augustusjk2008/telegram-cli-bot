@@ -14,6 +14,10 @@ type Props = {
   selectedModel: string;
   modelDisabled?: boolean;
   onModelChange: (model: string) => void;
+  reasoningEffortOptions?: string[];
+  selectedReasoningEffort?: string;
+  reasoningEffortDisabled?: boolean;
+  onReasoningEffortChange?: (effort: string) => void;
   executionMode: ChatExecutionMode;
   supportedExecutionModes?: ChatExecutionMode[];
   executionModeDisabled?: boolean;
@@ -52,6 +56,10 @@ export function ChatActionBar({
   selectedModel,
   modelDisabled = false,
   onModelChange,
+  reasoningEffortOptions = [],
+  selectedReasoningEffort = "",
+  reasoningEffortDisabled = false,
+  onReasoningEffortChange,
   executionMode,
   supportedExecutionModes = ["cli"],
   executionModeDisabled = false,
@@ -116,6 +124,21 @@ export function ChatActionBar({
               {visibleModelOptions.map((model) => (
                 <option key={model.value} value={model.value} title={model.title}>
                   {model.label}
+                </option>
+              ))}
+            </select>
+          ) : null}
+          {executionMode === "native_agent" && reasoningEffortOptions.length > 0 ? (
+            <select
+              aria-label="推理强度"
+              value={selectedReasoningEffort}
+              disabled={reasoningEffortDisabled || !onReasoningEffortChange}
+              onChange={(event) => onReasoningEffortChange?.(event.target.value)}
+              className="h-8 max-w-[7rem] shrink-0 truncate rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-2.5 text-xs font-medium text-[var(--text)] hover:bg-[var(--workbench-hover-bg)] focus:outline-none focus:ring-2 focus:ring-[var(--workbench-focus-ring)] disabled:opacity-60"
+            >
+              {reasoningEffortOptions.map((effort) => (
+                <option key={effort} value={effort}>
+                  {effort}
                 </option>
               ))}
             </select>
