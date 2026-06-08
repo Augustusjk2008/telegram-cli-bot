@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import inspect
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 from bot.native_agent.aggregator import NativeAgentAggregationResult, NativeAgentAggregator
@@ -23,6 +23,10 @@ class NativeAgentTurnState:
     last_non_transport_at: float = 0.0
     last_reconcile_at: float = 0.0
     reconcile_attempts: int = 0
+    final_candidate_first_seen_at: float = 0.0
+    final_candidate_seen_at: float = 0.0
+    final_candidate_message_id: str = ""
+    final_candidate_message_ids: set[str] = field(default_factory=set)
 
     def observe(self, event: NativeAgentEvent, result: NativeAgentAggregationResult, *, now: float) -> None:
         if not event.transport:
@@ -36,6 +40,41 @@ class NativeAgentTurnState:
             self.done = True
         if result.done:
             self.done = True
+        candidate = _completed_assistant_message_from_event(event)
+        if candidate:
+            self.observe_final_candidate(candidate, now=now)
+
+    def observe_final_candidate(self, message: dict[str, Any], *, now: float) -> None:
+        message_id = _message_id(message)
+        key = message_id or f"candidate-{len(self.final_candidate_message_ids) + 1}"
+        if key not in self.final_candidate_message_ids:
+            self.final_candidate_message_ids.add(key)
+        if message_id:
+            self.final_candidate_message_id = message_id
+        if not self.final_candidate_first_seen_at:
+            self.final_candidate_first_seen_at = now
+        self.final_candidate_seen_at = now
+
+    def has_final_candidate(self) -> bool:
+        return bool(self.final_candidate_first_seen_at)
+
+    def final_candidate_should_reconcile(
+        self,
+        *,
+        now: float,
+        force: bool = False,
+        completed_count: int = 2,
+        grace_seconds: float = 2.0,
+        max_seconds: float = 4.0,
+    ) -> bool:
+        if force:
+            return self.has_final_candidate() or self.has_text
+        if not self.has_final_candidate():
+            return False
+        if len(self.final_candidate_message_ids) >= completed_count:
+            return True
+        age = now - self.final_candidate_first_seen_at
+        return age >= max_seconds or age >= grace_seconds
 
     def should_reconcile(self, *, now: float, force: bool = False, interval_seconds: float = 0.35) -> bool:
         if self.done:
@@ -50,6 +89,8 @@ class NativeAgentTurnState:
         aggregator: NativeAgentAggregator,
         *,
         now: float,
+        require_completed_assistant: bool = False,
+        through_message_id: str = "",
     ) -> dict[str, Any]:
         self.last_reconcile_at = now
         self.reconcile_attempts += 1
@@ -61,12 +102,12 @@ class NativeAgentTurnState:
         if not isinstance(messages, list):
             return {"done": False, "text": ""}
 
-        current_messages = self.current_turn_messages(messages)
+        current_messages = self.current_turn_messages(messages, through_message_id=through_message_id)
         if not current_messages:
             return {"done": False, "text": ""}
 
-        text = aggregator.reconcile_messages(current_messages)
-        assistant = _last_assistant_message(current_messages)
+        text = aggregator.reconcile_messages(current_messages, require_completed=require_completed_assistant)
+        assistant = _last_completed_assistant_message(current_messages) if require_completed_assistant else _last_assistant_message(current_messages)
         if text:
             self.has_text = True
         if assistant:
@@ -78,18 +119,18 @@ class NativeAgentTurnState:
             return {"done": True, "text": text}
         return {"done": self.done, "text": text}
 
-    def current_turn_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def current_turn_messages(self, messages: list[dict[str, Any]], *, through_message_id: str = "") -> list[dict[str, Any]]:
         if not messages:
             return []
         user_index = _find_message_index(messages, self.user_message_id)
         if user_index >= 0:
-            return messages[user_index + 1 :]
+            return _truncate_messages(messages[user_index + 1 :], through_message_id)
         assistant_index = _find_message_index(messages, self.assistant_message_id)
         if assistant_index >= 0:
-            return messages[assistant_index:]
+            return _truncate_messages(messages[assistant_index:], through_message_id)
         baseline = max(0, int(self.baseline_message_count or 0))
         if self.baseline_known and len(messages) > baseline:
-            return messages[baseline:]
+            return _truncate_messages(messages[baseline:], through_message_id)
         return []
 
 
@@ -98,6 +139,45 @@ def _last_assistant_message(messages: list[dict[str, Any]]) -> dict[str, Any]:
         if isinstance(message, dict) and str(message.get("role") or "").lower() == "assistant":
             return message
     return {}
+
+
+def _last_completed_assistant_message(messages: list[dict[str, Any]]) -> dict[str, Any]:
+    for message in reversed(messages):
+        if not isinstance(message, dict):
+            continue
+        if str(message.get("role") or "").lower() == "assistant" and _message_completed(message):
+            return message
+    return {}
+
+
+def _completed_assistant_message_from_event(event: NativeAgentEvent) -> dict[str, Any]:
+    if event.type != "message.updated":
+        return {}
+    message = _message_from_event(event)
+    if str(message.get("role") or "").lower() != "assistant":
+        return {}
+    if not _message_completed(message):
+        return {}
+    message_id = _message_id(message) or event.message_id
+    if message_id and not _message_id(message):
+        message = {**message, "id": message_id}
+    return message
+
+
+def _message_from_event(event: NativeAgentEvent) -> dict[str, Any]:
+    payload = event.payload
+    message = payload.get("message")
+    if isinstance(message, dict):
+        return dict(message)
+    properties = payload.get("properties")
+    if isinstance(properties, dict):
+        message = properties.get("message") or properties.get("info")
+        if isinstance(message, dict):
+            return dict(message)
+    info = payload.get("info")
+    if isinstance(info, dict):
+        return dict(info)
+    return dict(payload)
 
 
 def _message_completed(message: dict[str, Any]) -> bool:
@@ -137,3 +217,13 @@ def _find_message_index(messages: list[dict[str, Any]], message_id: str) -> int:
         if isinstance(message, dict) and _message_id(message) == target:
             return index
     return -1
+
+
+def _truncate_messages(messages: list[dict[str, Any]], through_message_id: str) -> list[dict[str, Any]]:
+    target = str(through_message_id or "").strip()
+    if not target:
+        return messages
+    index = _find_message_index(messages, target)
+    if index < 0:
+        return []
+    return messages[: index + 1]

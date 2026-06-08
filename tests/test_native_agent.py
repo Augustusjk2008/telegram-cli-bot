@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from bot.native_agent.aggregator import NativeAgentAggregator
 from bot.native_agent.ag_ui_mapper import AgUiTurnState, build_run_error_event, build_run_finished_event, map_event as map_ag_ui_event
 from bot.native_agent.client import NativeAgentClient, NativeAgentClientError, NativeAgentServerRef, parse_sse_block
 from bot.native_agent.events import is_relevant_event, unwrap_event
+from bot.native_agent import service as native_service_module
 from bot.native_agent.service import NativeAgentService, normalize_execution_mode
 from bot.native_agent.turn_state import NativeAgentTurnState
 from bot.native_agent.server_manager import NativeAgentServerManager, _is_opencode_serve_process
@@ -21,9 +23,11 @@ from bot.web.chat_store import ChatStore
 
 
 @pytest.fixture(autouse=True)
-def clear_native_agent_global_config(monkeypatch: pytest.MonkeyPatch):
+def clear_native_agent_global_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     from bot import config
 
+    monkeypatch.setenv("OPENCODE_CONFIG", str(tmp_path / "opencode.json"))
+    monkeypatch.setenv("TCB_DATA_DIR", str(tmp_path / "tcb-data"))
     monkeypatch.setattr(config, "NATIVE_AGENT_PROVIDER", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_MODEL", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_BASE_URL", "")
@@ -50,6 +54,17 @@ def test_parse_sse_block_and_unwrap_global_event():
     assert event.type == "message.part.updated"
     assert event.directory == "/repo"
     assert is_relevant_event(event, session_id="s1", cwd="/repo")
+
+
+def test_native_agent_relevant_event_normalizes_cwd(tmp_path: Path):
+    event_dir = str(tmp_path).replace(os.sep, "/" if os.sep == "\\" else os.sep)
+    event = unwrap_event({
+        "directory": event_dir.upper() if os.name == "nt" else event_dir,
+        "payload": {"type": "session.idle", "sessionID": "sess-1"},
+    })
+
+    assert event is not None
+    assert is_relevant_event(event, session_id="sess-1", cwd=str(tmp_path))
 
 
 def test_native_agent_server_manager_matches_only_opencode_serve_processes():
@@ -1818,6 +1833,71 @@ async def test_native_agent_service_stream_persists_done_message(tmp_path: Path)
 
 
 @pytest.mark.asyncio
+async def test_native_agent_service_run_chat_clears_flags_before_return(tmp_path: Path):
+    class FakeClient:
+        def __init__(self) -> None:
+            self.prompt_called = False
+
+        async def create_session(self, *, cwd=None):
+            return {"id": "sess-1"}
+
+        async def prompt_async(self, session_id, text, *, message_id=None, model=None, agent=None):
+            self.prompt_called = True
+            return {}
+
+        async def events(self, *, global_events=True, ready_event=None):
+            if ready_event is not None:
+                ready_event.set()
+            while not self.prompt_called:
+                await asyncio.sleep(0)
+            yield {
+                "directory": str(tmp_path),
+                "payload": {
+                    "type": "message.part.updated",
+                    "sessionID": "sess-1",
+                    "part": {"id": "p1", "type": "text", "delta": "完成"},
+                },
+            }
+            yield {"directory": str(tmp_path), "payload": {"type": "session.idle", "sessionID": "sess-1"}}
+
+        async def list_messages(self, session_id):
+            return [{"role": "assistant", "content": "完成"}]
+
+    fake_client = FakeClient()
+
+    class FakeHandle:
+        def client(self):
+            return fake_client
+
+    class FakeManager:
+        async def ensure_started(self):
+            return FakeHandle()
+
+        async def get_existing(self):
+            return FakeHandle()
+
+    service = NativeAgentService()
+    service._server_manager = FakeManager()
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    result = await service.run_chat(
+        profile=profile,
+        session=session,
+        user_text="你好",
+        prompt_text="你好",
+        history_service=history,
+    )
+
+    assert result["output"] == "完成"
+    assert session.is_processing is False
+    assert session.native_agent_run_id is None
+    assert session.native_agent_server_key is None
+    assert session.stop_requested is False
+
+
+@pytest.mark.asyncio
 async def test_native_agent_service_stream_protocol_ag_ui_emits_ag_ui_events_and_filters_heartbeat(tmp_path: Path):
     event_adapter = TypeAdapter(core.Event)
 
@@ -2110,6 +2190,7 @@ async def test_native_agent_service_finalizes_completed_answer_before_duplicate_
             self.cancelled = False
             self.abort_calls: list[str] = []
             self.prompt_message_id = ""
+            self.completed_emitted = 0
 
         async def create_session(self, *, cwd=None):
             return {"id": "sess-1"}
@@ -2141,6 +2222,7 @@ async def test_native_agent_service_finalizes_completed_answer_before_duplicate_
                         "delta": text,
                     },
                 }
+                self.completed_emitted = index
                 yield {
                     "directory": str(tmp_path),
                     "payload": {
@@ -2162,8 +2244,7 @@ async def test_native_agent_service_finalizes_completed_answer_before_duplicate_
                 raise
 
         async def list_messages(self, session_id):
-            return [
-                {"id": self.prompt_message_id, "role": "user", "content": "你上轮对话是调用了一次还是两次"},
+            completed_messages = [
                 {
                     "id": "assistant-1",
                     "role": "assistant",
@@ -2185,6 +2266,10 @@ async def test_native_agent_service_finalizes_completed_answer_before_duplicate_
                     "content": "第三次重复答复。",
                     "time": {"completed": 3},
                 },
+            ]
+            return [
+                {"id": self.prompt_message_id, "role": "user", "content": "你上轮对话是调用了一次还是两次"},
+                *completed_messages[: self.completed_emitted],
             ]
 
     fake_client = FakeClient()
@@ -2220,9 +2305,190 @@ async def test_native_agent_service_finalizes_completed_answer_before_duplicate_
     )
 
     done = next(event for event in events if event["type"] == "done")
+    assert [event["type"] for event in events].count("done") == 1
     assert done["output"] == "第二次重复答复。"
     assert done["message"]["meta"]["completion_state"] == "completed"
     assert fake_client.cancelled is True
+    assert fake_client.abort_calls == ["sess-1"]
+    assert session.is_processing is False
+    assert session.native_agent_run_id is None
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_finishes_after_tool_followup_repeated_completed_without_idle(tmp_path: Path):
+    blocker = asyncio.Event()
+    event_adapter = TypeAdapter(core.Event)
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.prompt_called = False
+            self.cancelled = False
+            self.abort_calls: list[str] = []
+            self.prompt_message_id = ""
+            self.completed_emitted = 0
+
+        async def create_session(self, *, cwd=None):
+            return {"id": "sess-1"}
+
+        async def prompt_async(self, session_id, text, *, message_id=None, model=None, agent=None):
+            self.prompt_called = True
+            self.prompt_message_id = str(message_id or "")
+            return {}
+
+        async def abort(self, session_id):
+            self.abort_calls.append(session_id)
+            return True
+
+        async def events(self, *, global_events=True, ready_event=None):
+            if ready_event is not None:
+                ready_event.set()
+            while not self.prompt_called:
+                await asyncio.sleep(0)
+            yield {
+                "directory": str(tmp_path),
+                "payload": {
+                    "type": "message.part.delta",
+                    "sessionID": "sess-1",
+                    "messageID": "assistant-tool",
+                    "partID": "preview",
+                    "field": "text",
+                    "delta": "先检查。",
+                },
+            }
+            yield {
+                "directory": str(tmp_path),
+                "payload": {
+                    "type": "message.updated",
+                    "sessionID": "sess-1",
+                    "message": {
+                        "id": "assistant-tool",
+                        "role": "assistant",
+                        "finish": "tool-calls",
+                        "content": "先检查。",
+                        "time": {"completed": 1},
+                    },
+                },
+            }
+            yield {
+                "directory": str(tmp_path),
+                "payload": {
+                    "type": "message.part.updated",
+                    "sessionID": "sess-1",
+                    "part": {
+                        "id": "tool-1",
+                        "type": "tool",
+                        "tool": "shell_command",
+                        "output": "Exit code: 0",
+                        "state": "completed",
+                    },
+                },
+            }
+            for index in (1, 2):
+                message_id = f"assistant-final-{index}"
+                yield {
+                    "directory": str(tmp_path),
+                    "payload": {
+                        "type": "message.part.delta",
+                        "sessionID": "sess-1",
+                        "messageID": message_id,
+                        "partID": f"final-{index}",
+                        "field": "text",
+                        "delta": "最终答复。",
+                    },
+                }
+                self.completed_emitted = index
+                yield {
+                    "directory": str(tmp_path),
+                    "payload": {
+                        "type": "message.updated",
+                        "sessionID": "sess-1",
+                        "message": {
+                            "id": message_id,
+                            "role": "assistant",
+                            "finish": "stop",
+                            "content": "最终答复。",
+                            "time": {"completed": index + 1},
+                        },
+                    },
+                }
+            try:
+                await blocker.wait()
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+
+        async def list_messages(self, session_id):
+            final_messages = [
+                {
+                    "id": "assistant-final-1",
+                    "role": "assistant",
+                    "finish": "stop",
+                    "content": "最终答复。",
+                    "time": {"completed": 2},
+                },
+                {
+                    "id": "assistant-final-2",
+                    "role": "assistant",
+                    "finish": "stop",
+                    "content": "最终答复。",
+                    "time": {"completed": 3},
+                },
+            ]
+            return [
+                {"id": self.prompt_message_id, "role": "user", "content": "需要工具后总结"},
+                {
+                    "id": "assistant-tool",
+                    "role": "assistant",
+                    "finish": "tool-calls",
+                    "content": "先检查。",
+                    "time": {"completed": 1},
+                },
+                *final_messages[: self.completed_emitted],
+            ]
+
+    fake_client = FakeClient()
+
+    class FakeHandle:
+        def client(self):
+            return fake_client
+
+    class FakeManager:
+        async def ensure_started(self):
+            return FakeHandle()
+
+        async def get_existing(self):
+            return FakeHandle()
+
+    service = NativeAgentService()
+    service._server_manager = FakeManager()
+    profile = BotProfile(alias="agent-test", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="agent-test", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    events = await asyncio.wait_for(
+        _collect_native_stream(
+            service.stream_chat(
+                profile=profile,
+                session=session,
+                user_text="需要工具后总结",
+                prompt_text="需要工具后总结",
+                history_service=history,
+                protocol="ag-ui",
+            )
+        ),
+        timeout=1.5,
+    )
+
+    done = next(event for event in events if event["type"] == "done")
+    ag_ui_types = [event_adapter.validate_python(item["event"]).type for item in events if item["type"] == "ag_ui"]
+    assert [event["type"] for event in events].count("done") == 1
+    assert done["output"] == "最终答复。"
+    assert done["message"]["meta"]["completion_state"] == "completed"
+    assert ag_ui_types[-1] == core.EventType.RUN_FINISHED
+    assert fake_client.abort_calls == ["sess-1"]
+    assert fake_client.cancelled is True
+    assert session.is_processing is False
+    assert session.native_agent_run_id is None
 
 
 @pytest.mark.asyncio
@@ -2838,6 +3104,121 @@ async def test_native_agent_service_user_cancel_aborts_and_persists_cancelled(tm
 
 
 @pytest.mark.asyncio
+async def test_native_agent_service_abort_and_list_messages_have_local_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(native_service_module, "LIST_MESSAGES_TIMEOUT_SECONDS", 0.005)
+    monkeypatch.setattr(native_service_module, "ABORT_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(native_service_module, "FINAL_CANDIDATE_GRACE_SECONDS", 0.01)
+    monkeypatch.setattr(native_service_module, "FINAL_CANDIDATE_MAX_SECONDS", 0.02)
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.prompt_called = False
+            self.list_calls = 0
+            self.abort_calls: list[str] = []
+            self.abort_cancelled = False
+            self.reader_cancelled = False
+
+        async def create_session(self, *, cwd=None):
+            return {"id": "sess-1"}
+
+        async def prompt_async(self, session_id, text, *, message_id=None, model=None, agent=None):
+            self.prompt_called = True
+            return {}
+
+        async def abort(self, session_id):
+            self.abort_calls.append(session_id)
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.abort_cancelled = True
+                raise
+
+        async def events(self, *, global_events=True, ready_event=None):
+            if ready_event is not None:
+                ready_event.set()
+            while not self.prompt_called:
+                await asyncio.sleep(0)
+            yield {
+                "directory": str(tmp_path),
+                "payload": {
+                    "type": "message.part.delta",
+                    "sessionID": "sess-1",
+                    "messageID": "assistant-1",
+                    "partID": "answer",
+                    "field": "text",
+                    "delta": "OK",
+                },
+            }
+            yield {
+                "directory": str(tmp_path),
+                "payload": {
+                    "type": "message.updated",
+                    "sessionID": "sess-1",
+                    "message": {
+                        "id": "assistant-1",
+                        "role": "assistant",
+                        "finish": "stop",
+                        "content": "OK",
+                        "time": {"completed": 1},
+                    },
+                },
+            }
+            try:
+                while True:
+                    await asyncio.sleep(0.002)
+                    yield {"directory": str(tmp_path), "payload": {"type": "session.status", "sessionID": "sess-1", "status": "仍在生成"}}
+            except asyncio.CancelledError:
+                self.reader_cancelled = True
+                raise
+
+        async def list_messages(self, session_id):
+            self.list_calls += 1
+            await asyncio.Event().wait()
+            return []
+
+    fake_client = FakeClient()
+
+    class FakeHandle:
+        def client(self):
+            return fake_client
+
+    class FakeManager:
+        async def ensure_started(self):
+            return FakeHandle()
+
+        async def get_existing(self):
+            return FakeHandle()
+
+    service = NativeAgentService()
+    service._server_manager = FakeManager()
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    events = await asyncio.wait_for(
+        _collect_native_stream(
+            service.stream_chat(
+                profile=profile,
+                session=session,
+                user_text="只回复 OK",
+                prompt_text="只回复 OK",
+                history_service=history,
+            )
+        ),
+        timeout=1,
+    )
+
+    done = next(event for event in events if event["type"] == "done")
+    assert done["output"] == "OK"
+    assert done["message"]["meta"]["completion_state"] == "completed"
+    assert fake_client.list_calls >= 1
+    assert fake_client.abort_calls == ["sess-1"]
+    assert fake_client.abort_cancelled is True
+    assert fake_client.reader_cancelled is True
+    assert session.is_processing is False
+
+
+@pytest.mark.asyncio
 async def test_native_agent_service_waits_for_event_ready_before_prompt(tmp_path: Path):
     class FakeClient:
         def __init__(self) -> None:
@@ -2905,6 +3286,76 @@ async def test_native_agent_service_waits_for_event_ready_before_prompt(tmp_path
 
     assert fake_client.prompt_ready_states == [True]
     assert events[-1]["type"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_event_ready_has_local_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(native_service_module, "EVENT_READY_TIMEOUT_SECONDS", 0.005)
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.prompt_called = False
+            self.reader_cancelled = False
+
+        async def create_session(self, *, cwd=None):
+            return {"id": "sess-1"}
+
+        async def prompt_async(self, session_id, text, *, message_id=None, model=None, agent=None):
+            self.prompt_called = True
+            return {}
+
+        async def events(self, *, global_events=True, ready_event=None):
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.reader_cancelled = True
+                raise
+            if False:
+                yield {}
+
+        async def list_messages(self, session_id):
+            return []
+
+    fake_client = FakeClient()
+
+    class FakeHandle:
+        def client(self):
+            return fake_client
+
+    class FakeManager:
+        async def ensure_started(self):
+            return FakeHandle()
+
+        async def get_existing(self):
+            return FakeHandle()
+
+    service = NativeAgentService()
+    service._server_manager = FakeManager()
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    events = await asyncio.wait_for(
+        _collect_native_stream(
+            service.stream_chat(
+                profile=profile,
+                session=session,
+                user_text="你好",
+                prompt_text="你好",
+                history_service=history,
+            )
+        ),
+        timeout=1,
+    )
+
+    assert events[-1] == {
+        "type": "error",
+        "code": "native_agent_error",
+        "message": "原生 agent 执行失败: 原生 agent 事件流准备超时",
+    }
+    assert fake_client.prompt_called is False
+    assert fake_client.reader_cancelled is True
+    assert session.is_processing is False
 
 
 @pytest.mark.asyncio

@@ -605,7 +605,7 @@ class NativeAgentAggregator:
             raw_type="message.text.reclassified",
         )
 
-    def reconcile_messages(self, messages: list[dict[str, Any]]) -> str:
+    def reconcile_messages(self, messages: list[dict[str, Any]], *, require_completed: bool = False) -> str:
         selected_text = ""
         selected_message_id = ""
         selected_completed = False
@@ -615,16 +615,17 @@ class NativeAgentAggregator:
                 continue
             is_followup = _message_expects_followup(message)
             message_id = _message_id(message)
+            completed = _message_completed(message)
             if is_followup and message_id:
                 self.followup_message_ids.add(message_id)
                 self.has_followup_activity = True
                 self._discard_message_text(message_id)
             text = _message_parts_text(message.get("parts")) or _value_text(message.get("text") or message.get("content"))
-            if is_followup or not text:
+            if is_followup or not text or (require_completed and not completed):
                 continue
             selected_text = text
             selected_message_id = message_id
-            selected_completed = _message_completed(message)
+            selected_completed = completed
         if selected_text:
             self.final_text = selected_text
             self.text_parts.clear()
