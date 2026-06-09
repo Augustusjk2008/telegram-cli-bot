@@ -266,24 +266,18 @@ class TestManagerValidation:
         assert restored.main_profile.native_agent == {"native_agent_model": "jojocode/gpt-5.4", "reasoning_effort": "high"}
 
     @pytest.mark.asyncio
-    async def test_background_services_start_and_shutdown_global_native_agent_server(self, temp_dir: Path):
+    async def test_background_services_do_not_start_native_agent_server(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
         manager = MultiBotManager(BotProfile(alias="main", token="main_tok", working_dir=str(temp_dir)), str(storage))
 
-        with patch("bot.manager.NATIVE_AGENT_ENABLED", True), \
-             patch("bot.manager.NATIVE_AGENT_SERVER_MANAGER.terminate_stale_opencode_processes", MagicMock(return_value=[])) as cleanup_mock, \
-             patch("bot.manager.NATIVE_AGENT_SERVER_MANAGER.ensure_started", AsyncMock()) as start_mock, \
-             patch("bot.manager.NATIVE_AGENT_SERVER_MANAGER.stop_all", AsyncMock()) as stop_mock:
-            await manager.start_background_services(result_executor=AsyncMock(return_value={}))
-            await manager.shutdown_all()
+        await manager.start_background_services(result_executor=AsyncMock(return_value={}))
+        await manager.shutdown_all()
 
-        cleanup_mock.assert_called_once()
-        start_mock.assert_awaited_once()
-        stop_mock.assert_awaited_once()
+        assert "NATIVE_AGENT_SERVER_MANAGER" not in vars(__import__("bot.manager").manager)
 
     @pytest.mark.asyncio
-    async def test_background_services_prewarms_native_bot_workdirs(self, temp_dir: Path):
+    async def test_background_services_skip_native_bot_workdir_prewarm(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
         native_dir = temp_dir / "native"
         native_dir.mkdir()
@@ -297,32 +291,18 @@ class TestManagerValidation:
             default_execution_mode="native_agent",
         )
 
-        with patch("bot.manager.NATIVE_AGENT_ENABLED", True), \
-             patch("bot.manager.NATIVE_AGENT_SERVER_MANAGER.terminate_stale_opencode_processes", MagicMock(return_value=[])) as cleanup_mock, \
-             patch("bot.manager.NATIVE_AGENT_SERVER_MANAGER.ensure_started", AsyncMock()) as start_mock, \
-             patch("bot.manager.NATIVE_AGENT_SERVER_MANAGER.stop_all", AsyncMock()) as stop_mock:
-            await manager.start_background_services(result_executor=AsyncMock(return_value={}))
-            await manager.shutdown_all()
+        await manager.start_background_services(result_executor=AsyncMock(return_value={}))
+        await manager.shutdown_all()
 
-        cleanup_mock.assert_called_once()
-        assert start_mock.await_count == 2
-        assert start_mock.await_args_list[0].args == ()
-        assert start_mock.await_args_list[1].args[0].alias == "agent-test"
-        stop_mock.assert_awaited_once()
+        assert manager.assistant_runtime is None
 
     @pytest.mark.asyncio
-    async def test_background_services_runs_safe_stale_opencode_cleanup_even_when_native_disabled(self, temp_dir: Path):
+    async def test_background_services_do_not_run_stale_opencode_cleanup(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
         manager = MultiBotManager(BotProfile(alias="main", token="main_tok", working_dir=str(temp_dir)), str(storage))
 
-        with patch("bot.manager.NATIVE_AGENT_ENABLED", False), \
-             patch("bot.manager.NATIVE_AGENT_SERVER_MANAGER.terminate_stale_opencode_processes", MagicMock(return_value=[1234])) as cleanup_mock, \
-             patch("bot.manager.NATIVE_AGENT_SERVER_MANAGER.ensure_started", AsyncMock()) as start_mock, \
-             patch("bot.manager.NATIVE_AGENT_SERVER_MANAGER.stop_all", AsyncMock()) as stop_mock:
-            await manager.start_background_services(result_executor=AsyncMock(return_value={}))
-            await manager.shutdown_all()
+        await manager.start_background_services(result_executor=AsyncMock(return_value={}))
+        await manager.shutdown_all()
 
-        cleanup_mock.assert_called_once()
-        start_mock.assert_not_awaited()
-        stop_mock.assert_awaited_once()
+        assert "NATIVE_AGENT_SERVER_MANAGER" not in vars(__import__("bot.manager").manager)

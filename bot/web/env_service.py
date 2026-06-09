@@ -78,11 +78,8 @@ ENV_SCHEMA: tuple[EnvField, ...] = (
         max_length=8192,
     ),
     EnvField("WORKING_DIR", "默认工作目录", "仅影响主 Bot 下次启动默认目录。", "path", "", "basic"),
-    EnvField("NATIVE_AGENT_ENABLED", "启用原生 agent", "启用全局原生 agent 服务。", "boolean", "false", "advanced"),
-    EnvField("NATIVE_AGENT_COMMAND", "原生 agent 命令", "原生 agent 可执行文件路径或 PATH 中的命令名；兼容旧 NATIVE_AGENT_PATH。", "path", "opencode", "advanced"),
-    EnvField("NATIVE_AGENT_HOST", "原生 agent 地址", "全局原生 agent 服务监听地址。", "string", "127.0.0.1", "advanced"),
-    EnvField("NATIVE_AGENT_PORT", "原生 agent 端口", "全局原生 agent 服务监听端口；0 表示自动分配。", "number", "0", "advanced", min_value=0, max_value=65535, integer=True),
-    EnvField("NATIVE_AGENT_SERVER_PASSWORD", "原生 agent 密码", "全局原生 agent 服务 Basic Auth 密码。", "password", "", "advanced", sensitive=True, max_length=8192),
+    EnvField("NATIVE_AGENT_ENABLED", "启用原生 agent", "启用原生 agent run 命令。", "boolean", "false", "advanced"),
+    EnvField("NATIVE_AGENT_COMMAND", "原生 agent 命令", "原生 agent run 可执行文件路径或 PATH 中的命令名；兼容旧 NATIVE_AGENT_PATH。", "path", "opencode", "advanced"),
     EnvField("NATIVE_AGENT_OPENCODE_AGENT", "OpenCode agent", "全局 OpenCode agent 名称；留空使用默认。", "string", "", "advanced"),
     EnvField(
         "NATIVE_AGENT_REASONING_EFFORT",

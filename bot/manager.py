@@ -18,7 +18,7 @@ from bot.assistant.runtime import AssistantRunRequest, AssistantRuntimeCoordinat
 from bot.cli import resolve_cli_executable, validate_cli_type
 from bot.cli_params import CliParamsConfig, coerce_param_value
 from bot.cluster.config import normalize_agent_cluster_config, normalize_bot_cluster_config
-from bot.config import BOT_ALIAS_RE, CLI_PATH, CLI_TYPE, NATIVE_AGENT_ENABLED, RESERVED_ALIASES, WORKING_DIR, _DOTENV_VALUES
+from bot.config import BOT_ALIAS_RE, CLI_PATH, CLI_TYPE, RESERVED_ALIASES, WORKING_DIR, _DOTENV_VALUES
 from bot.agents import normalize_agent_id, normalize_agent_name, normalize_agent_prompt, now_iso
 from bot.models import (
     AgentProfile,
@@ -30,7 +30,6 @@ from bot.models import (
     normalize_execution_modes,
     normalize_prompt_presets,
 )
-from bot.native_agent.server_manager import SERVER_MANAGER as NATIVE_AGENT_SERVER_MANAGER
 from bot.plugins.service import PluginService
 from bot.platform.paths import truncate_path_for_display
 from bot.profile_store import (
@@ -460,23 +459,6 @@ class MultiBotManager:
     ) -> None:
         self._assistant_result_executor = result_executor
         self._assistant_stream_executor = stream_executor
-        NATIVE_AGENT_SERVER_MANAGER.terminate_stale_opencode_processes()
-        if NATIVE_AGENT_ENABLED:
-            await NATIVE_AGENT_SERVER_MANAGER.ensure_started()
-            native_profiles = [
-                profile
-                for profile in [self.main_profile, *self.managed_profiles.values()]
-                if EXECUTION_MODE_NATIVE_AGENT in normalize_execution_modes(
-                    getattr(profile, "supported_execution_modes", None)
-                )
-            ]
-            seen_workdirs = {str(self.main_profile.working_dir or WORKING_DIR)}
-            for profile in native_profiles:
-                working_dir = str(getattr(profile, "working_dir", "") or WORKING_DIR)
-                if working_dir in seen_workdirs:
-                    continue
-                seen_workdirs.add(working_dir)
-                await NATIVE_AGENT_SERVER_MANAGER.ensure_started(profile)
         await self._ensure_assistant_services()
 
     async def start_watchdog(self) -> None:
@@ -486,24 +468,21 @@ class MultiBotManager:
         self._watchdog_task = None
 
     async def stop_background_services(self) -> None:
-        try:
-            assistant_alias = self.assistant_alias()
-            wait_for_watch_tasks = self.assistant_runtime is not None
-            if assistant_alias is not None:
-                terminate_bot_processes(assistant_alias)
-            if self.assistant_runtime is not None:
-                await self.assistant_runtime.stop()
-                self.assistant_runtime = None
-            if self.assistant_cron_service is not None:
-                stop = getattr(self.assistant_cron_service, "stop", None)
-                if callable(stop):
-                    if isinstance(self.assistant_cron_service, AssistantCronService):
-                        await stop(cancel_watch_tasks=not wait_for_watch_tasks)
-                    else:
-                        await stop()
-                self.assistant_cron_service = None
-        finally:
-            await NATIVE_AGENT_SERVER_MANAGER.stop_all()
+        assistant_alias = self.assistant_alias()
+        wait_for_watch_tasks = self.assistant_runtime is not None
+        if assistant_alias is not None:
+            terminate_bot_processes(assistant_alias)
+        if self.assistant_runtime is not None:
+            await self.assistant_runtime.stop()
+            self.assistant_runtime = None
+        if self.assistant_cron_service is not None:
+            stop = getattr(self.assistant_cron_service, "stop", None)
+            if callable(stop):
+                if isinstance(self.assistant_cron_service, AssistantCronService):
+                    await stop(cancel_watch_tasks=not wait_for_watch_tasks)
+                else:
+                    await stop()
+            self.assistant_cron_service = None
 
     async def shutdown_all(self) -> None:
         await self.stop_background_services()

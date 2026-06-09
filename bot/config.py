@@ -156,13 +156,6 @@ NATIVE_AGENT_COMMAND = (
     or NATIVE_AGENT_PATH
     or "opencode"
 )
-NATIVE_AGENT_HOST = _get_project_config("NATIVE_AGENT_HOST", "127.0.0.1").strip() or "127.0.0.1"
-NATIVE_AGENT_PORT = min(65535, max(0, _get_project_optional_int("NATIVE_AGENT_PORT", 0)))
-NATIVE_AGENT_SERVER_PASSWORD = (
-    _get_project_config("NATIVE_AGENT_SERVER_PASSWORD", "").strip()
-    or _get_project_config("NATIVE_AGENT_PASSWORD", "").strip()
-)
-NATIVE_AGENT_PASSWORD = NATIVE_AGENT_SERVER_PASSWORD
 NATIVE_AGENT_PROVIDER = _get_project_config("NATIVE_AGENT_PROVIDER", "").strip()
 NATIVE_AGENT_MODEL = _get_project_config("NATIVE_AGENT_MODEL", "").strip()
 NATIVE_AGENT_BASE_URL = _get_project_config("NATIVE_AGENT_BASE_URL", "").strip()
