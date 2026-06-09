@@ -591,6 +591,120 @@ test("shows cluster task summary after main reply finishes", async () => {
   await waitFor(() => expect(client.getClusterTaskStatus).toHaveBeenCalledWith("main", "clr_1"));
 });
 
+test("native agent mode shows cluster entry and sends cluster options", async () => {
+  const user = userEvent.setup();
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias: string,
+    _text: string,
+    onChunk: (chunk: string) => void,
+  ): Promise<ChatMessage> => {
+    onChunk("原生集群回复");
+    return {
+      id: "assistant-native-cluster",
+      role: "assistant",
+      text: "原生集群回复",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    };
+  });
+  const client = createClient({
+    getBotOverview: async () => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+      supportedExecutionModes: ["native_agent"],
+      defaultExecutionMode: "native_agent",
+      executionMode: "native_agent",
+      cluster: {
+        enabled: true,
+        writePolicy: "selected_agents",
+        conflictPolicy: "snapshot_diff",
+        maxParallelAgents: 2,
+        defaultTimeoutSeconds: 600,
+        modelTiers: { low: "gpt-low", medium: "gpt-mid", high: "gpt-high" },
+      },
+      agents: [
+        { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true },
+        { id: "tester", name: "测试专家", systemPrompt: "", enabled: true, isMain: false },
+      ],
+    }),
+    sendMessage,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByRole("button", { name: "关闭集群模式" })).toBeInTheDocument();
+  const input = screen.getByPlaceholderText("@ 可指定智能体集群");
+  await user.type(input, "跑测试");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+  expect(sendMessage.mock.calls[0][5]).toMatchObject({
+    executionMode: "native_agent",
+    cluster: true,
+    mentions: [],
+  });
+});
+
+test("native agent @mention sends cluster options", async () => {
+  const user = userEvent.setup();
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias: string,
+    _text: string,
+    onChunk: (chunk: string) => void,
+  ): Promise<ChatMessage> => {
+    onChunk("原生点名回复");
+    return {
+      id: "assistant-native-mention",
+      role: "assistant",
+      text: "原生点名回复",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    };
+  });
+  const client = createClient({
+    getBotOverview: async () => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+      supportedExecutionModes: ["native_agent"],
+      defaultExecutionMode: "native_agent",
+      executionMode: "native_agent",
+      cluster: {
+        enabled: true,
+        writePolicy: "selected_agents",
+        conflictPolicy: "snapshot_diff",
+        maxParallelAgents: 2,
+        defaultTimeoutSeconds: 600,
+        modelTiers: { low: "gpt-low", medium: "gpt-mid", high: "gpt-high" },
+      },
+      agents: [
+        { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true },
+        { id: "tester", name: "测试专家", systemPrompt: "", enabled: true, isMain: false },
+      ],
+    }),
+    sendMessage,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByRole("button", { name: "关闭集群模式" })).toBeInTheDocument();
+  const input = screen.getByPlaceholderText("@ 可指定智能体集群");
+  await user.type(input, "@tester 跑测试");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+  expect(sendMessage.mock.calls[0][5]).toMatchObject({
+    executionMode: "native_agent",
+    cluster: true,
+    mentions: [{ agentId: "tester", label: "测试专家", start: 0, end: 7 }],
+  });
+});
+
 
 
 
@@ -1633,6 +1747,164 @@ test("sends native agent execution mode from action bar", async () => {
 
   await waitFor(() => expect(sendMessage).toHaveBeenCalled());
   expect(sendMessage.mock.calls[0][5]).toMatchObject({ executionMode: "native_agent" });
+});
+
+test("native agent plan mode keeps cluster options", async () => {
+  const user = userEvent.setup();
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias: string,
+    _text: string,
+    onChunk: (chunk: string) => void,
+  ): Promise<ChatMessage> => {
+    onChunk("原生计划回复");
+    return {
+      id: "assistant-native-plan-cluster",
+      role: "assistant",
+      text: "原生计划回复",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    };
+  });
+  const client = createClient({
+    getBotOverview: async () => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+      supportedExecutionModes: ["native_agent"],
+      defaultExecutionMode: "native_agent",
+      executionMode: "native_agent",
+      cluster: {
+        enabled: true,
+        writePolicy: "selected_agents",
+        conflictPolicy: "snapshot_diff",
+        maxParallelAgents: 2,
+        defaultTimeoutSeconds: 600,
+        modelTiers: { low: "gpt-low", medium: "gpt-mid", high: "gpt-high" },
+      },
+      agents: [
+        { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true },
+        { id: "tester", name: "测试专家", systemPrompt: "", enabled: true, isMain: false },
+      ],
+    }),
+    sendMessage,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: "计划模式" }));
+  await user.type(screen.getByPlaceholderText("@ 可指定智能体集群"), "@tester 先出方案");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+  expect(sendMessage.mock.calls[0][5]).toMatchObject({
+    taskMode: "plan",
+    executionMode: "native_agent",
+    cluster: true,
+    mentions: [{ agentId: "tester", label: "测试专家", start: 0, end: 7 }],
+  });
+});
+
+test("execute plan in native cluster keeps cluster options for create and auto-send", async () => {
+  const user = userEvent.setup();
+  const planMarkdown = "# 方案\n\n- 执行测试";
+  const executePlan = vi.fn<WebBotClient["executePlan"]>(async () => ({
+    planPath: "docs/plan/native.md",
+    conversation: {
+      id: "conv-native-cluster-plan",
+      title: "执行方案",
+      lastMessagePreview: "",
+      messageCount: 0,
+      pinned: false,
+      active: true,
+      status: "active",
+      botAlias: "main",
+      botMode: "cli",
+      cliType: "codex",
+      workingDir: "C:\\workspace",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+    messages: [],
+    executionMessage: "请按方案执行。方案文件：docs/plan/native.md",
+  }));
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias: string,
+    _text: string,
+    onChunk: (chunk: string) => void,
+  ): Promise<ChatMessage> => {
+    onChunk("已执行");
+    return {
+      id: "assistant-native-cluster-done",
+      role: "assistant",
+      text: "已执行",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    };
+  });
+  const client = createClient({
+    getBotOverview: async () => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+      supportedExecutionModes: ["native_agent"],
+      defaultExecutionMode: "native_agent",
+      executionMode: "native_agent",
+      cluster: {
+        enabled: true,
+        writePolicy: "selected_agents",
+        conflictPolicy: "snapshot_diff",
+        maxParallelAgents: 2,
+        defaultTimeoutSeconds: 600,
+        modelTiers: { low: "gpt-low", medium: "gpt-mid", high: "gpt-high" },
+      },
+      agents: [
+        { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true },
+        { id: "tester", name: "测试专家", systemPrompt: "", enabled: true, isMain: false },
+      ],
+    }),
+    listMessages: async (): Promise<ChatMessage[]> => [{
+      id: "assistant-plan-draft",
+      role: "assistant",
+      text: `<PLAN_DRAFT>${planMarkdown}</PLAN_DRAFT>`,
+      createdAt: new Date().toISOString(),
+      state: "done",
+    }],
+    executePlan,
+    sendMessage,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: "执行方案" }));
+
+  await waitFor(() => {
+    expect(executePlan).toHaveBeenCalledWith("main", expect.objectContaining({
+      content: planMarkdown,
+      executionMode: "native_agent",
+      cluster: true,
+      mentions: [],
+    }));
+  });
+  await waitFor(() => {
+    expect(sendMessage).toHaveBeenCalledWith(
+      "main",
+      expect.stringContaining("请按方案执行"),
+      expect.any(Function),
+      expect.any(Function),
+      expect.any(Function),
+      expect.objectContaining({
+        taskMode: "standard",
+        executionMode: "native_agent",
+        cluster: true,
+        mentions: [],
+      }),
+      expect.any(Function),
+    );
+  });
 });
 
 test("native agent model select is enabled and saves bot model", async () => {

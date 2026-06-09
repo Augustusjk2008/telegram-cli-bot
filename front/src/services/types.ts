@@ -768,6 +768,8 @@ export type PlanExecuteInput = {
   title?: string;
   agentId?: string;
   executionMode?: ChatExecutionMode;
+  cluster?: boolean;
+  mentions?: AgentMention[];
 };
 
 export type PlanExecuteResult = {

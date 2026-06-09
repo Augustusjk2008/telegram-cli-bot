@@ -4415,6 +4415,15 @@ export class RealWebBotClient implements WebBotClient {
           ...(input.title ? { title: input.title } : {}),
           ...(input.agentId ? { agent_id: input.agentId } : {}),
           ...(input.executionMode ? { execution_mode: input.executionMode } : {}),
+          ...(input.cluster ? { cluster: true } : {}),
+          ...(input.mentions ? {
+            mentions: input.mentions.map((mention) => ({
+              agent_id: mention.agentId,
+              label: mention.label,
+              start: mention.start,
+              end: mention.end,
+            })),
+          } : {}),
         }),
       },
     );

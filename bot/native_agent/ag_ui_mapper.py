@@ -65,7 +65,13 @@ def build_run_started_event(
     )
 
 
-def build_run_finished_event(*, state: AgUiTurnState, completion_state: str, content: str) -> core.RunFinishedEvent:
+def build_run_finished_event(
+    *,
+    state: AgUiTurnState,
+    completion_state: str,
+    content: str,
+    context_usage: dict[str, Any] | None = None,
+) -> core.RunFinishedEvent:
     if completion_state != "completed":
         outcome: Any = core.RunFinishedInterruptOutcome(
             type="interrupt",
@@ -73,11 +79,15 @@ def build_run_finished_event(*, state: AgUiTurnState, completion_state: str, con
         )
     else:
         outcome = core.RunFinishedSuccessOutcome(type="success")
+    result: dict[str, Any] = {"content": content, "completion_state": completion_state}
+    if context_usage:
+        result["context_usage"] = context_usage
+        result["contextUsage"] = context_usage
     return core.RunFinishedEvent(
         threadId=state.thread_id,
         runId=state.run_id,
         timestamp=_timestamp_ms(),
-        result={"content": content, "completion_state": completion_state},
+        result=result,
         outcome=outcome,
     )
 

@@ -968,7 +968,14 @@ describe("RealWebBotClient", () => {
     }));
 
     const client = new RealWebBotClient() as RealWebBotClient & {
-      executePlan: (botAlias: string, input: { content: string; title?: string; agentId?: string; executionMode?: "cli" | "native_agent" }) => Promise<{
+      executePlan: (botAlias: string, input: {
+        content: string;
+        title?: string;
+        agentId?: string;
+        executionMode?: "cli" | "native_agent";
+        cluster?: boolean;
+        mentions?: Array<{ agentId: string; label: string; start: number; end: number }>;
+      }) => Promise<{
         planPath: string;
         conversation: { id: string };
         executionMessage: string;
@@ -979,6 +986,8 @@ describe("RealWebBotClient", () => {
       title: "Plan Mode",
       agentId: "reviewer",
       executionMode: "native_agent",
+      cluster: true,
+      mentions: [{ agentId: "reviewer", label: "代码审查", start: 0, end: 9 }],
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -990,6 +999,8 @@ describe("RealWebBotClient", () => {
           title: "Plan Mode",
           agent_id: "reviewer",
           execution_mode: "native_agent",
+          cluster: true,
+          mentions: [{ agent_id: "reviewer", label: "代码审查", start: 0, end: 9 }],
         }),
       }),
     );

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import bot.config as config
+from bot.cluster.setup import CLUSTER_MCP_SERVER_NAME, prepare_cluster_mcp_launcher
 from bot.cli import resolve_cli_executable
 from bot.models import BotProfile, build_native_agent_model_id, normalize_native_agent_config
 from bot.native_agent.config_store import ensure_opencode_config
@@ -28,6 +29,30 @@ except ImportError:  # pragma: no cover
 
 
 logger = logging.getLogger(__name__)
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _cluster_bridge_url() -> str:
+    return f"http://127.0.0.1:{int(config.WEB_PORT)}"
+
+
+def _cluster_mcp_launcher_signature() -> dict[str, str]:
+    launcher_name = "tcb-cluster-mcp.cmd" if os.name == "nt" else "tcb-cluster-mcp.sh"
+    return {
+        "server_name": CLUSTER_MCP_SERVER_NAME,
+        "launcher_path": str(Path.home() / ".tcb" / "bin" / launcher_name),
+        "bridge_url": _cluster_bridge_url(),
+    }
+
+
+def _prepare_cluster_mcp_launcher_for_native() -> Path:
+    launcher = prepare_cluster_mcp_launcher(
+        home_dir=Path.home(),
+        repo_root=_REPO_ROOT,
+        bridge_url=_cluster_bridge_url(),
+    )
+    return launcher.launcher_path
 
 
 @dataclass
@@ -58,6 +83,7 @@ class NativeAgentServerManager:
                 "port": int(server_config.get("port") or 0),
                 "password": str(server_config.get("password") or ""),
                 "native_agent": normalize_native_agent_config(server_config.get("native_agent")),
+                "cluster_mcp": _cluster_mcp_launcher_signature(),
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -219,6 +245,16 @@ class NativeAgentServerManager:
         opencode_agent = str(native_agent.get("opencode_agent") or "").strip()
         if opencode_agent:
             runtime_payload["agent"] = opencode_agent
+        launcher_path = _prepare_cluster_mcp_launcher_for_native()
+        mcp = runtime_payload.get("mcp")
+        if not isinstance(mcp, dict):
+            mcp = {}
+            runtime_payload["mcp"] = mcp
+        mcp[CLUSTER_MCP_SERVER_NAME] = {
+            "type": "local",
+            "command": [str(launcher_path)],
+            "enabled": True,
+        }
         path = self._runtime_config_path(key)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(runtime_payload, ensure_ascii=False, indent=2), encoding="utf-8")

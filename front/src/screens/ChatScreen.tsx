@@ -2480,11 +2480,11 @@ export function ChatScreen({
       return;
     }
     if (executionModeRef.current === "native_agent" && activeAgentIdRef.current !== "main") {
-      setError("原生 agent 模式暂不支持子 agent，请切回主 agent 后继续");
+      setError("子智能体只读，请回主 agent 发送；可用 @ 指派");
       return;
     }
     if (botOverview?.cluster?.enabled && activeAgentIdRef.current !== "main") {
-      setError("子 agent 仅支持查看历史，请切回主 agent 后继续");
+      setError("子智能体只读，请回主 agent 发送；可用 @ 指派");
       return;
     }
     setConversationLoading(true);
@@ -3039,11 +3039,15 @@ export function ChatScreen({
     setError("");
     try {
       const currentExecutionMode = executionModeRef.current;
+      const nativeSend = currentExecutionMode === "native_agent";
+      const clusterSend = Boolean(botOverview?.cluster?.enabled);
+      const mentions: AgentMention[] = [];
       const result = await client.executePlan(botAlias, {
         content: planContent,
         title: "执行方案",
         agentId: activeAgentIdRef.current !== "main" ? activeAgentIdRef.current : undefined,
-        executionMode: currentExecutionMode === "native_agent" ? currentExecutionMode : undefined,
+        ...(nativeSend ? { executionMode: currentExecutionMode } : {}),
+        ...(clusterSend ? { cluster: true, mentions } : {}),
       });
       stopAssistantPoll();
       stopSseRecoveryWatch();
@@ -3060,10 +3064,14 @@ export function ChatScreen({
       setHistoryPanelOpen(false);
       setPlanMode(false);
       await sendMessageInternal(result.executionMessage, {
-        sendOptions: currentExecutionMode === "native_agent"
-          ? { taskMode: "standard", executionMode: currentExecutionMode }
-          : botOverview?.cluster?.enabled
-            ? { taskMode: "standard", cluster: true }
+        sendOptions: nativeSend
+          ? {
+            taskMode: "standard",
+            executionMode: currentExecutionMode,
+            ...(clusterSend ? { cluster: true, mentions } : {}),
+          }
+          : clusterSend
+            ? { taskMode: "standard", cluster: true, mentions }
             : { taskMode: "standard" },
       });
     } catch (err) {
@@ -3081,14 +3089,14 @@ export function ChatScreen({
     const currentExecutionMode = executionModeRef.current;
     const nativeSend = currentExecutionMode === "native_agent";
     if (nativeSend && activeAgentIdRef.current !== "main") {
-      setError("原生 agent 模式暂不支持子 agent，请切回主 agent 后继续");
+      setError("子智能体只读，请回主 agent 发送；可用 @ 指派");
       return;
     }
     if (!nativeSend && clusterMode && activeAgentIdRef.current !== "main") {
-      setError("子 agent 仅支持查看历史，请切回主 agent 后继续");
+      setError("子智能体只读，请回主 agent 发送；可用 @ 指派");
       return;
     }
-    const clusterSend = !nativeSend && (clusterMode || mentions.length > 0);
+    const clusterSend = clusterMode || mentions.length > 0;
     const isExecutingPlanPrompt = isPlanExecutionPrompt(text);
     if (planMode && isExecutingPlanPrompt) {
       setPlanMode(false);
@@ -3107,7 +3115,11 @@ export function ChatScreen({
         ...(clusterSend ? { cluster: true, mentions } : {}),
       }
       : clusterSend
-        ? { cluster: true, mentions }
+        ? {
+          ...(nativeSend ? { executionMode: currentExecutionMode } : {}),
+          cluster: true,
+          mentions,
+        }
         : nativeSend
           ? { executionMode: currentExecutionMode }
           : undefined;
@@ -3433,14 +3445,15 @@ export function ChatScreen({
   const chatDisabledReason = nativePermissionPending
     ? "等待权限处理"
     : activeNativeReadOnly
-    ? "原生 agent 模式暂不支持子 agent，请切回主 agent"
+    ? "子智能体只读，请回主 agent 发送；可用 @ 指派"
     : activeClusterChildReadOnly
-    ? "集群子智能体只读，请切回主智能体发送消息"
+    ? "子智能体只读，请回主 agent 发送；可用 @ 指派"
     : disabledReason || readOnlyReason || (readOnly ? "主机已关闭聊天，当前无法发送消息" : "");
   const killTaskDisabled = chatMutationsDisabled || !isStreaming || actionLoading === "kill";
-  const clusterAgents = agents.filter((agent) => !agent.isMain && agent.enabled);
+  const overviewAgents = botOverview?.agents && botOverview.agents.length > 0 ? botOverview.agents : agents;
+  const clusterAgents = overviewAgents.filter((agent) => !agent.isMain && agent.enabled);
   const showAgentSwitcher = agents.length > 1;
-  const showClusterToggle = Boolean(botOverview?.cluster) && botOverview?.botMode !== "assistant" && !nativeExecutionMode;
+  const showClusterToggle = Boolean(botOverview?.cluster) && botOverview?.botMode !== "assistant";
   const showActionBar = !isImmersive;
   const showImmersiveButton = !embedded && isVisible && Boolean(onToggleImmersive);
   const canManagePromptPresets = !readOnly && (botOverview?.effectiveCapabilities
@@ -3481,9 +3494,7 @@ export function ChatScreen({
   }, [cliModelOptions, nativeExecutionMode, nativeModelOptions, nativeSelectedModel, selectedModel]);
   const messageContentWidthClass = embedded ? "mx-auto w-full max-w-5xl space-y-4" : "w-full space-y-4";
   const composerPlaceholder = chatDisabledReason
-    || (nativeExecutionMode
-      ? "输入消息"
-      : (clusterMode ? "@ 可指定智能体集群" : (showAgentSwitcher ? `发给 ${activeAgent.name}...` : "输入消息")));
+    || (clusterMode ? "@ 可指定智能体集群" : (showAgentSwitcher && !nativeExecutionMode ? `发给 ${activeAgent.name}...` : "输入消息"));
   const deletedAttachmentKeysByMessage = useMemo(() => {
     const next: Record<string, Record<string, boolean>> = {};
     for (const [key, value] of Object.entries(deletedAttachmentKeys)) {

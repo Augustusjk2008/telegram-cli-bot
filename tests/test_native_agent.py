@@ -156,6 +156,63 @@ def test_native_agent_server_manager_terminates_only_tcb_managed_opencode_proces
     assert other.terminated is False
 
 
+def test_native_agent_server_manager_injects_tcb_cluster_mcp_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot.native_agent import config_store
+    from bot.native_agent import server_manager as server_manager_module
+
+    monkeypatch.setenv("OPENCODE_CONFIG", str(tmp_path / "opencode.json"))
+    monkeypatch.setattr(config_store, "get_app_data_root", lambda: tmp_path / "data")
+    monkeypatch.setattr(server_manager_module, "get_app_data_root", lambda: tmp_path / "data")
+    config_store.save_native_agent_config({
+        "provider": {
+            "jojocode": {
+                "models": {"gpt-5.4": {"name": "gpt-5.4"}},
+            }
+        },
+        "mcp": {
+            "existing": {"type": "local", "command": ["existing"], "enabled": True},
+        },
+    })
+
+    manager = NativeAgentServerManager()
+    path = manager._write_opencode_config("key-1", {"native_agent_model": "jojocode/gpt-5.4"})
+
+    launcher = Path.home() / ".tcb" / "bin" / ("tcb-cluster-mcp.cmd" if os.name == "nt" else "tcb-cluster-mcp.sh")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["mcp"]["existing"]["command"] == ["existing"]
+    assert payload["mcp"]["tcb-cluster"] == {
+        "type": "local",
+        "command": [str(launcher)],
+        "enabled": True,
+    }
+
+
+def test_native_agent_server_manager_server_key_includes_cluster_mcp_launcher(monkeypatch: pytest.MonkeyPatch):
+    from bot.native_agent import server_manager as server_manager_module
+
+    manager = NativeAgentServerManager()
+    server_config = {
+        "command": "opencode",
+        "hostname": "127.0.0.1",
+        "port": 0,
+        "password": "",
+        "native_agent": {},
+        "working_dir": ".",
+    }
+    first_key = manager._server_key(server_config)
+    monkeypatch.setattr(
+        server_manager_module,
+        "_cluster_mcp_launcher_signature",
+        lambda: {"launcher_path": "C:/other/tcb-cluster-mcp.cmd"},
+    )
+    second_key = manager._server_key(server_config)
+
+    assert first_key != second_key
+
+
 def test_native_agent_normalizer_accepts_official_properties_part_delta():
     aggregator = NativeAgentAggregator(user_message_id="u1")
     event = unwrap_event({
@@ -1106,7 +1163,13 @@ def test_native_agent_ag_ui_mapper_suppresses_reasoning_and_emits_tool_and_error
     tool_result = aggregator.apply(tool_event)
     tool_types = [event.type for event in map_ag_ui_event(event=tool_event, result=tool_result, state=state)]
     error_event = build_run_error_event("OpenCode failed")
-    finished_event = build_run_finished_event(state=state, completion_state="error", content="")
+    context_usage = {"session_id": "sess-1", "context_used": 100}
+    finished_event = build_run_finished_event(
+        state=state,
+        completion_state="error",
+        content="",
+        context_usage=context_usage,
+    )
 
     assert reasoning_types == []
     assert tool_types == [
@@ -1117,6 +1180,8 @@ def test_native_agent_ag_ui_mapper_suppresses_reasoning_and_emits_tool_and_error
     ]
     assert error_event.type == core.EventType.RUN_ERROR
     assert finished_event.outcome.type == "interrupt"
+    assert finished_event.result["contextUsage"] == context_usage
+    assert finished_event.result["context_usage"] == context_usage
 
 
 def test_native_agent_ag_ui_mapper_keeps_generic_trace_activities_distinct():
@@ -2231,13 +2296,16 @@ async def test_native_agent_service_stream_protocol_ag_ui_emits_ag_ui_events_and
             prompt_text="你好",
             history_service=history,
             protocol="ag-ui",
+            cluster_run_id="clr_123",
         )
     ]
 
+    meta = next(item for item in events if item["type"] == "meta")
     ag_ui_events = [event_adapter.validate_python(item["event"]) for item in events if item["type"] == "ag_ui"]
     ag_ui_types = [event.type for event in ag_ui_events]
     done = next(event for event in events if event["type"] == "done")
 
+    assert meta["cluster_run_id"] == "clr_123"
     assert ag_ui_types[0] == core.EventType.RUN_STARTED
     assert core.EventType.ACTIVITY_SNAPSHOT in ag_ui_types
     assert core.EventType.TEXT_MESSAGE_START in ag_ui_types

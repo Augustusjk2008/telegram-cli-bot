@@ -2661,17 +2661,25 @@ async def kill_user_process(
         if process is None and native_agent_session_id:
             aborted = await get_native_agent_service().abort(session)
             session.persist()
-            return {
+            result = {
                 "killed": bool(aborted),
                 "message": "已请求原生 agent 停止" if aborted else msg("kill", "already_done"),
                 "stop_requested": True,
                 "native_agent_aborted": bool(aborted),
             }
+            if cluster_run := _find_active_cluster_run_for_session(alias, user_id, session):
+                await _cancel_cluster_run(cluster_run.run_id, "主 agent 已停止")
+                result["cluster_run_cancelled"] = cluster_run.run_id
+            return result
         if process is not None and process.poll() is None:
             _terminate_process_sync(process)
             close_process_streams(process)
             session.persist()
-            return {"killed": True, "message": msg("kill", "killed"), "stop_requested": True}
+            result = {"killed": True, "message": msg("kill", "killed"), "stop_requested": True}
+            if cluster_run := _find_active_cluster_run_for_session(alias, user_id, session):
+                await _cancel_cluster_run(cluster_run.run_id, "主 agent 已停止")
+                result["cluster_run_cancelled"] = cluster_run.run_id
+            return result
         close_process_streams(process)
         with session._lock:
             _reset_session_runtime_flags(session)
@@ -2830,6 +2838,44 @@ def _cleanup_cluster_run_control_if_idle(run_id: str) -> None:
     if any(task.status in {"queued", "running"} for task in run.tasks.values()):
         return
     _CLUSTER_RUN_CONTROLS.pop(run_id, None)
+
+
+async def _cancel_cluster_run(run_id: str, message: str = "已取消") -> None:
+    normalized_run_id = str(run_id or "").strip()
+    if not normalized_run_id:
+        return
+    run = _CLUSTER_RUNTIME.get_run(normalized_run_id)
+    if run is None:
+        _CLUSTER_RUN_CONTROLS.pop(normalized_run_id, None)
+        return
+    _CLUSTER_RUNTIME.cancel_run_tasks(normalized_run_id, message)
+    _CLUSTER_RUNTIME.finish_run(normalized_run_id, "cancelled")
+    await _CLUSTER_RUNTIME.notify_agent_task_message(normalized_run_id)
+    _CLUSTER_RUN_CONTROLS.pop(normalized_run_id, None)
+
+
+def _start_cluster_run_if_requested(
+    *,
+    profile: BotProfile,
+    alias: str,
+    shared_user_id: int,
+    cluster: bool,
+    mentions: list[dict[str, Any]] | None,
+    allow_unsafe_cli: bool,
+):
+    if not cluster:
+        return None
+    if not profile.cluster.enabled:
+        _raise(409, "cluster_not_enabled", "该 Bot 未启用集群模式")
+    return _CLUSTER_RUNTIME.start_run(
+        ClusterRunRequest(
+            bot_alias=alias,
+            user_id=shared_user_id,
+            profile=profile,
+            mentions=list(mentions or []),
+            allow_unsafe_cli=allow_unsafe_cli,
+        )
+    )
 
 
 def _cluster_agent_result_error(result: dict[str, Any]) -> str:
@@ -5652,8 +5698,6 @@ async def run_chat(
         return await manager.assistant_runtime.submit_interactive(request)
     if _supports_cli_runtime(profile):
         if resolved_execution_mode == NATIVE_AGENT_PROVIDER:
-            if cluster:
-                _raise(409, "native_agent_cluster_disabled", "原生 agent 模式暂不支持 TCB 集群")
             if (agent_id or "main") != "main":
                 _raise(409, "native_agent_child_agent_disabled", "原生 agent 模式暂不支持子 agent")
             _profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, "main")
@@ -5664,7 +5708,21 @@ async def run_chat(
             if text.startswith("//"):
                 text = "/" + text[2:]
             is_plan_mode = task_mode == PLAN_MODE_TASK_MODE
-            prompt_text = build_plan_mode_prompt(text, cluster_active=False) if is_plan_mode else text
+            cluster_run = _start_cluster_run_if_requested(
+                profile=profile,
+                alias=alias,
+                shared_user_id=shared_user_id,
+                cluster=cluster,
+                mentions=mentions,
+                allow_unsafe_cli=allow_unsafe_cli,
+            )
+            prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run)) if is_plan_mode else text
+            prompt_text = _apply_cluster_prompt(
+                profile,
+                prompt_text,
+                cluster_run_id=cluster_run.run_id if cluster_run else "",
+                cluster_mentions=list(mentions or []),
+            )
             request = build_assistant_run_request(
                 alias,
                 shared_user_id,
@@ -5674,27 +5732,32 @@ async def run_chat(
                 visible_text=visible_text,
                 actor=actor,
             )
-            return await get_native_agent_service().run_chat(
-                profile=profile,
-                session=session,
-                user_text=text,
-                prompt_text=prompt_text,
-                history_service=_history_service_for_execution_mode(session, NATIVE_AGENT_PROVIDER),
-                actor=_actor_from_request(request),
-            )
-        if cluster and not profile.cluster.enabled:
-            _raise(409, "cluster_not_enabled", "该 Bot 未启用集群模式")
-        cluster_run = None
-        if cluster:
-            cluster_run = _CLUSTER_RUNTIME.start_run(
-                ClusterRunRequest(
-                    bot_alias=alias,
-                    user_id=shared_user_id,
+            run_status = "completed"
+            try:
+                return await get_native_agent_service().run_chat(
                     profile=profile,
-                    mentions=list(mentions or []),
-                    allow_unsafe_cli=allow_unsafe_cli,
+                    session=session,
+                    user_text=text,
+                    prompt_text=prompt_text,
+                    history_service=_history_service_for_execution_mode(session, NATIVE_AGENT_PROVIDER),
+                    actor=_actor_from_request(request),
+                    cluster_run_id=cluster_run.run_id if cluster_run else "",
                 )
-            )
+            except Exception:
+                run_status = "error"
+                raise
+            finally:
+                if cluster_run:
+                    _CLUSTER_RUNTIME.finish_run(cluster_run.run_id, run_status)
+                    _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
+        cluster_run = _start_cluster_run_if_requested(
+            profile=profile,
+            alias=alias,
+            shared_user_id=shared_user_id,
+            cluster=cluster,
+            mentions=mentions,
+            allow_unsafe_cli=allow_unsafe_cli,
+        )
         run_status = "completed"
         request = build_assistant_run_request(
             alias,
@@ -5767,8 +5830,6 @@ async def stream_chat(
             return
         if _supports_cli_runtime(profile):
             if resolved_execution_mode == NATIVE_AGENT_PROVIDER:
-                if cluster:
-                    _raise(409, "native_agent_cluster_disabled", "原生 agent 模式暂不支持 TCB 集群")
                 if (agent_id or "main") != "main":
                     _raise(409, "native_agent_child_agent_disabled", "原生 agent 模式暂不支持子 agent")
                 _profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, "main")
@@ -5779,7 +5840,21 @@ async def stream_chat(
                 if text.startswith("//"):
                     text = "/" + text[2:]
                 is_plan_mode = task_mode == PLAN_MODE_TASK_MODE
-                prompt_text = build_plan_mode_prompt(text, cluster_active=False) if is_plan_mode else text
+                cluster_run = _start_cluster_run_if_requested(
+                    profile=profile,
+                    alias=alias,
+                    shared_user_id=shared_user_id,
+                    cluster=cluster,
+                    mentions=mentions,
+                    allow_unsafe_cli=allow_unsafe_cli,
+                )
+                prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run)) if is_plan_mode else text
+                prompt_text = _apply_cluster_prompt(
+                    profile,
+                    prompt_text,
+                    cluster_run_id=cluster_run.run_id if cluster_run else "",
+                    cluster_mentions=list(mentions or []),
+                )
                 request = build_assistant_run_request(
                     alias,
                     shared_user_id,
@@ -5789,30 +5864,37 @@ async def stream_chat(
                     visible_text=visible_text,
                     actor=actor,
                 )
-                async for event in get_native_agent_service().stream_chat(
-                    profile=profile,
-                    session=session,
-                    user_text=text,
-                    prompt_text=prompt_text,
-                    history_service=_history_service_for_execution_mode(session, NATIVE_AGENT_PROVIDER),
-                    actor=_actor_from_request(request),
-                    protocol=protocol,
-                ):
-                    yield event
-                return
-            if cluster and not profile.cluster.enabled:
-                _raise(409, "cluster_not_enabled", "该 Bot 未启用集群模式")
-            cluster_run = None
-            if cluster:
-                cluster_run = _CLUSTER_RUNTIME.start_run(
-                    ClusterRunRequest(
-                        bot_alias=alias,
-                        user_id=shared_user_id,
+                run_status = "completed"
+                try:
+                    async for event in get_native_agent_service().stream_chat(
                         profile=profile,
-                        mentions=list(mentions or []),
-                        allow_unsafe_cli=allow_unsafe_cli,
-                    )
-                )
+                        session=session,
+                        user_text=text,
+                        prompt_text=prompt_text,
+                        history_service=_history_service_for_execution_mode(session, NATIVE_AGENT_PROVIDER),
+                        actor=_actor_from_request(request),
+                        protocol=protocol,
+                        cluster_run_id=cluster_run.run_id if cluster_run else "",
+                    ):
+                        if event.get("type") == "error":
+                            run_status = "error"
+                        yield event
+                except Exception:
+                    run_status = "error"
+                    raise
+                finally:
+                    if cluster_run:
+                        _CLUSTER_RUNTIME.finish_run(cluster_run.run_id, run_status)
+                        _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
+                return
+            cluster_run = _start_cluster_run_if_requested(
+                profile=profile,
+                alias=alias,
+                shared_user_id=shared_user_id,
+                cluster=cluster,
+                mentions=mentions,
+                allow_unsafe_cli=allow_unsafe_cli,
+            )
             run_status = "completed"
             request = build_assistant_run_request(
                 alias,

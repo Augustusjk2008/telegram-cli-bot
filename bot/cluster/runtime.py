@@ -284,6 +284,26 @@ class ClusterRuntime:
         )
         return task
 
+    def cancel_run_tasks(self, run_id: str, message: str = "已取消") -> list[ClusterAgentTask]:
+        run = self._runs.get(str(run_id or "").strip())
+        if run is None:
+            return []
+        now = self._now_iso()
+        cancelled: list[ClusterAgentTask] = []
+        for task in run.tasks.values():
+            if task.status not in {"queued", "running"}:
+                continue
+            task.status = "cancelled"
+            task.completed_at = now
+            task.error = str(message or "已取消")
+            self.append_agent_task_message(run_id, task.task_id, kind="final", content=task.error)
+            self.append_event(
+                run_id,
+                {"kind": "agent_task_cancelled", "task_id": task.task_id, "agent_id": task.agent_id, "error": task.error[:200]},
+            )
+            cancelled.append(task)
+        return cancelled
+
     def _task_deadline_exceeded(self, task: ClusterAgentTask) -> bool:
         if task.status != "running" or not task.started_at:
             return False

@@ -156,6 +156,7 @@ class NativeAgentService:
         history_service: ChatHistoryService,
         actor: dict[str, Any] | None = None,
         protocol: str = "",
+        cluster_run_id: str = "",
     ) -> AsyncIterator[dict[str, Any]]:
         loop = asyncio.get_running_loop()
         started_at = loop.time()
@@ -180,6 +181,7 @@ class NativeAgentService:
         final_text = ""
         reader_task: asyncio.Task[None] | None = None
         wants_ag_ui = str(protocol or "").strip().lower() == "ag-ui"
+        normalized_cluster_run_id = str(cluster_run_id or "").strip()
         prompt_started = False
         should_abort_prompt = False
         assistant_completed_at = 0.0
@@ -283,6 +285,7 @@ class NativeAgentService:
                 "native_provider": NATIVE_AGENT_PROVIDER,
                 "native_session_id": native_session_id,
                 "working_dir": session.working_dir,
+                **({"cluster_run_id": normalized_cluster_run_id} if normalized_cluster_run_id else {}),
             }
             if wants_ag_ui:
                 yield {
@@ -540,6 +543,7 @@ class NativeAgentService:
                         state=ag_ui_state,
                         completion_state=completion_state,
                         content=final_text,
+                        context_usage=context_usage,
                     ),
                 }
             elapsed_seconds = int(loop.time() - started_at)

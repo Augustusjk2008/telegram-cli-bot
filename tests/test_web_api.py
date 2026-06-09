@@ -418,6 +418,254 @@ async def test_run_chat_cluster_finishes_runtime_run(web_manager: MultiBotManage
 
 
 @pytest.mark.asyncio
+async def test_run_chat_native_agent_cluster_starts_run_and_injects_prompt(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot.cluster.config import BotClusterConfig
+
+    profile = web_manager.main_profile
+    profile.cluster = BotClusterConfig(enabled=True)
+    profile.supported_execution_modes = ["cli", "native_agent"]
+    captured: dict[str, Any] = {}
+
+    class FakeNativeAgentService:
+        async def run_chat(self, **kwargs):
+            captured.update(kwargs)
+            return {"output": "ok", "returncode": 0}
+
+    monkeypatch.setattr(api_service, "get_native_agent_service", lambda: FakeNativeAgentService())
+
+    result = await api_service.run_chat(
+        web_manager,
+        "main",
+        1001,
+        "hi",
+        execution_mode="native_agent",
+        cluster=True,
+        mentions=[{"agent_id": "reviewer"}],
+    )
+
+    assert result["output"] == "ok"
+    prompt = captured["prompt_text"]
+    assert "run_id:" in prompt
+    assert "reviewer" in prompt
+    assert captured["user_text"] == "hi"
+    run_id = captured["cluster_run_id"]
+    run = api_service._CLUSTER_RUNTIME.get_run(run_id)
+    assert run is not None
+    assert run.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_native_agent_cluster_emits_cluster_run_id_and_finishes(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot.cluster.config import BotClusterConfig
+
+    profile = web_manager.main_profile
+    profile.cluster = BotClusterConfig(enabled=True)
+    profile.supported_execution_modes = ["cli", "native_agent"]
+    captured: dict[str, Any] = {}
+
+    class FakeNativeAgentService:
+        async def stream_chat(self, **kwargs):
+            captured.update(kwargs)
+            yield {"type": "meta", "native_session_id": "sess-1", "cluster_run_id": kwargs.get("cluster_run_id")}
+            yield {"type": "done", "output": "ok", "returncode": 0}
+
+    monkeypatch.setattr(api_service, "get_native_agent_service", lambda: FakeNativeAgentService())
+
+    events = [
+        event async for event in api_service.stream_chat(
+            web_manager,
+            "main",
+            1001,
+            "@reviewer hi",
+            execution_mode="native_agent",
+            cluster=True,
+            mentions=[{"agent_id": "reviewer"}],
+        )
+    ]
+
+    meta = next(event for event in events if event["type"] == "meta")
+    assert meta["cluster_run_id"] == captured["cluster_run_id"]
+    assert "reviewer" in captured["prompt_text"]
+    run = api_service._CLUSTER_RUNTIME.get_run(captured["cluster_run_id"])
+    assert run is not None
+    assert run.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_run_chat_native_agent_plan_cluster_prompt_contains_run_id_and_mentions(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot.cluster.config import BotClusterConfig
+
+    profile = web_manager.main_profile
+    profile.cluster = BotClusterConfig(enabled=True)
+    profile.supported_execution_modes = ["cli", "native_agent"]
+    captured: dict[str, Any] = {}
+
+    class FakeNativeAgentService:
+        async def run_chat(self, **kwargs):
+            captured.update(kwargs)
+            return {"output": "ok", "returncode": 0}
+
+    monkeypatch.setattr(api_service, "get_native_agent_service", lambda: FakeNativeAgentService())
+
+    await api_service.run_chat(
+        web_manager,
+        "main",
+        1001,
+        "按方案执行",
+        task_mode="plan",
+        execution_mode="native_agent",
+        cluster=True,
+        mentions=[{"agent_id": "reviewer"}],
+    )
+
+    prompt = captured["prompt_text"]
+    assert captured["cluster_run_id"] in prompt
+    assert "reviewer" in prompt
+    assert "按方案执行" in prompt
+    assert captured["user_text"] == "按方案执行"
+
+
+@pytest.mark.asyncio
+async def test_kill_native_agent_cluster_marks_run_and_tasks_cancelled(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot.cluster.config import BotClusterConfig
+    from bot.cluster.runtime import AskAgentRequest
+
+    profile = web_manager.main_profile
+    profile.cluster = BotClusterConfig(enabled=True)
+    run = api_service._CLUSTER_RUNTIME.start_run(
+        api_service.ClusterRunRequest(bot_alias="main", user_id=chat_session_user_id(1001), profile=profile)
+    )
+    queued = api_service._CLUSTER_RUNTIME.create_agent_task(
+        run.run_id,
+        AskAgentRequest(agent_id="reviewer", message="看一下", model_tier="medium", timeout_seconds=60, allow_write=False),
+    )
+    running = api_service._CLUSTER_RUNTIME.create_agent_task(
+        run.run_id,
+        AskAgentRequest(agent_id="tester", message="测一下", model_tier="medium", timeout_seconds=60, allow_write=False),
+    )
+    api_service._CLUSTER_RUNTIME.mark_agent_task_running(run.run_id, running.task_id)
+    api_service._CLUSTER_RUN_CONTROLS[run.run_id] = api_service._ClusterRunControl(asyncio.Semaphore(1))
+
+    session = get_session_for_alias(web_manager, "main", 1001)
+    with session._lock:
+        session.is_processing = True
+        session.native_agent_session_id = "sess-1"
+        session.stop_requested = False
+    monkeypatch.setattr(api_service.get_native_agent_service(), "abort", AsyncMock(return_value=True))
+
+    result = await api_service.kill_user_process(web_manager, "main", 1001, execution_mode="native_agent")
+
+    assert result["cluster_run_cancelled"] == run.run_id
+    assert run.status == "cancelled"
+    assert run.tasks[queued.task_id].status == "cancelled"
+    assert run.tasks[running.task_id].status == "cancelled"
+    assert run.run_id not in api_service._CLUSTER_RUN_CONTROLS
+
+
+@pytest.mark.asyncio
+async def test_native_agent_cluster_child_task_inherits_unsafe_cli_permission(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot.cluster.config import BotClusterConfig
+
+    profile = web_manager.main_profile
+    profile.cluster = BotClusterConfig(enabled=True, max_parallel_agents=1)
+    profile.supported_execution_modes = ["cli", "native_agent"]
+    await web_manager.create_bot_agent("main", {"id": "tester", "name": "测试专家"})
+    captured: dict[str, Any] = {}
+
+    class FakeNativeAgentService:
+        async def run_chat(self, **kwargs):
+            captured["run_id"] = kwargs["cluster_run_id"]
+            return {"output": "ok", "returncode": 0}
+
+    async def fake_stream_cli_chat(*_args, **kwargs):
+        captured["allow_unsafe_cli"] = kwargs.get("allow_unsafe_cli")
+        yield {"type": "done", "output": "done", "returncode": 0}
+
+    monkeypatch.setattr(api_service, "get_native_agent_service", lambda: FakeNativeAgentService())
+    monkeypatch.setattr(api_service, "_stream_cli_chat", fake_stream_cli_chat)
+
+    await api_service.run_chat(
+        web_manager,
+        "main",
+        1001,
+        "hi",
+        execution_mode="native_agent",
+        cluster=True,
+        allow_unsafe_cli=True,
+    )
+    result = await api_service.handle_cluster_mcp_tool(
+        web_manager,
+        captured["run_id"],
+        "ask_agent",
+        {"agent_id": "tester", "message": "跑测试"},
+    )
+    task_id = result["data"]["task_id"]
+    await api_service.handle_cluster_mcp_tool(
+        web_manager,
+        captured["run_id"],
+        "poll_agent_tasks",
+        {"task_ids": [task_id], "wait_seconds": 1, "include_output": True},
+    )
+
+    assert captured["allow_unsafe_cli"] is True
+
+
+@pytest.mark.asyncio
+async def test_native_agent_cluster_child_task_respects_write_policy(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot.cluster.config import BotClusterConfig
+
+    profile = web_manager.main_profile
+    profile.cluster = BotClusterConfig(enabled=True, write_policy="main_only")
+    profile.supported_execution_modes = ["cli", "native_agent"]
+    await web_manager.create_bot_agent("main", {"id": "tester", "name": "测试专家", "cluster": {"allow_write": True}})
+    captured: dict[str, Any] = {}
+
+    class FakeNativeAgentService:
+        async def run_chat(self, **kwargs):
+            captured["run_id"] = kwargs["cluster_run_id"]
+            return {"output": "ok", "returncode": 0}
+
+    monkeypatch.setattr(api_service, "get_native_agent_service", lambda: FakeNativeAgentService())
+
+    await api_service.run_chat(
+        web_manager,
+        "main",
+        1001,
+        "hi",
+        execution_mode="native_agent",
+        cluster=True,
+    )
+
+    with pytest.raises(WebApiError) as exc_info:
+        await api_service.handle_cluster_mcp_tool(
+            web_manager,
+            captured["run_id"],
+            "ask_agent",
+            {"agent_id": "tester", "message": "改文件", "allow_write": True},
+        )
+
+    assert exc_info.value.code == "cluster_tool_forbidden"
+
+
+@pytest.mark.asyncio
 async def test_cluster_ask_agent_returns_task_without_waiting(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     from bot.cluster.config import BotClusterConfig
 
@@ -1490,6 +1738,7 @@ async def test_admin_execution_route_ignores_bot_scoped_native_agent_api_key(web
     monkeypatch.setattr(config, "NATIVE_AGENT_OPENCODE_AGENT", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_REASONING_EFFORT", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_THINKING_DEPTH", "")
+    monkeypatch.setattr("bot.native_agent.configuration.first_configured_model", lambda _config=None: None)
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
     monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
     monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
