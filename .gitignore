@@ -33,6 +33,7 @@ venv/
 .cloudflared_url
 .claude/settings.local.json
 tmp_bot_create_check/
+tmp/
 .web_tunnel_state.json
 .host.pid
 .codegraph/

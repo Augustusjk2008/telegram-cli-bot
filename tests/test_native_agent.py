@@ -464,6 +464,19 @@ def test_native_agent_aggregator_filters_watcher_noise_from_process_events():
     assert watcher_result.trace == []
 
 
+def test_native_agent_aggregator_ignores_idle_before_current_turn_activity():
+    aggregator = NativeAgentAggregator(user_message_id="u-new")
+    idle = unwrap_event({"type": "session.idle", "sessionID": "sess-1"})
+
+    assert idle is not None
+
+    result = aggregator.apply(idle)
+
+    assert result.status == "session.idle"
+    assert result.done is False
+    assert aggregator.text() == ""
+
+
 @pytest.mark.asyncio
 async def test_native_agent_turn_state_waits_past_tool_calls_message_for_final_answer():
     aggregator = NativeAgentAggregator(user_message_id="u-new")
@@ -1067,6 +1080,41 @@ async def test_native_agent_turn_state_reconcile_ignores_messages_before_current
 
     assert old_result == {"done": False, "text": ""}
     assert new_result == {"done": True, "text": "新回复"}
+
+
+@pytest.mark.asyncio
+async def test_native_agent_turn_state_reconcile_ignores_assistant_with_other_parent_id():
+    aggregator = NativeAgentAggregator(user_message_id="u-new")
+    state = NativeAgentTurnState(
+        native_session_id="sess-1",
+        user_message_id="u-new",
+        baseline_message_count=2,
+        baseline_known=True,
+    )
+
+    stale_result = await state.maybe_reconcile(
+        lambda _session_id: [
+            {"id": "u-old", "role": "user", "content": "old"},
+            {"id": "a-old", "role": "assistant", "parentID": "u-old", "content": "旧回复", "time": {"completed": 1}},
+            {"id": "a-late", "role": "assistant", "parentID": "u-old", "content": "迟到旧回复", "time": {"completed": 2}},
+        ],
+        aggregator,
+        now=1.0,
+    )
+    current_result = await state.maybe_reconcile(
+        lambda _session_id: [
+            {"id": "u-old", "role": "user", "content": "old"},
+            {"id": "a-old", "role": "assistant", "parentID": "u-old", "content": "旧回复", "time": {"completed": 1}},
+            {"id": "u-new", "role": "user", "content": "new"},
+            {"id": "a-late", "role": "assistant", "parentID": "u-old", "content": "迟到旧回复", "time": {"completed": 2}},
+            {"id": "a-new", "role": "assistant", "parentID": "u-new", "content": "新回复", "time": {"completed": 3}},
+        ],
+        aggregator,
+        now=2.0,
+    )
+
+    assert stale_result == {"done": False, "text": ""}
+    assert current_result == {"done": True, "text": "新回复"}
 
 
 def test_native_agent_aggregator_delta_replace_and_removed():
@@ -4230,6 +4278,129 @@ async def test_native_agent_service_reuses_native_session_for_three_completed_tu
     assert fake_client.prompt_sessions == ["sess-1", "sess-1", "sess-1"]
     assert fake_client.prompt_texts == ["1", "2", "3"]
     assert ChatStore(tmp_path).get_conversation_native_session(str(session.active_conversation_id))["session_id"] == "sess-1"
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_reused_session_waits_past_early_idle_for_current_assistant(tmp_path: Path):
+    class FakeClient:
+        def __init__(self) -> None:
+            self.create_count = 0
+            self.prompt_count = 0
+            self.event_count = 0
+            self.list_count = 0
+            self.abort_count = 0
+            self.prompt_sessions: list[str] = []
+            self.prompt_message_ids: list[str] = []
+            self.messages_by_session: dict[str, list[dict[str, object]]] = {}
+
+        async def get_session(self, session_id):
+            return {"id": session_id, "directory": str(tmp_path)}
+
+        async def create_session(self, *, cwd=None):
+            assert cwd == str(tmp_path)
+            self.create_count += 1
+            self.messages_by_session.setdefault("sess-1", [])
+            return {"id": "sess-1", "directory": str(tmp_path)}
+
+        async def prompt_async(self, session_id, text, *, message_id=None, model=None, agent=None):
+            self.prompt_count += 1
+            self.prompt_sessions.append(session_id)
+            self.prompt_message_ids.append(str(message_id or ""))
+            self.messages_by_session.setdefault(session_id, []).append({
+                "id": str(message_id or f"u-{self.prompt_count}"),
+                "role": "user",
+                "content": text,
+            })
+            if self.prompt_count == 1:
+                self.messages_by_session[session_id].append({
+                    "id": "a-1",
+                    "role": "assistant",
+                    "parentID": str(message_id or ""),
+                    "content": "答1",
+                    "finish": "stop",
+                    "time": {"completed": 1},
+                })
+            return {}
+
+        async def events(self, *, global_events=True, ready_event=None):
+            if ready_event is not None:
+                ready_event.set()
+            while self.event_count >= self.prompt_count:
+                await asyncio.sleep(0)
+            index = self.event_count
+            self.event_count += 1
+            session_id = self.prompt_sessions[index]
+            if index == 0:
+                yield {
+                    "directory": str(tmp_path),
+                    "payload": {
+                        "type": "message.part.updated",
+                        "sessionID": session_id,
+                        "part": {"id": "p-1", "type": "text", "delta": "答1", "messageID": "a-1"},
+                    },
+                }
+                yield {"directory": str(tmp_path), "payload": {"type": "session.idle", "sessionID": session_id}}
+                return
+            yield {"directory": str(tmp_path), "payload": {"type": "session.idle", "sessionID": session_id}}
+            while True:
+                await asyncio.sleep(0.05)
+
+        async def list_messages(self, session_id):
+            self.list_count += 1
+            messages = self.messages_by_session.get(session_id, [])
+            if self.prompt_count >= 2 and not any(item.get("id") == "a-2" for item in messages) and self.list_count >= 5:
+                messages.append({
+                    "id": "a-2",
+                    "role": "assistant",
+                    "parentID": self.prompt_message_ids[1],
+                    "content": "答2",
+                    "finish": "stop",
+                    "time": {"completed": 2},
+                })
+            return list(messages)
+
+        async def abort(self, session_id):
+            assert session_id == "sess-1"
+            self.abort_count += 1
+            return {}
+
+    fake_client = FakeClient()
+
+    class FakeHandle:
+        def client(self):
+            return fake_client
+
+    class FakeManager:
+        async def ensure_started(self):
+            return FakeHandle()
+
+        async def get_existing(self):
+            return FakeHandle()
+
+    service = NativeAgentService()
+    service._server_manager = FakeManager()
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    outputs = []
+    for text in ["1", "2"]:
+        events = [
+            event async for event in service.stream_chat(
+                profile=profile,
+                session=session,
+                user_text=text,
+                prompt_text=text,
+                history_service=history,
+            )
+        ]
+        outputs.append(next(event for event in events if event["type"] == "done")["output"])
+
+    assert outputs == ["答1", "答2"]
+    assert fake_client.create_count == 1
+    assert fake_client.prompt_sessions == ["sess-1", "sess-1"]
+    assert fake_client.list_count >= 4
+    assert fake_client.abort_count == 1
 
 
 @pytest.mark.asyncio

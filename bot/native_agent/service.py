@@ -495,6 +495,8 @@ class NativeAgentService:
                             now=loop.time(),
                         ):
                             continue
+                        completed_without_idle = True
+                        abort_after_completion = True
                         break
                     if await stop_if_no_progress(loop.time()):
                         break
@@ -535,6 +537,8 @@ class NativeAgentService:
                             now=loop.time(),
                         ):
                             continue
+                        completed_without_idle = True
+                        abort_after_completion = True
                         break
                     continue
                 if not is_relevant_event(event, session_id=native_session_id, cwd=session.working_dir):

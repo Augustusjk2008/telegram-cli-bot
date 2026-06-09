@@ -124,13 +124,22 @@ class NativeAgentTurnState:
             return []
         user_index = _find_message_index(messages, self.user_message_id)
         if user_index >= 0:
-            return _truncate_messages(messages[user_index + 1 :], through_message_id)
+            return _truncate_messages(
+                _filter_messages_for_user_parent(messages[user_index + 1 :], self.user_message_id),
+                through_message_id,
+            )
         assistant_index = _find_message_index(messages, self.assistant_message_id)
         if assistant_index >= 0:
-            return _truncate_messages(messages[assistant_index:], through_message_id)
+            return _truncate_messages(
+                _filter_messages_for_user_parent(messages[assistant_index:], self.user_message_id),
+                through_message_id,
+            )
         baseline = max(0, int(self.baseline_message_count or 0))
         if self.baseline_known and len(messages) > baseline:
-            return _truncate_messages(messages[baseline:], through_message_id)
+            return _truncate_messages(
+                _filter_messages_for_user_parent(messages[baseline:], self.user_message_id),
+                through_message_id,
+            )
         return []
 
 
@@ -207,6 +216,30 @@ def _message_id(message: dict[str, Any]) -> str:
         if value:
             return str(value)
     return ""
+
+
+def _message_parent_id(message: dict[str, Any]) -> str:
+    for key in ("parentID", "parent_id", "parentId"):
+        value = message.get(key)
+        if value:
+            return str(value)
+    return ""
+
+
+def _filter_messages_for_user_parent(messages: list[dict[str, Any]], user_message_id: str) -> list[dict[str, Any]]:
+    target = str(user_message_id or "").strip()
+    if not target:
+        return messages
+    filtered: list[dict[str, Any]] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "").lower()
+        parent_id = _message_parent_id(message)
+        if role == "assistant" and parent_id and parent_id != target:
+            continue
+        filtered.append(message)
+    return filtered
 
 
 def _find_message_index(messages: list[dict[str, Any]], message_id: str) -> int:

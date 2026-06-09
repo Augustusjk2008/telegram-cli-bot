@@ -179,8 +179,15 @@ class NativeAgentAggregator:
                 and self.assistant_message_id not in self.followup_message_ids
                 and self.text()
             )
+            has_current_turn_activity = bool(
+                self.assistant_message_id
+                or self.text()
+                or self.saw_tool_activity
+                or self.assistant_completed
+            )
             result.done = event_type == "session.idle" and (
-                not self.pending_followup or self.assistant_completed or has_non_followup_text
+                has_current_turn_activity
+                and (not self.pending_followup or self.assistant_completed or has_non_followup_text)
             )
             return result
         if event_type == "session.error":
