@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,8 @@ from bot.native_agent.ag_ui_mapper import AgUiTurnState, build_run_error_event, 
 from bot.native_agent.client import NativeAgentClient, NativeAgentClientError, NativeAgentServerRef, parse_sse_block
 from bot.native_agent.events import is_relevant_event, unwrap_event
 from bot.native_agent import service as native_service_module
+from bot.native_agent.run_client import NativeAgentRunClient, NativeAgentRunError, NativeAgentRunRequest
+from bot.native_agent.run_events import extract_step_finish_usage, run_json_to_events
 from bot.native_agent.service import NativeAgentService, normalize_execution_mode
 from bot.native_agent.turn_state import NativeAgentTurnState
 from bot.native_agent.server_manager import NativeAgentServerManager, _is_opencode_serve_process
@@ -211,6 +214,190 @@ def test_native_agent_server_manager_server_key_includes_cluster_mcp_launcher(mo
     second_key = manager._server_key(server_config)
 
     assert first_key != second_key
+
+
+def test_native_agent_run_config_injects_tcb_cluster_mcp_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot.native_agent import config_store, run_config
+
+    monkeypatch.setenv("OPENCODE_CONFIG", str(tmp_path / "opencode.json"))
+    monkeypatch.setattr(config_store, "get_app_data_root", lambda: tmp_path / "data")
+    monkeypatch.setattr(run_config, "get_app_data_root", lambda: tmp_path / "data")
+    monkeypatch.setattr(run_config, "prepare_cluster_mcp_launcher_for_native", lambda: tmp_path / "tcb-cluster-mcp.cmd")
+    config_store.save_native_agent_config({
+        "provider": {
+            "jojocode": {
+                "models": {"gpt-5.4": {"name": "gpt-5.4"}},
+            }
+        },
+        "mcp": {
+            "existing": {"type": "local", "command": ["existing"], "enabled": True},
+        },
+    })
+
+    path = run_config.write_runtime_opencode_config(
+        key="key-1",
+        native_agent={"native_agent_model": "jojocode/gpt-5.4"},
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["mcp"]["existing"]["command"] == ["existing"]
+    assert payload["mcp"]["tcb-cluster"] == {
+        "type": "local",
+        "command": [str(tmp_path / "tcb-cluster-mcp.cmd")],
+        "enabled": True,
+    }
+
+
+def test_native_agent_run_events_map_text_and_step_finish():
+    text_events = run_json_to_events(
+        {
+            "type": "text",
+            "sessionID": "sess-1",
+            "part": {"id": "p1", "type": "text", "text": "你好"},
+        },
+        cwd="/repo",
+        assistant_message_id="assistant-1",
+    )
+    finish_events = run_json_to_events(
+        {
+            "type": "step_finish",
+            "sessionID": "sess-1",
+            "tokens": {"input": 10, "cache": {"read": 2}, "output": 3},
+            "cost": 0.01,
+        },
+        cwd="/repo",
+        assistant_message_id="assistant-1",
+    )
+
+    assert text_events[0]["payload"]["type"] == "message.part.updated"
+    assert text_events[0]["payload"]["part"]["delta"] == "你好"
+    assert finish_events[0]["payload"]["type"] == "message.updated"
+    assert finish_events[1]["payload"]["type"] == "session.idle"
+    assert extract_step_finish_usage(finish_events[0]["payload"]["raw"]) == {
+        "input": 10,
+        "cache": {"read": 2},
+        "output": 3,
+        "cost": 0.01,
+    }
+
+
+def test_native_agent_run_client_builds_opencode_run_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from bot.native_agent import run_client
+
+    monkeypatch.setattr(run_client, "runtime_config_key", lambda **_kwargs: "key-1")
+    monkeypatch.setattr(run_client, "write_runtime_opencode_config", lambda **_kwargs: tmp_path / "run.json")
+    monkeypatch.setattr(run_client, "resolve_cli_executable", lambda command, _cwd=None: f"C:/tools/{command}.cmd")
+    monkeypatch.setattr(run_client, "build_executable_invocation", lambda path: ["cmd.exe", "/d", "/c", path])
+
+    args, env, config_path = NativeAgentRunClient().build_run_command(
+        NativeAgentRunRequest(
+            cwd=str(tmp_path),
+            prompt="你好",
+            command="opencode",
+            session_id="sess-1",
+            model_id="anthropic/claude",
+            agent_id="reviewer",
+            variant="high",
+            native_agent={"native_agent_model": "anthropic/claude"},
+        )
+    )
+
+    assert args == [
+        "cmd.exe",
+        "/d",
+        "/c",
+        "C:/tools/opencode.cmd",
+        "run",
+        "--format",
+        "json",
+        "--dir",
+        str(tmp_path.resolve()),
+        "--session",
+        "sess-1",
+        "--model",
+        "anthropic/claude",
+        "--agent",
+        "reviewer",
+        "--variant",
+        "high",
+        "你好",
+    ]
+    assert env["OPENCODE_CONFIG"] == str(tmp_path / "run.json")
+    assert config_path == tmp_path / "run.json"
+
+
+@pytest.mark.asyncio
+async def test_native_agent_run_client_stream_parses_json_and_raw_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from bot.native_agent import run_client
+
+    class FakeProcess:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.stdout = io.StringIO('{"type":"text","text":"回"}\nnot-json\n')
+            self.stderr = io.StringIO("")
+            self.returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            self.returncode = 0
+            return 0
+
+        def terminate(self):
+            self.returncode = -15
+
+    monkeypatch.setattr(run_client.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(run_client, "runtime_config_key", lambda **_kwargs: "key-1")
+    monkeypatch.setattr(run_client, "write_runtime_opencode_config", lambda **_kwargs: tmp_path / "run.json")
+
+    events = [
+        event async for event in NativeAgentRunClient().stream(
+            NativeAgentRunRequest(cwd=str(tmp_path), prompt="你好", command="opencode")
+        )
+    ]
+
+    assert events == [
+        {"type": "text", "text": "回"},
+        {"type": "raw_text", "raw_text": "not-json"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_native_agent_run_client_raises_with_stderr_on_nonzero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from bot.native_agent import run_client
+
+    class FakeProcess:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.stdout = io.StringIO("")
+            self.stderr = io.StringIO("bad session\n")
+            self.returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            self.returncode = 2
+            return 2
+
+        def terminate(self):
+            self.returncode = -15
+
+    monkeypatch.setattr(run_client.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(run_client, "runtime_config_key", lambda **_kwargs: "key-1")
+    monkeypatch.setattr(run_client, "write_runtime_opencode_config", lambda **_kwargs: tmp_path / "run.json")
+
+    with pytest.raises(NativeAgentRunError) as exc_info:
+        _ = [
+            event async for event in NativeAgentRunClient().stream(
+                NativeAgentRunRequest(cwd=str(tmp_path), prompt="你好", command="opencode")
+            )
+        ]
+
+    assert exc_info.value.returncode == 2
+    assert "bad session" in str(exc_info.value)
 
 
 def test_native_agent_normalizer_accepts_official_properties_part_delta():
