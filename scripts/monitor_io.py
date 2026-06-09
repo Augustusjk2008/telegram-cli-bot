@@ -748,8 +748,12 @@ def remember_native_session_id(state: MonitorState, session_id: str) -> None:
 
 def summarize_web_message(item: dict[str, Any]) -> dict[str, Any]:
     meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    message_id = str(item.get("id") or "").strip()
     return {
-        "web_message_id": str(item.get("id") or "").strip(),
+        "web_message_id": message_id,
+        "assistant_message_id": message_id if str(item.get("role") or "").strip().lower() == "assistant" else "",
+        "turn_id": str(item.get("turn_id") or meta.get("turn_id") or "").strip(),
+        "conversation_id": str(item.get("conversation_id") or meta.get("conversation_id") or "").strip(),
         "role": str(item.get("role") or "").strip(),
         "state": str(item.get("state") or "").strip(),
         "completion_state": str(meta.get("completion_state") or "").strip(),
@@ -770,11 +774,29 @@ def normalize_web_stream_event(alias: str, prompt: str, event: dict[str, Any]) -
     event_type = str(event.get("type") or "").strip()
     message = event.get("message") if isinstance(event.get("message"), dict) else {}
     meta = message.get("meta") if isinstance(message.get("meta"), dict) else {}
-    native_session_id = native_session_id_from_web_message(message) if message else ""
+    native_session_id = str(event.get("native_session_id") or "").strip() or (native_session_id_from_web_message(message) if message else "")
+    turn_id = str(event.get("turn_id") or message.get("turn_id") or meta.get("turn_id") or "").strip()
+    assistant_message_id = str(
+        event.get("assistant_message_id")
+        or message.get("id")
+        or event.get("message_id")
+        or event.get("messageId")
+        or ""
+    ).strip()
+    native_assistant_message_id = str(
+        event.get("native_assistant_message_id")
+        or event.get("opencode_message_id")
+        or ""
+    ).strip()
     output = str(event.get("output") or "")
     text = str(event.get("text") or event.get("delta") or "")
     snapshot = str(event.get("snapshot") or event.get("preview_text") or output)
     trace = event.get("event") if isinstance(event.get("event"), dict) else {}
+    trace_payload = trace.get("payload") if isinstance(trace.get("payload"), dict) else {}
+    if not native_assistant_message_id:
+        native_assistant_message_id = _first_text(trace, trace_payload, keys=("messageID", "message_id", "messageId"))
+    if not native_session_id:
+        native_session_id = _first_text(trace, trace_payload, keys=("sessionID", "session_id", "sessionId"))
     if event_type == "RUN_FINISHED":
         result = event.get("result") if isinstance(event.get("result"), dict) else {}
         result_message = result.get("message") if isinstance(result.get("message"), dict) else {}
@@ -782,16 +804,25 @@ def normalize_web_stream_event(alias: str, prompt: str, event: dict[str, Any]) -
         meta = message.get("meta") if isinstance(message.get("meta"), dict) else meta
         output = str(result.get("content") or message.get("content") or output)
         snapshot = output
-        native_session_id = native_session_id_from_web_message(message) if message else native_session_id
+        native_session_id = str(event.get("native_session_id") or "").strip() or (native_session_id_from_web_message(message) if message else native_session_id)
+        turn_id = str(event.get("turn_id") or message.get("turn_id") or meta.get("turn_id") or turn_id).strip()
+        assistant_message_id = str(event.get("assistant_message_id") or message.get("id") or assistant_message_id).strip()
     if event_type == "RUN_ERROR":
         snapshot = str(event.get("message") or snapshot)
     session = event.get("session") if isinstance(event.get("session"), dict) else {}
+    session_ids = session.get("session_ids") if isinstance(session.get("session_ids"), dict) else {}
+    if not native_session_id:
+        native_session_id = str(session_ids.get("native_agent_session_id") or "").strip()
+    web_message_id = str(message.get("id") or assistant_message_id or event.get("message_id") or event.get("messageId") or "").strip()
     return {
         "kind": "web_stream_event",
         "alias": alias,
         "prompt": prompt,
         "event_type": event_type,
-        "web_message_id": str(message.get("id") or event.get("message_id") or event.get("messageId") or "").strip(),
+        "web_message_id": web_message_id,
+        "assistant_message_id": assistant_message_id,
+        "native_assistant_message_id": native_assistant_message_id,
+        "turn_id": turn_id,
         "native_session_id": native_session_id,
         "role": str(message.get("role") or "").strip(),
         "state": str(message.get("state") or "").strip(),
@@ -1061,19 +1092,20 @@ def generate_comparison_report(record_dir: str | Path, run_id: str) -> dict[str,
     stream_records = read_jsonl(root / "web_stream_events.jsonl")
     opencode_records = read_jsonl(root / "opencode_events.jsonl")
     opencode_sessions = read_opencode_session_files(root / "opencode_sessions")
-    latest_web_by_session = latest_web_assistant_by_session(history_records)
+    latest_web_by_turn = latest_web_assistant_by_turn(history_records)
     latest_trace_by_message = latest_trace_by_message_id(trace_records)
-    latest_stream_done_by_session = latest_stream_done_by_session_id(stream_records)
-    opencode_by_session = summarize_opencode_by_session(opencode_records, opencode_sessions)
+    latest_stream_done_by_turn = latest_stream_done_by_turn_id(stream_records)
+    stream_windows = stream_windows_by_turn(stream_records)
+    opencode_by_turn = summarize_opencode_by_turn(opencode_records, opencode_sessions, latest_web_by_turn, latest_stream_done_by_turn)
     issues: list[dict[str, Any]] = []
     checks: list[dict[str, Any]] = []
 
-    anchored_session_ids = set(latest_web_by_session) | set(latest_stream_done_by_session)
-    session_ids = sorted(anchored_session_ids or set(opencode_by_session))
-    for session_id in session_ids:
-        web_item = latest_web_by_session.get(session_id, {})
-        op_item = opencode_by_session.get(session_id, {})
-        stream_item = latest_stream_done_by_session.get(session_id, {})
+    turn_keys = sorted(set(latest_web_by_turn) | set(latest_stream_done_by_turn) | set(opencode_by_turn))
+    for turn_key in turn_keys:
+        web_item = latest_web_by_turn.get(turn_key, {})
+        op_item = opencode_by_turn.get(turn_key, {})
+        stream_item = latest_stream_done_by_turn.get(turn_key, {})
+        session_id = str(web_item.get("native_session_id") or stream_item.get("native_session_id") or op_item.get("native_session_id") or "").strip()
         web_message_id = str(web_item.get("web_message_id") or "")
         trace_item = latest_trace_by_message.get(web_message_id, {})
         web_content = normalize_compare_text(web_item.get("history_content"))
@@ -1082,8 +1114,11 @@ def generate_comparison_report(record_dir: str | Path, run_id: str) -> dict[str,
         completion_state = str(web_item.get("completion_state") or "").strip()
         checks.append(
             {
+                "turn_key": turn_key,
+                "turn_id": web_item.get("turn_id") or stream_item.get("turn_id") or "",
                 "session_id": session_id,
                 "web_message_id": web_message_id,
+                "native_assistant_message_id": op_item.get("native_assistant_message_id") or stream_item.get("native_assistant_message_id") or "",
                 "web_completion_state": completion_state,
                 "web_trace_count": trace_item.get("trace_count", web_item.get("trace_count", 0)),
                 "web_tool_count": trace_item.get("tool_count", web_item.get("tool_count", 0)),
@@ -1150,7 +1185,7 @@ def generate_comparison_report(record_dir: str | Path, run_id: str) -> dict[str,
                     web_message_id=web_message_id,
                 )
             )
-        later_events = opencode_events_after_web_done(session_id, stream_item, opencode_records)
+        later_events = opencode_events_after_web_done_for_turn(turn_key, stream_item, stream_windows, opencode_records)
         if later_events:
             issues.append(
                 issue(
@@ -1164,8 +1199,8 @@ def generate_comparison_report(record_dir: str | Path, run_id: str) -> dict[str,
                 )
             )
 
-    session_consistency_issues = compare_session_id_consistency(session_records, latest_web_by_session)
-    issues.extend(session_consistency_issues)
+    issues.extend(compare_session_id_consistency(session_records, latest_web_by_turn))
+    issues.extend(compare_conversation_session_consistency(history_records))
     report = {
         "run_id": run_id,
         "generated_at": wall_ts(),
@@ -1177,18 +1212,19 @@ def generate_comparison_report(record_dir: str | Path, run_id: str) -> dict[str,
             "web_stream_events": len(stream_records),
             "opencode_events": len(opencode_records),
             "opencode_sessions": len(opencode_sessions),
-            "sessions_compared": len(session_ids),
+            "turns_compared": len(turn_keys),
+            "sessions_compared": len({str(item.get("session_id") or "") for item in checks if str(item.get("session_id") or "")}),
             "issue_count": len(issues),
         },
         "issues": issues,
         "checks": checks,
-        "sessions": {
-            session_id: {
-                "web": latest_web_by_session.get(session_id, {}),
-                "stream_done": latest_stream_done_by_session.get(session_id, {}),
-                "opencode": opencode_by_session.get(session_id, {}),
+        "turns": {
+            turn_key: {
+                "web": latest_web_by_turn.get(turn_key, {}),
+                "stream_done": latest_stream_done_by_turn.get(turn_key, {}),
+                "opencode": opencode_by_turn.get(turn_key, {}),
             }
-            for session_id in session_ids
+            for turn_key in turn_keys
         },
     }
     (root / "comparison_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1229,7 +1265,23 @@ def read_opencode_session_files(path: Path) -> dict[str, dict[str, Any]]:
     return result
 
 
-def latest_web_assistant_by_session(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def compare_key(record: dict[str, Any]) -> str:
+    turn_id = str(record.get("turn_id") or "").strip()
+    if turn_id:
+        return f"turn:{turn_id}"
+    message_id = str(record.get("assistant_message_id") or record.get("web_message_id") or "").strip()
+    if message_id:
+        return f"message:{message_id}"
+    prompt = str(record.get("prompt") or "").strip()
+    session_id = str(record.get("native_session_id") or "").strip()
+    if session_id and prompt:
+        return f"session-prompt:{session_id}:{hashlib.sha1(prompt.encode('utf-8')).hexdigest()[:12]}"
+    if session_id:
+        return f"session:{session_id}"
+    return ""
+
+
+def latest_web_assistant_by_turn(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
     for record in records:
         items = record.get("items") if isinstance(record.get("items"), list) else []
@@ -1241,7 +1293,9 @@ def latest_web_assistant_by_session(records: list[dict[str, Any]]) -> dict[str, 
                 continue
             summary = summarize_web_message(item)
             summary["ts_mono_ms"] = record.get("ts_mono_ms", 0)
-            result[session_id] = summary
+            key = compare_key(summary)
+            if key:
+                result[key] = summary
     return result
 
 
@@ -1256,31 +1310,103 @@ def latest_trace_by_message_id(records: list[dict[str, Any]]) -> dict[str, dict[
     return result
 
 
-def latest_stream_done_by_session_id(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def latest_stream_done_by_turn_id(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
+    latest_by_key: dict[str, dict[str, Any]] = {}
     for record in records:
+        if record.get("kind") != "web_stream_event":
+            continue
+        key = compare_key(record)
+        if key:
+            cached = latest_by_key.setdefault(key, {})
+            for field in ("native_session_id", "native_assistant_message_id", "assistant_message_id", "web_message_id", "turn_id"):
+                value = str(record.get(field) or "").strip()
+                if value:
+                    cached[field] = value
         event_type = str(record.get("event_type") or "").strip()
         if event_type not in {"done", "RUN_FINISHED"}:
             continue
-        session_id = str(record.get("native_session_id") or "").strip()
-        if session_id:
-            result[session_id] = record
+        if key:
+            merged = {**latest_by_key.get(key, {}), **record}
+            if not str(merged.get("native_assistant_message_id") or "").strip():
+                merged["native_assistant_message_id"] = str(latest_by_key.get(key, {}).get("native_assistant_message_id") or "")
+            result[key] = merged
     return result
 
 
-def summarize_opencode_by_session(
+def stream_windows_by_turn(records: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    windows: dict[str, dict[str, int]] = {}
+    last_key = ""
+    for record in records:
+        if record.get("kind") != "web_stream_event":
+            continue
+        key = compare_key(record)
+        if key:
+            last_key = key
+        elif last_key:
+            key = last_key
+        if not key:
+            continue
+        ts = int(record.get("ts_mono_ms") or 0)
+        item = windows.setdefault(key, {"start": ts, "done": 0})
+        if ts and (not item.get("start") or ts < int(item.get("start") or 0)):
+            item["start"] = ts
+        if str(record.get("event_type") or "").strip() in {"done", "RUN_FINISHED", "error", "RUN_ERROR"}:
+            item["done"] = ts
+            last_key = ""
+    return windows
+
+
+def summarize_opencode_by_turn(
     event_records: list[dict[str, Any]],
     session_files: dict[str, dict[str, Any]],
+    web_by_turn: dict[str, dict[str, Any]],
+    stream_done_by_turn: dict[str, dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
+    turn_records = {**web_by_turn, **stream_done_by_turn}
     result: dict[str, dict[str, Any]] = {}
+    native_message_to_key = {
+        str(record.get("native_assistant_message_id") or "").strip(): key
+        for key, record in stream_done_by_turn.items()
+        if str(record.get("native_assistant_message_id") or "").strip()
+    }
+    for key, record in turn_records.items():
+        session_id = str(record.get("native_session_id") or "").strip()
+        if not session_id:
+            continue
+        result.setdefault(
+            key,
+            {
+                "native_session_id": session_id,
+                "native_assistant_message_id": str(record.get("native_assistant_message_id") or "").strip(),
+                "tool_count": 0,
+                "abort_seen": False,
+                "abort_observed": False,
+                "abort_inferred": False,
+                "session_idle_seen": False,
+                "event_count": 0,
+            },
+        )
     for record in event_records:
         session_id = str(record.get("native_session_id") or "").strip()
         if not session_id:
             continue
+        message_id = str(record.get("opencode_message_id") or "").strip()
+        key = native_message_to_key.get(message_id, "")
+        if not key:
+            matching_keys = [
+                item_key
+                for item_key, item in turn_records.items()
+                if str(item.get("native_session_id") or "").strip() == session_id
+            ]
+            key = matching_keys[-1] if len(matching_keys) == 1 else ""
+        if not key:
+            continue
         item = result.setdefault(
-            session_id,
+            key,
             {
                 "native_session_id": session_id,
+                "native_assistant_message_id": message_id,
                 "tool_count": 0,
                 "abort_seen": False,
                 "abort_observed": False,
@@ -1296,31 +1422,71 @@ def summarize_opencode_by_session(
         item["session_idle_seen"] = bool(item.get("session_idle_seen")) or bool(record.get("session_idle_seen"))
     for session_id, payload in session_files.items():
         messages = payload.get("messages") if isinstance(payload.get("messages"), list) else []
-        item = result.setdefault(
-            session_id,
-            {
-                "native_session_id": session_id,
-                "tool_count": 0,
-                "abort_seen": False,
-                "abort_observed": False,
-                "abort_inferred": False,
-                "session_idle_seen": False,
-                "event_count": 0,
-            },
-        )
-        final_message = final_assistant_message(messages)
-        item["message_count"] = len(messages)
-        item["final_assistant_message_id"] = str(final_message.get("id") or "")
-        item["final_assistant_text"] = str(final_message.get("content") or "")
-        item["tool_count"] = int(item.get("tool_count") or 0) + count_tool_parts(messages)
-        messages_abort = contains_abort(messages)
-        item["abort_seen"] = bool(item.get("abort_seen")) or messages_abort
-        item["abort_observed"] = bool(item.get("abort_observed")) or messages_abort
-        item["has_followup_required_message"] = any(
-            isinstance(message, dict) and str(message.get("role") or "").lower() == "assistant" and message_expects_followup(message)
-            for message in messages
-        )
+        keys_for_session = [
+            key
+            for key, record in turn_records.items()
+            if str(record.get("native_session_id") or "").strip() == session_id
+        ]
+        if not keys_for_session:
+            keys_for_session = [f"session:{session_id}"]
+        for key in keys_for_session:
+            expected_message_id = str(turn_records.get(key, {}).get("native_assistant_message_id") or "").strip()
+            item = result.setdefault(
+                key,
+                {
+                    "native_session_id": session_id,
+                    "native_assistant_message_id": expected_message_id,
+                    "tool_count": 0,
+                    "abort_seen": False,
+                    "abort_observed": False,
+                    "abort_inferred": False,
+                    "session_idle_seen": False,
+                    "event_count": 0,
+                },
+            )
+            final_message = assistant_message_by_id(messages, expected_message_id) if expected_message_id else final_assistant_message(messages)
+            current_messages = messages_for_assistant(messages, expected_message_id) if expected_message_id else messages
+            item["message_count"] = len(current_messages)
+            item["final_assistant_message_id"] = str(final_message.get("id") or "")
+            item["final_assistant_text"] = str(final_message.get("content") or "")
+            item["tool_count"] = int(item.get("tool_count") or 0) + count_tool_parts(current_messages)
+            messages_abort = contains_abort(current_messages)
+            item["abort_seen"] = bool(item.get("abort_seen")) or messages_abort
+            item["abort_observed"] = bool(item.get("abort_observed")) or messages_abort
+            item["has_followup_required_message"] = any(
+                isinstance(message, dict) and str(message.get("role") or "").lower() == "assistant" and message_expects_followup(message)
+                for message in current_messages
+            )
     return result
+
+
+def assistant_message_by_id(messages: list[Any], message_id: str) -> dict[str, Any]:
+    target = str(message_id or "").strip()
+    if not target:
+        return {}
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if str(message.get("id") or "").strip() == target and str(message.get("role") or "").lower() == "assistant":
+            return message
+    return {}
+
+
+def messages_for_assistant(messages: list[Any], assistant_message_id: str) -> list[Any]:
+    target = str(assistant_message_id or "").strip()
+    if not target:
+        return messages
+    selected: list[Any] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if str(message.get("id") or "").strip() == target:
+            selected.append(message)
+            continue
+        parts = message.get("parts") if isinstance(message.get("parts"), list) else []
+        if any(isinstance(part, dict) and str(part.get("messageID") or part.get("message_id") or part.get("messageId") or "").strip() == target for part in parts):
+            selected.append(message)
+    return selected
 
 
 def final_assistant_message(messages: list[Any]) -> dict[str, Any]:
@@ -1358,19 +1524,41 @@ def count_tool_parts(messages: list[Any]) -> int:
     return count
 
 
-def opencode_events_after_web_done(
-    session_id: str,
+def opencode_events_after_web_done_for_turn(
+    turn_key: str,
     stream_done: dict[str, Any],
+    stream_windows: dict[str, dict[str, int]],
     opencode_records: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     done_ts = int(stream_done.get("ts_mono_ms") or 0)
     if not done_ts:
         return []
+    session_id = str(stream_done.get("native_session_id") or "").strip()
+    if not session_id:
+        return []
+    native_message_id = str(stream_done.get("native_assistant_message_id") or "").strip()
+    next_start_ts = 0
+    current_window = stream_windows.get(turn_key, {})
+    current_start = int(current_window.get("start") or 0)
+    for other_key, window in stream_windows.items():
+        if other_key == turn_key:
+            continue
+        start_ts = int(window.get("start") or 0)
+        if start_ts > done_ts and (not next_start_ts or start_ts < next_start_ts):
+            next_start_ts = start_ts
     later: list[dict[str, Any]] = []
     for record in opencode_records:
         if str(record.get("native_session_id") or "").strip() != session_id:
             continue
-        if int(record.get("ts_mono_ms") or 0) <= done_ts:
+        record_ts = int(record.get("ts_mono_ms") or 0)
+        if record_ts <= done_ts:
+            continue
+        if next_start_ts and record_ts >= next_start_ts:
+            continue
+        if current_start and record_ts < current_start:
+            continue
+        record_message_id = str(record.get("opencode_message_id") or "").strip()
+        if native_message_id and record_message_id and record_message_id != native_message_id:
             continue
         event_type = str(record.get("event_type") or "")
         role = str(record.get("role") or "").lower()
@@ -1389,7 +1577,7 @@ def opencode_events_after_web_done(
 
 def compare_session_id_consistency(
     session_records: list[dict[str, Any]],
-    latest_web_by_session: dict[str, dict[str, Any]],
+    latest_web_by_turn: dict[str, dict[str, Any]],
 ) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
     if not session_records:
@@ -1399,7 +1587,11 @@ def compare_session_id_consistency(
         alias = str(record.get("alias") or "").strip()
         if alias:
             latest_by_alias[alias] = record
-    history_session_ids = set(latest_web_by_session)
+    history_session_ids = {
+        str(item.get("native_session_id") or "").strip()
+        for item in latest_web_by_turn.values()
+        if str(item.get("native_session_id") or "").strip()
+    }
     for alias, record in latest_by_alias.items():
         session_id = str(record.get("native_session_id") or "").strip()
         if session_id and history_session_ids and session_id not in history_session_ids:
@@ -1413,6 +1605,34 @@ def compare_session_id_consistency(
                     history_native_session_ids=sorted(history_session_ids),
                 )
             )
+    return issues
+
+
+def compare_conversation_session_consistency(history_records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_conversation: dict[str, set[str]] = {}
+    for record in history_records:
+        items = record.get("items") if isinstance(record.get("items"), list) else []
+        for item in items:
+            if not isinstance(item, dict) or str(item.get("role") or "").strip().lower() != "assistant":
+                continue
+            summary = summarize_web_message(item)
+            conversation_id = str(summary.get("conversation_id") or "").strip()
+            session_id = str(summary.get("native_session_id") or "").strip()
+            if conversation_id and session_id:
+                by_conversation.setdefault(conversation_id, set()).add(session_id)
+    issues: list[dict[str, Any]] = []
+    for conversation_id, session_ids in sorted(by_conversation.items()):
+        if len(session_ids) <= 1:
+            continue
+        issues.append(
+            issue(
+                "error",
+                "conversation_session_changed",
+                "同 conversation 出现多个 native_session_id",
+                conversation_id=conversation_id,
+                native_session_ids=sorted(session_ids),
+            )
+        )
     return issues
 
 
@@ -1432,6 +1652,7 @@ def render_comparison_markdown(report: dict[str, Any]) -> str:
         "",
         f"- run_id: `{report.get('run_id') or ''}`",
         f"- record_dir: `{report.get('record_dir') or ''}`",
+        f"- turns_compared: {summary.get('turns_compared', 0)}",
         f"- sessions_compared: {summary.get('sessions_compared', 0)}",
         f"- issue_count: {summary.get('issue_count', 0)}",
         "",
@@ -1446,6 +1667,8 @@ def render_comparison_markdown(report: dict[str, Any]) -> str:
             session_id = evidence.get("session_id") or evidence.get("session_native_session_id") or ""
             lines.append("")
             lines.append(f"- **{item.get('severity')} / {item.get('code')}**: {item.get('message')}")
+            if evidence.get("turn_id"):
+                lines.append(f"  - turn_id: `{evidence.get('turn_id')}`")
             if session_id:
                 lines.append(f"  - session: `{session_id}`")
             if evidence.get("web_message_id"):
@@ -1459,7 +1682,8 @@ def render_comparison_markdown(report: dict[str, Any]) -> str:
         if not isinstance(check, dict):
             continue
         lines.append(
-            "- session `{}`: web_state={}, web_trace={}, opencode_tools={}, abort={}, idle={}, web_eq_opencode={}, stream_eq_history={}".format(
+            "- turn `{}` session `{}`: web_state={}, web_trace={}, opencode_tools={}, abort={}, idle={}, web_eq_opencode={}, stream_eq_history={}".format(
+                check.get("turn_id") or check.get("turn_key", ""),
                 check.get("session_id", ""),
                 check.get("web_completion_state", ""),
                 check.get("web_trace_count", 0),

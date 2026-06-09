@@ -6,8 +6,9 @@
 
 - 多 Bot 编排：主 Bot + 托管 Bot 共同运行，每个 Bot 绑定 CLI、工作目录、运行模式、CLI 参数和独立会话。
 - 集群协作：CLI Bot 支持子 agents、`@agent_id` 路由、集群模板、JSON bundle、MCP 连接和模型档位，适合并行分派审查、实现、验证等任务。
+- 原生 agent：Chat 支持普通 CLI 和原生 agent 执行模式，保留原生会话复用、上下文用量、工具调用、权限请求和过程详情。
 - Assistant Ops：提供 proposal 审批、patch 生成 / dry-run / apply、memory、diagnostics、audit、Automation 队列、cron 和 runs，承载长期维护流程。
-- 项目工作台：Chat、Files、Git、Terminal、Debug 组成一体化开发界面，覆盖对话执行、文件编辑、版本控制、终端和系统脚本。
+- 项目工作台：Chat、Files、Git、Terminal、Debug 组成一体化开发界面，覆盖对话执行、文件编辑、版本控制、终端和系统脚本；Chat 过程详情刷新前后保持一致。
 - 插件运行时：基于 `plugin.json` 扩展文件视图、插件配置和进程运行能力，支持 session 型重型视图，内置 Vivado waveform 示例。
 - 管理与交付：Admin Center 覆盖用户权限、邀请码、公告发布、更新检查、Release 下载和离线包管理；Cloudflare quick tunnel 支持移动端远程访问。
 
@@ -263,7 +264,7 @@ WEB_API_TOKEN=change-this-password
 
 ## 工作界面
 
-- `cli` Bot：把 Web 消息转发到本地 `codex` / `claude` / `kimi`，保留会话、trace、CLI 参数和子 agent 作用域。
+- `cli` Bot：把 Web 消息转发到本地 `codex` / `claude` / `kimi`，支持普通 CLI 和原生 agent 执行模式，保留会话、trace、上下文用量、CLI 参数和子 agent 作用域。
 - `assistant` Bot：走宿主管理流程，在工作目录下维护 `.assistant/`，用于长期记忆、任务编排和自动化维护。
 - Desktop Workbench：面向重复开发操作，集中承载文件树、编辑器、Git、终端、聊天和插件视图。
 - Admin Center：面向运维管理，集中承载账号权限、邀请、公告和更新。
@@ -296,5 +297,7 @@ cd front && npm run build
 ```bash
 python -m pytest tests/test_web_api.py -q
 python -m pytest tests/test_assistant.py -q
+python -m pytest tests/test_native_agent.py tests/test_native_agent_context_usage.py tests/test_sessions.py -q
 cd front && npm test -- --run src/test/chat-screen.test.tsx src/test/desktop-bot-manager-screen.test.tsx
+cd front && npm test -- --run src/test/real-client.test.ts src/test/ag-ui-stream-adapter.test.ts src/test/chat-screen.test.tsx
 ```

@@ -152,27 +152,33 @@ class NativeAgentAggregator:
         self.assistant_completed = False
         self.has_followup_activity = False
         self.completed_message_ids: set[str] = set()
+        self.reconciled_trace: list[dict[str, Any]] = []
 
     def text(self) -> str:
         if self.text_parts:
             return "".join(self.text_parts[key] for key in self._ordered_part_ids(self.text_parts))
         return self.final_text
 
+    def pop_reconciled_trace(self) -> list[dict[str, Any]]:
+        trace = list(self.reconciled_trace)
+        self.reconciled_trace.clear()
+        return trace
+
     def apply(self, event: NativeAgentEvent) -> NativeAgentAggregationResult:
-        result = NativeAgentAggregationResult()
         event_type = event.type
         payload = event.payload
         if event_type == "message.updated":
-            return self._message_updated(payload)
-        if event_type == "message.part.updated":
-            return self._part_updated(payload)
-        if event_type == "message.part.delta":
-            return self._part_delta(payload)
-        if event_type == "message.part.removed":
-            return self._part_removed(payload)
-        if event_type in {"permission.updated", "permission.replied"}:
-            return self._permission_updated(event_type, payload)
-        if event_type in {"session.status", "session.idle"}:
+            result = self._message_updated(payload)
+        elif event_type == "message.part.updated":
+            result = self._part_updated(payload)
+        elif event_type == "message.part.delta":
+            result = self._part_delta(payload)
+        elif event_type == "message.part.removed":
+            result = self._part_removed(payload)
+        elif event_type in {"permission.updated", "permission.replied"}:
+            result = self._permission_updated(event_type, payload)
+        elif event_type in {"session.status", "session.idle"}:
+            result = NativeAgentAggregationResult()
             result.status = event.status or _value_text(payload.get("status") or payload.get("state") or event_type)
             has_non_followup_text = bool(
                 self.assistant_message_id
@@ -189,19 +195,22 @@ class NativeAgentAggregator:
                 has_current_turn_activity
                 and (not self.pending_followup or self.assistant_completed or has_non_followup_text)
             )
-            return result
-        if event_type == "session.error":
+        elif event_type == "session.error":
+            result = NativeAgentAggregationResult()
             result.error = _value_text(payload.get("error") or payload.get("message") or payload)
-            return result
-        if event_type in {"session.retry", "message.retry"}:
+        elif event_type in {"session.retry", "message.retry"}:
+            result = NativeAgentAggregationResult()
             result.trace.append(self._trace("retry", "原生 agent 正在重试", payload))
-            return result
-        if event_type in NOISE_EVENT_TYPES:
-            return result
-        if event_type:
+        elif event_type in NOISE_EVENT_TYPES:
+            result = NativeAgentAggregationResult()
+        else:
+            result = NativeAgentAggregationResult()
             trace = self._trace_from_payload(event_type, payload)
             if trace is not None:
                 result.trace.append(trace)
+        failure = _explicit_failure_message(event_type, payload)
+        if failure and not result.error:
+            result.error = failure
         return result
 
     def _message_updated(self, payload: dict[str, Any]) -> NativeAgentAggregationResult:
@@ -499,6 +508,7 @@ class NativeAgentAggregator:
         if state in {"error", "failed", "failure", "cancelled", "canceled", "aborted", "abort"} or _value_text(part.get("error") or state_payload.get("error")):
             self.saw_tool_failure = True
             self.tool_failure_message = result_text or state or "工具执行失败"
+            result.error = self.tool_failure_message
         return result
 
     def _part_removed(self, payload: dict[str, Any]) -> NativeAgentAggregationResult:
@@ -632,6 +642,15 @@ class NativeAgentAggregator:
                 self.followup_message_ids.add(message_id)
                 self.has_followup_activity = True
                 self._discard_message_text(message_id)
+            parts = message.get("parts") if isinstance(message.get("parts"), list) else []
+            for part in parts:
+                if not isinstance(part, dict) or not _is_tool_part(part) or not _tool_part_failed(part):
+                    continue
+                effective_part = dict(part)
+                if message_id and not _message_id_from_payload(effective_part, effective_part):
+                    effective_part["messageID"] = message_id
+                result = self._tool_part_updated(effective_part)
+                self.reconciled_trace.extend(result.trace)
             text = _message_parts_text(message.get("parts")) or _value_text(message.get("text") or message.get("content"))
             if is_followup or not text or (require_completed and not completed):
                 continue
@@ -742,9 +761,66 @@ def _is_tool_part(part: dict[str, Any]) -> bool:
     return any(key in part for key in ("tool", "toolName", "callID", "toolCallId", "arguments", "raw_arguments"))
 
 
+def _tool_part_failed(part: dict[str, Any]) -> bool:
+    state_payload = part.get("state") if isinstance(part.get("state"), dict) else {}
+    state = str(
+        state_payload.get("status")
+        or part.get("state")
+        or part.get("status")
+        or ""
+    ).strip().lower()
+    return state in {"error", "failed", "failure", "cancelled", "canceled", "aborted", "abort"} or bool(
+        _value_text(part.get("error") or state_payload.get("error"))
+    )
+
+
 def _is_noise_part_kind(kind: str) -> bool:
     normalized = str(kind or "").strip().lower()
     return normalized in {"step-start", "step-finish"} or normalized.startswith("step-")
+
+
+def _explicit_failure_message(event_type: str, payload: dict[str, Any]) -> str:
+    raw_text = _json_text(payload)
+    if "MessageAbortedError" in raw_text:
+        return "MessageAbortedError"
+    if "Tool execution aborted" in raw_text:
+        return "Tool execution aborted"
+    error = _first_failure_text(payload, keys=("error", "errorMessage", "error_message"))
+    if error:
+        return error
+    state = _first_failure_text(payload, keys=("state", "status"))
+    if str(event_type or "").strip().lower() == "session.error":
+        return _value_text(payload.get("message") or payload) or "原生 agent 执行失败"
+    if state.lower() in {"error", "failed", "failure", "cancelled", "canceled", "aborted", "abort"}:
+        return state
+    return ""
+
+
+def _first_failure_text(value: Any, *, keys: tuple[str, ...]) -> str:
+    if isinstance(value, list):
+        for item in value:
+            text = _first_failure_text(item, keys=keys)
+            if text:
+                return text
+        return ""
+    if not isinstance(value, dict):
+        return ""
+    for key in keys:
+        current = value.get(key)
+        if current is None:
+            continue
+        if isinstance(current, dict):
+            text = _first_failure_text(current, keys=keys) or _value_text(current)
+        else:
+            text = _value_text(current)
+        if text:
+            return text
+    for key in ("payload", "properties", "message", "part", "state", "info", "metadata"):
+        nested = value.get(key)
+        text = _first_failure_text(nested, keys=keys)
+        if text:
+            return text
+    return ""
 
 
 def _message_expects_followup(message: dict[str, Any]) -> bool:

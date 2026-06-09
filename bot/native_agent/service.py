@@ -43,7 +43,7 @@ LIST_MESSAGES_TIMEOUT_SECONDS = 1.5
 ABORT_TIMEOUT_SECONDS = 2.0
 FINAL_CANDIDATE_GRACE_SECONDS = 2.0
 FINAL_CANDIDATE_MAX_SECONDS = 4.0
-NATIVE_AGENT_NO_PROGRESS_TIMEOUT_SECONDS = 180.0
+NATIVE_AGENT_NO_PROGRESS_TIMEOUT_SECONDS = 1000.0
 NATIVE_AGENT_NO_PROGRESS_MESSAGE = "原生 agent 长时间无输出或进展"
 
 
@@ -150,40 +150,34 @@ class NativeAgentService:
             conversation_native = {}
         conversation_session_id = str(conversation_native.get("session_id") or "").strip()
         stored_meta = conversation_native.get("meta") if isinstance(conversation_native.get("meta"), dict) else {}
-        with session._lock:
-            runtime_session_id = str(session.native_agent_session_id or "").strip()
-        candidate_session_id = conversation_session_id or runtime_session_id
-        if not candidate_session_id:
+        if not conversation_session_id:
             return await create("created")
 
         if not callable(getattr(client, "get_session", None)):
-            return await create("get_session_unavailable")
+            raise RuntimeError(_native_session_diagnostic(conversation_session_id, "get_session_unavailable"))
         try:
-            session_payload = await _get_session_with_timeout(client, candidate_session_id)
-        except Exception:
-            return await create("get_session_failed")
+            session_payload = await _get_session_with_timeout(client, conversation_session_id)
+        except Exception as exc:
+            raise RuntimeError(_native_session_diagnostic(conversation_session_id, "get_session_failed", str(exc))) from exc
 
         if not _session_payload_cwd_matches(session_payload, session.working_dir):
-            return await create("cwd_mismatch")
+            actual_cwd = _session_payload_cwd(session_payload)
+            raise RuntimeError(_native_session_diagnostic(conversation_session_id, "cwd_mismatch", f"{actual_cwd} != {session.working_dir}"))
         if _native_session_meta_mismatch(stored_meta, desired_meta):
-            return await create("config_changed")
+            raise RuntimeError(_native_session_diagnostic(conversation_session_id, "config_changed"))
         try:
-            baseline_messages = await _list_messages_with_timeout(client, candidate_session_id)
-        except Exception:
-            return await create("list_messages_failed")
-
-        reusable, reason = _native_session_reuse_health(baseline_messages, session_payload)
-        if not reusable:
-            return await create(reason)
+            baseline_messages = await _list_messages_with_timeout(client, conversation_session_id)
+        except Exception as exc:
+            raise RuntimeError(_native_session_diagnostic(conversation_session_id, "list_messages_failed", str(exc))) from exc
 
         with session._lock:
-            session.native_agent_session_id = candidate_session_id
-        history_service.store.set_conversation_native_session(conversation_id, candidate_session_id, desired_meta)
+            session.native_agent_session_id = conversation_session_id
+        history_service.store.set_conversation_native_session(conversation_id, conversation_session_id, desired_meta)
         session.persist()
         return NativeAgentSessionResolution(
-            session_id=candidate_session_id,
+            session_id=conversation_session_id,
             reused=True,
-            reason=reason,
+            reason="conversation_bound",
             baseline_messages=baseline_messages,
             session_payload=session_payload,
         )
@@ -376,6 +370,31 @@ class NativeAgentService:
                 last_progress_at = now
                 return True
 
+            def persist_reconciled_trace(reconciled: dict[str, Any]) -> list[dict[str, Any]]:
+                trace_events = reconciled.get("trace") if isinstance(reconciled.get("trace"), list) else []
+                persisted: list[dict[str, Any]] = []
+                for trace_event in trace_events:
+                    if not isinstance(trace_event, dict):
+                        continue
+                    live_trace.append(trace_event)
+                    persistence_buffer.queue_trace(trace_event)
+                    persisted.append(trace_event)
+                if persisted:
+                    persistence_buffer.maybe_flush()
+                return persisted
+
+            def apply_reconciled_text(reconciled: dict[str, Any], *, now: float) -> str:
+                nonlocal final_text
+                reconciled_text = str(reconciled.get("text") or "")
+                if not reconciled_text:
+                    return ""
+                changed = reconciled_text != final_text
+                final_text = reconciled_text
+                history_service.replace_assistant_content(turn_handle, final_text, state="streaming")
+                if changed:
+                    mark_progress(now, signature=f"reconcile:{final_text}")
+                return reconciled_text
+
             def mark_result_progress(event, result, *, now: float) -> None:
                 signature = _native_agent_progress_signature(event, result)
                 if signature is None:
@@ -394,13 +413,14 @@ class NativeAgentService:
                 if not no_progress_timed_out(now):
                     return False
                 reconciled = await reconcile_turn(now=now, force=True)
-                reconciled_text = str(reconciled.get("text") or "")
-                if reconciled_text:
-                    changed = reconciled_text != final_text
-                    final_text = reconciled_text
-                    history_service.replace_assistant_content(turn_handle, final_text, state="streaming")
-                    if changed:
-                        mark_progress(now, signature=f"reconcile:{final_text}")
+                persist_reconciled_trace(reconciled)
+                reconciled_text = apply_reconciled_text(reconciled, now=now)
+                if aggregator.saw_tool_failure:
+                    completion_state = "error"
+                    returncode = 1
+                    error_message = aggregator.tool_failure_message or "原生 agent 工具执行失败"
+                    should_abort_prompt = False
+                    return True
                 if reconciled.get("done"):
                     return True
                 if reconciled_text and not no_progress_timed_out(now):
@@ -418,6 +438,8 @@ class NativeAgentService:
                 "execution_mode": EXECUTION_MODE_NATIVE_AGENT,
                 "native_provider": NATIVE_AGENT_PROVIDER,
                 "native_session_id": native_session_id,
+                "turn_id": turn_handle.turn_id,
+                "assistant_message_id": turn_handle.assistant_message_id,
                 "native_session_reused": resolution.reused,
                 "native_session_reason": resolution.reason,
                 "working_dir": session.working_dir,
@@ -472,6 +494,7 @@ class NativeAgentService:
                     final_candidate = await reconcile_final_candidate(now=now)
                     if final_candidate.get("done"):
                         final_text = str(final_candidate.get("text") or "") or aggregator.text()
+                        persist_reconciled_trace(final_candidate)
                         if final_text:
                             history_service.replace_assistant_content(turn_handle, final_text, state="streaming")
                         completed_without_idle = True
@@ -484,10 +507,14 @@ class NativeAgentService:
                     ):
                         continue
                     reconciled = await reconcile_turn(now=now, force=True)
-                    reconciled_text = str(reconciled.get("text") or "")
-                    if reconciled_text:
-                        final_text = reconciled_text
-                        history_service.replace_assistant_content(turn_handle, final_text, state="streaming")
+                    persist_reconciled_trace(reconciled)
+                    reconciled_text = apply_reconciled_text(reconciled, now=now)
+                    if aggregator.saw_tool_failure:
+                        completion_state = "error"
+                        returncode = 1
+                        error_message = aggregator.tool_failure_message or "原生 agent 工具执行失败"
+                        should_abort_prompt = False
+                        break
                     if reconciled.get("done"):
                         if _defer_reconciled_done(
                             aggregator,
@@ -514,6 +541,7 @@ class NativeAgentService:
                     final_candidate = await reconcile_final_candidate(now=now)
                     if final_candidate.get("done"):
                         final_text = str(final_candidate.get("text") or "") or aggregator.text()
+                        persist_reconciled_trace(final_candidate)
                         if final_text:
                             history_service.replace_assistant_content(turn_handle, final_text, state="streaming")
                         completed_without_idle = True
@@ -526,10 +554,14 @@ class NativeAgentService:
                     ):
                         continue
                     reconciled = await reconcile_turn(now=now)
-                    reconciled_text = str(reconciled.get("text") or "")
-                    if reconciled_text:
-                        final_text = reconciled_text
-                        history_service.replace_assistant_content(turn_handle, final_text, state="streaming")
+                    persist_reconciled_trace(reconciled)
+                    reconciled_text = apply_reconciled_text(reconciled, now=now)
+                    if aggregator.saw_tool_failure:
+                        completion_state = "error"
+                        returncode = 1
+                        error_message = aggregator.tool_failure_message or "原生 agent 工具执行失败"
+                        should_abort_prompt = False
+                        break
                     if reconciled.get("done"):
                         if _defer_reconciled_done(
                             aggregator,
@@ -556,7 +588,9 @@ class NativeAgentService:
                     yield {
                         "type": "meta",
                         "native_session_id": native_session_id,
-                        "assistant_message_id": result.assistant_message_id,
+                        "turn_id": turn_handle.turn_id,
+                        "assistant_message_id": turn_handle.assistant_message_id,
+                        "native_assistant_message_id": result.assistant_message_id,
                     }
                 if result.delta:
                     final_text = aggregator.text()
@@ -585,10 +619,15 @@ class NativeAgentService:
                             "preview_text": result.status[-800:],
                         }
                 if result.error:
+                    reconciled = await reconcile_turn(now=loop.time(), force=True)
+                    persisted_trace = persist_reconciled_trace(reconciled)
+                    apply_reconciled_text(reconciled, now=loop.time())
+                    for trace_event in persisted_trace:
+                        yield {"type": "trace", "event": trace_event}
                     error_message = result.error
                     completion_state = "error"
                     returncode = 1
-                    should_abort_prompt = True
+                    should_abort_prompt = False
                     if wants_ag_ui:
                         text_end = build_text_end_event(state=ag_ui_state)
                         if text_end is not None:
@@ -613,6 +652,7 @@ class NativeAgentService:
                 final_candidate = await reconcile_final_candidate(now=loop.time())
                 if final_candidate.get("done"):
                     final_text = str(final_candidate.get("text") or "") or aggregator.text()
+                    persist_reconciled_trace(final_candidate)
                     if final_text:
                         history_service.replace_assistant_content(turn_handle, final_text, state="streaming")
                     completed_without_idle = True
@@ -637,6 +677,7 @@ class NativeAgentService:
                 try:
                     messages = await _list_messages_with_timeout(client, native_session_id)
                     reconciled = aggregator.reconcile_messages(turn_state.current_turn_messages(messages))
+                    persist_reconciled_trace({"trace": aggregator.pop_reconciled_trace()})
                     if reconciled:
                         final_text = reconciled
                 except Exception:
@@ -702,6 +743,10 @@ class NativeAgentService:
             elapsed_seconds = int(loop.time() - started_at)
             yield {
                 "type": "done",
+                "native_session_id": native_session_id,
+                "turn_id": turn_handle.turn_id,
+                "assistant_message_id": turn_handle.assistant_message_id,
+                "native_assistant_message_id": aggregator.assistant_message_id,
                 "output": final_text,
                 "message": done_message,
                 "elapsed_seconds": elapsed_seconds,
@@ -872,6 +917,19 @@ def _native_session_meta_mismatch(stored_meta: dict[str, Any], desired_meta: dic
         if str(stored_meta.get(key) or "") != str(desired_value or ""):
             return True
     return False
+
+
+def _native_session_diagnostic(session_id: str, reason: str, detail: str = "") -> str:
+    messages = {
+        "get_session_unavailable": "原生 agent 客户端不支持探测已绑定 session",
+        "get_session_failed": "已绑定 opencode session 不可用",
+        "list_messages_failed": "已绑定 opencode session 消息探测失败",
+        "cwd_mismatch": "已绑定 opencode session 工作目录不匹配",
+        "config_changed": "已绑定 opencode session 配置不匹配",
+    }
+    base = messages.get(str(reason or ""), "已绑定 opencode session 探测失败")
+    suffix = f": {detail}" if str(detail or "").strip() else ""
+    return f"{base} ({session_id}){suffix}"
 
 
 def _session_payload_cwd_matches(session_payload: dict[str, Any] | None, cwd: str) -> bool:

@@ -2189,8 +2189,15 @@ async def test_native_agent_service_stream_persists_done_message(tmp_path: Path)
     ]
 
     done = next(event for event in events if event["type"] == "done")
+    meta = next(event for event in events if event["type"] == "meta")
     assert done["output"] == "回答"
     assert done["message"]["meta"]["native_source"]["provider"] == "native_agent"
+    assert meta["native_session_id"] == "sess-1"
+    assert meta["turn_id"] == done["message"]["turn_id"]
+    assert meta["assistant_message_id"] == done["message"]["id"]
+    assert done["native_session_id"] == "sess-1"
+    assert done["turn_id"] == done["message"]["turn_id"]
+    assert done["assistant_message_id"] == done["message"]["id"]
     assert session.native_agent_session_id == "sess-1"
     assert session.is_processing is False
 
@@ -3078,6 +3085,108 @@ async def test_native_agent_service_marks_tool_failure_as_error(tmp_path: Path):
     assert done["message"]["content"] == "command not found"
     assert messages[-1]["content"] == "command not found"
     assert fake_client.abort_calls == []
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_tool_abort_fails_fast_without_no_progress_timeout(tmp_path: Path):
+    class FakeClient:
+        def __init__(self) -> None:
+            self.prompt_called = False
+            self.reader_cancelled = False
+            self.abort_calls: list[str] = []
+
+        async def create_session(self, *, cwd=None):
+            return {"id": "sess-1"}
+
+        async def prompt_async(self, session_id, text, *, message_id=None, model=None, agent=None):
+            self.prompt_called = True
+            return {}
+
+        async def abort(self, session_id):
+            self.abort_calls.append(session_id)
+            return True
+
+        async def events(self, *, global_events=True, ready_event=None):
+            if ready_event is not None:
+                ready_event.set()
+            while not self.prompt_called:
+                await asyncio.sleep(0)
+            yield {
+                "directory": str(tmp_path),
+                "payload": {
+                    "type": "message.part.updated",
+                    "sessionID": "sess-1",
+                    "part": {
+                        "id": "tool-1",
+                        "type": "tool",
+                        "tool": "apply_patch",
+                        "output": "Tool execution aborted",
+                        "state": "aborted",
+                    },
+                },
+            }
+            try:
+                while True:
+                    await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                self.reader_cancelled = True
+                raise
+
+        async def list_messages(self, session_id):
+            return [
+                {
+                    "id": "assistant-1",
+                    "role": "assistant",
+                    "content": "",
+                    "parts": [
+                        {
+                            "id": "tool-1",
+                            "type": "tool",
+                            "tool": "apply_patch",
+                            "output": "Tool execution aborted",
+                            "state": "aborted",
+                        }
+                    ],
+                }
+            ]
+
+    fake_client = FakeClient()
+
+    class FakeHandle:
+        def client(self):
+            return fake_client
+
+    class FakeManager:
+        async def ensure_started(self):
+            return FakeHandle()
+
+        async def get_existing(self):
+            return FakeHandle()
+
+    service = NativeAgentService()
+    service._server_manager = FakeManager()
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    events = await asyncio.wait_for(
+        _collect_native_stream(
+            service.stream_chat(
+                profile=profile,
+                session=session,
+                user_text="改文件",
+                prompt_text="改文件",
+                history_service=history,
+            )
+        ),
+        timeout=0.5,
+    )
+
+    done = next(event for event in events if event["type"] == "done")
+    assert done["returncode"] == 1
+    assert "Tool execution aborted" in done["output"]
+    assert fake_client.abort_calls == []
+    assert fake_client.reader_cancelled is True
 
 
 @pytest.mark.asyncio
@@ -4069,7 +4178,7 @@ async def test_native_agent_service_recreates_session_when_persisted_session_end
 
 
 @pytest.mark.asyncio
-async def test_native_agent_service_uses_fresh_native_session_with_web_history(tmp_path: Path):
+async def test_native_agent_service_reuses_failed_conversation_native_session(tmp_path: Path):
     class FakeClient:
         def __init__(self) -> None:
             self.prompt_called = False
@@ -4172,17 +4281,15 @@ async def test_native_agent_service_uses_fresh_native_session_with_web_history(t
         )
     ]
 
-    assert next(event for event in first if event["type"] == "done")["output"] == "sess-new-1"
-    assert next(event for event in second if event["type"] == "done")["output"] == "sess-new-2"
-    assert fake_client.created_count == 2
-    assert fake_client.prompt_sessions == ["sess-new-1", "sess-new-2"]
+    assert next(event for event in first if event["type"] == "done")["output"] == "sess-error"
+    assert next(event for event in second if event["type"] == "done")["output"] == "sess-error"
+    assert fake_client.created_count == 0
+    assert fake_client.prompt_sessions == ["sess-error", "sess-error"]
     assert fake_client.prompt_texts[0] == "1"
     assert "失败问题" not in fake_client.prompt_texts[0]
     assert "半截错误" not in fake_client.prompt_texts[0]
-    assert "用户: 1" in fake_client.prompt_texts[1]
-    assert "助手: sess-new-1" in fake_client.prompt_texts[1]
+    assert fake_client.prompt_texts[1] == "2"
     assert "半截错误" not in fake_client.prompt_texts[1]
-    assert fake_client.prompt_texts[1].endswith("2")
 
 
 @pytest.mark.asyncio
@@ -4404,7 +4511,7 @@ async def test_native_agent_service_reused_session_waits_past_early_idle_for_cur
 
 
 @pytest.mark.asyncio
-async def test_native_agent_service_recreates_session_when_model_or_agent_changes(tmp_path: Path):
+async def test_native_agent_service_reports_bound_session_when_model_or_agent_changes(tmp_path: Path):
     class FakeClient:
         def __init__(self) -> None:
             self.prompt_called = False
@@ -4486,9 +4593,153 @@ async def test_native_agent_service_recreates_session_when_model_or_agent_change
         )
     ]
 
-    assert next(event for event in events if event["type"] == "done")["output"] == "新配置"
-    assert fake_client.created_count == 1
-    assert fake_client.prompt_payload == ("sess-new", "anthropic/new-model", "writer")
+    error = next(event for event in events if event["type"] == "error")
+    assert "配置不匹配" in error["message"]
+    assert fake_client.created_count == 0
+    assert fake_client.prompt_payload is None
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_reports_bound_session_probe_failure_without_recreate(tmp_path: Path):
+    class FakeClient:
+        def __init__(self) -> None:
+            self.created_count = 0
+            self.prompt_called = False
+
+        async def get_session(self, session_id):
+            raise NativeAgentClientError(f"missing session {session_id}")
+
+        async def create_session(self, *, cwd=None):
+            self.created_count += 1
+            return {"id": "sess-new"}
+
+        async def prompt_async(self, session_id, text, *, message_id=None, model=None, agent=None):
+            self.prompt_called = True
+            return {}
+
+        async def events(self, *, global_events=True, ready_event=None):
+            if ready_event is not None:
+                ready_event.set()
+            if False:
+                yield {}
+
+        async def list_messages(self, session_id):
+            return []
+
+    fake_client = FakeClient()
+
+    class FakeHandle:
+        def client(self):
+            return fake_client
+
+    class FakeManager:
+        async def ensure_started(self):
+            return FakeHandle()
+
+        async def get_existing(self):
+            return FakeHandle()
+
+    service = NativeAgentService()
+    service._server_manager = FakeManager()
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+    old_handle = history.start_turn(
+        profile=profile,
+        session=session,
+        user_text="旧问题",
+        native_provider="native_agent",
+    )
+    history.complete_turn(old_handle, content="旧回复", completion_state="completed", native_session_id="sess-old")
+
+    events = [
+        event async for event in service.stream_chat(
+            profile=profile,
+            session=session,
+            user_text="继续",
+            prompt_text="继续",
+            history_service=history,
+        )
+    ]
+
+    error = next(event for event in events if event["type"] == "error")
+    assert "已绑定 opencode session 不可用" in error["message"]
+    assert fake_client.created_count == 0
+    assert fake_client.prompt_called is False
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_reports_bound_session_cwd_mismatch_without_recreate(tmp_path: Path):
+    old_dir = tmp_path / "old"
+    new_dir = tmp_path / "new"
+    old_dir.mkdir()
+    new_dir.mkdir()
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.created_count = 0
+            self.prompt_called = False
+
+        async def get_session(self, session_id):
+            return {"id": session_id, "directory": str(old_dir)}
+
+        async def create_session(self, *, cwd=None):
+            self.created_count += 1
+            return {"id": "sess-new"}
+
+        async def prompt_async(self, session_id, text, *, message_id=None, model=None, agent=None):
+            self.prompt_called = True
+            return {}
+
+        async def events(self, *, global_events=True, ready_event=None):
+            if ready_event is not None:
+                ready_event.set()
+            if False:
+                yield {}
+
+        async def list_messages(self, session_id):
+            return []
+
+    fake_client = FakeClient()
+
+    class FakeHandle:
+        def client(self):
+            return fake_client
+
+    class FakeManager:
+        async def ensure_started(self):
+            return FakeHandle()
+
+        async def get_existing(self):
+            return FakeHandle()
+
+    service = NativeAgentService()
+    service._server_manager = FakeManager()
+    profile = BotProfile(alias="main", working_dir=str(new_dir))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(new_dir))
+    history = ChatHistoryService(ChatStore(new_dir))
+    old_handle = history.start_turn(
+        profile=profile,
+        session=session,
+        user_text="旧问题",
+        native_provider="native_agent",
+    )
+    history.complete_turn(old_handle, content="旧回复", completion_state="completed", native_session_id="sess-old")
+
+    events = [
+        event async for event in service.stream_chat(
+            profile=profile,
+            session=session,
+            user_text="继续",
+            prompt_text="继续",
+            history_service=history,
+        )
+    ]
+
+    error = next(event for event in events if event["type"] == "error")
+    assert "工作目录不匹配" in error["message"]
+    assert fake_client.created_count == 0
+    assert fake_client.prompt_called is False
 
 
 @pytest.mark.asyncio
@@ -4501,7 +4752,7 @@ async def test_native_agent_service_recreates_session_when_model_or_agent_change
         ({}, [{"id": "a-open", "role": "assistant", "content": "未完成"}]),
     ],
 )
-async def test_native_agent_service_recreates_unhealthy_persisted_session(
+async def test_native_agent_service_reuses_unhealthy_bound_session(
     tmp_path: Path,
     old_payload: dict[str, object],
     old_messages: list[dict[str, object]],
@@ -4531,18 +4782,24 @@ async def test_native_agent_service_recreates_unhealthy_persisted_session(
                 ready_event.set()
             while not self.prompt_called:
                 await asyncio.sleep(0)
+            session_id = self.prompt_session_id
             yield {
                 "directory": str(tmp_path),
                 "payload": {
                     "type": "message.part.updated",
-                    "sessionID": "sess-new",
-                    "part": {"id": "p-new", "type": "text", "delta": "恢复"},
+                    "sessionID": session_id,
+                    "part": {"id": "p-new", "type": "text", "delta": "恢复", "messageID": "a-new"},
                 },
             }
-            yield {"directory": str(tmp_path), "payload": {"type": "session.idle", "sessionID": "sess-new"}}
+            yield {"directory": str(tmp_path), "payload": {"type": "session.idle", "sessionID": session_id}}
 
         async def list_messages(self, session_id):
             if session_id == "sess-old":
+                if self.prompt_called:
+                    return [
+                        *old_messages,
+                        {"id": "a-new", "role": "assistant", "content": "恢复", "finish": "stop", "time": {"completed": 2}},
+                    ]
                 return old_messages
             return [{"id": "a-new", "role": "assistant", "content": "恢复", "finish": "stop", "time": {"completed": 1}}]
 
@@ -4583,12 +4840,12 @@ async def test_native_agent_service_recreates_unhealthy_persisted_session(
     ]
 
     assert next(event for event in events if event["type"] == "done")["output"] == "恢复"
-    assert fake_client.created_count == 1
-    assert fake_client.prompt_session_id == "sess-new"
+    assert fake_client.created_count == 0
+    assert fake_client.prompt_session_id == "sess-old"
 
 
 @pytest.mark.asyncio
-async def test_native_agent_service_recreates_persisted_session_that_ends_with_user_message(tmp_path: Path):
+async def test_native_agent_service_reuses_bound_session_that_ends_with_user_message(tmp_path: Path):
     class FakeClient:
         def __init__(self) -> None:
             self.prompt_called = False
@@ -4613,24 +4870,28 @@ async def test_native_agent_service_recreates_persisted_session_that_ends_with_u
                 ready_event.set()
             while not self.prompt_called:
                 await asyncio.sleep(0)
+            session_id = self.prompt_sessions[-1]
             yield {
                 "directory": str(tmp_path),
                 "payload": {
                     "type": "message.part.updated",
-                    "sessionID": "sess-new",
+                    "sessionID": session_id,
                     "part": {
                         "id": "part-assistant",
                         "type": "text",
                         "delta": "恢复",
-                        "messageID": "msg-sess-new",
+                        "messageID": "msg-current",
                     },
                 },
             }
-            yield {"directory": str(tmp_path), "payload": {"type": "session.idle", "sessionID": "sess-new"}}
+            yield {"directory": str(tmp_path), "payload": {"type": "session.idle", "sessionID": session_id}}
 
         async def list_messages(self, session_id):
             if session_id == "sess-old":
-                return [{"id": "user-old", "role": "user", "content": "未回答"}]
+                messages = [{"id": "user-old", "role": "user", "content": "未回答"}]
+                if self.prompt_called:
+                    messages.append({"id": "msg-current", "role": "assistant", "content": "恢复", "time": {"completed": 1}})
+                return messages
             return [{"id": "msg-sess-new", "role": "assistant", "content": "恢复", "time": {"completed": 1}}]
 
     fake_client = FakeClient()
@@ -4677,9 +4938,9 @@ async def test_native_agent_service_recreates_persisted_session_that_ends_with_u
 
     done = next(event for event in events if event["type"] == "done")
     assert done["output"] == "恢复"
-    assert session.native_agent_session_id == "sess-new"
-    assert fake_client.created_count == 1
-    assert fake_client.prompt_sessions == ["sess-new"]
+    assert session.native_agent_session_id == "sess-old"
+    assert fake_client.created_count == 0
+    assert fake_client.prompt_sessions == ["sess-old"]
 
 
 @pytest.mark.asyncio

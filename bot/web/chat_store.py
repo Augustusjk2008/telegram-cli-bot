@@ -1701,6 +1701,8 @@ class ChatStore:
             author["username"] = str(author_username)
         return {
             "id": row["id"],
+            "turn_id": turn_id,
+            "conversation_id": str(row["conversation_id"] or ""),
             "role": row["role"],
             "content": row["content"],
             "state": row["state"],
@@ -1723,6 +1725,7 @@ class ChatStore:
                 SELECT
                     m.id,
                     m.turn_id,
+                    m.conversation_id,
                     m.role,
                     m.content,
                     m.state,
@@ -1754,6 +1757,7 @@ class ChatStore:
             SELECT
                 recent.id,
                 recent.turn_id,
+                recent.conversation_id,
                 recent.role,
                 recent.content,
                 recent.state,
@@ -1772,6 +1776,7 @@ class ChatStore:
                 SELECT
                     m.id,
                     m.turn_id,
+                    m.conversation_id,
                     m.role,
                     m.content,
                     m.state,
@@ -1822,6 +1827,7 @@ class ChatStore:
                     SELECT
                         m.id,
                         m.turn_id,
+                        m.conversation_id,
                         m.role,
                         m.content,
                         m.state,

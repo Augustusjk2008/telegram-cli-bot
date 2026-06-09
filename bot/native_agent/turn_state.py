@@ -77,10 +77,10 @@ class NativeAgentTurnState:
         return age >= max_seconds or age >= grace_seconds
 
     def should_reconcile(self, *, now: float, force: bool = False, interval_seconds: float = 0.35) -> bool:
-        if self.done:
-            return False
         if force:
             return True
+        if self.done:
+            return False
         return now - self.last_reconcile_at >= interval_seconds
 
     async def maybe_reconcile(
@@ -107,6 +107,7 @@ class NativeAgentTurnState:
             return {"done": False, "text": ""}
 
         text = aggregator.reconcile_messages(current_messages, require_completed=require_completed_assistant)
+        trace = aggregator.pop_reconciled_trace()
         assistant = _last_completed_assistant_message(current_messages) if require_completed_assistant else _last_assistant_message(current_messages)
         if text:
             self.has_text = True
@@ -114,10 +115,13 @@ class NativeAgentTurnState:
             message_id = _message_id(assistant)
             if message_id:
                 self.assistant_message_id = message_id
+        result = {"done": self.done, "text": text}
+        if trace:
+            result["trace"] = trace
         if assistant and _message_completed(assistant):
             self.done = True
-            return {"done": True, "text": text}
-        return {"done": self.done, "text": text}
+            result["done"] = True
+        return result
 
     def current_turn_messages(self, messages: list[dict[str, Any]], *, through_message_id: str = "") -> list[dict[str, Any]]:
         if not messages:
