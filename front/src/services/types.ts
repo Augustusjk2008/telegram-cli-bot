@@ -767,6 +767,7 @@ export type PlanExecuteInput = {
   content: string;
   title?: string;
   agentId?: string;
+  executionMode?: ChatExecutionMode;
 };
 
 export type PlanExecuteResult = {

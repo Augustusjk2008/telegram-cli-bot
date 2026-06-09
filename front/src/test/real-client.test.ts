@@ -968,7 +968,7 @@ describe("RealWebBotClient", () => {
     }));
 
     const client = new RealWebBotClient() as RealWebBotClient & {
-      executePlan: (botAlias: string, input: { content: string; title?: string; agentId?: string }) => Promise<{
+      executePlan: (botAlias: string, input: { content: string; title?: string; agentId?: string; executionMode?: "cli" | "native_agent" }) => Promise<{
         planPath: string;
         conversation: { id: string };
         executionMessage: string;
@@ -978,6 +978,7 @@ describe("RealWebBotClient", () => {
       content: "# 方案",
       title: "Plan Mode",
       agentId: "reviewer",
+      executionMode: "native_agent",
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -988,6 +989,7 @@ describe("RealWebBotClient", () => {
           content: "# 方案",
           title: "Plan Mode",
           agent_id: "reviewer",
+          execution_mode: "native_agent",
         }),
       }),
     );

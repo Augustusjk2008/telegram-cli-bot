@@ -4194,6 +4194,30 @@ async def test_plan_execute_endpoint_returns_plan_path(
 
 
 @pytest.mark.asyncio
+async def test_plan_execute_endpoint_accepts_native_agent_execution_mode(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
+    monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
+    monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: True)
+    web_manager.main_profile.supported_execution_modes = ["cli", "native_agent"]
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            response = await client.post(
+                "/api/bots/main/plans/execute",
+                json={"content": "# 方案\n\n- step", "title": "Native Plan", "execution_mode": "native_agent"},
+            )
+            payload = await response.json()
+
+    assert response.status == 200
+    assert payload["data"]["conversation"]["execution_mode"] == "native_agent"
+
+
+@pytest.mark.asyncio
 async def test_plugin_install_force_and_uninstall_routes(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,

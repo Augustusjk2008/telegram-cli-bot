@@ -1,0 +1,462 @@
+{
+  "run_id": "agui-20260609-0832",
+  "generated_at": "2026-06-09T08:33:00.676+08:00",
+  "record_dir": ".tmp\\monitor-io-opencode\\agui",
+  "summary": {
+    "web_history_snapshots": 37,
+    "web_trace_snapshots": 12,
+    "web_session_snapshots": 37,
+    "web_stream_events": 88,
+    "opencode_events": 189,
+    "opencode_sessions": 9,
+    "sessions_compared": 9,
+    "issue_count": 10
+  },
+  "issues": [
+    {
+      "severity": "warning",
+      "code": "completed_without_captured_idle",
+      "message": "Web completed，但记录中未见同 session 的 opencode idle",
+      "evidence": {
+        "session_id": "ses_156346b76ffetpP0jdJfKILDUj",
+        "web_message_id": "msg_67e585898fc54c9688da8b995316f678"
+      }
+    },
+    {
+      "severity": "error",
+      "code": "abort_completed",
+      "message": "opencode 见到 abort，但 Web history 标 completed",
+      "evidence": {
+        "session_id": "ses_15634bea4ffe1bd2rttyCvalsJ",
+        "web_message_id": "msg_8f9e0c44841c45f0b47657e4f2bec14e"
+      }
+    },
+    {
+      "severity": "warning",
+      "code": "completed_without_captured_idle",
+      "message": "Web completed，但记录中未见同 session 的 opencode idle",
+      "evidence": {
+        "session_id": "ses_15635e8a0ffeYVpCavqPl0bvso",
+        "web_message_id": "msg_794a4e6c1e3145da94e977c39a948b19"
+      }
+    },
+    {
+      "severity": "warning",
+      "code": "completed_without_captured_idle",
+      "message": "Web completed，但记录中未见同 session 的 opencode idle",
+      "evidence": {
+        "session_id": "ses_156363a15ffegcZr0TGUXbbvcT",
+        "web_message_id": "msg_592f7d3bbf0440bf91afda6f265cb1ad"
+      }
+    },
+    {
+      "severity": "warning",
+      "code": "completed_without_captured_idle",
+      "message": "Web completed，但记录中未见同 session 的 opencode idle",
+      "evidence": {
+        "session_id": "ses_15636b6a0ffecTTtw3nWmjXY63",
+        "web_message_id": "msg_8dedadac73d94852b86c805b4840945b"
+      }
+    },
+    {
+      "severity": "warning",
+      "code": "completed_without_captured_idle",
+      "message": "Web completed，但记录中未见同 session 的 opencode idle",
+      "evidence": {
+        "session_id": "ses_1564e343dffe8eYtr08VgHO0kx",
+        "web_message_id": "msg_3e0fca3002d14d8b8a9aaed5a0718e71"
+      }
+    },
+    {
+      "severity": "warning",
+      "code": "completed_without_captured_idle",
+      "message": "Web completed，但记录中未见同 session 的 opencode idle",
+      "evidence": {
+        "session_id": "ses_1564ea8ddffe9zdm7d96RSZ3LM",
+        "web_message_id": "msg_3982d1c57ff2442fb1ea7fa60bf53651"
+      }
+    },
+    {
+      "severity": "warning",
+      "code": "completed_without_captured_idle",
+      "message": "Web completed，但记录中未见同 session 的 opencode idle",
+      "evidence": {
+        "session_id": "ses_1564f0157ffe8XyBmwW86OxT1B",
+        "web_message_id": "msg_f32dfca9b1174103b57ff2d125b0d8c3"
+      }
+    },
+    {
+      "severity": "error",
+      "code": "abort_completed",
+      "message": "opencode 见到 abort，但 Web history 标 completed",
+      "evidence": {
+        "session_id": "ses_1564fad37ffe6LOrF3mpPzWw8o",
+        "web_message_id": "msg_b5d2795bbfa444818e2b501b94f27ff3"
+      }
+    },
+    {
+      "severity": "warning",
+      "code": "completed_without_captured_idle",
+      "message": "Web completed，但记录中未见同 session 的 opencode idle",
+      "evidence": {
+        "session_id": "ses_1564fad37ffe6LOrF3mpPzWw8o",
+        "web_message_id": "msg_b5d2795bbfa444818e2b501b94f27ff3"
+      }
+    }
+  ],
+  "checks": [
+    {
+      "session_id": "ses_156346b76ffetpP0jdJfKILDUj",
+      "web_message_id": "msg_67e585898fc54c9688da8b995316f678",
+      "web_completion_state": "completed",
+      "web_trace_count": 3,
+      "web_tool_count": 3,
+      "opencode_tool_count": 4,
+      "opencode_abort_seen": false,
+      "opencode_idle_seen": false,
+      "web_equals_opencode_final": true,
+      "stream_equals_history": true
+    },
+    {
+      "session_id": "ses_15634bea4ffe1bd2rttyCvalsJ",
+      "web_message_id": "msg_8f9e0c44841c45f0b47657e4f2bec14e",
+      "web_completion_state": "completed",
+      "web_trace_count": 1,
+      "web_tool_count": 0,
+      "opencode_tool_count": 0,
+      "opencode_abort_seen": true,
+      "opencode_idle_seen": true,
+      "web_equals_opencode_final": true,
+      "stream_equals_history": true
+    },
+    {
+      "session_id": "ses_15635e8a0ffeYVpCavqPl0bvso",
+      "web_message_id": "msg_794a4e6c1e3145da94e977c39a948b19",
+      "web_completion_state": "completed",
+      "web_trace_count": 3,
+      "web_tool_count": 3,
+      "opencode_tool_count": 1,
+      "opencode_abort_seen": false,
+      "opencode_idle_seen": false,
+      "web_equals_opencode_final": true,
+      "stream_equals_history": true
+    },
+    {
+      "session_id": "ses_156363a15ffegcZr0TGUXbbvcT",
+      "web_message_id": "msg_592f7d3bbf0440bf91afda6f265cb1ad",
+      "web_completion_state": "completed",
+      "web_trace_count": 0,
+      "web_tool_count": 0,
+      "opencode_tool_count": 0,
+      "opencode_abort_seen": false,
+      "opencode_idle_seen": false,
+      "web_equals_opencode_final": true,
+      "stream_equals_history": true
+    },
+    {
+      "session_id": "ses_15636b6a0ffecTTtw3nWmjXY63",
+      "web_message_id": "msg_8dedadac73d94852b86c805b4840945b",
+      "web_completion_state": "completed",
+      "web_trace_count": 0,
+      "web_tool_count": 0,
+      "opencode_tool_count": 0,
+      "opencode_abort_seen": false,
+      "opencode_idle_seen": false,
+      "web_equals_opencode_final": true,
+      "stream_equals_history": true
+    },
+    {
+      "session_id": "ses_1564e343dffe8eYtr08VgHO0kx",
+      "web_message_id": "msg_3e0fca3002d14d8b8a9aaed5a0718e71",
+      "web_completion_state": "completed",
+      "web_trace_count": 3,
+      "web_tool_count": 3,
+      "opencode_tool_count": 1,
+      "opencode_abort_seen": false,
+      "opencode_idle_seen": false,
+      "web_equals_opencode_final": true,
+      "stream_equals_history": true
+    },
+    {
+      "session_id": "ses_1564ea8ddffe9zdm7d96RSZ3LM",
+      "web_message_id": "msg_3982d1c57ff2442fb1ea7fa60bf53651",
+      "web_completion_state": "completed",
+      "web_trace_count": 5,
+      "web_tool_count": 5,
+      "opencode_tool_count": 2,
+      "opencode_abort_seen": false,
+      "opencode_idle_seen": false,
+      "web_equals_opencode_final": true,
+      "stream_equals_history": true
+    },
+    {
+      "session_id": "ses_1564f0157ffe8XyBmwW86OxT1B",
+      "web_message_id": "msg_f32dfca9b1174103b57ff2d125b0d8c3",
+      "web_completion_state": "completed",
+      "web_trace_count": 0,
+      "web_tool_count": 0,
+      "opencode_tool_count": 0,
+      "opencode_abort_seen": false,
+      "opencode_idle_seen": false,
+      "web_equals_opencode_final": true,
+      "stream_equals_history": true
+    },
+    {
+      "session_id": "ses_1564fad37ffe6LOrF3mpPzWw8o",
+      "web_message_id": "msg_b5d2795bbfa444818e2b501b94f27ff3",
+      "web_completion_state": "completed",
+      "web_trace_count": 1,
+      "web_tool_count": 0,
+      "opencode_tool_count": 0,
+      "opencode_abort_seen": true,
+      "opencode_idle_seen": false,
+      "web_equals_opencode_final": true,
+      "stream_equals_history": true
+    }
+  ],
+  "sessions": {
+    "ses_156346b76ffetpP0jdJfKILDUj": {
+      "web": {
+        "web_message_id": "msg_67e585898fc54c9688da8b995316f678",
+        "role": "assistant",
+        "state": "done",
+        "completion_state": "completed",
+        "native_session_id": "ses_156346b76ffetpP0jdJfKILDUj",
+        "history_content": "前 5 行概括：这份文档的核心建议是重点关注总价 `1400 万到 1450 万` 的房子。",
+        "trace_count": 3,
+        "tool_count": 1,
+        "ts_mono_ms": 423502326
+      },
+      "stream_done": {},
+      "opencode": {
+        "native_session_id": "ses_156346b76ffetpP0jdJfKILDUj",
+        "tool_count": 4,
+        "abort_seen": false,
+        "abort_observed": false,
+        "abort_inferred": false,
+        "session_idle_seen": false,
+        "event_count": 91,
+        "message_count": 3,
+        "final_assistant_message_id": "msg_ea9cbc79b001mQweZNdFstSpAn",
+        "final_assistant_text": "前 5 行概括：这份文档的核心建议是重点关注总价 `1400 万到 1450 万` 的房子。",
+        "has_followup_required_message": true
+      }
+    },
+    "ses_15634bea4ffe1bd2rttyCvalsJ": {
+      "web": {
+        "web_message_id": "msg_8f9e0c44841c45f0b47657e4f2bec14e",
+        "role": "assistant",
+        "state": "done",
+        "completion_state": "completed",
+        "native_session_id": "ses_15634bea4ffe1bd2rttyCvalsJ",
+        "history_content": "MONITOR-B-AGUI-20260609",
+        "trace_count": 1,
+        "tool_count": 0,
+        "ts_mono_ms": 423502326
+      },
+      "stream_done": {},
+      "opencode": {
+        "native_session_id": "ses_15634bea4ffe1bd2rttyCvalsJ",
+        "tool_count": 0,
+        "abort_seen": true,
+        "abort_observed": true,
+        "abort_inferred": false,
+        "session_idle_seen": true,
+        "event_count": 44,
+        "message_count": 3,
+        "final_assistant_message_id": "msg_ea9cb41fd001pKrAoGWT8Km5rt",
+        "final_assistant_text": "MONITOR-B-AGUI-20260609",
+        "has_followup_required_message": false
+      }
+    },
+    "ses_15635e8a0ffeYVpCavqPl0bvso": {
+      "web": {
+        "web_message_id": "msg_794a4e6c1e3145da94e977c39a948b19",
+        "role": "assistant",
+        "state": "done",
+        "completion_state": "completed",
+        "native_session_id": "ses_15635e8a0ffeYVpCavqPl0bvso",
+        "history_content": "当前项目根目录最多 8 个条目：\n\n- `tmp/`",
+        "trace_count": 3,
+        "tool_count": 1,
+        "ts_mono_ms": 423502326
+      },
+      "stream_done": {},
+      "opencode": {
+        "native_session_id": "ses_15635e8a0ffeYVpCavqPl0bvso",
+        "tool_count": 1,
+        "abort_seen": false,
+        "abort_observed": false,
+        "abort_inferred": false,
+        "session_idle_seen": false,
+        "event_count": 0,
+        "message_count": 3,
+        "final_assistant_message_id": "msg_ea9ca3bc70013KWrL1zMaiFy7F",
+        "final_assistant_text": "当前项目根目录最多 8 个条目：\n\n- `tmp/`",
+        "has_followup_required_message": true
+      }
+    },
+    "ses_156363a15ffegcZr0TGUXbbvcT": {
+      "web": {
+        "web_message_id": "msg_592f7d3bbf0440bf91afda6f265cb1ad",
+        "role": "assistant",
+        "state": "done",
+        "completion_state": "completed",
+        "native_session_id": "ses_156363a15ffegcZr0TGUXbbvcT",
+        "history_content": "纯文本-20260609",
+        "trace_count": 0,
+        "tool_count": 0,
+        "ts_mono_ms": 423502326
+      },
+      "stream_done": {},
+      "opencode": {
+        "native_session_id": "ses_156363a15ffegcZr0TGUXbbvcT",
+        "tool_count": 0,
+        "abort_seen": false,
+        "abort_observed": false,
+        "abort_inferred": false,
+        "session_idle_seen": false,
+        "event_count": 0,
+        "message_count": 2,
+        "final_assistant_message_id": "msg_ea9c9c66b001ssu7sWALow9dPD",
+        "final_assistant_text": "纯文本-20260609",
+        "has_followup_required_message": false
+      }
+    },
+    "ses_15636b6a0ffecTTtw3nWmjXY63": {
+      "web": {
+        "web_message_id": "msg_8dedadac73d94852b86c805b4840945b",
+        "role": "assistant",
+        "state": "done",
+        "completion_state": "completed",
+        "native_session_id": "ses_15636b6a0ffecTTtw3nWmjXY63",
+        "history_content": "MONITOR-A-纯文本-20260609",
+        "trace_count": 0,
+        "tool_count": 0,
+        "ts_mono_ms": 423502326
+      },
+      "stream_done": {},
+      "opencode": {
+        "native_session_id": "ses_15636b6a0ffecTTtw3nWmjXY63",
+        "tool_count": 0,
+        "abort_seen": false,
+        "abort_observed": false,
+        "abort_inferred": false,
+        "session_idle_seen": false,
+        "event_count": 0,
+        "message_count": 2,
+        "final_assistant_message_id": "msg_ea9c94b630010i4CfkwNF0DYeU",
+        "final_assistant_text": "MONITOR-A-纯文本-20260609",
+        "has_followup_required_message": false
+      }
+    },
+    "ses_1564e343dffe8eYtr08VgHO0kx": {
+      "web": {
+        "web_message_id": "msg_3e0fca3002d14d8b8a9aaed5a0718e71",
+        "role": "assistant",
+        "state": "done",
+        "completion_state": "completed",
+        "native_session_id": "ses_1564e343dffe8eYtr08VgHO0kx",
+        "history_content": "`tmp/月供分析.md` 主要是在做买房月供决策建议：\n\n- 核心结论：优先看 `1400 万到 1450 万` 区间。\n- 稳妥路线：控制在 `1450 万以内`，重点看 `汇峰鼎园`。\n- 品质路线：可考虑 `尚海湾豪庭`，但月供压力更高。\n- 主要依据：家庭年收入约 `85 万`，公积金月合计约 `1.85 万`，未来育儿嫂支出可能下降。\n- 风险点：如果租房支出不能提前覆盖，短期现金流压力会明显增加。",
+        "trace_count": 3,
+        "tool_count": 1,
+        "ts_mono_ms": 423502326
+      },
+      "stream_done": {},
+      "opencode": {
+        "native_session_id": "ses_1564e343dffe8eYtr08VgHO0kx",
+        "tool_count": 1,
+        "abort_seen": false,
+        "abort_observed": false,
+        "abort_inferred": false,
+        "session_idle_seen": false,
+        "event_count": 0,
+        "message_count": 3,
+        "final_assistant_message_id": "msg_ea9b1ebef001M3bKcKg9AC0z5T",
+        "final_assistant_text": "`tmp/月供分析.md` 主要是在做买房月供决策建议：\n\n- 核心结论：优先看 `1400 万到 1450 万` 区间。\n- 稳妥路线：控制在 `1450 万以内`，重点看 `汇峰鼎园`。\n- 品质路线：可考虑 `尚海湾豪庭`，但月供压力更高。\n- 主要依据：家庭年收入约 `85 万`，公积金月合计约 `1.85 万`，未来育儿嫂支出可能下降。\n- 风险点：如果租房支出不能提前覆盖，短期现金流压力会明显增加。",
+        "has_followup_required_message": true
+      }
+    },
+    "ses_1564ea8ddffe9zdm7d96RSZ3LM": {
+      "web": {
+        "web_message_id": "msg_3982d1c57ff2442fb1ea7fa60bf53651",
+        "role": "assistant",
+        "state": "done",
+        "completion_state": "completed",
+        "native_session_id": "ses_1564ea8ddffe9zdm7d96RSZ3LM",
+        "history_content": "项目根目录目前只有一个目录：`tmp/`\n\n里面有 3 个文件：\n\n- `tmp/月供分析.md`\n- `tmp/月供分析.pdf`\n- `tmp/月供分析.docx`\n\n需要的话我可以继续帮你查看 `月供分析.md` 的内容。",
+        "trace_count": 5,
+        "tool_count": 2,
+        "ts_mono_ms": 423502326
+      },
+      "stream_done": {},
+      "opencode": {
+        "native_session_id": "ses_1564ea8ddffe9zdm7d96RSZ3LM",
+        "tool_count": 2,
+        "abort_seen": false,
+        "abort_observed": false,
+        "abort_inferred": false,
+        "session_idle_seen": false,
+        "event_count": 0,
+        "message_count": 3,
+        "final_assistant_message_id": "msg_ea9b18c1d001JBm7QSHtdA7Gi4",
+        "final_assistant_text": "项目根目录目前只有一个目录：`tmp/`\n\n里面有 3 个文件：\n\n- `tmp/月供分析.md`\n- `tmp/月供分析.pdf`\n- `tmp/月供分析.docx`\n\n需要的话我可以继续帮你查看 `月供分析.md` 的内容。",
+        "has_followup_required_message": true
+      }
+    },
+    "ses_1564f0157ffe8XyBmwW86OxT1B": {
+      "web": {
+        "web_message_id": "msg_f32dfca9b1174103b57ff2d125b0d8c3",
+        "role": "assistant",
+        "state": "done",
+        "completion_state": "completed",
+        "native_session_id": "ses_1564f0157ffe8XyBmwW86OxT1B",
+        "history_content": "如果算上你现在这句，一共问了 2 个问题；只算刚才那句，是 1 个：“在吗”。",
+        "trace_count": 0,
+        "tool_count": 0,
+        "ts_mono_ms": 423502326
+      },
+      "stream_done": {},
+      "opencode": {
+        "native_session_id": "ses_1564f0157ffe8XyBmwW86OxT1B",
+        "tool_count": 0,
+        "abort_seen": false,
+        "abort_observed": false,
+        "abort_inferred": false,
+        "session_idle_seen": false,
+        "event_count": 0,
+        "message_count": 2,
+        "final_assistant_message_id": "msg_ea9b0ff12001z4I2143aE2E8Ue",
+        "final_assistant_text": "如果算上你现在这句，一共问了 2 个问题；只算刚才那句，是 1 个：“在吗”。",
+        "has_followup_required_message": false
+      }
+    },
+    "ses_1564fad37ffe6LOrF3mpPzWw8o": {
+      "web": {
+        "web_message_id": "msg_b5d2795bbfa444818e2b501b94f27ff3",
+        "role": "assistant",
+        "state": "done",
+        "completion_state": "completed",
+        "native_session_id": "ses_1564fad37ffe6LOrF3mpPzWw8o",
+        "history_content": "在。需要我帮你看代码、改功能，还是排查问题？",
+        "trace_count": 1,
+        "tool_count": 0,
+        "ts_mono_ms": 423502326
+      },
+      "stream_done": {},
+      "opencode": {
+        "native_session_id": "ses_1564fad37ffe6LOrF3mpPzWw8o",
+        "tool_count": 0,
+        "abort_seen": true,
+        "abort_observed": true,
+        "abort_inferred": false,
+        "session_idle_seen": false,
+        "event_count": 0,
+        "message_count": 3,
+        "final_assistant_message_id": "msg_ea9b055c6001NdRE40mxuOHPSd",
+        "final_assistant_text": "在。需要我帮你看代码、改功能，还是排查问题？",
+        "has_followup_required_message": false
+      }
+    }
+  }
+}

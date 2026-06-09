@@ -2958,6 +2958,7 @@ class WebApiServer:
             str(body.get("content") or ""),
             title=str(body.get("title") or ""),
             agent_id=agent_id,
+            execution_mode=str(body.get("execution_mode") or body.get("executionMode") or ""),
         )
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 

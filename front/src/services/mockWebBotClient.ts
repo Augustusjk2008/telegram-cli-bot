@@ -3659,6 +3659,7 @@ export class MockWebBotClient implements WebBotClient {
   async executePlan(botAlias: string, input: PlanExecuteInput): Promise<PlanExecuteResult> {
     const conversationResult = await this.createConversation(botAlias, input.title || "执行方案", {
       agentId: input.agentId,
+      executionMode: input.executionMode,
     });
     const planPath = MOCK_PLAN_PATH;
     return {

@@ -5963,6 +5963,7 @@ def execute_plan(
     *,
     title: str = "",
     agent_id: str = "main",
+    execution_mode: str = "",
 ) -> dict[str, Any]:
     user_id = chat_session_user_id(user_id)
     plan_text = str(content or "").strip()
@@ -5970,7 +5971,14 @@ def execute_plan(
         _raise(400, "empty_plan", "方案不能为空")
     profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
     saved = save_execution_plan(session.working_dir, plan_text, title=title)
-    conversation_data = create_conversation(manager, alias, user_id, title=title or "执行方案", agent_id=agent_id)
+    conversation_data = create_conversation(
+        manager,
+        alias,
+        user_id,
+        title=title or "执行方案",
+        agent_id=agent_id,
+        execution_mode=execution_mode,
+    )
     execution_message = build_plan_execution_prompt(saved.relative_path)
     return {
         "plan_path": saved.relative_path,

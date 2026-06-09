@@ -4414,6 +4414,7 @@ export class RealWebBotClient implements WebBotClient {
           content: input.content,
           ...(input.title ? { title: input.title } : {}),
           ...(input.agentId ? { agent_id: input.agentId } : {}),
+          ...(input.executionMode ? { execution_mode: input.executionMode } : {}),
         }),
       },
     );

@@ -87,6 +87,63 @@ async def test_run_chat_passes_plan_request_to_cli(monkeypatch: pytest.MonkeyPat
     assert request.text == "先出方案"
 
 
+@pytest.mark.asyncio
+async def test_run_chat_passes_plan_prompt_to_native_agent(monkeypatch: pytest.MonkeyPatch, web_manager):
+    web_manager.main_profile.supported_execution_modes = ["cli", "native_agent"]
+    captured: dict[str, object] = {}
+
+    class FakeNativeService:
+        async def run_chat(self, **kwargs):
+            captured.update(kwargs)
+            return {"output": "ok", "message": {"id": "m1", "content": "ok"}}
+
+    monkeypatch.setattr("bot.web.api_service.get_native_agent_service", lambda: FakeNativeService())
+
+    await run_chat(web_manager, "main", 1001, "先出原生方案", task_mode="plan", execution_mode="native_agent")
+
+    assert captured["user_text"] == "先出原生方案"
+    prompt_text = str(captured["prompt_text"])
+    assert "<PLAN_DRAFT>" in prompt_text
+    assert "</PLAN_DRAFT>" in prompt_text
+    assert "先出原生方案" in prompt_text
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_passes_plan_prompt_to_native_agent(monkeypatch: pytest.MonkeyPatch, web_manager):
+    web_manager.main_profile.supported_execution_modes = ["cli", "native_agent"]
+    captured: dict[str, object] = {}
+
+    class FakeNativeService:
+        async def stream_chat(self, **kwargs):
+            captured.update(kwargs)
+            yield {
+                "type": "done",
+                "output": "ok",
+                "message": {"id": "m1", "role": "assistant", "content": "ok", "meta": {}},
+                "elapsed_seconds": 0,
+                "returncode": 0,
+            }
+
+    monkeypatch.setattr("bot.web.api_service.get_native_agent_service", lambda: FakeNativeService())
+
+    events = [
+        event async for event in stream_chat(
+            web_manager,
+            "main",
+            1001,
+            "先流式原生方案",
+            task_mode="plan",
+            execution_mode="native_agent",
+        )
+    ]
+
+    assert events[-1]["type"] == "done"
+    prompt_text = str(captured["prompt_text"])
+    assert "<PLAN_DRAFT>" in prompt_text
+    assert "</PLAN_DRAFT>" in prompt_text
+    assert "先流式原生方案" in prompt_text
+
+
 def test_execute_plan_saves_plan_and_creates_fresh_conversation(web_manager):
     data = execute_plan(
         web_manager,
@@ -100,3 +157,19 @@ def test_execute_plan_saves_plan_and_creates_fresh_conversation(web_manager):
     assert data["conversation"]["active"] is True
     assert data["execution_message"].startswith("请按方案执行")
     assert data["plan_path"] in data["execution_message"]
+
+
+def test_execute_plan_can_create_native_agent_conversation(web_manager):
+    web_manager.main_profile.supported_execution_modes = ["cli", "native_agent"]
+    web_manager.main_profile.default_execution_mode = "cli"
+
+    data = execute_plan(
+        web_manager,
+        "main",
+        1001,
+        "# 原生方案\n\n- 改代码",
+        title="Native Plan",
+        execution_mode="native_agent",
+    )
+
+    assert data["conversation"]["execution_mode"] == "native_agent"

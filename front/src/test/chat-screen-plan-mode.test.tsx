@@ -32,6 +32,34 @@ function createOverview(): BotOverview {
   };
 }
 
+function createNativeOverview(): BotOverview {
+  return {
+    ...createOverview(),
+    supportedExecutionModes: ["native_agent"],
+    defaultExecutionMode: "native_agent",
+    executionMode: "native_agent",
+    nativeAgent: {
+      provider: "openai",
+      model: "gpt-5",
+      opencodeAgent: "main",
+    },
+  };
+}
+
+function createHybridOverview(executionMode: "cli" | "native_agent" = "cli"): BotOverview {
+  return {
+    ...createOverview(),
+    supportedExecutionModes: ["cli", "native_agent"],
+    defaultExecutionMode: "cli",
+    executionMode,
+    nativeAgent: {
+      provider: "openai",
+      model: "gpt-5",
+      opencodeAgent: "main",
+    },
+  };
+}
+
 function createClusterOverview(): BotOverview {
   return createClusterOverviewFixture({
     alias: "main",
@@ -92,6 +120,102 @@ test("sends chat with plan task mode when plan mode is active", async () => {
       expect.any(Function),
       expect.any(Function),
       expect.objectContaining({ taskMode: "plan" }),
+      expect.any(Function),
+    );
+  });
+});
+
+test("sends native agent chat with plan task mode when plan mode is active", async () => {
+  const user = userEvent.setup();
+  const sendMessage = vi.fn(async () => createAssistantMessage("先确认范围", { id: "assistant-native-plan" }));
+  const client = createClient({
+    getBotOverview: async () => createNativeOverview(),
+    sendMessage,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: "计划模式" }));
+  await user.type(screen.getByPlaceholderText("输入消息"), "先出原生方案");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  await waitFor(() => {
+    expect(sendMessage).toHaveBeenCalledWith(
+      "main",
+      "先出原生方案",
+      expect.any(Function),
+      expect.any(Function),
+      expect.any(Function),
+      expect.objectContaining({ taskMode: "plan", executionMode: "native_agent" }),
+      expect.any(Function),
+    );
+  });
+});
+
+test("executes native agent plan in native conversation scope", async () => {
+  const user = userEvent.setup();
+  const sendMessage = vi.fn()
+    .mockResolvedValueOnce(createAssistantMessage(wrapPlanDraft(MOCK_PLAN_MARKDOWN), { id: "assistant-native-plan" }))
+    .mockResolvedValueOnce(createAssistantMessage("已原生执行", { id: "assistant-native-done" }));
+  const executePlan = vi.fn(async () => createMockPlanExecuteResult(
+    createConversation({ id: "conv-native-exec", title: "执行方案" }),
+    { executionMessage: buildMockPlanExecutionMessage() },
+  ));
+  const client = createClient({
+    getBotOverview: async () => createNativeOverview(),
+    sendMessage,
+    executePlan,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: "计划模式" }));
+  await user.type(screen.getByPlaceholderText("输入消息"), "先出原生方案");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+  await user.click(await screen.findByRole("button", { name: "执行方案" }));
+
+  await waitFor(() => {
+    expect(executePlan).toHaveBeenCalledWith("main", expect.objectContaining({
+      content: MOCK_PLAN_MARKDOWN,
+      executionMode: "native_agent",
+    }));
+  });
+  await waitFor(() => {
+    expect(sendMessage).toHaveBeenLastCalledWith(
+      "main",
+      expect.stringContaining("请按方案执行"),
+      expect.any(Function),
+      expect.any(Function),
+      expect.any(Function),
+      expect.objectContaining({ taskMode: "standard", executionMode: "native_agent" }),
+      expect.any(Function),
+    );
+  });
+});
+
+test("keeps plan mode when switching to native agent", async () => {
+  const user = userEvent.setup();
+  const sendMessage = vi.fn(async () => createAssistantMessage("先确认范围", { id: "assistant-hybrid-native-plan" }));
+  const client = createClient({
+    getBotOverview: async (_botAlias, options) => createHybridOverview(options?.executionMode === "native_agent" ? "native_agent" : "cli"),
+    sendMessage,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: "计划模式" }));
+  await user.click(screen.getByRole("button", { name: "原生 agent" }));
+  await user.type(screen.getByPlaceholderText("输入消息"), "切到原生后仍出方案");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  await waitFor(() => {
+    expect(sendMessage).toHaveBeenCalledWith(
+      "main",
+      "切到原生后仍出方案",
+      expect.any(Function),
+      expect.any(Function),
+      expect.any(Function),
+      expect.objectContaining({ taskMode: "plan", executionMode: "native_agent" }),
       expect.any(Function),
     );
   });

@@ -3038,10 +3038,12 @@ export function ChatScreen({
     setConversationLoading(true);
     setError("");
     try {
+      const currentExecutionMode = executionModeRef.current;
       const result = await client.executePlan(botAlias, {
         content: planContent,
         title: "执行方案",
         agentId: activeAgentIdRef.current !== "main" ? activeAgentIdRef.current : undefined,
+        executionMode: currentExecutionMode === "native_agent" ? currentExecutionMode : undefined,
       });
       stopAssistantPoll();
       stopSseRecoveryWatch();
@@ -3057,7 +3059,6 @@ export function ChatScreen({
       setConversations((prev) => [result.conversation, ...prev.map((item) => ({ ...item, active: false }))]);
       setHistoryPanelOpen(false);
       setPlanMode(false);
-      const currentExecutionMode = executionModeRef.current;
       await sendMessageInternal(result.executionMessage, {
         sendOptions: currentExecutionMode === "native_agent"
           ? { taskMode: "standard", executionMode: currentExecutionMode }
@@ -3092,7 +3093,7 @@ export function ChatScreen({
     if (planMode && isExecutingPlanPrompt) {
       setPlanMode(false);
     }
-    const shouldSendPlanMode = !nativeSend && planMode && !isExecutingPlanPrompt;
+    const shouldSendPlanMode = planMode && !isExecutingPlanPrompt;
     const sendOptions = isExecutingPlanPrompt
       ? {
         taskMode: "standard" as const,
@@ -3102,6 +3103,7 @@ export function ChatScreen({
       : shouldSendPlanMode
       ? {
         taskMode: "plan" as const,
+        ...(nativeSend ? { executionMode: currentExecutionMode } : {}),
         ...(clusterSend ? { cluster: true, mentions } : {}),
       }
       : clusterSend
@@ -3314,9 +3316,6 @@ export function ChatScreen({
     const nextAgentId = mode === "native_agent" ? "main" : previousAgentId;
     setError("");
     setExecutionMode(mode);
-    if (mode === "native_agent") {
-      setPlanMode(false);
-    }
     clearStoredQueuedMessage(botAlias, previousAgentId, storageScope);
     clearStoredQueuedMessage(botAlias, nextAgentId, storageScope);
     activeAgentIdRef.current = nextAgentId;
@@ -3571,7 +3570,7 @@ export function ChatScreen({
           clusterDisabled={loading || isStreaming || clusterSaving || readOnly}
           onToggleClusterMode={() => void handleToggleClusterMode()}
           planMode={planMode}
-          planDisabled={loading || isStreaming || chatMutationsDisabled || nativeExecutionMode}
+          planDisabled={loading || isStreaming || chatMutationsDisabled}
           onTogglePlanMode={() => setPlanMode((value) => !value)}
           embedded={embedded}
           focused={focused}
