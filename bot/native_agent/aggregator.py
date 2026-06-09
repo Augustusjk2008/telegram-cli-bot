@@ -6,7 +6,8 @@ from typing import Any
 
 from bot.native_agent.events import NativeAgentEvent
 
-PROCESS_EVENT_KINDS = {"file.edited", "file.watcher.updated"}
+PROCESS_EVENT_KINDS = {"file.edited"}
+NOISE_EVENT_TYPES = {"file.watcher.updated"}
 
 
 def _value_text(value: Any) -> str:
@@ -187,6 +188,8 @@ class NativeAgentAggregator:
             return result
         if event_type in {"session.retry", "message.retry"}:
             result.trace.append(self._trace("retry", "原生 agent 正在重试", payload))
+            return result
+        if event_type in NOISE_EVENT_TYPES:
             return result
         if event_type:
             trace = self._trace_from_payload(event_type, payload)
@@ -530,6 +533,8 @@ class NativeAgentAggregator:
 
     def _trace_from_payload(self, raw_type: str, payload: dict[str, Any]) -> dict[str, Any] | None:
         kind = str(payload.get("type") or payload.get("kind") or raw_type or "event").lower()
+        if kind in NOISE_EVENT_TYPES or str(raw_type or "").lower() in NOISE_EVENT_TYPES:
+            return None
         if kind in {"text", "message", "assistant_text", "sync", "session.updated", "session.diff", "session.next.agent.switched", "session.next.model.switched"}:
             return None
         if _is_noise_part_kind(kind) or str(raw_type or "").lower() in {"part.step-start", "part.step-finish"}:

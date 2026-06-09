@@ -40,6 +40,8 @@ LIST_MESSAGES_TIMEOUT_SECONDS = 1.5
 ABORT_TIMEOUT_SECONDS = 2.0
 FINAL_CANDIDATE_GRACE_SECONDS = 2.0
 FINAL_CANDIDATE_MAX_SECONDS = 4.0
+NATIVE_AGENT_NO_PROGRESS_TIMEOUT_SECONDS = 180.0
+NATIVE_AGENT_NO_PROGRESS_MESSAGE = "原生 agent 长时间无输出或进展"
 
 
 def normalize_execution_mode(value: Any, profile: BotProfile | None = None) -> str:
@@ -179,6 +181,8 @@ class NativeAgentService:
         error_message = ""
         last_status_signature = ""
         final_text = ""
+        last_progress_at = started_at
+        last_progress_signature = ""
         reader_task: asyncio.Task[None] | None = None
         wants_ag_ui = str(protocol or "").strip().lower() == "ag-ui"
         normalized_cluster_run_id = str(cluster_run_id or "").strip()
@@ -277,6 +281,52 @@ class NativeAgentService:
                         return {"done": True, "text": text}
                 return {"done": False, "text": ""}
 
+            def mark_progress(now: float, *, signature: str = "") -> bool:
+                nonlocal last_progress_at, last_progress_signature
+                if signature:
+                    if signature == last_progress_signature:
+                        return False
+                    last_progress_signature = signature
+                else:
+                    last_progress_signature = ""
+                last_progress_at = now
+                return True
+
+            def mark_result_progress(event, result, *, now: float) -> None:
+                signature = _native_agent_progress_signature(event, result)
+                if signature is None:
+                    return
+                mark_progress(now, signature=signature)
+
+            def no_progress_timed_out(now: float) -> bool:
+                try:
+                    timeout = float(NATIVE_AGENT_NO_PROGRESS_TIMEOUT_SECONDS)
+                except (TypeError, ValueError):
+                    timeout = 0.0
+                return timeout > 0 and now - last_progress_at >= timeout
+
+            async def stop_if_no_progress(now: float) -> bool:
+                nonlocal completion_state, error_message, final_text, returncode, should_abort_prompt
+                if not no_progress_timed_out(now):
+                    return False
+                reconciled = await reconcile_turn(now=now, force=True)
+                reconciled_text = str(reconciled.get("text") or "")
+                if reconciled_text:
+                    changed = reconciled_text != final_text
+                    final_text = reconciled_text
+                    history_service.replace_assistant_content(turn_handle, final_text, state="streaming")
+                    if changed:
+                        mark_progress(now, signature=f"reconcile:{final_text}")
+                if reconciled.get("done"):
+                    return True
+                if reconciled_text and not no_progress_timed_out(now):
+                    return False
+                completion_state = "error"
+                returncode = 1
+                error_message = NATIVE_AGENT_NO_PROGRESS_MESSAGE
+                should_abort_prompt = True
+                return True
+
             yield {
                 "type": "meta",
                 "alias": profile.alias,
@@ -325,7 +375,10 @@ class NativeAgentService:
                 agent=agent_id or None,
             )
             prompt_started = True
+            mark_progress(loop.time(), signature="prompt-started")
             while True:
+                if await stop_if_no_progress(loop.time()):
+                    break
                 try:
                     queued_event = await asyncio.wait_for(event_queue.get(), timeout=0.5)
                 except asyncio.TimeoutError:
@@ -356,6 +409,8 @@ class NativeAgentService:
                             now=loop.time(),
                         ):
                             continue
+                        break
+                    if await stop_if_no_progress(loop.time()):
                         break
                     continue
                 if queued_event is None:
@@ -400,6 +455,7 @@ class NativeAgentService:
                     continue
                 result = aggregator.apply(event)
                 turn_state.observe(event, result, now=loop.time())
+                mark_result_progress(event, result, now=loop.time())
                 if aggregator.assistant_completed and not assistant_completed_at:
                     assistant_completed_at = loop.time()
                 if wants_ag_ui and not should_filter_event(event):
@@ -712,6 +768,35 @@ def _defer_reconciled_done(
     if not aggregator.assistant_completed or not completed_at:
         return False
     return now - completed_at < window_seconds
+
+
+def _native_agent_progress_signature(event: Any, result: Any) -> str | None:
+    if result.delta or result.trace or result.error or result.done:
+        return ""
+    if result.snapshot:
+        return f"snapshot:{result.snapshot}"
+    if result.replace_text:
+        return "replace"
+    status = str(result.status or "").strip()
+    if status:
+        return f"status:{status}"
+    assistant_message_id = str(result.assistant_message_id or "").strip()
+    if assistant_message_id:
+        return f"assistant:{assistant_message_id}"
+    event_type = str(getattr(event, "type", "") or "").strip()
+    if event_type in {"permission.updated", "permission.replied"}:
+        payload = getattr(event, "payload", {}) if event is not None else {}
+        permission_id = ""
+        if isinstance(payload, dict):
+            permission = payload.get("permission") if isinstance(payload.get("permission"), dict) else payload
+            permission_id = str(
+                permission.get("id")
+                or permission.get("permissionID")
+                or permission.get("permission_id")
+                or ""
+            ).strip()
+        return f"permission:{permission_id or event_type}"
+    return None
 
 
 async def _list_messages_with_timeout(

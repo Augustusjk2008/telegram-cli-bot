@@ -441,7 +441,7 @@ def test_native_agent_aggregator_suppresses_reasoning_delta_and_step_noise():
     assert aggregator.text() == "最终回答"
 
 
-def test_native_agent_aggregator_classifies_file_change_events_as_process_events():
+def test_native_agent_aggregator_filters_watcher_noise_from_process_events():
     aggregator = NativeAgentAggregator(user_message_id="msg-user")
     edited = unwrap_event({
         "type": "file.edited",
@@ -461,7 +461,7 @@ def test_native_agent_aggregator_classifies_file_change_events_as_process_events
     watcher_result = aggregator.apply(watcher)
 
     assert edited_result.trace[0]["kind"] == "event"
-    assert watcher_result.trace[0]["kind"] == "event"
+    assert watcher_result.trace == []
 
 
 @pytest.mark.asyncio
@@ -3532,6 +3532,96 @@ async def test_native_agent_service_abort_and_list_messages_have_local_timeout(t
     assert fake_client.list_calls >= 1
     assert fake_client.abort_calls == ["sess-1"]
     assert fake_client.abort_cancelled is True
+    assert fake_client.reader_cancelled is True
+    assert session.is_processing is False
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_marks_no_progress_stream_as_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(native_service_module, "LIST_MESSAGES_TIMEOUT_SECONDS", 0.005)
+    monkeypatch.setattr(native_service_module, "ABORT_TIMEOUT_SECONDS", 0.5)
+    monkeypatch.setattr(native_service_module, "NATIVE_AGENT_NO_PROGRESS_TIMEOUT_SECONDS", 0.03, raising=False)
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.prompt_called = False
+            self.abort_calls: list[str] = []
+            self.reader_cancelled = False
+
+        async def create_session(self, *, cwd=None):
+            return {"id": "sess-1"}
+
+        async def prompt_async(self, session_id, text, *, message_id=None, model=None, agent=None):
+            self.prompt_called = True
+            return {}
+
+        async def abort(self, session_id):
+            self.abort_calls.append(session_id)
+            return True
+
+        async def events(self, *, global_events=True, ready_event=None):
+            if ready_event is not None:
+                ready_event.set()
+            while not self.prompt_called:
+                await asyncio.sleep(0)
+            try:
+                while True:
+                    await asyncio.sleep(0.002)
+                    yield {
+                        "directory": str(tmp_path),
+                        "payload": {
+                            "type": "file.watcher.updated",
+                            "sessionID": "sess-1",
+                            "path": "generated.tmp",
+                        },
+                    }
+            except asyncio.CancelledError:
+                self.reader_cancelled = True
+                raise
+
+        async def list_messages(self, session_id):
+            return []
+
+    fake_client = FakeClient()
+
+    class FakeHandle:
+        def client(self):
+            return fake_client
+
+    class FakeManager:
+        async def ensure_started(self):
+            return FakeHandle()
+
+        async def get_existing(self):
+            return FakeHandle()
+
+    service = NativeAgentService()
+    service._server_manager = FakeManager()
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    events = await asyncio.wait_for(
+        _collect_native_stream(
+            service.stream_chat(
+                profile=profile,
+                session=session,
+                user_text="生成文件",
+                prompt_text="生成文件",
+                history_service=history,
+            )
+        ),
+        timeout=1,
+    )
+
+    done = next(event for event in events if event["type"] == "done")
+    trace_events = [event for event in events if event["type"] == "trace"]
+    assert trace_events == []
+    assert done["returncode"] == 1
+    assert done["message"]["state"] == "error"
+    assert done["message"]["meta"]["completion_state"] == "error"
+    assert "长时间无输出" in done["output"]
+    assert fake_client.abort_calls == ["sess-1"]
     assert fake_client.reader_cancelled is True
     assert session.is_processing is False
 
