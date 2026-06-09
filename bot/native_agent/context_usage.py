@@ -12,7 +12,19 @@ def resolve_native_agent_context_usage(
     model_id: str,
     messages: list[dict[str, Any]],
     session_payload: dict[str, Any] | None = None,
+    run_usage: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
+    if isinstance(run_usage, dict) and run_usage:
+        usage = _build_usage(
+            session_id=session_id,
+            model_id=model_id,
+            tokens=run_usage,
+            source="native_agent_run_tokens",
+            scope="turn",
+        )
+        if usage is not None:
+            return usage
+
     session_tokens = _session_tokens_payload(session_payload)
     if session_tokens:
         usage = _build_usage(
@@ -91,6 +103,9 @@ def _build_usage(
                 "status_text": f"{used_percent}% context used · {_format_tokens(used_tokens)} / {_format_tokens(context_window)}",
             }
         )
+    cost = tokens.get("cost")
+    if cost is not None:
+        usage["cost"] = cost
     return usage
 
 

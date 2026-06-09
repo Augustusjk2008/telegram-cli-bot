@@ -8,7 +8,7 @@ import threading
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import bot.config as config
 from bot.cli import resolve_cli_executable
@@ -42,6 +42,7 @@ class NativeAgentRunRequest:
     agent_id: str = ""
     variant: str = ""
     native_agent: dict[str, Any] = field(default_factory=dict)
+    on_process: Callable[[subprocess.Popen[str]], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -110,6 +111,8 @@ class NativeAgentRunClient:
         except OSError as exc:
             raise NativeAgentRunError(f"原生 agent run 启动失败: {exc}") from exc
         self.process = process
+        if request.on_process is not None:
+            request.on_process(process)
 
         stderr_thread = threading.Thread(target=_read_stream_to_list, args=(process.stderr, stderr_lines), daemon=True)
         stderr_thread.start()

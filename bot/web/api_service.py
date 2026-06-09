@@ -2720,6 +2720,8 @@ async def reply_native_agent_permission(
             message=str(message or ""),
         )
     except RuntimeError as exc:
+        if "unsupported_in_run_mode" in str(exc):
+            _raise(409, "unsupported_in_run_mode", "opencode run 模式暂不支持交互式权限处理，请调整 OpenCode agent 权限配置")
         _raise(409, "native_agent_permission_unavailable", str(exc))
     except Exception as exc:
         _raise(500, "native_agent_permission_failed", f"原生 agent 权限处理失败: {exc}")

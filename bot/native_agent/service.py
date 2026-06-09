@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from bot.chat_identity import chat_session_user_id
+from bot import config
 from bot.models import (
     BotProfile,
     EXECUTION_MODE_CLI,
@@ -30,10 +31,17 @@ from bot.native_agent.ag_ui_mapper import (
     should_filter_event,
 )
 from bot.native_agent.aggregator import NativeAgentAggregator
-from bot.native_agent.client import NativeAgentClient, NativeAgentClientError
 from bot.native_agent.context_usage import resolve_native_agent_context_usage
 from bot.native_agent.events import is_relevant_event, unwrap_event
-from bot.native_agent.server_manager import SERVER_MANAGER, NativeAgentServerHandle
+from bot.native_agent.run_client import (
+    NativeAgentExportRequest,
+    NativeAgentRunClient,
+    NativeAgentRunError,
+    NativeAgentRunRequest,
+    is_session_unavailable_error,
+)
+from bot.native_agent.run_events import extract_session_id as extract_run_session_id
+from bot.native_agent.run_events import extract_step_finish_usage, run_json_to_events
 from bot.native_agent.turn_state import NativeAgentTurnState
 from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenceBuffer
 
@@ -78,32 +86,7 @@ def normalize_execution_mode(value: Any, profile: BotProfile | None = None) -> s
 
 class NativeAgentService:
     def __init__(self) -> None:
-        self._server_manager = SERVER_MANAGER
-
-    async def _server_for(self, profile: BotProfile) -> NativeAgentServerHandle:
-        try:
-            return await self._server_manager.ensure_started(profile)
-        except TypeError:
-            return await self._server_manager.ensure_started()
-
-    async def _client_for_active_run(self, session: UserSession) -> NativeAgentClient | None:
-        with session._lock:
-            server_key = str(getattr(session, "native_agent_server_key", "") or "").strip()
-        handle = None
-        get_existing_by_key = getattr(self._server_manager, "get_existing_by_key", None)
-        if server_key and callable(get_existing_by_key):
-            handle = await get_existing_by_key(server_key)
-        get_existing_for = getattr(self._server_manager, "get_existing_for", None)
-        if callable(get_existing_for):
-            profile = BotProfile(alias=session.bot_alias, working_dir=session.working_dir)
-            handle = handle or await get_existing_for(profile)
-        get_existing_for_alias = getattr(self._server_manager, "get_existing_for_alias", None)
-        has_alias_lookup = callable(get_existing_for_alias)
-        if has_alias_lookup:
-            handle = handle or await get_existing_for_alias(session.bot_alias)
-        if handle is None and not has_alias_lookup:
-            handle = await self._server_manager.get_existing()
-        return handle.client() if handle is not None else None
+        self._run_client_factory = NativeAgentRunClient
 
     def _prompt_options(self, profile: BotProfile) -> tuple[str, str]:
         native_agent = effective_native_agent_config(getattr(profile, "native_agent", {}))
@@ -184,15 +167,14 @@ class NativeAgentService:
 
     async def abort(self, session: UserSession) -> bool:
         with session._lock:
-            session_id = str(session.native_agent_session_id or "").strip()
-            if not session.is_processing or not session_id:
+            process = session.process
+            if not session.is_processing:
                 return False
             session.stop_requested = True
-        client = await self._client_for_active_run(session)
-        if client is None:
+        if process is None or process.poll() is not None:
             return False
         try:
-            await asyncio.wait_for(client.abort(session_id), timeout=ABORT_TIMEOUT_SECONDS)
+            process.terminate()
             return True
         except Exception:
             return False
@@ -205,14 +187,8 @@ class NativeAgentService:
         approved: bool,
         message: str = "",
     ) -> dict[str, Any]:
-        with session._lock:
-            session_id = str(session.native_agent_session_id or "").strip()
-        if not session_id:
-            raise RuntimeError("当前没有原生 agent 会话")
-        client = await self._client_for_active_run(session)
-        if client is None:
-            raise RuntimeError("原生 agent 服务未运行")
-        return await client.reply_permission(session_id, permission_id, approved=approved, message=message)
+        _ = session, permission_id, approved, message
+        raise RuntimeError("unsupported_in_run_mode: opencode run 模式暂不支持交互式权限处理，请调整 OpenCode agent 权限配置")
 
     async def stream_chat(
         self,
@@ -249,17 +225,16 @@ class NativeAgentService:
         final_text = ""
         last_progress_at = started_at
         last_progress_signature = ""
-        reader_task: asyncio.Task[None] | None = None
         wants_ag_ui = str(protocol or "").strip().lower() == "ag-ui"
         normalized_cluster_run_id = str(cluster_run_id or "").strip()
-        prompt_started = False
-        should_abort_prompt = False
-        assistant_completed_at = 0.0
-        completed_without_idle = False
-        abort_after_completion = False
-        abort_after_completion_done = False
+        native_session_id = ""
+        context_run_usage: dict[str, Any] = {}
+        raw_output_parts: list[str] = []
+        active_run_client: NativeAgentRunClient | None = None
 
         try:
+            if not config.NATIVE_AGENT_ENABLED:
+                raise RuntimeError("原生 agent 未启用")
             try:
                 history_items = history_service.list_history(profile, session, limit=12)
             except Exception:
@@ -271,43 +246,35 @@ class NativeAgentService:
                 native_provider=NATIVE_AGENT_PROVIDER,
                 actor=actor,
             )
-            server = await self._server_for(profile)
-            with session._lock:
-                session.native_agent_server_key = str(getattr(server, "key", "") or "")
-            client = server.client()
             model_id, agent_id = self._prompt_options(profile)
-            resolution = await self._ensure_session_id(
-                client,
-                session,
-                history_service,
-                turn_handle.conversation_id,
+            native_agent_config = effective_native_agent_config(getattr(profile, "native_agent", {}))
+            desired_meta = _native_session_meta(
+                cwd=session.working_dir,
                 model_id=model_id,
                 opencode_agent=agent_id,
             )
-            native_session_id = resolution.session_id
-            native_prompt_text = prompt_text if resolution.reused else _build_native_prompt_with_history(history_items, prompt_text)
-            baseline_message_count = 0
-            baseline_known = False
-            if resolution.reused:
-                baseline_message_count = len(resolution.baseline_messages)
-                baseline_known = True
-            else:
-                try:
-                    baseline_messages = await _list_messages_with_timeout(client, native_session_id)
-                    if isinstance(baseline_messages, list):
-                        baseline_message_count = len(baseline_messages)
-                        baseline_known = True
-                except Exception:
-                    baseline_message_count = 0
-                    baseline_known = False
+            try:
+                conversation_native = history_service.store.get_conversation_native_session(turn_handle.conversation_id)
+            except Exception:
+                conversation_native = {}
+            requested_session_id = str(conversation_native.get("session_id") or "").strip()
+            stored_meta = conversation_native.get("meta") if isinstance(conversation_native.get("meta"), dict) else {}
+            if requested_session_id and _native_session_meta_mismatch(stored_meta, desired_meta):
+                history_service.store.set_conversation_native_session(turn_handle.conversation_id, None, None)
+                requested_session_id = ""
+            if requested_session_id:
+                native_session_id = requested_session_id
+                with session._lock:
+                    session.native_agent_session_id = native_session_id
+                session.persist()
 
             aggregator = NativeAgentAggregator(user_message_id=f"msg_{uuid.uuid4().hex[:12]}")
             turn_state = NativeAgentTurnState(
                 native_session_id=native_session_id,
                 user_message_id=aggregator.user_message_id,
                 assistant_message_id=turn_handle.assistant_message_id,
-                baseline_message_count=baseline_message_count,
-                baseline_known=baseline_known,
+                baseline_message_count=0,
+                baseline_known=False,
             )
             persistence_buffer = StreamingPersistenceBuffer(history_service, turn_handle, loop_time=loop.time)
             ag_ui_state = AgUiTurnState(
@@ -316,48 +283,6 @@ class NativeAgentService:
                 user_message_id=turn_handle.user_message_id,
                 assistant_message_id=turn_handle.assistant_message_id,
             )
-
-            async def list_messages_with_timeout(session_id: str) -> list[dict[str, Any]]:
-                return await _list_messages_with_timeout(client, session_id)
-
-            async def reconcile_turn(*, now: float, force: bool = False) -> dict[str, Any]:
-                if not turn_state.should_reconcile(now=now, force=force):
-                    return {"done": False, "text": ""}
-                try:
-                    return await turn_state.maybe_reconcile(list_messages_with_timeout, aggregator, now=now)
-                except Exception:
-                    return {"done": False, "text": ""}
-
-            async def reconcile_final_candidate(*, now: float, force: bool = False) -> dict[str, Any]:
-                if not turn_state.final_candidate_should_reconcile(
-                    now=now,
-                    force=force,
-                    grace_seconds=FINAL_CANDIDATE_GRACE_SECONDS,
-                    max_seconds=FINAL_CANDIDATE_MAX_SECONDS,
-                ):
-                    return {"done": False, "text": ""}
-                try:
-                    reconciled = await turn_state.maybe_reconcile(
-                        list_messages_with_timeout,
-                        aggregator,
-                        now=now,
-                        require_completed_assistant=True,
-                        through_message_id=turn_state.final_candidate_message_id,
-                    )
-                except Exception:
-                    text = aggregator.text()
-                    return {"done": bool(text), "text": text}
-                text = str(reconciled.get("text") or "")
-                if reconciled.get("done"):
-                    text = text or aggregator.text()
-                    turn_state.done = True
-                    return {"done": True, "text": text}
-                if force:
-                    text = text or aggregator.text()
-                    if text:
-                        turn_state.done = True
-                        return {"done": True, "text": text}
-                return {"done": False, "text": ""}
 
             def mark_progress(now: float, *, signature: str = "") -> bool:
                 nonlocal last_progress_at, last_progress_signature
@@ -369,31 +294,6 @@ class NativeAgentService:
                     last_progress_signature = ""
                 last_progress_at = now
                 return True
-
-            def persist_reconciled_trace(reconciled: dict[str, Any]) -> list[dict[str, Any]]:
-                trace_events = reconciled.get("trace") if isinstance(reconciled.get("trace"), list) else []
-                persisted: list[dict[str, Any]] = []
-                for trace_event in trace_events:
-                    if not isinstance(trace_event, dict):
-                        continue
-                    live_trace.append(trace_event)
-                    persistence_buffer.queue_trace(trace_event)
-                    persisted.append(trace_event)
-                if persisted:
-                    persistence_buffer.maybe_flush()
-                return persisted
-
-            def apply_reconciled_text(reconciled: dict[str, Any], *, now: float) -> str:
-                nonlocal final_text
-                reconciled_text = str(reconciled.get("text") or "")
-                if not reconciled_text:
-                    return ""
-                changed = reconciled_text != final_text
-                final_text = reconciled_text
-                history_service.replace_assistant_content(turn_handle, final_text, state="streaming")
-                if changed:
-                    mark_progress(now, signature=f"reconcile:{final_text}")
-                return reconciled_text
 
             def mark_result_progress(event, result, *, now: float) -> None:
                 signature = _native_agent_progress_signature(event, result)
@@ -408,28 +308,21 @@ class NativeAgentService:
                     timeout = 0.0
                 return timeout > 0 and now - last_progress_at >= timeout
 
-            async def stop_if_no_progress(now: float) -> bool:
-                nonlocal completion_state, error_message, final_text, returncode, should_abort_prompt
-                if not no_progress_timed_out(now):
-                    return False
-                reconciled = await reconcile_turn(now=now, force=True)
-                persist_reconciled_trace(reconciled)
-                reconciled_text = apply_reconciled_text(reconciled, now=now)
-                if aggregator.saw_tool_failure:
-                    completion_state = "error"
-                    returncode = 1
-                    error_message = aggregator.tool_failure_message or "原生 agent 工具执行失败"
-                    should_abort_prompt = False
-                    return True
-                if reconciled.get("done"):
-                    return True
-                if reconciled_text and not no_progress_timed_out(now):
-                    return False
-                completion_state = "error"
-                returncode = 1
-                error_message = NATIVE_AGENT_NO_PROGRESS_MESSAGE
-                should_abort_prompt = True
-                return True
+            def attach_process(process) -> None:
+                with session._lock:
+                    session.process = process
+
+            def remember_native_session(session_id: str) -> None:
+                nonlocal native_session_id
+                resolved = str(session_id or "").strip()
+                if not resolved or resolved == native_session_id:
+                    return
+                native_session_id = resolved
+                turn_state.native_session_id = resolved
+                history_service.store.set_conversation_native_session(turn_handle.conversation_id, resolved, desired_meta)
+                with session._lock:
+                    session.native_agent_session_id = resolved
+                session.persist()
 
             yield {
                 "type": "meta",
@@ -440,8 +333,8 @@ class NativeAgentService:
                 "native_session_id": native_session_id,
                 "turn_id": turn_handle.turn_id,
                 "assistant_message_id": turn_handle.assistant_message_id,
-                "native_session_reused": resolution.reused,
-                "native_session_reason": resolution.reason,
+                "native_session_reused": bool(requested_session_id),
+                "native_session_reason": "conversation_bound" if requested_session_id else "created",
                 "working_dir": session.working_dir,
                 **({"cluster_run_id": normalized_cluster_run_id} if normalized_cluster_run_id else {}),
             }
@@ -451,243 +344,204 @@ class NativeAgentService:
                     "event": build_run_started_event(state=ag_ui_state, user_text=user_text),
                 }
 
-            event_queue: asyncio.Queue[dict[str, Any] | BaseException | None] = asyncio.Queue()
-            event_ready = asyncio.Event()
-
-            async def read_events() -> None:
-                try:
-                    try:
-                        async for raw_event in client.events(global_events=True, ready_event=event_ready):
-                            await event_queue.put(raw_event)
-                    except TypeError:
-                        event_ready.set()
-                        async for raw_event in client.events(global_events=True):
-                            await event_queue.put(raw_event)
-                    await event_queue.put(None)
-                except asyncio.CancelledError:
-                    raise
-                except BaseException as exc:
-                    event_ready.set()
-                    await event_queue.put(exc)
-
-            reader_task = asyncio.create_task(read_events())
-            try:
-                await asyncio.wait_for(event_ready.wait(), timeout=EVENT_READY_TIMEOUT_SECONDS)
-            except asyncio.TimeoutError as exc:
-                raise RuntimeError("原生 agent 事件流准备超时") from exc
-            await client.prompt_async(
-                native_session_id,
-                native_prompt_text,
-                message_id=aggregator.user_message_id,
-                model=model_id or None,
-                agent=agent_id or None,
-            )
-            prompt_started = True
-            mark_progress(loop.time(), signature="prompt-started")
-            while True:
-                if await stop_if_no_progress(loop.time()):
-                    break
-                try:
-                    queued_event = await asyncio.wait_for(event_queue.get(), timeout=0.5)
-                except asyncio.TimeoutError:
-                    now = loop.time()
-                    final_candidate = await reconcile_final_candidate(now=now)
-                    if final_candidate.get("done"):
-                        final_text = str(final_candidate.get("text") or "") or aggregator.text()
-                        persist_reconciled_trace(final_candidate)
-                        if final_text:
-                            history_service.replace_assistant_content(turn_handle, final_text, state="streaming")
-                        completed_without_idle = True
-                        abort_after_completion = True
-                        break
-                    if _defer_reconciled_done(
-                        aggregator,
-                        completed_at=assistant_completed_at,
-                        now=now,
-                    ):
-                        continue
-                    reconciled = await reconcile_turn(now=now, force=True)
-                    persist_reconciled_trace(reconciled)
-                    reconciled_text = apply_reconciled_text(reconciled, now=now)
-                    if aggregator.saw_tool_failure:
-                        completion_state = "error"
-                        returncode = 1
-                        error_message = aggregator.tool_failure_message or "原生 agent 工具执行失败"
-                        should_abort_prompt = False
-                        break
-                    if reconciled.get("done"):
-                        if _defer_reconciled_done(
-                            aggregator,
-                            completed_at=assistant_completed_at,
-                            now=loop.time(),
-                        ):
-                            continue
-                        completed_without_idle = True
-                        abort_after_completion = True
-                        break
-                    if await stop_if_no_progress(loop.time()):
-                        break
-                    continue
-                if queued_event is None:
-                    break
-                if isinstance(queued_event, BaseException):
-                    raise queued_event
-                raw_event = queued_event
-                event = unwrap_event(raw_event)
-                if event is None:
-                    continue
-                if event.transport:
-                    now = loop.time()
-                    final_candidate = await reconcile_final_candidate(now=now)
-                    if final_candidate.get("done"):
-                        final_text = str(final_candidate.get("text") or "") or aggregator.text()
-                        persist_reconciled_trace(final_candidate)
-                        if final_text:
-                            history_service.replace_assistant_content(turn_handle, final_text, state="streaming")
-                        completed_without_idle = True
-                        abort_after_completion = True
-                        break
-                    if _defer_reconciled_done(
-                        aggregator,
-                        completed_at=assistant_completed_at,
-                        now=now,
-                    ):
-                        continue
-                    reconciled = await reconcile_turn(now=now)
-                    persist_reconciled_trace(reconciled)
-                    reconciled_text = apply_reconciled_text(reconciled, now=now)
-                    if aggregator.saw_tool_failure:
-                        completion_state = "error"
-                        returncode = 1
-                        error_message = aggregator.tool_failure_message or "原生 agent 工具执行失败"
-                        should_abort_prompt = False
-                        break
-                    if reconciled.get("done"):
-                        if _defer_reconciled_done(
-                            aggregator,
-                            completed_at=assistant_completed_at,
-                            now=loop.time(),
-                        ):
-                            continue
-                        completed_without_idle = True
-                        abort_after_completion = True
-                        break
-                    continue
-                if not is_relevant_event(event, session_id=native_session_id, cwd=session.working_dir):
-                    continue
-                result = aggregator.apply(event)
-                turn_state.observe(event, result, now=loop.time())
-                mark_result_progress(event, result, now=loop.time())
-                if aggregator.assistant_completed and not assistant_completed_at:
-                    assistant_completed_at = loop.time()
-                if wants_ag_ui and not should_filter_event(event):
-                    for ag_ui_event in map_ag_ui_event(event=event, result=result, state=ag_ui_state):
-                        yield {"type": "ag_ui", "event": ag_ui_event}
-                if result.assistant_message_id:
-                    ag_ui_state.assistant_message_id = result.assistant_message_id
-                    yield {
-                        "type": "meta",
-                        "native_session_id": native_session_id,
-                        "turn_id": turn_handle.turn_id,
-                        "assistant_message_id": turn_handle.assistant_message_id,
-                        "native_assistant_message_id": result.assistant_message_id,
-                    }
-                if result.delta:
-                    final_text = aggregator.text()
-                    history_service.replace_assistant_content(turn_handle, final_text, state="streaming")
-                    yield {"type": "delta", "text": result.delta}
-                if result.snapshot or result.replace_text:
-                    final_text = result.snapshot
-                    history_service.replace_assistant_content(turn_handle, final_text, state="streaming")
-                    yield {
-                        "type": "snapshot",
-                        "text": final_text,
-                        "elapsed_seconds": int(loop.time() - started_at),
-                    }
-                for trace_event in result.trace:
-                    live_trace.append(trace_event)
-                    persistence_buffer.queue_trace(trace_event)
-                    persistence_buffer.maybe_flush()
-                    yield {"type": "trace", "event": trace_event}
-                if result.status:
-                    signature = f"{int(loop.time() - started_at)}:{result.status}"
-                    if signature != last_status_signature:
-                        last_status_signature = signature
-                        yield {
-                            "type": "status",
-                            "elapsed_seconds": int(loop.time() - started_at),
-                            "preview_text": result.status[-800:],
-                        }
-                if result.error:
-                    reconciled = await reconcile_turn(now=loop.time(), force=True)
-                    persisted_trace = persist_reconciled_trace(reconciled)
-                    apply_reconciled_text(reconciled, now=loop.time())
-                    for trace_event in persisted_trace:
-                        yield {"type": "trace", "event": trace_event}
-                    error_message = result.error
+            async def stop_if_no_progress(now: float) -> bool:
+                nonlocal completion_state, error_message, returncode
+                if not no_progress_timed_out(now):
+                    return False
+                if aggregator.saw_tool_failure:
                     completion_state = "error"
                     returncode = 1
-                    should_abort_prompt = False
-                    if wants_ag_ui:
-                        text_end = build_text_end_event(state=ag_ui_state)
-                        if text_end is not None:
-                            yield {"type": "ag_ui", "event": text_end}
-                        yield {"type": "ag_ui", "event": build_run_error_event(error_message)}
-                    break
-                with session._lock:
-                    stop_requested = bool(session.stop_requested)
-                if stop_requested:
-                    completion_state = "cancelled"
-                    should_abort_prompt = True
-                    break
-                if result.done:
-                    if event.type != "session.idle":
-                        final_candidate = await reconcile_final_candidate(now=loop.time(), force=True)
-                        final_text = str(final_candidate.get("text") or "") or aggregator.text()
-                        if final_text:
-                            history_service.replace_assistant_content(turn_handle, final_text, state="streaming")
-                        completed_without_idle = True
-                        abort_after_completion = True
-                    break
-                final_candidate = await reconcile_final_candidate(now=loop.time())
-                if final_candidate.get("done"):
-                    final_text = str(final_candidate.get("text") or "") or aggregator.text()
-                    persist_reconciled_trace(final_candidate)
-                    if final_text:
-                        history_service.replace_assistant_content(turn_handle, final_text, state="streaming")
-                    completed_without_idle = True
-                    abort_after_completion = True
-                    break
+                    error_message = aggregator.tool_failure_message or "原生 agent 工具执行失败"
+                    return True
+                completion_state = "error"
+                returncode = 1
+                error_message = NATIVE_AGENT_NO_PROGRESS_MESSAGE
+                if active_run_client is not None:
+                    active_run_client.kill()
+                return True
 
-            if prompt_started and should_abort_prompt:
-                await _abort_native_prompt_best_effort(
-                    client,
-                    native_session_id,
-                    assistant_message_id=aggregator.assistant_message_id,
+            attempt = 0
+            while True:
+                attempt += 1
+                reused = bool(requested_session_id)
+                native_prompt_text = prompt_text if reused else _build_native_prompt_with_history(history_items, prompt_text)
+                run_client = self._run_client_factory()
+                active_run_client = run_client
+                request = NativeAgentRunRequest(
+                    cwd=session.working_dir,
+                    prompt=native_prompt_text,
+                    command=config.NATIVE_AGENT_COMMAND,
+                    session_id=requested_session_id,
+                    model_id=model_id,
+                    agent_id=agent_id,
+                    variant=str(native_agent_config.get("reasoning_effort") or ""),
+                    native_agent=native_agent_config,
+                    on_process=attach_process,
                 )
-
-            reader_task.cancel()
-            try:
-                await reader_task
-            except asyncio.CancelledError:
-                pass
-
-            if not completed_without_idle:
-                messages = []
+                stream = run_client.stream(request)
+                iterator = stream.__aiter__()
+                mark_progress(loop.time(), signature="run-started")
                 try:
-                    messages = await _list_messages_with_timeout(client, native_session_id)
-                    reconciled = aggregator.reconcile_messages(turn_state.current_turn_messages(messages))
-                    persist_reconciled_trace({"trace": aggregator.pop_reconciled_trace()})
+                    while True:
+                        with session._lock:
+                            stop_requested = bool(session.stop_requested)
+                        if stop_requested:
+                            completion_state = "cancelled"
+                            run_client.kill()
+                            break
+                        if await stop_if_no_progress(loop.time()):
+                            break
+                        try:
+                            raw_event = await asyncio.wait_for(iterator.__anext__(), timeout=0.5)
+                        except asyncio.TimeoutError:
+                            continue
+                        except StopAsyncIteration:
+                            with session._lock:
+                                stopped_after_exit = bool(session.stop_requested)
+                            if stopped_after_exit:
+                                completion_state = "cancelled"
+                                run_client.kill()
+                            break
+                        except NativeAgentRunError as exc:
+                            if completion_state == "cancelled":
+                                break
+                            if requested_session_id and attempt == 1 and is_session_unavailable_error(exc):
+                                history_service.store.set_conversation_native_session(turn_handle.conversation_id, None, None)
+                                with session._lock:
+                                    session.native_agent_session_id = None
+                                session.persist()
+                                requested_session_id = ""
+                                native_session_id = ""
+                                yield {
+                                    "type": "status",
+                                    "elapsed_seconds": int(loop.time() - started_at),
+                                    "preview_text": "已绑定 opencode session 不可用，正在新建 session 重试",
+                                }
+                                break
+                            raise
+                        if str(raw_event.get("type") or "") == "raw_text":
+                            raw_text = str(raw_event.get("raw_text") or "")
+                            if raw_text:
+                                raw_output_parts.append(raw_text)
+                        discovered_session_id = extract_run_session_id(raw_event)
+                        if discovered_session_id:
+                            remember_native_session(discovered_session_id)
+                            yield {
+                                "type": "meta",
+                                "native_session_id": native_session_id,
+                                "turn_id": turn_handle.turn_id,
+                                "assistant_message_id": turn_handle.assistant_message_id,
+                            }
+                        usage = extract_step_finish_usage(raw_event)
+                        if usage:
+                            context_run_usage = usage
+                        for mapped_raw in run_json_to_events(
+                            raw_event,
+                            cwd=session.working_dir,
+                            fallback_session_id=native_session_id,
+                            assistant_message_id=aggregator.assistant_message_id or turn_handle.assistant_message_id,
+                        ):
+                            event = unwrap_event(mapped_raw)
+                            if event is None:
+                                continue
+                            if native_session_id and not is_relevant_event(event, session_id=native_session_id, cwd=session.working_dir):
+                                continue
+                            result = aggregator.apply(event)
+                            turn_state.observe(event, result, now=loop.time())
+                            mark_result_progress(event, result, now=loop.time())
+                            if wants_ag_ui and not should_filter_event(event):
+                                for ag_ui_event in map_ag_ui_event(event=event, result=result, state=ag_ui_state):
+                                    yield {"type": "ag_ui", "event": ag_ui_event}
+                            if result.assistant_message_id:
+                                ag_ui_state.assistant_message_id = result.assistant_message_id
+                                yield {
+                                    "type": "meta",
+                                    "native_session_id": native_session_id,
+                                    "turn_id": turn_handle.turn_id,
+                                    "assistant_message_id": turn_handle.assistant_message_id,
+                                    "native_assistant_message_id": result.assistant_message_id,
+                                }
+                            if result.delta:
+                                final_text = aggregator.text()
+                                history_service.replace_assistant_content(turn_handle, final_text, state="streaming")
+                                yield {"type": "delta", "text": result.delta}
+                            if result.snapshot or result.replace_text:
+                                final_text = result.snapshot
+                                history_service.replace_assistant_content(turn_handle, final_text, state="streaming")
+                                yield {
+                                    "type": "snapshot",
+                                    "text": final_text,
+                                    "elapsed_seconds": int(loop.time() - started_at),
+                                }
+                            for trace_event in result.trace:
+                                live_trace.append(trace_event)
+                                persistence_buffer.queue_trace(trace_event)
+                                persistence_buffer.maybe_flush()
+                                yield {"type": "trace", "event": trace_event}
+                            if result.status:
+                                signature = f"{int(loop.time() - started_at)}:{result.status}"
+                                if signature != last_status_signature:
+                                    last_status_signature = signature
+                                    yield {
+                                        "type": "status",
+                                        "elapsed_seconds": int(loop.time() - started_at),
+                                        "preview_text": result.status[-800:],
+                                    }
+                            if event.type == "permission.updated":
+                                error_message = "opencode run 模式暂不支持交互式权限请求，请调整 OpenCode agent 权限配置"
+                                completion_state = "error"
+                                returncode = 1
+                                if wants_ag_ui:
+                                    text_end = build_text_end_event(state=ag_ui_state)
+                                    if text_end is not None:
+                                        yield {"type": "ag_ui", "event": text_end}
+                                    yield {"type": "ag_ui", "event": build_run_error_event(error_message)}
+                                break
+                            if result.error:
+                                error_message = result.error
+                                completion_state = "error"
+                                returncode = 1
+                                if wants_ag_ui:
+                                    text_end = build_text_end_event(state=ag_ui_state)
+                                    if text_end is not None:
+                                        yield {"type": "ag_ui", "event": text_end}
+                                    yield {"type": "ag_ui", "event": build_run_error_event(error_message)}
+                                break
+                        if completion_state in {"error", "cancelled"} or turn_state.done:
+                            break
+                    if requested_session_id == "" and reused and attempt == 1 and not native_session_id:
+                        continue
+                    break
+                finally:
+                    try:
+                        await stream.aclose()
+                    except Exception:
+                        pass
+
+            messages = []
+            if native_session_id and active_run_client is not None:
+                try:
+                    messages = await active_run_client.export_session(
+                        NativeAgentExportRequest(
+                            cwd=session.working_dir,
+                            session_id=native_session_id,
+                            command=config.NATIVE_AGENT_COMMAND,
+                            native_agent=native_agent_config,
+                        )
+                    )
+                except Exception:
+                    messages = []
+            if messages:
+                try:
+                    reconciled = aggregator.reconcile_messages(messages)
+                    trace = aggregator.pop_reconciled_trace()
+                    for trace_event in trace:
+                        live_trace.append(trace_event)
+                        persistence_buffer.queue_trace(trace_event)
                     if reconciled:
                         final_text = reconciled
                 except Exception:
-                    messages = []
                     pass
-            else:
-                try:
-                    messages = await _list_messages_with_timeout(client, native_session_id)
-                except Exception:
-                    messages = []
             final_text = final_text or aggregator.text()
             if completion_state == "completed" and aggregator.saw_tool_failure:
                 completion_state = "error"
@@ -695,6 +549,12 @@ class NativeAgentService:
                 error_message = aggregator.tool_failure_message or "原生 agent 工具执行失败"
             if completion_state == "cancelled":
                 live_trace.append({"kind": "cancelled", "source": "native_agent", "summary": "用户终止输出"})
+                if active_run_client is not None:
+                    active_run_client.kill()
+            if completion_state == "completed" and not final_text and raw_output_parts:
+                completion_state = "error"
+                returncode = 1
+                error_message = f"原生 agent 返回了非 JSON 输出: {' '.join(raw_output_parts)[:2000]}"
             if not final_text and completion_state == "completed":
                 final_text = "原生 agent 未返回内容"
             if completion_state == "error" and not final_text:
@@ -704,16 +564,12 @@ class NativeAgentService:
                 if trace_event.get("kind") == "cancelled":
                     history_service.append_trace_event(turn_handle, trace_event)
             final_session_payload = None
-            if callable(getattr(client, "get_session", None)):
-                try:
-                    final_session_payload = await _get_session_with_timeout(client, native_session_id)
-                except Exception:
-                    pass
             context_usage = resolve_native_agent_context_usage(
                 session_id=native_session_id,
                 model_id=model_id,
                 messages=messages,
                 session_payload=final_session_payload,
+                run_usage=context_run_usage,
             )
             done_message = history_service.complete_turn(
                 turn_handle,
@@ -763,25 +619,11 @@ class NativeAgentService:
                     },
                 },
             }
-            if prompt_started and abort_after_completion:
-                await _abort_native_prompt_best_effort(
-                    client,
-                    native_session_id,
-                    assistant_message_id=aggregator.assistant_message_id,
-                )
-                abort_after_completion_done = True
         except asyncio.CancelledError:
             with session._lock:
                 session.stop_requested = True
-            try:
-                if "client" in locals() and "native_session_id" in locals():
-                    await _abort_native_prompt_best_effort(
-                        client,
-                        native_session_id,
-                        assistant_message_id=getattr(locals().get("aggregator", None), "assistant_message_id", ""),
-                    )
-            except Exception:
-                pass
+            if active_run_client is not None:
+                active_run_client.kill()
             raise
         except Exception as exc:
             error_message = str(exc) or "原生 agent 执行失败"
@@ -798,25 +640,6 @@ class NativeAgentService:
                 yield {"type": "ag_ui", "event": build_run_error_event(error_message)}
             yield {"type": "error", "code": "native_agent_error", "message": f"原生 agent 执行失败: {error_message}"}
         finally:
-            if (
-                prompt_started
-                and abort_after_completion
-                and not abort_after_completion_done
-                and "client" in locals()
-                and "native_session_id" in locals()
-            ):
-                await _abort_native_prompt_best_effort(
-                    client,
-                    native_session_id,
-                    assistant_message_id=getattr(locals().get("aggregator", None), "assistant_message_id", ""),
-                )
-                abort_after_completion_done = True
-            if reader_task is not None and not reader_task.done():
-                reader_task.cancel()
-                try:
-                    await reader_task
-                except asyncio.CancelledError:
-                    pass
             with session._lock:
                 session.native_agent_run_id = None
                 session.native_agent_server_key = None
