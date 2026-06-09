@@ -2,6 +2,10 @@ import { EventType, parseAgUiEvent, type AgUiEvent } from "./agUiProtocol";
 
 const AG_UI_EVENT_TYPES = new Set<string>(Object.values(EventType));
 
+type AgUiStreamAdapterOptions = {
+  bridgeLegacy?: boolean;
+};
+
 type LegacyTraceEvent = {
   id?: unknown;
   ordinal?: unknown;
@@ -85,11 +89,16 @@ function normalizeSummary(value: unknown, payload?: unknown) {
   return normalizePayloadText(payload).trim();
 }
 
-export function createAgUiStreamAdapter() {
+export function isAgUiEventType(type: unknown): type is string {
+  return typeof type === "string" && AG_UI_EVENT_TYPES.has(type);
+}
+
+export function createAgUiStreamAdapter(options: AgUiStreamAdapterOptions = {}) {
   let sequence = 0;
   let textStarted = false;
   let textEnded = false;
   let runStarted = false;
+  const bridgeLegacy = Boolean(options.bridgeLegacy);
   const threadId = `legacy-thread-${Date.now().toString(36)}`;
   const runId = `legacy-run-${Date.now().toString(36)}`;
   const messageId = `legacy-message-${Date.now().toString(36)}`;
@@ -216,7 +225,7 @@ export function createAgUiStreamAdapter() {
         return [];
       }
 
-      if (AG_UI_EVENT_TYPES.has(rawType)) {
+      if (isAgUiEventType(rawType)) {
         const parsed = parseAgUiEvent(raw);
         if (parsed) {
           runStarted = true;
@@ -233,6 +242,10 @@ export function createAgUiStreamAdapter() {
           textEnded = textStarted || textEnded;
         }
         return parsed ? [parsed] : [];
+      }
+
+      if (!bridgeLegacy) {
+        return [];
       }
 
       const legacyEvent = directRecord as LegacyStreamEvent;

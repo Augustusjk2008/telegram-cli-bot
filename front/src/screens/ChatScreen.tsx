@@ -572,6 +572,14 @@ function maxDefinedNumber(...values: Array<number | undefined>) {
   return definedValues.length > 0 ? Math.max(...definedValues) : undefined;
 }
 
+function summarizeTrace(trace?: ChatTraceEvent[]) {
+  return {
+    traceCount: trace?.length || 0,
+    toolCallCount: (trace || []).filter((item) => item.kind === "tool_call").length,
+    processCount: (trace || []).filter((item) => item.kind !== "tool_call" && item.kind !== "tool_result").length,
+  };
+}
+
 function mergeMessageMeta(base?: ChatMessageMetaInfo, incoming?: ChatMessageMetaInfo): ChatMessageMetaInfo | undefined {
   const isNativeSource = isNativeAgentMessage(incoming) || isNativeAgentMessage(base);
   const tracePresentation = incoming?.tracePresentation || base?.tracePresentation || (isNativeSource ? "native_agent_flat" : undefined);
@@ -579,27 +587,17 @@ function mergeMessageMeta(base?: ChatMessageMetaInfo, incoming?: ChatMessageMeta
     [base?.trace, incoming?.trace],
     { nativeFlat: tracePresentation === "native_agent_flat" },
   );
-  const traceCount = trace?.length;
-  const toolCallCount = trace?.filter((event) => event.kind === "tool_call").length;
-  const processCount = trace?.filter((event) => event.kind !== "tool_call" && event.kind !== "tool_result").length;
+  const traceSummary = trace ? summarizeTrace(trace) : undefined;
   const meta: ChatMessageMetaInfo = {
     completionState: incoming?.completionState || base?.completionState,
     summaryKind: incoming?.summaryKind || base?.summaryKind,
     traceVersion: incoming?.traceVersion ?? base?.traceVersion ?? (trace ? 1 : undefined),
-    traceCount: typeof traceCount === "number" ? traceCount : maxDefinedNumber(incoming?.traceCount, base?.traceCount),
-    toolCallCount: maxDefinedNumber(
-      typeof toolCallCount === "number" ? toolCallCount : undefined,
-      incoming?.toolCallCount,
-      base?.toolCallCount,
-    ),
-    processCount: maxDefinedNumber(
-      typeof processCount === "number" ? processCount : undefined,
-      incoming?.processCount,
-      base?.processCount,
-    ),
+    traceCount: maxDefinedNumber(incoming?.traceCount, base?.traceCount, traceSummary?.traceCount),
+    toolCallCount: maxDefinedNumber(incoming?.toolCallCount, base?.toolCallCount, traceSummary?.toolCallCount),
+    processCount: maxDefinedNumber(incoming?.processCount, base?.processCount, traceSummary?.processCount),
     nativeSource: incoming?.nativeSource || base?.nativeSource,
     contextUsage: incoming?.contextUsage || base?.contextUsage,
-    agUiRunState: incoming?.agUiRunState || base?.agUiRunState,
+    agUiRunState: isNativeSource ? incoming?.agUiRunState || base?.agUiRunState : undefined,
     tracePresentation,
     trace,
   };
@@ -2410,7 +2408,7 @@ export function ChatScreen({
       return;
     }
     for (const item of items) {
-      if (item.role !== "assistant" || !isNativeAgentMessage(item.meta)) {
+      if (item.role !== "assistant") {
         continue;
       }
       const expectedTraceCount = item.meta?.traceCount || 0;
@@ -2842,6 +2840,16 @@ export function ChatScreen({
             text: status.replaceText || "",
             state: "streaming",
           })));
+        } else if (typeof status.previewText === "string" && status.previewText.trim()) {
+          setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => (
+            item.text.trim()
+              ? item
+              : {
+                  ...item,
+                  text: status.previewText || "",
+                  state: "streaming",
+                }
+          )));
         }
       };
       const onTrace = (traceEvent: ChatTraceEvent) => {

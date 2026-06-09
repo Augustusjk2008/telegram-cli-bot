@@ -343,6 +343,119 @@ test("shows streaming state before assistant message completes", async () => {
   expect(await screen.findByText("稍后完成")).toBeInTheDocument();
 });
 
+test("uses cli status preview while waiting for first output chunk", async () => {
+  const user = userEvent.setup();
+  let resolveFinal!: (message: ChatMessage) => void;
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias,
+    _text,
+    _onChunk,
+    onStatus,
+  ) => {
+    onStatus?.({ previewText: "正在检查目录" });
+    return new Promise<ChatMessage>((resolve) => {
+      resolveFinal = resolve;
+    });
+  });
+  const client = createClient({ sendMessage });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+  await user.type(screen.getByPlaceholderText("输入消息"), "继续");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(await screen.findByText("正在检查目录")).toBeInTheDocument();
+  expect(screen.queryByText("正在输出...")).not.toBeInTheDocument();
+
+  await act(async () => {
+    resolveFinal({
+      id: "assistant-preview-final",
+      role: "assistant",
+      text: "最终答复",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    });
+  });
+  expect(await screen.findByText("最终答复")).toBeInTheDocument();
+});
+
+test("keeps live cli trace panel after final message", async () => {
+  const user = userEvent.setup();
+  let resolveFinal!: (message: ChatMessage) => void;
+  const getMessageTrace = vi.fn(async () => ({
+    trace: [
+      { kind: "commentary", summary: "我先检查目录。", source: "codex" },
+      {
+        kind: "tool_call",
+        summary: "Get-ChildItem",
+        toolName: "shell_command",
+        callId: "call-1",
+        payload: { arguments: "Get-ChildItem" },
+      },
+      {
+        kind: "tool_result",
+        summary: "Exit code: 0",
+        callId: "call-1",
+        payload: { output: "Exit code: 0" },
+      },
+      { kind: "commentary", summary: "继续整理结果。", source: "codex" },
+      { kind: "commentary", summary: "完成。", source: "codex" },
+    ],
+    traceCount: 5,
+    toolCallCount: 1,
+    processCount: 5,
+  }));
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias,
+    _text,
+    _onChunk,
+    _onStatus,
+    onTrace,
+  ) => {
+    onTrace?.({
+      kind: "commentary",
+      summary: "我先检查目录。",
+      source: "codex",
+    });
+    return new Promise<ChatMessage>((resolve) => {
+      resolveFinal = resolve;
+    });
+  });
+  const client = createClient({ sendMessage, getMessageTrace: getMessageTrace as never });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+  await user.type(screen.getByPlaceholderText("输入消息"), "继续");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+  const liveToggle = await screen.findByRole("button", { name: "展开过程详情" });
+  const livePanel = liveToggle.closest("section");
+  expect(livePanel?.getAttribute("data-testid")).toMatch(/^chat-trace-panel-assistant-/);
+  expect(livePanel?.textContent).toContain("1 条过程");
+  expect(screen.queryByTestId("native-agent-transcript")).not.toBeInTheDocument();
+
+  await act(async () => {
+    resolveFinal({
+      id: "assistant-cli-final",
+      role: "assistant",
+      text: "最终答复",
+      createdAt: new Date().toISOString(),
+      state: "done",
+      meta: { traceCount: 5, toolCallCount: 1, processCount: 5 },
+    });
+  });
+
+  expect(await screen.findByText("最终答复")).toBeInTheDocument();
+  expect(screen.queryByTestId("native-agent-transcript")).not.toBeInTheDocument();
+  await waitFor(() => expect(getMessageTrace).toHaveBeenCalledWith("main", "assistant-cli-final"));
+  const panel = await screen.findByTestId("chat-trace-panel-assistant-cli-final");
+  expect(panel.textContent).toContain("5 条过程");
+  expect(panel.textContent).toContain("1 次工具");
+  await user.click(screen.getByRole("button", { name: "展开过程详情" }));
+  expect(await screen.findByText("Get-ChildItem")).toBeInTheDocument();
+});
+
 test("final resolved assistant message does not keep streaming state", async () => {
   const client = createClient({
     sendMessage: async () => ({
@@ -712,7 +825,7 @@ test("native agent @mention sends cluster options", async () => {
 
 
 
-test("lazy-loads trace details and groups tool call/result into one trace card", async () => {
+test("auto-loads trace details and groups tool call/result into one trace card", async () => {
   const user = userEvent.setup();
   const getMessageTrace = vi.fn(async () => ({
     trace: [
@@ -782,11 +895,10 @@ test("lazy-loads trace details and groups tool call/result into one trace card",
   render(<ChatScreen botAlias="main" client={client} />);
 
   expect(await screen.findByText("目录已读取完成。")).toBeInTheDocument();
-  expect(getMessageTrace).not.toHaveBeenCalled();
+  await waitFor(() => expect(getMessageTrace).toHaveBeenCalledWith("main", "assistant-1"));
 
   await user.click(screen.getByRole("button", { name: "展开过程详情" }));
 
-  expect(getMessageTrace).toHaveBeenCalledWith("main", "assistant-1");
   expect(await screen.findByText("我先检查目录结构。")).toBeInTheDocument();
   expect(screen.getByText("工具调用 1")).toBeInTheDocument();
   expect(screen.getByText("Get-Content -Path todo.txt")).toBeInTheDocument();
@@ -1027,6 +1139,39 @@ test("native history trace auto-load does not retry immediately after failure", 
   render(<ChatScreen botAlias="main" client={client} />);
 
   await screen.findByTestId("native-agent-transcript");
+  await waitFor(() => expect(getMessageTrace).toHaveBeenCalledTimes(1));
+  await act(async () => {
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+  });
+  expect(getMessageTrace).toHaveBeenCalledTimes(1);
+});
+
+test("non-native history trace auto-load does not retry immediately after failure", async () => {
+  const getMessageTrace = vi.fn(async () => {
+    throw new Error("trace unavailable");
+  });
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "assistant-history-error",
+        role: "assistant",
+        text: "最终答复",
+        createdAt: new Date().toISOString(),
+        state: "done",
+        meta: {
+          traceCount: 3,
+          toolCallCount: 0,
+          processCount: 3,
+        },
+      },
+    ],
+    getMessageTrace: getMessageTrace as never,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByText("最终答复")).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "展开过程详情" })).toBeInTheDocument();
   await waitFor(() => expect(getMessageTrace).toHaveBeenCalledTimes(1));
   await act(async () => {
     await new Promise((resolve) => window.setTimeout(resolve, 20));

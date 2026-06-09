@@ -198,7 +198,7 @@ import type {
   WebNotificationEvent,
 } from "./types";
 import type { WebBotClient } from "./webBotClient";
-import { createAgUiStreamAdapter } from "./agUiStreamAdapter";
+import { createAgUiStreamAdapter, isAgUiEventType } from "./agUiStreamAdapter";
 import {
   EventType,
   type AgUiEvent,
@@ -4612,7 +4612,8 @@ export class RealWebBotClient implements WebBotClient {
           continue;
         }
 
-        const agUiEvents = agUiAdapter.adapt(event);
+        const shouldAdaptAgUiEvent = useAgUiProtocol || isAgUiEventType(event.type);
+        const agUiEvents = shouldAdaptAgUiEvent ? agUiAdapter.adapt(event) : [];
         if (agUiEvents.length > 0) {
           sawAgUiEvent = true;
           for (const agUiEvent of agUiEvents) {
@@ -4661,7 +4662,7 @@ export class RealWebBotClient implements WebBotClient {
           }
         }
 
-        if (sawAgUiEvent) {
+        if (sawAgUiEvent && event.type !== "done" && event.type !== "error") {
           separator = findSseSeparator(buffer);
           continue;
         }

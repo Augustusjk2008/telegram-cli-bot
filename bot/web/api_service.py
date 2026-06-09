@@ -4716,9 +4716,15 @@ async def _stream_cli_chat(
             with session._lock:
                 session.process = process
 
+            turn_event_ids = {
+                "turn_id": turn_handle.turn_id,
+                "assistant_message_id": turn_handle.assistant_message_id,
+            }
+
             if not meta_sent:
                 yield {
                     "type": "meta",
+                    **turn_event_ids,
                     "alias": alias,
                     "cli_type": cli_type,
                     "working_dir": session.working_dir,
@@ -4788,7 +4794,7 @@ async def _stream_cli_chat(
                         for trace_event in consume_stream_trace_chunk(cli_type, text_chunk, trace_state):
                             appended_trace = append_live_trace_event(trace_event)
                             if appended_trace is not None:
-                                yield {"type": "trace", "event": appended_trace}
+                                yield {"type": "trace", **turn_event_ids, "event": appended_trace}
 
                         if cli_type == "codex":
                             now = loop.time()
@@ -4807,7 +4813,7 @@ async def _stream_cli_chat(
                         for trace_event in kimi_wire_tail.poll():
                             appended_trace = append_live_trace_event(trace_event)
                             if appended_trace is not None:
-                                yield {"type": "trace", "event": appended_trace}
+                                yield {"type": "trace", **turn_event_ids, "event": appended_trace}
 
                     with session._lock:
                         stop_requested = bool(session.stop_requested)
@@ -4877,6 +4883,7 @@ async def _stream_cli_chat(
                             status_event["preview_text"] = preview_text[-800:]
                     else:
                         status_event = preview_state.status_event(elapsed_seconds=int(loop.time() - started_at))
+                    status_event.update(turn_event_ids)
                     status_context_usage = None
                     status_session_id = _status_context_session_id(
                         session,
@@ -5151,6 +5158,7 @@ async def _stream_cli_chat(
                 session.is_processing = False
             done_event = {
                 "type": "done",
+                **turn_event_ids,
                 "output": str(done_message.get("content") or response),
                 "message": done_message,
                 "elapsed_seconds": elapsed_seconds,

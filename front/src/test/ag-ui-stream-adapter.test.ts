@@ -17,8 +17,15 @@ describe("agUiStreamAdapter", () => {
     })]);
   });
 
-  test("does not append legacy done output after direct ag-ui text", () => {
+  test("ignores legacy stream events by default", () => {
     const adapter = createAgUiStreamAdapter();
+    expect(adapter.adapt({ type: "status", elapsed_seconds: 1, preview_text: "处理中" })).toEqual([]);
+    expect(adapter.adapt({ type: "trace", event: { kind: "commentary", summary: "检查目录" } })).toEqual([]);
+    expect(adapter.adapt({ type: "done", output: "ok" })).toEqual([]);
+  });
+
+  test("bridges legacy done output when enabled", () => {
+    const adapter = createAgUiStreamAdapter({ bridgeLegacy: true });
     const events = [
       ...adapter.adapt({ type: EventType.TEXT_MESSAGE_START, messageId: "msg-1", role: "assistant" }),
       ...adapter.adapt({ type: EventType.TEXT_MESSAGE_CONTENT, messageId: "msg-1", delta: "internal thinking" }),
@@ -34,7 +41,7 @@ describe("agUiStreamAdapter", () => {
   });
 
   test("maps legacy stream events to ag-ui sequence", () => {
-    const adapter = createAgUiStreamAdapter();
+    const adapter = createAgUiStreamAdapter({ bridgeLegacy: true });
     const events = [
       ...adapter.adapt({ type: "meta", cluster_run_id: "clr_1" }),
       ...adapter.adapt({ type: "status", elapsed_seconds: 2, preview_text: "处理中" }),
@@ -88,7 +95,7 @@ describe("agUiStreamAdapter", () => {
   });
 
   test("maps legacy snapshot to message snapshot", () => {
-    const adapter = createAgUiStreamAdapter();
+    const adapter = createAgUiStreamAdapter({ bridgeLegacy: true });
     const events = [
       ...adapter.adapt({ type: "delta", text: "先查一下..." }),
       ...adapter.adapt({ type: "snapshot", text: "" }),
@@ -112,7 +119,7 @@ describe("agUiStreamAdapter", () => {
   });
 
   test("uses legacy snapshot field when text is absent", () => {
-    const adapter = createAgUiStreamAdapter();
+    const adapter = createAgUiStreamAdapter({ bridgeLegacy: true });
     const events = adapter.adapt({ type: "snapshot", snapshot: "最终快照" });
 
     expect(events).toEqual([
@@ -125,7 +132,7 @@ describe("agUiStreamAdapter", () => {
   });
 
   test("preserves legacy trace stable ordering metadata", () => {
-    const adapter = createAgUiStreamAdapter();
+    const adapter = createAgUiStreamAdapter({ bridgeLegacy: true });
     const events = adapter.adapt({
       type: "trace",
       event: {

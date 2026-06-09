@@ -3862,14 +3862,50 @@ async def test_stream_cli_chat_emits_trace_events_and_done_message(web_manager: 
         events = [event async for event in _stream_cli_chat(web_manager, "main", 1001, "列出当前目录")]
 
     trace_events = [event for event in events if event["type"] == "trace"]
+    meta_event = next(event for event in events if event["type"] == "meta")
     done_event = next(event for event in events if event["type"] == "done")
 
     assert trace_events
+    assert meta_event["turn_id"]
+    assert meta_event["assistant_message_id"]
+    for trace_event in trace_events:
+        assert trace_event["turn_id"] == meta_event["turn_id"]
+        assert trace_event["assistant_message_id"] == meta_event["assistant_message_id"]
     assert trace_events[0]["event"]["kind"] == "tool_call"
     assert trace_events[0]["event"]["summary"] == "Get-ChildItem -Force"
     assert trace_events[1]["event"]["kind"] == "tool_result"
+    assert done_event["turn_id"] == meta_event["turn_id"]
+    assert done_event["assistant_message_id"] == meta_event["assistant_message_id"]
+    assert done_event["message"]["id"] == done_event["assistant_message_id"]
     assert done_event["message"]["role"] == "assistant"
     assert done_event["message"]["content"] == "目录已读取完成。"
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_status_event_includes_turn_ids(web_manager: MultiBotManager):
+    web_manager.main_profile.cli_type = "codex"
+    fake_process = _ScheduledFakeProcess([
+        (0, '{"type":"item.delta","item":{"type":"assistant_message","delta":"处理中"}}\n'),
+        (0.05, '{"type":"item.completed","item":{"type":"assistant_message","text":"完成回复"}}\n'),
+    ])
+
+    with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
+         patch("bot.web.api_service.build_cli_command", return_value=(["codex"], False)), \
+         patch("bot.web.api_service.subprocess.Popen", return_value=fake_process):
+        events = await asyncio.wait_for(
+            _collect_stream_events(_stream_cli_chat(web_manager, "main", 1001, "执行")),
+            timeout=2,
+        )
+
+    meta_event = next(event for event in events if event["type"] == "meta")
+    status_event = next(event for event in events if event["type"] == "status")
+    done_event = next(event for event in events if event["type"] == "done")
+
+    assert status_event["turn_id"] == meta_event["turn_id"]
+    assert status_event["assistant_message_id"] == meta_event["assistant_message_id"]
+    assert done_event["turn_id"] == meta_event["turn_id"]
+    assert done_event["assistant_message_id"] == meta_event["assistant_message_id"]
+    assert status_event["preview_text"] == "处理中"
 
 
 @pytest.mark.asyncio
