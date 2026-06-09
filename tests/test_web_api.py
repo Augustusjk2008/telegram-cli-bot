@@ -3409,6 +3409,11 @@ def test_native_agent_conversation_api_uses_native_provider(web_manager: MultiBo
 
     created = create_conversation(web_manager, "main", 1001, "原生任务", execution_mode="native_agent")
     conversation_id = created["conversation"]["id"]
+    ChatStore(tmp_path).set_conversation_native_session(
+        conversation_id,
+        "native-1",
+        {"cwd": str(tmp_path), "model_id": "anthropic/sonnet", "opencode_agent": "reviewer"},
+    )
 
     assert created["conversation"]["native_provider"] == "native_agent"
     assert created["conversation"]["execution_mode"] == "native_agent"
@@ -3420,7 +3425,8 @@ def test_native_agent_conversation_api_uses_native_provider(web_manager: MultiBo
     selected = select_conversation(web_manager, "main", 1001, conversation_id, execution_mode="native_agent")
 
     assert selected["conversation"]["execution_mode"] == "native_agent"
-    assert session.native_agent_session_id is None
+    assert session.native_agent_session_id == "native-1"
+    assert selected["conversation"]["native_session_meta"]["model_id"] == "anthropic/sonnet"
     with pytest.raises(WebApiError) as exc_info:
         select_conversation(web_manager, "main", 1001, conversation_id, execution_mode="cli")
     assert exc_info.value.code == "conversation_execution_mode_mismatch"
@@ -3603,6 +3609,25 @@ def test_delete_all_conversations_scopes_agent_and_execution_mode(web_manager: M
     assert list_conversations(web_manager, "main", 1001, agent_id="reviewer", execution_mode="cli")["items"] == []
 
 
+def test_delete_active_native_conversation_clears_runtime_native_session(web_manager: MultiBotManager, tmp_path: Path):
+    web_manager.main_profile.working_dir = str(tmp_path)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+
+    created = create_conversation(web_manager, "main", 1001, "原生", execution_mode="native_agent")
+    conversation_id = created["conversation"]["id"]
+    ChatStore(tmp_path).set_conversation_native_session(conversation_id, "native-1", {"cwd": str(tmp_path)})
+    select_conversation(web_manager, "main", 1001, conversation_id, execution_mode="native_agent")
+
+    assert session.native_agent_session_id == "native-1"
+
+    result = delete_conversation(web_manager, "main", 1001, conversation_id, execution_mode="native_agent")
+
+    assert result["native_session_cleared"] is True
+    assert session.active_conversation_id is None
+    assert session.native_agent_session_id is None
+
+
 def test_reset_user_session_blocks_while_processing(web_manager: MultiBotManager):
     session = get_session_for_alias(web_manager, "main", 1001)
     with session._lock:
@@ -3614,6 +3639,23 @@ def test_reset_user_session_blocks_while_processing(web_manager: MultiBotManager
 
     assert exc_info.value.status == 409
     assert exc_info.value.code == "conversation_switch_blocked"
+
+
+def test_reset_user_session_clears_runtime_native_session(web_manager: MultiBotManager, tmp_path: Path):
+    web_manager.main_profile.working_dir = str(tmp_path)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+    with session._lock:
+        session.native_agent_session_id = "native-1"
+        session.native_agent_run_id = "run-1"
+    session.persist()
+
+    result = reset_user_session(web_manager, "main", 1001)
+    next_session = get_session_for_alias(web_manager, "main", 1001)
+
+    assert result["reset"] is True
+    assert next_session.native_agent_session_id is None
+    assert next_session.native_agent_run_id is None
 
 
 @pytest.mark.asyncio

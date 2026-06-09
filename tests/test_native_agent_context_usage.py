@@ -39,6 +39,35 @@ def test_native_agent_context_usage_counts_cache_tokens(monkeypatch) -> None:
     assert usage["reasoning_tokens"] == 20
 
 
+def test_native_agent_context_usage_prefers_session_aggregate(monkeypatch) -> None:
+    monkeypatch.setattr(context_usage, "find_configured_model", lambda model_id: {
+        "id": model_id,
+        "context_window": 2_000,
+    })
+
+    usage = context_usage.resolve_native_agent_context_usage(
+        session_id="sess-1",
+        model_id="jojocode/gpt-5.4",
+        session_payload={
+            "tokens": {
+                "input": 500,
+                "cache_read": 200,
+                "cache_write": 100,
+                "output": 40,
+            },
+        },
+        messages=[
+            {"role": "assistant", "tokens": {"input": 10, "cache_read": 5}},
+        ],
+    )
+
+    assert usage is not None
+    assert usage["source"] == "native_agent_session_tokens"
+    assert usage["scope"] == "session"
+    assert usage["context_used"] == 800
+    assert usage["context_used_percent"] == 40
+
+
 def test_native_agent_context_usage_unknown_window_keeps_details(monkeypatch) -> None:
     monkeypatch.setattr(context_usage, "find_configured_model", lambda _model_id: None)
 

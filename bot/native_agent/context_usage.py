@@ -11,14 +11,44 @@ def resolve_native_agent_context_usage(
     session_id: str,
     model_id: str,
     messages: list[dict[str, Any]],
+    session_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
+    session_tokens = _session_tokens_payload(session_payload)
+    if session_tokens:
+        usage = _build_usage(
+            session_id=session_id,
+            model_id=model_id,
+            tokens=session_tokens,
+            source="native_agent_session_tokens",
+            scope="session",
+        )
+        if usage is not None:
+            return usage
+
     assistant_message = _latest_assistant_message_with_tokens(messages)
     if assistant_message is None:
         return None
     tokens = _tokens_payload(assistant_message)
     if not tokens:
         return None
-    input_tokens = _as_non_negative_int(_pick(tokens, "input", "input_tokens", "inputTokens"))
+    return _build_usage(
+        session_id=session_id,
+        model_id=model_id,
+        tokens=tokens,
+        source="native_agent_tokens",
+        scope="turn",
+    )
+
+
+def _build_usage(
+    *,
+    session_id: str,
+    model_id: str,
+    tokens: dict[str, Any],
+    source: str,
+    scope: str,
+) -> dict[str, Any] | None:
+    input_tokens = _as_non_negative_int(_pick(tokens, "input", "tokens_input", "input_tokens", "inputTokens", "tokensInput"))
     cache = tokens.get("cache") if isinstance(tokens.get("cache"), dict) else {}
     cache_read_tokens = _as_non_negative_int(_pick(tokens, "cache_read", "cache_read_tokens", "cacheReadTokens", "cacheRead"))
     cache_write_tokens = _as_non_negative_int(_pick(tokens, "cache_write", "cache_write_tokens", "cacheWriteTokens", "cacheWrite"))
@@ -35,7 +65,8 @@ def resolve_native_agent_context_usage(
     context_window = _as_positive_int(model.get("context_window")) if model else None
     usage: dict[str, Any] = {
         "provider": "native_agent",
-        "source": "native_agent_tokens",
+        "source": source,
+        "scope": scope,
         "session_id": session_id,
         "model": model_id,
         "used_tokens": used_tokens,
@@ -89,6 +120,21 @@ def _tokens_payload(message: dict[str, Any]) -> dict[str, Any]:
     for item in candidates:
         if isinstance(item, dict):
             return item
+    return {}
+
+
+def _session_tokens_payload(session_payload: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(session_payload, dict):
+        return {}
+    candidates = [session_payload]
+    for key in ("data", "session", "info"):
+        value = session_payload.get(key)
+        if isinstance(value, dict):
+            candidates.append(value)
+    for item in candidates:
+        tokens = _tokens_payload(item)
+        if tokens:
+            return tokens
     return {}
 
 

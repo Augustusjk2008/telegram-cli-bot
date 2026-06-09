@@ -49,6 +49,14 @@ def _parse_json(value: str | None) -> Any:
     return json.loads(value)
 
 
+def _parse_json_dict(value: str | None) -> dict[str, Any]:
+    try:
+        parsed = _parse_json(value)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def _row_text(row: sqlite3.Row, key: str) -> str:
     return str(row[key] or "")
 
@@ -331,6 +339,7 @@ class ChatStore:
                 status TEXT NOT NULL,
                 native_provider TEXT,
                 native_session_id TEXT,
+                native_session_meta_json TEXT,
                 assistant_home TEXT,
                 managed_prompt_hash TEXT,
                 prompt_surface_version TEXT,
@@ -413,6 +422,7 @@ class ChatStore:
         self._ensure_column(conn, "conversations", "message_count", "INTEGER NOT NULL DEFAULT 0")
         self._ensure_column(conn, "conversations", "pinned", "INTEGER NOT NULL DEFAULT 0")
         self._ensure_column(conn, "conversations", "archived_at", "TEXT")
+        self._ensure_column(conn, "conversations", "native_session_meta_json", "TEXT")
         self._ensure_column(conn, "turns", "trace_recovery_attempted_at", "TEXT")
         self._ensure_column(conn, "turns", "trace_recovery_status", "TEXT")
         self._ensure_column(conn, "turns", "context_usage_json", "TEXT")
@@ -608,6 +618,7 @@ class ChatStore:
                 status,
                 native_provider,
                 native_session_id,
+                native_session_meta_json,
                 assistant_home,
                 managed_prompt_hash,
                 prompt_surface_version,
@@ -619,7 +630,7 @@ class ChatStore:
                 archived_at,
                 created_at,
                 updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 conversation_id,
@@ -633,6 +644,7 @@ class ChatStore:
                 session_epoch,
                 "active",
                 native_provider,
+                None,
                 None,
                 assistant_home,
                 managed_prompt_hash,
@@ -663,6 +675,7 @@ class ChatStore:
             "status": str(row["status"] or "active"),
             "native_provider": str(row["native_provider"] or ""),
             "native_session_id": str(row["native_session_id"] or ""),
+            "native_session_meta": _parse_json_dict(row["native_session_meta_json"]),
             "agent_prompt_hash": str(row["agent_prompt_hash"] or ""),
             "title": str(row["title"] or ""),
             "last_message_preview": str(row["last_message_preview"] or ""),
@@ -710,6 +723,7 @@ class ChatStore:
                     status,
                     native_provider,
                     native_session_id,
+                    native_session_meta_json,
                     assistant_home,
                     managed_prompt_hash,
                     prompt_surface_version,
@@ -721,7 +735,7 @@ class ChatStore:
                     archived_at,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     conversation_id,
@@ -735,6 +749,7 @@ class ChatStore:
                     session_epoch,
                     "active",
                     native_provider,
+                    None,
                     None,
                     assistant_home,
                     managed_prompt_hash,
@@ -778,6 +793,48 @@ class ChatStore:
                 if row is None:
                     raise KeyError(conversation_id)
                 return str(row["native_provider"] or "")
+
+    def get_conversation_native_session(self, conversation_id: str) -> dict[str, Any]:
+        conn = self._connect(create=False)
+        if conn is None:
+            raise KeyError(conversation_id)
+        with closing(conn):
+            with conn:
+                row = conn.execute(
+                    """
+                    SELECT native_session_id, native_session_meta_json
+                    FROM conversations
+                    WHERE id = ? AND archived_at IS NULL
+                    """,
+                    (conversation_id,),
+                ).fetchone()
+                if row is None:
+                    raise KeyError(conversation_id)
+                return {
+                    "session_id": str(row["native_session_id"] or ""),
+                    "meta": _parse_json_dict(row["native_session_meta_json"]),
+                }
+
+    def set_conversation_native_session(
+        self,
+        conversation_id: str,
+        session_id: str | None,
+        meta: dict[str, Any] | None = None,
+    ) -> None:
+        normalized_session_id = str(session_id or "").strip()
+        meta_json = json.dumps(dict(meta or {}), ensure_ascii=False) if normalized_session_id else None
+        now = _utc_now()
+        with self._connect_for_write() as conn:
+            conn.execute(
+                """
+                UPDATE conversations
+                SET native_session_id = ?,
+                    native_session_meta_json = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (normalized_session_id or None, meta_json, now, conversation_id),
+            )
 
     def list_conversations(
         self,
@@ -2063,6 +2120,7 @@ class ChatStore:
                 status = ?,
                 native_provider = ?,
                 native_session_id = ?,
+                native_session_meta_json = ?,
                 assistant_home = ?,
                 managed_prompt_hash = ?,
                 prompt_surface_version = ?,
@@ -2079,6 +2137,7 @@ class ChatStore:
                 else _row_text(target, "status") or _row_text(source, "status") or "active",
                 _row_text(target, "native_provider") or _row_text(source, "native_provider") or None,
                 _row_text(target, "native_session_id") or _row_text(source, "native_session_id") or None,
+                _row_text(target, "native_session_meta_json") or _row_text(source, "native_session_meta_json") or None,
                 _row_text(target, "assistant_home") or _row_text(source, "assistant_home") or None,
                 _row_text(target, "managed_prompt_hash") or _row_text(source, "managed_prompt_hash") or None,
                 _row_text(target, "prompt_surface_version") or _row_text(source, "prompt_surface_version") or None,

@@ -426,6 +426,129 @@ def test_chat_store_selectable_conversation_preserves_native_session(monkeypatch
     assert summary["last_message_preview"] == "world"
 
 
+def test_chat_store_updates_conversation_native_session_meta(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    store = ChatStore(workspace)
+    conversation_id = store.create_conversation(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        native_provider="native_agent",
+        title="Native",
+    )
+
+    store.set_conversation_native_session(
+        conversation_id,
+        "sess-1",
+        {"cwd": str(workspace), "model_id": "anthropic/sonnet", "opencode_agent": "reviewer"},
+    )
+
+    assert store.get_conversation_native_session(conversation_id) == {
+        "session_id": "sess-1",
+        "meta": {"cwd": str(workspace), "model_id": "anthropic/sonnet", "opencode_agent": "reviewer"},
+    }
+    assert store.get_conversation(conversation_id)["native_session_meta"]["model_id"] == "anthropic/sonnet"
+
+
+def test_chat_store_upgrades_legacy_conversation_without_native_session_meta(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    store = ChatStore(workspace)
+    store.db_path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE conversations (
+                id TEXT PRIMARY KEY,
+                bot_id INTEGER NOT NULL,
+                bot_alias TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                agent_id TEXT NOT NULL DEFAULT 'main',
+                bot_mode TEXT NOT NULL,
+                cli_type TEXT NOT NULL,
+                working_dir TEXT NOT NULL,
+                session_epoch INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                native_provider TEXT,
+                native_session_id TEXT,
+                assistant_home TEXT,
+                managed_prompt_hash TEXT,
+                prompt_surface_version TEXT,
+                agent_prompt_hash TEXT,
+                title TEXT,
+                last_message_preview TEXT,
+                message_count INTEGER NOT NULL DEFAULT 0,
+                pinned INTEGER NOT NULL DEFAULT 0,
+                archived_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO conversations (
+                id,
+                bot_id,
+                bot_alias,
+                user_id,
+                agent_id,
+                bot_mode,
+                cli_type,
+                working_dir,
+                session_epoch,
+                status,
+                native_provider,
+                native_session_id,
+                title,
+                last_message_preview,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "conv-old",
+                1,
+                "main",
+                1001,
+                "main",
+                "cli",
+                "codex",
+                str(workspace),
+                1,
+                "active",
+                "native_agent",
+                "sess-old",
+                "旧会话",
+                "旧回复",
+                "2026-06-09T00:00:00+00:00",
+                "2026-06-09T00:00:00+00:00",
+            ),
+        )
+    chat_store_module.clear_chat_store_prepare_cache()
+
+    summary = store.get_conversation("conv-old")
+
+    assert summary["native_session_id"] == "sess-old"
+    assert summary["native_session_meta"] == {}
+    with sqlite3.connect(store.db_path) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(conversations)").fetchall()}
+    assert "native_session_meta_json" in columns
+
+
 def test_finalize_turn_reuses_same_assistant_message_and_exposes_trace(monkeypatch, tmp_path: Path):
     home = tmp_path / "home"
     home.mkdir()

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 import uuid
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from bot.chat_identity import chat_session_user_id
@@ -42,6 +45,15 @@ FINAL_CANDIDATE_GRACE_SECONDS = 2.0
 FINAL_CANDIDATE_MAX_SECONDS = 4.0
 NATIVE_AGENT_NO_PROGRESS_TIMEOUT_SECONDS = 180.0
 NATIVE_AGENT_NO_PROGRESS_MESSAGE = "原生 agent 长时间无输出或进展"
+
+
+@dataclass(frozen=True)
+class NativeAgentSessionResolution:
+    session_id: str
+    reused: bool
+    reason: str
+    baseline_messages: list[dict[str, Any]]
+    session_payload: dict[str, Any] | None = None
 
 
 def normalize_execution_mode(value: Any, profile: BotProfile | None = None) -> str:
@@ -107,14 +119,74 @@ class NativeAgentService:
         session: UserSession,
         history_service: ChatHistoryService,
         conversation_id: str,
-    ) -> str:
-        _ = history_service, conversation_id
-        created = await client.create_session(cwd=session.working_dir)
-        native_session_id = _extract_session_id(created)
+        *,
+        model_id: str,
+        opencode_agent: str,
+    ) -> NativeAgentSessionResolution:
+        desired_meta = _native_session_meta(
+            cwd=session.working_dir,
+            model_id=model_id,
+            opencode_agent=opencode_agent,
+        )
+
+        async def create(reason: str) -> NativeAgentSessionResolution:
+            created = await client.create_session(cwd=session.working_dir)
+            native_session_id = _extract_session_id(created)
+            with session._lock:
+                session.native_agent_session_id = native_session_id
+            history_service.store.set_conversation_native_session(conversation_id, native_session_id, desired_meta)
+            session.persist()
+            return NativeAgentSessionResolution(
+                session_id=native_session_id,
+                reused=False,
+                reason=reason,
+                baseline_messages=[],
+                session_payload=created if isinstance(created, dict) else None,
+            )
+
+        try:
+            conversation_native = history_service.store.get_conversation_native_session(conversation_id)
+        except Exception:
+            conversation_native = {}
+        conversation_session_id = str(conversation_native.get("session_id") or "").strip()
+        stored_meta = conversation_native.get("meta") if isinstance(conversation_native.get("meta"), dict) else {}
         with session._lock:
-            session.native_agent_session_id = native_session_id
+            runtime_session_id = str(session.native_agent_session_id or "").strip()
+        candidate_session_id = conversation_session_id or runtime_session_id
+        if not candidate_session_id:
+            return await create("created")
+
+        if not callable(getattr(client, "get_session", None)):
+            return await create("get_session_unavailable")
+        try:
+            session_payload = await _get_session_with_timeout(client, candidate_session_id)
+        except Exception:
+            return await create("get_session_failed")
+
+        if not _session_payload_cwd_matches(session_payload, session.working_dir):
+            return await create("cwd_mismatch")
+        if _native_session_meta_mismatch(stored_meta, desired_meta):
+            return await create("config_changed")
+        try:
+            baseline_messages = await _list_messages_with_timeout(client, candidate_session_id)
+        except Exception:
+            return await create("list_messages_failed")
+
+        reusable, reason = _native_session_reuse_health(baseline_messages, session_payload)
+        if not reusable:
+            return await create(reason)
+
+        with session._lock:
+            session.native_agent_session_id = candidate_session_id
+        history_service.store.set_conversation_native_session(conversation_id, candidate_session_id, desired_meta)
         session.persist()
-        return native_session_id
+        return NativeAgentSessionResolution(
+            session_id=candidate_session_id,
+            reused=True,
+            reason=reason,
+            baseline_messages=baseline_messages,
+            session_payload=session_payload,
+        )
 
     async def abort(self, session: UserSession) -> bool:
         with session._lock:
@@ -198,7 +270,6 @@ class NativeAgentService:
                 history_items = history_service.list_history(profile, session, limit=12)
             except Exception:
                 history_items = []
-            native_prompt_text = _build_native_prompt_with_history(history_items, prompt_text)
             turn_handle = history_service.start_turn(
                 profile=profile,
                 session=session,
@@ -210,18 +281,31 @@ class NativeAgentService:
             with session._lock:
                 session.native_agent_server_key = str(getattr(server, "key", "") or "")
             client = server.client()
-            native_session_id = await self._ensure_session_id(client, session, history_service, turn_handle.conversation_id)
             model_id, agent_id = self._prompt_options(profile)
+            resolution = await self._ensure_session_id(
+                client,
+                session,
+                history_service,
+                turn_handle.conversation_id,
+                model_id=model_id,
+                opencode_agent=agent_id,
+            )
+            native_session_id = resolution.session_id
+            native_prompt_text = prompt_text if resolution.reused else _build_native_prompt_with_history(history_items, prompt_text)
             baseline_message_count = 0
             baseline_known = False
-            try:
-                baseline_messages = await _list_messages_with_timeout(client, native_session_id)
-                if isinstance(baseline_messages, list):
-                    baseline_message_count = len(baseline_messages)
-                    baseline_known = True
-            except Exception:
-                baseline_message_count = 0
-                baseline_known = False
+            if resolution.reused:
+                baseline_message_count = len(resolution.baseline_messages)
+                baseline_known = True
+            else:
+                try:
+                    baseline_messages = await _list_messages_with_timeout(client, native_session_id)
+                    if isinstance(baseline_messages, list):
+                        baseline_message_count = len(baseline_messages)
+                        baseline_known = True
+                except Exception:
+                    baseline_message_count = 0
+                    baseline_known = False
 
             aggregator = NativeAgentAggregator(user_message_id=f"msg_{uuid.uuid4().hex[:12]}")
             turn_state = NativeAgentTurnState(
@@ -334,6 +418,8 @@ class NativeAgentService:
                 "execution_mode": EXECUTION_MODE_NATIVE_AGENT,
                 "native_provider": NATIVE_AGENT_PROVIDER,
                 "native_session_id": native_session_id,
+                "native_session_reused": resolution.reused,
+                "native_session_reason": resolution.reason,
                 "working_dir": session.working_dir,
                 **({"cluster_run_id": normalized_cluster_run_id} if normalized_cluster_run_id else {}),
             }
@@ -572,10 +658,17 @@ class NativeAgentService:
             for trace_event in live_trace:
                 if trace_event.get("kind") == "cancelled":
                     history_service.append_trace_event(turn_handle, trace_event)
+            final_session_payload = None
+            if callable(getattr(client, "get_session", None)):
+                try:
+                    final_session_payload = await _get_session_with_timeout(client, native_session_id)
+                except Exception:
+                    pass
             context_usage = resolve_native_agent_context_usage(
                 session_id=native_session_id,
                 model_id=model_id,
                 messages=messages,
+                session_payload=final_session_payload,
             )
             done_message = history_service.complete_turn(
                 turn_handle,
@@ -758,6 +851,146 @@ def _history_item_content(item: dict[str, Any]) -> str:
     return ""
 
 
+def _native_session_meta(*, cwd: str, model_id: str, opencode_agent: str) -> dict[str, str]:
+    return {
+        "cwd": str(cwd or ""),
+        "model_id": str(model_id or ""),
+        "opencode_agent": str(opencode_agent or ""),
+    }
+
+
+def _native_session_meta_mismatch(stored_meta: dict[str, Any], desired_meta: dict[str, str]) -> bool:
+    if not isinstance(stored_meta, dict) or not stored_meta:
+        return False
+    for key, desired_value in desired_meta.items():
+        if key not in stored_meta:
+            continue
+        if str(stored_meta.get(key) or "") != str(desired_value or ""):
+            return True
+    return False
+
+
+def _session_payload_cwd_matches(session_payload: dict[str, Any] | None, cwd: str) -> bool:
+    payload_cwd = _session_payload_cwd(session_payload)
+    if not payload_cwd:
+        return True
+    return _normalize_path_for_compare(payload_cwd) == _normalize_path_for_compare(cwd)
+
+
+def _session_payload_cwd(session_payload: dict[str, Any] | None) -> str:
+    if not isinstance(session_payload, dict):
+        return ""
+    candidates = [session_payload]
+    for key in ("data", "session"):
+        value = session_payload.get(key)
+        if isinstance(value, dict):
+            candidates.append(value)
+    for item in candidates:
+        for key in ("directory", "cwd", "working_dir", "workingDir"):
+            value = item.get(key)
+            if value:
+                return str(value)
+    return ""
+
+
+def _native_session_reuse_health(
+    messages: list[dict[str, Any]],
+    session_payload: dict[str, Any] | None,
+) -> tuple[bool, str]:
+    if _payload_has_pending_permission(session_payload):
+        return False, "pending_permission"
+    if _payload_is_cancelled(session_payload):
+        return False, "cancelled"
+    last_message = _last_user_or_assistant_message(messages)
+    if not last_message:
+        return True, "empty"
+    if _payload_has_pending_permission(last_message):
+        return False, "pending_permission"
+    if _payload_is_cancelled(last_message):
+        return False, "cancelled"
+    role = str(last_message.get("role") or "").strip().lower()
+    if role == "user":
+        return False, "last_user"
+    if role == "assistant":
+        if _service_message_expects_followup(last_message):
+            return False, "tool_call"
+        if _service_message_completed(last_message):
+            return True, "completed"
+        return False, "assistant_incomplete"
+    return True, "empty"
+
+
+def _last_user_or_assistant_message(messages: list[dict[str, Any]]) -> dict[str, Any]:
+    if not isinstance(messages, list):
+        return {}
+    for message in reversed(messages):
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "").strip().lower()
+        if role in {"user", "assistant"}:
+            return message
+    return {}
+
+
+def _payload_is_cancelled(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    status_values: list[str] = []
+    for key in ("status", "state", "finish", "finish_reason", "finishReason"):
+        value = payload.get(key)
+        if value is not None:
+            status_values.append(str(value).strip().lower())
+    info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
+    for key in ("status", "state", "finish", "finish_reason", "finishReason"):
+        value = info.get(key)
+        if value is not None:
+            status_values.append(str(value).strip().lower())
+    return any(value in {"abort", "aborted", "cancel", "canceled", "cancelled"} for value in status_values)
+
+
+def _payload_has_pending_permission(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    for key in ("permission", "permissions"):
+        value = payload.get(key)
+        if _permission_payload_pending(value):
+            return True
+    info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
+    for key in ("permission", "permissions"):
+        value = info.get(key)
+        if _permission_payload_pending(value):
+            return True
+    parts = payload.get("parts")
+    if isinstance(parts, list):
+        for part in parts:
+            if _permission_payload_pending(part):
+                return True
+    return False
+
+
+def _permission_payload_pending(value: Any) -> bool:
+    if isinstance(value, list):
+        return any(_permission_payload_pending(item) for item in value)
+    if not isinstance(value, dict):
+        return False
+    kind = str(value.get("type") or value.get("kind") or "").strip().lower()
+    status = str(value.get("status") or value.get("state") or value.get("result") or "").strip().lower()
+    if kind == "permission" and status in {"", "pending", "requested", "open", "waiting", "awaiting"}:
+        return True
+    return status in {"pending", "requested", "open", "waiting", "awaiting"}
+
+
+def _normalize_path_for_compare(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        normalized = str(Path(text).expanduser().resolve(strict=False))
+    except Exception:
+        normalized = text
+    return os.path.normcase(normalized).rstrip("\\/")
+
+
 def _defer_reconciled_done(
     aggregator: NativeAgentAggregator,
     *,
@@ -810,6 +1043,17 @@ async def _list_messages_with_timeout(
     timeout = LIST_MESSAGES_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
     messages = await asyncio.wait_for(client.list_messages(session_id), timeout=timeout)
     return messages if isinstance(messages, list) else []
+
+
+async def _get_session_with_timeout(
+    client: NativeAgentClient,
+    session_id: str,
+    *,
+    timeout_seconds: float | None = None,
+) -> dict[str, Any]:
+    timeout = LIST_MESSAGES_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+    payload = await asyncio.wait_for(client.get_session(session_id), timeout=timeout)
+    return payload if isinstance(payload, dict) else {}
 
 
 async def _abort_native_prompt_best_effort(

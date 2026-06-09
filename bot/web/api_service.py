@@ -2413,6 +2413,9 @@ def delete_conversation(
     with session._lock:
         if is_active:
             session.active_conversation_id = None
+            if native_provider == NATIVE_AGENT_PROVIDER and session.native_agent_session_id:
+                _clear_native_agent_session_locked(session)
+                native_cleared = True
         if delete_native_session and native_session_id:
             if native_provider == "codex" and session.codex_session_id == native_session_id:
                 session.codex_session_id = None
