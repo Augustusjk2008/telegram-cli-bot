@@ -74,6 +74,88 @@ def test_native_agent_server_manager_matches_only_opencode_serve_processes():
     assert not _is_opencode_serve_process("python.exe", ["python", "-m", "bot"])
 
 
+def test_native_agent_server_manager_matches_only_tcb_managed_opencode_serve_processes(tmp_path: Path):
+    from bot.native_agent import server_manager as server_manager_module
+
+    helper = server_manager_module._is_tcb_managed_opencode_serve_process
+    native_root = tmp_path / "data" / "native-agent"
+    old_config = native_root / "opencode-workspace-abc.json"
+
+    assert not helper("node.exe", ["node", "opencode", "serve"], {}, app_data_root=tmp_path / "data")
+    assert helper(
+        "node.exe",
+        ["node", "opencode", "serve"],
+        {"TCB_NATIVE_AGENT_MANAGED": "1"},
+        app_data_root=tmp_path / "data",
+    )
+    assert helper(
+        "node.exe",
+        ["node", "opencode", "serve"],
+        {"OPENCODE_CONFIG": str(old_config)},
+        app_data_root=tmp_path / "data",
+    )
+    assert not helper(
+        "opencode.exe",
+        ["opencode", "run"],
+        {"TCB_NATIVE_AGENT_MANAGED": "1", "OPENCODE_CONFIG": str(old_config)},
+        app_data_root=tmp_path / "data",
+    )
+
+
+def test_native_agent_server_manager_terminates_only_tcb_managed_opencode_processes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    from types import SimpleNamespace
+    from bot.native_agent import server_manager as server_manager_module
+
+    class FakePsutilError(Exception):
+        pass
+
+    class FakeProcess:
+        def __init__(self, pid: int, name: str, cmdline: list[str], environ: dict[str, str] | None = None) -> None:
+            self.pid = pid
+            self.info = {"pid": pid, "name": name, "cmdline": cmdline}
+            self._environ = environ
+            self.terminated = False
+            self.killed = False
+
+        def environ(self):
+            if self._environ is None:
+                raise FakePsutilError()
+            return self._environ
+
+        def children(self, recursive: bool = False):
+            return []
+
+        def terminate(self):
+            self.terminated = True
+
+        def kill(self):
+            self.killed = True
+
+    manual = FakeProcess(101, "node.exe", ["node", "opencode", "serve"], {})
+    managed = FakeProcess(102, "node.exe", ["node", "opencode", "serve"], {"TCB_NATIVE_AGENT_MANAGED": "1"})
+    unreadable = FakeProcess(103, "opencode.exe", ["opencode", "serve"], None)
+    other = FakeProcess(104, "python.exe", ["python", "-m", "bot"], {"TCB_NATIVE_AGENT_MANAGED": "1"})
+    processes = [manual, managed, unreadable, other]
+
+    fake_psutil = SimpleNamespace(
+        NoSuchProcess=FakePsutilError,
+        AccessDenied=FakePsutilError,
+        ZombieProcess=FakePsutilError,
+        process_iter=lambda _attrs: processes,
+        wait_procs=lambda procs, timeout: (procs, []),
+    )
+    monkeypatch.setattr(server_manager_module, "psutil", fake_psutil)
+    monkeypatch.setattr(server_manager_module, "get_app_data_root", lambda: tmp_path / "data")
+
+    killed = NativeAgentServerManager().terminate_stale_opencode_processes()
+
+    assert killed == [102]
+    assert manual.terminated is False
+    assert managed.terminated is True
+    assert unreadable.terminated is False
+    assert other.terminated is False
+
+
 def test_native_agent_normalizer_accepts_official_properties_part_delta():
     aggregator = NativeAgentAggregator(user_message_id="u1")
     event = unwrap_event({
@@ -1326,6 +1408,9 @@ async def test_native_agent_server_manager_ignores_bot_provider_config_and_write
     assert first.config_path.exists()
     assert changed.config_path is not None and changed.config_path.exists()
     assert captured_envs[0]["OPENCODE_CONFIG"] == str(first.config_path)
+    assert captured_envs[0]["TCB_NATIVE_AGENT_MANAGED"] == "1"
+    assert captured_envs[0]["TCB_NATIVE_AGENT_SERVER_KEY"] == first.key
+    assert captured_envs[0]["TCB_NATIVE_AGENT_CONFIG_PATH"] == str(first.config_path)
     assert captured_envs[0]["OPENCODE_SERVER_PASSWORD"] == "secret"
 
     payload = json.loads(changed.config_path.read_text(encoding="utf-8"))

@@ -311,7 +311,7 @@ class TestManagerValidation:
         stop_mock.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_background_services_cleans_stale_opencode_even_when_native_disabled(self, temp_dir: Path):
+    async def test_background_services_runs_safe_stale_opencode_cleanup_even_when_native_disabled(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
         manager = MultiBotManager(BotProfile(alias="main", token="main_tok", working_dir=str(temp_dir)), str(storage))

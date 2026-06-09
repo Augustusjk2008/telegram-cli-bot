@@ -548,14 +548,19 @@ def print_web_stream_event(alias: str, event: dict[str, Any]) -> None:
         log(f"STREAM {alias} {event_type}: {text[:500]}")
 
 
-def monitor_opencode(args: argparse.Namespace, state: MonitorState) -> None:
+def monitor_opencode(args: argparse.Namespace, state: MonitorState, *, max_events: int | None = None) -> None:
     basic = opencode_basic(args)
     base_url = state.opencode_base_url or resolve_opencode_url(args.opencode_url or "auto", basic=basic)
     state.opencode_base_url = base_url
     url = f"{base_url.rstrip('/')}/global/event"
-    log(f"opencode SSE connected: {url}")
+    seen = 0
     for raw in stream_sse(url, basic=basic):
+        if seen == 0:
+            log(f"opencode SSE connected: {url}")
         print_opencode_event(args, raw, state)
+        seen += 1
+        if max_events is not None and seen >= max_events:
+            return
 
 
 def resolve_opencode_url(value: str, *, basic: tuple[str, str]) -> str:
@@ -804,46 +809,48 @@ def normalize_web_stream_event(alias: str, prompt: str, event: dict[str, Any]) -
 
 def normalize_opencode_event(raw: dict[str, Any], *, alias: str = "") -> dict[str, Any]:
     payload = raw.get("payload") if isinstance(raw.get("payload"), dict) else raw
-    message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
-    part = payload.get("part") if isinstance(payload.get("part"), dict) else {}
-    event_type = str(payload.get("type") or raw.get("type") or "event")
-    message_id = str(
-        payload.get("messageID")
-        or payload.get("message_id")
-        or payload.get("messageId")
-        or message.get("id")
-        or message.get("messageID")
-        or part.get("messageID")
-        or part.get("message_id")
-        or ""
-    ).strip()
-    part_id = str(part.get("id") or part.get("partID") or part.get("part_id") or payload.get("partID") or "").strip()
-    call_id = str(
-        part.get("callID")
-        or part.get("call_id")
-        or part.get("toolCallID")
-        or part.get("tool_call_id")
-        or payload.get("callID")
-        or ""
-    ).strip()
-    finish = str(message.get("finish") or message.get("finish_reason") or message.get("finishReason") or "").strip()
+    properties = payload.get("properties") if isinstance(payload.get("properties"), dict) else {}
+    message = _first_dict(payload.get("message"), properties.get("message"), payload.get("info"), properties.get("info"))
+    part = _first_dict(payload.get("part"), properties.get("part"))
+    event_type = _first_text(payload, properties, message, part, raw, keys=("type", "event", "name")) or "event"
+    permission = _permission_payload(event_type, payload, properties)
+    message_id = _first_text(payload, properties, message, part, keys=("messageID", "message_id", "messageId"))
+    if not message_id:
+        message_id = _first_text(message, part, keys=("id",))
+    part_id = _first_text(payload, properties, part, keys=("partID", "part_id", "partId"))
+    if not part_id:
+        part_id = _first_text(part, keys=("id",))
+    call_id = _first_text(
+        payload,
+        properties,
+        part,
+        keys=("callID", "call_id", "toolCallID", "toolCallId", "tool_call_id"),
+    )
+    finish = _first_text(payload, properties, message, part, keys=("finish", "finish_reason", "finishReason"))
     part_state = part.get("state")
-    status = ""
-    state = ""
+    state_records: list[dict[str, Any]] = [payload, properties]
     if isinstance(part_state, dict):
-        status = str(part_state.get("status") or part_state.get("state") or "").strip()
-        state = status
-    else:
-        state = str(part_state or payload.get("state") or payload.get("status") or "").strip()
-        status = state
-    part_type = str(part.get("type") or part.get("kind") or "").strip()
-    tool_name = str(part.get("tool") or part.get("toolName") or part.get("name") or "").strip()
-    delta = str(payload.get("delta") or part.get("delta") or "").strip()
-    text = str(message.get("content") or message.get("text") or part.get("text") or part.get("content") or "").strip()
-    session_id = extract_native_session_id_from_opencode(raw, payload, message, part)
+        state_records.append(part_state)
+    state_records.append(part)
+    status = _first_text(*state_records, keys=("status", "state"))
+    state = _first_text(*state_records, keys=("state", "status"))
+    part_type = _first_text(part, keys=("type", "kind"))
+    tool_name = _first_text(part, properties, payload, keys=("tool", "toolName", "tool_name"))
+    if not tool_name:
+        tool_name = _first_text(part, keys=("name",))
+    delta = _first_text(payload, properties, part, keys=("delta",))
+    text = _first_text(payload, properties, message, part, keys=("content", "text", "snapshot", "output"))
+    session_id = extract_native_session_id_from_opencode(raw, payload, properties, message, part, permission)
     raw_text = json.dumps(raw, ensure_ascii=False)
     abort_observed = "MessageAbortedError" in raw_text or "Tool execution aborted" in raw_text
-    tool_count = 1 if (part_type == "tool" or bool(tool_name) or bool(call_id) or any(key in part for key in ("tool", "toolName", "callID", "arguments"))) else 0
+    tool_count = 1 if (
+        part_type == "tool"
+        or bool(tool_name)
+        or bool(call_id)
+        or any(key in part for key in ("tool", "toolName", "callID", "toolCallId", "arguments", "raw_arguments"))
+        or any(key in properties for key in ("tool", "toolName", "callID", "toolCallId", "arguments", "raw_arguments"))
+        or any(key in payload for key in ("tool", "toolName", "callID", "toolCallId", "arguments", "raw_arguments"))
+    ) else 0
     session_idle_seen = event_type == "session.idle" or state.lower() == "idle" or status.lower() == "idle"
     return {
         "kind": "opencode_event",
@@ -859,6 +866,7 @@ def normalize_opencode_event(raw: dict[str, Any], *, alias: str = "") -> dict[st
         "state": state,
         "part_type": part_type,
         "tool_name": tool_name,
+        "permission": permission,
         "delta_text": delta,
         "snapshot_text": text,
         "tool_count": tool_count,
@@ -873,28 +881,51 @@ def normalize_opencode_event(raw: dict[str, Any], *, alias: str = "") -> dict[st
 def extract_native_session_id_from_opencode(
     raw: dict[str, Any],
     payload: dict[str, Any],
+    properties: dict[str, Any],
     message: dict[str, Any],
     part: dict[str, Any],
+    permission: dict[str, Any] | None = None,
 ) -> str:
-    values = [
-        raw.get("sessionID"),
-        raw.get("session_id"),
-        raw.get("sessionId"),
-        payload.get("sessionID"),
-        payload.get("session_id"),
-        payload.get("sessionId"),
-        message.get("sessionID"),
-        message.get("session_id"),
-        message.get("sessionId"),
-        part.get("sessionID"),
-        part.get("session_id"),
-        part.get("sessionId"),
-    ]
+    return _first_text(
+        payload,
+        properties,
+        message,
+        part,
+        permission or {},
+        raw,
+        keys=("sessionID", "session_id", "sessionId"),
+    )
+
+
+def _first_dict(*values: Any) -> dict[str, Any]:
     for value in values:
-        text = str(value or "").strip()
-        if text:
-            return text
+        if isinstance(value, dict):
+            return dict(value)
+    return {}
+
+
+def _first_text(*records: dict[str, Any], keys: tuple[str, ...]) -> str:
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        for key in keys:
+            value = record.get(key)
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                return text
     return ""
+
+
+def _permission_payload(event_type: str, payload: dict[str, Any], properties: dict[str, Any]) -> dict[str, Any]:
+    if isinstance(payload.get("permission"), dict):
+        return dict(payload["permission"])
+    if isinstance(properties.get("permission"), dict):
+        return dict(properties["permission"])
+    if event_type in {"permission.updated", "permission.replied"}:
+        return dict(properties or payload)
+    return {}
 
 
 def normalize_opencode_messages_payload(payload: Any) -> list[dict[str, Any]]:
@@ -1485,12 +1516,12 @@ def main() -> int:
         log("--password 或 --opencode-password 必填，用于 opencode basic auth")
         return 2
     try:
-        if args.compare and args.record_dir and args.no_web:
-            maybe_generate_report(args, state)
-            return 0
         if args.capture_session_messages:
             ensure_opencode_base_url(args, state)
-        if args.capture_opencode_sse or (args.opencode_url and not args.capture_session_messages):
+        should_monitor_opencode = bool(args.capture_opencode_sse or (args.opencode_url and not args.capture_session_messages))
+        if should_monitor_opencode and args.once:
+            monitor_opencode(args, state, max_events=1)
+        elif should_monitor_opencode:
             start_opencode_thread(args, state)
         if not args.no_web:
             poll_all(args, state, initial=True)
@@ -1513,7 +1544,6 @@ def main() -> int:
         return 130
     except Exception as exc:
         log(f"error: {exc}")
-        maybe_generate_report(args, state)
         return 1
 
 

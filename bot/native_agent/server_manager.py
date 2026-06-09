@@ -263,6 +263,9 @@ class NativeAgentServerManager:
         env["OPENCODE_SERVER_PASSWORD"] = password
         opencode_config_path = self._write_opencode_config(key, normalize_native_agent_config(server_config.get("native_agent")))
         env["OPENCODE_CONFIG"] = str(opencode_config_path)
+        env["TCB_NATIVE_AGENT_MANAGED"] = "1"
+        env["TCB_NATIVE_AGENT_SERVER_KEY"] = key
+        env["TCB_NATIVE_AGENT_CONFIG_PATH"] = str(opencode_config_path)
         invocation = self._resolve_command(command, working_dir)
         process = await asyncio.create_subprocess_exec(
             *invocation,
@@ -328,7 +331,10 @@ class NativeAgentServerManager:
                     continue
                 name = str(process.info.get("name") or "")
                 cmdline = process.info.get("cmdline") or []
-                if _is_opencode_serve_process(name, cmdline):
+                if not _is_opencode_serve_process(name, cmdline):
+                    continue
+                environ = process.environ()
+                if _is_tcb_managed_opencode_serve_process(name, cmdline, environ):
                     candidates.append(process)
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 continue
@@ -387,3 +393,26 @@ def _is_opencode_serve_process(name: str, cmdline: Any) -> bool:
     has_opencode = "opencode" in lowered_name or "opencode" in joined
     has_serve = any(item == "serve" for item in lowered_parts)
     return has_opencode and has_serve
+
+
+def _is_tcb_managed_opencode_serve_process(
+    name: str,
+    cmdline: Any,
+    environ: dict[str, Any],
+    app_data_root: Path | None = None,
+) -> bool:
+    if not _is_opencode_serve_process(name, cmdline):
+        return False
+    if str(environ.get("TCB_NATIVE_AGENT_MANAGED") or "") == "1":
+        return True
+    raw_config_path = str(environ.get("OPENCODE_CONFIG") or "").strip()
+    if not raw_config_path:
+        return False
+    config_path = Path(raw_config_path)
+    if not config_path.name.startswith("opencode-workspace-"):
+        return False
+    native_root = (app_data_root or get_app_data_root()) / "native-agent"
+    try:
+        return config_path.resolve().is_relative_to(native_root.resolve())
+    except OSError:
+        return False
