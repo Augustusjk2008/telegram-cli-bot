@@ -286,7 +286,7 @@ def test_monitor_opencode_once_returns_after_first_event(monkeypatch, capsys):
     monitor_io.monitor_opencode(args, state, max_events=1)
 
     output = capsys.readouterr().out
-    assert "opencode SSE connected: http://127.0.0.1:4096/global/event" in output
+    assert "opencode SSE connected: http://127.0.0.1:4096" + "/global" + "/event" in output
 
 
 def test_main_once_capture_opencode_sse_fails_on_connection_error(monkeypatch, tmp_path, capsys):

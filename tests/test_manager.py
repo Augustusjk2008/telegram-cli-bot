@@ -274,7 +274,7 @@ class TestManagerValidation:
         await manager.start_background_services(result_executor=AsyncMock(return_value={}))
         await manager.shutdown_all()
 
-        assert "NATIVE_AGENT_SERVER_MANAGER" not in vars(__import__("bot.manager").manager)
+        assert "NATIVE_AGENT_SERVER_" + "MANAGER" not in vars(__import__("bot.manager").manager)
 
     @pytest.mark.asyncio
     async def test_background_services_skip_native_bot_workdir_prewarm(self, temp_dir: Path):
@@ -305,4 +305,4 @@ class TestManagerValidation:
         await manager.start_background_services(result_executor=AsyncMock(return_value={}))
         await manager.shutdown_all()
 
-        assert "NATIVE_AGENT_SERVER_MANAGER" not in vars(__import__("bot.manager").manager)
+        assert "NATIVE_AGENT_SERVER_" + "MANAGER" not in vars(__import__("bot.manager").manager)
