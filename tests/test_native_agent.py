@@ -137,6 +137,52 @@ def test_native_agent_run_events_map_text_and_step_finish():
     }
 
 
+def test_native_agent_run_events_ignore_step_start():
+    events = run_json_to_events(
+        {
+            "type": "step_start",
+            "sessionID": "sess-1",
+            "part": {
+                "id": "step-1",
+                "type": "step-start",
+                "messageID": "assistant-1",
+            },
+        },
+        cwd="/repo",
+        assistant_message_id="assistant-1",
+    )
+
+    assert events == []
+
+
+def test_native_agent_run_events_do_not_idle_on_tool_calls_step_finish():
+    finish_events = run_json_to_events(
+        {
+            "type": "step_finish",
+            "sessionID": "sess-1",
+            "part": {
+                "id": "step-1",
+                "type": "step-finish",
+                "messageID": "assistant-tool",
+                "reason": "tool-calls",
+                "tokens": {"input": 10, "output": 1},
+                "cost": 0.02,
+            },
+        },
+        cwd="/repo",
+        assistant_message_id="assistant-tool",
+    )
+
+    assert len(finish_events) == 1
+    assert finish_events[0]["payload"]["type"] == "message.updated"
+    assert finish_events[0]["payload"]["message"]["finish"] == "tool-calls"
+    assert extract_step_finish_usage(finish_events[0]["payload"]["raw"]) == {
+        "input": 10,
+        "output": 1,
+        "cost": 0.02,
+    }
+
+
 def test_native_agent_run_client_builds_opencode_run_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from bot.native_agent import run_client
 
@@ -1414,6 +1460,7 @@ class FakeRunClient:
         export_messages: list[dict[str, object]] | None = None,
         gate: asyncio.Event | None = None,
         started: asyncio.Event | None = None,
+        event_delay_seconds: float = 0.0,
     ) -> None:
         self.events = list(events or [])
         self.error = error
@@ -1424,6 +1471,7 @@ class FakeRunClient:
         self.killed = False
         self.gate = gate
         self.started = started
+        self.event_delay_seconds = event_delay_seconds
 
     async def stream(self, request: NativeAgentRunRequest):
         self.requests.append(request)
@@ -1436,7 +1484,7 @@ class FakeRunClient:
         if self.error is not None:
             raise self.error
         for event in self.events:
-            await asyncio.sleep(0)
+            await asyncio.sleep(self.event_delay_seconds)
             yield event
 
     async def export_session(self, request):
@@ -1454,6 +1502,7 @@ async def test_native_agent_service_streams_opencode_run_and_persists_done(tmp_p
 
     monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
     fake_client = FakeRunClient([
+        {"type": "step_start", "sessionID": "sess-1", "part": {"id": "step-1", "type": "step-start", "messageID": "assistant-1"}},
         {"type": "text", "sessionID": "sess-1", "part": {"id": "p1", "type": "text", "text": "回"}},
         {"type": "text", "sessionID": "sess-1", "part": {"id": "p1", "type": "text", "text": "答"}},
         {"type": "step_finish", "sessionID": "sess-1"},
@@ -1475,6 +1524,7 @@ async def test_native_agent_service_streams_opencode_run_and_persists_done(tmp_p
     ]
 
     done = next(event for event in events if event["type"] == "done")
+    assert [event["type"] for event in events if event["type"] == "trace"] == []
     assert done["output"] == "回答"
     assert done["native_session_id"] == "sess-1"
     assert done["message"]["meta"]["native_source"]["provider"] == "native_agent"
@@ -1482,6 +1532,39 @@ async def test_native_agent_service_streams_opencode_run_and_persists_done(tmp_p
     assert session.is_processing is False
     assert fake_client.requests[0].session_id == ""
     assert fake_client.requests[0].prompt == "你好"
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_does_not_cancel_slow_first_run_event(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from bot import config
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    fake_client = FakeRunClient(
+        [
+            {"type": "text", "sessionID": "sess-1", "part": {"id": "p1", "type": "text", "text": "慢回复"}},
+            {"type": "step_finish", "sessionID": "sess-1"},
+        ],
+        event_delay_seconds=0.7,
+    )
+    service = NativeAgentService()
+    service._run_client_factory = lambda: fake_client
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    events = [
+        event async for event in service.stream_chat(
+            profile=profile,
+            session=session,
+            user_text="你好",
+            prompt_text="你好",
+            history_service=history,
+        )
+    ]
+
+    done = next(event for event in events if event["type"] == "done")
+    assert done["output"] == "慢回复"
+    assert done["native_session_id"] == "sess-1"
 
 
 @pytest.mark.asyncio
@@ -1520,6 +1603,76 @@ async def test_native_agent_service_reuses_bound_run_session(tmp_path: Path, mon
     assert done["output"] == "继续"
     assert fake_client.requests[0].session_id == "sess-old"
     assert fake_client.requests[0].prompt == "继续"
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_continues_after_tool_calls_step_finish(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from bot import config
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    fake_client = FakeRunClient([
+        {
+            "type": "tool",
+            "sessionID": "sess-1",
+            "part": {
+                "id": "tool-1",
+                "type": "tool",
+                "messageID": "assistant-tool",
+                "tool": "list",
+                "state": "completed",
+                "output": "ok",
+            },
+        },
+        {
+            "type": "step_finish",
+            "sessionID": "sess-1",
+            "part": {
+                "id": "step-1",
+                "type": "step-finish",
+                "messageID": "assistant-tool",
+                "reason": "tool-calls",
+            },
+        },
+        {
+            "type": "text",
+            "sessionID": "sess-1",
+            "part": {
+                "id": "text-1",
+                "type": "text",
+                "messageID": "assistant-final",
+                "text": "最终回答",
+            },
+        },
+        {
+            "type": "step_finish",
+            "sessionID": "sess-1",
+            "part": {
+                "id": "step-2",
+                "type": "step-finish",
+                "messageID": "assistant-final",
+                "reason": "stop",
+            },
+        },
+    ])
+    service = NativeAgentService()
+    service._run_client_factory = lambda: fake_client
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    events = [
+        event async for event in service.stream_chat(
+            profile=profile,
+            session=session,
+            user_text="查一下",
+            prompt_text="查一下",
+            history_service=history,
+        )
+    ]
+
+    done = next(event for event in events if event["type"] == "done")
+    assert done["output"] == "最终回答"
+    assert done["native_assistant_message_id"] == "assistant-final"
 
 
 @pytest.mark.asyncio

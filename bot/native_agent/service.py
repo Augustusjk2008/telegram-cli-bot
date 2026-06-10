@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -294,6 +295,7 @@ class NativeAgentService:
                 )
                 stream = run_client.stream(request)
                 iterator = stream.__aiter__()
+                next_event_task: asyncio.Task[dict[str, Any]] | None = None
                 mark_progress(loop.time(), signature="run-started")
                 try:
                     while True:
@@ -305,10 +307,15 @@ class NativeAgentService:
                             break
                         if await stop_if_no_progress(loop.time()):
                             break
-                        try:
-                            raw_event = await asyncio.wait_for(iterator.__anext__(), timeout=0.5)
-                        except asyncio.TimeoutError:
+                        if next_event_task is None:
+                            next_event_task = asyncio.create_task(iterator.__anext__())
+                        done_tasks, _ = await asyncio.wait({next_event_task}, timeout=0.5)
+                        if not done_tasks:
                             continue
+                        task = next_event_task
+                        next_event_task = None
+                        try:
+                            raw_event = task.result()
                         except StopAsyncIteration:
                             with session._lock:
                                 stopped_after_exit = bool(session.stop_requested)
@@ -427,6 +434,10 @@ class NativeAgentService:
                         continue
                     break
                 finally:
+                    if next_event_task is not None and not next_event_task.done():
+                        next_event_task.cancel()
+                        with suppress(asyncio.CancelledError, StopAsyncIteration):
+                            await next_event_task
                     try:
                         await stream.aclose()
                     except Exception:

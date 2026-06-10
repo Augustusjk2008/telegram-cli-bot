@@ -18,6 +18,9 @@ def run_json_to_events(
     message_id = _message_id(raw) or str(assistant_message_id or "").strip() or "msg_opencode_run_assistant"
     directory = str(raw.get("directory") or raw.get("cwd") or cwd or "").strip()
 
+    if raw_type in {"step_start", "step-start", "step.start"}:
+        return []
+
     if raw_type == "text" and isinstance(raw.get("part"), dict):
         part = _normalize_text_part(raw["part"], raw, message_id=message_id, session_id=session_id)
         return [_wrap_event("message.part.updated", raw, session_id=session_id, directory=directory, part=part, message_id=message_id)]
@@ -39,24 +42,26 @@ def run_json_to_events(
         return [_wrap_event("message.part.updated", raw, session_id=session_id, directory=directory, part={**part, "messageID": _message_id(part) or message_id, "sessionID": session_id}, message_id=message_id)]
 
     if raw_type in {"step_finish", "step-finish", "step.finish"}:
-        message = raw.get("message") if isinstance(raw.get("message"), dict) else {}
+        message = dict(raw["message"]) if isinstance(raw.get("message"), dict) else {}
+        finish = _step_finish_reason(raw)
         if not message:
             message = {
                 "id": message_id,
                 "role": "assistant",
-                "finish": "stop",
                 "time": {"completed": raw.get("time") or raw.get("completed_at") or True},
             }
         message.setdefault("id", message_id)
         message.setdefault("role", "assistant")
-        message.setdefault("finish", "stop")
+        message.setdefault("finish", finish or "stop")
         tokens = extract_step_finish_usage(raw)
         if tokens:
             message.setdefault("tokens", tokens)
-        return [
+        events = [
             _wrap_event("message.updated", raw, session_id=session_id, directory=directory, message=message, message_id=message_id),
-            _wrap_event("session.idle", raw, session_id=session_id, directory=directory, message_id=message_id),
         ]
+        if not _step_finish_expects_followup(message.get("finish")):
+            events.append(_wrap_event("session.idle", raw, session_id=session_id, directory=directory, message_id=message_id))
+        return events
 
     if raw_type in {"permission", "permission.updated", "permission.requested"} or isinstance(raw.get("permission"), dict):
         permission = raw.get("permission") if isinstance(raw.get("permission"), dict) else raw
@@ -88,13 +93,27 @@ def extract_session_id(raw: dict[str, Any]) -> str:
 
 
 def extract_step_finish_usage(raw: dict[str, Any]) -> dict[str, Any]:
+    part = raw.get("part") if isinstance(raw.get("part"), dict) else {}
+    message = raw.get("message") if isinstance(raw.get("message"), dict) else {}
     candidates = [
         raw.get("tokens"),
         raw.get("usage"),
         raw.get("tokenUsage"),
         raw.get("token_usage"),
+        part.get("tokens"),
+        part.get("usage"),
+        part.get("tokenUsage"),
+        part.get("token_usage"),
+        message.get("tokens"),
+        message.get("usage"),
+        message.get("tokenUsage"),
+        message.get("token_usage"),
     ]
     cost = raw.get("cost")
+    if cost is None:
+        cost = part.get("cost")
+    if cost is None:
+        cost = message.get("cost")
     for item in candidates:
         if isinstance(item, dict):
             usage = dict(item)
@@ -172,6 +191,22 @@ def _part_is_tool(part: dict[str, Any]) -> bool:
     return kind in {"tool", "tool_call", "tool-call", "tool_use"} or any(
         key in part for key in ("tool", "toolName", "callID", "toolCallId", "arguments", "raw_arguments")
     )
+
+
+def _step_finish_reason(raw: dict[str, Any]) -> str:
+    part = raw.get("part") if isinstance(raw.get("part"), dict) else {}
+    message = raw.get("message") if isinstance(raw.get("message"), dict) else {}
+    for record in (raw, part, message):
+        for key in ("reason", "finish", "finish_reason", "finishReason"):
+            value = record.get(key)
+            if value:
+                return str(value).strip()
+    return ""
+
+
+def _step_finish_expects_followup(value: Any) -> bool:
+    normalized = str(value or "").strip().lower().replace("_", "-")
+    return normalized in {"tool-calls", "tool-call"}
 
 
 def _value_text(value: Any) -> str:
