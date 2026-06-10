@@ -122,7 +122,7 @@ class TestManagerLoadSave:
 
         assert profile.supported_execution_modes == ["native_agent"]
         assert profile.default_execution_mode == "native_agent"
-        assert profile.native_agent == {"opencode_agent": "reviewer"}
+        assert profile.native_agent == {"backend": "pi", "pi_agent": "reviewer"}
 
 class TestManagerValidation:
     """测试验证逻辑"""
@@ -182,7 +182,7 @@ class TestManagerValidation:
                 },
             },
         )
-        assert manager.main_profile.native_agent == {"opencode_agent": "planner"}
+        assert manager.main_profile.native_agent == {"pi_agent": "planner"}
         await manager.set_bot_execution_config(
             "main",
             {
@@ -197,7 +197,7 @@ class TestManagerValidation:
                 },
             },
         )
-        assert manager.main_profile.native_agent == {"opencode_agent": "main"}
+        assert manager.main_profile.native_agent == {"pi_agent": "main"}
         await manager.set_bot_execution_config(
             "main",
             {
@@ -217,7 +217,7 @@ class TestManagerValidation:
 
         assert restored.main_profile.supported_execution_modes == ["native_agent"]
         assert restored.main_profile.default_execution_mode == "native_agent"
-        assert restored.main_profile.native_agent == {"opencode_agent": "main"}
+        assert restored.main_profile.native_agent == {"backend": "pi", "pi_agent": "main"}
 
     @pytest.mark.asyncio
     async def test_native_agent_bot_config_ignores_global_provider_fields(self, temp_dir: Path):
@@ -240,7 +240,7 @@ class TestManagerValidation:
             },
         )
 
-        assert manager.main_profile.native_agent == {"opencode_agent": "reviewer"}
+        assert manager.main_profile.native_agent == {"pi_agent": "reviewer"}
 
     @pytest.mark.asyncio
     async def test_native_agent_model_selection_persists(self, temp_dir: Path):
@@ -263,7 +263,11 @@ class TestManagerValidation:
             str(storage),
         )
 
-        assert restored.main_profile.native_agent == {"native_agent_model": "jojocode/gpt-5.4", "reasoning_effort": "high"}
+        assert restored.main_profile.native_agent == {
+            "backend": "pi",
+            "model": "jojocode/gpt-5.4",
+            "reasoning_effort": "high",
+        }
 
     @pytest.mark.asyncio
     async def test_background_services_do_not_start_native_agent_server(self, temp_dir: Path):

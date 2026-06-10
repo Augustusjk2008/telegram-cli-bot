@@ -79,8 +79,10 @@ ENV_SCHEMA: tuple[EnvField, ...] = (
     ),
     EnvField("WORKING_DIR", "默认工作目录", "仅影响主 Bot 下次启动默认目录。", "path", "", "basic"),
     EnvField("NATIVE_AGENT_ENABLED", "启用原生 agent", "启用原生 agent run 命令。", "boolean", "false", "advanced"),
-    EnvField("NATIVE_AGENT_COMMAND", "原生 agent 命令", "原生 agent run 可执行文件路径或 PATH 中的命令名；兼容旧 NATIVE_AGENT_PATH。", "path", "opencode", "advanced"),
-    EnvField("NATIVE_AGENT_OPENCODE_AGENT", "OpenCode agent", "全局 OpenCode agent 名称；留空使用默认。", "string", "", "advanced"),
+    EnvField("NATIVE_AGENT_COMMAND", "原生 agent 命令", "Pi run 可执行文件路径或 PATH 中的命令名；兼容旧 NATIVE_AGENT_PATH。", "path", "pi", "advanced"),
+    EnvField("NATIVE_AGENT_PI_COMMAND", "Pi 命令", "Pi agent 可执行文件路径或 PATH 中的命令名。", "path", "pi", "advanced"),
+    EnvField("NATIVE_AGENT_PI_AGENT", "Pi agent", "全局 Pi agent 名称；留空使用默认。", "string", "", "advanced"),
+    EnvField("NATIVE_AGENT_WORKSPACE_HISTORY_ENABLED", "Pi 工作区历史", "是否启用 Pi workspace history。", "boolean", "true", "advanced"),
     EnvField(
         "NATIVE_AGENT_REASONING_EFFORT",
         "Reasoning effort",

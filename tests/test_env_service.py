@@ -70,6 +70,10 @@ def test_env_service_exposes_native_agent_global_fields(tmp_path: Path) -> None:
 
     assert items["NATIVE_AGENT_ENABLED"]["type"] == "boolean"
     assert items["NATIVE_AGENT_COMMAND"]["type"] == "path"
+    assert items["NATIVE_AGENT_COMMAND"]["default"] == "pi"
+    assert items["NATIVE_AGENT_PI_COMMAND"]["type"] == "path"
+    assert items["NATIVE_AGENT_PI_AGENT"]["type"] == "string"
+    assert items["NATIVE_AGENT_WORKSPACE_HISTORY_ENABLED"]["type"] == "boolean"
     assert "run 命令" in items["NATIVE_AGENT_ENABLED"]["description"]
     assert "NATIVE_AGENT_" + "HOST" not in items
     assert "NATIVE_AGENT_" + "PORT" not in items
@@ -78,7 +82,7 @@ def test_env_service_exposes_native_agent_global_fields(tmp_path: Path) -> None:
     assert "NATIVE_AGENT_MODEL" not in items
     assert "NATIVE_AGENT_BASE_URL" not in items
     assert "NATIVE_AGENT_API_KEY" not in items
-    assert items["NATIVE_AGENT_OPENCODE_AGENT"]["type"] == "string"
+    assert "NATIVE_AGENT_OPENCODE_AGENT" not in items
     assert items["NATIVE_AGENT_REASONING_EFFORT"]["type"] == "select"
     assert items["NATIVE_AGENT_THINKING_DEPTH"]["type"] == "number"
 

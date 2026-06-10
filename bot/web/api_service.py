@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -132,8 +133,7 @@ from bot.native_agent import (
 from bot.native_agent.configuration import effective_native_agent_config
 from bot.native_agent.config_store import (
     find_configured_model,
-    get_native_agent_backup_path,
-    get_opencode_config_path,
+    get_pi_settings_path,
     list_configured_models,
     load_native_agent_config,
     save_native_agent_config,
@@ -265,6 +265,8 @@ WORKDIR_CHANGE_REQUIRES_RESET = "workdir_change_requires_reset"
 WORKDIR_CHANGE_BLOCKED_PROCESSING = "workdir_change_blocked_processing"
 CODEX_DONE_QUIET_SECONDS = 0.5
 CODEX_TERMINATE_GRACE_SECONDS = 1.0
+CLI_CONTEXT_USAGE_RESOLVE_TIMEOUT_SECONDS = 0.25
+_CLI_CONTEXT_USAGE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cli-context-usage")
 @dataclass
 class CliAttemptState:
     """单次 CLI 尝试的会话状态。"""
@@ -2022,9 +2024,12 @@ def get_native_agent_config_payload() -> dict[str, Any]:
         _raise(400, "invalid_native_agent_config", str(exc))
     return {
         "config": native_config,
-        "opencode_config_path": str(get_opencode_config_path()),
-        "backup_path": str(get_native_agent_backup_path()),
+        "backend": "pi",
+        "config_path": str(get_pi_settings_path()),
+        "workspace_history_enabled": bool(native_config.get("workspace_history_enabled", True)),
         "models": list_configured_models(native_config),
+        "selected_model": str(native_config.get("model") or native_config.get("selected_model") or "").strip(),
+        "selected_reasoning_effort": str(native_config.get("reasoning_effort") or "").strip(),
         "needs_restart": False,
     }
 
@@ -2042,7 +2047,7 @@ def update_native_agent_config_payload(payload: dict[str, Any]) -> dict[str, Any
 def get_native_agent_models_payload(manager: MultiBotManager, alias: str) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     models = list_configured_models()
-    selected_model = str(profile.native_agent.get("native_agent_model") or "").strip()
+    selected_model = str(profile.native_agent.get("model") or profile.native_agent.get("native_agent_model") or "").strip()
     if not selected_model and models:
         selected_model = str(models[0].get("id") or "")
     selected_item = _find_native_agent_model_item(models, selected_model)
@@ -2721,7 +2726,7 @@ async def reply_native_agent_permission(
         )
     except RuntimeError as exc:
         if "unsupported_in_run_mode" in str(exc):
-            _raise(409, "unsupported_in_run_mode", "opencode run 模式暂不支持交互式权限处理，请调整 OpenCode agent 权限配置")
+            _raise(409, "unsupported_in_run_mode", "原生 agent run 模式暂不支持交互式权限处理，请调整 Pi agent 权限配置")
         _raise(409, "native_agent_permission_unavailable", str(exc))
     except Exception as exc:
         _raise(500, "native_agent_permission_failed", f"原生 agent 权限处理失败: {exc}")
@@ -3098,6 +3103,58 @@ def _with_compaction_count(
         next_usage.pop("compaction_count", None)
 
     return next_usage, current_left_percent, next_count
+
+
+async def _resolve_cli_context_usage_bounded(
+    cli_type: str,
+    session_id: str | None,
+    *,
+    cwd_hint: str | None,
+    timeout_seconds: float = CLI_CONTEXT_USAGE_RESOLVE_TIMEOUT_SECONDS,
+) -> dict[str, Any] | None:
+    normalized_session_id = str(session_id or "").strip()
+    if not normalized_session_id:
+        return None
+    normalized_cli_type = normalize_cli_type(cli_type)
+    loop = asyncio.get_running_loop()
+    task = loop.run_in_executor(
+        _CLI_CONTEXT_USAGE_EXECUTOR,
+        resolve_cli_context_usage,
+        normalized_cli_type,
+        normalized_session_id,
+        cwd_hint,
+    )
+    done, _pending = await asyncio.wait({task}, timeout=timeout_seconds)
+    if not done:
+        def _consume_late_result(late_task: asyncio.Future[dict[str, Any] | None]) -> None:
+            try:
+                late_task.result()
+            except Exception:
+                logger.debug(
+                    "异步查询 CLI context_usage 失败 cli_type=%s session_id=%s",
+                    normalized_cli_type,
+                    normalized_session_id,
+                    exc_info=True,
+                )
+
+        task.add_done_callback(_consume_late_result)
+        logger.debug(
+            "查询 CLI context_usage 超时 cli_type=%s session_id=%s timeout=%.2f",
+            normalized_cli_type,
+            normalized_session_id,
+            timeout_seconds,
+        )
+        return None
+    try:
+        return task.result()
+    except Exception:
+        logger.debug(
+            "查询 CLI context_usage 失败 cli_type=%s session_id=%s",
+            normalized_cli_type,
+            normalized_session_id,
+            exc_info=True,
+        )
+        return None
 
 
 def _apply_agent_prompt_if_needed(prompt_text: str, agent: AgentProfile, session: UserSession, cli_type: str) -> str:
@@ -4902,8 +4959,7 @@ async def _stream_cli_chat(
                         )
                     )
                     if should_refresh_context_usage and status_session_id:
-                        status_context_usage = await asyncio.to_thread(
-                            resolve_cli_context_usage,
+                        status_context_usage = await _resolve_cli_context_usage_bounded(
                             cli_type,
                             status_session_id,
                             cwd_hint=session.working_dir,
@@ -5085,8 +5141,7 @@ async def _stream_cli_chat(
                 if completion_state == "completed" or should_force_error_output
                 else (response or latest_preview_text)
             )
-            context_usage = await asyncio.to_thread(
-                resolve_cli_context_usage,
+            context_usage = await _resolve_cli_context_usage_bounded(
                 cli_type,
                 native_session_id,
                 cwd_hint=session.working_dir,
@@ -5544,7 +5599,11 @@ async def run_cli_chat(
                 native_session_id=native_session_id,
             )
             assistant_stage_durations["trace_ms"] += max(0, int(round((time.perf_counter() - trace_started_at) * 1000)))
-            context_usage = resolve_cli_context_usage(cli_type, native_session_id, cwd_hint=session.working_dir)
+            context_usage = await _resolve_cli_context_usage_bounded(
+                cli_type,
+                native_session_id,
+                cwd_hint=session.working_dir,
+            )
             complete_started_at = time.perf_counter()
             done_message = service.complete_turn(
                 turn_handle,

@@ -6,6 +6,7 @@ import sqlite3
 import threading
 from contextlib import closing
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -84,6 +85,34 @@ def _iter_codex_state_databases(home: Path):
     return sorted(home.glob("state_*.sqlite"), reverse=True)
 
 
+_CODEX_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def _codex_session_date_parts(session_id: str) -> tuple[str, str, str] | None:
+    normalized = str(session_id or "").strip()
+    if not _CODEX_UUID_RE.match(normalized):
+        return None
+    try:
+        timestamp_ms = int(normalized.replace("-", "")[:12], 16)
+        date = datetime.fromtimestamp(timestamp_ms / 1000, UTC)
+    except (OverflowError, OSError, ValueError):
+        return None
+    return (f"{date.year:04d}", f"{date.month:02d}", f"{date.day:02d}")
+
+
+def _iter_codex_rollout_candidates(home: Path, session_id: str):
+    date_parts = _codex_session_date_parts(session_id)
+    if date_parts is None:
+        return
+    session_dir = home / "sessions" / date_parts[0] / date_parts[1] / date_parts[2]
+    if not session_dir.is_dir():
+        return
+    for candidate in session_dir.glob(f"rollout-*-{session_id}.jsonl"):
+        yield candidate
+
+
 def locate_codex_transcript(
     session_id: str,
     *,
@@ -115,7 +144,7 @@ def locate_codex_transcript(
                 LocatedTranscript("codex", session_id, transcript, cwd_hint),
             )
 
-    for candidate in home.glob("sessions/**/*.jsonl"):
+    for candidate in _iter_codex_rollout_candidates(home, session_id):
         if candidate.is_file() and session_id in candidate.name:
             return _set_cached_transcript(
                 "codex",

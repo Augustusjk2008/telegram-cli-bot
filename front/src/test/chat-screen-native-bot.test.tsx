@@ -23,7 +23,7 @@ test("pure native bot hides execution switch and sends native mode by default", 
     nativeAgent: {
       provider: "anthropic",
       model: "claude-sonnet-4-5",
-      opencodeAgent: "reviewer",
+      piAgent: "reviewer",
     },
   });
   const sendMessage = vi.spyOn(client, "sendMessage");

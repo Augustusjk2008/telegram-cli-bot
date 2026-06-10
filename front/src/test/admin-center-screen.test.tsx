@@ -167,9 +167,12 @@ test("admin center shows native agent global fields", async () => {
   render(<AdminCenterScreen client={client} onClose={() => {}} />);
 
   await user.click(await screen.findByRole("tab", { name: "原生 Agent" }));
-  await screen.findByRole("heading", { name: "原生 Agent" });
+  await screen.findByRole("heading", { name: "Pi 原生 agent 配置" });
 
-  expect(screen.getByText(/OpenCode:/)).toBeInTheDocument();
+  expect(screen.getByText(/Pi 配置:/)).toBeInTheDocument();
+  expect(screen.getByText(/Workspace history: 启用/)).toBeInTheDocument();
+  expect(screen.queryByText(/OpenCode:/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/备份:/)).not.toBeInTheDocument();
   expect(screen.getByText("jojocode_max / gpt-5.4")).toBeInTheDocument();
   const editor = screen.getByLabelText("原生 Agent 配置 JSON");
   fireEvent.change(editor, { target: { value: JSON.stringify({ provider: {} }) } });
@@ -178,4 +181,3 @@ test("admin center shows native agent global fields", async () => {
   await waitFor(() => expect(updateNativeAgentConfig).toHaveBeenCalledWith({ provider: {} }));
   expect(await screen.findByText("配置已保存，重启原生 agent 后生效")).toBeInTheDocument();
 });
-

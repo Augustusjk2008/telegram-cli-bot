@@ -77,7 +77,7 @@ class NativeAgentService:
         validate_native_agent_model_config(native_agent)
         return (
             build_native_agent_model_id(native_agent),
-            str(native_agent.get("opencode_agent") or "").strip(),
+            str(native_agent.get("pi_agent") or native_agent.get("opencode_agent") or "").strip(),
         )
 
     async def abort(self, session: UserSession) -> bool:
@@ -103,7 +103,7 @@ class NativeAgentService:
         message: str = "",
     ) -> dict[str, Any]:
         _ = session, permission_id, approved, message
-        raise RuntimeError("unsupported_in_run_mode: opencode run 模式暂不支持交互式权限处理，请调整 OpenCode agent 权限配置")
+        raise RuntimeError("unsupported_in_run_mode: 原生 agent run 模式暂不支持交互式权限处理，请调整 Pi agent 权限配置")
 
     async def stream_chat(
         self,
@@ -409,7 +409,7 @@ class NativeAgentService:
                                         "preview_text": result.status[-800:],
                                     }
                             if event.type == "permission.updated":
-                                error_message = "opencode run 模式暂不支持交互式权限请求，请调整 OpenCode agent 权限配置"
+                                error_message = "原生 agent run 模式暂不支持交互式权限请求，请调整 Pi agent 权限配置"
                                 completion_state = "error"
                                 returncode = 1
                                 if wants_ag_ui:
@@ -662,7 +662,10 @@ def _native_session_meta_mismatch(stored_meta: dict[str, Any], desired_meta: dic
     for key, desired_value in desired_meta.items():
         if key not in stored_meta:
             continue
-        if str(stored_meta.get(key) or "") != str(desired_value or ""):
+        stored_value = str(stored_meta.get(key) or "").strip()
+        if not stored_value:
+            continue
+        if stored_value != str(desired_value or ""):
             return True
     return False
 

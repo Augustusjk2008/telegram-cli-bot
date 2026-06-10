@@ -1229,8 +1229,8 @@ export function AdminCenterScreen({
           <section className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h2 className="text-base font-semibold text-[var(--text)]">原生 Agent</h2>
-                <p className="text-sm text-[var(--muted)]">OpenCode provider/model 配置。保存后需重启原生 agent。</p>
+                <h2 className="text-base font-semibold text-[var(--text)]">Pi 原生 agent 配置</h2>
+                <p className="text-sm text-[var(--muted)]">Pi provider/model 配置。保存后需重启原生 agent。</p>
               </div>
               <button
                 type="button"
@@ -1245,10 +1245,10 @@ export function AdminCenterScreen({
 
             <div className="grid grid-cols-1 gap-3 text-xs text-[var(--muted)] lg:grid-cols-2">
               <p className="break-all rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                OpenCode: {nativeAgentConfig?.opencodeConfigPath || "-"}
+                Pi 配置: {nativeAgentConfig?.configPath || "-"}
               </p>
               <p className="break-all rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                备份: {nativeAgentConfig?.backupPath || "-"}
+                Workspace history: {nativeAgentConfig?.workspaceHistoryEnabled ? "启用" : "关闭"}
               </p>
             </div>
 

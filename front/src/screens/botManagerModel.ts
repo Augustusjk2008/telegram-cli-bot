@@ -69,7 +69,7 @@ export type BotConfigSnapshot = {
 export const DEFAULT_NATIVE_AGENT_CONFIG: NativeAgentConfig = {
   provider: "",
   model: "",
-  opencodeAgent: "",
+  piAgent: "",
   baseUrl: "",
   hasApiKey: false,
   apiKeyMasked: "",
@@ -210,7 +210,7 @@ export function botMatchesManagerQuery(bot: BotSummary, query: string) {
     getRuntimeBackend(bot),
     bot.nativeAgent?.provider || "",
     bot.nativeAgent?.model || "",
-    bot.nativeAgent?.opencodeAgent || "",
+    bot.nativeAgent?.piAgent || "",
     ...(bot.busyAgentNames || []),
   ].join(" ").toLowerCase();
   return haystack.includes(normalized);

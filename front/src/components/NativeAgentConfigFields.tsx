@@ -3,7 +3,7 @@ import type { NativeAgentConfigInput, NativeAgentDraft } from "../services/types
 type Props = {
   provider: string;
   model: string;
-  opencodeAgent: string;
+  piAgent: string;
   baseUrl?: string;
   apiKey?: string;
   hasApiKey?: boolean;
@@ -17,7 +17,7 @@ type Props = {
 export function NativeAgentConfigFields({
   provider,
   model,
-  opencodeAgent,
+  piAgent,
   baseUrl = "",
   apiKey = "",
   hasApiKey = false,
@@ -44,12 +44,12 @@ export function NativeAgentConfigFields({
       </div>
       <div className="grid grid-cols-1 gap-3">
         <label className="space-y-1 text-sm">
-          <span className="text-[var(--muted)]">OpenCode agent</span>
+          <span className="text-[var(--muted)]">Pi agent</span>
           <input
-            aria-label="OpenCode agent"
-            value={opencodeAgent}
+            aria-label="Pi agent"
+            value={piAgent}
             disabled={disabled}
-            onChange={(event) => onNativeAgentChange({ opencodeAgent: event.target.value })}
+            onChange={(event) => onNativeAgentChange({ piAgent: event.target.value })}
             className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm disabled:opacity-60"
             placeholder="main"
           />

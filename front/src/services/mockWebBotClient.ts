@@ -481,11 +481,11 @@ function createMockEnvItems(): EnvConfigItem[] {
     {
       key: "NATIVE_AGENT_COMMAND",
       label: "原生 agent 命令",
-      description: "全局 OpenCode run 命令。",
+      description: "全局 Pi run 命令。",
       type: "path",
       category: "native_agent",
-      value: "opencode",
-      defaultValue: "opencode",
+      value: "pi",
+      defaultValue: "pi",
       source: "env",
       sensitive: false,
       masked: false,
@@ -1413,7 +1413,7 @@ export class MockWebBotClient implements WebBotClient {
         promptPresets: clonePromptPresets(item.promptPresets),
         supportedExecutionModes: ["cli"],
         defaultExecutionMode: "cli",
-        nativeAgent: { provider: "", model: "", opencodeAgent: "", baseUrl: "", hasApiKey: false, apiKeyMasked: "" },
+        nativeAgent: { provider: "", model: "", piAgent: "", baseUrl: "", hasApiKey: false, apiKeyMasked: "" },
         cluster: {
           ...DEFAULT_CLUSTER,
           modelTiers: { ...DEFAULT_CLUSTER.modelTiers },
@@ -1423,24 +1423,12 @@ export class MockWebBotClient implements WebBotClient {
   );
   private globalPromptPresets: PromptPreset[] = [];
   private nativeAgentConfig: Record<string, unknown> = {
-    "$schema": "https://opencode.ai/config.json",
-    provider: {
-      jojocode_max: {
-        models: {
-          "gpt-5.4": {
-            name: "gpt-5.4",
-            reasoningEfforts: ["low", "medium", "high"],
-            options: {
-              reasoningEffort: "medium",
-            },
-            limit: {
-              context: 1000000,
-              output: 128000,
-            },
-          },
-        },
-      },
-    },
+    backend: "pi",
+    model: "jojocode_max/gpt-5.4",
+    reasoning_effort: "medium",
+    pi_agent: "main",
+    pi_command: "pi",
+    workspace_history_enabled: true,
   };
   private nativeAgentModels: NativeAgentModelOption[] = [
     {
@@ -2315,13 +2303,14 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   private normalizeNativeAgentConfig(input: BotExecutionConfigInput["nativeAgent"] | CreateBotInput["nativeAgent"] | undefined, current?: BotSummary["nativeAgent"]): BotSummary["nativeAgent"] {
-    const opencodeAgent = String(input?.opencodeAgent || "").trim();
+    const legacyInput = input as unknown as { opencodeAgent?: string } | undefined;
+    const piAgent = String(input?.piAgent ?? legacyInput?.opencodeAgent ?? "").trim();
     const model = String(input?.model || current?.model || "").trim();
     const reasoningEffort = String(input?.reasoningEffort || current?.reasoningEffort || "").trim();
     return {
       provider: "",
       model,
-      opencodeAgent,
+      piAgent,
       baseUrl: "",
       hasApiKey: false,
       apiKeyMasked: "",
@@ -2330,6 +2319,36 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   private extractNativeAgentModels(config: Record<string, unknown>): NativeAgentModelOption[] {
+    const configuredModels = Array.isArray(config.models) ? config.models : [];
+    const directItems = configuredModels
+      .map((value): NativeAgentModelOption | null => {
+        const item = value && typeof value === "object" ? value as Record<string, unknown> : {};
+        const id = String(item.id || "").trim();
+        const provider = String(item.provider || id.split("/")[0] || "").trim();
+        const model = String(item.model || id.split("/").slice(1).join("/") || "").trim();
+        const name = String(item.name || model || id).trim();
+        if (!provider || !model) {
+          return null;
+        }
+        const reasoningEfforts = Array.isArray(item.reasoning_efforts)
+          ? Array.from(new Set(item.reasoning_efforts.map((entry) => String(entry || "").trim()).filter(Boolean)))
+          : [];
+        return {
+          id: id || `${provider}/${model}`,
+          provider,
+          model,
+          name,
+          label: String(item.label || `${provider} / ${name}`),
+          ...(typeof item.context_window === "number" ? { contextWindow: item.context_window } : {}),
+          ...(typeof item.output_limit === "number" ? { outputLimit: item.output_limit } : {}),
+          ...(reasoningEfforts.length ? { reasoningEfforts } : {}),
+          ...(item.default_reasoning_effort ? { defaultReasoningEffort: String(item.default_reasoning_effort) } : {}),
+        };
+      })
+      .filter((item): item is NativeAgentModelOption => Boolean(item));
+    if (directItems.length > 0) {
+      return directItems;
+    }
     const providerMap = config.provider && typeof config.provider === "object"
       ? config.provider as Record<string, unknown>
       : {};
@@ -3084,9 +3103,12 @@ export class MockWebBotClient implements WebBotClient {
     }
     return {
       config: JSON.parse(JSON.stringify(this.nativeAgentConfig)) as Record<string, unknown>,
-      opencodeConfigPath: "~/.config/opencode/opencode.json",
-      backupPath: "~/.tcb/native_agent/opencode.config.backup.json",
+      backend: String(this.nativeAgentConfig.backend || "pi"),
+      configPath: "~/.pi/agent/settings.json",
+      workspaceHistoryEnabled: Boolean(this.nativeAgentConfig.workspace_history_enabled ?? true),
       models: this.nativeAgentModels.map((item) => ({ ...item })),
+      selectedModel: String(this.nativeAgentConfig.model || ""),
+      selectedReasoningEffort: String(this.nativeAgentConfig.reasoning_effort || ""),
       needsRestart: false,
     };
   }
@@ -3099,9 +3121,12 @@ export class MockWebBotClient implements WebBotClient {
     this.nativeAgentModels = this.extractNativeAgentModels(this.nativeAgentConfig);
     return {
       config: JSON.parse(JSON.stringify(this.nativeAgentConfig)) as Record<string, unknown>,
-      opencodeConfigPath: "~/.config/opencode/opencode.json",
-      backupPath: "~/.tcb/native_agent/opencode.config.backup.json",
+      backend: String(this.nativeAgentConfig.backend || "pi"),
+      configPath: "~/.pi/agent/settings.json",
+      workspaceHistoryEnabled: Boolean(this.nativeAgentConfig.workspace_history_enabled),
       models: this.nativeAgentModels.map((item) => ({ ...item })),
+      selectedModel: String(this.nativeAgentConfig.model || ""),
+      selectedReasoningEffort: String(this.nativeAgentConfig.reasoning_effort || ""),
       needsRestart: true,
     };
   }
@@ -6908,7 +6933,7 @@ export class MockWebBotClient implements WebBotClient {
     const selectedItem = this.nativeAgentModels.find((item) => item.id === model);
     const reasoningEffort = this.resolveSelectedReasoningEffort(selectedItem, options.reasoningEffort);
     const nextNativeAgent = {
-      ...(bot.nativeAgent || { provider: "", model: "", opencodeAgent: "" }),
+      ...(bot.nativeAgent || { provider: "", model: "", piAgent: "" }),
       model,
       ...(reasoningEffort ? { reasoningEffort } : {}),
     };

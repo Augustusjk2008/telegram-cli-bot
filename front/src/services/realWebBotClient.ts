@@ -2022,7 +2022,7 @@ function mapNativeAgentConfig(value: unknown): NativeAgentConfig | undefined {
   return {
     provider: String(raw.provider || ""),
     model: String(raw.model || ""),
-    opencodeAgent: String(raw.opencode_agent ?? raw.opencodeAgent ?? raw.agent ?? ""),
+    piAgent: String(raw.pi_agent ?? raw.piAgent ?? raw.opencode_agent ?? raw.opencodeAgent ?? raw.agent ?? ""),
     baseUrl: String(raw.base_url ?? raw.baseUrl ?? ""),
     hasApiKey: Boolean(raw.has_api_key ?? raw.hasApiKey ?? raw.api_key_masked ?? raw.apiKeyMasked),
     apiKeyMasked: String(raw.api_key_masked ?? raw.apiKeyMasked ?? ""),
@@ -2055,9 +2055,12 @@ function mapNativeAgentConfigPayload(raw: unknown): NativeAgentConfigPayload {
   const models = Array.isArray(item.models) ? item.models.map(mapNativeAgentModelOption) : [];
   return {
     config: item.config && typeof item.config === "object" ? item.config as Record<string, unknown> : {},
-    opencodeConfigPath: String(item.opencode_config_path ?? item.opencodeConfigPath ?? ""),
-    backupPath: String(item.backup_path ?? item.backupPath ?? ""),
+    backend: String(item.backend ?? "pi"),
+    configPath: String(item.config_path ?? item.configPath ?? ""),
+    workspaceHistoryEnabled: Boolean(item.workspace_history_enabled ?? item.workspaceHistoryEnabled),
     models,
+    selectedModel: String(item.selected_model ?? item.selectedModel ?? ""),
+    selectedReasoningEffort: String(item.selected_reasoning_effort ?? item.selectedReasoningEffort ?? "").trim(),
     needsRestart: Boolean(item.needs_restart ?? item.needsRestart),
   };
 }
@@ -2084,9 +2087,10 @@ function toStringArray(value: unknown): string[] {
 }
 
 function serializeNativeAgentConfig(input: NativeAgentConfigInput | undefined) {
-  const nativeAgent = input || { provider: "", model: "", opencodeAgent: "", baseUrl: "" };
+  const nativeAgent = input || { provider: "", model: "", piAgent: "", baseUrl: "" };
   return {
-    opencode_agent: nativeAgent.opencodeAgent,
+    backend: "pi",
+    pi_agent: nativeAgent.piAgent,
   };
 }
 

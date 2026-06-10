@@ -199,7 +199,7 @@ export type CliErrorStatsFilters = {
 export type NativeAgentConfigView = {
   provider: string;
   model: string;
-  opencodeAgent: string;
+  piAgent: string;
   baseUrl?: string;
   hasApiKey?: boolean;
   apiKeyMasked?: string;
@@ -210,7 +210,7 @@ export type NativeAgentConfigView = {
 export type NativeAgentConfigInput = {
   provider: string;
   model: string;
-  opencodeAgent: string;
+  piAgent: string;
   baseUrl?: string;
   apiKey?: string;
   clearApiKey?: boolean;
@@ -232,9 +232,12 @@ export type NativeAgentModelOption = {
 
 export type NativeAgentConfigPayload = {
   config: Record<string, unknown>;
-  opencodeConfigPath: string;
-  backupPath: string;
+  backend: string;
+  configPath: string;
+  workspaceHistoryEnabled: boolean;
   models: NativeAgentModelOption[];
+  selectedModel: string;
+  selectedReasoningEffort?: string;
   needsRestart?: boolean;
 };
 

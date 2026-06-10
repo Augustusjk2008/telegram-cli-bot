@@ -88,7 +88,7 @@ test("native bots hide cli settings and params", async () => {
     nativeAgent: {
       provider: "anthropic",
       model: "claude-sonnet-4-5",
-      opencodeAgent: "reviewer",
+      piAgent: "reviewer",
       baseUrl: "https://cdn.codeflow.asia/v1",
       apiKey: "sk-settings-1234",
     },
@@ -108,7 +108,7 @@ test("native bots hide cli settings and params", async () => {
   expect(screen.queryByText("https://cdn.codeflow.asia/v1")).not.toBeInTheDocument();
   expect(screen.queryByText("已保存 sk-****1234")).not.toBeInTheDocument();
   expect(screen.queryByText("sk-settings-1234")).not.toBeInTheDocument();
-  expect(screen.getByText("OpenCode agent:")).toBeInTheDocument();
+  expect(screen.getByText("Pi agent:")).toBeInTheDocument();
   expect(screen.getByText("reviewer")).toBeInTheDocument();
 });
 

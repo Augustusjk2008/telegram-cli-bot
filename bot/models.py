@@ -108,22 +108,28 @@ def normalize_native_agent_config(value: Any, *, existing: dict[str, Any] | None
     data = value if isinstance(value, dict) else {}
     existing_config = dict(existing or {})
     provider = normalize_native_agent_provider(data.get("provider"))
-    model = str(data.get("model") or data.get("modelId") or data.get("model_id") or "").strip()
-    native_agent_model = str(
-        data.get("native_agent_model")
+    model = str(
+        data.get("model")
+        or data.get("modelId")
+        or data.get("model_id")
+        or data.get("native_agent_model")
         or data.get("nativeAgentModel")
         or data.get("selected_model")
         or data.get("selectedModel")
         or ""
     ).strip()
-    if not native_agent_model and "/" in model:
-        native_agent_model = model
-    opencode_agent = str(
-        data.get("opencode_agent")
+    if provider and model and "/" not in model:
+        model = f"{provider}/{model}"
+    pi_agent = str(
+        data.get("pi_agent")
+        or data.get("piAgent")
+        or data.get("opencode_agent")
         or data.get("opencodeAgent")
         or data.get("agent")
         or ""
     ).strip()
+    pi_command = str(data.get("pi_command") or data.get("piCommand") or "").strip()
+    workspace_history_value = _native_agent_value(data, "workspace_history_enabled", "workspaceHistoryEnabled")
     reasoning_effort = str(
         data.get("reasoning_effort")
         or data.get("reasoningEffort")
@@ -139,14 +145,43 @@ def normalize_native_agent_config(value: Any, *, existing: dict[str, Any] | None
     has_api_key_input = "api_key" in data or "apiKey" in data
     api_key = str(_native_agent_value(data, "api_key", "apiKey") or "").strip() if has_api_key_input else ""
     result: dict[str, Any] = {}
-    if native_agent_model:
-        result["native_agent_model"] = native_agent_model
+    if data and any(
+        key in data
+        for key in (
+            "backend",
+            "model",
+            "modelId",
+            "model_id",
+            "native_agent_model",
+            "nativeAgentModel",
+            "selected_model",
+            "selectedModel",
+            "pi_agent",
+            "piAgent",
+            "opencode_agent",
+            "opencodeAgent",
+            "agent",
+            "pi_command",
+            "piCommand",
+            "workspace_history_enabled",
+            "workspaceHistoryEnabled",
+            "reasoning_effort",
+            "reasoningEffort",
+            "thinking_depth",
+            "thinkingDepth",
+        )
+    ):
+        result["backend"] = "pi"
     if provider:
         result["provider"] = provider
     if model:
         result["model"] = model
-    if opencode_agent:
-        result["opencode_agent"] = opencode_agent
+    if pi_agent:
+        result["pi_agent"] = pi_agent
+    if pi_command:
+        result["pi_command"] = pi_command
+    if workspace_history_value is not None:
+        result["workspace_history_enabled"] = _native_agent_bool(data, "workspace_history_enabled", "workspaceHistoryEnabled")
     if reasoning_effort:
         result["reasoning_effort"] = reasoning_effort
     if thinking_depth:
@@ -169,12 +204,11 @@ def public_native_agent_config(value: Any) -> dict[str, Any]:
     config = normalize_native_agent_config(value)
     result = {
         key: config[key]
-        for key in ("provider", "model", "opencode_agent", "base_url", "reasoning_effort", "thinking_depth")
+        for key in ("backend", "model", "pi_agent", "pi_command", "reasoning_effort", "thinking_depth")
         if config.get(key)
     }
-    if config.get("native_agent_model"):
-        result["native_agent_model"] = config["native_agent_model"]
-        result["model"] = config["native_agent_model"]
+    if config.get("workspace_history_enabled") is not None:
+        result["workspace_history_enabled"] = bool(config.get("workspace_history_enabled"))
     api_key = str(config.get("api_key") or "")
     if api_key:
         result["has_api_key"] = True
@@ -187,9 +221,6 @@ def public_native_agent_config(value: Any) -> dict[str, Any]:
 
 def build_native_agent_model_id(value: Any) -> str:
     config = normalize_native_agent_config(value)
-    native_agent_model = str(config.get("native_agent_model") or "").strip()
-    if native_agent_model:
-        return native_agent_model
     provider = str(config.get("provider") or "").strip().lower()
     model = str(config.get("model") or "").strip()
     if not model:

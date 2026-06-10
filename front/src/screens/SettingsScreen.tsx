@@ -858,7 +858,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                   <p className="break-all"><span className="font-medium text-[var(--text)]">CLI 路径:</span> {overview.cliPath}</p>
                 ) : null}
                 {nativeRuntime ? <p><span className="font-medium text-[var(--text)]">Provider/Model:</span> 全局环境配置</p> : null}
-                {nativeRuntime ? <p><span className="font-medium text-[var(--text)]">OpenCode agent:</span> {overview.nativeAgent?.opencodeAgent || "未设置"}</p> : null}
+                {nativeRuntime ? <p><span className="font-medium text-[var(--text)]">Pi agent:</span> {overview.nativeAgent?.piAgent || "未设置"}</p> : null}
                 <p><span className="font-medium text-[var(--text)]">状态:</span> {overview.status}</p>
                 <p className="break-all"><span className="font-medium text-[var(--text)]">目录:</span> {overview.workingDir}</p>
               </div>

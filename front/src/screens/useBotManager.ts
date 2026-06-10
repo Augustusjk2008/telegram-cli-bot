@@ -93,7 +93,7 @@ function normalizeNativeAgentInput(nativeAgent: CreateBotInput["nativeAgent"] | 
     ...(nativeAgent || {}),
     provider: "",
     model: "",
-    opencodeAgent: nativeAgent?.opencodeAgent?.trim() || "",
+    piAgent: nativeAgent?.piAgent?.trim() || "",
     baseUrl: "",
     apiKey: "",
     clearApiKey: false,
@@ -103,7 +103,7 @@ function normalizeNativeAgentInput(nativeAgent: CreateBotInput["nativeAgent"] | 
 function comparableNativeAgentInput(nativeAgent: CreateBotInput["nativeAgent"] | EditDraft["nativeAgent"] | undefined) {
   const normalized = normalizeNativeAgentInput(nativeAgent);
   return {
-    opencodeAgent: normalized.opencodeAgent,
+    piAgent: normalized.piAgent,
   };
 }
 

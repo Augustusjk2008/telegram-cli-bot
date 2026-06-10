@@ -36,7 +36,7 @@ class DesktopManagerClient extends MockWebBotClient {
         isMain: true,
         supportedExecutionModes: ["cli"],
         defaultExecutionMode: "cli",
-        nativeAgent: { provider: "", model: "", opencodeAgent: "" },
+        nativeAgent: { provider: "", model: "", piAgent: "" },
       },
       {
         alias: "review",
@@ -57,7 +57,7 @@ class DesktopManagerClient extends MockWebBotClient {
         nativeAgent: {
           provider: "anthropic",
           model: "claude-sonnet-4-5",
-          opencodeAgent: "reviewer",
+          piAgent: "reviewer",
           baseUrl: "https://cdn.codeflow.asia/v1",
           hasApiKey: true,
           apiKeyMasked: "sk-****1234",
@@ -76,7 +76,7 @@ class DesktopManagerClient extends MockWebBotClient {
         avatarName: "avatar_03.png",
         supportedExecutionModes: ["cli"],
         defaultExecutionMode: "cli",
-        nativeAgent: { provider: "", model: "", opencodeAgent: "" },
+        nativeAgent: { provider: "", model: "", piAgent: "" },
       },
     ];
   }
@@ -433,7 +433,7 @@ test("desktop bot manager creates a bot with native agent config", async () => {
   expect(screen.queryByLabelText("原生 agent Model")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("原生 agent Base URL")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("原生 agent API Key")).not.toBeInTheDocument();
-  fireEvent.change(screen.getByLabelText("OpenCode agent"), { target: { value: "reviewer" } });
+  fireEvent.change(screen.getByLabelText("Pi agent"), { target: { value: "reviewer" } });
   await user.click(screen.getByRole("button", { name: "创建智能体" }));
 
   await waitFor(() => {
@@ -444,7 +444,7 @@ test("desktop bot manager creates a bot with native agent config", async () => {
     supportedExecutionModes: ["native_agent"],
     defaultExecutionMode: "native_agent",
     nativeAgent: {
-      opencodeAgent: "reviewer",
+      piAgent: "reviewer",
     },
   });
 });
@@ -464,9 +464,9 @@ test("desktop bot manager edits native agent config", async () => {
   expect(screen.queryByLabelText("原生 agent Model")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("原生 agent Base URL")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("原生 agent API Key")).not.toBeInTheDocument();
-  expect(screen.getByLabelText("OpenCode agent")).toHaveValue("reviewer");
+  expect(screen.getByLabelText("Pi agent")).toHaveValue("reviewer");
 
-  fireEvent.change(screen.getByLabelText("OpenCode agent"), { target: { value: "qa" } });
+  fireEvent.change(screen.getByLabelText("Pi agent"), { target: { value: "qa" } });
   await user.click(screen.getByRole("button", { name: "保存智能体" }));
 
   await waitFor(() => {
@@ -478,7 +478,7 @@ test("desktop bot manager edits native agent config", async () => {
       supportedExecutionModes: ["native_agent"],
       defaultExecutionMode: "native_agent",
       nativeAgent: {
-        opencodeAgent: "qa",
+        piAgent: "qa",
       },
     },
   });

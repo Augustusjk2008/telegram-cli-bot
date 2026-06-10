@@ -2092,7 +2092,7 @@ test("native agent model select is enabled and saves bot model", async () => {
       isProcessing: false,
       supportedExecutionModes: ["native_agent"],
       defaultExecutionMode: "native_agent",
-      nativeAgent: { provider: "", model: "jojocode_max/gpt-5.4", opencodeAgent: "" },
+      nativeAgent: { provider: "", model: "jojocode_max/gpt-5.4", piAgent: "" },
     }),
     getNativeAgentModels: async () => ({
       items: [

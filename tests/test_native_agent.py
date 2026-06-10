@@ -1431,7 +1431,7 @@ def test_native_agent_global_config_splits_provider_from_model(monkeypatch: pyte
     validate_native_agent_model_config(native_agent)
 
     assert native_agent["provider"] == "jojocode"
-    assert native_agent["model"] == "gpt-5.4"
+    assert native_agent["model"] == "jojocode/gpt-5.4"
 
 
 class FakeRunProcess:

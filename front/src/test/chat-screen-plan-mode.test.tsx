@@ -41,7 +41,7 @@ function createNativeOverview(): BotOverview {
     nativeAgent: {
       provider: "openai",
       model: "gpt-5",
-      opencodeAgent: "main",
+      piAgent: "main",
     },
   };
 }
@@ -55,7 +55,7 @@ function createHybridOverview(executionMode: "cli" | "native_agent" = "cli"): Bo
     nativeAgent: {
       provider: "openai",
       model: "gpt-5",
-      opencodeAgent: "main",
+      piAgent: "main",
     },
   };
 }

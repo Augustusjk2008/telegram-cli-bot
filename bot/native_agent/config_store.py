@@ -18,13 +18,19 @@ def get_opencode_config_path() -> Path:
     return Path.home() / ".config" / "opencode" / "opencode.json"
 
 
+def get_pi_settings_path() -> Path:
+    override = os.environ.get("PI_AGENT_SETTINGS")
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / ".pi" / "agent" / "settings.json"
+
+
 def get_native_agent_backup_path() -> Path:
     return get_app_data_root() / "native_agent" / "opencode.config.backup.json"
 
 
 def load_native_agent_config() -> dict[str, Any]:
-    backup_path = get_native_agent_backup_path()
-    source_path = backup_path if backup_path.is_file() else get_opencode_config_path()
+    source_path = get_pi_settings_path()
     try:
         payload = json.loads(source_path.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -38,15 +44,16 @@ def load_native_agent_config() -> dict[str, Any]:
 
 def save_native_agent_config(config: dict[str, Any]) -> dict[str, Any]:
     normalized = normalize_native_agent_config_document(config)
-    opencode_path = get_opencode_config_path()
-    backup_path = get_native_agent_backup_path()
-    for path in (opencode_path, backup_path):
-        _write_json(path, normalized)
+    settings_path = get_pi_settings_path()
+    _write_json(settings_path, normalized)
     return {
         "config": normalized,
-        "opencode_config_path": str(opencode_path),
-        "backup_path": str(backup_path),
+        "backend": "pi",
+        "config_path": str(settings_path),
+        "workspace_history_enabled": bool(normalized.get("workspace_history_enabled", True)),
         "models": list_configured_models(normalized),
+        "selected_model": str(normalized.get("model") or normalized.get("selected_model") or "").strip(),
+        "selected_reasoning_effort": str(normalized.get("reasoning_effort") or "").strip(),
         "needs_restart": True,
     }
 
@@ -69,6 +76,13 @@ def ensure_opencode_config(native_agent: dict[str, Any] | None = None) -> Path:
         if fallback:
             _write_json(opencode_path, fallback)
             _write_json(backup_path, fallback)
+        return opencode_path
+    try:
+        configured = load_native_agent_config()
+    except ValueError:
+        configured = {}
+    if configured and list_configured_models(configured):
+        _write_json(opencode_path, configured)
         return opencode_path
     fallback = build_legacy_opencode_config(native_agent or {})
     if fallback:
@@ -103,7 +117,7 @@ def build_legacy_opencode_config(native_agent: dict[str, Any]) -> dict[str, Any]
         provider_config["options"]["baseURL"] = base_url
     if api_key:
         provider_config["options"]["apiKey"] = api_key
-    opencode_agent = str(native_agent.get("opencode_agent") or "").strip()
+    opencode_agent = str(native_agent.get("pi_agent") or native_agent.get("opencode_agent") or "").strip()
     payload: dict[str, Any] = {
         "$schema": OPENCODE_SCHEMA,
         "model": f"{provider}/{model_name}",
@@ -121,6 +135,48 @@ def list_configured_models(config: dict[str, Any] | None = None) -> list[dict[st
         load_native_agent_config() if config is None else config,
         validate_limits=False,
     )
+    direct_models = payload.get("models")
+    if isinstance(direct_models, list):
+        items: list[dict[str, Any]] = []
+        for raw_item in direct_models:
+            if not isinstance(raw_item, dict):
+                continue
+            item_id = str(raw_item.get("id") or "").strip()
+            provider = str(raw_item.get("provider") or (item_id.split("/", 1)[0] if "/" in item_id else "")).strip()
+            model = str(raw_item.get("model") or (item_id.split("/", 1)[1] if "/" in item_id else "")).strip()
+            if not provider or not model:
+                continue
+            name = str(raw_item.get("name") or model).strip() or model
+            model_key = item_id or f"{provider}/{model}"
+            if isinstance(raw_item.get("variants"), dict):
+                reasoning_efforts = _string_list(list(raw_item["variants"].keys()))
+            else:
+                reasoning_efforts = _string_list(
+                    raw_item.get("reasoning_efforts", raw_item.get("reasoningEfforts"))
+                )
+            items.append(
+                {
+                    "id": model_key,
+                    "provider": provider,
+                    "model": model,
+                    "name": name,
+                    "label": str(raw_item.get("label") or f"{provider} / {name}"),
+                    "context_window": _positive_int_or_none(
+                        raw_item.get("context_window", raw_item.get("contextWindow"))
+                    ),
+                    "output_limit": _positive_int_or_none(
+                        raw_item.get("output_limit", raw_item.get("outputLimit"))
+                    ),
+                    "reasoning_efforts": reasoning_efforts,
+                    "default_reasoning_effort": str(
+                        raw_item.get("default_reasoning_effort")
+                        or raw_item.get("defaultReasoningEffort")
+                        or ""
+                    ).strip(),
+                }
+            )
+        if items:
+            return items
     provider_map = payload.get("provider")
     if not isinstance(provider_map, dict):
         return []
@@ -181,10 +237,42 @@ def normalize_native_agent_config_document(
     if not isinstance(config, dict):
         raise ValueError("原生 Agent 配置必须是 JSON 对象")
     payload = dict(config)
-    payload.setdefault("$schema", OPENCODE_SCHEMA)
+    payload["backend"] = "pi"
+    if "selected_model" in payload and not payload.get("model"):
+        payload["model"] = str(payload.get("selected_model") or "").strip()
+    if "selectedModel" in payload and not payload.get("model"):
+        payload["model"] = str(payload.get("selectedModel") or "").strip()
+    if "piAgent" in payload and "pi_agent" not in payload:
+        payload["pi_agent"] = str(payload.get("piAgent") or "").strip()
+    if "piCommand" in payload and "pi_command" not in payload:
+        payload["pi_command"] = str(payload.get("piCommand") or "").strip()
+    if "opencode_agent" in payload and "pi_agent" not in payload:
+        payload["pi_agent"] = str(payload.get("opencode_agent") or "").strip()
+    if "opencodeAgent" in payload and "pi_agent" not in payload:
+        payload["pi_agent"] = str(payload.get("opencodeAgent") or "").strip()
+    if "agent" in payload and "pi_agent" not in payload:
+        payload["pi_agent"] = str(payload.get("agent") or "").strip()
+    if "workspaceHistoryEnabled" in payload and "workspace_history_enabled" not in payload:
+        payload["workspace_history_enabled"] = bool(payload.get("workspaceHistoryEnabled"))
+    payload.setdefault("workspace_history_enabled", True)
+    for legacy_key in (
+        "$schema",
+        "selected_model",
+        "selectedModel",
+        "piAgent",
+        "piCommand",
+        "opencode_agent",
+        "opencodeAgent",
+        "agent",
+        "workspaceHistoryEnabled",
+        "opencode_config_path",
+        "opencodeConfigPath",
+        "backup_path",
+        "backupPath",
+    ):
+        payload.pop(legacy_key, None)
     providers = payload.get("provider")
     if providers is None:
-        payload["provider"] = {}
         return payload
     if not isinstance(providers, dict):
         raise ValueError("provider 必须是对象")
@@ -222,8 +310,13 @@ def normalize_native_agent_config_document(
 
 def _default_config() -> dict[str, Any]:
     return {
-        "$schema": OPENCODE_SCHEMA,
-        "provider": {},
+        "backend": "pi",
+        "model": "",
+        "reasoning_effort": "",
+        "pi_agent": "",
+        "pi_command": "pi",
+        "workspace_history_enabled": True,
+        "models": [],
     }
 
 

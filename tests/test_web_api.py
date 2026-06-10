@@ -1445,7 +1445,10 @@ def test_build_bot_summary_returns_native_agent_config_without_password(web_mana
     monkeypatch.setattr(config, "NATIVE_AGENT_MODEL", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_BASE_URL", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_API_KEY", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PI_AGENT", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_OPENCODE_AGENT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PI_COMMAND", "pi")
+    monkeypatch.setattr(config, "NATIVE_AGENT_WORKSPACE_HISTORY_ENABLED", True)
     monkeypatch.setattr(config, "NATIVE_AGENT_REASONING_EFFORT", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_THINKING_DEPTH", "")
     monkeypatch.setattr("bot.native_agent.configuration.first_configured_model", lambda _config=None: None)
@@ -1454,7 +1457,7 @@ def test_build_bot_summary_returns_native_agent_config_without_password(web_mana
     web_manager.main_profile.native_agent = {
         "provider": "anthropic",
         "model": "claude-sonnet-4-5",
-        "opencode_agent": "reviewer",
+        "pi_agent": "reviewer",
         "base_url": "https://cdn.codeflow.asia/v1",
         "api_key": "sk-secret-1234",
     }
@@ -1463,14 +1466,11 @@ def test_build_bot_summary_returns_native_agent_config_without_password(web_mana
 
     assert summary["supported_execution_modes"] == ["native_agent"]
     assert summary["default_execution_mode"] == "native_agent"
-    assert summary["native_agent"] == {
-        "opencode_agent": "reviewer",
-        "has_api_key": False,
-        "api_key_masked": "",
-    }
+    assert summary["native_agent"]["backend"] == "pi"
+    assert summary["native_agent"]["pi_agent"] == "reviewer"
+    assert "opencode_agent" not in summary["native_agent"]
     assert "provider" not in summary["native_agent"]
-    assert "model" not in summary["native_agent"]
-    assert "base_url" not in summary["native_agent"]
+    assert summary["native_agent"]["model"] == "anthropic/claude-sonnet-4-5"
     assert "api_key" not in summary["native_agent"]
     assert "sk-secret-1234" not in json.dumps(summary, ensure_ascii=False)
 
@@ -1483,9 +1483,8 @@ async def test_admin_native_agent_config_routes_save_config(
 ):
     from bot.native_agent import config_store
 
-    opencode_path = tmp_path / "opencode.json"
-    monkeypatch.setenv("OPENCODE_CONFIG", str(opencode_path))
-    monkeypatch.setattr(config_store, "get_app_data_root", lambda: tmp_path / "data")
+    settings_path = tmp_path / "settings.json"
+    monkeypatch.setenv("PI_AGENT_SETTINGS", str(settings_path))
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
     monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
     monkeypatch.setattr("bot.web.server.ALLOWED_USER_IDS", [])
@@ -1497,16 +1496,19 @@ async def test_admin_native_agent_config_routes_save_config(
                 "/api/admin/native-agent/config",
                 json={
                     "config": {
-                        "provider": {
-                            "jojocode_max": {
-                                "models": {
-                                    "gpt-5.4": {
-                                        "name": "gpt-5.4",
-                                        "limit": {"context": 1_000_000, "output": 128_000},
-                                    }
-                                }
+                        "backend": "pi",
+                        "model": "jojocode_max/gpt-5.4",
+                        "workspace_history_enabled": True,
+                        "models": [
+                            {
+                                "id": "jojocode_max/gpt-5.4",
+                                "provider": "jojocode_max",
+                                "model": "gpt-5.4",
+                                "name": "gpt-5.4",
+                                "context_window": 1_000_000,
+                                "output_limit": 128_000,
                             }
-                        }
+                        ],
                     }
                 },
             )
@@ -1516,9 +1518,14 @@ async def test_admin_native_agent_config_routes_save_config(
 
     assert patch_resp.status == 200
     assert patch_payload["data"]["needs_restart"] is True
-    assert patch_payload["data"]["opencode_config_path"] == str(opencode_path)
+    assert patch_payload["data"]["backend"] == "pi"
+    assert patch_payload["data"]["config_path"] == str(settings_path)
+    assert patch_payload["data"]["selected_model"] == "jojocode_max/gpt-5.4"
+    assert patch_payload["data"]["workspace_history_enabled"] is True
+    assert "opencode_config_path" not in patch_payload["data"]
+    assert "backup_path" not in patch_payload["data"]
     assert patch_payload["data"]["models"][0]["id"] == "jojocode_max/gpt-5.4"
-    assert json.loads(opencode_path.read_text(encoding="utf-8")) == patch_payload["data"]["config"]
+    assert json.loads(settings_path.read_text(encoding="utf-8")) == patch_payload["data"]["config"]
     assert get_resp.status == 200
     assert get_payload["data"]["models"][0]["context_window"] == 1_000_000
 
@@ -1531,21 +1538,25 @@ async def test_bot_native_agent_model_routes_save_selection(
 ):
     from bot.native_agent import config_store
 
-    monkeypatch.setenv("OPENCODE_CONFIG", str(tmp_path / "opencode.json"))
-    monkeypatch.setattr(config_store, "get_app_data_root", lambda: tmp_path / "data")
+    monkeypatch.setenv("PI_AGENT_SETTINGS", str(tmp_path / "settings.json"))
     config_store.save_native_agent_config({
-        "provider": {
-            "jojocode_max": {
-                "models": {
-                    "gpt-5.4": {"name": "gpt-5.4", "limit": {"context": 1_000_000}},
-                    "gpt-5.5": {
-                        "name": "gpt-5.5",
-                        "reasoningEfforts": ["low", "medium", "high"],
-                        "options": {"reasoningEffort": "medium"},
-                    },
-                }
-            }
-        }
+        "models": [
+            {
+                "id": "jojocode_max/gpt-5.4",
+                "provider": "jojocode_max",
+                "model": "gpt-5.4",
+                "name": "gpt-5.4",
+                "context_window": 1_000_000,
+            },
+            {
+                "id": "jojocode_max/gpt-5.5",
+                "provider": "jojocode_max",
+                "model": "gpt-5.5",
+                "name": "gpt-5.5",
+                "reasoning_efforts": ["low", "medium", "high"],
+                "default_reasoning_effort": "medium",
+            },
+        ]
     })
     web_manager.main_profile.supported_execution_modes = ["native_agent"]
     web_manager.main_profile.default_execution_mode = "native_agent"
@@ -1573,7 +1584,7 @@ async def test_bot_native_agent_model_routes_save_selection(
     assert patch_payload["data"]["bot"]["native_agent"]["model"] == "jojocode_max/gpt-5.5"
     assert patch_payload["data"]["bot"]["native_agent"]["reasoning_effort"] == "high"
     assert web_manager.main_profile.native_agent == {
-        "native_agent_model": "jojocode_max/gpt-5.5",
+        "model": "jojocode_max/gpt-5.5",
         "reasoning_effort": "high",
     }
 
@@ -1586,25 +1597,28 @@ async def test_bot_native_agent_model_routes_validate_and_clear_reasoning_effort
 ):
     from bot.native_agent import config_store
 
-    monkeypatch.setenv("OPENCODE_CONFIG", str(tmp_path / "opencode.json"))
-    monkeypatch.setattr(config_store, "get_app_data_root", lambda: tmp_path / "data")
+    monkeypatch.setenv("PI_AGENT_SETTINGS", str(tmp_path / "settings.json"))
     config_store.save_native_agent_config({
-        "provider": {
-            "jojocode_max": {
-                "models": {
-                    "gpt-5.4": {
-                        "name": "gpt-5.4",
-                        "reasoningEfforts": ["low", "high"],
-                    },
-                    "gpt-plain": {"name": "gpt-plain"},
-                }
-            }
-        }
+        "models": [
+            {
+                "id": "jojocode_max/gpt-5.4",
+                "provider": "jojocode_max",
+                "model": "gpt-5.4",
+                "name": "gpt-5.4",
+                "reasoning_efforts": ["low", "high"],
+            },
+            {
+                "id": "jojocode_max/gpt-plain",
+                "provider": "jojocode_max",
+                "model": "gpt-plain",
+                "name": "gpt-plain",
+            },
+        ]
     })
     web_manager.main_profile.supported_execution_modes = ["native_agent"]
     web_manager.main_profile.default_execution_mode = "native_agent"
     web_manager.main_profile.native_agent = {
-        "native_agent_model": "jojocode_max/gpt-5.4",
+        "model": "jojocode_max/gpt-5.4",
         "reasoning_effort": "high",
     }
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
@@ -1632,7 +1646,7 @@ async def test_bot_native_agent_model_routes_validate_and_clear_reasoning_effort
     assert clear_resp.status == 200
     assert clear_payload["data"]["selected_model"] == "jojocode_max/gpt-plain"
     assert clear_payload["data"]["selected_reasoning_effort"] == ""
-    assert web_manager.main_profile.native_agent == {"native_agent_model": "jojocode_max/gpt-plain"}
+    assert web_manager.main_profile.native_agent == {"model": "jojocode_max/gpt-plain"}
 
 
 @pytest.mark.asyncio
@@ -1643,7 +1657,10 @@ async def test_admin_execution_route_updates_native_agent_config_and_hides_passw
     monkeypatch.setattr(config, "NATIVE_AGENT_MODEL", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_BASE_URL", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_API_KEY", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PI_AGENT", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_OPENCODE_AGENT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PI_COMMAND", "pi")
+    monkeypatch.setattr(config, "NATIVE_AGENT_WORKSPACE_HISTORY_ENABLED", True)
     monkeypatch.setattr(config, "NATIVE_AGENT_REASONING_EFFORT", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_THINKING_DEPTH", "")
     monkeypatch.setattr("bot.native_agent.configuration.first_configured_model", lambda _config=None: None)
@@ -1702,28 +1719,20 @@ async def test_admin_execution_route_updates_native_agent_config_and_hides_passw
     assert resp.status == 200
     assert payload["data"]["bot"]["default_execution_mode"] == "native_agent"
     assert payload["data"]["bot"]["supported_execution_modes"] == ["native_agent"]
-    assert payload["data"]["bot"]["native_agent"] == {
-        "opencode_agent": "reviewer",
-        "has_api_key": False,
-        "api_key_masked": "",
-    }
+    assert payload["data"]["bot"]["native_agent"]["pi_agent"] == "reviewer"
+    assert payload["data"]["bot"]["native_agent"]["backend"] == "pi"
+    assert "opencode_agent" not in payload["data"]["bot"]["native_agent"]
     assert "api_key" not in payload["data"]["bot"]["native_agent"]
     assert "sk-route-1234" not in json.dumps(payload, ensure_ascii=False)
     assert keep_resp.status == 200
-    assert keep_payload["data"]["bot"]["native_agent"] == {
-        "opencode_agent": "main",
-        "has_api_key": False,
-        "api_key_masked": "",
-    }
+    assert keep_payload["data"]["bot"]["native_agent"]["pi_agent"] == "main"
+    assert "opencode_agent" not in keep_payload["data"]["bot"]["native_agent"]
     assert "sk-route-1234" not in json.dumps(keep_payload, ensure_ascii=False)
     assert clear_resp.status == 200
-    assert clear_payload["data"]["bot"]["native_agent"] == {
-        "opencode_agent": "main",
-        "has_api_key": False,
-        "api_key_masked": "",
-    }
+    assert clear_payload["data"]["bot"]["native_agent"]["pi_agent"] == "main"
+    assert "opencode_agent" not in clear_payload["data"]["bot"]["native_agent"]
     assert web_manager.main_profile.native_agent == {
-        "opencode_agent": "main",
+        "pi_agent": "main",
     }
 
 
@@ -1735,7 +1744,10 @@ async def test_admin_execution_route_ignores_bot_scoped_native_agent_api_key(web
     monkeypatch.setattr(config, "NATIVE_AGENT_MODEL", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_BASE_URL", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_API_KEY", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PI_AGENT", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_OPENCODE_AGENT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PI_COMMAND", "pi")
+    monkeypatch.setattr(config, "NATIVE_AGENT_WORKSPACE_HISTORY_ENABLED", True)
     monkeypatch.setattr(config, "NATIVE_AGENT_REASONING_EFFORT", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_THINKING_DEPTH", "")
     monkeypatch.setattr("bot.native_agent.configuration.first_configured_model", lambda _config=None: None)
@@ -1745,7 +1757,7 @@ async def test_admin_execution_route_ignores_bot_scoped_native_agent_api_key(web
     web_manager.main_profile.native_agent = {
         "provider": "anthropic",
         "model": "claude-sonnet-4-5",
-        "opencode_agent": "reviewer",
+        "pi_agent": "reviewer",
         "base_url": "https://cdn.codeflow.asia/v1",
         "api_key": "sk-old-1234",
     }
@@ -1770,14 +1782,11 @@ async def test_admin_execution_route_ignores_bot_scoped_native_agent_api_key(web
             payload = await resp.json()
 
     assert resp.status == 200
-    assert payload["data"]["bot"]["native_agent"] == {
-        "opencode_agent": "reviewer",
-        "has_api_key": False,
-        "api_key_masked": "",
-    }
+    assert payload["data"]["bot"]["native_agent"]["pi_agent"] == "reviewer"
+    assert "opencode_agent" not in payload["data"]["bot"]["native_agent"]
     assert "api_key" not in payload["data"]["bot"]["native_agent"]
     assert "sk-new-5678" not in json.dumps(payload, ensure_ascii=False)
-    assert web_manager.main_profile.native_agent == {"opencode_agent": "reviewer"}
+    assert web_manager.main_profile.native_agent == {"pi_agent": "reviewer"}
 @pytest.mark.asyncio
 async def test_web_api_lists_plugins_and_resolves_vcd_handler(
     web_manager: MultiBotManager,

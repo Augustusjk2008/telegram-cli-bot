@@ -112,7 +112,7 @@ function normalizeCreateDraft(draft: CreateDraft): CreateDraft {
     ...(draft.nativeAgent || {}),
     provider: providerLooksLikeUrl ? "codeflow" : providerInput,
     model: draft.nativeAgent?.model?.trim() || "",
-    opencodeAgent: draft.nativeAgent?.opencodeAgent?.trim() || "",
+    piAgent: draft.nativeAgent?.piAgent?.trim() || "",
     baseUrl: providerLooksLikeUrl && !baseUrlInput ? providerInput.replace(/\/+$/, "") : baseUrlInput.replace(/\/+$/, ""),
     apiKey: draft.nativeAgent?.apiKey?.trim() || "",
     clearApiKey: Boolean(draft.nativeAgent?.clearApiKey),
@@ -148,7 +148,7 @@ function normalizeEditDraft(draft: EditDraft): EditDraft {
       ...draft.nativeAgent,
       provider: providerLooksLikeUrl ? "codeflow" : providerInput,
       model: draft.nativeAgent.model.trim(),
-      opencodeAgent: draft.nativeAgent.opencodeAgent.trim(),
+      piAgent: draft.nativeAgent.piAgent.trim(),
       baseUrl: providerLooksLikeUrl && !baseUrlInput ? providerInput.replace(/\/+$/, "") : baseUrlInput.replace(/\/+$/, ""),
       apiKey: draft.nativeAgent.apiKey.trim(),
       clearApiKey: Boolean(draft.nativeAgent.clearApiKey),
@@ -415,7 +415,7 @@ function CreatePanel({
         <NativeAgentConfigFields
           provider={draft.nativeAgent?.provider || DEFAULT_NATIVE_AGENT_DRAFT.provider}
           model={draft.nativeAgent?.model || DEFAULT_NATIVE_AGENT_DRAFT.model}
-          opencodeAgent={draft.nativeAgent?.opencodeAgent || DEFAULT_NATIVE_AGENT_DRAFT.opencodeAgent}
+          piAgent={draft.nativeAgent?.piAgent || DEFAULT_NATIVE_AGENT_DRAFT.piAgent}
           baseUrl={draft.nativeAgent?.baseUrl || DEFAULT_NATIVE_AGENT_DRAFT.baseUrl}
           apiKey={draft.nativeAgent?.apiKey || ""}
           disabled={!canManage || manager.savingAction !== ""}
@@ -694,7 +694,7 @@ function EditPanel({
         <NativeAgentConfigFields
           provider={draft.nativeAgent.provider}
           model={draft.nativeAgent.model}
-          opencodeAgent={draft.nativeAgent.opencodeAgent}
+          piAgent={draft.nativeAgent.piAgent}
           baseUrl={draft.nativeAgent.baseUrl}
           apiKey={draft.nativeAgent.apiKey}
           hasApiKey={draft.nativeAgent.hasApiKey}
@@ -1596,7 +1596,7 @@ export function DesktopBotManagerScreen({
                       <div className="text-xs font-medium text-[var(--muted)]">原生 agent</div>
                       <div className="mt-1 space-y-1 text-xs text-[var(--muted)]">
                         <div>Provider/Model: 全局配置</div>
-                        <div>OpenCode agent: {focusedBot.nativeAgent?.opencodeAgent || "未设置"}</div>
+                        <div>Pi agent: {focusedBot.nativeAgent?.piAgent || "未设置"}</div>
                       </div>
                     </div>
                   )}

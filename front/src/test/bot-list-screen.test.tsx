@@ -23,7 +23,7 @@ class BotListClient extends MockWebBotClient {
         isMain: true,
         supportedExecutionModes: ["cli"],
         defaultExecutionMode: "cli",
-        nativeAgent: { provider: "", model: "", opencodeAgent: "" },
+        nativeAgent: { provider: "", model: "", piAgent: "" },
       },
     ];
   }
@@ -61,7 +61,7 @@ test("bot list creates bot with native agent config", async () => {
   expect(screen.queryByLabelText("原生 agent Model")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("原生 agent Base URL")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("原生 agent API Key")).not.toBeInTheDocument();
-  fireEvent.change(screen.getByLabelText("OpenCode agent"), { target: { value: "reviewer" } });
+  fireEvent.change(screen.getByLabelText("Pi agent"), { target: { value: "reviewer" } });
   await user.click(screen.getByRole("button", { name: "创建智能体" }));
 
   await waitFor(() => {
@@ -72,7 +72,7 @@ test("bot list creates bot with native agent config", async () => {
     supportedExecutionModes: ["native_agent"],
     defaultExecutionMode: "native_agent",
     nativeAgent: {
-      opencodeAgent: "reviewer",
+      piAgent: "reviewer",
     },
   });
 });

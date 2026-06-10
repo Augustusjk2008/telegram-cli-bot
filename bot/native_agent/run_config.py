@@ -72,7 +72,7 @@ def write_runtime_opencode_config(*, key: str, native_agent: dict[str, Any]) -> 
     if selected_model:
         runtime_payload["model"] = selected_model
         apply_model_options(runtime_payload, selected_model, model_options(normalized_native_agent))
-    opencode_agent = str(normalized_native_agent.get("opencode_agent") or "").strip()
+    opencode_agent = str(normalized_native_agent.get("pi_agent") or normalized_native_agent.get("opencode_agent") or "").strip()
     if opencode_agent:
         runtime_payload["agent"] = opencode_agent
 

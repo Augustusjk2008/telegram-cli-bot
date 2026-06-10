@@ -48,25 +48,21 @@ REMOVED_LEGACY_CLI_TYPES: set[str] = set()
 def _normalize_bot_native_agent_config(value: Any, *, existing: dict[str, Any] | None = None) -> dict[str, Any]:
     data = value if isinstance(value, dict) else {}
     source = data
-    if not any(key in data for key in ("opencode_agent", "opencodeAgent", "agent")):
+    if not any(key in data for key in ("pi_agent", "piAgent", "opencode_agent", "opencodeAgent", "agent")):
         source = existing if isinstance(existing, dict) else {}
-    opencode_agent = ""
-    for key in ("opencode_agent", "opencodeAgent", "agent"):
+    pi_agent = ""
+    for key in ("pi_agent", "piAgent", "opencode_agent", "opencodeAgent", "agent"):
         if isinstance(source, dict) and key in source:
-            opencode_agent = str(source.get(key) or "").strip()
+            pi_agent = str(source.get(key) or "").strip()
             break
     model_source = data
     if not any(key in data for key in ("native_agent_model", "nativeAgentModel", "selected_model", "selectedModel", "model")):
         model_source = existing if isinstance(existing, dict) else {}
-    native_agent_model = ""
-    for key in ("native_agent_model", "nativeAgentModel", "selected_model", "selectedModel"):
+    selected_model = ""
+    for key in ("model", "selected_model", "selectedModel", "native_agent_model", "nativeAgentModel"):
         if isinstance(model_source, dict) and key in model_source:
-            native_agent_model = str(model_source.get(key) or "").strip()
+            selected_model = str(model_source.get(key) or "").strip()
             break
-    if not native_agent_model and isinstance(model_source, dict) and "model" in model_source:
-        legacy_model = str(model_source.get("model") or "").strip()
-        if "/" in legacy_model:
-            native_agent_model = legacy_model
     reasoning_source = data
     if not any(key in data for key in ("reasoning_effort", "reasoningEffort")):
         reasoning_source = existing if isinstance(existing, dict) else {}
@@ -76,10 +72,10 @@ def _normalize_bot_native_agent_config(value: Any, *, existing: dict[str, Any] |
             reasoning_effort = str(reasoning_source.get(key) or "").strip()
             break
     result: dict[str, Any] = {}
-    if opencode_agent:
-        result["opencode_agent"] = opencode_agent
-    if native_agent_model:
-        result["native_agent_model"] = native_agent_model
+    if pi_agent:
+        result["pi_agent"] = pi_agent
+    if selected_model and "/" in selected_model:
+        result["model"] = selected_model
     if reasoning_effort:
         result["reasoning_effort"] = reasoning_effort
     return result
@@ -721,7 +717,7 @@ class MultiBotManager:
             if profile.bot_mode != "cli" or EXECUTION_MODE_NATIVE_AGENT not in profile.supported_execution_modes:
                 raise ValueError("仅原生 agent Bot 支持模型选择")
             native_agent = _normalize_bot_native_agent_config(profile.native_agent)
-            native_agent["native_agent_model"] = selected_model
+            native_agent["model"] = selected_model
             if selected_reasoning_effort:
                 native_agent["reasoning_effort"] = selected_reasoning_effort
             else:

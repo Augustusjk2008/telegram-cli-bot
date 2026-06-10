@@ -293,7 +293,7 @@ export function BotListScreen({
             <NativeAgentConfigFields
               provider={createDraft.nativeAgent?.provider || DEFAULT_NATIVE_AGENT_DRAFT.provider}
               model={createDraft.nativeAgent?.model || DEFAULT_NATIVE_AGENT_DRAFT.model}
-              opencodeAgent={createDraft.nativeAgent?.opencodeAgent || DEFAULT_NATIVE_AGENT_DRAFT.opencodeAgent}
+              piAgent={createDraft.nativeAgent?.piAgent || DEFAULT_NATIVE_AGENT_DRAFT.piAgent}
               baseUrl={createDraft.nativeAgent?.baseUrl || DEFAULT_NATIVE_AGENT_DRAFT.baseUrl}
               apiKey={createDraft.nativeAgent?.apiKey || ""}
               disabled={!canManage || savingAction !== ""}

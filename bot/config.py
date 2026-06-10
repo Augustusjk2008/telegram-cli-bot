@@ -149,18 +149,29 @@ for uid in _allowed_raw.split(","):
 
 CLI_TYPE = _get_project_config("CLI_TYPE", "codex").strip().lower()
 CLI_PATH = _get_project_config("CLI_PATH", "codex")
-NATIVE_AGENT_PATH = _get_project_config("NATIVE_AGENT_PATH", "opencode").strip() or "opencode"
+NATIVE_AGENT_BACKEND = "pi"
+NATIVE_AGENT_PATH = _get_project_config("NATIVE_AGENT_PATH", "").strip()
 NATIVE_AGENT_ENABLED = _get_project_bool("NATIVE_AGENT_ENABLED", False)
+NATIVE_AGENT_PI_COMMAND = (
+    _get_project_config(
+        "NATIVE_AGENT_PI_COMMAND",
+        _get_project_config("NATIVE_AGENT_COMMAND", NATIVE_AGENT_PATH or "pi"),
+    ).strip()
+    or "pi"
+)
 NATIVE_AGENT_COMMAND = (
     _get_project_config("NATIVE_AGENT_COMMAND", "").strip()
     or NATIVE_AGENT_PATH
-    or "opencode"
+    or NATIVE_AGENT_PI_COMMAND
+    or "pi"
 )
 NATIVE_AGENT_PROVIDER = _get_project_config("NATIVE_AGENT_PROVIDER", "").strip()
 NATIVE_AGENT_MODEL = _get_project_config("NATIVE_AGENT_MODEL", "").strip()
 NATIVE_AGENT_BASE_URL = _get_project_config("NATIVE_AGENT_BASE_URL", "").strip()
 NATIVE_AGENT_API_KEY = _get_project_config("NATIVE_AGENT_API_KEY", "").strip()
 NATIVE_AGENT_OPENCODE_AGENT = _get_project_config("NATIVE_AGENT_OPENCODE_AGENT", "").strip()
+NATIVE_AGENT_PI_AGENT = _get_project_config("NATIVE_AGENT_PI_AGENT", NATIVE_AGENT_OPENCODE_AGENT).strip()
+NATIVE_AGENT_WORKSPACE_HISTORY_ENABLED = _get_project_bool("NATIVE_AGENT_WORKSPACE_HISTORY_ENABLED", True)
 NATIVE_AGENT_REASONING_EFFORT = _get_project_config("NATIVE_AGENT_REASONING_EFFORT", "").strip()
 NATIVE_AGENT_THINKING_DEPTH = _get_project_config("NATIVE_AGENT_THINKING_DEPTH", "").strip()
 CLI_MODEL_OPTIONS = normalize_cli_model_options(_split_csv_env(_get_project_config("CLI_MODEL_OPTIONS", "")))

@@ -767,9 +767,12 @@ describe("RealWebBotClient", () => {
   test("native agent config and model APIs map payloads", async () => {
     fetchMock
       .mockResolvedValueOnce(jsonOk({
-        config: { provider: { jojocode_max: { models: {} } } },
-        opencode_config_path: "C:\\Users\\me\\.config\\opencode\\opencode.json",
-        backup_path: "C:\\Users\\me\\.tcb\\native_agent\\opencode.config.backup.json",
+        backend: "pi",
+        config: { backend: "pi", model: "jojocode_max/gpt-5.4", workspace_history_enabled: true },
+        config_path: "C:\\Users\\me\\.pi\\agent\\settings.json",
+        workspace_history_enabled: true,
+        selected_model: "jojocode_max/gpt-5.4",
+        selected_reasoning_effort: "medium",
         models: [{
           id: "jojocode_max/gpt-5.4",
           provider: "jojocode_max",
@@ -784,9 +787,11 @@ describe("RealWebBotClient", () => {
         needs_restart: false,
       }))
       .mockResolvedValueOnce(jsonOk({
-        config: { provider: {} },
-        opencode_config_path: "opencode.json",
-        backup_path: "backup.json",
+        backend: "pi",
+        config: { backend: "pi", models: [] },
+        config_path: "settings.json",
+        workspace_history_enabled: false,
+        selected_model: "",
         models: [],
         needs_restart: true,
       }))
@@ -830,7 +835,14 @@ describe("RealWebBotClient", () => {
       reasoningEfforts: ["low", "medium", "high"],
       defaultReasoningEffort: "medium",
     });
+    expect(config.backend).toBe("pi");
+    expect(config.configPath).toBe("C:\\Users\\me\\.pi\\agent\\settings.json");
+    expect(config.workspaceHistoryEnabled).toBe(true);
+    expect(config.selectedModel).toBe("jojocode_max/gpt-5.4");
+    expect(config.selectedReasoningEffort).toBe("medium");
     expect(saved.needsRestart).toBe(true);
+    expect(saved.configPath).toBe("settings.json");
+    expect(saved.workspaceHistoryEnabled).toBe(false);
     expect(models.selectedModel).toBe("jojocode_max/gpt-5.4");
     expect(models.selectedReasoningEffort).toBe("medium");
     expect(updated.selectedModel).toBe("jojocode_max/gpt-5.5");
@@ -1252,7 +1264,7 @@ describe("RealWebBotClient", () => {
         native_agent: {
           provider: "anthropic",
           model: "claude-sonnet-4-5",
-          opencode_agent: "reviewer",
+          pi_agent: "reviewer",
           base_url: "https://cdn.codeflow.asia/v1",
           has_api_key: true,
           api_key_masked: "sk-****1234",
@@ -1267,7 +1279,7 @@ describe("RealWebBotClient", () => {
       nativeAgent: {
         provider: "anthropic",
         model: "claude-sonnet-4-5",
-        opencodeAgent: "reviewer",
+        piAgent: "reviewer",
         baseUrl: "https://cdn.codeflow.asia/v1",
         apiKey: "sk-route-1234",
       },
@@ -1282,13 +1294,15 @@ describe("RealWebBotClient", () => {
       supported_execution_modes: ["native_agent"],
       default_execution_mode: "native_agent",
       native_agent: {
-        opencode_agent: "reviewer",
+        backend: "pi",
+        pi_agent: "reviewer",
       },
     });
+    expect(body.native_agent).not.toHaveProperty("opencode_agent");
     expect(bot.nativeAgent).toEqual({
       provider: "anthropic",
       model: "claude-sonnet-4-5",
-      opencodeAgent: "reviewer",
+      piAgent: "reviewer",
       baseUrl: "https://cdn.codeflow.asia/v1",
       hasApiKey: true,
       apiKeyMasked: "sk-****1234",
@@ -1310,7 +1324,7 @@ describe("RealWebBotClient", () => {
         native_agent: {
           provider: "codeflow",
           model: "gpt-5.1-codex",
-          opencode_agent: "main",
+          pi_agent: "main",
           base_url: "https://cdn.codeflow.asia/v1",
           has_api_key: false,
           api_key_masked: "",
@@ -1331,7 +1345,7 @@ describe("RealWebBotClient", () => {
       nativeAgent: {
         provider: "codeflow",
         model: "gpt-5.1-codex",
-        opencodeAgent: "main",
+        piAgent: "main",
         baseUrl: "https://cdn.codeflow.asia/v1",
         clearApiKey: true,
       },
@@ -1343,8 +1357,10 @@ describe("RealWebBotClient", () => {
       expect.objectContaining({ method: "POST" }),
     );
     expect(body.native_agent).toEqual({
-      opencode_agent: "main",
+      backend: "pi",
+      pi_agent: "main",
     });
+    expect(body.native_agent).not.toHaveProperty("opencode_agent");
   });
 
   
@@ -1491,7 +1507,7 @@ describe("RealWebBotClient", () => {
     expect(overview.nativeAgent).toEqual({
       provider: "anthropic",
       model: "claude-sonnet-4-5",
-      opencodeAgent: "reviewer",
+      piAgent: "reviewer",
       baseUrl: "https://cdn.codeflow.asia/v1",
       hasApiKey: true,
       apiKeyMasked: "sk-****abcd",
