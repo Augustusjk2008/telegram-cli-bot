@@ -388,6 +388,113 @@ describe("agUiRunReducer", () => {
     })]);
   });
 
+  test.each(["confirm", "select", "input", "editor"])("keeps %s permission request fields", (uiKind) => {
+    const state = reduceAgUiRunEvent(createAgUiRunState(), {
+      type: EventType.ACTIVITY_SNAPSHOT,
+      messageId: `activity-${uiKind}`,
+      activityType: "TCB_PERMISSION_REQUEST",
+      replace: true,
+      content: {
+        id: `perm-${uiKind}`,
+        permissionId: `perm-${uiKind}`,
+        summary: "需要处理",
+        state: "permission.updated",
+        source: "native_agent",
+        uiKind,
+        options: ["a", "b"],
+        defaultValue: "a",
+        placeholder: "输入",
+      },
+    });
+
+    expect(state.permissionRequests).toEqual([expect.objectContaining({
+      permissionId: `perm-${uiKind}`,
+      uiKind,
+      options: ["a", "b"],
+      defaultValue: "a",
+      placeholder: "输入",
+    })]);
+    expect(state.entries).toEqual([expect.objectContaining({
+      kind: "permission",
+      permissionId: `perm-${uiKind}`,
+      pending: true,
+      permission: expect.objectContaining({ uiKind }),
+    })]);
+    expect(buildAgUiMessageMeta(state)?.tracePresentation).toBe("native_agent_flat");
+  });
+
+  test("upserts replied permission by id and keeps response value", () => {
+    const events: AgUiEvent[] = [
+      {
+        type: EventType.ACTIVITY_SNAPSHOT,
+        messageId: "activity-perm-input",
+        activityType: "TCB_PERMISSION_REQUEST",
+        replace: true,
+        content: {
+          id: "perm-input",
+          permissionId: "perm-input",
+          summary: "输入名称",
+          state: "permission.updated",
+          source: "native_agent",
+          uiKind: "input",
+        },
+      },
+      {
+        type: EventType.ACTIVITY_SNAPSHOT,
+        messageId: "activity-perm-input",
+        activityType: "TCB_PERMISSION_REQUEST",
+        replace: true,
+        content: {
+          id: "perm-input",
+          permissionId: "perm-input",
+          summary: "已提交",
+          state: "permission.replied",
+          source: "native_agent",
+          uiKind: "input",
+          value: "orbit",
+        },
+      },
+    ];
+
+    const state = events.reduce(reduceAgUiRunEvent, createAgUiRunState());
+
+    expect(state.permissionRequests).toEqual([expect.objectContaining({
+      permissionId: "perm-input",
+      state: "permission.replied",
+      value: "orbit",
+    })]);
+    expect(state.entries.filter((entry) => entry.kind === "permission")).toEqual([
+      expect.objectContaining({
+        permissionId: "perm-input",
+        pending: false,
+        permission: expect.objectContaining({ value: "orbit" }),
+      }),
+    ]);
+  });
+
+  test.each(["notify", "setStatus", "setWidget"])("treats %s ui request as process status", (uiKind) => {
+    const state = reduceAgUiRunEvent(createAgUiRunState(), {
+      type: EventType.ACTIVITY_SNAPSHOT,
+      messageId: `activity-${uiKind}`,
+      activityType: "TCB_STATUS",
+      replace: true,
+      content: {
+        id: `status-${uiKind}`,
+        summary: "继续执行",
+        source: "native_agent",
+        rawKind: "status",
+        uiKind,
+      },
+    });
+
+    expect(state.permissionRequests).toEqual([]);
+    expect(state.entries).toEqual([expect.objectContaining({
+      kind: "process",
+      summary: "继续执行",
+    })]);
+    expect(buildAgUiMessageMeta(state)?.tracePresentation).toBe("native_agent_flat");
+  });
+
   test("does not infer native flat presentation from non-native permission activity", () => {
     const state = reduceAgUiRunEvent(createAgUiRunState(), {
       type: EventType.ACTIVITY_SNAPSHOT,

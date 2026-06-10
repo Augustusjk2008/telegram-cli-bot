@@ -3,13 +3,13 @@ import { Check, ChevronRight, LoaderCircle, X } from "lucide-react";
 import { ChatMarkdownMessage } from "./ChatMarkdownMessage";
 import { ChatPlainTextMessage } from "./ChatPlainTextMessage";
 import type { ChatMessage } from "../services/types";
-import type { NativeAgentTranscriptEntry } from "../utils/agUiRunReducer";
+import type { AgUiPermissionRequest, NativeAgentPermissionReply, NativeAgentTranscriptEntry } from "../utils/agUiRunReducer";
 
 type Props = {
   entries: NativeAgentTranscriptEntry[];
   resultText: string;
   state?: ChatMessage["state"];
-  onReplyPermission?: (permissionId: string, approved: boolean) => Promise<void>;
+  onReplyPermission?: (reply: NativeAgentPermissionReply) => Promise<void>;
   onFileLinkClick?: (href: string) => void;
 };
 
@@ -27,6 +27,147 @@ function EntryBody({ entry }: { entry: NativeAgentTranscriptEntry }) {
     <pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--workbench-panel-bg)] px-2 py-1.5 text-xs leading-5 text-[var(--text)]">
       {body}
     </pre>
+  );
+}
+
+function stringValue(value: unknown) {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return "";
+}
+
+function permissionKind(permission?: AgUiPermissionRequest) {
+  return stringValue(permission?.uiKind).trim().toLowerCase() || "confirm";
+}
+
+function permissionOptions(permission?: AgUiPermissionRequest) {
+  return (permission?.options || []).map((option) => {
+    if (typeof option === "string" || typeof option === "number" || typeof option === "boolean") {
+      const value = String(option);
+      return { label: value, value };
+    }
+    if (option && typeof option === "object") {
+      const record = option as Record<string, unknown>;
+      const value = stringValue(record.value || record.id || record.label || record.name);
+      const label = stringValue(record.label || record.name || record.title || record.value || record.id) || value;
+      return { label, value };
+    }
+    return { label: "", value: "" };
+  }).filter((option) => option.value || option.label);
+}
+
+function PermissionEntry({
+  entry,
+  rowClassName,
+  replyingPermissionId,
+  onReply,
+}: {
+  entry: NativeAgentTranscriptEntry;
+  rowClassName: string;
+  replyingPermissionId: string;
+  onReply?: (reply: NativeAgentPermissionReply) => Promise<void>;
+}) {
+  const permission = entry.permission;
+  const permissionId = entry.permissionId || permission?.permissionId || "";
+  const pending = Boolean(entry.pending && permissionId);
+  const kind = permissionKind(permission);
+  const options = permissionOptions(permission);
+  const initialValue = stringValue(permission?.defaultValue) || stringValue(permission?.value) || options[0]?.value || "";
+  const [value, setValue] = useState(initialValue);
+  const disabled = Boolean(replyingPermissionId) || !pending;
+  const submit = (accepted: boolean, nextValue?: unknown) => {
+    if (!onReply || !permissionId || disabled) {
+      return;
+    }
+    void onReply({
+      requestId: permissionId,
+      accepted,
+      ...(typeof nextValue !== "undefined" ? { value: nextValue } : {}),
+    });
+  };
+
+  return (
+    <div key={entry.id} data-testid="native-agent-permission" className={rowClassName}>
+      <div className="whitespace-pre-wrap break-words text-[var(--text)]">{compact(entry.summary, "权限请求")}</div>
+      {pending && onReply ? (
+        kind === "select" || kind === "input" || kind === "editor" ? (
+          <div className="mt-2 flex flex-col gap-2">
+            {kind === "select" ? (
+              <select
+                aria-label="权限选项"
+                value={value}
+                disabled={disabled}
+                onChange={(event) => setValue(event.target.value)}
+                className="h-8 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-2 text-xs text-[var(--text)] disabled:opacity-60"
+              >
+                {options.map((option) => (
+                  <option key={option.value || option.label} value={option.value}>{option.label || option.value}</option>
+                ))}
+              </select>
+            ) : kind === "editor" ? (
+              <textarea
+                aria-label="权限输入"
+                value={value}
+                disabled={disabled}
+                placeholder={permission?.placeholder}
+                onChange={(event) => setValue(event.target.value)}
+                className="min-h-24 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-2 py-1.5 text-xs text-[var(--text)] disabled:opacity-60"
+              />
+            ) : (
+              <input
+                aria-label="权限输入"
+                value={value}
+                disabled={disabled}
+                placeholder={permission?.placeholder}
+                onChange={(event) => setValue(event.target.value)}
+                className="h-8 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-2 text-xs text-[var(--text)] disabled:opacity-60"
+              />
+            )}
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => submit(true, value)}
+                className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--accent-outline)] px-2 text-xs text-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Check className="h-3.5 w-3.5" />
+                提交
+              </button>
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => submit(false)}
+                className="inline-flex h-7 items-center gap-1 rounded-md border border-red-200 px-2 text-xs text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <X className="h-3.5 w-3.5" />
+                取消
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-1 flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => submit(true)}
+              className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--accent-outline)] px-2 text-xs text-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <Check className="h-3.5 w-3.5" />
+              允许一次
+            </button>
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => submit(false)}
+              className="inline-flex h-7 items-center gap-1 rounded-md border border-red-200 px-2 text-xs text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <X className="h-3.5 w-3.5" />
+              拒绝
+            </button>
+          </div>
+        )
+      ) : null}
+    </div>
   );
 }
 
@@ -98,13 +239,13 @@ export function NativeAgentTranscript({
   const [replyingPermissionId, setReplyingPermissionId] = useState("");
   const renderItems = groupTranscriptEntries(entries);
 
-  const replyPermission = async (permissionId: string, approved: boolean) => {
-    if (!onReplyPermission || !permissionId || replyingPermissionId) {
+  const replyPermission = async (reply: NativeAgentPermissionReply) => {
+    if (!onReplyPermission || !reply.requestId || replyingPermissionId) {
       return;
     }
-    setReplyingPermissionId(permissionId);
+    setReplyingPermissionId(reply.requestId);
     try {
-      await onReplyPermission(permissionId, approved);
+      await onReplyPermission(reply);
     } finally {
       setReplyingPermissionId("");
     }
@@ -126,33 +267,14 @@ export function NativeAgentTranscript({
     }
 
     if (entry.kind === "permission") {
-      const pending = Boolean(entry.pending && entry.permissionId);
       return (
-        <div key={entry.id} data-testid="native-agent-permission" className={rowClassName}>
-          <div className="whitespace-pre-wrap break-words text-[var(--text)]">{compact(entry.summary, "权限请求")}</div>
-          {pending && onReplyPermission ? (
-            <div className="mt-1 flex flex-wrap gap-2">
-              <button
-                type="button"
-                disabled={Boolean(replyingPermissionId)}
-                onClick={() => void replyPermission(entry.permissionId || "", true)}
-                className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--accent-outline)] px-2 text-xs text-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <Check className="h-3.5 w-3.5" />
-                允许一次
-              </button>
-              <button
-                type="button"
-                disabled={Boolean(replyingPermissionId)}
-                onClick={() => void replyPermission(entry.permissionId || "", false)}
-                className="inline-flex h-7 items-center gap-1 rounded-md border border-red-200 px-2 text-xs text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <X className="h-3.5 w-3.5" />
-                拒绝
-              </button>
-            </div>
-          ) : null}
-        </div>
+        <PermissionEntry
+          key={entry.id}
+          entry={entry}
+          rowClassName={rowClassName}
+          replyingPermissionId={replyingPermissionId}
+          onReply={replyPermission}
+        />
       );
     }
 

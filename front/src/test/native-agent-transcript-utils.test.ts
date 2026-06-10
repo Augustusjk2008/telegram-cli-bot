@@ -60,3 +60,19 @@ test("uses live entry trace when message trace is not available", () => {
 
   expect(entries.map((entry) => entry.summary)).toEqual(["bash", "准备统计。"]);
 });
+
+test("sorts pi trace entries by sequence and ordinal", () => {
+  const trace: ChatTraceEvent[] = [
+    { kind: "permission", sequence: 30, summary: "输入", source: "native_agent", payload: { id: "perm-1", uiKind: "input" } },
+    { kind: "status", ordinal: 10, summary: "启动", source: "native_agent", payload: { uiKind: "notify" } },
+    { kind: "tool_call", sequence: 20, summary: "shell", callId: "call-1", toolName: "shell", source: "native_agent" },
+  ];
+
+  const entries = buildNativeAgentTranscriptEntries({ trace });
+
+  expect(entries.map((entry) => entry.summary)).toEqual(["启动", "shell", "输入"]);
+  expect(entries[2]).toEqual(expect.objectContaining({
+    kind: "permission",
+    permission: expect.objectContaining({ uiKind: "input" }),
+  }));
+});

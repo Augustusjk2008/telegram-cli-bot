@@ -111,6 +111,8 @@ def map_event(
     mapped: list[core.BaseEvent] = []
     if event.type in {"permission.updated", "permission.replied"}:
         mapped.extend(_map_permission_event(event, state))
+    if event.type == "session.status":
+        mapped.extend(_map_status_event(event, state))
     structured_events = _map_structured_part_event(event, state)
     if structured_events:
         mapped.extend(structured_events)
@@ -225,6 +227,12 @@ def _map_permission_event(event: NativeAgentEvent, state: AgUiTurnState) -> list
         "permissionId": permission_id,
         "permission_id": permission_id,
         "title": title or "原生 agent 请求权限",
+        "message": str(permission.get("message") or "").strip(),
+        "uiKind": str(permission.get("uiKind") or permission.get("ui_kind") or "confirm").strip() or "confirm",
+        "options": permission.get("options"),
+        "defaultValue": permission.get("defaultValue") if "defaultValue" in permission else permission.get("default_value"),
+        "placeholder": permission.get("placeholder"),
+        "value": permission.get("value"),
         "state": str(permission.get("status") or permission.get("state") or event.type),
         "source": "native_agent",
         "payload": permission,
@@ -238,6 +246,28 @@ def _map_permission_event(event: NativeAgentEvent, state: AgUiTurnState) -> list
             replace=True,
         )
     ]
+
+
+def _map_status_event(event: NativeAgentEvent, state: AgUiTurnState) -> list[core.BaseEvent]:
+    payload = event.payload
+    pi_event_type = str(payload.get("piEventType") or "").strip()
+    ui_kind = str(payload.get("uiKind") or payload.get("ui_kind") or "").strip()
+    if not pi_event_type and not ui_kind:
+        return []
+    status = event.status or _payload_text(payload.get("status") or payload.get("summary") or payload.get("message"))
+    content = {
+        "id": str(payload.get("id") or payload.get("messageID") or f"status_{state.run_id}"),
+        "summary": status,
+        "message": status,
+        "previewText": status,
+        "source": "native_agent",
+        "rawType": "session.status",
+        "rawKind": "status",
+        "piEventType": pi_event_type,
+        "uiKind": ui_kind or pi_event_type,
+        "payload": payload,
+    }
+    return [_build_status_event(state=state, activity_type="TCB_STATUS", content=content)]
 
 
 def _map_structured_part_event(event: NativeAgentEvent, state: AgUiTurnState) -> list[core.BaseEvent]:

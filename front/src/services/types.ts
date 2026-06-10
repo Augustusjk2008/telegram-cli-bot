@@ -795,6 +795,7 @@ export type ChatSendOptions = {
 export type NativeAgentPermissionReplyOptions = AgentScopedOptions & {
   approved: boolean;
   message?: string;
+  value?: unknown;
 };
 
 export type BrowserNotificationPermission = NotificationPermission | "unsupported";

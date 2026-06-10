@@ -2838,7 +2838,7 @@ class WebApiServer:
             self._chat_user_id(auth),
             permission_id,
             approved=approved,
-            message=str(body.get("message") or ""),
+            message=str(body.get("message") if body.get("message") is not None else body.get("value") or ""),
             agent_id=agent_id,
         )
         return _json({"ok": True, "data": data})

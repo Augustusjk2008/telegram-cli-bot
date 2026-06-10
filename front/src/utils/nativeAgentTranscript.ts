@@ -1,5 +1,5 @@
 import type { ChatMessageMetaInfo, ChatTraceEvent } from "../services/types";
-import type { AgUiRunState, NativeAgentTranscriptEntry } from "./agUiRunReducer";
+import type { AgUiPermissionRequest, AgUiRunState, NativeAgentTranscriptEntry } from "./agUiRunReducer";
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -134,6 +134,27 @@ function permissionId(trace: ChatTraceEvent) {
   return asString(payload.permissionId || payload.id || payload.permissionID || payload.permission_id).trim();
 }
 
+function permissionFromTrace(trace: ChatTraceEvent, summary: string): AgUiPermissionRequest {
+  const payload = asRecord(trace.payload);
+  const id = permissionId(trace);
+  const uiKind = pickString(payload.uiKind, payload.ui_kind) || "confirm";
+  const options = Array.isArray(payload.options) ? payload.options : undefined;
+  const message = pickString(payload.message, payload.title, summary);
+  return {
+    permissionId: id,
+    summary,
+    state: pickString(payload.state, payload.status) || "",
+    content: payload,
+    source: pickString(trace.source, payload.source) || "",
+    uiKind,
+    ...(options ? { options } : {}),
+    ...(typeof payload.defaultValue !== "undefined" ? { defaultValue: payload.defaultValue } : {}),
+    ...(typeof payload.value !== "undefined" ? { value: payload.value } : {}),
+    ...(pickString(payload.placeholder) ? { placeholder: pickString(payload.placeholder) } : {}),
+    ...(message ? { message } : {}),
+  };
+}
+
 function isPermissionPending(trace: ChatTraceEvent) {
   const payload = asRecord(trace.payload);
   const state = asString(payload.state || payload.status).trim().toLowerCase();
@@ -240,16 +261,18 @@ export function mergeChatTraceEvents(
 function traceToEntry(trace: ChatTraceEvent, index: number, seq = traceOrder(trace, index)): NativeAgentTranscriptEntry {
   const kind = entryKind(trace);
   const body = kind === "tool" || trace.kind === "tool_result" ? payloadText(trace) : undefined;
+  const summary = trace.summary || trace.title || trace.toolName || "";
+  const permission = kind === "permission" ? permissionFromTrace(trace, summary) : undefined;
   return {
     id: trace.id || `${trace.kind || "trace"}-${seq}-${index}`,
     seq,
     kind,
     label: entryLabel(kind, trace),
-    summary: trace.summary || trace.title || trace.toolName || "",
+    summary,
     body,
     collapsedByDefault: !["process", "permission", "error", "cancelled"].includes(kind),
     trace,
-    ...(kind === "permission" ? { permissionId: permissionId(trace), pending: isPermissionPending(trace) } : {}),
+    ...(permission ? { permissionId: permission.permissionId, pending: isPermissionPending(trace), permission } : {}),
   };
 }
 

@@ -67,6 +67,7 @@ import {
   createAgUiRunState,
   reduceAgUiRunEvent,
   type AgUiRunState,
+  type NativeAgentPermissionReply,
 } from "../utils/agUiRunReducer";
 import {
   buildNativeAgentTranscriptEntries,
@@ -638,7 +639,12 @@ function isNativePermissionTrace(event: ChatTraceEvent, permissionId: string) {
   return event.kind === "permission" && currentId === permissionId;
 }
 
-function markNativePermissionTraceReplied(meta: ChatMessageMetaInfo | undefined, permissionId: string, approved: boolean): ChatMessageMetaInfo | undefined {
+function markNativePermissionTraceReplied(
+  meta: ChatMessageMetaInfo | undefined,
+  permissionId: string,
+  approved: boolean,
+  value?: unknown,
+): ChatMessageMetaInfo | undefined {
   if (!meta?.trace?.length && !getAgUiRunState(meta)?.entries.length) {
     return meta;
   }
@@ -658,6 +664,7 @@ function markNativePermissionTraceReplied(meta: ChatMessageMetaInfo | undefined,
         ...payload,
         state: "permission.replied",
         response,
+        ...(typeof value !== "undefined" ? { value } : {}),
       },
     };
   };
@@ -675,7 +682,9 @@ function markNativePermissionTraceReplied(meta: ChatMessageMetaInfo | undefined,
                   ...permission.content,
                   state: "permission.replied",
                   response,
+                  ...(typeof value !== "undefined" ? { value } : {}),
                 },
+                ...(typeof value !== "undefined" ? { value } : {}),
               }
             : permission
         )),
@@ -686,6 +695,20 @@ function markNativePermissionTraceReplied(meta: ChatMessageMetaInfo | undefined,
                 ...entry,
                 summary,
                 pending: false,
+                permission: entry.permission
+                  ? {
+                      ...entry.permission,
+                      summary,
+                      state: "permission.replied",
+                      content: {
+                        ...entry.permission.content,
+                        state: "permission.replied",
+                        response,
+                        ...(typeof value !== "undefined" ? { value } : {}),
+                      },
+                      ...(typeof value !== "undefined" ? { value } : {}),
+                    }
+                  : entry.permission,
                 trace: entry.trace ? patchTrace(entry.trace) : entry.trace,
               }
             : entry
@@ -1016,7 +1039,7 @@ type ChatMessageRowProps = {
   onLoadTrace: (messageId: string) => void;
   onToggleTracePanel: (messageClientStateKey: string) => void;
   onCopyFinalAnswer: (text: string) => boolean | void | Promise<boolean | void>;
-  onReplyNativePermission: (permissionId: string, approved: boolean) => Promise<void>;
+  onReplyNativePermission: (reply: NativeAgentPermissionReply) => Promise<void>;
   wideMessages: boolean;
 };
 
@@ -1193,7 +1216,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
             loadError={traceLoadState?.error}
             onLoadTrace={() => void onLoadTrace(item.id)}
             onCopyFinalAnswer={item.text ? () => onCopyFinalAnswer(item.text) : undefined}
-            onReplyNativePermission={onReplyNativePermission}
+            onReplyNativePermission={(permissionId, approved) => onReplyNativePermission({ requestId: permissionId, accepted: approved })}
           />
         ) : null}
       </div>
@@ -1232,7 +1255,7 @@ const ChatMessageList = memo(function ChatMessageList({
   loadMessageTrace: (messageId: string) => void;
   handleToggleTracePanel: (messageClientStateKey: string) => void;
   handleCopyFinalAnswer: (text: string) => boolean | void | Promise<boolean | void>;
-  handleReplyNativePermission: (permissionId: string, approved: boolean) => Promise<void>;
+  handleReplyNativePermission: (reply: NativeAgentPermissionReply) => Promise<void>;
   executingPlanMessageId: string;
   planExecuteError: string;
   handleExecutePlan: (messageId: string, content: string) => void;
@@ -2331,15 +2354,17 @@ export function ChatScreen({
     }
   }, []);
 
-  const handleReplyNativePermission = useCallback(async (permissionId: string, approved: boolean) => {
+  const handleReplyNativePermission = useCallback(async (reply: NativeAgentPermissionReply) => {
     try {
-      await client.replyNativeAgentPermission(botAlias, permissionId, {
-        approved,
+      await client.replyNativeAgentPermission(botAlias, reply.requestId, {
+        approved: reply.accepted,
+        ...(typeof reply.value !== "undefined" ? { value: reply.value } : {}),
+        ...(typeof reply.value === "string" ? { message: reply.value } : {}),
         agentId: activeAgentIdRef.current,
         executionMode: "native_agent",
       });
       setItems((prev) => prev.map((item) => {
-        const nextMeta = markNativePermissionTraceReplied(item.meta, permissionId, approved);
+        const nextMeta = markNativePermissionTraceReplied(item.meta, reply.requestId, reply.accepted, reply.value);
         return nextMeta === item.meta ? item : { ...item, meta: nextMeta };
       }));
     } catch (err) {

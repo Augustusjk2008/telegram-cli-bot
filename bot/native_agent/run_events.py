@@ -4,6 +4,47 @@ import json
 from typing import Any
 
 
+def native_json_to_events(
+    raw: dict[str, Any],
+    *,
+    provider: str = "opencode",
+    cwd: str = "",
+    fallback_session_id: str = "",
+    assistant_message_id: str = "",
+) -> list[dict[str, Any]]:
+    if str(provider or "").strip().lower() == "pi":
+        from bot.native_agent.pi_events import pi_json_to_events
+
+        return pi_json_to_events(
+            raw,
+            cwd=cwd,
+            fallback_session_id=fallback_session_id,
+            assistant_message_id=assistant_message_id,
+        )
+    return run_json_to_events(
+        raw,
+        cwd=cwd,
+        fallback_session_id=fallback_session_id,
+        assistant_message_id=assistant_message_id,
+    )
+
+
+def extract_native_session_id(raw: dict[str, Any], *, provider: str = "opencode") -> str:
+    if str(provider or "").strip().lower() == "pi":
+        from bot.native_agent.pi_events import extract_session_id as extract_pi_session_id
+
+        return extract_pi_session_id(raw)
+    return extract_session_id(raw)
+
+
+def extract_native_context_usage(raw: dict[str, Any], *, provider: str = "opencode") -> dict[str, Any]:
+    if str(provider or "").strip().lower() == "pi":
+        from bot.native_agent.pi_events import extract_context_usage
+
+        return extract_context_usage(raw)
+    return extract_step_finish_usage(raw)
+
+
 def run_json_to_events(
     raw: dict[str, Any],
     *,

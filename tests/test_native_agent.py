@@ -16,7 +16,7 @@ from bot.native_agent.ag_ui_mapper import AgUiTurnState, build_run_error_event, 
 from bot.native_agent.events import is_relevant_event, unwrap_event
 from bot.native_agent import service as native_service_module
 from bot.native_agent.run_client import NativeAgentRunClient, NativeAgentRunError, NativeAgentRunRequest
-from bot.native_agent.run_events import extract_step_finish_usage, run_json_to_events
+from bot.native_agent.run_events import extract_step_finish_usage, native_json_to_events, run_json_to_events
 from bot.native_agent.service import NativeAgentService, normalize_execution_mode
 from bot.native_agent.turn_state import NativeAgentTurnState
 from bot.web.chat_history_service import ChatHistoryService
@@ -1357,6 +1357,132 @@ def test_native_agent_ag_ui_mapper_suppresses_session_status_noise():
     mapped = map_ag_ui_event(event=event, result=aggregator.apply(event), state=state)
 
     assert mapped == []
+
+
+def test_pi_events_flow_through_aggregator_and_ag_ui_mapper_without_polluting_final_text():
+    state = AgUiTurnState(
+        thread_id="conv-1",
+        run_id="run-1",
+        user_message_id="user-1",
+        assistant_message_id="assistant-1",
+    )
+    aggregator = NativeAgentAggregator(user_message_id="user-1")
+    raw_events = [
+        {"type": "turn_start", "session_id": "sess-1"},
+        {
+            "type": "tool_execution_start",
+            "session_id": "sess-1",
+            "message_id": "assistant-1",
+            "call_id": "call-1",
+            "tool": "shell_command",
+            "args": {"command": "dir"},
+        },
+        {
+            "type": "tool_execution_end",
+            "session_id": "sess-1",
+            "message_id": "assistant-1",
+            "call_id": "call-1",
+            "tool": "shell_command",
+            "output": "Exit code: 0",
+        },
+        {
+            "type": "extension_ui_request",
+            "session_id": "sess-1",
+            "request_id": "req-1",
+            "uiKind": "input",
+            "title": "需要参数",
+            "message": "请输入名称",
+            "placeholder": "名称",
+        },
+        {
+            "type": "extension_ui_request",
+            "session_id": "sess-1",
+            "id": "notify-1",
+            "uiKind": "notify",
+            "message": "继续执行",
+        },
+        {"type": "message_update", "session_id": "sess-1", "message_id": "assistant-1", "content": "最终"},
+        {"type": "message_update", "session_id": "sess-1", "message_id": "assistant-1", "delta": "回答"},
+        {"type": "message_end", "session_id": "sess-1", "message_id": "assistant-1"},
+        {"type": "turn_end", "session_id": "sess-1"},
+    ]
+
+    mapped_types: list[core.EventType] = []
+    done_values: list[bool] = []
+    permission_contents: list[dict[str, object]] = []
+    status_contents: list[dict[str, object]] = []
+    for raw_event in raw_events:
+        for mapped_raw in native_json_to_events(
+            raw_event,
+            provider="pi",
+            cwd="/repo",
+            fallback_session_id="sess-1",
+            assistant_message_id="assistant-1",
+        ):
+            event = unwrap_event(mapped_raw)
+            assert event is not None
+            result = aggregator.apply(event)
+            done_values.append(result.done)
+            ag_ui_events = map_ag_ui_event(event=event, result=result, state=state)
+            mapped_types.extend(item.type for item in ag_ui_events)
+            permission_contents.extend(
+                item.content
+                for item in ag_ui_events
+                if item.type == core.EventType.ACTIVITY_SNAPSHOT and item.activity_type == "TCB_PERMISSION_REQUEST"
+            )
+            status_contents.extend(
+                item.content
+                for item in ag_ui_events
+                if item.type == core.EventType.ACTIVITY_SNAPSHOT and item.activity_type == "TCB_STATUS"
+            )
+
+    assert aggregator.text() == "最终回答"
+    assert mapped_types.count(core.EventType.TOOL_CALL_START) == 1
+    assert mapped_types.count(core.EventType.TOOL_CALL_RESULT) == 1
+    assert len(permission_contents) == 1
+    assert permission_contents[0]["uiKind"] == "input"
+    assert permission_contents[0]["placeholder"] == "名称"
+    assert status_contents
+    assert all(content.get("uiKind") == "notify" or content.get("uiKind") == "turn_start" for content in status_contents)
+    assert "请输入名称" not in aggregator.text()
+    assert done_values[-1] is True
+
+
+def test_pi_turn_end_does_not_finish_without_activity_through_facade():
+    aggregator = NativeAgentAggregator(user_message_id="user-1")
+    [mapped_raw] = native_json_to_events(
+        {"type": "turn_end", "session_id": "sess-1"},
+        provider="pi",
+        fallback_session_id="sess-1",
+    )
+    event = unwrap_event(mapped_raw)
+
+    assert event is not None
+    result = aggregator.apply(event)
+    assert result.done is False
+    assert aggregator.text() == ""
+
+
+def test_native_json_to_events_keeps_opencode_default_behavior():
+    event = native_json_to_events(
+        {
+            "type": "text",
+            "sessionID": "sess-1",
+            "part": {"id": "p1", "type": "text", "text": "你好"},
+        },
+        cwd="/repo",
+        assistant_message_id="assistant-1",
+    )
+
+    assert event == run_json_to_events(
+        {
+            "type": "text",
+            "sessionID": "sess-1",
+            "part": {"id": "p1", "type": "text", "text": "你好"},
+        },
+        cwd="/repo",
+        assistant_message_id="assistant-1",
+    )
 
 
 def test_native_agent_ag_ui_mapper_emits_empty_message_snapshot_for_replace_text():

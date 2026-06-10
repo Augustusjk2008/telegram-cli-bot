@@ -4817,6 +4817,7 @@ export class RealWebBotClient implements WebBotClient {
           ...scopedRequestBody(options),
           approved: Boolean(options.approved),
           ...(options.message ? { message: options.message } : {}),
+          ...(typeof options.value !== "undefined" ? { value: options.value } : {}),
         }),
       },
     );

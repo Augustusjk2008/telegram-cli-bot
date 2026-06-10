@@ -28,6 +28,18 @@ export type AgUiPermissionRequest = {
   state: string;
   content: Record<string, unknown>;
   source: string;
+  uiKind?: string;
+  options?: unknown[];
+  defaultValue?: unknown;
+  value?: unknown;
+  placeholder?: string;
+  message?: string;
+};
+
+export type NativeAgentPermissionReply = {
+  requestId: string;
+  accepted: boolean;
+  value?: unknown;
 };
 
 export type AgUiReasoningItem = {
@@ -46,6 +58,7 @@ export type NativeAgentTranscriptEntry = {
   trace?: ChatTraceEvent;
   permissionId?: string;
   pending?: boolean;
+  permission?: AgUiPermissionRequest;
 };
 
 export type AgUiRunState = {
@@ -190,7 +203,8 @@ function resolveActivityTraceKind(activityType: string, content: Record<string, 
     return "";
   }
   if (activityType === "TCB_PERMISSION_REQUEST") {
-    return "permission";
+    const uiKind = permissionUiKind(content);
+    return isNonInteractiveUiKind(uiKind) ? (asString(content.rawKind).trim() || "status") : "permission";
   }
   if (activityType === "TCB_STATUS") {
     return "status";
@@ -203,6 +217,14 @@ function getPermissionId(content: Record<string, unknown>) {
   return asString(content.permissionId || content.id || content.permissionID || content.permission_id).trim();
 }
 
+function permissionUiKind(content: Record<string, unknown>) {
+  return asString(content.uiKind || content.ui_kind).trim();
+}
+
+function isNonInteractiveUiKind(uiKind: string) {
+  return ["notify", "setstatus", "setwidget"].includes(uiKind.trim().toLowerCase());
+}
+
 function isPermissionPending(content: Record<string, unknown>) {
   const state = asString(content.state || content.status).trim().toLowerCase();
   return !state || (
@@ -212,6 +234,25 @@ function isPermissionPending(content: Record<string, unknown>) {
     && !state.includes("denied")
     && !state.includes("allow")
   );
+}
+
+function buildPermissionRequest(permissionId: string, summary: string, content: Record<string, unknown>): AgUiPermissionRequest {
+  const uiKind = permissionUiKind(content) || "confirm";
+  const options = Array.isArray(content.options) ? content.options : undefined;
+  const message = asString(content.message || content.title || content.summary).trim();
+  return {
+    permissionId,
+    summary,
+    state: asString(content.state || content.status).trim(),
+    content,
+    source: asString(content.source).trim(),
+    uiKind,
+    ...(options ? { options } : {}),
+    ...(typeof content.defaultValue !== "undefined" ? { defaultValue: content.defaultValue } : {}),
+    ...(typeof content.value !== "undefined" ? { value: content.value } : {}),
+    ...(asString(content.placeholder).trim() ? { placeholder: asString(content.placeholder).trim() } : {}),
+    ...(message ? { message } : {}),
+  };
 }
 
 function nativeEntryKindForTrace(event: ChatTraceEvent): NativeAgentTranscriptEntry["kind"] {
@@ -275,6 +316,7 @@ function appendTraceEntry(
     trace,
     permissionId: options.permissionId,
     pending: options.pending,
+    permission: options.permission,
   };
   if (kind === "permission" && options.permissionId) {
     const entryIndex = state.entries.findIndex((item) => item.kind === "permission" && item.permissionId === options.permissionId);
@@ -418,6 +460,13 @@ export function reduceAgUiRunEvent(state: AgUiRunState, event: AgUiEvent): AgUiR
       ? [...state.activities, nextActivity]
       : state.activities.map((item, index) => index === activityIndex ? nextActivity : item);
 
+    const permissionId = getPermissionId(content);
+    const permissionActivity = event.activityType === "TCB_PERMISSION_REQUEST"
+      && Boolean(permissionId)
+      && !isNonInteractiveUiKind(permissionUiKind(content));
+    const nextPermissionRequest = permissionActivity
+      ? buildPermissionRequest(permissionId, summary, content)
+      : undefined;
     const traceKind = resolveActivityTraceKind(event.activityType, content);
     const activityTraceEvent: ChatTraceEvent | null = traceKind
       ? {
@@ -441,20 +490,12 @@ export function reduceAgUiRunEvent(state: AgUiRunState, event: AgUiEvent): AgUiR
       ? upsertTraceEvent(state.traceEvents, activityTraceEvent)
       : state.traceEvents;
 
-    const permissionId = getPermissionId(content);
-    const permissionRequests = event.activityType === "TCB_PERMISSION_REQUEST" && permissionId
+    const permissionRequests = nextPermissionRequest
       ? (() => {
-          const nextPermission: AgUiPermissionRequest = {
-            permissionId,
-            summary,
-            state: asString(content.state || content.status).trim(),
-            content,
-            source: asString(content.source).trim(),
-          };
-          const permissionIndex = state.permissionRequests.findIndex((item) => item.permissionId === permissionId);
+          const permissionIndex = state.permissionRequests.findIndex((item) => item.permissionId === nextPermissionRequest.permissionId);
           return permissionIndex < 0
-            ? [...state.permissionRequests, nextPermission]
-            : state.permissionRequests.map((item, index) => index === permissionIndex ? nextPermission : item);
+            ? [...state.permissionRequests, nextPermissionRequest]
+            : state.permissionRequests.map((item, index) => index === permissionIndex ? nextPermissionRequest : item);
         })()
       : state.permissionRequests;
 
@@ -488,6 +529,7 @@ export function reduceAgUiRunEvent(state: AgUiRunState, event: AgUiEvent): AgUiR
         ? {
             permissionId,
             pending: isPermissionPending(content),
+            permission: nextPermissionRequest,
             collapsedByDefault: false,
           }
         : {}),

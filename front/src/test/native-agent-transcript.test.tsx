@@ -1,6 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { NativeAgentTranscript } from "../components/NativeAgentTranscript";
 import type { NativeAgentTranscriptEntry } from "../utils/agUiRunReducer";
 
@@ -197,4 +197,89 @@ test("native transcript shows streaming status as the last row until done", () =
   );
 
   expect(screen.queryByTestId("native-agent-streaming-status")).not.toBeInTheDocument();
+});
+
+test.each([
+  ["select", "权限选项", "beta"],
+  ["input", "权限输入", "typed value"],
+  ["editor", "权限输入", "typed value"],
+])("native transcript renders %s permission control", async (uiKind, label, submittedValue) => {
+  const user = userEvent.setup();
+  const onReplyPermission = vi.fn(async () => undefined);
+  render(
+    <NativeAgentTranscript
+      entries={[
+        entry({
+          id: `permission-${uiKind}`,
+          seq: 1,
+          kind: "permission",
+          label: "权限",
+          summary: "需要输入",
+          permissionId: `perm-${uiKind}`,
+          pending: true,
+          permission: {
+            permissionId: `perm-${uiKind}`,
+            summary: "需要输入",
+            state: "permission.updated",
+            source: "native_agent",
+            content: {},
+            uiKind,
+            options: ["alpha", "beta"],
+            defaultValue: "alpha",
+            placeholder: "请输入",
+          },
+        }),
+      ]}
+      resultText=""
+      onReplyPermission={onReplyPermission}
+    />,
+  );
+
+  const control = screen.getByLabelText(label);
+  if (uiKind === "select") {
+    await user.selectOptions(control, submittedValue);
+  } else {
+    await user.clear(control);
+    await user.type(control, submittedValue);
+  }
+  await user.click(screen.getByRole("button", { name: "提交" }));
+
+  expect(onReplyPermission).toHaveBeenCalledWith({
+    requestId: `perm-${uiKind}`,
+    accepted: true,
+    value: submittedValue,
+  });
+});
+
+test("native transcript disables handled permission controls", () => {
+  render(
+    <NativeAgentTranscript
+      entries={[
+        entry({
+          id: "permission-done",
+          seq: 1,
+          kind: "permission",
+          label: "权限",
+          summary: "已处理",
+          permissionId: "perm-done",
+          pending: false,
+          permission: {
+            permissionId: "perm-done",
+            summary: "已处理",
+            state: "permission.replied",
+            source: "native_agent",
+            content: {},
+            uiKind: "input",
+          },
+        }),
+      ]}
+      resultText="**完成**"
+      state="done"
+      onReplyPermission={async () => undefined}
+    />,
+  );
+
+  expect(screen.queryByRole("button", { name: "提交" })).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("权限输入")).not.toBeInTheDocument();
+  expect(screen.getByTestId("native-agent-final-result")).toHaveTextContent("完成");
 });
