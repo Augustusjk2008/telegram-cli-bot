@@ -15,6 +15,26 @@ function basename(path: string) {
   return parts[parts.length - 1] || path || "无";
 }
 
+function looksLikePath(value: string) {
+  const normalized = value.trim();
+  if (!/[\\/]/.test(normalized)) {
+    return false;
+  }
+  return (
+    /[A-Za-z]:[\\/]/.test(normalized)
+    || /(^|\s|["'`])\.{1,2}[\\/]/.test(normalized)
+    || /(^|\s|["'`])[~/][^ \t\r\n]+[\\/]/.test(normalized)
+    || /[^ \t\r\n]+[\\/][^ \t\r\n]+/.test(normalized)
+  );
+}
+
+function sanitizeDegradedReason(reason: string) {
+  if (looksLikePath(reason)) {
+    return "会话历史降级，详情见后端诊断";
+  }
+  return reason || "未知";
+}
+
 function field(label: string, value: string) {
   return (
     <div className="grid grid-cols-[6rem_minmax(0,1fr)] gap-3 border-b border-[var(--workbench-hairline)] px-4 py-3 text-sm last:border-b-0">
@@ -45,7 +65,7 @@ export function SoloSessionInfoTab({ snapshot }: Props) {
         {field("历史 Head", shortId(snapshot.workspaceHistoryHead))}
         {field("上下文", snapshot.contextStatusText)}
         {field("回滚", snapshot.rollbackSupported ? "可用" : "不可用")}
-        {snapshot.degraded ? field("降级原因", snapshot.degradedReason || "未知") : null}
+        {snapshot.degraded ? field("降级原因", sanitizeDegradedReason(snapshot.degradedReason)) : null}
       </dl>
     </div>
   );

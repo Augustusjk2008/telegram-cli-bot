@@ -53,6 +53,7 @@ test("native bot shows ag-ui process tool permission and submits input value", a
     cliType: "codex",
     cliPath: "codex",
     workingDir: "C:\\workspace\\native2",
+    avatarName: "avatar_01.png",
     supportedExecutionModes: ["native_agent"],
     defaultExecutionMode: "native_agent",
     nativeAgent: {

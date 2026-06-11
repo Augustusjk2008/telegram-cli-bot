@@ -1,8 +1,9 @@
 import { clsx } from "clsx";
-import { FileText, GitCompare, Info, LoaderCircle, X } from "lucide-react";
+import { FileText, GitBranch, GitCompare, Info, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ViewMode } from "../app/layoutMode";
-import { MarkdownPreview } from "../components/MarkdownPreview";
+import { FilePreviewSurface } from "../components/FilePreviewSurface";
+import { GitScreen } from "../screens/GitScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { FileReadResult } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
@@ -52,48 +53,6 @@ function clampChatWidth(value: number, containerWidth: number) {
   return Math.min(Math.max(MIN_CHAT_WIDTH_PX, value), maxChatWidth);
 }
 
-function previewBody(path: string, state: PreviewState) {
-  if (state.loading) {
-    return (
-      <div className="flex h-full items-center justify-center gap-2 text-sm text-[var(--muted)]">
-        <LoaderCircle className="h-4 w-4 animate-spin" />
-        加载预览...
-      </div>
-    );
-  }
-  if (state.error) {
-    return <div className="p-4 text-sm text-red-600">{state.error}</div>;
-  }
-  const result = state.result;
-  if (!result) {
-    return <div className="p-4 text-sm text-[var(--muted)]">选择聊天中的文件链接查看预览</div>;
-  }
-  if (result.previewKind === "image" && result.contentType && result.contentBase64) {
-    return (
-      <div className="flex h-full items-center justify-center overflow-auto p-4">
-        <img
-          alt={basename(path)}
-          src={`data:${result.contentType};base64,${result.contentBase64}`}
-          className="max-h-full max-w-full object-contain"
-        />
-      </div>
-    );
-  }
-  const content = result.content || "文件为空";
-  if (/\.(md|markdown)$/i.test(path)) {
-    return (
-      <div className="h-full overflow-y-auto p-4">
-        <MarkdownPreview content={content} variant="preview" />
-      </div>
-    );
-  }
-  return (
-    <pre className="h-full overflow-auto p-4 font-mono text-xs leading-5 text-[var(--text)] whitespace-pre-wrap">
-      {content}
-    </pre>
-  );
-}
-
 export function SoloWorkbench({
   botAlias,
   client = new MockWebBotClient(),
@@ -114,10 +73,13 @@ export function SoloWorkbench({
 }: Props) {
   const columnsRef = useRef<HTMLDivElement | null>(null);
   const resizeStartWidthRef = useRef(0);
-  const requestSeqRef = useRef(0);
+  const previewRequestSeqRef = useRef<Record<string, number>>({});
   const [chatWidthPx, setChatWidthPx] = useState<number | null>(null);
   const [isResizing, setIsResizing] = useState(false);
-  const [tabs, setTabs] = useState<SoloTab[]>([{ id: "session", kind: "session", title: "会话信息" }]);
+  const [tabs, setTabs] = useState<SoloTab[]>([
+    { id: "session", kind: "session", title: "会话信息" },
+    { id: "git", kind: "git-status", title: "Git" },
+  ]);
   const [activeTabId, setActiveTabId] = useState("session");
   const [previews, setPreviews] = useState<Record<string, PreviewState>>({});
 
@@ -136,18 +98,18 @@ export function SoloWorkbench({
       ...current,
       [nextPath]: { loading: true, error: "", result: current[nextPath]?.result || null },
     }));
-    const requestId = requestSeqRef.current + 1;
-    requestSeqRef.current = requestId;
+    const requestId = (previewRequestSeqRef.current[nextPath] || 0) + 1;
+    previewRequestSeqRef.current[nextPath] = requestId;
     void client.readFile(botAlias, nextPath)
       .then((result) => {
-        if (requestSeqRef.current !== requestId) return;
+        if (previewRequestSeqRef.current[nextPath] !== requestId) return;
         setPreviews((current) => ({
           ...current,
           [nextPath]: { loading: false, error: "", result: withDetectedPreviewKind(nextPath, result) },
         }));
       })
       .catch((err) => {
-        if (requestSeqRef.current !== requestId) return;
+        if (previewRequestSeqRef.current[nextPath] !== requestId) return;
         setPreviews((current) => ({
           ...current,
           [nextPath]: {
@@ -159,10 +121,41 @@ export function SoloWorkbench({
       });
   }, [botAlias, client]);
 
+  const openGitDiffTab = useCallback(async (path: string, staged: boolean) => {
+    const diff = await client.getGitDiff(botAlias, path, staged);
+    const id = `git-diff:${staged ? "staged" : "worktree"}:${path}`;
+    const title = `${basename(path)}.diff`;
+    const diffText = diff.truncated && diff.diff
+      ? `${diff.diff}\n\n...[diff truncated]`
+      : (diff.diff || "当前没有可显示的差异");
+    setTabs((current) => {
+      const nextTab: SoloTab = {
+        id,
+        kind: "git-diff",
+        title,
+        path,
+        staged,
+        diffText,
+        readonly: true,
+        truncated: diff.truncated,
+      };
+      const index = current.findIndex((tab) => tab.id === id);
+      if (index === -1) {
+        return [...current, nextTab];
+      }
+      return current.map((tab) => (tab.id === id ? nextTab : tab));
+    });
+    setActiveTabId(id);
+  }, [botAlias, client]);
+
   useEffect(() => {
-    setTabs([{ id: "session", kind: "session", title: "会话信息" }]);
+    setTabs([
+      { id: "session", kind: "session", title: "会话信息" },
+      { id: "git", kind: "git-status", title: "Git" },
+    ]);
     setActiveTabId("session");
     setPreviews({});
+    previewRequestSeqRef.current = {};
     setChatWidthPx(null);
   }, [botAlias]);
 
@@ -232,7 +225,7 @@ export function SoloWorkbench({
             <div className="flex min-w-0 items-center gap-1 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2 py-1.5" role="tablist" aria-label="Solo 标签">
               {tabs.map((tab) => {
                 const active = tab.id === activeTab.id;
-                const Icon = tab.kind === "session" ? Info : tab.kind === "git-diff" ? GitCompare : FileText;
+                const Icon = tab.kind === "session" ? Info : tab.kind === "git-status" ? GitBranch : tab.kind === "git-diff" ? GitCompare : FileText;
                 return (
                   <div key={tab.id} className="flex min-w-0 items-center">
                     <button
@@ -249,7 +242,7 @@ export function SoloWorkbench({
                       <Icon className="h-3.5 w-3.5 shrink-0" />
                       <span className="max-w-36 truncate">{tab.title}</span>
                     </button>
-                    {tab.kind !== "session" ? (
+                    {tab.kind !== "session" && tab.kind !== "git-status" ? (
                       <button
                         type="button"
                         aria-label={`关闭 ${tab.title}`}
@@ -270,6 +263,13 @@ export function SoloWorkbench({
             <div className="min-h-0 overflow-hidden">
               {activeTab.kind === "session" ? (
                 <SoloSessionInfoTab snapshot={sessionSnapshot} />
+              ) : activeTab.kind === "git-status" ? (
+                <GitScreen
+                  botAlias={botAlias}
+                  client={client}
+                  embedded
+                  onOpenDiff={openGitDiffTab}
+                />
               ) : activeTab.kind === "file-preview" ? (
                 <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]">
                   <div className="flex min-w-0 items-center justify-between gap-3 border-b border-[var(--workbench-hairline)] px-4 py-2 text-xs text-[var(--muted)]">
@@ -277,7 +277,18 @@ export function SoloWorkbench({
                     <span className="shrink-0">{getFilePreviewStatusText(previews[activeTab.path]?.result || null) || "只读"}</span>
                   </div>
                   <div className="min-h-0 overflow-hidden">
-                    {previewBody(activeTab.path, previews[activeTab.path] || { loading: false, error: "", result: null })}
+                    {previews[activeTab.path]?.error ? (
+                      <div className="p-4 text-sm text-red-600">{previews[activeTab.path]?.error}</div>
+                    ) : (
+                      <FilePreviewSurface
+                        title={activeTab.path}
+                        result={previews[activeTab.path]?.result || null}
+                        loading={previews[activeTab.path]?.loading}
+                        botAlias={botAlias}
+                        desktop
+                        onFileLinkClick={requestPreview}
+                      />
+                    )}
                   </div>
                 </div>
               ) : (

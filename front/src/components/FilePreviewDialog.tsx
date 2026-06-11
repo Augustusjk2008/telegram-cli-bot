@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { MarkdownPreview } from "./MarkdownPreview";
 import type { FilePreviewKind } from "../services/types";
-import { buildFileDownloadUrl, isExternalHref, isSafeMarkdownHref, resolveMarkdownImagePath } from "../utils/fileLinks";
+import { FilePreviewSurface } from "./FilePreviewSurface";
 
 type DesktopAnchorRect = {
   left: number;
@@ -64,12 +63,7 @@ export function FilePreviewDialog({
   onDownload,
   onFileLinkClick,
 }: Props) {
-  const isMarkdownPreview = /\.(md|markdown)$/i.test(title);
-  const isSvgPreview = /\.svg$/i.test(title);
-  const isRasterPreview = previewKind === "image" && Boolean(contentType) && Boolean(contentBase64);
-  const isHtmlPreview = previewKind === "html";
   const [desktopOffset, setDesktopOffset] = useState({ x: 0, y: 0 });
-  const [imagePreviewUrl, setImagePreviewUrl] = useState("");
   const isDownloading = Boolean(downloadProgressText);
   const dragStateRef = useRef<{
     pointerId: number;
@@ -84,29 +78,6 @@ export function FilePreviewDialog({
       setDesktopOffset({ x: 0, y: 0 });
     }
   }, [title, variant]);
-
-  useEffect(() => {
-    if (isRasterPreview) {
-      setImagePreviewUrl(`data:${contentType};base64,${contentBase64}`);
-      return undefined;
-    }
-
-    if (!isSvgPreview) {
-      setImagePreviewUrl("");
-      return undefined;
-    }
-
-    if (typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
-      const objectUrl = URL.createObjectURL(new Blob([content], { type: "image/svg+xml" }));
-      setImagePreviewUrl(objectUrl);
-      return () => {
-        URL.revokeObjectURL(objectUrl);
-      };
-    }
-
-    setImagePreviewUrl(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(content)}`);
-    return undefined;
-  }, [content, contentBase64, contentType, isRasterPreview, isSvgPreview]);
 
   useEffect(() => {
     if (variant !== "desktop") {
@@ -179,20 +150,6 @@ export function FilePreviewDialog({
     };
   }, [desktopAnchorRect, desktopOffset.x, desktopOffset.y, variant]);
 
-  const resolveMarkdownImageSrc = useMemo(() => {
-    const normalizedBotAlias = botAlias.trim();
-    return (src: string) => {
-      if (isSafeMarkdownHref(src) && isExternalHref(src)) {
-        return src;
-      }
-      if (!normalizedBotAlias) {
-        return "";
-      }
-      const imagePath = resolveMarkdownImagePath(src, title);
-      return imagePath ? buildFileDownloadUrl(normalizedBotAlias, imagePath) : "";
-    };
-  }, [botAlias, title]);
-
   function handleDesktopDragStart(event: ReactPointerEvent<HTMLDivElement>) {
     if (variant !== "desktop" || event.button !== 0) {
       return;
@@ -209,41 +166,6 @@ export function FilePreviewDialog({
       startOffsetY: desktopOffset.y,
     };
     event.preventDefault();
-  }
-
-  function renderPreviewContent(desktop: boolean) {
-    if (isMarkdownPreview) {
-      return (
-        <MarkdownPreview
-          content={content}
-          variant={desktop ? "desktop-preview" : undefined}
-          onFileLinkClick={onFileLinkClick}
-          resolveImageSrc={resolveMarkdownImageSrc}
-        />
-      );
-    }
-    if (imagePreviewUrl) {
-      return (
-        <div className={`${desktop ? "h-full" : "max-h-[50vh]"} flex items-start justify-center overflow-auto rounded-xl bg-[var(--surface-strong)] p-4`}>
-          <img src={imagePreviewUrl} alt={title} className="block h-auto max-w-full" />
-        </div>
-      );
-    }
-    if (isHtmlPreview) {
-      return (
-        <iframe
-          title={title}
-          sandbox=""
-          srcDoc={content}
-          className={`${desktop ? "h-full" : "h-[50vh]"} w-full rounded-xl border border-[var(--border)] bg-white`}
-        />
-      );
-    }
-    return (
-      <pre className={`${desktop ? "h-full" : "max-h-[50vh]"} overflow-auto rounded-xl bg-[var(--surface-strong)] p-4 text-sm whitespace-pre-wrap break-all`}>
-        {content}
-      </pre>
-    );
   }
 
   function renderDownloadProgress() {
@@ -310,7 +232,14 @@ export function FilePreviewDialog({
           </div>
 
           <div className="min-h-0 flex-1 overflow-hidden px-5 py-4">
-            {renderPreviewContent(true)}
+            <FilePreviewSurface
+              title={title}
+              result={{ content, mode: mode === "full" ? "cat" : "head", previewKind, contentType, contentBase64 }}
+              loading={loading}
+              botAlias={botAlias}
+              desktop
+              onFileLinkClick={onFileLinkClick}
+            />
           </div>
 
           <div className="flex items-center justify-between gap-3 border-t border-[var(--workbench-hairline)] px-5 py-4">
@@ -373,7 +302,13 @@ export function FilePreviewDialog({
             关闭
           </button>
         </div>
-        {renderPreviewContent(false)}
+        <FilePreviewSurface
+          title={title}
+          result={{ content, mode: mode === "full" ? "cat" : "head", previewKind, contentType, contentBase64 }}
+          loading={loading}
+          botAlias={botAlias}
+          onFileLinkClick={onFileLinkClick}
+        />
         <div className="mt-4 flex items-center justify-between gap-3">
           <div className="min-h-[1.25rem] text-sm text-[var(--muted)]">
             {statusText}

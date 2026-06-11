@@ -871,6 +871,71 @@ test("opens changed file diff in the editor instead of rendering diff in git", a
   expect(screen.queryByTestId("git-inline-diff")).not.toBeInTheDocument();
 });
 
+test("opens unstaged changed file diff as worktree diff", async () => {
+  const user = userEvent.setup();
+  const openDiff = vi.fn(async () => undefined);
+
+  render(
+    <GitScreen
+      botAlias="main"
+      client={createClient({
+        getGitOverview: async (): Promise<GitOverview> => buildRepoOverview({
+          changedFiles: [
+            {
+              path: "tracked.txt",
+              status: " M",
+              staged: false,
+              unstaged: true,
+              untracked: false,
+            },
+          ],
+        }),
+      })}
+      onOpenDiff={openDiff}
+    />,
+  );
+
+  await user.click(await screen.findByLabelText("在编辑器打开 tracked.txt"));
+
+  expect(openDiff).toHaveBeenCalledWith("tracked.txt", false);
+  expect(screen.queryByTestId("git-diff-panel")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("git-inline-diff")).not.toBeInTheDocument();
+});
+
+test("opens staged and unstaged views of the same changed file with separate diff modes", async () => {
+  const user = userEvent.setup();
+  const openDiff = vi.fn(async () => undefined);
+
+  render(
+    <GitScreen
+      botAlias="main"
+      client={createClient({
+        getGitOverview: async (): Promise<GitOverview> => buildRepoOverview({
+          changedFiles: [
+            {
+              path: "tracked.txt",
+              status: "MM",
+              staged: true,
+              unstaged: true,
+              untracked: false,
+            },
+          ],
+        }),
+      })}
+      onOpenDiff={openDiff}
+    />,
+  );
+
+  const diffButtons = await screen.findAllByLabelText("在编辑器打开 tracked.txt");
+  await user.click(diffButtons[0]);
+  await user.click(diffButtons[1]);
+
+  expect(openDiff).toHaveBeenNthCalledWith(1, "tracked.txt", true);
+  expect(openDiff).toHaveBeenNthCalledWith(2, "tracked.txt", false);
+  expect(screen.queryByTestId("git-diff-panel")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("git-inline-diff")).not.toBeInTheDocument();
+});
+
 
 
 

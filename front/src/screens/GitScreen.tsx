@@ -1062,7 +1062,7 @@ export function GitScreen({
                                       type="button"
                                       aria-label={`在编辑器打开 ${item.path}`}
                                       title={`在编辑器打开 ${item.path}`}
-                                      onClick={() => void openChangedDiff(item.path, item.staged && !item.unstaged)}
+                                      onClick={() => void openChangedDiff(item.path, key === "staged")}
                                       className={iconButtonClass()}
                                     >
                                       <FileDiff className="h-3 w-3" />
