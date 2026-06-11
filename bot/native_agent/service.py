@@ -32,6 +32,7 @@ from bot.native_agent.aggregator import NativeAgentAggregator
 from bot.native_agent.context_usage import resolve_native_agent_context_usage
 from bot.native_agent.events import is_relevant_event, unwrap_event
 from bot.native_agent.pi_rpc_client import PiRpcRunError
+from bot.native_agent.pi_session_store import PiSessionRecord, PiSessionStore, pi_session_key
 from bot.native_agent.pi_session_runtime import (
     PiSessionRuntime,
     PiSessionRuntimeRegistry,
@@ -39,6 +40,7 @@ from bot.native_agent.pi_session_runtime import (
     build_pi_owner_key,
     build_pi_runtime_key,
 )
+from bot.native_agent.pi_workspace_history import PiWorkspaceHistory, WorkspaceHistoryStatus
 from bot.native_agent.run_events import extract_native_context_usage, extract_native_session_id, native_json_to_events
 from bot.native_agent.turn_state import NativeAgentTurnState
 from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenceBuffer
@@ -71,6 +73,8 @@ def normalize_execution_mode(value: Any, profile: BotProfile | None = None) -> s
 class NativeAgentService:
     def __init__(self) -> None:
         self._runtime_registry = PiSessionRuntimeRegistry()
+        self._pi_session_store = PiSessionStore()
+        self._workspace_history = PiWorkspaceHistory()
 
     def _prompt_options(self, profile: BotProfile) -> tuple[str, str]:
         native_agent = effective_native_agent_config(getattr(profile, "native_agent", {}))
@@ -79,6 +83,97 @@ class NativeAgentService:
             build_native_agent_model_id(native_agent),
             str(native_agent.get("pi_agent") or "").strip(),
         )
+
+    def _pi_record_key(self, session: UserSession, user_id: int, conversation_id: str) -> str:
+        return pi_session_key(
+            cwd=session.working_dir,
+            bot_id=int(session.bot_id or 0),
+            user_id=int(user_id),
+            conversation_id=conversation_id,
+        )
+
+    def _load_or_create_pi_record(
+        self,
+        *,
+        key: str,
+        session: UserSession,
+        conversation_id: str,
+        pi_session_id: str = "",
+    ) -> PiSessionRecord:
+        record = self._pi_session_store.get(key)
+        if record is not None:
+            if pi_session_id and not record.pi_session_id:
+                record.pi_session_id = pi_session_id
+                record = self._pi_session_store.upsert(record)
+            return record
+        record = PiSessionRecord(
+            key=key,
+            cwd=session.working_dir,
+            conversation_id=conversation_id,
+            pi_session_id=str(pi_session_id or "").strip(),
+        )
+        return self._pi_session_store.upsert(record)
+
+    def _seed_runtime_from_record(self, runtime: PiSessionRuntime, record: PiSessionRecord) -> None:
+        runtime.state.native_session_id = str(record.pi_session_id or runtime.state.native_session_id or "").strip()
+        current_head = str(
+            record.workspace_history_head
+            or getattr(runtime.state, "workspace_history_head", "")
+            or getattr(runtime, "workspace_history_head", "")
+            or ""
+        ).strip()
+        runtime.state.workspace_history_head = current_head
+        runtime.state.linear_index = max(0, int(record.linear_index or 0))
+
+    def _workspace_meta(self, record: PiSessionRecord | None, runtime: PiSessionRuntime | None = None) -> dict[str, Any]:
+        head = str((record.workspace_history_head if record else "") or "").strip()
+        linear_index = int((record.linear_index if record else 0) or 0)
+        degraded = bool(record.degraded) if record is not None else False
+        degraded_reason = str(record.degraded_reason or "") if record is not None else ""
+        if runtime is not None:
+            head = head or str(getattr(runtime.state, "workspace_history_head", "") or "").strip()
+            linear_index = max(linear_index, int(getattr(runtime.state, "linear_index", 0) or 0))
+        return {
+            "workspace_history_head": head,
+            "linear_index": linear_index,
+            "rollback_supported": bool(head and not degraded),
+            "degraded": degraded,
+            "degraded_reason": degraded_reason,
+        }
+
+    async def rollback_workspace_history(
+        self,
+        *,
+        profile: BotProfile,
+        session: UserSession,
+        conversation_id: str,
+        target_head: str,
+        native_session_id: str = "",
+    ) -> WorkspaceHistoryStatus:
+        model_id, agent_id = self._prompt_options(profile)
+        native_agent_config = effective_native_agent_config(getattr(profile, "native_agent", {}))
+        user_id = chat_session_user_id(session.user_id)
+        runtime = await self._runtime_registry.open_or_create(
+            PiSessionRuntimeRequest(
+                runtime_key=build_pi_runtime_key(
+                    bot_id=int(session.bot_id or 0),
+                    user_id=int(user_id),
+                    conversation_id=conversation_id,
+                ),
+                owner_key=build_pi_owner_key(bot_id=int(session.bot_id or 0), user_id=int(user_id)),
+                conversation_id=conversation_id,
+                cwd=session.working_dir,
+                command=str(native_agent_config.get("pi_command") or config.NATIVE_AGENT_PI_COMMAND or config.NATIVE_AGENT_COMMAND or "pi"),
+                model=model_id,
+                agent_id=agent_id,
+                native_session_id=native_session_id,
+            )
+        )
+        key = self._pi_record_key(session, user_id, conversation_id)
+        record = self._pi_session_store.get(key)
+        if record is not None:
+            self._seed_runtime_from_record(runtime, record)
+        return await self._workspace_history.rollback(runtime, target_head=target_head)
 
     async def abort(self, session: UserSession) -> bool:
         with session._lock:
@@ -153,6 +248,8 @@ class NativeAgentService:
         native_session_id = ""
         context_run_usage: dict[str, Any] = {}
         active_runtime: PiSessionRuntime | None = None
+        pi_record_key = ""
+        pi_record: PiSessionRecord | None = None
 
         try:
             if not config.NATIVE_AGENT_ENABLED:
@@ -186,6 +283,19 @@ class NativeAgentService:
                 requested_session_id = ""
             if requested_session_id:
                 native_session_id = requested_session_id
+                with session._lock:
+                    session.native_agent_session_id = native_session_id
+                session.persist()
+
+            pi_record_key = self._pi_record_key(session, user_id, turn_handle.conversation_id)
+            pi_record = self._load_or_create_pi_record(
+                key=pi_record_key,
+                session=session,
+                conversation_id=turn_handle.conversation_id,
+                pi_session_id=native_session_id,
+            )
+            if pi_record.pi_session_id:
+                native_session_id = pi_record.pi_session_id
                 with session._lock:
                     session.native_agent_session_id = native_session_id
                 session.persist()
@@ -231,13 +341,16 @@ class NativeAgentService:
                 return timeout > 0 and now - last_progress_at >= timeout
 
             def remember_native_session(session_id: str) -> None:
-                nonlocal native_session_id
+                nonlocal native_session_id, pi_record
                 resolved = str(session_id or "").strip()
                 if not resolved or resolved == native_session_id:
                     return
                 native_session_id = resolved
                 turn_state.native_session_id = resolved
                 history_service.store.set_conversation_native_session(turn_handle.conversation_id, resolved, desired_meta)
+                if pi_record is not None:
+                    pi_record.pi_session_id = resolved
+                    pi_record = self._pi_session_store.upsert(pi_record)
                 with session._lock:
                     session.native_agent_session_id = resolved
                 session.persist()
@@ -259,6 +372,29 @@ class NativeAgentService:
                     native_session_id=native_session_id,
                 )
             )
+            if pi_record is not None:
+                self._seed_runtime_from_record(active_runtime, pi_record)
+                native_session_id = active_runtime.state.native_session_id
+                turn_state.native_session_id = native_session_id
+            if bool(native_agent_config.get("workspace_history_enabled", True)):
+                status = await self._workspace_history.status(active_runtime)
+                if status.degraded:
+                    pi_record = self._pi_session_store.mark_degraded(pi_record_key, status.message) if pi_record_key else pi_record
+                else:
+                    if status.head:
+                        active_runtime.state.workspace_history_head = status.head
+                        if pi_record is not None:
+                            pi_record.workspace_history_head = status.head
+                            pi_record = self._pi_session_store.upsert(pi_record)
+                    if not status.clean or status.manual_change_count > 0:
+                        checkpoint = await self._workspace_history.checkpoint(active_runtime, label="manual-before-turn")
+                        if checkpoint.degraded:
+                            pi_record = self._pi_session_store.mark_degraded(pi_record_key, checkpoint.message) if pi_record_key else pi_record
+                        elif checkpoint.head:
+                            active_runtime.state.workspace_history_head = checkpoint.head
+                            if pi_record is not None:
+                                pi_record.workspace_history_head = checkpoint.head
+                                pi_record = self._pi_session_store.upsert(pi_record)
             with session._lock:
                 session.native_agent_server_key = active_runtime.runtime_id
             session.persist()
@@ -271,7 +407,7 @@ class NativeAgentService:
                 "native_provider": NATIVE_AGENT_PROVIDER,
                 "runtime_provider": "pi",
                 "pi_runtime_id": active_runtime.runtime_id,
-                "workspace_history_head": active_runtime.workspace_history_head,
+                **self._workspace_meta(pi_record, active_runtime),
                 "native_session_id": native_session_id,
                 "turn_id": turn_handle.turn_id,
                 "assistant_message_id": turn_handle.assistant_message_id,
@@ -466,6 +602,29 @@ class NativeAgentService:
                 error_message=None if completion_state == "completed" else (error_message or final_text),
                 context_usage=context_usage,
             )
+            if completion_state == "completed" and active_runtime is not None and pi_record_key:
+                final_head = str(getattr(active_runtime.state, "workspace_history_head", "") or "").strip()
+                if bool(native_agent_config.get("workspace_history_enabled", True)):
+                    final_status = await self._workspace_history.status(active_runtime)
+                    if final_status.degraded:
+                        pi_record = self._pi_session_store.mark_degraded(pi_record_key, final_status.message)
+                    elif final_status.head:
+                        final_head = final_status.head
+                        active_runtime.state.workspace_history_head = final_head
+                pi_record = self._pi_session_store.update_after_completed_turn(
+                    pi_record_key,
+                    pi_session_id=native_session_id,
+                    turn_id=turn_handle.turn_id,
+                    workspace_history_head=final_head,
+                )
+                self._seed_runtime_from_record(active_runtime, pi_record)
+                history_service.store.update_turn_workspace_history(
+                    turn_handle.turn_id,
+                    pi_record.workspace_history_head,
+                    pi_record.linear_index,
+                )
+            if isinstance(done_message.get("meta"), dict):
+                done_message["meta"].update(self._workspace_meta(pi_record, active_runtime))
             if wants_ag_ui:
                 if final_text and not ag_ui_state.text_started:
                     for ag_ui_event in build_text_message_events(state=ag_ui_state, content=final_text):

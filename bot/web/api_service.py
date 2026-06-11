@@ -138,6 +138,7 @@ from bot.native_agent.config_store import (
     load_native_agent_config,
     save_native_agent_config,
 )
+from bot.native_agent.pi_session_store import PiSessionStore, pi_session_key
 from bot.platform.output import strip_ansi_escape
 from bot.platform.processes import build_chat_cli_process_kwargs, build_hidden_process_kwargs, terminate_process_tree_sync
 from bot.platform.subprocess_streams import close_process_streams
@@ -583,9 +584,11 @@ def _clear_native_agent_session_locked(session: UserSession) -> bool:
     changed = bool(
         session.native_agent_session_id
         or session.native_agent_run_id
+        or session.native_agent_server_key
     )
     session.native_agent_session_id = None
     session.native_agent_run_id = None
+    session.native_agent_server_key = None
     return changed
 
 
@@ -629,6 +632,34 @@ def _history_service_for_execution_mode(session: UserSession, execution_mode: st
     if execution_mode == NATIVE_AGENT_PROVIDER:
         return ChatHistoryService(_get_chat_store(session), native_provider_filter=NATIVE_AGENT_PROVIDER)
     return ChatHistoryService(_get_chat_store(session), native_provider_exclude=NATIVE_AGENT_PROVIDER)
+
+
+def _pi_store() -> PiSessionStore:
+    return PiSessionStore()
+
+
+def _pi_key_for_session(session: UserSession, conversation_id: str) -> str:
+    return pi_session_key(
+        cwd=session.working_dir,
+        bot_id=int(session.bot_id or 0),
+        user_id=int(session.user_id or 0),
+        conversation_id=conversation_id,
+    )
+
+
+def _safe_pi_workspace_meta(record: Any | None, latest: dict[str, Any] | None = None) -> dict[str, Any]:
+    latest = latest if isinstance(latest, dict) else {}
+    head = str(getattr(record, "workspace_history_head", "") or latest.get("workspace_history_head") or "").strip()
+    linear_index = int(getattr(record, "linear_index", 0) or latest.get("linear_index") or 0)
+    degraded = bool(getattr(record, "degraded", False)) if record is not None else False
+    degraded_reason = str(getattr(record, "degraded_reason", "") or "")
+    return {
+        "workspace_history_head": head,
+        "linear_index": linear_index,
+        "rollback_supported": bool(head and not degraded),
+        "degraded": degraded,
+        "degraded_reason": degraded_reason,
+    }
 
 
 def get_file_browser_directory(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
@@ -2213,16 +2244,26 @@ def list_conversations(
         native_provider=NATIVE_AGENT_PROVIDER if resolved_execution_mode == NATIVE_AGENT_PROVIDER else None,
         native_provider_exclude=NATIVE_AGENT_PROVIDER if resolved_execution_mode != NATIVE_AGENT_PROVIDER else None,
     )
+    pi_store = _pi_store() if resolved_execution_mode == NATIVE_AGENT_PROVIDER else None
+
+    def decorate(item: dict[str, Any]) -> dict[str, Any]:
+        workspace_meta: dict[str, Any] = {}
+        if pi_store is not None:
+            conversation_id = str(item.get("id") or "")
+            workspace_meta = _safe_pi_workspace_meta(
+                pi_store.get(_pi_key_for_session(session, conversation_id)),
+                store.latest_active_workspace_history(conversation_id),
+            )
+        return {
+            **item,
+            **workspace_meta,
+            "active": str(item.get("id") or "") == visible_active_id,
+            "bot_mode": str(item.get("bot_mode") or profile.bot_mode),
+            "execution_mode": _conversation_execution_mode(item),
+        }
+
     return {
-        "items": [
-            {
-                **item,
-                "active": str(item.get("id") or "") == visible_active_id,
-                "bot_mode": str(item.get("bot_mode") or profile.bot_mode),
-                "execution_mode": _conversation_execution_mode(item),
-            }
-            for item in items
-        ],
+        "items": [decorate(item) for item in items],
         "active_conversation_id": visible_active_id,
         "execution_mode": resolved_execution_mode,
     }
@@ -2349,6 +2390,16 @@ def select_conversation(
         native_provider = NATIVE_AGENT_PROVIDER
     conversation_execution_mode = _ensure_conversation_execution_mode(conversation, requested_execution_mode)
     native_session_id = str(conversation.get("native_session_id") or "").strip()
+    workspace_meta: dict[str, Any] = {}
+    if native_provider == NATIVE_AGENT_PROVIDER:
+        pi_store = _pi_store()
+        record = pi_store.get(_pi_key_for_session(session, str(conversation["id"])))
+        if record is not None and record.pi_session_id:
+            native_session_id = record.pi_session_id
+        workspace_meta = _safe_pi_workspace_meta(
+            record,
+            store.latest_active_workspace_history(str(conversation["id"])),
+        )
     with session._lock:
         session.active_conversation_id = str(conversation["id"])
         _clear_all_native_sessions_locked(session)
@@ -2361,12 +2412,14 @@ def select_conversation(
             session.kimi_session_id = native_session_id or None
         if native_provider == NATIVE_AGENT_PROVIDER:
             session.native_agent_session_id = native_session_id or None
+            session.native_agent_server_key = None
     session.persist()
 
     messages = _history_service_for_execution_mode(session, conversation_execution_mode).list_history(profile, session, limit=50)
     return {
         "conversation": {
             **conversation,
+            **workspace_meta,
             "active": True,
             "bot_mode": str(conversation.get("bot_mode") or profile.bot_mode),
             "agent_id": session.agent_id,
@@ -2415,6 +2468,14 @@ def delete_conversation(
         native_provider = NATIVE_AGENT_PROVIDER
     _ensure_conversation_execution_mode(conversation, requested_execution_mode)
     native_session_id = str(conversation.get("native_session_id") or "").strip()
+    pi_record_deleted = False
+    if delete_native_session and native_provider == NATIVE_AGENT_PROVIDER:
+        pi_record_deleted = _pi_store().delete_conversation(
+            cwd=session.working_dir,
+            bot_id=session.bot_id,
+            user_id=session.user_id,
+            conversation_id=conversation_id,
+        )
     with session._lock:
         if is_active:
             session.active_conversation_id = None
@@ -2435,6 +2496,8 @@ def delete_conversation(
             elif native_provider == NATIVE_AGENT_PROVIDER and session.native_agent_session_id == native_session_id:
                 _clear_native_agent_session_locked(session)
                 native_cleared = True
+        if pi_record_deleted:
+            native_cleared = True
     session.persist()
 
     store.delete_conversation_by_id(conversation_id)
@@ -2474,6 +2537,16 @@ def delete_all_conversations(
         active_conversation_id = str(session.active_conversation_id or "")
 
     store = _get_chat_store(session)
+    native_conversations_to_delete: list[dict[str, Any]] = []
+    if delete_native_session and resolved_execution_mode == NATIVE_AGENT_PROVIDER:
+        native_conversations_to_delete = store.list_conversations(
+            bot_id=session.bot_id,
+            user_id=session.user_id,
+            working_dir=session.working_dir,
+            agent_id=session.agent_id,
+            native_provider=NATIVE_AGENT_PROVIDER,
+            limit=100,
+        )
     deleted_count = store.archive_bot_conversations(
         bot_id=session.bot_id,
         user_id=session.user_id,
@@ -2482,6 +2555,15 @@ def delete_all_conversations(
         native_provider=NATIVE_AGENT_PROVIDER if resolved_execution_mode == NATIVE_AGENT_PROVIDER else None,
         native_provider_exclude=NATIVE_AGENT_PROVIDER if resolved_execution_mode != NATIVE_AGENT_PROVIDER else None,
     )
+    if native_conversations_to_delete:
+        pi_store = _pi_store()
+        for item in native_conversations_to_delete:
+            pi_store.delete_conversation(
+                cwd=session.working_dir,
+                bot_id=session.bot_id,
+                user_id=session.user_id,
+                conversation_id=str(item.get("id") or ""),
+            )
 
     native_cleared = False
     with session._lock:
@@ -2552,6 +2634,107 @@ def get_history_trace(
     if data is None:
         _raise(404, "trace_not_found", "未找到对应消息的过程详情")
     return data
+
+
+async def rollback_native_agent_history(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    *,
+    conversation_id: str,
+    target_turn_id: str,
+    agent_id: str = "main",
+) -> dict[str, Any]:
+    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    resolved_execution_mode = normalize_execution_mode(NATIVE_AGENT_PROVIDER, profile)
+    if resolved_execution_mode != NATIVE_AGENT_PROVIDER:
+        _raise(409, "native_agent_unavailable", "当前 Bot 未启用原生 agent")
+    normalized_conversation_id = str(conversation_id or "").strip()
+    normalized_turn_id = str(target_turn_id or "").strip()
+    if not normalized_conversation_id:
+        _raise(400, "missing_conversation_id", "缺少 conversation_id")
+    if not normalized_turn_id:
+        _raise(400, "missing_target_turn_id", "缺少 target_turn_id")
+    with session._lock:
+        if bool(session.is_processing):
+            _raise(409, "conversation_switch_blocked", "当前任务运行中，先终止或等待完成")
+
+    store = _get_chat_store(session)
+    try:
+        conversation = store.get_conversation(normalized_conversation_id)
+    except KeyError:
+        _raise(404, "conversation_not_found", "未找到会话")
+    if int(conversation.get("bot_id") or 0) != session.bot_id or int(conversation.get("user_id") or 0) != session.user_id:
+        _raise(404, "conversation_not_found", "未找到会话")
+    if str(conversation.get("agent_id") or "main") != session.agent_id:
+        _raise(404, "conversation_not_found", "未找到会话")
+    if str(conversation.get("working_dir") or "") != session.working_dir:
+        _raise(409, "conversation_workdir_mismatch", "会话工作目录和当前 Bot 不一致")
+    if str(conversation.get("archived_at") or "").strip():
+        _raise(404, "conversation_not_found", "未找到会话")
+    if str(conversation.get("native_provider") or "").strip().lower() != NATIVE_AGENT_PROVIDER:
+        _raise(409, "conversation_execution_mode_mismatch", "会话执行模式和当前选择不一致")
+
+    target = store.get_turn_workspace_history(normalized_turn_id)
+    if target is None or str(target.get("conversation_id") or "") != normalized_conversation_id:
+        _raise(404, "target_turn_not_found", "未找到目标会话点")
+    if str(target.get("discarded_at") or "").strip():
+        _raise(409, "target_turn_discarded", "目标会话点已被丢弃")
+    target_head = str(target.get("workspace_history_head") or "").strip()
+    if not target_head:
+        _raise(409, "workspace_history_head_missing", "目标会话点没有可撤回的工作区记录")
+
+    pi_store = _pi_store()
+    pi_key = _pi_key_for_session(session, normalized_conversation_id)
+    record = pi_store.get(pi_key)
+    if record is not None and record.degraded:
+        _raise(409, "workspace_history_degraded", record.degraded_reason or "workspace history 状态已降级")
+    latest = store.latest_active_workspace_history(normalized_conversation_id)
+    latest_head = str((latest or {}).get("workspace_history_head") or "").strip()
+    if record is not None and record.workspace_history_head and latest_head and record.workspace_history_head != latest_head:
+        _raise(409, "workspace_history_head_drift", "工作区记录和会话历史不一致，请刷新后重试")
+
+    status = await get_native_agent_service().rollback_workspace_history(
+        profile=profile,
+        session=session,
+        conversation_id=normalized_conversation_id,
+        target_head=target_head,
+        native_session_id=str(getattr(record, "pi_session_id", "") or conversation.get("native_session_id") or ""),
+    )
+    if status.degraded:
+        pi_store.mark_degraded(pi_key, status.message)
+        if int(status.locked_file_count or 0) > 0:
+            _raise(
+                409,
+                "workspace_history_locked",
+                "部分文件被占用，无法撤回；请关闭相关程序后重试",
+                {"locked_file_count": int(status.locked_file_count or 0)},
+            )
+        _raise(409, "workspace_history_unavailable", status.message or "workspace history 不可用")
+    if status.head and status.head != target_head:
+        _raise(409, "workspace_history_head_drift", "工作区撤回结果和目标记录不一致")
+
+    try:
+        updated_record = pi_store.mark_discarded_after(pi_key, normalized_turn_id)
+    except KeyError:
+        _raise(409, "workspace_history_record_missing", "本地工作区记录缺失，请重新开始会话")
+    store.mark_turns_after_discarded(normalized_conversation_id, normalized_turn_id)
+    store.update_turn_workspace_history(
+        normalized_turn_id,
+        updated_record.workspace_history_head or target_head,
+        updated_record.linear_index or int(target.get("linear_index") or 0),
+    )
+    with session._lock:
+        session.active_conversation_id = normalized_conversation_id
+        session.native_agent_session_id = updated_record.pi_session_id or session.native_agent_session_id
+        session.native_agent_server_key = None
+    session.persist()
+    return {
+        "conversation_id": normalized_conversation_id,
+        "current_turn_id": normalized_turn_id,
+        "rollback_supported": False,
+        "message": "已撤回到所选会话点；该操作不可撤销",
+    }
 
 
 def reset_user_session(manager: MultiBotManager, alias: str, user_id: int, agent_id: str = "main") -> dict[str, Any]:

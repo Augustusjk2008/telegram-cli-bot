@@ -372,6 +372,9 @@ class ChatStore:
                 trace_recovery_attempted_at TEXT,
                 trace_recovery_status TEXT,
                 context_usage_json TEXT,
+                workspace_history_head TEXT,
+                workspace_history_index INTEGER,
+                workspace_history_discarded_at TEXT,
                 FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
             );
 
@@ -426,6 +429,9 @@ class ChatStore:
         self._ensure_column(conn, "turns", "trace_recovery_attempted_at", "TEXT")
         self._ensure_column(conn, "turns", "trace_recovery_status", "TEXT")
         self._ensure_column(conn, "turns", "context_usage_json", "TEXT")
+        self._ensure_column(conn, "turns", "workspace_history_head", "TEXT")
+        self._ensure_column(conn, "turns", "workspace_history_index", "INTEGER")
+        self._ensure_column(conn, "turns", "workspace_history_discarded_at", "TEXT")
         self._ensure_column(conn, "messages", "author_user_id", "INTEGER")
         self._ensure_column(conn, "messages", "author_account_id", "TEXT")
         self._ensure_column(conn, "messages", "author_username", "TEXT")
@@ -1233,6 +1239,157 @@ class ChatStore:
                 turn_id=turn_id,
             )
 
+    def update_turn_workspace_history(self, turn_id: str, head: str, index: int) -> bool:
+        normalized_turn_id = str(turn_id or "").strip()
+        normalized_head = str(head or "").strip()
+        try:
+            normalized_index = int(index)
+        except (TypeError, ValueError):
+            normalized_index = 0
+        now = _utc_now()
+        with self._connect_for_write() as conn:
+            result = conn.execute(
+                """
+                UPDATE turns
+                SET workspace_history_head = ?,
+                    workspace_history_index = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (normalized_head, normalized_index, now, normalized_turn_id),
+            )
+            if result.rowcount == 0:
+                raise KeyError(normalized_turn_id)
+        return True
+
+    def get_turn_workspace_history(self, turn_id: str) -> dict[str, Any] | None:
+        normalized_turn_id = str(turn_id or "").strip()
+        conn = self._connect(create=False)
+        if conn is None:
+            return None
+        with closing(conn):
+            row = conn.execute(
+                """
+                SELECT
+                    id,
+                    conversation_id,
+                    seq,
+                    native_provider,
+                    workspace_history_head,
+                    workspace_history_index,
+                    workspace_history_discarded_at
+                FROM turns
+                WHERE id = ?
+                """,
+                (normalized_turn_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "turn_id": str(row["id"]),
+            "conversation_id": str(row["conversation_id"] or ""),
+            "seq": int(row["seq"] or 0),
+            "native_provider": str(row["native_provider"] or ""),
+            "workspace_history_head": str(row["workspace_history_head"] or ""),
+            "linear_index": int(row["workspace_history_index"] or 0),
+            "discarded_at": str(row["workspace_history_discarded_at"] or ""),
+        }
+
+    def mark_turns_after_discarded(self, conversation_id: str, target_turn_id: str) -> int:
+        normalized_conversation_id = str(conversation_id or "").strip()
+        normalized_turn_id = str(target_turn_id or "").strip()
+        now = _utc_now()
+        with self._connect_for_write() as conn:
+            target = conn.execute(
+                """
+                SELECT seq
+                FROM turns
+                WHERE id = ? AND conversation_id = ? AND workspace_history_discarded_at IS NULL
+                """,
+                (normalized_turn_id, normalized_conversation_id),
+            ).fetchone()
+            if target is None:
+                raise KeyError(normalized_turn_id)
+            result = conn.execute(
+                """
+                UPDATE turns
+                SET workspace_history_discarded_at = ?,
+                    updated_at = ?
+                WHERE conversation_id = ?
+                  AND seq > ?
+                  AND workspace_history_discarded_at IS NULL
+                """,
+                (now, now, normalized_conversation_id, int(target["seq"] or 0)),
+            )
+            latest = conn.execute(
+                """
+                SELECT m.content
+                FROM messages AS m
+                JOIN turns AS t ON t.id = m.turn_id
+                WHERE m.conversation_id = ?
+                  AND t.workspace_history_discarded_at IS NULL
+                ORDER BY
+                    t.seq DESC,
+                    CASE m.role WHEN 'user' THEN 0 ELSE 1 END DESC,
+                    m.created_at DESC,
+                    m.id DESC
+                LIMIT 1
+                """,
+                (normalized_conversation_id,),
+            ).fetchone()
+            count_row = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM messages AS m
+                JOIN turns AS t ON t.id = m.turn_id
+                WHERE m.conversation_id = ?
+                  AND t.workspace_history_discarded_at IS NULL
+                """,
+                (normalized_conversation_id,),
+            ).fetchone()
+            conn.execute(
+                """
+                UPDATE conversations
+                SET last_message_preview = ?,
+                    message_count = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    self._summarize_preview(str(latest["content"] or "")) if latest is not None else "",
+                    int(count_row["count"] or 0) if count_row is not None else 0,
+                    now,
+                    normalized_conversation_id,
+                ),
+            )
+            return int(result.rowcount or 0)
+
+    def latest_active_workspace_history(self, conversation_id: str) -> dict[str, Any] | None:
+        normalized_conversation_id = str(conversation_id or "").strip()
+        conn = self._connect(create=False)
+        if conn is None:
+            return None
+        with closing(conn):
+            row = conn.execute(
+                """
+                SELECT id, workspace_history_head, workspace_history_index
+                FROM turns
+                WHERE conversation_id = ?
+                  AND workspace_history_discarded_at IS NULL
+                  AND COALESCE(workspace_history_head, '') != ''
+                ORDER BY seq DESC, started_at DESC, id DESC
+                LIMIT 1
+                """,
+                (normalized_conversation_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "turn_id": str(row["id"]),
+            "workspace_history_head": str(row["workspace_history_head"] or ""),
+            "linear_index": int(row["workspace_history_index"] or 0),
+        }
+
     def append_trace_event(
         self,
         turn_id: str,
@@ -1667,6 +1824,25 @@ class ChatStore:
                 "tool_call_count": int(trace_stats.get("tool_call_count", 0) or 0),
                 "process_count": int(trace_stats.get("process_count", 0) or 0),
             })
+            try:
+                workspace_history_head = str(row["workspace_history_head"] or "").strip()
+            except (KeyError, IndexError):
+                workspace_history_head = ""
+            try:
+                workspace_history_index = row["workspace_history_index"]
+            except (KeyError, IndexError):
+                workspace_history_index = None
+            if workspace_history_head:
+                meta["workspace_history_head"] = workspace_history_head
+                meta["rollback_supported"] = True
+            if workspace_history_index is not None:
+                try:
+                    meta["linear_index"] = int(workspace_history_index)
+                except (TypeError, ValueError):
+                    pass
+            if "rollback_supported" not in meta:
+                meta["rollback_supported"] = False
+            meta["degraded"] = False
             native_provider = str(row["native_provider"] or "").strip()
             native_session_id = str(row["native_session_id"] or "").strip()
             if native_provider or native_session_id:
@@ -1738,10 +1914,13 @@ class ChatStore:
                     t.completion_state,
                     t.native_provider,
                     t.native_session_id,
-                    t.context_usage_json
+                    t.context_usage_json,
+                    t.workspace_history_head,
+                    t.workspace_history_index
                 FROM messages AS m
                 JOIN turns AS t ON t.id = m.turn_id
                 WHERE m.conversation_id = ?
+                  AND t.workspace_history_discarded_at IS NULL
                 ORDER BY
                     t.seq ASC,
                     CASE m.role WHEN 'user' THEN 0 ELSE 1 END ASC,
@@ -1771,6 +1950,8 @@ class ChatStore:
                 recent.native_provider,
                 recent.native_session_id,
                 recent.context_usage_json,
+                recent.workspace_history_head,
+                recent.workspace_history_index,
                 recent.role_order
             FROM (
                 SELECT
@@ -1790,10 +1971,13 @@ class ChatStore:
                     t.native_provider,
                     t.native_session_id,
                     t.context_usage_json,
+                    t.workspace_history_head,
+                    t.workspace_history_index,
                     CASE m.role WHEN 'user' THEN 0 ELSE 1 END AS role_order
                 FROM messages AS m
                 JOIN turns AS t ON t.id = m.turn_id
                 WHERE m.conversation_id = ?
+                  AND t.workspace_history_discarded_at IS NULL
                 ORDER BY
                     t.seq DESC,
                     role_order DESC,
@@ -1839,10 +2023,13 @@ class ChatStore:
                         t.completion_state,
                         t.native_provider,
                         t.native_session_id,
-                        t.context_usage_json
+                        t.context_usage_json,
+                        t.workspace_history_head,
+                        t.workspace_history_index
                     FROM messages AS m
                     JOIN turns AS t ON t.id = m.turn_id
                     WHERE m.id = ?
+                      AND t.workspace_history_discarded_at IS NULL
                     """,
                     (message_id,),
                 ).fetchone()
@@ -1938,7 +2125,13 @@ class ChatStore:
                 if resolved_conversation_id is None:
                     return 0
                 row = conn.execute(
-                    "SELECT COUNT(*) AS count FROM messages WHERE conversation_id = ?",
+                    """
+                    SELECT COUNT(*) AS count
+                    FROM messages AS m
+                    JOIN turns AS t ON t.id = m.turn_id
+                    WHERE m.conversation_id = ?
+                      AND t.workspace_history_discarded_at IS NULL
+                    """,
                     (resolved_conversation_id,),
                 ).fetchone()
                 count = int(row["count"])
@@ -2330,7 +2523,13 @@ class ChatStore:
         with closing(conn):
             with conn:
                 row = conn.execute(
-                    "SELECT turn_id FROM messages WHERE id = ?",
+                    """
+                    SELECT m.turn_id
+                    FROM messages AS m
+                    JOIN turns AS t ON t.id = m.turn_id
+                    WHERE m.id = ?
+                      AND t.workspace_history_discarded_at IS NULL
+                    """,
                     (message_id,),
                 ).fetchone()
                 if row is None:
@@ -2407,6 +2606,7 @@ class ChatStore:
                     JOIN conversations AS conversation ON conversation.id = assistant.conversation_id
                     JOIN messages AS user ON user.id = turn.user_message_id
                     WHERE assistant.id = ?
+                      AND turn.workspace_history_discarded_at IS NULL
                     """,
                     (message_id,),
                 ).fetchone()

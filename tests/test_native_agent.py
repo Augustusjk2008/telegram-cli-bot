@@ -1589,6 +1589,7 @@ class FakeRunClient:
         started: asyncio.Event | None = None,
         event_delay_seconds: float = 0.0,
         wait_after_first_event: bool = False,
+        workspace_results: dict[str, list[dict[str, object]]] | None = None,
     ) -> None:
         self.events = list(events or [])
         self.error = error
@@ -1635,6 +1636,7 @@ class FakePiRuntime:
         started: asyncio.Event | None = None,
         event_delay_seconds: float = 0.0,
         wait_after_first_event: bool = False,
+        workspace_results: dict[str, list[dict[str, object]]] | None = None,
     ) -> None:
         self.events_payload = list(events or [])
         self.error = error
@@ -1648,14 +1650,48 @@ class FakePiRuntime:
         self.replies: list[dict[str, object]] = []
         self.runtime_id = "pir_fake"
         self.workspace_history_head = "head-1"
-        self.state = type("State", (), {"native_session_id": "", "pending_permission_ids": set()})()
+        self.workspace_requests: list[dict[str, object]] = []
+        self._workspace_result_queue: list[dict[str, object]] = []
+        self.workspace_results = {key: list(value) for key, value in (workspace_results or {}).items()}
+        self.state = type("State", (), {
+            "native_session_id": "",
+            "workspace_history_head": "head-1",
+            "linear_index": 0,
+            "pending_permission_ids": set(),
+        })()
 
     async def prompt(self, text: str, *, conversation_id: str = "") -> None:
         self.prompts.append({"text": text, "conversation_id": conversation_id})
         if self.started is not None:
             self.started.set()
 
+    async def send(self, packet: dict[str, object]) -> None:
+        if str(packet.get("type") or "") != "workspace_history":
+            return
+        self.workspace_requests.append(dict(packet))
+        action = str(packet.get("action") or "")
+        responses = self.workspace_results.get(action) or []
+        response = dict(responses.pop(0)) if responses else {
+            "head": self.state.workspace_history_head,
+            "clean": True,
+            "manual_change_count": 0,
+        }
+        if action in self.workspace_results:
+            self.workspace_results[action] = responses
+        if response.get("head"):
+            self.workspace_history_head = str(response["head"])
+            self.state.workspace_history_head = str(response["head"])
+        self._workspace_result_queue.append({
+            "type": "workspace_history_result",
+            "id": str(packet.get("id") or ""),
+            **response,
+        })
+
     async def events(self):
+        if self._workspace_result_queue:
+            while self._workspace_result_queue:
+                yield self._workspace_result_queue.pop(0)
+            return
         if self.gate is not None and not self.wait_after_first_event:
             await self.gate.wait()
         if self.error is not None:
@@ -1783,6 +1819,93 @@ async def test_native_agent_service_streams_pi_runtime_and_persists_done(tmp_pat
     assert session.is_processing is False
     assert runtime.prompts[0]["conversation_id"] == ""
     assert runtime.prompts[0]["text"] == "你好"
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_completed_turn_writes_workspace_history(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from bot import config
+    from bot.native_agent.pi_session_store import PiSessionStore, pi_session_key
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    runtime = FakePiRuntime(
+        [
+            {"type": "agent_start", "sessionId": "sess-1"},
+            {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "完成"}},
+            {"type": "turn_end", "sessionId": "sess-1"},
+        ],
+        workspace_results={
+            "status": [
+                {"head": "head-before", "clean": True, "manual_change_count": 0},
+                {"head": "head-after", "clean": True, "manual_change_count": 0},
+            ],
+        },
+    )
+    service = NativeAgentService()
+    service._runtime_registry = FakePiRuntimeRegistry(runtime)
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    events = [
+        event async for event in service.stream_chat(
+            profile=profile,
+            session=session,
+            user_text="做事",
+            prompt_text="做事",
+            history_service=history,
+        )
+    ]
+
+    done = next(event for event in events if event["type"] == "done")
+    assert [item["action"] for item in runtime.workspace_requests] == ["status", "status"]
+    assert done["message"]["meta"]["workspace_history_head"] == "head-after"
+    assert done["message"]["meta"]["linear_index"] == 1
+    key = pi_session_key(cwd=str(tmp_path), bot_id=1, user_id=1, conversation_id=done["message"]["conversation_id"])
+    record = PiSessionStore().get(key)
+    assert record is not None
+    assert record.linear_index == 1
+    assert record.workspace_history_head == "head-after"
+    assert history.store.get_turn_workspace_history(done["turn_id"])["workspace_history_head"] == "head-after"
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_dirty_workspace_checkpoints_before_turn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from bot import config
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    runtime = FakePiRuntime(
+        [
+            {"type": "agent_start", "sessionId": "sess-1"},
+            {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "完成"}},
+            {"type": "turn_end", "sessionId": "sess-1"},
+        ],
+        workspace_results={
+            "status": [
+                {"head": "head-before", "clean": False, "manual_change_count": 2, "changed_paths": ["secret.py"]},
+                {"head": "head-after", "clean": True, "manual_change_count": 0},
+            ],
+            "checkpoint": [{"head": "head-manual", "clean": True, "manual_change_count": 0}],
+        },
+    )
+    service = NativeAgentService()
+    service._runtime_registry = FakePiRuntimeRegistry(runtime)
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    events = [
+        event async for event in service.stream_chat(
+            profile=profile,
+            session=session,
+            user_text="做事",
+            prompt_text="做事",
+            history_service=history,
+        )
+    ]
+
+    assert [item["action"] for item in runtime.workspace_requests] == ["status", "checkpoint", "status"]
+    assert runtime.workspace_requests[1]["label"] == "manual-before-turn"
+    assert "changed_paths" not in json.dumps(events, ensure_ascii=False)
 
 
 @pytest.mark.asyncio

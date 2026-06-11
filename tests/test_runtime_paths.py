@@ -37,3 +37,27 @@ def test_runtime_paths_loads_tcb_data_dir_from_dotenv(tmp_path, monkeypatch):
     reloaded = importlib.reload(runtime_paths)
 
     assert reloaded.get_app_data_root() == data
+
+
+def test_native_agent_paths_use_app_data_root(monkeypatch, tmp_path: Path):
+    data = tmp_path / "data"
+    monkeypatch.setenv("TCB_DATA_DIR", str(data))
+
+    assert runtime_paths.get_native_agent_data_dir() == data / "native-agent"
+    assert runtime_paths.get_pi_session_store_path() == data / "native-agent" / "pi_sessions.json"
+    assert runtime_paths.get_pi_workspace_history_diagnostics_dir() == data / "native-agent" / "workspace-history-diagnostics"
+    assert not runtime_paths.get_pi_session_store_path().exists()
+
+
+def test_native_agent_paths_default_under_home(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    home.mkdir()
+    repo.mkdir()
+    monkeypatch.delenv("TCB_DATA_DIR", raising=False)
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(runtime_paths, "dotenv_values", lambda _path: {})
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    assert runtime_paths.get_pi_session_store_path() == home / ".tcb" / "orbit-safe-claw" / "native-agent" / "pi_sessions.json"
+    assert str(repo) not in str(runtime_paths.get_pi_session_store_path())

@@ -185,6 +185,7 @@ from .api_service import (
     get_history,
     get_history_delta,
     get_history_trace,
+    rollback_native_agent_history,
     get_assistant_diagnostics,
     get_native_agent_config_payload,
     get_native_agent_models_payload,
@@ -3113,6 +3114,21 @@ class WebApiServer:
         agent_id = self._request_agent_id(request)
         execution_mode = str(request.query.get("execution_mode") or request.query.get("executionMode") or "").strip()
         return _json({"ok": True, "data": get_history_trace(self.manager, alias, self._chat_user_id(auth), message_id, agent_id=agent_id, execution_mode=execution_mode)})
+
+    async def post_native_agent_history_rollback_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_CHAT_SEND)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
+        agent_id = self._request_agent_id(request, body)
+        data = await rollback_native_agent_history(
+            self.manager,
+            alias,
+            self._chat_user_id(auth),
+            conversation_id=str(body.get("conversation_id") or body.get("conversationId") or ""),
+            target_turn_id=str(body.get("target_turn_id") or body.get("targetTurnId") or ""),
+            agent_id=agent_id,
+        )
+        return _json({"ok": True, "data": data})
 
     async def get_git_overview_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)

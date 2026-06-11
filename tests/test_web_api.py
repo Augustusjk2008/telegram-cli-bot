@@ -98,6 +98,7 @@ from bot.web.api_service import (
     move_path,
     rename_path,
     reply_native_agent_permission,
+    rollback_native_agent_history,
     run_chat,
     run_cli_chat,
     reset_user_session,
@@ -3441,6 +3442,46 @@ def test_native_agent_conversation_api_uses_native_provider(web_manager: MultiBo
     assert exc_info.value.code == "conversation_execution_mode_mismatch"
 
 
+def test_native_agent_select_and_delete_sync_pi_session_store(web_manager: MultiBotManager, tmp_path: Path):
+    from bot.native_agent.pi_session_store import PiSessionRecord, PiSessionStore, pi_session_key
+
+    web_manager.main_profile.working_dir = str(tmp_path)
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+    created = create_conversation(web_manager, "main", 1001, "原生任务", execution_mode="native_agent")
+    conversation_id = created["conversation"]["id"]
+    ChatStore(tmp_path).set_conversation_native_session(conversation_id, "sqlite-native", {"cwd": str(tmp_path)})
+    key = pi_session_key(cwd=str(tmp_path), bot_id=session.bot_id, user_id=session.user_id, conversation_id=conversation_id)
+    pi_store = PiSessionStore()
+    pi_store.upsert(PiSessionRecord(
+        key=key,
+        cwd=str(tmp_path),
+        conversation_id=conversation_id,
+        pi_session_id="pi-native",
+        linear_index=3,
+        workspace_history_head="head-3",
+    ))
+
+    selected = select_conversation(web_manager, "main", 1001, conversation_id, execution_mode="native_agent")
+
+    assert session.native_agent_session_id == "pi-native"
+    assert selected["conversation"]["workspace_history_head"] == "head-3"
+    assert selected["conversation"]["linear_index"] == 3
+    assert "changed_paths" not in json.dumps(selected, ensure_ascii=False)
+
+    result = delete_conversation(
+        web_manager,
+        "main",
+        1001,
+        conversation_id,
+        execution_mode="native_agent",
+        delete_native_session=True,
+    )
+
+    assert result["native_session_cleared"] is True
+    assert pi_store.get(key) is None
+
+
 def test_conversation_api_delete_all_clears_bot_workspace_sessions(web_manager: MultiBotManager, tmp_path: Path):
     web_manager.main_profile.working_dir = str(tmp_path)
     session = get_session_for_alias(web_manager, "main", 1001)
@@ -3635,6 +3676,58 @@ def test_delete_active_native_conversation_clears_runtime_native_session(web_man
     assert result["native_session_cleared"] is True
     assert session.active_conversation_id is None
     assert session.native_agent_session_id is None
+
+
+@pytest.mark.asyncio
+async def test_native_agent_history_rollback_discards_forward_turns(
+    web_manager: MultiBotManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot.native_agent.pi_session_store import PiSessionRecord, PiSessionStore, pi_session_key
+    from bot.native_agent.pi_workspace_history import WorkspaceHistoryStatus
+
+    web_manager.main_profile.working_dir = str(tmp_path)
+    profile = web_manager.main_profile
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+    history = ChatHistoryService(ChatStore(tmp_path), native_provider_filter="native_agent")
+    first = history.start_turn(profile=profile, session=session, user_text="一", native_provider="native_agent")
+    history.complete_turn(first, content="一回", completion_state="completed", native_session_id="pi-native")
+    history.store.update_turn_workspace_history(first.turn_id, "head-1", 1)
+    second = history.start_turn(profile=profile, session=session, user_text="二", native_provider="native_agent")
+    history.complete_turn(second, content="二回", completion_state="completed", native_session_id="pi-native")
+    history.store.update_turn_workspace_history(second.turn_id, "head-2", 2)
+    key = pi_session_key(cwd=str(tmp_path), bot_id=session.bot_id, user_id=session.user_id, conversation_id=first.conversation_id)
+    pi_store = PiSessionStore()
+    pi_store.upsert(PiSessionRecord(key=key, cwd=str(tmp_path), conversation_id=first.conversation_id, pi_session_id="pi-native"))
+    pi_store.update_after_completed_turn(key, pi_session_id="pi-native", turn_id=first.turn_id, workspace_history_head="head-1")
+    pi_store.update_after_completed_turn(key, pi_session_id="pi-native", turn_id=second.turn_id, workspace_history_head="head-2")
+
+    class FakeNativeService:
+        async def rollback_workspace_history(self, **kwargs):
+            assert kwargs["target_head"] == "head-1"
+            return WorkspaceHistoryStatus(head="head-1", clean=True, manual_change_count=0)
+
+    monkeypatch.setattr(api_service, "get_native_agent_service", lambda: FakeNativeService())
+
+    result = await rollback_native_agent_history(
+        web_manager,
+        "main",
+        1001,
+        conversation_id=first.conversation_id,
+        target_turn_id=first.turn_id,
+    )
+
+    assert result["current_turn_id"] == first.turn_id
+    assert result["rollback_supported"] is False
+    assert [item["content"] for item in history.list_history(profile, session)] == ["一", "一回"]
+    reloaded = pi_store.get(key)
+    assert reloaded is not None
+    assert reloaded.linear_index == 1
+    assert reloaded.workspace_history_head == "head-1"
+    assert reloaded.turns[1].status == "discarded"
+    assert "changed_paths" not in json.dumps(result, ensure_ascii=False)
 
 
 def test_reset_user_session_blocks_while_processing(web_manager: MultiBotManager):

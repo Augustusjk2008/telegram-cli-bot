@@ -74,7 +74,6 @@ class PiSessionRuntime:
 
     async def prompt(self, text: str, *, conversation_id: str = "") -> None:
         self.state.processing = True
-        self.state.linear_index += 1
         await self.client.prompt(text, conversation_id=conversation_id or self.state.native_session_id)
 
     async def events(self):

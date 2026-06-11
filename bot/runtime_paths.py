@@ -72,6 +72,18 @@ def get_session_store_path() -> Path:
     return get_app_data_root() / "sessions" / "session_store.json"
 
 
+def get_native_agent_data_dir() -> Path:
+    return get_app_data_root() / "native-agent"
+
+
+def get_pi_session_store_path() -> Path:
+    return get_native_agent_data_dir() / "pi_sessions.json"
+
+
+def get_pi_workspace_history_diagnostics_dir() -> Path:
+    return get_native_agent_data_dir() / "workspace-history-diagnostics"
+
+
 def get_announcements_content_path() -> Path:
     return get_app_data_root() / "announcements" / "content.json"
 
