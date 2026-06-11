@@ -238,7 +238,7 @@ class NativeAgentAggregator:
         switched_message = False
         if role == "assistant" and message_id:
             previous_message_id = self.assistant_message_id
-            switched, discarded_text = self._switch_assistant_message(message_id)
+            switched, discarded_text = self._switch_assistant_message(message_id, preserve_message_id=message_id)
             if switched:
                 switched_message = True
                 result.snapshot = ""
@@ -304,7 +304,7 @@ class NativeAgentAggregator:
         switched_message = False
         if message_id and self._part_belongs_to_current_turn(message_id):
             previous_message_id = self.assistant_message_id
-            switched, discarded_text = self._switch_assistant_message(message_id)
+            switched, discarded_text = self._switch_assistant_message(message_id, preserve_message_id=message_id)
             if switched:
                 switched_message = True
                 result.snapshot = ""
@@ -381,7 +381,7 @@ class NativeAgentAggregator:
         switched_message = False
         if message_id and self._part_belongs_to_current_turn(message_id):
             previous_message_id = self.assistant_message_id
-            switched, discarded_text = self._switch_assistant_message(message_id)
+            switched, discarded_text = self._switch_assistant_message(message_id, preserve_message_id=message_id)
             if switched:
                 switched_message = True
                 result.snapshot = ""
@@ -715,14 +715,25 @@ class NativeAgentAggregator:
             self.final_text = ""
         return changed, "".join(discarded_chunks)
 
-    def _switch_assistant_message(self, message_id: str) -> tuple[bool, str]:
+    def _switch_assistant_message(self, message_id: str, *, preserve_message_id: str = "") -> tuple[bool, str]:
         target = str(message_id or "").strip()
         current = str(self.assistant_message_id or "").strip()
         if not target or not current or target == current:
             return False, ""
-        discarded_text = self.text()
+        preserve_target = str(preserve_message_id or "").strip()
+        preserved_text_parts: dict[str, str] = {}
+        discarded_chunks: list[str] = []
+        for part_id in self._ordered_part_ids(self.text_parts):
+            text = self.text_parts.get(part_id, "")
+            if preserve_target and self.part_message_ids.get(part_id) == preserve_target:
+                preserved_text_parts[part_id] = text
+            elif text:
+                discarded_chunks.append(text)
+        if self.final_text:
+            discarded_chunks.append(self.final_text)
+        discarded_text = "".join(discarded_chunks)
         changed = bool(discarded_text)
-        self.text_parts.clear()
+        self.text_parts = preserved_text_parts
         self.final_text = ""
         self.assistant_completed = False
         self.final_message_id = ""

@@ -2639,9 +2639,10 @@ async def kill_user_process(
         is_processing = bool(session.is_processing)
         process = session.process
         native_agent_session_id = str(session.native_agent_session_id or "").strip()
+        native_agent_server_key = str(session.native_agent_server_key or "").strip()
         if not is_processing:
             return {"killed": False, "message": msg("kill", "no_task")}
-        if process is None and native_agent_session_id:
+        if process is None and (native_agent_session_id or native_agent_server_key):
             session.stop_requested = True
             stale_cleared = False
         elif process is None:
@@ -2666,7 +2667,7 @@ async def kill_user_process(
         return result
 
     try:
-        if process is None and native_agent_session_id:
+        if process is None and (native_agent_session_id or native_agent_server_key):
             aborted = await get_native_agent_service().abort(session)
             session.persist()
             result = {
@@ -2725,8 +2726,6 @@ async def reply_native_agent_permission(
             message=str(message or ""),
         )
     except RuntimeError as exc:
-        if "unsupported_in_run_mode" in str(exc):
-            _raise(409, "unsupported_in_run_mode", "原生 agent run 模式暂不支持交互式权限处理，请调整 Pi agent 权限配置")
         _raise(409, "native_agent_permission_unavailable", str(exc))
     except Exception as exc:
         _raise(500, "native_agent_permission_failed", f"原生 agent 权限处理失败: {exc}")

@@ -4473,6 +4473,28 @@ async def test_kill_user_process_aborts_native_agent_run(web_manager: MultiBotMa
 
 
 @pytest.mark.asyncio
+async def test_kill_user_process_aborts_native_agent_runtime_before_session_id(web_manager: MultiBotManager):
+    session = get_session_for_alias(web_manager, "main", 1001)
+    with session._lock:
+        session.is_processing = True
+        session.process = None
+        session.native_agent_session_id = None
+        session.native_agent_server_key = "pir-1"
+        session.native_agent_run_id = "run-1"
+
+    with patch("bot.web.api_service.get_native_agent_service") as service_factory:
+        service = service_factory.return_value
+        service.abort = AsyncMock(return_value=True)
+        result = await kill_user_process(web_manager, "main", 1001)
+
+    assert result["killed"] is True
+    assert result["native_agent_aborted"] is True
+    service.abort.assert_awaited_once_with(session)
+    assert session.stop_requested is True
+    assert session.native_agent_server_key == "pir-1"
+
+
+@pytest.mark.asyncio
 async def test_reply_native_agent_permission_calls_native_service(web_manager: MultiBotManager):
     session = get_session_for_alias(web_manager, "main", 1001)
     with session._lock:

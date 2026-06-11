@@ -31,15 +31,15 @@ from bot.native_agent.ag_ui_mapper import (
 from bot.native_agent.aggregator import NativeAgentAggregator
 from bot.native_agent.context_usage import resolve_native_agent_context_usage
 from bot.native_agent.events import is_relevant_event, unwrap_event
-from bot.native_agent.run_client import (
-    NativeAgentExportRequest,
-    NativeAgentRunClient,
-    NativeAgentRunError,
-    NativeAgentRunRequest,
-    is_session_unavailable_error,
+from bot.native_agent.pi_rpc_client import PiRpcRunError
+from bot.native_agent.pi_session_runtime import (
+    PiSessionRuntime,
+    PiSessionRuntimeRegistry,
+    PiSessionRuntimeRequest,
+    build_pi_owner_key,
+    build_pi_runtime_key,
 )
-from bot.native_agent.run_events import extract_session_id as extract_run_session_id
-from bot.native_agent.run_events import extract_step_finish_usage, run_json_to_events
+from bot.native_agent.run_events import extract_native_context_usage, extract_native_session_id, native_json_to_events
 from bot.native_agent.turn_state import NativeAgentTurnState
 from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenceBuffer
 
@@ -70,22 +70,26 @@ def normalize_execution_mode(value: Any, profile: BotProfile | None = None) -> s
 
 class NativeAgentService:
     def __init__(self) -> None:
-        self._run_client_factory = NativeAgentRunClient
+        self._runtime_registry = PiSessionRuntimeRegistry()
 
     def _prompt_options(self, profile: BotProfile) -> tuple[str, str]:
         native_agent = effective_native_agent_config(getattr(profile, "native_agent", {}))
         validate_native_agent_model_config(native_agent)
         return (
             build_native_agent_model_id(native_agent),
-            str(native_agent.get("pi_agent") or native_agent.get("opencode_agent") or "").strip(),
+            str(native_agent.get("pi_agent") or "").strip(),
         )
 
     async def abort(self, session: UserSession) -> bool:
         with session._lock:
-            process = session.process
             if not session.is_processing:
                 return False
             session.stop_requested = True
+            runtime_id = str(session.native_agent_server_key or "").strip()
+            process = session.process
+        runtime = self._runtime_registry.get_by_runtime_id(runtime_id) if runtime_id else None
+        if runtime is not None:
+            return await runtime.abort()
         if process is None or process.poll() is not None:
             return False
         try:
@@ -102,8 +106,12 @@ class NativeAgentService:
         approved: bool,
         message: str = "",
     ) -> dict[str, Any]:
-        _ = session, permission_id, approved, message
-        raise RuntimeError("unsupported_in_run_mode: 原生 agent run 模式暂不支持交互式权限处理，请调整 Pi agent 权限配置")
+        with session._lock:
+            runtime_id = str(session.native_agent_server_key or "").strip()
+        runtime = self._runtime_registry.get_by_runtime_id(runtime_id) if runtime_id else None
+        if runtime is None:
+            raise RuntimeError("原生 agent 权限请求已失效，请刷新后重试")
+        return await runtime.reply_permission(permission_id, approved=approved, message=message)
 
     async def stream_chat(
         self,
@@ -144,8 +152,7 @@ class NativeAgentService:
         normalized_cluster_run_id = str(cluster_run_id or "").strip()
         native_session_id = ""
         context_run_usage: dict[str, Any] = {}
-        raw_output_parts: list[str] = []
-        active_run_client: NativeAgentRunClient | None = None
+        active_runtime: PiSessionRuntime | None = None
 
         try:
             if not config.NATIVE_AGENT_ENABLED:
@@ -166,7 +173,7 @@ class NativeAgentService:
             desired_meta = _native_session_meta(
                 cwd=session.working_dir,
                 model_id=model_id,
-                opencode_agent=agent_id,
+                pi_agent=agent_id,
             )
             try:
                 conversation_native = history_service.store.get_conversation_native_session(turn_handle.conversation_id)
@@ -223,10 +230,6 @@ class NativeAgentService:
                     timeout = 0.0
                 return timeout > 0 and now - last_progress_at >= timeout
 
-            def attach_process(process) -> None:
-                with session._lock:
-                    session.process = process
-
             def remember_native_session(session_id: str) -> None:
                 nonlocal native_session_id
                 resolved = str(session_id or "").strip()
@@ -239,12 +242,36 @@ class NativeAgentService:
                     session.native_agent_session_id = resolved
                 session.persist()
 
+            runtime_key = build_pi_runtime_key(
+                bot_id=int(session.bot_id or 0),
+                user_id=int(user_id),
+                conversation_id=turn_handle.conversation_id,
+            )
+            active_runtime = await self._runtime_registry.open_or_create(
+                PiSessionRuntimeRequest(
+                    runtime_key=runtime_key,
+                    owner_key=build_pi_owner_key(bot_id=int(session.bot_id or 0), user_id=int(user_id)),
+                    conversation_id=turn_handle.conversation_id,
+                    cwd=session.working_dir,
+                    command=str(native_agent_config.get("pi_command") or config.NATIVE_AGENT_PI_COMMAND or config.NATIVE_AGENT_COMMAND or "pi"),
+                    model=model_id,
+                    agent_id=agent_id,
+                    native_session_id=native_session_id,
+                )
+            )
+            with session._lock:
+                session.native_agent_server_key = active_runtime.runtime_id
+            session.persist()
+
             yield {
                 "type": "meta",
                 "alias": profile.alias,
                 "cli_type": profile.cli_type,
                 "execution_mode": EXECUTION_MODE_NATIVE_AGENT,
                 "native_provider": NATIVE_AGENT_PROVIDER,
+                "runtime_provider": "pi",
+                "pi_runtime_id": active_runtime.runtime_id,
+                "workspace_history_head": active_runtime.workspace_history_head,
                 "native_session_id": native_session_id,
                 "turn_id": turn_handle.turn_id,
                 "assistant_message_id": turn_handle.assistant_message_id,
@@ -271,202 +298,140 @@ class NativeAgentService:
                 completion_state = "error"
                 returncode = 1
                 error_message = NATIVE_AGENT_NO_PROGRESS_MESSAGE
-                if active_run_client is not None:
-                    active_run_client.kill()
+                if active_runtime is not None:
+                    await active_runtime.kill()
                 return True
 
-            attempt = 0
-            while True:
-                attempt += 1
-                reused = bool(requested_session_id)
-                native_prompt_text = prompt_text if reused else _build_native_prompt_with_history(history_items, prompt_text)
-                run_client = self._run_client_factory()
-                active_run_client = run_client
-                request = NativeAgentRunRequest(
-                    cwd=session.working_dir,
-                    prompt=native_prompt_text,
-                    command=config.NATIVE_AGENT_COMMAND,
-                    session_id=requested_session_id,
-                    model_id=model_id,
-                    agent_id=agent_id,
-                    variant=str(native_agent_config.get("reasoning_effort") or ""),
-                    native_agent=native_agent_config,
-                    on_process=attach_process,
-                )
-                stream = run_client.stream(request)
-                iterator = stream.__aiter__()
-                next_event_task: asyncio.Task[dict[str, Any]] | None = None
-                mark_progress(loop.time(), signature="run-started")
-                try:
-                    while True:
+            native_prompt_text = prompt_text if requested_session_id else _build_native_prompt_with_history(history_items, prompt_text)
+            await active_runtime.prompt(native_prompt_text, conversation_id=native_session_id)
+            stream = active_runtime.events()
+            iterator = stream.__aiter__()
+            next_event_task: asyncio.Task[dict[str, Any]] | None = None
+            mark_progress(loop.time(), signature="pi-run-started")
+            try:
+                while True:
+                    with session._lock:
+                        stop_requested = bool(session.stop_requested)
+                    if stop_requested:
+                        completion_state = "cancelled"
+                        await active_runtime.abort()
+                        break
+                    if await stop_if_no_progress(loop.time()):
+                        break
+                    if next_event_task is None:
+                        next_event_task = asyncio.create_task(iterator.__anext__())
+                    done_tasks, _ = await asyncio.wait({next_event_task}, timeout=0.5)
+                    if not done_tasks:
+                        continue
+                    task = next_event_task
+                    next_event_task = None
+                    try:
+                        raw_event = task.result()
+                    except StopAsyncIteration:
                         with session._lock:
-                            stop_requested = bool(session.stop_requested)
-                        if stop_requested:
+                            stopped_after_exit = bool(session.stop_requested)
+                        if stopped_after_exit:
                             completion_state = "cancelled"
-                            run_client.kill()
+                            await active_runtime.abort()
+                        break
+                    except PiRpcRunError:
+                        if completion_state == "cancelled":
                             break
-                        if await stop_if_no_progress(loop.time()):
-                            break
-                        if next_event_task is None:
-                            next_event_task = asyncio.create_task(iterator.__anext__())
-                        done_tasks, _ = await asyncio.wait({next_event_task}, timeout=0.5)
-                        if not done_tasks:
+                        raise
+                    discovered_session_id = extract_native_session_id(raw_event, provider="pi")
+                    if discovered_session_id:
+                        remember_native_session(discovered_session_id)
+                        active_runtime.state.native_session_id = discovered_session_id
+                        yield {
+                            "type": "meta",
+                            "native_session_id": native_session_id,
+                            "turn_id": turn_handle.turn_id,
+                            "assistant_message_id": turn_handle.assistant_message_id,
+                            "runtime_provider": "pi",
+                        }
+                    usage = extract_native_context_usage(raw_event, provider="pi")
+                    if usage:
+                        context_run_usage = usage
+                    for mapped_raw in native_json_to_events(
+                        raw_event,
+                        provider="pi",
+                        cwd=session.working_dir,
+                        fallback_session_id=native_session_id,
+                        assistant_message_id=aggregator.assistant_message_id or turn_handle.assistant_message_id,
+                    ):
+                        event = unwrap_event(mapped_raw)
+                        if event is None:
                             continue
-                        task = next_event_task
-                        next_event_task = None
-                        try:
-                            raw_event = task.result()
-                        except StopAsyncIteration:
-                            with session._lock:
-                                stopped_after_exit = bool(session.stop_requested)
-                            if stopped_after_exit:
-                                completion_state = "cancelled"
-                                run_client.kill()
-                            break
-                        except NativeAgentRunError as exc:
-                            if completion_state == "cancelled":
-                                break
-                            if requested_session_id and attempt == 1 and is_session_unavailable_error(exc):
-                                history_service.store.set_conversation_native_session(turn_handle.conversation_id, None, None)
-                                with session._lock:
-                                    session.native_agent_session_id = None
-                                session.persist()
-                                requested_session_id = ""
-                                native_session_id = ""
-                                yield {
-                                    "type": "status",
-                                    "elapsed_seconds": int(loop.time() - started_at),
-                                    "preview_text": "已绑定 opencode session 不可用，正在新建 session 重试",
-                                }
-                                break
-                            raise
-                        if str(raw_event.get("type") or "") == "raw_text":
-                            raw_text = str(raw_event.get("raw_text") or "")
-                            if raw_text:
-                                raw_output_parts.append(raw_text)
-                        discovered_session_id = extract_run_session_id(raw_event)
-                        if discovered_session_id:
-                            remember_native_session(discovered_session_id)
+                        if native_session_id and not is_relevant_event(event, session_id=native_session_id, cwd=session.working_dir):
+                            continue
+                        result = aggregator.apply(event)
+                        turn_state.observe(event, result, now=loop.time())
+                        mark_result_progress(event, result, now=loop.time())
+                        if event.type == "permission.updated":
+                            permission_id = _permission_id_from_event(event)
+                            if permission_id:
+                                active_runtime.mark_permission_pending(permission_id)
+                        if wants_ag_ui and not should_filter_event(event):
+                            for ag_ui_event in map_ag_ui_event(event=event, result=result, state=ag_ui_state):
+                                yield {"type": "ag_ui", "event": ag_ui_event}
+                        if result.assistant_message_id:
+                            ag_ui_state.assistant_message_id = result.assistant_message_id
                             yield {
                                 "type": "meta",
                                 "native_session_id": native_session_id,
                                 "turn_id": turn_handle.turn_id,
                                 "assistant_message_id": turn_handle.assistant_message_id,
+                                "native_assistant_message_id": result.assistant_message_id,
                             }
-                        usage = extract_step_finish_usage(raw_event)
-                        if usage:
-                            context_run_usage = usage
-                        for mapped_raw in run_json_to_events(
-                            raw_event,
-                            cwd=session.working_dir,
-                            fallback_session_id=native_session_id,
-                            assistant_message_id=aggregator.assistant_message_id or turn_handle.assistant_message_id,
-                        ):
-                            event = unwrap_event(mapped_raw)
-                            if event is None:
-                                continue
-                            if native_session_id and not is_relevant_event(event, session_id=native_session_id, cwd=session.working_dir):
-                                continue
-                            result = aggregator.apply(event)
-                            turn_state.observe(event, result, now=loop.time())
-                            mark_result_progress(event, result, now=loop.time())
-                            if wants_ag_ui and not should_filter_event(event):
-                                for ag_ui_event in map_ag_ui_event(event=event, result=result, state=ag_ui_state):
-                                    yield {"type": "ag_ui", "event": ag_ui_event}
-                            if result.assistant_message_id:
-                                ag_ui_state.assistant_message_id = result.assistant_message_id
+                        if result.delta:
+                            final_text = aggregator.text()
+                            history_service.replace_assistant_content(turn_handle, final_text, state="streaming")
+                            yield {"type": "delta", "text": result.delta}
+                        if result.snapshot or result.replace_text:
+                            final_text = result.snapshot
+                            history_service.replace_assistant_content(turn_handle, final_text, state="streaming")
+                            yield {
+                                "type": "snapshot",
+                                "text": final_text,
+                                "elapsed_seconds": int(loop.time() - started_at),
+                            }
+                        for trace_event in result.trace:
+                            live_trace.append(trace_event)
+                            persistence_buffer.queue_trace(trace_event)
+                            persistence_buffer.maybe_flush()
+                            yield {"type": "trace", "event": trace_event}
+                        if result.status:
+                            signature = f"{int(loop.time() - started_at)}:{result.status}"
+                            if signature != last_status_signature:
+                                last_status_signature = signature
                                 yield {
-                                    "type": "meta",
-                                    "native_session_id": native_session_id,
-                                    "turn_id": turn_handle.turn_id,
-                                    "assistant_message_id": turn_handle.assistant_message_id,
-                                    "native_assistant_message_id": result.assistant_message_id,
-                                }
-                            if result.delta:
-                                final_text = aggregator.text()
-                                history_service.replace_assistant_content(turn_handle, final_text, state="streaming")
-                                yield {"type": "delta", "text": result.delta}
-                            if result.snapshot or result.replace_text:
-                                final_text = result.snapshot
-                                history_service.replace_assistant_content(turn_handle, final_text, state="streaming")
-                                yield {
-                                    "type": "snapshot",
-                                    "text": final_text,
+                                    "type": "status",
                                     "elapsed_seconds": int(loop.time() - started_at),
+                                    "preview_text": result.status[-800:],
                                 }
-                            for trace_event in result.trace:
-                                live_trace.append(trace_event)
-                                persistence_buffer.queue_trace(trace_event)
-                                persistence_buffer.maybe_flush()
-                                yield {"type": "trace", "event": trace_event}
-                            if result.status:
-                                signature = f"{int(loop.time() - started_at)}:{result.status}"
-                                if signature != last_status_signature:
-                                    last_status_signature = signature
-                                    yield {
-                                        "type": "status",
-                                        "elapsed_seconds": int(loop.time() - started_at),
-                                        "preview_text": result.status[-800:],
-                                    }
-                            if event.type == "permission.updated":
-                                error_message = "原生 agent run 模式暂不支持交互式权限请求，请调整 Pi agent 权限配置"
-                                completion_state = "error"
-                                returncode = 1
-                                if wants_ag_ui:
-                                    text_end = build_text_end_event(state=ag_ui_state)
-                                    if text_end is not None:
-                                        yield {"type": "ag_ui", "event": text_end}
-                                    yield {"type": "ag_ui", "event": build_run_error_event(error_message)}
-                                break
-                            if result.error:
-                                error_message = result.error
-                                completion_state = "error"
-                                returncode = 1
-                                if wants_ag_ui:
-                                    text_end = build_text_end_event(state=ag_ui_state)
-                                    if text_end is not None:
-                                        yield {"type": "ag_ui", "event": text_end}
-                                    yield {"type": "ag_ui", "event": build_run_error_event(error_message)}
-                                break
-                        if completion_state in {"error", "cancelled"} or turn_state.done:
+                        if result.error:
+                            error_message = result.error
+                            completion_state = "error"
+                            returncode = 1
+                            if wants_ag_ui:
+                                text_end = build_text_end_event(state=ag_ui_state)
+                                if text_end is not None:
+                                    yield {"type": "ag_ui", "event": text_end}
+                                yield {"type": "ag_ui", "event": build_run_error_event(error_message)}
                             break
-                    if requested_session_id == "" and reused and attempt == 1 and not native_session_id:
-                        continue
-                    break
-                finally:
-                    if next_event_task is not None and not next_event_task.done():
-                        next_event_task.cancel()
-                        with suppress(asyncio.CancelledError, StopAsyncIteration):
-                            await next_event_task
-                    try:
-                        await stream.aclose()
-                    except Exception:
-                        pass
-
-            messages = []
-            if native_session_id and active_run_client is not None:
+                    if completion_state in {"error", "cancelled"} or turn_state.done:
+                        break
+            finally:
+                if next_event_task is not None and not next_event_task.done():
+                    next_event_task.cancel()
+                    with suppress(asyncio.CancelledError, StopAsyncIteration):
+                        await next_event_task
                 try:
-                    messages = await active_run_client.export_session(
-                        NativeAgentExportRequest(
-                            cwd=session.working_dir,
-                            session_id=native_session_id,
-                            command=config.NATIVE_AGENT_COMMAND,
-                            native_agent=native_agent_config,
-                        )
-                    )
-                except Exception:
-                    messages = []
-            if messages:
-                try:
-                    reconciled = aggregator.reconcile_messages(messages)
-                    trace = aggregator.pop_reconciled_trace()
-                    for trace_event in trace:
-                        live_trace.append(trace_event)
-                        persistence_buffer.queue_trace(trace_event)
-                    if reconciled:
-                        final_text = reconciled
+                    await stream.aclose()
                 except Exception:
                     pass
+
+            messages = []
             final_text = final_text or aggregator.text()
             if completion_state == "completed" and aggregator.saw_tool_failure:
                 completion_state = "error"
@@ -474,12 +439,8 @@ class NativeAgentService:
                 error_message = aggregator.tool_failure_message or "原生 agent 工具执行失败"
             if completion_state == "cancelled":
                 live_trace.append({"kind": "cancelled", "source": "native_agent", "summary": "用户终止输出"})
-                if active_run_client is not None:
-                    active_run_client.kill()
-            if completion_state == "completed" and not final_text and raw_output_parts:
-                completion_state = "error"
-                returncode = 1
-                error_message = f"原生 agent 返回了非 JSON 输出: {' '.join(raw_output_parts)[:2000]}"
+                if active_runtime is not None:
+                    await active_runtime.kill()
             if not final_text and completion_state == "completed":
                 final_text = "原生 agent 未返回内容"
             if completion_state == "error" and not final_text:
@@ -547,8 +508,8 @@ class NativeAgentService:
         except asyncio.CancelledError:
             with session._lock:
                 session.stop_requested = True
-            if active_run_client is not None:
-                active_run_client.kill()
+            if active_runtime is not None:
+                await active_runtime.kill()
             raise
         except Exception as exc:
             error_message = str(exc) or "原生 agent 执行失败"
@@ -597,20 +558,6 @@ class NativeAgentService:
         }
 
 
-def _extract_session_id(payload: dict[str, Any]) -> str:
-    candidates = [payload]
-    if isinstance(payload.get("data"), dict):
-        candidates.append(payload["data"])
-    if isinstance(payload.get("session"), dict):
-        candidates.append(payload["session"])
-    for item in candidates:
-        for key in ("id", "sessionID", "session_id", "sessionId"):
-            value = item.get(key)
-            if value:
-                return str(value)
-    raise RuntimeError("原生 agent 未返回 session id")
-
-
 def _build_native_prompt_with_history(history_items: list[dict[str, Any]], prompt_text: str) -> str:
     rows: list[str] = []
     for item in history_items[-12:]:
@@ -648,17 +595,19 @@ def _history_item_content(item: dict[str, Any]) -> str:
     return ""
 
 
-def _native_session_meta(*, cwd: str, model_id: str, opencode_agent: str) -> dict[str, str]:
+def _native_session_meta(*, cwd: str, model_id: str, pi_agent: str) -> dict[str, str]:
     return {
         "cwd": str(cwd or ""),
         "model_id": str(model_id or ""),
-        "opencode_agent": str(opencode_agent or ""),
+        "pi_agent": str(pi_agent or ""),
     }
 
 
 def _native_session_meta_mismatch(stored_meta: dict[str, Any], desired_meta: dict[str, str]) -> bool:
     if not isinstance(stored_meta, dict) or not stored_meta:
         return False
+    if "opencode_agent" in stored_meta and "pi_agent" not in stored_meta:
+        stored_meta = {**stored_meta, "pi_agent": stored_meta.get("opencode_agent")}
     for key, desired_value in desired_meta.items():
         if key not in stored_meta:
             continue
@@ -697,6 +646,18 @@ def _native_agent_progress_signature(event: Any, result: Any) -> str | None:
             ).strip()
         return f"permission:{permission_id or event_type}"
     return None
+
+
+def _permission_id_from_event(event: Any) -> str:
+    payload = getattr(event, "payload", {}) if event is not None else {}
+    if not isinstance(payload, dict):
+        return ""
+    permission = payload.get("permission") if isinstance(payload.get("permission"), dict) else payload
+    for key in ("id", "permissionID", "permission_id", "request_id", "requestId"):
+        value = permission.get(key)
+        if value:
+            return str(value).strip()
+    return ""
 
 
 _SERVICE = NativeAgentService()

@@ -15,6 +15,7 @@ from bot.native_agent.aggregator import NativeAgentAggregator
 from bot.native_agent.ag_ui_mapper import AgUiTurnState, build_run_error_event, build_run_finished_event, map_event as map_ag_ui_event
 from bot.native_agent.events import is_relevant_event, unwrap_event
 from bot.native_agent import service as native_service_module
+from bot.native_agent.pi_rpc_client import PiRpcRunError
 from bot.native_agent.run_client import NativeAgentRunClient, NativeAgentRunError, NativeAgentRunRequest
 from bot.native_agent.run_events import extract_step_finish_usage, native_json_to_events, run_json_to_events
 from bot.native_agent.service import NativeAgentService, normalize_execution_mode
@@ -1587,6 +1588,7 @@ class FakeRunClient:
         gate: asyncio.Event | None = None,
         started: asyncio.Event | None = None,
         event_delay_seconds: float = 0.0,
+        wait_after_first_event: bool = False,
     ) -> None:
         self.events = list(events or [])
         self.error = error
@@ -1598,6 +1600,7 @@ class FakeRunClient:
         self.gate = gate
         self.started = started
         self.event_delay_seconds = event_delay_seconds
+        self.wait_after_first_event = wait_after_first_event
 
     async def stream(self, request: NativeAgentRunRequest):
         self.requests.append(request)
@@ -1622,19 +1625,141 @@ class FakeRunClient:
         self.process.terminate()
 
 
+class FakePiRuntime:
+    def __init__(
+        self,
+        events: list[dict[str, object]] | None = None,
+        *,
+        error: BaseException | None = None,
+        gate: asyncio.Event | None = None,
+        started: asyncio.Event | None = None,
+        event_delay_seconds: float = 0.0,
+        wait_after_first_event: bool = False,
+    ) -> None:
+        self.events_payload = list(events or [])
+        self.error = error
+        self.gate = gate
+        self.started = started
+        self.event_delay_seconds = event_delay_seconds
+        self.wait_after_first_event = wait_after_first_event
+        self.prompts: list[dict[str, str]] = []
+        self.aborted = False
+        self.killed = False
+        self.replies: list[dict[str, object]] = []
+        self.runtime_id = "pir_fake"
+        self.workspace_history_head = "head-1"
+        self.state = type("State", (), {"native_session_id": "", "pending_permission_ids": set()})()
+
+    async def prompt(self, text: str, *, conversation_id: str = "") -> None:
+        self.prompts.append({"text": text, "conversation_id": conversation_id})
+        if self.started is not None:
+            self.started.set()
+
+    async def events(self):
+        if self.gate is not None and not self.wait_after_first_event:
+            await self.gate.wait()
+        if self.error is not None:
+            raise self.error
+        for index, event in enumerate(self.events_payload):
+            if self.event_delay_seconds:
+                await asyncio.sleep(self.event_delay_seconds)
+            yield event
+            if index == 0 and self.gate is not None and self.wait_after_first_event:
+                await self.gate.wait()
+
+    async def abort(self) -> bool:
+        self.aborted = True
+        return True
+
+    async def reply_permission(self, permission_id: str, *, approved: bool, message: str = "") -> dict[str, object]:
+        if permission_id not in self.state.pending_permission_ids:
+            raise RuntimeError("原生 agent 权限请求已失效，请刷新后重试")
+        self.state.pending_permission_ids.discard(permission_id)
+        self.replies.append({"permission_id": permission_id, "approved": approved, "message": message})
+        return {"sent": True, "runtime_id": self.runtime_id}
+
+    def mark_permission_pending(self, permission_id: str) -> None:
+        self.state.pending_permission_ids.add(permission_id)
+
+    async def kill(self) -> None:
+        self.killed = True
+
+
+class FakePiRuntimeRegistry:
+    def __init__(self, runtime: FakePiRuntime | None = None, *, error: BaseException | None = None) -> None:
+        self.runtime = runtime
+        self.error = error
+        self.requests: list[object] = []
+
+    async def open_or_create(self, request):
+        if self.error is not None:
+            raise self.error
+        self.requests.append(request)
+        return self.runtime
+
+    def get_by_runtime_id(self, runtime_id: str):
+        return self.runtime if runtime_id == self.runtime.runtime_id else None
+
+
 @pytest.mark.asyncio
-async def test_native_agent_service_streams_opencode_run_and_persists_done(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+async def test_native_agent_service_uses_pi_runtime_and_emits_runtime_meta(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
     from bot import config
 
     monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
-    fake_client = FakeRunClient([
-        {"type": "step_start", "sessionID": "sess-1", "part": {"id": "step-1", "type": "step-start", "messageID": "assistant-1"}},
-        {"type": "text", "sessionID": "sess-1", "part": {"id": "p1", "type": "text", "text": "回"}},
-        {"type": "text", "sessionID": "sess-1", "part": {"id": "p1", "type": "text", "text": "答"}},
-        {"type": "step_finish", "sessionID": "sess-1"},
+    monkeypatch.setattr(config, "NATIVE_AGENT_PI_COMMAND", "pi")
+    runtime = FakePiRuntime([
+        {"type": "agent_start", "sessionId": "pi-sess-1"},
+        {"type": "message_update", "sessionId": "pi-sess-1", "message": {"role": "assistant", "content": "Pi 回复"}},
+        {"type": "turn_end", "sessionId": "pi-sess-1"},
+    ])
+    registry = FakePiRuntimeRegistry(runtime)
+    service = NativeAgentService()
+    service._runtime_registry = registry
+    profile = BotProfile(alias="main", working_dir=str(tmp_path), native_agent={"pi_agent": "reviewer"})
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    events = [
+        event async for event in service.stream_chat(
+            profile=profile,
+            session=session,
+            user_text="你好",
+            prompt_text="你好",
+            history_service=history,
+        )
+    ]
+
+    meta = next(event for event in events if event["type"] == "meta")
+    done = next(event for event in events if event["type"] == "done")
+    assert meta["runtime_provider"] == "pi"
+    assert meta["workspace_history_head"] == "head-1"
+    assert done["output"] == "Pi 回复"
+    assert done["native_session_id"] == "pi-sess-1"
+    assert done["session"]["session_ids"]["native_agent_session_id"] == "pi-sess-1"
+    assert session.native_agent_session_id == "pi-sess-1"
+    assert session.native_agent_server_key is None
+    assert runtime.prompts == [{"text": "你好", "conversation_id": ""}]
+    assert registry.requests[0].runtime_key.startswith("1:1:")
+    assert registry.requests[0].command == "pi"
+    assert registry.requests[0].agent_id == "reviewer"
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_streams_pi_runtime_and_persists_done(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from bot import config
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    runtime = FakePiRuntime([
+        {"type": "agent_start", "sessionId": "sess-1"},
+        {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "回"}},
+        {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "回答"}},
+        {"type": "turn_end", "sessionId": "sess-1"},
     ])
     service = NativeAgentService()
-    service._run_client_factory = lambda: fake_client
+    service._runtime_registry = FakePiRuntimeRegistry(runtime)
     profile = BotProfile(alias="main", working_dir=str(tmp_path))
     session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
     history = ChatHistoryService(ChatStore(tmp_path))
@@ -1656,8 +1781,8 @@ async def test_native_agent_service_streams_opencode_run_and_persists_done(tmp_p
     assert done["message"]["meta"]["native_source"]["provider"] == "native_agent"
     assert session.native_agent_session_id == "sess-1"
     assert session.is_processing is False
-    assert fake_client.requests[0].session_id == ""
-    assert fake_client.requests[0].prompt == "你好"
+    assert runtime.prompts[0]["conversation_id"] == ""
+    assert runtime.prompts[0]["text"] == "你好"
 
 
 @pytest.mark.asyncio
@@ -1665,15 +1790,15 @@ async def test_native_agent_service_does_not_cancel_slow_first_run_event(tmp_pat
     from bot import config
 
     monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
-    fake_client = FakeRunClient(
+    runtime = FakePiRuntime(
         [
-            {"type": "text", "sessionID": "sess-1", "part": {"id": "p1", "type": "text", "text": "慢回复"}},
-            {"type": "step_finish", "sessionID": "sess-1"},
+            {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "慢回复"}},
+            {"type": "turn_end", "sessionId": "sess-1"},
         ],
         event_delay_seconds=0.7,
     )
     service = NativeAgentService()
-    service._run_client_factory = lambda: fake_client
+    service._runtime_registry = FakePiRuntimeRegistry(runtime)
     profile = BotProfile(alias="main", working_dir=str(tmp_path))
     session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
     history = ChatHistoryService(ChatStore(tmp_path))
@@ -1694,16 +1819,16 @@ async def test_native_agent_service_does_not_cancel_slow_first_run_event(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_native_agent_service_reuses_bound_run_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+async def test_native_agent_service_reuses_bound_pi_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from bot import config
 
     monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
-    fake_client = FakeRunClient([
-        {"type": "text", "sessionID": "sess-old", "part": {"id": "p1", "type": "text", "text": "继续"}},
-        {"type": "step_finish", "sessionID": "sess-old"},
+    runtime = FakePiRuntime([
+        {"type": "message_update", "sessionId": "sess-old", "message": {"role": "assistant", "content": "继续"}},
+        {"type": "turn_end", "sessionId": "sess-old"},
     ])
     service = NativeAgentService()
-    service._run_client_factory = lambda: fake_client
+    service._runtime_registry = FakePiRuntimeRegistry(runtime)
     profile = BotProfile(alias="main", working_dir=str(tmp_path))
     session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
     history = ChatHistoryService(ChatStore(tmp_path))
@@ -1712,7 +1837,7 @@ async def test_native_agent_service_reuses_bound_run_session(tmp_path: Path, mon
     history.store.set_conversation_native_session(
         old_handle.conversation_id,
         "sess-old",
-        {"cwd": str(tmp_path), "model_id": "", "opencode_agent": ""},
+        {"cwd": str(tmp_path), "model_id": "", "pi_agent": ""},
     )
 
     events = [
@@ -1727,8 +1852,8 @@ async def test_native_agent_service_reuses_bound_run_session(tmp_path: Path, mon
 
     done = next(event for event in events if event["type"] == "done")
     assert done["output"] == "继续"
-    assert fake_client.requests[0].session_id == "sess-old"
-    assert fake_client.requests[0].prompt == "继续"
+    assert runtime.prompts[0]["conversation_id"] == "sess-old"
+    assert runtime.prompts[0]["text"] == "继续"
 
 
 @pytest.mark.asyncio
@@ -1736,52 +1861,47 @@ async def test_native_agent_service_continues_after_tool_calls_step_finish(tmp_p
     from bot import config
 
     monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
-    fake_client = FakeRunClient([
+    runtime = FakePiRuntime([
         {
-            "type": "tool",
-            "sessionID": "sess-1",
-            "part": {
-                "id": "tool-1",
-                "type": "tool",
-                "messageID": "assistant-tool",
-                "tool": "list",
-                "state": "completed",
-                "output": "ok",
+            "type": "tool_execution_start",
+            "sessionId": "sess-1",
+            "messageID": "assistant-tool",
+            "tool": "list",
+            "arguments": {"path": "."},
+        },
+        {
+            "type": "tool_execution_end",
+            "sessionId": "sess-1",
+            "messageID": "assistant-tool",
+            "tool": "list",
+            "output": "ok",
+        },
+        {
+            "type": "message_update",
+            "sessionId": "sess-1",
+            "messageID": "assistant-final",
+            "message": {
+                "id": "assistant-final",
+                "role": "assistant",
+                "content": "最终回答",
             },
         },
         {
-            "type": "step_finish",
-            "sessionID": "sess-1",
-            "part": {
-                "id": "step-1",
-                "type": "step-finish",
-                "messageID": "assistant-tool",
-                "reason": "tool-calls",
+            "type": "message_end",
+            "sessionId": "sess-1",
+            "messageID": "assistant-final",
+            "message": {
+                "id": "assistant-final",
+                "role": "assistant",
             },
         },
         {
-            "type": "text",
-            "sessionID": "sess-1",
-            "part": {
-                "id": "text-1",
-                "type": "text",
-                "messageID": "assistant-final",
-                "text": "最终回答",
-            },
-        },
-        {
-            "type": "step_finish",
-            "sessionID": "sess-1",
-            "part": {
-                "id": "step-2",
-                "type": "step-finish",
-                "messageID": "assistant-final",
-                "reason": "stop",
-            },
+            "type": "turn_end",
+            "sessionId": "sess-1",
         },
     ])
     service = NativeAgentService()
-    service._run_client_factory = lambda: fake_client
+    service._runtime_registry = FakePiRuntimeRegistry(runtime)
     profile = BotProfile(alias="main", working_dir=str(tmp_path))
     session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
     history = ChatHistoryService(ChatStore(tmp_path))
@@ -1806,14 +1926,12 @@ async def test_native_agent_service_retries_once_when_run_session_is_missing(tmp
     from bot import config
 
     monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
-    first = FakeRunClient(error=NativeAgentRunError("session not found", returncode=1, stderr="session not found"))
-    second = FakeRunClient([
-        {"type": "text", "sessionID": "sess-new", "part": {"id": "p1", "type": "text", "text": "新回复"}},
-        {"type": "step_finish", "sessionID": "sess-new"},
+    runtime = FakePiRuntime([
+        {"type": "message_update", "sessionId": "sess-old", "message": {"role": "assistant", "content": "新回复"}},
+        {"type": "turn_end", "sessionId": "sess-old"},
     ])
-    clients = [first, second]
     service = NativeAgentService()
-    service._run_client_factory = lambda: clients.pop(0)
+    service._runtime_registry = FakePiRuntimeRegistry(runtime)
     profile = BotProfile(alias="main", working_dir=str(tmp_path))
     session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
     history = ChatHistoryService(ChatStore(tmp_path))
@@ -1822,7 +1940,7 @@ async def test_native_agent_service_retries_once_when_run_session_is_missing(tmp
     history.store.set_conversation_native_session(
         old_handle.conversation_id,
         "sess-old",
-        {"cwd": str(tmp_path), "model_id": "", "opencode_agent": ""},
+        {"cwd": str(tmp_path), "model_id": "", "pi_agent": ""},
     )
 
     events = [
@@ -1836,11 +1954,10 @@ async def test_native_agent_service_retries_once_when_run_session_is_missing(tmp
     ]
 
     done = next(event for event in events if event["type"] == "done")
-    assert done["native_session_id"] == "sess-new"
-    assert first.requests[0].session_id == "sess-old"
-    assert second.requests[0].session_id == ""
-    assert "旧回复" in second.requests[0].prompt
-    assert session.native_agent_session_id == "sess-new"
+    assert done["native_session_id"] == "sess-old"
+    assert runtime.prompts[0]["conversation_id"] == "sess-old"
+    assert runtime.prompts[0]["text"] == "继续"
+    assert session.native_agent_session_id == "sess-old"
 
 
 @pytest.mark.asyncio
@@ -1848,12 +1965,12 @@ async def test_native_agent_service_context_usage_from_step_finish(tmp_path: Pat
     from bot import config
 
     monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
-    fake_client = FakeRunClient([
-        {"type": "text", "sessionID": "sess-1", "part": {"id": "p1", "type": "text", "text": "完成"}},
-        {"type": "step_finish", "sessionID": "sess-1", "tokens": {"input": 10, "cache": {"read": 2, "write": 3}, "output": 4}, "cost": 0.05},
+    runtime = FakePiRuntime([
+        {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "完成"}},
+        {"type": "turn_end", "sessionId": "sess-1", "tokens": {"input": 10, "cache": {"read": 2, "write": 3}, "output": 4}, "cost": 0.05},
     ])
     service = NativeAgentService()
-    service._run_client_factory = lambda: fake_client
+    service._runtime_registry = FakePiRuntimeRegistry(runtime)
     profile = BotProfile(alias="main", working_dir=str(tmp_path))
     session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
     history = ChatHistoryService(ChatStore(tmp_path))
@@ -1880,11 +1997,13 @@ async def test_native_agent_service_permission_event_fails_in_run_mode(tmp_path:
     from bot import config
 
     monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
-    fake_client = FakeRunClient([
-        {"type": "permission", "sessionID": "sess-1", "permission": {"id": "perm-1", "title": "允许执行？"}},
+    runtime = FakePiRuntime([
+        {"type": "extension_ui_request", "sessionId": "sess-1", "requestType": "confirm", "permission": {"id": "perm-1", "title": "允许执行？"}},
+        {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "已批准"}},
+        {"type": "turn_end", "sessionId": "sess-1"},
     ])
     service = NativeAgentService()
-    service._run_client_factory = lambda: fake_client
+    service._runtime_registry = FakePiRuntimeRegistry(runtime)
     profile = BotProfile(alias="main", working_dir=str(tmp_path))
     session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
     history = ChatHistoryService(ChatStore(tmp_path))
@@ -1900,9 +2019,62 @@ async def test_native_agent_service_permission_event_fails_in_run_mode(tmp_path:
     ]
 
     done = next(event for event in events if event["type"] == "done")
-    assert done["returncode"] == 1
-    assert done["message"]["state"] == "error"
-    assert "权限" in done["output"]
+    assert done["returncode"] == 0
+    assert done["message"]["state"] == "done"
+    assert done["output"] == "已批准"
+    assert runtime.replies == []
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_permission_reply_requires_pending_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot import config
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    started = asyncio.Event()
+    gate = asyncio.Event()
+    runtime = FakePiRuntime(
+        [
+            {"type": "extension_ui_request", "sessionId": "sess-1", "requestType": "confirm", "id": "perm-1"},
+            {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "继续"}},
+            {"type": "turn_end", "sessionId": "sess-1"},
+        ],
+        gate=gate,
+        started=started,
+        wait_after_first_event=True,
+    )
+    service = NativeAgentService()
+    service._runtime_registry = FakePiRuntimeRegistry(runtime)
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    task = asyncio.create_task(_collect_native_stream(service.stream_chat(
+        profile=profile,
+        session=session,
+        user_text="执行",
+        prompt_text="执行",
+        history_service=history,
+    )))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    for _ in range(20):
+        if "perm-1" in runtime.state.pending_permission_ids:
+            break
+        await asyncio.sleep(0.05)
+
+    with pytest.raises(RuntimeError):
+        await service.reply_permission(session, "perm-missing", approved=True)
+
+    assert "perm-1" in runtime.state.pending_permission_ids
+    result = await service.reply_permission(session, "perm-1", approved=True, message="允许")
+    gate.set()
+    events = await asyncio.wait_for(task, timeout=2)
+
+    assert result["sent"] is True
+    assert runtime.replies == [{"permission_id": "perm-1", "approved": True, "message": "允许"}]
+    assert next(event for event in events if event["type"] == "done")["output"] == "继续"
 
 
 @pytest.mark.asyncio
@@ -1912,9 +2084,16 @@ async def test_native_agent_service_abort_terminates_local_run_process(tmp_path:
     monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
     started = asyncio.Event()
     gate = asyncio.Event()
-    fake_client = FakeRunClient(gate=gate, started=started)
+    runtime = FakePiRuntime(
+        [
+            {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "慢"}} ,
+            {"type": "turn_end", "sessionId": "sess-1"},
+        ],
+        gate=gate,
+        started=started,
+    )
     service = NativeAgentService()
-    service._run_client_factory = lambda: fake_client
+    service._runtime_registry = FakePiRuntimeRegistry(runtime)
     profile = BotProfile(alias="main", working_dir=str(tmp_path))
     session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
     history = ChatHistoryService(ChatStore(tmp_path))
@@ -1934,10 +2113,9 @@ async def test_native_agent_service_abort_terminates_local_run_process(tmp_path:
 
     done = next(event for event in events if event["type"] == "done")
     assert aborted is True
-    assert fake_client.process.terminated is True
-    assert done["message"]["state"] == "error"
+    assert runtime.aborted is True
     assert done["message"]["meta"]["completion_state"] == "cancelled"
-    assert session.process is None
+    assert session.is_processing is False
 
 
 @pytest.mark.asyncio
@@ -1945,9 +2123,8 @@ async def test_native_agent_service_persists_turn_when_run_start_fails(tmp_path:
     from bot import config
 
     monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
-    fake_client = FakeRunClient(error=NativeAgentRunError("run failed", returncode=2, stderr="run failed"))
     service = NativeAgentService()
-    service._run_client_factory = lambda: fake_client
+    service._runtime_registry = FakePiRuntimeRegistry(error=PiRpcRunError("run failed", returncode=2, stderr="run failed"))
     profile = BotProfile(alias="agent_test", working_dir=str(tmp_path))
     session = UserSession(bot_id=1, bot_alias="agent_test", user_id=1001, working_dir=str(tmp_path))
     history = ChatHistoryService(ChatStore(tmp_path))
@@ -1975,12 +2152,12 @@ async def test_native_agent_service_run_chat_clears_flags_before_return(tmp_path
     from bot import config
 
     monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
-    fake_client = FakeRunClient([
-        {"type": "text", "sessionID": "sess-1", "part": {"id": "p1", "type": "text", "text": "完成"}},
-        {"type": "step_finish", "sessionID": "sess-1"},
+    runtime = FakePiRuntime([
+        {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "完成"}},
+        {"type": "turn_end", "sessionId": "sess-1"},
     ])
     service = NativeAgentService()
-    service._run_client_factory = lambda: fake_client
+    service._runtime_registry = FakePiRuntimeRegistry(runtime)
     profile = BotProfile(alias="main", working_dir=str(tmp_path))
     session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
     history = ChatHistoryService(ChatStore(tmp_path))
