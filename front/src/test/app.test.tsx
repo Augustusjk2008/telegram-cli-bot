@@ -5,6 +5,7 @@ import { App } from "../app/App";
 import { DEMO_MAIN_WORKDIR, DEMO_TEAM_WORKDIR } from "../mocks/demoEnvironment";
 import type { BotSummary, ChatMessage, SessionState } from "../services/types";
 import { MockWebBotClient } from "../services/mockWebBotClient";
+import { soloModeStorageKey } from "../workbench/soloTypes";
 import { buildWorkbenchSessionStorageKey } from "../workbench/workbenchSession";
 
 const terminalSessionMock = vi.hoisted(() => ({
@@ -102,6 +103,56 @@ async function createManagedBot(user: ReturnType<typeof userEvent.setup>, alias:
   await user.click(screen.getByRole("button", { name: "创建智能体" }));
 }
 
+function nativeBotSummary(alias = "pi"): BotSummary {
+  return {
+    alias,
+    cliType: "codex",
+    status: "running",
+    workingDir: `C:\\workspace\\${alias}`,
+    lastActiveText: "运行中",
+    avatarName: "avatar_01.png",
+    cliPath: "codex",
+    botMode: "cli",
+    supportedExecutionModes: ["cli", "native_agent"],
+    defaultExecutionMode: "native_agent",
+    nativeAgent: {
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      piAgent: "reviewer",
+    },
+    canOperate: true,
+    effectiveCapabilities: SUPER_ADMIN_SESSION.capabilities,
+  };
+}
+
+function mockNativeDesktopSession(bot: BotSummary) {
+  vi.spyOn(MockWebBotClient.prototype, "login").mockResolvedValue({
+    ...SUPER_ADMIN_SESSION,
+    accountId: "acct-1",
+    currentBotAlias: bot.alias,
+  });
+  vi.spyOn(MockWebBotClient.prototype, "listBots").mockResolvedValue([bot]);
+  vi.spyOn(MockWebBotClient.prototype, "getBotOverview").mockImplementation(async (_botAlias, options = {}) => ({
+    ...bot,
+    botMode: bot.botMode || "cli",
+    cliPath: bot.cliPath,
+    enabled: true,
+    isMain: false,
+    messageCount: 0,
+    historyCount: 0,
+    isProcessing: false,
+    runningReply: null,
+    assistantRuntime: null,
+    agents: [{ id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true }],
+    activeAgentId: options.agentId || "main",
+    busyAgentIds: [],
+    busyAgentNames: [],
+    busyAgentCount: 0,
+    executionMode: options.executionMode || bot.defaultExecutionMode || "native_agent",
+    globalPromptPresets: [],
+  }));
+}
+
 test("shows bottom navigation after entering demo app shell", async () => {
   render(<App />);
   await userEvent.type(screen.getByLabelText("访问口令"), "123");
@@ -158,6 +209,42 @@ test("forced desktop mode mounts the desktop shell instead of the mobile bottom 
   await user.click(screen.getByRole("button", { name: "登录" }));
 
   expect(await screen.findByTestId("desktop-workbench-root")).toBeInTheDocument();
+});
+
+test("native desktop bot auto enters solo workbench", async () => {
+  localStorage.setItem("web-view-mode", "desktop");
+  const user = userEvent.setup();
+  const bot = nativeBotSummary("pi");
+  mockNativeDesktopSession(bot);
+
+  render(<App />);
+
+  await loginAsSuperAdmin(user);
+
+  expect(await screen.findByTestId("solo-workbench-root")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Solo 模式" })).toHaveAttribute("aria-pressed", "true");
+});
+
+test("build solo switch persists per account and does not create conversations", async () => {
+  localStorage.setItem("web-view-mode", "desktop");
+  const user = userEvent.setup();
+  const bot = nativeBotSummary("pi");
+  mockNativeDesktopSession(bot);
+  const createConversation = vi.spyOn(MockWebBotClient.prototype, "createConversation");
+
+  render(<App />);
+
+  await loginAsSuperAdmin(user);
+  expect(await screen.findByTestId("solo-workbench-root")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "构建模式" }));
+  expect(await screen.findByTestId("desktop-workbench-root")).toBeInTheDocument();
+  expect(localStorage.getItem(soloModeStorageKey("acct-1", "pi"))).toBe("build");
+
+  await user.click(screen.getByRole("button", { name: "Solo 模式" }));
+  expect(await screen.findByTestId("solo-workbench-root")).toBeInTheDocument();
+  expect(localStorage.getItem(soloModeStorageKey("acct-1", "pi"))).toBe("solo");
+  expect(createConversation).not.toHaveBeenCalled();
 });
 
 
@@ -241,7 +328,6 @@ test("member can enter ungranted bot in read-only mode and hits create quota cop
   await createManagedBot(user, "owned3");
   expect(await screen.findByText("普通用户最多只能创建 3 个 Bot")).toBeInTheDocument();
 });
-
 
 
 

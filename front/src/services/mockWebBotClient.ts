@@ -2657,6 +2657,34 @@ export class MockWebBotClient implements WebBotClient {
     return agentId === "main" ? botAlias : this.agentKey(botAlias, agentId);
   }
 
+  private isNativeExecution(botAlias: string, executionMode?: string) {
+    const bot = this.getBotSummary(botAlias);
+    return executionMode === "native_agent"
+      || bot.defaultExecutionMode === "native_agent"
+      || (bot.supportedExecutionModes?.length === 1 && bot.supportedExecutionModes[0] === "native_agent");
+  }
+
+  private mockNativeMeta(linearIndex = 1): ChatMessage["meta"] {
+    return {
+      tracePresentation: "native_agent_flat",
+      nativeSource: {
+        provider: "原生 agent",
+        sessionId: "native-session-1",
+      },
+      contextUsage: {
+        provider: "native_agent",
+        sessionId: "native-session-1",
+        model: "claude-sonnet-4-5",
+        statusText: "上下文正常",
+      },
+      workspaceHistoryHead: "head-1",
+      linearIndex,
+      rollbackSupported: true,
+      degraded: false,
+      degradedReason: "",
+    };
+  }
+
   private mainAgent(): AgentSummary {
     return {
       id: "main",
@@ -3569,7 +3597,7 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
-  private ensureConversations(botAlias: string, agentId = "main"): ConversationSummary[] {
+  private ensureConversations(botAlias: string, agentId = "main", executionMode?: string): ConversationSummary[] {
     const key = this.getConversationKey(botAlias, agentId);
     const existing = this.conversationsByBot.get(key);
     if (existing) {
@@ -3590,6 +3618,17 @@ export class MockWebBotClient implements WebBotClient {
       botMode: this.getBotSummary(botAlias).botMode || "cli",
       cliType: this.getBotSummary(botAlias).cliType,
       workingDir: this.getBotSummary(botAlias).workingDir,
+      ...(this.isNativeExecution(botAlias, executionMode) ? {
+        nativeSource: {
+          provider: "原生 agent",
+          sessionId: "native-session-1",
+        },
+        workspaceHistoryHead: "head-1",
+        linearIndex: 1,
+        rollbackSupported: true,
+        degraded: false,
+        degradedReason: "",
+      } : {}),
       createdAt: messages[0]?.createdAt || now,
       updatedAt: messages[messages.length - 1]?.createdAt || now,
     };
@@ -3602,7 +3641,7 @@ export class MockWebBotClient implements WebBotClient {
   async listConversations(botAlias: string, _query = "", options: AgentScopedOptions = {}): Promise<ConversationListResult> {
     const agentId = options.agentId || "main";
     const key = this.getConversationKey(botAlias, agentId);
-    const items = this.ensureConversations(botAlias, agentId);
+    const items = this.ensureConversations(botAlias, agentId, options.executionMode);
     const activeConversationId = this.activeConversationByBot.get(key) || items.find((item) => item.active)?.id || "";
     return { items, activeConversationId };
   }
@@ -3625,10 +3664,21 @@ export class MockWebBotClient implements WebBotClient {
       botMode: bot.botMode || "cli",
       cliType: bot.cliType,
       workingDir: bot.workingDir,
+      ...(this.isNativeExecution(botAlias, options.executionMode) ? {
+        nativeSource: {
+          provider: "原生 agent",
+          sessionId: "native-session-1",
+        },
+        workspaceHistoryHead: "head-1",
+        linearIndex: 1,
+        rollbackSupported: true,
+        degraded: false,
+        degradedReason: "",
+      } : {}),
       createdAt: now,
       updatedAt: now,
     };
-    const previous = this.ensureConversations(botAlias, agentId).map((item) => ({ ...item, active: false }));
+    const previous = this.ensureConversations(botAlias, agentId, options.executionMode).map((item) => ({ ...item, active: false }));
     this.conversationsByBot.set(key, [conversation, ...previous]);
     this.activeConversationByBot.set(key, conversation.id);
     if (agentId === "main") {
@@ -4093,13 +4143,17 @@ export class MockWebBotClient implements WebBotClient {
       runId: "mock-run",
       outcome: { type: "success" },
     });
+    const nativeMeta = this.isNativeExecution(botAlias, options?.executionMode)
+      ? this.mockNativeMeta(this.getAgentMessages(botAlias, agentId).filter((item) => item.role === "assistant").length + 1)
+      : undefined;
     const assistantMessage = {
       id: Date.now().toString(),
       role: "assistant",
       text: streamed || "Mock response",
       createdAt: new Date().toISOString(),
       elapsedSeconds: 1,
-      state: "done"
+      state: "done",
+      ...(nativeMeta ? { meta: nativeMeta } : {}),
     } satisfies ChatMessage;
     this.appendAgentChatMessage(botAlias, agentId, assistantMessage);
     return assistantMessage;

@@ -56,6 +56,12 @@
     gap 180ms ease;
 }
 
+.solo-workbench-root [data-testid="solo-workbench-shell"] > .grid {
+  transition:
+    grid-template-columns 220ms cubic-bezier(0.2, 0, 0, 1),
+    gap 180ms ease;
+}
+
 .desktop-workbench-root [data-testid="desktop-workbench-center-rows"] {
   transition:
     grid-template-rows 220ms cubic-bezier(0.2, 0, 0, 1),
@@ -101,6 +107,7 @@
 }
 
 .desktop-workbench-root[data-resizing="true"] [data-testid="desktop-workbench-columns"],
+.solo-workbench-root[data-resizing="true"] [data-testid="solo-workbench-shell"] > .grid,
 .desktop-workbench-root[data-resizing="true"] [data-testid="desktop-workbench-center-rows"],
 .desktop-workbench-root[data-resizing="true"] .desktop-workbench-pane {
   transition: none !important;

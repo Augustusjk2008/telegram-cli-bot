@@ -40,7 +40,9 @@ import { PluginsScreen } from "../screens/PluginsScreen";
 import { SettingsScreen } from "../screens/SettingsScreen";
 import { PersistentTerminalProvider } from "../terminal/PersistentTerminalProvider";
 import { DesktopWorkbench } from "../workbench/DesktopWorkbench";
-import type { ChatWorkbenchStatus } from "../workbench/workbenchTypes";
+import { SoloWorkbench } from "../workbench/SoloWorkbench";
+import type { ChatWorkbenchStatus, WorkbenchProductMode } from "../workbench/workbenchTypes";
+import { soloModeStorageKey, type SoloSessionSnapshot } from "../workbench/soloTypes";
 import { readStoredUserAvatarName, storeUserAvatarName } from "../utils/avatar";
 import {
   APP_NAME,
@@ -75,6 +77,13 @@ const EMPTY_ANNOUNCEMENT_STATE: AnnouncementListResult = {
   lastSeenId: "",
   hasUnseen: false,
 };
+function readStoredProductMode(accountKey: string, botAlias: string): WorkbenchProductMode | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const raw = window.localStorage.getItem(soloModeStorageKey(accountKey, botAlias));
+  return raw === "solo" || raw === "build" ? raw : null;
+}
 const TerminalScreen = lazy(() =>
   import("../screens/TerminalScreen").then((module) => ({ default: module.TerminalScreen })),
 );
@@ -234,6 +243,8 @@ export function App() {
   const [mountedChatBots, setMountedChatBots] = useState<string[]>([]);
   const [desktopChatStatusByBot, setDesktopChatStatusByBot] = useState<Record<string, ChatWorkbenchStatus>>({});
   const [desktopChatPaneVisible, setDesktopChatPaneVisible] = useState(true);
+  const [productModeByBot, setProductModeByBot] = useState<Record<string, WorkbenchProductMode>>({});
+  const [soloSessionSnapshotByBot, setSoloSessionSnapshotByBot] = useState<Record<string, SoloSessionSnapshot | null>>({});
   const [isChatImmersive, setIsChatImmersive] = useState(false);
   const [isTerminalImmersive, setIsTerminalImmersive] = useState(false);
   const [userAvatarName, setUserAvatarName] = useState(() => readStoredUserAvatarName());
@@ -269,16 +280,6 @@ export function App() {
     }
     return botSummaryByAlias.get(currentBot) || bots.find((bot) => bot.alias === currentBot) || null;
   }, [botSummaryByAlias, bots, currentBot]);
-  const visibleChatBotAlias = currentBot
-    && !showBotManager
-    && !showAdminCenter
-    && (
-      effectiveLayoutMode === "desktop"
-        ? desktopChatPaneVisible
-        : currentTab === "chat"
-    )
-    ? currentBot
-    : null;
   const canOperateCurrentBot = currentBotSummary?.canOperate !== false;
   const canReadCurrentBotFiles = canOperateCurrentBot && hasCapability(session, "read_file_content");
   const canWriteCurrentBotFiles = canOperateCurrentBot && hasCapability(session, "write_files");
@@ -299,6 +300,40 @@ export function App() {
     && hasCapability(session, "admin_ops");
   const accountKey = sessionAccountKey(session);
   const chatInstanceKey = chatInstanceKeyFor(accountKey, currentBot);
+  const productModeKey = currentBot ? soloModeStorageKey(accountKey, currentBot) : "";
+  const currentBotSupportedExecutionModes = currentBotSummary?.supportedExecutionModes || [];
+  const soloAvailable = Boolean(
+    currentBotSupportedExecutionModes.includes("native_agent")
+    || currentBotSummary?.defaultExecutionMode === "native_agent",
+  );
+  const storedProductMode = currentBot
+    ? productModeByBot[productModeKey] || readStoredProductMode(accountKey, currentBot)
+    : null;
+  const productMode: WorkbenchProductMode = storedProductMode
+    ? (storedProductMode === "solo" && !soloAvailable ? "build" : storedProductMode)
+    : (
+      soloAvailable
+      && (
+        currentBotSummary?.defaultExecutionMode === "native_agent"
+        || (currentBotSupportedExecutionModes.length === 1 && currentBotSupportedExecutionModes[0] === "native_agent")
+      )
+        ? "solo"
+        : "build"
+    );
+  const soloSessionSnapshot = currentBot ? soloSessionSnapshotByBot[currentBot] || null : null;
+  const currentWorkspaceName = currentBotSummary?.workingDir.split(/[\\/]+/).filter(Boolean).pop()
+    || currentBotSummary?.workingDir
+    || "";
+  const visibleChatBotAlias = currentBot
+    && !showBotManager
+    && !showAdminCenter
+    && (
+      effectiveLayoutMode === "desktop"
+        ? (productMode === "solo" || desktopChatPaneVisible)
+        : currentTab === "chat"
+    )
+    ? currentBot
+    : null;
 
   function handleSelectBot(alias: string | null) {
     setCurrentBot(alias);
@@ -322,6 +357,22 @@ export function App() {
     commitBotSelection(alias);
     setCurrentTab("chat");
     return true;
+  }
+
+  function handleProductModeChange(mode: WorkbenchProductMode) {
+    if (!currentBot) {
+      return;
+    }
+    const nextMode = mode === "solo" && !soloAvailable ? "build" : mode;
+    const key = soloModeStorageKey(accountKey, currentBot);
+    setProductModeByBot((prev) => (
+      prev[key] === nextMode ? prev : { ...prev, [key]: nextMode }
+    ));
+    try {
+      window.localStorage.setItem(key, nextMode);
+    } catch {
+      // Keep in-memory preference if storage is unavailable.
+    }
   }
 
   async function openBotSwitcher(anchorRect?: DOMRect) {
@@ -794,6 +845,60 @@ export function App() {
     || (currentTab === "terminal" && isTerminalImmersive);
   let activeScreen: ReactNode = null;
 
+  function renderDesktopChatStack(options: {
+    requestPreview?: (path: string) => void;
+    forcedExecutionMode?: "native_agent";
+    onSoloSessionInfoChange?: (snapshot: SoloSessionSnapshot) => void;
+    currentVisible?: boolean;
+  } = {}) {
+    const currentVisible = options.currentVisible ?? desktopChatPaneVisible;
+    return (
+      <div className="h-full">
+        {mountedChatBots.map((instanceKey) => {
+          const alias = chatAliasFromInstanceKey(instanceKey);
+          return (
+            <div key={`desktop-chat-${instanceKey}`} className={clsx("h-full", instanceKey === chatInstanceKey ? "block" : "hidden")}>
+              <ChatScreen
+                botAlias={alias}
+                accountId={accountKey}
+                client={client}
+                botAvatarName={botSummaryByAlias.get(alias)?.avatarName || bots.find((bot) => bot.alias === alias)?.avatarName}
+                userAvatarName={userAvatarName}
+                isVisible={instanceKey === chatInstanceKey && currentVisible}
+                readOnly={chatReadOnly || !canOperateCurrentBot}
+                disabledReason={chatDisabledReason}
+                allowTrace={allowTrace}
+                embedded
+                forcedExecutionMode={instanceKey === chatInstanceKey ? options.forcedExecutionMode : undefined}
+                onSoloSessionInfoChange={instanceKey === chatInstanceKey ? options.onSoloSessionInfoChange : undefined}
+                onRequestDesktopPreview={options.requestPreview}
+                onUnreadResult={markBotUnread}
+                onBotActivityChange={handleBotActivityChange}
+                onWorkbenchStatusChange={(status) => {
+                  setDesktopChatStatusByBot((prev) => {
+                    const currentStatus = prev[alias];
+                    if (
+                      currentStatus?.state === status.state
+                      && currentStatus.processing === status.processing
+                      && currentStatus.elapsedSeconds === status.elapsedSeconds
+                      && currentStatus.lastError === status.lastError
+                    ) {
+                      return prev;
+                    }
+                    return {
+                      ...prev,
+                      [alias]: status,
+                    };
+                  });
+                }}
+              />
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
   if (currentTab === "chat") {
     activeScreen = (
       <div className="absolute inset-0">
@@ -965,97 +1070,94 @@ export function App() {
     return (
       <>
         <PersistentTerminalProvider client={client}>
-          <DesktopWorkbench
-            authToken={session?.token || ""}
-            accountId={accountKey}
-            botAlias={currentBot}
-            botAvatarName={currentBotSummary?.avatarName}
-            userAvatarName={userAvatarName}
-            client={client}
-            structureOnly={structureOnly}
-            canWriteFiles={canWriteCurrentBotFiles}
-            canOpenSystemFolder={Boolean(session?.isLocalAdmin) && hasCapability(session, "admin_ops") && canOperateCurrentBot}
-            chatReadOnly={chatReadOnly || !canOperateCurrentBot}
-            chatDisabledReason={chatDisabledReason}
-            botCanOperate={canOperateCurrentBot}
-            terminalDisabledReason={terminalDisabledReason}
-            allowTrace={allowTrace}
-            allowCodeJump={!structureOnly && !isGuest(session)}
-            themeName={themeName}
-            onThemeChange={handleThemeChange}
-            chatBodyFontFamily={chatBodyFontFamily}
-            onChatBodyFontFamilyChange={handleChatBodyFontFamilyChange}
-            chatBodyFontSize={chatBodyFontSize}
-            onChatBodyFontSizeChange={handleChatBodyFontSizeChange}
-            chatBodyLineHeight={chatBodyLineHeight}
-            onChatBodyLineHeightChange={handleChatBodyLineHeightChange}
-            chatBodyParagraphSpacing={chatBodyParagraphSpacing}
-            onChatBodyParagraphSpacingChange={handleChatBodyParagraphSpacingChange}
-            onUserAvatarChange={handleUserAvatarChange}
-            sessionCapabilities={session?.capabilities}
-            canViewAssistantOps={canViewAssistantOps}
-            viewMode={viewMode}
-            hasUnreadOtherBots={hasUnreadOtherBots}
-            announcementAction={announcementButton}
-            chatStatus={currentBot ? desktopChatStatusByBot[currentBot] : undefined}
-            chatPaneContent={({ requestPreview }) => (
-              <div className="h-full">
-                {mountedChatBots.map((instanceKey) => {
-                  const alias = chatAliasFromInstanceKey(instanceKey);
-                  return (
-                  <div key={`desktop-chat-${instanceKey}`} className={clsx("h-full", instanceKey === chatInstanceKey ? "block" : "hidden")}>
-                    <ChatScreen
-                      botAlias={alias}
-                      accountId={accountKey}
-                      client={client}
-                      botAvatarName={botSummaryByAlias.get(alias)?.avatarName || bots.find((bot) => bot.alias === alias)?.avatarName}
-                      userAvatarName={userAvatarName}
-                      isVisible={instanceKey === chatInstanceKey && desktopChatPaneVisible}
-                      readOnly={chatReadOnly || !canOperateCurrentBot}
-                      disabledReason={chatDisabledReason}
-                      allowTrace={allowTrace}
-                      embedded
-                      onRequestDesktopPreview={requestPreview}
-                      onUnreadResult={markBotUnread}
-                      onBotActivityChange={handleBotActivityChange}
-                      onWorkbenchStatusChange={(status) => {
-                        setDesktopChatStatusByBot((prev) => {
-                          const currentStatus = prev[alias];
-                          if (
-                            currentStatus?.state === status.state
-                            && currentStatus.processing === status.processing
-                            && currentStatus.elapsedSeconds === status.elapsedSeconds
-                            && currentStatus.lastError === status.lastError
-                          ) {
-                            return prev;
-                          }
-                          return {
-                            ...prev,
-                            [alias]: status,
-                          };
-                        });
-                      }}
-                    />
-                  </div>
-                  );
-                })}
-              </div>
-            )}
-            onViewModeChange={setViewMode}
-            onOpenBotSwitcher={(anchorRect) => {
-              void openBotSwitcher(anchorRect);
-            }}
-            onOpenBotManager={() => {
-              setShowBotManager(true);
-              setShowAdminCenter(false);
-              setShowSwitcher(false);
-              setIsChatImmersive(false);
-              setIsTerminalImmersive(false);
-            }}
-            onLogout={handleLogout}
-            onDirtyTabsChange={setDesktopHasDirtyTabs}
-            onChatPaneVisibilityChange={setDesktopChatPaneVisible}
-          />
+          {productMode === "solo" ? (
+            <SoloWorkbench
+              botAlias={currentBot}
+              client={client}
+              workspaceName={currentWorkspaceName}
+              branchName=""
+              viewMode={viewMode}
+              hasUnreadOtherBots={hasUnreadOtherBots}
+              announcementAction={announcementButton}
+              chatPaneContent={({ requestPreview }) => renderDesktopChatStack({
+                requestPreview,
+                forcedExecutionMode: "native_agent",
+                onSoloSessionInfoChange: (snapshot) => {
+                  setSoloSessionSnapshotByBot((prev) => (
+                    prev[currentBot] && JSON.stringify(prev[currentBot]) === JSON.stringify(snapshot)
+                      ? prev
+                      : { ...prev, [currentBot]: snapshot }
+                  ));
+                },
+                currentVisible: true,
+              })}
+              sessionSnapshot={soloSessionSnapshot}
+              chatStatus={currentBot ? desktopChatStatusByBot[currentBot] : undefined}
+              productMode={productMode}
+              soloAvailable={soloAvailable}
+              onProductModeChange={handleProductModeChange}
+              onViewModeChange={setViewMode}
+              onOpenBotSwitcher={(anchorRect) => {
+                void openBotSwitcher(anchorRect);
+              }}
+              onLogout={handleLogout}
+            />
+          ) : (
+            <DesktopWorkbench
+              authToken={session?.token || ""}
+              accountId={accountKey}
+              botAlias={currentBot}
+              botAvatarName={currentBotSummary?.avatarName}
+              userAvatarName={userAvatarName}
+              client={client}
+              structureOnly={structureOnly}
+              canWriteFiles={canWriteCurrentBotFiles}
+              canOpenSystemFolder={Boolean(session?.isLocalAdmin) && hasCapability(session, "admin_ops") && canOperateCurrentBot}
+              chatReadOnly={chatReadOnly || !canOperateCurrentBot}
+              chatDisabledReason={chatDisabledReason}
+              botCanOperate={canOperateCurrentBot}
+              terminalDisabledReason={terminalDisabledReason}
+              allowTrace={allowTrace}
+              allowCodeJump={!structureOnly && !isGuest(session)}
+              themeName={themeName}
+              onThemeChange={handleThemeChange}
+              chatBodyFontFamily={chatBodyFontFamily}
+              onChatBodyFontFamilyChange={handleChatBodyFontFamilyChange}
+              chatBodyFontSize={chatBodyFontSize}
+              onChatBodyFontSizeChange={handleChatBodyFontSizeChange}
+              chatBodyLineHeight={chatBodyLineHeight}
+              onChatBodyLineHeightChange={handleChatBodyLineHeightChange}
+              chatBodyParagraphSpacing={chatBodyParagraphSpacing}
+              onChatBodyParagraphSpacingChange={handleChatBodyParagraphSpacingChange}
+              onUserAvatarChange={handleUserAvatarChange}
+              sessionCapabilities={session?.capabilities}
+              canViewAssistantOps={canViewAssistantOps}
+              viewMode={viewMode}
+              hasUnreadOtherBots={hasUnreadOtherBots}
+              announcementAction={announcementButton}
+              chatStatus={currentBot ? desktopChatStatusByBot[currentBot] : undefined}
+              productMode={productMode}
+              soloAvailable={soloAvailable}
+              onProductModeChange={handleProductModeChange}
+              chatPaneContent={({ requestPreview }) => renderDesktopChatStack({
+                requestPreview,
+              })}
+              onViewModeChange={setViewMode}
+              onOpenBotSwitcher={(anchorRect) => {
+                void openBotSwitcher(anchorRect);
+              }}
+              onOpenBotManager={() => {
+                setShowBotManager(true);
+                setShowAdminCenter(false);
+                setShowSwitcher(false);
+                setIsChatImmersive(false);
+                setIsTerminalImmersive(false);
+              }}
+              onLogout={handleLogout}
+              onDirtyTabsChange={setDesktopHasDirtyTabs}
+              onChatPaneVisibilityChange={setDesktopChatPaneVisible}
+            />
+          )}
         </PersistentTerminalProvider>
         {switcher}
         {notificationCenter}

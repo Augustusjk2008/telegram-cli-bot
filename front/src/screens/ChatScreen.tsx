@@ -60,6 +60,7 @@ import {
 } from "../utils/filePreview";
 import type { BotActivityChange } from "../app/botActivity";
 import type { ChatWorkbenchStatus } from "../workbench/workbenchTypes";
+import type { SoloSessionSnapshot } from "../workbench/soloTypes";
 import { extractPlanDraft, stripPlanDraftTags } from "../utils/planDraft";
 import type { AgUiEvent } from "../services/agUiProtocol";
 import {
@@ -95,6 +96,8 @@ type Props = {
   onBotActivityChange?: (botAlias: string, activity: BotActivityChange) => void;
   onWorkbenchStatusChange?: (status: ChatWorkbenchStatus) => void;
   onRequestDesktopPreview?: (path: string) => void;
+  forcedExecutionMode?: ChatExecutionMode;
+  onSoloSessionInfoChange?: (snapshot: SoloSessionSnapshot) => void;
 };
 
 type PendingChatAttachment = ChatAttachmentUploadResult & {
@@ -601,6 +604,11 @@ function mergeMessageMeta(base?: ChatMessageMetaInfo, incoming?: ChatMessageMeta
     agUiRunState: isNativeSource ? incoming?.agUiRunState || base?.agUiRunState : undefined,
     tracePresentation,
     trace,
+    workspaceHistoryHead: incoming?.workspaceHistoryHead ?? base?.workspaceHistoryHead,
+    linearIndex: incoming?.linearIndex ?? base?.linearIndex,
+    rollbackSupported: incoming?.rollbackSupported ?? base?.rollbackSupported,
+    degraded: incoming?.degraded ?? base?.degraded,
+    degradedReason: incoming?.degradedReason ?? base?.degradedReason,
   };
 
   return Object.values(meta).some((value) => typeof value !== "undefined") ? meta : undefined;
@@ -1318,6 +1326,8 @@ export function ChatScreen({
   onBotActivityChange,
   onWorkbenchStatusChange,
   onRequestDesktopPreview,
+  forcedExecutionMode,
+  onSoloSessionInfoChange,
 }: Props) {
   const storageScope = accountId?.trim() || "";
   const [items, setItems] = useState<ChatMessage[]>([]);
@@ -1355,13 +1365,13 @@ export function ChatScreen({
   const [deletingConversationId, setDeletingConversationId] = useState("");
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [agents, setAgents] = useState<AgentSummary[]>(fallbackAgents());
-  const [activeAgentId, setActiveAgentId] = useState(() => readStoredAgentId(botAlias, storageScope));
+  const [activeAgentId, setActiveAgentId] = useState(() => forcedExecutionMode === "native_agent" ? "main" : readStoredAgentId(botAlias, storageScope));
   const [clusterRunId, setClusterRunId] = useState("");
   const [clusterTaskStatus, setClusterTaskStatus] = useState<ClusterTaskStatus | null>(null);
   const [clusterTaskError, setClusterTaskError] = useState("");
   const [clusterSaving, setClusterSaving] = useState(false);
   const [planMode, setPlanModeState] = useState(() => readStoredPlanMode(botAlias, storageScope));
-  const [executionMode, setExecutionModeState] = useState<ChatExecutionMode>(() => readStoredExecutionMode(botAlias, storageScope) ?? "cli");
+  const [executionMode, setExecutionModeState] = useState<ChatExecutionMode>(() => forcedExecutionMode ?? readStoredExecutionMode(botAlias, storageScope) ?? "cli");
   const [nativePermissionPending, setNativePermissionPending] = useState(false);
   const [executingPlanMessageId, setExecutingPlanMessageId] = useState("");
   const [planExecuteError, setPlanExecuteError] = useState("");
@@ -1418,6 +1428,11 @@ export function ChatScreen({
     });
   }, []);
 
+  const setTransientExecutionMode = useCallback((next: ChatExecutionMode) => {
+    executionModeRef.current = next;
+    setExecutionModeState(next);
+  }, []);
+
   const setQueuedMessageState = useCallback((
     next: QueuedChatMessage | null,
     context?: { botAlias: string; agentId: string; accountId?: string },
@@ -1448,10 +1463,10 @@ export function ChatScreen({
     previousStorageScopeRef.current = storageScope;
     assistantSendVersionRef.current += 1;
     setPlanModeState(readStoredPlanMode(botAlias, storageScope));
-    const storedExecutionMode = readStoredExecutionMode(botAlias, storageScope) ?? "cli";
+    const storedExecutionMode = forcedExecutionMode ?? readStoredExecutionMode(botAlias, storageScope) ?? "cli";
     executionModeRef.current = storedExecutionMode;
     setExecutionModeState(storedExecutionMode);
-  }, [botAlias, storageScope]);
+  }, [botAlias, forcedExecutionMode, storageScope]);
 
   useEffect(() => {
     isVisibleRef.current = isVisible;
@@ -1472,10 +1487,10 @@ export function ChatScreen({
     clusterRunIdRef.current = "";
     setQueuedMessage(null);
     queuedMessageRef.current = null;
-    const storedAgentId = readStoredAgentId(botAlias, storageScope);
+    const storedAgentId = forcedExecutionMode === "native_agent" ? "main" : readStoredAgentId(botAlias, storageScope);
     setActiveAgentId(storedAgentId);
     activeAgentIdRef.current = storedAgentId;
-  }, [botAlias, storageScope]);
+  }, [botAlias, forcedExecutionMode, storageScope]);
 
   useEffect(() => {
     loadingRef.current = loading;
@@ -1542,10 +1557,16 @@ export function ChatScreen({
 
   useEffect(() => {
     const supported = getSupportedExecutionModes(botOverview);
+    if (forcedExecutionMode) {
+      if (supported.includes(forcedExecutionMode) && executionModeRef.current !== forcedExecutionMode) {
+        setTransientExecutionMode(forcedExecutionMode);
+      }
+      return;
+    }
     if (!supported.includes(executionModeRef.current)) {
       setExecutionMode(getDefaultExecutionMode(botOverview));
     }
-  }, [botOverview?.defaultExecutionMode, botOverview?.supportedExecutionModes, setExecutionMode]);
+  }, [botOverview?.defaultExecutionMode, botOverview?.supportedExecutionModes, forcedExecutionMode, setExecutionMode, setTransientExecutionMode]);
 
   useEffect(() => {
     clusterRunIdRef.current = clusterRunId;
@@ -1927,9 +1948,9 @@ export function ChatScreen({
     shouldStickToBottomRef.current = true;
     forceAutoScrollRef.current = true;
 
-    const storedExecutionMode = readStoredExecutionMode(botAlias, storageScope);
-    const requestedExecutionMode = storedExecutionMode || undefined;
-    const requestedAgentId = activeAgentIdRef.current || "main";
+    const storedExecutionMode = forcedExecutionMode ?? readStoredExecutionMode(botAlias, storageScope);
+    const requestedExecutionMode = forcedExecutionMode ?? storedExecutionMode ?? undefined;
+    const requestedAgentId = forcedExecutionMode === "native_agent" ? "main" : activeAgentIdRef.current || "main";
     const loadAgents = typeof client.listAgents === "function"
       ? client.listAgents(botAlias).catch(() => ({ items: fallbackAgents() }))
       : Promise.resolve({ items: fallbackAgents() });
@@ -1942,7 +1963,10 @@ export function ChatScreen({
       .then(async ([agentData, initialMessages, initialOverview]) => {
         if (cancelled) return;
         const nextAgents = agentData.items.length > 0 ? agentData.items : fallbackAgents();
-        const nextExecutionMode = storedExecutionMode
+        const supportedModes = getSupportedExecutionModes(initialOverview);
+        const nextExecutionMode = forcedExecutionMode && supportedModes.includes(forcedExecutionMode)
+          ? forcedExecutionMode
+          : storedExecutionMode
           ? (getSupportedExecutionModes(initialOverview).includes(storedExecutionMode)
             ? storedExecutionMode
             : getDefaultExecutionMode(initialOverview))
@@ -1951,7 +1975,9 @@ export function ChatScreen({
         const nextAgentId = nextAgents.some((agent) => agent.id === preferredAgentId) ? preferredAgentId : "main";
         let messages = initialMessages;
         let overview = initialOverview;
-        if (storedExecutionMode && nextExecutionMode !== storedExecutionMode) {
+        if (forcedExecutionMode) {
+          setTransientExecutionMode(nextExecutionMode);
+        } else if (storedExecutionMode && nextExecutionMode !== storedExecutionMode) {
           setExecutionMode(nextExecutionMode);
         } else if (!storedExecutionMode && nextExecutionMode !== requestedExecutionMode) {
           executionModeRef.current = nextExecutionMode;
@@ -2009,10 +2035,12 @@ export function ChatScreen({
     applyHistoryView,
     botAlias,
     client,
+    forcedExecutionMode,
     isVisible,
     restoreClusterRunFromOverview,
     scheduleAssistantPoll,
     setQueuedMessageState,
+    setTransientExecutionMode,
     stopAssistantPoll,
     stopSseRecoveryWatch,
     storageScope,
@@ -3468,8 +3496,13 @@ export function ChatScreen({
   const assistantName = botAlias;
   const assistantAvatarName = botOverview?.avatarName || botAvatarName;
   const activeAgent = agents.find((agent) => agent.id === activeAgentId) || agents[0] || fallbackAgents()[0];
-  const supportedExecutionModes = getSupportedExecutionModes(botOverview);
-  const effectiveExecutionMode = supportedExecutionModes.includes(executionMode) ? executionMode : getDefaultExecutionMode(botOverview);
+  const rawSupportedExecutionModes = getSupportedExecutionModes(botOverview);
+  const forcedNativeSupported = forcedExecutionMode === "native_agent"
+    && (!botOverview || rawSupportedExecutionModes.includes("native_agent"));
+  const supportedExecutionModes = forcedNativeSupported ? ["native_agent" as const] : rawSupportedExecutionModes;
+  const effectiveExecutionMode = forcedNativeSupported
+    ? "native_agent"
+    : supportedExecutionModes.includes(executionMode) ? executionMode : getDefaultExecutionMode(botOverview);
   const nativeExecutionMode = effectiveExecutionMode === "native_agent";
   const clusterMode = Boolean(botOverview?.cluster?.enabled);
   const activeClusterChildReadOnly = clusterMode && activeAgentId !== "main";
@@ -3573,6 +3606,68 @@ export function ChatScreen({
       deletingAttachmentKeys: deletingAttachmentKeysByMessage[item.id] || EMPTY_ATTACHMENT_STATE,
     };
   }), [deletedAttachmentKeysByMessage, deletingAttachmentKeysByMessage, visibleItems]);
+
+  const soloConversationLoadKeyRef = useRef("");
+
+  useEffect(() => {
+    if (!onSoloSessionInfoChange || loading) {
+      return;
+    }
+    const key = `${botAlias}:${activeAgentId}:${effectiveExecutionMode}`;
+    if (soloConversationLoadKeyRef.current === key) {
+      return;
+    }
+    soloConversationLoadKeyRef.current = key;
+    void listScopedConversations(client, botAlias, "", activeAgentIdRef.current, executionModeRef.current)
+      .then((data) => {
+        if (soloConversationLoadKeyRef.current === key) {
+          setConversations(data.items);
+        }
+      })
+      .catch(() => {
+        if (soloConversationLoadKeyRef.current === key) {
+          setConversations([]);
+        }
+      });
+  }, [activeAgentId, botAlias, client, effectiveExecutionMode, loading, onSoloSessionInfoChange]);
+
+  useEffect(() => {
+    if (!onSoloSessionInfoChange || effectiveExecutionMode !== "native_agent") {
+      return;
+    }
+    const activeConversation = conversations.find((conversation) => conversation.active) || conversations[0];
+    const latestNativeAssistant = [...items]
+      .reverse()
+      .find((item) => item.role === "assistant" && isNativeAgentMessage(item.meta));
+    const latestNativeMeta = latestNativeAssistant?.meta;
+    const contextUsage = latestNativeMeta?.contextUsage;
+    const snapshot: SoloSessionSnapshot = {
+      botAlias,
+      executionMode: "native_agent",
+      conversationId: activeConversation?.id || "",
+      conversationTitle: activeConversation?.title || "当前会话",
+      workingDir: activeConversation?.workingDir || workingDir || botOverview?.workingDir || "",
+      model: contextUsage?.model || nativeSelectedModel || botOverview?.nativeAgent?.model || "",
+      nativeSessionId: latestNativeMeta?.nativeSource?.sessionId || activeConversation?.nativeSource?.sessionId || "",
+      workspaceHistoryHead: latestNativeMeta?.workspaceHistoryHead || activeConversation?.workspaceHistoryHead || "",
+      linearIndex: latestNativeMeta?.linearIndex ?? activeConversation?.linearIndex ?? 0,
+      rollbackSupported: latestNativeMeta?.rollbackSupported ?? activeConversation?.rollbackSupported ?? false,
+      degraded: latestNativeMeta?.degraded ?? activeConversation?.degraded ?? false,
+      degradedReason: latestNativeMeta?.degradedReason || activeConversation?.degradedReason || "",
+      contextStatusText: contextUsage?.statusText || "",
+    };
+    onSoloSessionInfoChange(snapshot);
+  }, [
+    botAlias,
+    botOverview?.nativeAgent?.model,
+    botOverview?.workingDir,
+    conversations,
+    effectiveExecutionMode,
+    items,
+    nativeSelectedModel,
+    onSoloSessionInfoChange,
+    workingDir,
+  ]);
 
   function emitBotActivityForActiveAgent(activityStatus: "idle" | "busy") {
     const agentId = activeAgentIdRef.current || "main";

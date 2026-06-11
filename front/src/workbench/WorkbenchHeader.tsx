@@ -17,6 +17,7 @@ import {
 import type { ViewMode } from "../app/layoutMode";
 import { premiumMotion, resolveMotionProps } from "../motion/premiumMotion";
 import { AppLogo } from "../components/AppLogo";
+import type { WorkbenchProductMode } from "./workbenchTypes";
 
 type LayoutControlId = "sidebar" | "terminal" | "chat";
 
@@ -37,6 +38,9 @@ type Props = {
   terminalVisible: boolean;
   chatVisible: boolean;
   availableLayoutControls?: LayoutControlId[];
+  productMode?: WorkbenchProductMode;
+  soloAvailable?: boolean;
+  onProductModeChange?: (mode: WorkbenchProductMode) => void;
   onToggleSidebar: () => void;
   onToggleTerminal: () => void;
   onToggleChat: () => void;
@@ -56,6 +60,9 @@ export function WorkbenchHeader({
   terminalVisible,
   chatVisible,
   availableLayoutControls,
+  productMode,
+  soloAvailable = false,
+  onProductModeChange,
   onToggleSidebar,
   onToggleTerminal,
   onToggleChat,
@@ -104,6 +111,43 @@ export function WorkbenchHeader({
         <span className="workbench-topbar-logo flex h-7 w-7 shrink-0 items-center justify-center border border-[var(--border)] bg-[var(--surface-glass)]">
           <AppLogo size={21} decorative />
         </span>
+        {productMode && onProductModeChange ? (
+          <div
+            aria-label="产品模式"
+            className="workbench-segmented inline-flex border border-[var(--border)] bg-[var(--surface-glass)] p-0.5"
+            role="group"
+          >
+            <button
+              type="button"
+              aria-label="构建模式"
+              aria-pressed={productMode === "build"}
+              onClick={() => onProductModeChange("build")}
+              className={clsx(
+                "h-7 px-2 text-xs font-medium transition-colors",
+                productMode === "build"
+                  ? "tcb-selected-accent"
+                  : "text-[var(--text)] hover:bg-[var(--surface-strong)]",
+              )}
+            >
+              构建
+            </button>
+            <button
+              type="button"
+              aria-label="Solo 模式"
+              aria-pressed={productMode === "solo"}
+              disabled={!soloAvailable}
+              onClick={() => onProductModeChange("solo")}
+              className={clsx(
+                "h-7 px-2 text-xs font-medium transition-colors disabled:opacity-50",
+                productMode === "solo"
+                  ? "tcb-selected-accent"
+                  : "text-[var(--text)] hover:bg-[var(--surface-strong)]",
+              )}
+            >
+              Solo
+            </button>
+          </div>
+        ) : null}
         <button
           type="button"
           aria-label={`切换 Bot: ${currentBot}`}

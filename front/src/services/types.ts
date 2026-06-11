@@ -679,6 +679,11 @@ export type ChatMessageMetaInfo = {
   contextUsage?: ChatMessageContextUsage;
   agUiRunState?: unknown;
   tracePresentation?: "native_agent_flat" | "generic";
+  workspaceHistoryHead?: string;
+  linearIndex?: number;
+  rollbackSupported?: boolean;
+  degraded?: boolean;
+  degradedReason?: string;
 };
 
 export type ChatMessageAuthor = {
@@ -726,6 +731,11 @@ export type ConversationSummary = {
   agentId?: string;
   workingDir: string;
   nativeSource?: ChatMessageNativeSource;
+  workspaceHistoryHead?: string;
+  linearIndex?: number;
+  rollbackSupported?: boolean;
+  degraded?: boolean;
+  degradedReason?: string;
   createdAt: string;
   updatedAt: string;
 };

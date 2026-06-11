@@ -124,3 +124,60 @@ test("native bot shows ag-ui process tool permission and submits input value", a
   ));
   expect(screen.getByTestId("native-agent-final-result")).toHaveTextContent("完成");
 });
+
+test("forced native mode sends native_agent for mixed-mode bot", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  await client.addBot({
+    alias: "mixed-native",
+    botMode: "cli",
+    cliType: "codex",
+    cliPath: "codex",
+    workingDir: "C:\\workspace\\mixed-native",
+    avatarName: "avatar_01.png",
+    supportedExecutionModes: ["cli", "native_agent"],
+    defaultExecutionMode: "cli",
+    nativeAgent: {
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      piAgent: "reviewer",
+    },
+  });
+  const sendMessage = vi.spyOn(client, "sendMessage");
+  const onSoloSessionInfoChange = vi.fn();
+
+  render(
+    <ChatScreen
+      botAlias="mixed-native"
+      client={client}
+      forcedExecutionMode="native_agent"
+      onSoloSessionInfoChange={onSoloSessionInfoChange}
+    />,
+  );
+
+  const composer = await screen.findByPlaceholderText("输入消息");
+  expect(screen.queryByRole("button", { name: "CLI" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "原生 agent" })).not.toBeInTheDocument();
+  await waitFor(() => {
+    expect(onSoloSessionInfoChange).toHaveBeenCalledWith(expect.objectContaining({
+      conversationId: "mock-conv-mixed-native",
+      nativeSessionId: "native-session-1",
+      workspaceHistoryHead: "head-1",
+      rollbackSupported: true,
+    }));
+  });
+
+  await user.type(composer, "hello");
+  await user.click(screen.getByLabelText("发送"));
+
+  await waitFor(() => {
+    expect(sendMessage).toHaveBeenCalled();
+  });
+  expect(sendMessage.mock.calls[0][5]).toMatchObject({ executionMode: "native_agent" });
+  await waitFor(() => {
+    expect(onSoloSessionInfoChange).toHaveBeenCalledWith(expect.objectContaining({
+      contextStatusText: "上下文正常",
+      linearIndex: 1,
+    }));
+  });
+});

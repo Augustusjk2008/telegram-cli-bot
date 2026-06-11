@@ -56,6 +56,7 @@ import {
   type TerminalOverrideState,
   type TerminalWorkbenchStatus,
   type WorkbenchActivityId,
+  type WorkbenchProductMode,
 } from "./workbenchTypes";
 
 const RASTER_IMAGE_PREVIEW_RE = /\.(?:png|jpe?g|gif|webp)$/i;
@@ -133,7 +134,10 @@ type Props = {
   announcementAction?: ReactNode;
   chatPaneContent?: ReactNode | ((actions: { requestPreview: (path: string) => void }) => ReactNode);
   chatStatus?: ChatWorkbenchStatus;
+  productMode?: WorkbenchProductMode;
+  soloAvailable?: boolean;
   onUnreadResult?: (botAlias: string) => void;
+  onProductModeChange?: (mode: WorkbenchProductMode) => void;
   onViewModeChange?: (viewMode: ViewMode) => void;
   onOpenBotSwitcher?: (anchorRect?: DOMRect) => void;
   onOpenBotManager?: () => void;
@@ -177,7 +181,10 @@ export function DesktopWorkbench({
   announcementAction,
   chatPaneContent,
   chatStatus: externalChatStatus,
+  productMode,
+  soloAvailable = false,
   onUnreadResult,
+  onProductModeChange,
   onViewModeChange,
   onOpenBotSwitcher,
   onOpenBotManager,
@@ -1002,6 +1009,9 @@ export function DesktopWorkbench({
         terminalVisible={!structureOnly && !showGuideWorkspace && !layoutState.terminalCollapsed}
         chatVisible={!showGuideWorkspace && !layoutState.chatCollapsed}
         availableLayoutControls={showGuideWorkspace ? [] : structureOnly ? ["sidebar", "chat"] : undefined}
+        productMode={productMode}
+        soloAvailable={soloAvailable}
+        onProductModeChange={onProductModeChange}
         onToggleSidebar={toggleSidebar}
         onToggleTerminal={toggleTerminal}
         onToggleChat={toggleChat}

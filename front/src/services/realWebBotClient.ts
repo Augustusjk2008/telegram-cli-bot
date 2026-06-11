@@ -353,20 +353,40 @@ type RawChatMessageAuthor = {
 type RawConversationSummary = {
   id?: string;
   bot_alias?: string;
+  botAlias?: string;
   agent_id?: string;
+  agentId?: string;
   bot_mode?: string;
+  botMode?: string;
   cli_type?: string;
+  cliType?: string;
   working_dir?: string;
+  workingDir?: string;
   status?: string;
   native_provider?: string;
+  nativeProvider?: string;
   native_session_id?: string;
+  nativeSessionId?: string;
   title?: string;
   last_message_preview?: string;
+  lastMessagePreview?: string;
   message_count?: number;
+  messageCount?: number;
   pinned?: boolean;
   active?: boolean;
+  workspace_history_head?: string;
+  workspaceHistoryHead?: string;
+  linear_index?: number;
+  linearIndex?: number;
+  rollback_supported?: boolean;
+  rollbackSupported?: boolean;
+  degraded?: boolean;
+  degraded_reason?: string;
+  degradedReason?: string;
   created_at?: string;
+  createdAt?: string;
   updated_at?: string;
+  updatedAt?: string;
 };
 
 type RawPlanExecuteResult = {
@@ -410,17 +430,37 @@ type RawChatTraceEvent = {
 
 type RawChatMessageMeta = {
   completion_state?: string;
+  completionState?: string;
   summary_kind?: string;
+  summaryKind?: string;
   trace_version?: number;
+  traceVersion?: number;
   trace_count?: number;
+  traceCount?: number;
   tool_call_count?: number;
+  toolCallCount?: number;
   process_count?: number;
+  processCount?: number;
   trace?: RawChatTraceEvent[];
   native_source?: {
     provider?: string;
     session_id?: string;
   };
+  nativeSource?: {
+    provider?: string;
+    sessionId?: string;
+  };
   context_usage?: RawChatMessageContextUsage | null;
+  contextUsage?: RawChatMessageContextUsage | null;
+  workspace_history_head?: string;
+  workspaceHistoryHead?: string;
+  linear_index?: number;
+  linearIndex?: number;
+  rollback_supported?: boolean;
+  rollbackSupported?: boolean;
+  degraded?: boolean;
+  degraded_reason?: string;
+  degradedReason?: string;
 };
 
 type RawChatMessageContextUsage = {
@@ -2111,54 +2151,81 @@ function mapMessageMeta(raw?: RawChatMessageMeta | null): ChatMessageMetaInfo | 
     return undefined;
   }
 
+  const rawNativeSource = raw.native_source || (raw.nativeSource
+    ? {
+        provider: raw.nativeSource.provider,
+        session_id: raw.nativeSource.sessionId,
+      }
+    : undefined);
+  const rawContextUsage = raw.context_usage ?? raw.contextUsage;
+  const rawWorkspaceHistoryHead = raw.workspace_history_head ?? raw.workspaceHistoryHead;
+  const rawLinearIndex = raw.linear_index ?? raw.linearIndex;
+  const rawRollbackSupported = raw.rollback_supported ?? raw.rollbackSupported;
+  const rawDegraded = raw.degraded;
+  const rawDegradedReason = raw.degraded_reason ?? raw.degradedReason;
   const rawTrace = (raw.trace || [])
     .map((item) => mapTraceEvent(item))
     .filter((item): item is ChatTraceEvent => Boolean(item));
-  const isNativeFlat = String(raw.native_source?.provider || "").trim().toLowerCase() === "native_agent";
+  const isNativeFlat = String(rawNativeSource?.provider || "").trim().toLowerCase() === "native_agent";
   const trace = mergeChatTraceEvents([rawTrace], { nativeFlat: isNativeFlat });
   const traceSummary = summarizeTrace(trace);
 
   const meta: ChatMessageMetaInfo = {};
-  if (raw.completion_state) {
-    meta.completionState = raw.completion_state;
+  if (raw.completion_state || raw.completionState) {
+    meta.completionState = raw.completion_state || raw.completionState;
   }
-  if (raw.summary_kind) {
-    meta.summaryKind = raw.summary_kind;
+  if (raw.summary_kind || raw.summaryKind) {
+    meta.summaryKind = raw.summary_kind || raw.summaryKind;
   }
-  if (typeof raw.trace_version === "number") {
-    meta.traceVersion = raw.trace_version;
+  if (typeof (raw.trace_version ?? raw.traceVersion) === "number") {
+    meta.traceVersion = raw.trace_version ?? raw.traceVersion;
   }
   if (traceSummary.traceCount > 0) {
     meta.traceCount = traceSummary.traceCount;
-  } else if (typeof raw.trace_count === "number") {
-    meta.traceCount = raw.trace_count;
+  } else if (typeof (raw.trace_count ?? raw.traceCount) === "number") {
+    meta.traceCount = raw.trace_count ?? raw.traceCount;
   }
   if (traceSummary.traceCount > 0) {
     meta.toolCallCount = traceSummary.toolCallCount;
     meta.processCount = traceSummary.processCount;
   } else {
-    if (typeof raw.tool_call_count === "number") {
-      meta.toolCallCount = raw.tool_call_count;
+    if (typeof (raw.tool_call_count ?? raw.toolCallCount) === "number") {
+      meta.toolCallCount = raw.tool_call_count ?? raw.toolCallCount;
     }
-    if (typeof raw.process_count === "number") {
-      meta.processCount = raw.process_count;
+    if (typeof (raw.process_count ?? raw.processCount) === "number") {
+      meta.processCount = raw.process_count ?? raw.processCount;
     }
   }
   if ((trace || []).length > 0) {
     meta.trace = trace;
   }
-  if (raw.native_source?.provider || raw.native_source?.session_id) {
+  if (rawNativeSource?.provider || rawNativeSource?.session_id) {
     if (isNativeFlat) {
       meta.tracePresentation = "native_agent_flat";
     }
     meta.nativeSource = {
-      provider: displayNativeProvider(raw.native_source.provider),
-      sessionId: raw.native_source.session_id || undefined,
+      provider: displayNativeProvider(rawNativeSource.provider),
+      sessionId: rawNativeSource.session_id || undefined,
     };
   }
-  const contextUsage = mapContextUsage(raw.context_usage);
+  const contextUsage = mapContextUsage(rawContextUsage);
   if (contextUsage) {
     meta.contextUsage = contextUsage;
+  }
+  if (typeof rawWorkspaceHistoryHead === "string") {
+    meta.workspaceHistoryHead = rawWorkspaceHistoryHead;
+  }
+  if (typeof rawLinearIndex === "number" && Number.isFinite(rawLinearIndex)) {
+    meta.linearIndex = rawLinearIndex;
+  }
+  if (typeof rawRollbackSupported === "boolean") {
+    meta.rollbackSupported = rawRollbackSupported;
+  }
+  if (typeof rawDegraded === "boolean") {
+    meta.degraded = rawDegraded;
+  }
+  if (typeof rawDegradedReason === "string") {
+    meta.degradedReason = rawDegradedReason;
   }
 
   return Object.keys(meta).length > 0 ? meta : undefined;
@@ -2206,6 +2273,11 @@ function mergeMessageMeta(
     contextUsage: incoming?.contextUsage || base?.contextUsage,
     tracePresentation,
     trace,
+    workspaceHistoryHead: incoming?.workspaceHistoryHead ?? base?.workspaceHistoryHead,
+    linearIndex: incoming?.linearIndex ?? base?.linearIndex,
+    rollbackSupported: incoming?.rollbackSupported ?? base?.rollbackSupported,
+    degraded: incoming?.degraded ?? base?.degraded,
+    degradedReason: incoming?.degradedReason ?? base?.degradedReason,
   };
 
   return Object.values(meta).some((value) => typeof value !== "undefined") ? meta : undefined;
@@ -2262,29 +2334,39 @@ function mapChatMessage(raw: RawHistoryItem, index: number, fallbackState: ChatM
 }
 
 function mapConversationSummary(raw: RawConversationSummary): ConversationSummary {
-  const nativeProvider = String(raw.native_provider || "");
-  const nativeSessionId = String(raw.native_session_id || "");
+  const nativeProvider = String(raw.native_provider ?? raw.nativeProvider ?? "");
+  const nativeSessionId = String(raw.native_session_id ?? raw.nativeSessionId ?? "");
+  const workspaceHistoryHead = raw.workspace_history_head ?? raw.workspaceHistoryHead;
+  const linearIndex = raw.linear_index ?? raw.linearIndex;
+  const rollbackSupported = raw.rollback_supported ?? raw.rollbackSupported;
+  const degraded = raw.degraded;
+  const degradedReason = raw.degraded_reason ?? raw.degradedReason;
   return {
     id: String(raw.id || ""),
     title: String(raw.title || "新会话"),
-    lastMessagePreview: String(raw.last_message_preview || ""),
-    messageCount: Number(raw.message_count || 0),
+    lastMessagePreview: String(raw.last_message_preview ?? raw.lastMessagePreview ?? ""),
+    messageCount: Number(raw.message_count ?? raw.messageCount ?? 0),
     pinned: Boolean(raw.pinned),
     active: Boolean(raw.active),
     status: String(raw.status || "active"),
-    botAlias: String(raw.bot_alias || ""),
-    botMode: String(raw.bot_mode || ""),
-    cliType: String(raw.cli_type || ""),
-    agentId: String(raw.agent_id || "main"),
-    workingDir: String(raw.working_dir || ""),
+    botAlias: String(raw.bot_alias ?? raw.botAlias ?? ""),
+    botMode: String(raw.bot_mode ?? raw.botMode ?? ""),
+    cliType: String(raw.cli_type ?? raw.cliType ?? ""),
+    agentId: String(raw.agent_id ?? raw.agentId ?? "main"),
+    workingDir: String(raw.working_dir ?? raw.workingDir ?? ""),
     ...(nativeProvider || nativeSessionId ? {
       nativeSource: {
         provider: displayNativeProvider(nativeProvider),
         sessionId: nativeSessionId,
       },
     } : {}),
-    createdAt: String(raw.created_at || ""),
-    updatedAt: String(raw.updated_at || ""),
+    ...(typeof workspaceHistoryHead === "string" ? { workspaceHistoryHead } : {}),
+    ...(typeof linearIndex === "number" && Number.isFinite(linearIndex) ? { linearIndex } : {}),
+    ...(typeof rollbackSupported === "boolean" ? { rollbackSupported } : {}),
+    ...(typeof degraded === "boolean" ? { degraded } : {}),
+    ...(typeof degradedReason === "string" ? { degradedReason } : {}),
+    createdAt: String(raw.created_at ?? raw.createdAt ?? ""),
+    updatedAt: String(raw.updated_at ?? raw.updatedAt ?? ""),
   };
 }
 
