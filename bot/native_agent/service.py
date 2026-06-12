@@ -223,7 +223,12 @@ class NativeAgentService:
         record = self._pi_session_store.get(key)
         if record is not None:
             self._seed_runtime_from_record(runtime, record)
-        return await self._workspace_history.rollback(runtime, target_head=target_head)
+        return await self._workspace_history.rollback(
+            runtime,
+            target_head=target_head,
+            cwd=session.working_dir,
+            conversation_id=conversation_id,
+        )
 
     async def abort(self, session: UserSession) -> bool:
         with session._lock:
@@ -302,6 +307,7 @@ class NativeAgentService:
         pi_record: PiSessionRecord | None = None
         workspace_history_enabled = False
         session_binding_invalidated = False
+        workspace_history_before_head = ""
 
         try:
             if not config.NATIVE_AGENT_ENABLED:
@@ -487,25 +493,20 @@ class NativeAgentService:
                 native_session_id = active_runtime.state.native_session_id
                 turn_state.native_session_id = native_session_id
             if workspace_history_enabled and pi_record is not None:
-                status_before_turn = await self._workspace_history.status(active_runtime)
-                if status_before_turn.degraded:
+                before_turn = await self._workspace_history.checkpoint(
+                    active_runtime,
+                    label=f"{turn_handle.turn_id}-before",
+                    cwd=session.working_dir,
+                    conversation_id=turn_handle.conversation_id,
+                )
+                if before_turn.degraded:
                     pi_record = self._pi_session_store.mark_degraded(
                         pi_record_key,
-                        status_before_turn.message or "workspace history 不可用",
+                        before_turn.message or "workspace history 不可用",
                     )
                 else:
-                    active_runtime.state.workspace_history_head = str(status_before_turn.head or "").strip()
-                    if status_before_turn.manual_change_count > 0:
-                        checkpoint = await self._workspace_history.checkpoint(active_runtime, label="manual-before-turn")
-                        if checkpoint.degraded:
-                            pi_record = self._pi_session_store.mark_degraded(
-                                pi_record_key,
-                                checkpoint.message or "workspace history 不可用",
-                            )
-                        else:
-                            active_runtime.state.workspace_history_head = str(
-                                checkpoint.head or active_runtime.state.workspace_history_head or ""
-                            ).strip()
+                    workspace_history_before_head = str(before_turn.head or "").strip()
+                    active_runtime.state.workspace_history_head = workspace_history_before_head
             with session._lock:
                 session.native_agent_server_key = active_runtime.runtime_id
             session.persist()
@@ -730,8 +731,15 @@ class NativeAgentService:
                 context_usage=context_usage,
             )
             if completion_state == "completed" and active_runtime is not None and pi_record_key and pi_record is not None:
-                if workspace_history_enabled:
-                    status_after_turn = await self._workspace_history.status(active_runtime)
+                if workspace_history_enabled and workspace_history_before_head:
+                    status_after_turn = await self._workspace_history.record_completed_turn(
+                        active_runtime,
+                        turn_id=turn_handle.turn_id,
+                        before_head=workspace_history_before_head,
+                        pi_session_id=native_session_id,
+                        cwd=session.working_dir,
+                        conversation_id=turn_handle.conversation_id,
+                    )
                     if status_after_turn.degraded:
                         pi_record = self._pi_session_store.mark_degraded(
                             pi_record_key,

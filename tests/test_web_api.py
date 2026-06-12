@@ -78,6 +78,8 @@ from bot.web.api_service import (
     get_directory_listing,
     get_chat_session_for_alias,
     get_history,
+    get_native_agent_history_changes,
+    get_native_agent_history_diff,
     get_history_trace,
     get_cluster_status,
     get_session_for_alias,
@@ -3822,6 +3824,128 @@ async def test_native_agent_history_rollback_discards_forward_turns(
     assert reloaded.workspace_history_head == "head-1"
     assert reloaded.turns[1].status == "discarded"
     assert "changed_paths" not in json.dumps(result, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_native_agent_history_rollback_requires_local_record_before_reset(
+    web_manager: MultiBotManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("TCB_DATA_DIR", str(tmp_path / "data"))
+    web_manager.main_profile.working_dir = str(tmp_path)
+    profile = web_manager.main_profile
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+    history = ChatHistoryService(ChatStore(tmp_path), native_provider_filter="native_agent")
+    first = history.start_turn(profile=profile, session=session, user_text="一", native_provider="native_agent")
+    history.complete_turn(first, content="一回", completion_state="completed", native_session_id="pi-native")
+    history.store.update_turn_workspace_history(first.turn_id, "head-1", 1)
+
+    class FakeNativeService:
+        async def rollback_workspace_history(self, **_kwargs):
+            raise AssertionError("缺本地记录时不应执行工作区 rollback")
+
+    monkeypatch.setattr(api_service, "get_native_agent_service", lambda: FakeNativeService())
+
+    with pytest.raises(WebApiError) as exc_info:
+        await rollback_native_agent_history(
+            web_manager,
+            "main",
+            1001,
+            conversation_id=first.conversation_id,
+            target_turn_id=first.turn_id,
+        )
+
+    assert exc_info.value.code == "workspace_history_record_missing"
+
+
+def test_native_agent_history_changes_and_diff_api(web_manager: MultiBotManager, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from bot.native_agent.shadow_git_history import ShadowGitHistory
+
+    monkeypatch.setenv("TCB_DATA_DIR", str(tmp_path / "data"))
+    web_manager.main_profile.working_dir = str(tmp_path)
+    profile = web_manager.main_profile
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+    history = ChatHistoryService(ChatStore(tmp_path), native_provider_filter="native_agent")
+    shadow = ShadowGitHistory()
+
+    first = history.start_turn(profile=profile, session=session, user_text="一", native_provider="native_agent")
+    before_first = shadow.snapshot(cwd=tmp_path, conversation_id=first.conversation_id, label="turn-1-before")
+    (tmp_path / "smoke").mkdir()
+    (tmp_path / "smoke" / "history.txt").write_text("A\n", encoding="utf-8")
+    history.complete_turn(first, content="一回", completion_state="completed", native_session_id="pi-native")
+    after_first = shadow.record_completed_turn(
+        cwd=tmp_path,
+        conversation_id=first.conversation_id,
+        turn_id=first.turn_id,
+        before_head=before_first.head,
+        pi_session_id="pi-native",
+    )
+    history.store.update_turn_workspace_history(first.turn_id, after_first.head, 1)
+
+    second = history.start_turn(profile=profile, session=session, user_text="二", native_provider="native_agent")
+    before_second = shadow.snapshot(cwd=tmp_path, conversation_id=second.conversation_id, label="turn-2-before")
+    (tmp_path / "smoke" / "history.txt").write_text("A\nB\n", encoding="utf-8")
+    (tmp_path / "smoke" / "new.txt").write_text("N\n", encoding="utf-8")
+    history.complete_turn(second, content="二回", completion_state="completed", native_session_id="pi-native")
+    after_second = shadow.record_completed_turn(
+        cwd=tmp_path,
+        conversation_id=second.conversation_id,
+        turn_id=second.turn_id,
+        before_head=before_second.head,
+        pi_session_id="pi-native",
+    )
+    history.store.update_turn_workspace_history(second.turn_id, after_second.head, 2)
+
+    changes = get_native_agent_history_changes(
+        web_manager,
+        "main",
+        1001,
+        conversation_id=first.conversation_id,
+        turn_id=second.turn_id,
+    )
+    files = {item["path"]: item for item in changes["files"]}
+    diff = get_native_agent_history_diff(
+        web_manager,
+        "main",
+        1001,
+        conversation_id=first.conversation_id,
+        turn_id=second.turn_id,
+        path="smoke/history.txt",
+    )
+
+    assert changes["turn_id"] == second.turn_id
+    assert changes["linear_index"] == 2
+    assert files["smoke/history.txt"]["additions"] == 1
+    assert files["smoke/new.txt"]["status"] == "added"
+    assert diff["status"] == "modified"
+    assert diff["old_path"] == ""
+    assert diff["binary"] is False
+    assert "+B" in diff["diff"]
+    assert diff["truncated"] is False
+    with pytest.raises(WebApiError) as exc_info:
+        get_native_agent_history_diff(
+            web_manager,
+            "main",
+            1001,
+            conversation_id=first.conversation_id,
+            turn_id=second.turn_id,
+            path="smoke/missing.txt",
+        )
+    assert exc_info.value.code == "history_diff_path_invalid"
+
+    history.store.mark_turns_after_discarded(first.conversation_id, first.turn_id)
+    with pytest.raises(WebApiError) as discarded:
+        get_native_agent_history_changes(
+            web_manager,
+            "main",
+            1001,
+            conversation_id=first.conversation_id,
+            turn_id=second.turn_id,
+        )
+    assert discarded.value.code == "target_turn_discarded"
 
 
 def test_reset_user_session_blocks_while_processing(web_manager: MultiBotManager):

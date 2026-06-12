@@ -723,6 +723,8 @@ export type ChatTraceDetails = {
 
 export type ChatMessage = {
   id: string;
+  turnId?: string;
+  conversationId?: string;
   role: "user" | "assistant" | "system";
   text: string;
   createdAt: string;
@@ -736,6 +738,46 @@ export type ChatMessage = {
 export type HistoryDeltaResult = {
   items: ChatMessage[];
   reset: boolean;
+};
+
+export type NativeAgentHistoryFileStatus = "added" | "modified" | "deleted" | "renamed" | "copied" | "unknown";
+
+export type NativeAgentHistoryChangedFile = {
+  path: string;
+  oldPath: string;
+  status: NativeAgentHistoryFileStatus | string;
+  additions: number;
+  deletions: number;
+  binary: boolean;
+};
+
+export type NativeAgentHistoryChangesPayload = {
+  conversationId: string;
+  turnId: string;
+  linearIndex: number;
+  baseHead: string;
+  head: string;
+  files: NativeAgentHistoryChangedFile[];
+  discarded?: boolean;
+  message?: string;
+};
+
+export type NativeAgentHistoryDiffPayload = {
+  conversationId: string;
+  turnId: string;
+  path: string;
+  oldPath: string;
+  status: NativeAgentHistoryFileStatus | string;
+  diff: string;
+  truncated?: boolean;
+  binary?: boolean;
+};
+
+export type NativeAgentHistoryRollbackResult = {
+  conversationId: string;
+  currentTurnId: string;
+  rollbackSupported: boolean;
+  message: string;
 };
 
 export type ConversationSummary = {

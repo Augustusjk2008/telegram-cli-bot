@@ -85,6 +85,9 @@ import type {
   NativeAgentConfig,
   NativeAgentConfigInput,
   NativeAgentConfigPayload,
+  NativeAgentHistoryChangesPayload,
+  NativeAgentHistoryDiffPayload,
+  NativeAgentHistoryRollbackResult,
   NativeAgentPreflightResult,
   NativeAgentModelOption,
   NativeAgentModelsPayload,
@@ -329,6 +332,10 @@ type RawNotificationSettings = {
 
 type RawHistoryItem = {
   id?: string;
+  turn_id?: string;
+  turnId?: string;
+  conversation_id?: string;
+  conversationId?: string;
   timestamp?: string;
   created_at?: string;
   updated_at?: string;
@@ -491,6 +498,55 @@ type RawChatTraceDetails = {
   tool_call_count?: number;
   process_count?: number;
   trace?: RawChatTraceEvent[];
+};
+
+type RawNativeAgentHistoryChangedFile = {
+  path?: string;
+  old_path?: string;
+  oldPath?: string;
+  status?: string;
+  additions?: number;
+  deletions?: number;
+  binary?: boolean;
+};
+
+type RawNativeAgentHistoryChangesPayload = {
+  conversation_id?: string;
+  conversationId?: string;
+  turn_id?: string;
+  turnId?: string;
+  linear_index?: number;
+  linearIndex?: number;
+  base_head?: string;
+  baseHead?: string;
+  head?: string;
+  files?: RawNativeAgentHistoryChangedFile[];
+  discarded?: boolean;
+  message?: string;
+};
+
+type RawNativeAgentHistoryDiffPayload = {
+  conversation_id?: string;
+  conversationId?: string;
+  turn_id?: string;
+  turnId?: string;
+  path?: string;
+  old_path?: string;
+  oldPath?: string;
+  status?: string;
+  diff?: string;
+  truncated?: boolean;
+  binary?: boolean;
+};
+
+type RawNativeAgentHistoryRollbackResult = {
+  conversation_id?: string;
+  conversationId?: string;
+  current_turn_id?: string;
+  currentTurnId?: string;
+  rollback_supported?: boolean;
+  rollbackSupported?: boolean;
+  message?: string;
 };
 
 type RawClusterAgentTask = {
@@ -2348,16 +2404,68 @@ function mapChatMessageAuthor(raw?: RawChatMessageAuthor | null): ChatMessage["a
 
 function mapChatMessage(raw: RawHistoryItem, index: number, fallbackState: ChatMessage["state"] = "done"): ChatMessage {
   const author = mapChatMessageAuthor(raw.author);
+  const turnId = raw.turn_id ?? raw.turnId;
+  const conversationId = raw.conversation_id ?? raw.conversationId;
+  const meta = mapMessageMeta(raw.meta);
   return {
     id: raw.id || `${raw.timestamp || raw.created_at || "history"}-${index}`,
+    ...(typeof turnId === "string" && turnId ? { turnId } : {}),
+    ...(typeof conversationId === "string" && conversationId ? { conversationId } : {}),
     role: raw.role,
     text: raw.content,
     createdAt: raw.created_at || raw.timestamp || new Date().toISOString(),
     ...(raw.updated_at || raw.updatedAt ? { updatedAt: raw.updated_at || raw.updatedAt } : {}),
     state: raw.state || fallbackState,
     ...(typeof raw.elapsed_seconds === "number" ? { elapsedSeconds: raw.elapsed_seconds } : {}),
-    ...(mapMessageMeta(raw.meta) ? { meta: mapMessageMeta(raw.meta) } : {}),
+    ...(meta ? { meta } : {}),
     ...(author ? { author } : {}),
+  };
+}
+
+function mapNativeAgentHistoryChangedFile(raw: RawNativeAgentHistoryChangedFile) {
+  return {
+    path: String(raw.path || ""),
+    oldPath: String(raw.old_path ?? raw.oldPath ?? ""),
+    status: String(raw.status || "unknown"),
+    additions: Number(raw.additions || 0),
+    deletions: Number(raw.deletions || 0),
+    binary: Boolean(raw.binary),
+  };
+}
+
+function mapNativeAgentHistoryChanges(raw: RawNativeAgentHistoryChangesPayload): NativeAgentHistoryChangesPayload {
+  const linearIndex = Number(raw.linear_index ?? raw.linearIndex ?? 0);
+  return {
+    conversationId: String(raw.conversation_id ?? raw.conversationId ?? ""),
+    turnId: String(raw.turn_id ?? raw.turnId ?? ""),
+    linearIndex: Number.isFinite(linearIndex) ? linearIndex : 0,
+    baseHead: String(raw.base_head ?? raw.baseHead ?? ""),
+    head: String(raw.head || ""),
+    files: Array.isArray(raw.files) ? raw.files.map(mapNativeAgentHistoryChangedFile) : [],
+    ...(typeof raw.discarded === "boolean" ? { discarded: raw.discarded } : {}),
+    ...(typeof raw.message === "string" ? { message: raw.message } : {}),
+  };
+}
+
+function mapNativeAgentHistoryDiff(raw: RawNativeAgentHistoryDiffPayload): NativeAgentHistoryDiffPayload {
+  return {
+    conversationId: String(raw.conversation_id ?? raw.conversationId ?? ""),
+    turnId: String(raw.turn_id ?? raw.turnId ?? ""),
+    path: String(raw.path || ""),
+    oldPath: String(raw.old_path ?? raw.oldPath ?? ""),
+    status: String(raw.status || "unknown"),
+    diff: String(raw.diff || ""),
+    truncated: Boolean(raw.truncated),
+    binary: Boolean(raw.binary),
+  };
+}
+
+function mapNativeAgentHistoryRollback(raw: RawNativeAgentHistoryRollbackResult): NativeAgentHistoryRollbackResult {
+  return {
+    conversationId: String(raw.conversation_id ?? raw.conversationId ?? ""),
+    currentTurnId: String(raw.current_turn_id ?? raw.currentTurnId ?? ""),
+    rollbackSupported: Boolean(raw.rollback_supported ?? raw.rollbackSupported),
+    message: String(raw.message || ""),
   };
 }
 
@@ -6756,6 +6864,59 @@ export class RealWebBotClient implements WebBotClient {
     const mapped = mapNativeAgentModelsPayload(raw);
     const bot = raw.bot ? mapBotSummary(raw.bot as RawBotSummary, Boolean((raw.bot as RawBotSummary).is_processing)) : undefined;
     return { ...mapped, ...(bot ? { bot } : {}) };
+  }
+
+  async getNativeAgentHistoryChanges(
+    botAlias: string,
+    input: { conversationId: string; turnId: string; agentId?: string },
+  ): Promise<NativeAgentHistoryChangesPayload> {
+    const params = new URLSearchParams({
+      conversation_id: input.conversationId,
+      turn_id: input.turnId,
+    });
+    appendAgentParam(params, input.agentId);
+    const data = await this.requestJson<RawNativeAgentHistoryChangesPayload>(
+      `/api/bots/${encodeURIComponent(botAlias)}/native-agent/history/changes?${params.toString()}`,
+    );
+    return mapNativeAgentHistoryChanges(data);
+  }
+
+  async getNativeAgentHistoryDiff(
+    botAlias: string,
+    input: { conversationId: string; turnId: string; path: string; agentId?: string },
+  ): Promise<NativeAgentHistoryDiffPayload> {
+    const params = new URLSearchParams({
+      conversation_id: input.conversationId,
+      turn_id: input.turnId,
+      path: input.path,
+    });
+    appendAgentParam(params, input.agentId);
+    const data = await this.requestJson<RawNativeAgentHistoryDiffPayload>(
+      `/api/bots/${encodeURIComponent(botAlias)}/native-agent/history/diff?${params.toString()}`,
+    );
+    return mapNativeAgentHistoryDiff(data);
+  }
+
+  async rollbackNativeAgentHistory(
+    botAlias: string,
+    input: { conversationId: string; targetTurnId: string; agentId?: string },
+  ): Promise<NativeAgentHistoryRollbackResult> {
+    const normalizedAgentId = String(input.agentId || "").trim();
+    const data = await this.requestJson<RawNativeAgentHistoryRollbackResult>(
+      `/api/bots/${encodeURIComponent(botAlias)}/native-agent/history/rollback`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          conversation_id: input.conversationId,
+          target_turn_id: input.targetTurnId,
+          ...(normalizedAgentId && normalizedAgentId !== "main" ? { agent_id: normalizedAgentId } : {}),
+        }),
+      },
+    );
+    return mapNativeAgentHistoryRollback(data);
   }
 
   async updateCliParam(botAlias: string, key: string, value: unknown, cliType?: string): Promise<CliParamsPayload> {

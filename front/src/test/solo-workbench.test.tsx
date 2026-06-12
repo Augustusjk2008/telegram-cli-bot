@@ -4,7 +4,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { NativeAgentTranscript } from "../components/NativeAgentTranscript";
 import { ChatScreen } from "../screens/ChatScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { FileReadResult, GitDiffPayload, GitOverview } from "../services/types";
+import type { ChatMessage, FileReadResult } from "../services/types";
 import { FILE_PREVIEW_FULL_READ_LIMIT_BYTES } from "../utils/filePreview";
 import { SoloWorkbench } from "../workbench/SoloWorkbench";
 import type { SoloSessionSnapshot } from "../workbench/soloTypes";
@@ -16,6 +16,7 @@ afterEach(() => {
 
 const snapshot: SoloSessionSnapshot = {
   botAlias: "main",
+  agentId: "main",
   executionMode: "native_agent",
   conversationId: "conv-1",
   conversationTitle: "当前会话",
@@ -50,22 +51,6 @@ function buildFileResult(content: string, overrides: Partial<FileReadResult> = {
   };
 }
 
-function buildGitOverview(changedFiles: GitOverview["changedFiles"]): GitOverview {
-  return {
-    repoFound: true,
-    canInit: false,
-    workingDir: "C:\\workspace\\main",
-    repoPath: "C:\\workspace\\main",
-    repoName: "main",
-    currentBranch: "main",
-    isClean: false,
-    aheadCount: 0,
-    behindCount: 0,
-    changedFiles,
-    recentCommits: [],
-  };
-}
-
 function renderSoloWorkbench(
   client: MockWebBotClient,
   chatPaneContent: Parameters<typeof SoloWorkbench>[0]["chatPaneContent"],
@@ -90,6 +75,23 @@ function renderSoloWorkbench(
   );
 }
 
+function nativeTurn(turnId: string, linearIndex: number, head: string, createdAt: string): ChatMessage {
+  return {
+    id: `msg-${turnId}`,
+    turnId,
+    conversationId: "conv-1",
+    role: "assistant",
+    text: `完成第 ${linearIndex} 轮`,
+    createdAt,
+    state: "done",
+    meta: {
+      workspaceHistoryHead: head,
+      linearIndex,
+      rollbackSupported: true,
+    },
+  };
+}
+
 test("renders solo layout with session tab and no manual file controls", () => {
   renderSoloWorkbench(new MockWebBotClient(), <div>chat</div>);
 
@@ -97,7 +99,8 @@ test("renders solo layout with session tab and no manual file controls", () => {
   expect(screen.getByTestId("solo-chat-pane")).toBeInTheDocument();
   expect(screen.getByTestId("solo-tabs-pane")).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "会话信息" })).toHaveAttribute("aria-selected", "true");
-  expect(screen.getByRole("tab", { name: "Git" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "会话变更" })).toBeInTheDocument();
+  expect(screen.queryByRole("tab", { name: "Git" })).not.toBeInTheDocument();
   expect(screen.queryByText("打开系统文件夹")).not.toBeInTheDocument();
   expect(screen.queryByRole("textbox", { name: /路径|文件路径|path/i })).not.toBeInTheDocument();
 });
@@ -275,78 +278,157 @@ test("native transcript file link opens a readonly solo preview tab", async () =
   expect(await screen.findByText(/Mock full content for README\.md/)).toBeInTheDocument();
 });
 
-test("opens readonly git diff tab from git status", async () => {
+test("opens readonly session diff tab from session changes", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
-  const getGitDiff = vi.spyOn(client, "getGitDiff").mockResolvedValue({
+  vi.spyOn(client, "listMessages").mockResolvedValue([
+    nativeTurn("turn-1", 1, "head-1", "2026-06-12T10:00:00Z"),
+    nativeTurn("turn-2", 2, "head-2", "2026-06-12T10:01:00Z"),
+  ]);
+  const getChanges = vi.spyOn(client, "getNativeAgentHistoryChanges").mockResolvedValue({
+    conversationId: "conv-1",
+    turnId: "turn-2",
+    linearIndex: 2,
+    baseHead: "head-1",
+    head: "head-2",
+    files: [
+      { path: "bot/web/server.py", oldPath: "", status: "modified", additions: 1, deletions: 1, binary: false },
+    ],
+  });
+  const getDiff = vi.spyOn(client, "getNativeAgentHistoryDiff").mockResolvedValue({
+    conversationId: "conv-1",
+    turnId: "turn-2",
     path: "bot/web/server.py",
-    staged: true,
+    oldPath: "",
+    status: "modified",
     diff: "diff --git a/bot/web/server.py b/bot/web/server.py\n@@ -1 +1 @@\n-old\n+new",
   });
 
   renderSoloWorkbench(client, <div>chat</div>);
 
-  await user.click(screen.getByRole("tab", { name: "Git" }));
-  await user.click(await screen.findByLabelText("在编辑器打开 bot/web/server.py"));
+  await user.click(screen.getByRole("tab", { name: "会话变更" }));
+  await user.click(await screen.findByLabelText("打开 bot/web/server.py diff"));
 
-  expect(getGitDiff).toHaveBeenCalledWith("main", "bot/web/server.py", true);
+  expect(getChanges).toHaveBeenCalledWith("main", { conversationId: "conv-1", turnId: "turn-2" });
+  expect(getDiff).toHaveBeenCalledWith("main", { conversationId: "conv-1", turnId: "turn-2", path: "bot/web/server.py" });
   expect(await screen.findByRole("tab", { name: "server.py.diff" })).toHaveAttribute("aria-selected", "true");
   expect(screen.getByText(/\+new/)).toBeInTheDocument();
   expect(screen.queryByLabelText("文件内容")).not.toBeInTheDocument();
 });
 
-test("keeps git diff content when switching tabs", async () => {
+test("passes child agent scope to session changes APIs", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
-  const getGitDiff = vi.spyOn(client, "getGitDiff").mockResolvedValue({
+  const listMessages = vi.spyOn(client, "listMessages").mockResolvedValue([
+    nativeTurn("turn-2", 2, "head-2", "2026-06-12T10:01:00Z"),
+  ]);
+  const getChanges = vi.spyOn(client, "getNativeAgentHistoryChanges").mockResolvedValue({
+    conversationId: "conv-1",
+    turnId: "turn-2",
+    linearIndex: 2,
+    baseHead: "head-1",
+    head: "head-2",
+    files: [
+      { path: "bot/web/server.py", oldPath: "", status: "modified", additions: 1, deletions: 0, binary: false },
+    ],
+  });
+  const getDiff = vi.spyOn(client, "getNativeAgentHistoryDiff").mockResolvedValue({
+    conversationId: "conv-1",
+    turnId: "turn-2",
     path: "bot/web/server.py",
-    staged: true,
+    oldPath: "",
+    status: "modified",
+    diff: "diff\n+new",
+  });
+
+  renderSoloWorkbench(client, <div>chat</div>, "main", { agentId: "reviewer" });
+
+  await user.click(screen.getByRole("tab", { name: "会话变更" }));
+  await user.click(await screen.findByLabelText("打开 bot/web/server.py diff"));
+
+  expect(listMessages).toHaveBeenCalledWith("main", { executionMode: "native_agent", agentId: "reviewer" });
+  expect(getChanges).toHaveBeenCalledWith("main", { conversationId: "conv-1", turnId: "turn-2", agentId: "reviewer" });
+  expect(getDiff).toHaveBeenCalledWith("main", { conversationId: "conv-1", turnId: "turn-2", path: "bot/web/server.py", agentId: "reviewer" });
+});
+
+test("keeps session diff content when switching tabs", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "listMessages").mockResolvedValue([
+    nativeTurn("turn-2", 2, "head-2", "2026-06-12T10:01:00Z"),
+  ]);
+  vi.spyOn(client, "getNativeAgentHistoryChanges").mockResolvedValue({
+    conversationId: "conv-1",
+    turnId: "turn-2",
+    linearIndex: 2,
+    baseHead: "head-1",
+    head: "head-2",
+    files: [
+      { path: "bot/web/server.py", oldPath: "", status: "modified", additions: 1, deletions: 0, binary: false },
+    ],
+  });
+  const getDiff = vi.spyOn(client, "getNativeAgentHistoryDiff").mockResolvedValue({
+    conversationId: "conv-1",
+    turnId: "turn-2",
+    path: "bot/web/server.py",
+    oldPath: "",
+    status: "modified",
     diff: "persistent diff\n+new",
   });
 
   renderSoloWorkbench(client, <div>chat</div>);
 
-  await user.click(screen.getByRole("tab", { name: "Git" }));
-  await user.click(await screen.findByLabelText("在编辑器打开 bot/web/server.py"));
+  await user.click(screen.getByRole("tab", { name: "会话变更" }));
+  await user.click(await screen.findByLabelText("打开 bot/web/server.py diff"));
   expect(await screen.findByText(/persistent diff/)).toBeInTheDocument();
 
   await user.click(screen.getByRole("tab", { name: "会话信息" }));
   await user.click(screen.getByRole("tab", { name: "server.py.diff" }));
 
   expect(screen.getByText(/persistent diff/)).toBeInTheDocument();
-  expect(getGitDiff).toHaveBeenCalledTimes(1);
+  expect(getDiff).toHaveBeenCalledTimes(1);
 });
 
-test("keeps staged and worktree diff tabs separate", async () => {
+test("rolls back to a previous session turn and refreshes the active chain", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
-  vi.spyOn(client, "getGitOverview").mockResolvedValue(buildGitOverview([
-    { path: "tracked.txt", status: "M ", staged: true, unstaged: false, untracked: false },
-    { path: "tracked.txt", status: " M", staged: false, unstaged: true, untracked: false },
-  ]));
-  vi.spyOn(client, "getGitDiff").mockImplementation(async (_botAlias, path, staged): Promise<GitDiffPayload> => ({
-    path,
-    staged: Boolean(staged),
-    diff: staged ? "staged diff\n+index" : "worktree diff\n+worktree",
+  vi.spyOn(client, "listMessages")
+    .mockResolvedValueOnce([
+      nativeTurn("turn-1", 1, "head-1", "2026-06-12T10:00:00Z"),
+      nativeTurn("turn-2", 2, "head-2", "2026-06-12T10:01:00Z"),
+    ])
+    .mockResolvedValueOnce([
+      nativeTurn("turn-1", 1, "head-1", "2026-06-12T10:00:00Z"),
+    ]);
+  vi.spyOn(client, "getNativeAgentHistoryChanges").mockImplementation(async (_botAlias, input) => ({
+    conversationId: input.conversationId,
+    turnId: input.turnId,
+    linearIndex: input.turnId === "turn-1" ? 1 : 2,
+    baseHead: input.turnId === "turn-1" ? "" : "head-1",
+    head: input.turnId === "turn-1" ? "head-1" : "head-2",
+    files: [
+      { path: input.turnId === "turn-1" ? "smoke/history.txt" : "smoke/new.txt", oldPath: "", status: "added", additions: 1, deletions: 0, binary: false },
+    ],
   }));
+  const rollback = vi.spyOn(client, "rollbackNativeAgentHistory").mockResolvedValue({
+    conversationId: "conv-1",
+    currentTurnId: "turn-1",
+    rollbackSupported: false,
+    message: "已撤回到所选会话点；该操作不可撤销",
+  });
 
   renderSoloWorkbench(client, <div>chat</div>);
 
-  await user.click(screen.getByRole("tab", { name: "Git" }));
-  const diffButtons = await screen.findAllByLabelText("在编辑器打开 tracked.txt");
-  await user.click(diffButtons[0]);
-  expect(await screen.findByText(/staged diff/)).toBeInTheDocument();
-  await user.click(screen.getByRole("tab", { name: "Git" }));
-  const refreshedDiffButtons = await screen.findAllByLabelText("在编辑器打开 tracked.txt");
-  await user.click(refreshedDiffButtons[1]);
-  expect(await screen.findByText(/worktree diff/)).toBeInTheDocument();
+  await user.click(screen.getByRole("tab", { name: "会话变更" }));
+  await user.click(await screen.findByLabelText("选择第 1 轮"));
+  await user.click(await screen.findByRole("button", { name: "撤回到此轮" }));
 
-  const diffTabs = screen.getAllByRole("tab", { name: "tracked.txt.diff" });
-  expect(diffTabs).toHaveLength(2);
-  await user.click(diffTabs[0]);
-  expect(screen.getByText(/staged diff/)).toBeInTheDocument();
-  await user.click(diffTabs[1]);
-  expect(screen.getByText(/worktree diff/)).toBeInTheDocument();
+  expect(rollback).toHaveBeenCalledWith("main", { conversationId: "conv-1", targetTurnId: "turn-1" });
+  await waitFor(() => {
+    expect(screen.queryByLabelText("选择第 2 轮")).not.toBeInTheDocument();
+  });
+  expect(screen.queryByRole("button", { name: "撤回到此轮" })).not.toBeInTheDocument();
+  expect(screen.getByText("已撤回到所选会话点；该操作不可撤销")).toBeInTheDocument();
 });
 
 test("renders session info with short ids and basename only", () => {

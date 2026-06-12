@@ -63,6 +63,9 @@ import type {
   ChatTraceEvent,
   NativeAgentPermissionReplyOptions,
   NativeAgentConfigPayload,
+  NativeAgentHistoryChangesPayload,
+  NativeAgentHistoryDiffPayload,
+  NativeAgentHistoryRollbackResult,
   NativeAgentModelOption,
   NativeAgentPreflightResult,
   NativeAgentModelsPayload,
@@ -2705,7 +2708,7 @@ export class MockWebBotClient implements WebBotClient {
         model: "claude-sonnet-4-5",
         statusText: "上下文正常",
       },
-      workspaceHistoryHead: "head-1",
+      workspaceHistoryHead: `head-${linearIndex}`,
       linearIndex,
       rollbackSupported: true,
       degraded: false,
@@ -3837,6 +3840,71 @@ export class MockWebBotClient implements WebBotClient {
       processCount: 0,
       trace: [],
     };
+  }
+
+  async getNativeAgentHistoryChanges(
+    _botAlias: string,
+    input: { conversationId: string; turnId: string; agentId?: string },
+  ): Promise<NativeAgentHistoryChangesPayload> {
+    const linearIndex = this.inferHistoryLinearIndex(input.turnId);
+    const files = linearIndex === 1
+      ? [
+          { path: "smoke/history.txt", oldPath: "", status: "added", additions: 1, deletions: 0, binary: false },
+        ]
+      : linearIndex === 3
+        ? [
+            { path: "smoke/history.txt", oldPath: "", status: "deleted", additions: 0, deletions: 2, binary: false },
+          ]
+        : [
+            { path: "smoke/history.txt", oldPath: "", status: "modified", additions: 1, deletions: 0, binary: false },
+            { path: "smoke/new.txt", oldPath: "", status: "added", additions: 1, deletions: 0, binary: false },
+          ];
+    return {
+      conversationId: input.conversationId,
+      turnId: input.turnId,
+      linearIndex,
+      baseHead: linearIndex > 1 ? `head-${linearIndex - 1}` : "",
+      head: `head-${linearIndex}`,
+      files,
+    };
+  }
+
+  async getNativeAgentHistoryDiff(
+    _botAlias: string,
+    input: { conversationId: string; turnId: string; path: string; agentId?: string },
+  ): Promise<NativeAgentHistoryDiffPayload> {
+    const linearIndex = this.inferHistoryLinearIndex(input.turnId);
+    const deleted = linearIndex === 3;
+    return {
+      conversationId: input.conversationId,
+      turnId: input.turnId,
+      path: input.path,
+      oldPath: "",
+      status: deleted ? "deleted" : linearIndex === 1 ? "added" : "modified",
+      diff: deleted
+        ? `diff --git a/${input.path} b/${input.path}\n@@ -1,2 +0,0 @@\n-A\n-B`
+        : `diff --git a/${input.path} b/${input.path}\n@@ -1 +1,2 @@\n A\n+B`,
+      truncated: false,
+      binary: false,
+    };
+  }
+
+  async rollbackNativeAgentHistory(
+    _botAlias: string,
+    input: { conversationId: string; targetTurnId: string; agentId?: string },
+  ): Promise<NativeAgentHistoryRollbackResult> {
+    return {
+      conversationId: input.conversationId,
+      currentTurnId: input.targetTurnId,
+      rollbackSupported: false,
+      message: "已撤回到所选会话点；该操作不可撤销",
+    };
+  }
+
+  private inferHistoryLinearIndex(turnId: string) {
+    const match = String(turnId || "").match(/(\d+)$/);
+    const parsed = match ? Number(match[1]) : 1;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
   }
 
   async getDebugProfile(_botAlias: string): Promise<DebugProfile | null> {

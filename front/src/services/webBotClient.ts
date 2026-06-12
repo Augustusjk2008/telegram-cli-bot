@@ -101,6 +101,9 @@ import type {
   NativeAgentModelUpdateResult,
   NativeAgentModelUpdateOptions,
   NativeAgentModelsPayload,
+  NativeAgentHistoryChangesPayload,
+  NativeAgentHistoryDiffPayload,
+  NativeAgentHistoryRollbackResult,
   ChatSendOptions,
   ClusterConfigUpdateInput,
   ClusterConfigUpdateResult,
@@ -232,6 +235,18 @@ export interface WebBotClient {
   ): Promise<{ permissionId: string; approved: boolean }>;
   getNativeAgentModels(botAlias: string): Promise<NativeAgentModelsPayload>;
   updateNativeAgentModel(botAlias: string, model: string, options?: NativeAgentModelUpdateOptions): Promise<NativeAgentModelUpdateResult>;
+  getNativeAgentHistoryChanges(
+    botAlias: string,
+    input: { conversationId: string; turnId: string; agentId?: string },
+  ): Promise<NativeAgentHistoryChangesPayload>;
+  getNativeAgentHistoryDiff(
+    botAlias: string,
+    input: { conversationId: string; turnId: string; path: string; agentId?: string },
+  ): Promise<NativeAgentHistoryDiffPayload>;
+  rollbackNativeAgentHistory(
+    botAlias: string,
+    input: { conversationId: string; targetTurnId: string; agentId?: string },
+  ): Promise<NativeAgentHistoryRollbackResult>;
   getDebugProfile(botAlias: string): Promise<DebugProfile | null>;
   getDebugState(botAlias: string): Promise<DebugState>;
   getTerminalSession(ownerId: string): Promise<PersistentTerminalSnapshot>;

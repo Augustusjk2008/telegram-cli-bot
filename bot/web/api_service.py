@@ -145,6 +145,7 @@ from bot.native_agent.legacy_migration import (
 )
 from bot.native_agent.pi_rpc_preflight import PiWindowsPreflightRequest, run_pi_windows_preflight
 from bot.native_agent.pi_session_store import PiSessionStore, pi_session_key
+from bot.native_agent.shadow_git_history import ShadowGitHistory
 from bot.platform.output import strip_ansi_escape
 from bot.platform.processes import build_chat_cli_process_kwargs, build_hidden_process_kwargs, terminate_process_tree_sync
 from bot.platform.subprocess_streams import close_process_streams
@@ -165,6 +166,7 @@ from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenc
 from bot.web.chat_store import ChatStore
 from bot.web.cli_context_usage import resolve_cli_context_usage
 from bot.web.diagnostics import diag_log_event, diag_log_slow
+from bot.web.git_commit_message import truncate_diff_text
 from bot.web.native_history_adapter import create_stream_trace_state, consume_stream_trace_chunk
 from bot.web.native_history_locator import locate_kimi_transcript
 from bot.web.plan_mode import (
@@ -2677,6 +2679,116 @@ def get_history_trace(
     return data
 
 
+def _require_native_history_turn(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    *,
+    conversation_id: str,
+    turn_id: str,
+    agent_id: str = "main",
+) -> tuple[BotProfile, UserSession, ChatStore, dict[str, Any], dict[str, Any]]:
+    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    resolved_execution_mode = normalize_execution_mode(NATIVE_AGENT_PROVIDER, profile)
+    if resolved_execution_mode != NATIVE_AGENT_PROVIDER:
+        _raise(409, "native_agent_unavailable", "当前 Bot 未启用原生 agent")
+    normalized_conversation_id = str(conversation_id or "").strip()
+    normalized_turn_id = str(turn_id or "").strip()
+    if not normalized_conversation_id:
+        _raise(400, "missing_conversation_id", "缺少 conversation_id")
+    if not normalized_turn_id:
+        _raise(400, "missing_turn_id", "缺少 turn_id")
+
+    store = _get_chat_store(session)
+    try:
+        conversation = store.get_conversation(normalized_conversation_id)
+    except KeyError:
+        _raise(404, "conversation_not_found", "未找到会话")
+    if int(conversation.get("bot_id") or 0) != session.bot_id or int(conversation.get("user_id") or 0) != session.user_id:
+        _raise(404, "conversation_not_found", "未找到会话")
+    if str(conversation.get("agent_id") or "main") != session.agent_id:
+        _raise(404, "conversation_not_found", "未找到会话")
+    if str(conversation.get("working_dir") or "") != session.working_dir:
+        _raise(409, "conversation_workdir_mismatch", "会话工作目录和当前 Bot 不一致")
+    if str(conversation.get("archived_at") or "").strip():
+        _raise(404, "conversation_not_found", "未找到会话")
+    if str(conversation.get("native_provider") or "").strip().lower() != NATIVE_AGENT_PROVIDER:
+        _raise(409, "conversation_execution_mode_mismatch", "会话执行模式和当前选择不一致")
+
+    target = store.get_turn_workspace_history(normalized_turn_id)
+    if target is None or str(target.get("conversation_id") or "") != normalized_conversation_id:
+        _raise(404, "target_turn_not_found", "未找到目标会话点")
+    if str(target.get("discarded_at") or "").strip():
+        _raise(409, "target_turn_discarded", "目标会话点已被丢弃")
+    if not str(target.get("workspace_history_head") or "").strip():
+        _raise(409, "workspace_history_head_missing", "目标会话点没有工作区记录")
+    return profile, session, store, conversation, target
+
+
+def get_native_agent_history_changes(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    *,
+    conversation_id: str,
+    turn_id: str,
+    agent_id: str = "main",
+) -> dict[str, Any]:
+    _profile, session, _store, _conversation, target = _require_native_history_turn(
+        manager,
+        alias,
+        user_id,
+        conversation_id=conversation_id,
+        turn_id=turn_id,
+        agent_id=agent_id,
+    )
+    try:
+        data = ShadowGitHistory().changes(
+            cwd=session.working_dir,
+            conversation_id=str(conversation_id or "").strip(),
+            turn_id=str(turn_id or "").strip(),
+        )
+    except KeyError:
+        _raise(409, "workspace_history_record_missing", "本地工作区记录缺失，请重新开始会话")
+    data["linear_index"] = int(data.get("linear_index") or target.get("linear_index") or 0)
+    return data
+
+
+def get_native_agent_history_diff(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    *,
+    conversation_id: str,
+    turn_id: str,
+    path: str,
+    agent_id: str = "main",
+) -> dict[str, Any]:
+    _profile, session, _store, _conversation, _target = _require_native_history_turn(
+        manager,
+        alias,
+        user_id,
+        conversation_id=conversation_id,
+        turn_id=turn_id,
+        agent_id=agent_id,
+    )
+    try:
+        data = ShadowGitHistory().diff(
+            cwd=session.working_dir,
+            conversation_id=str(conversation_id or "").strip(),
+            turn_id=str(turn_id or "").strip(),
+            path=path,
+        )
+    except ValueError:
+        _raise(400, "invalid_path", "文件路径无效")
+    except KeyError:
+        _raise(400, "history_diff_path_invalid", "只能查看该轮会话变更内的文件 diff")
+    diff_text, truncated = truncate_diff_text(str(data.get("diff") or ""))
+    data["diff"] = diff_text
+    data["truncated"] = bool(truncated)
+    return data
+
+
 async def rollback_native_agent_history(
     manager: MultiBotManager,
     alias: str,
@@ -2728,6 +2840,8 @@ async def rollback_native_agent_history(
     pi_store = _pi_store()
     pi_key = _pi_key_for_session(session, normalized_conversation_id)
     record = pi_store.get(pi_key)
+    if record is None:
+        _raise(409, "workspace_history_record_missing", "本地工作区记录缺失，请重新开始会话")
     if record is not None and record.degraded:
         _raise(409, "workspace_history_degraded", record.degraded_reason or "workspace history 状态已降级")
     latest = store.latest_active_workspace_history(normalized_conversation_id)

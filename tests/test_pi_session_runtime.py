@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-import pytest
-
 from bot.native_agent.pi_session_runtime import (
     PiSessionRuntime,
     PiSessionRuntimeRequest,
@@ -93,47 +91,3 @@ def test_runtime_match_rejects_reasoning_effort_change():
         agent_id="reviewer",
         reasoning_effort="medium",
     )) is False
-
-
-@pytest.mark.asyncio
-async def test_runtime_routes_workspace_history_result_without_stream_competition():
-    client = FakeClient([
-        lambda current: {
-            "type": "workspace_history_result",
-            "id": str(current.sent[0]["id"]),
-            "head": "head-1",
-            "clean": True,
-            "manual_change_count": 0,
-        },
-        {"type": "message_update", "message": {"role": "assistant", "content": "ok"}},
-        {"type": "turn_end"},
-    ])
-    runtime = _runtime(client=client)
-
-    payload = await runtime.request_workspace_history({"action": "status"})
-    events = [event async for event in runtime.events()]
-
-    assert client.sent == [{"type": "workspace_history", "id": client.sent[0]["id"], "action": "status"}]
-    assert payload["head"] == "head-1"
-    assert [event["type"] for event in events] == ["message_update", "turn_end"]
-
-
-@pytest.mark.asyncio
-async def test_runtime_routes_workspace_history_response_error_without_timeout():
-    client = FakeClient([
-        {
-            "type": "response",
-            "command": "workspace_history",
-            "success": False,
-            "error": "Unknown command: workspace_history",
-        },
-        {"type": "message_update", "message": {"role": "assistant", "content": "ok"}},
-    ])
-    runtime = _runtime(client=client)
-
-    payload = await runtime.request_workspace_history({"action": "status"})
-    events = [event async for event in runtime.events()]
-
-    assert payload["ok"] is False
-    assert payload["error"] == "Unknown command: workspace_history"
-    assert [event["type"] for event in events] == ["message_update"]

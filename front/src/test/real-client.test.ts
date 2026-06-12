@@ -888,6 +888,71 @@ describe("RealWebBotClient", () => {
     expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/native-agent/preflight?cwd=C%3A%5Cworkspace&pi_command=C%3A%5CProgram+Files%5CPi%5Cpi.cmd");
   });
 
+  test("native agent history APIs map changes, diff and rollback payloads", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonOk({
+        conversation_id: "conv-1",
+        turn_id: "turn-2",
+        linear_index: 2,
+        base_head: "head-1",
+        head: "head-2",
+        files: [
+          {
+            path: "src/app.ts",
+            old_path: "",
+            status: "modified",
+            additions: 3,
+            deletions: 1,
+            binary: false,
+          },
+        ],
+      }))
+      .mockResolvedValueOnce(jsonOk({
+        conversation_id: "conv-1",
+        turn_id: "turn-2",
+        path: "src/app.ts",
+        old_path: "",
+        status: "modified",
+        diff: "diff --git\n+new",
+        truncated: true,
+        binary: false,
+      }))
+      .mockResolvedValueOnce(jsonOk({
+        conversation_id: "conv-1",
+        current_turn_id: "turn-1",
+        rollback_supported: false,
+        message: "已撤回到所选会话点；该操作不可撤销",
+      }));
+
+    const client = new RealWebBotClient();
+    const changes = await client.getNativeAgentHistoryChanges("main", { conversationId: "conv-1", turnId: "turn-2", agentId: "reviewer" });
+    const diff = await client.getNativeAgentHistoryDiff("main", { conversationId: "conv-1", turnId: "turn-2", path: "src/app.ts", agentId: "reviewer" });
+    const rollback = await client.rollbackNativeAgentHistory("main", { conversationId: "conv-1", targetTurnId: "turn-1", agentId: "reviewer" });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/bots/main/native-agent/history/changes?conversation_id=conv-1&turn_id=turn-2&agent_id=reviewer",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/bots/main/native-agent/history/diff?conversation_id=conv-1&turn_id=turn-2&path=src%2Fapp.ts&agent_id=reviewer",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/bots/main/native-agent/history/rollback",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ conversation_id: "conv-1", target_turn_id: "turn-1", agent_id: "reviewer" }),
+      }),
+    );
+    expect(changes.files[0]).toMatchObject({ path: "src/app.ts", additions: 3, deletions: 1 });
+    expect(diff.truncated).toBe(true);
+    expect(rollback.currentTurnId).toBe("turn-1");
+    expect(rollback.rollbackSupported).toBe(false);
+  });
+
   test("maps context_usage from history and stream done message", async () => {
     const encoder = new TextEncoder();
     fetchMock

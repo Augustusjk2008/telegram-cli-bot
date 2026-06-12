@@ -188,6 +188,8 @@ from .api_service import (
     get_file_browser_directory,
     get_history,
     get_history_delta,
+    get_native_agent_history_changes,
+    get_native_agent_history_diff,
     get_history_trace,
     rollback_native_agent_history,
     get_assistant_diagnostics,
@@ -3131,6 +3133,35 @@ class WebApiServer:
         agent_id = self._request_agent_id(request)
         execution_mode = self._request_execution_mode(request, include_body=False)
         return _json({"ok": True, "data": get_history_trace(self.manager, alias, self._chat_user_id(auth), message_id, agent_id=agent_id, execution_mode=execution_mode)})
+
+    async def get_native_agent_history_changes_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_VIEW_CHAT_HISTORY)
+        alias = self._manager_alias(request)
+        agent_id = self._request_agent_id(request)
+        data = get_native_agent_history_changes(
+            self.manager,
+            alias,
+            self._chat_user_id(auth),
+            conversation_id=str(request.query.get("conversation_id") or request.query.get("conversationId") or ""),
+            turn_id=str(request.query.get("turn_id") or request.query.get("turnId") or ""),
+            agent_id=agent_id,
+        )
+        return _json({"ok": True, "data": data})
+
+    async def get_native_agent_history_diff_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_VIEW_CHAT_HISTORY)
+        alias = self._manager_alias(request)
+        agent_id = self._request_agent_id(request)
+        data = get_native_agent_history_diff(
+            self.manager,
+            alias,
+            self._chat_user_id(auth),
+            conversation_id=str(request.query.get("conversation_id") or request.query.get("conversationId") or ""),
+            turn_id=str(request.query.get("turn_id") or request.query.get("turnId") or ""),
+            path=str(request.query.get("path") or ""),
+            agent_id=agent_id,
+        )
+        return _json({"ok": True, "data": data})
 
     async def post_native_agent_history_rollback_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_CHAT_SEND)

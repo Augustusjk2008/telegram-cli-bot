@@ -81,6 +81,7 @@ pwsh -ExecutionPolicy Bypass -File .release-local/publish-release.ps1 -Version <
 - 命令构造和 CLI 参数：`bot/cli.py`、`bot/cli_params.py`
 - 原生 agent 路径：`bot/native_agent/service.py`、`bot/native_agent/turn_state.py`、`bot/native_agent/ag_ui_mapper.py`
 - Pi 主链模块：`bot/native_agent/pi_rpc_client.py`、`bot/native_agent/pi_events.py`、`bot/native_agent/pi_session_runtime.py`、`bot/native_agent/pi_session_store.py`、`bot/native_agent/pi_workspace_history.py`、`bot/native_agent/pi_rpc_preflight.py`
+- Pi / `pi-workspace-history` 本地资料见 `docs/reference/pi/INDEX.md`；先查本地资料，除非需确认最新版。
 - 支持的 CLI 类型：`claude`、`codex`、`kimi`
 
 关键行为：
@@ -90,7 +91,7 @@ pwsh -ExecutionPolicy Bypass -File .release-local/publish-release.ps1 -Version <
 - Kimi 使用 streaming JSON，由 `parse_kimi_stream_json_output()` 解析
 - 长 Web 回复在 Web API 层 streaming 和 finalize
 - `execution_mode=native_agent` 使用 AG-UI 协议；普通 CLI legacy SSE 保持 `delta/status/trace/done`
-- Pi runtime 只允许 `pi_session_runtime.py` 单 reader 读取 `client.events()`；`workspace_history_result` 走 `request_workspace_history()` request/response 分发，禁止再在别处直接并发消费 stdout
+- Pi runtime 只允许 `pi_session_runtime.py` 单 reader 读取 `client.events()`；工作区历史由本地 shadow git 处理，不再依赖 Pi `workspace_history` RPC
 - Pi 会话绑定指纹固定为 `cwd + model_id + pi_agent + reasoning_effort`；任一项变化都要失效旧 session 和 workspace history rollback 链
 - 普通 CLI trace 只进入 `ChatTracePanel`；只有原生来源使用 `NativeAgentTranscript`
 - CLI SSE 的 `meta/status/trace/done` 顶层带 `turn_id`、`assistant_message_id`，用于前端稳定绑定当前轮

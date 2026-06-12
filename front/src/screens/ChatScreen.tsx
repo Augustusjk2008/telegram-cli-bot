@@ -3642,6 +3642,7 @@ export function ChatScreen({
     const contextUsage = latestNativeMeta?.contextUsage;
     const snapshot: SoloSessionSnapshot = {
       botAlias,
+      agentId: activeAgentId || "main",
       executionMode: "native_agent",
       conversationId: activeConversation?.id || "",
       conversationTitle: activeConversation?.title || "当前会话",
@@ -3660,6 +3661,7 @@ export function ChatScreen({
     botAlias,
     botOverview?.nativeAgent?.model,
     botOverview?.workingDir,
+    activeAgentId,
     conversations,
     effectiveExecutionMode,
     items,

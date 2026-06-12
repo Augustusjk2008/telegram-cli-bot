@@ -1,9 +1,8 @@
 import { clsx } from "clsx";
-import { FileText, GitBranch, GitCompare, Info, X } from "lucide-react";
+import { FileText, History, Info, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ViewMode } from "../app/layoutMode";
 import { FilePreviewSurface } from "../components/FilePreviewSurface";
-import { GitScreen } from "../screens/GitScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { FileReadResult } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
@@ -15,6 +14,7 @@ import {
   withDetectedPreviewKind,
 } from "../utils/filePreview";
 import { PaneResizer } from "./PaneResizer";
+import { SoloSessionChangesTab, type SoloSessionChangesClient } from "./SoloSessionChangesTab";
 import { SoloSessionInfoTab } from "./SoloSessionInfoTab";
 import type { SoloSessionSnapshot, SoloTab } from "./soloTypes";
 import { PANE_RESIZER_SIZE_PX, type ChatWorkbenchStatus, type WorkbenchProductMode } from "./workbenchTypes";
@@ -84,7 +84,7 @@ export function SoloWorkbench({
   const [isResizing, setIsResizing] = useState(false);
   const [tabs, setTabs] = useState<SoloTab[]>([
     { id: "session", kind: "session", title: "会话信息" },
-    { id: "git", kind: "git-status", title: "Git" },
+    { id: "changes", kind: "session-changes", title: "会话变更" },
   ]);
   const [activeTabId, setActiveTabId] = useState("session");
   const [previews, setPreviews] = useState<Record<string, PreviewState>>({});
@@ -137,9 +137,16 @@ export function SoloWorkbench({
     void loadPreview(nextPath, "preview");
   }, [loadPreview]);
 
-  const openGitDiffTab = useCallback(async (path: string, staged: boolean) => {
-    const diff = await client.getGitDiff(botAlias, path, staged);
-    const id = `git-diff:${staged ? "staged" : "worktree"}:${path}`;
+  const historyClient = client as WebBotClient & SoloSessionChangesClient;
+
+  const openSessionDiffTab = useCallback(async (turnId: string, path: string) => {
+    const diff = await historyClient.getNativeAgentHistoryDiff(botAlias, {
+      conversationId: sessionSnapshot?.conversationId || "",
+      turnId,
+      path,
+      ...(sessionSnapshot?.agentId && sessionSnapshot.agentId !== "main" ? { agentId: sessionSnapshot.agentId } : {}),
+    });
+    const id = `session-diff:${turnId}:${path}`;
     const title = `${basename(path)}.diff`;
     const diffText = diff.truncated && diff.diff
       ? `${diff.diff}\n\n...[diff truncated]`
@@ -147,10 +154,10 @@ export function SoloWorkbench({
     setTabs((current) => {
       const nextTab: SoloTab = {
         id,
-        kind: "git-diff",
+        kind: "session-diff",
         title,
         path,
-        staged,
+        turnId,
         diffText,
         readonly: true,
         truncated: diff.truncated,
@@ -162,12 +169,12 @@ export function SoloWorkbench({
       return current.map((tab) => (tab.id === id ? nextTab : tab));
     });
     setActiveTabId(id);
-  }, [botAlias, client]);
+  }, [botAlias, historyClient, sessionSnapshot?.agentId, sessionSnapshot?.conversationId]);
 
   useEffect(() => {
     setTabs([
       { id: "session", kind: "session", title: "会话信息" },
-      { id: "git", kind: "git-status", title: "Git" },
+      { id: "changes", kind: "session-changes", title: "会话变更" },
     ]);
     setActiveTabId("session");
     setPreviews({});
@@ -247,7 +254,7 @@ export function SoloWorkbench({
             <div className="flex min-w-0 items-center gap-1 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2 py-1.5" role="tablist" aria-label="Solo 标签">
               {tabs.map((tab) => {
                 const active = tab.id === activeTab.id;
-                const Icon = tab.kind === "session" ? Info : tab.kind === "git-status" ? GitBranch : tab.kind === "git-diff" ? GitCompare : FileText;
+                const Icon = tab.kind === "session" ? Info : tab.kind === "session-changes" ? History : FileText;
                 return (
                   <div key={tab.id} className="flex min-w-0 items-center">
                     <button
@@ -264,7 +271,7 @@ export function SoloWorkbench({
                       <Icon className="h-3.5 w-3.5 shrink-0" />
                       <span className="max-w-36 truncate">{tab.title}</span>
                     </button>
-                    {tab.kind !== "session" && tab.kind !== "git-status" ? (
+                    {tab.kind !== "session" && tab.kind !== "session-changes" ? (
                       <button
                         type="button"
                         aria-label={`关闭 ${tab.title}`}
@@ -285,12 +292,12 @@ export function SoloWorkbench({
             <div className="min-h-0 overflow-hidden">
               {activeTab.kind === "session" ? (
                 <SoloSessionInfoTab snapshot={sessionSnapshot} />
-              ) : activeTab.kind === "git-status" ? (
-                <GitScreen
+              ) : activeTab.kind === "session-changes" ? (
+                <SoloSessionChangesTab
                   botAlias={botAlias}
-                  client={client}
-                  embedded
-                  onOpenDiff={openGitDiffTab}
+                  client={historyClient}
+                  snapshot={sessionSnapshot}
+                  onOpenDiff={openSessionDiffTab}
                 />
               ) : activeTab.kind === "file-preview" ? (
                 <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]">

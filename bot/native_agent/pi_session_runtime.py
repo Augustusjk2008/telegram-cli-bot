@@ -47,7 +47,6 @@ class PiSessionRuntime:
         self.client = client
         self.state = state
         self._stream_queue: asyncio.Queue[dict[str, Any] | object] = asyncio.Queue()
-        self._workspace_requests: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._reader_task: asyncio.Task[None] | None = None
         self._reader_error: BaseException | None = None
         self._stream_closed = False
@@ -134,22 +133,6 @@ class PiSessionRuntime:
         self.state.pending_permission_ids.discard(normalized)
         return {"sent": True, "runtime_id": self.runtime_id}
 
-    async def request_workspace_history(self, fields: dict[str, Any]) -> dict[str, Any]:
-        self._ensure_reader()
-        request_id = str(fields.get("id") or f"wh_{uuid.uuid4().hex}").strip()
-        packet = {"type": "workspace_history", "id": request_id, **dict(fields)}
-        packet["id"] = request_id
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future[dict[str, Any]] = loop.create_future()
-        self._workspace_requests[request_id] = future
-        try:
-            await self.client.send(packet)
-        except Exception:
-            self._workspace_requests.pop(request_id, None)
-            future.cancel()
-            raise
-        return await future
-
     async def close(self) -> None:
         self.state.processing = False
         try:
@@ -171,62 +154,17 @@ class PiSessionRuntime:
     async def _reader_loop(self) -> None:
         try:
             async for event in self.client.events():
-                workspace_future = self._pop_workspace_history_request(event)
-                if workspace_future is not None:
-                    future, payload = workspace_future
-                    if future is not None and not future.done():
-                        future.set_result(payload)
-                    continue
                 await self._stream_queue.put(event)
         except Exception as exc:
             self._reader_error = exc
-            self._fail_workspace_requests(exc)
-        else:
-            self._fail_workspace_requests(RuntimeError("Pi runtime 已关闭"))
         finally:
             self._stream_closed = True
             self.state.processing = False
             await self._stream_queue.put(_STREAM_DONE)
 
-    def _fail_workspace_requests(self, exc: BaseException) -> None:
-        for request_id, future in list(self._workspace_requests.items()):
-            self._workspace_requests.pop(request_id, None)
-            if not future.done():
-                future.set_exception(exc)
-
-    def _pop_workspace_history_request(
-        self,
-        event: dict[str, Any] | object,
-    ) -> tuple[asyncio.Future[dict[str, Any]], dict[str, Any]] | None:
-        if not isinstance(event, dict):
-            return None
-        event_type = str(event.get("type") or "").strip()
-        if event_type == "workspace_history_result":
-            request_id = str(event.get("id") or "").strip()
-            future = self._workspace_requests.pop(request_id, None)
-            return (future, event) if future is not None else None
-        if event_type != "response":
-            return None
-        if str(event.get("command") or "").strip() != "workspace_history":
-            return None
-        request_id = str(event.get("id") or "").strip()
-        if request_id:
-            future = self._workspace_requests.pop(request_id, None)
-        elif len(self._workspace_requests) == 1:
-            _, future = self._workspace_requests.popitem()
-        else:
-            future = None
-        if future is None:
-            return None
-        payload = dict(event)
-        if payload.get("success") is False:
-            payload.setdefault("ok", False)
-        return future, payload
-
     async def _drain_reader(self) -> None:
         reader = self._reader_task
         if reader is None:
-            self._fail_workspace_requests(RuntimeError("Pi runtime 已关闭"))
             self._stream_closed = True
             return
         try:

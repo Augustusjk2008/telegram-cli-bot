@@ -29,6 +29,14 @@ def register(app: web.Application, server) -> None:
         "/api/bots/{alias}/native-agent/permissions/{permission_id}/reply",
         server.post_native_agent_permission_reply,
     )
+    app.router.add_get(
+        "/api/bots/{alias}/native-agent/history/changes",
+        server.get_native_agent_history_changes_view,
+    )
+    app.router.add_get(
+        "/api/bots/{alias}/native-agent/history/diff",
+        server.get_native_agent_history_diff_view,
+    )
     app.router.add_post(
         "/api/bots/{alias}/native-agent/history/rollback",
         server.post_native_agent_history_rollback_view,

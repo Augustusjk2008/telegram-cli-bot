@@ -1752,26 +1752,31 @@ async def test_native_agent_service_waits_after_pi_tool_use_turn_end_for_final_t
 async def test_native_agent_service_completed_turn_writes_workspace_history(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from bot import config
     from bot.native_agent.pi_session_store import PiSessionStore, pi_session_key
+    from bot.native_agent.pi_workspace_history import WorkspaceHistoryStatus
 
     monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    class SuccessfulWorkspaceHistory:
+        async def checkpoint(self, *_args, **_kwargs):
+            return WorkspaceHistoryStatus(head="head-before", clean=True, manual_change_count=0)
+
+        async def record_completed_turn(self, *_args, **_kwargs):
+            return WorkspaceHistoryStatus(head="head-after", clean=True, manual_change_count=0, linear_index=1)
+
     runtime = FakePiRuntime(
         [
             {"type": "agent_start", "sessionId": "sess-1"},
             {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "完成"}},
             {"type": "turn_end", "sessionId": "sess-1"},
         ],
-        workspace_results={
-            "status": [
-                {"head": "head-before", "clean": True, "manual_change_count": 0},
-                {"head": "head-after", "clean": True, "manual_change_count": 0},
-            ],
-        },
     )
     service = NativeAgentService()
     service._runtime_registry = FakePiRuntimeRegistry(runtime)
-    profile = BotProfile(alias="main", working_dir=str(tmp_path))
-    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
-    history = ChatHistoryService(ChatStore(tmp_path))
+    service._workspace_history = SuccessfulWorkspaceHistory()
+    profile = BotProfile(alias="main", working_dir=str(workspace))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(workspace))
+    history = ChatHistoryService(ChatStore(workspace))
 
     events = [
         event async for event in service.stream_chat(
@@ -1784,11 +1789,12 @@ async def test_native_agent_service_completed_turn_writes_workspace_history(tmp_
     ]
 
     done = next(event for event in events if event["type"] == "done")
-    assert [item["action"] for item in runtime.workspace_requests] == ["status", "status"]
-    assert done["message"]["meta"]["workspace_history_head"] == "head-after"
+    history_head = done["message"]["meta"]["workspace_history_head"]
+    assert runtime.workspace_requests == []
+    assert history_head == "head-after"
     assert done["message"]["meta"]["linear_index"] == 1
     assert done["message"]["meta"]["degraded"] is False
-    key = pi_session_key(cwd=str(tmp_path), bot_id=1, user_id=1, conversation_id=done["message"]["conversation_id"])
+    key = pi_session_key(cwd=str(workspace), bot_id=1, user_id=1, conversation_id=done["message"]["conversation_id"])
     record = PiSessionStore().get(key)
     assert record is not None
     assert record.linear_index == 1
@@ -1798,29 +1804,40 @@ async def test_native_agent_service_completed_turn_writes_workspace_history(tmp_
 
 
 @pytest.mark.asyncio
-async def test_native_agent_service_dirty_workspace_checkpoints_before_turn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+async def test_native_agent_service_snapshots_dirty_workspace_before_turn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from bot import config
+    from bot.native_agent.pi_workspace_history import WorkspaceHistoryStatus
 
     monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "secret.py").write_text("print(1)\n", encoding="utf-8")
+    class SuccessfulWorkspaceHistory:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def checkpoint(self, *_args, **_kwargs):
+            self.calls.append("checkpoint")
+            return WorkspaceHistoryStatus(head="head-before", clean=True, manual_change_count=0)
+
+        async def record_completed_turn(self, *_args, **_kwargs):
+            self.calls.append("record_completed_turn")
+            return WorkspaceHistoryStatus(head="head-after", clean=True, manual_change_count=0, linear_index=1)
+
+    workspace_history = SuccessfulWorkspaceHistory()
     runtime = FakePiRuntime(
         [
             {"type": "agent_start", "sessionId": "sess-1"},
             {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "完成"}},
             {"type": "turn_end", "sessionId": "sess-1"},
         ],
-        workspace_results={
-            "status": [
-                {"head": "head-before", "clean": False, "manual_change_count": 2, "changed_paths": ["secret.py"]},
-                {"head": "head-after", "clean": True, "manual_change_count": 0},
-            ],
-            "checkpoint": [{"head": "head-manual", "clean": True, "manual_change_count": 0}],
-        },
     )
     service = NativeAgentService()
     service._runtime_registry = FakePiRuntimeRegistry(runtime)
-    profile = BotProfile(alias="main", working_dir=str(tmp_path))
-    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
-    history = ChatHistoryService(ChatStore(tmp_path))
+    service._workspace_history = workspace_history
+    profile = BotProfile(alias="main", working_dir=str(workspace))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(workspace))
+    history = ChatHistoryService(ChatStore(workspace))
 
     events = [
         event async for event in service.stream_chat(
@@ -1832,7 +1849,10 @@ async def test_native_agent_service_dirty_workspace_checkpoints_before_turn(tmp_
         )
     ]
 
-    assert [item["action"] for item in runtime.workspace_requests] == ["status", "checkpoint", "status"]
+    done = next(event for event in events if event["type"] == "done")
+    assert runtime.workspace_requests == []
+    assert workspace_history.calls == ["checkpoint", "record_completed_turn"]
+    assert done["message"]["meta"]["workspace_history_head"] == "head-after"
     assert "changed_paths" not in json.dumps(events, ensure_ascii=False)
 
 
@@ -1842,33 +1862,32 @@ async def test_native_agent_service_workspace_history_timeout_marks_degraded_wit
     monkeypatch: pytest.MonkeyPatch,
 ):
     from bot import config
-    from bot.native_agent.pi_workspace_history import PiWorkspaceHistory
     from bot.native_agent.pi_session_store import PiSessionStore, pi_session_key
+    from bot.native_agent.pi_workspace_history import WorkspaceHistoryStatus
 
     monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
 
-    class SlowPostStatusRuntime(FakePiRuntime):
-        def __init__(self):
-            super().__init__([
-                {"type": "agent_start", "sessionId": "sess-1"},
-                {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "完成"}},
-                {"type": "turn_end", "sessionId": "sess-1"},
-            ], workspace_results={
-                "status": [
-                    {"head": "head-before", "clean": True, "manual_change_count": 0},
-                    {"head": "head-after", "clean": True, "manual_change_count": 0},
-                ],
-            })
+    class DegradedWorkspaceHistory:
+        async def checkpoint(self, *_args, **_kwargs):
+            return WorkspaceHistoryStatus(head="head-before", clean=True, manual_change_count=0)
 
-        async def request_workspace_history(self, fields: dict[str, object]) -> dict[str, object]:
-            if len(self.workspace_requests) >= 1 and str(fields.get("action") or "") == "status":
-                await asyncio.sleep(0.1)
-            return await super().request_workspace_history(fields)
+        async def record_completed_turn(self, *_args, **_kwargs):
+            return WorkspaceHistoryStatus(
+                head="",
+                clean=False,
+                manual_change_count=0,
+                degraded=True,
+                message="workspace history 响应超时",
+            )
 
-    runtime = SlowPostStatusRuntime()
+    runtime = FakePiRuntime([
+        {"type": "agent_start", "sessionId": "sess-1"},
+        {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "完成"}},
+        {"type": "turn_end", "sessionId": "sess-1"},
+    ])
     service = NativeAgentService()
     service._runtime_registry = FakePiRuntimeRegistry(runtime)
-    service._workspace_history = PiWorkspaceHistory(timeout_seconds=0.01)
+    service._workspace_history = DegradedWorkspaceHistory()
     profile = BotProfile(alias="main", working_dir=str(tmp_path))
     session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
     history = ChatHistoryService(ChatStore(tmp_path))

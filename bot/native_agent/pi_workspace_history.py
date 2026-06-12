@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-import uuid
+from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from typing import Any, Callable
+
+from bot.native_agent.shadow_git_history import ShadowGitHistory
+
+_LOCKS: dict[tuple[str, str], asyncio.Lock] = {}
+_LOCKS_GUARD = asyncio.Lock()
 
 
 @dataclass(frozen=True)
@@ -14,26 +20,102 @@ class WorkspaceHistoryStatus:
     degraded: bool = False
     message: str = ""
     locked_file_count: int = 0
+    linear_index: int = 0
 
 
 class PiWorkspaceHistory:
-    def __init__(self, *, timeout_seconds: float = 10.0) -> None:
+    def __init__(self, *, timeout_seconds: float = 10.0, shadow_history: ShadowGitHistory | None = None) -> None:
         self.timeout_seconds = max(0.1, float(timeout_seconds or 10.0))
+        self._shadow_history = shadow_history or ShadowGitHistory(timeout_seconds=self.timeout_seconds)
 
-    async def status(self, runtime: Any) -> WorkspaceHistoryStatus:
-        return await self._request(runtime, {"action": "status"})
+    async def status(
+        self,
+        runtime: Any,
+        *,
+        cwd: str | Path | None = None,
+        conversation_id: str = "",
+    ) -> WorkspaceHistoryStatus:
+        return await self._call_shadow(
+            runtime,
+            cwd,
+            conversation_id,
+            lambda resolved_cwd, resolved_conversation_id: self._shadow_history.status(
+                cwd=resolved_cwd,
+                conversation_id=resolved_conversation_id,
+            ),
+        )
 
-    async def checkpoint(self, runtime: Any, *, label: str) -> WorkspaceHistoryStatus:
-        return await self._request(runtime, {"action": "checkpoint", "label": str(label or "")})
+    async def checkpoint(
+        self,
+        runtime: Any,
+        *,
+        label: str,
+        cwd: str | Path | None = None,
+        conversation_id: str = "",
+    ) -> WorkspaceHistoryStatus:
+        return await self._call_shadow(
+            runtime,
+            cwd,
+            conversation_id,
+            lambda resolved_cwd, resolved_conversation_id: self._shadow_history.snapshot(
+                cwd=resolved_cwd,
+                conversation_id=resolved_conversation_id,
+                label=str(label or ""),
+            ),
+        )
 
-    async def rollback(self, runtime: Any, *, target_head: str) -> WorkspaceHistoryStatus:
-        return await self._request(runtime, {"action": "rollback", "target_head": str(target_head or "")})
+    async def record_completed_turn(
+        self,
+        runtime: Any,
+        *,
+        turn_id: str,
+        before_head: str,
+        pi_session_id: str = "",
+        cwd: str | Path | None = None,
+        conversation_id: str = "",
+    ) -> WorkspaceHistoryStatus:
+        return await self._call_shadow(
+            runtime,
+            cwd,
+            conversation_id,
+            lambda resolved_cwd, resolved_conversation_id: self._shadow_history.record_completed_turn(
+                cwd=resolved_cwd,
+                conversation_id=resolved_conversation_id,
+                turn_id=turn_id,
+                before_head=before_head,
+                pi_session_id=pi_session_id,
+            ),
+        )
 
-    async def _request(self, runtime: Any, fields: dict[str, Any]) -> WorkspaceHistoryStatus:
+    async def rollback(
+        self,
+        runtime: Any,
+        *,
+        target_head: str,
+        cwd: str | Path | None = None,
+        conversation_id: str = "",
+    ) -> WorkspaceHistoryStatus:
+        return await self._call_shadow(
+            runtime,
+            cwd,
+            conversation_id,
+            lambda resolved_cwd, resolved_conversation_id: self._shadow_history.rollback(
+                cwd=resolved_cwd,
+                conversation_id=resolved_conversation_id,
+                target_head=str(target_head or ""),
+            ),
+        )
+
+    async def _call_shadow(
+        self,
+        runtime: Any,
+        cwd: str | Path | None,
+        conversation_id: str,
+        callback: Callable[[Path, str], Any],
+    ) -> WorkspaceHistoryStatus:
         try:
-            payload = await asyncio.wait_for(self._request_payload(runtime, fields), timeout=self.timeout_seconds)
-        except (TimeoutError, asyncio.TimeoutError):
-            return WorkspaceHistoryStatus(head="", clean=False, manual_change_count=0, degraded=True, message="workspace history 响应超时")
+            resolved_cwd = self._resolve_cwd(runtime, cwd)
+            resolved_conversation_id = self._resolve_conversation_id(runtime, conversation_id)
         except Exception as exc:
             return WorkspaceHistoryStatus(
                 head="",
@@ -42,89 +124,66 @@ class PiWorkspaceHistory:
                 degraded=True,
                 message=_safe_message(str(exc) or "", default="workspace history 不可用"),
             )
-        return self._status_from_payload(payload)
-
-    async def _request_payload(self, runtime: Any, fields: dict[str, Any]) -> dict[str, Any]:
-        request = getattr(runtime, "request_workspace_history", None)
-        if callable(request):
-            return await request(dict(fields))
-        request_id = f"wh_{uuid.uuid4().hex}"
-        packet = {"type": "workspace_history", "id": request_id, **fields}
-        await self._send(runtime, packet)
-        return await self._wait_result(runtime, request_id)
-
-    async def _send(self, runtime: Any, packet: dict[str, Any]) -> None:
-        send = getattr(runtime, "send", None)
-        if callable(send):
-            await send(packet)
-            return
-        client = getattr(runtime, "client", None)
-        client_send = getattr(client, "send", None)
-        if callable(client_send):
-            await client_send(packet)
-            return
-        raise RuntimeError("Pi workspace history 插件不可用")
-
-    async def _wait_result(self, runtime: Any, request_id: str) -> dict[str, Any]:
-        events = runtime.events()
+        lock = await _lock_for(resolved_cwd, resolved_conversation_id)
+        await lock.acquire()
+        task = asyncio.create_task(asyncio.to_thread(callback, resolved_cwd, resolved_conversation_id))
+        release_in_finally = True
         try:
-            async for event in events:
-                if not isinstance(event, dict):
-                    continue
-                if str(event.get("type") or "") != "workspace_history_result":
-                    continue
-                if str(event.get("id") or "") != request_id:
-                    continue
-                return event
-        finally:
-            close = getattr(events, "aclose", None)
-            if callable(close):
-                await close()
-        raise RuntimeError("Pi workspace history 无响应")
-
-    def _status_from_payload(self, payload: dict[str, Any]) -> WorkspaceHistoryStatus:
-        if bool(payload.get("ok", True)) is False or payload.get("error"):
-            error = payload.get("error")
-            message = ""
-            if isinstance(error, dict):
-                message = str(error.get("message") or error.get("code") or "")
-            else:
-                message = str(error or "")
+            status = await asyncio.wait_for(asyncio.shield(task), timeout=self.timeout_seconds)
+        except (TimeoutError, asyncio.TimeoutError):
+            release_in_finally = False
+            task.add_done_callback(lambda done: _release_lock_after_done(done, lock))
             return WorkspaceHistoryStatus(
-                head=str(payload.get("head") or payload.get("current_head") or ""),
+                head="",
                 clean=False,
-                manual_change_count=_count_value(payload, "manual_change_count", "changed_file_count", "changed_count", "changed_paths", "changed_files", "manual_changes"),
+                manual_change_count=0,
                 degraded=True,
-                message=_safe_message(message or str(payload.get("message") or ""), default="workspace history 执行失败"),
-                locked_file_count=_count_value(payload, "locked_file_count", "locked_count", "locked_files"),
+                message="workspace history 响应超时",
             )
-
-        head = str(payload.get("head") or payload.get("current_head") or payload.get("target_head") or "")
-        count = _count_value(payload, "manual_change_count", "changed_file_count", "changed_count", "changed_paths", "changed_files", "manual_changes")
-        clean = bool(payload.get("clean", count == 0))
+        except Exception as exc:
+            return WorkspaceHistoryStatus(
+                head="",
+                clean=False,
+                manual_change_count=0,
+                degraded=True,
+                message=_safe_message(str(exc) or "", default="workspace history 不可用"),
+            )
+        finally:
+            if release_in_finally and lock.locked():
+                lock.release()
         return WorkspaceHistoryStatus(
-            head=head,
-            clean=clean,
-            manual_change_count=count,
-            degraded=bool(payload.get("degraded", False)),
-            message=_safe_message(str(payload.get("message") or ""), default=""),
-            locked_file_count=_count_value(payload, "locked_file_count", "locked_count", "locked_files"),
+            head=str(getattr(status, "head", "") or ""),
+            clean=bool(getattr(status, "clean", False)),
+            manual_change_count=max(0, int(getattr(status, "manual_change_count", 0) or 0)),
+            degraded=bool(getattr(status, "degraded", False)),
+            message=_safe_message(str(getattr(status, "message", "") or ""), default=""),
+            locked_file_count=max(0, int(getattr(status, "locked_file_count", 0) or 0)),
+            linear_index=max(0, int(getattr(status, "linear_index", 0) or 0)),
         )
 
+    def _resolve_cwd(self, runtime: Any, cwd: str | Path | None) -> Path:
+        if cwd is not None and str(cwd or "").strip():
+            return Path(cwd).expanduser().resolve()
+        state = getattr(runtime, "state", None)
+        for value in (
+            getattr(state, "cwd", None),
+            getattr(runtime, "cwd", None),
+        ):
+            if value:
+                return Path(str(value)).expanduser().resolve()
+        raise ValueError("workspace cwd is required")
 
-def _count_value(payload: dict[str, Any], *keys: str) -> int:
-    for key in keys:
-        value = payload.get(key)
-        if isinstance(value, int):
-            return max(0, value)
-        if isinstance(value, list):
-            return len(value)
-        try:
-            if value is not None:
-                return max(0, int(value))
-        except (TypeError, ValueError):
-            continue
-    return 0
+    def _resolve_conversation_id(self, runtime: Any, conversation_id: str) -> str:
+        if str(conversation_id or "").strip():
+            return str(conversation_id or "").strip()
+        state = getattr(runtime, "state", None)
+        for value in (
+            getattr(state, "conversation_id", None),
+            getattr(runtime, "conversation_id", None),
+        ):
+            if str(value or "").strip():
+                return str(value or "").strip()
+        raise ValueError("conversation_id is required")
 
 
 def _safe_message(message: str, *, default: str) -> str:
@@ -136,4 +195,21 @@ def _safe_message(message: str, *, default: str) -> str:
         return default
     if ":\\" in text or ":/" in text or "\\\\" in text:
         return default
-    return text
+    return text[:240]
+
+
+async def _lock_for(cwd: Path, conversation_id: str) -> asyncio.Lock:
+    key = (str(cwd), str(conversation_id or "").strip())
+    async with _LOCKS_GUARD:
+        lock = _LOCKS.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _LOCKS[key] = lock
+        return lock
+
+
+def _release_lock_after_done(task: asyncio.Task[Any], lock: asyncio.Lock) -> None:
+    with suppress(BaseException):
+        task.exception()
+    if lock.locked():
+        lock.release()
