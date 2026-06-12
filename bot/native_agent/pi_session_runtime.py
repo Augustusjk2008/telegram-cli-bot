@@ -171,15 +171,12 @@ class PiSessionRuntime:
     async def _reader_loop(self) -> None:
         try:
             async for event in self.client.events():
-                if (
-                    isinstance(event, dict)
-                    and str(event.get("type") or "") == "workspace_history_result"
-                ):
-                    request_id = str(event.get("id") or "").strip()
-                    future = self._workspace_requests.pop(request_id, None)
+                workspace_future = self._pop_workspace_history_request(event)
+                if workspace_future is not None:
+                    future, payload = workspace_future
                     if future is not None and not future.done():
-                        future.set_result(event)
-                        continue
+                        future.set_result(payload)
+                    continue
                 await self._stream_queue.put(event)
         except Exception as exc:
             self._reader_error = exc
@@ -196,6 +193,35 @@ class PiSessionRuntime:
             self._workspace_requests.pop(request_id, None)
             if not future.done():
                 future.set_exception(exc)
+
+    def _pop_workspace_history_request(
+        self,
+        event: dict[str, Any] | object,
+    ) -> tuple[asyncio.Future[dict[str, Any]], dict[str, Any]] | None:
+        if not isinstance(event, dict):
+            return None
+        event_type = str(event.get("type") or "").strip()
+        if event_type == "workspace_history_result":
+            request_id = str(event.get("id") or "").strip()
+            future = self._workspace_requests.pop(request_id, None)
+            return (future, event) if future is not None else None
+        if event_type != "response":
+            return None
+        if str(event.get("command") or "").strip() != "workspace_history":
+            return None
+        request_id = str(event.get("id") or "").strip()
+        if request_id:
+            future = self._workspace_requests.pop(request_id, None)
+        elif len(self._workspace_requests) == 1:
+            _, future = self._workspace_requests.popitem()
+        else:
+            future = None
+        if future is None:
+            return None
+        payload = dict(event)
+        if payload.get("success") is False:
+            payload.setdefault("ok", False)
+        return future, payload
 
     async def _drain_reader(self) -> None:
         reader = self._reader_task

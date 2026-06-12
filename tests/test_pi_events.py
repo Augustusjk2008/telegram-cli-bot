@@ -63,6 +63,45 @@ def test_pi_events_maps_full_text_without_duplicate_delta() -> None:
     assert aggregator.text() == "你好！"
 
 
+def test_pi_events_maps_assistant_stop_error_to_native_error() -> None:
+    raw = {
+        "type": "message_start",
+        "message": {
+            "role": "assistant",
+            "content": [],
+            "stopReason": "error",
+            "errorMessage": "403 Your request was blocked.",
+        },
+    }
+
+    [mapped] = pi_json_to_events(raw, cwd="/repo", fallback_session_id="sess-1", assistant_message_id="msg-1")
+    event = unwrap_event(mapped)
+    assert event is not None
+
+    result = NativeAgentAggregator(user_message_id="user-1").apply(event)
+
+    assert mapped["payload"]["type"] == "message.updated"
+    assert mapped["payload"]["message"]["state"] == "error"
+    assert result.error == "403 Your request was blocked."
+
+
+def test_pi_events_maps_turn_end_error_without_message_end() -> None:
+    raw = {
+        "type": "turn_end",
+        "message": {
+            "role": "assistant",
+            "content": [],
+            "stopReason": "error",
+            "errorMessage": "403 Your request was blocked.",
+        },
+    }
+
+    [payload] = _payloads(raw, cwd="/repo", fallback_session_id="sess-1", assistant_message_id="msg-1")
+
+    assert payload["type"] == "session.error"
+    assert payload["error"] == "403 Your request was blocked."
+
+
 def test_pi_events_maps_tool_lifecycle_to_single_tool_part() -> None:
     raw_events = [
         {

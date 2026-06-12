@@ -116,3 +116,24 @@ async def test_runtime_routes_workspace_history_result_without_stream_competitio
     assert client.sent == [{"type": "workspace_history", "id": client.sent[0]["id"], "action": "status"}]
     assert payload["head"] == "head-1"
     assert [event["type"] for event in events] == ["message_update", "turn_end"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_routes_workspace_history_response_error_without_timeout():
+    client = FakeClient([
+        {
+            "type": "response",
+            "command": "workspace_history",
+            "success": False,
+            "error": "Unknown command: workspace_history",
+        },
+        {"type": "message_update", "message": {"role": "assistant", "content": "ok"}},
+    ])
+    runtime = _runtime(client=client)
+
+    payload = await runtime.request_workspace_history({"action": "status"})
+    events = [event async for event in runtime.events()]
+
+    assert payload["ok"] is False
+    assert payload["error"] == "Unknown command: workspace_history"
+    assert [event["type"] for event in events] == ["message_update"]

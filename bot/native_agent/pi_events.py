@@ -29,12 +29,15 @@ def pi_json_to_events(
     if raw_type == "message_start":
         if _is_non_assistant_role(raw):
             return []
+        error = _message_error_text(raw)
         message = {
             "id": message_id,
             "role": "assistant",
             "sessionID": session_id,
-            "state": "running",
+            "state": "error" if error else "running",
         }
+        if error:
+            message["error"] = error
         return [_wrap_event("message.updated", raw, session_id=session_id, directory=directory, message_id=message_id, message=message)]
 
     if raw_type == "message_update":
@@ -71,13 +74,17 @@ def pi_json_to_events(
     if raw_type == "message_end":
         if _is_non_assistant_role(raw):
             return []
+        error = _message_error_text(raw)
         message = {
             "id": message_id,
             "role": "assistant",
             "sessionID": session_id,
-            "finish": _finish_reason(raw) or "stop",
+            "finish": _finish_reason(raw) or ("error" if error else "stop"),
             "time": {"completed": raw.get("completed_at") or raw.get("completedAt") or True},
         }
+        if error:
+            message["state"] = "error"
+            message["error"] = error
         return [_wrap_event("message.updated", raw, session_id=session_id, directory=directory, message_id=message_id, message=message)]
 
     if raw_type in {"tool_execution_start", "tool_execution_update", "tool_execution_end"}:
@@ -99,7 +106,19 @@ def pi_json_to_events(
             )
         ]
 
-    if raw_type == "turn_end":
+    if raw_type in {"agent_end", "turn_end"}:
+        error = _message_error_text(raw)
+        if error:
+            return [
+                _wrap_event(
+                    "session.error",
+                    raw,
+                    session_id=session_id,
+                    directory=directory,
+                    message_id=message_id,
+                    error=error,
+                )
+            ]
         return [_wrap_event("session.idle", raw, session_id=session_id, directory=directory, message_id=message_id)]
 
     if raw_type == "diagnostic":
@@ -413,10 +432,20 @@ def _status_text(raw: dict[str, Any]) -> str:
 
 def _finish_reason(raw: dict[str, Any]) -> str:
     for record in _candidate_records(raw):
-        for key in ("finish", "finish_reason", "finishReason", "reason"):
+        for key in ("finish", "finish_reason", "finishReason", "stopReason", "stop_reason", "reason"):
             value = record.get(key)
             if value:
                 return str(value).strip()
+    return ""
+
+
+def _message_error_text(raw: dict[str, Any]) -> str:
+    error = _value_text(_first_present(raw, "error", "errorMessage", "error_message"))
+    if error:
+        return error
+    finish = _finish_reason(raw).strip().lower()
+    if finish in {"error", "failed", "failure"}:
+        return "Pi agent 执行失败"
     return ""
 
 
