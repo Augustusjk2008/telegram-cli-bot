@@ -1380,10 +1380,11 @@ def test_normalize_execution_mode_uses_profile_default_for_pure_native_bot():
     assert normalize_execution_mode("", profile) == "native_agent"
 
 
-def test_native_agent_global_config_requires_provider_when_model_has_no_provider(monkeypatch: pytest.MonkeyPatch):
+def test_native_agent_global_config_requires_provider_when_model_has_no_provider(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from bot import config
     from bot.native_agent.configuration import global_native_agent_config, validate_native_agent_model_config
 
+    monkeypatch.setenv("PI_AGENT_SETTINGS", str(tmp_path / "settings.json"))
     monkeypatch.setattr(config, "NATIVE_AGENT_PROVIDER", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_MODEL", "gpt-5.4")
     monkeypatch.setattr(config, "NATIVE_AGENT_BASE_URL", "https://jojocode.com/v1")
@@ -1395,10 +1396,11 @@ def test_native_agent_global_config_requires_provider_when_model_has_no_provider
         validate_native_agent_model_config(global_native_agent_config())
 
 
-def test_native_agent_global_config_splits_provider_from_model(monkeypatch: pytest.MonkeyPatch):
+def test_native_agent_global_config_splits_provider_from_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from bot import config
     from bot.native_agent.configuration import global_native_agent_config, validate_native_agent_model_config
 
+    monkeypatch.setenv("PI_AGENT_SETTINGS", str(tmp_path / "settings.json"))
     monkeypatch.setattr(config, "NATIVE_AGENT_PROVIDER", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_MODEL", "jojocode/gpt-5.4")
     monkeypatch.setattr(config, "NATIVE_AGENT_BASE_URL", "https://jojocode.com/v1")

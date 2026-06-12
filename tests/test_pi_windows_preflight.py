@@ -25,6 +25,7 @@ def _runner(stdout: str = "v22.0.0\n", returncode: int = 0):
 
 
 def _request(tmp_path: Path, **kwargs: Any) -> PiWindowsPreflightRequest:
+    kwargs.setdefault("settings_path", tmp_path / "missing-settings.json")
     return PiWindowsPreflightRequest(cwd=tmp_path, data_dir=tmp_path / "data", **kwargs)
 
 

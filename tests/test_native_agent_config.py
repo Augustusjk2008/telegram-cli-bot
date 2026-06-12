@@ -186,6 +186,40 @@ def test_effective_native_agent_config_defaults_to_first_reasoning_effort(
     assert native_agent["reasoning_effort"] == "low"
 
 
+def test_effective_native_agent_config_ignores_stale_env_model_when_pi_settings_has_models(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bot import config
+    from bot.native_agent.configuration import effective_native_agent_config
+
+    settings_path = tmp_path / "settings.json"
+    monkeypatch.setenv("PI_AGENT_SETTINGS", str(settings_path))
+    config_store.save_native_agent_config({
+        "provider": {
+            "jojocode": {
+                "models": {
+                    "gpt-5.4": {"name": "gpt-5.4"}
+                }
+            }
+        },
+        "workspace_history_enabled": True,
+    })
+    monkeypatch.setattr(config, "NATIVE_AGENT_PROVIDER", "jojocode_max")
+    monkeypatch.setattr(config, "NATIVE_AGENT_MODEL", "gpt-5.4")
+    monkeypatch.setattr(config, "NATIVE_AGENT_BASE_URL", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_API_KEY", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PI_AGENT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PI_COMMAND", "pi")
+    monkeypatch.setattr(config, "NATIVE_AGENT_WORKSPACE_HISTORY_ENABLED", True)
+    monkeypatch.setattr(config, "NATIVE_AGENT_REASONING_EFFORT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_THINKING_DEPTH", "")
+
+    native_agent = effective_native_agent_config({})
+
+    assert native_agent["model"] == "jojocode/gpt-5.4"
+
+
 @pytest.mark.parametrize(
     "config, message",
     [
