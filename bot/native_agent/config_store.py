@@ -18,31 +18,47 @@ def get_pi_settings_path() -> Path:
     return Path.home() / ".pi" / "agent" / "settings.json"
 
 
+def get_pi_models_path() -> Path:
+    override = os.environ.get("PI_AGENT_MODELS")
+    if override:
+        return Path(override).expanduser()
+    settings_override = os.environ.get("PI_AGENT_SETTINGS")
+    if settings_override:
+        return Path(settings_override).expanduser().with_name("models.json")
+    return get_pi_settings_path().with_name("models.json")
+
+
 def load_native_agent_config() -> dict[str, Any]:
-    source_path = get_pi_settings_path()
-    try:
-        payload = json.loads(source_path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return _default_config()
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"原生 Agent 配置不是有效 JSON: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise ValueError("原生 Agent 配置必须是 JSON 对象")
-    return normalize_native_agent_config_document(payload)
+    settings_payload = _read_json_object(get_pi_settings_path(), "原生 Agent 配置", default=_default_config())
+    models_payload = _read_json_object(get_pi_models_path(), "Pi models.json", default={})
+    if not _has_pi_models(models_payload):
+        migrated_models = _models_config_from_native(settings_payload)
+        if _has_pi_models(migrated_models):
+            models_payload = migrated_models
+            _write_json(get_pi_models_path(), models_payload)
+    return normalize_native_agent_config_document(_merge_settings_and_models(settings_payload, models_payload))
 
 
 def save_native_agent_config(config: dict[str, Any]) -> dict[str, Any]:
     normalized = normalize_native_agent_config_document(config)
     settings_path = get_pi_settings_path()
-    _write_json(settings_path, normalized)
+    models_path = get_pi_models_path()
+    existing_settings = _read_json_object(settings_path, "原生 Agent 配置", default={})
+    settings_payload = _settings_document_from_config(normalized, existing=existing_settings)
+    models_payload = _models_config_from_native(normalized)
+    _write_json(settings_path, settings_payload)
+    if _has_model_source(normalized) or _has_pi_models(models_payload):
+        _write_json(models_path, models_payload)
+    combined = normalize_native_agent_config_document(_merge_settings_and_models(settings_payload, models_payload))
     return {
-        "config": normalized,
+        "config": combined,
         "backend": "pi",
         "config_path": str(settings_path),
-        "workspace_history_enabled": bool(normalized.get("workspace_history_enabled", True)),
-        "models": list_configured_models(normalized),
-        "selected_model": str(normalized.get("model") or "").strip(),
-        "selected_reasoning_effort": str(normalized.get("reasoning_effort") or "").strip(),
+        "models_path": str(models_path),
+        "workspace_history_enabled": bool(combined.get("workspace_history_enabled", True)),
+        "models": list_configured_models(combined),
+        "selected_model": str(combined.get("model") or "").strip(),
+        "selected_reasoning_effort": str(combined.get("reasoning_effort") or "").strip(),
         "needs_restart": True,
     }
 
@@ -52,6 +68,11 @@ def list_configured_models(config: dict[str, Any] | None = None) -> list[dict[st
         load_native_agent_config() if config is None else config,
         validate_limits=False,
     )
+    providers = payload.get("providers")
+    if isinstance(providers, dict):
+        items = _list_models_from_pi_providers(providers)
+        if items:
+            return items
     direct_models = payload.get("models")
     if isinstance(direct_models, list):
         items: list[dict[str, Any]] = []
@@ -174,6 +195,31 @@ def normalize_native_agent_config_document(
         *LEGACY_NATIVE_AGENT_DOCUMENT_KEYS,
     ):
         payload.pop(legacy_key, None)
+    pi_providers = payload.get("providers")
+    if pi_providers is not None:
+        if not isinstance(pi_providers, dict):
+            raise ValueError("providers 必须是对象")
+        for provider_id, provider_config in pi_providers.items():
+            provider = str(provider_id or "").strip()
+            if not provider:
+                raise ValueError("providers 的 provider id 不能为空")
+            if not isinstance(provider_config, dict):
+                raise ValueError(f"providers.{provider} 必须是对象")
+            models = provider_config.get("models")
+            if models is None:
+                continue
+            if not isinstance(models, list):
+                raise ValueError(f"providers.{provider}.models 必须是数组")
+            for index, model_config in enumerate(models):
+                if not isinstance(model_config, dict):
+                    raise ValueError(f"providers.{provider}.models[{index}] 必须是对象")
+                model = str(model_config.get("id") or "").strip()
+                if not model:
+                    raise ValueError(f"providers.{provider}.models[{index}].id 不能为空")
+                if validate_limits:
+                    for key, field in (("contextWindow", "contextWindow"), ("maxTokens", "maxTokens")):
+                        if key in model_config and model_config.get(key) is not None:
+                            _require_positive_int(model_config.get(key), f"providers.{provider}.models[{index}].{field}")
     providers = payload.get("provider")
     if providers is None:
         return payload
@@ -220,6 +266,231 @@ def _default_config() -> dict[str, Any]:
     }
 
 
+def _read_json_object(path: Path, label: str, *, default: dict[str, Any]) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return dict(default)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{label}不是有效 JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"{label}必须是 JSON 对象")
+    return payload
+
+
+def _merge_settings_and_models(settings: dict[str, Any], models_config: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(settings)
+    if _has_pi_models(models_config):
+        merged["providers"] = dict(models_config.get("providers") or {})
+    return merged
+
+
+def _settings_document_from_config(config: dict[str, Any], *, existing: dict[str, Any]) -> dict[str, Any]:
+    result = {
+        key: value
+        for key, value in dict(existing or {}).items()
+        if key not in {"provider", "providers", "models", "selected_model", "selectedModel"}
+    }
+    for key in (
+        "backend",
+        "model",
+        "reasoning_effort",
+        "pi_agent",
+        "pi_command",
+        "workspace_history_enabled",
+        "thinking_depth",
+        "shellPath",
+        "shell_path",
+    ):
+        if key in config:
+            value = config.get(key)
+            if value is not None:
+                result[key] = value
+    result["backend"] = "pi"
+    result.setdefault("workspace_history_enabled", True)
+    return result
+
+
+def _has_model_source(config: dict[str, Any]) -> bool:
+    return any(isinstance(config.get(key), expected) for key, expected in (
+        ("providers", dict),
+        ("provider", dict),
+        ("models", list),
+    ))
+
+
+def _has_pi_models(config: dict[str, Any]) -> bool:
+    providers = config.get("providers")
+    return isinstance(providers, dict) and bool(providers)
+
+
+def _models_config_from_native(config: dict[str, Any]) -> dict[str, Any]:
+    providers = config.get("providers")
+    if isinstance(providers, dict):
+        return {"providers": _copy_pi_providers(providers)}
+    legacy_providers = config.get("provider")
+    if isinstance(legacy_providers, dict):
+        return {"providers": _legacy_providers_to_pi(legacy_providers)}
+    direct_models = config.get("models")
+    if isinstance(direct_models, list):
+        return {"providers": _direct_models_to_pi(direct_models)}
+    return {"providers": {}}
+
+
+def _copy_pi_providers(providers: dict[str, Any]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for provider_id, provider_config in providers.items():
+        provider = str(provider_id or "").strip()
+        if provider and isinstance(provider_config, dict):
+            result[provider] = json.loads(json.dumps(provider_config, ensure_ascii=False))
+    return result
+
+
+def _legacy_providers_to_pi(providers: dict[str, Any]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for provider_id, provider_config in providers.items():
+        provider = str(provider_id or "").strip()
+        if not provider or not isinstance(provider_config, dict):
+            continue
+        options = provider_config.get("options") if isinstance(provider_config.get("options"), dict) else {}
+        converted: dict[str, Any] = {}
+        base_url = (
+            provider_config.get("baseUrl")
+            or provider_config.get("baseURL")
+            or provider_config.get("base_url")
+            or options.get("baseUrl")
+            or options.get("baseURL")
+            or options.get("base_url")
+        )
+        api_key = (
+            provider_config.get("apiKey")
+            or provider_config.get("api_key")
+            or options.get("apiKey")
+            or options.get("api_key")
+        )
+        api = provider_config.get("api") or options.get("api")
+        if base_url:
+            converted["baseUrl"] = str(base_url).strip().rstrip("/")
+        if api_key:
+            converted["apiKey"] = str(api_key).strip()
+        if api:
+            converted["api"] = str(api).strip()
+        elif converted.get("baseUrl") or converted.get("apiKey"):
+            converted["api"] = "openai-completions"
+        models = provider_config.get("models")
+        converted_models: list[dict[str, Any]] = []
+        if isinstance(models, dict):
+            for model_id, model_config in models.items():
+                if isinstance(model_config, dict):
+                    converted_models.append(_legacy_model_to_pi(str(model_id or "").strip(), model_config))
+        if converted_models:
+            converted["models"] = converted_models
+        if converted:
+            result[provider] = converted
+    return result
+
+
+def _direct_models_to_pi(models: list[Any]) -> dict[str, Any]:
+    providers: dict[str, Any] = {}
+    for raw_item in models:
+        if not isinstance(raw_item, dict):
+            continue
+        item_id = str(raw_item.get("id") or "").strip()
+        provider = str(raw_item.get("provider") or (item_id.split("/", 1)[0] if "/" in item_id else "")).strip()
+        model = str(raw_item.get("model") or (item_id.split("/", 1)[1] if "/" in item_id else "")).strip()
+        if not provider or not model:
+            continue
+        providers.setdefault(provider, {"models": []})
+        providers[provider]["models"].append(_direct_model_to_pi(model, raw_item))
+    return providers
+
+
+def _legacy_model_to_pi(model_id: str, model_config: dict[str, Any]) -> dict[str, Any]:
+    item: dict[str, Any] = {"id": model_id}
+    name = str(model_config.get("name") or "").strip()
+    if name and name != model_id:
+        item["name"] = name
+    limit = model_config.get("limit") if isinstance(model_config.get("limit"), dict) else {}
+    context = _positive_int_or_none(limit.get("context")) if isinstance(limit, dict) else None
+    output = _positive_int_or_none(limit.get("output")) if isinstance(limit, dict) else None
+    if context:
+        item["contextWindow"] = context
+    if output:
+        item["maxTokens"] = output
+    efforts, _default_effort = _model_reasoning_efforts(model_config)
+    if efforts:
+        item["reasoning"] = True
+        item["thinkingLevelMap"] = _thinking_level_map(efforts)
+    _copy_known_pi_model_fields(model_config, item)
+    return item
+
+
+def _direct_model_to_pi(model_id: str, model_config: dict[str, Any]) -> dict[str, Any]:
+    item: dict[str, Any] = {"id": model_id}
+    name = str(model_config.get("name") or "").strip()
+    if name and name != model_id:
+        item["name"] = name
+    context = _positive_int_or_none(model_config.get("contextWindow", model_config.get("context_window")))
+    output = _positive_int_or_none(model_config.get("maxTokens", model_config.get("outputLimit", model_config.get("output_limit"))))
+    if context:
+        item["contextWindow"] = context
+    if output:
+        item["maxTokens"] = output
+    efforts, _default_effort = _model_reasoning_efforts(model_config)
+    if efforts:
+        item["reasoning"] = True
+        item["thinkingLevelMap"] = _thinking_level_map(efforts)
+    _copy_known_pi_model_fields(model_config, item)
+    return item
+
+
+def _copy_known_pi_model_fields(source: dict[str, Any], target: dict[str, Any]) -> None:
+    for key in ("api", "reasoning", "input", "cost", "thinkingLevelMap", "compat", "headers"):
+        if key in source and source.get(key) is not None:
+            target[key] = source[key]
+
+
+def _thinking_level_map(efforts: list[str]) -> dict[str, str | None]:
+    allowed = ("off", "minimal", "low", "medium", "high", "xhigh")
+    supported = {item for item in efforts if item in allowed}
+    return {level: (level if level in supported else None) for level in allowed}
+
+
+def _list_models_from_pi_providers(providers: dict[str, Any]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for provider_id, provider_config in providers.items():
+        provider = str(provider_id or "").strip()
+        if not provider or not isinstance(provider_config, dict):
+            continue
+        models = provider_config.get("models")
+        if not isinstance(models, list):
+            continue
+        for model_config in models:
+            if not isinstance(model_config, dict):
+                continue
+            model = str(model_config.get("id") or "").strip()
+            if not model:
+                continue
+            name = str(model_config.get("name") or model).strip() or model
+            context = _positive_int_or_none(model_config.get("contextWindow"))
+            output = _positive_int_or_none(model_config.get("maxTokens"))
+            reasoning_efforts, default_reasoning_effort = _model_reasoning_efforts(model_config)
+            items.append(
+                {
+                    "id": f"{provider}/{model}",
+                    "provider": provider,
+                    "model": model,
+                    "name": name,
+                    "label": f"{provider} / {name}",
+                    "context_window": context,
+                    "output_limit": output,
+                    "reasoning_efforts": reasoning_efforts,
+                    "default_reasoning_effort": default_reasoning_effort,
+                }
+            )
+    return items
+
+
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -231,6 +502,14 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 def _model_reasoning_efforts(model_config: dict[str, Any]) -> tuple[list[str], str]:
     options = model_config.get("options") if isinstance(model_config.get("options"), dict) else {}
+    thinking_level_map = model_config.get("thinkingLevelMap")
+    if isinstance(thinking_level_map, dict):
+        efforts = [
+            str(key or "").strip()
+            for key, value in thinking_level_map.items()
+            if str(key or "").strip() and value is not None
+        ]
+        return efforts, ""
     efforts = _string_list(
         model_config.get(
             "reasoningEfforts",

@@ -133,6 +133,7 @@ from bot.native_agent import (
 from bot.native_agent.configuration import effective_native_agent_config
 from bot.native_agent.config_store import (
     find_configured_model,
+    get_pi_models_path,
     get_pi_settings_path,
     list_configured_models,
     load_native_agent_config,
@@ -2068,6 +2069,7 @@ def get_native_agent_config_payload() -> dict[str, Any]:
         "config": native_config,
         "backend": "pi",
         "config_path": str(get_pi_settings_path()),
+        "models_path": str(get_pi_models_path()),
         "workspace_history_enabled": bool(native_config.get("workspace_history_enabled", True)),
         "models": list_configured_models(native_config),
         "selected_model": str(native_config.get("model") or native_config.get("selected_model") or "").strip(),

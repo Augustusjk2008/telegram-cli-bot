@@ -194,6 +194,22 @@ async def test_pi_rpc_client_send_writes_single_jsonl_packet(tmp_path: Path, mon
 
 
 @pytest.mark.asyncio
+async def test_pi_rpc_client_send_after_immediate_exit_reports_stderr(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = await _start_fake_client(tmp_path, monkeypatch, "stderr_exit")
+    await asyncio.sleep(0.2)
+
+    with pytest.raises(PiRpcRunError) as exc_info:
+        await client.send({"type": "custom"})
+
+    assert exc_info.value.returncode == 7
+    assert "err-259" in exc_info.value.stderr
+    assert "Pi RPC 退出码 7" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
 async def test_pi_rpc_client_prompt_adds_text_and_conversation_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     client = await _start_fake_client(tmp_path, monkeypatch, "wait_input")
     stream = client.events().__aiter__()

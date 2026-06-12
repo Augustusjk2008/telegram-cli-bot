@@ -170,7 +170,8 @@ test("admin center shows native agent global fields", async () => {
   await user.click(await screen.findByRole("tab", { name: "原生 Agent" }));
   await screen.findByRole("heading", { name: "Pi 原生 agent 配置" });
 
-  expect(screen.getByText(/Pi 配置:/)).toBeInTheDocument();
+  expect(screen.getByText(/Pi settings:/)).toBeInTheDocument();
+  expect(screen.getByText(/Pi models:/)).toBeInTheDocument();
   expect(screen.getByText(/Workspace history: 启用/)).toBeInTheDocument();
   expect(screen.getByText(/运行检查: 警告/)).toBeInTheDocument();
   expect(screen.getByText("workspace_history")).toBeInTheDocument();

@@ -2123,6 +2123,7 @@ function mapNativeAgentConfigPayload(raw: unknown): NativeAgentConfigPayload {
     config: item.config && typeof item.config === "object" ? item.config as Record<string, unknown> : {},
     backend: String(item.backend ?? "pi"),
     configPath: String(item.config_path ?? item.configPath ?? ""),
+    modelsPath: String(item.models_path ?? item.modelsPath ?? ""),
     workspaceHistoryEnabled: Boolean(item.workspace_history_enabled ?? item.workspaceHistoryEnabled),
     models,
     selectedModel: String(item.selected_model ?? item.selectedModel ?? ""),

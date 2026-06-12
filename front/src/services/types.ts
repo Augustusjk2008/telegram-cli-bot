@@ -253,6 +253,7 @@ export type NativeAgentConfigPayload = {
   config: Record<string, unknown>;
   backend: string;
   configPath: string;
+  modelsPath?: string;
   workspaceHistoryEnabled: boolean;
   models: NativeAgentModelOption[];
   selectedModel: string;

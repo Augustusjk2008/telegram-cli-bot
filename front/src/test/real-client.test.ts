@@ -770,6 +770,7 @@ describe("RealWebBotClient", () => {
         backend: "pi",
         config: { backend: "pi", model: "jojocode_max/gpt-5.4", workspace_history_enabled: true },
         config_path: "C:\\Users\\me\\.pi\\agent\\settings.json",
+        models_path: "C:\\Users\\me\\.pi\\agent\\models.json",
         workspace_history_enabled: true,
         selected_model: "jojocode_max/gpt-5.4",
         selected_reasoning_effort: "medium",
@@ -847,6 +848,7 @@ describe("RealWebBotClient", () => {
     });
     expect(config.backend).toBe("pi");
     expect(config.configPath).toBe("C:\\Users\\me\\.pi\\agent\\settings.json");
+    expect(config.modelsPath).toBe("C:\\Users\\me\\.pi\\agent\\models.json");
     expect(config.workspaceHistoryEnabled).toBe(true);
     expect(config.selectedModel).toBe("jojocode_max/gpt-5.4");
     expect(config.selectedReasoningEffort).toBe("medium");

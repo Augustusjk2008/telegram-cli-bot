@@ -1483,6 +1483,7 @@ async def test_admin_native_agent_config_routes_save_config(
     from bot.native_agent import config_store
 
     settings_path = tmp_path / "settings.json"
+    models_path = tmp_path / "models.json"
     monkeypatch.setenv("PI_AGENT_SETTINGS", str(settings_path))
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
     monkeypatch.setattr("bot.web.server.WEB_DEFAULT_USER_ID", 1001)
@@ -1533,7 +1534,17 @@ async def test_admin_native_agent_config_routes_save_config(
     assert patch_payload["data"]["workspace_history_enabled"] is True
     assert "backup_path" not in patch_payload["data"]
     assert patch_payload["data"]["models"][0]["id"] == "jojocode_max/gpt-5.4"
-    assert json.loads(settings_path.read_text(encoding="utf-8")) == patch_payload["data"]["config"]
+    assert json.loads(settings_path.read_text(encoding="utf-8")) == {
+        "backend": "pi",
+        "model": "jojocode_max/gpt-5.4",
+        "workspace_history_enabled": True,
+    }
+    assert json.loads(models_path.read_text(encoding="utf-8"))["providers"]["jojocode_max"]["models"][0] == {
+        "id": "gpt-5.4",
+        "contextWindow": 1_000_000,
+        "maxTokens": 128_000,
+    }
+    assert patch_payload["data"]["config"]["providers"] == json.loads(models_path.read_text(encoding="utf-8"))["providers"]
     assert get_resp.status == 200
     assert get_payload["data"]["models"][0]["context_window"] == 1_000_000
     assert "preflight" in get_payload["data"]

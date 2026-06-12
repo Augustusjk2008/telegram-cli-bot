@@ -229,9 +229,12 @@ class PiRpcClient:
 
     async def _write_packet_unlocked(self, message: dict[str, Any], *, ignore_errors: bool) -> None:
         stdin = self.process.stdin
-        if self.process.poll() is not None or stdin is None or stdin.closed:
+        returncode = self.process.poll()
+        if returncode is not None or stdin is None or stdin.closed:
             if ignore_errors:
                 return
+            if returncode is not None:
+                await self._raise_if_failed(returncode)
             raise PiRpcRunError("Pi RPC 进程未运行，无法写入")
         line = json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n"
         try:

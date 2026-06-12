@@ -33,6 +33,7 @@ def _sample_config() -> dict[str, object]:
 
 def test_native_agent_config_store_saves_pi_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings_path = tmp_path / "settings.json"
+    models_path = tmp_path / "models.json"
     monkeypatch.setenv("PI_AGENT_SETTINGS", str(settings_path))
 
     payload = config_store.save_native_agent_config(_sample_config())
@@ -43,7 +44,37 @@ def test_native_agent_config_store_saves_pi_settings(tmp_path: Path, monkeypatch
     assert payload["selected_model"] == "jojocode_max/gpt-5.4"
     assert payload["workspace_history_enabled"] is True
     assert "backup_path" not in payload
-    assert json.loads(settings_path.read_text(encoding="utf-8")) == payload["config"]
+    assert json.loads(settings_path.read_text(encoding="utf-8")) == {
+        "backend": "pi",
+        "model": "jojocode_max/gpt-5.4",
+        "reasoning_effort": "medium",
+        "pi_agent": "main",
+        "pi_command": "pi",
+        "workspace_history_enabled": True,
+    }
+    assert json.loads(models_path.read_text(encoding="utf-8")) == {
+        "providers": {
+            "jojocode_max": {
+                "models": [
+                    {
+                        "id": "gpt-5.4",
+                        "contextWindow": 1_000_000,
+                        "maxTokens": 128_000,
+                        "reasoning": True,
+                        "thinkingLevelMap": {
+                            "off": None,
+                            "minimal": None,
+                            "low": "low",
+                            "medium": "medium",
+                            "high": "high",
+                            "xhigh": None,
+                        },
+                    }
+                ]
+            }
+        }
+    }
+    assert payload["config"]["providers"] == json.loads(models_path.read_text(encoding="utf-8"))["providers"]
     assert payload["models"] == [
         {
             "id": "jojocode_max/gpt-5.4",
@@ -54,18 +85,50 @@ def test_native_agent_config_store_saves_pi_settings(tmp_path: Path, monkeypatch
             "context_window": 1_000_000,
             "output_limit": 128_000,
             "reasoning_efforts": ["low", "medium", "high"],
-            "default_reasoning_effort": "medium",
+            "default_reasoning_effort": "",
         }
     ]
 
 
 def test_native_agent_config_store_loads_pi_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings_path = tmp_path / "settings.json"
-    settings_path.write_text(json.dumps(_sample_config()), encoding="utf-8")
     monkeypatch.setenv("PI_AGENT_SETTINGS", str(settings_path))
+    config_store.save_native_agent_config(_sample_config())
 
     assert config_store.first_configured_model()["id"] == "jojocode_max/gpt-5.4"
     assert config_store.load_native_agent_config()["backend"] == "pi"
+
+
+def test_native_agent_config_store_migrates_legacy_settings_provider_to_models_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings_path = tmp_path / "settings.json"
+    models_path = tmp_path / "models.json"
+    settings_path.write_text(
+        json.dumps(
+            {
+                "provider": {
+                    "jojocode": {
+                        "options": {"baseURL": "https://example.test/v1", "apiKey": "SECRET"},
+                        "models": {"gpt-5.4": {"name": "gpt-5.4"}},
+                    }
+                },
+                "workspace_history_enabled": True,
+                "shellPath": "C:/Git/bin/bash.exe",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PI_AGENT_SETTINGS", str(settings_path))
+
+    loaded = config_store.load_native_agent_config()
+
+    assert loaded["providers"]["jojocode"]["baseUrl"] == "https://example.test/v1"
+    assert loaded["providers"]["jojocode"]["api"] == "openai-completions"
+    assert config_store.first_configured_model()["id"] == "jojocode/gpt-5.4"
+    assert json.loads(models_path.read_text(encoding="utf-8"))["providers"]["jojocode"]["models"][0]["id"] == "gpt-5.4"
+    assert "provider" in json.loads(settings_path.read_text(encoding="utf-8"))
 
 
 def test_native_agent_config_store_uses_variants_as_reasoning_efforts() -> None:

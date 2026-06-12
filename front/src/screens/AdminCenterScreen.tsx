@@ -1294,7 +1294,10 @@ export function AdminCenterScreen({
 
             <div className="grid grid-cols-1 gap-3 text-xs text-[var(--muted)] lg:grid-cols-2">
               <p className="break-all rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                Pi 配置: {nativeAgentConfig?.configPath || "-"}
+                Pi settings: {nativeAgentConfig?.configPath || "-"}
+              </p>
+              <p className="break-all rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                Pi models: {nativeAgentConfig?.modelsPath || "-"}
               </p>
               <p className="break-all rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
                 Workspace history: {nativeAgentConfig?.workspaceHistoryEnabled ? "启用" : "关闭"}
