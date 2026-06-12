@@ -40,8 +40,6 @@ def test_pi_events_maps_text_turn_to_canonical_events() -> None:
     aggregator, results = _apply_all(raw_events)
 
     assert [payload["type"] for payload in mapped] == [
-        "session.status",
-        "session.status",
         "message.updated",
         "message.part.delta",
         "message.part.delta",
@@ -50,6 +48,11 @@ def test_pi_events_maps_text_turn_to_canonical_events() -> None:
     ]
     assert aggregator.text() == "你好"
     assert results[-1].done is True
+
+
+def test_pi_events_suppresses_default_lifecycle_status() -> None:
+    assert pi_json_to_events({"type": "agent_start", "session_id": "sess-1"}) == []
+    assert pi_json_to_events({"type": "turn_start", "session_id": "sess-1"}) == []
 
 
 def test_pi_events_maps_full_text_without_duplicate_delta() -> None:

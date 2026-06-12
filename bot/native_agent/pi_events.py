@@ -23,7 +23,9 @@ def pi_json_to_events(
     message_id = _message_id(raw) or str(assistant_message_id or "").strip() or "msg_pi_assistant"
 
     if raw_type in {"agent_start", "turn_start"}:
-        status = _status_text(raw) or ("Pi agent 已启动" if raw_type == "agent_start" else "Pi agent 正在运行")
+        status = _status_text(raw)
+        if not status:
+            return []
         return [_wrap_event("session.status", raw, session_id=session_id, directory=directory, status=status, piEventType=raw_type)]
 
     if raw_type == "message_start":
