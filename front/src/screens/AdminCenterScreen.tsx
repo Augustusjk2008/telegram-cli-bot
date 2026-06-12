@@ -19,6 +19,8 @@ import type {
   LanChatConfig,
   LanChatConfigInput,
   NativeAgentConfigPayload,
+  NativeAgentPreflightCheck,
+  NativeAgentPreflightResult,
   OfflineUpdatePackageList,
   RegisterCodeCreateResult,
   RegisterCodeItem,
@@ -124,6 +126,26 @@ function formatShortTime(value: string) {
   return date.toLocaleString();
 }
 
+function nativePreflightStatus(preflight?: NativeAgentPreflightResult) {
+  if (!preflight) return "未运行";
+  if (!preflight.ok) return "失败";
+  return preflight.checks.some((check) => check.severity === "warning" && !check.ok) ? "警告" : "通过";
+}
+
+function nativePreflightStatusClass(preflight?: NativeAgentPreflightResult) {
+  const status = nativePreflightStatus(preflight);
+  if (status === "失败") return "border-red-200 bg-red-50 text-red-700";
+  if (status === "警告") return "border-amber-200 bg-amber-50 text-amber-800";
+  if (status === "通过") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  return "border-[var(--border)] bg-[var(--bg)] text-[var(--muted)]";
+}
+
+function nativePreflightCheckClass(check: NativeAgentPreflightCheck) {
+  if (check.severity === "error" && !check.ok) return "border-red-200 bg-red-50 text-red-800";
+  if (check.severity === "warning" && !check.ok) return "border-amber-200 bg-amber-50 text-amber-800";
+  return "border-[var(--border)] bg-[var(--bg)] text-[var(--muted)]";
+}
+
 function shortErrorText(value: string) {
   const text = (value || "").trim();
   if (!text) return "-";
@@ -177,6 +199,7 @@ export function AdminCenterScreen({
   const [nativeAgentConfig, setNativeAgentConfig] = useState<NativeAgentConfigPayload | null>(null);
   const [nativeAgentDraft, setNativeAgentDraft] = useState("");
   const [nativeAgentSaving, setNativeAgentSaving] = useState(false);
+  const [nativeAgentPreflightRunning, setNativeAgentPreflightRunning] = useState(false);
   const [envConfig, setEnvConfig] = useState<EnvConfigSnapshot | null>(null);
   const [envDraft, setEnvDraft] = useState<Record<string, EnvConfigValue>>({});
   const [envVisibleSecrets, setEnvVisibleSecrets] = useState<Record<string, boolean>>({});
@@ -775,13 +798,28 @@ export function AdminCenterScreen({
         return;
       }
       const saved = await client.updateNativeAgentConfig(parsed as Record<string, unknown>);
-      setNativeAgentConfig(saved);
+      setNativeAgentConfig({ ...saved, preflight: undefined });
       setNativeAgentDraft(JSON.stringify(saved.config || {}, null, 2));
-      setNotice(saved.needsRestart ? "配置已保存，重启原生 agent 后生效" : "原生 Agent 配置已保存");
+      setNotice(saved.needsRestart ? "配置已保存，重启原生 agent 后生效；请重新运行检查" : "原生 Agent 配置已保存；请重新运行检查");
     } catch (nextError) {
       setError(getErrorMessage(nextError, "保存原生 Agent 配置失败"));
     } finally {
       setNativeAgentSaving(false);
+    }
+  };
+
+  const runNativeAgentPreflight = async () => {
+    setNativeAgentPreflightRunning(true);
+    setError("");
+    setNotice("");
+    try {
+      const preflight = await client.runNativeAgentPreflight();
+      setNativeAgentConfig((prev) => prev ? { ...prev, preflight } : prev);
+      setNotice(preflight.ok ? "运行检查完成" : "运行检查失败");
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "运行检查失败"));
+    } finally {
+      setNativeAgentPreflightRunning(false);
     }
   };
 
@@ -1232,15 +1270,26 @@ export function AdminCenterScreen({
                 <h2 className="text-base font-semibold text-[var(--text)]">Pi 原生 agent 配置</h2>
                 <p className="text-sm text-[var(--muted)]">Pi provider/model 配置。保存后需重启原生 agent。</p>
               </div>
-              <button
-                type="button"
-                onClick={() => void saveNativeAgentConfig()}
-                disabled={nativeAgentSaving}
-                className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm tcb-solid-accent hover:opacity-90 disabled:opacity-60"
-              >
-                <Save className="h-4 w-4" />
-                {nativeAgentSaving ? "保存中..." : "保存配置"}
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void runNativeAgentPreflight()}
+                  disabled={nativeAgentPreflightRunning}
+                  className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  {nativeAgentPreflightRunning ? "检查中..." : "运行检查"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void saveNativeAgentConfig()}
+                  disabled={nativeAgentSaving}
+                  className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm tcb-solid-accent hover:opacity-90 disabled:opacity-60"
+                >
+                  <Save className="h-4 w-4" />
+                  {nativeAgentSaving ? "保存中..." : "保存配置"}
+                </button>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 gap-3 text-xs text-[var(--muted)] lg:grid-cols-2">
@@ -1250,6 +1299,27 @@ export function AdminCenterScreen({
               <p className="break-all rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
                 Workspace history: {nativeAgentConfig?.workspaceHistoryEnabled ? "启用" : "关闭"}
               </p>
+            </div>
+
+            <div className={`rounded-lg border px-3 py-3 text-sm ${nativePreflightStatusClass(nativeAgentConfig?.preflight)}`}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="font-medium">运行检查: {nativePreflightStatus(nativeAgentConfig?.preflight)}</p>
+                <p className="text-xs">{nativeAgentConfig?.preflight?.message || "保存配置后运行检查"}</p>
+              </div>
+              {nativeAgentConfig?.preflight?.checks.length ? (
+                <div className="mt-3 grid gap-2 lg:grid-cols-2">
+                  {nativeAgentConfig.preflight.checks.map((check) => (
+                    <div key={check.key} className={`rounded-lg border px-3 py-2 ${nativePreflightCheckClass(check)}`}>
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="font-medium text-[var(--text)]">{check.key}</p>
+                        <span className="text-xs">{check.ok ? "通过" : check.severity === "warning" ? "警告" : "失败"}</span>
+                      </div>
+                      <p className="mt-1 text-xs">{check.message}</p>
+                      {!check.ok && check.fix ? <p className="mt-1 text-xs">修复: {check.fix}</p> : null}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </div>
 
             <div className="grid gap-4 lg:grid-cols-[1fr_320px]">

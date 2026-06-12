@@ -64,6 +64,7 @@ import type {
   NativeAgentPermissionReplyOptions,
   NativeAgentConfigPayload,
   NativeAgentModelOption,
+  NativeAgentPreflightResult,
   NativeAgentModelsPayload,
   NativeAgentModelUpdateResult,
   NativeAgentModelUpdateOptions,
@@ -2303,8 +2304,7 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   private normalizeNativeAgentConfig(input: BotExecutionConfigInput["nativeAgent"] | CreateBotInput["nativeAgent"] | undefined, current?: BotSummary["nativeAgent"]): BotSummary["nativeAgent"] {
-    const legacyInput = input as unknown as { opencodeAgent?: string } | undefined;
-    const piAgent = String(input?.piAgent ?? legacyInput?.opencodeAgent ?? "").trim();
+    const piAgent = String(input?.piAgent ?? "").trim();
     const model = String(input?.model || current?.model || "").trim();
     const reasoningEffort = String(input?.reasoningEffort || current?.reasoningEffort || "").trim();
     return {
@@ -2390,6 +2390,34 @@ export class MockWebBotClient implements WebBotClient {
       : [];
     const defaultReasoningEffort = String(options.reasoningEffort || "").trim();
     return efforts.length > 0 ? efforts : (defaultReasoningEffort ? [defaultReasoningEffort] : []);
+  }
+
+  private buildNativeAgentPreflight(): NativeAgentPreflightResult {
+    const workspaceHistoryEnabled = Boolean(this.nativeAgentConfig.workspace_history_enabled ?? true);
+    const checks = [
+      { key: "cwd", ok: true, severity: "info", message: "工作目录可访问: C:\\workspace", fix: "" },
+      { key: "node", ok: true, severity: "info", message: "Node.js 版本可用: v22.0.0", fix: "", version: "v22.0.0" },
+      { key: "pi", ok: true, severity: "info", message: "Pi CLI 可用: pi 1.0.0", fix: "", command: String(this.nativeAgentConfig.pi_command || "pi"), version: "pi 1.0.0" },
+      { key: "bash", ok: true, severity: "info", message: "bash 可用: GNU bash, version 5.2", fix: "" },
+      { key: "data_dir", ok: true, severity: "info", message: "数据目录可写: ~/.tcb/orbit-safe-claw", fix: "" },
+      workspaceHistoryEnabled
+        ? {
+            key: "workspace_history",
+            ok: false,
+            severity: "warning",
+            message: "workspace history 已开启，当前运行前检查已降级，不阻断基础 Pi 对话",
+            fix: "如需恢复回滚能力，确认 Pi workspace-history 插件可用后重新运行检查",
+          }
+        : { key: "workspace_history", ok: true, severity: "info", message: "workspace history 已关闭", fix: "" },
+    ];
+    const warning = checks.find((item) => item.severity === "warning" && !item.ok);
+    return {
+      ok: true,
+      code: "ok",
+      message: warning ? `Pi 运行前置检查通过，存在警告：${warning.message}` : "Pi 运行前置检查通过",
+      platform: "nt",
+      checks,
+    };
   }
 
   private getBotSummary(botAlias: string): BotSummary {
@@ -3138,7 +3166,15 @@ export class MockWebBotClient implements WebBotClient {
       selectedModel: String(this.nativeAgentConfig.model || ""),
       selectedReasoningEffort: String(this.nativeAgentConfig.reasoning_effort || ""),
       needsRestart: false,
+      preflight: this.buildNativeAgentPreflight(),
     };
+  }
+
+  async runNativeAgentPreflight(_options: { cwd?: string; piCommand?: string } = {}): Promise<NativeAgentPreflightResult> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权运行原生 Agent 检查", { status: 403, code: "forbidden" });
+    }
+    return this.buildNativeAgentPreflight();
   }
 
   async updateNativeAgentConfig(config: Record<string, unknown>): Promise<NativeAgentConfigPayload> {

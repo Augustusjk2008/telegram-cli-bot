@@ -13,6 +13,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
+from bot.native_agent.legacy_migration import migrate_native_session_meta
 from bot.runtime_paths import (
     get_chat_history_db_path,
     get_chat_workspace_key,
@@ -668,6 +669,7 @@ class ChatStore:
         return conversation_id, 1
 
     def _conversation_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
+        native_session_meta = migrate_native_session_meta(_parse_json_dict(row["native_session_meta_json"]))
         return {
             "id": str(row["id"]),
             "bot_id": int(row["bot_id"]),
@@ -681,7 +683,7 @@ class ChatStore:
             "status": str(row["status"] or "active"),
             "native_provider": str(row["native_provider"] or ""),
             "native_session_id": str(row["native_session_id"] or ""),
-            "native_session_meta": _parse_json_dict(row["native_session_meta_json"]),
+            "native_session_meta": native_session_meta,
             "agent_prompt_hash": str(row["agent_prompt_hash"] or ""),
             "title": str(row["title"] or ""),
             "last_message_preview": str(row["last_message_preview"] or ""),
@@ -818,7 +820,7 @@ class ChatStore:
                     raise KeyError(conversation_id)
                 return {
                     "session_id": str(row["native_session_id"] or ""),
-                    "meta": _parse_json_dict(row["native_session_meta_json"]),
+                    "meta": migrate_native_session_meta(_parse_json_dict(row["native_session_meta_json"])),
                 }
 
     def set_conversation_native_session(
@@ -828,7 +830,8 @@ class ChatStore:
         meta: dict[str, Any] | None = None,
     ) -> None:
         normalized_session_id = str(session_id or "").strip()
-        meta_json = json.dumps(dict(meta or {}), ensure_ascii=False) if normalized_session_id else None
+        normalized_meta = migrate_native_session_meta(meta)
+        meta_json = json.dumps(normalized_meta, ensure_ascii=False) if normalized_session_id else None
         now = _utc_now()
         with self._connect_for_write() as conn:
             conn.execute(

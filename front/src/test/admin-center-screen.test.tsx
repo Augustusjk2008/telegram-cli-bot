@@ -16,6 +16,7 @@ function createClient() {
     listOfflineUpdatePackages: vi.spyOn(client, "listOfflineUpdatePackages"),
     upsertAnnouncement: vi.spyOn(client, "upsertAnnouncement"),
     getNativeAgentConfig: vi.spyOn(client, "getNativeAgentConfig"),
+    runNativeAgentPreflight: vi.spyOn(client, "runNativeAgentPreflight"),
     updateNativeAgentConfig: vi.spyOn(client, "updateNativeAgentConfig"),
     previewEnvConfig: vi.spyOn(client, "previewEnvConfig"),
     updateEnvConfig: vi.spyOn(client, "updateEnvConfig"),
@@ -171,7 +172,8 @@ test("admin center shows native agent global fields", async () => {
 
   expect(screen.getByText(/Pi 配置:/)).toBeInTheDocument();
   expect(screen.getByText(/Workspace history: 启用/)).toBeInTheDocument();
-  expect(screen.queryByText(/OpenCode:/)).not.toBeInTheDocument();
+  expect(screen.getByText(/运行检查: 警告/)).toBeInTheDocument();
+  expect(screen.getByText("workspace_history")).toBeInTheDocument();
   expect(screen.queryByText(/备份:/)).not.toBeInTheDocument();
   expect(screen.getByText("jojocode_max / gpt-5.4")).toBeInTheDocument();
   const editor = screen.getByLabelText("原生 Agent 配置 JSON");
@@ -179,5 +181,20 @@ test("admin center shows native agent global fields", async () => {
   await user.click(screen.getByRole("button", { name: "保存配置" }));
 
   await waitFor(() => expect(updateNativeAgentConfig).toHaveBeenCalledWith({ provider: {} }));
-  expect(await screen.findByText("配置已保存，重启原生 agent 后生效")).toBeInTheDocument();
+  expect(await screen.findByText("配置已保存，重启原生 agent 后生效；请重新运行检查")).toBeInTheDocument();
+});
+
+test("admin center runs native agent preflight", async () => {
+  const user = userEvent.setup();
+  const { client, runNativeAgentPreflight } = createClient();
+  await client.login({ username: "127.0.0.1", password: "test" });
+
+  render(<AdminCenterScreen client={client} onClose={() => {}} />);
+
+  await user.click(await screen.findByRole("tab", { name: "原生 Agent" }));
+  await user.click(await screen.findByRole("button", { name: "运行检查" }));
+
+  await waitFor(() => expect(runNativeAgentPreflight).toHaveBeenCalled());
+  expect(await screen.findByText("运行检查完成")).toBeInTheDocument();
+  expect(screen.getByText(/运行检查: 警告/)).toBeInTheDocument();
 });

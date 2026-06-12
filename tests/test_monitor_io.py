@@ -39,10 +39,7 @@ def test_poll_web_history_prints_message_when_existing_item_changes(monkeypatch,
         },
     ]
 
-    def fake_request_json(*args, **kwargs):
-        return snapshots.pop(0)
-
-    monkeypatch.setattr(monitor_io, "request_json", fake_request_json)
+    monkeypatch.setattr(monitor_io, "request_json", lambda *args, **kwargs: snapshots.pop(0))
     args = SimpleNamespace(
         web_url="http://127.0.0.1:8765",
         password="secret",
@@ -51,6 +48,7 @@ def test_poll_web_history_prints_message_when_existing_item_changes(monkeypatch,
         execution_mode="native_agent",
         agent_id="main",
         show_trace=False,
+        include_existing=False,
     )
     state = monitor_io.MonitorState(recorder=monitor_io.Recorder(None, "test"))
 
@@ -102,6 +100,7 @@ def test_poll_web_history_does_not_reprint_user_when_state_changes(monkeypatch, 
         execution_mode="native_agent",
         agent_id="main",
         show_trace=False,
+        include_existing=False,
     )
     state = monitor_io.MonitorState(recorder=monitor_io.Recorder(None, "test"))
 
@@ -122,7 +121,7 @@ def test_normalize_web_stream_event_reads_top_level_native_turn_fields():
             "native_session_id": "sess-1",
             "turn_id": "turn-1",
             "assistant_message_id": "msg-web-1",
-            "native_assistant_message_id": "oc-a1",
+            "native_assistant_message_id": "native-a1",
         },
     )
 
@@ -130,11 +129,11 @@ def test_normalize_web_stream_event_reads_top_level_native_turn_fields():
     assert event["turn_id"] == "turn-1"
     assert event["assistant_message_id"] == "msg-web-1"
     assert event["web_message_id"] == "msg-web-1"
-    assert event["native_assistant_message_id"] == "oc-a1"
+    assert event["native_assistant_message_id"] == "native-a1"
 
 
-def test_normalize_opencode_event_accepts_official_properties_shape():
-    event = monitor_io.normalize_opencode_event(
+def test_normalize_native_event_accepts_official_properties_shape():
+    event = monitor_io.normalize_native_event(
         {
             "type": "message.part.updated",
             "properties": {
@@ -153,7 +152,7 @@ def test_normalize_opencode_event_accepts_official_properties_shape():
 
     assert event["event_type"] == "message.part.updated"
     assert event["native_session_id"] == "sess-1"
-    assert event["opencode_message_id"] == "msg-1"
+    assert event["native_message_id"] == "msg-1"
     assert event["part_id"] == "part-1"
     assert event["delta_text"] == "hi"
     assert event["status"] == "running"
@@ -195,7 +194,7 @@ def test_generate_comparison_report_keeps_two_turns_in_same_session_separate(tmp
             "assistant_message_id": "msg-web-1",
             "web_message_id": "msg-web-1",
             "native_session_id": "sess-1",
-            "native_assistant_message_id": "oc-a1",
+            "native_assistant_message_id": "native-a1",
             "history_content": "答1",
             "ts_mono_ms": 1000,
         },
@@ -206,7 +205,7 @@ def test_generate_comparison_report_keeps_two_turns_in_same_session_separate(tmp
             "assistant_message_id": "msg-web-2",
             "web_message_id": "msg-web-2",
             "native_session_id": "sess-1",
-            "native_assistant_message_id": "oc-a2",
+            "native_assistant_message_id": "native-a2",
             "history_content": "答2",
             "ts_mono_ms": 2000,
         },
@@ -216,14 +215,14 @@ def test_generate_comparison_report_keeps_two_turns_in_same_session_separate(tmp
         "\n".join(json.dumps(item, ensure_ascii=False) for item in stream_records) + "\n",
         encoding="utf-8",
     )
-    (tmp_path / "opencode_sessions").mkdir()
-    (tmp_path / "opencode_sessions" / "sess-1.messages.json").write_text(
+    (tmp_path / "native_sessions").mkdir()
+    (tmp_path / "native_sessions" / "sess-1.messages.json").write_text(
         json.dumps(
             {
                 "native_session_id": "sess-1",
                 "messages": [
-                    {"id": "oc-a1", "role": "assistant", "content": "答1"},
-                    {"id": "oc-a2", "role": "assistant", "content": "答2"},
+                    {"id": "native-a1", "role": "assistant", "content": "答1"},
+                    {"id": "native-a2", "role": "assistant", "content": "答2"},
                 ],
             },
             ensure_ascii=False,
@@ -235,8 +234,8 @@ def test_generate_comparison_report_keeps_two_turns_in_same_session_separate(tmp
 
     assert report["summary"]["turns_compared"] == 2
     assert report["summary"]["issue_count"] == 0
-    assert report["turns"]["turn:turn-1"]["opencode"]["final_assistant_text"] == "答1"
-    assert report["turns"]["turn:turn-2"]["opencode"]["final_assistant_text"] == "答2"
+    assert report["turns"]["turn:turn-1"]["native"]["final_assistant_text"] == "答1"
+    assert report["turns"]["turn:turn-2"]["native"]["final_assistant_text"] == "答2"
 
 
 def test_compare_conversation_session_consistency_reports_changed_session():
@@ -269,80 +268,21 @@ def test_compare_conversation_session_consistency_reports_changed_session():
     assert issues[0]["evidence"]["native_session_ids"] == ["sess-1", "sess-2"]
 
 
-def test_monitor_opencode_once_returns_after_first_event(monkeypatch, capsys):
-    events = iter([{"type": "server.connected"}, {"type": "session.idle"}])
-    monkeypatch.setattr(monitor_io, "resolve_opencode_url", lambda *_args, **_kwargs: "http://127.0.0.1:4096")
-    monkeypatch.setattr(monitor_io, "stream_sse", lambda *_args, **_kwargs: events)
-    args = SimpleNamespace(
-        opencode_url="auto",
-        opencode_username="opencode",
-        opencode_password="secret",
-        password="",
-        alias="agent-test",
-        capture_opencode_sse=True,
-    )
-    state = monitor_io.MonitorState(recorder=monitor_io.Recorder(None, "test"))
-
-    monitor_io.monitor_opencode(args, state, max_events=1)
-
-    output = capsys.readouterr().out
-    assert "opencode SSE connected: http://127.0.0.1:4096" + "/global" + "/event" in output
-
-
-def test_main_once_capture_opencode_sse_fails_on_connection_error(monkeypatch, tmp_path, capsys):
-    def fail_stream(*_args, **_kwargs):
-        raise OSError("connection refused")
-
+def test_main_compare_no_web_writes_report(monkeypatch, tmp_path, capsys):
+    (tmp_path / "web_history_snapshots.jsonl").write_text("", encoding="utf-8")
+    (tmp_path / "web_stream_events.jsonl").write_text("", encoding="utf-8")
     monkeypatch.setattr(sys, "argv", [
         "monitor_io.py",
-        "--no-web",
-        "--capture-opencode-sse",
-        "--opencode-url",
-        "http://127.0.0.1:1",
-        "--opencode-password",
-        "x",
-        "--once",
-        "--record-dir",
-        str(tmp_path),
-    ])
-    monkeypatch.setattr(monitor_io, "stream_sse", fail_stream)
-
-    code = monitor_io.main()
-
-    output = capsys.readouterr().out
-    assert code == 1
-    assert "error: connection refused" in output
-    assert "opencode SSE connected" not in output
-
-
-def test_main_compare_no_web_capture_opencode_sse_fails_before_report(monkeypatch, tmp_path):
-    calls: list[str] = []
-
-    def fail_stream(*_args, **_kwargs):
-        calls.append("capture")
-        raise OSError("connection refused")
-
-    def fake_report(*_args, **_kwargs):
-        calls.append("report")
-        return {"summary": {"issue_count": 0}}
-
-    monkeypatch.setattr(sys, "argv", [
-        "monitor_io.py",
-        "--no-web",
         "--compare",
         "--record-dir",
         str(tmp_path),
-        "--capture-opencode-sse",
-        "--opencode-url",
-        "http://127.0.0.1:1",
-        "--opencode-password",
-        "x",
+        "--no-web",
         "--once",
     ])
-    monkeypatch.setattr(monitor_io, "stream_sse", fail_stream)
-    monkeypatch.setattr(monitor_io, "generate_comparison_report", fake_report)
 
     code = monitor_io.main()
 
-    assert code == 1
-    assert calls == ["capture"]
+    output = capsys.readouterr().out
+    assert code == 0
+    assert "comparison complete" in output
+    assert (tmp_path / "comparison_report.json").is_file()

@@ -14,10 +14,7 @@ def global_native_agent_config() -> dict[str, Any]:
         "model": getattr(config, "NATIVE_AGENT_MODEL", ""),
         "base_url": getattr(config, "NATIVE_AGENT_BASE_URL", ""),
         "api_key": getattr(config, "NATIVE_AGENT_API_KEY", ""),
-        "pi_agent": (
-            getattr(config, "NATIVE_AGENT_PI_AGENT", "")
-            or getattr(config, "NATIVE_AGENT_OPENCODE_AGENT", "")
-        ),
+        "pi_agent": getattr(config, "NATIVE_AGENT_PI_AGENT", ""),
         "pi_command": (
             getattr(config, "NATIVE_AGENT_PI_COMMAND", "")
             or getattr(config, "NATIVE_AGENT_COMMAND", "")

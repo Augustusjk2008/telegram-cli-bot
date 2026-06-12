@@ -837,7 +837,6 @@ function shouldShowContextRing(meta?: ChatMessageMetaInfo) {
   return (
     isNativeAgentMessage(meta)
     || provider === "native_agent"
-    || provider === "opencode"
     || provider === "原生 agent"
   );
 }

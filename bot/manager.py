@@ -30,6 +30,7 @@ from bot.models import (
     normalize_execution_modes,
     normalize_prompt_presets,
 )
+from bot.native_agent.legacy_migration import migrate_native_agent_payload
 from bot.plugins.service import PluginService
 from bot.platform.paths import truncate_path_for_display
 from bot.profile_store import (
@@ -46,29 +47,24 @@ REMOVED_LEGACY_CLI_TYPES: set[str] = set()
 
 
 def _normalize_bot_native_agent_config(value: Any, *, existing: dict[str, Any] | None = None) -> dict[str, Any]:
-    data = value if isinstance(value, dict) else {}
-    source = data
-    if not any(key in data for key in ("pi_agent", "piAgent", "opencode_agent", "opencodeAgent", "agent")):
-        source = existing if isinstance(existing, dict) else {}
-    pi_agent = ""
-    for key in ("pi_agent", "piAgent", "opencode_agent", "opencodeAgent", "agent"):
-        if isinstance(source, dict) and key in source:
-            pi_agent = str(source.get(key) or "").strip()
-            break
+    data = migrate_native_agent_payload(value)
+    existing_data = migrate_native_agent_payload(existing)
+    source = data if "pi_agent" in data else existing_data
+    pi_agent = str(source.get("pi_agent") or "").strip()
     model_source = data
     if not any(key in data for key in ("native_agent_model", "nativeAgentModel", "selected_model", "selectedModel", "model")):
-        model_source = existing if isinstance(existing, dict) else {}
+        model_source = existing_data
     selected_model = ""
     for key in ("model", "selected_model", "selectedModel", "native_agent_model", "nativeAgentModel"):
-        if isinstance(model_source, dict) and key in model_source:
+        if key in model_source:
             selected_model = str(model_source.get(key) or "").strip()
             break
     reasoning_source = data
     if not any(key in data for key in ("reasoning_effort", "reasoningEffort")):
-        reasoning_source = existing if isinstance(existing, dict) else {}
+        reasoning_source = existing_data
     reasoning_effort = ""
     for key in ("reasoning_effort", "reasoningEffort"):
-        if isinstance(reasoning_source, dict) and key in reasoning_source:
+        if key in reasoning_source:
             reasoning_effort = str(reasoning_source.get(key) or "").strip()
             break
     result: dict[str, Any] = {}

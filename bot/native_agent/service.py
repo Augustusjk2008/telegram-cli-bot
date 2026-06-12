@@ -31,6 +31,8 @@ from bot.native_agent.ag_ui_mapper import (
 from bot.native_agent.aggregator import NativeAgentAggregator
 from bot.native_agent.context_usage import resolve_native_agent_context_usage
 from bot.native_agent.events import is_relevant_event, unwrap_event
+from bot.native_agent.legacy_migration import migrate_native_session_meta
+from bot.native_agent.pi_rpc_preflight import PiWindowsPreflightRequest, run_pi_windows_preflight
 from bot.native_agent.pi_rpc_client import PiRpcRunError
 from bot.native_agent.pi_session_store import PiSessionRecord, PiSessionStore, pi_session_key
 from bot.native_agent.pi_session_runtime import (
@@ -267,6 +269,19 @@ class NativeAgentService:
             )
             model_id, agent_id = self._prompt_options(profile)
             native_agent_config = effective_native_agent_config(getattr(profile, "native_agent", {}))
+            pi_command = str(
+                native_agent_config.get("pi_command")
+                or config.NATIVE_AGENT_PI_COMMAND
+                or config.NATIVE_AGENT_COMMAND
+                or "pi"
+            ).strip() or "pi"
+            preflight = run_pi_windows_preflight(
+                PiWindowsPreflightRequest(
+                    cwd=session.working_dir,
+                    pi_command=pi_command,
+                    workspace_history_enabled=bool(native_agent_config.get("workspace_history_enabled", True)),
+                )
+            )
             desired_meta = _native_session_meta(
                 cwd=session.working_dir,
                 model_id=model_id,
@@ -315,6 +330,32 @@ class NativeAgentService:
                 user_message_id=turn_handle.user_message_id,
                 assistant_message_id=turn_handle.assistant_message_id,
             )
+            if not bool(preflight.get("ok")):
+                error_message = str(preflight.get("message") or "Pi 运行前置检查失败")
+                history_service.complete_turn(
+                    turn_handle,
+                    content=error_message,
+                    completion_state="error",
+                    native_session_id=native_session_id,
+                    error_code=str(preflight.get("code") or "pi_preflight_failed"),
+                    error_message=error_message,
+                )
+                if wants_ag_ui:
+                    yield {"type": "ag_ui", "event": build_run_error_event(error_message)}
+                yield {
+                    "type": "error",
+                    "code": str(preflight.get("code") or "pi_preflight_failed"),
+                    "message": error_message,
+                    "preflight": preflight,
+                    "turn_id": turn_handle.turn_id,
+                    "assistant_message_id": turn_handle.assistant_message_id,
+                }
+                return
+            preflight_warnings = [
+                item
+                for item in preflight.get("checks", [])
+                if isinstance(item, dict) and item.get("severity") == "warning" and not item.get("ok")
+            ]
 
             def mark_progress(now: float, *, signature: str = "") -> bool:
                 nonlocal last_progress_at, last_progress_signature
@@ -366,7 +407,7 @@ class NativeAgentService:
                     owner_key=build_pi_owner_key(bot_id=int(session.bot_id or 0), user_id=int(user_id)),
                     conversation_id=turn_handle.conversation_id,
                     cwd=session.working_dir,
-                    command=str(native_agent_config.get("pi_command") or config.NATIVE_AGENT_PI_COMMAND or config.NATIVE_AGENT_COMMAND or "pi"),
+                    command=pi_command,
                     model=model_id,
                     agent_id=agent_id,
                     native_session_id=native_session_id,
@@ -376,25 +417,11 @@ class NativeAgentService:
                 self._seed_runtime_from_record(active_runtime, pi_record)
                 native_session_id = active_runtime.state.native_session_id
                 turn_state.native_session_id = native_session_id
-            if bool(native_agent_config.get("workspace_history_enabled", True)):
-                status = await self._workspace_history.status(active_runtime)
-                if status.degraded:
-                    pi_record = self._pi_session_store.mark_degraded(pi_record_key, status.message) if pi_record_key else pi_record
-                else:
-                    if status.head:
-                        active_runtime.state.workspace_history_head = status.head
-                        if pi_record is not None:
-                            pi_record.workspace_history_head = status.head
-                            pi_record = self._pi_session_store.upsert(pi_record)
-                    if not status.clean or status.manual_change_count > 0:
-                        checkpoint = await self._workspace_history.checkpoint(active_runtime, label="manual-before-turn")
-                        if checkpoint.degraded:
-                            pi_record = self._pi_session_store.mark_degraded(pi_record_key, checkpoint.message) if pi_record_key else pi_record
-                        elif checkpoint.head:
-                            active_runtime.state.workspace_history_head = checkpoint.head
-                            if pi_record is not None:
-                                pi_record.workspace_history_head = checkpoint.head
-                                pi_record = self._pi_session_store.upsert(pi_record)
+            if bool(native_agent_config.get("workspace_history_enabled", True)) and pi_record_key:
+                pi_record = self._pi_session_store.mark_degraded(
+                    pi_record_key,
+                    "workspace history 已降级，不阻断基础 Pi 对话",
+                )
             with session._lock:
                 session.native_agent_server_key = active_runtime.runtime_id
             session.persist()
@@ -407,6 +434,7 @@ class NativeAgentService:
                 "native_provider": NATIVE_AGENT_PROVIDER,
                 "runtime_provider": "pi",
                 "pi_runtime_id": active_runtime.runtime_id,
+                "preflight": preflight,
                 **self._workspace_meta(pi_record, active_runtime),
                 "native_session_id": native_session_id,
                 "turn_id": turn_handle.turn_id,
@@ -416,6 +444,17 @@ class NativeAgentService:
                 "working_dir": session.working_dir,
                 **({"cluster_run_id": normalized_cluster_run_id} if normalized_cluster_run_id else {}),
             }
+            for warning in preflight_warnings:
+                trace_event = {
+                    "kind": "warning",
+                    "source": "native_agent",
+                    "summary": str(warning.get("message") or "Pi preflight warning"),
+                    "preflight_key": str(warning.get("key") or ""),
+                    "fix": str(warning.get("fix") or ""),
+                }
+                live_trace.append(trace_event)
+                persistence_buffer.queue_trace(trace_event)
+                yield {"type": "trace", "event": trace_event}
             if wants_ag_ui:
                 yield {
                     "type": "ag_ui",
@@ -604,13 +643,6 @@ class NativeAgentService:
             )
             if completion_state == "completed" and active_runtime is not None and pi_record_key:
                 final_head = str(getattr(active_runtime.state, "workspace_history_head", "") or "").strip()
-                if bool(native_agent_config.get("workspace_history_enabled", True)):
-                    final_status = await self._workspace_history.status(active_runtime)
-                    if final_status.degraded:
-                        pi_record = self._pi_session_store.mark_degraded(pi_record_key, final_status.message)
-                    elif final_status.head:
-                        final_head = final_status.head
-                        active_runtime.state.workspace_history_head = final_head
                 pi_record = self._pi_session_store.update_after_completed_turn(
                     pi_record_key,
                     pi_session_id=native_session_id,
@@ -763,10 +795,9 @@ def _native_session_meta(*, cwd: str, model_id: str, pi_agent: str) -> dict[str,
 
 
 def _native_session_meta_mismatch(stored_meta: dict[str, Any], desired_meta: dict[str, str]) -> bool:
-    if not isinstance(stored_meta, dict) or not stored_meta:
+    stored_meta = migrate_native_session_meta(stored_meta)
+    if not stored_meta:
         return False
-    if "opencode_agent" in stored_meta and "pi_agent" not in stored_meta:
-        stored_meta = {**stored_meta, "pi_agent": stored_meta.get("opencode_agent")}
     for key, desired_value in desired_meta.items():
         if key not in stored_meta:
             continue

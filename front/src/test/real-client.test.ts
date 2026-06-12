@@ -553,7 +553,7 @@ describe("RealWebBotClient", () => {
     const stream = new ReadableStream({
       start(controller) {
         controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"RUN_STARTED\",\"threadId\":\"thread-1\",\"runId\":\"run-1\"}\n\n"));
-        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"RUN_ERROR\",\"message\":\"OpenCode failed\",\"code\":\"session.error\"}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"RUN_ERROR\",\"message\":\"Pi failed\",\"code\":\"session.error\"}\n\n"));
         controller.close();
       },
     });
@@ -569,7 +569,7 @@ describe("RealWebBotClient", () => {
     expect(message.state).toBe("error");
     expect(message.meta?.tracePresentation).toBeUndefined();
     expect(message.meta?.trace).toEqual([
-      expect.objectContaining({ kind: "error", rawType: "session.error", summary: "OpenCode failed" }),
+      expect.objectContaining({ kind: "error", rawType: "session.error", summary: "Pi failed" }),
     ]);
   });
 
@@ -578,7 +578,7 @@ describe("RealWebBotClient", () => {
     const stream = new ReadableStream({
       start(controller) {
         controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"RUN_STARTED\",\"threadId\":\"thread-1\",\"runId\":\"run-1\"}\n\n"));
-        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"RUN_ERROR\",\"message\":\"OpenCode failed\",\"code\":\"session.error\"}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"RUN_ERROR\",\"message\":\"Pi failed\",\"code\":\"session.error\"}\n\n"));
         controller.close();
       },
     });
@@ -596,7 +596,7 @@ describe("RealWebBotClient", () => {
     expect(message.state).toBe("error");
     expect(message.meta?.tracePresentation).toBe("native_agent_flat");
     expect(message.meta?.trace).toEqual([
-      expect.objectContaining({ kind: "error", rawType: "session.error", summary: "OpenCode failed" }),
+      expect.objectContaining({ kind: "error", rawType: "session.error", summary: "Pi failed" }),
     ]);
   });
 
@@ -785,6 +785,16 @@ describe("RealWebBotClient", () => {
           default_reasoning_effort: "medium",
         }],
         needs_restart: false,
+        preflight: {
+          ok: true,
+          code: "ok",
+          message: "Pi 运行前置检查通过，存在警告：workspace history 已开启",
+          platform: "nt",
+          checks: [
+            { key: "node", ok: true, severity: "info", message: "Node.js 版本可用: v22.0.0", version: "v22.0.0" },
+            { key: "workspace_history", ok: false, severity: "warning", message: "workspace history 已开启", fix: "确认插件可用" },
+          ],
+        },
       }))
       .mockResolvedValueOnce(jsonOk({
         backend: "pi",
@@ -840,6 +850,7 @@ describe("RealWebBotClient", () => {
     expect(config.workspaceHistoryEnabled).toBe(true);
     expect(config.selectedModel).toBe("jojocode_max/gpt-5.4");
     expect(config.selectedReasoningEffort).toBe("medium");
+    expect(config.preflight?.checks[1]).toMatchObject({ key: "workspace_history", severity: "warning" });
     expect(saved.needsRestart).toBe(true);
     expect(saved.configPath).toBe("settings.json");
     expect(saved.workspaceHistoryEnabled).toBe(false);
@@ -854,6 +865,25 @@ describe("RealWebBotClient", () => {
       model: "jojocode_max/gpt-5.5",
       reasoning_effort: "high",
     });
+  });
+
+  test("native agent preflight API maps payload and query", async () => {
+    fetchMock.mockResolvedValue(jsonOk({
+      ok: false,
+      code: "pi_preflight_failed",
+      message: "Pi 运行前置检查失败：未找到 bash",
+      platform: "nt",
+      checks: [
+        { key: "bash", ok: false, severity: "error", message: "未找到 bash", fix: "安装 Git for Windows" },
+      ],
+    }));
+
+    const client = new RealWebBotClient();
+    const preflight = await client.runNativeAgentPreflight({ cwd: "C:\\workspace", piCommand: "C:\\Program Files\\Pi\\pi.cmd" });
+
+    expect(preflight.ok).toBe(false);
+    expect(preflight.checks[0].fix).toBe("安装 Git for Windows");
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/native-agent/preflight?cwd=C%3A%5Cworkspace&pi_command=C%3A%5CProgram+Files%5CPi%5Cpi.cmd");
   });
 
   test("maps context_usage from history and stream done message", async () => {
@@ -1298,7 +1328,6 @@ describe("RealWebBotClient", () => {
         pi_agent: "reviewer",
       },
     });
-    expect(body.native_agent).not.toHaveProperty("opencode_agent");
     expect(bot.nativeAgent).toEqual({
       provider: "anthropic",
       model: "claude-sonnet-4-5",
@@ -1360,7 +1389,6 @@ describe("RealWebBotClient", () => {
       backend: "pi",
       pi_agent: "main",
     });
-    expect(body.native_agent).not.toHaveProperty("opencode_agent");
   });
 
   
@@ -1448,7 +1476,7 @@ describe("RealWebBotClient", () => {
               native_agent: {
                 provider: "anthropic",
                 model: "claude-sonnet-4-5",
-                opencode_agent: "reviewer",
+                pi_agent: "reviewer",
                 base_url: "https://cdn.codeflow.asia/v1",
                 has_api_key: true,
                 api_key_masked: "sk-****abcd",

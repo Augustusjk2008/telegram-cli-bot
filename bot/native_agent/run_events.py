@@ -7,7 +7,7 @@ from typing import Any
 def native_json_to_events(
     raw: dict[str, Any],
     *,
-    provider: str = "opencode",
+    provider: str = "pi",
     cwd: str = "",
     fallback_session_id: str = "",
     assistant_message_id: str = "",
@@ -29,7 +29,7 @@ def native_json_to_events(
     )
 
 
-def extract_native_session_id(raw: dict[str, Any], *, provider: str = "opencode") -> str:
+def extract_native_session_id(raw: dict[str, Any], *, provider: str = "pi") -> str:
     if str(provider or "").strip().lower() == "pi":
         from bot.native_agent.pi_events import extract_session_id as extract_pi_session_id
 
@@ -37,7 +37,7 @@ def extract_native_session_id(raw: dict[str, Any], *, provider: str = "opencode"
     return extract_session_id(raw)
 
 
-def extract_native_context_usage(raw: dict[str, Any], *, provider: str = "opencode") -> dict[str, Any]:
+def extract_native_context_usage(raw: dict[str, Any], *, provider: str = "pi") -> dict[str, Any]:
     if str(provider or "").strip().lower() == "pi":
         from bot.native_agent.pi_events import extract_context_usage
 
@@ -56,7 +56,7 @@ def run_json_to_events(
         return []
     raw_type = str(raw.get("type") or raw.get("event") or raw.get("name") or "").strip()
     session_id = extract_session_id(raw) or fallback_session_id
-    message_id = _message_id(raw) or str(assistant_message_id or "").strip() or "msg_opencode_run_assistant"
+    message_id = _message_id(raw) or str(assistant_message_id or "").strip() or "msg_native_run_assistant"
     directory = str(raw.get("directory") or raw.get("cwd") or cwd or "").strip()
 
     if raw_type in {"step_start", "step-start", "step.start"}:

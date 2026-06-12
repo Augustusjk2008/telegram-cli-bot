@@ -230,6 +230,25 @@ export type NativeAgentModelOption = {
   defaultReasoningEffort?: string;
 };
 
+export type NativeAgentPreflightCheck = {
+  key: string;
+  ok: boolean;
+  severity: "info" | "warning" | "error" | string;
+  message: string;
+  fix?: string;
+  path?: string;
+  command?: string;
+  version?: string;
+};
+
+export type NativeAgentPreflightResult = {
+  ok: boolean;
+  code: string;
+  message: string;
+  platform: string;
+  checks: NativeAgentPreflightCheck[];
+};
+
 export type NativeAgentConfigPayload = {
   config: Record<string, unknown>;
   backend: string;
@@ -239,6 +258,7 @@ export type NativeAgentConfigPayload = {
   selectedModel: string;
   selectedReasoningEffort?: string;
   needsRestart?: boolean;
+  preflight?: NativeAgentPreflightResult;
 };
 
 export type NativeAgentModelsPayload = {

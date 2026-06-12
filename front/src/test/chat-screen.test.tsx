@@ -1309,11 +1309,11 @@ test("live non-native ag-ui session error stays in regular error bubble", async 
     onAgUiEvent,
   ) => {
     onAgUiEvent?.({ type: EventType.RUN_STARTED, threadId: "thread-1", runId: "run-1" });
-    onAgUiEvent?.({ type: EventType.RUN_ERROR, message: "OpenCode failed", code: "session.error" });
+    onAgUiEvent?.({ type: EventType.RUN_ERROR, message: "Pi failed", code: "session.error" });
     return {
       id: "assistant-error",
       role: "assistant",
-      text: "OpenCode failed",
+      text: "Pi failed",
       createdAt: new Date().toISOString(),
       state: "error",
     };
@@ -1326,7 +1326,7 @@ test("live non-native ag-ui session error stays in regular error bubble", async 
   await user.click(screen.getByRole("button", { name: "发送" }));
 
   await waitFor(() => expect(sendMessage).toHaveBeenCalled());
-  expect(await screen.findByText("OpenCode failed")).toBeInTheDocument();
+  expect(await screen.findByText("Pi failed")).toBeInTheDocument();
   expect(screen.queryByTestId("native-agent-transcript")).not.toBeInTheDocument();
 });
 
@@ -1594,7 +1594,7 @@ test("live ag-ui run error renders flat transcript error row", async () => {
     onAgUiEvent,
   ) => {
     onAgUiEvent?.({ type: EventType.RUN_STARTED, threadId: "thread-1", runId: "run-1" });
-    onAgUiEvent?.({ type: EventType.RUN_ERROR, message: "OpenCode failed", code: "session.error" });
+    onAgUiEvent?.({ type: EventType.RUN_ERROR, message: "Pi failed", code: "session.error" });
     onAgUiEvent?.({ type: EventType.RUN_FINISHED, threadId: "thread-1", runId: "run-1", outcome: { type: "interrupt", interrupts: [] } });
     return {
       id: "assistant-error",
@@ -1623,7 +1623,7 @@ test("live ag-ui run error renders flat transcript error row", async () => {
   await user.click(screen.getByRole("button", { name: "发送" }));
 
   const transcript = await screen.findByTestId("native-agent-transcript");
-  expect(within(transcript).getByText("OpenCode failed")).toBeInTheDocument();
+  expect(within(transcript).getByText("Pi failed")).toBeInTheDocument();
   expect(screen.queryByTestId("native-agent-run-timeline")).not.toBeInTheDocument();
 });
 

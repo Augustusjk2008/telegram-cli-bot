@@ -129,7 +129,7 @@ export function WorkbenchHeader({
                   : "text-[var(--text)] hover:bg-[var(--surface-strong)]",
               )}
             >
-              构建
+              IDE
             </button>
             <button
               type="button"

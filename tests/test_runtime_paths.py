@@ -61,3 +61,11 @@ def test_native_agent_paths_default_under_home(monkeypatch, tmp_path: Path):
 
     assert runtime_paths.get_pi_session_store_path() == home / ".tcb" / "orbit-safe-claw" / "native-agent" / "pi_sessions.json"
     assert str(repo) not in str(runtime_paths.get_pi_session_store_path())
+
+
+def test_normalize_workspace_dir_collapses_windows_path_variants(monkeypatch):
+    monkeypatch.setattr(runtime_paths, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(runtime_paths.os.path, "abspath", lambda value: str(value).replace("/", "\\").rstrip("\\"))
+    monkeypatch.setattr(runtime_paths.os.path, "normcase", lambda value: str(value).lower())
+
+    assert runtime_paths.normalize_workspace_dir("C:/Repo/") == runtime_paths.normalize_workspace_dir("c:\\repo")

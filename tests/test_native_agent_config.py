@@ -42,7 +42,6 @@ def test_native_agent_config_store_saves_pi_settings(tmp_path: Path, monkeypatch
     assert payload["config_path"] == str(settings_path)
     assert payload["selected_model"] == "jojocode_max/gpt-5.4"
     assert payload["workspace_history_enabled"] is True
-    assert "opencode_config_path" not in payload
     assert "backup_path" not in payload
     assert json.loads(settings_path.read_text(encoding="utf-8")) == payload["config"]
     assert payload["models"] == [
@@ -94,14 +93,13 @@ def test_native_agent_config_store_uses_variants_as_reasoning_efforts() -> None:
     assert models[0]["default_reasoning_effort"] == ""
 
 
-def test_normalize_native_agent_config_accepts_pi_and_legacy_agents() -> None:
+def test_normalize_native_agent_config_accepts_pi_agent_aliases() -> None:
     from bot.models import normalize_native_agent_config, public_native_agent_config, build_native_agent_model_id
 
     normalized = normalize_native_agent_config(
         {
             "provider": "legacy-provider",
             "native_agent_model": "selected/model",
-            "opencode_agent": "legacy",
             "agent": "agent-legacy",
             "piAgent": "reviewer",
             "pi_command": "pi-custom",
@@ -116,10 +114,8 @@ def test_normalize_native_agent_config_accepts_pi_and_legacy_agents() -> None:
     assert normalized["pi_command"] == "pi-custom"
     assert normalized["workspace_history_enabled"] is False
     assert normalized["reasoning_effort"] == "high"
-    assert "opencode_agent" not in normalized
     public = public_native_agent_config(normalized)
     assert public["pi_agent"] == "reviewer"
-    assert "opencode_agent" not in public
     assert build_native_agent_model_id(normalized) == "selected/model"
 
 
@@ -138,7 +134,6 @@ def test_effective_native_agent_config_normalizes_invalid_reasoning_effort(
     monkeypatch.setattr(config, "NATIVE_AGENT_BASE_URL", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_API_KEY", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_PI_AGENT", "")
-    monkeypatch.setattr(config, "NATIVE_AGENT_OPENCODE_AGENT", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_PI_COMMAND", "pi")
     monkeypatch.setattr(config, "NATIVE_AGENT_WORKSPACE_HISTORY_ENABLED", True)
     monkeypatch.setattr(config, "NATIVE_AGENT_REASONING_EFFORT", "ultra")
@@ -179,7 +174,6 @@ def test_effective_native_agent_config_defaults_to_first_reasoning_effort(
     monkeypatch.setattr(config, "NATIVE_AGENT_BASE_URL", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_API_KEY", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_PI_AGENT", "")
-    monkeypatch.setattr(config, "NATIVE_AGENT_OPENCODE_AGENT", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_PI_COMMAND", "pi")
     monkeypatch.setattr(config, "NATIVE_AGENT_WORKSPACE_HISTORY_ENABLED", True)
     monkeypatch.setattr(config, "NATIVE_AGENT_REASONING_EFFORT", "")

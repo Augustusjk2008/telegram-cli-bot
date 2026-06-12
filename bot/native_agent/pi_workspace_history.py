@@ -60,14 +60,20 @@ class PiWorkspaceHistory:
         raise RuntimeError("Pi workspace history 插件不可用")
 
     async def _wait_result(self, runtime: Any, request_id: str) -> dict[str, Any]:
-        async for event in runtime.events():
-            if not isinstance(event, dict):
-                continue
-            if str(event.get("type") or "") != "workspace_history_result":
-                continue
-            if str(event.get("id") or "") != request_id:
-                continue
-            return event
+        events = runtime.events()
+        try:
+            async for event in events:
+                if not isinstance(event, dict):
+                    continue
+                if str(event.get("type") or "") != "workspace_history_result":
+                    continue
+                if str(event.get("id") or "") != request_id:
+                    continue
+                return event
+        finally:
+            close = getattr(events, "aclose", None)
+            if callable(close):
+                await close()
         raise RuntimeError("Pi workspace history 无响应")
 
     def _status_from_payload(self, payload: dict[str, Any]) -> WorkspaceHistoryStatus:

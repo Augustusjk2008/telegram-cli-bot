@@ -32,7 +32,7 @@ function firstNumber(raw: Record<string, unknown>, ...keys: string[]) {
 
 function displayContextProvider(provider: string) {
   const normalized = provider.trim().toLowerCase();
-  if (normalized === "native_agent" || normalized === "opencode") {
+  if (normalized === "native_agent") {
     return "原生 agent";
   }
   return provider || undefined;

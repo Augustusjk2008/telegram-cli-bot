@@ -449,12 +449,12 @@ def test_chat_store_updates_conversation_native_session_meta(monkeypatch, tmp_pa
     store.set_conversation_native_session(
         conversation_id,
         "sess-1",
-        {"cwd": str(workspace), "model_id": "anthropic/sonnet", "opencode_agent": "reviewer"},
+        {"cwd": str(workspace), "model_id": "anthropic/sonnet", "pi_agent": "reviewer"},
     )
 
     assert store.get_conversation_native_session(conversation_id) == {
         "session_id": "sess-1",
-        "meta": {"cwd": str(workspace), "model_id": "anthropic/sonnet", "opencode_agent": "reviewer"},
+        "meta": {"cwd": str(workspace), "model_id": "anthropic/sonnet", "pi_agent": "reviewer"},
     }
     assert store.get_conversation(conversation_id)["native_session_meta"]["model_id"] == "anthropic/sonnet"
 

@@ -16,6 +16,7 @@ from bot.cluster.config import (
     normalize_agent_cluster_config,
     normalize_bot_cluster_config,
 )
+from bot.native_agent.legacy_migration import migrate_native_agent_payload
 
 if TYPE_CHECKING:
     # 避免循环导入
@@ -105,7 +106,7 @@ def mask_secret(value: Any) -> str:
 
 
 def normalize_native_agent_config(value: Any, *, existing: dict[str, Any] | None = None) -> dict[str, Any]:
-    data = value if isinstance(value, dict) else {}
+    data = migrate_native_agent_payload(value)
     existing_config = dict(existing or {})
     provider = normalize_native_agent_provider(data.get("provider"))
     model = str(
@@ -120,14 +121,7 @@ def normalize_native_agent_config(value: Any, *, existing: dict[str, Any] | None
     ).strip()
     if provider and model and "/" not in model:
         model = f"{provider}/{model}"
-    pi_agent = str(
-        data.get("pi_agent")
-        or data.get("piAgent")
-        or data.get("opencode_agent")
-        or data.get("opencodeAgent")
-        or data.get("agent")
-        or ""
-    ).strip()
+    pi_agent = str(data.get("pi_agent") or "").strip()
     pi_command = str(data.get("pi_command") or data.get("piCommand") or "").strip()
     workspace_history_value = _native_agent_value(data, "workspace_history_enabled", "workspaceHistoryEnabled")
     reasoning_effort = str(
@@ -157,10 +151,6 @@ def normalize_native_agent_config(value: Any, *, existing: dict[str, Any] | None
             "selected_model",
             "selectedModel",
             "pi_agent",
-            "piAgent",
-            "opencode_agent",
-            "opencodeAgent",
-            "agent",
             "pi_command",
             "piCommand",
             "workspace_history_enabled",

@@ -138,6 +138,11 @@ from bot.native_agent.config_store import (
     load_native_agent_config,
     save_native_agent_config,
 )
+from bot.native_agent.legacy_migration import (
+    LEGACY_EXECUTION_MODE_REMOVED_MESSAGE,
+    is_legacy_execution_mode,
+)
+from bot.native_agent.pi_rpc_preflight import PiWindowsPreflightRequest, run_pi_windows_preflight
 from bot.native_agent.pi_session_store import PiSessionStore, pi_session_key
 from bot.platform.output import strip_ansi_escape
 from bot.platform.processes import build_chat_cli_process_kwargs, build_hidden_process_kwargs, terminate_process_tree_sync
@@ -634,6 +639,12 @@ def _history_service_for_execution_mode(session: UserSession, execution_mode: st
     return ChatHistoryService(_get_chat_store(session), native_provider_exclude=NATIVE_AGENT_PROVIDER)
 
 
+def _resolve_requested_execution_mode(execution_mode: str, profile: BotProfile) -> str:
+    if is_legacy_execution_mode(execution_mode):
+        _raise(400, "invalid_execution_mode", LEGACY_EXECUTION_MODE_REMOVED_MESSAGE)
+    return normalize_execution_mode(execution_mode, profile)
+
+
 def _pi_store() -> PiSessionStore:
     return PiSessionStore()
 
@@ -802,7 +813,7 @@ def list_bots(manager: MultiBotManager, user_id: Optional[int] = None) -> list[d
 
 def get_overview(manager: MultiBotManager, alias: str, user_id: int, agent_id: str = "main", execution_mode: str = "") -> dict[str, Any]:
     profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
-    resolved_execution_mode = normalize_execution_mode(execution_mode, profile)
+    resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     bot_id = resolve_session_bot_id(manager, alias)
     active_cluster_run = _find_active_cluster_run_for_session(alias, user_id, session)
     history_service = _history_service_for_execution_mode(session, resolved_execution_mode)
@@ -2062,7 +2073,35 @@ def get_native_agent_config_payload() -> dict[str, Any]:
         "selected_model": str(native_config.get("model") or native_config.get("selected_model") or "").strip(),
         "selected_reasoning_effort": str(native_config.get("reasoning_effort") or "").strip(),
         "needs_restart": False,
+        "preflight": get_native_agent_preflight_payload(native_config=native_config),
     }
+
+
+def get_native_agent_preflight_payload(
+    *,
+    cwd: str = "",
+    pi_command: str = "",
+    native_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    try:
+        resolved_config = native_config if native_config is not None else load_native_agent_config()
+    except ValueError as exc:
+        _raise(400, "invalid_native_agent_config", str(exc))
+    command = str(
+        pi_command
+        or resolved_config.get("pi_command")
+        or config.NATIVE_AGENT_PI_COMMAND
+        or config.NATIVE_AGENT_COMMAND
+        or "pi"
+    ).strip() or "pi"
+    workspace_history_enabled = resolved_config.get("workspace_history_enabled", True)
+    return run_pi_windows_preflight(
+        PiWindowsPreflightRequest(
+            cwd=Path(cwd or Path.cwd()),
+            pi_command=command,
+            workspace_history_enabled=bool(workspace_history_enabled) if workspace_history_enabled is not None else None,
+        )
+    )
 
 
 def update_native_agent_config_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -2186,7 +2225,7 @@ def get_history(
     execution_mode: str = "",
 ) -> dict[str, Any]:
     profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
-    resolved_execution_mode = normalize_execution_mode(execution_mode, profile)
+    resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     service = _history_service_for_execution_mode(session, resolved_execution_mode)
     return {"items": service.list_history(profile, session, limit=max(1, limit))}
 
@@ -2230,7 +2269,7 @@ def list_conversations(
     execution_mode: str = "",
 ) -> dict[str, Any]:
     profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
-    resolved_execution_mode = normalize_execution_mode(execution_mode, profile)
+    resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     store = _get_chat_store(session)
     active_id = str(getattr(session, "active_conversation_id", "") or "")
     visible_active_id = active_id if _active_conversation_matches_execution_mode(store, active_id, resolved_execution_mode) else ""
@@ -2277,7 +2316,7 @@ def _create_agent_conversation(
     execution_mode: str = "",
 ) -> tuple[ChatStore, str]:
     store = _get_chat_store(session)
-    resolved_execution_mode = normalize_execution_mode(execution_mode, profile)
+    resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     native_provider = NATIVE_AGENT_PROVIDER if resolved_execution_mode == NATIVE_AGENT_PROVIDER else normalize_cli_type(profile.cli_type)
     conversation_id = store.create_conversation(
         bot_id=session.bot_id,
@@ -2332,7 +2371,7 @@ def create_conversation(
     execution_mode: str = "",
 ) -> dict[str, Any]:
     profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
-    resolved_execution_mode = normalize_execution_mode(execution_mode, profile)
+    resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     with session._lock:
         is_processing = bool(session.is_processing)
     if is_processing:
@@ -2364,7 +2403,7 @@ def select_conversation(
     execution_mode: str = "",
 ) -> dict[str, Any]:
     profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
-    requested_execution_mode = normalize_execution_mode(execution_mode, profile)
+    requested_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     with session._lock:
         is_processing = bool(session.is_processing)
     if is_processing:
@@ -2440,7 +2479,7 @@ def delete_conversation(
     execution_mode: str = "",
 ) -> dict[str, Any]:
     profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
-    requested_execution_mode = normalize_execution_mode(execution_mode, profile)
+    requested_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     with session._lock:
         is_processing = bool(session.is_processing)
     if is_processing:
@@ -2530,7 +2569,7 @@ def delete_all_conversations(
     delete_native_session: bool = False,
 ) -> dict[str, Any]:
     profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
-    resolved_execution_mode = normalize_execution_mode(execution_mode, profile)
+    resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     with session._lock:
         if bool(session.is_processing):
             _raise(409, "conversation_switch_blocked", "当前任务运行中，先终止或等待完成")
@@ -2607,7 +2646,7 @@ def get_history_delta(
     execution_mode: str = "",
 ) -> dict[str, Any]:
     profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
-    resolved_execution_mode = normalize_execution_mode(execution_mode, profile)
+    resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     items = _history_service_for_execution_mode(session, resolved_execution_mode).list_history(profile, session, limit=max(1, limit))
     marker = str(after_id or "")
     if not marker:
@@ -2628,7 +2667,7 @@ def get_history_trace(
     execution_mode: str = "",
 ) -> dict[str, Any]:
     profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
-    resolved_execution_mode = normalize_execution_mode(execution_mode, profile)
+    resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     service = _history_service_for_execution_mode(session, resolved_execution_mode)
     data = service.get_message_trace(profile, session, message_id)
     if data is None:
@@ -2810,7 +2849,7 @@ async def kill_user_process(
 ) -> dict[str, Any]:
     user_id = chat_session_user_id(user_id)
     profile = get_profile_or_raise(manager, alias)
-    resolved_execution_mode = normalize_execution_mode(execution_mode, profile)
+    resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     normalized_agent_id = str(agent_id or "main").strip().lower() or "main"
     if resolved_execution_mode == NATIVE_AGENT_PROVIDER:
         normalized_agent_id = "main"
@@ -5934,7 +5973,7 @@ async def run_chat(
 ) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     shared_user_id = chat_session_user_id(user_id)
-    resolved_execution_mode = normalize_execution_mode(execution_mode, profile)
+    resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     if profile.bot_mode == "assistant":
         if manager.assistant_runtime is None:
             _raise(503, "assistant_runtime_unavailable", "assistant 运行时尚未启动")
@@ -6064,7 +6103,7 @@ async def stream_chat(
     try:
         profile = get_profile_or_raise(manager, alias)
         shared_user_id = chat_session_user_id(user_id)
-        resolved_execution_mode = normalize_execution_mode(execution_mode, profile)
+        resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
         if profile.bot_mode == "assistant":
             if manager.assistant_runtime is None:
                 _raise(503, "assistant_runtime_unavailable", "assistant 运行时尚未启动")

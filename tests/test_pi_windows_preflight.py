@@ -38,8 +38,10 @@ def test_pi_windows_preflight_reports_missing_node(tmp_path: Path) -> None:
     )
 
     assert result["ok"] is False
+    assert result["code"] == "pi_preflight_failed"
     assert _check(result, "node")["ok"] is False
-    assert "未找到 node" in _check(result, "node")["message"]
+    assert _check(result, "node")["severity"] == "error"
+    assert "未找到 Node" in _check(result, "node")["message"]
     assert "Node.js 22" in _check(result, "node")["fix"]
 
 
@@ -72,7 +74,50 @@ def test_pi_windows_preflight_reports_missing_pi(tmp_path: Path) -> None:
     assert "NATIVE_AGENT_PI_COMMAND" in _check(result, "pi")["fix"]
 
 
-def test_pi_windows_preflight_reports_missing_bash_on_windows(tmp_path: Path) -> None:
+def test_pi_windows_preflight_runs_pi_version(tmp_path: Path) -> None:
+    commands: list[list[str]] = []
+
+    def run(command: list[str]) -> tuple[int, str, str]:
+        commands.append(command)
+        if command[-1] == "--version" and "pi" in command[-2]:
+            return 0, "pi 1.2.3\n", ""
+        return 0, "v22.0.0\n", ""
+
+    result = run_pi_windows_preflight(
+        _request(tmp_path),
+        os_name="nt",
+        resolve_executable=_resolver({"node": "C:/node/node.exe", "pi": "C:/npm/pi.cmd", "bash": "C:/Git/bin/bash.exe"}),
+        run_command=run,
+        is_dir_writable=lambda _path: True,
+    )
+
+    assert result["ok"] is True
+    assert _check(result, "pi")["version"] == "pi 1.2.3"
+    assert any(command[-1] == "--version" and "pi" in command[-2] for command in commands)
+
+
+def test_pi_windows_preflight_reports_pi_version_failure(tmp_path: Path) -> None:
+    def run(command: list[str]) -> tuple[int, str, str]:
+        if command[-1] == "--version" and "pi" in command[-2]:
+            return 1, "", "boom"
+        return 0, "v22.0.0\n", ""
+
+    result = run_pi_windows_preflight(
+        _request(tmp_path),
+        os_name="nt",
+        resolve_executable=_resolver({"node": "C:/node/node.exe", "pi": "C:/npm/pi.cmd", "bash": "C:/Git/bin/bash.exe"}),
+        run_command=run,
+        is_dir_writable=lambda _path: True,
+    )
+
+    assert result["ok"] is False
+    assert _check(result, "pi")["ok"] is False
+    assert "Pi CLI 版本检查失败" in _check(result, "pi")["message"]
+
+
+def test_pi_windows_preflight_reports_missing_bash_on_windows(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("bot.native_agent.pi_rpc_preflight._common_windows_bash_paths", lambda: [])
+
     result = run_pi_windows_preflight(
         _request(tmp_path),
         os_name="nt",
@@ -84,6 +129,34 @@ def test_pi_windows_preflight_reports_missing_bash_on_windows(tmp_path: Path) ->
     assert result["ok"] is False
     assert _check(result, "bash")["ok"] is False
     assert "未找到 bash" in _check(result, "bash")["message"]
+
+
+def test_pi_windows_preflight_uses_shell_path_from_settings(tmp_path: Path) -> None:
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text('{"shellPath":"C:/Git/bin/bash.exe"}', encoding="utf-8")
+    seen: list[list[str]] = []
+
+    def run(command: list[str]) -> tuple[int, str, str]:
+        seen.append(command)
+        if command[-1] == "--version" and "bash" in command[-2]:
+            return 0, "GNU bash, version 5.2\n", ""
+        return 0, "v22.0.0\n", ""
+
+    result = run_pi_windows_preflight(
+        _request(tmp_path, settings_path=settings_path),
+        os_name="nt",
+        resolve_executable=_resolver({
+            "node": "C:/node/node.exe",
+            "pi": "C:/npm/pi.cmd",
+            "C:/Git/bin/bash.exe": "C:/Git/bin/bash.exe",
+        }),
+        run_command=run,
+        is_dir_writable=lambda _path: True,
+    )
+
+    assert result["ok"] is True
+    assert _check(result, "bash")["version"] == "GNU bash, version 5.2"
+    assert any("bash" in command[-2] for command in seen)
 
 
 def test_pi_windows_preflight_reports_unwritable_data_dir(tmp_path: Path) -> None:
@@ -109,9 +182,24 @@ def test_pi_windows_preflight_reports_workspace_history_unknown(tmp_path: Path) 
         is_dir_writable=lambda _path: True,
     )
 
-    assert result["ok"] is False
+    assert result["ok"] is True
     assert _check(result, "workspace_history")["ok"] is False
+    assert _check(result, "workspace_history")["severity"] == "warning"
     assert "无法判定" in _check(result, "workspace_history")["message"]
+
+
+def test_pi_windows_preflight_warns_when_workspace_history_enabled(tmp_path: Path) -> None:
+    result = run_pi_windows_preflight(
+        _request(tmp_path, workspace_history_enabled=True),
+        os_name="nt",
+        resolve_executable=_resolver({"node": "C:/node/node.exe", "pi": "C:/npm/pi.cmd", "bash": "C:/Git/bin/bash.exe"}),
+        run_command=_runner(),
+        is_dir_writable=lambda _path: True,
+    )
+
+    assert result["ok"] is True
+    assert _check(result, "workspace_history")["severity"] == "warning"
+    assert "不阻断" in _check(result, "workspace_history")["message"]
 
 
 def test_pi_windows_preflight_accepts_workspace_history_disabled(tmp_path: Path) -> None:
@@ -126,6 +214,21 @@ def test_pi_windows_preflight_accepts_workspace_history_disabled(tmp_path: Path)
     assert result["ok"] is True
     assert _check(result, "workspace_history")["ok"] is True
     assert "已关闭" in _check(result, "workspace_history")["message"]
+
+
+def test_pi_windows_preflight_warns_tcb_data_dir_inside_workspace(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("TCB_DATA_DIR", str(tmp_path / "data"))
+
+    result = run_pi_windows_preflight(
+        _request(tmp_path, workspace_history_enabled=False),
+        os_name="nt",
+        resolve_executable=_resolver({"node": "C:/node/node.exe", "pi": "C:/npm/pi.cmd", "bash": "C:/Git/bin/bash.exe"}),
+        run_command=_runner(),
+        is_dir_writable=lambda _path: True,
+    )
+
+    assert result["ok"] is True
+    assert _check(result, "tcb_data_dir")["severity"] == "warning"
 
 
 def test_pi_windows_preflight_uses_chinese_executable_errors(tmp_path: Path) -> None:

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import json
 import os
 from pathlib import Path
@@ -16,7 +15,6 @@ from bot.native_agent.ag_ui_mapper import AgUiTurnState, build_run_error_event, 
 from bot.native_agent.events import is_relevant_event, unwrap_event
 from bot.native_agent import service as native_service_module
 from bot.native_agent.pi_rpc_client import PiRpcRunError
-from bot.native_agent.run_client import NativeAgentRunClient, NativeAgentRunError, NativeAgentRunRequest
 from bot.native_agent.run_events import extract_step_finish_usage, native_json_to_events, run_json_to_events
 from bot.native_agent.service import NativeAgentService, normalize_execution_mode
 from bot.native_agent.turn_state import NativeAgentTurnState
@@ -28,15 +26,24 @@ from bot.web.chat_store import ChatStore
 def clear_native_agent_global_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     from bot import config
 
-    monkeypatch.setenv("OPENCODE_CONFIG", str(tmp_path / "opencode.json"))
     monkeypatch.setenv("TCB_DATA_DIR", str(tmp_path / "tcb-data"))
     monkeypatch.setattr(config, "NATIVE_AGENT_PROVIDER", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_MODEL", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_BASE_URL", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_API_KEY", "")
-    monkeypatch.setattr(config, "NATIVE_AGENT_OPENCODE_AGENT", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_REASONING_EFFORT", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_THINKING_DEPTH", "")
+    monkeypatch.setattr(native_service_module, "run_pi_windows_preflight", lambda _request: {
+        "ok": True,
+        "code": "ok",
+        "message": "Pi 运行前置检查通过",
+        "platform": "nt",
+        "checks": [
+            {"key": "node", "ok": True, "severity": "info", "message": "Node.js 版本可用: v22.0.0", "fix": ""},
+            {"key": "pi", "ok": True, "severity": "info", "message": "Pi CLI 可用", "fix": ""},
+            {"key": "bash", "ok": True, "severity": "info", "message": "bash 可用", "fix": ""},
+        ],
+    })
 
 
 async def _collect_native_stream(stream):
@@ -68,41 +75,6 @@ def test_native_agent_relevant_event_normalizes_cwd(tmp_path: Path):
 
     assert event is not None
     assert is_relevant_event(event, session_id="sess-1", cwd=str(tmp_path))
-
-
-def test_native_agent_run_config_injects_tcb_cluster_mcp_config(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    from bot.native_agent import config_store, run_config
-
-    monkeypatch.setenv("OPENCODE_CONFIG", str(tmp_path / "opencode.json"))
-    monkeypatch.setattr(config_store, "get_app_data_root", lambda: tmp_path / "data")
-    monkeypatch.setattr(run_config, "get_app_data_root", lambda: tmp_path / "data")
-    monkeypatch.setattr(run_config, "prepare_cluster_mcp_launcher_for_native", lambda: tmp_path / "tcb-cluster-mcp.cmd")
-    config_store.save_native_agent_config({
-        "provider": {
-            "jojocode": {
-                "models": {"gpt-5.4": {"name": "gpt-5.4"}},
-            }
-        },
-        "mcp": {
-            "existing": {"type": "local", "command": ["existing"], "enabled": True},
-        },
-    })
-
-    path = run_config.write_runtime_opencode_config(
-        key="key-1",
-        native_agent={"native_agent_model": "jojocode/gpt-5.4"},
-    )
-
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    assert payload["mcp"]["existing"]["command"] == ["existing"]
-    assert payload["mcp"]["tcb-cluster"] == {
-        "type": "local",
-        "command": [str(tmp_path / "tcb-cluster-mcp.cmd")],
-        "enabled": True,
-    }
 
 
 def test_native_agent_run_events_map_text_and_step_finish():
@@ -184,122 +156,6 @@ def test_native_agent_run_events_do_not_idle_on_tool_calls_step_finish():
     }
 
 
-def test_native_agent_run_client_builds_opencode_run_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    from bot.native_agent import run_client
-
-    monkeypatch.setattr(run_client, "runtime_config_key", lambda **_kwargs: "key-1")
-    monkeypatch.setattr(run_client, "write_runtime_opencode_config", lambda **_kwargs: tmp_path / "run.json")
-    monkeypatch.setattr(run_client, "resolve_cli_executable", lambda command, _cwd=None: f"C:/tools/{command}.cmd")
-    monkeypatch.setattr(run_client, "build_executable_invocation", lambda path: ["cmd.exe", "/d", "/c", path])
-
-    args, env, config_path = NativeAgentRunClient().build_run_command(
-        NativeAgentRunRequest(
-            cwd=str(tmp_path),
-            prompt="你好",
-            command="opencode",
-            session_id="sess-1",
-            model_id="anthropic/claude",
-            agent_id="reviewer",
-            variant="high",
-            native_agent={"native_agent_model": "anthropic/claude"},
-        )
-    )
-
-    assert args == [
-        "cmd.exe",
-        "/d",
-        "/c",
-        "C:/tools/opencode.cmd",
-        "run",
-        "--format",
-        "json",
-        "--dir",
-        str(tmp_path.resolve()),
-        "--session",
-        "sess-1",
-        "--model",
-        "anthropic/claude",
-        "--agent",
-        "reviewer",
-        "--variant",
-        "high",
-        "你好",
-    ]
-    assert env["OPENCODE_CONFIG"] == str(tmp_path / "run.json")
-    assert config_path == tmp_path / "run.json"
-
-
-@pytest.mark.asyncio
-async def test_native_agent_run_client_stream_parses_json_and_raw_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    from bot.native_agent import run_client
-
-    class FakeProcess:
-        def __init__(self, *_args, **_kwargs) -> None:
-            self.stdout = io.StringIO('{"type":"text","text":"回"}\nnot-json\n')
-            self.stderr = io.StringIO("")
-            self.returncode = None
-
-        def poll(self):
-            return self.returncode
-
-        def wait(self, timeout=None):
-            self.returncode = 0
-            return 0
-
-        def terminate(self):
-            self.returncode = -15
-
-    monkeypatch.setattr(run_client.subprocess, "Popen", FakeProcess)
-    monkeypatch.setattr(run_client, "runtime_config_key", lambda **_kwargs: "key-1")
-    monkeypatch.setattr(run_client, "write_runtime_opencode_config", lambda **_kwargs: tmp_path / "run.json")
-
-    events = [
-        event async for event in NativeAgentRunClient().stream(
-            NativeAgentRunRequest(cwd=str(tmp_path), prompt="你好", command="opencode")
-        )
-    ]
-
-    assert events == [
-        {"type": "text", "text": "回"},
-        {"type": "raw_text", "raw_text": "not-json"},
-    ]
-
-
-@pytest.mark.asyncio
-async def test_native_agent_run_client_raises_with_stderr_on_nonzero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    from bot.native_agent import run_client
-
-    class FakeProcess:
-        def __init__(self, *_args, **_kwargs) -> None:
-            self.stdout = io.StringIO("")
-            self.stderr = io.StringIO("bad session\n")
-            self.returncode = None
-
-        def poll(self):
-            return self.returncode
-
-        def wait(self, timeout=None):
-            self.returncode = 2
-            return 2
-
-        def terminate(self):
-            self.returncode = -15
-
-    monkeypatch.setattr(run_client.subprocess, "Popen", FakeProcess)
-    monkeypatch.setattr(run_client, "runtime_config_key", lambda **_kwargs: "key-1")
-    monkeypatch.setattr(run_client, "write_runtime_opencode_config", lambda **_kwargs: tmp_path / "run.json")
-
-    with pytest.raises(NativeAgentRunError) as exc_info:
-        _ = [
-            event async for event in NativeAgentRunClient().stream(
-                NativeAgentRunRequest(cwd=str(tmp_path), prompt="你好", command="opencode")
-            )
-        ]
-
-    assert exc_info.value.returncode == 2
-    assert "bad session" in str(exc_info.value)
-
-
 def test_native_agent_normalizer_accepts_official_properties_part_delta():
     aggregator = NativeAgentAggregator(user_message_id="u1")
     event = unwrap_event({
@@ -320,7 +176,7 @@ def test_native_agent_normalizer_accepts_official_properties_part_delta():
     assert aggregator.text() == "ok"
 
 
-def test_native_agent_aggregator_ignores_user_part_and_streams_opencode_delta():
+def test_native_agent_aggregator_ignores_user_part_and_streams_text_delta():
     aggregator = NativeAgentAggregator(user_message_id="msg-user")
 
     user_part = unwrap_event({
@@ -381,7 +237,7 @@ def test_native_agent_aggregator_ignores_user_part_and_streams_opencode_delta():
     assert aggregator.text() == "收到了"
 
 
-def test_native_agent_aggregator_uses_part_message_id_over_event_id_for_opencode_events():
+def test_native_agent_aggregator_uses_part_message_id_over_event_id():
     aggregator = NativeAgentAggregator(user_message_id="msg-user")
 
     user_part = unwrap_event({
@@ -1297,7 +1153,7 @@ def test_native_agent_ag_ui_mapper_suppresses_reasoning_and_emits_tool_and_error
     assert tool_event is not None
     tool_result = aggregator.apply(tool_event)
     tool_types = [event.type for event in map_ag_ui_event(event=tool_event, result=tool_result, state=state)]
-    error_event = build_run_error_event("OpenCode failed")
+    error_event = build_run_error_event("Pi failed")
     context_usage = {"session_id": "sess-1", "context_used": 100}
     finished_event = build_run_finished_event(
         state=state,
@@ -1464,25 +1320,22 @@ def test_pi_turn_end_does_not_finish_without_activity_through_facade():
     assert aggregator.text() == ""
 
 
-def test_native_json_to_events_keeps_opencode_default_behavior():
+def test_native_json_to_events_defaults_to_pi_events():
     event = native_json_to_events(
         {
-            "type": "text",
-            "sessionID": "sess-1",
-            "part": {"id": "p1", "type": "text", "text": "你好"},
+            "type": "turn_end",
+            "sessionId": "sess-1",
         },
-        cwd="/repo",
-        assistant_message_id="assistant-1",
+        fallback_session_id="sess-1",
     )
 
-    assert event == run_json_to_events(
+    assert event == native_json_to_events(
         {
-            "type": "text",
-            "sessionID": "sess-1",
-            "part": {"id": "p1", "type": "text", "text": "你好"},
+            "type": "turn_end",
+            "sessionId": "sess-1",
         },
-        cwd="/repo",
-        assistant_message_id="assistant-1",
+        provider="pi",
+        fallback_session_id="sess-1",
     )
 
 
@@ -1534,7 +1387,6 @@ def test_native_agent_global_config_requires_provider_when_model_has_no_provider
     monkeypatch.setattr(config, "NATIVE_AGENT_MODEL", "gpt-5.4")
     monkeypatch.setattr(config, "NATIVE_AGENT_BASE_URL", "https://jojocode.com/v1")
     monkeypatch.setattr(config, "NATIVE_AGENT_API_KEY", "sk-global-1234")
-    monkeypatch.setattr(config, "NATIVE_AGENT_OPENCODE_AGENT", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_REASONING_EFFORT", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_THINKING_DEPTH", "")
 
@@ -1550,7 +1402,6 @@ def test_native_agent_global_config_splits_provider_from_model(monkeypatch: pyte
     monkeypatch.setattr(config, "NATIVE_AGENT_MODEL", "jojocode/gpt-5.4")
     monkeypatch.setattr(config, "NATIVE_AGENT_BASE_URL", "https://jojocode.com/v1")
     monkeypatch.setattr(config, "NATIVE_AGENT_API_KEY", "sk-global-1234")
-    monkeypatch.setattr(config, "NATIVE_AGENT_OPENCODE_AGENT", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_REASONING_EFFORT", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_THINKING_DEPTH", "")
 
@@ -1576,54 +1427,6 @@ class FakeRunProcess:
     def kill(self):
         self.terminated = True
         self.returncode = -9
-
-
-class FakeRunClient:
-    def __init__(
-        self,
-        events: list[dict[str, object]] | None = None,
-        *,
-        error: BaseException | None = None,
-        export_messages: list[dict[str, object]] | None = None,
-        gate: asyncio.Event | None = None,
-        started: asyncio.Event | None = None,
-        event_delay_seconds: float = 0.0,
-        wait_after_first_event: bool = False,
-        workspace_results: dict[str, list[dict[str, object]]] | None = None,
-    ) -> None:
-        self.events = list(events or [])
-        self.error = error
-        self.export_messages = list(export_messages or [])
-        self.requests: list[NativeAgentRunRequest] = []
-        self.export_requests: list[object] = []
-        self.process = FakeRunProcess()
-        self.killed = False
-        self.gate = gate
-        self.started = started
-        self.event_delay_seconds = event_delay_seconds
-        self.wait_after_first_event = wait_after_first_event
-
-    async def stream(self, request: NativeAgentRunRequest):
-        self.requests.append(request)
-        if request.on_process is not None:
-            request.on_process(self.process)
-        if self.started is not None:
-            self.started.set()
-        if self.gate is not None:
-            await self.gate.wait()
-        if self.error is not None:
-            raise self.error
-        for event in self.events:
-            await asyncio.sleep(self.event_delay_seconds)
-            yield event
-
-    async def export_session(self, request):
-        self.export_requests.append(request)
-        return self.export_messages
-
-    def kill(self) -> None:
-        self.killed = True
-        self.process.terminate()
 
 
 class FakePiRuntime:
@@ -1857,15 +1660,17 @@ async def test_native_agent_service_completed_turn_writes_workspace_history(tmp_
     ]
 
     done = next(event for event in events if event["type"] == "done")
-    assert [item["action"] for item in runtime.workspace_requests] == ["status", "status"]
-    assert done["message"]["meta"]["workspace_history_head"] == "head-after"
+    assert runtime.workspace_requests == []
+    assert done["message"]["meta"]["workspace_history_head"] == "head-1"
     assert done["message"]["meta"]["linear_index"] == 1
+    assert done["message"]["meta"]["degraded"] is True
     key = pi_session_key(cwd=str(tmp_path), bot_id=1, user_id=1, conversation_id=done["message"]["conversation_id"])
     record = PiSessionStore().get(key)
     assert record is not None
     assert record.linear_index == 1
-    assert record.workspace_history_head == "head-after"
-    assert history.store.get_turn_workspace_history(done["turn_id"])["workspace_history_head"] == "head-after"
+    assert record.workspace_history_head == "head-1"
+    assert record.degraded is True
+    assert history.store.get_turn_workspace_history(done["turn_id"])["workspace_history_head"] == "head-1"
 
 
 @pytest.mark.asyncio
@@ -1903,8 +1708,7 @@ async def test_native_agent_service_dirty_workspace_checkpoints_before_turn(tmp_
         )
     ]
 
-    assert [item["action"] for item in runtime.workspace_requests] == ["status", "checkpoint", "status"]
-    assert runtime.workspace_requests[1]["label"] == "manual-before-turn"
+    assert runtime.workspace_requests == []
     assert "changed_paths" not in json.dumps(events, ensure_ascii=False)
 
 

@@ -5,17 +5,10 @@ import os
 from pathlib import Path
 from typing import Any
 
-from bot.runtime_paths import get_app_data_root
-
-OPENCODE_SCHEMA = "https://opencode.ai/config.json"
-BUILTIN_PROVIDER_IDS = {"anthropic", "openai"}
-
-
-def get_opencode_config_path() -> Path:
-    override = os.environ.get("OPENCODE_CONFIG")
-    if override:
-        return Path(override).expanduser()
-    return Path.home() / ".config" / "opencode" / "opencode.json"
+from bot.native_agent.legacy_migration import (
+    LEGACY_NATIVE_AGENT_DOCUMENT_KEYS,
+    migrate_native_agent_payload,
+)
 
 
 def get_pi_settings_path() -> Path:
@@ -23,10 +16,6 @@ def get_pi_settings_path() -> Path:
     if override:
         return Path(override).expanduser()
     return Path.home() / ".pi" / "agent" / "settings.json"
-
-
-def get_native_agent_backup_path() -> Path:
-    return get_app_data_root() / "native_agent" / "opencode.config.backup.json"
 
 
 def load_native_agent_config() -> dict[str, Any]:
@@ -52,82 +41,10 @@ def save_native_agent_config(config: dict[str, Any]) -> dict[str, Any]:
         "config_path": str(settings_path),
         "workspace_history_enabled": bool(normalized.get("workspace_history_enabled", True)),
         "models": list_configured_models(normalized),
-        "selected_model": str(normalized.get("model") or normalized.get("selected_model") or "").strip(),
+        "selected_model": str(normalized.get("model") or "").strip(),
         "selected_reasoning_effort": str(normalized.get("reasoning_effort") or "").strip(),
         "needs_restart": True,
     }
-
-
-def ensure_opencode_config(native_agent: dict[str, Any] | None = None) -> Path:
-    opencode_path = get_opencode_config_path()
-    backup_path = get_native_agent_backup_path()
-    if backup_path.is_file():
-        config = load_native_agent_config()
-        _write_json(opencode_path, config)
-        return opencode_path
-    if opencode_path.is_file():
-        try:
-            payload = json.loads(opencode_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            payload = {}
-        if isinstance(payload, dict) and list_configured_models(payload):
-            return opencode_path
-        fallback = build_legacy_opencode_config(native_agent or {})
-        if fallback:
-            _write_json(opencode_path, fallback)
-            _write_json(backup_path, fallback)
-        return opencode_path
-    try:
-        configured = load_native_agent_config()
-    except ValueError:
-        configured = {}
-    if configured and list_configured_models(configured):
-        _write_json(opencode_path, configured)
-        return opencode_path
-    fallback = build_legacy_opencode_config(native_agent or {})
-    if fallback:
-        _write_json(opencode_path, fallback)
-        _write_json(backup_path, fallback)
-    return opencode_path
-
-
-def build_legacy_opencode_config(native_agent: dict[str, Any]) -> dict[str, Any] | None:
-    provider = str(native_agent.get("provider") or "").strip().lower()
-    model = str(native_agent.get("model") or "").strip()
-    base_url = str(native_agent.get("base_url") or "").strip().rstrip("/")
-    api_key = str(native_agent.get("api_key") or "").strip()
-    if not (provider and model and (base_url or api_key)):
-        return None
-    model_name = model.split("/", 1)[1] if "/" in model else model
-    provider_config: dict[str, Any] = {
-        "options": {},
-        "models": {
-            model_name: {
-                "name": model_name,
-            },
-        },
-    }
-    model_options = _model_options(native_agent)
-    if model_options:
-        provider_config["models"][model_name]["options"] = model_options
-    if provider not in BUILTIN_PROVIDER_IDS:
-        provider_config["npm"] = "@ai-sdk/openai-compatible"
-        provider_config["name"] = provider[:1].upper() + provider[1:] if provider else "Provider"
-    if base_url:
-        provider_config["options"]["baseURL"] = base_url
-    if api_key:
-        provider_config["options"]["apiKey"] = api_key
-    opencode_agent = str(native_agent.get("pi_agent") or native_agent.get("opencode_agent") or "").strip()
-    payload: dict[str, Any] = {
-        "$schema": OPENCODE_SCHEMA,
-        "model": f"{provider}/{model_name}",
-        "provider": {
-            provider: provider_config,
-        },
-    }
-    if opencode_agent:
-        payload["agent"] = opencode_agent
-    return payload
 
 
 def list_configured_models(config: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -236,39 +153,25 @@ def normalize_native_agent_config_document(
 ) -> dict[str, Any]:
     if not isinstance(config, dict):
         raise ValueError("原生 Agent 配置必须是 JSON 对象")
-    payload = dict(config)
+    payload = migrate_native_agent_payload(config)
     payload["backend"] = "pi"
     if "selected_model" in payload and not payload.get("model"):
         payload["model"] = str(payload.get("selected_model") or "").strip()
     if "selectedModel" in payload and not payload.get("model"):
         payload["model"] = str(payload.get("selectedModel") or "").strip()
-    if "piAgent" in payload and "pi_agent" not in payload:
-        payload["pi_agent"] = str(payload.get("piAgent") or "").strip()
     if "piCommand" in payload and "pi_command" not in payload:
         payload["pi_command"] = str(payload.get("piCommand") or "").strip()
-    if "opencode_agent" in payload and "pi_agent" not in payload:
-        payload["pi_agent"] = str(payload.get("opencode_agent") or "").strip()
-    if "opencodeAgent" in payload and "pi_agent" not in payload:
-        payload["pi_agent"] = str(payload.get("opencodeAgent") or "").strip()
-    if "agent" in payload and "pi_agent" not in payload:
-        payload["pi_agent"] = str(payload.get("agent") or "").strip()
     if "workspaceHistoryEnabled" in payload and "workspace_history_enabled" not in payload:
         payload["workspace_history_enabled"] = bool(payload.get("workspaceHistoryEnabled"))
     payload.setdefault("workspace_history_enabled", True)
     for legacy_key in (
-        "$schema",
         "selected_model",
         "selectedModel",
-        "piAgent",
         "piCommand",
-        "opencode_agent",
-        "opencodeAgent",
-        "agent",
         "workspaceHistoryEnabled",
-        "opencode_config_path",
-        "opencodeConfigPath",
         "backup_path",
         "backupPath",
+        *LEGACY_NATIVE_AGENT_DOCUMENT_KEYS,
     ):
         payload.pop(legacy_key, None)
     providers = payload.get("provider")
@@ -301,10 +204,7 @@ def normalize_native_agent_config_document(
             if validate_limits:
                 for key in ("context", "output"):
                     if key in limit and limit.get(key) is not None:
-                        _require_positive_int(
-                            limit.get(key),
-                            f"provider.{provider}.models.{model}.limit.{key}",
-                        )
+                        _require_positive_int(limit.get(key), f"provider.{provider}.models.{model}.limit.{key}")
     return payload
 
 
@@ -367,25 +267,6 @@ def _string_list(value: Any) -> list[str]:
         if normalized and normalized not in result:
             result.append(normalized)
     return result
-
-
-def _model_options(native_agent: dict[str, Any]) -> dict[str, Any]:
-    options: dict[str, Any] = {}
-    reasoning_effort = str(native_agent.get("reasoning_effort") or "").strip()
-    if reasoning_effort:
-        options["reasoningEffort"] = reasoning_effort
-    raw_thinking_depth = str(native_agent.get("thinking_depth") or "").strip()
-    if raw_thinking_depth:
-        try:
-            thinking_depth = int(float(raw_thinking_depth))
-        except (TypeError, ValueError):
-            thinking_depth = 0
-        if thinking_depth > 0:
-            options["thinking"] = {
-                "type": "enabled",
-                "budgetTokens": thinking_depth,
-            }
-    return options
 
 
 def _positive_int_or_none(value: Any) -> int | None:

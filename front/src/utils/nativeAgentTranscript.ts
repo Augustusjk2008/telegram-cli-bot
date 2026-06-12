@@ -201,7 +201,7 @@ function normalizeNativeAgentTrace(trace: ChatTraceEvent[]) {
 function shouldNormalizeAsNativeFlat(trace: ChatTraceEvent[]) {
   const hasNativeSource = trace.some((event) => {
     const source = asString(event.source).trim().toLowerCase();
-    return source === "native_agent" || source === "native" || source === "opencode";
+    return source === "native_agent" || source === "native";
   });
   if (hasNativeSource) {
     return true;

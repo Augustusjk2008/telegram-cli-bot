@@ -85,6 +85,7 @@ import type {
   NativeAgentConfig,
   NativeAgentConfigInput,
   NativeAgentConfigPayload,
+  NativeAgentPreflightResult,
   NativeAgentModelOption,
   NativeAgentModelsPayload,
   NativeAgentModelUpdateResult,
@@ -2062,7 +2063,7 @@ function mapNativeAgentConfig(value: unknown): NativeAgentConfig | undefined {
   return {
     provider: String(raw.provider || ""),
     model: String(raw.model || ""),
-    piAgent: String(raw.pi_agent ?? raw.piAgent ?? raw.opencode_agent ?? raw.opencodeAgent ?? raw.agent ?? ""),
+    piAgent: String(raw.pi_agent ?? raw.piAgent ?? raw.agent ?? ""),
     baseUrl: String(raw.base_url ?? raw.baseUrl ?? ""),
     hasApiKey: Boolean(raw.has_api_key ?? raw.hasApiKey ?? raw.api_key_masked ?? raw.apiKeyMasked),
     apiKeyMasked: String(raw.api_key_masked ?? raw.apiKeyMasked ?? ""),
@@ -2090,9 +2091,34 @@ function mapNativeAgentModelOption(raw: unknown): NativeAgentModelOption {
   };
 }
 
+function mapNativeAgentPreflightResult(raw: unknown): NativeAgentPreflightResult {
+  const item = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const checks = Array.isArray(item.checks) ? item.checks : [];
+  return {
+    ok: Boolean(item.ok),
+    code: String(item.code ?? ""),
+    message: String(item.message ?? ""),
+    platform: String(item.platform ?? ""),
+    checks: checks.map((rawCheck) => {
+      const check = rawCheck && typeof rawCheck === "object" ? rawCheck as Record<string, unknown> : {};
+      return {
+        key: String(check.key ?? ""),
+        ok: Boolean(check.ok),
+        severity: String(check.severity ?? (check.ok ? "info" : "error")),
+        message: String(check.message ?? ""),
+        fix: String(check.fix ?? ""),
+        ...(check.path ? { path: String(check.path) } : {}),
+        ...(check.command ? { command: String(check.command) } : {}),
+        ...(check.version ? { version: String(check.version) } : {}),
+      };
+    }),
+  };
+}
+
 function mapNativeAgentConfigPayload(raw: unknown): NativeAgentConfigPayload {
   const item = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
   const models = Array.isArray(item.models) ? item.models.map(mapNativeAgentModelOption) : [];
+  const rawPreflight = item.preflight ?? item.preflightResult;
   return {
     config: item.config && typeof item.config === "object" ? item.config as Record<string, unknown> : {},
     backend: String(item.backend ?? "pi"),
@@ -2102,6 +2128,7 @@ function mapNativeAgentConfigPayload(raw: unknown): NativeAgentConfigPayload {
     selectedModel: String(item.selected_model ?? item.selectedModel ?? ""),
     selectedReasoningEffort: String(item.selected_reasoning_effort ?? item.selectedReasoningEffort ?? "").trim(),
     needsRestart: Boolean(item.needs_restart ?? item.needsRestart),
+    ...(rawPreflight ? { preflight: mapNativeAgentPreflightResult(rawPreflight) } : {}),
   };
 }
 
@@ -2136,7 +2163,7 @@ function serializeNativeAgentConfig(input: NativeAgentConfigInput | undefined) {
 
 function displayNativeProvider(provider?: string) {
   const normalized = String(provider || "").trim().toLowerCase();
-  if (normalized === "native_agent" || normalized === "opencode") {
+  if (normalized === "native_agent") {
     return "原生 agent";
   }
   return provider || undefined;
@@ -6689,6 +6716,14 @@ export class RealWebBotClient implements WebBotClient {
 
   async getNativeAgentConfig(): Promise<NativeAgentConfigPayload> {
     return mapNativeAgentConfigPayload(await this.requestJson("/api/admin/native-agent/config"));
+  }
+
+  async runNativeAgentPreflight(options: { cwd?: string; piCommand?: string } = {}): Promise<NativeAgentPreflightResult> {
+    const params = new URLSearchParams();
+    if (options.cwd) params.set("cwd", options.cwd);
+    if (options.piCommand) params.set("pi_command", options.piCommand);
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    return mapNativeAgentPreflightResult(await this.requestJson(`/api/admin/native-agent/preflight${suffix}`));
   }
 
   async updateNativeAgentConfig(config: Record<string, unknown>): Promise<NativeAgentConfigPayload> {

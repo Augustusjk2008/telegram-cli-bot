@@ -212,7 +212,7 @@ describe("agUiRunReducer", () => {
   test("does not infer native flat presentation from session error alone", () => {
     const state = reduceAgUiRunEvent(createAgUiRunState(), {
       type: EventType.RUN_ERROR,
-      message: "OpenCode failed",
+      message: "Pi failed",
       code: "session.error",
     });
 

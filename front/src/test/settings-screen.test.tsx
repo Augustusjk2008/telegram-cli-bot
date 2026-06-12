@@ -76,6 +76,8 @@ test("assistant bots lock the default workdir in settings", async () => {
 
 test("native bots hide cli settings and params", async () => {
   const client = new MockWebBotClient();
+  const openManager = vi.fn();
+  await client.login({ username: "127.0.0.1", password: "test" });
   await client.addBot({
     alias: "native1",
     botMode: "cli",
@@ -94,7 +96,7 @@ test("native bots hide cli settings and params", async () => {
     },
   });
 
-  render(<SettingsScreen botAlias="native1" client={client} onLogout={() => undefined} />);
+  render(<SettingsScreen botAlias="native1" client={client} onLogout={() => undefined} onOpenBotManager={openManager} />);
 
   expect(await screen.findByText("运行后端:")).toBeInTheDocument();
   expect(screen.getByText("原生 agent")).toBeInTheDocument();
@@ -110,6 +112,10 @@ test("native bots hide cli settings and params", async () => {
   expect(screen.queryByText("sk-settings-1234")).not.toBeInTheDocument();
   expect(screen.getByText("Pi agent:")).toBeInTheDocument();
   expect(screen.getByText("reviewer")).toBeInTheDocument();
+  expect(await screen.findByText("运行检查:")).toBeInTheDocument();
+  expect(await screen.findByText(/Pi 运行前置检查通过，存在警告/)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "查看管理中心" }));
+  expect(openManager).toHaveBeenCalled();
 });
 
 test("git proxy controls stack on narrow screens", async () => {

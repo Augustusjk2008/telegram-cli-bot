@@ -1,7 +1,7 @@
 import { clsx } from "clsx";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { AlertTriangle, Bell, Copy, Globe, LogOut, RotateCw, Save, Square } from "lucide-react";
+import { AlertTriangle, Bell, Copy, Globe, LogOut, RotateCw, Save, SlidersHorizontal, Square } from "lucide-react";
 import { AvatarPicker } from "../components/AvatarPicker";
 import { AgentSettingsPanel } from "../components/AgentSettingsPanel";
 import { BotCliParamsPanel } from "../components/BotCliParamsPanel";
@@ -18,6 +18,8 @@ import type {
   BrowserNotificationPermission,
   CliType,
   GitProxySettings,
+  NativeAgentConfigPayload,
+  NativeAgentPreflightResult,
   NotificationSettingsStatus,
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
@@ -131,6 +133,12 @@ function tunnelSourceText(tunnel: TunnelSnapshot) {
   if (tunnel.source === "fixed_public_forward" || tunnel.mode === "fixed_public_forward") return "固定公网转发";
   if (tunnel.source === "manual_config") return "手工地址";
   return "Quick Tunnel";
+}
+
+function nativePreflightSummary(preflight?: NativeAgentPreflightResult) {
+  if (!preflight) return "未运行";
+  if (!preflight.ok) return "失败";
+  return preflight.checks.some((check) => check.severity === "warning" && !check.ok) ? "警告" : "通过";
 }
 
 function isFixedPublicForward(tunnel: TunnelSnapshot) {
@@ -255,6 +263,7 @@ export function SettingsScreen({
   const [overview, setOverview] = useState<BotOverview | null>(null);
   const [tunnel, setTunnel] = useState<TunnelSnapshot | null>(null);
   const [gitProxySettings, setGitProxySettings] = useState<GitProxySettings | null>(null);
+  const [nativeAgentConfig, setNativeAgentConfig] = useState<NativeAgentConfigPayload | null>(null);
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettingsStatus | null>(null);
   const [notificationEnabled, setNotificationEnabled] = useState(() => readChatCompletionWebNotificationEnabled());
   const [notificationPermission, setNotificationPermission] = useState<BrowserNotificationPermission>(() => getBrowserNotificationPermission());
@@ -346,6 +355,28 @@ export function SettingsScreen({
       cancelled = true;
     };
   }, [botAlias, client, isMainBot, prefilledWorkdir]);
+
+  useEffect(() => {
+    if (!nativeRuntime) {
+      setNativeAgentConfig(null);
+      return;
+    }
+    let cancelled = false;
+    void client.getNativeAgentConfig()
+      .then((config) => {
+        if (!cancelled) {
+          setNativeAgentConfig(config);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setNativeAgentConfig(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, nativeRuntime]);
 
   useEffect(() => {
     if (!["starting", "connected", "verifying_public"].includes(tunnel?.status || "") || !tunnel?.publicUrl || tunnelAction !== "") {
@@ -859,9 +890,27 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 ) : null}
                 {nativeRuntime ? <p><span className="font-medium text-[var(--text)]">Provider/Model:</span> 全局环境配置</p> : null}
                 {nativeRuntime ? <p><span className="font-medium text-[var(--text)]">Pi agent:</span> {overview.nativeAgent?.piAgent || "未设置"}</p> : null}
+                {nativeRuntime ? (
+                  <p>
+                    <span className="font-medium text-[var(--text)]">运行检查:</span>{" "}
+                    {nativePreflightSummary(nativeAgentConfig?.preflight)}
+                    {nativeAgentConfig?.preflight?.message ? ` · ${nativeAgentConfig.preflight.message}` : ""}
+                  </p>
+                ) : null}
                 <p><span className="font-medium text-[var(--text)]">状态:</span> {overview.status}</p>
                 <p className="break-all"><span className="font-medium text-[var(--text)]">目录:</span> {overview.workingDir}</p>
               </div>
+
+              {nativeRuntime && onOpenBotManager ? (
+                <button
+                  type="button"
+                  onClick={onOpenBotManager}
+                  className={settingsButtonClass("plain")}
+                >
+                  <SlidersHorizontal className="h-4 w-4" />
+                  查看管理中心
+                </button>
+              ) : null}
 
               {!nativeRuntime ? (
                 <div className="space-y-3 border-t border-[var(--border)] pt-4">

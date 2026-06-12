@@ -66,6 +66,10 @@ from bot.config import (
 )
 from bot.debug.service import DebugService
 from bot.manager import MultiBotManager
+from bot.native_agent.legacy_migration import (
+    LEGACY_EXECUTION_MODE_REMOVED_MESSAGE,
+    is_legacy_execution_mode,
+)
 from bot.platform.runtime import get_default_shell
 from bot.runtime_paths import (
     get_announcements_content_path,
@@ -188,6 +192,7 @@ from .api_service import (
     rollback_native_agent_history,
     get_assistant_diagnostics,
     get_native_agent_config_payload,
+    get_native_agent_preflight_payload,
     get_native_agent_models_payload,
     get_overview,
     get_cluster_task_status,
@@ -1741,7 +1746,7 @@ class WebApiServer:
         auth = self._bot_auth(base_auth, alias)
         _require_capability(auth, CAP_VIEW_BOT_STATUS)
         agent_id = self._request_agent_id(request)
-        execution_mode = str(request.query.get("execution_mode") or request.query.get("executionMode") or "").strip()
+        execution_mode = self._request_execution_mode(request, include_body=False)
         data = get_overview(self.manager, alias, auth.user_id, agent_id=agent_id, execution_mode=execution_mode)
         return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(base_auth, data["bot"])}})
 
@@ -1752,6 +1757,24 @@ class WebApiServer:
         if not isinstance(value, str):
             return "main"
         return str(value or "main").strip().lower() or "main"
+
+    def _request_execution_mode(
+        self,
+        request: web.Request,
+        body: dict[str, Any] | None = None,
+        *,
+        include_query: bool = True,
+        include_body: bool = True,
+    ) -> str:
+        value: Any = ""
+        if include_body and isinstance(body, dict):
+            value = body.get("execution_mode") or body.get("executionMode") or value
+        if include_query and not value:
+            value = request.query.get("execution_mode") or request.query.get("executionMode") or value
+        normalized = str(value or "").strip()
+        if is_legacy_execution_mode(normalized):
+            raise WebApiError(400, "invalid_execution_mode", LEGACY_EXECUTION_MODE_REMOVED_MESSAGE)
+        return normalized
 
     def _chat_user_id(self, auth: AuthContext) -> int:
         return chat_session_user_id(auth.user_id)
@@ -2015,7 +2038,7 @@ class WebApiServer:
         task_mode = str(body.get("task_mode") or "").strip()
         task_payload = body.get("task_payload")
         visible_text = body.get("visible_text")
-        execution_mode = str(body.get("execution_mode") or body.get("executionMode") or "").strip()
+        execution_mode = self._request_execution_mode(request, body, include_query=False)
         agent_id = self._request_agent_id(request, body)
         cluster_enabled = bool(body.get("cluster"))
         mentions = body.get("mentions") if isinstance(body.get("mentions"), list) else []
@@ -2071,7 +2094,7 @@ class WebApiServer:
         task_mode = str(body.get("task_mode") or "").strip()
         task_payload = body.get("task_payload")
         visible_text = body.get("visible_text")
-        execution_mode = str(body.get("execution_mode") or body.get("executionMode") or "").strip()
+        execution_mode = self._request_execution_mode(request, body, include_query=False)
         protocol = str(request.query.get("protocol") or body.get("protocol") or "").strip()
         agent_id = self._request_agent_id(request, body)
         cluster_enabled = bool(body.get("cluster"))
@@ -2811,7 +2834,7 @@ class WebApiServer:
         alias = self._manager_alias(request)
         body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
         agent_id = self._request_agent_id(request, body)
-        execution_mode = str(body.get("execution_mode") or body.get("executionMode") or "").strip()
+        execution_mode = self._request_execution_mode(request, body, include_query=False)
         return _json({
             "ok": True,
             "data": await kill_user_process(
@@ -2892,7 +2915,7 @@ class WebApiServer:
         alias = self._manager_alias(request)
         limit = int(request.query.get("limit", "50"))
         agent_id = self._request_agent_id(request)
-        execution_mode = str(request.query.get("execution_mode") or request.query.get("executionMode") or "").strip()
+        execution_mode = self._request_execution_mode(request, include_body=False)
         data = get_history(self.manager, alias, self._chat_user_id(auth), limit=limit, agent_id=agent_id, execution_mode=execution_mode)
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
@@ -2902,7 +2925,7 @@ class WebApiServer:
         limit = int(request.query.get("limit", "50"))
         after_id = request.query.get("after_id", "")
         agent_id = self._request_agent_id(request)
-        execution_mode = str(request.query.get("execution_mode") or request.query.get("executionMode") or "").strip()
+        execution_mode = self._request_execution_mode(request, include_body=False)
         data = get_history_delta(self.manager, alias, self._chat_user_id(auth), after_id, limit=limit, agent_id=agent_id, execution_mode=execution_mode)
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
@@ -2912,7 +2935,7 @@ class WebApiServer:
         limit = int(request.query.get("limit", "50"))
         query = request.query.get("q", "")
         agent_id = self._request_agent_id(request)
-        execution_mode = str(request.query.get("execution_mode") or request.query.get("executionMode") or "").strip()
+        execution_mode = self._request_execution_mode(request, include_body=False)
         return _json({"ok": True, "data": list_conversations(self.manager, alias, self._chat_user_id(auth), limit=limit, query=query, agent_id=agent_id, execution_mode=execution_mode)})
 
     async def post_conversation_view(self, request: web.Request) -> web.Response:
@@ -2920,7 +2943,7 @@ class WebApiServer:
         alias = self._manager_alias(request)
         body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
         agent_id = self._request_agent_id(request, body)
-        execution_mode = str(body.get("execution_mode") or body.get("executionMode") or "").strip()
+        execution_mode = self._request_execution_mode(request, body, include_query=False)
         data = create_conversation(self.manager, alias, self._chat_user_id(auth), str(body.get("title") or ""), agent_id=agent_id, execution_mode=execution_mode)
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
@@ -2930,13 +2953,7 @@ class WebApiServer:
         body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
         agent_id = self._request_agent_id(request, body)
         delete_native = str(request.query.get("delete_native_session", "")).lower() in {"1", "true", "yes", "on"}
-        execution_mode = str(
-            body.get("execution_mode")
-            or body.get("executionMode")
-            or request.query.get("execution_mode")
-            or request.query.get("executionMode")
-            or ""
-        ).strip()
+        execution_mode = self._request_execution_mode(request, body)
         data = delete_all_conversations(
             self.manager,
             alias,
@@ -2959,7 +2976,7 @@ class WebApiServer:
             str(body.get("content") or ""),
             title=str(body.get("title") or ""),
             agent_id=agent_id,
-            execution_mode=str(body.get("execution_mode") or body.get("executionMode") or ""),
+            execution_mode=self._request_execution_mode(request, body, include_query=False),
         )
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
@@ -2969,7 +2986,7 @@ class WebApiServer:
         conversation_id = request.match_info.get("conversation_id", "")
         body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
         agent_id = self._request_agent_id(request, body)
-        execution_mode = str(body.get("execution_mode") or body.get("executionMode") or "").strip()
+        execution_mode = self._request_execution_mode(request, body, include_query=False)
         data = select_conversation(self.manager, alias, self._chat_user_id(auth), conversation_id, agent_id=agent_id, execution_mode=execution_mode)
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
@@ -2979,7 +2996,7 @@ class WebApiServer:
         conversation_id = request.match_info.get("conversation_id", "")
         agent_id = self._request_agent_id(request)
         delete_native = str(request.query.get("delete_native_session", "")).lower() in {"1", "true", "yes", "on"}
-        execution_mode = str(request.query.get("execution_mode") or request.query.get("executionMode") or "").strip()
+        execution_mode = self._request_execution_mode(request, include_body=False)
         data = delete_conversation(
             self.manager,
             alias,
@@ -3112,7 +3129,7 @@ class WebApiServer:
         alias = self._manager_alias(request)
         message_id = request.match_info.get("message_id", "")
         agent_id = self._request_agent_id(request)
-        execution_mode = str(request.query.get("execution_mode") or request.query.get("executionMode") or "").strip()
+        execution_mode = self._request_execution_mode(request, include_body=False)
         return _json({"ok": True, "data": get_history_trace(self.manager, alias, self._chat_user_id(auth), message_id, agent_id=agent_id, execution_mode=execution_mode)})
 
     async def post_native_agent_history_rollback_view(self, request: web.Request) -> web.Response:
@@ -3914,6 +3931,14 @@ class WebApiServer:
     async def admin_native_agent_config_get(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
         return _json({"ok": True, "data": get_native_agent_config_payload()})
+
+    async def admin_native_agent_preflight_get(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        data = get_native_agent_preflight_payload(
+            cwd=str(request.query.get("cwd", "")).strip(),
+            pi_command=str(request.query.get("pi_command", request.query.get("piCommand", ""))).strip(),
+        )
+        return _json({"ok": True, "data": data})
 
     async def admin_native_agent_config_patch(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)

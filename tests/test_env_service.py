@@ -82,7 +82,9 @@ def test_env_service_exposes_native_agent_global_fields(tmp_path: Path) -> None:
     assert "NATIVE_AGENT_MODEL" not in items
     assert "NATIVE_AGENT_BASE_URL" not in items
     assert "NATIVE_AGENT_API_KEY" not in items
-    assert "NATIVE_AGENT_OPENCODE_AGENT" not in items
+    assert sorted(key for key in items if key.startswith("NATIVE_AGENT_") and key.endswith("_AGENT")) == [
+        "NATIVE_AGENT_PI_AGENT"
+    ]
     assert items["NATIVE_AGENT_REASONING_EFFORT"]["type"] == "select"
     assert items["NATIVE_AGENT_THINKING_DEPTH"]["type"] == "number"
 

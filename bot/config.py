@@ -9,6 +9,7 @@ import sys
 from typing import Any, List, Optional, Set
 
 from bot.cli_params import normalize_cli_model_options
+from bot.native_agent.legacy_migration import resolve_pi_agent_env
 
 # 加载 .env 文件中的环境变量
 try:
@@ -169,8 +170,7 @@ NATIVE_AGENT_PROVIDER = _get_project_config("NATIVE_AGENT_PROVIDER", "").strip()
 NATIVE_AGENT_MODEL = _get_project_config("NATIVE_AGENT_MODEL", "").strip()
 NATIVE_AGENT_BASE_URL = _get_project_config("NATIVE_AGENT_BASE_URL", "").strip()
 NATIVE_AGENT_API_KEY = _get_project_config("NATIVE_AGENT_API_KEY", "").strip()
-NATIVE_AGENT_OPENCODE_AGENT = _get_project_config("NATIVE_AGENT_OPENCODE_AGENT", "").strip()
-NATIVE_AGENT_PI_AGENT = _get_project_config("NATIVE_AGENT_PI_AGENT", NATIVE_AGENT_OPENCODE_AGENT).strip()
+NATIVE_AGENT_PI_AGENT = resolve_pi_agent_env(_get_project_config)
 NATIVE_AGENT_WORKSPACE_HISTORY_ENABLED = _get_project_bool("NATIVE_AGENT_WORKSPACE_HISTORY_ENABLED", True)
 NATIVE_AGENT_REASONING_EFFORT = _get_project_config("NATIVE_AGENT_REASONING_EFFORT", "").strip()
 NATIVE_AGENT_THINKING_DEPTH = _get_project_config("NATIVE_AGENT_THINKING_DEPTH", "").strip()

@@ -111,7 +111,7 @@ class TestManagerLoadSave:
                 native_agent={
                     "provider": "anthropic",
                     "model": "claude-sonnet-4-5",
-                    "opencode_agent": "reviewer",
+                    "pi_agent": "reviewer",
                     "base_url": "https://cdn.codeflow.asia/v1",
                     "api_key": "sk-create-1234",
                 },
@@ -161,7 +161,7 @@ class TestManagerValidation:
                 "native_agent": {
                     "provider": "anthropic",
                     "model": "claude-sonnet-4-5",
-                    "opencode_agent": "reviewer",
+                    "pi_agent": "reviewer",
                     "baseUrl": "https://cdn.codeflow.asia/v1",
                     "apiKey": "sk-old-1234",
                 },
@@ -177,7 +177,7 @@ class TestManagerValidation:
                 "native_agent": {
                     "provider": "openai",
                     "model": "gpt-5",
-                    "opencode_agent": "planner",
+                    "pi_agent": "planner",
                     "base_url": "https://api.example.test/v1",
                 },
             },
@@ -191,7 +191,7 @@ class TestManagerValidation:
                 "native_agent": {
                     "provider": "codeflow",
                     "model": "gpt-5.1-codex",
-                    "opencode_agent": "main",
+                    "pi_agent": "main",
                     "base_url": "https://cdn.codeflow.asia/v1",
                     "api_key": "sk-new-5678",
                 },
@@ -206,7 +206,7 @@ class TestManagerValidation:
                 "native_agent": {
                     "provider": "codeflow",
                     "model": "gpt-5.1-codex",
-                    "opencode_agent": "main",
+                    "pi_agent": "main",
                     "base_url": "https://cdn.codeflow.asia/v1",
                     "clear_api_key": True,
                 },
@@ -235,7 +235,7 @@ class TestManagerValidation:
                     "model": "gpt-5.1-codex",
                     "base_url": "file:///secret",
                     "api_key": "sk-ignored",
-                    "opencode_agent": "reviewer",
+                    "pi_agent": "reviewer",
                 },
             },
         )
@@ -301,7 +301,7 @@ class TestManagerValidation:
         assert manager.assistant_runtime is None
 
     @pytest.mark.asyncio
-    async def test_background_services_do_not_run_stale_opencode_cleanup(self, temp_dir: Path):
+    async def test_background_services_do_not_run_stale_native_cleanup(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
         manager = MultiBotManager(BotProfile(alias="main", token="main_tok", working_dir=str(temp_dir)), str(storage))
