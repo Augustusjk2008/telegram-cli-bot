@@ -15,6 +15,8 @@ from bot.runtime_paths import TCB_DATA_DIR_ENV, get_app_data_root, normalize_wor
 from bot.native_agent.config_store import get_pi_settings_path
 
 
+PREFLIGHT_COMMAND_TIMEOUT_SECONDS = 15
+
 ResolveExecutable = Callable[[str, str | None], str | None]
 RunCommand = Callable[[list[str]], tuple[int, str, str]]
 WritableCheck = Callable[[Path], bool]
@@ -202,7 +204,7 @@ def _run_command(command: list[str]) -> tuple[int, str, str]:
         text=True,
         encoding="utf-8",
         errors="replace",
-        timeout=5,
+        timeout=PREFLIGHT_COMMAND_TIMEOUT_SECONDS,
         check=False,
         **build_hidden_process_kwargs(),
     )

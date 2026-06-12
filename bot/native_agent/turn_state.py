@@ -211,7 +211,7 @@ def _message_completed(message: dict[str, Any]) -> bool:
 
 def _message_expects_followup(message: dict[str, Any]) -> bool:
     finish = str(message.get("finish") or message.get("finish_reason") or message.get("finishReason") or "").strip().lower()
-    return finish in {"tool-calls", "tool_calls", "tool-call", "tool_call"}
+    return finish in {"tool-calls", "tool_calls", "tool-call", "tool_call", "tooluse", "tool-use", "tool_use"}
 
 
 def _message_id(message: dict[str, Any]) -> str:

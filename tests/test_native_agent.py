@@ -1632,6 +1632,123 @@ async def test_native_agent_service_streams_pi_runtime_and_persists_done(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_native_agent_service_uses_last_tool_result_when_pi_returns_no_final_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from bot import config
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    runtime = FakePiRuntime([
+        {"type": "agent_start", "sessionId": "sess-1"},
+        {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "我先列出顶层条目。"}},
+        {
+            "type": "message_end",
+            "sessionId": "sess-1",
+            "message": {"role": "assistant", "stopReason": "toolUse", "content": [{"type": "text", "text": "我先列出顶层条目。"}]},
+        },
+        {
+            "type": "tool_execution_start",
+            "sessionId": "sess-1",
+            "call_id": "call-1",
+            "tool": "bash",
+            "args": {"command": "ls -1A"},
+        },
+        {
+            "type": "tool_execution_end",
+            "sessionId": "sess-1",
+            "call_id": "call-1",
+            "tool": "bash",
+            "result": "index.html\ndocs\ntmp\n",
+        },
+        {
+            "type": "turn_end",
+            "sessionId": "sess-1",
+            "message": {"role": "assistant", "stopReason": "toolUse", "content": [{"type": "text", "text": "我先列出顶层条目。"}]},
+        },
+        {"type": "agent_end", "sessionId": "sess-1"},
+    ])
+    service = NativeAgentService()
+    service._runtime_registry = FakePiRuntimeRegistry(runtime)
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    events = [
+        event async for event in service.stream_chat(
+            profile=profile,
+            session=session,
+            user_text="列出顶层",
+            prompt_text="列出顶层",
+            history_service=history,
+        )
+    ]
+
+    done = next(event for event in events if event["type"] == "done")
+    assert "原生 agent 未返回内容" not in done["output"]
+    assert "原生 agent 未返回最终总结" in done["output"]
+    assert "index.html\ndocs\ntmp" in done["output"]
+    assert done["message"]["content"] == done["output"]
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_waits_after_pi_tool_use_turn_end_for_final_turn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from bot import config
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    runtime = FakePiRuntime([
+        {"type": "turn_start", "sessionId": "sess-1"},
+        {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "先查一下。"}},
+        {
+            "type": "message_end",
+            "sessionId": "sess-1",
+            "message": {"role": "assistant", "stopReason": "toolUse", "content": [{"type": "text", "text": "先查一下。"}]},
+        },
+        {
+            "type": "tool_execution_end",
+            "sessionId": "sess-1",
+            "call_id": "call-1",
+            "tool": "bash",
+            "result": "index.html\ndocs\ntmp\n",
+        },
+        {
+            "type": "turn_end",
+            "sessionId": "sess-1",
+            "message": {"role": "assistant", "stopReason": "toolUse", "content": [{"type": "text", "text": "先查一下。"}]},
+        },
+        {"type": "turn_start", "sessionId": "sess-1"},
+        {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "顶层包含 index.html、docs 和 tmp。"}},
+        {
+            "type": "message_end",
+            "sessionId": "sess-1",
+            "message": {"role": "assistant", "stopReason": "stop", "content": [{"type": "text", "text": "顶层包含 index.html、docs 和 tmp。"}]},
+        },
+        {
+            "type": "turn_end",
+            "sessionId": "sess-1",
+            "message": {"role": "assistant", "stopReason": "stop", "content": [{"type": "text", "text": "顶层包含 index.html、docs 和 tmp。"}]},
+        },
+        {"type": "agent_end", "sessionId": "sess-1"},
+    ])
+    service = NativeAgentService()
+    service._runtime_registry = FakePiRuntimeRegistry(runtime)
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    events = [
+        event async for event in service.stream_chat(
+            profile=profile,
+            session=session,
+            user_text="列出顶层",
+            prompt_text="列出顶层",
+            history_service=history,
+        )
+    ]
+
+    done = next(event for event in events if event["type"] == "done")
+    assert done["output"] == "顶层包含 index.html、docs 和 tmp。"
+    assert "最后工具结果" not in done["output"]
+
+
+@pytest.mark.asyncio
 async def test_native_agent_service_completed_turn_writes_workspace_history(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from bot import config
     from bot.native_agent.pi_session_store import PiSessionStore, pi_session_key

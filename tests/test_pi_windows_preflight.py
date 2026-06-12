@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -95,6 +96,26 @@ def test_pi_windows_preflight_runs_pi_version(tmp_path: Path) -> None:
     assert result["ok"] is True
     assert _check(result, "pi")["version"] == "pi 1.2.3"
     assert any(command[-1] == "--version" and "pi" in command[-2] for command in commands)
+
+
+def test_pi_windows_preflight_run_command_uses_extended_timeout(monkeypatch) -> None:
+    from bot.native_agent.pi_rpc_preflight import PREFLIGHT_COMMAND_TIMEOUT_SECONDS, _run_command
+
+    captured: dict[str, Any] = {}
+
+    def run(command: list[str], **kwargs: Any):
+        captured["command"] = command
+        captured["timeout"] = kwargs.get("timeout")
+        return subprocess.CompletedProcess(command, 0, stdout="pi 1.2.3\n", stderr="")
+
+    monkeypatch.setattr("bot.native_agent.pi_rpc_preflight.subprocess.run", run)
+
+    returncode, stdout, stderr = _run_command(["pi", "--version"])
+
+    assert returncode == 0
+    assert stdout == "pi 1.2.3\n"
+    assert stderr == ""
+    assert captured["timeout"] == PREFLIGHT_COMMAND_TIMEOUT_SECONDS == 15
 
 
 def test_pi_windows_preflight_reports_pi_version_failure(tmp_path: Path) -> None:

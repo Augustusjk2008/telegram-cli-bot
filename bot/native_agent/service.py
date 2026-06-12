@@ -50,6 +50,7 @@ from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenc
 NATIVE_AGENT_PROVIDER = EXECUTION_MODE_NATIVE_AGENT
 NATIVE_AGENT_NO_PROGRESS_TIMEOUT_SECONDS = 1000.0
 NATIVE_AGENT_NO_PROGRESS_MESSAGE = "原生 agent 长时间无输出或进展"
+TOOL_RESULT_FALLBACK_LIMIT = 12000
 
 
 def normalize_execution_mode(value: Any, profile: BotProfile | None = None) -> str:
@@ -70,6 +71,49 @@ def normalize_execution_mode(value: Any, profile: BotProfile | None = None) -> s
                 return default_mode
             return supported_modes[0] if supported_modes else EXECUTION_MODE_CLI
     return mode
+
+
+def _completed_tool_result_fallback(trace_events: list[dict[str, Any]]) -> str:
+    for trace in reversed(trace_events):
+        if str(trace.get("kind") or "").strip() != "tool_result":
+            continue
+        text = _trace_text(trace.get("payload")) or _trace_text(trace.get("summary"))
+        text = text.strip()
+        if not text:
+            continue
+        truncated = _truncate_text(text, TOOL_RESULT_FALLBACK_LIMIT)
+        return f"原生 agent 未返回最终总结。最后工具结果：\n\n```text\n{_escape_markdown_fence(truncated)}\n```"
+    if any(str(trace.get("kind") or "").strip() == "tool_call" for trace in trace_events):
+        return "原生 agent 已完成工具调用，但未返回最终总结。"
+    return ""
+
+
+def _trace_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, list):
+        return "".join(_trace_text(item) for item in value)
+    if isinstance(value, dict):
+        for key in ("output", "result", "text", "content", "summary", "message", "value"):
+            text = _trace_text(value.get(key))
+            if text:
+                return text
+    return ""
+
+
+def _truncate_text(text: str, limit: int) -> str:
+    normalized = str(text or "")
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: max(0, limit)] + "\n...（已截断）"
+
+
+def _escape_markdown_fence(text: str) -> str:
+    return str(text or "").replace("```", "``\\`")
 
 
 class NativeAgentService:
@@ -661,7 +705,7 @@ class NativeAgentService:
                 if active_runtime is not None:
                     await active_runtime.kill()
             if not final_text and completion_state == "completed":
-                final_text = "原生 agent 未返回内容"
+                final_text = _completed_tool_result_fallback(live_trace) or "原生 agent 未返回内容"
             if completion_state == "error" and not final_text:
                 final_text = error_message or "原生 agent 执行失败"
             persistence_buffer.flush()

@@ -119,7 +119,13 @@ def pi_json_to_events(
                     error=error,
                 )
             ]
-        return [_wrap_event("session.idle", raw, session_id=session_id, directory=directory, message_id=message_id)]
+        events: list[dict[str, Any]] = []
+        if raw_type == "turn_end":
+            message = _completion_message(raw, session_id=session_id, message_id=message_id)
+            if message:
+                events.append(_wrap_event("message.updated", raw, session_id=session_id, directory=directory, message_id=message_id, message=message))
+        events.append(_wrap_event("session.idle", raw, session_id=session_id, directory=directory, message_id=message_id, piEventType=raw_type))
+        return events
 
     if raw_type == "diagnostic":
         return [
@@ -399,10 +405,13 @@ def _role(raw: dict[str, Any]) -> str:
 
 def _is_non_assistant_role(raw: dict[str, Any]) -> bool:
     role = _role(raw)
-    return role in {"user", "system"}
+    return bool(role and role != "assistant")
 
 
 def _explicit_delta(raw: dict[str, Any]) -> str:
+    event = _assistant_message_event(raw)
+    if str(event.get("type") or "").strip() == "text_delta":
+        return _value_text(event.get("delta"))
     if "delta" not in raw and "delta_text" not in raw and "deltaText" not in raw:
         return ""
     return _value_text(raw.get("delta") or raw.get("delta_text") or raw.get("deltaText"))
@@ -410,6 +419,11 @@ def _explicit_delta(raw: dict[str, Any]) -> str:
 
 def _message_text(raw: dict[str, Any]) -> str:
     message = raw.get("message") if isinstance(raw.get("message"), dict) else {}
+    event = _assistant_message_event(raw)
+    event_type = str(event.get("type") or "").strip()
+    event_text = ""
+    if event_type in {"text_end", "text"}:
+        event_text = _value_text(event.get("content") or event.get("partial"))
     return _value_text(
         raw.get("content")
         or raw.get("text")
@@ -417,6 +431,7 @@ def _message_text(raw: dict[str, Any]) -> str:
         or message.get("content")
         or message.get("text")
         or message.get("parts")
+        or event_text
     )
 
 
@@ -439,6 +454,27 @@ def _finish_reason(raw: dict[str, Any]) -> str:
     return ""
 
 
+def _completion_message(raw: dict[str, Any], *, session_id: str, message_id: str) -> dict[str, Any]:
+    source = raw.get("message") if isinstance(raw.get("message"), dict) else {}
+    role = str(source.get("role") or "").strip().lower()
+    if role and role != "assistant":
+        return {}
+    text = _message_text(raw)
+    finish = _finish_reason(raw)
+    if not text and not finish:
+        return {}
+    message = dict(source)
+    message["id"] = _message_id(raw) or str(message_id or "").strip()
+    message["role"] = "assistant"
+    message["sessionID"] = session_id
+    if finish:
+        message["finish"] = finish
+    if text and "content" not in message and "text" not in message:
+        message["content"] = text
+    message.setdefault("time", {"completed": raw.get("completed_at") or raw.get("completedAt") or True})
+    return message
+
+
 def _message_error_text(raw: dict[str, Any]) -> str:
     error = _value_text(_first_present(raw, "error", "errorMessage", "error_message"))
     if error:
@@ -447,6 +483,11 @@ def _message_error_text(raw: dict[str, Any]) -> str:
     if finish in {"error", "failed", "failure"}:
         return "Pi agent 执行失败"
     return ""
+
+
+def _assistant_message_event(raw: dict[str, Any]) -> dict[str, Any]:
+    event = raw.get("assistantMessageEvent")
+    return event if isinstance(event, dict) else {}
 
 
 def _first_present(raw: dict[str, Any], *keys: str) -> Any:

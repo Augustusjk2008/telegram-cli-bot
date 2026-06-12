@@ -63,6 +63,32 @@ def test_pi_events_maps_full_text_without_duplicate_delta() -> None:
     assert aggregator.text() == "你好！"
 
 
+def test_pi_events_maps_assistant_message_event_text_deltas() -> None:
+    aggregator, results = _apply_all([
+        {
+            "type": "message_update",
+            "session_id": "sess-1",
+            "message_id": "msg-1",
+            "assistantMessageEvent": {"type": "text_delta", "delta": "你"},
+        },
+        {
+            "type": "message_update",
+            "session_id": "sess-1",
+            "message_id": "msg-1",
+            "assistantMessageEvent": {"type": "text_delta", "delta": "好"},
+        },
+        {
+            "type": "message_update",
+            "session_id": "sess-1",
+            "message_id": "msg-1",
+            "assistantMessageEvent": {"type": "text_end", "content": "你好"},
+        },
+    ])
+
+    assert [result.delta for result in results] == ["你", "好", ""]
+    assert aggregator.text() == "你好"
+
+
 def test_pi_events_maps_assistant_stop_error_to_native_error() -> None:
     raw = {
         "type": "message_start",
@@ -246,6 +272,17 @@ def test_pi_events_ignores_user_message_updates() -> None:
     }) == []
 
 
+def test_pi_events_ignores_tool_result_messages() -> None:
+    assert pi_json_to_events({
+        "type": "message_end",
+        "session_id": "sess-1",
+        "message": {
+            "role": "toolResult",
+            "content": [{"type": "text", "text": "工具输出不应当成 assistant final"}],
+        },
+    }) == []
+
+
 def test_pi_events_turn_end_does_not_finish_before_final_text() -> None:
     aggregator, results = _apply_all([
         {"type": "turn_start", "session_id": "sess-1"},
@@ -254,3 +291,29 @@ def test_pi_events_turn_end_does_not_finish_before_final_text() -> None:
 
     assert aggregator.text() == ""
     assert results[-1].done is False
+
+
+def test_pi_events_turn_end_tool_use_waits_for_followup_until_agent_end() -> None:
+    raw_events = [
+        {"type": "message_update", "session_id": "sess-1", "message_id": "msg-1", "content": "先查一下。"},
+        {
+            "type": "message_end",
+            "session_id": "sess-1",
+            "message_id": "msg-1",
+            "message": {"role": "assistant", "stopReason": "toolUse", "content": [{"type": "text", "text": "先查一下。"}]},
+        },
+        {"type": "tool_execution_end", "session_id": "sess-1", "call_id": "call-1", "tool": "bash", "result": "ok"},
+        {
+            "type": "turn_end",
+            "session_id": "sess-1",
+            "message_id": "msg-1",
+            "message": {"role": "assistant", "stopReason": "toolUse", "content": [{"type": "text", "text": "先查一下。"}]},
+        },
+        {"type": "agent_end", "session_id": "sess-1"},
+    ]
+
+    aggregator, results = _apply_all(raw_events)
+
+    assert aggregator.text() == ""
+    assert results[-2].done is False
+    assert results[-1].done is True

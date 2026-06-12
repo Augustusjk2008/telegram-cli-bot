@@ -180,6 +180,7 @@ class NativeAgentAggregator:
         elif event_type in {"session.status", "session.idle"}:
             result = NativeAgentAggregationResult()
             result.status = event.status or _value_text(payload.get("status") or payload.get("state") or event_type)
+            is_agent_end = str(payload.get("piEventType") or payload.get("raw_type") or "").strip() == "agent_end"
             has_non_followup_text = bool(
                 self.assistant_message_id
                 and self.assistant_message_id not in self.followup_message_ids
@@ -193,7 +194,7 @@ class NativeAgentAggregator:
             )
             result.done = event_type == "session.idle" and (
                 has_current_turn_activity
-                and (not self.pending_followup or self.assistant_completed or has_non_followup_text)
+                and (is_agent_end or not self.pending_followup or self.assistant_completed or has_non_followup_text)
             )
         elif event_type == "session.error":
             result = NativeAgentAggregationResult()
@@ -836,7 +837,7 @@ def _first_failure_text(value: Any, *, keys: tuple[str, ...]) -> str:
 
 def _message_expects_followup(message: dict[str, Any]) -> bool:
     finish = str(message.get("finish") or message.get("finish_reason") or message.get("finishReason") or "").strip().lower()
-    return finish in {"tool-calls", "tool_calls", "tool-call", "tool_call"}
+    return finish in {"tool-calls", "tool_calls", "tool-call", "tool_call", "tooluse", "tool-use", "tool_use"}
 
 
 def _message_completed(message: dict[str, Any]) -> bool:
