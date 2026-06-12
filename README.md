@@ -18,7 +18,7 @@
 - Ubuntu / Debian Linux
 - macOS 12+（首版为源码包，非 `.app` / DMG）
 - Python 3.10+
-- Node.js 18+
+- Node.js 18+（Pi 原生 agent 需 Node.js 22+）
 - Git
 
 ## 下载与安装
@@ -32,6 +32,8 @@ Windows：
 3. 安装版：下载 `orbit-safe-claw-windows-x64-installer-<version>.zip`，解压后运行 `install.bat`
 
 Windows 绿色版已带 Python、Git 和前端构建产物，无需安装 Python / Node / Git；不内置 AI CLI。使用前需本机可运行 `codex --version` / `claude --version` / `kimi info`，并可在 Web 设置页或 `.env` 修改 `CLI_TYPE` / `CLI_PATH`。
+
+Pi 原生 agent 需额外满足：Node.js 22+、Pi CLI、Windows Git Bash。若 `pi` 不在 PATH，设置 `NATIVE_AGENT_PI_COMMAND` 为可执行文件路径。运行态数据默认在用户目录 `.tcb/orbit-safe-claw`；如设置 `TCB_DATA_DIR`，建议放 workspace 外，避免 workspace rollback 影响运行状态。Pi workspace history 默认不再在 preflight 阶段直接降级，插件可用性和锁文件改在运行时校验；rollback 失败只影响回滚能力，不阻断已完成回复。Pi workspace rollback 会丢弃目标 turn 之后记录，无 redo。
 
 Linux：
 
@@ -52,7 +54,7 @@ bash install.sh
 bash start.sh
 ```
 
-macOS 需要 Python 3.10+、Node.js 18+、Git，推荐先装 Homebrew。AI CLI 不内置，需自行安装 `codex` / `claude` / `kimi`。
+macOS 需要 Python 3.10+、Node.js 18+、Git，推荐先装 Homebrew；Pi 原生 agent 需 Node.js 22+。AI CLI 不内置，需自行安装 `codex` / `claude` / `kimi`。
 
 源码快照安装：
 
@@ -290,6 +292,7 @@ python -m bot
 python -m pytest tests -q
 cd front && npm test
 cd front && npm run build
+cd front && npm run lint
 ```
 
 常用聚焦测试：

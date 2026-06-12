@@ -78,12 +78,13 @@ class NativeAgentService:
         self._pi_session_store = PiSessionStore()
         self._workspace_history = PiWorkspaceHistory()
 
-    def _prompt_options(self, profile: BotProfile) -> tuple[str, str]:
+    def _prompt_options(self, profile: BotProfile) -> tuple[str, str, str]:
         native_agent = effective_native_agent_config(getattr(profile, "native_agent", {}))
         validate_native_agent_model_config(native_agent)
         return (
             build_native_agent_model_id(native_agent),
             str(native_agent.get("pi_agent") or "").strip(),
+            str(native_agent.get("reasoning_effort") or "").strip(),
         )
 
     def _pi_record_key(self, session: UserSession, user_id: int, conversation_id: str) -> str:
@@ -101,6 +102,7 @@ class NativeAgentService:
         session: UserSession,
         conversation_id: str,
         pi_session_id: str = "",
+        session_meta: dict[str, str] | None = None,
     ) -> PiSessionRecord:
         record = self._pi_session_store.get(key)
         if record is not None:
@@ -113,6 +115,7 @@ class NativeAgentService:
             cwd=session.working_dir,
             conversation_id=conversation_id,
             pi_session_id=str(pi_session_id or "").strip(),
+            session_meta=dict(session_meta or {}),
         )
         return self._pi_session_store.upsert(record)
 
@@ -152,7 +155,7 @@ class NativeAgentService:
         target_head: str,
         native_session_id: str = "",
     ) -> WorkspaceHistoryStatus:
-        model_id, agent_id = self._prompt_options(profile)
+        model_id, agent_id, reasoning_effort = self._prompt_options(profile)
         native_agent_config = effective_native_agent_config(getattr(profile, "native_agent", {}))
         user_id = chat_session_user_id(session.user_id)
         runtime = await self._runtime_registry.open_or_create(
@@ -168,6 +171,7 @@ class NativeAgentService:
                 command=str(native_agent_config.get("pi_command") or config.NATIVE_AGENT_PI_COMMAND or config.NATIVE_AGENT_COMMAND or "pi"),
                 model=model_id,
                 agent_id=agent_id,
+                reasoning_effort=reasoning_effort,
                 native_session_id=native_session_id,
             )
         )
@@ -252,6 +256,8 @@ class NativeAgentService:
         active_runtime: PiSessionRuntime | None = None
         pi_record_key = ""
         pi_record: PiSessionRecord | None = None
+        workspace_history_enabled = False
+        session_binding_invalidated = False
 
         try:
             if not config.NATIVE_AGENT_ENABLED:
@@ -267,8 +273,9 @@ class NativeAgentService:
                 native_provider=NATIVE_AGENT_PROVIDER,
                 actor=actor,
             )
-            model_id, agent_id = self._prompt_options(profile)
+            model_id, agent_id, reasoning_effort = self._prompt_options(profile)
             native_agent_config = effective_native_agent_config(getattr(profile, "native_agent", {}))
+            workspace_history_enabled = bool(native_agent_config.get("workspace_history_enabled", True))
             pi_command = str(
                 native_agent_config.get("pi_command")
                 or config.NATIVE_AGENT_PI_COMMAND
@@ -279,13 +286,14 @@ class NativeAgentService:
                 PiWindowsPreflightRequest(
                     cwd=session.working_dir,
                     pi_command=pi_command,
-                    workspace_history_enabled=bool(native_agent_config.get("workspace_history_enabled", True)),
+                    workspace_history_enabled=workspace_history_enabled,
                 )
             )
             desired_meta = _native_session_meta(
                 cwd=session.working_dir,
                 model_id=model_id,
                 pi_agent=agent_id,
+                reasoning_effort=reasoning_effort,
             )
             try:
                 conversation_native = history_service.store.get_conversation_native_session(turn_handle.conversation_id)
@@ -295,7 +303,9 @@ class NativeAgentService:
             stored_meta = conversation_native.get("meta") if isinstance(conversation_native.get("meta"), dict) else {}
             if requested_session_id and _native_session_meta_mismatch(stored_meta, desired_meta):
                 history_service.store.set_conversation_native_session(turn_handle.conversation_id, None, None)
+                history_service.store.invalidate_conversation_workspace_history(turn_handle.conversation_id)
                 requested_session_id = ""
+                session_binding_invalidated = True
             if requested_session_id:
                 native_session_id = requested_session_id
                 with session._lock:
@@ -308,7 +318,21 @@ class NativeAgentService:
                 session=session,
                 conversation_id=turn_handle.conversation_id,
                 pi_session_id=native_session_id,
+                session_meta=desired_meta,
             )
+            if _native_session_meta_mismatch(pi_record.session_meta, desired_meta):
+                pi_record = self._pi_session_store.invalidate_binding(pi_record_key, "binding changed")
+                history_service.store.set_conversation_native_session(turn_handle.conversation_id, None, None)
+                history_service.store.invalidate_conversation_workspace_history(turn_handle.conversation_id)
+                native_session_id = ""
+                requested_session_id = ""
+                session_binding_invalidated = True
+                with session._lock:
+                    session.native_agent_session_id = None
+                session.persist()
+            if pi_record.session_meta != desired_meta:
+                pi_record.session_meta = dict(desired_meta)
+                pi_record = self._pi_session_store.upsert(pi_record)
             if pi_record.pi_session_id:
                 native_session_id = pi_record.pi_session_id
                 with session._lock:
@@ -410,6 +434,7 @@ class NativeAgentService:
                     command=pi_command,
                     model=model_id,
                     agent_id=agent_id,
+                    reasoning_effort=reasoning_effort,
                     native_session_id=native_session_id,
                 )
             )
@@ -417,11 +442,26 @@ class NativeAgentService:
                 self._seed_runtime_from_record(active_runtime, pi_record)
                 native_session_id = active_runtime.state.native_session_id
                 turn_state.native_session_id = native_session_id
-            if bool(native_agent_config.get("workspace_history_enabled", True)) and pi_record_key:
-                pi_record = self._pi_session_store.mark_degraded(
-                    pi_record_key,
-                    "workspace history 已降级，不阻断基础 Pi 对话",
-                )
+            if workspace_history_enabled and pi_record is not None:
+                status_before_turn = await self._workspace_history.status(active_runtime)
+                if status_before_turn.degraded:
+                    pi_record = self._pi_session_store.mark_degraded(
+                        pi_record_key,
+                        status_before_turn.message or "workspace history 不可用",
+                    )
+                else:
+                    active_runtime.state.workspace_history_head = str(status_before_turn.head or "").strip()
+                    if status_before_turn.manual_change_count > 0:
+                        checkpoint = await self._workspace_history.checkpoint(active_runtime, label="manual-before-turn")
+                        if checkpoint.degraded:
+                            pi_record = self._pi_session_store.mark_degraded(
+                                pi_record_key,
+                                checkpoint.message or "workspace history 不可用",
+                            )
+                        else:
+                            active_runtime.state.workspace_history_head = str(
+                                checkpoint.head or active_runtime.state.workspace_history_head or ""
+                            ).strip()
             with session._lock:
                 session.native_agent_server_key = active_runtime.runtime_id
             session.persist()
@@ -477,7 +517,11 @@ class NativeAgentService:
                     await active_runtime.kill()
                 return True
 
-            native_prompt_text = prompt_text if requested_session_id else _build_native_prompt_with_history(history_items, prompt_text)
+            native_prompt_text = (
+                prompt_text
+                if requested_session_id or session_binding_invalidated
+                else _build_native_prompt_with_history(history_items, prompt_text)
+            )
             await active_runtime.prompt(native_prompt_text, conversation_id=native_session_id)
             stream = active_runtime.events()
             iterator = stream.__aiter__()
@@ -641,20 +685,33 @@ class NativeAgentService:
                 error_message=None if completion_state == "completed" else (error_message or final_text),
                 context_usage=context_usage,
             )
-            if completion_state == "completed" and active_runtime is not None and pi_record_key:
-                final_head = str(getattr(active_runtime.state, "workspace_history_head", "") or "").strip()
-                pi_record = self._pi_session_store.update_after_completed_turn(
-                    pi_record_key,
-                    pi_session_id=native_session_id,
-                    turn_id=turn_handle.turn_id,
-                    workspace_history_head=final_head,
-                )
-                self._seed_runtime_from_record(active_runtime, pi_record)
-                history_service.store.update_turn_workspace_history(
-                    turn_handle.turn_id,
-                    pi_record.workspace_history_head,
-                    pi_record.linear_index,
-                )
+            if completion_state == "completed" and active_runtime is not None and pi_record_key and pi_record is not None:
+                if workspace_history_enabled:
+                    status_after_turn = await self._workspace_history.status(active_runtime)
+                    if status_after_turn.degraded:
+                        pi_record = self._pi_session_store.mark_degraded(
+                            pi_record_key,
+                            status_after_turn.message or "workspace history 不可用",
+                        )
+                    else:
+                        final_head = str(status_after_turn.head or "").strip()
+                        active_runtime.state.workspace_history_head = final_head
+                        pi_record = self._pi_session_store.update_after_completed_turn(
+                            pi_record_key,
+                            pi_session_id=native_session_id,
+                            turn_id=turn_handle.turn_id,
+                            workspace_history_head=final_head,
+                        )
+                        self._seed_runtime_from_record(active_runtime, pi_record)
+                        history_service.store.update_turn_workspace_history(
+                            turn_handle.turn_id,
+                            pi_record.workspace_history_head,
+                            pi_record.linear_index,
+                        )
+                else:
+                    pi_record.pi_session_id = native_session_id
+                    pi_record.session_meta = dict(desired_meta)
+                    pi_record = self._pi_session_store.upsert(pi_record)
             if isinstance(done_message.get("meta"), dict):
                 done_message["meta"].update(self._workspace_meta(pi_record, active_runtime))
             if wants_ag_ui:
@@ -786,25 +843,23 @@ def _history_item_content(item: dict[str, Any]) -> str:
     return ""
 
 
-def _native_session_meta(*, cwd: str, model_id: str, pi_agent: str) -> dict[str, str]:
+def _native_session_meta(*, cwd: str, model_id: str, pi_agent: str, reasoning_effort: str) -> dict[str, str]:
     return {
         "cwd": str(cwd or ""),
         "model_id": str(model_id or ""),
         "pi_agent": str(pi_agent or ""),
+        "reasoning_effort": str(reasoning_effort or ""),
     }
 
 
 def _native_session_meta_mismatch(stored_meta: dict[str, Any], desired_meta: dict[str, str]) -> bool:
     stored_meta = migrate_native_session_meta(stored_meta)
     if not stored_meta:
-        return False
+        return any(str(value or "").strip() for value in desired_meta.values())
     for key, desired_value in desired_meta.items():
-        if key not in stored_meta:
-            continue
+        normalized_desired = str(desired_value or "").strip()
         stored_value = str(stored_meta.get(key) or "").strip()
-        if not stored_value:
-            continue
-        if stored_value != str(desired_value or ""):
+        if stored_value != normalized_desired:
             return True
     return False
 

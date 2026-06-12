@@ -174,13 +174,12 @@ def _check_workspace_history(enabled: bool | None) -> dict[str, object]:
         return _warn(
             "workspace_history",
             "workspace history 状态无法判定",
-            "检查 Pi agent 设置中的 workspace_history_enabled；当前会降级且不阻断基础对话",
+            "检查 Pi agent 设置中的 workspace_history_enabled",
         )
     if enabled:
-        return _warn(
+        return _ok(
             "workspace_history",
-            "workspace history 已开启，当前运行前检查已降级，不阻断基础 Pi 对话",
-            "如需恢复回滚能力，确认 Pi workspace-history 插件可用后重新运行检查",
+            "workspace history 已启用，插件和锁文件改在运行时校验",
         )
     return _ok("workspace_history", "workspace history 已关闭")
 

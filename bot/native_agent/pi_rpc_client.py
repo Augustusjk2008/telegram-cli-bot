@@ -97,7 +97,7 @@ class PiRpcClient:
     @classmethod
     async def start(cls, request: PiRpcStartRequest) -> PiRpcClient:
         cwd = Path(request.cwd or ".").expanduser().resolve()
-        args = _build_rpc_command(request.command, str(cwd))
+        args = _build_rpc_command(request.command, str(cwd), model=request.model)
         env = _base_env(request.env)
         try:
             process = subprocess.Popen(
@@ -124,8 +124,22 @@ class PiRpcClient:
             raise TypeError("Pi RPC message 必须是 dict")
         await self._write_packet(message)
 
-    async def prompt(self, text: str, *, conversation_id: str | None = None) -> None:
-        message: dict[str, Any] = {"type": "prompt", "text": str(text or "")}
+    async def prompt(
+        self,
+        text: str,
+        *,
+        conversation_id: str | None = None,
+        agent_id: str = "",
+        reasoning_effort: str = "",
+    ) -> None:
+        normalized_reasoning = str(reasoning_effort or "").strip()
+        if normalized_reasoning:
+            await self.send({"type": "set_thinking_level", "level": normalized_reasoning})
+        normalized_agent = str(agent_id or "").strip().lstrip("/")
+        prompt_text = str(text or "")
+        if normalized_agent and not prompt_text.lstrip().startswith("/"):
+            prompt_text = f"/{normalized_agent} {prompt_text}".strip()
+        message: dict[str, Any] = {"type": "prompt", "message": prompt_text}
         if conversation_id:
             message["conversation_id"] = str(conversation_id)
         await self.send(message)
@@ -256,11 +270,15 @@ class PiRpcClient:
         _safe_close(self.process.stderr)
 
 
-def _build_rpc_command(command: str | None, cwd: str) -> list[str]:
+def _build_rpc_command(command: str | None, cwd: str, *, model: str | None = None) -> list[str]:
     command_text = str(command or DEFAULT_PI_COMMAND).strip() or DEFAULT_PI_COMMAND
     resolved = resolve_cli_executable(command_text, cwd)
     invocation = build_executable_invocation(resolved) if resolved else [command_text]
-    return [*invocation, "--mode", "rpc"]
+    args = [*invocation, "--mode", "rpc"]
+    normalized_model = str(model or "").strip()
+    if normalized_model:
+        args.extend(["--model", normalized_model])
+    return args
 
 
 def _base_env(extra_env: dict[str, str] | None) -> dict[str, str]:

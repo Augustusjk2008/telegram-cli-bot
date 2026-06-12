@@ -3528,6 +3528,43 @@ def test_native_agent_select_and_delete_sync_pi_session_store(web_manager: Multi
     assert pi_store.get(key) is None
 
 
+def test_native_agent_select_hides_rollback_after_binding_invalidation(web_manager: MultiBotManager, tmp_path: Path):
+    from bot.native_agent.pi_session_store import PiSessionRecord, PiSessionStore, pi_session_key
+
+    web_manager.main_profile.working_dir = str(tmp_path)
+    profile = web_manager.main_profile
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+    history = ChatHistoryService(ChatStore(tmp_path), native_provider_filter="native_agent")
+    handle = history.start_turn(profile=profile, session=session, user_text="一", native_provider="native_agent")
+    history.complete_turn(handle, content="一回", completion_state="completed", native_session_id="pi-old")
+    history.store.update_turn_workspace_history(handle.turn_id, "head-1", 1)
+    key = pi_session_key(cwd=str(tmp_path), bot_id=session.bot_id, user_id=session.user_id, conversation_id=handle.conversation_id)
+    pi_store = PiSessionStore()
+    pi_store.upsert(PiSessionRecord(
+        key=key,
+        cwd=str(tmp_path),
+        conversation_id=handle.conversation_id,
+        pi_session_id="pi-old",
+        session_meta={
+            "cwd": str(tmp_path),
+            "model_id": "anthropic/claude-haiku-3",
+            "pi_agent": "main",
+            "reasoning_effort": "low",
+        },
+        linear_index=1,
+        workspace_history_head="head-1",
+    ))
+
+    history.store.invalidate_conversation_workspace_history(handle.conversation_id)
+    pi_store.invalidate_binding(key, "binding changed")
+    selected = select_conversation(web_manager, "main", 1001, handle.conversation_id, execution_mode="native_agent")
+
+    assert selected["conversation"]["rollback_supported"] is False
+    assert selected["conversation"]["workspace_history_head"] == ""
+    assert selected["messages"]
+
+
 def test_conversation_api_delete_all_clears_bot_workspace_sessions(web_manager: MultiBotManager, tmp_path: Path):
     web_manager.main_profile.working_dir = str(tmp_path)
     session = get_session_for_alias(web_manager, "main", 1001)

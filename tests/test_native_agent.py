@@ -27,6 +27,7 @@ def clear_native_agent_global_config(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     from bot import config
 
     monkeypatch.setenv("TCB_DATA_DIR", str(tmp_path / "tcb-data"))
+    monkeypatch.setenv("PI_AGENT_SETTINGS", str(tmp_path / "pi-settings.json"))
     monkeypatch.setattr(config, "NATIVE_AGENT_PROVIDER", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_MODEL", "")
     monkeypatch.setattr(config, "NATIVE_AGENT_BASE_URL", "")
@@ -1454,25 +1455,32 @@ class FakePiRuntime:
         self.runtime_id = "pir_fake"
         self.workspace_history_head = "head-1"
         self.workspace_requests: list[dict[str, object]] = []
-        self._workspace_result_queue: list[dict[str, object]] = []
         self.workspace_results = {key: list(value) for key, value in (workspace_results or {}).items()}
         self.state = type("State", (), {
             "native_session_id": "",
             "workspace_history_head": "head-1",
             "linear_index": 0,
             "pending_permission_ids": set(),
+            "agent_id": "",
+            "reasoning_effort": "",
         })()
 
     async def prompt(self, text: str, *, conversation_id: str = "") -> None:
-        self.prompts.append({"text": text, "conversation_id": conversation_id})
+        prompt_text = str(text or "")
+        agent_id = str(getattr(self.state, "agent_id", "") or "").strip().lstrip("/")
+        if agent_id and not prompt_text.lstrip().startswith("/"):
+            prompt_text = f"/{agent_id} {prompt_text}".strip()
+        self.prompts.append({
+            "text": prompt_text,
+            "conversation_id": conversation_id,
+            "reasoning_effort": str(getattr(self.state, "reasoning_effort", "") or ""),
+        })
         if self.started is not None:
             self.started.set()
 
-    async def send(self, packet: dict[str, object]) -> None:
-        if str(packet.get("type") or "") != "workspace_history":
-            return
-        self.workspace_requests.append(dict(packet))
-        action = str(packet.get("action") or "")
+    async def request_workspace_history(self, fields: dict[str, object]) -> dict[str, object]:
+        self.workspace_requests.append(dict(fields))
+        action = str(fields.get("action") or "")
         responses = self.workspace_results.get(action) or []
         response = dict(responses.pop(0)) if responses else {
             "head": self.state.workspace_history_head,
@@ -1484,17 +1492,9 @@ class FakePiRuntime:
         if response.get("head"):
             self.workspace_history_head = str(response["head"])
             self.state.workspace_history_head = str(response["head"])
-        self._workspace_result_queue.append({
-            "type": "workspace_history_result",
-            "id": str(packet.get("id") or ""),
-            **response,
-        })
+        return response
 
     async def events(self):
-        if self._workspace_result_queue:
-            while self._workspace_result_queue:
-                yield self._workspace_result_queue.pop(0)
-            return
         if self.gate is not None and not self.wait_after_first_event:
             await self.gate.wait()
         if self.error is not None:
@@ -1534,6 +1534,11 @@ class FakePiRuntimeRegistry:
         if self.error is not None:
             raise self.error
         self.requests.append(request)
+        if self.runtime is not None:
+            self.runtime.state.agent_id = str(getattr(request, "agent_id", "") or "")
+            self.runtime.state.reasoning_effort = str(getattr(request, "reasoning_effort", "") or "")
+            if getattr(request, "native_session_id", "") and not self.runtime.state.native_session_id:
+                self.runtime.state.native_session_id = str(request.native_session_id)
         return self.runtime
 
     def get_by_runtime_id(self, runtime_id: str):
@@ -1580,7 +1585,7 @@ async def test_native_agent_service_uses_pi_runtime_and_emits_runtime_meta(
     assert done["session"]["session_ids"]["native_agent_session_id"] == "pi-sess-1"
     assert session.native_agent_session_id == "pi-sess-1"
     assert session.native_agent_server_key is None
-    assert runtime.prompts == [{"text": "你好", "conversation_id": ""}]
+    assert runtime.prompts == [{"text": "/reviewer 你好", "conversation_id": "", "reasoning_effort": ""}]
     assert registry.requests[0].runtime_key.startswith("1:1:")
     assert registry.requests[0].command == "pi"
     assert registry.requests[0].agent_id == "reviewer"
@@ -1660,17 +1665,17 @@ async def test_native_agent_service_completed_turn_writes_workspace_history(tmp_
     ]
 
     done = next(event for event in events if event["type"] == "done")
-    assert runtime.workspace_requests == []
-    assert done["message"]["meta"]["workspace_history_head"] == "head-1"
+    assert [item["action"] for item in runtime.workspace_requests] == ["status", "status"]
+    assert done["message"]["meta"]["workspace_history_head"] == "head-after"
     assert done["message"]["meta"]["linear_index"] == 1
-    assert done["message"]["meta"]["degraded"] is True
+    assert done["message"]["meta"]["degraded"] is False
     key = pi_session_key(cwd=str(tmp_path), bot_id=1, user_id=1, conversation_id=done["message"]["conversation_id"])
     record = PiSessionStore().get(key)
     assert record is not None
     assert record.linear_index == 1
-    assert record.workspace_history_head == "head-1"
-    assert record.degraded is True
-    assert history.store.get_turn_workspace_history(done["turn_id"])["workspace_history_head"] == "head-1"
+    assert record.workspace_history_head == "head-after"
+    assert record.degraded is False
+    assert history.store.get_turn_workspace_history(done["turn_id"])["workspace_history_head"] == "head-after"
 
 
 @pytest.mark.asyncio
@@ -1708,8 +1713,193 @@ async def test_native_agent_service_dirty_workspace_checkpoints_before_turn(tmp_
         )
     ]
 
-    assert runtime.workspace_requests == []
+    assert [item["action"] for item in runtime.workspace_requests] == ["status", "checkpoint", "status"]
     assert "changed_paths" not in json.dumps(events, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_workspace_history_timeout_marks_degraded_without_failing_answer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot import config
+    from bot.native_agent.pi_workspace_history import PiWorkspaceHistory
+    from bot.native_agent.pi_session_store import PiSessionStore, pi_session_key
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+
+    class SlowPostStatusRuntime(FakePiRuntime):
+        def __init__(self):
+            super().__init__([
+                {"type": "agent_start", "sessionId": "sess-1"},
+                {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "完成"}},
+                {"type": "turn_end", "sessionId": "sess-1"},
+            ], workspace_results={
+                "status": [
+                    {"head": "head-before", "clean": True, "manual_change_count": 0},
+                    {"head": "head-after", "clean": True, "manual_change_count": 0},
+                ],
+            })
+
+        async def request_workspace_history(self, fields: dict[str, object]) -> dict[str, object]:
+            if len(self.workspace_requests) >= 1 and str(fields.get("action") or "") == "status":
+                await asyncio.sleep(0.1)
+            return await super().request_workspace_history(fields)
+
+    runtime = SlowPostStatusRuntime()
+    service = NativeAgentService()
+    service._runtime_registry = FakePiRuntimeRegistry(runtime)
+    service._workspace_history = PiWorkspaceHistory(timeout_seconds=0.01)
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    events = [
+        event async for event in service.stream_chat(
+            profile=profile,
+            session=session,
+            user_text="做事",
+            prompt_text="做事",
+            history_service=history,
+        )
+    ]
+
+    done = next(event for event in events if event["type"] == "done")
+    key = pi_session_key(cwd=str(tmp_path), bot_id=1, user_id=1, conversation_id=done["message"]["conversation_id"])
+    record = PiSessionStore().get(key)
+
+    assert done["output"] == "完成"
+    assert done["message"]["meta"]["degraded"] is True
+    assert done["message"]["meta"]["rollback_supported"] is False
+    assert record is not None
+    assert record.degraded is True
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_does_not_reuse_pi_store_session_after_meta_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot import config
+    from bot.native_agent.pi_session_store import PiSessionRecord, PiSessionStore, pi_session_key
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    runtime = FakePiRuntime([
+        {"type": "agent_start", "sessionId": "sess-new"},
+        {"type": "message_update", "sessionId": "sess-new", "message": {"role": "assistant", "content": "新回复"}},
+        {"type": "turn_end", "sessionId": "sess-new"},
+    ], workspace_results={
+        "status": [
+            {"head": "head-before", "clean": True, "manual_change_count": 0},
+            {"head": "head-after", "clean": True, "manual_change_count": 0},
+        ],
+    })
+    service = NativeAgentService()
+    service._runtime_registry = FakePiRuntimeRegistry(runtime)
+    profile = BotProfile(
+        alias="main",
+        working_dir=str(tmp_path),
+        native_agent={"model": "anthropic/claude-sonnet-4", "pi_agent": "reviewer", "reasoning_effort": "high"},
+    )
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+    old_handle = history.start_turn(profile=profile, session=session, user_text="旧问题", native_provider="native_agent")
+    history.complete_turn(old_handle, content="旧回复", completion_state="completed", native_session_id="sess-old")
+    history.store.set_conversation_native_session(
+        old_handle.conversation_id,
+        "sess-old",
+        {"cwd": str(tmp_path), "model_id": "anthropic/claude-haiku-3", "pi_agent": "main", "reasoning_effort": "low"},
+    )
+    history.store.update_turn_workspace_history(old_handle.turn_id, "head-old", 1)
+    key = pi_session_key(cwd=str(tmp_path), bot_id=session.bot_id, user_id=1, conversation_id=old_handle.conversation_id)
+    PiSessionStore().upsert(PiSessionRecord(
+        key=key,
+        cwd=str(tmp_path),
+        conversation_id=old_handle.conversation_id,
+        pi_session_id="sess-old",
+        session_meta={
+            "cwd": str(tmp_path),
+            "model_id": "anthropic/claude-haiku-3",
+            "pi_agent": "main",
+            "reasoning_effort": "low",
+        },
+        linear_index=1,
+        workspace_history_head="head-old",
+    ))
+
+    events = [
+        event async for event in service.stream_chat(
+            profile=profile,
+            session=session,
+            user_text="继续",
+            prompt_text="继续",
+            history_service=history,
+        )
+    ]
+
+    done = next(event for event in events if event["type"] == "done")
+    reloaded = PiSessionStore().get(key)
+    conversation_native = history.store.get_conversation_native_session(done["message"]["conversation_id"])
+
+    assert runtime.prompts[0]["conversation_id"] == ""
+    assert runtime.prompts[0]["text"] == "/reviewer 继续"
+    assert done["native_session_id"] == "sess-new"
+    assert reloaded is not None
+    assert reloaded.pi_session_id == "sess-new"
+    assert reloaded.session_meta == {
+        "cwd": str(tmp_path),
+        "model_id": "anthropic/claude-sonnet-4",
+        "pi_agent": "reviewer",
+        "reasoning_effort": "high",
+    }
+    assert conversation_native["session_id"] == "sess-new"
+    assert conversation_native["meta"]["reasoning_effort"] == "high"
+    assert history.store.get_turn_workspace_history(old_handle.turn_id)["workspace_history_head"] == ""
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_sends_selected_model_agent_and_reasoning_to_pi(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot import config
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    runtime = FakePiRuntime([
+        {"type": "agent_start", "sessionId": "sess-1"},
+        {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "完成"}},
+        {"type": "turn_end", "sessionId": "sess-1"},
+    ], workspace_results={
+        "status": [
+            {"head": "head-before", "clean": True, "manual_change_count": 0},
+            {"head": "head-after", "clean": True, "manual_change_count": 0},
+        ],
+    })
+    registry = FakePiRuntimeRegistry(runtime)
+    service = NativeAgentService()
+    service._runtime_registry = registry
+    profile = BotProfile(
+        alias="main",
+        working_dir=str(tmp_path),
+        native_agent={"model": "anthropic/claude-sonnet-4", "pi_agent": "reviewer", "reasoning_effort": "high"},
+    )
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    await _collect_native_stream(service.stream_chat(
+        profile=profile,
+        session=session,
+        user_text="执行",
+        prompt_text="执行",
+        history_service=history,
+    ))
+
+    request = registry.requests[0]
+
+    assert request.model == "anthropic/claude-sonnet-4"
+    assert request.agent_id == "reviewer"
+    assert request.reasoning_effort == "high"
+    assert runtime.prompts[0]["text"] == "/reviewer 执行"
 
 
 @pytest.mark.asyncio

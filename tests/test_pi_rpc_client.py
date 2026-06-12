@@ -198,13 +198,22 @@ async def test_pi_rpc_client_prompt_adds_text_and_conversation_id(tmp_path: Path
     client = await _start_fake_client(tmp_path, monkeypatch, "wait_input")
     stream = client.events().__aiter__()
 
-    await client.prompt("你好", conversation_id="conv-1")
-    event = await asyncio.wait_for(stream.__anext__(), timeout=2)
+    await client.prompt("你好", conversation_id="conv-1", agent_id="reviewer", reasoning_effort="high")
+    first = await asyncio.wait_for(stream.__anext__(), timeout=2)
+    second = await asyncio.wait_for(stream.__anext__(), timeout=2)
     await client.close()
 
-    assert event == {
+    assert first == {
         "type": "received",
-        "packet": {"type": "prompt", "text": "你好", "conversation_id": "conv-1"},
+        "packet": {"type": "set_thinking_level", "level": "high"},
+    }
+    assert second == {
+        "type": "received",
+        "packet": {
+            "type": "prompt",
+            "message": "/reviewer 你好",
+            "conversation_id": "conv-1",
+        },
     }
 
 
@@ -345,8 +354,17 @@ async def test_pi_rpc_client_start_uses_default_pi_rpc_command_and_process_kwarg
     monkeypatch.setattr(pi_rpc_client, "build_chat_cli_process_kwargs", lambda: {"creationflags": 123})
     monkeypatch.setattr(pi_rpc_client.subprocess, "Popen", fake_popen)
 
-    await PiRpcClient.start(PiRpcStartRequest(command=None, cwd=tmp_path / "."))
+    await PiRpcClient.start(PiRpcStartRequest(command=None, cwd=tmp_path / ".", model="anthropic/claude-sonnet-4"))
 
-    assert captured["args"] == ["cmd.exe", "/d", "/c", "C:/Program Files/Pi/pi.cmd", "--mode", "rpc"]
+    assert captured["args"] == [
+        "cmd.exe",
+        "/d",
+        "/c",
+        "C:/Program Files/Pi/pi.cmd",
+        "--mode",
+        "rpc",
+        "--model",
+        "anthropic/claude-sonnet-4",
+    ]
     assert captured["kwargs"]["cwd"] == str(tmp_path.resolve())
     assert captured["kwargs"]["creationflags"] == 123

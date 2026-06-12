@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,6 +19,7 @@ class PiSessionRuntimeRequest:
     command: str
     model: str = ""
     agent_id: str = ""
+    reasoning_effort: str = ""
     native_session_id: str = ""
     env: dict[str, str] | None = None
 
@@ -32,6 +34,7 @@ class PiSessionRuntimeState:
     command: str
     model: str = ""
     agent_id: str = ""
+    reasoning_effort: str = ""
     native_session_id: str = ""
     linear_index: int = 0
     workspace_history_head: str = ""
@@ -43,6 +46,11 @@ class PiSessionRuntime:
     def __init__(self, *, client: PiRpcClient, state: PiSessionRuntimeState) -> None:
         self.client = client
         self.state = state
+        self._stream_queue: asyncio.Queue[dict[str, Any] | object] = asyncio.Queue()
+        self._workspace_requests: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        self._reader_task: asyncio.Task[None] | None = None
+        self._reader_error: BaseException | None = None
+        self._stream_closed = False
 
     @property
     def runtime_id(self) -> str:
@@ -66,22 +74,34 @@ class PiSessionRuntime:
         return (
             self.is_running()
             and self.state.runtime_key == request.runtime_key
-            and self.state.cwd == str(Path(request.cwd or ".").expanduser().resolve())
+            and str(Path(self.state.cwd or ".").expanduser().resolve()) == str(Path(request.cwd or ".").expanduser().resolve())
             and self.state.command == str(request.command or "").strip()
             and self.state.model == str(request.model or "").strip()
             and self.state.agent_id == str(request.agent_id or "").strip()
+            and self.state.reasoning_effort == str(request.reasoning_effort or "").strip()
         )
 
     async def prompt(self, text: str, *, conversation_id: str = "") -> None:
         self.state.processing = True
-        await self.client.prompt(text, conversation_id=conversation_id or self.state.native_session_id)
+        self._ensure_reader()
+        await self.client.prompt(
+            text,
+            conversation_id=conversation_id or self.state.native_session_id,
+            agent_id=self.state.agent_id,
+            reasoning_effort=self.state.reasoning_effort,
+        )
 
     async def events(self):
-        try:
-            async for event in self.client.events():
-                yield event
-        finally:
-            self.state.processing = False
+        self._ensure_reader()
+        while True:
+            item = await self._stream_queue.get()
+            if item is _STREAM_DONE:
+                await self._stream_queue.put(_STREAM_DONE)
+                self.state.processing = False
+                if self._reader_error is not None:
+                    raise self._reader_error
+                return
+            yield item
 
     async def abort(self) -> bool:
         try:
@@ -114,13 +134,79 @@ class PiSessionRuntime:
         self.state.pending_permission_ids.discard(normalized)
         return {"sent": True, "runtime_id": self.runtime_id}
 
+    async def request_workspace_history(self, fields: dict[str, Any]) -> dict[str, Any]:
+        self._ensure_reader()
+        request_id = str(fields.get("id") or f"wh_{uuid.uuid4().hex}").strip()
+        packet = {"type": "workspace_history", "id": request_id, **dict(fields)}
+        packet["id"] = request_id
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[dict[str, Any]] = loop.create_future()
+        self._workspace_requests[request_id] = future
+        try:
+            await self.client.send(packet)
+        except Exception:
+            self._workspace_requests.pop(request_id, None)
+            future.cancel()
+            raise
+        return await future
+
     async def close(self) -> None:
         self.state.processing = False
-        await self.client.close()
+        try:
+            await self.client.close()
+        finally:
+            await self._drain_reader()
 
     async def kill(self) -> None:
         self.state.processing = False
-        await self.client.kill()
+        try:
+            await self.client.kill()
+        finally:
+            await self._drain_reader()
+
+    def _ensure_reader(self) -> None:
+        if self._reader_task is None:
+            self._reader_task = asyncio.create_task(self._reader_loop())
+
+    async def _reader_loop(self) -> None:
+        try:
+            async for event in self.client.events():
+                if (
+                    isinstance(event, dict)
+                    and str(event.get("type") or "") == "workspace_history_result"
+                ):
+                    request_id = str(event.get("id") or "").strip()
+                    future = self._workspace_requests.pop(request_id, None)
+                    if future is not None and not future.done():
+                        future.set_result(event)
+                        continue
+                await self._stream_queue.put(event)
+        except Exception as exc:
+            self._reader_error = exc
+            self._fail_workspace_requests(exc)
+        else:
+            self._fail_workspace_requests(RuntimeError("Pi runtime 已关闭"))
+        finally:
+            self._stream_closed = True
+            self.state.processing = False
+            await self._stream_queue.put(_STREAM_DONE)
+
+    def _fail_workspace_requests(self, exc: BaseException) -> None:
+        for request_id, future in list(self._workspace_requests.items()):
+            self._workspace_requests.pop(request_id, None)
+            if not future.done():
+                future.set_exception(exc)
+
+    async def _drain_reader(self) -> None:
+        reader = self._reader_task
+        if reader is None:
+            self._fail_workspace_requests(RuntimeError("Pi runtime 已关闭"))
+            self._stream_closed = True
+            return
+        try:
+            await reader
+        except Exception:
+            return
 
 
 class PiSessionRuntimeRegistry:
@@ -157,6 +243,7 @@ class PiSessionRuntimeRegistry:
                 command=normalized.command,
                 model=normalized.model,
                 agent_id=normalized.agent_id,
+                reasoning_effort=normalized.reasoning_effort,
                 native_session_id=normalized.native_session_id,
             ),
         )
@@ -203,6 +290,10 @@ def _normalize_request(request: PiSessionRuntimeRequest) -> PiSessionRuntimeRequ
         command=str(request.command or "pi").strip() or "pi",
         model=str(request.model or "").strip(),
         agent_id=str(request.agent_id or "").strip(),
+        reasoning_effort=str(request.reasoning_effort or "").strip(),
         native_session_id=str(request.native_session_id or "").strip(),
         env=dict(request.env or {}) or None,
     )
+
+
+_STREAM_DONE = object()

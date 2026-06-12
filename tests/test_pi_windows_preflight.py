@@ -188,7 +188,7 @@ def test_pi_windows_preflight_reports_workspace_history_unknown(tmp_path: Path) 
     assert "无法判定" in _check(result, "workspace_history")["message"]
 
 
-def test_pi_windows_preflight_warns_when_workspace_history_enabled(tmp_path: Path) -> None:
+def test_pi_windows_preflight_reports_workspace_history_enabled_runtime_check(tmp_path: Path) -> None:
     result = run_pi_windows_preflight(
         _request(tmp_path, workspace_history_enabled=True),
         os_name="nt",
@@ -198,8 +198,9 @@ def test_pi_windows_preflight_warns_when_workspace_history_enabled(tmp_path: Pat
     )
 
     assert result["ok"] is True
-    assert _check(result, "workspace_history")["severity"] == "warning"
-    assert "不阻断" in _check(result, "workspace_history")["message"]
+    assert _check(result, "workspace_history")["ok"] is True
+    assert _check(result, "workspace_history")["severity"] == "info"
+    assert "运行时校验" in _check(result, "workspace_history")["message"]
 
 
 def test_pi_windows_preflight_accepts_workspace_history_disabled(tmp_path: Path) -> None:

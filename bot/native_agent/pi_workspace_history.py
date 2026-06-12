@@ -30,12 +30,9 @@ class PiWorkspaceHistory:
         return await self._request(runtime, {"action": "rollback", "target_head": str(target_head or "")})
 
     async def _request(self, runtime: Any, fields: dict[str, Any]) -> WorkspaceHistoryStatus:
-        request_id = f"wh_{uuid.uuid4().hex}"
-        packet = {"type": "workspace_history", "id": request_id, **fields}
         try:
-            await self._send(runtime, packet)
-            payload = await asyncio.wait_for(self._wait_result(runtime, request_id), timeout=self.timeout_seconds)
-        except TimeoutError:
+            payload = await asyncio.wait_for(self._request_payload(runtime, fields), timeout=self.timeout_seconds)
+        except (TimeoutError, asyncio.TimeoutError):
             return WorkspaceHistoryStatus(head="", clean=False, manual_change_count=0, degraded=True, message="workspace history 响应超时")
         except Exception as exc:
             return WorkspaceHistoryStatus(
@@ -46,6 +43,15 @@ class PiWorkspaceHistory:
                 message=_safe_message(str(exc) or "", default="workspace history 不可用"),
             )
         return self._status_from_payload(payload)
+
+    async def _request_payload(self, runtime: Any, fields: dict[str, Any]) -> dict[str, Any]:
+        request = getattr(runtime, "request_workspace_history", None)
+        if callable(request):
+            return await request(dict(fields))
+        request_id = f"wh_{uuid.uuid4().hex}"
+        packet = {"type": "workspace_history", "id": request_id, **fields}
+        await self._send(runtime, packet)
+        return await self._wait_result(runtime, request_id)
 
     async def _send(self, runtime: Any, packet: dict[str, Any]) -> None:
         send = getattr(runtime, "send", None)

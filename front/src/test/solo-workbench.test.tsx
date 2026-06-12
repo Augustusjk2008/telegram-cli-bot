@@ -1,9 +1,11 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
+import { NativeAgentTranscript } from "../components/NativeAgentTranscript";
 import { ChatScreen } from "../screens/ChatScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { FileReadResult, GitDiffPayload, GitOverview } from "../services/types";
+import { FILE_PREVIEW_FULL_READ_LIMIT_BYTES } from "../utils/filePreview";
 import { SoloWorkbench } from "../workbench/SoloWorkbench";
 import type { SoloSessionSnapshot } from "../workbench/soloTypes";
 
@@ -38,12 +40,13 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
-function buildFileResult(content: string): FileReadResult {
+function buildFileResult(content: string, overrides: Partial<FileReadResult> = {}): FileReadResult {
   return {
     content,
     mode: "head",
     fileSizeBytes: content.length,
     isFullContent: true,
+    ...overrides,
   };
 }
 
@@ -157,6 +160,119 @@ test("keeps file preview loading state per path", async () => {
   await user.click(screen.getByRole("tab", { name: "A.md" }));
 
   expect(await screen.findByRole("heading", { name: "A content" })).toBeInTheDocument();
+});
+
+test("auto-loads full html preview for readonly solo tabs", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const readFile = vi.spyOn(client, "readFile").mockResolvedValue(
+    buildFileResult("<html><body>partial</body></html>", {
+      isFullContent: false,
+      fileSizeBytes: 256,
+    }),
+  );
+  const readFileFull = vi.spyOn(client, "readFileFull").mockResolvedValue(
+    buildFileResult("<html><body><h1>Full report</h1></body></html>", {
+      mode: "cat",
+      isFullContent: true,
+      fileSizeBytes: 512,
+    }),
+  );
+
+  renderSoloWorkbench(client, ({ requestPreview }) => (
+    <button type="button" onClick={() => requestPreview("report.html")}>打开 report.html</button>
+  ));
+
+  await user.click(screen.getByRole("button", { name: "打开 report.html" }));
+
+  await waitFor(() => {
+    expect(readFile).toHaveBeenCalledWith("main", "report.html");
+    expect(readFileFull).toHaveBeenCalledWith("main", "report.html");
+  });
+  expect(document.querySelector("iframe[title='report.html']")).toBeInTheDocument();
+  expect(screen.getByText("已加载 HTML 预览")).toBeInTheDocument();
+});
+
+test("readonly solo preview can load full content for partial files", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "readFile").mockResolvedValue(
+    buildFileResult("预览片段", {
+      isFullContent: false,
+      fileSizeBytes: 256,
+    }),
+  );
+  const readFileFull = vi.spyOn(client, "readFileFull").mockResolvedValue(
+    buildFileResult("# Full README", {
+      mode: "cat",
+      isFullContent: true,
+      fileSizeBytes: 512,
+    }),
+  );
+
+  renderSoloWorkbench(client, ({ requestPreview }) => (
+    <button type="button" onClick={() => requestPreview("README.md")}>打开 README.md</button>
+  ));
+
+  await user.click(screen.getByRole("button", { name: "打开 README.md" }));
+
+  expect(await screen.findByText("预览片段")).toBeInTheDocument();
+  expect(readFileFull).not.toHaveBeenCalled();
+
+  await user.click(screen.getByRole("button", { name: "全文读取" }));
+
+  await waitFor(() => {
+    expect(readFileFull).toHaveBeenCalledWith("main", "README.md");
+  });
+  expect(await screen.findByRole("heading", { name: "Full README" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "全文读取" })).not.toBeInTheDocument();
+});
+
+test("readonly solo preview hides full read action for oversized files", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const readFileFull = vi.spyOn(client, "readFileFull");
+  vi.spyOn(client, "readFile").mockResolvedValue(
+    buildFileResult("仅预览", {
+      isFullContent: false,
+      fileSizeBytes: FILE_PREVIEW_FULL_READ_LIMIT_BYTES + 1,
+    }),
+  );
+
+  renderSoloWorkbench(client, ({ requestPreview }) => (
+    <button type="button" onClick={() => requestPreview("big.log")}>打开 big.log</button>
+  ));
+
+  await user.click(screen.getByRole("button", { name: "打开 big.log" }));
+
+  expect(await screen.findByText("仅预览")).toBeInTheDocument();
+  expect(screen.getByText("文件超过1MB，请下载后读取全文")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "全文读取" })).not.toBeInTheDocument();
+  expect(readFileFull).not.toHaveBeenCalled();
+});
+
+test("native transcript file link opens a readonly solo preview tab", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const readFile = vi.spyOn(client, "readFile");
+
+  renderSoloWorkbench(client, ({ requestPreview }) => (
+    <NativeAgentTranscript
+      entries={[]}
+      resultText="[README](README.md)"
+      state="done"
+      onFileLinkClick={requestPreview}
+    />
+  ));
+
+  await user.click(screen.getByRole("link", { name: "README" }));
+
+  await waitFor(() => {
+    expect(readFile).toHaveBeenCalledTimes(1);
+    expect(readFile).toHaveBeenCalledWith("main", "README.md");
+  });
+  expect(await screen.findByRole("tab", { name: "README.md" })).toBeInTheDocument();
+  expect(await screen.findByText(/Mock full content for README\.md/)).toBeInTheDocument();
 });
 
 test("opens readonly git diff tab from git status", async () => {

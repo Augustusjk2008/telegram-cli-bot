@@ -7,7 +7,13 @@ import { GitScreen } from "../screens/GitScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { FileReadResult } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
-import { getFilePreviewStatusText, withDetectedPreviewKind } from "../utils/filePreview";
+import {
+  getFilePreviewStatusText,
+  isFilePreviewFullyLoaded,
+  isFilePreviewTooLarge,
+  shouldAutoLoadFullHtmlPreview,
+  withDetectedPreviewKind,
+} from "../utils/filePreview";
 import { PaneResizer } from "./PaneResizer";
 import { SoloSessionInfoTab } from "./SoloSessionInfoTab";
 import type { SoloSessionSnapshot, SoloTab } from "./soloTypes";
@@ -83,6 +89,40 @@ export function SoloWorkbench({
   const [activeTabId, setActiveTabId] = useState("session");
   const [previews, setPreviews] = useState<Record<string, PreviewState>>({});
 
+  const loadPreview = useCallback(async (path: string, mode: "preview" | "full") => {
+    const nextPath = path.trim();
+    if (!nextPath) return;
+    setPreviews((current) => ({
+      ...current,
+      [nextPath]: { loading: true, error: "", result: current[nextPath]?.result || null },
+    }));
+    const requestId = (previewRequestSeqRef.current[nextPath] || 0) + 1;
+    previewRequestSeqRef.current[nextPath] = requestId;
+    try {
+      let result = mode === "full"
+        ? await client.readFileFull(botAlias, nextPath)
+        : await client.readFile(botAlias, nextPath);
+      if (mode === "preview" && shouldAutoLoadFullHtmlPreview(nextPath, result)) {
+        result = await client.readFileFull(botAlias, nextPath);
+      }
+      if (previewRequestSeqRef.current[nextPath] !== requestId) return;
+      setPreviews((current) => ({
+        ...current,
+        [nextPath]: { loading: false, error: "", result: withDetectedPreviewKind(nextPath, result) },
+      }));
+    } catch (err) {
+      if (previewRequestSeqRef.current[nextPath] !== requestId) return;
+      setPreviews((current) => ({
+        ...current,
+        [nextPath]: {
+          loading: false,
+          error: err instanceof Error ? err.message : "读取文件失败",
+          result: current[nextPath]?.result || null,
+        },
+      }));
+    }
+  }, [botAlias, client]);
+
   const requestPreview = useCallback((path: string) => {
     const nextPath = path.trim();
     if (!nextPath) return;
@@ -94,32 +134,8 @@ export function SoloWorkbench({
         : [...current, { id, kind: "file-preview", title, path: nextPath, readonly: true }]
     ));
     setActiveTabId(id);
-    setPreviews((current) => ({
-      ...current,
-      [nextPath]: { loading: true, error: "", result: current[nextPath]?.result || null },
-    }));
-    const requestId = (previewRequestSeqRef.current[nextPath] || 0) + 1;
-    previewRequestSeqRef.current[nextPath] = requestId;
-    void client.readFile(botAlias, nextPath)
-      .then((result) => {
-        if (previewRequestSeqRef.current[nextPath] !== requestId) return;
-        setPreviews((current) => ({
-          ...current,
-          [nextPath]: { loading: false, error: "", result: withDetectedPreviewKind(nextPath, result) },
-        }));
-      })
-      .catch((err) => {
-        if (previewRequestSeqRef.current[nextPath] !== requestId) return;
-        setPreviews((current) => ({
-          ...current,
-          [nextPath]: {
-            loading: false,
-            error: err instanceof Error ? err.message : "读取文件失败",
-            result: null,
-          },
-        }));
-      });
-  }, [botAlias, client]);
+    void loadPreview(nextPath, "preview");
+  }, [loadPreview]);
 
   const openGitDiffTab = useCallback(async (path: string, staged: boolean) => {
     const diff = await client.getGitDiff(botAlias, path, staged);
@@ -163,6 +179,12 @@ export function SoloWorkbench({
     ? DEFAULT_COLUMNS
     : `${chatWidthPx}px ${PANE_RESIZER_SIZE_PX}px minmax(${MIN_TABS_WIDTH_PX}px, 1fr)`;
   const activeTab = tabs.find((tab) => tab.id === activeTabId) || tabs[0];
+  const activePreview = activeTab.kind === "file-preview" ? previews[activeTab.path] : null;
+  const canLoadFullPreview = Boolean(
+    activePreview?.result
+    && !isFilePreviewFullyLoaded(activePreview.result)
+    && !isFilePreviewTooLarge(activePreview.result),
+  );
   const resolvedChatPaneContent = useMemo(
     () => (typeof chatPaneContent === "function" ? chatPaneContent({ requestPreview }) : chatPaneContent),
     [chatPaneContent, requestPreview],
@@ -274,16 +296,28 @@ export function SoloWorkbench({
                 <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]">
                   <div className="flex min-w-0 items-center justify-between gap-3 border-b border-[var(--workbench-hairline)] px-4 py-2 text-xs text-[var(--muted)]">
                     <span className="min-w-0 truncate" title={activeTab.path}>{activeTab.path}</span>
-                    <span className="shrink-0">{getFilePreviewStatusText(previews[activeTab.path]?.result || null) || "只读"}</span>
+                    <div className="flex shrink-0 items-center gap-2">
+                      {canLoadFullPreview ? (
+                        <button
+                          type="button"
+                          onClick={() => void loadPreview(activeTab.path, "full")}
+                          disabled={activePreview?.loading}
+                          className="inline-flex h-7 items-center rounded-md border border-[var(--accent-outline)] px-2 text-xs text-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {activePreview?.loading ? "读取中..." : "全文读取"}
+                        </button>
+                      ) : null}
+                      <span className="shrink-0">{getFilePreviewStatusText(activePreview?.result || null) || "只读"}</span>
+                    </div>
                   </div>
                   <div className="min-h-0 overflow-hidden">
-                    {previews[activeTab.path]?.error ? (
-                      <div className="p-4 text-sm text-red-600">{previews[activeTab.path]?.error}</div>
+                    {activePreview?.error ? (
+                      <div className="p-4 text-sm text-red-600">{activePreview.error}</div>
                     ) : (
                       <FilePreviewSurface
                         title={activeTab.path}
-                        result={previews[activeTab.path]?.result || null}
-                        loading={previews[activeTab.path]?.loading}
+                        result={activePreview?.result || null}
+                        loading={activePreview?.loading}
                         botAlias={botAlias}
                         desktop
                         onFileLinkClick={requestPreview}

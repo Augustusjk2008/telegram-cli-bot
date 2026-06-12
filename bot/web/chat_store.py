@@ -1393,6 +1393,34 @@ class ChatStore:
             "linear_index": int(row["workspace_history_index"] or 0),
         }
 
+    def invalidate_conversation_workspace_history(self, conversation_id: str) -> int:
+        normalized_conversation_id = str(conversation_id or "").strip()
+        now = _utc_now()
+        with self._connect_for_write() as conn:
+            result = conn.execute(
+                """
+                UPDATE turns
+                SET workspace_history_head = '',
+                    workspace_history_index = 0,
+                    updated_at = ?
+                WHERE conversation_id = ?
+                  AND (
+                    COALESCE(workspace_history_head, '') != ''
+                    OR COALESCE(workspace_history_index, 0) != 0
+                  )
+                """,
+                (now, normalized_conversation_id),
+            )
+            conn.execute(
+                """
+                UPDATE conversations
+                SET updated_at = ?
+                WHERE id = ?
+                """,
+                (now, normalized_conversation_id),
+            )
+            return int(result.rowcount or 0)
+
     def append_trace_event(
         self,
         turn_id: str,

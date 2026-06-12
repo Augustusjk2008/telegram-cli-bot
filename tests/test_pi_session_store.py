@@ -75,3 +75,39 @@ def test_pi_session_store_isolates_and_deletes_conversation(tmp_path: Path):
     assert store.get(key2).pi_session_id == "sess-2"  # type: ignore[union-attr]
     payload = json.loads((tmp_path / "pi_sessions.json").read_text(encoding="utf-8"))
     assert set(payload["sessions"]) == {key2}
+
+
+def test_pi_session_store_invalidate_binding_clears_session_and_chain(tmp_path: Path):
+    store = PiSessionStore(tmp_path / "pi_sessions.json")
+    key = pi_session_key(cwd=str(tmp_path), bot_id=1, user_id=1001, conversation_id="conv-1")
+    store.upsert(PiSessionRecord(
+        key=key,
+        cwd=str(tmp_path),
+        conversation_id="conv-1",
+        pi_session_id="sess-1",
+        session_meta={
+            "cwd": str(tmp_path),
+            "model_id": "anthropic/claude-sonnet-4",
+            "pi_agent": "reviewer",
+            "reasoning_effort": "high",
+        },
+    ))
+    store.update_after_completed_turn(key, pi_session_id="sess-1", turn_id="turn-1", workspace_history_head="head-1")
+    store.update_after_completed_turn(key, pi_session_id="sess-1", turn_id="turn-2", workspace_history_head="head-2")
+
+    invalidated = store.invalidate_binding(key, "binding changed")
+    reloaded = store.get(key)
+
+    assert invalidated.pi_session_id == ""
+    assert invalidated.workspace_history_head == ""
+    assert invalidated.linear_index == 0
+    assert invalidated.last_turn_id == ""
+    assert invalidated.session_meta["model_id"] == "anthropic/claude-sonnet-4"
+    assert reloaded is not None
+    assert reloaded.pi_session_id == ""
+    assert reloaded.workspace_history_head == ""
+    assert reloaded.linear_index == 0
+    assert reloaded.turns[0].status == "discarded"
+    assert reloaded.turns[0].discarded_at
+    assert reloaded.turns[1].status == "discarded"
+    assert reloaded.turns[1].discarded_at

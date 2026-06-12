@@ -54,6 +54,7 @@ class PiSessionRecord:
     cwd: str = ""
     conversation_id: str = ""
     pi_session_id: str = ""
+    session_meta: dict[str, str] = field(default_factory=dict)
     linear_index: int = 0
     workspace_history_head: str = ""
     last_turn_id: str = ""
@@ -69,11 +70,19 @@ class PiSessionRecord:
             for item in payload.get("turns", [])
             if isinstance(item, dict)
         ]
+        raw_meta = payload.get("session_meta")
+        session_meta = {}
+        if isinstance(raw_meta, dict):
+            session_meta = {
+                str(meta_key): str(meta_value or "").strip()
+                for meta_key, meta_value in raw_meta.items()
+            }
         return cls(
             key=str(payload.get("key") or key or ""),
             cwd=str(payload.get("cwd") or ""),
             conversation_id=str(payload.get("conversation_id") or ""),
             pi_session_id=str(payload.get("pi_session_id") or ""),
+            session_meta=session_meta,
             linear_index=max(0, int(payload.get("linear_index") or 0)),
             workspace_history_head=str(payload.get("workspace_history_head") or ""),
             last_turn_id=str(payload.get("last_turn_id") or ""),
@@ -88,6 +97,11 @@ class PiSessionRecord:
             "cwd": self.cwd,
             "conversation_id": self.conversation_id,
             "pi_session_id": self.pi_session_id,
+            "session_meta": {
+                str(key): str(value or "").strip()
+                for key, value in self.session_meta.items()
+                if str(key or "").strip()
+            },
             "linear_index": int(self.linear_index),
             "workspace_history_head": self.workspace_history_head,
             "last_turn_id": self.last_turn_id,
@@ -161,11 +175,12 @@ class PiSessionStore:
                 record.turns.append(existing)
             else:
                 record.linear_index = max(record.linear_index, existing.linear_index)
-                if head:
-                    existing.workspace_history_head = head
+                existing.workspace_history_head = head
             record.pi_session_id = str(pi_session_id or record.pi_session_id or "").strip()
-            record.workspace_history_head = head or existing.workspace_history_head or record.workspace_history_head
+            record.workspace_history_head = head
             record.last_turn_id = normalized_turn_id
+            record.degraded = False
+            record.degraded_reason = ""
             record.updated_at = _utc_now()
             payload["sessions"][normalized_key] = record.to_dict()
             self._write_payload(payload)
@@ -181,6 +196,30 @@ class PiSessionStore:
             record.degraded = True
             record.degraded_reason = str(reason or "").strip() or "workspace history unavailable"
             record.updated_at = _utc_now()
+            payload["sessions"][normalized_key] = record.to_dict()
+            self._write_payload(payload)
+            return record
+
+    def invalidate_binding(self, key: str, reason: str) -> PiSessionRecord:
+        normalized_key = str(key or "").strip()
+        if not normalized_key:
+            raise ValueError("Pi session key is required")
+        now = _utc_now()
+        with self._lock:
+            payload = self._read_payload()
+            record = PiSessionRecord.from_dict(payload["sessions"].get(normalized_key, {}), key=normalized_key)
+            for turn in record.turns:
+                if turn.discarded_at:
+                    continue
+                turn.status = "discarded"
+                turn.discarded_at = now
+            record.pi_session_id = ""
+            record.linear_index = 0
+            record.workspace_history_head = ""
+            record.last_turn_id = ""
+            record.degraded = False
+            record.degraded_reason = ""
+            record.updated_at = now
             payload["sessions"][normalized_key] = record.to_dict()
             self._write_payload(payload)
             return record
