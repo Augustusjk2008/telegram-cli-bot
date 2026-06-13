@@ -1632,6 +1632,40 @@ async def test_native_agent_service_streams_pi_runtime_and_persists_done(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_native_agent_service_starts_fresh_pi_session_without_web_history_prompt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot import config
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    runtime = FakePiRuntime([
+        {"type": "agent_start", "sessionId": "sess-1"},
+        {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "新回复"}},
+        {"type": "turn_end", "sessionId": "sess-1"},
+    ])
+    service = NativeAgentService()
+    service._runtime_registry = FakePiRuntimeRegistry(runtime)
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+    old_turn = history.start_turn(profile=profile, session=session, user_text="旧问题", native_provider="native_agent")
+    history.complete_turn(old_turn, content="旧回答", completion_state="completed")
+
+    await _collect_native_stream(service.stream_chat(
+        profile=profile,
+        session=session,
+        user_text="新问题",
+        prompt_text="新问题",
+        history_service=history,
+    ))
+
+    assert runtime.prompts[0]["text"] == "新问题"
+    assert "旧问题" not in runtime.prompts[0]["text"]
+    assert "旧回答" not in runtime.prompts[0]["text"]
+
+
+@pytest.mark.asyncio
 async def test_native_agent_service_uses_last_tool_result_when_pi_returns_no_final_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from bot import config
 

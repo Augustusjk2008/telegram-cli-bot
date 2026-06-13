@@ -306,16 +306,11 @@ class NativeAgentService:
         pi_record_key = ""
         pi_record: PiSessionRecord | None = None
         workspace_history_enabled = False
-        session_binding_invalidated = False
         workspace_history_before_head = ""
 
         try:
             if not config.NATIVE_AGENT_ENABLED:
                 raise RuntimeError("原生 agent 未启用")
-            try:
-                history_items = history_service.list_history(profile, session, limit=12)
-            except Exception:
-                history_items = []
             turn_handle = history_service.start_turn(
                 profile=profile,
                 session=session,
@@ -355,7 +350,6 @@ class NativeAgentService:
                 history_service.store.set_conversation_native_session(turn_handle.conversation_id, None, None)
                 history_service.store.invalidate_conversation_workspace_history(turn_handle.conversation_id)
                 requested_session_id = ""
-                session_binding_invalidated = True
             if requested_session_id:
                 native_session_id = requested_session_id
                 with session._lock:
@@ -376,7 +370,6 @@ class NativeAgentService:
                 history_service.store.invalidate_conversation_workspace_history(turn_handle.conversation_id)
                 native_session_id = ""
                 requested_session_id = ""
-                session_binding_invalidated = True
                 with session._lock:
                     session.native_agent_session_id = None
                 session.persist()
@@ -562,12 +555,7 @@ class NativeAgentService:
                     await active_runtime.kill()
                 return True
 
-            native_prompt_text = (
-                prompt_text
-                if requested_session_id or session_binding_invalidated
-                else _build_native_prompt_with_history(history_items, prompt_text)
-            )
-            await active_runtime.prompt(native_prompt_text, conversation_id=native_session_id)
+            await active_runtime.prompt(prompt_text, conversation_id=native_session_id)
             stream = active_runtime.events()
             iterator = stream.__aiter__()
             next_event_task: asyncio.Task[dict[str, Any]] | None = None
@@ -856,43 +844,6 @@ class NativeAgentService:
             "returncode": last_event.get("returncode", 0),
             "session": last_event.get("session"),
         }
-
-
-def _build_native_prompt_with_history(history_items: list[dict[str, Any]], prompt_text: str) -> str:
-    rows: list[str] = []
-    for item in history_items[-12:]:
-        if not isinstance(item, dict):
-            continue
-        meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
-        if str(meta.get("completion_state") or "").strip().lower() not in {"", "completed"}:
-            continue
-        role = str(item.get("role") or "").strip().lower()
-        if role not in {"user", "assistant"}:
-            continue
-        if role == "assistant" and str(item.get("state") or "").strip().lower() != "done":
-            continue
-        content = _history_item_content(item)
-        if not content:
-            continue
-        label = "用户" if role == "user" else "助手"
-        rows.append(f"{label}: {content[:2000]}")
-    if not rows:
-        return prompt_text
-    context = "\n\n".join(rows)
-    return (
-        "以下是本 Web 会话最近上下文，请据此回答当前用户消息。\n\n"
-        f"{context}\n\n"
-        "当前用户消息:\n"
-        f"{prompt_text}"
-    )
-
-
-def _history_item_content(item: dict[str, Any]) -> str:
-    for key in ("content", "text", "output", "message"):
-        value = item.get(key)
-        if value:
-            return str(value).strip()
-    return ""
 
 
 def _native_session_meta(*, cwd: str, model_id: str, pi_agent: str, reasoning_effort: str) -> dict[str, str]:
