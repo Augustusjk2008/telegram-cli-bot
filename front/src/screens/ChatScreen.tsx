@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { LoaderCircle, Maximize2, Minimize2, Paperclip, Trash2 } from "lucide-react";
+import { createPortal } from "react-dom";
+import { LoaderCircle, Maximize2, Minimize2, Paperclip, RotateCcw, Trash2 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { ChatAvatar } from "../components/ChatAvatar";
 import { ChatActionBar, type ChatModelOption } from "../components/ChatActionBar";
@@ -97,7 +98,10 @@ type Props = {
   onWorkbenchStatusChange?: (status: ChatWorkbenchStatus) => void;
   onRequestDesktopPreview?: (path: string) => void;
   forcedExecutionMode?: ChatExecutionMode;
+  soloMode?: boolean;
+  soloHistoryRevision?: number;
   onSoloSessionInfoChange?: (snapshot: SoloSessionSnapshot) => void;
+  onSoloHistoryRollback?: () => void;
 };
 
 type PendingChatAttachment = ChatAttachmentUploadResult & {
@@ -121,6 +125,12 @@ type ChatMessageRowModel = {
   planDraft: string;
   deletedAttachmentKeys: Record<string, boolean>;
   deletingAttachmentKeys: Record<string, boolean>;
+  soloRollbackTarget?: SoloRollbackTarget;
+};
+
+type SoloRollbackTarget = {
+  conversationId: string;
+  targetTurnId: string;
 };
 
 const EMPTY_ATTACHMENT_STATE: Record<string, boolean> = {};
@@ -832,6 +842,44 @@ function getMessageClientStateKey(item: ChatMessage) {
   return `${item.role}|${item.id}`;
 }
 
+function isCompletedNativeHistoryPoint(item: ChatMessage) {
+  return Boolean(
+    item.role === "assistant"
+    && item.state !== "streaming"
+    && item.state !== "error"
+    && item.meta?.workspaceHistoryHead
+    && item.meta?.rollbackSupported !== false
+    && String(item.turnId || item.id || "").trim(),
+  );
+}
+
+function buildSoloRollbackTargets(items: ChatMessage[]) {
+  const targets = new Map<string, SoloRollbackTarget>();
+  let previousHistoryPoint: SoloRollbackTarget | null = null;
+  for (const item of items) {
+    if (item.role === "user" && previousHistoryPoint) {
+      targets.set(item.id, previousHistoryPoint);
+      continue;
+    }
+    if (isCompletedNativeHistoryPoint(item)) {
+      previousHistoryPoint = {
+        conversationId: item.conversationId || "",
+        targetTurnId: String(item.turnId || item.id || "").trim(),
+      };
+    }
+  }
+  return targets;
+}
+
+function resolveActiveConversationId(conversations: ConversationSummary[], items: ChatMessage[]) {
+  return (
+    conversations.find((conversation) => conversation.active)?.id
+    || conversations[0]?.id
+    || items.find((item) => item.conversationId)?.conversationId
+    || ""
+  );
+}
+
 function shouldShowContextRing(meta?: ChatMessageMetaInfo) {
   const provider = String(meta?.contextUsage?.provider || "").trim().toLowerCase();
   return (
@@ -1047,6 +1095,8 @@ type ChatMessageRowProps = {
   onToggleTracePanel: (messageClientStateKey: string) => void;
   onCopyFinalAnswer: (text: string) => boolean | void | Promise<boolean | void>;
   onReplyNativePermission: (reply: NativeAgentPermissionReply) => Promise<void>;
+  soloRollbackTarget?: SoloRollbackTarget;
+  onRequestSoloRollback?: (target: SoloRollbackTarget) => void;
   wideMessages: boolean;
 };
 
@@ -1067,6 +1117,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
   onToggleTracePanel,
   onCopyFinalAnswer,
   onReplyNativePermission,
+  soloRollbackTarget,
+  onRequestSoloRollback,
   wideMessages,
 }: ChatMessageRowProps) {
   const reduceMotion = useReducedMotion();
@@ -1100,6 +1152,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   });
   const traceCount = typeof item.meta?.traceCount === "number" ? item.meta.traceCount : trace?.length ?? 0;
   const hasTracePanel = allowTrace && item.role === "assistant" && traceCount > 0 && !agUiRunState && !isNativeAgentAssistant;
+  const showSoloRollback = Boolean(isUser && isCurrentUserMessage && soloRollbackTarget && onRequestSoloRollback);
   const inlineAvatar = (
     <ChatAvatar
       alt={`${messageName} 头像`}
@@ -1123,92 +1176,105 @@ const ChatMessageRow = memo(function ChatMessageRow({
           contextUsage={!isUser ? item.meta?.contextUsage : undefined}
           contextVariant={showContextRing ? "ring" : "text"}
         />
-        <div
-          data-streaming={isStreamingAssistant ? "true" : "false"}
-          className={isNativeAgentAssistant
-            ? "min-w-0 overflow-hidden text-[var(--text)]"
-            : [
-                "chat-message-bubble-delight",
-                isUser && isCurrentUserMessage
-                  ? "rounded-lg bg-[var(--accent)] px-4 py-2 text-[var(--accent-foreground)] shadow-[var(--shadow-soft)]"
-                  : isStreamingAssistant
-                    ? "min-w-0 overflow-hidden rounded-lg border border-[var(--accent)]/45 bg-[var(--workbench-panel-elevated-bg)] px-4 py-3 text-[var(--text)] shadow-[var(--shadow-soft)]"
-                  : item.state === "error"
-                    ? "rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-red-700 shadow-[var(--shadow-soft)]"
-                    : "min-w-0 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-3 text-[var(--text)] shadow-[var(--shadow-soft)]",
-              ].join(" ")}
-        >
-          {isNativeAgentAssistant ? (
-            <NativeAgentTranscript
-              entries={nativeTranscriptEntries}
-              resultText={item.text}
-              state={item.state}
-              onReplyPermission={onReplyNativePermission}
-              onFileLinkClick={onFileLinkClick}
-            />
-          ) : item.role === "assistant" && item.state !== "streaming" && item.state !== "error" ? (
-            <ChatMarkdownMessage content={item.text} onFileLinkClick={onFileLinkClick} />
-          ) : isUser ? (
-            <div className={userAttachments.length > 0 && visibleUserText ? "space-y-2" : undefined}>
-              {visibleUserText ? (
-                <ChatPlainTextMessage
-                  content={visibleUserText}
-                  className={isCurrentUserMessage ? "text-[var(--accent-foreground)]" : undefined}
-                />
-              ) : null}
-              {userAttachments.length > 0 ? (
-                <div className="flex flex-wrap gap-2">
-                  {userAttachments.map((attachment) => {
-                    const attachmentStateKey = getRenderedAttachmentStateKey(item.id, attachment.savedPath);
-                    const isDeleted = Boolean(deletedAttachmentKeys[attachmentStateKey]);
-                    const isDeleting = Boolean(deletingAttachmentKeys[attachmentStateKey]);
+        <div className={showSoloRollback ? "flex items-start justify-end gap-1.5" : undefined}>
+          {showSoloRollback ? (
+            <button
+              type="button"
+              aria-label="撤回到此消息前"
+              title="撤回到此消息前"
+              onClick={() => onRequestSoloRollback?.(soloRollbackTarget as SoloRollbackTarget)}
+              className="mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-red-500/25 text-red-700 hover:bg-red-500/10"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
+          <div
+            data-streaming={isStreamingAssistant ? "true" : "false"}
+            className={isNativeAgentAssistant
+              ? "min-w-0 overflow-hidden text-[var(--text)]"
+              : [
+                  "chat-message-bubble-delight",
+                  isUser && isCurrentUserMessage
+                    ? "rounded-lg bg-[var(--accent)] px-4 py-2 text-[var(--accent-foreground)] shadow-[var(--shadow-soft)]"
+                    : isStreamingAssistant
+                      ? "min-w-0 overflow-hidden rounded-lg border border-[var(--accent)]/45 bg-[var(--workbench-panel-elevated-bg)] px-4 py-3 text-[var(--text)] shadow-[var(--shadow-soft)]"
+                    : item.state === "error"
+                      ? "rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-red-700 shadow-[var(--shadow-soft)]"
+                      : "min-w-0 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-3 text-[var(--text)] shadow-[var(--shadow-soft)]",
+                ].join(" ")}
+          >
+            {isNativeAgentAssistant ? (
+              <NativeAgentTranscript
+                entries={nativeTranscriptEntries}
+                resultText={item.text}
+                state={item.state}
+                onReplyPermission={onReplyNativePermission}
+                onFileLinkClick={onFileLinkClick}
+              />
+            ) : item.role === "assistant" && item.state !== "streaming" && item.state !== "error" ? (
+              <ChatMarkdownMessage content={item.text} onFileLinkClick={onFileLinkClick} />
+            ) : isUser ? (
+              <div className={userAttachments.length > 0 && visibleUserText ? "space-y-2" : undefined}>
+                {visibleUserText ? (
+                  <ChatPlainTextMessage
+                    content={visibleUserText}
+                    className={isCurrentUserMessage ? "text-[var(--accent-foreground)]" : undefined}
+                  />
+                ) : null}
+                {userAttachments.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {userAttachments.map((attachment) => {
+                      const attachmentStateKey = getRenderedAttachmentStateKey(item.id, attachment.savedPath);
+                      const isDeleted = Boolean(deletedAttachmentKeys[attachmentStateKey]);
+                      const isDeleting = Boolean(deletingAttachmentKeys[attachmentStateKey]);
 
-                    return (
-                      <span
-                        key={attachment.savedPath}
-                        title={attachment.savedPath}
-                        className={!isCurrentUserMessage
-                          ? "inline-flex max-w-full items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--bg)] px-3 py-1 text-xs text-[var(--muted)]"
-                          : isDeleted
-                          ? "inline-flex max-w-full items-center gap-1.5 rounded-full border border-[var(--accent-foreground)]/20 bg-[var(--accent-foreground)]/10 px-3 py-1 text-xs text-[var(--accent-foreground)]/70"
-                          : "inline-flex max-w-full items-center gap-1.5 rounded-full border border-[var(--accent-foreground)]/25 bg-[var(--accent-foreground)]/10 px-3 py-1 text-xs text-[var(--accent-foreground)]"}
-                      >
-                        <Paperclip className="h-3.5 w-3.5 shrink-0" />
-                        <span className="truncate">{attachment.filename}</span>
-                        {isDeleted ? (
-                          <span className="rounded-full bg-[var(--accent-foreground)]/10 px-1.5 py-0.5 text-[10px] text-[var(--accent-foreground)]/80">已删除</span>
-                        ) : (
-                          <button
-                            type="button"
-                            aria-label={`删除附件文件 ${attachment.filename}`}
-                            disabled={isDeleting}
-                            onClick={() => onDeleteAttachment(item.id, attachment.savedPath)}
-                            className="inline-flex h-4 w-4 items-center justify-center rounded-full text-[var(--accent-foreground)]/80 hover:bg-[var(--accent-foreground)]/15 disabled:opacity-60"
-                          >
-                            {isDeleting ? (
-                              <LoaderCircle className="h-3 w-3 animate-spin" />
-                            ) : (
-                              <Trash2 className="h-3 w-3" />
-                            )}
-                          </button>
-                        )}
-                      </span>
-                    );
-                  })}
-                </div>
-              ) : null}
-            </div>
-          ) : isStreamingAssistant && !hasStreamingText ? (
-            <div className="inline-flex items-center gap-2 text-sm text-[var(--muted)]">
-              <LoaderCircle className="h-4 w-4 animate-spin text-[var(--accent)]" />
-              <span>正在输出...</span>
-            </div>
-          ) : (
-            <ChatPlainTextMessage
-              content={item.text}
-              className={isUser ? "text-[var(--accent-foreground)]" : item.state === "error" ? "text-red-700" : "text-[var(--text)]"}
-            />
-          )}
+                      return (
+                        <span
+                          key={attachment.savedPath}
+                          title={attachment.savedPath}
+                          className={!isCurrentUserMessage
+                            ? "inline-flex max-w-full items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--bg)] px-3 py-1 text-xs text-[var(--muted)]"
+                            : isDeleted
+                            ? "inline-flex max-w-full items-center gap-1.5 rounded-full border border-[var(--accent-foreground)]/20 bg-[var(--accent-foreground)]/10 px-3 py-1 text-xs text-[var(--accent-foreground)]/70"
+                            : "inline-flex max-w-full items-center gap-1.5 rounded-full border border-[var(--accent-foreground)]/25 bg-[var(--accent-foreground)]/10 px-3 py-1 text-xs text-[var(--accent-foreground)]"}
+                        >
+                          <Paperclip className="h-3.5 w-3.5 shrink-0" />
+                          <span className="truncate">{attachment.filename}</span>
+                          {isDeleted ? (
+                            <span className="rounded-full bg-[var(--accent-foreground)]/10 px-1.5 py-0.5 text-[10px] text-[var(--accent-foreground)]/80">已删除</span>
+                          ) : (
+                            <button
+                              type="button"
+                              aria-label={`删除附件文件 ${attachment.filename}`}
+                              disabled={isDeleting}
+                              onClick={() => onDeleteAttachment(item.id, attachment.savedPath)}
+                              className="inline-flex h-4 w-4 items-center justify-center rounded-full text-[var(--accent-foreground)]/80 hover:bg-[var(--accent-foreground)]/15 disabled:opacity-60"
+                            >
+                              {isDeleting ? (
+                                <LoaderCircle className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-3 w-3" />
+                              )}
+                            </button>
+                          )}
+                        </span>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            ) : isStreamingAssistant && !hasStreamingText ? (
+              <div className="inline-flex items-center gap-2 text-sm text-[var(--muted)]">
+                <LoaderCircle className="h-4 w-4 animate-spin text-[var(--accent)]" />
+                <span>正在输出...</span>
+              </div>
+            ) : (
+              <ChatPlainTextMessage
+                content={item.text}
+                className={isUser ? "text-[var(--accent-foreground)]" : item.state === "error" ? "text-red-700" : "text-[var(--text)]"}
+              />
+            )}
+          </div>
         </div>
         {hasTracePanel ? (
           <ChatTracePanel
@@ -1245,6 +1311,7 @@ const ChatMessageList = memo(function ChatMessageList({
   handleToggleTracePanel,
   handleCopyFinalAnswer,
   handleReplyNativePermission,
+  handleRequestSoloRollback,
   executingPlanMessageId,
   planExecuteError,
   handleExecutePlan,
@@ -1263,6 +1330,7 @@ const ChatMessageList = memo(function ChatMessageList({
   handleToggleTracePanel: (messageClientStateKey: string) => void;
   handleCopyFinalAnswer: (text: string) => boolean | void | Promise<boolean | void>;
   handleReplyNativePermission: (reply: NativeAgentPermissionReply) => Promise<void>;
+  handleRequestSoloRollback?: (target: SoloRollbackTarget) => void;
   executingPlanMessageId: string;
   planExecuteError: string;
   handleExecutePlan: (messageId: string, content: string) => void;
@@ -1287,6 +1355,8 @@ const ChatMessageList = memo(function ChatMessageList({
         onToggleTracePanel={handleToggleTracePanel}
         onCopyFinalAnswer={handleCopyFinalAnswer}
         onReplyNativePermission={handleReplyNativePermission}
+        soloRollbackTarget={row.soloRollbackTarget}
+        onRequestSoloRollback={handleRequestSoloRollback}
         wideMessages={wideMessages}
       />
       {row.planDraft ? (
@@ -1326,7 +1396,10 @@ export function ChatScreen({
   onWorkbenchStatusChange,
   onRequestDesktopPreview,
   forcedExecutionMode,
+  soloMode = false,
+  soloHistoryRevision = 0,
   onSoloSessionInfoChange,
+  onSoloHistoryRollback,
 }: Props) {
   const storageScope = accountId?.trim() || "";
   const [items, setItems] = useState<ChatMessage[]>([]);
@@ -1374,6 +1447,8 @@ export function ChatScreen({
   const [nativePermissionPending, setNativePermissionPending] = useState(false);
   const [executingPlanMessageId, setExecutingPlanMessageId] = useState("");
   const [planExecuteError, setPlanExecuteError] = useState("");
+  const [soloRollbackTarget, setSoloRollbackTarget] = useState<SoloRollbackTarget | null>(null);
+  const [soloRollbacking, setSoloRollbacking] = useState(false);
   const [composerPulseKey, setComposerPulseKey] = useState(0);
   const bottomAnchorRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLElement | null>(null);
@@ -1404,6 +1479,7 @@ export function ChatScreen({
   const userScrollIntentRef = useRef(false);
   const clusterRunIdRef = useRef("");
   const assistantSendVersionRef = useRef(0);
+  const soloHistoryRevisionRef = useRef(soloHistoryRevision);
   const previousBotAliasRef = useRef(botAlias);
   const previousStorageScopeRef = useRef(storageScope);
   const hasActivatedRef = useRef(false);
@@ -1475,6 +1551,8 @@ export function ChatScreen({
     setHistoryPanelOpen(false);
     setConversationQuery("");
     setConversations([]);
+    setSoloRollbackTarget(null);
+    setSoloRollbacking(false);
     if (clusterTaskPollTimerRef.current !== null) {
       window.clearTimeout(clusterTaskPollTimerRef.current);
       clusterTaskPollTimerRef.current = null;
@@ -1938,6 +2016,8 @@ export function ChatScreen({
     setPendingCronRuns([]);
     setPendingAttachments([]);
     setUploadingAttachments(false);
+    setSoloRollbackTarget(null);
+    setSoloRollbacking(false);
     setDeletedAttachmentKeys({});
     setDeletingAttachmentKeys({});
     setExpandedTracePanels({});
@@ -2489,6 +2569,86 @@ export function ChatScreen({
       setConversationLoading(false);
     }
   }, [botAlias, client]);
+
+  const refreshSoloNativeHistory = useCallback(async () => {
+    if (executionModeRef.current !== "native_agent") {
+      return;
+    }
+    const agentId = activeAgentIdRef.current || "main";
+    setError("");
+    try {
+      const [messages, conversationData] = await Promise.all([
+        listScopedMessages(client, botAlias, agentId, "native_agent"),
+        listScopedConversations(client, botAlias, conversationQuery, agentId, "native_agent"),
+      ]);
+      setPendingCronRuns([]);
+      setConversations(conversationData.items);
+      itemsRef.current = messages;
+      const overview = botOverviewRef.current;
+      if (overview) {
+        applyHistoryView(messages, overview, []);
+      } else {
+        setItems(messages);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "刷新会话历史失败");
+    }
+  }, [applyHistoryView, botAlias, client, conversationQuery]);
+
+  useEffect(() => {
+    if (soloHistoryRevisionRef.current === soloHistoryRevision) {
+      return;
+    }
+    soloHistoryRevisionRef.current = soloHistoryRevision;
+    if (!soloMode || isStreamingRef.current) {
+      return;
+    }
+    void refreshSoloNativeHistory();
+  }, [refreshSoloNativeHistory, soloHistoryRevision, soloMode]);
+
+  const handleRequestSoloRollback = useCallback((target: SoloRollbackTarget) => {
+    setSoloRollbackTarget(target);
+  }, []);
+
+  const handleConfirmSoloRollback = useCallback(async () => {
+    if (!soloRollbackTarget || soloRollbacking) {
+      return;
+    }
+    const conversationId = soloRollbackTarget.conversationId || resolveActiveConversationId(conversations, itemsRef.current);
+    if (!conversationId) {
+      setSoloRollbackTarget(null);
+      setError("缺少会话 ID，无法撤回");
+      return;
+    }
+    setSoloRollbacking(true);
+    setError("");
+    try {
+      const agentId = activeAgentIdRef.current || "main";
+      await client.rollbackNativeAgentHistory(botAlias, {
+        conversationId,
+        targetTurnId: soloRollbackTarget.targetTurnId,
+        ...(agentId !== "main" ? { agentId } : {}),
+      });
+      setSoloRollbackTarget(null);
+      if (onSoloHistoryRollback) {
+        onSoloHistoryRollback();
+      } else {
+        await refreshSoloNativeHistory();
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "撤回失败");
+    } finally {
+      setSoloRollbacking(false);
+    }
+  }, [
+    botAlias,
+    client,
+    conversations,
+    onSoloHistoryRollback,
+    refreshSoloNativeHistory,
+    soloRollbackTarget,
+    soloRollbacking,
+  ]);
 
   async function handleOpenHistoryPanel() {
     setHistoryPanelOpen(true);
@@ -3591,6 +3751,11 @@ export function ChatScreen({
     () => (hiddenHistoryCount > 0 ? items.slice(hiddenHistoryCount) : items),
     [hiddenHistoryCount, items],
   );
+  const soloRollbackTargets = useMemo(() => (
+    nativeExecutionMode && !isStreaming && !loading && !readOnly
+      ? buildSoloRollbackTargets(items)
+      : new Map<string, SoloRollbackTarget>()
+  ), [items, loading, nativeExecutionMode, readOnly, isStreaming]);
   const messageRowModels = useMemo<ChatMessageRowModel[]>(() => visibleItems.map((item) => {
     const messageClientStateKey = getMessageClientStateKey(item);
     const planDraft = item.role === "assistant" && item.state === "done"
@@ -3603,8 +3768,9 @@ export function ChatScreen({
       planDraft,
       deletedAttachmentKeys: deletedAttachmentKeysByMessage[item.id] || EMPTY_ATTACHMENT_STATE,
       deletingAttachmentKeys: deletingAttachmentKeysByMessage[item.id] || EMPTY_ATTACHMENT_STATE,
+      soloRollbackTarget: soloRollbackTargets.get(item.id),
     };
-  }), [deletedAttachmentKeysByMessage, deletingAttachmentKeysByMessage, visibleItems]);
+  }), [deletedAttachmentKeysByMessage, deletingAttachmentKeysByMessage, soloRollbackTargets, visibleItems]);
 
   const soloConversationLoadKeyRef = useRef("");
 
@@ -3683,6 +3849,33 @@ export function ChatScreen({
       busyAgentCount: activityStatus === "busy" ? 1 : 0,
     });
   }
+
+  const soloRollbackDialog = soloRollbackTarget ? (
+    <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/35 px-4">
+      <div role="dialog" aria-modal="true" aria-label="确认撤回" className="w-full max-w-sm rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] p-4 shadow-[var(--shadow-card)]">
+        <h2 className="text-sm font-semibold text-[var(--text)]">确认撤回</h2>
+        <p className="mt-2 text-sm text-[var(--muted)]">会丢弃该点之后的会话和工作区改动，不可撤销</p>
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => setSoloRollbackTarget(null)}
+            disabled={soloRollbacking}
+            className="inline-flex h-8 items-center rounded-md border border-[var(--workbench-hairline)] px-3 text-xs text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleConfirmSoloRollback()}
+            disabled={soloRollbacking}
+            className="inline-flex h-8 items-center rounded-md bg-red-600 px-3 text-xs font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {soloRollbacking ? "撤回中..." : "确认撤回"}
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
 
   return (
     <main className="relative flex h-full flex-col bg-[var(--workbench-panel-bg)]">
@@ -3801,6 +3994,7 @@ export function ChatScreen({
             handleToggleTracePanel={handleToggleTracePanel}
             handleCopyFinalAnswer={handleCopyFinalAnswer}
             handleReplyNativePermission={handleReplyNativePermission}
+            handleRequestSoloRollback={handleRequestSoloRollback}
             executingPlanMessageId={executingPlanMessageId}
             planExecuteError={planExecuteError}
             handleExecutePlan={handleExecutePlan}
@@ -3879,6 +4073,8 @@ export function ChatScreen({
           onSaveBotPromptPresets={handleSaveBotPromptPresets}
         />
       </div>
+
+      {soloRollbackDialog && typeof document !== "undefined" ? createPortal(soloRollbackDialog, document.body) : soloRollbackDialog}
 
       {shouldUseInlinePreview && previewName ? (
         <FilePreviewDialog

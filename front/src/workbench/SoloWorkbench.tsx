@@ -30,10 +30,12 @@ type Props = {
   announcementAction?: ReactNode;
   chatPaneContent: ReactNode | ((actions: { requestPreview: (path: string) => void }) => ReactNode);
   sessionSnapshot: SoloSessionSnapshot | null;
+  soloHistoryRevision?: number;
   chatStatus?: ChatWorkbenchStatus;
   productMode?: WorkbenchProductMode;
   soloAvailable?: boolean;
   onProductModeChange?: (mode: WorkbenchProductMode) => void;
+  onSoloHistoryRollback?: () => void;
   onViewModeChange: (viewMode: ViewMode) => void;
   onOpenBotSwitcher: (anchorRect?: DOMRect) => void;
   onLogout: () => void;
@@ -69,10 +71,12 @@ export function SoloWorkbench({
   announcementAction,
   chatPaneContent,
   sessionSnapshot,
+  soloHistoryRevision = 0,
   chatStatus,
   productMode = "solo",
   soloAvailable = true,
   onProductModeChange,
+  onSoloHistoryRollback,
   onViewModeChange,
   onOpenBotSwitcher,
   onLogout,
@@ -297,7 +301,9 @@ export function SoloWorkbench({
                   botAlias={botAlias}
                   client={historyClient}
                   snapshot={sessionSnapshot}
+                  historyRevision={soloHistoryRevision}
                   onOpenDiff={openSessionDiffTab}
+                  onRollbackComplete={onSoloHistoryRollback}
                 />
               ) : activeTab.kind === "file-preview" ? (
                 <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]">

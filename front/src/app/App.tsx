@@ -245,6 +245,7 @@ export function App() {
   const [desktopChatPaneVisible, setDesktopChatPaneVisible] = useState(true);
   const [productModeByBot, setProductModeByBot] = useState<Record<string, WorkbenchProductMode>>({});
   const [soloSessionSnapshotByBot, setSoloSessionSnapshotByBot] = useState<Record<string, SoloSessionSnapshot | null>>({});
+  const [soloHistoryRevisionByBot, setSoloHistoryRevisionByBot] = useState<Record<string, number>>({});
   const [isChatImmersive, setIsChatImmersive] = useState(false);
   const [isTerminalImmersive, setIsTerminalImmersive] = useState(false);
   const [userAvatarName, setUserAvatarName] = useState(() => readStoredUserAvatarName());
@@ -321,6 +322,7 @@ export function App() {
         : "build"
     );
   const soloSessionSnapshot = currentBot ? soloSessionSnapshotByBot[currentBot] || null : null;
+  const soloHistoryRevision = currentBot ? soloHistoryRevisionByBot[currentBot] || 0 : 0;
   const currentWorkspaceName = currentBotSummary?.workingDir.split(/[\\/]+/).filter(Boolean).pop()
     || currentBotSummary?.workingDir
     || "";
@@ -373,6 +375,16 @@ export function App() {
     } catch {
       // Keep in-memory preference if storage is unavailable.
     }
+  }
+
+  function bumpSoloHistoryRevision(alias: string | null = currentBot) {
+    if (!alias) {
+      return;
+    }
+    setSoloHistoryRevisionByBot((prev) => ({
+      ...prev,
+      [alias]: (prev[alias] || 0) + 1,
+    }));
   }
 
   async function openBotSwitcher(anchorRect?: DOMRect) {
@@ -694,6 +706,7 @@ export function App() {
     setUnreadBots([]);
     setMountedChatBots([]);
     setDesktopChatStatusByBot({});
+    setSoloHistoryRevisionByBot({});
     setDesktopChatPaneVisible(true);
     setLoginError("");
     setIsChatImmersive(false);
@@ -848,7 +861,10 @@ export function App() {
   function renderDesktopChatStack(options: {
     requestPreview?: (path: string) => void;
     forcedExecutionMode?: "native_agent";
+    soloMode?: boolean;
+    soloHistoryRevision?: number;
     onSoloSessionInfoChange?: (snapshot: SoloSessionSnapshot) => void;
+    onSoloHistoryRollback?: () => void;
     currentVisible?: boolean;
   } = {}) {
     const currentVisible = options.currentVisible ?? desktopChatPaneVisible;
@@ -870,7 +886,10 @@ export function App() {
                 allowTrace={allowTrace}
                 embedded
                 forcedExecutionMode={instanceKey === chatInstanceKey ? options.forcedExecutionMode : undefined}
+                soloMode={instanceKey === chatInstanceKey ? options.soloMode : false}
+                soloHistoryRevision={instanceKey === chatInstanceKey ? options.soloHistoryRevision : undefined}
                 onSoloSessionInfoChange={instanceKey === chatInstanceKey ? options.onSoloSessionInfoChange : undefined}
+                onSoloHistoryRollback={instanceKey === chatInstanceKey ? options.onSoloHistoryRollback : undefined}
                 onRequestDesktopPreview={options.requestPreview}
                 onUnreadResult={markBotUnread}
                 onBotActivityChange={handleBotActivityChange}
@@ -1082,6 +1101,8 @@ export function App() {
               chatPaneContent={({ requestPreview }) => renderDesktopChatStack({
                 requestPreview,
                 forcedExecutionMode: "native_agent",
+                soloMode: true,
+                soloHistoryRevision,
                 onSoloSessionInfoChange: (snapshot) => {
                   setSoloSessionSnapshotByBot((prev) => (
                     prev[currentBot] && JSON.stringify(prev[currentBot]) === JSON.stringify(snapshot)
@@ -1089,13 +1110,16 @@ export function App() {
                       : { ...prev, [currentBot]: snapshot }
                   ));
                 },
+                onSoloHistoryRollback: () => bumpSoloHistoryRevision(currentBot),
                 currentVisible: true,
               })}
               sessionSnapshot={soloSessionSnapshot}
+              soloHistoryRevision={soloHistoryRevision}
               chatStatus={currentBot ? desktopChatStatusByBot[currentBot] : undefined}
               productMode={productMode}
               soloAvailable={soloAvailable}
               onProductModeChange={handleProductModeChange}
+              onSoloHistoryRollback={() => bumpSoloHistoryRevision(currentBot)}
               onViewModeChange={setViewMode}
               onOpenBotSwitcher={(anchorRect) => {
                 void openBotSwitcher(anchorRect);

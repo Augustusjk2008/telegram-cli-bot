@@ -1,6 +1,7 @@
 import { clsx } from "clsx";
 import { RefreshCw, RotateCcw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import type {
   AgentScopedOptions,
   ChatMessage,
@@ -31,7 +32,9 @@ type Props = {
   botAlias: string;
   client: SoloSessionChangesClient;
   snapshot: SoloSessionSnapshot | null;
+  historyRevision?: number;
   onOpenDiff: (turnId: string, path: string) => Promise<void>;
+  onRollbackComplete?: () => void;
 };
 
 type SessionChangeTurn = {
@@ -40,19 +43,8 @@ type SessionChangeTurn = {
   createdAt: string;
   linearIndex: number;
   head: string;
+  userText: string;
 };
-
-function shortId(value: string) {
-  const normalized = value.trim();
-  if (!normalized) return "无";
-  return normalized.length > 10 ? `${normalized.slice(0, 7)}...${normalized.slice(-3)}` : normalized;
-}
-
-function formatTime(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value || "";
-  return `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-}
 
 function statusLabel(status: string) {
   const normalized = status.toLowerCase();
@@ -73,11 +65,33 @@ function statusClass(status: string) {
   return "bg-[var(--surface-strong)] text-[var(--text)]";
 }
 
+const CHAT_ATTACHMENT_LINE_RE = /^附件路径为[:：]\s*(.+?)\s*$/;
+
+function belongsToConversation(message: ChatMessage, conversationId: string) {
+  return !message.conversationId || !conversationId || message.conversationId === conversationId;
+}
+
+function summarizeUserText(text: string) {
+  const value = text
+    .split(/\r?\n/)
+    .filter((line) => !CHAT_ATTACHMENT_LINE_RE.test(line.trim()))
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!value) return "用户消息";
+  return value.length > 80 ? `${value.slice(0, 80).trimEnd()}...` : value;
+}
+
 function buildTurns(messages: ChatMessage[], conversationId: string): SessionChangeTurn[] {
   const turns = new Map<string, SessionChangeTurn>();
+  let pendingUserText = "";
   for (const message of messages) {
+    if (!belongsToConversation(message, conversationId)) continue;
+    if (message.role === "user") {
+      pendingUserText = summarizeUserText(message.text);
+      continue;
+    }
     if (message.role !== "assistant") continue;
-    if (message.conversationId && conversationId && message.conversationId !== conversationId) continue;
     const head = String(message.meta?.workspaceHistoryHead || "").trim();
     if (!head) continue;
     const turnId = String(message.turnId || message.id || "").trim();
@@ -89,6 +103,7 @@ function buildTurns(messages: ChatMessage[], conversationId: string): SessionCha
       createdAt: message.createdAt,
       linearIndex: Number.isFinite(linearIndex) ? linearIndex : turns.size + 1,
       head,
+      userText: pendingUserText || "用户消息",
     });
   }
   return [...turns.values()].sort((a, b) => a.linearIndex - b.linearIndex || a.createdAt.localeCompare(b.createdAt));
@@ -98,7 +113,14 @@ function fileKey(file: NativeAgentHistoryChangedFile) {
   return `${file.status}:${file.oldPath}:${file.path}`;
 }
 
-export function SoloSessionChangesTab({ botAlias, client, snapshot, onOpenDiff }: Props) {
+export function SoloSessionChangesTab({
+  botAlias,
+  client,
+  snapshot,
+  historyRevision = 0,
+  onOpenDiff,
+  onRollbackComplete,
+}: Props) {
   const conversationId = snapshot?.conversationId || "";
   const agentId = snapshot?.agentId && snapshot.agentId !== "main" ? snapshot.agentId : "";
   const [turns, setTurns] = useState<SessionChangeTurn[]>([]);
@@ -109,6 +131,7 @@ export function SoloSessionChangesTab({ botAlias, client, snapshot, onOpenDiff }
   const [changesLoading, setChangesLoading] = useState(false);
   const [changesError, setChangesError] = useState("");
   const [rollbacking, setRollbacking] = useState(false);
+  const [pendingRollbackTurn, setPendingRollbackTurn] = useState<SessionChangeTurn | null>(null);
   const [notice, setNotice] = useState("");
 
   const loadTurns = useCallback(async () => {
@@ -143,7 +166,7 @@ export function SoloSessionChangesTab({ botAlias, client, snapshot, onOpenDiff }
     setChanges(null);
     setNotice("");
     void loadTurns();
-  }, [loadTurns]);
+  }, [historyRevision, loadTurns]);
 
   useEffect(() => {
     if (!conversationId || !selectedTurnId) {
@@ -188,24 +211,26 @@ export function SoloSessionChangesTab({ botAlias, client, snapshot, onOpenDiff }
     && selectedTurn.linearIndex < latestTurn.linearIndex,
   );
 
-  const handleRollback = async () => {
-    if (!conversationId || !selectedTurn) return;
+  const handleRollback = async (turn: SessionChangeTurn) => {
+    if (!conversationId) return;
     setRollbacking(true);
     setNotice("");
     setChangesError("");
     try {
       const result = await client.rollbackNativeAgentHistory(botAlias, {
         conversationId,
-        targetTurnId: selectedTurn.turnId,
+        targetTurnId: turn.turnId,
         ...(agentId ? { agentId } : {}),
       });
       setNotice(result.message || "已撤回到所选会话点");
-      setSelectedTurnId(selectedTurn.turnId);
+      setSelectedTurnId(turn.turnId);
       await loadTurns();
+      onRollbackComplete?.();
     } catch (err) {
       setChangesError(err instanceof Error ? err.message : "撤回失败");
     } finally {
       setRollbacking(false);
+      setPendingRollbackTurn(null);
     }
   };
 
@@ -217,6 +242,33 @@ export function SoloSessionChangesTab({ botAlias, client, snapshot, onOpenDiff }
     );
   }
 
+  const rollbackDialog = pendingRollbackTurn ? (
+    <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/35 px-4">
+      <div role="dialog" aria-modal="true" aria-label="确认撤回" className="w-full max-w-sm rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] p-4 shadow-[var(--shadow-card)]">
+        <h2 className="text-sm font-semibold text-[var(--text)]">确认撤回</h2>
+        <p className="mt-2 text-sm text-[var(--muted)]">会丢弃该点之后的会话和工作区改动，不可撤销</p>
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => setPendingRollbackTurn(null)}
+            disabled={rollbacking}
+            className="inline-flex h-8 items-center rounded-md border border-[var(--workbench-hairline)] px-3 text-xs text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleRollback(pendingRollbackTurn)}
+            disabled={rollbacking}
+            className="inline-flex h-8 items-center rounded-md bg-red-600 px-3 text-xs font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {rollbacking ? "撤回中..." : "确认撤回"}
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   return (
     <div data-testid="solo-session-changes-tab" className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]">
       <div className="flex min-w-0 items-center justify-between gap-3 border-b border-[var(--workbench-hairline)] px-4 py-2 text-xs text-[var(--muted)]">
@@ -225,7 +277,7 @@ export function SoloSessionChangesTab({ botAlias, client, snapshot, onOpenDiff }
           {canRollback ? (
             <button
               type="button"
-              onClick={() => void handleRollback()}
+              onClick={() => setPendingRollbackTurn(selectedTurn)}
               disabled={rollbacking}
               className="inline-flex h-7 items-center gap-1 rounded-md border border-red-500/30 px-2 text-xs text-red-700 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-60"
             >
@@ -262,15 +314,15 @@ export function SoloSessionChangesTab({ botAlias, client, snapshot, onOpenDiff }
                   <button
                     key={turn.turnId}
                     type="button"
-                    aria-label={`选择第 ${turn.linearIndex} 轮`}
+                    aria-label={`选择 ${turn.userText}`}
+                    title={turn.userText}
                     onClick={() => setSelectedTurnId(turn.turnId)}
                     className={clsx(
-                      "mb-1 grid w-full min-w-0 gap-1 rounded-md px-2.5 py-2 text-left text-xs transition-colors",
+                      "mb-1 block w-full min-w-0 rounded-md px-2.5 py-2 text-left text-xs transition-colors",
                       active ? "tcb-selected-accent" : "text-[var(--text)] hover:bg-[var(--surface-strong)]",
                     )}
                   >
-                    <span className="font-medium">第 {turn.linearIndex} 轮</span>
-                    <span className="min-w-0 truncate text-[var(--muted)]">{formatTime(turn.createdAt)} · {shortId(turn.head)}</span>
+                    <span className="block min-w-0 truncate font-medium">{turn.userText}</span>
                   </button>
                 );
               })}
@@ -296,21 +348,27 @@ export function SoloSessionChangesTab({ botAlias, client, snapshot, onOpenDiff }
                   type="button"
                   aria-label={`打开 ${file.path} diff`}
                   onClick={() => void onOpenDiff(selectedTurn.turnId, file.path)}
-                  className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-3 px-4 py-3 text-left text-sm hover:bg-[var(--surface-subtle)]"
+                  className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-2 px-4 py-1.5 text-left text-xs hover:bg-[var(--surface-subtle)]"
                 >
-                  <span className="min-w-0 truncate font-medium text-[var(--text)]" title={file.path}>
-                    {file.path}
-                    {file.oldPath ? <span className="text-[var(--muted)]"> ← {file.oldPath}</span> : null}
+                  <span className="flex min-w-0 items-center gap-1 font-medium text-[var(--text)]">
+                    <span className="min-w-0 truncate" title={file.path}>{file.path}</span>
+                    {file.oldPath ? (
+                      <>
+                        <span className="shrink-0 text-[var(--muted)]">←</span>
+                        <span className="min-w-0 truncate text-[var(--muted)]" title={file.oldPath}>{file.oldPath}</span>
+                      </>
+                    ) : null}
                   </span>
-                  <span className={clsx("rounded px-1.5 py-0.5 text-[11px] font-medium", statusClass(file.status))}>{statusLabel(file.status)}</span>
-                  <span className="font-mono text-xs text-emerald-700">+{file.additions}</span>
-                  <span className="font-mono text-xs text-red-700">-{file.deletions}</span>
+                  <span className={clsx("rounded px-1.5 py-0.5 text-[10px] font-medium", statusClass(file.status))}>{statusLabel(file.status)}</span>
+                  <span className="font-mono text-[11px] text-emerald-700">+{file.additions}</span>
+                  <span className="font-mono text-[11px] text-red-700">-{file.deletions}</span>
                 </button>
               ))}
             </div>
           )}
         </section>
       </div>
+      {rollbackDialog && typeof document !== "undefined" ? createPortal(rollbackDialog, document.body) : rollbackDialog}
     </div>
   );
 }

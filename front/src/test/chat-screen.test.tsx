@@ -2298,6 +2298,131 @@ test("uses overview default execution mode when storage is empty", async () => {
   expect(window.localStorage.getItem("tcb.executionMode.main")).toBeNull();
 });
 
+test("native user bubble rollback confirms and refreshes history outside solo mode", async () => {
+  const user = userEvent.setup();
+  const now = new Date().toISOString();
+  let rolledBack = false;
+  const user1: ChatMessage = {
+    id: "user-1",
+    conversationId: "conv-1",
+    role: "user",
+    text: "第一轮需求",
+    createdAt: now,
+    state: "done",
+  };
+  const assistant1: ChatMessage = {
+    id: "assistant-1",
+    turnId: "turn-1",
+    conversationId: "conv-1",
+    role: "assistant",
+    text: "第一轮完成",
+    createdAt: now,
+    state: "done",
+    meta: {
+      workspaceHistoryHead: "head-1",
+      linearIndex: 1,
+      rollbackSupported: true,
+    },
+  };
+  const user2: ChatMessage = {
+    id: "user-2",
+    conversationId: "conv-1",
+    role: "user",
+    text: "第二轮需求",
+    createdAt: now,
+    state: "done",
+  };
+  const assistant2: ChatMessage = {
+    id: "assistant-2",
+    turnId: "turn-2",
+    conversationId: "conv-1",
+    role: "assistant",
+    text: "第二轮完成",
+    createdAt: now,
+    state: "done",
+    meta: {
+      workspaceHistoryHead: "head-2",
+      linearIndex: 2,
+      rollbackSupported: true,
+    },
+  };
+  const listMessages = vi.fn<WebBotClient["listMessages"]>(async () => (
+    rolledBack ? [user1, assistant1] : [user1, assistant1, user2, assistant2]
+  ));
+  const listConversations = vi.fn<WebBotClient["listConversations"]>(async (): Promise<ConversationListResult> => ({
+    activeConversationId: "conv-1",
+    items: [{
+      id: "conv-1",
+      title: "当前会话",
+      lastMessagePreview: "",
+      messageCount: rolledBack ? 2 : 4,
+      pinned: false,
+      active: true,
+      status: "active",
+      botAlias: "main",
+      botMode: "cli",
+      cliType: "codex",
+      workingDir: "C:\\workspace",
+      createdAt: now,
+      updatedAt: now,
+      workspaceHistoryHead: rolledBack ? "head-1" : "head-2",
+      linearIndex: rolledBack ? 1 : 2,
+      rollbackSupported: true,
+    }],
+  }));
+  const rollbackNativeAgentHistory = vi.fn<WebBotClient["rollbackNativeAgentHistory"]>(async () => {
+    rolledBack = true;
+    return {
+      conversationId: "conv-1",
+      currentTurnId: "turn-1",
+      rollbackSupported: false,
+      message: "已撤回到所选会话点",
+    };
+  });
+  const client = createClient({
+    getBotOverview: async () => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+      supportedExecutionModes: ["native_agent"],
+      defaultExecutionMode: "native_agent",
+      executionMode: "native_agent",
+    }),
+    listMessages,
+    listConversations,
+    rollbackNativeAgentHistory,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} forcedExecutionMode="native_agent" />);
+
+  expect(await screen.findByText("第二轮需求")).toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: "撤回到此消息前" })).toHaveLength(1);
+
+  await user.click(screen.getByRole("button", { name: "撤回到此消息前" }));
+  const dialog = await screen.findByRole("dialog", { name: "确认撤回" });
+  expect(dialog).toBeInTheDocument();
+  expect(dialog.parentElement?.parentElement).toBe(document.body);
+  expect(dialog.parentElement).toHaveClass("z-[1000]");
+  expect(screen.getByText("会丢弃该点之后的会话和工作区改动，不可撤销")).toBeInTheDocument();
+  expect(rollbackNativeAgentHistory).not.toHaveBeenCalled();
+
+  await user.click(screen.getByRole("button", { name: "确认撤回" }));
+
+  await waitFor(() => {
+    expect(rollbackNativeAgentHistory).toHaveBeenCalledWith("main", {
+      conversationId: "conv-1",
+      targetTurnId: "turn-1",
+    });
+  });
+  await waitFor(() => {
+    expect(screen.queryByText("第二轮需求")).not.toBeInTheDocument();
+  });
+  expect(listMessages.mock.calls.filter(([, options]) => options?.executionMode === "native_agent").length).toBeGreaterThan(1);
+  expect(listConversations).toHaveBeenCalled();
+});
+
 
 
 

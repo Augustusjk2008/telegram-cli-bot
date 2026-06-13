@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 import { NativeAgentTranscript } from "../components/NativeAgentTranscript";
 import { ChatScreen } from "../screens/ChatScreen";
@@ -89,6 +90,17 @@ function nativeTurn(turnId: string, linearIndex: number, head: string, createdAt
       linearIndex,
       rollbackSupported: true,
     },
+  };
+}
+
+function userTurn(text: string, createdAt: string): ChatMessage {
+  return {
+    id: `user-${createdAt}`,
+    conversationId: "conv-1",
+    role: "user",
+    text,
+    createdAt,
+    state: "done",
   };
 }
 
@@ -351,6 +363,33 @@ test("passes child agent scope to session changes APIs", async () => {
   expect(getDiff).toHaveBeenCalledWith("main", { conversationId: "conv-1", turnId: "turn-2", path: "bot/web/server.py", agentId: "reviewer" });
 });
 
+test("session change summaries hide attachment paths from user messages", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "listMessages").mockResolvedValue([
+    userTurn("请处理附件\n\n附件路径为：C:\\Users\\demo\\private\\secret.txt", "2026-06-12T09:59:59Z"),
+    nativeTurn("turn-1", 1, "head-1", "2026-06-12T10:00:00Z"),
+  ]);
+  vi.spyOn(client, "getNativeAgentHistoryChanges").mockResolvedValue({
+    conversationId: "conv-1",
+    turnId: "turn-1",
+    linearIndex: 1,
+    baseHead: "",
+    head: "head-1",
+    files: [
+      { path: "smoke/history.txt", oldPath: "", status: "added", additions: 1, deletions: 0, binary: false },
+    ],
+  });
+
+  renderSoloWorkbench(client, <div>chat</div>);
+
+  await user.click(screen.getByRole("tab", { name: "会话变更" }));
+
+  expect(await screen.findByLabelText("选择 请处理附件")).toBeInTheDocument();
+  expect(document.body).not.toHaveTextContent("private");
+  expect(document.body).not.toHaveTextContent("secret.txt");
+});
+
 test("keeps session diff content when switching tabs", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
@@ -394,10 +433,13 @@ test("rolls back to a previous session turn and refreshes the active chain", asy
   const client = new MockWebBotClient();
   vi.spyOn(client, "listMessages")
     .mockResolvedValueOnce([
+      userTurn("初始化历史文件", "2026-06-12T09:59:59Z"),
       nativeTurn("turn-1", 1, "head-1", "2026-06-12T10:00:00Z"),
+      userTurn("添加新文件", "2026-06-12T10:00:30Z"),
       nativeTurn("turn-2", 2, "head-2", "2026-06-12T10:01:00Z"),
     ])
     .mockResolvedValueOnce([
+      userTurn("初始化历史文件", "2026-06-12T09:59:59Z"),
       nativeTurn("turn-1", 1, "head-1", "2026-06-12T10:00:00Z"),
     ]);
   vi.spyOn(client, "getNativeAgentHistoryChanges").mockImplementation(async (_botAlias, input) => ({
@@ -420,15 +462,135 @@ test("rolls back to a previous session turn and refreshes the active chain", asy
   renderSoloWorkbench(client, <div>chat</div>);
 
   await user.click(screen.getByRole("tab", { name: "会话变更" }));
-  await user.click(await screen.findByLabelText("选择第 1 轮"));
+  await user.click(await screen.findByLabelText("选择 初始化历史文件"));
+  expect(screen.getByText("初始化历史文件")).toBeInTheDocument();
+  expect(screen.queryByText("第 1 轮")).not.toBeInTheDocument();
   await user.click(await screen.findByRole("button", { name: "撤回到此轮" }));
+  const dialog = await screen.findByRole("dialog", { name: "确认撤回" });
+  expect(dialog).toBeInTheDocument();
+  expect(dialog.parentElement?.parentElement).toBe(document.body);
+  expect(dialog.parentElement).toHaveClass("z-[1000]");
+  expect(screen.getByText("会丢弃该点之后的会话和工作区改动，不可撤销")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "确认撤回" }));
 
   expect(rollback).toHaveBeenCalledWith("main", { conversationId: "conv-1", targetTurnId: "turn-1" });
   await waitFor(() => {
-    expect(screen.queryByLabelText("选择第 2 轮")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("选择 添加新文件")).not.toBeInTheDocument();
   });
   expect(screen.queryByRole("button", { name: "撤回到此轮" })).not.toBeInTheDocument();
   expect(screen.getByText("已撤回到所选会话点；该操作不可撤销")).toBeInTheDocument();
+});
+
+test("syncs solo chat after rolling back from session changes", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  let rolledBack = false;
+  const messagesBefore = [
+    userTurn("初始化历史文件", "2026-06-12T09:59:59Z"),
+    nativeTurn("turn-1", 1, "head-1", "2026-06-12T10:00:00Z"),
+    userTurn("添加新文件", "2026-06-12T10:00:30Z"),
+    nativeTurn("turn-2", 2, "head-2", "2026-06-12T10:01:00Z"),
+  ];
+  const messagesAfter = messagesBefore.slice(0, 2);
+  vi.spyOn(client, "getBotOverview").mockResolvedValue({
+    alias: "main",
+    cliType: "codex",
+    status: "running",
+    workingDir: "C:\\workspace\\main",
+    isProcessing: false,
+    supportedExecutionModes: ["native_agent"],
+    defaultExecutionMode: "native_agent",
+    executionMode: "native_agent",
+  });
+  vi.spyOn(client, "listMessages").mockImplementation(async () => (
+    rolledBack ? messagesAfter : messagesBefore
+  ));
+  vi.spyOn(client, "listConversations").mockImplementation(async () => ({
+    activeConversationId: "conv-1",
+    items: [{
+      id: "conv-1",
+      title: "当前会话",
+      lastMessagePreview: "",
+      messageCount: rolledBack ? 2 : 4,
+      pinned: false,
+      active: true,
+      status: "active",
+      botAlias: "main",
+      botMode: "cli",
+      cliType: "codex",
+      workingDir: "C:\\workspace\\main",
+      createdAt: "2026-06-12T10:00:00Z",
+      updatedAt: "2026-06-12T10:01:00Z",
+      workspaceHistoryHead: rolledBack ? "head-1" : "head-2",
+      linearIndex: rolledBack ? 1 : 2,
+      rollbackSupported: true,
+    }],
+  }));
+  vi.spyOn(client, "getNativeAgentHistoryChanges").mockImplementation(async (_botAlias, input) => ({
+    conversationId: input.conversationId,
+    turnId: input.turnId,
+    linearIndex: input.turnId === "turn-1" ? 1 : 2,
+    baseHead: input.turnId === "turn-1" ? "" : "head-1",
+    head: input.turnId === "turn-1" ? "head-1" : "head-2",
+    files: [
+      { path: input.turnId === "turn-1" ? "smoke/history.txt" : "smoke/new.txt", oldPath: "", status: "added", additions: 1, deletions: 0, binary: false },
+    ],
+  }));
+  const rollback = vi.spyOn(client, "rollbackNativeAgentHistory").mockImplementation(async () => {
+    rolledBack = true;
+    return {
+      conversationId: "conv-1",
+      currentTurnId: "turn-1",
+      rollbackSupported: false,
+      message: "已撤回到所选会话点",
+    };
+  });
+
+  function Harness() {
+    const [revision, setRevision] = useState(0);
+    const bumpRevision = () => setRevision((value) => value + 1);
+    return (
+      <SoloWorkbench
+        botAlias="main"
+        client={client}
+        workspaceName="main"
+        viewMode="desktop"
+        chatPaneContent={(
+          <ChatScreen
+            botAlias="main"
+            client={client}
+            embedded
+            forcedExecutionMode="native_agent"
+            soloMode
+            soloHistoryRevision={revision}
+            onSoloHistoryRollback={bumpRevision}
+          />
+        )}
+        sessionSnapshot={{ ...snapshot, linearIndex: 2, workspaceHistoryHead: "head-2" }}
+        soloHistoryRevision={revision}
+        productMode="solo"
+        soloAvailable
+        onProductModeChange={() => {}}
+        onSoloHistoryRollback={bumpRevision}
+        onViewModeChange={() => {}}
+        onOpenBotSwitcher={() => {}}
+        onLogout={() => {}}
+      />
+    );
+  }
+
+  render(<Harness />);
+
+  expect(await screen.findByText("添加新文件")).toBeInTheDocument();
+  await user.click(screen.getByRole("tab", { name: "会话变更" }));
+  await user.click(await screen.findByLabelText("选择 初始化历史文件"));
+  await user.click(await screen.findByRole("button", { name: "撤回到此轮" }));
+  await user.click(await screen.findByRole("button", { name: "确认撤回" }));
+
+  expect(rollback).toHaveBeenCalledWith("main", { conversationId: "conv-1", targetTurnId: "turn-1" });
+  await waitFor(() => {
+    expect(screen.queryByText("添加新文件")).not.toBeInTheDocument();
+  });
 });
 
 test("renders session info with short ids and basename only", () => {
