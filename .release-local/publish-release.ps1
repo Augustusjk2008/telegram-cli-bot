@@ -345,8 +345,15 @@ function Invoke-ReleasePrepChecks {
 }
 
 function Invoke-FrontBuild {
-    Write-Step "构建前端"
+    param([string]$StepMessage = "构建前端")
+
+    Write-Step $StepMessage
     Invoke-CheckedCommand -FilePath "npm.cmd" -Arguments @("run", "build") -FailureMessage "前端构建失败" -WorkingDirectory $script:FrontDir
+}
+
+function Invoke-PostPortableFrontBuild {
+    Write-Info "Windows 绿色版构建会临时使用根路径资源，正在恢复本机前端构建产物。"
+    Invoke-FrontBuild -StepMessage "恢复本机前端构建产物"
 }
 
 function Copy-TrackedFilesToStage {
@@ -471,13 +478,26 @@ function New-ReleaseArchives {
         $windowsPortableArchive = $null
     } else {
         Write-Step "创建 Windows 绿色版包"
-        Invoke-CheckedCommand -FilePath "powershell.exe" -Arguments @(
-            "-NoProfile",
-            "-ExecutionPolicy", "Bypass",
-            "-File", $script:PortableBuildScript,
-            "-PackageName", ("{0}-windows-x64-{1}" -f $script:PackageBaseName, $NormalizedVersion),
-            "-ArtifactPath", $windowsPortableArchive
-        ) -FailureMessage "创建 Windows 绿色版包失败"
+        $portableBuildSucceeded = $false
+        try {
+            Invoke-CheckedCommand -FilePath "powershell.exe" -Arguments @(
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-File", $script:PortableBuildScript,
+                "-PackageName", ("{0}-windows-x64-{1}" -f $script:PackageBaseName, $NormalizedVersion),
+                "-ArtifactPath", $windowsPortableArchive
+            ) -FailureMessage "创建 Windows 绿色版包失败"
+            $portableBuildSucceeded = $true
+        } finally {
+            try {
+                Invoke-PostPortableFrontBuild
+            } catch {
+                if ($portableBuildSucceeded) {
+                    throw
+                }
+                Write-Host ("[错误] 恢复本机前端构建产物失败: {0}" -f $_.Exception.Message) -ForegroundColor Red
+            }
+        }
     }
 
     Write-Step "创建 Windows 安装版包"

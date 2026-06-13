@@ -51,6 +51,31 @@ def test_publish_release_shell_generates_and_publishes_checksum_assets():
     )
 
 
+def test_publish_release_restores_local_front_build_after_portable_package():
+    ps1_content = Path(".release-local/publish-release.ps1").read_text(encoding="utf-8")
+    sh_content = Path(".release-local/publish-release.sh").read_text(encoding="utf-8")
+
+    assert "function Invoke-PostPortableFrontBuild" in ps1_content
+    assert 'Invoke-FrontBuild -StepMessage "恢复本机前端构建产物"' in ps1_content
+    ps1_archives = ps1_content[
+        ps1_content.index("function New-ReleaseArchives"):
+        ps1_content.index("function Get-ReleaseArchivePaths")
+    ]
+    assert ps1_archives.index('Write-Step "创建 Windows 绿色版包"') < ps1_archives.index(
+        "Invoke-PostPortableFrontBuild"
+    ) < ps1_archives.index('Write-Step "创建 Windows 安装版包"')
+
+    assert "restore_front_build_after_portable()" in sh_content
+    assert 'write_step "恢复本机前端构建产物"' in sh_content
+    sh_archives = sh_content[
+        sh_content.index("new_release_archives()"):
+        sh_content.index("set_release_archive_paths()")
+    ]
+    assert sh_archives.index('write_step "创建 Windows 绿色版包"') < sh_archives.index(
+        "restore_front_build_after_portable"
+    ) < sh_archives.index('write_step "创建 Windows 安装版包"')
+
+
 def test_publish_release_scripts_reference_existing_release_check_files():
     script_paths = [
         Path(".release-local/publish-release.ps1"),

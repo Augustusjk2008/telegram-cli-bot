@@ -390,8 +390,15 @@ invoke_release_prep_checks() {
 }
 
 invoke_front_build() {
-  write_step "构建前端"
+  local step_message="${1:-构建前端}"
+  write_step "$step_message"
   run_checked_command "$front_dir" "前端构建失败" "$npm_bin" run build
+}
+
+restore_front_build_after_portable() {
+  write_info "Windows 绿色版构建会临时使用根路径资源，正在恢复本机前端构建产物。"
+  write_step "恢复本机前端构建产物"
+  (cd "$front_dir" && "$npm_bin" run build)
 }
 
 copy_tracked_files_to_stage() {
@@ -540,12 +547,29 @@ new_release_archives() {
     fi
 
     write_step "创建 Windows 绿色版包"
-    run_checked_command "$repo_root" "创建 Windows 绿色版包失败" "$powershell_command" \
+    set +e
+    (cd "$repo_root" && "$powershell_command" \
       -NoProfile \
       -ExecutionPolicy Bypass \
       -File "$portable_build_script" \
       -PackageName "${package_base_name}-windows-x64-${normalized_version}" \
-      -ArtifactPath "$windows_archive"
+      -ArtifactPath "$windows_archive")
+    local portable_exit=$?
+    set -e
+
+    set +e
+    restore_front_build_after_portable
+    local restore_exit=$?
+    set -e
+    if [[ $restore_exit -ne 0 ]]; then
+      if [[ $portable_exit -ne 0 ]]; then
+        printf '[错误] 创建 Windows 绿色版包失败 (退出码 %s)\n' "$portable_exit" >&2
+      fi
+      fail "恢复本机前端构建产物失败 (退出码 $restore_exit)"
+    fi
+    if [[ $portable_exit -ne 0 ]]; then
+      fail "创建 Windows 绿色版包失败 (退出码 $portable_exit)"
+    fi
   fi
 
   write_step "创建 Windows 安装版包"
