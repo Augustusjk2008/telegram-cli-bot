@@ -4,6 +4,7 @@ import { X } from "lucide-react";
 import { BotActivitySummary } from "./BotActivitySummary";
 import { ChatAvatar } from "./ChatAvatar";
 import { StatusPill } from "./StatusPill";
+import { getBotRuntimeLabel } from "./botRuntimeLabel";
 
 type Props = {
   bots: BotSummary[];
@@ -90,9 +91,9 @@ export function BotSwitcherSheet({
                         "max-w-full truncate text-xs",
                         currentAlias === bot.alias ? "text-[var(--text)]" : "text-[var(--muted)]",
                       )}
-                      title={`${bot.cliType}: ${bot.workingDir}`}
+                      title={`${getBotRuntimeLabel(bot)}: ${bot.workingDir}`}
                     >
-                      {bot.cliType}: {bot.workingDir}
+                      {getBotRuntimeLabel(bot)}: {bot.workingDir}
                     </span>
                     {isOffline ? (
                       <span className="mt-1 text-xs font-medium text-red-700">离线中，暂不可切换</span>

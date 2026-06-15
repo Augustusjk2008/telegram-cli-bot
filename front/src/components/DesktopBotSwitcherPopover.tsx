@@ -7,6 +7,7 @@ import { premiumMotion, resolveMotionProps } from "../motion/premiumMotion";
 import { BotActivitySummary, getBotActivityText } from "./BotActivitySummary";
 import { ChatAvatar } from "./ChatAvatar";
 import { StatusPill } from "./StatusPill";
+import { getBotRuntimeLabel } from "./botRuntimeLabel";
 
 type StatusFilter = "all" | BotStatus;
 
@@ -301,7 +302,7 @@ export function DesktopBotSwitcherPopover({
                       "mt-0.5 flex min-w-0 items-center gap-2 text-xs",
                       current ? "text-[var(--text)]" : "text-[var(--muted)]",
                     )}>
-                      <span className="shrink-0">{bot.botMode || "cli"} · {bot.cliType}</span>
+                      <span className="shrink-0">{bot.botMode || "cli"} · {getBotRuntimeLabel(bot)}</span>
                       <span className="truncate" title={bot.workingDir}>{bot.workingDir}</span>
                     </span>
                     <BotActivitySummary bot={bot} className="mt-0.5" />
@@ -333,7 +334,7 @@ export function DesktopBotSwitcherPopover({
                           <StatusPill status={effectiveStatus(focusedBot) === "unread" ? "online" : effectiveStatus(focusedBot)} />
                         </div>
                         <div className="mt-1 truncate text-sm font-medium text-[var(--text)]">{focusedBot.alias}</div>
-                        <div className="text-xs text-[var(--muted)]">{focusedBot.botMode || "cli"} · {focusedBot.cliType}</div>
+                        <div className="text-xs text-[var(--muted)]">{focusedBot.botMode || "cli"} · {getBotRuntimeLabel(focusedBot)}</div>
                       </div>
                     </div>
 
