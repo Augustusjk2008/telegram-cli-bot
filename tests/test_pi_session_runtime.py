@@ -91,3 +91,31 @@ def test_runtime_match_rejects_reasoning_effort_change():
         agent_id="reviewer",
         reasoning_effort="medium",
     )) is False
+
+
+def test_runtime_match_rejects_append_system_prompt_change():
+    runtime = _runtime(client=FakeClient([]), reasoning_effort="high")
+    runtime.state.append_system_prompt = "solo prompt"
+
+    assert runtime.matches(PiSessionRuntimeRequest(
+        runtime_key="1:1:conv-1",
+        owner_key="1:1",
+        conversation_id="conv-1",
+        cwd="C:/repo",
+        command="pi",
+        model="anthropic/claude-sonnet-4",
+        agent_id="reviewer",
+        reasoning_effort="high",
+        append_system_prompt="solo prompt",
+    )) is True
+    assert runtime.matches(PiSessionRuntimeRequest(
+        runtime_key="1:1:conv-1",
+        owner_key="1:1",
+        conversation_id="conv-1",
+        cwd="C:/repo",
+        command="pi",
+        model="anthropic/claude-sonnet-4",
+        agent_id="reviewer",
+        reasoning_effort="high",
+        append_system_prompt="",
+    )) is False

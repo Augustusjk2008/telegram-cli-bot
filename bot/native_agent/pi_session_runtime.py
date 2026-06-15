@@ -20,6 +20,7 @@ class PiSessionRuntimeRequest:
     model: str = ""
     agent_id: str = ""
     reasoning_effort: str = ""
+    append_system_prompt: str = ""
     native_session_id: str = ""
     env: dict[str, str] | None = None
 
@@ -35,6 +36,7 @@ class PiSessionRuntimeState:
     model: str = ""
     agent_id: str = ""
     reasoning_effort: str = ""
+    append_system_prompt: str = ""
     native_session_id: str = ""
     linear_index: int = 0
     workspace_history_head: str = ""
@@ -78,6 +80,7 @@ class PiSessionRuntime:
             and self.state.model == str(request.model or "").strip()
             and self.state.agent_id == str(request.agent_id or "").strip()
             and self.state.reasoning_effort == str(request.reasoning_effort or "").strip()
+            and self.state.append_system_prompt == str(request.append_system_prompt or "").strip()
         )
 
     async def prompt(self, text: str, *, conversation_id: str = "") -> None:
@@ -194,6 +197,7 @@ class PiSessionRuntimeRegistry:
                 cwd=Path(normalized.cwd),
                 env=normalized.env,
                 model=normalized.model,
+                append_system_prompt=normalized.append_system_prompt,
             )
         )
         runtime = PiSessionRuntime(
@@ -208,6 +212,7 @@ class PiSessionRuntimeRegistry:
                 model=normalized.model,
                 agent_id=normalized.agent_id,
                 reasoning_effort=normalized.reasoning_effort,
+                append_system_prompt=normalized.append_system_prompt,
                 native_session_id=normalized.native_session_id,
             ),
         )
@@ -255,6 +260,7 @@ def _normalize_request(request: PiSessionRuntimeRequest) -> PiSessionRuntimeRequ
         model=str(request.model or "").strip(),
         agent_id=str(request.agent_id or "").strip(),
         reasoning_effort=str(request.reasoning_effort or "").strip(),
+        append_system_prompt=str(request.append_system_prompt or "").strip(),
         native_session_id=str(request.native_session_id or "").strip(),
         env=dict(request.env or {}) or None,
     )

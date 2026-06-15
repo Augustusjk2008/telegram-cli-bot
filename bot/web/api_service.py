@@ -6084,6 +6084,7 @@ async def run_chat(
     cluster: bool = False,
     mentions: list[dict[str, Any]] | None = None,
     execution_mode: str = "",
+    solo_mode: bool = False,
     actor: dict[str, Any] | None = None,
     allow_unsafe_cli: bool = False,
 ) -> dict[str, Any]:
@@ -6151,6 +6152,7 @@ async def run_chat(
                     history_service=_history_service_for_execution_mode(session, NATIVE_AGENT_PROVIDER),
                     actor=_actor_from_request(request),
                     cluster_run_id=cluster_run.run_id if cluster_run else "",
+                    solo_mode=solo_mode,
                 )
             except Exception:
                 run_status = "error"
@@ -6212,6 +6214,7 @@ async def stream_chat(
     cluster: bool = False,
     mentions: list[dict[str, Any]] | None = None,
     execution_mode: str = "",
+    solo_mode: bool = False,
     actor: dict[str, Any] | None = None,
     protocol: str = "",
     allow_unsafe_cli: bool = False,
@@ -6284,6 +6287,7 @@ async def stream_chat(
                         actor=_actor_from_request(request),
                         protocol=protocol,
                         cluster_run_id=cluster_run.run_id if cluster_run else "",
+                        solo_mode=solo_mode,
                     ):
                         if event.get("type") == "error":
                             run_status = "error"

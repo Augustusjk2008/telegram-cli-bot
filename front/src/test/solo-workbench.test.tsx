@@ -662,6 +662,7 @@ test("solo chat forces native_agent send for a mixed-mode bot", async () => {
       client={client}
       embedded
       forcedExecutionMode="native_agent"
+      soloMode
     />
   ), "mixed");
 
@@ -671,5 +672,5 @@ test("solo chat forces native_agent send for a mixed-mode bot", async () => {
   await waitFor(() => {
     expect(sendMessage).toHaveBeenCalled();
   });
-  expect(sendMessage.mock.calls[0][5]).toMatchObject({ executionMode: "native_agent" });
+  expect(sendMessage.mock.calls[0][5]).toMatchObject({ executionMode: "native_agent", soloMode: true });
 });

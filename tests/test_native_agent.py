@@ -1591,6 +1591,38 @@ async def test_native_agent_service_uses_pi_runtime_and_emits_runtime_meta(
     assert registry.requests[0].runtime_key.startswith("1:1:")
     assert registry.requests[0].command == "pi"
     assert registry.requests[0].agent_id == "reviewer"
+    assert registry.requests[0].append_system_prompt == ""
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_adds_solo_prompt_only_for_solo_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from bot import config
+    from bot.native_agent.service import SOLO_NATIVE_AGENT_SYSTEM_PROMPT
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    runtime = FakePiRuntime([
+        {"type": "agent_start", "sessionId": "sess-1"},
+        {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "回"}},
+        {"type": "turn_end", "sessionId": "sess-1"},
+    ])
+    registry = FakePiRuntimeRegistry(runtime)
+    service = NativeAgentService()
+    service._runtime_registry = registry
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    await _collect_native_stream(service.stream_chat(
+        profile=profile,
+        session=session,
+        user_text="你好",
+        prompt_text="你好",
+        history_service=history,
+        solo_mode=True,
+    ))
+
+    assert registry.requests[0].append_system_prompt == SOLO_NATIVE_AGENT_SYSTEM_PROMPT
+    assert registry.requests[0].append_system_prompt
 
 
 @pytest.mark.asyncio

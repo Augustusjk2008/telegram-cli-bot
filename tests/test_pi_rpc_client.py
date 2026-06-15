@@ -384,3 +384,46 @@ async def test_pi_rpc_client_start_uses_default_pi_rpc_command_and_process_kwarg
     ]
     assert captured["kwargs"]["cwd"] == str(tmp_path.resolve())
     assert captured["kwargs"]["creationflags"] == 123
+
+
+@pytest.mark.asyncio
+async def test_pi_rpc_client_start_appends_system_prompt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeProcess:
+        pid = 4321
+        stdin = None
+        stdout = None
+        stderr = None
+        returncode = 0
+
+        def poll(self) -> int:
+            return 0
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+    def fake_popen(args: list[str], **kwargs: Any) -> FakeProcess:
+        captured["args"] = args
+        return FakeProcess()
+
+    monkeypatch.setattr(pi_rpc_client, "resolve_cli_executable", lambda command, _cwd=None: command)
+    monkeypatch.setattr(pi_rpc_client, "build_executable_invocation", lambda resolved: [resolved])
+    monkeypatch.setattr(pi_rpc_client.subprocess, "Popen", fake_popen)
+
+    await PiRpcClient.start(PiRpcStartRequest(
+        command="pi",
+        cwd=tmp_path / ".",
+        append_system_prompt="solo prompt",
+    ))
+
+    assert captured["args"] == [
+        "pi",
+        "--mode",
+        "rpc",
+        "--append-system-prompt",
+        "solo prompt",
+    ]

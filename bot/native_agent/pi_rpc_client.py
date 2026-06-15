@@ -41,6 +41,7 @@ class PiRpcStartRequest:
     cwd: Path
     env: dict[str, str] | None = None
     model: str | None = None
+    append_system_prompt: str = ""
     timeout_seconds: float | None = None
 
 
@@ -97,7 +98,12 @@ class PiRpcClient:
     @classmethod
     async def start(cls, request: PiRpcStartRequest) -> PiRpcClient:
         cwd = Path(request.cwd or ".").expanduser().resolve()
-        args = _build_rpc_command(request.command, str(cwd), model=request.model)
+        args = _build_rpc_command(
+            request.command,
+            str(cwd),
+            model=request.model,
+            append_system_prompt=request.append_system_prompt,
+        )
         env = _base_env(request.env)
         try:
             process = subprocess.Popen(
@@ -273,7 +279,13 @@ class PiRpcClient:
         _safe_close(self.process.stderr)
 
 
-def _build_rpc_command(command: str | None, cwd: str, *, model: str | None = None) -> list[str]:
+def _build_rpc_command(
+    command: str | None,
+    cwd: str,
+    *,
+    model: str | None = None,
+    append_system_prompt: str = "",
+) -> list[str]:
     command_text = str(command or DEFAULT_PI_COMMAND).strip() or DEFAULT_PI_COMMAND
     resolved = resolve_cli_executable(command_text, cwd)
     invocation = build_executable_invocation(resolved) if resolved else [command_text]
@@ -281,6 +293,9 @@ def _build_rpc_command(command: str | None, cwd: str, *, model: str | None = Non
     normalized_model = str(model or "").strip()
     if normalized_model:
         args.extend(["--model", normalized_model])
+    normalized_prompt = str(append_system_prompt or "").strip()
+    if normalized_prompt:
+        args.extend(["--append-system-prompt", normalized_prompt])
     return args
 
 

@@ -51,6 +51,12 @@ NATIVE_AGENT_PROVIDER = EXECUTION_MODE_NATIVE_AGENT
 NATIVE_AGENT_NO_PROGRESS_TIMEOUT_SECONDS = 1000.0
 NATIVE_AGENT_NO_PROGRESS_MESSAGE = "原生 agent 长时间无输出或进展"
 TOOL_RESULT_FALLBACK_LIMIT = 12000
+SOLO_NATIVE_AGENT_SYSTEM_PROMPT = """Solo native agent mode:
+- Work autonomously until the user request is fully handled, including implementation and focused verification when feasible.
+- Read the relevant project files before editing. Prefer existing project patterns and keep changes scoped.
+- Do not fabricate tool results. If blocked, report the exact blocker and what user action is needed.
+- For code changes, run appropriate checks before claiming completion. If checks cannot run, state why.
+- Keep final replies concise and include changed files plus verification status."""
 
 
 def normalize_execution_mode(value: Any, profile: BotProfile | None = None) -> str:
@@ -274,6 +280,7 @@ class NativeAgentService:
         actor: dict[str, Any] | None = None,
         protocol: str = "",
         cluster_run_id: str = "",
+        solo_mode: bool = False,
     ) -> AsyncIterator[dict[str, Any]]:
         loop = asyncio.get_running_loop()
         started_at = loop.time()
@@ -339,6 +346,7 @@ class NativeAgentService:
                 model_id=model_id,
                 pi_agent=agent_id,
                 reasoning_effort=reasoning_effort,
+                prompt_profile="solo" if solo_mode else "",
             )
             try:
                 conversation_native = history_service.store.get_conversation_native_session(turn_handle.conversation_id)
@@ -478,6 +486,7 @@ class NativeAgentService:
                     model=model_id,
                     agent_id=agent_id,
                     reasoning_effort=reasoning_effort,
+                    append_system_prompt=SOLO_NATIVE_AGENT_SYSTEM_PROMPT if solo_mode else "",
                     native_session_id=native_session_id,
                 )
             )
@@ -846,12 +855,20 @@ class NativeAgentService:
         }
 
 
-def _native_session_meta(*, cwd: str, model_id: str, pi_agent: str, reasoning_effort: str) -> dict[str, str]:
+def _native_session_meta(
+    *,
+    cwd: str,
+    model_id: str,
+    pi_agent: str,
+    reasoning_effort: str,
+    prompt_profile: str = "",
+) -> dict[str, str]:
     return {
         "cwd": str(cwd or ""),
         "model_id": str(model_id or ""),
         "pi_agent": str(pi_agent or ""),
         "reasoning_effort": str(reasoning_effort or ""),
+        **({"prompt_profile": str(prompt_profile or "")} if str(prompt_profile or "").strip() else {}),
     }
 
 
@@ -859,6 +876,10 @@ def _native_session_meta_mismatch(stored_meta: dict[str, Any], desired_meta: dic
     stored_meta = migrate_native_session_meta(stored_meta)
     if not stored_meta:
         return any(str(value or "").strip() for value in desired_meta.values())
+    stored_prompt_profile = str(stored_meta.get("prompt_profile") or "").strip()
+    desired_prompt_profile = str(desired_meta.get("prompt_profile") or "").strip()
+    if stored_prompt_profile != desired_prompt_profile:
+        return True
     for key, desired_value in desired_meta.items():
         normalized_desired = str(desired_value or "").strip()
         stored_value = str(stored_meta.get(key) or "").strip()

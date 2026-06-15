@@ -863,6 +863,7 @@ export type ChatSendOptions = {
   cluster?: boolean;
   mentions?: AgentMention[];
   executionMode?: ChatExecutionMode;
+  soloMode?: boolean;
 };
 
 export type NativeAgentPermissionReplyOptions = AgentScopedOptions & {

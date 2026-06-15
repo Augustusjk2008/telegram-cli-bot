@@ -385,6 +385,34 @@ describe("RealWebBotClient", () => {
     expect(body.protocol).toBe("ag-ui");
   });
 
+  test("sendMessage includes solo mode for native agent request", async () => {
+    const encoder = new TextEncoder();
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: vi.fn()
+            .mockResolvedValueOnce({
+              value: encoder.encode("data: {\"type\":\"done\",\"output\":\"ok\"}\n\n"),
+              done: false,
+            })
+            .mockResolvedValueOnce({ value: undefined, done: true }),
+          cancel: vi.fn().mockResolvedValue(undefined),
+        }),
+      },
+    });
+
+    const client = new RealWebBotClient();
+    await client.sendMessage("main", "hi", vi.fn(), undefined, undefined, {
+      executionMode: "native_agent",
+      soloMode: true,
+    });
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+    expect(body.execution_mode).toBe("native_agent");
+    expect(body.solo_mode).toBe(true);
+  });
+
   test("sendMessage parses legacy CRLF SSE delta and done as completed", async () => {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({

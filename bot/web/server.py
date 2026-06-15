@@ -2043,6 +2043,7 @@ class WebApiServer:
         execution_mode = self._request_execution_mode(request, body, include_query=False)
         agent_id = self._request_agent_id(request, body)
         cluster_enabled = bool(body.get("cluster"))
+        solo_mode = bool(body.get("solo_mode") or body.get("soloMode"))
         mentions = body.get("mentions") if isinstance(body.get("mentions"), list) else []
         chat_user_id = self._chat_user_id(auth)
         actor = self._chat_actor(auth)
@@ -2061,6 +2062,7 @@ class WebApiServer:
                     cluster=cluster_enabled,
                     mentions=mentions,
                     execution_mode=execution_mode,
+                    solo_mode=solo_mode,
                     actor=actor,
                     allow_unsafe_cli=allow_unsafe_cli,
                 )
@@ -2074,6 +2076,7 @@ class WebApiServer:
                     cluster=cluster_enabled,
                     mentions=mentions,
                     execution_mode=execution_mode,
+                    solo_mode=solo_mode,
                     actor=actor,
                     allow_unsafe_cli=allow_unsafe_cli,
                 )
@@ -2100,6 +2103,7 @@ class WebApiServer:
         protocol = str(request.query.get("protocol") or body.get("protocol") or "").strip()
         agent_id = self._request_agent_id(request, body)
         cluster_enabled = bool(body.get("cluster"))
+        solo_mode = bool(body.get("solo_mode") or body.get("soloMode"))
         mentions = body.get("mentions") if isinstance(body.get("mentions"), list) else []
         chat_user_id = self._chat_user_id(auth)
         actor = self._chat_actor(auth)
@@ -2124,6 +2128,8 @@ class WebApiServer:
         }
         if execution_mode:
             stream_kwargs["execution_mode"] = execution_mode
+        if solo_mode:
+            stream_kwargs["solo_mode"] = True
         if agent_id != "main":
             stream_kwargs["agent_id"] = agent_id
         if cluster_enabled:

@@ -4267,6 +4267,33 @@ async def test_stream_chat_routes_native_agent_execution_mode(web_manager: Multi
     assert captured["session"].agent_id == "main"
     assert captured["user_text"] == "你好"
     assert captured["prompt_text"] == "你好"
+    assert captured["solo_mode"] is False
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_routes_native_agent_solo_mode(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, Any] = {}
+
+    class FakeNativeService:
+        async def stream_chat(self, **kwargs):
+            captured.update(kwargs)
+            yield {"type": "done", "output": "原生回复", "message": {"id": "assistant-native", "role": "assistant", "content": "原生回复", "meta": {}}, "elapsed_seconds": 1, "returncode": 0}
+
+    monkeypatch.setattr(api_service, "get_native_agent_service", lambda: FakeNativeService())
+
+    events = [
+        event async for event in api_service.stream_chat(
+            web_manager,
+            "main",
+            1001,
+            "你好",
+            execution_mode="native_agent",
+            solo_mode=True,
+        )
+    ]
+
+    assert events[-1]["type"] == "done"
+    assert captured["solo_mode"] is True
 
 
 @pytest.mark.asyncio

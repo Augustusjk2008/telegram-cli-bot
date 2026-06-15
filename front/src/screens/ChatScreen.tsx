@@ -3288,6 +3288,7 @@ export function ChatScreen({
           ? {
             taskMode: "standard",
             executionMode: currentExecutionMode,
+            ...(soloMode ? { soloMode: true } : {}),
             ...(clusterSend ? { cluster: true, mentions } : {}),
           }
           : clusterSend
@@ -3302,7 +3303,7 @@ export function ChatScreen({
       setExecutingPlanMessageId("");
       setConversationLoading(false);
     }
-  }, [botAlias, botOverview, client, sendMessageInternal, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch, setQueuedMessageState]);
+  }, [botAlias, botOverview, client, sendMessageInternal, soloMode, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch, setQueuedMessageState]);
 
   const handleSend = useCallback(async (text: string, mentions: AgentMention[] = []) => {
     const clusterMode = Boolean(botOverview?.cluster?.enabled);
@@ -3326,22 +3327,28 @@ export function ChatScreen({
       ? {
         taskMode: "standard" as const,
         ...(nativeSend ? { executionMode: currentExecutionMode } : {}),
+        ...(soloMode && nativeSend ? { soloMode: true } : {}),
         ...(clusterSend ? { cluster: true, mentions } : {}),
       }
       : shouldSendPlanMode
       ? {
         taskMode: "plan" as const,
         ...(nativeSend ? { executionMode: currentExecutionMode } : {}),
+        ...(soloMode && nativeSend ? { soloMode: true } : {}),
         ...(clusterSend ? { cluster: true, mentions } : {}),
       }
       : clusterSend
         ? {
           ...(nativeSend ? { executionMode: currentExecutionMode } : {}),
+          ...(soloMode && nativeSend ? { soloMode: true } : {}),
           cluster: true,
           mentions,
         }
         : nativeSend
-          ? { executionMode: currentExecutionMode }
+          ? {
+            executionMode: currentExecutionMode,
+            ...(soloMode ? { soloMode: true } : {}),
+          }
           : undefined;
     if (isStreamingRef.current) {
       const nextQueuedMessage: QueuedChatMessage = {
@@ -3366,7 +3373,7 @@ export function ChatScreen({
       clearPendingAttachments: true,
       sendOptions,
     });
-  }, [botOverview?.cluster?.enabled, pendingAttachments, planMode, sendMessageInternal, setPlanMode]);
+  }, [botOverview?.cluster?.enabled, pendingAttachments, planMode, sendMessageInternal, setPlanMode, soloMode]);
 
   async function handleToggleClusterMode() {
     if (!botOverview?.cluster || clusterSaving) {

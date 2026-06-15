@@ -4778,6 +4778,7 @@ export class RealWebBotClient implements WebBotClient {
         ...(options?.visibleText ? { visible_text: options.visibleText } : {}),
         ...(options?.agentId ? { agent_id: options.agentId } : {}),
         ...(options?.executionMode ? { execution_mode: options.executionMode } : {}),
+        ...(options?.soloMode ? { solo_mode: true } : {}),
         ...(useAgUiProtocol ? { protocol: "ag-ui" } : {}),
         ...(options?.cluster ? { cluster: true } : {}),
         ...(options?.mentions ? {
