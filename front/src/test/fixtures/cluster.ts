@@ -134,6 +134,7 @@ export function createClusterStatus(overrides: Partial<ClusterStatus> = {}): Clu
       codex: { state: "installed", message: "已安装" },
       claude: { state: "not_checked", message: "未使用" },
       kimi: { state: "not_checked", message: "未使用" },
+      pi: { state: "not_checked", message: "未使用" },
     },
     agents: [{
       id: "tester",
@@ -161,6 +162,9 @@ export function createClusterStatus(overrides: Partial<ClusterStatus> = {}): Clu
       codex: { ...base.mcp.codex, ...(overrides.mcp?.codex || {}) },
       claude: { ...base.mcp.claude, ...(overrides.mcp?.claude || {}) },
       kimi: { ...base.mcp.kimi, ...(overrides.mcp?.kimi || {}) },
+      pi: overrides.mcp?.pi
+        ? { ...(base.mcp.pi || { state: "not_checked", message: "未使用" }), ...overrides.mcp.pi }
+        : base.mcp.pi,
     },
     agents: overrides.agents || base.agents,
   };

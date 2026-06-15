@@ -17,10 +17,29 @@ const CLI_LABELS: Record<string, string> = {
   claude: "Claude",
   codex: "Codex",
   kimi: "Kimi",
+  pi: "Pi",
 };
 
 function cliLabel(cliType: string) {
   return CLI_LABELS[cliType] || cliType;
+}
+
+function targetStatus(status: ClusterStatus) {
+  const activeCliType = status.mcp.activeCliType === "pi"
+    ? "pi"
+    : status.mcp.activeCliType === "kimi"
+      ? "kimi"
+      : status.mcp.activeCliType === "claude"
+        ? "claude"
+        : "codex";
+  const activeStatus = activeCliType === "pi"
+    ? status.mcp.pi
+    : activeCliType === "kimi"
+      ? status.mcp.kimi
+      : activeCliType === "claude"
+        ? status.mcp.claude
+        : status.mcp.codex;
+  return { activeCliType, activeStatus };
 }
 
 export function ClusterSetupPanel({ botAlias, client, canManage = true }: Props) {
@@ -94,30 +113,47 @@ export function ClusterSetupPanel({ botAlias, client, canManage = true }: Props)
       {status ? (
         <div className="mt-3 grid gap-2 text-sm">
           {(() => {
-            const activeCliType = status.mcp.activeCliType === "kimi"
-              ? "kimi"
-              : status.mcp.activeCliType === "claude"
-                ? "claude"
-                : "codex";
-            const activeStatus = activeCliType === "kimi"
-              ? status.mcp.kimi
-              : activeCliType === "claude"
-                ? status.mcp.claude
-                : status.mcp.codex;
-            return <div>{cliLabel(activeCliType)}：{activeStatus.message || activeStatus.state}</div>;
+            const { activeCliType, activeStatus } = targetStatus(status);
+            return <div>{cliLabel(activeCliType)}：{activeStatus?.message || activeStatus?.state || "未检测"}</div>;
           })()}
+          {status.mcp.pi ? <div>Pi：{status.mcp.pi.message || status.mcp.pi.state}</div> : null}
         </div>
       ) : null}
       {prepare ? (
         <div className="mt-4 space-y-3">
-          <div>
+          {prepare.installCommand.length > 0 ? <div>
             <div className="text-sm font-medium text-[var(--text)]">安装命令</div>
             <pre className="mt-1 overflow-x-auto rounded-md bg-[var(--surface-strong)] p-3 text-xs">{commandText(prepare.installCommand)}</pre>
-          </div>
-          <div>
+          </div> : null}
+          {prepare.verifyCommand.length > 0 ? <div>
             <div className="text-sm font-medium text-[var(--text)]">验证命令</div>
             <pre className="mt-1 overflow-x-auto rounded-md bg-[var(--surface-strong)] p-3 text-xs">{commandText(prepare.verifyCommand)}</pre>
-          </div>
+          </div> : null}
+          {prepare.piSettingsSnippet ? (
+            <div>
+              <div className="text-sm font-medium text-[var(--text)]">Pi settings.json</div>
+              <p className="mt-1 break-all text-xs text-[var(--muted)]">{prepare.piSettingsPath}</p>
+              <pre className="mt-1 overflow-x-auto rounded-md bg-[var(--surface-strong)] p-3 text-xs">{prepare.piSettingsSnippet}</pre>
+            </div>
+          ) : null}
+          {prepare.selfTestCommand && prepare.selfTestCommand.length > 0 ? (
+            <div>
+              <div className="text-sm font-medium text-[var(--text)]">本项目自检</div>
+              <pre className="mt-1 overflow-x-auto rounded-md bg-[var(--surface-strong)] p-3 text-xs">{commandText(prepare.selfTestCommand)}</pre>
+            </div>
+          ) : null}
+          {prepare.piSettingsSnippet ? (
+            <div className="rounded-md border border-[var(--border)] bg-[var(--bg)] p-3 text-xs text-[var(--muted)]">
+              <div className="font-medium text-[var(--text)]">Pi 验证步骤</div>
+              <ol className="mt-2 list-decimal space-y-1 pl-5">
+                <li>生成 launcher 和 config</li>
+                <li>把上方 JSON 合入 Pi settings.json</li>
+                <li>重启 Pi 原生 agent</li>
+                <li>开启集群模式后用当前 run_id 调 cluster_status</li>
+              </ol>
+              <p className="mt-2">Pi 是主 agent，子 agent 仍由本项目 cluster runtime 托管。</p>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </section>

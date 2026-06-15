@@ -118,6 +118,37 @@ test("native bots hide cli settings and params", async () => {
   expect(openManager).toHaveBeenCalled();
 });
 
+test("native settings shows pi cluster mcp setup", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  await client.addBot({
+    alias: "native1",
+    botMode: "cli",
+    cliType: "codex",
+    cliPath: "codex",
+    workingDir: "C:\\workspace\\native1",
+    avatarName: "avatar_01.png",
+    supportedExecutionModes: ["native_agent"],
+    defaultExecutionMode: "native_agent",
+    nativeAgent: {
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      piAgent: "reviewer",
+    },
+  });
+
+  render(<SettingsScreen botAlias="native1" client={client} onLogout={() => undefined} />);
+
+  expect(await screen.findByText("集群 MCP")).toBeInTheDocument();
+  expect((await screen.findAllByText(/Pi MCP 已配置/)).length).toBeGreaterThan(0);
+  await user.click(screen.getByRole("button", { name: "生成安装命令" }));
+  expect(await screen.findByText("Pi settings.json")).toBeInTheDocument();
+  expect(screen.getAllByText(/tcb-cluster/).length).toBeGreaterThan(0);
+  expect(screen.getByText("本项目自检")).toBeInTheDocument();
+  expect(screen.getByText("Pi 验证步骤")).toBeInTheDocument();
+  expect(screen.getByText(/当前 run_id 调 cluster_status/)).toBeInTheDocument();
+});
+
 test("git proxy controls stack on narrow screens", async () => {
   render(<SettingsScreen botAlias="main" client={new MockWebBotClient()} onLogout={() => undefined} />);
 

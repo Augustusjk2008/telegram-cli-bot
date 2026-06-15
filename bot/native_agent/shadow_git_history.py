@@ -17,9 +17,42 @@ GIT_COMMAND_TIMEOUT_SECONDS = 30.0
 MAX_TRACKED_FILES = 20000
 SHADOW_GIT_AUTHOR_NAME = "Orbit Workspace History"
 SHADOW_GIT_AUTHOR_EMAIL = "orbit@local"
+EXCLUDE_DIR_NAMES = frozenset({
+    ".git",
+    ".tcb",
+    ".worktrees",
+    ".updates",
+    ".tmp",
+    ".codegraph",
+    ".plugins",
+    "node_modules",
+    "venv",
+    ".venv",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".cache",
+    ".next",
+    ".turbo",
+    "coverage",
+    "dist",
+    "build",
+    "tmp",
+})
 EXCLUDE_PATTERNS = (
     ".git/",
     ".tcb/",
+    ".release-local/artifacts/",
+    ".release-local/stage/",
+    ".release-local/portable-win/artifacts/",
+    ".release-local/portable-win/downloads/",
+    ".release-local/portable-win/stage/",
+    ".worktrees/",
+    ".updates/",
+    ".tmp/",
+    ".codegraph/",
+    ".plugins/",
     "node_modules/",
     "venv/",
     ".venv/",
@@ -28,8 +61,12 @@ EXCLUDE_PATTERNS = (
     ".mypy_cache/",
     ".ruff_cache/",
     ".cache/",
+    ".next/",
+    ".turbo/",
+    "coverage/",
     "dist/",
     "build/",
+    "tmp/",
     ".env",
     ".env.*",
     "*.pyc",
@@ -331,6 +368,9 @@ class ShadowGitHistory:
         return sum(1 for line in str(result.stdout or "").splitlines() if line.strip())
 
     def _tracked_file_budget(self, context: "_ShadowContext") -> int:
+        result = self._git(context, "ls-files", "-co", "--exclude-standard", "--", ".", check=False)
+        if result.returncode == 0:
+            return sum(1 for line in str(result.stdout or "").splitlines() if line.strip())
         count = 0
         shadow_root = self.root_dir.expanduser().resolve()
         for root, dirs, files in os.walk(context.cwd):
@@ -338,7 +378,7 @@ class ShadowGitHistory:
             dirs[:] = [
                 name
                 for name in dirs
-                if name not in {".git", ".tcb", "node_modules", "venv", ".venv", "__pycache__", ".pytest_cache"}
+                if name not in EXCLUDE_DIR_NAMES
                 and (root_path / name).resolve() != shadow_root
             ]
             count += len(files)

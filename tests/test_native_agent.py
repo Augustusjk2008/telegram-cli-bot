@@ -1626,6 +1626,35 @@ async def test_native_agent_service_adds_solo_prompt_only_for_solo_mode(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_native_agent_service_passes_cluster_run_id_to_pi_runtime_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from bot import config
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    runtime = FakePiRuntime([
+        {"type": "agent_start", "sessionId": "sess-1"},
+        {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "回"}},
+        {"type": "turn_end", "sessionId": "sess-1"},
+    ])
+    registry = FakePiRuntimeRegistry(runtime)
+    service = NativeAgentService()
+    service._runtime_registry = registry
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    await _collect_native_stream(service.stream_chat(
+        profile=profile,
+        session=session,
+        user_text="你好",
+        prompt_text="你好",
+        history_service=history,
+        cluster_run_id="clr_test",
+    ))
+
+    assert registry.requests[0].env == {"TCB_CLUSTER_RUN_ID": "clr_test"}
+
+
+@pytest.mark.asyncio
 async def test_native_agent_service_streams_pi_runtime_and_persists_done(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from bot import config
 

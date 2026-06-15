@@ -6,6 +6,7 @@ import { AvatarPicker } from "../components/AvatarPicker";
 import { AgentSettingsPanel } from "../components/AgentSettingsPanel";
 import { BotCliParamsPanel } from "../components/BotCliParamsPanel";
 import { BotIdentity } from "../components/BotIdentity";
+import { ClusterSetupPanel } from "../components/ClusterSetupPanel";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
 import { StateBadge } from "../components/StateBadge";
 import { ThemeDropdown } from "../components/ThemeDropdown";
@@ -1048,6 +1049,14 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
               当前状态: {gitProxyStatusText(gitProxySettings)}
             </p>
           </div>
+        ) : null}
+
+        {overview && showBotRuntimeSettings && nativeRuntime ? (
+          <ClusterSetupPanel
+            botAlias={botAlias}
+            client={client}
+            canManage={canManageBotRuntime}
+          />
         ) : null}
 
         {overview && showBotRuntimeSettings ? (

@@ -3406,16 +3406,22 @@ export class MockWebBotClient implements WebBotClient {
   async getClusterStatus(botAlias: string): Promise<ClusterStatus> {
     const bot = this.getBotSummary(botAlias);
     const cluster = bot.cluster || DEFAULT_CLUSTER;
+    const activeCliType = bot.defaultExecutionMode === "native_agent" || (
+      Array.isArray(bot.supportedExecutionModes)
+      && bot.supportedExecutionModes.length === 1
+      && bot.supportedExecutionModes[0] === "native_agent"
+    ) ? "pi" : bot.cliType;
     return {
       enabled: Boolean(cluster.enabled),
       modelTiers: { ...cluster.modelTiers },
       mcp: {
         serverName: "tcb-cluster",
-        activeCliType: bot.cliType,
+        activeCliType,
         runtime: { state: "runtime_ready", message: "运行态可用" },
-        codex: bot.cliType === "codex" ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
-        claude: bot.cliType === "claude" ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
-        kimi: bot.cliType === "kimi" ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
+        codex: activeCliType === "codex" ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
+        claude: activeCliType === "claude" ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
+        kimi: activeCliType === "kimi" ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
+        pi: activeCliType === "pi" ? { state: "installed", message: "Pi MCP 已配置" } : { state: "not_checked", message: "未使用" },
       },
       agents: this.ensureAgents(botAlias)
         .filter((agent) => !agent.isMain)
@@ -3443,16 +3449,46 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async prepareClusterSetup(botAlias: string): Promise<ClusterSetupPrepareResult> {
-    const cliPath = this.getBotSummary(botAlias).cliPath || defaultCliPathForType(this.getBotSummary(botAlias).cliType);
-    const cliType = this.getBotSummary(botAlias).cliType;
+    const bot = this.getBotSummary(botAlias);
+    const cliPath = bot.cliPath || defaultCliPathForType(bot.cliType);
+    const cliType = bot.cliType;
+    const launcherPath = "C:\\Users\\demo\\.tcb\\bin\\tcb-cluster-mcp.cmd";
+    const configPath = "C:\\Users\\demo\\.tcb\\cluster-mcp\\config.json";
+    const activeCliType = bot.defaultExecutionMode === "native_agent" || (
+      Array.isArray(bot.supportedExecutionModes)
+      && bot.supportedExecutionModes.length === 1
+      && bot.supportedExecutionModes[0] === "native_agent"
+    ) ? "pi" : bot.cliType;
+    if (activeCliType === "pi") {
+      return {
+        serverName: "tcb-cluster",
+        launcherPath,
+        configPath,
+        tokenPath: "C:\\Users\\demo\\.tcb\\cluster-mcp\\token",
+        installCommand: [],
+        verifyCommand: [],
+        removeCommand: [],
+        piSettingsPath: "C:\\Users\\demo\\.pi\\agent\\settings.json",
+        piSettingsSnippet: JSON.stringify({
+          mcp: {
+            "tcb-cluster": {
+              type: "local",
+              command: [launcherPath],
+              enabled: true,
+            },
+          },
+        }, null, 2),
+        selfTestCommand: ["python", "bot\\cluster\\mcp_stdio.py", "--config", configPath, "--self-test"],
+      };
+    }
     return {
       serverName: "tcb-cluster",
-      launcherPath: "C:\\Users\\demo\\.tcb\\bin\\tcb-cluster-mcp.cmd",
-      configPath: "C:\\Users\\demo\\.tcb\\cluster-mcp\\config.json",
+      launcherPath,
+      configPath,
       tokenPath: "C:\\Users\\demo\\.tcb\\cluster-mcp\\token",
       installCommand: cliType === "kimi"
-        ? [cliPath, "mcp", "add", "--transport", "stdio", "tcb-cluster", "--", "C:\\Users\\demo\\.tcb\\bin\\tcb-cluster-mcp.cmd"]
-        : [cliPath, "mcp", "add", "tcb-cluster", "--", "C:\\Users\\demo\\.tcb\\bin\\tcb-cluster-mcp.cmd"],
+        ? [cliPath, "mcp", "add", "--transport", "stdio", "tcb-cluster", "--", launcherPath]
+        : [cliPath, "mcp", "add", "tcb-cluster", "--", launcherPath],
       verifyCommand: cliType === "kimi"
         ? [cliPath, "mcp", "test", "tcb-cluster"]
         : [cliPath, "mcp", "get", "tcb-cluster"],

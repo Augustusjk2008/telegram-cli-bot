@@ -538,6 +538,86 @@ async def test_run_chat_native_agent_plan_cluster_prompt_contains_run_id_and_men
 
 
 @pytest.mark.asyncio
+async def test_get_cluster_status_native_agent_reports_pi_target(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    profile = web_manager.main_profile
+    profile.default_execution_mode = "native_agent"
+    profile.supported_execution_modes = ["native_agent"]
+    launcher = tmp_path / ".tcb" / "bin" / "tcb-cluster-mcp.cmd"
+    config_path = tmp_path / ".tcb" / "cluster-mcp" / "config.json"
+    token_path = tmp_path / ".tcb" / "cluster-mcp" / "token"
+    settings_path = tmp_path / ".pi" / "agent" / "settings.json"
+    launcher.parent.mkdir(parents=True, exist_ok=True)
+    launcher.write_text("@echo off\r\n", encoding="utf-8")
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps({
+        "schema_version": 1,
+        "repo_root": str(tmp_path),
+        "bridge_url": "http://127.0.0.1:8765",
+        "token_file": str(token_path),
+        "server_name": "tcb-cluster",
+    }), encoding="utf-8")
+    token_path.write_text("token", encoding="utf-8")
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(json.dumps({
+        "mcp": {
+            "tcb-cluster": {
+                "type": "local",
+                "command": [str(launcher)],
+                "enabled": True,
+            }
+        }
+    }), encoding="utf-8")
+    monkeypatch.setenv("PI_AGENT_SETTINGS", str(settings_path))
+    monkeypatch.setattr(api_service, "_cluster_launcher_path", lambda: launcher)
+    monkeypatch.setattr(api_service, "_cluster_mcp_config_path", lambda: config_path)
+    monkeypatch.setattr(api_service, "_cluster_token_path", lambda: token_path)
+    monkeypatch.setattr(api_service, "build_pi_mcp_self_test_command", lambda cfg: ["python", str(cfg), "--self-test"])
+    monkeypatch.setattr(api_service.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, stdout="ok", stderr=""))
+
+    status = api_service.get_cluster_status(web_manager, "main")
+
+    assert status["mcp"]["active_cli_type"] == "pi"
+    assert status["mcp"]["pi"]["state"] == "installed"
+    assert status["mcp"]["pi"]["message"] == "Pi MCP 已配置"
+
+
+@pytest.mark.asyncio
+async def test_prepare_cluster_setup_returns_pi_settings_snippet(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    profile = web_manager.main_profile
+    profile.default_execution_mode = "native_agent"
+    profile.supported_execution_modes = ["native_agent"]
+    monkeypatch.setenv("PI_AGENT_SETTINGS", str(tmp_path / ".pi" / "agent" / "settings.json"))
+
+    class FakeLauncher:
+        launcher_path = tmp_path / ".tcb" / "bin" / "tcb-cluster-mcp.cmd"
+        config_path = tmp_path / ".tcb" / "cluster-mcp" / "config.json"
+        token_path = tmp_path / ".tcb" / "cluster-mcp" / "token"
+
+        def to_dict(self):
+            return {
+                "server_name": "tcb-cluster",
+                "launcher_path": str(self.launcher_path),
+                "config_path": str(self.config_path),
+                "token_path": str(self.token_path),
+            }
+
+    monkeypatch.setattr(api_service, "prepare_cluster_mcp_launcher", lambda **kwargs: FakeLauncher())
+    result = api_service.prepare_cluster_setup(web_manager, "main")
+
+    assert result["pi_settings_path"].endswith(".pi\\agent\\settings.json") or result["pi_settings_path"].endswith(".pi/agent/settings.json")
+    assert "tcb-cluster" in result["pi_settings_snippet"]
+    assert "self_test_command" in result
+
+
+@pytest.mark.asyncio
 async def test_kill_native_agent_cluster_marks_run_and_tasks_cancelled(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,

@@ -307,6 +307,7 @@ class NativeAgentService:
         last_progress_signature = ""
         wants_ag_ui = str(protocol or "").strip().lower() == "ag-ui"
         normalized_cluster_run_id = str(cluster_run_id or "").strip()
+        pi_runtime_env = {"TCB_CLUSTER_RUN_ID": normalized_cluster_run_id} if normalized_cluster_run_id else None
         native_session_id = ""
         context_run_usage: dict[str, Any] = {}
         active_runtime: PiSessionRuntime | None = None
@@ -488,6 +489,7 @@ class NativeAgentService:
                     reasoning_effort=reasoning_effort,
                     append_system_prompt=SOLO_NATIVE_AGENT_SYSTEM_PROMPT if solo_mode else "",
                     native_session_id=native_session_id,
+                    env=pi_runtime_env,
                 )
             )
             if pi_record is not None:

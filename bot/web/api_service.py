@@ -101,6 +101,8 @@ from bot.cluster.setup import (
     build_cli_install_command,
     build_cli_remove_command,
     build_cli_verify_command,
+    build_pi_mcp_self_test_command,
+    build_pi_mcp_settings_snippet,
     prepare_cluster_mcp_launcher,
 )
 from bot.prompts import render_prompt
@@ -850,6 +852,15 @@ def _cluster_token_path() -> Path:
     return Path.home() / ".tcb" / "cluster-mcp" / "token"
 
 
+def _cluster_launcher_path() -> Path:
+    launcher_name = "tcb-cluster-mcp.cmd" if sys.platform.startswith("win") else "tcb-cluster-mcp.sh"
+    return Path.home() / ".tcb" / "bin" / launcher_name
+
+
+def _cluster_mcp_config_path() -> Path:
+    return Path.home() / ".tcb" / "cluster-mcp" / "config.json"
+
+
 def _cluster_bridge_url() -> str:
     return f"http://127.0.0.1:{WEB_PORT}"
 
@@ -877,9 +888,8 @@ def _cluster_cli_path(profile: BotProfile, cli_type: str) -> str:
 
 
 def _cluster_runtime_mcp_status() -> dict[str, str]:
-    launcher_name = "tcb-cluster-mcp.cmd" if sys.platform.startswith("win") else "tcb-cluster-mcp.sh"
-    launcher_path = Path.home() / ".tcb" / "bin" / launcher_name
-    config_path = Path.home() / ".tcb" / "cluster-mcp" / "config.json"
+    launcher_path = _cluster_launcher_path()
+    config_path = _cluster_mcp_config_path()
     token_path = _cluster_token_path()
     if not launcher_path.exists() or not config_path.exists():
         return {"state": "launcher_missing", "message": "未生成运行配置"}
@@ -933,12 +943,88 @@ def _cluster_mcp_target_status(profile: BotProfile, cli_type: str, *, active_cli
     return {"state": "mcp_missing", "message": "未安装"}
 
 
+def _profile_cluster_active_cli_type(profile: BotProfile) -> str:
+    supported_modes = {
+        str(mode or "").strip().lower()
+        for mode in list(getattr(profile, "supported_execution_modes", []) or [])
+        if str(mode or "").strip()
+    }
+    default_mode = str(getattr(profile, "default_execution_mode", "") or "").strip().lower()
+    if default_mode == NATIVE_AGENT_PROVIDER or supported_modes == {NATIVE_AGENT_PROVIDER}:
+        return "pi"
+    try:
+        return normalize_cli_type(profile.cli_type)
+    except ValueError:
+        return ""
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    try:
+        return str(left.expanduser().resolve()).lower() == str(right.expanduser().resolve()).lower()
+    except OSError:
+        return str(left.expanduser()).lower() == str(right.expanduser()).lower()
+
+
+def _pi_mcp_command_points_to_launcher(command: Any, launcher_path: Path) -> bool:
+    if isinstance(command, str):
+        candidate = command
+    elif isinstance(command, list) and command:
+        candidate = command[0]
+    else:
+        return False
+    return _same_path(Path(str(candidate or "")), launcher_path)
+
+
+def _cluster_pi_mcp_target_status(*, active_cli_type: str) -> dict[str, str]:
+    if active_cli_type != "pi":
+        return _cluster_inactive_target_status()
+    launcher_path = _cluster_launcher_path()
+    config_path = _cluster_mcp_config_path()
+    runtime_status = _cluster_runtime_mcp_status()
+    if runtime_status["state"] != "runtime_ready":
+        return runtime_status
+    settings_path = get_pi_settings_path()
+    try:
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"state": "mcp_missing", "message": f"未配置 Pi MCP: {settings_path}"}
+    except Exception as exc:
+        return {"state": "broken", "message": f"Pi settings 无效: {exc}"}
+    if not isinstance(settings, dict):
+        return {"state": "broken", "message": "Pi settings 必须是 JSON 对象"}
+    mcp = settings.get("mcp")
+    target = mcp.get(CLUSTER_MCP_SERVER_NAME) if isinstance(mcp, dict) else None
+    if not isinstance(target, dict):
+        return {"state": "mcp_missing", "message": "Pi 未配置 tcb-cluster MCP"}
+    if target.get("enabled") is not True:
+        return {"state": "broken", "message": "Pi MCP 已配置但未启用"}
+    if not _pi_mcp_command_points_to_launcher(target.get("command"), launcher_path):
+        return {"state": "stale", "message": "Pi MCP command 未指向当前 launcher"}
+    command = build_pi_mcp_self_test_command(config_path)
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+            **build_hidden_process_kwargs(),
+        )
+    except FileNotFoundError:
+        return {"state": "broken", "message": "未找到 Python，无法自检"}
+    except subprocess.TimeoutExpired:
+        return {"state": "broken", "message": "Pi MCP 自检超时"}
+    except OSError as exc:
+        return {"state": "broken", "message": str(exc)}
+    if completed.returncode != 0:
+        output = f"{completed.stdout or ''}\n{completed.stderr or ''}".strip()
+        return {"state": "broken", "message": output or "Pi MCP 自检失败"}
+    return {"state": "installed", "message": "Pi MCP 已配置"}
+
+
 def get_cluster_status(manager: MultiBotManager, alias: str) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
-    try:
-        active_cli_type = normalize_cli_type(profile.cli_type)
-    except ValueError:
-        active_cli_type = ""
+    active_cli_type = _profile_cluster_active_cli_type(profile)
     return {
         "enabled": bool(profile.cluster.enabled),
         "model_tiers": dict(profile.cluster.model_tiers),
@@ -949,6 +1035,7 @@ def get_cluster_status(manager: MultiBotManager, alias: str) -> dict[str, Any]:
             "codex": _cluster_mcp_target_status(profile, "codex", active_cli_type=active_cli_type),
             "claude": _cluster_mcp_target_status(profile, "claude", active_cli_type=active_cli_type),
             "kimi": _cluster_mcp_target_status(profile, "kimi", active_cli_type=active_cli_type),
+            "pi": _cluster_pi_mcp_target_status(active_cli_type=active_cli_type),
         },
         "agents": [
             {
@@ -973,15 +1060,28 @@ def prepare_cluster_setup(manager: MultiBotManager, alias: str) -> dict[str, Any
         repo_root=_REPO_ROOT,
         bridge_url=_cluster_bridge_url(),
     )
+    active_cli_type = _profile_cluster_active_cli_type(profile)
+    if active_cli_type == "pi":
+        pi_settings_snippet = build_pi_mcp_settings_snippet(launcher.launcher_path)
+        return {
+            **launcher.to_dict(),
+            "install_command": [],
+            "verify_command": [],
+            "remove_command": [],
+            "pi_settings_path": str(get_pi_settings_path()),
+            "pi_settings_snippet": json.dumps(pi_settings_snippet, ensure_ascii=False, indent=2),
+            "self_test_command": build_pi_mcp_self_test_command(launcher.config_path),
+        }
+    cli_type = active_cli_type if active_cli_type in {"codex", "claude", "kimi"} else profile.cli_type
     return {
         **launcher.to_dict(),
         "install_command": build_cli_install_command(
-            cli_type=profile.cli_type,
+            cli_type=cli_type,
             cli_path=profile.cli_path,
             launcher_path=launcher.launcher_path,
         ),
-        "verify_command": build_cli_verify_command(profile.cli_type, profile.cli_path),
-        "remove_command": build_cli_remove_command(profile.cli_type, profile.cli_path),
+        "verify_command": build_cli_verify_command(cli_type, profile.cli_path),
+        "remove_command": build_cli_remove_command(cli_type, profile.cli_path),
     }
 
 

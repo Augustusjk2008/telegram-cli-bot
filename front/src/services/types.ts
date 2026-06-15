@@ -415,6 +415,7 @@ export type ClusterStatus = {
     codex: ClusterMcpTargetStatus;
     claude: ClusterMcpTargetStatus;
     kimi: ClusterMcpTargetStatus;
+    pi?: ClusterMcpTargetStatus;
   };
   agents: ClusterAgentStatus[];
 };
@@ -470,6 +471,9 @@ export type ClusterSetupPrepareResult = {
   installCommand: string[];
   verifyCommand: string[];
   removeCommand: string[];
+  piSettingsPath?: string;
+  piSettingsSnippet?: string;
+  selfTestCommand?: string[];
 };
 
 export type ClusterConfigUpdateInput = {

@@ -6,9 +6,27 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 CLUSTER_MCP_SERVER_NAME = "tcb-cluster"
+
+
+def build_pi_mcp_settings_snippet(launcher_path: Path) -> dict[str, Any]:
+    return {
+        "mcp": {
+            CLUSTER_MCP_SERVER_NAME: {
+                "type": "local",
+                "command": [str(launcher_path)],
+                "enabled": True,
+            }
+        }
+    }
+
+
+def build_pi_mcp_self_test_command(config_path: Path, *, python_executable: Path | None = None) -> list[str]:
+    python_executable = python_executable or Path(sys.executable)
+    script_path = Path(__file__).resolve().with_name("mcp_stdio.py")
+    return [str(python_executable), str(script_path), "--config", str(config_path), "--self-test"]
 
 
 @dataclass(frozen=True)
@@ -88,16 +106,18 @@ def prepare_cluster_mcp_launcher(
     return ClusterMcpLauncher(CLUSTER_MCP_SERVER_NAME, launcher_path, config_path, token_path)
 
 
-def normalize_cli_kind(cli_type: str) -> Literal["codex", "claude", "kimi"]:
+def normalize_cli_kind(cli_type: str) -> Literal["codex", "claude", "kimi", "pi"]:
     kind = str(cli_type or "").strip().lower()
-    if kind not in {"codex", "claude", "kimi"}:
-        raise ValueError("cluster MCP 仅支持 codex / claude / kimi")
+    if kind not in {"codex", "claude", "kimi", "pi"}:
+        raise ValueError("cluster MCP 仅支持 codex / claude / kimi / pi")
     return kind  # type: ignore[return-value]
 
 
 def build_cli_install_command(*, cli_type: str, cli_path: str, launcher_path: Path) -> list[str]:
     kind = normalize_cli_kind(cli_type)
     executable = str(cli_path or kind)
+    if kind == "pi":
+        return []
     if kind == "codex":
         return [executable, "mcp", "add", CLUSTER_MCP_SERVER_NAME, "--", str(launcher_path)]
     if kind == "kimi":
@@ -116,6 +136,8 @@ def build_cli_install_command(*, cli_type: str, cli_path: str, launcher_path: Pa
 
 def build_cli_verify_command(cli_type: str, cli_path: str) -> list[str]:
     kind = normalize_cli_kind(cli_type)
+    if kind == "pi":
+        return [str(cli_path or kind), "-p", "--tools", f"{CLUSTER_MCP_SERVER_NAME}.cluster_status", "列出 MCP 工具"]
     if kind == "kimi":
         return [str(cli_path or kind), "mcp", "test", CLUSTER_MCP_SERVER_NAME]
     return [str(cli_path or kind), "mcp", "get", CLUSTER_MCP_SERVER_NAME]
@@ -123,4 +145,6 @@ def build_cli_verify_command(cli_type: str, cli_path: str) -> list[str]:
 
 def build_cli_remove_command(cli_type: str, cli_path: str) -> list[str]:
     kind = normalize_cli_kind(cli_type)
+    if kind == "pi":
+        return []
     return [str(cli_path or kind), "mcp", "remove", CLUSTER_MCP_SERVER_NAME]

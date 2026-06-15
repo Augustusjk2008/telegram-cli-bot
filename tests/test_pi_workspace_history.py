@@ -295,3 +295,37 @@ def test_shadow_git_history_excludes_env_files(monkeypatch: pytest.MonkeyPatch, 
     assert "visible.txt" in tree.stdout
     assert ".env" not in tree.stdout
     assert ".env.local" not in tree.stdout
+
+
+def test_shadow_git_history_budget_excludes_release_artifacts(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / ".gitignore").write_text(
+        ".release-local/*\n!.release-local/\n!.release-local/portable-win/\n"
+        ".release-local/portable-win/*\n!.release-local/portable-win/build-portable.ps1\n",
+        encoding="utf-8",
+    )
+    release_stage = workspace / ".release-local" / "portable-win" / "stage"
+    release_stage.mkdir(parents=True)
+    for index in range(30):
+        (release_stage / f"artifact-{index}.txt").write_text("generated\n", encoding="utf-8")
+    script = workspace / ".release-local" / "portable-win" / "build-portable.ps1"
+    script.write_text("Write-Host build\n", encoding="utf-8")
+    (workspace / "visible.txt").write_text("visible\n", encoding="utf-8")
+
+    history = ShadowGitHistory(root_dir=tmp_path / "shadow", max_tracked_files=5)
+    status = history.snapshot(cwd=workspace, conversation_id="conv-1", label="base")
+
+    assert status.degraded is False
+    repo = next((tmp_path / "shadow").rglob("repo.git"))
+    tree = subprocess.run(
+        ["git", "--git-dir", str(repo), "ls-tree", "-r", "--name-only", "HEAD"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=True,
+    )
+    assert ".release-local/portable-win/build-portable.ps1" in tree.stdout
+    assert "visible.txt" in tree.stdout
+    assert ".release-local/portable-win/stage/artifact-0.txt" not in tree.stdout

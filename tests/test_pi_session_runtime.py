@@ -119,3 +119,41 @@ def test_runtime_match_rejects_append_system_prompt_change():
         reasoning_effort="high",
         append_system_prompt="",
     )) is False
+
+
+def test_runtime_match_rejects_env_change():
+    runtime = _runtime(client=FakeClient([]), reasoning_effort="high")
+    runtime.state.env = {"TCB_CLUSTER_RUN_ID": "clr_old"}
+
+    assert runtime.matches(PiSessionRuntimeRequest(
+        runtime_key="1:1:conv-1",
+        owner_key="1:1",
+        conversation_id="conv-1",
+        cwd="C:/repo",
+        command="pi",
+        model="anthropic/claude-sonnet-4",
+        agent_id="reviewer",
+        reasoning_effort="high",
+        env={"TCB_CLUSTER_RUN_ID": "clr_old"},
+    )) is True
+    assert runtime.matches(PiSessionRuntimeRequest(
+        runtime_key="1:1:conv-1",
+        owner_key="1:1",
+        conversation_id="conv-1",
+        cwd="C:/repo",
+        command="pi",
+        model="anthropic/claude-sonnet-4",
+        agent_id="reviewer",
+        reasoning_effort="high",
+        env={"TCB_CLUSTER_RUN_ID": "clr_new"},
+    )) is False
+    assert runtime.matches(PiSessionRuntimeRequest(
+        runtime_key="1:1:conv-1",
+        owner_key="1:1",
+        conversation_id="conv-1",
+        cwd="C:/repo",
+        command="pi",
+        model="anthropic/claude-sonnet-4",
+        agent_id="reviewer",
+        reasoning_effort="high",
+    )) is False

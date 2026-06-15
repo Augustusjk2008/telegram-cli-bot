@@ -196,6 +196,7 @@ describe("RealWebBotClient", () => {
         codex: { state: "not_checked", message: "未使用" },
         claude: { state: "not_checked", message: "未使用" },
         kimi: { state: "installed", message: "已安装" },
+        pi: { state: "not_checked", message: "未使用" },
       },
       modelTiers: { low: "fast-model", medium: "balanced-model", high: "strong-model" },
       agents: [{
@@ -222,6 +223,7 @@ describe("RealWebBotClient", () => {
             codex: statusData.mcp.codex,
             claude: statusData.mcp.claude,
             kimi: statusData.mcp.kimi,
+            pi: statusData.mcp.pi,
           },
           agents: statusData.agents.map((agent) => ({
             id: agent.id,
@@ -245,10 +247,40 @@ describe("RealWebBotClient", () => {
     expect(status.mcp.activeCliType).toBe("kimi");
     expect(status.mcp.runtime?.state).toBe("runtime_ready");
     expect(status.mcp.kimi.state).toBe("installed");
+    expect(status.mcp.pi?.state).toBe("not_checked");
     expect(status.modelTiers.low).toBe("fast-model");
     expect(status.agents[0].allowWrite).toBe(false);
     expect(status.agents[0].sessionPolicy).toBe("ephemeral");
     expect(status.agents[0].timeoutSeconds).toBe(180);
+  });
+
+  test("cluster setup prepare maps pi fields", async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        data: {
+          server_name: "tcb-cluster",
+          launcher_path: "C:\\Users\\demo\\.tcb\\bin\\tcb-cluster-mcp.cmd",
+          config_path: "C:\\Users\\demo\\.tcb\\cluster-mcp\\config.json",
+          token_path: "C:\\Users\\demo\\.tcb\\cluster-mcp\\token",
+          install_command: [],
+          verify_command: [],
+          remove_command: [],
+          pi_settings_path: "C:\\Users\\demo\\.pi\\agent\\settings.json",
+          pi_settings_snippet: "{\n  \"mcp\": {}\n}",
+          self_test_command: ["python", "bot\\cluster\\mcp_stdio.py", "--self-test"],
+        },
+      }),
+    });
+
+    const client = new RealWebBotClient();
+    const prepare = await client.prepareClusterSetup("main");
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/bots/main/cluster/setup/prepare", expect.objectContaining({ method: "POST" }));
+    expect(prepare.piSettingsPath).toContain("settings.json");
+    expect(prepare.piSettingsSnippet).toContain("\"mcp\"");
+    expect(prepare.selfTestCommand).toEqual(["python", "bot\\cluster\\mcp_stdio.py", "--self-test"]);
   });
 
   test("getDebugProfile normalizes snake case launch schema fields", async () => {

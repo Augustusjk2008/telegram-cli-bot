@@ -1756,6 +1756,7 @@ function mapClusterStatus(raw: unknown): ClusterStatus {
       codex: mapTarget(mcp.codex),
       claude: mapTarget(mcp.claude),
       kimi: mapTarget(mcp.kimi),
+      pi: mcp.pi ? mapTarget(mcp.pi) : undefined,
     },
     agents: Array.isArray(value.agents) ? value.agents.map((rawAgent) => {
       const agent = rawAgent && typeof rawAgent === "object" ? rawAgent as Record<string, unknown> : {};
@@ -1863,6 +1864,9 @@ function mapClusterSetupPrepare(raw: unknown): ClusterSetupPrepareResult {
     installCommand: list("install_command", "installCommand"),
     verifyCommand: list("verify_command", "verifyCommand"),
     removeCommand: list("remove_command", "removeCommand"),
+    piSettingsPath: String(value.pi_settings_path || value.piSettingsPath || ""),
+    piSettingsSnippet: String(value.pi_settings_snippet || value.piSettingsSnippet || ""),
+    selfTestCommand: list("self_test_command", "selfTestCommand"),
   };
 }
 
