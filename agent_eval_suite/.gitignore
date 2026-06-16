@@ -1,0 +1,7 @@
+runs/
+private_gold/*
+!private_gold/.gitkeep
+__pycache__/
+*.pyc
+.venv/
+
