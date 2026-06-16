@@ -59,6 +59,25 @@ function traceCallKey(trace: ChatTraceEvent) {
   return callId ? `${trace.kind}:${callId}` : "";
 }
 
+function isNativeFlatTraceEvent(trace: ChatTraceEvent) {
+  const source = asString(trace.source).trim().toLowerCase();
+  const rawType = asString(trace.rawType).trim();
+  return source === "native_agent" || source === "native" || rawType === "message.text.reclassified";
+}
+
+function traceFallbackKey(trace: ChatTraceEvent, nativeFlat: boolean) {
+  if (nativeFlat || isNativeFlatTraceEvent(trace)) {
+    return "";
+  }
+  const rawType = asString(trace.rawType).trim();
+  const callId = asString(trace.callId).trim();
+  const summary = asString(trace.summary).trim();
+  if (!rawType && !callId && !summary) {
+    return "";
+  }
+  return `${trace.kind}:${rawType}:${callId}:${summary}`;
+}
+
 function traceRichness(trace: ChatTraceEvent) {
   return (
     payloadText(trace).length * 10
@@ -220,24 +239,31 @@ export function mergeChatTraceEvents(
   const merged: ChatTraceEvent[] = [];
   const stableIndexMap = new Map<string, number>();
   const callIndexMap = new Map<string, number>();
+  const fallbackIndexMap = new Map<string, number>();
 
   for (const source of sources) {
     for (const event of source || []) {
       const stableKey = traceStableKey(event);
       const callKey = traceCallKey(event);
+      const fallbackKey = traceFallbackKey(event, Boolean(options.nativeFlat));
       const existingIndex = (
         (callKey ? callIndexMap.get(callKey) : undefined)
         ?? (stableKey ? stableIndexMap.get(stableKey) : undefined)
+        ?? (fallbackKey ? fallbackIndexMap.get(fallbackKey) : undefined)
       );
       if (typeof existingIndex === "number") {
         merged[existingIndex] = mergeTraceEvent(merged[existingIndex], event);
         const nextStableKey = traceStableKey(merged[existingIndex]);
         const nextCallKey = traceCallKey(merged[existingIndex]);
+        const nextFallbackKey = traceFallbackKey(merged[existingIndex], Boolean(options.nativeFlat));
         if (nextStableKey) {
           stableIndexMap.set(nextStableKey, existingIndex);
         }
         if (nextCallKey) {
           callIndexMap.set(nextCallKey, existingIndex);
+        }
+        if (nextFallbackKey) {
+          fallbackIndexMap.set(nextFallbackKey, existingIndex);
         }
         continue;
       }
@@ -248,6 +274,9 @@ export function mergeChatTraceEvents(
       }
       if (callKey) {
         callIndexMap.set(callKey, nextIndex);
+      }
+      if (fallbackKey) {
+        fallbackIndexMap.set(fallbackKey, nextIndex);
       }
     }
   }

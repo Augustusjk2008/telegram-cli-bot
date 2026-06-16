@@ -3,7 +3,7 @@ from __future__ import annotations
 import random
 from typing import Any
 
-from .paths import BENCHMARKS
+from .paths import PRESET_BENCHMARKS, WORKSPACE_BENCHMARK
 
 
 def build_dataset(
@@ -12,33 +12,53 @@ def build_dataset(
     samples: int,
     seed: int,
 ) -> tuple[dict[str, list[dict[str, Any]]], dict[str, list[dict[str, Any]]]]:
-    if preset not in {"smoke", "win-native"}:
+    if preset not in PRESET_BENCHMARKS:
         raise ValueError(f"unsupported preset: {preset}")
-    samples = max(samples, len(BENCHMARKS))
-    counts = _benchmark_counts(samples)
+    benchmarks = PRESET_BENCHMARKS[preset]
+    samples = max(samples, len(benchmarks))
+    counts = _benchmark_counts(samples, benchmarks)
     rng = random.Random(seed)
+    builders = _hard_builders() if preset == "win-native-hard" else _static_builders()
 
     visible: dict[str, list[dict[str, Any]]] = {}
     gold: dict[str, list[dict[str, Any]]] = {}
     for benchmark, count in counts.items():
-        builders = {
-            "ifeval": _build_ifeval,
-            "simpleqa": _build_simpleqa,
-            "evalplus": _build_evalplus,
-            "gaia": _build_gaia,
-        }[benchmark]
-        task_rows, gold_rows = builders(count, rng)
+        if benchmark == WORKSPACE_BENCHMARK:
+            task_rows, gold_rows = _build_workspace_ops(count, rng)
+        else:
+            task_rows, gold_rows = builders[benchmark](count, rng)
         visible[benchmark] = task_rows
         gold[benchmark] = gold_rows
     return visible, gold
 
 
-def _benchmark_counts(samples: int) -> dict[str, int]:
-    base = samples // len(BENCHMARKS)
-    remainder = samples % len(BENCHMARKS)
-    return {
+def _benchmark_counts(samples: int, benchmarks: tuple[str, ...]) -> dict[str, int]:
+    base = samples // len(benchmarks)
+    remainder = samples % len(benchmarks)
+    counts = {
         benchmark: base + (1 if index < remainder else 0)
-        for index, benchmark in enumerate(BENCHMARKS)
+        for index, benchmark in enumerate(benchmarks)
+    }
+    if WORKSPACE_BENCHMARK in counts:
+        counts[WORKSPACE_BENCHMARK] = max(3, counts[WORKSPACE_BENCHMARK])
+    return counts
+
+
+def _static_builders() -> dict[str, Any]:
+    return {
+        "ifeval": _build_ifeval,
+        "simpleqa": _build_simpleqa,
+        "evalplus": _build_evalplus,
+        "gaia": _build_gaia,
+    }
+
+
+def _hard_builders() -> dict[str, Any]:
+    return {
+        "ifeval": _build_ifeval_hard,
+        "simpleqa": _build_simpleqa_hard,
+        "evalplus": _build_evalplus_hard,
+        "gaia": _build_gaia_hard,
     }
 
 
@@ -230,3 +250,268 @@ def _build_gaia(
         gold.append({"id": task_id, "final_answer": answer, "level": level})
     return tasks, gold
 
+
+def _build_ifeval_hard(
+    count: int, rng: random.Random
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    del rng
+    tasks: list[dict[str, Any]] = []
+    gold: list[dict[str, Any]] = []
+    for i in range(count):
+        task_id = f"ifeval_{i + 1:04d}"
+        keyword = f"ORBIT{i}"
+        prompt = (
+            "Return only a JSON object. It must have keys status, tag, and note. "
+            f"Use status=ready, tag={keyword}. The note must start with PASS, "
+            "end with DONE, and contain no more than 6 words."
+        )
+        tasks.append({"id": task_id, "prompt": prompt, "difficulty": "hard"})
+        gold.append(
+            {
+                "id": task_id,
+                "instructions": [
+                    {"type": "format_json"},
+                    {"type": "json_field", "key": "status", "value": "ready"},
+                    {"type": "json_field", "key": "tag", "value": keyword},
+                    {"type": "keyword_include_all", "keywords": [keyword]},
+                    {"type": "prefix", "text": "{"},
+                    {"type": "suffix", "text": "}"},
+                    {"type": "max_words", "count": 12},
+                ],
+            }
+        )
+    return tasks, gold
+
+
+def _build_simpleqa_hard(
+    count: int, rng: random.Random
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    tasks: list[dict[str, Any]] = []
+    gold: list[dict[str, Any]] = []
+    for i in range(count):
+        task_id = f"simpleqa_{i + 1:04d}"
+        if i % 2 == 0:
+            answer = f"CASE-{100 + i}"
+            question = (
+                f"Read cases/{task_id}/facts.json. What is the canonical incident code?"
+            )
+            source = "facts.json"
+        else:
+            answer = f"north-{i + 3}"
+            question = f"Read cases/{task_id}/notes.md. What route is marked final?"
+            source = "notes.md"
+        tasks.append(
+            {
+                "id": task_id,
+                "question": question,
+                "topic": "workspace-reference",
+                "source": f"cases/{task_id}/{source}",
+                "difficulty": "hard",
+            }
+        )
+        gold.append({"id": task_id, "answer": answer, "aliases": [answer], "source": source})
+    rng.shuffle(tasks)
+    return tasks, gold
+
+
+def _build_evalplus_hard(
+    count: int, rng: random.Random
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    del rng
+    templates = (
+        _evalplus_parse_ints,
+        _evalplus_safe_ratio,
+        _evalplus_window_sum,
+    )
+    tasks: list[dict[str, Any]] = []
+    gold: list[dict[str, Any]] = []
+    for i in range(count):
+        task, hidden = templates[i % len(templates)](i)
+        tasks.append(task)
+        gold.append(hidden)
+    return tasks, gold
+
+
+def _evalplus_parse_ints(i: int) -> tuple[dict[str, Any], dict[str, Any]]:
+    entry = f"parse_ints_{i}"
+    task_id = f"HumanEval/{i}"
+    prompt = (
+        f"Implement `{entry}(text: str) -> list[int]`.\n"
+        "Split on commas, trim whitespace, ignore empty fields, and parse signed integers."
+    )
+    return (
+        {"task_id": task_id, "prompt": prompt, "entry_point": entry, "difficulty": "hard"},
+        {
+            "task_id": task_id,
+            "entry_point": entry,
+            "base_tests": f"assert {entry}('1, 2, -3') == [1, 2, -3]",
+            "plus_tests": f"assert {entry}(' 4,, -5 ,0 ') == [4, -5, 0]",
+        },
+    )
+
+
+def _evalplus_safe_ratio(i: int) -> tuple[dict[str, Any], dict[str, Any]]:
+    entry = f"safe_ratio_{i}"
+    task_id = f"HumanEval/{i}"
+    prompt = (
+        f"Implement `{entry}(num: float, den: float) -> float | None`.\n"
+        "Return None when den is zero; otherwise return num / den."
+    )
+    return (
+        {"task_id": task_id, "prompt": prompt, "entry_point": entry, "difficulty": "hard"},
+        {
+            "task_id": task_id,
+            "entry_point": entry,
+            "base_tests": f"assert {entry}(6, 3) == 2\nassert {entry}(1, 0) is None",
+            "plus_tests": f"assert {entry}(-9, 3) == -3\nassert {entry}(0, 5) == 0",
+        },
+    )
+
+
+def _evalplus_window_sum(i: int) -> tuple[dict[str, Any], dict[str, Any]]:
+    entry = f"window_sum_{i}"
+    task_id = f"HumanEval/{i}"
+    prompt = (
+        f"Implement `{entry}(values: list[int], size: int) -> list[int]`.\n"
+        "Return sums for each contiguous window. Return [] when size <= 0 or size is too large."
+    )
+    return (
+        {"task_id": task_id, "prompt": prompt, "entry_point": entry, "difficulty": "hard"},
+        {
+            "task_id": task_id,
+            "entry_point": entry,
+            "base_tests": f"assert {entry}([1, 2, 3], 2) == [3, 5]",
+            "plus_tests": (
+                f"assert {entry}([5], 2) == []\n"
+                f"assert {entry}([1, -1, 4, 0], 3) == [4, 3]\n"
+                f"assert {entry}([1, 2], 0) == []"
+            ),
+        },
+    )
+
+
+def _build_gaia_hard(
+    count: int, rng: random.Random
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    del rng
+    tasks: list[dict[str, Any]] = []
+    gold: list[dict[str, Any]] = []
+    for i in range(count):
+        task_id = f"gaia_{i + 1:04d}"
+        answer = f"delta-{200 + i}"
+        tasks.append(
+            {
+                "id": task_id,
+                "question": (
+                    f"Use cases/{task_id}/ledger.md and cases/{task_id}/archive.json. "
+                    "Ignore distractors. What is the confirmed launch code?"
+                ),
+                "level": 2,
+                "difficulty": "hard",
+            }
+        )
+        gold.append({"id": task_id, "final_answer": answer, "level": 2})
+    return tasks, gold
+
+
+def _build_workspace_ops(
+    count: int, rng: random.Random
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    del rng
+    tasks: list[dict[str, Any]] = []
+    gold: list[dict[str, Any]] = []
+    templates = (_workspace_add_tags, _workspace_path_report, _workspace_manifest_fix)
+    for i in range(count):
+        task, hidden = templates[i % len(templates)](i)
+        tasks.append(task)
+        gold.append(hidden)
+    return tasks, gold
+
+
+def _workspace_add_tags(i: int) -> tuple[dict[str, Any], dict[str, Any]]:
+    task_id = f"workspace_{i + 1:04d}"
+    workdir = f"cases/{task_id}"
+    return (
+        {
+            "id": task_id,
+            "instruction": (
+                f"Fix the failing add_tags behavior in {workdir}. "
+                "Only edit src/formatter.py. Then write an answer row."
+            ),
+            "workdir": workdir,
+            "difficulty": "hard",
+        },
+        {
+            "id": task_id,
+            "workdir": workdir,
+            "case_type": "add_tags",
+            "checks": [
+                {
+                    "type": "text_contains",
+                    "path": "src/formatter.py",
+                    "text": "return [f\"#{item}\" for item in tags]",
+                },
+                {
+                    "type": "command_exit_zero",
+                    "argv": ["python", "-m", "pytest", "tests/test_formatter.py", "-q"],
+                    "timeout_seconds": 5,
+                },
+            ],
+        },
+    )
+
+
+def _workspace_path_report(i: int) -> tuple[dict[str, Any], dict[str, Any]]:
+    task_id = f"workspace_{i + 1:04d}"
+    workdir = f"cases/{task_id}"
+    return (
+        {
+            "id": task_id,
+            "instruction": (
+                f"Inspect {workdir}. Create reports/final.txt containing output path, "
+                "line number, and conclusion from notes.md."
+            ),
+            "workdir": workdir,
+            "difficulty": "hard",
+        },
+        {
+            "id": task_id,
+            "workdir": workdir,
+            "case_type": "path_report",
+            "checks": [
+                {"type": "file_exists", "path": "reports/final.txt"},
+                {"type": "text_contains", "path": "reports/final.txt", "text": "reports/final.txt"},
+                {"type": "text_contains", "path": "reports/final.txt", "text": "42"},
+                {"type": "text_contains", "path": "reports/final.txt", "text": "ready"},
+            ],
+        },
+    )
+
+
+def _workspace_manifest_fix(i: int) -> tuple[dict[str, Any], dict[str, Any]]:
+    task_id = f"workspace_{i + 1:04d}"
+    workdir = f"cases/{task_id}"
+    return (
+        {
+            "id": task_id,
+            "instruction": (
+                f"Fix the plugin manifest in {workdir}. The filesystem permission "
+                "must be readonly. Then write an answer row."
+            ),
+            "workdir": workdir,
+            "difficulty": "hard",
+        },
+        {
+            "id": task_id,
+            "workdir": workdir,
+            "case_type": "manifest_fix",
+            "checks": [
+                {
+                    "type": "json_field_equals",
+                    "path": "plugin.json",
+                    "field": "permissions.filesystem",
+                    "value": "readonly",
+                }
+            ],
+        },
+    )

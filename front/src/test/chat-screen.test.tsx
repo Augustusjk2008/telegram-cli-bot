@@ -456,6 +456,50 @@ test("keeps live cli trace panel after final message", async () => {
   expect(await screen.findByText("Get-ChildItem")).toBeInTheDocument();
 });
 
+test("keeps authoritative final cli trace count when live trace matches final trace", async () => {
+  const user = userEvent.setup();
+  const finalTrace = { kind: "commentary", summary: "我先检查目录。", rawType: "message", source: "codex" };
+  const getMessageTrace = vi.fn(async () => ({
+    trace: [],
+    traceCount: 0,
+    toolCallCount: 0,
+    processCount: 0,
+  }));
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias,
+    _text,
+    _onChunk,
+    _onStatus,
+    onTrace,
+  ) => {
+    onTrace?.(finalTrace);
+    return {
+      id: "assistant-cli-authoritative-final",
+      role: "assistant",
+      text: "最终答复",
+      createdAt: new Date().toISOString(),
+      state: "done",
+      meta: {
+        trace: [finalTrace],
+        traceCount: 1,
+        toolCallCount: 0,
+        processCount: 1,
+      },
+    };
+  });
+  const client = createClient({ sendMessage, getMessageTrace: getMessageTrace as never });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+  await user.type(screen.getByPlaceholderText("输入消息"), "继续");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(await screen.findByText("最终答复")).toBeInTheDocument();
+  const panel = await screen.findByTestId("chat-trace-panel-assistant-cli-authoritative-final");
+  expect(panel.textContent).toContain("1 条过程");
+  expect(getMessageTrace).not.toHaveBeenCalled();
+});
+
 test("final resolved assistant message does not keep streaming state", async () => {
   const client = createClient({
     sendMessage: async () => ({
@@ -562,7 +606,12 @@ test("copies final answer using execCommand fallback when clipboard api is unava
       text: "最终答案",
       createdAt: new Date().toISOString(),
       state: "done",
-      meta: { traceCount: 1, toolCallCount: 0, processCount: 1 },
+      meta: {
+        trace: [{ kind: "commentary", summary: "完成。", source: "codex" }],
+        traceCount: 1,
+        toolCallCount: 0,
+        processCount: 1,
+      },
     }],
   });
 

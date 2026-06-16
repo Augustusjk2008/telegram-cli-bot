@@ -3,14 +3,13 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
-from .paths import BENCHMARKS
-
 
 ANSWER_KEYS = {
     "ifeval": ("id", "response"),
     "simpleqa": ("id", "answer"),
     "evalplus": ("task_id", "solution"),
     "gaia": ("id", "final_answer"),
+    "workspace_ops": ("id", "status", "summary"),
 }
 
 ID_KEYS = {
@@ -18,6 +17,7 @@ ID_KEYS = {
     "simpleqa": "id",
     "evalplus": "task_id",
     "gaia": "id",
+    "workspace_ops": "id",
 }
 
 
@@ -27,7 +27,7 @@ def validate_answer_rows(
     task_rows: list[dict[str, Any]],
     answer_rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    if benchmark not in BENCHMARKS:
+    if benchmark not in ANSWER_KEYS:
         raise ValueError(f"unsupported benchmark: {benchmark}")
     id_key = ID_KEYS[benchmark]
     allowed_ids = {str(row.get(id_key)) for row in task_rows if row.get(id_key) is not None}

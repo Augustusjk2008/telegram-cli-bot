@@ -102,11 +102,12 @@ def _details_section(paths: SuitePaths, results: dict[str, Any]) -> str:
             task_id = detail.get("id") or detail.get("task_id") or ""
             passed = bool(detail.get("passed"))
             status = "pass" if passed else "fail"
+            reason = _detail_reason(detail)
             rows.append(
                 "<tr>"
                 f"<td><code>{html.escape(str(task_id))}</code></td>"
                 f"<td class=\"{status}\">{status}</td>"
-                f"<td>{html.escape(str(detail.get('reason', '')))}</td>"
+                f"<td>{html.escape(reason)}</td>"
                 f"<td><a href=\"{answer_href}\">answer</a></td>"
                 "</tr>"
             )
@@ -143,6 +144,23 @@ def _format_value(value: Any) -> str:
     if isinstance(value, float):
         return f"{value:.4f}"
     return html.escape(str(value))
+
+
+def _detail_reason(detail: dict[str, Any]) -> str:
+    reason = str(detail.get("reason", ""))
+    failed_checks = detail.get("failed_checks")
+    if not failed_checks:
+        return reason
+    parts = []
+    for check in failed_checks:
+        check_type = str(check.get("type", ""))
+        check_reason = str(check.get("reason", ""))
+        path = str(check.get("path", ""))
+        parts.append(":".join(part for part in (check_type, path, check_reason) if part))
+    suffix = "; ".join(parts)
+    if len(suffix) > 300:
+        suffix = suffix[:300] + "..."
+    return f"{reason} | failed_checks: {suffix}"
 
 
 def _relative_href(base: Path, target: Path) -> str:

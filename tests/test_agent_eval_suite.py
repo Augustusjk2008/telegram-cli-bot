@@ -11,6 +11,7 @@ SUITE_PACKAGE_ROOT = Path(__file__).resolve().parents[1] / "agent_eval_suite"
 sys.path.insert(0, str(SUITE_PACKAGE_ROOT))
 
 from suite.jsonl import read_jsonl, write_jsonl  # noqa: E402
+from suite.paths import BENCHMARKS  # noqa: E402
 from suite.prepare import prepare_run  # noqa: E402
 from suite.report import render_report  # noqa: E402
 from suite.scoring import score_run  # noqa: E402
@@ -46,6 +47,116 @@ def test_prepare_smoke_creates_workspace_without_gold(tmp_path: Path) -> None:
     assert manifest["seed"] == 123
     assert manifest["task_hash"]
     assert manifest["dataset_source"] == "local-built-in-v1"
+
+
+def test_prepare_hard_creates_workspace_ops_without_hidden_oracle(tmp_path: Path) -> None:
+    paths = prepare_run(
+        suite_root=tmp_path,
+        run_id="hard001",
+        preset="win-native-hard",
+        samples=10,
+        seed=123,
+    )
+
+    task_path = paths.tasks_dir / "workspace_ops.jsonl"
+    gold_path = paths.gold_dir / "workspace_ops.jsonl"
+    assert task_path.exists()
+    assert gold_path.exists()
+    assert paths.cases_dir.exists()
+
+    workspace_tasks = read_jsonl(task_path)
+    workspace_gold = read_jsonl(gold_path)
+    assert workspace_tasks
+    assert workspace_gold
+    assert {row["case_type"] for row in workspace_gold} >= {"add_tags", "path_report", "manifest_fix"}
+    assert workspace_tasks[0]["workdir"].startswith("cases/workspace_")
+    assert (paths.workspace / workspace_tasks[0]["workdir"]).exists()
+
+    workspace_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in paths.workspace.rglob("*")
+        if path.is_file()
+    )
+    assert "checks" not in workspace_text
+    assert "return [f\"#{item}\" for item in tags]" not in workspace_text
+    assert "oracle" not in workspace_text.casefold()
+    assert "hidden_tests" not in workspace_text
+
+    manifest = json.loads(paths.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["enabled_benchmarks"] == [*BENCHMARKS, "workspace_ops"]
+    assert manifest["benchmarks"]["workspace_ops"] == len(workspace_tasks)
+
+    prompt = paths.prompt_path.read_text(encoding="utf-8")
+    assert "answers/workspace_ops.jsonl" in prompt
+    assert "Work inside each listed cases/<id> directory." in prompt
+
+
+def test_prepare_smoke_still_uses_static_benchmarks_only(tmp_path: Path) -> None:
+    paths = prepare_run(
+        suite_root=tmp_path,
+        run_id="smoke001",
+        preset="smoke",
+        samples=4,
+        seed=123,
+    )
+
+    assert sorted(path.stem for path in paths.tasks_dir.glob("*.jsonl")) == sorted(BENCHMARKS)
+    assert not (paths.tasks_dir / "workspace_ops.jsonl").exists()
+    manifest = json.loads(paths.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["enabled_benchmarks"] == list(BENCHMARKS)
+
+
+def test_workspace_ops_score_passes_known_correct_case_and_report(tmp_path: Path) -> None:
+    paths = prepare_run(
+        suite_root=tmp_path,
+        run_id="hard002",
+        preset="win-native-hard",
+        samples=10,
+        seed=123,
+    )
+    task = read_jsonl(paths.tasks_dir / "workspace_ops.jsonl")[0]
+    case_dir = paths.workspace / task["workdir"]
+    formatter = case_dir / "src" / "formatter.py"
+    if formatter.exists():
+        formatter.write_text(
+            "def add_tags(tags):\n    return [f\"#{item}\" for item in tags]\n",
+            encoding="utf-8",
+        )
+    write_jsonl(
+        paths.answers_dir / "workspace_ops.jsonl",
+        [{"id": task["id"], "status": "done", "summary": "fixed"}],
+    )
+
+    results = score_run(suite_root=tmp_path, run_id="hard002", evalplus_timeout=1.0)
+    report_path = render_report(suite_root=tmp_path, run_id="hard002")
+    summary_rows = list(csv.DictReader((paths.report_dir / "summary.csv").open(encoding="utf-8")))
+
+    assert "workspace_ops" in results["benchmarks"]
+    assert results["benchmarks"]["workspace_ops"]["metrics"]["pass@1"]["passed"] >= 1
+    assert any(row["benchmark"] == "workspace_ops" for row in summary_rows)
+    assert "workspace_ops" in report_path.read_text(encoding="utf-8")
+
+
+def test_report_includes_workspace_failed_checks(tmp_path: Path) -> None:
+    paths = prepare_run(
+        suite_root=tmp_path,
+        run_id="hard003",
+        preset="win-native-hard",
+        samples=10,
+        seed=123,
+    )
+    task = read_jsonl(paths.tasks_dir / "workspace_ops.jsonl")[0]
+    write_jsonl(
+        paths.answers_dir / "workspace_ops.jsonl",
+        [{"id": task["id"], "status": "done", "summary": "not fixed"}],
+    )
+
+    score_run(suite_root=tmp_path, run_id="hard003", evalplus_timeout=1.0)
+    report_path = render_report(suite_root=tmp_path, run_id="hard003")
+    html = report_path.read_text(encoding="utf-8")
+
+    assert "failed_checks:" in html
+    assert "text_contains" in html
 
 
 def test_empty_answers_fail_all(tmp_path: Path) -> None:

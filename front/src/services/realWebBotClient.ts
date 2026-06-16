@@ -430,9 +430,12 @@ type RawChatTraceEvent = {
   summary?: string;
   source?: string;
   raw_type?: string;
+  rawType?: string;
   title?: string;
   tool_name?: string;
+  toolName?: string;
   call_id?: string;
+  callId?: string;
   payload?: unknown;
 };
 
@@ -2077,17 +2080,17 @@ function mapTraceEvent(raw?: RawChatTraceEvent | null): ChatTraceEvent | null {
   if (raw.source) {
     event.source = raw.source;
   }
-  if (raw.raw_type) {
-    event.rawType = raw.raw_type;
+  if (raw.raw_type || raw.rawType) {
+    event.rawType = raw.raw_type || raw.rawType;
   }
   if (raw.title) {
     event.title = raw.title;
   }
-  if (raw.tool_name) {
-    event.toolName = raw.tool_name;
+  if (raw.tool_name || raw.toolName) {
+    event.toolName = raw.tool_name || raw.toolName;
   }
-  if (raw.call_id) {
-    event.callId = raw.call_id;
+  if (raw.call_id || raw.callId) {
+    event.callId = raw.call_id || raw.callId;
   }
   if (typeof raw.payload !== "undefined") {
     event.payload = raw.payload;
@@ -2327,13 +2330,6 @@ function summarizeTrace(trace?: ChatTraceEvent[]) {
   };
 }
 
-function maxDefinedNumber(...values: Array<number | undefined>) {
-  const definedValues = values.filter((value): value is number => (
-    typeof value === "number" && Number.isFinite(value)
-  ));
-  return definedValues.length > 0 ? Math.max(...definedValues) : undefined;
-}
-
 function mergeMessageMeta(
   base?: ChatMessageMetaInfo,
   incoming?: ChatMessageMetaInfo,
@@ -2350,13 +2346,22 @@ function mergeMessageMeta(
     { nativeFlat: tracePresentation === "native_agent_flat" },
   );
   const traceSummary = trace ? summarizeTrace(trace) : undefined;
+  const pickTraceCount = (incomingValue?: number, baseValue?: number, summaryValue?: number) => {
+    if (typeof incomingValue === "number" && Number.isFinite(incomingValue)) {
+      return incomingValue;
+    }
+    if (typeof summaryValue === "number" && Number.isFinite(summaryValue)) {
+      return summaryValue;
+    }
+    return typeof baseValue === "number" && Number.isFinite(baseValue) ? baseValue : undefined;
+  };
   const meta: ChatMessageMetaInfo = {
     completionState: incoming?.completionState || base?.completionState,
     summaryKind: incoming?.summaryKind || base?.summaryKind,
     traceVersion: incoming?.traceVersion ?? base?.traceVersion ?? (trace ? 1 : undefined),
-    traceCount: maxDefinedNumber(incoming?.traceCount, base?.traceCount, traceSummary?.traceCount),
-    toolCallCount: maxDefinedNumber(incoming?.toolCallCount, base?.toolCallCount, traceSummary?.toolCallCount),
-    processCount: maxDefinedNumber(incoming?.processCount, base?.processCount, traceSummary?.processCount),
+    traceCount: pickTraceCount(incoming?.traceCount, base?.traceCount, traceSummary?.traceCount),
+    toolCallCount: pickTraceCount(incoming?.toolCallCount, base?.toolCallCount, traceSummary?.toolCallCount),
+    processCount: pickTraceCount(incoming?.processCount, base?.processCount, traceSummary?.processCount),
     nativeSource: incoming?.nativeSource || base?.nativeSource,
     contextUsage: incoming?.contextUsage || base?.contextUsage,
     tracePresentation,
@@ -4937,10 +4942,16 @@ export class RealWebBotClient implements WebBotClient {
         } else if (event.type === "done") {
           if (event.message) {
             finalMessage = mapChatMessage(event.message, 0);
+            const finalMetaHasTrace = Boolean(
+              finalMessage.meta?.trace?.length
+              || typeof finalMessage.meta?.traceCount === "number"
+              || typeof finalMessage.meta?.toolCallCount === "number"
+              || typeof finalMessage.meta?.processCount === "number"
+            );
             finalMessage.meta = mergeMessageMeta(
               streamedContextUsage ? { contextUsage: streamedContextUsage } : undefined,
               finalMessage.meta,
-              streamedTrace,
+              finalMetaHasTrace ? undefined : streamedTrace,
             );
             finalText = finalMessage.text;
           } else {
@@ -4978,11 +4989,7 @@ export class RealWebBotClient implements WebBotClient {
       return normalizeResolvedFinalMessage({
         ...finalMessage,
         elapsedSeconds: finalMessage.elapsedSeconds ?? finalElapsedSeconds,
-        meta: mergeMessageMeta(
-          streamedContextUsage ? { contextUsage: streamedContextUsage } : undefined,
-          finalMessage.meta,
-          streamedTrace,
-        ),
+        meta: finalMessage.meta,
       });
     }
 

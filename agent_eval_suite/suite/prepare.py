@@ -15,7 +15,7 @@ from .external_data import (
     load_simpleqa_csv,
 )
 from .jsonl import write_jsonl
-from .paths import BENCHMARKS, SuitePaths
+from .paths import BENCHMARKS, PRESET_BENCHMARKS, SuitePaths, WORKSPACE_BENCHMARK
 
 
 def prepare_run(
@@ -41,7 +41,8 @@ def prepare_run(
 
     visible, gold = build_dataset(preset=preset, samples=samples, seed=seed)
     external_metadata: dict[str, Any] = {}
-    per_benchmark_samples = max(1, samples // len(BENCHMARKS))
+    enabled_benchmarks = list(PRESET_BENCHMARKS[preset])
+    per_benchmark_samples = max(1, samples // len(enabled_benchmarks))
     if ifeval_input:
         visible["ifeval"], gold["ifeval"] = load_ifeval_official(
             ifeval_input,
@@ -76,19 +77,26 @@ def prepare_run(
     paths.answers_dir.mkdir(parents=True, exist_ok=True)
     paths.report_dir.mkdir(parents=True, exist_ok=True)
     paths.gold_dir.mkdir(parents=True, exist_ok=True)
+    if preset == "win-native-hard":
+        paths.cases_dir.mkdir(parents=True, exist_ok=True)
+        paths.gold_cases_dir.mkdir(parents=True, exist_ok=True)
 
-    for benchmark in BENCHMARKS:
+    for benchmark in enabled_benchmarks:
         write_jsonl(paths.tasks_dir / f"{benchmark}.jsonl", visible[benchmark])
         write_jsonl(paths.gold_dir / f"{benchmark}.jsonl", gold[benchmark])
+    if preset == "win-native-hard":
+        _write_reference_cases(paths, visible, gold)
+        _write_workspace_cases(paths, visible["workspace_ops"], gold["workspace_ops"])
 
-    paths.prompt_path.write_text(_build_prompt(), encoding="utf-8", newline="\n")
+    paths.prompt_path.write_text(_build_prompt(enabled_benchmarks), encoding="utf-8", newline="\n")
     metadata = {
         "run_id": run_id,
         "preset": preset,
         "samples": samples,
         "seed": seed,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "benchmarks": {name: len(visible[name]) for name in BENCHMARKS},
+        "benchmarks": {name: len(visible[name]) for name in enabled_benchmarks},
+        "enabled_benchmarks": enabled_benchmarks,
         "dataset_source": "local-built-in-v1",
         "task_hash": _hash_dataset(visible),
         "gold_hash": _hash_dataset(gold),
@@ -97,6 +105,7 @@ def prepare_run(
             "simpleqa": "deterministic-or-openai-grader",
             "evalplus": "win-adapter-subprocess",
             "gaia": "local-final-answer-lite",
+            "workspace_ops": "workspace-file-state-grader",
         },
         "external_sources": external_metadata,
     }
@@ -124,8 +133,8 @@ def _safe_rmtree(path: Path, suite_root: Path) -> None:
     shutil.rmtree(resolved_path)
 
 
-def _build_prompt() -> str:
-    return """# Agent Evaluation Task
+def _build_prompt(enabled_benchmarks: list[str]) -> str:
+    prompt = """# Agent Evaluation Task
 
 Read every JSONL file in `tasks/` and write answers to `answers/`.
 
@@ -158,6 +167,127 @@ Output files and schemas:
 {"id":"gaia_0001","final_answer":"your final answer"}
 ```
 """
+    if WORKSPACE_BENCHMARK not in enabled_benchmarks:
+        return prompt
+    return (
+        prompt
+        + """
+
+For workspace_ops:
+- Work inside each listed cases/<id> directory.
+- Do not modify tasks/.
+- Write answers/workspace_ops.jsonl with {"id":"workspace_0001","status":"done","summary":"..."}.
+"""
+    )
+
+
+def _write_workspace_cases(paths: SuitePaths, task_rows: list[dict[str, Any]], gold_rows: list[dict[str, Any]]) -> None:
+    gold_by_id = {str(row["id"]): row for row in gold_rows}
+    for task in task_rows:
+        task_id = str(task["id"])
+        case_rel = Path(str(task["workdir"]))
+        case_dir = paths.workspace / case_rel
+        case_dir.mkdir(parents=True, exist_ok=True)
+        _seed_workspace_case(case_dir, task_id, gold_by_id[task_id])
+
+
+def _seed_workspace_case(case_dir: Path, task_id: str, gold_row: dict[str, Any]) -> None:
+    del task_id
+    case_type = str(gold_row.get("case_type", ""))
+    if case_type == "add_tags":
+        (case_dir / "src").mkdir(parents=True, exist_ok=True)
+        (case_dir / "tests").mkdir(parents=True, exist_ok=True)
+        (case_dir / "src" / "formatter.py").write_text(
+            "def add_tags(tags):\n    return [item for item in tags]\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        (case_dir / "tests" / "test_formatter.py").write_text(
+            "from src.formatter import add_tags\n\n"
+            "def test_add_tags():\n"
+            "    assert add_tags(['a', 'b']) == ['#a', '#b']\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        return
+    if case_type == "path_report":
+        (case_dir / "notes.md").write_text(
+            "output path: reports/final.txt\nline: 42\nconclusion: ready\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        (case_dir / "reports").mkdir(parents=True, exist_ok=True)
+        return
+    if case_type == "manifest_fix":
+        (case_dir / "plugin.json").write_text(
+            json.dumps({"permissions": {"filesystem": "read"}}),
+            encoding="utf-8",
+            newline="\n",
+        )
+        return
+    (case_dir / "README.md").write_text("workspace case\n", encoding="utf-8", newline="\n")
+
+
+def _write_reference_cases(
+    paths: SuitePaths,
+    visible: dict[str, list[dict[str, Any]]],
+    gold: dict[str, list[dict[str, Any]]],
+) -> None:
+    _write_simpleqa_reference_cases(paths, visible.get("simpleqa", []), gold.get("simpleqa", []))
+    _write_gaia_reference_cases(paths, visible.get("gaia", []), gold.get("gaia", []))
+
+
+def _write_simpleqa_reference_cases(
+    paths: SuitePaths,
+    task_rows: list[dict[str, Any]],
+    gold_rows: list[dict[str, Any]],
+) -> None:
+    gold_by_id = {str(row["id"]): row for row in gold_rows}
+    for task in task_rows:
+        task_id = str(task["id"])
+        if str(task.get("topic", "")) != "workspace-reference":
+            continue
+        case_dir = paths.cases_dir / task_id
+        case_dir.mkdir(parents=True, exist_ok=True)
+        answer = str(gold_by_id.get(task_id, {}).get("answer", ""))
+        if str(task.get("source", "")).endswith("facts.json"):
+            (case_dir / "facts.json").write_text(
+                json.dumps({"canonical_incident_code": answer, "distractor_code": "CASE-000"}),
+                encoding="utf-8",
+                newline="\n",
+            )
+        else:
+            (case_dir / "notes.md").write_text(
+                f"draft route: east-0\nfinal route: {answer}\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+
+
+def _write_gaia_reference_cases(
+    paths: SuitePaths,
+    task_rows: list[dict[str, Any]],
+    gold_rows: list[dict[str, Any]],
+) -> None:
+    gold_by_id = {str(row["id"]): row for row in gold_rows}
+    for task in task_rows:
+        task_id = str(task["id"])
+        if str(task.get("difficulty", "")) != "hard":
+            continue
+        case_dir = paths.cases_dir / task_id
+        case_dir.mkdir(parents=True, exist_ok=True)
+        answer = str(gold_by_id.get(task_id, {}).get("final_answer", ""))
+        (case_dir / "ledger.md").write_text(
+            "candidate launch code: delta-000\n"
+            f"confirmed launch code: {answer}\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        (case_dir / "archive.json").write_text(
+            json.dumps({"ignore": ["delta-111", "delta-999"], "status": "confirmed"}),
+            encoding="utf-8",
+            newline="\n",
+        )
 
 
 def _hash_dataset(dataset: dict[str, list[dict[str, Any]]]) -> str:

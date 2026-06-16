@@ -64,7 +64,7 @@ def _build_parser() -> argparse.ArgumentParser:
     prepare = subparsers.add_parser("prepare")
     prepare.add_argument("--suite-root", default=argparse.SUPPRESS)
     prepare.add_argument("--run", required=True)
-    prepare.add_argument("--preset", default="win-native", choices=["win-native", "smoke"])
+    prepare.add_argument("--preset", default="win-native", choices=["win-native", "win-native-hard", "smoke"])
     prepare.add_argument("--samples", type=int, default=50)
     prepare.add_argument("--seed", type=int, default=20260616)
     prepare.add_argument("--overwrite", action="store_true")

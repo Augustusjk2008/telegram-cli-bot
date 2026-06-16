@@ -2600,6 +2600,71 @@ describe("RealWebBotClient", () => {
     }));
   });
 
+  test("sendMessage deduplicates legacy live and done trace counts", async () => {
+    const encoder = new TextEncoder();
+    const traceEvent = {
+      kind: "commentary",
+      raw_type: "message",
+      summary: "我先检查目录。",
+      source: "codex",
+    };
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(`event: trace\ndata: ${JSON.stringify({ event: traceEvent })}\n\n`));
+        controller.enqueue(encoder.encode(`event: done\ndata: ${JSON.stringify({
+          output: "最终结果",
+          message: {
+            id: "assistant-final",
+            role: "assistant",
+            content: "最终结果",
+            created_at: "2026-06-06T00:00:00Z",
+            state: "done",
+            meta: {
+              trace: [traceEvent],
+              trace_count: 1,
+              tool_call_count: 0,
+              process_count: 1,
+            },
+          },
+        })}\n\n`));
+        controller.close();
+      },
+    });
+
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            user_id: 1001,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        body: stream,
+        json: async () => ({
+          ok: true,
+          data: {},
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+
+    const traces: string[] = [];
+    const message = await client.sendMessage("main", "hello", () => undefined, undefined, (trace) => {
+      traces.push(`${trace.kind}:${trace.summary}`);
+    });
+
+    expect(traces).toEqual(["commentary:我先检查目录。"]);
+    expect(message.meta?.trace).toHaveLength(1);
+    expect(message.meta?.traceCount).toBe(1);
+    expect(message.meta?.toolCallCount).toBe(0);
+    expect(message.meta?.processCount).toBe(1);
+  });
+
   
   
   

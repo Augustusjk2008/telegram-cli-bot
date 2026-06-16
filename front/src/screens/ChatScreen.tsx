@@ -579,13 +579,6 @@ function resolveStreamStartMs(items: ChatMessage[], elapsedSeconds?: number) {
   return Date.now();
 }
 
-function maxDefinedNumber(...values: Array<number | undefined>) {
-  const definedValues = values.filter((value): value is number => (
-    typeof value === "number" && Number.isFinite(value)
-  ));
-  return definedValues.length > 0 ? Math.max(...definedValues) : undefined;
-}
-
 function summarizeTrace(trace?: ChatTraceEvent[]) {
   return {
     traceCount: trace?.length || 0,
@@ -602,13 +595,22 @@ function mergeMessageMeta(base?: ChatMessageMetaInfo, incoming?: ChatMessageMeta
     { nativeFlat: tracePresentation === "native_agent_flat" },
   );
   const traceSummary = trace ? summarizeTrace(trace) : undefined;
+  const pickTraceCount = (incomingValue?: number, baseValue?: number, summaryValue?: number) => {
+    if (typeof incomingValue === "number" && Number.isFinite(incomingValue)) {
+      return incomingValue;
+    }
+    if (typeof summaryValue === "number" && Number.isFinite(summaryValue)) {
+      return summaryValue;
+    }
+    return typeof baseValue === "number" && Number.isFinite(baseValue) ? baseValue : undefined;
+  };
   const meta: ChatMessageMetaInfo = {
     completionState: incoming?.completionState || base?.completionState,
     summaryKind: incoming?.summaryKind || base?.summaryKind,
     traceVersion: incoming?.traceVersion ?? base?.traceVersion ?? (trace ? 1 : undefined),
-    traceCount: maxDefinedNumber(incoming?.traceCount, base?.traceCount, traceSummary?.traceCount),
-    toolCallCount: maxDefinedNumber(incoming?.toolCallCount, base?.toolCallCount, traceSummary?.toolCallCount),
-    processCount: maxDefinedNumber(incoming?.processCount, base?.processCount, traceSummary?.processCount),
+    traceCount: pickTraceCount(incoming?.traceCount, base?.traceCount, traceSummary?.traceCount),
+    toolCallCount: pickTraceCount(incoming?.toolCallCount, base?.toolCallCount, traceSummary?.toolCallCount),
+    processCount: pickTraceCount(incoming?.processCount, base?.processCount, traceSummary?.processCount),
     nativeSource: incoming?.nativeSource || base?.nativeSource,
     contextUsage: incoming?.contextUsage || base?.contextUsage,
     agUiRunState: isNativeSource ? incoming?.agUiRunState || base?.agUiRunState : undefined,
@@ -3186,10 +3188,16 @@ export function ChatScreen({
             }
           : {}),
       });
+      const finalMetaHasTrace = Boolean(
+        finalizedMessage.meta?.trace?.length
+        || typeof finalizedMessage.meta?.traceCount === "number"
+        || typeof finalizedMessage.meta?.toolCallCount === "number"
+        || typeof finalizedMessage.meta?.processCount === "number"
+      );
 
       setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => ({
         ...finalizedMessage,
-        meta: mergeMessageMeta(item.meta, finalizedMessage.meta),
+        meta: finalMetaHasTrace ? finalizedMessage.meta : mergeMessageMeta(item.meta, finalizedMessage.meta),
       })));
       options.onSuccess?.(finalizedMessage);
       if (!isVisibleRef.current) {

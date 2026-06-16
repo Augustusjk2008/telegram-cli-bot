@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 2,
+  "id": "csv-preview",
+  "name": "CSV Preview",
+  "version": "0.1.0",
+  "description": "快速浏览 CSV 表格，支持搜索、排序和分页。",
+  "enabled": true,
+  "config": {
+    "defaultPageSize": 50
+  },
+  "runtime": {
+    "type": "python",
+    "entry": "backend/main.py",
+    "protocol": "jsonrpc-stdio",
+    "permissions": {
+      "workspaceRead": true
+    }
+  },
+  "views": [
+    {
+      "id": "csv-table",
+      "title": "CSV 预览",
+      "renderer": "table",
+      "viewMode": "session",
+      "dataProfile": "heavy"
+    }
+  ],
+  "fileHandlers": [
+    {
+      "id": "csv-file",
+      "label": "CSV 预览",
+      "extensions": [
+        ".csv"
+      ],
+      "viewId": "csv-table"
+    }
+  ]
+}

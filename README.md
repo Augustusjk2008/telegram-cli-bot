@@ -21,6 +21,34 @@
 - Node.js 18+（Pi 原生 agent 需 Node.js 22+）
 - Git
 
+## 项目目录
+
+```text
+.
+├─ bot/                    # Python 后端、Web API、bot manager、native agent、plugins
+├─ front/                  # React/Vite 前端，chat/files/git/terminal/admin/plugins UI
+├─ examples/plugins/       # 示例插件，如 Vivado waveform、CSV preview
+├─ tests/                  # 后端 pytest；含 Web/API、agent、plugin、eval suite 集成测试
+├─ agent_eval_suite/       # Agent 评测套件，含 prepare/score/report CLI
+├─ scripts/                # 辅助脚本
+├─ deploy/                 # 发布/部署相关文件
+├─ docs/                   # 本地参考资料和计划文档；通常不提交运行态资料
+├─ install.*               # 安装脚本
+├─ start.*                 # 启动脚本
+├─ suite.py                # agent_eval_suite 的仓库根 CLI shim
+├─ managed_bots.example.json
+└─ AGENTS.md               # coding agent 工作约定
+```
+
+运行态/本地文件：
+
+- `.env`：本机配置，不提交
+- `managed_bots.json`：本机托管 bot 配置，不提交真实文件
+- `front/dist/`：前端构建产物
+- `agent_eval_suite/runs/`：评测 run workspace/report，git 忽略
+- `agent_eval_suite/private_gold/<run>/`：评测隐藏答案/checks，git 忽略
+- `Path.home()/.tcb/orbit-safe-claw`：默认运行态数据目录，可用 `TCB_DATA_DIR` 覆盖
+
 ## 下载与安装
 
 推荐用 GitHub Releases 正式包：
@@ -304,3 +332,31 @@ python -m pytest tests/test_native_agent.py tests/test_native_agent_context_usag
 cd front && npm test -- --run src/test/chat-screen.test.tsx src/test/desktop-bot-manager-screen.test.tsx
 cd front && npm test -- --run src/test/real-client.test.ts src/test/ag-ui-stream-adapter.test.ts src/test/chat-screen.test.tsx
 ```
+
+## Agent Eval Suite
+
+本仓库内置 `agent_eval_suite/`，用于评测本地 coding agent。仓库根的 `suite.py` 提供入口：
+
+```powershell
+python -m suite prepare --suite-root agent_eval_suite --run run001 --preset win-native --samples 50
+python -m suite score --suite-root agent_eval_suite --run run001
+python -m suite report --suite-root agent_eval_suite --run run001
+```
+
+生成后，把 agent 工作目录设为：
+
+```text
+agent_eval_suite\runs\run001\workspace
+```
+
+让 agent 按 `PROMPT.md` 读 `tasks/*.jsonl`，写 `answers/*.jsonl`。隐藏答案在 `agent_eval_suite/private_gold/<run>/`，不进入 workspace。
+
+Hard preset 会额外生成真实文件操作题：
+
+```powershell
+python -m suite prepare --suite-root agent_eval_suite --run run002 --preset win-native-hard --samples 20
+python -m suite score --suite-root agent_eval_suite --run run002 --evalplus-timeout 1.0
+python -m suite report --suite-root agent_eval_suite --run run002
+```
+
+`workspace_ops` 任务位于 `runs/<run>/workspace/tasks/workspace_ops.jsonl`，可见项目位于 `runs/<run>/workspace/cases/<id>/`，agent 需写 `answers/workspace_ops.jsonl`。详见 `agent_eval_suite/README.md`。

@@ -10,6 +10,7 @@ from .graders.evalplus import score_evalplus
 from .graders.gaia import score_gaia
 from .graders.ifeval import score_ifeval
 from .graders.simpleqa import score_simpleqa
+from .graders.workspace import score_workspace_ops
 from .jsonl import read_jsonl
 from .paths import BENCHMARKS, SuitePaths
 from .validation import validate_answer_rows
@@ -35,7 +36,7 @@ def score_run(
     benchmarks: dict[str, Any] = {}
     validation: dict[str, list[dict[str, Any]]] = {}
 
-    for benchmark in BENCHMARKS:
+    for benchmark in _enabled_benchmarks(metadata):
         tasks = read_jsonl(paths.tasks_dir / f"{benchmark}.jsonl")
         gold = read_jsonl(paths.gold_dir / f"{benchmark}.jsonl")
         answers = read_jsonl(paths.answers_dir / f"{benchmark}.jsonl")
@@ -61,6 +62,12 @@ def score_run(
             )
         elif benchmark == "gaia":
             result = score_gaia(gold_rows=gold, answer_rows=answers)
+        elif benchmark == "workspace_ops":
+            result = score_workspace_ops(
+                gold_rows=gold,
+                answer_rows=answers,
+                workspace_root=paths.workspace,
+            )
         else:
             raise ValueError(f"unsupported benchmark: {benchmark}")
         result["answer_file"] = str(paths.answers_dir / f"{benchmark}.jsonl")
@@ -88,6 +95,13 @@ def _load_metadata(paths: SuitePaths) -> dict[str, Any]:
     if not metadata_path.exists():
         raise FileNotFoundError(f"missing run metadata: {paths.metadata_path}")
     return json.loads(metadata_path.read_text(encoding="utf-8"))
+
+
+def _enabled_benchmarks(metadata: dict[str, Any]) -> list[str]:
+    value = metadata.get("enabled_benchmarks")
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        return value
+    return list(BENCHMARKS)
 
 
 def _write_summary_csv(path: Path, results: dict[str, Any]) -> None:
@@ -131,7 +145,14 @@ def _write_summary_csv(path: Path, results: dict[str, Any]) -> None:
 
 
 def _workspace_integrity(paths: SuitePaths) -> dict[str, Any]:
-    forbidden_names = {"private_gold", "gold", "hidden_tests", "reference_answer"}
+    forbidden_names = {
+        "private_gold",
+        "gold",
+        "hidden_tests",
+        "reference_answer",
+        "oracle",
+        "gold_backup",
+    }
     violations: list[str] = []
     if paths.workspace.exists():
         for item in paths.workspace.rglob("*"):
