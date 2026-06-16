@@ -87,7 +87,7 @@ def _summary_section(results: dict[str, Any]) -> str:
     )
     return (
         "<section><h2>Summary</h2><table><tr><th>Benchmark</th><th>Metric</th>"
-        "<th>Value</th><th>Passed</th><th>Total</th></tr>"
+        "<th>Value</th><th>Passed / Count</th><th>Total</th></tr>"
         + "".join(rows)
         + "</table></section>"
     )
