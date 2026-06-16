@@ -115,3 +115,22 @@ def test_main_exits_without_retry_when_configured_web_port_is_busy(monkeypatch):
     assert exc_info.value.code == 1
     assert calls["sleep"] == 0
 
+
+def test_web_runtime_state_records_actual_port(monkeypatch, tmp_path):
+    import bot.main as main_module
+
+    state_path = tmp_path / "runtime_state.json"
+    bind = main_module.RuntimeWebBind(host="127.0.0.1", configured_port=8765, actual_port=8767)
+    monkeypatch.setattr(main_module, "get_web_runtime_state_path", lambda: state_path)
+
+    main_module._write_web_runtime_state(bind)
+
+    assert state_path.read_text(encoding="utf-8")
+    payload = __import__("json").loads(state_path.read_text(encoding="utf-8"))
+    assert payload["configured_port"] == 8765
+    assert payload["actual_port"] == 8767
+
+    main_module._clear_web_runtime_state()
+
+    assert not state_path.exists()
+

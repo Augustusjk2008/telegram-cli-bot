@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import subprocess
 import threading
 import time
 from collections import deque
@@ -17,6 +19,7 @@ logger = logging.getLogger(__name__)
 TERMINAL_REPLAY_MAX_BYTES = 8 * 1024 * 1024
 TERMINAL_CLIENT_EOF = object()
 _TERMINAL_OUTPUT_EOF = object()
+TERMINAL_PROCESS_CLEANUP_JOIN_SECONDS = 0.05
 
 
 @dataclass(slots=True)
@@ -119,6 +122,58 @@ class _TerminalOutputPump:
             if pending:
                 self._put(bytes(pending))
             self._put(_TERMINAL_OUTPUT_EOF)
+
+
+def _cleanup_terminal_process(process: PtyWrapper) -> None:
+    try:
+        process.terminate()
+    except Exception:
+        pass
+    try:
+        process.close()
+    except Exception:
+        pass
+
+
+def _request_windows_process_tree_kill(process: PtyWrapper) -> None:
+    if os.name != "nt":
+        return
+    pid = getattr(process, "pid", None)
+    try:
+        pid_int = int(pid)
+    except (TypeError, ValueError):
+        return
+    if pid_int <= 0 or pid_int == os.getpid():
+        return
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        subprocess.Popen(
+            ["taskkill", "/F", "/T", "/PID", str(pid_int)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creationflags,
+        )
+    except Exception:
+        pass
+
+
+def _cleanup_terminal_process_without_blocking(process: PtyWrapper) -> None:
+    _request_windows_process_tree_kill(process)
+    thread = threading.Thread(
+        target=_cleanup_terminal_process,
+        args=(process,),
+        name=f"terminal-cleanup-{getattr(process, 'pid', 'unknown')}",
+        daemon=True,
+    )
+    thread.start()
+    thread.join(TERMINAL_PROCESS_CLEANUP_JOIN_SECONDS)
+    if thread.is_alive():
+        logger.warning(
+            "终端进程清理未在 %.2f 秒内完成，已转后台继续: pid=%s",
+            TERMINAL_PROCESS_CLEANUP_JOIN_SECONDS,
+            getattr(process, "pid", "unknown"),
+        )
 
 
 class TerminalSessionManager:
@@ -319,14 +374,7 @@ class TerminalSessionManager:
         if pump_task is not None and not pump_task.done():
             pump_task.cancel()
         if process is not None:
-            try:
-                process.terminate()
-            except Exception:
-                pass
-            try:
-                process.close()
-            except Exception:
-                pass
+            _cleanup_terminal_process_without_blocking(process)
         if pump_task is not None:
             await asyncio.gather(pump_task, return_exceptions=True)
 

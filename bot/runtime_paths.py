@@ -104,6 +104,10 @@ def get_tunnel_state_path() -> Path:
     return get_app_data_root() / "tunnel" / "state.json"
 
 
+def get_web_runtime_state_path() -> Path:
+    return get_app_data_root() / "web" / "runtime_state.json"
+
+
 def get_migrations_state_path() -> Path:
     return get_app_data_root() / "migrations" / "state.json"
 

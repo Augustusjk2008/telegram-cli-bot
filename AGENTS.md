@@ -39,13 +39,6 @@ cd front && npm test -- --run src/test/plugins-screen.test.tsx src/test/plugin-v
 cd front && npm run build
 cd front && npm run lint
 
-# Agent Eval Suite
-python -m pytest agent_eval_suite/tests/test_workspace_grader.py -q
-python -m pytest tests/test_agent_eval_suite.py -q
-python -m suite prepare --suite-root agent_eval_suite --run dry-hard --preset win-native-hard --samples 10 --overwrite
-python -m suite score --suite-root agent_eval_suite --run dry-hard --evalplus-timeout 1.0
-python -m suite report --suite-root agent_eval_suite --run dry-hard
-
 # Release
 pwsh -ExecutionPolicy Bypass -File .release-local/publish-release.ps1 -Version <version> -RunChecks -AutoConfirmDirtyWorktree
 pwsh -ExecutionPolicy Bypass -File .release-local/publish-release.ps1 -Version <version> -RunChecks -AutoConfirmDirtyWorktree -ReleaseNotesFile .\docs\release-notes\v<version>.md
@@ -59,14 +52,12 @@ pwsh -ExecutionPolicy Bypass -File .release-local/publish-release.ps1 -Version <
 .
 ├─ bot/                    # 后端、Web API、bot manager、native agent、plugins
 ├─ front/                  # React/Vite 前端
-├─ tests/                  # 后端 pytest 和 eval suite 集成测试
-├─ agent_eval_suite/       # agent 评测套件
+├─ tests/                  # 后端 pytest
 ├─ examples/plugins/       # 示例插件
 ├─ docs/                   # 本地资料、计划和参考文档
 ├─ scripts/                # 辅助脚本
 ├─ deploy/                 # 发布/部署材料
 ├─ install.* / start.*     # 安装和启动脚本
-├─ suite.py                # agent_eval_suite 仓库根入口
 └─ AGENTS.md               # 本文件
 ```
 
@@ -75,8 +66,6 @@ pwsh -ExecutionPolicy Bypass -File .release-local/publish-release.ps1 -Version <
 - `.env`
 - `managed_bots.json`
 - `docs/` 运行态资料和 release notes
-- `agent_eval_suite/runs/`
-- `agent_eval_suite/private_gold/<run>/`
 - 用户目录 `.tcb/` 下运行态数据
 
 ## 运行结构
@@ -138,53 +127,6 @@ pwsh -ExecutionPolicy Bypass -File .release-local/publish-release.ps1 -Version <
 - 已完成 assistant 回复用 Markdown 渲染，失败时 fallback 到 raw text
 - plugin file view 支持 session-backed heavy views 和 VCD waveform rendering
 - Git UI 支持 overview、diff、stage/unstage、commit、fetch/pull/push、stash/pop
-
-## Agent Eval Suite
-
-`agent_eval_suite/` 用于评测本地 coding agent。根目录 `suite.py` 是 shim；实际包在 `agent_eval_suite/suite/`。
-
-关键文件：
-
-- `suite/paths.py`：benchmark registry、run/workspace/private_gold 路径
-- `suite/data.py`：`smoke`、`win-native`、`win-native-hard` 数据生成
-- `suite/prepare.py`：写 `runs/<run>/workspace`、`tasks/`、`PROMPT.md`、`private_gold/<run>/`
-- `suite/validation.py`：校验 answers JSONL schema
-- `suite/scoring.py`：按 `manifest.enabled_benchmarks` 调 grader，写 `results.json`、`summary.csv`
-- `suite/report.py`：写 `report.html`
-- `suite/graders/workspace.py`：`workspace_ops` 文件态/命令评分器
-
-生成目录：
-
-```text
-agent_eval_suite/runs/<run>/
-  run.json
-  manifest.json
-  workspace/
-    PROMPT.md
-    tasks/*.jsonl
-    answers/*.jsonl
-    cases/<id>/          # hard preset
-  report/
-    results.json
-    summary.csv
-    report.html
-agent_eval_suite/private_gold/<run>/*.jsonl
-```
-
-使用流程：
-
-1. `python -m suite prepare --suite-root agent_eval_suite --run <run> --preset win-native-hard --samples 20`
-2. 把 agent 工作目录设到 `agent_eval_suite/runs/<run>/workspace`
-3. agent 只读 `tasks/` 和 `cases/`，写 `answers/`
-4. `python -m suite score --suite-root agent_eval_suite --run <run> --evalplus-timeout 1.0`
-5. `python -m suite report --suite-root agent_eval_suite --run <run>`
-
-约束：
-
-- `BENCHMARKS` 保持旧 4 项语义；hard preset 通过 `PRESET_BENCHMARKS` 加 `workspace_ops`
-- 不要把 `private_gold`、hidden checks、oracle 写入 workspace
-- `workspace_ops` 命令检查必须用 argv list，不用 shell 字符串
-- 旧 `smoke` / `win-native` 仍只生成 IFEval、SimpleQA、EvalPlus、GAIA
 
 ## Plugin System
 

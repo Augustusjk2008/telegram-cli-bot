@@ -1623,6 +1623,8 @@ async def test_native_agent_service_adds_solo_prompt_only_for_solo_mode(tmp_path
 
     assert registry.requests[0].append_system_prompt == SOLO_NATIVE_AGENT_SYSTEM_PROMPT
     assert registry.requests[0].append_system_prompt
+    assert "Plan Mode takes precedence" in registry.requests[0].append_system_prompt
+    assert "do not edit files" in registry.requests[0].append_system_prompt
 
 
 @pytest.mark.asyncio

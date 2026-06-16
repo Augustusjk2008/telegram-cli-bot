@@ -1,6 +1,0 @@
-psutil>=5.9.0  # process-tree cleanup for EvalPlus timeout cases
-
-# Optional:
-# openai>=1.0.0      # for --simpleqa-grader openai
-# evalplus>=0.3.0    # for future official EvalPlus data adapters
-# datasets>=2.0.0    # for future GAIA/SimpleQA data adapters

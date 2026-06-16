@@ -2,6 +2,7 @@
 
 import asyncio
 import ctypes
+import json
 import logging
 import os
 import shutil
@@ -44,6 +45,7 @@ from bot.version import APP_VERSION
 from bot.web import WebApiServer
 from bot.web.api_service import execute_assistant_run_request, stream_assistant_run_request
 from bot.web.runtime_binding import RuntimeWebBind, WebPortInUseError, resolve_runtime_web_bind
+from bot.runtime_paths import get_web_runtime_state_path
 
 logger = logging.getLogger(__name__)
 
@@ -261,6 +263,28 @@ def _open_local_browser_sync(url: str) -> bool:
     return _open_default_browser(url)
 
 
+def _write_web_runtime_state(bind: RuntimeWebBind) -> None:
+    path = get_web_runtime_state_path()
+    payload = {
+        "host": bind.host,
+        "configured_port": bind.configured_port,
+        "actual_port": bind.actual_port,
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except Exception as exc:
+        logger.warning("写入 Web runtime 状态失败 %s: %s", path, exc)
+
+
+def _clear_web_runtime_state() -> None:
+    path = get_web_runtime_state_path()
+    try:
+        path.unlink(missing_ok=True)
+    except Exception as exc:
+        logger.warning("删除 Web runtime 状态失败 %s: %s", path, exc)
+
+
 async def _open_local_browser(bind: RuntimeWebBind):
     url = _get_local_browser_url(bind)
     if not _should_open_local_browser():
@@ -396,6 +420,7 @@ async def run_all_bots():
         config.WEB_PORT,
         allow_port_fallback=_allow_runtime_port_fallback(),
     )
+    _write_web_runtime_state(runtime_bind)
     web_server = WebApiServer(manager, host=runtime_bind.host, port=runtime_bind.actual_port)
     try:
         await web_server.start()
@@ -413,6 +438,7 @@ async def run_all_bots():
         # 保存所有会话到持久化存储
         from bot.sessions import save_all_sessions
         save_all_sessions()
+        _clear_web_runtime_state()
         config.RESTART_EVENT = None
         # 注意：主bot关闭时不恢复睡眠，保持系统阻止睡眠状态
         # 如需恢复睡眠，请手动重启系统或执行 powercfg 命令

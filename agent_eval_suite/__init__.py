@@ -1,2 +1,0 @@
-"""Agent evaluation suite package."""
-

@@ -126,3 +126,17 @@ def test_resolve_terminal_action_requires_confirmation(tmp_path: Path, monkeypat
     assert action.command == "git clean -fdx"
 
 
+def test_restart_terminal_action_uses_background_windows_restart_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("bot.web.terminal_actions.get_runtime_platform", lambda: "windows")
+    repo_root = Path(__file__).resolve().parents[1]
+
+    result = load_terminal_actions_config(repo_root)
+    restart = next(action for action in result.config.actions if action.id == "restart")
+
+    assert "Start-Process -WindowStyle Hidden" in restart.command
+    assert "runtime_state.json" in restart.command
+    assert "Invoke-RestMethod -Method Post" in restart.command
+
+

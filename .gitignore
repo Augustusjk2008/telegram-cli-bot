@@ -38,6 +38,3 @@ tmp/
 .web_tunnel_state.json
 .host.pid
 .codegraph/
-agent_eval_suite/runs/
-agent_eval_suite/private_gold/*
-!agent_eval_suite/private_gold/.gitkeep
