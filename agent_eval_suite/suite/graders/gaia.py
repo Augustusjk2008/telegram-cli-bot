@@ -23,7 +23,7 @@ def score_gaia(
         row = answers.get(task_id)
         answer = str(row.get("final_answer", "")) if row else ""
         expected = str(gold.get("final_answer", ""))
-        ok = _normalize(answer) == _normalize(expected)
+        ok = _matches_answer(answer, expected)
         level = str(gold.get("level", "unknown"))
         passed += int(ok)
         by_level[level]["passed"] += int(ok)
@@ -54,4 +54,14 @@ def _normalize(text: str) -> str:
     cleaned = cleaned.translate(str.maketrans("", "", string.punctuation.replace(".", "")))
     cleaned = re.sub(r"\s+", " ", cleaned)
     return cleaned.strip()
+
+
+def _matches_answer(answer: str, expected: str) -> bool:
+    normalized_answer = _normalize(answer)
+    normalized_expected = _normalize(expected)
+    if normalized_answer == normalized_expected:
+        return True
+    if re.fullmatch(r"[-+]?\d+(?:\.\d+)?", normalized_expected):
+        return bool(re.fullmatch(rf"{re.escape(normalized_expected)}(?:\s+[a-z]+)*", normalized_answer))
+    return False
 
