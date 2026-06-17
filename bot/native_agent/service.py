@@ -133,6 +133,16 @@ class NativeAgentService:
     async def shutdown(self) -> None:
         await self._runtime_registry.shutdown()
 
+    def _pi_runtime_env(self, cluster_run_id: str = "") -> dict[str, str] | None:
+        env: dict[str, str] = {}
+        normalized_cluster_run_id = str(cluster_run_id or "").strip()
+        if normalized_cluster_run_id:
+            env["TCB_CLUSTER_RUN_ID"] = normalized_cluster_run_id
+        pi_home = str(getattr(config, "NATIVE_AGENT_PI_HOME", "") or "").strip()
+        if pi_home:
+            env["NATIVE_AGENT_PI_HOME"] = pi_home
+        return env or None
+
     def _prompt_options(self, profile: BotProfile) -> tuple[str, str, str]:
         native_agent = effective_native_agent_config(getattr(profile, "native_agent", {}))
         validate_native_agent_model_config(native_agent)
@@ -237,6 +247,7 @@ class NativeAgentService:
                 reasoning_effort=reasoning_effort,
                 native_session_id=native_session_id,
                 config_fingerprint=config_fingerprint,
+                env=self._pi_runtime_env(),
             )
         )
         key = self._pi_record_key(session, user_id, conversation_id)
@@ -321,7 +332,7 @@ class NativeAgentService:
         last_progress_signature = ""
         wants_ag_ui = str(protocol or "").strip().lower() == "ag-ui"
         normalized_cluster_run_id = str(cluster_run_id or "").strip()
-        pi_runtime_env = {"TCB_CLUSTER_RUN_ID": normalized_cluster_run_id} if normalized_cluster_run_id else None
+        pi_runtime_env = self._pi_runtime_env(normalized_cluster_run_id)
         native_session_id = ""
         context_run_usage: dict[str, Any] = {}
         active_runtime: PiSessionRuntime | None = None

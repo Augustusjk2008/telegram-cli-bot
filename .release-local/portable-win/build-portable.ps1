@@ -16,6 +16,9 @@ $script:DownloadsRoot = Join-Path $script:PortableRoot "downloads"
 $script:FrontDir = Join-Path $script:RepoRoot "front"
 $script:VersionFile = Join-Path $script:RepoRoot "VERSION"
 $script:PackageBaseName = "orbit-safe-claw"
+$script:NodeVersion = "22.17.1"
+$script:PiPackageSpec = "@earendil-works/pi-coding-agent@0.74.2"
+$script:PiWorkspaceHistoryPackageSpec = "pi-workspace-history@0.2.2"
 
 function Write-Step {
     param([string]$Message)
@@ -265,6 +268,131 @@ function Install-PortableGit {
     Copy-Item -Path (Join-Path $SourceGitRoot "*") -Destination $targetGitRoot -Recurse -Force
 }
 
+function Install-EmbeddedNode {
+    param([string]$PackageRoot)
+
+    Write-Step "准备包内 Node.js"
+    [void](New-Item -ItemType Directory -Path $script:DownloadsRoot -Force)
+    $fileName = "node-v$($script:NodeVersion)-win-x64.zip"
+    $url = "https://nodejs.org/dist/v$($script:NodeVersion)/$fileName"
+    $zipPath = Join-Path $script:DownloadsRoot $fileName
+    if (-not (Test-Path -LiteralPath $zipPath)) {
+        Write-Info ("下载 Node.js: {0}" -f $url)
+        Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $zipPath
+    }
+
+    $nodeRoot = Join-Path $PackageRoot "runtime\node"
+    $extractRoot = Join-Path $script:DownloadsRoot "node-extract"
+    Reset-Directory -Path $nodeRoot
+    Reset-Directory -Path $extractRoot
+    try {
+        Expand-Archive -LiteralPath $zipPath -DestinationPath $extractRoot -Force
+        $expanded = Get-ChildItem -LiteralPath $extractRoot -Directory | Select-Object -First 1
+        if (-not $expanded) {
+            throw "Node.js 压缩包结构无效。"
+        }
+        Copy-Item -Path (Join-Path $expanded.FullName "*") -Destination $nodeRoot -Recurse -Force
+    } finally {
+        if (Test-Path -LiteralPath $extractRoot) {
+            Remove-Item -LiteralPath $extractRoot -Recurse -Force
+        }
+    }
+}
+
+function Install-PortablePi {
+    param([string]$PackageRoot)
+
+    Write-Step "安装包内 Pi CLI"
+    $nodeRoot = Join-Path $PackageRoot "runtime\node"
+    $npmCmd = Join-Path $nodeRoot "npm.cmd"
+    if (-not (Test-Path -LiteralPath $npmCmd)) {
+        throw "未找到包内 npm: $npmCmd"
+    }
+    $piRoot = Join-Path $PackageRoot "tools\pi"
+    Reset-Directory -Path $piRoot
+    Invoke-CheckedCommand -FilePath $npmCmd -Arguments @(
+        "install",
+        "--global",
+        "--prefix", $piRoot,
+        "--omit=dev",
+        "--no-audit",
+        "--no-fund",
+        $script:PiPackageSpec
+    ) -FailureMessage "安装包内 Pi CLI 失败" -WorkingDirectory $PackageRoot
+
+    $piCmd = Join-Path $piRoot "pi.cmd"
+    $piWrapper = @'
+@ECHO off
+SETLOCAL
+SET "SCRIPT_DIR=%~dp0"
+SET "NODE_EXE=%SCRIPT_DIR%..\..\runtime\node\node.exe"
+SET "CLI_JS=%SCRIPT_DIR%node_modules\@earendil-works\pi-coding-agent\dist\cli.js"
+IF NOT EXIST "%NODE_EXE%" SET "NODE_EXE=node"
+"%NODE_EXE%" "%CLI_JS%" %*
+EXIT /B %ERRORLEVEL%
+'@
+    Set-Content -LiteralPath $piCmd -Value $piWrapper -Encoding ASCII
+}
+
+function Install-PortablePiExtensions {
+    param([string]$PackageRoot)
+
+    Write-Step "安装包内 Pi 扩展"
+    $nodeRoot = Join-Path $PackageRoot "runtime\node"
+    $npmCmd = Join-Path $nodeRoot "npm.cmd"
+    if (-not (Test-Path -LiteralPath $npmCmd)) {
+        throw "未找到包内 npm: $npmCmd"
+    }
+    $piAgentRoot = Join-Path $PackageRoot "data\pi-home\.pi\agent"
+    $extensionsRoot = Join-Path $piAgentRoot "extensions"
+    $extensionInstallRoot = Join-Path $PackageRoot "tools\pi-extensions"
+    [void](New-Item -ItemType Directory -Path $extensionsRoot -Force)
+    Reset-Directory -Path $extensionInstallRoot
+    Invoke-CheckedCommand -FilePath $npmCmd -Arguments @(
+        "install",
+        "--prefix", $extensionInstallRoot,
+        "--omit=dev",
+        "--no-audit",
+        "--no-fund",
+        $script:PiWorkspaceHistoryPackageSpec
+    ) -FailureMessage "安装包内 Pi 扩展失败" -WorkingDirectory $PackageRoot
+
+    $workspaceHistorySource = Join-Path $extensionInstallRoot "node_modules\pi-workspace-history\.pi\extensions\workspace-history.ts"
+    if (-not (Test-Path -LiteralPath $workspaceHistorySource)) {
+        throw "未找到 pi-workspace-history 扩展文件: $workspaceHistorySource"
+    }
+    Copy-Item -LiteralPath $workspaceHistorySource -Destination (Join-Path $extensionsRoot "workspace-history.ts") -Force
+}
+
+function Initialize-PortablePiConfig {
+    param([string]$PackageRoot)
+
+    Write-Step "初始化包内 Pi 配置"
+    $piAgentRoot = Join-Path $PackageRoot "data\pi-home\.pi\agent"
+    [void](New-Item -ItemType Directory -Path $piAgentRoot -Force)
+
+    $settingsPath = Join-Path $piAgentRoot "settings.json"
+    if (-not (Test-Path -LiteralPath $settingsPath)) {
+        $settings = [ordered]@{
+            backend = "pi"
+            model = ""
+            reasoning_effort = ""
+            pi_agent = ""
+            workspace_history_enabled = $true
+            shellPath = ""
+        } | ConvertTo-Json -Depth 5
+        Set-Content -LiteralPath $settingsPath -Value $settings -Encoding UTF8
+    }
+
+    $modelsPath = Join-Path $piAgentRoot "models.json"
+    if (-not (Test-Path -LiteralPath $modelsPath)) {
+        $models = [ordered]@{
+            providers = [ordered]@{}
+        } | ConvertTo-Json -Depth 5
+        Set-Content -LiteralPath $modelsPath -Value $models -Encoding UTF8
+    }
+}
+
 function Write-PortableEnv {
     param(
         [string]$PackageRoot,
@@ -344,14 +472,91 @@ function Prepend-Path {
 function Import-DotEnv {
     param([string]$Path)
 
-    foreach ($line in Get-Content -LiteralPath $Path -Encoding UTF8) {
-        $trimmed = $line.Trim()
-        if (-not $trimmed -or $trimmed.StartsWith("#") -or -not $trimmed.Contains("=")) {
+    $env:TCB_PORTABLE_DOTENV_PATH = $Path
+    $python = @(
+        "from __future__ import annotations",
+        "",
+        "import os",
+        "from pathlib import Path",
+        "",
+        "from dotenv import dotenv_values",
+        "",
+        'path = Path(os.environ["TCB_PORTABLE_DOTENV_PATH"])',
+        "for key, value in dotenv_values(path).items():",
+        "    if value is not None:",
+        '        print(f"{key}={value}")'
+    ) -join "`n"
+    try {
+        $output = & $pythonExe -c $python
+        if ($LASTEXITCODE -ne 0) {
+            throw "解析 .env 失败。"
+        }
+    } finally {
+        Remove-Item Env:TCB_PORTABLE_DOTENV_PATH -ErrorAction SilentlyContinue
+    }
+    foreach ($line in $output) {
+        if ($line -notmatch "^(?<key>[A-Za-z_][A-Za-z0-9_]*)=(?<value>.*)$") {
             continue
         }
-        $parts = $trimmed.Split("=", 2)
-        [Environment]::SetEnvironmentVariable($parts[0].Trim(), $parts[1], "Process")
+        [Environment]::SetEnvironmentVariable($Matches["key"], $Matches["value"], "Process")
     }
+}
+
+function Set-PortablePiShellPath {
+    param([string]$PackageRoot)
+
+    $agentRoot = Join-Path $PackageRoot "data\pi-home\.pi\agent"
+    [void](New-Item -ItemType Directory -Path $agentRoot -Force)
+    $settingsPath = Join-Path $PackageRoot "data\pi-home\.pi\agent\settings.json"
+    if (-not (Test-Path -LiteralPath $settingsPath)) {
+        $settingsContent = @(
+            "{",
+            '  "backend": "pi",',
+            '  "model": "",',
+            '  "reasoning_effort": "",',
+            '  "pi_agent": "",',
+            '  "workspace_history_enabled": true,',
+            '  "shellPath": ""',
+            "}"
+        ) -join "`n"
+        Set-Content -LiteralPath $settingsPath -Value $settingsContent -Encoding UTF8
+    }
+    $modelsPath = Join-Path $PackageRoot "data\pi-home\.pi\agent\models.json"
+    if (-not (Test-Path -LiteralPath $modelsPath)) {
+        Set-Content -LiteralPath $modelsPath -Value '{"providers":{}}' -Encoding UTF8
+    }
+    $gitBash = Join-Path $PackageRoot "tools\git\bin\bash.exe"
+
+    $settings = $null
+    try {
+        $settings = Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    } catch {
+        $settings = $null
+    }
+    if ($null -eq $settings) {
+        $settings = [pscustomobject]@{}
+    }
+    if ($settings.PSObject.Properties.Name -contains "shellPath") {
+        $settings.shellPath = $gitBash
+    } else {
+        Add-Member -InputObject $settings -NotePropertyName "shellPath" -NotePropertyValue $gitBash
+    }
+    $settings | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $settingsPath -Encoding UTF8
+}
+
+function Set-PortableRuntimeEnv {
+    param([string]$PackageRoot)
+
+    $env:WEB_ENABLED = "true"
+    $env:PYTHONUTF8 = "1"
+    $env:PYTHONNOUSERSITE = "1"
+    $env:TCB_DATA_DIR = Join-Path $PackageRoot "data\orbit-safe-claw"
+    $env:PI_AGENT_SETTINGS = Join-Path $PackageRoot "data\pi-home\.pi\agent\settings.json"
+    $env:PI_AGENT_MODELS = Join-Path $PackageRoot "data\pi-home\.pi\agent\models.json"
+    $env:NATIVE_AGENT_PI_COMMAND = Join-Path $PackageRoot "tools\pi\pi.cmd"
+    $env:NATIVE_AGENT_COMMAND = $env:NATIVE_AGENT_PI_COMMAND
+    $env:NATIVE_AGENT_ENABLED = "true"
+    $env:NATIVE_AGENT_PI_HOME = Join-Path $PackageRoot "data\pi-home"
 }
 
 function Invoke-RepoModule {
@@ -373,6 +578,9 @@ if (-not (Test-Path -LiteralPath $pythonExe)) {
 }
 
 Prepend-Path -Entries @(
+    (Join-Path $scriptDir "runtime\node"),
+    (Join-Path $scriptDir "tools\pi"),
+    (Join-Path $scriptDir "tools\pi\node_modules\.bin"),
     (Join-Path $scriptDir "tools\git\cmd"),
     (Join-Path $scriptDir "tools\git\bin"),
     (Join-Path $scriptDir "tools\git\usr\bin"),
@@ -380,9 +588,7 @@ Prepend-Path -Entries @(
 )
 
 $env:CLI_BRIDGE_SUPERVISOR = "1"
-$env:WEB_ENABLED = "true"
-$env:PYTHONUTF8 = "1"
-$env:PYTHONNOUSERSITE = "1"
+Set-PortableRuntimeEnv -PackageRoot $scriptDir
 
 Write-Host ("[INFO] Start dir: {0}" -f $scriptDir)
 Write-Host ("[INFO] Start mode: {0}" -f $Mode)
@@ -397,9 +603,8 @@ if ($migrationExitCode -ne 0) {
     throw "Copy .env failed."
 }
 Import-DotEnv -Path $envPath
-$env:WEB_ENABLED = "true"
-$env:PYTHONUTF8 = "1"
-$env:PYTHONNOUSERSITE = "1"
+Set-PortablePiShellPath -PackageRoot $scriptDir
+Set-PortableRuntimeEnv -PackageRoot $scriptDir
 
 while ($true) {
     $exitCode = Invoke-RepoModule -Module "bot"
@@ -557,9 +762,10 @@ WEB_API_TOKEN: $Token
 
 说明:
 - 绿色包无需安装 Python / Node / Git
-- 包内已带 Python、Git 和前端构建产物
-- 不内置 AI CLI；请先在本机安装 codex / claude / kimi
-- 使用前确认 codex --version / claude --version / kimi info 可运行
+- 包内已带 Python、Node 22、Git、Pi CLI、Pi 扩展和前端构建产物
+- Pi 可直接用于 native_agent；codex / claude / kimi 仍可外部安装或另配
+- 模型 API key 需在 Web 设置页或 data\pi-home\.pi\agent\models.json 填写
+- Pi 扩展目录: data\pi-home\.pi\agent\extensions
 - 可在 Web 设置页或 .env 修改 CLI_TYPE / CLI_PATH
 - 默认 WORKING_DIR=当前解压目录，可在设置页再改
 "@
@@ -571,9 +777,18 @@ function Test-PortableBundle {
 
     Write-Step "校验绿色包"
     $pythonExe = Join-Path $PackageRoot "runtime\python\python.exe"
+    $nodeExe = Join-Path $PackageRoot "runtime\node\node.exe"
+    $piCmd = Join-Path $PackageRoot "tools\pi\pi.cmd"
     $gitExe = Join-Path $PackageRoot "tools\git\cmd\git.exe"
     $envPath = Join-Path $PackageRoot ".env"
     $bootstrap = Join-Path $PackageRoot "runtime\portable_bootstrap.py"
+    $workspaceHistory = Join-Path $PackageRoot "data\pi-home\.pi\agent\extensions\workspace-history.ts"
+
+    Invoke-CheckedCommand -FilePath $nodeExe -Arguments @("--version") -FailureMessage "包内 Node 校验失败" -WorkingDirectory $PackageRoot
+    Invoke-CheckedCommand -FilePath $piCmd -Arguments @("--version") -FailureMessage "包内 Pi 校验失败" -WorkingDirectory $PackageRoot
+    if (-not (Test-Path -LiteralPath $workspaceHistory)) {
+        throw "未找到包内 pi-workspace-history 扩展: $workspaceHistory"
+    }
 
     Invoke-CheckedCommand -FilePath $pythonExe -Arguments @(
         "-c",
@@ -624,6 +839,10 @@ function New-ZipArchive {
     )
 
     Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $destinationDir = Split-Path -Parent $DestinationFile
+    if ($destinationDir) {
+        [void](New-Item -ItemType Directory -Path $destinationDir -Force)
+    }
     if (Test-Path -LiteralPath $DestinationFile) {
         Remove-Item -LiteralPath $DestinationFile -Force
     }
@@ -679,6 +898,10 @@ try {
     Copy-WorktreeFiles -DestinationRoot $packageRoot
     Install-EmbeddedPython -PackageRoot $packageRoot
     Install-PortableGit -PackageRoot $packageRoot -SourceGitRoot $GitRoot
+    Install-EmbeddedNode -PackageRoot $packageRoot
+    Install-PortablePi -PackageRoot $packageRoot
+    Install-PortablePiExtensions -PackageRoot $packageRoot
+    Initialize-PortablePiConfig -PackageRoot $packageRoot
     Write-PortableEnv -PackageRoot $packageRoot -Token $token
     Write-PortableScripts -PackageRoot $packageRoot
     Write-PortableReadme -PackageRoot $packageRoot -Token $token -Version $version

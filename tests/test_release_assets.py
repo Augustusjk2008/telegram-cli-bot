@@ -33,6 +33,25 @@ def test_portable_build_script_only_copies_tracked_files():
     assert 'Write-DistributionMarker -Root $packageRoot -PackageKind "portable" -Platform "windows-x64"' in content
 
 
+def test_portable_build_script_embeds_node_pi_and_portable_pi_home():
+    content = Path(".release-local/portable-win/build-portable.ps1").read_text(encoding="utf-8")
+
+    assert "Install-EmbeddedNode" in content
+    assert "Install-PortablePi" in content
+    assert "Install-PortablePiExtensions" in content
+    assert "@earendil-works/pi-coding-agent@0.74.2" in content
+    assert "pi-workspace-history@0.2.2" in content
+    assert "PI_AGENT_SETTINGS" in content
+    assert "PI_AGENT_MODELS" in content
+    assert "NATIVE_AGENT_PI_COMMAND" in content
+    assert "NATIVE_AGENT_PI_HOME" in content
+    assert "runtime\\node" in content
+    assert "tools\\pi" in content
+    assert "data\\pi-home\\.pi\\agent\\extensions" in content
+    assert "$env:HOME" not in content
+    assert "$env:USERPROFILE" not in content
+
+
 def test_publish_release_shell_generates_and_publishes_checksum_assets():
     content = Path(".release-local/publish-release.sh").read_text(encoding="utf-8")
 
@@ -74,6 +93,17 @@ def test_publish_release_restores_local_front_build_after_portable_package():
     assert sh_archives.index('write_step "创建 Windows 绿色版包"') < sh_archives.index(
         "restore_front_build_after_portable"
     ) < sh_archives.index('write_step "创建 Windows 安装版包"')
+
+
+def test_publish_release_checks_cover_native_agent_portable_runtime():
+    ps1_content = Path(".release-local/publish-release.ps1").read_text(encoding="utf-8")
+    sh_content = Path(".release-local/publish-release.sh").read_text(encoding="utf-8")
+
+    for content in (ps1_content, sh_content):
+        assert "tests/test_native_agent_config.py" in content
+        assert "tests/test_native_agent.py" in content
+        assert "tests/test_pi_rpc_client.py" in content
+        assert "tests/test_pi_windows_preflight.py" in content
 
 
 def test_publish_release_scripts_reference_existing_release_check_files():

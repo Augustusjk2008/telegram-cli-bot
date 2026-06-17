@@ -307,6 +307,10 @@ def _base_env(extra_env: dict[str, str] | None) -> dict[str, str]:
         env["PYTHONUTF8"] = "1"
     for key, value in (extra_env or {}).items():
         env[str(key)] = str(value)
+    pi_home = str(env.get("NATIVE_AGENT_PI_HOME") or "").strip()
+    if pi_home:
+        env["HOME"] = pi_home
+        env["USERPROFILE"] = pi_home
     return env
 
 

@@ -387,6 +387,49 @@ async def test_pi_rpc_client_start_uses_default_pi_rpc_command_and_process_kwarg
 
 
 @pytest.mark.asyncio
+async def test_pi_rpc_client_start_maps_portable_pi_home_to_child_home(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    pi_home = tmp_path / "pi-home"
+
+    class FakeProcess:
+        pid = 4321
+        stdin = None
+        stdout = None
+        stderr = None
+        returncode = 0
+
+        def poll(self) -> int:
+            return 0
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+    def fake_popen(args: list[str], **kwargs: Any) -> FakeProcess:
+        captured["env"] = kwargs["env"]
+        return FakeProcess()
+
+    monkeypatch.setattr(pi_rpc_client, "resolve_cli_executable", lambda command, _cwd=None: command)
+    monkeypatch.setattr(pi_rpc_client, "build_executable_invocation", lambda resolved: [resolved])
+    monkeypatch.setattr(pi_rpc_client.subprocess, "Popen", fake_popen)
+
+    await PiRpcClient.start(
+        PiRpcStartRequest(
+            command="pi",
+            cwd=tmp_path / ".",
+            env={"NATIVE_AGENT_PI_HOME": str(pi_home), "UNCHANGED": "1"},
+        )
+    )
+
+    assert captured["env"]["NATIVE_AGENT_PI_HOME"] == str(pi_home)
+    assert captured["env"]["HOME"] == str(pi_home)
+    assert captured["env"]["USERPROFILE"] == str(pi_home)
+    assert captured["env"]["UNCHANGED"] == "1"
+
+
+@pytest.mark.asyncio
 async def test_pi_rpc_client_start_appends_system_prompt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -153,6 +153,7 @@ CLI_PATH = _get_project_config("CLI_PATH", "codex")
 NATIVE_AGENT_BACKEND = "pi"
 NATIVE_AGENT_PATH = _get_project_config("NATIVE_AGENT_PATH", "").strip()
 NATIVE_AGENT_ENABLED = _get_project_bool("NATIVE_AGENT_ENABLED", False)
+NATIVE_AGENT_PI_HOME = _get_project_config("NATIVE_AGENT_PI_HOME", "").strip()
 NATIVE_AGENT_PI_COMMAND = (
     _get_project_config(
         "NATIVE_AGENT_PI_COMMAND",

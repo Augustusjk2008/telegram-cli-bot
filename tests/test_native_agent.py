@@ -1659,6 +1659,7 @@ async def test_native_agent_service_passes_cluster_run_id_to_pi_runtime_env(tmp_
     from bot import config
 
     monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    monkeypatch.setattr(config, "NATIVE_AGENT_PI_HOME", str(tmp_path / "pi-home"))
     runtime = FakePiRuntime([
         {"type": "agent_start", "sessionId": "sess-1"},
         {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "回"}},
@@ -1680,7 +1681,39 @@ async def test_native_agent_service_passes_cluster_run_id_to_pi_runtime_env(tmp_
         cluster_run_id="clr_test",
     ))
 
-    assert registry.requests[0].env == {"TCB_CLUSTER_RUN_ID": "clr_test"}
+    assert registry.requests[0].env == {
+        "TCB_CLUSTER_RUN_ID": "clr_test",
+        "NATIVE_AGENT_PI_HOME": str(tmp_path / "pi-home"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_passes_portable_pi_home_to_runtime_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from bot import config
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    monkeypatch.setattr(config, "NATIVE_AGENT_PI_HOME", str(tmp_path / "pi-home"))
+    runtime = FakePiRuntime([
+        {"type": "agent_start", "sessionId": "sess-1"},
+        {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "回"}},
+        {"type": "turn_end", "sessionId": "sess-1"},
+    ])
+    registry = FakePiRuntimeRegistry(runtime)
+    service = NativeAgentService()
+    service._runtime_registry = registry
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    await _collect_native_stream(service.stream_chat(
+        profile=profile,
+        session=session,
+        user_text="你好",
+        prompt_text="你好",
+        history_service=history,
+    ))
+
+    assert registry.requests[0].env == {"NATIVE_AGENT_PI_HOME": str(tmp_path / "pi-home")}
 
 
 @pytest.mark.asyncio

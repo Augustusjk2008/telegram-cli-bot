@@ -330,6 +330,10 @@ function Invoke-ReleasePrepChecks {
         "tests/test_updater.py",
         "tests/test_web_api.py",
         "tests/test_release_assets.py",
+        "tests/test_native_agent_config.py",
+        "tests/test_native_agent.py",
+        "tests/test_pi_rpc_client.py",
+        "tests/test_pi_windows_preflight.py",
         "-q"
     ) -FailureMessage "后端发布检查失败"
 

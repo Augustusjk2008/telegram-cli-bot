@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -29,6 +32,28 @@ def _sample_config() -> dict[str, object]:
             }
         ],
     }
+
+
+def test_config_reads_native_agent_pi_home(tmp_path: Path) -> None:
+    pi_home = tmp_path / "pi-home"
+    env = dict(os.environ)
+    env["NATIVE_AGENT_PI_HOME"] = str(pi_home)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from bot import config; print(config.NATIVE_AGENT_PI_HOME)",
+        ],
+        cwd=Path.cwd(),
+        env=env,
+        text=True,
+        encoding="utf-8",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+
+    assert result.stdout.strip() == str(pi_home)
 
 
 def test_native_agent_config_store_saves_pi_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
