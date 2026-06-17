@@ -171,6 +171,144 @@ def test_pi_events_maps_tool_lifecycle_to_single_tool_part() -> None:
     assert aggregator.text() == ""
 
 
+def test_pi_events_maps_pi_message_tool_use_commentary() -> None:
+    raw = {
+        "type": "message",
+        "id": "msg-1",
+        "message": {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "我先查一下文件。"},
+                {
+                    "type": "toolCall",
+                    "id": "call-1",
+                    "name": "bash",
+                    "arguments": {"command": "dir"},
+                },
+            ],
+            "stopReason": "toolUse",
+        },
+    }
+
+    payloads = _payloads(raw, cwd="/repo", fallback_session_id="sess-1")
+    aggregator, results = _apply_all([raw])
+    trace = [item for result in results for item in result.trace]
+
+    assert [payload["type"] for payload in payloads] == [
+        "message.part.updated",
+        "message.part.updated",
+        "message.updated",
+    ]
+    assert payloads[0]["part"]["text"] == "我先查一下文件。"
+    assert payloads[1]["part"]["callID"] == "call-1"
+    assert payloads[1]["part"]["arguments"] == {"command": "dir"}
+    assert any(item["kind"] == "commentary" and item["summary"] == "我先查一下文件。" for item in trace)
+    assert any(item["kind"] == "tool_call" for item in trace)
+    assert aggregator.text() == ""
+
+
+def test_pi_events_maps_message_end_tool_use_commentary_with_distinct_responses() -> None:
+    raw_events = [
+        {
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "第一句过程。"},
+                    {"type": "toolCall", "id": "call-1", "name": "bash", "arguments": {"command": "rg x"}},
+                ],
+                "stopReason": "toolUse",
+                "responseId": "resp-1",
+            },
+        },
+        {
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "第二句过程。"},
+                    {"type": "toolCall", "id": "call-2", "name": "read", "arguments": {"path": "x"}},
+                ],
+                "stopReason": "toolUse",
+                "responseId": "resp-2",
+            },
+        },
+    ]
+
+    payloads = [payload for raw in raw_events for payload in _payloads(raw, cwd="/repo", fallback_session_id="sess-1", assistant_message_id="web-msg")]
+    aggregator = NativeAgentAggregator(user_message_id="user-1")
+    results = []
+    for raw in raw_events:
+        for mapped in pi_json_to_events(raw, cwd="/repo", fallback_session_id="sess-1", assistant_message_id=aggregator.assistant_message_id or "web-msg"):
+            event = unwrap_event(mapped)
+            assert event is not None
+            results.append(aggregator.apply(event))
+    trace = [item for result in results for item in result.trace]
+
+    assert [payload["type"] for payload in payloads] == [
+        "message.part.updated",
+        "message.part.updated",
+        "message.updated",
+        "message.part.updated",
+        "message.part.updated",
+        "message.updated",
+    ]
+    assert {payload.get("messageID") for payload in payloads} == {"resp-1", "resp-2"}
+    assert any(item["kind"] == "commentary" and item["summary"] == "第一句过程。" for item in trace)
+    assert any(item["kind"] == "commentary" and item["summary"] == "第二句过程。" for item in trace)
+    assert [item["call_id"] for item in trace if item["kind"] == "tool_call"] == ["call-1", "call-2"]
+    assert aggregator.text() == ""
+
+
+def test_pi_events_maps_pi_message_tool_result() -> None:
+    raw = {
+        "type": "message",
+        "id": "tool-result-1",
+        "message": {
+            "role": "toolResult",
+            "toolCallId": "call-1",
+            "toolName": "bash",
+            "content": [{"type": "text", "text": "ok"}],
+            "isError": False,
+        },
+    }
+
+    [payload] = _payloads(raw, cwd="/repo", fallback_session_id="sess-1")
+    aggregator, results = _apply_all([raw])
+    trace = [item for result in results for item in result.trace]
+
+    assert payload["type"] == "message.part.updated"
+    assert payload["part"]["callID"] == "call-1"
+    assert payload["part"]["toolName"] == "bash"
+    assert payload["part"]["output"] == "ok"
+    assert payload["part"]["state"] == "completed"
+    assert any(item["kind"] == "tool_result" and item["summary"] == "ok" for item in trace)
+    assert aggregator.text() == ""
+
+
+def test_pi_events_maps_pi_message_error() -> None:
+    raw = {
+        "type": "message",
+        "id": "msg-error",
+        "message": {
+            "role": "assistant",
+            "content": [],
+            "stopReason": "error",
+            "errorMessage": "Upstream service temporarily unavailable",
+        },
+    }
+
+    [payload] = _payloads(raw, cwd="/repo", fallback_session_id="sess-1")
+    event = unwrap_event({"directory": "/repo", "payload": payload})
+    assert event is not None
+
+    result = NativeAgentAggregator(user_message_id="user-1").apply(event)
+
+    assert payload["type"] == "message.updated"
+    assert payload["message"]["state"] == "error"
+    assert result.error == "Upstream service temporarily unavailable"
+
+
 def test_pi_events_maps_interactive_extension_requests() -> None:
     for ui_kind in ("confirm", "select", "input", "editor"):
         [payload] = _payloads({

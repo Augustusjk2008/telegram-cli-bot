@@ -76,6 +76,9 @@ def pi_json_to_events(
     if raw_type == "message_end":
         if _is_non_assistant_role(raw):
             return []
+        if _finish_expects_followup(_finish_reason(raw)) and (_message_text(raw) or _has_tool_call_content(raw)):
+            record_message_id = _message_id(raw) or _message_response_id(raw) or message_id
+            return _message_record_to_events(raw, session_id=session_id, directory=directory, message_id=record_message_id)
         error = _message_error_text(raw)
         message = {
             "id": message_id,
@@ -88,6 +91,9 @@ def pi_json_to_events(
             message["state"] = "error"
             message["error"] = error
         return [_wrap_event("message.updated", raw, session_id=session_id, directory=directory, message_id=message_id, message=message)]
+
+    if raw_type == "message":
+        return _message_record_to_events(raw, session_id=session_id, directory=directory, message_id=message_id)
 
     if raw_type in {"tool_execution_start", "tool_execution_update", "tool_execution_end"}:
         part = _tool_part(raw, raw_type=raw_type, session_id=session_id, message_id=message_id)
@@ -286,6 +292,60 @@ def _extension_ui_request_to_events(
     return []
 
 
+def _message_record_to_events(
+    raw: dict[str, Any],
+    *,
+    session_id: str,
+    directory: str,
+    message_id: str,
+) -> list[dict[str, Any]]:
+    source = raw.get("message") if isinstance(raw.get("message"), dict) else {}
+    role = str(source.get("role") or raw.get("role") or "").strip().lower()
+    if role == "toolresult":
+        part = _tool_result_message_part(raw, session_id=session_id, message_id=message_id)
+        return [_wrap_event("message.part.updated", raw, session_id=session_id, directory=directory, message_id=message_id, part=part)]
+    if role and role != "assistant":
+        return []
+
+    error = _message_error_text(raw)
+    text = _message_text(raw)
+    events: list[dict[str, Any]] = []
+    if text:
+        part_id = _part_id(raw) or f"{message_id}:text"
+        events.append(
+            _wrap_event(
+                "message.part.updated",
+                raw,
+                session_id=session_id,
+                directory=directory,
+                message_id=message_id,
+                part={
+                    "id": part_id,
+                    "type": "text",
+                    "text": text,
+                    "messageID": message_id,
+                    "sessionID": session_id,
+                },
+            )
+        )
+    for part in _tool_call_message_parts(raw, session_id=session_id, message_id=message_id):
+        events.append(_wrap_event("message.part.updated", raw, session_id=session_id, directory=directory, message_id=message_id, part=part))
+    finish = _finish_reason(raw)
+    if finish or error:
+        message = dict(source)
+        message["id"] = _message_id(raw) or str(message_id or "").strip()
+        message["role"] = "assistant"
+        message["sessionID"] = session_id
+        if finish:
+            message["finish"] = finish
+        if error:
+            message["state"] = "error"
+            message["error"] = error
+        message.setdefault("time", {"completed": raw.get("completed_at") or raw.get("completedAt") or source.get("timestamp") or True})
+        events.append(_wrap_event("message.updated", raw, session_id=session_id, directory=directory, message_id=message_id, message=message))
+    return events
+
+
 def _tool_part(raw: dict[str, Any], *, raw_type: str, session_id: str, message_id: str) -> dict[str, Any]:
     call_id = _tool_call_id(raw) or _part_id(raw) or "pi-tool"
     tool_name = _tool_name(raw)
@@ -320,6 +380,79 @@ def _tool_part(raw: dict[str, Any], *, raw_type: str, session_id: str, message_i
     return part
 
 
+def _tool_call_message_parts(raw: dict[str, Any], *, session_id: str, message_id: str) -> list[dict[str, Any]]:
+    source = raw.get("message") if isinstance(raw.get("message"), dict) else {}
+    content = source.get("content") if isinstance(source.get("content"), list) else raw.get("content")
+    if not isinstance(content, list):
+        return []
+    parts: list[dict[str, Any]] = []
+    for index, item in enumerate(content, 1):
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("type") or item.get("kind") or "").strip().lower()
+        if kind not in {"toolcall", "tool_call", "tool-use", "tool_use"}:
+            continue
+        call_id = str(item.get("id") or item.get("callID") or item.get("toolCallId") or f"{message_id}:tool:{index}").strip()
+        tool_name = str(item.get("name") or item.get("tool") or item.get("toolName") or "tool").strip()
+        part: dict[str, Any] = {
+            "id": call_id,
+            "type": "tool",
+            "callID": call_id,
+            "toolCallId": call_id,
+            "tool": tool_name,
+            "toolName": tool_name,
+            "messageID": message_id,
+            "sessionID": session_id,
+            "state": "running",
+        }
+        arguments = item.get("arguments")
+        if arguments is None:
+            arguments = item.get("args", item.get("input", item.get("params")))
+        if arguments is not None:
+            part["arguments"] = arguments
+        parts.append(part)
+    return parts
+
+
+def _has_tool_call_content(raw: dict[str, Any]) -> bool:
+    source = raw.get("message") if isinstance(raw.get("message"), dict) else {}
+    content = source.get("content") if isinstance(source.get("content"), list) else raw.get("content")
+    if not isinstance(content, list):
+        return False
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("type") or item.get("kind") or "").strip().lower()
+        if kind in {"toolcall", "tool_call", "tool-use", "tool_use"}:
+            return True
+    return False
+
+
+def _tool_result_message_part(raw: dict[str, Any], *, session_id: str, message_id: str) -> dict[str, Any]:
+    source = raw.get("message") if isinstance(raw.get("message"), dict) else {}
+    call_id = _tool_call_id(raw) or str(source.get("toolCallId") or source.get("tool_call_id") or source.get("call_id") or "pi-tool").strip()
+    tool_name = _tool_name(raw)
+    output = _message_text(raw)
+    error = _message_error_text(raw)
+    is_error = bool(source.get("isError") or raw.get("isError") or error)
+    part: dict[str, Any] = {
+        "id": call_id,
+        "type": "tool",
+        "callID": call_id,
+        "toolCallId": call_id,
+        "tool": tool_name,
+        "toolName": tool_name,
+        "messageID": message_id,
+        "sessionID": session_id,
+        "state": "error" if is_error else "completed",
+    }
+    if output:
+        part["output"] = output
+    if error:
+        part["error"] = error
+    return part
+
+
 def _candidate_records(raw: dict[str, Any]) -> list[dict[str, Any]]:
     records = [raw]
     for key in ("session", "conversation", "message", "part", "properties", "payload", "data", "request"):
@@ -342,8 +475,20 @@ def _message_id(raw: dict[str, Any]) -> str:
     message = raw.get("message")
     if isinstance(message, dict) and message.get("id"):
         return str(message["id"])
+    if _raw_type(raw) == "message" and raw.get("id"):
+        return str(raw["id"])
     if _raw_type(raw).startswith("message_") and raw.get("id"):
         return str(raw["id"])
+    return ""
+
+
+def _message_response_id(raw: dict[str, Any]) -> str:
+    message = raw.get("message") if isinstance(raw.get("message"), dict) else {}
+    for record in (raw, message):
+        for key in ("responseId", "response_id", "responseID"):
+            value = record.get(key)
+            if value:
+                return str(value)
     return ""
 
 
@@ -454,6 +599,11 @@ def _finish_reason(raw: dict[str, Any]) -> str:
             if value:
                 return str(value).strip()
     return ""
+
+
+def _finish_expects_followup(value: str) -> bool:
+    normalized = str(value or "").strip().lower().replace("_", "-")
+    return normalized in {"tool-calls", "tool-call", "tooluse", "tool-use"}
 
 
 def _completion_message(raw: dict[str, Any], *, session_id: str, message_id: str) -> dict[str, Any]:
