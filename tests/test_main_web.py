@@ -38,7 +38,11 @@ async def test_run_all_bots_starts_web_server_when_enabled(monkeypatch):
     monkeypatch.setattr(main_module.config, "WEB_ENABLED", True)
     monkeypatch.setattr(main_module, "_allow_runtime_port_fallback", lambda: True)
 
+    fake_native_service = MagicMock()
+    fake_native_service.shutdown = AsyncMock()
+
     with patch.object(main_module, "MultiBotManager", return_value=fake_manager), \
+         patch("bot.main.get_native_agent_service", return_value=fake_native_service), \
          patch.object(main_module.asyncio, "Event", return_value=fake_event), \
          patch.object(main_module, "WebApiServer", return_value=fake_web_server):
         await main_module.run_all_bots()
@@ -47,6 +51,7 @@ async def test_run_all_bots_starts_web_server_when_enabled(monkeypatch):
     fake_manager.start_watchdog.assert_not_called()
     fake_web_server.start.assert_awaited_once()
     fake_web_server.stop.assert_awaited_once_with(preserve_tunnel=False)
+    fake_native_service.shutdown.assert_awaited_once()
     fake_manager.shutdown_all.assert_awaited_once()
 
 @pytest.mark.asyncio
@@ -70,13 +75,18 @@ async def test_run_all_bots_preserves_tunnel_when_restart_requested(monkeypatch)
     monkeypatch.setattr(main_module.config, "WEB_ENABLED", True)
     monkeypatch.setattr(main_module, "_allow_runtime_port_fallback", lambda: True)
 
+    fake_native_service = MagicMock()
+    fake_native_service.shutdown = AsyncMock()
+
     with patch.object(main_module, "MultiBotManager", return_value=fake_manager), \
+         patch("bot.main.get_native_agent_service", return_value=fake_native_service), \
          patch.object(main_module.asyncio, "Event", return_value=FakeEvent()), \
          patch.object(main_module, "WebApiServer", return_value=fake_web_server):
         await main_module.run_all_bots()
 
     fake_web_server.start.assert_awaited_once()
     fake_web_server.stop.assert_awaited_once_with(preserve_tunnel=True)
+    fake_native_service.shutdown.assert_awaited_once()
     fake_manager.shutdown_all.assert_awaited_once()
 
 @pytest.mark.asyncio

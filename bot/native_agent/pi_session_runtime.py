@@ -229,6 +229,16 @@ class PiSessionRuntimeRegistry:
     async def close_runtime(self, runtime: PiSessionRuntime) -> None:
         await self._remove(runtime, close=True)
 
+    async def shutdown(self) -> None:
+        runtimes = list(self._by_runtime_id.values())
+        self._by_key.clear()
+        self._by_runtime_id.clear()
+        for runtime in runtimes:
+            try:
+                await runtime.close()
+            except Exception:
+                pass
+
     async def _close_owner_runtimes_except(self, owner_key: str, runtime_key: str) -> None:
         stale = [
             runtime

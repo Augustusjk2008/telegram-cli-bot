@@ -1453,6 +1453,7 @@ class FakePiRuntime:
         self.prompts: list[dict[str, str]] = []
         self.aborted = False
         self.killed = False
+        self.closed = False
         self.replies: list[dict[str, object]] = []
         self.runtime_id = "pir_fake"
         self.workspace_history_head = "head-1"
@@ -1525,12 +1526,16 @@ class FakePiRuntime:
     async def kill(self) -> None:
         self.killed = True
 
+    async def close(self) -> None:
+        self.closed = True
+
 
 class FakePiRuntimeRegistry:
     def __init__(self, runtime: FakePiRuntime | None = None, *, error: BaseException | None = None) -> None:
         self.runtime = runtime
         self.error = error
         self.requests: list[object] = []
+        self.shutdown_called = False
 
     async def open_or_create(self, request):
         if self.error is not None:
@@ -1545,6 +1550,24 @@ class FakePiRuntimeRegistry:
 
     def get_by_runtime_id(self, runtime_id: str):
         return self.runtime if runtime_id == self.runtime.runtime_id else None
+
+    async def shutdown(self):
+        self.shutdown_called = True
+        if self.runtime is not None:
+            await self.runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_shutdown_closes_pi_runtimes():
+    runtime = FakePiRuntime([])
+    registry = FakePiRuntimeRegistry(runtime)
+    service = NativeAgentService()
+    service._runtime_registry = registry
+
+    await service.shutdown()
+
+    assert registry.shutdown_called is True
+    assert runtime.closed is True
 
 
 @pytest.mark.asyncio

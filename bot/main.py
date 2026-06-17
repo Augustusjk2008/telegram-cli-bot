@@ -41,6 +41,7 @@ from bot.config import (
 from bot.manager import MultiBotManager
 from bot.messages import get_messages
 from bot.models import BotProfile
+from bot.native_agent.service import get_native_agent_service
 from bot.version import APP_VERSION
 from bot.web import WebApiServer
 from bot.web.api_service import execute_assistant_run_request, stream_assistant_run_request
@@ -434,6 +435,7 @@ async def run_all_bots():
         await config.RESTART_EVENT.wait()
     finally:
         await web_server.stop(preserve_tunnel=config.RESTART_REQUESTED)
+        await get_native_agent_service().shutdown()
         await manager.shutdown_all()
         # 保存所有会话到持久化存储
         from bot.sessions import save_all_sessions

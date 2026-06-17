@@ -129,6 +129,9 @@ class NativeAgentService:
         self._pi_session_store = PiSessionStore()
         self._workspace_history = PiWorkspaceHistory()
 
+    async def shutdown(self) -> None:
+        await self._runtime_registry.shutdown()
+
     def _prompt_options(self, profile: BotProfile) -> tuple[str, str, str]:
         native_agent = effective_native_agent_config(getattr(profile, "native_agent", {}))
         validate_native_agent_model_config(native_agent)
