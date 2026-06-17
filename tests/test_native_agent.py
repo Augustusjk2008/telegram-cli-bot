@@ -1579,6 +1579,9 @@ async def test_native_agent_service_uses_pi_runtime_and_emits_runtime_meta(
 
     monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
     monkeypatch.setattr(config, "NATIVE_AGENT_PI_COMMAND", "pi")
+    models_path = tmp_path / "models.json"
+    models_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("PI_AGENT_MODELS", str(models_path))
     runtime = FakePiRuntime([
         {"type": "agent_start", "sessionId": "pi-sess-1"},
         {"type": "message_update", "sessionId": "pi-sess-1", "message": {"role": "assistant", "content": "Pi 回复"}},
@@ -1615,6 +1618,7 @@ async def test_native_agent_service_uses_pi_runtime_and_emits_runtime_meta(
     assert registry.requests[0].command == "pi"
     assert registry.requests[0].agent_id == "reviewer"
     assert registry.requests[0].append_system_prompt == ""
+    assert registry.requests[0].config_fingerprint
 
 
 @pytest.mark.asyncio

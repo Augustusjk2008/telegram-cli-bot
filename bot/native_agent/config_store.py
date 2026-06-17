@@ -205,6 +205,7 @@ def normalize_native_agent_config_document(
                 raise ValueError("providers 的 provider id 不能为空")
             if not isinstance(provider_config, dict):
                 raise ValueError(f"providers.{provider} 必须是对象")
+            _require_headers_object(provider_config.get("headers"), f"providers.{provider}.headers")
             models = provider_config.get("models")
             if models is None:
                 continue
@@ -221,36 +222,44 @@ def normalize_native_agent_config_document(
                         if key in model_config and model_config.get(key) is not None:
                             _require_positive_int(model_config.get(key), f"providers.{provider}.models[{index}].{field}")
     providers = payload.get("provider")
-    if providers is None:
-        return payload
-    if not isinstance(providers, dict):
-        raise ValueError("provider 必须是对象")
-    for provider_id, provider_config in providers.items():
-        provider = str(provider_id or "").strip()
-        if not provider:
-            raise ValueError("provider id 不能为空")
-        if not isinstance(provider_config, dict):
-            raise ValueError(f"provider.{provider} 必须是对象")
-        models = provider_config.get("models")
-        if models is None:
-            continue
-        if not isinstance(models, dict):
-            raise ValueError(f"provider.{provider}.models 必须是对象")
-        for model_id, model_config in models.items():
-            model = str(model_id or "").strip()
-            if not model:
-                raise ValueError(f"provider.{provider}.models 的 model id 不能为空")
-            if not isinstance(model_config, dict):
-                raise ValueError(f"provider.{provider}.models.{model} 必须是对象")
-            if "limit" not in model_config or model_config.get("limit") is None:
+    if providers is not None:
+        if not isinstance(providers, dict):
+            raise ValueError("provider 必须是对象")
+        for provider_id, provider_config in providers.items():
+            provider = str(provider_id or "").strip()
+            if not provider:
+                raise ValueError("provider id 不能为空")
+            if not isinstance(provider_config, dict):
+                raise ValueError(f"provider.{provider} 必须是对象")
+            _require_headers_object(provider_config.get("headers"), f"provider.{provider}.headers")
+            options = provider_config.get("options")
+            if isinstance(options, dict):
+                _require_headers_object(options.get("headers"), f"provider.{provider}.options.headers")
+            models = provider_config.get("models")
+            if models is None:
                 continue
-            limit = model_config.get("limit")
-            if not isinstance(limit, dict):
-                raise ValueError(f"provider.{provider}.models.{model}.limit 必须是对象")
-            if validate_limits:
-                for key in ("context", "output"):
-                    if key in limit and limit.get(key) is not None:
-                        _require_positive_int(limit.get(key), f"provider.{provider}.models.{model}.limit.{key}")
+            if not isinstance(models, dict):
+                raise ValueError(f"provider.{provider}.models 必须是对象")
+            for model_id, model_config in models.items():
+                model = str(model_id or "").strip()
+                if not model:
+                    raise ValueError(f"provider.{provider}.models 的 model id 不能为空")
+                if not isinstance(model_config, dict):
+                    raise ValueError(f"provider.{provider}.models.{model} 必须是对象")
+                if "limit" not in model_config or model_config.get("limit") is None:
+                    continue
+                limit = model_config.get("limit")
+                if not isinstance(limit, dict):
+                    raise ValueError(f"provider.{provider}.models.{model}.limit 必须是对象")
+                if validate_limits:
+                    for key in ("context", "output"):
+                        if key in limit and limit.get(key) is not None:
+                            _require_positive_int(limit.get(key), f"provider.{provider}.models.{model}.limit.{key}")
+    direct_models = payload.get("models")
+    if isinstance(direct_models, list):
+        for index, model_config in enumerate(direct_models):
+            if isinstance(model_config, dict):
+                _require_headers_object(model_config.get("headers"), f"models[{index}].headers")
     return payload
 
 
@@ -369,6 +378,7 @@ def _legacy_providers_to_pi(providers: dict[str, Any]) -> dict[str, Any]:
             or options.get("api_key")
         )
         api = provider_config.get("api") or options.get("api")
+        headers = _provider_headers(provider_config, options)
         if base_url:
             converted["baseUrl"] = str(base_url).strip().rstrip("/")
         if api_key:
@@ -377,6 +387,8 @@ def _legacy_providers_to_pi(providers: dict[str, Any]) -> dict[str, Any]:
             converted["api"] = str(api).strip()
         elif converted.get("baseUrl") or converted.get("apiKey"):
             converted["api"] = "openai-completions"
+        if headers is not None:
+            converted["headers"] = headers
         models = provider_config.get("models")
         converted_models: list[dict[str, Any]] = []
         if isinstance(models, dict):
@@ -400,9 +412,17 @@ def _direct_models_to_pi(models: list[Any]) -> dict[str, Any]:
         model = str(raw_item.get("model") or (item_id.split("/", 1)[1] if "/" in item_id else "")).strip()
         if not provider or not model:
             continue
-        providers.setdefault(provider, {"models": []})
-        providers[provider]["models"].append(_direct_model_to_pi(model, raw_item))
+        provider_config = providers.setdefault(provider, {"models": []})
+        provider_config["models"].append(_direct_model_to_pi(model, raw_item))
     return providers
+
+
+def _provider_headers(provider_config: dict[str, Any], options: dict[str, Any]) -> dict[str, Any] | None:
+    for source in (provider_config, options):
+        headers = source.get("headers")
+        if isinstance(headers, dict):
+            return json.loads(json.dumps(headers, ensure_ascii=False))
+    return None
 
 
 def _legacy_model_to_pi(model_id: str, model_config: dict[str, Any]) -> dict[str, Any]:
@@ -566,3 +586,8 @@ def _require_positive_int(value: Any, field: str) -> int:
     if parsed <= 0:
         raise ValueError(f"{field} 必须是正整数")
     return parsed
+
+
+def _require_headers_object(value: Any, field: str) -> None:
+    if value is not None and not isinstance(value, dict):
+        raise ValueError(f"{field} 必须是对象")

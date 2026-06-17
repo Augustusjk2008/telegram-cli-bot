@@ -1589,18 +1589,22 @@ async def test_admin_native_agent_config_routes_save_config(
                 json={
                     "config": {
                         "backend": "pi",
-                        "model": "jojocode_max/gpt-5.4",
+                        "model": "jojocode/gpt-5.4",
                         "workspace_history_enabled": True,
-                        "models": [
-                            {
-                                "id": "jojocode_max/gpt-5.4",
-                                "provider": "jojocode_max",
-                                "model": "gpt-5.4",
-                                "name": "gpt-5.4",
-                                "context_window": 1_000_000,
-                                "output_limit": 128_000,
+                        "providers": {
+                            "jojocode": {
+                                "baseUrl": "https://max.jojocode.com",
+                                "api": "openai-responses",
+                                "headers": {"User-Agent": "Codex CLI"},
+                                "models": [
+                                    {
+                                        "id": "gpt-5.4",
+                                        "contextWindow": 1_000_000,
+                                        "maxTokens": 128_000,
+                                    }
+                                ],
                             }
-                        ],
+                        },
                     }
                 },
             )
@@ -1612,16 +1616,19 @@ async def test_admin_native_agent_config_routes_save_config(
     assert patch_payload["data"]["needs_restart"] is True
     assert patch_payload["data"]["backend"] == "pi"
     assert patch_payload["data"]["config_path"] == str(settings_path)
-    assert patch_payload["data"]["selected_model"] == "jojocode_max/gpt-5.4"
+    assert patch_payload["data"]["selected_model"] == "jojocode/gpt-5.4"
     assert patch_payload["data"]["workspace_history_enabled"] is True
     assert "backup_path" not in patch_payload["data"]
-    assert patch_payload["data"]["models"][0]["id"] == "jojocode_max/gpt-5.4"
+    assert patch_payload["data"]["models"][0]["id"] == "jojocode/gpt-5.4"
+    assert patch_payload["data"]["config"]["providers"]["jojocode"]["headers"] == {"User-Agent": "Codex CLI"}
     assert json.loads(settings_path.read_text(encoding="utf-8")) == {
         "backend": "pi",
-        "model": "jojocode_max/gpt-5.4",
+        "model": "jojocode/gpt-5.4",
         "workspace_history_enabled": True,
     }
-    assert json.loads(models_path.read_text(encoding="utf-8"))["providers"]["jojocode_max"]["models"][0] == {
+    saved_provider = json.loads(models_path.read_text(encoding="utf-8"))["providers"]["jojocode"]
+    assert saved_provider["headers"] == {"User-Agent": "Codex CLI"}
+    assert saved_provider["models"][0] == {
         "id": "gpt-5.4",
         "contextWindow": 1_000_000,
         "maxTokens": 128_000,
@@ -1629,6 +1636,7 @@ async def test_admin_native_agent_config_routes_save_config(
     assert patch_payload["data"]["config"]["providers"] == json.loads(models_path.read_text(encoding="utf-8"))["providers"]
     assert get_resp.status == 200
     assert get_payload["data"]["models"][0]["context_window"] == 1_000_000
+    assert get_payload["data"]["config"]["providers"]["jojocode"]["headers"] == {"User-Agent": "Codex CLI"}
     assert "preflight" in get_payload["data"]
 
 

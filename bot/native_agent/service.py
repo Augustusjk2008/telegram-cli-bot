@@ -18,6 +18,7 @@ from bot.models import (
     normalize_execution_mode as _normalize_execution_mode,
 )
 from bot.native_agent.configuration import effective_native_agent_config, validate_native_agent_model_config
+from bot.native_agent.config_store import get_pi_models_path
 from bot.native_agent.ag_ui_mapper import (
     AgUiTurnState,
     build_run_error_event,
@@ -141,6 +142,13 @@ class NativeAgentService:
             str(native_agent.get("reasoning_effort") or "").strip(),
         )
 
+    def _runtime_config_fingerprint(self) -> str:
+        try:
+            stat = get_pi_models_path().stat()
+        except OSError:
+            return ""
+        return f"models:{stat.st_mtime_ns}:{stat.st_size}"
+
     def _pi_record_key(self, session: UserSession, user_id: int, conversation_id: str) -> str:
         return pi_session_key(
             cwd=session.working_dir,
@@ -211,6 +219,7 @@ class NativeAgentService:
     ) -> WorkspaceHistoryStatus:
         model_id, agent_id, reasoning_effort = self._prompt_options(profile)
         native_agent_config = effective_native_agent_config(getattr(profile, "native_agent", {}))
+        config_fingerprint = self._runtime_config_fingerprint()
         user_id = chat_session_user_id(session.user_id)
         runtime = await self._runtime_registry.open_or_create(
             PiSessionRuntimeRequest(
@@ -227,6 +236,7 @@ class NativeAgentService:
                 agent_id=agent_id,
                 reasoning_effort=reasoning_effort,
                 native_session_id=native_session_id,
+                config_fingerprint=config_fingerprint,
             )
         )
         key = self._pi_record_key(session, user_id, conversation_id)
@@ -493,6 +503,7 @@ class NativeAgentService:
                     reasoning_effort=reasoning_effort,
                     append_system_prompt=SOLO_NATIVE_AGENT_SYSTEM_PROMPT if solo_mode else "",
                     native_session_id=native_session_id,
+                    config_fingerprint=self._runtime_config_fingerprint(),
                     env=pi_runtime_env,
                 )
             )

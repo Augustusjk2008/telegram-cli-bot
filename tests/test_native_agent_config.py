@@ -111,6 +111,7 @@ def test_native_agent_config_store_migrates_legacy_settings_provider_to_models_j
                 "provider": {
                     "jojocode": {
                         "options": {"baseURL": "https://example.test/v1", "apiKey": "SECRET"},
+                        "headers": {"User-Agent": "Codex CLI"},
                         "models": {"gpt-5.4": {"name": "gpt-5.4"}},
                     }
                 },
@@ -126,9 +127,120 @@ def test_native_agent_config_store_migrates_legacy_settings_provider_to_models_j
 
     assert loaded["providers"]["jojocode"]["baseUrl"] == "https://example.test/v1"
     assert loaded["providers"]["jojocode"]["api"] == "openai-completions"
+    assert loaded["providers"]["jojocode"]["headers"] == {"User-Agent": "Codex CLI"}
     assert config_store.first_configured_model()["id"] == "jojocode/gpt-5.4"
-    assert json.loads(models_path.read_text(encoding="utf-8"))["providers"]["jojocode"]["models"][0]["id"] == "gpt-5.4"
+    migrated_provider = json.loads(models_path.read_text(encoding="utf-8"))["providers"]["jojocode"]
+    assert migrated_provider["headers"] == {"User-Agent": "Codex CLI"}
+    assert migrated_provider["models"][0]["id"] == "gpt-5.4"
     assert "provider" in json.loads(settings_path.read_text(encoding="utf-8"))
+
+
+def test_native_agent_config_store_preserves_provider_headers_from_pi_providers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings_path = tmp_path / "settings.json"
+    models_path = tmp_path / "models.json"
+    monkeypatch.setenv("PI_AGENT_SETTINGS", str(settings_path))
+
+    config_store.save_native_agent_config(
+        {
+            "backend": "pi",
+            "model": "jojocode/gpt-5.5",
+            "providers": {
+                "jojocode": {
+                    "baseUrl": "https://max.jojocode.com",
+                    "api": "openai-responses",
+                    "headers": {"User-Agent": "Codex CLI"},
+                    "models": [{"id": "gpt-5.5"}],
+                }
+            },
+        }
+    )
+
+    saved_provider = json.loads(models_path.read_text(encoding="utf-8"))["providers"]["jojocode"]
+    assert saved_provider["headers"] == {"User-Agent": "Codex CLI"}
+    assert config_store.load_native_agent_config()["providers"]["jojocode"]["headers"] == {"User-Agent": "Codex CLI"}
+
+
+def test_native_agent_config_store_preserves_direct_model_headers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings_path = tmp_path / "settings.json"
+    models_path = tmp_path / "models.json"
+    monkeypatch.setenv("PI_AGENT_SETTINGS", str(settings_path))
+
+    config_store.save_native_agent_config(
+        {
+            "backend": "pi",
+            "models": [
+                {
+                    "id": "jojocode/gpt-5.5",
+                    "headers": {"User-Agent": "Codex CLI"},
+                }
+            ],
+        }
+    )
+
+    saved_provider = json.loads(models_path.read_text(encoding="utf-8"))["providers"]["jojocode"]
+    assert "headers" not in saved_provider
+    assert saved_provider["models"][0]["headers"] == {"User-Agent": "Codex CLI"}
+
+
+def test_native_agent_config_store_does_not_promote_partial_direct_model_headers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings_path = tmp_path / "settings.json"
+    models_path = tmp_path / "models.json"
+    monkeypatch.setenv("PI_AGENT_SETTINGS", str(settings_path))
+
+    config_store.save_native_agent_config(
+        {
+            "backend": "pi",
+            "models": [
+                {"id": "jojocode/gpt-5.4"},
+                {"id": "jojocode/gpt-5.5", "headers": {"User-Agent": "Codex CLI"}},
+            ],
+        }
+    )
+
+    saved_provider = json.loads(models_path.read_text(encoding="utf-8"))["providers"]["jojocode"]
+    assert "headers" not in saved_provider
+    assert "headers" not in saved_provider["models"][0]
+    assert saved_provider["models"][1]["headers"] == {"User-Agent": "Codex CLI"}
+
+
+def test_native_agent_config_store_migrates_legacy_options_headers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings_path = tmp_path / "settings.json"
+    models_path = tmp_path / "models.json"
+    settings_path.write_text(
+        json.dumps(
+            {
+                "provider": {
+                    "jojocode": {
+                        "options": {
+                            "baseURL": "https://example.test/v1",
+                            "apiKey": "SECRET",
+                            "headers": {"User-Agent": "Codex CLI"},
+                        },
+                        "models": {"gpt-5.4": {"name": "gpt-5.4"}},
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PI_AGENT_SETTINGS", str(settings_path))
+
+    config_store.load_native_agent_config()
+
+    migrated_provider = json.loads(models_path.read_text(encoding="utf-8"))["providers"]["jojocode"]
+    assert migrated_provider["headers"] == {"User-Agent": "Codex CLI"}
 
 
 def test_native_agent_config_store_uses_variants_as_reasoning_efforts() -> None:

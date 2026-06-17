@@ -22,6 +22,7 @@ class PiSessionRuntimeRequest:
     reasoning_effort: str = ""
     append_system_prompt: str = ""
     native_session_id: str = ""
+    config_fingerprint: str = ""
     env: dict[str, str] | None = None
 
 
@@ -38,6 +39,7 @@ class PiSessionRuntimeState:
     reasoning_effort: str = ""
     append_system_prompt: str = ""
     native_session_id: str = ""
+    config_fingerprint: str = ""
     env: dict[str, str] | None = None
     linear_index: int = 0
     workspace_history_head: str = ""
@@ -82,6 +84,7 @@ class PiSessionRuntime:
             and self.state.agent_id == str(request.agent_id or "").strip()
             and self.state.reasoning_effort == str(request.reasoning_effort or "").strip()
             and self.state.append_system_prompt == str(request.append_system_prompt or "").strip()
+            and self.state.config_fingerprint == str(request.config_fingerprint or "").strip()
             and _normalize_env(self.state.env) == _normalize_env(request.env)
         )
 
@@ -216,6 +219,7 @@ class PiSessionRuntimeRegistry:
                 reasoning_effort=normalized.reasoning_effort,
                 append_system_prompt=normalized.append_system_prompt,
                 native_session_id=normalized.native_session_id,
+                config_fingerprint=normalized.config_fingerprint,
                 env=normalized.env,
             ),
         )
@@ -275,6 +279,7 @@ def _normalize_request(request: PiSessionRuntimeRequest) -> PiSessionRuntimeRequ
         reasoning_effort=str(request.reasoning_effort or "").strip(),
         append_system_prompt=str(request.append_system_prompt or "").strip(),
         native_session_id=str(request.native_session_id or "").strip(),
+        config_fingerprint=str(request.config_fingerprint or "").strip(),
         env=_normalize_env(request.env),
     )
 

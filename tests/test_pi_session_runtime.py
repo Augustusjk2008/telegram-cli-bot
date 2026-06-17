@@ -157,3 +157,31 @@ def test_runtime_match_rejects_env_change():
         agent_id="reviewer",
         reasoning_effort="high",
     )) is False
+
+
+def test_runtime_match_rejects_config_fingerprint_change():
+    runtime = _runtime(client=FakeClient([]), reasoning_effort="high")
+    runtime.state.config_fingerprint = "old"
+
+    assert runtime.matches(PiSessionRuntimeRequest(
+        runtime_key="1:1:conv-1",
+        owner_key="1:1",
+        conversation_id="conv-1",
+        cwd="C:/repo",
+        command="pi",
+        model="anthropic/claude-sonnet-4",
+        agent_id="reviewer",
+        reasoning_effort="high",
+        config_fingerprint="old",
+    )) is True
+    assert runtime.matches(PiSessionRuntimeRequest(
+        runtime_key="1:1:conv-1",
+        owner_key="1:1",
+        conversation_id="conv-1",
+        cwd="C:/repo",
+        command="pi",
+        model="anthropic/claude-sonnet-4",
+        agent_id="reviewer",
+        reasoning_effort="high",
+        config_fingerprint="new",
+    )) is False
