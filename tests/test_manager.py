@@ -124,6 +124,35 @@ class TestManagerLoadSave:
         assert profile.default_execution_mode == "native_agent"
         assert profile.native_agent == {"backend": "pi", "pi_agent": "reviewer"}
 
+    @pytest.mark.asyncio
+    async def test_add_assistant_native_agent_bot_persists_native_execution_config(self, temp_dir: Path):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        manager = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
+        assistant_dir = temp_dir / "assistant-native"
+        assistant_dir.mkdir()
+
+        with patch.object(manager, "_start_profile", AsyncMock(return_value=None)):
+            await manager.add_bot(
+                "assistant-native",
+                "",
+                "codex",
+                "missing-cli",
+                str(assistant_dir),
+                "assistant",
+                supported_execution_modes=["native_agent"],
+                default_execution_mode="native_agent",
+                native_agent={"pi_agent": "planner"},
+            )
+
+        restored = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
+        profile = restored.managed_profiles["assistant-native"]
+
+        assert profile.bot_mode == "assistant"
+        assert profile.supported_execution_modes == ["native_agent"]
+        assert profile.default_execution_mode == "native_agent"
+        assert profile.native_agent == {"backend": "pi", "pi_agent": "planner"}
+
 class TestManagerValidation:
     """测试验证逻辑"""
 
@@ -260,6 +289,34 @@ class TestManagerValidation:
         await manager.set_bot_native_agent_model("main", "jojocode/gpt-5.4", "high")
         restored = MultiBotManager(
             BotProfile(alias="main", token="main_tok", working_dir=str(temp_dir)),
+            str(storage),
+        )
+
+        assert restored.main_profile.native_agent == {
+            "backend": "pi",
+            "model": "jojocode/gpt-5.4",
+            "reasoning_effort": "high",
+        }
+
+    @pytest.mark.asyncio
+    async def test_assistant_native_agent_model_selection_persists(self, temp_dir: Path):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        manager = MultiBotManager(
+            BotProfile(
+                alias="main",
+                token="main_tok",
+                working_dir=str(temp_dir),
+                bot_mode="assistant",
+                supported_execution_modes=["native_agent"],
+                default_execution_mode="native_agent",
+            ),
+            str(storage),
+        )
+
+        await manager.set_bot_native_agent_model("main", "jojocode/gpt-5.4", "high")
+        restored = MultiBotManager(
+            BotProfile(alias="main", token="main_tok", working_dir=str(temp_dir), bot_mode="assistant"),
             str(storage),
         )
 

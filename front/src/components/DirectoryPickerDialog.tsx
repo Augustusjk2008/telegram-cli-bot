@@ -36,6 +36,9 @@ function getParentBrowserPath(path: string) {
   if (!normalized || normalized === "/") {
     return normalized || "/";
   }
+  if (/^[A-Za-z]:$/.test(normalized)) {
+    return "::windows-drives::";
+  }
   const parts = normalized.split(/[\\/]+/);
   if (parts.length <= 1) {
     return normalized;

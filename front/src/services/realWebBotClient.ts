@@ -1869,6 +1869,8 @@ function mapClusterSetupPrepare(raw: unknown): ClusterSetupPrepareResult {
     removeCommand: list("remove_command", "removeCommand"),
     piSettingsPath: String(value.pi_settings_path || value.piSettingsPath || ""),
     piSettingsSnippet: String(value.pi_settings_snippet || value.piSettingsSnippet || ""),
+    piExtensionPath: String(value.pi_extension_path || value.piExtensionPath || ""),
+    piExtensionName: String(value.pi_extension_name || value.piExtensionName || ""),
     selfTestCommand: list("self_test_command", "selfTestCommand"),
   };
 }
@@ -4499,8 +4501,8 @@ export class RealWebBotClient implements WebBotClient {
     return { templates: (data.templates || []).map(mapClusterTemplateSummary) };
   }
 
-  async getClusterBundleSchema(botAlias: string): Promise<ClusterBundleSchemaResult> {
-    const data = await this.requestJson<Record<string, unknown>>(`/api/admin/bots/${encodeURIComponent(botAlias)}/cluster/schema`, {
+  async getClusterBundleSchema(_botAlias: string): Promise<ClusterBundleSchemaResult> {
+    const data = await this.requestJson<Record<string, unknown>>("/api/admin/cluster/schema", {
       method: "GET",
       headers: this.headers(),
       cache: "no-store",

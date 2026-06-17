@@ -133,6 +133,9 @@ def resolve_browser_target_path(current_dir: str, new_path: str) -> str:
     if not path:
         _raise(400, "missing_path", "路径不能为空")
 
+    if is_windows_drives_virtual_root(path):
+        return _WINDOWS_DRIVES_VIRTUAL_ROOT
+
     if is_windows_drives_virtual_root(current_dir):
         if path in {"..", "."}:
             return _WINDOWS_DRIVES_VIRTUAL_ROOT
@@ -194,6 +197,8 @@ def get_directory_listing(
     if path is not None and str(path).strip():
         target_dir = resolve_browser_target_path(browser_dir, str(path))
     if restrict_to_base_dir and base_dir:
+        if is_windows_drives_virtual_root(target_dir):
+            _raise(403, "forbidden_path", "当前账号无权访问该目录")
         ensure_path_within_base_dir(base_dir, target_dir)
     if is_windows_drives_virtual_root(target_dir):
         return list_windows_drive_entries()

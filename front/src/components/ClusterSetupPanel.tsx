@@ -129,7 +129,13 @@ export function ClusterSetupPanel({ botAlias, client, canManage = true }: Props)
             <div className="text-sm font-medium text-[var(--text)]">验证命令</div>
             <pre className="mt-1 overflow-x-auto rounded-md bg-[var(--surface-strong)] p-3 text-xs">{commandText(prepare.verifyCommand)}</pre>
           </div> : null}
-          {prepare.piSettingsSnippet ? (
+          {prepare.piExtensionPath ? (
+            <div>
+              <div className="text-sm font-medium text-[var(--text)]">Pi 扩展</div>
+              <p className="mt-1 break-all text-xs text-[var(--muted)]">{prepare.piExtensionPath}</p>
+              <p className="mt-1 text-xs text-[var(--muted)]">{prepare.piExtensionName || "tcb-cluster.ts"}</p>
+            </div>
+          ) : prepare.piSettingsSnippet ? (
             <div>
               <div className="text-sm font-medium text-[var(--text)]">Pi settings.json</div>
               <p className="mt-1 break-all text-xs text-[var(--muted)]">{prepare.piSettingsPath}</p>
@@ -142,7 +148,18 @@ export function ClusterSetupPanel({ botAlias, client, canManage = true }: Props)
               <pre className="mt-1 overflow-x-auto rounded-md bg-[var(--surface-strong)] p-3 text-xs">{commandText(prepare.selfTestCommand)}</pre>
             </div>
           ) : null}
-          {prepare.piSettingsSnippet ? (
+          {prepare.piExtensionPath ? (
+            <div className="rounded-md border border-[var(--border)] bg-[var(--bg)] p-3 text-xs text-[var(--muted)]">
+              <div className="font-medium text-[var(--text)]">Pi 验证步骤</div>
+              <ol className="mt-2 list-decimal space-y-1 pl-5">
+                <li>生成 launcher 和 config</li>
+                <li>把 tcb-cluster.ts 放入 Pi 扩展目录</li>
+                <li>重启 Pi 原生 agent</li>
+                <li>开启集群模式后用当前 run_id 调 cluster_status</li>
+              </ol>
+              <p className="mt-2">Pi 是主 agent，子 agent 仍由本项目 cluster runtime 托管。</p>
+            </div>
+          ) : prepare.piSettingsSnippet ? (
             <div className="rounded-md border border-[var(--border)] bg-[var(--bg)] p-3 text-xs text-[var(--muted)]">
               <div className="font-medium text-[var(--text)]">Pi 验证步骤</div>
               <ol className="mt-2 list-decimal space-y-1 pl-5">

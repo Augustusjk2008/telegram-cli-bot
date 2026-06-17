@@ -118,7 +118,7 @@ test("native bots hide cli settings and params", async () => {
   expect(openManager).toHaveBeenCalled();
 });
 
-test("native settings shows pi cluster mcp setup", async () => {
+test("native settings shows pi cluster extension setup", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
   await client.addBot({
@@ -140,9 +140,10 @@ test("native settings shows pi cluster mcp setup", async () => {
   render(<SettingsScreen botAlias="native1" client={client} onLogout={() => undefined} />);
 
   expect(await screen.findByText("集群 MCP")).toBeInTheDocument();
-  expect((await screen.findAllByText(/Pi MCP 已配置/)).length).toBeGreaterThan(0);
+  expect((await screen.findAllByText(/Pi 集群扩展已配置/)).length).toBeGreaterThan(0);
   await user.click(screen.getByRole("button", { name: "生成安装命令" }));
-  expect(await screen.findByText("Pi settings.json")).toBeInTheDocument();
+  expect(await screen.findByText("Pi 扩展")).toBeInTheDocument();
+  expect(screen.getAllByText(/tcb-cluster\.ts/).length).toBeGreaterThan(0);
   expect(screen.getAllByText(/tcb-cluster/).length).toBeGreaterThan(0);
   expect(screen.getByText("本项目自检")).toBeInTheDocument();
   expect(screen.getByText("Pi 验证步骤")).toBeInTheDocument();

@@ -9,6 +9,7 @@ from typing import Any
 
 from bot.chat_identity import chat_session_user_id
 from bot import config
+from bot.cluster.setup import get_cluster_mcp_config_path
 from bot.models import (
     BotProfile,
     EXECUTION_MODE_CLI,
@@ -138,6 +139,7 @@ class NativeAgentService:
         normalized_cluster_run_id = str(cluster_run_id or "").strip()
         if normalized_cluster_run_id:
             env["TCB_CLUSTER_RUN_ID"] = normalized_cluster_run_id
+            env["TCB_CLUSTER_MCP_CONFIG"] = str(get_cluster_mcp_config_path())
         pi_home = str(getattr(config, "NATIVE_AGENT_PI_HOME", "") or "").strip()
         if pi_home:
             env["NATIVE_AGENT_PI_HOME"] = pi_home

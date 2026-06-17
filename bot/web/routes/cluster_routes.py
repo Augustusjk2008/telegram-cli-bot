@@ -15,7 +15,7 @@ def register(app: web.Application, server) -> None:
     app.router.add_post("/api/admin/bots/{alias}/cluster/setup/prepare", server.post_cluster_setup_prepare)
     app.router.add_post("/api/admin/bots/{alias}/cluster/config", server.post_cluster_config)
     app.router.add_get("/api/admin/bots/{alias}/cluster/templates", server.get_cluster_templates_view)
-    app.router.add_get("/api/admin/bots/{alias}/cluster/schema", server.get_cluster_schema_view)
+    app.router.add_get("/api/admin/cluster/schema", server.get_cluster_schema_view)
     app.router.add_post(
         "/api/admin/bots/{alias}/cluster/templates/preview",
         server.post_cluster_template_preview,
@@ -32,4 +32,3 @@ def register(app: web.Application, server) -> None:
         "/api/admin/bots/{alias}/cluster/config-bundle/apply",
         server.post_cluster_bundle_apply,
     )
-

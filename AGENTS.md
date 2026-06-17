@@ -119,6 +119,53 @@ pwsh -ExecutionPolicy Bypass -File .release-local/publish-release.ps1 -Version <
 - CLI SSE 的 `meta/status/trace/done` 顶层带 `turn_id`、`assistant_message_id`，用于前端稳定绑定当前轮
 - CLI bot 可定义 child agents；非 cluster chat 只绑定一个 active agent，cluster mode 通过 `@agent_id` 分发 child agents
 
+### Pi 原生 agent 环境（非绿色版）
+
+当前 Pi 扩展只有：
+
+- `workspace-history.ts`：来自 `pi-workspace-history@0.2.2`，放入 Pi 自动发现扩展目录；提供 Pi 侧 `/checkpoint`、`/undo`、`/redo` 等工作区历史能力。Web rollback 仍以本地 `ShadowGitHistory` 为准。
+- `tcb-cluster.ts`：本仓库 `bot/cluster/pi_extension/tcb-cluster.ts`，放入 Pi 自动发现扩展目录；注册 `cluster_status`、`list_agents`、`ask_agent`、`poll_agent_tasks`、`wait_agent_messages`。运行时依赖 `TCB_CLUSTER_MCP_CONFIG` 和 `TCB_CLUSTER_RUN_ID`，由 Web cluster/native agent 链路注入。
+
+Pi 扩展目录规则：
+
+- 默认：`~/.pi/agent/extensions`
+- 设置 `PI_AGENT_SETTINGS=/path/to/settings.json` 时：`/path/to/extensions`
+- 设置 `NATIVE_AGENT_PI_HOME=/path/to/pi-home` 时，Pi 子进程把该目录当 HOME，扩展目录为 `/path/to/pi-home/.pi/agent/extensions`
+
+Linux / macOS 非绿色版安装：
+
+```bash
+# 先装 Node.js 22+、Git、bash
+npm install -g @earendil-works/pi-coding-agent@0.74.2 pi-workspace-history@0.2.2
+mkdir -p ~/.pi/agent/extensions
+cp "$(npm root -g)/pi-workspace-history/.pi/extensions/workspace-history.ts" ~/.pi/agent/extensions/workspace-history.ts
+cp ./bot/cluster/pi_extension/tcb-cluster.ts ~/.pi/agent/extensions/tcb-cluster.ts
+pi --version
+```
+
+Windows 非绿色版安装：
+
+```powershell
+# 先装 Node.js 22+ 和 Git for Windows；Git Bash 要可用
+npm install -g @earendil-works/pi-coding-agent@0.74.2 pi-workspace-history@0.2.2
+New-Item -ItemType Directory -Force "$HOME\.pi\agent\extensions" | Out-Null
+$npmRoot = npm root -g
+Copy-Item "$npmRoot\pi-workspace-history\.pi\extensions\workspace-history.ts" "$HOME\.pi\agent\extensions\workspace-history.ts" -Force
+Copy-Item ".\bot\cluster\pi_extension\tcb-cluster.ts" "$HOME\.pi\agent\extensions\tcb-cluster.ts" -Force
+pi --version
+```
+
+`.env` 至少配置：
+
+```env
+NATIVE_AGENT_ENABLED=true
+NATIVE_AGENT_PI_COMMAND=pi
+# 如隔离 Pi HOME：
+# NATIVE_AGENT_PI_HOME=/abs/path/to/pi-home
+```
+
+Pi 模型配置写 Web 设置页，或直接写 `~/.pi/agent/settings.json` 和 `~/.pi/agent/models.json`；如设置 `PI_AGENT_SETTINGS`，`models.json` 默认和它同目录。Windows 下 Pi shell 异常时，在 `settings.json` 写 `shellPath` 指向 Git Bash，如 `C:\\Program Files\\Git\\bin\\bash.exe`。
+
 ### Web API 和 Frontend
 
 - 后端 API：`bot/web/server.py`、`bot/web/api_service.py`、`bot/web/git_service.py`

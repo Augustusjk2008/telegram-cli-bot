@@ -473,6 +473,8 @@ export type ClusterSetupPrepareResult = {
   removeCommand: string[];
   piSettingsPath?: string;
   piSettingsSnippet?: string;
+  piExtensionPath?: string;
+  piExtensionName?: string;
   selfTestCommand?: string[];
 };
 

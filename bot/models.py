@@ -59,10 +59,11 @@ def normalize_execution_mode_config(
     *,
     bot_mode: str = "cli",
 ) -> tuple[list[str], str]:
-    if str(bot_mode or "cli").strip().lower() != "cli":
-        return [EXECUTION_MODE_CLI], EXECUTION_MODE_CLI
+    normalized_bot_mode = str(bot_mode or "cli").strip().lower()
     supported = normalize_execution_modes(supported_value)
     default = normalize_execution_mode(default_value, default=supported[0])
+    if normalized_bot_mode not in {"cli", "assistant"}:
+        return [EXECUTION_MODE_CLI], EXECUTION_MODE_CLI
     if supported == [EXECUTION_MODE_NATIVE_AGENT] or default == EXECUTION_MODE_NATIVE_AGENT:
         return [EXECUTION_MODE_NATIVE_AGENT], EXECUTION_MODE_NATIVE_AGENT
     return [EXECUTION_MODE_CLI], EXECUTION_MODE_CLI

@@ -362,6 +362,12 @@ function Install-PortablePiExtensions {
         throw "未找到 pi-workspace-history 扩展文件: $workspaceHistorySource"
     }
     Copy-Item -LiteralPath $workspaceHistorySource -Destination (Join-Path $extensionsRoot "workspace-history.ts") -Force
+
+    $piClusterExtensionSource = Join-Path $script:RepoRoot "bot\cluster\pi_extension\tcb-cluster.ts"
+    if (-not (Test-Path -LiteralPath $piClusterExtensionSource)) {
+        throw "未找到 Pi 集群扩展文件: $piClusterExtensionSource"
+    }
+    Copy-Item -LiteralPath $piClusterExtensionSource -Destination (Join-Path $extensionsRoot "tcb-cluster.ts") -Force
 }
 
 function Initialize-PortablePiConfig {
@@ -557,6 +563,7 @@ function Set-PortableRuntimeEnv {
     $env:NATIVE_AGENT_COMMAND = $env:NATIVE_AGENT_PI_COMMAND
     $env:NATIVE_AGENT_ENABLED = "true"
     $env:NATIVE_AGENT_PI_HOME = Join-Path $PackageRoot "data\pi-home"
+    $env:TCB_CLUSTER_MCP_CONFIG = Join-Path $PackageRoot ".tcb\cluster-mcp\config.json"
 }
 
 function Invoke-RepoModule {
@@ -783,11 +790,15 @@ function Test-PortableBundle {
     $envPath = Join-Path $PackageRoot ".env"
     $bootstrap = Join-Path $PackageRoot "runtime\portable_bootstrap.py"
     $workspaceHistory = Join-Path $PackageRoot "data\pi-home\.pi\agent\extensions\workspace-history.ts"
+    $piClusterExtension = Join-Path $PackageRoot "data\pi-home\.pi\agent\extensions\tcb-cluster.ts"
 
     Invoke-CheckedCommand -FilePath $nodeExe -Arguments @("--version") -FailureMessage "包内 Node 校验失败" -WorkingDirectory $PackageRoot
     Invoke-CheckedCommand -FilePath $piCmd -Arguments @("--version") -FailureMessage "包内 Pi 校验失败" -WorkingDirectory $PackageRoot
     if (-not (Test-Path -LiteralPath $workspaceHistory)) {
         throw "未找到包内 pi-workspace-history 扩展: $workspaceHistory"
+    }
+    if (-not (Test-Path -LiteralPath $piClusterExtension)) {
+        throw "未找到包内 Pi 集群扩展: $piClusterExtension"
     }
 
     Invoke-CheckedCommand -FilePath $pythonExe -Arguments @(

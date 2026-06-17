@@ -41,6 +41,8 @@ def test_portable_build_script_embeds_node_pi_and_portable_pi_home():
     assert "Install-PortablePiExtensions" in content
     assert "@earendil-works/pi-coding-agent@0.74.2" in content
     assert "pi-workspace-history@0.2.2" in content
+    assert "tcb-cluster.ts" in content
+    assert "TCB_CLUSTER_MCP_CONFIG" in content
     assert "PI_AGENT_SETTINGS" in content
     assert "PI_AGENT_MODELS" in content
     assert "NATIVE_AGENT_PI_COMMAND" in content
@@ -50,6 +52,24 @@ def test_portable_build_script_embeds_node_pi_and_portable_pi_home():
     assert "data\\pi-home\\.pi\\agent\\extensions" in content
     assert "$env:HOME" not in content
     assert "$env:USERPROFILE" not in content
+
+
+def test_pi_cluster_extension_source_is_packaged_and_uses_bridge_env():
+    extension = Path("bot/cluster/pi_extension/tcb-cluster.ts")
+
+    assert extension.exists()
+    content = extension.read_text(encoding="utf-8")
+    for tool_name in [
+        "cluster_status",
+        "list_agents",
+        "ask_agent",
+        "poll_agent_tasks",
+        "wait_agent_messages",
+    ]:
+        assert f'"{tool_name}"' in content
+    assert "TCB_CLUSTER_MCP_CONFIG" in content
+    assert "TCB_CLUSTER_RUN_ID" in content
+    assert "/api/internal/cluster/mcp/tools/" in content
 
 
 def test_publish_release_shell_generates_and_publishes_checksum_assets():

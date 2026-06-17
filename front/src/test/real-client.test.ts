@@ -254,7 +254,7 @@ describe("RealWebBotClient", () => {
     expect(status.agents[0].timeoutSeconds).toBe(180);
   });
 
-  test("cluster setup prepare maps pi fields", async () => {
+  test("cluster setup prepare maps pi extension fields", async () => {
     fetchMock.mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -267,8 +267,8 @@ describe("RealWebBotClient", () => {
           install_command: [],
           verify_command: [],
           remove_command: [],
-          pi_settings_path: "C:\\Users\\demo\\.pi\\agent\\settings.json",
-          pi_settings_snippet: "{\n  \"mcp\": {}\n}",
+          pi_extension_path: "C:\\Users\\demo\\.pi\\agent\\extensions\\tcb-cluster.ts",
+          pi_extension_name: "tcb-cluster.ts",
           self_test_command: ["python", "bot\\cluster\\mcp_stdio.py", "--self-test"],
         },
       }),
@@ -278,9 +278,30 @@ describe("RealWebBotClient", () => {
     const prepare = await client.prepareClusterSetup("main");
 
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/bots/main/cluster/setup/prepare", expect.objectContaining({ method: "POST" }));
-    expect(prepare.piSettingsPath).toContain("settings.json");
-    expect(prepare.piSettingsSnippet).toContain("\"mcp\"");
+    expect(prepare.piExtensionPath).toContain("tcb-cluster.ts");
+    expect(prepare.piExtensionName).toBe("tcb-cluster.ts");
     expect(prepare.selfTestCommand).toEqual(["python", "bot\\cluster\\mcp_stdio.py", "--self-test"]);
+  });
+
+  test("cluster bundle schema uses global admin route", async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        data: {
+          version: 1,
+          schema: { type: "object" },
+          instructions: "只输出 JSON",
+        },
+      }),
+    });
+
+    const client = new RealWebBotClient();
+    const schema = await client.getClusterBundleSchema("main");
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/cluster/schema", expect.objectContaining({ cache: "no-store" }));
+    expect(schema.version).toBe(1);
+    expect(schema.schema.type).toBe("object");
   });
 
   test("getDebugProfile normalizes snake case launch schema fields", async () => {

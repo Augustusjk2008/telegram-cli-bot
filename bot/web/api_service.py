@@ -102,8 +102,9 @@ from bot.cluster.setup import (
     build_cli_remove_command,
     build_cli_verify_command,
     build_pi_mcp_self_test_command,
-    build_pi_mcp_settings_snippet,
+    get_pi_cluster_extension_path,
     prepare_cluster_mcp_launcher,
+    write_pi_cluster_extension,
 )
 from bot.prompts import render_prompt
 from bot import config
@@ -580,6 +581,16 @@ def _supports_cli_runtime(profile: BotProfile) -> bool:
     return profile.bot_mode in ("cli", "assistant")
 
 
+def _supports_native_agent_runtime(profile: BotProfile) -> bool:
+    modes = {
+        str(mode or "").strip().lower()
+        for mode in list(getattr(profile, "supported_execution_modes", []) or [])
+        if str(mode or "").strip()
+    }
+    default_mode = str(getattr(profile, "default_execution_mode", "") or "").strip().lower()
+    return NATIVE_AGENT_PROVIDER in modes or default_mode == NATIVE_AGENT_PROVIDER
+
+
 def _build_session_ids(session: UserSession) -> dict[str, Any]:
     return {
         "codex_session_id": session.codex_session_id,
@@ -648,6 +659,17 @@ def _resolve_requested_execution_mode(execution_mode: str, profile: BotProfile) 
     if is_legacy_execution_mode(execution_mode):
         _raise(400, "invalid_execution_mode", LEGACY_EXECUTION_MODE_REMOVED_MESSAGE)
     return normalize_execution_mode(execution_mode, profile)
+
+
+def _resolve_chat_execution_mode(profile: BotProfile, execution_mode: str) -> str:
+    resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
+    if resolved_execution_mode == NATIVE_AGENT_PROVIDER and not _supports_native_agent_runtime(profile):
+        _raise(409, "native_agent_unavailable", "当前 Bot 未启用原生 agent")
+    return resolved_execution_mode
+
+
+def _should_route_assistant_runtime(task_mode: str, resolved_execution_mode: str) -> bool:
+    return task_mode == "proposal_patch" or resolved_execution_mode != NATIVE_AGENT_PROVIDER
 
 
 def _pi_store() -> PiSessionStore:
@@ -978,28 +1000,13 @@ def _pi_mcp_command_points_to_launcher(command: Any, launcher_path: Path) -> boo
 def _cluster_pi_mcp_target_status(*, active_cli_type: str) -> dict[str, str]:
     if active_cli_type != "pi":
         return _cluster_inactive_target_status()
-    launcher_path = _cluster_launcher_path()
     config_path = _cluster_mcp_config_path()
     runtime_status = _cluster_runtime_mcp_status()
     if runtime_status["state"] != "runtime_ready":
         return runtime_status
-    settings_path = get_pi_settings_path()
-    try:
-        settings = json.loads(settings_path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return {"state": "mcp_missing", "message": f"未配置 Pi MCP: {settings_path}"}
-    except Exception as exc:
-        return {"state": "broken", "message": f"Pi settings 无效: {exc}"}
-    if not isinstance(settings, dict):
-        return {"state": "broken", "message": "Pi settings 必须是 JSON 对象"}
-    mcp = settings.get("mcp")
-    target = mcp.get(CLUSTER_MCP_SERVER_NAME) if isinstance(mcp, dict) else None
-    if not isinstance(target, dict):
-        return {"state": "mcp_missing", "message": "Pi 未配置 tcb-cluster MCP"}
-    if target.get("enabled") is not True:
-        return {"state": "broken", "message": "Pi MCP 已配置但未启用"}
-    if not _pi_mcp_command_points_to_launcher(target.get("command"), launcher_path):
-        return {"state": "stale", "message": "Pi MCP command 未指向当前 launcher"}
+    extension_path = get_pi_cluster_extension_path()
+    if not extension_path.exists():
+        return {"state": "mcp_missing", "message": f"未安装 Pi 集群扩展: {extension_path}"}
     command = build_pi_mcp_self_test_command(config_path)
     try:
         completed = subprocess.run(
@@ -1013,13 +1020,13 @@ def _cluster_pi_mcp_target_status(*, active_cli_type: str) -> dict[str, str]:
     except FileNotFoundError:
         return {"state": "broken", "message": "未找到 Python，无法自检"}
     except subprocess.TimeoutExpired:
-        return {"state": "broken", "message": "Pi MCP 自检超时"}
+        return {"state": "broken", "message": "Pi 集群扩展自检超时"}
     except OSError as exc:
         return {"state": "broken", "message": str(exc)}
     if completed.returncode != 0:
         output = f"{completed.stdout or ''}\n{completed.stderr or ''}".strip()
-        return {"state": "broken", "message": output or "Pi MCP 自检失败"}
-    return {"state": "installed", "message": "Pi MCP 已配置"}
+        return {"state": "broken", "message": output or "Pi 集群扩展自检失败"}
+    return {"state": "installed", "message": "Pi 集群扩展已配置"}
 
 
 def get_cluster_status(manager: MultiBotManager, alias: str) -> dict[str, Any]:
@@ -1062,14 +1069,14 @@ def prepare_cluster_setup(manager: MultiBotManager, alias: str) -> dict[str, Any
     )
     active_cli_type = _profile_cluster_active_cli_type(profile)
     if active_cli_type == "pi":
-        pi_settings_snippet = build_pi_mcp_settings_snippet(launcher.launcher_path)
+        extension_path = write_pi_cluster_extension(repo_root=_REPO_ROOT)
         return {
             **launcher.to_dict(),
             "install_command": [],
             "verify_command": [],
             "remove_command": [],
-            "pi_settings_path": str(get_pi_settings_path()),
-            "pi_settings_snippet": json.dumps(pi_settings_snippet, ensure_ascii=False, indent=2),
+            "pi_extension_path": str(extension_path),
+            "pi_extension_name": "tcb-cluster.ts",
             "self_test_command": build_pi_mcp_self_test_command(launcher.config_path),
         }
     cli_type = active_cli_type if active_cli_type in {"codex", "claude", "kimi"} else profile.cli_type
@@ -6190,8 +6197,8 @@ async def run_chat(
 ) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     shared_user_id = chat_session_user_id(user_id)
-    resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
-    if profile.bot_mode == "assistant":
+    resolved_execution_mode = _resolve_chat_execution_mode(profile, execution_mode)
+    if profile.bot_mode == "assistant" and _should_route_assistant_runtime(task_mode, resolved_execution_mode):
         if manager.assistant_runtime is None:
             _raise(503, "assistant_runtime_unavailable", "assistant 运行时尚未启动")
         if task_mode == "proposal_patch":
@@ -6322,8 +6329,8 @@ async def stream_chat(
     try:
         profile = get_profile_or_raise(manager, alias)
         shared_user_id = chat_session_user_id(user_id)
-        resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
-        if profile.bot_mode == "assistant":
+        resolved_execution_mode = _resolve_chat_execution_mode(profile, execution_mode)
+        if profile.bot_mode == "assistant" and _should_route_assistant_runtime(task_mode, resolved_execution_mode):
             if manager.assistant_runtime is None:
                 _raise(503, "assistant_runtime_unavailable", "assistant 运行时尚未启动")
             if task_mode == "proposal_patch":

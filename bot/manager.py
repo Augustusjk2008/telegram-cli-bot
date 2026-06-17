@@ -513,11 +513,6 @@ class MultiBotManager:
             default_execution_mode,
             default=requested_supported_execution_modes[0],
         )
-        if resolved_bot_mode != "cli" and (
-            EXECUTION_MODE_NATIVE_AGENT in requested_supported_execution_modes
-            or requested_default_execution_mode == EXECUTION_MODE_NATIVE_AGENT
-        ):
-            raise ValueError("仅 CLI Bot 支持原生 agent")
         resolved_supported_execution_modes, resolved_default_execution_mode = normalize_execution_mode_config(
             requested_supported_execution_modes,
             default_execution_mode,
@@ -676,11 +671,6 @@ class MultiBotManager:
 
         async with self._lock:
             profile = self._get_profile_for_update(normalized_alias)
-            if profile.bot_mode != "cli" and (
-                EXECUTION_MODE_NATIVE_AGENT in requested_supported_execution_modes
-                or requested_default_execution_mode == EXECUTION_MODE_NATIVE_AGENT
-            ):
-                raise ValueError("仅 CLI Bot 支持原生 agent")
             supported, default_mode = normalize_execution_mode_config(
                 requested_supported_execution_modes,
                 requested_default_execution_mode,
@@ -710,7 +700,7 @@ class MultiBotManager:
 
         async with self._lock:
             profile = self._get_profile_for_update(normalized_alias)
-            if profile.bot_mode != "cli" or EXECUTION_MODE_NATIVE_AGENT not in profile.supported_execution_modes:
+            if EXECUTION_MODE_NATIVE_AGENT not in profile.supported_execution_modes:
                 raise ValueError("仅原生 agent Bot 支持模型选择")
             native_agent = _normalize_bot_native_agent_config(profile.native_agent)
             native_agent["model"] = selected_model

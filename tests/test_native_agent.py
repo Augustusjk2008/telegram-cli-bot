@@ -1660,6 +1660,7 @@ async def test_native_agent_service_passes_cluster_run_id_to_pi_runtime_env(tmp_
 
     monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
     monkeypatch.setattr(config, "NATIVE_AGENT_PI_HOME", str(tmp_path / "pi-home"))
+    monkeypatch.setattr("bot.native_agent.service.get_cluster_mcp_config_path", lambda: tmp_path / ".tcb" / "cluster-mcp" / "config.json")
     runtime = FakePiRuntime([
         {"type": "agent_start", "sessionId": "sess-1"},
         {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "回"}},
@@ -1683,6 +1684,7 @@ async def test_native_agent_service_passes_cluster_run_id_to_pi_runtime_env(tmp_
 
     assert registry.requests[0].env == {
         "TCB_CLUSTER_RUN_ID": "clr_test",
+        "TCB_CLUSTER_MCP_CONFIG": str(tmp_path / ".tcb" / "cluster-mcp" / "config.json"),
         "NATIVE_AGENT_PI_HOME": str(tmp_path / "pi-home"),
     }
 

@@ -3421,7 +3421,7 @@ export class MockWebBotClient implements WebBotClient {
         codex: activeCliType === "codex" ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
         claude: activeCliType === "claude" ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
         kimi: activeCliType === "kimi" ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
-        pi: activeCliType === "pi" ? { state: "installed", message: "Pi MCP 已配置" } : { state: "not_checked", message: "未使用" },
+        pi: activeCliType === "pi" ? { state: "installed", message: "Pi 集群扩展已配置" } : { state: "not_checked", message: "未使用" },
       },
       agents: this.ensureAgents(botAlias)
         .filter((agent) => !agent.isMain)
@@ -3468,16 +3468,8 @@ export class MockWebBotClient implements WebBotClient {
         installCommand: [],
         verifyCommand: [],
         removeCommand: [],
-        piSettingsPath: "C:\\Users\\demo\\.pi\\agent\\settings.json",
-        piSettingsSnippet: JSON.stringify({
-          mcp: {
-            "tcb-cluster": {
-              type: "local",
-              command: [launcherPath],
-              enabled: true,
-            },
-          },
-        }, null, 2),
+        piExtensionPath: "C:\\Users\\demo\\.pi\\agent\\extensions\\tcb-cluster.ts",
+        piExtensionName: "tcb-cluster.ts",
         selfTestCommand: ["python", "bot\\cluster\\mcp_stdio.py", "--config", configPath, "--self-test"],
       };
     }

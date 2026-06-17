@@ -1129,6 +1129,21 @@ class WebApiServer:
         _require_capability(auth, capability)
         return auth
 
+    async def _with_any_capability(self, request: web.Request, capabilities: set[str]) -> AuthContext:
+        auth = await self._with_auth(request)
+        if any(capability in auth.capabilities for capability in capabilities):
+            return auth
+        raise WebApiError(403, "forbidden", "权限不足")
+
+    async def _with_cluster_bot_config_access(self, request: web.Request) -> AuthContext:
+        auth = await self._with_any_capability(request, {CAP_MANAGE_BOTS, CAP_ADMIN_OPS})
+        raw_alias = request.match_info.get("alias")
+        alias = str(raw_alias or "").strip().lower() if isinstance(raw_alias, str) else ""
+        if alias:
+            auth = self._bot_auth(auth, alias)
+            request["auth"] = auth
+        return auth
+
     def _schedule_restart_request(self) -> None:
         if self._restart_task is not None and not self._restart_task.done():
             return
@@ -1978,45 +1993,45 @@ class WebApiServer:
         return _json({"ok": True, "data": data})
 
     async def post_cluster_setup_prepare(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
+        await self._with_cluster_bot_config_access(request)
         alias = self._manager_alias(request)
         return _json({"ok": True, "data": prepare_cluster_setup(self.manager, alias)})
 
     async def post_cluster_config(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
+        await self._with_cluster_bot_config_access(request)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         return _json({"ok": True, "data": await update_cluster_config(self.manager, alias, dict(body or {}))})
 
     async def get_cluster_templates_view(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
+        await self._with_cluster_bot_config_access(request)
         alias = self._manager_alias(request)
         return _json({"ok": True, "data": get_cluster_templates(self.manager, alias)})
 
     async def get_cluster_schema_view(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
+        await self._with_any_capability(request, {CAP_MANAGE_BOTS, CAP_ADMIN_OPS})
         return _json({"ok": True, "data": get_cluster_bundle_schema()})
 
     async def post_cluster_template_preview(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
+        await self._with_cluster_bot_config_access(request)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         return _json({"ok": True, "data": preview_cluster_template(self.manager, alias, dict(body or {}))})
 
     async def post_cluster_template_apply(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
+        await self._with_cluster_bot_config_access(request)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         return _json({"ok": True, "data": await apply_cluster_template(self.manager, alias, dict(body or {}))})
 
     async def post_cluster_bundle_preview(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
+        await self._with_cluster_bot_config_access(request)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         return _json({"ok": True, "data": preview_cluster_config_bundle(self.manager, alias, dict(body or {}))})
 
     async def post_cluster_bundle_apply(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
+        await self._with_cluster_bot_config_access(request)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         return _json({"ok": True, "data": await apply_cluster_config_bundle(self.manager, alias, dict(body or {}))})

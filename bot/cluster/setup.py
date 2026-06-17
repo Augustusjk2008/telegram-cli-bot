@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import sys
 from dataclasses import dataclass
@@ -21,6 +22,33 @@ def build_pi_mcp_settings_snippet(launcher_path: Path) -> dict[str, Any]:
             }
         }
     }
+
+
+def get_cluster_mcp_config_path(*, home_dir: Path | None = None) -> Path:
+    root = home_dir or Path.home()
+    return root / ".tcb" / "cluster-mcp" / "config.json"
+
+
+def get_pi_cluster_extension_source_path(repo_root: Path | None = None) -> Path:
+    root = repo_root or Path(__file__).resolve().parents[2]
+    return root / "bot" / "cluster" / "pi_extension" / "tcb-cluster.ts"
+
+
+def get_pi_cluster_extension_path(*, home_dir: Path | None = None) -> Path:
+    if home_dir is None:
+        settings_override = str(os.environ.get("PI_AGENT_SETTINGS") or "").strip()
+        if settings_override:
+            return Path(settings_override).expanduser().parent / "extensions" / "tcb-cluster.ts"
+    root = home_dir or Path.home()
+    return root / ".pi" / "agent" / "extensions" / "tcb-cluster.ts"
+
+
+def write_pi_cluster_extension(*, home_dir: Path | None = None, repo_root: Path | None = None) -> Path:
+    source = get_pi_cluster_extension_source_path(repo_root)
+    destination = get_pi_cluster_extension_path(home_dir=home_dir)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    return destination
 
 
 def build_pi_mcp_self_test_command(config_path: Path, *, python_executable: Path | None = None) -> list[str]:
@@ -86,7 +114,7 @@ def prepare_cluster_mcp_launcher(
     bin_dir = home_dir / ".tcb" / "bin"
     mcp_dir = home_dir / ".tcb" / "cluster-mcp"
     launcher_path = bin_dir / ("tcb-cluster-mcp.cmd" if sys.platform.startswith("win") else "tcb-cluster-mcp.sh")
-    config_path = mcp_dir / "config.json"
+    config_path = get_cluster_mcp_config_path(home_dir=home_dir)
     token_path = mcp_dir / "token"
 
     mcp_dir.mkdir(parents=True, exist_ok=True)

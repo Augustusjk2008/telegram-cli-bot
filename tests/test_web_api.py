@@ -45,6 +45,7 @@ from bot.models import AgentProfile, BotProfile, UserSession
 from bot.plugins.service import PluginService
 from bot.session_store import load_session, save_session
 from bot.web.auth_store import (
+    CAP_ADMIN_OPS,
     CAP_CHAT_SEND,
     CAP_CREATE_WORKDIR_DIRECTORY,
     CAP_DEBUG_EXEC,
@@ -538,7 +539,7 @@ async def test_run_chat_native_agent_plan_cluster_prompt_contains_run_id_and_men
 
 
 @pytest.mark.asyncio
-async def test_get_cluster_status_native_agent_reports_pi_target(
+async def test_get_cluster_status_native_agent_reports_pi_extension_target(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -549,7 +550,7 @@ async def test_get_cluster_status_native_agent_reports_pi_target(
     launcher = tmp_path / ".tcb" / "bin" / "tcb-cluster-mcp.cmd"
     config_path = tmp_path / ".tcb" / "cluster-mcp" / "config.json"
     token_path = tmp_path / ".tcb" / "cluster-mcp" / "token"
-    settings_path = tmp_path / ".pi" / "agent" / "settings.json"
+    extension_path = tmp_path / ".pi" / "agent" / "extensions" / "tcb-cluster.ts"
     launcher.parent.mkdir(parents=True, exist_ok=True)
     launcher.write_text("@echo off\r\n", encoding="utf-8")
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -561,20 +562,13 @@ async def test_get_cluster_status_native_agent_reports_pi_target(
         "server_name": "tcb-cluster",
     }), encoding="utf-8")
     token_path.write_text("token", encoding="utf-8")
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
-    settings_path.write_text(json.dumps({
-        "mcp": {
-            "tcb-cluster": {
-                "type": "local",
-                "command": [str(launcher)],
-                "enabled": True,
-            }
-        }
-    }), encoding="utf-8")
-    monkeypatch.setenv("PI_AGENT_SETTINGS", str(settings_path))
+    extension_path.parent.mkdir(parents=True, exist_ok=True)
+    extension_path.write_text("export default function () {}\n", encoding="utf-8")
+    monkeypatch.setenv("PI_AGENT_SETTINGS", str(tmp_path / ".pi" / "agent" / "settings.json"))
     monkeypatch.setattr(api_service, "_cluster_launcher_path", lambda: launcher)
     monkeypatch.setattr(api_service, "_cluster_mcp_config_path", lambda: config_path)
     monkeypatch.setattr(api_service, "_cluster_token_path", lambda: token_path)
+    monkeypatch.setattr(api_service, "get_pi_cluster_extension_path", lambda: extension_path)
     monkeypatch.setattr(api_service, "build_pi_mcp_self_test_command", lambda cfg: ["python", str(cfg), "--self-test"])
     monkeypatch.setattr(api_service.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, stdout="ok", stderr=""))
 
@@ -582,11 +576,11 @@ async def test_get_cluster_status_native_agent_reports_pi_target(
 
     assert status["mcp"]["active_cli_type"] == "pi"
     assert status["mcp"]["pi"]["state"] == "installed"
-    assert status["mcp"]["pi"]["message"] == "Pi MCP 已配置"
+    assert status["mcp"]["pi"]["message"] == "Pi 集群扩展已配置"
 
 
 @pytest.mark.asyncio
-async def test_prepare_cluster_setup_returns_pi_settings_snippet(
+async def test_prepare_cluster_setup_returns_pi_extension_paths(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -610,11 +604,106 @@ async def test_prepare_cluster_setup_returns_pi_settings_snippet(
             }
 
     monkeypatch.setattr(api_service, "prepare_cluster_mcp_launcher", lambda **kwargs: FakeLauncher())
+    extension_path = tmp_path / ".pi" / "agent" / "extensions" / "tcb-cluster.ts"
+    monkeypatch.setattr(api_service, "write_pi_cluster_extension", lambda **kwargs: extension_path)
     result = api_service.prepare_cluster_setup(web_manager, "main")
 
-    assert result["pi_settings_path"].endswith(".pi\\agent\\settings.json") or result["pi_settings_path"].endswith(".pi/agent/settings.json")
-    assert "tcb-cluster" in result["pi_settings_snippet"]
+    assert result["pi_extension_path"].endswith(".pi\\agent\\extensions\\tcb-cluster.ts") or result["pi_extension_path"].endswith(".pi/agent/extensions/tcb-cluster.ts")
+    assert result["pi_extension_name"] == "tcb-cluster.ts"
     assert "self_test_command" in result
+
+
+@pytest.mark.asyncio
+async def test_run_chat_routes_assistant_native_agent_execution_mode(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    web_manager.main_profile.bot_mode = "assistant"
+    web_manager.main_profile.working_dir = str(temp_dir)
+    web_manager.main_profile.supported_execution_modes = ["native_agent"]
+    web_manager.main_profile.default_execution_mode = "native_agent"
+    web_manager.assistant_runtime = MagicMock()
+    web_manager.assistant_runtime.submit_interactive = AsyncMock(return_value={"output": "assistant"})
+    captured: dict[str, Any] = {}
+
+    class FakeNativeService:
+        async def run_chat(self, **kwargs):
+            captured.update(kwargs)
+            return {"output": "native", "returncode": 0}
+
+    monkeypatch.setattr(api_service, "get_native_agent_service", lambda: FakeNativeService())
+
+    result = await run_chat(web_manager, "main", 1001, "你好", execution_mode="native_agent")
+
+    assert result["output"] == "native"
+    assert captured["profile"] is web_manager.main_profile
+    assert captured["prompt_text"] == "你好"
+    web_manager.assistant_runtime.submit_interactive.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_chat_assistant_proposal_patch_stays_on_assistant_runtime_when_default_native(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    web_manager.main_profile.bot_mode = "assistant"
+    web_manager.main_profile.supported_execution_modes = ["native_agent"]
+    web_manager.main_profile.default_execution_mode = "native_agent"
+    runtime = MagicMock()
+    runtime.submit_interactive = AsyncMock(return_value={"output": "assistant"})
+    web_manager.assistant_runtime = runtime
+    monkeypatch.setattr(api_service, "_ensure_proposal_patch_chat_available", lambda *args, **kwargs: None)
+
+    result = await run_chat(web_manager, "main", 1001, "生成 patch", task_mode="proposal_patch")
+
+    assert result["output"] == "assistant"
+    runtime.submit_interactive.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_routes_assistant_native_agent_execution_mode(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    web_manager.main_profile.bot_mode = "assistant"
+    web_manager.main_profile.working_dir = str(temp_dir)
+    web_manager.main_profile.supported_execution_modes = ["native_agent"]
+    web_manager.main_profile.default_execution_mode = "native_agent"
+    web_manager.assistant_runtime = MagicMock()
+    web_manager.assistant_runtime.stream_interactive = AsyncMock()
+    captured: dict[str, Any] = {}
+
+    class FakeNativeService:
+        async def stream_chat(self, **kwargs):
+            captured.update(kwargs)
+            yield {"type": "done", "output": "native", "message": {"id": "assistant-native", "role": "assistant", "content": "native", "meta": {}}, "elapsed_seconds": 1, "returncode": 0}
+
+    monkeypatch.setattr(api_service, "get_native_agent_service", lambda: FakeNativeService())
+
+    events = [
+        event async for event in api_service.stream_chat(
+            web_manager,
+            "main",
+            1001,
+            "你好",
+            execution_mode="native_agent",
+        )
+    ]
+
+    assert events[-1]["type"] == "done"
+    assert captured["profile"] is web_manager.main_profile
+    assert captured["prompt_text"] == "你好"
+
+
+def test_pi_cluster_extension_path_uses_pi_agent_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    from bot.cluster.setup import get_pi_cluster_extension_path
+
+    settings_path = tmp_path / "data" / "pi-home" / ".pi" / "agent" / "settings.json"
+    monkeypatch.setenv("PI_AGENT_SETTINGS", str(settings_path))
+
+    assert get_pi_cluster_extension_path() == settings_path.parent / "extensions" / "tcb-cluster.ts"
 
 
 @pytest.mark.asyncio
@@ -955,6 +1044,37 @@ def test_overview_and_directory_listing(web_manager: MultiBotManager, temp_dir: 
     listing = get_directory_listing(web_manager, "main", 1001)
     assert listing["working_dir"] == str(subdir)
     assert any(item["name"] == "hello.txt" for item in listing["entries"])
+
+
+def test_directory_listing_supports_windows_virtual_drive_root(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.browse_dir = "C:\\"
+
+    monkeypatch.setattr("bot.web.files_service.os.path.isdir", lambda path: str(path) in {"C:\\", "D:\\"})
+
+    listing = get_directory_listing(web_manager, "main", 1001, path="::windows-drives::")
+
+    assert listing["working_dir"] == "盘符列表"
+    assert listing["is_virtual_root"] is True
+    assert [item["name"] for item in listing["entries"]] == ["C:\\", "D:\\"]
+
+
+def test_guest_directory_listing_rejects_windows_virtual_drive_root(web_manager: MultiBotManager):
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.browse_dir = "C:\\"
+
+    with pytest.raises(WebApiError) as exc_info:
+        get_directory_listing(
+            web_manager,
+            "main",
+            1001,
+            path="::windows-drives::",
+            base_dir="C:\\",
+            restrict_to_base_dir=True,
+        )
+
+    assert exc_info.value.status == 403
+    assert exc_info.value.code == "forbidden_path"
 
 class _FakeAssistantRuntimeCoordinator:
     def __init__(self) -> None:
@@ -1466,6 +1586,100 @@ async def test_member_cannot_read_unallowed_bot(
     assert [item["alias"] for item in list_payload["data"]] == ["main"]
     assert team_resp.status == 403
     assert team_payload["error"]["code"] == "bot_forbidden"
+
+
+@pytest.mark.asyncio
+async def test_member_manage_bots_can_access_bot_scoped_cluster_routes(
+    web_manager: MultiBotManager,
+    isolated_web_auth_store: WebAuthStore,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: False)
+    isolated_web_auth_store.register_codes_path.write_text(
+        json.dumps({"items": [{"code": "INVITE-001", "disabled": False}]}),
+        encoding="utf-8",
+    )
+    session = isolated_web_auth_store.register_member("alice", "pw-123", "INVITE-001")
+    isolated_web_auth_store.update_member(
+        session.account.account_id,
+        capabilities=[*MEMBER_CAPABILITIES, CAP_MANAGE_BOTS],
+    )
+    refreshed = isolated_web_auth_store.login_member("alice", "pw-123")
+    from bot.web.permission_store import BotPermissionStore
+
+    permission_store = BotPermissionStore(temp_dir / ".web_permissions.json")
+    permission_store.grant_bot_to_account(refreshed.account.account_id, "main")
+    monkeypatch.setattr("bot.web.server._BOT_PERMISSION_STORE", permission_store)
+    monkeypatch.setattr("bot.web.server.prepare_cluster_setup", lambda *_args, **_kwargs: {"ok": True})
+    monkeypatch.setattr("bot.web.server.get_cluster_templates", lambda *_args, **_kwargs: {"items": []})
+    headers = {"Authorization": f"Bearer {refreshed.token}"}
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            prepare_resp = await client.post("/api/admin/bots/main/cluster/setup/prepare", headers=headers)
+            templates_resp = await client.get("/api/admin/bots/main/cluster/templates", headers=headers)
+            schema_resp = await client.get("/api/admin/cluster/schema", headers=headers)
+
+    assert prepare_resp.status == 200
+    assert templates_resp.status == 200
+    assert schema_resp.status == 200
+
+
+@pytest.mark.asyncio
+async def test_member_without_bot_access_cannot_access_bot_scoped_cluster_routes(
+    web_manager: MultiBotManager,
+    isolated_web_auth_store: WebAuthStore,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: False)
+    isolated_web_auth_store.register_codes_path.write_text(
+        json.dumps({"items": [{"code": "INVITE-001", "disabled": False}]}),
+        encoding="utf-8",
+    )
+    session = isolated_web_auth_store.register_member("alice", "pw-123", "INVITE-001")
+    isolated_web_auth_store.update_member(
+        session.account.account_id,
+        capabilities=[*MEMBER_CAPABILITIES, CAP_MANAGE_BOTS],
+    )
+    refreshed = isolated_web_auth_store.login_member("alice", "pw-123")
+    monkeypatch.setattr("bot.web.server._BOT_PERMISSION_STORE", __import__("bot.web.permission_store", fromlist=["BotPermissionStore"]).BotPermissionStore(temp_dir / ".web_permissions.json"))
+    headers = {"Authorization": f"Bearer {refreshed.token}"}
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.post("/api/admin/bots/main/cluster/setup/prepare", headers=headers)
+            payload = await resp.json()
+
+    assert resp.status == 403
+    assert payload["error"]["code"] == "bot_forbidden"
+
+
+@pytest.mark.asyncio
+async def test_member_without_manage_bots_or_admin_ops_cannot_access_cluster_schema(
+    web_manager: MultiBotManager,
+    isolated_web_auth_store: WebAuthStore,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: False)
+    isolated_web_auth_store.register_codes_path.write_text(
+        json.dumps({"items": [{"code": "INVITE-001", "disabled": False}]}),
+        encoding="utf-8",
+    )
+    session = isolated_web_auth_store.register_member("alice", "pw-123", "INVITE-001")
+    headers = {"Authorization": f"Bearer {session.token}"}
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            resp = await client.get("/api/admin/cluster/schema", headers=headers)
+            payload = await resp.json()
+
+    assert resp.status == 403
+    assert payload["error"]["code"] == "forbidden"
 
 
 @pytest.mark.asyncio
