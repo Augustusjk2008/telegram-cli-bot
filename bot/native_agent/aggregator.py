@@ -677,6 +677,8 @@ class NativeAgentAggregator:
             return False
         current = str(self.assistant_message_id or "").strip()
         if current and normalized != current:
+            if not self.has_followup_activity and not self.text() and not self.saw_tool_activity and not self.assistant_completed:
+                return True
             return current in self.followup_message_ids or self.has_followup_activity or bool(self.text())
         return True
 

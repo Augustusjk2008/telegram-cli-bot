@@ -260,6 +260,63 @@ def test_pi_events_maps_message_end_tool_use_commentary_with_distinct_responses(
     assert aggregator.text() == ""
 
 
+def test_pi_events_does_not_duplicate_commentary_after_placeholder_message_start() -> None:
+    raw_events = [
+        {"type": "message_start", "message": {"role": "assistant"}},
+        {
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "开头过程。"},
+                    {"type": "toolCall", "id": "call-1", "name": "read", "arguments": {"path": "x"}},
+                    {"type": "toolCall", "id": "call-2", "name": "read", "arguments": {"path": "y"}},
+                ],
+                "stopReason": "toolUse",
+                "responseId": "resp-1",
+            },
+        },
+    ]
+
+    aggregator = NativeAgentAggregator(user_message_id="user-1")
+    results = []
+    for raw in raw_events:
+        for mapped in pi_json_to_events(raw, cwd="/repo", fallback_session_id="sess-1", assistant_message_id=aggregator.assistant_message_id or "web-msg"):
+            event = unwrap_event(mapped)
+            assert event is not None
+            results.append(aggregator.apply(event))
+    trace = [item for result in results for item in result.trace]
+
+    commentary = [item for item in trace if item["kind"] == "commentary"]
+    assert [item["summary"] for item in commentary] == ["开头过程。"]
+    assert [item["call_id"] for item in trace if item["kind"] == "tool_call"] == ["call-1", "call-2"]
+
+
+def test_pi_events_filters_leaked_thinking_text() -> None:
+    raw = {
+        "type": "message",
+        "id": "msg-1",
+        "message": {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "<thinking>hidden reasoning"},
+                {"type": "toolCall", "id": "call-1", "name": "write", "arguments": {"path": "x"}},
+            ],
+            "stopReason": "toolUse",
+        },
+    }
+
+    payloads = _payloads(raw, cwd="/repo", fallback_session_id="sess-1")
+    aggregator, results = _apply_all([raw])
+    trace = [item for result in results for item in result.trace]
+
+    assert [payload["type"] for payload in payloads] == ["message.part.updated", "message.updated"]
+    assert payloads[0]["part"]["callID"] == "call-1"
+    assert not any(item["kind"] == "commentary" for item in trace)
+    assert any(item["kind"] == "tool_call" and item["call_id"] == "call-1" for item in trace)
+    assert aggregator.text() == ""
+
+
 def test_pi_events_maps_pi_message_tool_result() -> None:
     raw = {
         "type": "message",

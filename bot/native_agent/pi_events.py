@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
@@ -571,7 +572,7 @@ def _message_text(raw: dict[str, Any]) -> str:
     event_text = ""
     if event_type in {"text_end", "text"}:
         event_text = _value_text(event.get("content") or event.get("partial"))
-    return _value_text(
+    return _clean_visible_text(_value_text(
         raw.get("content")
         or raw.get("text")
         or raw.get("value")
@@ -579,7 +580,7 @@ def _message_text(raw: dict[str, Any]) -> str:
         or message.get("text")
         or message.get("parts")
         or event_text
-    )
+    ))
 
 
 def _status_text(raw: dict[str, Any]) -> str:
@@ -648,6 +649,17 @@ def _first_present(raw: dict[str, Any], *keys: str) -> Any:
             if key in record:
                 return record[key]
     return None
+
+
+_THINKING_BLOCK_RE = re.compile(r"<thinking>.*?(?:</thinking>|$)", re.IGNORECASE | re.DOTALL)
+
+
+def _clean_visible_text(text: str) -> str:
+    value = str(text or "")
+    if not value:
+        return ""
+    cleaned = _THINKING_BLOCK_RE.sub("", value)
+    return cleaned.strip()
 
 
 def _value_text(value: Any) -> str:
