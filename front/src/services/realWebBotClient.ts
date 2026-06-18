@@ -210,7 +210,9 @@ import {
 import {
   buildAgUiMessageMeta,
   createAgUiRunState,
+  findAgUiActivityForDelta,
   reduceAgUiRunEvent,
+  type AgUiActivityItem,
 } from "../utils/agUiRunReducer";
 import { mapChatMessageContextUsage } from "../utils/contextUsage";
 import { mergeChatTraceEvents } from "../utils/nativeAgentTranscript";
@@ -1458,7 +1460,13 @@ type StreamEvent =
     }
   | { type: "error"; message?: string; code?: string };
 
-function mapAgUiTraceEvent(event: AgUiEvent): ChatTraceEvent | null {
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function mapAgUiTraceEvent(event: AgUiEvent, activityContent?: Record<string, unknown>): ChatTraceEvent | null {
   if (event.type === EventType.TOOL_CALL_START) {
     return {
       kind: "tool_call",
@@ -1493,11 +1501,13 @@ function mapAgUiTraceEvent(event: AgUiEvent): ChatTraceEvent | null {
   }
   if (event.type === EventType.ACTIVITY_SNAPSHOT || event.type === EventType.ACTIVITY_DELTA) {
     const content = (
-      event.type === EventType.ACTIVITY_SNAPSHOT
-        ? event.content
-        : { patch: event.patch }
-    ) as Record<string, unknown>;
+      activityContent
+      || (event.type === EventType.ACTIVITY_SNAPSHOT ? asRecord(event.content) : {})
+    );
     const summary = String(content.summary || content.previewText || content.message || content.reason || "").trim();
+    if (!summary && event.activityType === "TCB_NATIVE_AGENT_TRACE") {
+      return null;
+    }
     const rawKind = String(content.rawKind || "").trim();
     if (event.activityType === "TCB_META") {
       return null;
@@ -1537,6 +1547,19 @@ function mapAgUiTraceEvent(event: AgUiEvent): ChatTraceEvent | null {
     };
   }
   return null;
+}
+
+function contentForAgUiActivityEvent(
+  activities: AgUiActivityItem[],
+  event: AgUiEvent,
+): Record<string, unknown> {
+  if (event.type !== EventType.ACTIVITY_SNAPSHOT && event.type !== EventType.ACTIVITY_DELTA) {
+    return {};
+  }
+  if (event.type === EventType.ACTIVITY_SNAPSHOT) {
+    return asRecord(event.content);
+  }
+  return findAgUiActivityForDelta(activities, event.activityType, event.messageId)?.content || {};
 }
 
 function mapStatus(status: string, isProcessing = false): BotStatus {
@@ -4853,7 +4876,8 @@ export class RealWebBotClient implements WebBotClient {
           for (const agUiEvent of agUiEvents) {
             agUiState = reduceAgUiRunEvent(agUiState, agUiEvent);
             onAgUiEvent?.(agUiEvent);
-            const traceEvent = mapAgUiTraceEvent(agUiEvent);
+            const activityContent = contentForAgUiActivityEvent(agUiState.activities, agUiEvent);
+            const traceEvent = mapAgUiTraceEvent(agUiEvent, activityContent);
             if (traceEvent) {
               const mergedTrace = mergeChatTraceEvents([streamedTrace, [traceEvent]], {
                 nativeFlat: options?.executionMode === "native_agent",
@@ -4861,11 +4885,7 @@ export class RealWebBotClient implements WebBotClient {
               streamedTrace.splice(0, streamedTrace.length, ...(mergedTrace || []));
             }
             if (agUiEvent.type === EventType.ACTIVITY_SNAPSHOT || agUiEvent.type === EventType.ACTIVITY_DELTA) {
-              const content = (
-                agUiEvent.type === EventType.ACTIVITY_SNAPSHOT
-                  ? agUiEvent.content
-                  : {}
-              ) as Record<string, unknown>;
+              const content = activityContent;
               if (agUiEvent.activityType === "TCB_STATUS") {
                 const contextUsage = mapContextUsage(content.contextUsage ?? content.context_usage);
                 if (contextUsage) {

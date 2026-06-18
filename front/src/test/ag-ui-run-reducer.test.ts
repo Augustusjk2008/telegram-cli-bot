@@ -362,6 +362,60 @@ describe("agUiRunReducer", () => {
     ]);
   });
 
+  test("applies activity delta patches before rendering native commentary", () => {
+    const events: AgUiEvent[] = [
+      {
+        type: EventType.ACTIVITY_SNAPSHOT,
+        messageId: "activity-trace-1",
+        activityType: "TCB_NATIVE_AGENT_TRACE",
+        replace: true,
+        content: {
+          id: "activity-trace-1",
+          source: "native_agent",
+          rawKind: "commentary",
+          rawType: "message.text.reclassified",
+        },
+      },
+      {
+        type: EventType.ACTIVITY_DELTA,
+        messageId: "activity-trace-1",
+        activityType: "TCB_NATIVE_AGENT_TRACE",
+        patch: [
+          { op: "add", path: "/summary", value: "我先读取文件。" },
+        ],
+      },
+    ];
+
+    const state = events.reduce(reduceAgUiRunEvent, createAgUiRunState());
+
+    expect(state.activities).toEqual([
+      expect.objectContaining({
+        id: "activity-trace-1",
+        summary: "我先读取文件。",
+        content: expect.objectContaining({
+          id: "activity-trace-1",
+          summary: "我先读取文件。",
+          source: "native_agent",
+          rawKind: "commentary",
+        }),
+      }),
+    ]);
+    expect(state.entries).toEqual([
+      expect.objectContaining({
+        kind: "process",
+        summary: "我先读取文件。",
+      }),
+    ]);
+    expect(buildAgUiMessageMeta(state)?.trace).toEqual([
+      expect.objectContaining({
+        id: "activity-trace-1",
+        kind: "commentary",
+        summary: "我先读取文件。",
+        source: "native_agent",
+      }),
+    ]);
+  });
+
   test("does not mark handled native permissions as pending", () => {
     const state = reduceAgUiRunEvent(createAgUiRunState(), {
       type: EventType.ACTIVITY_SNAPSHOT,

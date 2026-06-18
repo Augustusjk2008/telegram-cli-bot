@@ -574,6 +574,48 @@ describe("RealWebBotClient", () => {
     ]);
   });
 
+  test("sendMessage applies ag-ui activity delta patches to native trace", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"RUN_STARTED\",\"threadId\":\"thread-1\",\"runId\":\"run-1\"}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"TEXT_MESSAGE_START\",\"messageId\":\"assistant-live\",\"role\":\"assistant\"}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"TEXT_MESSAGE_CONTENT\",\"messageId\":\"assistant-live\",\"delta\":\"我先读取文件。\"}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"MESSAGES_SNAPSHOT\",\"messages\":[{\"id\":\"assistant-live\",\"role\":\"assistant\",\"content\":\"\"}]}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"ACTIVITY_SNAPSHOT\",\"messageId\":\"activity-trace-1\",\"activityType\":\"TCB_NATIVE_AGENT_TRACE\",\"replace\":true,\"content\":{\"id\":\"activity-trace-1\",\"source\":\"native_agent\",\"rawKind\":\"commentary\",\"rawType\":\"message.text.reclassified\"}}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"ACTIVITY_DELTA\",\"messageId\":\"activity-trace-1\",\"activityType\":\"TCB_NATIVE_AGENT_TRACE\",\"patch\":[{\"op\":\"add\",\"path\":\"/summary\",\"value\":\"我先读取文件。\"}]}\n\n"));
+        controller.enqueue(encoder.encode("event: message\ndata: {\"type\":\"RUN_FINISHED\",\"threadId\":\"thread-1\",\"runId\":\"run-1\",\"result\":{\"content\":\"final answer\"},\"outcome\":{\"type\":\"success\"}}\n\n"));
+        controller.close();
+      },
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: stream,
+      json: async () => ({ ok: true, data: {} }),
+    });
+
+    const client = new RealWebBotClient();
+    const message = await client.sendMessage(
+      "main",
+      "hi",
+      vi.fn(),
+      undefined,
+      undefined,
+      { executionMode: "native_agent" },
+    );
+
+    expect(message.text).toBe("final answer");
+    expect(message.meta?.tracePresentation).toBe("native_agent_flat");
+    expect(message.meta?.trace).toEqual([
+      expect.objectContaining({
+        id: "activity-trace-1",
+        kind: "commentary",
+        summary: "我先读取文件。",
+        source: "native_agent",
+      }),
+    ]);
+  });
+
   test("sendMessage upserts ag-ui tool results by toolCallId", async () => {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({

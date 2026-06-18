@@ -111,6 +111,179 @@ function stringifyValue(value: unknown) {
   }
 }
 
+function cloneJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(cloneJsonValue);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .map(([key, entry]) => [key, cloneJsonValue(entry)]),
+    );
+  }
+  return value;
+}
+
+function cloneRecord(value: Record<string, unknown>) {
+  return asRecord(cloneJsonValue(value));
+}
+
+function decodeJsonPointerSegment(segment: string) {
+  return segment.replace(/~1/g, "/").replace(/~0/g, "~");
+}
+
+function jsonPointerSegments(pathValue: unknown) {
+  const path = asString(pathValue);
+  if (!path.startsWith("/")) {
+    return [];
+  }
+  const segments = path.slice(1).split("/").map(decodeJsonPointerSegment);
+  return segments[0] === "content" ? segments.slice(1) : segments;
+}
+
+function isArrayIndex(segment: string) {
+  return segment === "-" || /^(0|[1-9]\d*)$/.test(segment);
+}
+
+function ensureJsonPointerParent(target: Record<string, unknown>, segments: string[]) {
+  let current: unknown = target;
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const segment = segments[index];
+    const nextSegment = segments[index + 1] || "";
+    const created: unknown[] | Record<string, unknown> = isArrayIndex(nextSegment) ? [] : {};
+    if (Array.isArray(current)) {
+      const arrayIndex = segment === "-" ? current.length : Number(segment);
+      if (!Number.isInteger(arrayIndex) || arrayIndex < 0) {
+        return null;
+      }
+      if (!current[arrayIndex] || typeof current[arrayIndex] !== "object") {
+        current[arrayIndex] = created;
+      }
+      current = current[arrayIndex];
+    } else if (current && typeof current === "object") {
+      const record = current as Record<string, unknown>;
+      if (!record[segment] || typeof record[segment] !== "object") {
+        record[segment] = created;
+      }
+      current = record[segment];
+    } else {
+      return null;
+    }
+  }
+  return current && typeof current === "object" ? current : null;
+}
+
+function setJsonPointerValue(
+  target: Record<string, unknown>,
+  segments: string[],
+  value: unknown,
+  operation: "add" | "replace",
+) {
+  const parent = ensureJsonPointerParent(target, segments);
+  const key = segments[segments.length - 1];
+  const nextValue = cloneJsonValue(value);
+  if (Array.isArray(parent)) {
+    if (key === "-") {
+      parent.push(nextValue);
+      return;
+    }
+    const index = Number(key);
+    if (!Number.isInteger(index) || index < 0) {
+      return;
+    }
+    if (operation === "add") {
+      parent.splice(Math.min(index, parent.length), 0, nextValue);
+    } else if (index < parent.length) {
+      parent[index] = nextValue;
+    }
+    return;
+  }
+  if (parent && typeof parent === "object") {
+    (parent as Record<string, unknown>)[key] = nextValue;
+  }
+}
+
+function removeJsonPointerValue(target: Record<string, unknown>, segments: string[]) {
+  const parent = ensureJsonPointerParent(target, segments);
+  const key = segments[segments.length - 1];
+  if (Array.isArray(parent)) {
+    const index = Number(key);
+    if (Number.isInteger(index) && index >= 0 && index < parent.length) {
+      parent.splice(index, 1);
+    }
+    return;
+  }
+  if (parent && typeof parent === "object") {
+    delete (parent as Record<string, unknown>)[key];
+  }
+}
+
+function valueAtJsonPointer(target: Record<string, unknown>, segments: string[]) {
+  let current: unknown = target;
+  for (const segment of segments) {
+    if (Array.isArray(current)) {
+      const index = Number(segment);
+      current = Number.isInteger(index) && index >= 0 ? current[index] : undefined;
+    } else if (current && typeof current === "object") {
+      current = (current as Record<string, unknown>)[segment];
+    } else {
+      return undefined;
+    }
+  }
+  return current;
+}
+
+export function applyAgUiActivityPatch(baseContent: Record<string, unknown>, patch: unknown) {
+  let nextContent = cloneRecord(baseContent);
+  if (!Array.isArray(patch)) {
+    return nextContent;
+  }
+  for (const item of patch) {
+    const operation = asRecord(item);
+    const op = asString(operation.op).trim().toLowerCase();
+    const segments = jsonPointerSegments(operation.path);
+    if (!op) {
+      continue;
+    }
+    if (segments.length === 0) {
+      if (op === "remove") {
+        nextContent = {};
+      } else if (op === "add" || op === "replace") {
+        nextContent = cloneRecord(asRecord(operation.value));
+      }
+      continue;
+    }
+    if (op === "remove") {
+      removeJsonPointerValue(nextContent, segments);
+    } else if (op === "add" || op === "replace") {
+      setJsonPointerValue(nextContent, segments, operation.value, op);
+    } else if (op === "copy" || op === "move") {
+      const sourceSegments = jsonPointerSegments(operation.from);
+      const sourceValue = valueAtJsonPointer(nextContent, sourceSegments);
+      if (typeof sourceValue !== "undefined") {
+        setJsonPointerValue(nextContent, segments, sourceValue, "replace");
+        if (op === "move") {
+          removeJsonPointerValue(nextContent, sourceSegments);
+        }
+      }
+    }
+  }
+  return nextContent;
+}
+
+export function findAgUiActivityForDelta(
+  activities: AgUiActivityItem[],
+  activityType: string,
+  messageId: string,
+) {
+  const typedActivities = activities.filter((item) => item.activityType === activityType);
+  return typedActivities.find((item) => (
+    item.id === messageId
+    || asString(item.content.id).trim() === messageId
+    || asString(item.content.messageId || item.content.message_id).trim() === messageId
+  )) || (typedActivities.length === 1 ? typedActivities[0] : undefined);
+}
+
 function interruptReason(value: unknown) {
   const record = asRecord(value);
   const interrupts = Array.isArray(record.interrupts) ? record.interrupts : [];
@@ -194,7 +367,7 @@ function summarizeActivity(activityType: string, content: Record<string, unknown
   return (
     asString(content.message).trim()
     || asString(content.title).trim()
-    || stringifyValue(content).trim()
+    || (activityType === "TCB_NATIVE_AGENT_TRACE" ? "" : stringifyValue(content).trim())
   );
 }
 
@@ -442,9 +615,10 @@ export function reduceAgUiRunEvent(state: AgUiRunState, event: AgUiEvent): AgUiR
   if (event.type === EventType.ACTIVITY_SNAPSHOT || event.type === EventType.ACTIVITY_DELTA) {
     const content = event.type === EventType.ACTIVITY_SNAPSHOT
       ? asRecord(event.content)
-      : {
-          patch: Array.isArray(event.patch) ? event.patch : [],
-        };
+      : applyAgUiActivityPatch(
+          findAgUiActivityForDelta(state.activities, event.activityType, event.messageId)?.content || {},
+          event.patch,
+        );
     const summary = summarizeActivity(event.activityType, content);
     const activityId = event.activityType === "TCB_PERMISSION_REQUEST"
       ? getPermissionId(content) || event.activityType

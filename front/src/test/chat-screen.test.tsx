@@ -1498,6 +1498,167 @@ test("native send renders streaming transcript immediately without cli bubble ch
   expect(await screen.findByText("final answer")).toBeInTheDocument();
 });
 
+test("native ag-ui commentary is visible while stream is still running", async () => {
+  const user = userEvent.setup();
+  let resolveFinal!: (message: ChatMessage) => void;
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias,
+    _text,
+    _onChunk,
+    _onStatus,
+    _onTrace,
+    _options,
+    onAgUiEvent,
+  ) => {
+    onAgUiEvent?.({ type: EventType.RUN_STARTED, threadId: "thread-1", runId: "run-1" });
+    onAgUiEvent?.({ type: EventType.TEXT_MESSAGE_START, messageId: "assistant-live", role: "assistant" });
+    onAgUiEvent?.({ type: EventType.TEXT_MESSAGE_CONTENT, messageId: "assistant-live", delta: "我先读取文件。" });
+    onAgUiEvent?.({
+      type: EventType.MESSAGES_SNAPSHOT,
+      messages: [
+        { id: "assistant-live", role: "assistant", content: "" },
+      ],
+    });
+    onAgUiEvent?.({
+      type: EventType.ACTIVITY_SNAPSHOT,
+      messageId: "activity-trace-1",
+      activityType: "TCB_NATIVE_AGENT_TRACE",
+      replace: true,
+      content: {
+        id: "activity-trace-1",
+        summary: "我先读取文件。",
+        source: "native_agent",
+        rawKind: "commentary",
+        rawType: "message.text.reclassified",
+      },
+    });
+    onAgUiEvent?.({ type: EventType.TOOL_CALL_START, toolCallId: "tool-1", toolCallName: "shell_command" });
+    return new Promise<ChatMessage>((resolve) => {
+      resolveFinal = resolve;
+    });
+  });
+  const client = createClient({
+    getBotOverview: async (): Promise<BotOverview> => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+      supportedExecutionModes: ["native_agent"],
+      defaultExecutionMode: "native_agent",
+    }),
+    sendMessage,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  await screen.findByText("暂无消息，开始聊天吧");
+  await user.type(screen.getByPlaceholderText("输入消息"), "hi");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(within(transcript).getByText("我先读取文件。")).toBeInTheDocument();
+  expect(screen.getByTestId("native-agent-streaming-status")).toBeInTheDocument();
+
+  await act(async () => {
+    resolveFinal({
+      id: "assistant-native-final",
+      role: "assistant",
+      text: "final answer",
+      createdAt: new Date().toISOString(),
+      state: "done",
+      meta: {
+        tracePresentation: "native_agent_flat",
+        nativeSource: { provider: "原生 agent", sessionId: "sess-1" },
+        trace: [{ kind: "commentary", summary: "我先读取文件。", source: "native_agent" }],
+      },
+    });
+  });
+});
+
+test("native ag-ui delta commentary is visible while stream is still running", async () => {
+  const user = userEvent.setup();
+  let resolveFinal!: (message: ChatMessage) => void;
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias,
+    _text,
+    _onChunk,
+    _onStatus,
+    _onTrace,
+    _options,
+    onAgUiEvent,
+  ) => {
+    onAgUiEvent?.({ type: EventType.RUN_STARTED, threadId: "thread-1", runId: "run-1" });
+    onAgUiEvent?.({ type: EventType.TEXT_MESSAGE_START, messageId: "assistant-live", role: "assistant" });
+    onAgUiEvent?.({ type: EventType.TEXT_MESSAGE_CONTENT, messageId: "assistant-live", delta: "我先读取文件。" });
+    onAgUiEvent?.({
+      type: EventType.MESSAGES_SNAPSHOT,
+      messages: [
+        { id: "assistant-live", role: "assistant", content: "" },
+      ],
+    });
+    onAgUiEvent?.({
+      type: EventType.ACTIVITY_SNAPSHOT,
+      messageId: "activity-trace-1",
+      activityType: "TCB_NATIVE_AGENT_TRACE",
+      replace: true,
+      content: {
+        id: "activity-trace-1",
+        source: "native_agent",
+        rawKind: "commentary",
+        rawType: "message.text.reclassified",
+      },
+    });
+    onAgUiEvent?.({
+      type: EventType.ACTIVITY_DELTA,
+      messageId: "activity-trace-1",
+      activityType: "TCB_NATIVE_AGENT_TRACE",
+      patch: [
+        { op: "add", path: "/summary", value: "我先读取文件。" },
+      ],
+    });
+    onAgUiEvent?.({ type: EventType.TOOL_CALL_START, toolCallId: "tool-1", toolCallName: "shell_command" });
+    return new Promise<ChatMessage>((resolve) => {
+      resolveFinal = resolve;
+    });
+  });
+  const client = createClient({
+    getBotOverview: async (): Promise<BotOverview> => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+      supportedExecutionModes: ["native_agent"],
+      defaultExecutionMode: "native_agent",
+    }),
+    sendMessage,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  await screen.findByText("暂无消息，开始聊天吧");
+  await user.type(screen.getByPlaceholderText("输入消息"), "hi");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(within(transcript).getByText("我先读取文件。")).toBeInTheDocument();
+  expect(screen.getByTestId("native-agent-streaming-status")).toBeInTheDocument();
+
+  await act(async () => {
+    resolveFinal({
+      id: "assistant-native-final",
+      role: "assistant",
+      text: "final answer",
+      createdAt: new Date().toISOString(),
+      state: "done",
+      meta: {
+        tracePresentation: "native_agent_flat",
+        nativeSource: { provider: "原生 agent", sessionId: "sess-1" },
+        trace: [{ kind: "commentary", summary: "我先读取文件。", source: "native_agent" }],
+      },
+    });
+  });
+});
+
 test("final ag-ui message replaces polluted live assistant text", async () => {
   const user = userEvent.setup();
   const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
