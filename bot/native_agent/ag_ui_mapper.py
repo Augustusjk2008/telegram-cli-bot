@@ -114,8 +114,6 @@ def map_event(
     if event.type == "session.status":
         mapped.extend(_map_status_event(event, state))
     structured_events = _map_structured_part_event(event, state)
-    if structured_events:
-        mapped.extend(structured_events)
     if result.delta:
         if not state.text_started:
             mapped.append(
@@ -154,8 +152,18 @@ def map_event(
                 ],
             )
         )
-    if result.trace and not structured_events:
-        mapped.extend(_map_trace_events(result.trace, state))
+    if result.trace:
+        trace_events = result.trace
+        if structured_events:
+            trace_events = [
+                trace
+                for trace in trace_events
+                if str(trace.get("kind") or "").strip().lower() not in {"tool_call", "tool_result"}
+            ]
+        if trace_events:
+            mapped.extend(_map_trace_events(trace_events, state))
+    if structured_events:
+        mapped.extend(structured_events)
     return mapped
 
 

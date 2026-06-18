@@ -1176,6 +1176,72 @@ def test_native_agent_ag_ui_mapper_suppresses_reasoning_and_emits_tool_and_error
     assert finished_event.result["context_usage"] == context_usage
 
 
+def test_native_agent_ag_ui_mapper_keeps_commentary_before_structured_tool_events():
+    state = AgUiTurnState(
+        thread_id="conv-1",
+        run_id="run-1",
+        user_message_id="user-1",
+        assistant_message_id="assistant-1",
+    )
+    aggregator = NativeAgentAggregator(user_message_id="user-1")
+    preview = unwrap_event({
+        "type": "message.part.delta",
+        "sessionID": "sess-1",
+        "messageID": "assistant-1",
+        "partID": "preview",
+        "field": "text",
+        "delta": "我先读取文件。",
+    })
+    tool_event = unwrap_event({
+        "type": "message.part.updated",
+        "sessionID": "sess-1",
+        "part": {
+            "id": "tool-1",
+            "type": "tool",
+            "messageID": "assistant-1",
+            "tool": "shell_command",
+            "arguments": {"command": "dir"},
+            "output": "Exit code: 0",
+            "state": "completed",
+        },
+    })
+
+    assert preview is not None
+    assert tool_event is not None
+    preview_result = aggregator.apply(preview)
+    assert preview_result.delta == "我先读取文件。"
+    assert [event.type for event in map_ag_ui_event(event=preview, result=preview_result, state=state)] == [
+        core.EventType.TEXT_MESSAGE_START,
+        core.EventType.TEXT_MESSAGE_CONTENT,
+    ]
+    result = aggregator.apply(tool_event)
+
+    assert [item["kind"] for item in result.trace] == ["commentary", "tool_call", "tool_result"]
+
+    mapped = map_ag_ui_event(event=tool_event, result=result, state=state)
+    mapped_types = [event.type for event in mapped]
+    assert mapped_types.count(core.EventType.TOOL_CALL_START) == 1
+    assert mapped_types.count(core.EventType.TOOL_CALL_ARGS) == 1
+    assert mapped_types.count(core.EventType.TOOL_CALL_END) == 1
+    assert mapped_types.count(core.EventType.TOOL_CALL_RESULT) == 1
+    assert core.EventType.MESSAGES_SNAPSHOT in mapped_types
+
+    commentary = next(
+        (
+            event
+            for event in mapped
+            if event.type == core.EventType.ACTIVITY_SNAPSHOT
+            and event.activity_type == "TCB_NATIVE_AGENT_TRACE"
+        ),
+        None,
+    )
+    assert commentary is not None
+    assert commentary.activity_type == "TCB_NATIVE_AGENT_TRACE"
+    assert commentary.content["rawKind"] == "commentary"
+    assert commentary.content["summary"] == "我先读取文件。"
+    assert mapped.index(commentary) < mapped_types.index(core.EventType.TOOL_CALL_START)
+
+
 def test_native_agent_ag_ui_mapper_keeps_generic_trace_activities_distinct():
     state = AgUiTurnState(
         thread_id="conv-1",
