@@ -3816,6 +3816,75 @@ def _normalize_dream_prompt_preparation(
     return assistant_home, prompt_text, context_stats, new_stage_durations()
 
 
+@dataclass
+class _AssistantRequestPromptPreparation:
+    assistant_home: Any | None
+    assistant_pre_surface: dict[str, str]
+    prompt_text: str
+    compaction_prompt_active: bool
+    finalize_assistant_turn: bool
+    dream_context_stats: dict[str, Any] | None
+    dream_prompt_text: str
+    stage_durations: dict[str, int] = field(default_factory=new_stage_durations)
+
+
+def _prepare_assistant_request_prompt(
+    manager: MultiBotManager,
+    profile: BotProfile,
+    session: UserSession,
+    request: AssistantRunRequest | None,
+    *,
+    user_id: int,
+    user_text: str,
+    cli_type: str,
+) -> _AssistantRequestPromptPreparation:
+    _migrate_assistant_home_to_shared(bootstrap_assistant_home(profile.working_dir))
+    if _is_dream_request(request):
+        assert request is not None
+        assistant_home, prompt_text, dream_context_stats, stage_durations = _normalize_dream_prompt_preparation(
+            _prepare_dream_assistant_prompt(
+                manager,
+                profile,
+                session,
+                request,
+                user_text=user_text,
+            )
+        )
+        return _AssistantRequestPromptPreparation(
+            assistant_home=assistant_home,
+            assistant_pre_surface={},
+            prompt_text=prompt_text,
+            compaction_prompt_active=False,
+            finalize_assistant_turn=False,
+            dream_context_stats=dream_context_stats,
+            dream_prompt_text=prompt_text,
+            stage_durations=stage_durations,
+        )
+
+    context_user_id = request.context_user_id if request is not None and request.context_user_id is not None else user_id
+    assistant_home, assistant_pre_surface, prompt_text, compaction_prompt_active, stage_durations = (
+        _normalize_assistant_prompt_preparation(
+            _prepare_assistant_prompt(
+                profile,
+                session,
+                user_id=context_user_id,
+                user_text=user_text,
+                cli_type=cli_type,
+            )
+        )
+    )
+    return _AssistantRequestPromptPreparation(
+        assistant_home=assistant_home,
+        assistant_pre_surface=assistant_pre_surface,
+        prompt_text=prompt_text,
+        compaction_prompt_active=compaction_prompt_active,
+        finalize_assistant_turn=True,
+        dream_context_stats=None,
+        dream_prompt_text="",
+        stage_durations=stage_durations,
+    )
+
+
 def _finalize_dream_execution(
     manager: MultiBotManager,
     request: AssistantRunRequest,
@@ -5785,32 +5854,24 @@ async def run_cli_chat(
         _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
 
     if profile.bot_mode == "assistant":
-        _migrate_assistant_home_to_shared(bootstrap_assistant_home(profile.working_dir))
-        if _is_dream_request(request):
-            assert request is not None
-            assistant_home, prompt_text, dream_context_stats, assistant_stage_durations = _normalize_dream_prompt_preparation(
-                _prepare_dream_assistant_prompt(
-                    manager,
-                    profile,
-                    session,
-                    request,
-                    user_text=text,
-                )
-            )
-            dream_prompt_text = prompt_text
-            finalize_assistant_turn = False
-        else:
-            assistant_home, assistant_pre_surface, prompt_text, compaction_prompt_active, assistant_stage_durations = (
-                _normalize_assistant_prompt_preparation(
-                    _prepare_assistant_prompt(
-                        profile,
-                        session,
-                        user_id=request.context_user_id if request is not None and request.context_user_id is not None else user_id,
-                        user_text=text,
-                        cli_type=cli_type,
-                    )
-                )
-            )
+        prepared_prompt = _prepare_assistant_request_prompt(
+            manager,
+            profile,
+            session,
+            request,
+            user_id=user_id,
+            user_text=text,
+            cli_type=cli_type,
+        )
+        assistant_home = prepared_prompt.assistant_home
+        assistant_pre_surface = prepared_prompt.assistant_pre_surface
+        prompt_text = prepared_prompt.prompt_text
+        compaction_prompt_active = prepared_prompt.compaction_prompt_active
+        finalize_assistant_turn = prepared_prompt.finalize_assistant_turn
+        dream_context_stats = prepared_prompt.dream_context_stats
+        dream_prompt_text = prepared_prompt.dream_prompt_text
+        assistant_stage_durations = prepared_prompt.stage_durations
+        if not _is_dream_request(request):
             if is_plan_mode:
                 prompt_text = build_plan_mode_prompt(prompt_text, cluster_active=bool(cluster_run_id))
         prompt_text = _apply_cluster_prompt(
@@ -6178,6 +6239,244 @@ async def run_cli_chat(
         close_process_streams(lingering_process)
 
 
+def _normalized_chat_text(
+    user_text: str,
+    *,
+    request: AssistantRunRequest | None = None,
+    visible_text: str | None = None,
+) -> str:
+    visible_input = request.visible_text if request is not None and request.visible_text is not None else visible_text
+    text = (visible_input if visible_input is not None else user_text or "").strip()
+    if not text:
+        _raise(400, "empty_message", "消息不能为空")
+    if text.startswith("//"):
+        text = "/" + text[2:]
+    return text
+
+
+async def _run_native_agent_chat(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    user_text: str,
+    *,
+    request: AssistantRunRequest | None = None,
+    task_mode: str = "standard",
+    task_payload: dict[str, Any] | None = None,
+    visible_text: str | None = None,
+    agent_id: str = "main",
+    cluster: bool = False,
+    mentions: list[dict[str, Any]] | None = None,
+    solo_mode: bool = False,
+    actor: dict[str, Any] | None = None,
+    allow_unsafe_cli: bool = False,
+    prepare_assistant_request: bool = False,
+) -> dict[str, Any]:
+    shared_user_id = chat_session_user_id(user_id)
+    if (agent_id or "main") != "main":
+        _raise(409, "native_agent_child_agent_disabled", "原生 agent 模式暂不支持子 agent")
+    profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, "main")
+    if not _supports_cli_runtime(profile):
+        _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，Web 对话暂不支持该模式")
+
+    effective_task_mode = request.task_mode if request is not None else task_mode
+    effective_task_payload = request.task_payload if request is not None else task_payload
+    text = _normalized_chat_text(user_text, request=request, visible_text=visible_text)
+    request_obj = request or build_assistant_run_request(
+        alias,
+        shared_user_id,
+        user_text,
+        task_mode=effective_task_mode,
+        task_payload=effective_task_payload,
+        visible_text=visible_text,
+        actor=actor,
+    )
+    is_plan_mode = effective_task_mode == PLAN_MODE_TASK_MODE
+    cluster_run = _start_cluster_run_if_requested(
+        profile=profile,
+        alias=alias,
+        shared_user_id=shared_user_id,
+        cluster=cluster,
+        mentions=mentions,
+        allow_unsafe_cli=allow_unsafe_cli,
+    )
+    prepared_prompt: _AssistantRequestPromptPreparation | None = None
+    run_status = "completed"
+    try:
+        if prepare_assistant_request and profile.bot_mode == "assistant":
+            prepared_prompt = _prepare_assistant_request_prompt(
+                manager,
+                profile,
+                session,
+                request_obj,
+                user_id=shared_user_id,
+                user_text=text,
+                cli_type=normalize_cli_type(profile.cli_type),
+            )
+            prompt_text = prepared_prompt.prompt_text
+            if not _is_dream_request(request_obj) and is_plan_mode:
+                prompt_text = build_plan_mode_prompt(prompt_text, cluster_active=bool(cluster_run))
+        else:
+            prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run)) if is_plan_mode else text
+        prompt_text = _apply_cluster_prompt(
+            profile,
+            prompt_text,
+            cluster_run_id=cluster_run.run_id if cluster_run else "",
+            cluster_mentions=list(mentions or []),
+        )
+        result = await get_native_agent_service().run_chat(
+            profile=profile,
+            session=session,
+            user_text=text,
+            prompt_text=prompt_text,
+            history_service=_history_service_for_execution_mode(session, NATIVE_AGENT_PROVIDER),
+            actor=_actor_from_request(request_obj),
+            cluster_run_id=cluster_run.run_id if cluster_run else "",
+            solo_mode=solo_mode,
+        )
+        if prepared_prompt is not None:
+            result = dict(result)
+            if prepared_prompt.assistant_home is not None and prepared_prompt.finalize_assistant_turn:
+                try:
+                    _finalize_assistant_chat_turn(
+                        prepared_prompt.assistant_home,
+                        user_id=shared_user_id,
+                        user_text=text,
+                        response=str(result.get("output") or ""),
+                        assistant_pre_surface=prepared_prompt.assistant_pre_surface,
+                        compaction_prompt_active=prepared_prompt.compaction_prompt_active,
+                    )
+                except Exception as exc:
+                    logger.warning("处理 assistant native chat 收尾失败 user=%s error=%s", shared_user_id, exc)
+            result["assistant_stage_durations"] = dict(prepared_prompt.stage_durations)
+            if prepared_prompt.dream_context_stats is not None:
+                result["dream_context_stats"] = prepared_prompt.dream_context_stats
+                result["dream_prompt_text"] = prepared_prompt.dream_prompt_text
+        return result
+    except Exception:
+        run_status = "error"
+        raise
+    finally:
+        if cluster_run:
+            _CLUSTER_RUNTIME.finish_run(cluster_run.run_id, run_status)
+            _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
+
+
+async def _stream_native_agent_chat(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    user_text: str,
+    *,
+    request: AssistantRunRequest | None = None,
+    task_mode: str = "standard",
+    task_payload: dict[str, Any] | None = None,
+    visible_text: str | None = None,
+    agent_id: str = "main",
+    cluster: bool = False,
+    mentions: list[dict[str, Any]] | None = None,
+    solo_mode: bool = False,
+    actor: dict[str, Any] | None = None,
+    protocol: str = "",
+    allow_unsafe_cli: bool = False,
+    prepare_assistant_request: bool = False,
+) -> AsyncIterator[dict[str, Any]]:
+    shared_user_id = chat_session_user_id(user_id)
+    if (agent_id or "main") != "main":
+        _raise(409, "native_agent_child_agent_disabled", "原生 agent 模式暂不支持子 agent")
+    profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, "main")
+    if not _supports_cli_runtime(profile):
+        _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，Web 对话暂不支持该模式")
+
+    effective_task_mode = request.task_mode if request is not None else task_mode
+    effective_task_payload = request.task_payload if request is not None else task_payload
+    text = _normalized_chat_text(user_text, request=request, visible_text=visible_text)
+    request_obj = request or build_assistant_run_request(
+        alias,
+        shared_user_id,
+        user_text,
+        task_mode=effective_task_mode,
+        task_payload=effective_task_payload,
+        visible_text=visible_text,
+        actor=actor,
+    )
+    is_plan_mode = effective_task_mode == PLAN_MODE_TASK_MODE
+    cluster_run = _start_cluster_run_if_requested(
+        profile=profile,
+        alias=alias,
+        shared_user_id=shared_user_id,
+        cluster=cluster,
+        mentions=mentions,
+        allow_unsafe_cli=allow_unsafe_cli,
+    )
+    prepared_prompt: _AssistantRequestPromptPreparation | None = None
+    finalization_scheduled = False
+    run_status = "completed"
+    try:
+        if prepare_assistant_request and profile.bot_mode == "assistant":
+            prepared_prompt = _prepare_assistant_request_prompt(
+                manager,
+                profile,
+                session,
+                request_obj,
+                user_id=shared_user_id,
+                user_text=text,
+                cli_type=normalize_cli_type(profile.cli_type),
+            )
+            prompt_text = prepared_prompt.prompt_text
+            if not _is_dream_request(request_obj) and is_plan_mode:
+                prompt_text = build_plan_mode_prompt(prompt_text, cluster_active=bool(cluster_run))
+        else:
+            prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run)) if is_plan_mode else text
+        prompt_text = _apply_cluster_prompt(
+            profile,
+            prompt_text,
+            cluster_run_id=cluster_run.run_id if cluster_run else "",
+            cluster_mentions=list(mentions or []),
+        )
+        async for event in get_native_agent_service().stream_chat(
+            profile=profile,
+            session=session,
+            user_text=text,
+            prompt_text=prompt_text,
+            history_service=_history_service_for_execution_mode(session, NATIVE_AGENT_PROVIDER),
+            actor=_actor_from_request(request_obj),
+            protocol=protocol,
+            cluster_run_id=cluster_run.run_id if cluster_run else "",
+            solo_mode=solo_mode,
+        ):
+            if event.get("type") == "error":
+                run_status = "error"
+            if prepared_prompt is not None and event.get("type") == "done":
+                event = dict(event)
+                if (
+                    not finalization_scheduled
+                    and prepared_prompt.assistant_home is not None
+                    and prepared_prompt.finalize_assistant_turn
+                ):
+                    finalization_scheduled = True
+                    _schedule_assistant_chat_turn_finalization(
+                        prepared_prompt.assistant_home,
+                        user_id=shared_user_id,
+                        user_text=text,
+                        response=str(event.get("output") or ""),
+                        assistant_pre_surface=prepared_prompt.assistant_pre_surface,
+                        compaction_prompt_active=prepared_prompt.compaction_prompt_active,
+                    )
+                event["assistant_stage_durations"] = dict(prepared_prompt.stage_durations)
+                if prepared_prompt.dream_context_stats is not None:
+                    event["dream_context_stats"] = prepared_prompt.dream_context_stats
+                    event["dream_prompt_text"] = prepared_prompt.dream_prompt_text
+            yield event
+    except Exception:
+        run_status = "error"
+        raise
+    finally:
+        if cluster_run:
+            _CLUSTER_RUNTIME.finish_run(cluster_run.run_id, run_status)
+            _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
+
+
 async def run_chat(
     manager: MultiBotManager,
     alias: str,
@@ -6215,59 +6514,21 @@ async def run_chat(
         return await manager.assistant_runtime.submit_interactive(request)
     if _supports_cli_runtime(profile):
         if resolved_execution_mode == NATIVE_AGENT_PROVIDER:
-            if (agent_id or "main") != "main":
-                _raise(409, "native_agent_child_agent_disabled", "原生 agent 模式暂不支持子 agent")
-            _profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, "main")
-            visible_input = visible_text if visible_text is not None else user_text
-            text = (visible_input or "").strip()
-            if not text:
-                _raise(400, "empty_message", "消息不能为空")
-            if text.startswith("//"):
-                text = "/" + text[2:]
-            is_plan_mode = task_mode == PLAN_MODE_TASK_MODE
-            cluster_run = _start_cluster_run_if_requested(
-                profile=profile,
-                alias=alias,
-                shared_user_id=shared_user_id,
-                cluster=cluster,
-                mentions=mentions,
-                allow_unsafe_cli=allow_unsafe_cli,
-            )
-            prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run)) if is_plan_mode else text
-            prompt_text = _apply_cluster_prompt(
-                profile,
-                prompt_text,
-                cluster_run_id=cluster_run.run_id if cluster_run else "",
-                cluster_mentions=list(mentions or []),
-            )
-            request = build_assistant_run_request(
+            return await _run_native_agent_chat(
+                manager,
                 alias,
                 shared_user_id,
                 user_text,
                 task_mode=task_mode,
                 task_payload=task_payload,
                 visible_text=visible_text,
+                agent_id=agent_id,
+                cluster=cluster,
+                mentions=mentions,
+                solo_mode=solo_mode,
                 actor=actor,
+                allow_unsafe_cli=allow_unsafe_cli,
             )
-            run_status = "completed"
-            try:
-                return await get_native_agent_service().run_chat(
-                    profile=profile,
-                    session=session,
-                    user_text=text,
-                    prompt_text=prompt_text,
-                    history_service=_history_service_for_execution_mode(session, NATIVE_AGENT_PROVIDER),
-                    actor=_actor_from_request(request),
-                    cluster_run_id=cluster_run.run_id if cluster_run else "",
-                    solo_mode=solo_mode,
-                )
-            except Exception:
-                run_status = "error"
-                raise
-            finally:
-                if cluster_run:
-                    _CLUSTER_RUNTIME.finish_run(cluster_run.run_id, run_status)
-                    _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
         cluster_run = _start_cluster_run_if_requested(
             profile=profile,
             alias=alias,
@@ -6349,63 +6610,23 @@ async def stream_chat(
             return
         if _supports_cli_runtime(profile):
             if resolved_execution_mode == NATIVE_AGENT_PROVIDER:
-                if (agent_id or "main") != "main":
-                    _raise(409, "native_agent_child_agent_disabled", "原生 agent 模式暂不支持子 agent")
-                _profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, "main")
-                visible_input = visible_text if visible_text is not None else user_text
-                text = (visible_input or "").strip()
-                if not text:
-                    _raise(400, "empty_message", "消息不能为空")
-                if text.startswith("//"):
-                    text = "/" + text[2:]
-                is_plan_mode = task_mode == PLAN_MODE_TASK_MODE
-                cluster_run = _start_cluster_run_if_requested(
-                    profile=profile,
-                    alias=alias,
-                    shared_user_id=shared_user_id,
-                    cluster=cluster,
-                    mentions=mentions,
-                    allow_unsafe_cli=allow_unsafe_cli,
-                )
-                prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run)) if is_plan_mode else text
-                prompt_text = _apply_cluster_prompt(
-                    profile,
-                    prompt_text,
-                    cluster_run_id=cluster_run.run_id if cluster_run else "",
-                    cluster_mentions=list(mentions or []),
-                )
-                request = build_assistant_run_request(
+                async for event in _stream_native_agent_chat(
+                    manager,
                     alias,
                     shared_user_id,
                     user_text,
                     task_mode=task_mode,
                     task_payload=task_payload,
                     visible_text=visible_text,
+                    agent_id=agent_id,
+                    cluster=cluster,
+                    mentions=mentions,
+                    solo_mode=solo_mode,
                     actor=actor,
-                )
-                run_status = "completed"
-                try:
-                    async for event in get_native_agent_service().stream_chat(
-                        profile=profile,
-                        session=session,
-                        user_text=text,
-                        prompt_text=prompt_text,
-                        history_service=_history_service_for_execution_mode(session, NATIVE_AGENT_PROVIDER),
-                        actor=_actor_from_request(request),
-                        protocol=protocol,
-                        cluster_run_id=cluster_run.run_id if cluster_run else "",
-                        solo_mode=solo_mode,
-                    ):
-                        if event.get("type") == "error":
-                            run_status = "error"
-                        yield event
-                except Exception:
-                    run_status = "error"
-                    raise
-                finally:
-                    if cluster_run:
-                        _CLUSTER_RUNTIME.finish_run(cluster_run.run_id, run_status)
-                        _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
+                    protocol=protocol,
+                    allow_unsafe_cli=allow_unsafe_cli,
+                ):
+                    yield event
                 return
             cluster_run = _start_cluster_run_if_requested(
                 profile=profile,
@@ -6802,13 +7023,25 @@ async def execute_assistant_run_request(manager: MultiBotManager, request: Assis
             if str(event.get("type") or "") == "done":
                 return {key: value for key, value in event.items() if key != "type"}
         return {"output": "", "message": None, "metadata": None}
-    result = await run_cli_chat(
-        manager,
-        request.bot_alias,
-        request.user_id,
-        request.text,
-        request=request,
-    )
+    profile = get_profile_or_raise(manager, request.bot_alias)
+    resolved_execution_mode = _resolve_chat_execution_mode(profile, "")
+    if resolved_execution_mode == NATIVE_AGENT_PROVIDER:
+        result = await _run_native_agent_chat(
+            manager,
+            request.bot_alias,
+            request.user_id,
+            request.text,
+            request=request,
+            prepare_assistant_request=True,
+        )
+    else:
+        result = await run_cli_chat(
+            manager,
+            request.bot_alias,
+            request.user_id,
+            request.text,
+            request=request,
+        )
     if _is_dream_request(request):
         return _finalize_dream_execution(manager, request, result)
     return result
@@ -6825,6 +7058,19 @@ async def stream_assistant_run_request(
     if _is_dream_request(request):
         result = await execute_assistant_run_request(manager, request)
         yield {"type": "done", **result}
+        return
+    profile = get_profile_or_raise(manager, request.bot_alias)
+    resolved_execution_mode = _resolve_chat_execution_mode(profile, "")
+    if resolved_execution_mode == NATIVE_AGENT_PROVIDER:
+        async for event in _stream_native_agent_chat(
+            manager,
+            request.bot_alias,
+            request.user_id,
+            request.text,
+            request=request,
+            prepare_assistant_request=True,
+        ):
+            yield event
         return
     async for event in _stream_cli_chat(
         manager,

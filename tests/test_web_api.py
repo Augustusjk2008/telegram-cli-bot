@@ -697,6 +697,212 @@ async def test_stream_chat_routes_assistant_native_agent_execution_mode(
     assert captured["prompt_text"] == "你好"
 
 
+@pytest.mark.asyncio
+async def test_execute_assistant_run_request_routes_default_native_agent(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    profile = web_manager.main_profile
+    profile.bot_mode = "assistant"
+    profile.working_dir = str(temp_dir)
+    profile.cli_type = "codex"
+    profile.cli_path = "codex"
+    profile.supported_execution_modes = ["cli", "native_agent"]
+    profile.default_execution_mode = "native_agent"
+    captured: dict[str, Any] = {}
+
+    async def fail_run_cli_chat(*_args, **_kwargs):
+        raise AssertionError("run_cli_chat should not be called")
+
+    def fake_prepare_assistant_prompt(_profile, _session, *, user_id, user_text, cli_type):
+        captured["prepared_user_id"] = user_id
+        captured["prepared_user_text"] = user_text
+        captured["prepared_cli_type"] = cli_type
+        return object(), {}, f"prepared:{user_text}", False, {"sync_ms": 3}
+
+    def fake_finalize_assistant_chat_turn(_assistant_home, **kwargs):
+        captured["finalized_response"] = kwargs["response"]
+
+    class FakeNativeService:
+        async def run_chat(self, **kwargs):
+            captured.update(kwargs)
+            return {"output": "native", "returncode": 0}
+
+    monkeypatch.setattr(api_service, "run_cli_chat", fail_run_cli_chat)
+    monkeypatch.setattr(api_service, "_prepare_assistant_prompt", fake_prepare_assistant_prompt)
+    monkeypatch.setattr(api_service, "_finalize_assistant_chat_turn", fake_finalize_assistant_chat_turn)
+    monkeypatch.setattr(api_service, "get_native_agent_service", lambda: FakeNativeService())
+
+    request = AssistantRunRequest(
+        run_id="run-native-cron",
+        source="cron",
+        bot_alias="main",
+        user_id=1001,
+        text="cron prompt",
+        interactive=False,
+        visible_text="cron prompt",
+    )
+
+    result = await execute_assistant_run_request(web_manager, request)
+
+    assert result["output"] == "native"
+    assert result["assistant_stage_durations"] == {"sync_ms": 3}
+    assert captured["profile"] is profile
+    assert captured["user_text"] == "cron prompt"
+    assert captured["prompt_text"] == "prepared:cron prompt"
+    assert captured["prepared_cli_type"] == "codex"
+    assert captured["finalized_response"] == "native"
+
+
+@pytest.mark.asyncio
+async def test_execute_assistant_run_request_native_dream_uses_prepared_prompt(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    profile = web_manager.main_profile
+    profile.bot_mode = "assistant"
+    profile.working_dir = str(temp_dir)
+    profile.supported_execution_modes = ["cli", "native_agent"]
+    profile.default_execution_mode = "native_agent"
+    captured: dict[str, Any] = {}
+    finalized: dict[str, Any] = {}
+
+    async def fail_run_cli_chat(*_args, **_kwargs):
+        raise AssertionError("run_cli_chat should not be called")
+
+    def fake_prepare_dream(_manager, _profile, _session, _request, *, user_text):
+        captured["dream_prepare_user_text"] = user_text
+        return object(), "prepared dream prompt", {"history_count": 2}, {"dream_ms": 9}
+
+    def fake_finalize(_manager, _request, result):
+        finalized["result"] = dict(result)
+        return {"output": "final dream", "message": result.get("message")}
+
+    class FakeNativeService:
+        async def run_chat(self, **kwargs):
+            captured.update(kwargs)
+            return {"output": "raw dream", "message": {"id": "m1", "content": "raw dream"}, "returncode": 0}
+
+    monkeypatch.setattr(api_service, "run_cli_chat", fail_run_cli_chat)
+    monkeypatch.setattr(api_service, "_prepare_dream_assistant_prompt", fake_prepare_dream)
+    monkeypatch.setattr(api_service, "_finalize_dream_execution", fake_finalize)
+    monkeypatch.setattr(api_service, "get_native_agent_service", lambda: FakeNativeService())
+
+    request = AssistantRunRequest(
+        run_id="run-native-dream",
+        source="cron",
+        bot_alias="main",
+        user_id=-123,
+        text="raw cron dream",
+        interactive=False,
+        visible_text="raw cron dream",
+        context_user_id=1001,
+        task_mode="dream",
+        task_payload={"mode": "dream"},
+    )
+
+    result = await execute_assistant_run_request(web_manager, request)
+
+    assert result["output"] == "final dream"
+    assert captured["prompt_text"] == "prepared dream prompt"
+    assert captured["dream_prepare_user_text"] == "raw cron dream"
+    assert finalized["result"]["dream_context_stats"] == {"history_count": 2}
+    assert finalized["result"]["dream_prompt_text"] == "prepared dream prompt"
+    assert finalized["result"]["assistant_stage_durations"] == {"dream_ms": 9}
+
+
+@pytest.mark.asyncio
+async def test_execute_assistant_run_request_default_cli_stays_cli(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    profile = web_manager.main_profile
+    profile.bot_mode = "assistant"
+    profile.supported_execution_modes = ["cli", "native_agent"]
+    profile.default_execution_mode = "cli"
+    captured: dict[str, Any] = {}
+
+    async def fake_run_cli_chat(_manager, alias, user_id, text, *, request=None, **_kwargs):
+        captured["alias"] = alias
+        captured["user_id"] = user_id
+        captured["text"] = text
+        captured["request"] = request
+        return {"output": "cli", "returncode": 0}
+
+    monkeypatch.setattr(api_service, "run_cli_chat", fake_run_cli_chat)
+    monkeypatch.setattr(api_service, "get_native_agent_service", lambda: (_ for _ in ()).throw(AssertionError("native should not be called")))
+
+    request = AssistantRunRequest(
+        run_id="run-cli-cron",
+        source="cron",
+        bot_alias="main",
+        user_id=1001,
+        text="cron prompt",
+        interactive=False,
+    )
+
+    result = await execute_assistant_run_request(web_manager, request)
+
+    assert result["output"] == "cli"
+    assert captured["alias"] == "main"
+    assert captured["text"] == "cron prompt"
+    assert captured["request"] is request
+
+
+@pytest.mark.asyncio
+async def test_stream_assistant_run_request_routes_default_native_agent(
+    web_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    profile = web_manager.main_profile
+    profile.bot_mode = "assistant"
+    profile.working_dir = str(temp_dir)
+    profile.supported_execution_modes = ["cli", "native_agent"]
+    profile.default_execution_mode = "native_agent"
+    captured: dict[str, Any] = {}
+
+    async def fail_stream_cli_chat(*_args, **_kwargs):
+        raise AssertionError("_stream_cli_chat should not be called")
+        yield {}
+
+    def fake_prepare_assistant_prompt(_profile, _session, *, user_id, user_text, cli_type):
+        return object(), {}, f"prepared stream:{user_text}", False, {"sync_ms": 5}
+
+    def fake_schedule_assistant_chat_turn_finalization(_assistant_home, **kwargs):
+        captured["scheduled_response"] = kwargs["response"]
+
+    class FakeNativeService:
+        async def stream_chat(self, **kwargs):
+            captured.update(kwargs)
+            yield {"type": "done", "output": "native stream", "message": {"id": "m1", "content": "native stream"}, "returncode": 0}
+
+    monkeypatch.setattr(api_service, "_stream_cli_chat", fail_stream_cli_chat)
+    monkeypatch.setattr(api_service, "_prepare_assistant_prompt", fake_prepare_assistant_prompt)
+    monkeypatch.setattr(api_service, "_schedule_assistant_chat_turn_finalization", fake_schedule_assistant_chat_turn_finalization)
+    monkeypatch.setattr(api_service, "get_native_agent_service", lambda: FakeNativeService())
+
+    request = AssistantRunRequest(
+        run_id="run-native-stream",
+        source="web",
+        bot_alias="main",
+        user_id=1001,
+        text="stream prompt",
+        interactive=True,
+        visible_text="stream prompt",
+    )
+
+    events = [event async for event in stream_assistant_run_request(web_manager, request)]
+
+    assert events[-1]["type"] == "done"
+    assert events[-1]["output"] == "native stream"
+    assert events[-1]["assistant_stage_durations"] == {"sync_ms": 5}
+    assert captured["prompt_text"] == "prepared stream:stream prompt"
+    assert captured["scheduled_response"] == "native stream"
+
+
 def test_pi_cluster_extension_path_uses_pi_agent_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     from bot.cluster.setup import get_pi_cluster_extension_path
 

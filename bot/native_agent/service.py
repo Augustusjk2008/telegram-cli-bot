@@ -63,7 +63,8 @@ SOLO_NATIVE_AGENT_SYSTEM_PROMPT = """Solo native agent mode:
 
 
 def normalize_execution_mode(value: Any, profile: BotProfile | None = None) -> str:
-    mode = _normalize_execution_mode(value, default="")
+    has_requested_mode = bool(str(value or "").strip())
+    mode = _normalize_execution_mode(value, default="") if has_requested_mode else ""
     if not mode and profile is not None:
         mode = _normalize_execution_mode(getattr(profile, "default_execution_mode", ""), default=EXECUTION_MODE_CLI)
     if not mode:
