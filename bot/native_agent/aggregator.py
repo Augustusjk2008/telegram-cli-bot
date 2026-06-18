@@ -232,7 +232,7 @@ class NativeAgentAggregator:
         text = _value_text(message.get("text") or message.get("content")) or _message_parts_text(message.get("parts"))
         is_completed_final_message = role == "assistant" and bool(message_id) and _message_completed(message)
         should_suppress_switch_trace = (
-            is_completed_final_message
+            role == "assistant"
             and bool(text)
             and _normalized_commentary_summary(text) == _normalized_commentary_summary(self.text())
         )
@@ -302,6 +302,10 @@ class NativeAgentAggregator:
         message_id = _message_id_from_payload(payload, part)
         if message_id == self.user_message_id:
             return result
+        kind = str(part.get("type") or part.get("kind") or "").lower()
+        delta = _value_text(payload.get("delta") or part.get("delta"))
+        full_text = _value_text(part.get("text") or part.get("content"))
+        incoming_text = full_text or delta
         switched_message = False
         if message_id and self._part_belongs_to_current_turn(message_id):
             previous_message_id = self.assistant_message_id
@@ -310,14 +314,15 @@ class NativeAgentAggregator:
                 switched_message = True
                 result.snapshot = ""
                 result.replace_text = True
-                trace = self._build_commentary_trace(
-                    message_id=previous_message_id,
-                    text=discarded_text,
-                    reason="assistant-message-switched",
-                    payload=payload,
-                )
-                if trace is not None:
-                    result.trace.append(trace)
+                if _normalized_commentary_summary(discarded_text) != _normalized_commentary_summary(incoming_text):
+                    trace = self._build_commentary_trace(
+                        message_id=previous_message_id,
+                        text=discarded_text,
+                        reason="assistant-message-switched",
+                        payload=payload,
+                    )
+                    if trace is not None:
+                        result.trace.append(trace)
             self.assistant_message_id = message_id
             result.assistant_message_id = message_id
         part_id = _part_id_from_payload(payload, part) or str(len(self.parts) + 1)
@@ -325,11 +330,8 @@ class NativeAgentAggregator:
         self.parts[part_id] = dict(part)
         if message_id:
             self.part_message_ids[part_id] = message_id
-        kind = str(part.get("type") or part.get("kind") or "").lower()
         if _is_noise_part_kind(kind):
             return result
-        delta = _value_text(payload.get("delta") or part.get("delta"))
-        full_text = _value_text(part.get("text") or part.get("content"))
         if kind in {"text", "assistant_text", "message"} or (not kind and (delta or full_text)):
             if message_id in self.followup_message_ids:
                 changed, discarded_text = self._discard_message_text(message_id)
@@ -387,14 +389,15 @@ class NativeAgentAggregator:
                 switched_message = True
                 result.snapshot = ""
                 result.replace_text = True
-                trace = self._build_commentary_trace(
-                    message_id=previous_message_id,
-                    text=discarded_text,
-                    reason="assistant-message-switched",
-                    payload=payload,
-                )
-                if trace is not None:
-                    result.trace.append(trace)
+                if _normalized_commentary_summary(discarded_text) != _normalized_commentary_summary(payload.get("delta") or properties.get("delta")):
+                    trace = self._build_commentary_trace(
+                        message_id=previous_message_id,
+                        text=discarded_text,
+                        reason="assistant-message-switched",
+                        payload=payload,
+                    )
+                    if trace is not None:
+                        result.trace.append(trace)
             self.assistant_message_id = message_id
             result.assistant_message_id = message_id
         field = str(payload.get("field") or properties.get("field") or "").strip().lower()

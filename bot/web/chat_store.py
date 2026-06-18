@@ -113,12 +113,30 @@ def _trace_payload_state(trace: dict[str, Any]) -> str:
     return str(payload.get("state") or payload.get("status") or "").strip().lower()
 
 
+def _trace_payload_reason(trace: dict[str, Any]) -> str:
+    payload = trace.get("payload")
+    if not isinstance(payload, dict):
+        return ""
+    return str(payload.get("reason") or "").strip()
+
+
 def _tool_result_rank(trace: dict[str, Any]) -> tuple[int, int, int]:
     state = _trace_payload_state(trace)
     payload_text = _payload_text(trace.get("payload")).strip()
     summary = str(trace.get("summary") or "").strip()
     terminal = state in {"completed", "done", "finished", "success", "error", "failed"}
     return (1 if terminal else 0, max(len(payload_text), len(summary)), int(trace.get("ordinal") or 0))
+
+
+def _reclassified_commentary_rank(trace: dict[str, Any]) -> tuple[int, int, int]:
+    call_id = str(trace.get("call_id") or "").strip()
+    message_id = _trace_payload_message_id(trace)
+    reason = _trace_payload_reason(trace)
+    return (
+        1 if call_id else 0,
+        0 if reason == "assistant-message-switched" else 1,
+        0 if message_id.startswith("msg_") else 1,
+    )
 
 
 def _normalize_trace_events(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -128,6 +146,7 @@ def _normalize_trace_events(trace: list[dict[str, Any]]) -> list[dict[str, Any]]
     kept: list[dict[str, Any]] = []
     result_indexes_by_call_id: dict[str, int] = {}
     commentary_signatures: set[tuple[str, str]] = set()
+    commentary_indexes_by_summary: dict[str, int] = {}
     for item in trace:
         event = dict(item)
         kind = str(event.get("kind") or "").strip()
@@ -141,7 +160,14 @@ def _normalize_trace_events(trace: list[dict[str, Any]]) -> list[dict[str, Any]]
             signature = (_trace_payload_message_id(event), summary_key)
             if summary_key and signature in commentary_signatures:
                 continue
+            existing_index = commentary_indexes_by_summary.get(summary_key)
+            if summary_key and existing_index is not None:
+                if _reclassified_commentary_rank(event) > _reclassified_commentary_rank(kept[existing_index]):
+                    kept[existing_index] = event
+                continue
             commentary_signatures.add(signature)
+            if summary_key:
+                commentary_indexes_by_summary[summary_key] = len(kept)
         if kind == "tool_result" and call_id:
             existing_index = result_indexes_by_call_id.get(call_id)
             if existing_index is None:
@@ -159,6 +185,7 @@ def _normalize_trace_events(trace: list[dict[str, Any]]) -> list[dict[str, Any]]
     seen_tool_call_ids: set[str] = set()
     late_commentary_by_call_id: dict[str, list[dict[str, Any]]] = {}
     late_commentary_indexes: set[int] = set()
+    reclassified_commentary_summaries: set[str] = set()
     for index, item in enumerate(kept):
         kind = str(item.get("kind") or "").strip()
         call_id = str(item.get("call_id") or "").strip()
@@ -171,6 +198,11 @@ def _normalize_trace_events(trace: list[dict[str, Any]]) -> list[dict[str, Any]]
             and call_id in seen_tool_call_ids
             and str(item.get("raw_type") or "") == "message.text.reclassified"
         ):
+            summary_key = _trace_summary_key(item)
+            if summary_key in reclassified_commentary_summaries:
+                late_commentary_indexes.add(index)
+                continue
+            reclassified_commentary_summaries.add(summary_key)
             late_commentary_by_call_id.setdefault(call_id, []).append(item)
             late_commentary_indexes.add(index)
 

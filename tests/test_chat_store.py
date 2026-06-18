@@ -800,6 +800,57 @@ def test_chat_store_deduplicates_reclassified_commentary_by_message_id(monkeypat
     ]
 
 
+def test_chat_store_deduplicates_reclassified_commentary_by_summary(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    store = ChatStore(workspace)
+    handle = store.begin_turn(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        user_text="列出当前目录",
+        native_provider="codex",
+    )
+    store.append_trace_events(handle.turn_id, [
+        {
+            "kind": "commentary",
+            "raw_type": "message.text.reclassified",
+            "summary": "我先读取文件。",
+            "call_id": "call_1",
+            "payload": {"messageID": "msg_1", "reason": "assistant-message-switched"},
+        },
+        {
+            "kind": "commentary",
+            "raw_type": "message.text.reclassified",
+            "summary": "我先读取文件。",
+            "call_id": "call_2",
+            "payload": {"messageID": "resp_1", "reason": "tool-call"},
+        },
+        {"kind": "tool_call", "summary": "dir", "tool_name": "bash", "call_id": "call_2"},
+    ])
+    store.complete_turn(
+        handle,
+        content="目录已读取完成。",
+        completion_state="completed",
+        native_session_id="thread-1",
+    )
+
+    trace = store.get_message_trace(handle.assistant_message_id)
+
+    assert [(item["kind"], item["summary"]) for item in trace["trace"]] == [
+        ("commentary", "我先读取文件。"),
+        ("tool_call", "dir"),
+    ]
+
+
 def test_chat_store_reclassifies_legacy_file_events_as_process_events(monkeypatch, tmp_path: Path):
     home = tmp_path / "home"
     home.mkdir()

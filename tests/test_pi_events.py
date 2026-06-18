@@ -292,6 +292,37 @@ def test_pi_events_does_not_duplicate_commentary_after_placeholder_message_start
     assert [item["call_id"] for item in trace if item["kind"] == "tool_call"] == ["call-1", "call-2"]
 
 
+def test_pi_events_does_not_duplicate_commentary_when_message_id_switches_on_first_tool_call() -> None:
+    raw_events = [
+        {
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "我先查一下文件。"},
+                    {"type": "toolCall", "id": "call-1", "name": "bash", "arguments": {"command": "dir"}},
+                ],
+                "stopReason": "toolUse",
+                "responseId": "resp-1",
+            },
+        },
+    ]
+
+    aggregator = NativeAgentAggregator(user_message_id="user-1")
+    results = []
+    for raw in raw_events:
+        for mapped in pi_json_to_events(raw, cwd="/repo", fallback_session_id="sess-1", assistant_message_id="web-msg"):
+            event = unwrap_event(mapped)
+            assert event is not None
+            results.append(aggregator.apply(event))
+
+    trace = [item for result in results for item in result.trace]
+    commentary = [item for item in trace if item["kind"] == "commentary"]
+
+    assert [item["summary"] for item in commentary] == ["我先查一下文件。"]
+    assert [item["call_id"] for item in trace if item["kind"] == "tool_call"] == ["call-1"]
+
+
 def test_pi_events_filters_leaked_thinking_text() -> None:
     raw = {
         "type": "message",
