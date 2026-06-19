@@ -4524,8 +4524,8 @@ export class RealWebBotClient implements WebBotClient {
     return { templates: (data.templates || []).map(mapClusterTemplateSummary) };
   }
 
-  async getClusterBundleSchema(_botAlias: string): Promise<ClusterBundleSchemaResult> {
-    const data = await this.requestJson<Record<string, unknown>>("/api/admin/cluster/schema", {
+  async getClusterBundleSchema(botAlias: string): Promise<ClusterBundleSchemaResult> {
+    const data = await this.requestJson<Record<string, unknown>>(`/api/admin/bots/${encodeURIComponent(botAlias)}/cluster/schema`, {
       method: "GET",
       headers: this.headers(),
       cache: "no-store",

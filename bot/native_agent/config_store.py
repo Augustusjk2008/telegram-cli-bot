@@ -182,6 +182,8 @@ def normalize_native_agent_config_document(
         payload["model"] = str(payload.get("selectedModel") or "").strip()
     if "piCommand" in payload and "pi_command" not in payload:
         payload["pi_command"] = str(payload.get("piCommand") or "").strip()
+    if "systemPrompt" in payload and "system_prompt" not in payload:
+        payload["system_prompt"] = str(payload.get("systemPrompt") or "").strip()
     if "workspaceHistoryEnabled" in payload and "workspace_history_enabled" not in payload:
         payload["workspace_history_enabled"] = bool(payload.get("workspaceHistoryEnabled"))
     payload.setdefault("workspace_history_enabled", True)
@@ -189,6 +191,7 @@ def normalize_native_agent_config_document(
         "selected_model",
         "selectedModel",
         "piCommand",
+        "systemPrompt",
         "workspaceHistoryEnabled",
         "backup_path",
         "backupPath",
@@ -270,6 +273,7 @@ def _default_config() -> dict[str, Any]:
         "reasoning_effort": "",
         "pi_agent": "",
         "pi_command": "pi",
+        "system_prompt": "",
         "workspace_history_enabled": True,
         "models": [],
     }
@@ -306,6 +310,7 @@ def _settings_document_from_config(config: dict[str, Any], *, existing: dict[str
         "reasoning_effort",
         "pi_agent",
         "pi_command",
+        "system_prompt",
         "workspace_history_enabled",
         "thinking_depth",
         "shellPath",

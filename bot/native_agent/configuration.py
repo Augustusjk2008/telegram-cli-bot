@@ -21,6 +21,7 @@ def global_native_agent_config() -> dict[str, Any]:
         "model": settings_model,
         "pi_agent": settings.get("pi_agent"),
         "pi_command": settings.get("pi_command"),
+        "system_prompt": settings.get("system_prompt"),
         "workspace_history_enabled": settings.get("workspace_history_enabled", True),
         "reasoning_effort": settings.get("reasoning_effort"),
         "thinking_depth": settings.get("thinking_depth"),
@@ -78,6 +79,10 @@ def effective_native_agent_config(fallback: Any = None) -> dict[str, Any]:
         fallback_agent = str(fallback_config.get("pi_agent") or "").strip()
         if fallback_agent:
             resolved["pi_agent"] = fallback_agent
+    if not resolved.get("system_prompt"):
+        fallback_system_prompt = str(fallback_config.get("system_prompt") or "").strip()
+        if fallback_system_prompt:
+            resolved["system_prompt"] = fallback_system_prompt
     fallback_reasoning_effort = str(fallback_config.get("reasoning_effort") or "").strip()
     if fallback_reasoning_effort:
         resolved["reasoning_effort"] = fallback_reasoning_effort

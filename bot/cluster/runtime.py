@@ -14,6 +14,7 @@ class ClusterRunRequest:
     bot_alias: str
     user_id: int
     profile: BotProfile
+    execution_mode: str = "cli"
     mentions: list[dict[str, Any]] = field(default_factory=list)
     allow_unsafe_cli: bool = False
 
@@ -59,6 +60,7 @@ class ClusterRun:
     run_id: str
     bot_alias: str
     user_id: int
+    execution_mode: str
     status: str
     profile: BotProfile
     mentions: list[dict[str, Any]]
@@ -111,6 +113,7 @@ class ClusterRuntime:
             run_id=f"clr_{uuid.uuid4().hex[:12]}",
             bot_alias=request.bot_alias,
             user_id=request.user_id,
+            execution_mode=str(request.execution_mode or "cli").strip().lower() or "cli",
             status="running",
             profile=request.profile,
             mentions=[dict(item) for item in request.mentions],
@@ -505,6 +508,7 @@ class ClusterRuntime:
         return {
             "run_id": run.run_id,
             "bot_alias": run.bot_alias,
+            "execution_mode": run.execution_mode,
             "status": run.status,
             "agents": agents,
             "events": list(run.events),

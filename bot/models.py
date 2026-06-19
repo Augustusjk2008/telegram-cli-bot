@@ -124,6 +124,7 @@ def normalize_native_agent_config(value: Any, *, existing: dict[str, Any] | None
         model = f"{provider}/{model}"
     pi_agent = str(data.get("pi_agent") or "").strip()
     pi_command = str(data.get("pi_command") or data.get("piCommand") or "").strip()
+    system_prompt = str(data.get("system_prompt") or data.get("systemPrompt") or "").strip()
     workspace_history_value = _native_agent_value(data, "workspace_history_enabled", "workspaceHistoryEnabled")
     reasoning_effort = str(
         data.get("reasoning_effort")
@@ -154,6 +155,8 @@ def normalize_native_agent_config(value: Any, *, existing: dict[str, Any] | None
             "pi_agent",
             "pi_command",
             "piCommand",
+            "system_prompt",
+            "systemPrompt",
             "workspace_history_enabled",
             "workspaceHistoryEnabled",
             "reasoning_effort",
@@ -171,6 +174,8 @@ def normalize_native_agent_config(value: Any, *, existing: dict[str, Any] | None
         result["pi_agent"] = pi_agent
     if pi_command:
         result["pi_command"] = pi_command
+    if system_prompt:
+        result["system_prompt"] = system_prompt
     if workspace_history_value is not None:
         result["workspace_history_enabled"] = _native_agent_bool(data, "workspace_history_enabled", "workspaceHistoryEnabled")
     if reasoning_effort:

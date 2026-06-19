@@ -41,6 +41,7 @@ class PiRpcStartRequest:
     cwd: Path
     env: dict[str, str] | None = None
     model: str | None = None
+    system_prompt: str = ""
     append_system_prompt: str = ""
     timeout_seconds: float | None = None
 
@@ -102,6 +103,7 @@ class PiRpcClient:
             request.command,
             str(cwd),
             model=request.model,
+            system_prompt=request.system_prompt,
             append_system_prompt=request.append_system_prompt,
         )
         env = _base_env(request.env)
@@ -284,6 +286,7 @@ def _build_rpc_command(
     cwd: str,
     *,
     model: str | None = None,
+    system_prompt: str = "",
     append_system_prompt: str = "",
 ) -> list[str]:
     command_text = str(command or DEFAULT_PI_COMMAND).strip() or DEFAULT_PI_COMMAND
@@ -293,6 +296,9 @@ def _build_rpc_command(
     normalized_model = str(model or "").strip()
     if normalized_model:
         args.extend(["--model", normalized_model])
+    normalized_system_prompt = str(system_prompt or "").strip()
+    if normalized_system_prompt:
+        args.extend(["--system-prompt", normalized_system_prompt])
     normalized_prompt = str(append_system_prompt or "").strip()
     if normalized_prompt:
         args.extend(["--append-system-prompt", normalized_prompt])

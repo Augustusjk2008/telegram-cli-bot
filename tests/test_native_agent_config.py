@@ -18,6 +18,7 @@ def _sample_config() -> dict[str, object]:
         "reasoning_effort": "medium",
         "pi_agent": "main",
         "pi_command": "pi",
+        "system_prompt": "全局约束",
         "workspace_history_enabled": True,
         "models": [
             {
@@ -75,6 +76,7 @@ def test_native_agent_config_store_saves_pi_settings(tmp_path: Path, monkeypatch
         "reasoning_effort": "medium",
         "pi_agent": "main",
         "pi_command": "pi",
+        "system_prompt": "全局约束",
         "workspace_history_enabled": True,
     }
     assert json.loads(models_path.read_text(encoding="utf-8")) == {
@@ -122,6 +124,17 @@ def test_native_agent_config_store_loads_pi_settings(tmp_path: Path, monkeypatch
 
     assert config_store.first_configured_model()["id"] == "jojocode_max/gpt-5.4"
     assert config_store.load_native_agent_config()["backend"] == "pi"
+    assert config_store.load_native_agent_config()["system_prompt"] == "全局约束"
+
+
+def test_native_agent_config_store_normalizes_system_prompt_alias(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings_path = tmp_path / "settings.json"
+    monkeypatch.setenv("PI_AGENT_SETTINGS", str(settings_path))
+
+    saved = config_store.save_native_agent_config({"systemPrompt": "全局提示"})
+
+    assert saved["config"]["system_prompt"] == "全局提示"
+    assert json.loads(settings_path.read_text(encoding="utf-8"))["system_prompt"] == "全局提示"
 
 
 def test_native_agent_config_store_migrates_legacy_settings_provider_to_models_json(
@@ -303,6 +316,7 @@ def test_normalize_native_agent_config_accepts_pi_agent_aliases() -> None:
             "agent": "agent-legacy",
             "piAgent": "reviewer",
             "pi_command": "pi-custom",
+            "systemPrompt": "全局提示",
             "workspace_history_enabled": False,
             "reasoningEffort": "high",
         }
@@ -312,6 +326,7 @@ def test_normalize_native_agent_config_accepts_pi_agent_aliases() -> None:
     assert normalized["model"] == "selected/model"
     assert normalized["pi_agent"] == "reviewer"
     assert normalized["pi_command"] == "pi-custom"
+    assert normalized["system_prompt"] == "全局提示"
     assert normalized["workspace_history_enabled"] is False
     assert normalized["reasoning_effort"] == "high"
     public = public_native_agent_config(normalized)

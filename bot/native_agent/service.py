@@ -9,6 +9,7 @@ from typing import Any
 
 from bot.chat_identity import chat_session_user_id
 from bot import config
+from bot.agents import hash_agent_prompt
 from bot.cluster.setup import get_cluster_mcp_config_path
 from bot.models import (
     BotProfile,
@@ -146,14 +147,47 @@ class NativeAgentService:
             env["NATIVE_AGENT_PI_HOME"] = pi_home
         return env or None
 
-    def _prompt_options(self, profile: BotProfile) -> tuple[str, str, str]:
+    def _prompt_options(self, profile: BotProfile) -> tuple[str, str, str, str]:
         native_agent = effective_native_agent_config(getattr(profile, "native_agent", {}))
         validate_native_agent_model_config(native_agent)
         return (
             build_native_agent_model_id(native_agent),
             str(native_agent.get("pi_agent") or "").strip(),
             str(native_agent.get("reasoning_effort") or "").strip(),
+            str(native_agent.get("system_prompt") or "").strip(),
         )
+
+    def _child_agent_prompt(self, profile: BotProfile, session: UserSession) -> tuple[str, str]:
+        agent_id = str(getattr(session, "agent_id", "") or "main").strip().lower() or "main"
+        if agent_id == "main":
+            return "", ""
+        try:
+            agent = profile.get_agent(agent_id)
+        except KeyError:
+            return "", ""
+        prompt = str(getattr(agent, "system_prompt", "") or "").strip()
+        if not prompt:
+            return "", ""
+        wrapped = (
+            "<tcbridge_child_agent_system_prompt>\n"
+            f"id: {agent.id}\n"
+            f"name: {agent.name}\n"
+            f"{prompt}\n"
+            "</tcbridge_child_agent_system_prompt>"
+        )
+        return wrapped, hash_agent_prompt(prompt)
+
+    def _append_system_prompt(self, profile: BotProfile, session: UserSession, *, solo_mode: bool) -> tuple[str, str]:
+        child_prompt, child_prompt_hash = self._child_agent_prompt(profile, session)
+        parts = [
+            part
+            for part in (
+                child_prompt,
+                SOLO_NATIVE_AGENT_SYSTEM_PROMPT if solo_mode else "",
+            )
+            if part
+        ]
+        return "\n\n".join(parts), child_prompt_hash
 
     def _runtime_config_fingerprint(self) -> str:
         try:
@@ -230,7 +264,8 @@ class NativeAgentService:
         target_head: str,
         native_session_id: str = "",
     ) -> WorkspaceHistoryStatus:
-        model_id, agent_id, reasoning_effort = self._prompt_options(profile)
+        model_id, agent_id, reasoning_effort, system_prompt = self._prompt_options(profile)
+        append_system_prompt, _child_prompt_hash = self._append_system_prompt(profile, session, solo_mode=False)
         native_agent_config = effective_native_agent_config(getattr(profile, "native_agent", {}))
         config_fingerprint = self._runtime_config_fingerprint()
         user_id = chat_session_user_id(session.user_id)
@@ -248,6 +283,8 @@ class NativeAgentService:
                 model=model_id,
                 agent_id=agent_id,
                 reasoning_effort=reasoning_effort,
+                system_prompt=system_prompt,
+                append_system_prompt=append_system_prompt,
                 native_session_id=native_session_id,
                 config_fingerprint=config_fingerprint,
                 env=self._pi_runtime_env(),
@@ -354,7 +391,8 @@ class NativeAgentService:
                 native_provider=NATIVE_AGENT_PROVIDER,
                 actor=actor,
             )
-            model_id, agent_id, reasoning_effort = self._prompt_options(profile)
+            model_id, agent_id, reasoning_effort, system_prompt = self._prompt_options(profile)
+            append_system_prompt, child_agent_prompt_hash = self._append_system_prompt(profile, session, solo_mode=solo_mode)
             native_agent_config = effective_native_agent_config(getattr(profile, "native_agent", {}))
             workspace_history_enabled = bool(native_agent_config.get("workspace_history_enabled", True))
             pi_command = str(
@@ -375,7 +413,9 @@ class NativeAgentService:
                 model_id=model_id,
                 pi_agent=agent_id,
                 reasoning_effort=reasoning_effort,
+                system_prompt_hash=hash_agent_prompt(system_prompt),
                 prompt_profile="solo" if solo_mode else "",
+                child_agent_prompt_hash=child_agent_prompt_hash,
             )
             try:
                 conversation_native = history_service.store.get_conversation_native_session(turn_handle.conversation_id)
@@ -515,7 +555,8 @@ class NativeAgentService:
                     model=model_id,
                     agent_id=agent_id,
                     reasoning_effort=reasoning_effort,
-                    append_system_prompt=SOLO_NATIVE_AGENT_SYSTEM_PROMPT if solo_mode else "",
+                    system_prompt=system_prompt,
+                    append_system_prompt=append_system_prompt,
                     native_session_id=native_session_id,
                     config_fingerprint=self._runtime_config_fingerprint(),
                     env=pi_runtime_env,
@@ -892,14 +933,18 @@ def _native_session_meta(
     model_id: str,
     pi_agent: str,
     reasoning_effort: str,
+    system_prompt_hash: str = "",
     prompt_profile: str = "",
+    child_agent_prompt_hash: str = "",
 ) -> dict[str, str]:
     return {
         "cwd": str(cwd or ""),
         "model_id": str(model_id or ""),
         "pi_agent": str(pi_agent or ""),
         "reasoning_effort": str(reasoning_effort or ""),
+        **({"system_prompt_hash": str(system_prompt_hash or "")} if str(system_prompt_hash or "").strip() else {}),
         **({"prompt_profile": str(prompt_profile or "")} if str(prompt_profile or "").strip() else {}),
+        **({"child_agent_prompt_hash": str(child_agent_prompt_hash or "")} if str(child_agent_prompt_hash or "").strip() else {}),
     }
 
 

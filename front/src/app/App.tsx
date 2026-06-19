@@ -259,7 +259,7 @@ export function App() {
   const canUseDebug = hasCapability(session, "debug_exec");
   const canUseGit = hasCapability(session, "git_ops");
   const canViewPlugins = hasCapability(session, "view_plugins");
-  const canUseSettings = hasCapability(session, "admin_ops");
+  const canUseHostSettings = hasCapability(session, "admin_ops");
   const canManageBots = hasCapability(session, "manage_bots") || hasCapability(session, "admin_ops");
   const canCreateWorkdirDirectory = hasCapability(session, "create_workdir_directory") || canManageBots;
   const canOpenAdminCenter = hasCapability(session, "admin_ops");
@@ -282,6 +282,7 @@ export function App() {
     return botSummaryByAlias.get(currentBot) || bots.find((bot) => bot.alias === currentBot) || null;
   }, [botSummaryByAlias, bots, currentBot]);
   const canOperateCurrentBot = currentBotSummary?.canOperate !== false;
+  const canUseSettings = canUseHostSettings || Boolean(currentBotSummary && canOperateCurrentBot);
   const canReadCurrentBotFiles = canOperateCurrentBot && hasCapability(session, "read_file_content");
   const canWriteCurrentBotFiles = canOperateCurrentBot && hasCapability(session, "write_files");
   const structureOnly = !canReadCurrentBotFiles;

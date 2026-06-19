@@ -20,6 +20,7 @@ class PiSessionRuntimeRequest:
     model: str = ""
     agent_id: str = ""
     reasoning_effort: str = ""
+    system_prompt: str = ""
     append_system_prompt: str = ""
     native_session_id: str = ""
     config_fingerprint: str = ""
@@ -37,6 +38,7 @@ class PiSessionRuntimeState:
     model: str = ""
     agent_id: str = ""
     reasoning_effort: str = ""
+    system_prompt: str = ""
     append_system_prompt: str = ""
     native_session_id: str = ""
     config_fingerprint: str = ""
@@ -83,6 +85,7 @@ class PiSessionRuntime:
             and self.state.model == str(request.model or "").strip()
             and self.state.agent_id == str(request.agent_id or "").strip()
             and self.state.reasoning_effort == str(request.reasoning_effort or "").strip()
+            and self.state.system_prompt == str(request.system_prompt or "").strip()
             and self.state.append_system_prompt == str(request.append_system_prompt or "").strip()
             and self.state.config_fingerprint == str(request.config_fingerprint or "").strip()
             and _normalize_env(self.state.env) == _normalize_env(request.env)
@@ -202,6 +205,7 @@ class PiSessionRuntimeRegistry:
                 cwd=Path(normalized.cwd),
                 env=normalized.env,
                 model=normalized.model,
+                system_prompt=normalized.system_prompt,
                 append_system_prompt=normalized.append_system_prompt,
             )
         )
@@ -217,6 +221,7 @@ class PiSessionRuntimeRegistry:
                 model=normalized.model,
                 agent_id=normalized.agent_id,
                 reasoning_effort=normalized.reasoning_effort,
+                system_prompt=normalized.system_prompt,
                 append_system_prompt=normalized.append_system_prompt,
                 native_session_id=normalized.native_session_id,
                 config_fingerprint=normalized.config_fingerprint,
@@ -277,6 +282,7 @@ def _normalize_request(request: PiSessionRuntimeRequest) -> PiSessionRuntimeRequ
         model=str(request.model or "").strip(),
         agent_id=str(request.agent_id or "").strip(),
         reasoning_effort=str(request.reasoning_effort or "").strip(),
+        system_prompt=str(request.system_prompt or "").strip(),
         append_system_prompt=str(request.append_system_prompt or "").strip(),
         native_session_id=str(request.native_session_id or "").strip(),
         config_fingerprint=str(request.config_fingerprint or "").strip(),

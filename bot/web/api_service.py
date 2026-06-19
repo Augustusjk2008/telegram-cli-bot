@@ -2487,8 +2487,6 @@ def create_conversation(
         is_processing = bool(session.is_processing)
     if is_processing:
         _raise(409, "conversation_switch_blocked", "当前任务运行中，先终止或等待完成")
-    if resolved_execution_mode == NATIVE_AGENT_PROVIDER and session.agent_id != "main":
-        _raise(409, "native_agent_child_agent_disabled", "原生 agent 模式暂不支持子 agent")
 
     if session.agent_id == "main" and resolved_execution_mode != NATIVE_AGENT_PROVIDER:
         _create_cluster_child_conversations(manager, alias, user_id, profile)
@@ -3157,9 +3155,7 @@ async def reply_native_agent_permission(
     message: str = "",
     agent_id: str = "main",
 ) -> dict[str, Any]:
-    if str(agent_id or "main").strip().lower() != "main":
-        _raise(409, "native_agent_child_agent_disabled", "原生 agent 模式暂不支持子 agent")
-    _profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, "main")
+    _profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
     normalized_permission_id = str(permission_id or "").strip()
     if not normalized_permission_id:
         _raise(400, "permission_required", "缺少权限请求 ID")
@@ -3314,6 +3310,7 @@ def _start_cluster_run_if_requested(
     alias: str,
     shared_user_id: int,
     cluster: bool,
+    execution_mode: str,
     mentions: list[dict[str, Any]] | None,
     allow_unsafe_cli: bool,
 ):
@@ -3326,6 +3323,7 @@ def _start_cluster_run_if_requested(
             bot_alias=alias,
             user_id=shared_user_id,
             profile=profile,
+            execution_mode=execution_mode,
             mentions=list(mentions or []),
             allow_unsafe_cli=allow_unsafe_cli,
         )
@@ -3371,18 +3369,30 @@ async def _run_cluster_agent_task(
                 if live_task is None or live_task.status != "queued":
                     return
                 live_task = _CLUSTER_RUNTIME.mark_agent_task_running(run_id, task_id)
-                cli_params_override = build_cluster_cli_params_override(live_run.profile, live_task.model_tier)
                 final_output = ""
                 returncode = 0
-                async for event in _stream_cli_chat(
-                    manager,
-                    live_run.bot_alias,
-                    live_run.user_id,
-                    live_task.message,
-                    agent_id=live_task.agent_id,
-                    cli_params_override=cli_params_override,
-                    allow_unsafe_cli=live_run.allow_unsafe_cli,
-                ):
+                event_stream = (
+                    _stream_native_agent_chat(
+                        manager,
+                        live_run.bot_alias,
+                        live_run.user_id,
+                        live_task.message,
+                        agent_id=live_task.agent_id,
+                        solo_mode=True,
+                        allow_unsafe_cli=live_run.allow_unsafe_cli,
+                    )
+                    if live_run.execution_mode == NATIVE_AGENT_PROVIDER
+                    else _stream_cli_chat(
+                        manager,
+                        live_run.bot_alias,
+                        live_run.user_id,
+                        live_task.message,
+                        agent_id=live_task.agent_id,
+                        cli_params_override=build_cluster_cli_params_override(live_run.profile, live_task.model_tier),
+                        allow_unsafe_cli=live_run.allow_unsafe_cli,
+                    )
+                )
+                async for event in event_stream:
                     event_type = str(event.get("type") or "")
                     if event_type == "status":
                         progress_text = str(event.get("preview_text") or "").strip()
@@ -6273,9 +6283,7 @@ async def _run_native_agent_chat(
     prepare_assistant_request: bool = False,
 ) -> dict[str, Any]:
     shared_user_id = chat_session_user_id(user_id)
-    if (agent_id or "main") != "main":
-        _raise(409, "native_agent_child_agent_disabled", "原生 agent 模式暂不支持子 agent")
-    profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, "main")
+    profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, agent_id)
     if not _supports_cli_runtime(profile):
         _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，Web 对话暂不支持该模式")
 
@@ -6297,6 +6305,7 @@ async def _run_native_agent_chat(
         alias=alias,
         shared_user_id=shared_user_id,
         cluster=cluster,
+        execution_mode=NATIVE_AGENT_PROVIDER,
         mentions=mentions,
         allow_unsafe_cli=allow_unsafe_cli,
     )
@@ -6382,9 +6391,7 @@ async def _stream_native_agent_chat(
     prepare_assistant_request: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
     shared_user_id = chat_session_user_id(user_id)
-    if (agent_id or "main") != "main":
-        _raise(409, "native_agent_child_agent_disabled", "原生 agent 模式暂不支持子 agent")
-    profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, "main")
+    profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, agent_id)
     if not _supports_cli_runtime(profile):
         _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，Web 对话暂不支持该模式")
 
@@ -6406,6 +6413,7 @@ async def _stream_native_agent_chat(
         alias=alias,
         shared_user_id=shared_user_id,
         cluster=cluster,
+        execution_mode=NATIVE_AGENT_PROVIDER,
         mentions=mentions,
         allow_unsafe_cli=allow_unsafe_cli,
     )
@@ -6534,6 +6542,7 @@ async def run_chat(
             alias=alias,
             shared_user_id=shared_user_id,
             cluster=cluster,
+            execution_mode=EXECUTION_MODE_CLI,
             mentions=mentions,
             allow_unsafe_cli=allow_unsafe_cli,
         )
@@ -6633,6 +6642,7 @@ async def stream_chat(
                 alias=alias,
                 shared_user_id=shared_user_id,
                 cluster=cluster,
+                execution_mode=EXECUTION_MODE_CLI,
                 mentions=mentions,
                 allow_unsafe_cli=allow_unsafe_cli,
             )

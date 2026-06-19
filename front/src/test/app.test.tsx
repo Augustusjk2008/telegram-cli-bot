@@ -197,6 +197,18 @@ test("guest login trims member-only navigation", async () => {
   expect(screen.queryByRole("button", { name: "设置" })).not.toBeInTheDocument();
 });
 
+test("member with current bot access can open bot settings", async () => {
+  const user = userEvent.setup();
+
+  render(<App />);
+
+  await loginAsMember(user);
+
+  expect(await screen.findByRole("button", { name: "设置" })).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "设置" }));
+  expect(await screen.findByText("CLI 参数")).toBeInTheDocument();
+});
+
 
 
 test("forced desktop mode mounts the desktop shell instead of the mobile bottom navigation", async () => {
@@ -328,7 +340,6 @@ test("member can enter ungranted bot in read-only mode and hits create quota cop
   await createManagedBot(user, "owned3");
   expect(await screen.findByText("普通用户最多只能创建 3 个 Bot")).toBeInTheDocument();
 });
-
 
 
 

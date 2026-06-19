@@ -484,6 +484,21 @@ test("desktop bot manager edits native agent config", async () => {
   });
 });
 
+test("desktop bot manager exposes cluster config for native agent backend", async () => {
+  const user = userEvent.setup();
+  const client = new DesktopManagerClient();
+
+  render(<DesktopBotManagerScreen client={client} currentAlias="review" onSelect={vi.fn()} onBotsChange={vi.fn()} />);
+
+  await screen.findByRole("heading", { name: "智能体管理" });
+  await user.click(screen.getByRole("button", { name: "配置" }));
+
+  expect(screen.getByLabelText("运行后端")).toHaveValue("native_agent");
+  expect(await screen.findByLabelText("并发子 agent 数")).toBeInTheDocument();
+  expect(await screen.findByText("集群模板")).toBeInTheDocument();
+  expect(await screen.findByText("集群 MCP")).toBeInTheDocument();
+});
+
 test("desktop bot manager keeps native api key global", async () => {
   const user = userEvent.setup();
   const client = new DesktopManagerClient();
@@ -576,6 +591,34 @@ test("desktop bot manager exposes cluster templates in config tab", async () => 
   })));
   expect(await screen.findByText("集群模板")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "预览 全量测试集群" })).toBeInTheDocument();
+});
+
+test("desktop bot manager lets bot operators edit cluster and cli params without bot admin", async () => {
+  const user = userEvent.setup();
+  const client = new DesktopManagerClient();
+  const updateClusterConfig = vi.spyOn(client, "updateClusterConfig");
+  const updateCliParam = vi.spyOn(client, "updateCliParam");
+
+  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onBotsChange={vi.fn()} canManage={false} />);
+
+  await screen.findByRole("heading", { name: "智能体管理" });
+  await user.click(screen.getByRole("button", { name: "配置" }));
+
+  expect(screen.getByRole("button", { name: "保存智能体" })).toBeDisabled();
+  const parallelSelect = await screen.findByLabelText("并发子 agent 数");
+  expect(parallelSelect).not.toBeDisabled();
+  await user.selectOptions(parallelSelect, "4");
+
+  await waitFor(() => expect(updateClusterConfig).toHaveBeenCalledWith("main", expect.objectContaining({
+    maxParallelAgents: 4,
+  })));
+
+  const effortSelect = await screen.findByLabelText("推理努力程度");
+  expect(effortSelect).not.toBeDisabled();
+  await user.selectOptions(effortSelect, "high");
+  await user.click(screen.getByRole("button", { name: "保存参数" }));
+
+  await waitFor(() => expect(updateCliParam).toHaveBeenCalledWith("main", "reasoning_effort", "high"));
 });
 
 

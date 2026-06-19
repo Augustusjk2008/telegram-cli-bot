@@ -2104,6 +2104,69 @@ test("sends native agent execution mode from action bar", async () => {
   expect(sendMessage.mock.calls[0][5]).toMatchObject({ executionMode: "native_agent" });
 });
 
+test("sends native agent message to selected child agent", async () => {
+  const user = userEvent.setup();
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias: string,
+    _text: string,
+    onChunk: (chunk: string) => void,
+  ): Promise<ChatMessage> => {
+    onChunk("审查回复");
+    return {
+      id: "assistant-native-child",
+      role: "assistant",
+      text: "审查回复",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    };
+  });
+  const client = createClient({
+    getBotOverview: async (_alias, options) => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+      supportedExecutionModes: ["native_agent"],
+      defaultExecutionMode: "native_agent",
+      executionMode: "native_agent",
+      cluster: {
+        enabled: true,
+        writePolicy: "selected_agents",
+        conflictPolicy: "snapshot_diff",
+        maxParallelAgents: 2,
+        defaultTimeoutSeconds: 600,
+        modelTiers: { low: "gpt-low", medium: "gpt-mid", high: "gpt-high" },
+      },
+      activeAgentId: options?.agentId || "main",
+      agents: [
+        { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true },
+        { id: "reviewer", name: "审查专家", systemPrompt: "", enabled: true, isMain: false },
+      ],
+    }),
+    listAgents: async () => ({
+      items: [
+        { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true },
+        { id: "reviewer", name: "审查专家", systemPrompt: "", enabled: true, isMain: false },
+      ],
+    }),
+    sendMessage,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await user.selectOptions(await screen.findByRole("combobox", { name: "当前 agent" }), "reviewer");
+  await user.type(await screen.findByPlaceholderText("发给 审查专家..."), "帮我审查");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+  expect(sendMessage.mock.calls[0][5]).toMatchObject({
+    executionMode: "native_agent",
+    agentId: "reviewer",
+  });
+  expect(sendMessage.mock.calls[0][5]).not.toMatchObject({ cluster: true });
+});
+
 test("native agent plan mode keeps cluster options", async () => {
   const user = userEvent.setup();
   const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (

@@ -175,13 +175,18 @@ test("admin center shows native agent global fields", async () => {
   expect(screen.getByText(/Workspace history: 启用/)).toBeInTheDocument();
   expect(screen.getByText(/运行检查: 警告/)).toBeInTheDocument();
   expect(screen.getByText("workspace_history")).toBeInTheDocument();
+  expect(screen.getByLabelText("原生 Agent 全局提示词")).toBeInTheDocument();
   expect(screen.queryByText(/备份:/)).not.toBeInTheDocument();
   expect(screen.getByText("jojocode_max / gpt-5.4")).toBeInTheDocument();
   const editor = screen.getByLabelText("原生 Agent 配置 JSON");
   fireEvent.change(editor, { target: { value: JSON.stringify({ provider: {} }) } });
+  fireEvent.change(screen.getByLabelText("原生 Agent 全局提示词"), { target: { value: "全局提示词" } });
   await user.click(screen.getByRole("button", { name: "保存配置" }));
 
-  await waitFor(() => expect(updateNativeAgentConfig).toHaveBeenCalledWith({ provider: {} }));
+  await waitFor(() => expect(updateNativeAgentConfig).toHaveBeenCalledWith({
+    provider: {},
+    system_prompt: "全局提示词",
+  }));
   expect(await screen.findByText("配置已保存，重启原生 agent 后生效；请重新运行检查")).toBeInTheDocument();
 });
 

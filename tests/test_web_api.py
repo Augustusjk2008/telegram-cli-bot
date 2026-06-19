@@ -264,6 +264,33 @@ def test_list_avatar_assets_prefixes_web_base_path(tmp_path: Path, monkeypatch: 
         ]
     }
 
+
+def test_create_native_conversation_allows_child_agent(web_manager: MultiBotManager):
+    web_manager.main_profile.agents = [
+        AgentProfile(id="reviewer", name="审查专家", system_prompt="先列风险"),
+    ]
+    result = create_conversation(
+        web_manager,
+        "main",
+        1001,
+        "审查",
+        agent_id="reviewer",
+        execution_mode="native_agent",
+    )
+
+    assert result["conversation"]["agent_id"] == "reviewer"
+    assert result["conversation"]["execution_mode"] == "native_agent"
+
+    listed = list_conversations(
+        web_manager,
+        "main",
+        1001,
+        agent_id="reviewer",
+        execution_mode="native_agent",
+    )
+    assert listed["items"][0]["id"] == result["conversation"]["id"]
+
+
 @pytest.fixture
 def web_manager(temp_dir: Path) -> MultiBotManager:
     storage_file = temp_dir / "managed_bots.json"
@@ -953,7 +980,7 @@ async def test_kill_native_agent_cluster_marks_run_and_tasks_cancelled(
 
 
 @pytest.mark.asyncio
-async def test_native_agent_cluster_child_task_inherits_unsafe_cli_permission(
+async def test_native_agent_cluster_child_task_uses_native_runner(
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -970,12 +997,12 @@ async def test_native_agent_cluster_child_task_inherits_unsafe_cli_permission(
             captured["run_id"] = kwargs["cluster_run_id"]
             return {"output": "ok", "returncode": 0}
 
-    async def fake_stream_cli_chat(*_args, **kwargs):
-        captured["allow_unsafe_cli"] = kwargs.get("allow_unsafe_cli")
-        yield {"type": "done", "output": "done", "returncode": 0}
+        async def stream_chat(self, **kwargs):
+            captured["child_agent_id"] = kwargs["session"].agent_id
+            captured["child_solo_mode"] = kwargs.get("solo_mode")
+            yield {"type": "done", "output": "done", "returncode": 0}
 
     monkeypatch.setattr(api_service, "get_native_agent_service", lambda: FakeNativeAgentService())
-    monkeypatch.setattr(api_service, "_stream_cli_chat", fake_stream_cli_chat)
 
     await api_service.run_chat(
         web_manager,
@@ -1000,7 +1027,8 @@ async def test_native_agent_cluster_child_task_inherits_unsafe_cli_permission(
         {"task_ids": [task_id], "wait_seconds": 1, "include_output": True},
     )
 
-    assert captured["allow_unsafe_cli"] is True
+    assert captured["child_agent_id"] == "tester"
+    assert captured["child_solo_mode"] is True
 
 
 @pytest.mark.asyncio
@@ -1662,7 +1690,7 @@ async def test_guest_cannot_list_bots(
 
 
 @pytest.mark.asyncio
-async def test_default_member_cannot_execute_host_level_actions(
+async def test_default_member_can_configure_authorized_bot_cli_params_only(
     web_manager: MultiBotManager,
     isolated_web_auth_store: WebAuthStore,
     monkeypatch: pytest.MonkeyPatch,
@@ -1690,9 +1718,15 @@ async def test_default_member_cannot_execute_host_level_actions(
                 json={"alias": "memberbot", "working_dir": str(temp_dir)},
                 headers=headers,
             )
+            cli_get_resp = await client.get("/api/bots/main/cli-params", headers=headers)
             cli_resp = await client.patch(
                 "/api/bots/main/cli-params",
                 json={"cli_type": "codex", "key": "yolo", "value": True},
+                headers=headers,
+            )
+            cli_reset_resp = await client.post(
+                "/api/bots/main/cli-params/reset",
+                json={"cli_type": "codex"},
                 headers=headers,
             )
             workdir_resp = await client.post(
@@ -1700,11 +1734,55 @@ async def test_default_member_cannot_execute_host_level_actions(
                 json={"parent_path": str(temp_dir), "name": "member-workdir"},
                 headers=headers,
             )
+            start_resp = await client.post("/api/admin/bots/main/start", headers=headers)
+            stop_resp = await client.post("/api/admin/bots/main/stop", headers=headers)
+            delete_resp = await client.delete("/api/admin/bots/main", headers=headers)
+            admin_cli_resp = await client.patch(
+                "/api/admin/bots/main/cli",
+                json={"cli_type": "codex", "cli_path": "codex"},
+                headers=headers,
+            )
+            env_resp = await client.get("/api/admin/env", headers=headers)
+            update_resp = await client.get("/api/admin/update", headers=headers)
 
     assert chat_resp.status == 403
     assert add_bot_resp.status == 403
-    assert cli_resp.status == 403
+    assert cli_get_resp.status == 200
+    assert cli_resp.status == 200
+    assert cli_reset_resp.status == 200
     assert workdir_resp.status == 403
+    assert start_resp.status == 403
+    assert stop_resp.status == 403
+    assert delete_resp.status == 403
+    assert admin_cli_resp.status == 403
+    assert env_resp.status == 403
+    assert update_resp.status == 403
+
+
+@pytest.mark.asyncio
+async def test_guest_with_bot_access_cannot_configure_bot(
+    web_manager: MultiBotManager,
+    isolated_web_auth_store: WebAuthStore,
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+):
+    monkeypatch.setattr("bot.web.server._is_loopback_request", lambda _request: False)
+    session = isolated_web_auth_store.create_guest_session()
+    from bot.web.permission_store import BotPermissionStore
+
+    permission_store = BotPermissionStore(temp_dir / ".web_permissions.json")
+    permission_store.grant_bot_to_account(session.account.account_id, "main")
+    monkeypatch.setattr("bot.web.server._BOT_PERMISSION_STORE", permission_store)
+    headers = {"Authorization": f"Bearer {session.token}"}
+
+    app = WebApiServer(web_manager)._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            cli_resp = await client.get("/api/bots/main/cli-params", headers=headers)
+            cluster_resp = await client.get("/api/admin/bots/main/cluster/schema", headers=headers)
+
+    assert cli_resp.status == 403
+    assert cluster_resp.status == 403
 
 
 @pytest.mark.asyncio
@@ -1787,15 +1865,39 @@ async def test_member_cannot_read_unallowed_bot(
             list_payload = await list_resp.json()
             team_resp = await client.get("/api/bots/team/history", headers=headers)
             team_payload = await team_resp.json()
+            team_cli_resp = await client.get("/api/bots/team/cli-params", headers=headers)
+            team_cli_payload = await team_cli_resp.json()
+            team_cli_patch_resp = await client.patch(
+                "/api/bots/team/cli-params",
+                json={"cli_type": "codex", "key": "yolo", "value": True},
+                headers=headers,
+            )
+            team_cli_patch_payload = await team_cli_patch_resp.json()
+            team_cli_reset_resp = await client.post(
+                "/api/bots/team/cli-params/reset",
+                json={"cli_type": "codex"},
+                headers=headers,
+            )
+            team_cli_reset_payload = await team_cli_reset_resp.json()
+            team_cluster_resp = await client.get("/api/admin/bots/team/cluster/schema", headers=headers)
+            team_cluster_payload = await team_cluster_resp.json()
 
     assert list_resp.status == 200
     assert [item["alias"] for item in list_payload["data"]] == ["main"]
     assert team_resp.status == 403
     assert team_payload["error"]["code"] == "bot_forbidden"
+    assert team_cli_resp.status == 403
+    assert team_cli_payload["error"]["code"] == "bot_forbidden"
+    assert team_cli_patch_resp.status == 403
+    assert team_cli_patch_payload["error"]["code"] == "bot_forbidden"
+    assert team_cli_reset_resp.status == 403
+    assert team_cli_reset_payload["error"]["code"] == "bot_forbidden"
+    assert team_cluster_resp.status == 403
+    assert team_cluster_payload["error"]["code"] == "bot_forbidden"
 
 
 @pytest.mark.asyncio
-async def test_member_manage_bots_can_access_bot_scoped_cluster_routes(
+async def test_member_with_bot_access_can_access_bot_scoped_cluster_routes(
     web_manager: MultiBotManager,
     isolated_web_auth_store: WebAuthStore,
     monkeypatch: pytest.MonkeyPatch,
@@ -1807,10 +1909,6 @@ async def test_member_manage_bots_can_access_bot_scoped_cluster_routes(
         encoding="utf-8",
     )
     session = isolated_web_auth_store.register_member("alice", "pw-123", "INVITE-001")
-    isolated_web_auth_store.update_member(
-        session.account.account_id,
-        capabilities=[*MEMBER_CAPABILITIES, CAP_MANAGE_BOTS],
-    )
     refreshed = isolated_web_auth_store.login_member("alice", "pw-123")
     from bot.web.permission_store import BotPermissionStore
 
@@ -1820,17 +1918,76 @@ async def test_member_manage_bots_can_access_bot_scoped_cluster_routes(
     monkeypatch.setattr("bot.web.server.prepare_cluster_setup", lambda *_args, **_kwargs: {"ok": True})
     monkeypatch.setattr("bot.web.server.get_cluster_templates", lambda *_args, **_kwargs: {"items": []})
     headers = {"Authorization": f"Bearer {refreshed.token}"}
+    bundle = {
+        "id": "member_review",
+        "name": "成员复核集群",
+        "description": "",
+        "cluster": {
+            "enabled": True,
+            "write_policy": "selected_agents",
+            "conflict_policy": "snapshot_diff",
+            "max_parallel_agents": 1,
+            "default_timeout_seconds": 600,
+            "model_tiers": {"low": "", "medium": "", "high": ""},
+        },
+        "agents": [
+            {
+                "id": "reviewer",
+                "name": "复核",
+                "system_prompt": "只读复核当前改动，输出风险和建议。",
+                "enabled": True,
+                "cluster": {
+                    "allow_cluster": True,
+                    "allow_write": False,
+                    "session_policy": "ephemeral",
+                    "timeout_seconds": 600,
+                },
+            }
+        ],
+    }
 
     app = WebApiServer(web_manager)._build_app()
     async with TestServer(app) as test_server:
         async with TestClient(test_server) as client:
             prepare_resp = await client.post("/api/admin/bots/main/cluster/setup/prepare", headers=headers)
+            config_resp = await client.post(
+                "/api/admin/bots/main/cluster/config",
+                json={"cluster": {"enabled": True}},
+                headers=headers,
+            )
             templates_resp = await client.get("/api/admin/bots/main/cluster/templates", headers=headers)
+            bot_schema_resp = await client.get("/api/admin/bots/main/cluster/schema", headers=headers)
+            template_preview_resp = await client.post(
+                "/api/admin/bots/main/cluster/templates/preview",
+                json={"template_id": "full_test"},
+                headers=headers,
+            )
+            template_apply_resp = await client.post(
+                "/api/admin/bots/main/cluster/templates/apply",
+                json={"template_id": "full_test", "confirm_overwrite_agents": True},
+                headers=headers,
+            )
+            bundle_preview_resp = await client.post(
+                "/api/admin/bots/main/cluster/config-bundle/preview",
+                json={"bundle": bundle},
+                headers=headers,
+            )
+            bundle_apply_resp = await client.post(
+                "/api/admin/bots/main/cluster/config-bundle/apply",
+                json={"bundle": bundle, "confirm_overwrite_agents": True},
+                headers=headers,
+            )
             schema_resp = await client.get("/api/admin/cluster/schema", headers=headers)
 
     assert prepare_resp.status == 200
+    assert config_resp.status == 200
     assert templates_resp.status == 200
-    assert schema_resp.status == 200
+    assert bot_schema_resp.status == 200
+    assert template_preview_resp.status == 200
+    assert template_apply_resp.status == 200
+    assert bundle_preview_resp.status == 200
+    assert bundle_apply_resp.status == 200
+    assert schema_resp.status == 403
 
 
 @pytest.mark.asyncio
@@ -1857,11 +2014,35 @@ async def test_member_without_bot_access_cannot_access_bot_scoped_cluster_routes
     app = WebApiServer(web_manager)._build_app()
     async with TestServer(app) as test_server:
         async with TestClient(test_server) as client:
-            resp = await client.post("/api/admin/bots/main/cluster/setup/prepare", headers=headers)
-            payload = await resp.json()
+            responses = [
+                await client.post("/api/admin/bots/main/cluster/setup/prepare", headers=headers),
+                await client.post("/api/admin/bots/main/cluster/config", json={"cluster": {"enabled": True}}, headers=headers),
+                await client.get("/api/admin/bots/main/cluster/schema", headers=headers),
+                await client.post(
+                    "/api/admin/bots/main/cluster/templates/preview",
+                    json={"template_id": "full_test"},
+                    headers=headers,
+                ),
+                await client.post(
+                    "/api/admin/bots/main/cluster/templates/apply",
+                    json={"template_id": "full_test", "confirm_overwrite_agents": True},
+                    headers=headers,
+                ),
+                await client.post(
+                    "/api/admin/bots/main/cluster/config-bundle/preview",
+                    json={"bundle": {}},
+                    headers=headers,
+                ),
+                await client.post(
+                    "/api/admin/bots/main/cluster/config-bundle/apply",
+                    json={"bundle": {}, "confirm_overwrite_agents": True},
+                    headers=headers,
+                ),
+            ]
+            payloads = [await response.json() for response in responses]
 
-    assert resp.status == 403
-    assert payload["error"]["code"] == "bot_forbidden"
+    assert [response.status for response in responses] == [403] * len(responses)
+    assert {payload["error"]["code"] for payload in payloads} == {"bot_forbidden"}
 
 
 @pytest.mark.asyncio
@@ -4779,6 +4960,112 @@ async def test_stream_chat_routes_native_agent_execution_mode(web_manager: Multi
 
 
 @pytest.mark.asyncio
+async def test_stream_chat_routes_native_agent_child_agent(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    web_manager.main_profile.agents = [
+        AgentProfile(id="reviewer", name="审查专家", system_prompt="先列风险"),
+    ]
+    captured: dict[str, Any] = {}
+
+    class FakeNativeService:
+        async def stream_chat(self, **kwargs):
+            captured.update(kwargs)
+            yield {"type": "meta", "execution_mode": "native_agent"}
+            yield {
+                "type": "done",
+                "output": "审查回复",
+                "message": {
+                    "id": "assistant-native-child",
+                    "role": "assistant",
+                    "content": "审查回复",
+                    "created_at": "2026-06-04T00:00:00",
+                    "meta": {"native_source": {"provider": "native_agent", "session_id": "native-child-1"}},
+                },
+                "elapsed_seconds": 1,
+                "returncode": 0,
+            }
+
+    monkeypatch.setattr(api_service, "get_native_agent_service", lambda: FakeNativeService())
+
+    events = [
+        event async for event in api_service.stream_chat(
+            web_manager,
+            "main",
+            1001,
+            "你好",
+            agent_id="reviewer",
+            execution_mode="native_agent",
+        )
+    ]
+
+    assert events[-1]["type"] == "done"
+    assert captured["profile"] is web_manager.main_profile
+    assert captured["session"].agent_id == "reviewer"
+    assert captured["user_text"] == "你好"
+    assert captured["prompt_text"].endswith("你好")
+
+
+@pytest.mark.asyncio
+async def test_native_cluster_child_task_uses_native_history(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
+    web_manager.main_profile.supported_execution_modes = ["native_agent"]
+    web_manager.main_profile.default_execution_mode = "native_agent"
+    web_manager.main_profile.cluster = api_service.normalize_bot_cluster_config({"enabled": True})
+    web_manager.main_profile.agents = [
+        AgentProfile(id="reviewer", name="审查专家", system_prompt="先列风险"),
+    ]
+    calls: list[dict[str, Any]] = []
+
+    class FakeNativeService:
+        async def stream_chat(self, **kwargs):
+            calls.append(dict(kwargs))
+            history = kwargs["history_service"]
+            session = kwargs["session"]
+            handle = history.start_turn(
+                profile=kwargs["profile"],
+                session=session,
+                user_text=kwargs["user_text"],
+                native_provider="native_agent",
+            )
+            message = history.complete_turn(
+                handle,
+                content="子 agent 回复",
+                completion_state="completed",
+                native_session_id="native-child-1",
+            )
+            yield {"type": "status", "preview_text": "处理中"}
+            yield {"type": "done", "output": "子 agent 回复", "message": message, "returncode": 0}
+
+    monkeypatch.setattr(api_service, "get_native_agent_service", lambda: FakeNativeService())
+
+    run = api_service._CLUSTER_RUNTIME.start_run(
+        api_service.ClusterRunRequest(
+            bot_alias="main",
+            user_id=chat_session_user_id(1001),
+            profile=web_manager.main_profile,
+            execution_mode="native_agent",
+        )
+    )
+    request = api_service._CLUSTER_RUNTIME.validate_ask_agent(
+        run.run_id,
+        {"agent_id": "reviewer", "message": "复核一下"},
+    )
+    task = api_service._CLUSTER_RUNTIME.create_agent_task(run.run_id, request)
+
+    await api_service._run_cluster_agent_task(web_manager, run.run_id, task.task_id)
+
+    status = api_service._CLUSTER_RUNTIME.build_task_status(run.run_id, [task.task_id], include_output=True)
+    assert status["completed_count"] == 1
+    assert status["tasks"][0]["output"] == "子 agent 回复"
+    assert calls[0]["session"].agent_id == "reviewer"
+    assert calls[0]["solo_mode"] is True
+    assert [item["content"] for item in get_history(web_manager, "main", 1001, agent_id="reviewer", execution_mode="native_agent")["items"]] == [
+        "复核一下",
+        "子 agent 回复",
+    ]
+    conversations = list_conversations(web_manager, "main", 1001, agent_id="reviewer", execution_mode="native_agent")["items"]
+    assert conversations[0]["native_provider"] == "native_agent"
+
+
+@pytest.mark.asyncio
 async def test_stream_chat_routes_native_agent_solo_mode(web_manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch):
     captured: dict[str, Any] = {}
 
@@ -5201,10 +5488,17 @@ async def test_cli_chat_popen_uses_chat_cli_process_kwargs(
 async def test_run_cli_chat_clamps_yolo_without_unsafe_capability(web_manager: MultiBotManager):
     web_manager.main_profile.cli_type = "codex"
     web_manager.main_profile.cli_params.codex["yolo"] = True
+    web_manager.main_profile.cli_params.codex["extra_args"] = [
+        "--safe-flag",
+        "--dangerously-bypass-approvals-and-sandbox",
+    ]
     captured_yolo: list[bool] = []
+    captured_extra_args: list[list[str]] = []
 
     def fake_build_cli_command(**kwargs):
-        captured_yolo.append(bool(kwargs["params_config"].codex.get("yolo")))
+        params_config = kwargs["params_config"]
+        captured_yolo.append(bool(params_config.codex.get("yolo")))
+        captured_extra_args.append(list(params_config.codex.get("extra_args") or []))
         return ["codex"], False
 
     with patch("bot.web.api_service.resolve_cli_executable", return_value="codex"), \
@@ -5223,6 +5517,10 @@ async def test_run_cli_chat_clamps_yolo_without_unsafe_capability(web_manager: M
     assert result["output"] == "完成"
     assert unsafe_result["output"] == "完成"
     assert captured_yolo == [False, True]
+    assert captured_extra_args == [
+        ["--safe-flag"],
+        ["--safe-flag", "--dangerously-bypass-approvals-and-sandbox"],
+    ]
 
 
 @pytest.mark.asyncio

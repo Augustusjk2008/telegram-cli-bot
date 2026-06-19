@@ -1432,6 +1432,7 @@ export class MockWebBotClient implements WebBotClient {
     reasoning_effort: "medium",
     pi_agent: "main",
     pi_command: "pi",
+    system_prompt: "",
     workspace_history_enabled: true,
   };
   private nativeAgentModels: NativeAgentModelOption[] = [

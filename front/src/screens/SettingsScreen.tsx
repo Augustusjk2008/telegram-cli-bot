@@ -295,7 +295,7 @@ export function SettingsScreen({
     || sessionCapabilities.includes("create_workdir_directory")
     || sessionCapabilities.includes("manage_bots")
     || sessionCapabilities.includes("admin_ops");
-  const canManageCliParams = canManageBotRuntime || sessionCapabilities.includes("manage_cli_params");
+  const canConfigureBot = overview ? overview.canOperate !== false : canManageBotRuntime;
   const runtimeBackend = getRuntimeBackend(overview);
   const nativeRuntime = runtimeBackend === "native_agent";
 
@@ -1055,7 +1055,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
           <ClusterSetupPanel
             botAlias={botAlias}
             client={client}
-            canManage={canManageBotRuntime}
+            canManage={canConfigureBot}
           />
         ) : null}
 
@@ -1072,7 +1072,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
           <BotCliParamsPanel
             botAlias={botAlias}
             client={client}
-            canManage={canManageCliParams}
+            canManage={canConfigureBot}
             reloadKey={`${botAlias}:${overview.cliType}:${overview.cliPath || ""}`}
           />
         ) : null}

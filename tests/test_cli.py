@@ -29,7 +29,7 @@ from bot.cli import (
     should_reset_codex_session,
     validate_cli_type,
 )
-from bot.cli_params import CliParamsConfig, normalize_cli_model_options, with_global_extra_args
+from bot.cli_params import CliParamsConfig, clamp_unsafe_cli_params, normalize_cli_model_options, with_global_extra_args
 
 class TestValidateCliType:
     """测试 validate_cli_type"""
@@ -170,6 +170,33 @@ class TestBuildCliCommand:
         assert merged.codex["extra_args"] == ["--bot-codex", "--global-codex"]
         assert merged.claude["extra_args"] == ["--bot-claude", "--global-claude"]
         assert merged.kimi["extra_args"] == ["--bot-kimi", "--global-kimi"]
+
+    def test_clamp_unsafe_cli_params_filters_extra_args(self):
+        params_config = CliParamsConfig()
+        params_config.codex["extra_args"] = [
+            "--safe",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--approval-policy",
+            "never",
+            "--sandbox=danger-full-access",
+            "-c",
+            "sandbox_mode=\"danger-full-access\"",
+        ]
+        params_config.claude["extra_args"] = [
+            "--keep",
+            "--dangerously-skip-permissions",
+            "--permission-mode",
+            "bypassPermissions",
+        ]
+        params_config.kimi["extra_args"] = ["--agent", "coder", "--yolo"]
+
+        clamped = clamp_unsafe_cli_params(params_config, allow_unsafe_cli=False)
+        allowed = clamp_unsafe_cli_params(params_config, allow_unsafe_cli=True)
+
+        assert clamped.codex["extra_args"] == ["--safe"]
+        assert clamped.claude["extra_args"] == ["--keep"]
+        assert clamped.kimi["extra_args"] == ["--agent", "coder"]
+        assert allowed.codex["extra_args"] == params_config.codex["extra_args"]
 
 
 class TestParseCodexJsonOutput:

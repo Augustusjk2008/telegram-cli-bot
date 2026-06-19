@@ -283,7 +283,7 @@ describe("RealWebBotClient", () => {
     expect(prepare.selfTestCommand).toEqual(["python", "bot\\cluster\\mcp_stdio.py", "--self-test"]);
   });
 
-  test("cluster bundle schema uses global admin route", async () => {
+  test("cluster bundle schema uses bot-scoped route", async () => {
     fetchMock.mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -299,7 +299,7 @@ describe("RealWebBotClient", () => {
     const client = new RealWebBotClient();
     const schema = await client.getClusterBundleSchema("main");
 
-    expect(fetchMock).toHaveBeenCalledWith("/api/admin/cluster/schema", expect.objectContaining({ cache: "no-store" }));
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/bots/main/cluster/schema", expect.objectContaining({ cache: "no-store" }));
     expect(schema.version).toBe(1);
     expect(schema.schema.type).toBe("object");
   });

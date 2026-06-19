@@ -1135,14 +1135,19 @@ class WebApiServer:
             return auth
         raise WebApiError(403, "forbidden", "权限不足")
 
-    async def _with_cluster_bot_config_access(self, request: web.Request) -> AuthContext:
-        auth = await self._with_any_capability(request, {CAP_MANAGE_BOTS, CAP_ADMIN_OPS})
+    async def _with_bot_config_access(self, request: web.Request) -> AuthContext:
+        auth = await self._with_auth(request)
+        if not self._is_local_admin(auth) and auth.role != "member":
+            raise WebApiError(403, "forbidden", "权限不足")
         raw_alias = request.match_info.get("alias")
         alias = str(raw_alias or "").strip().lower() if isinstance(raw_alias, str) else ""
         if alias:
             auth = self._bot_auth(auth, alias)
             request["auth"] = auth
         return auth
+
+    async def _with_cluster_bot_config_access(self, request: web.Request) -> AuthContext:
+        return await self._with_bot_config_access(request)
 
     def _schedule_restart_request(self) -> None:
         if self._restart_task is not None and not self._restart_task.done():
@@ -2007,6 +2012,10 @@ class WebApiServer:
         await self._with_cluster_bot_config_access(request)
         alias = self._manager_alias(request)
         return _json({"ok": True, "data": get_cluster_templates(self.manager, alias)})
+
+    async def get_bot_cluster_schema_view(self, request: web.Request) -> web.Response:
+        await self._with_cluster_bot_config_access(request)
+        return _json({"ok": True, "data": get_cluster_bundle_schema()})
 
     async def get_cluster_schema_view(self, request: web.Request) -> web.Response:
         await self._with_any_capability(request, {CAP_MANAGE_BOTS, CAP_ADMIN_OPS})
@@ -2891,7 +2900,7 @@ class WebApiServer:
         return _json({"ok": True, "data": data})
 
     async def get_cli_params(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_MANAGE_CLI_PARAMS)
+        await self._with_bot_config_access(request)
         alias = self._manager_alias(request)
         cli_type = request.query.get("cli_type") or None
         return _json({"ok": True, "data": get_cli_params_payload(self.manager, alias, cli_type)})
@@ -2914,7 +2923,7 @@ class WebApiServer:
         return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})
 
     async def patch_cli_params(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_MANAGE_CLI_PARAMS)
+        await self._with_bot_config_access(request)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         data = await update_cli_params(
@@ -2927,7 +2936,7 @@ class WebApiServer:
         return _json({"ok": True, "data": data})
 
     async def post_cli_params_reset(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_MANAGE_CLI_PARAMS)
+        await self._with_bot_config_access(request)
         alias = self._manager_alias(request)
         body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
         data = await reset_cli_params(self.manager, alias, body.get("cli_type"))

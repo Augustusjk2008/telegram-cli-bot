@@ -24,9 +24,27 @@ def test_cluster_runtime_starts_run():
     assert run.run_id.startswith("clr_")
     assert run.status == "running"
     assert run.bot_alias == "main"
+    assert run.execution_mode == "cli"
     assert run.mentions == [{"agent_id": "reviewer"}]
     assert run.allow_unsafe_cli is True
     assert runtime.get_run(run.run_id) is run
+
+
+def test_cluster_runtime_stores_execution_mode():
+    profile = BotProfile(alias="main", agents=[AgentProfile(id="reviewer", name="代码审查")])
+    runtime = ClusterRuntime()
+
+    run = runtime.start_run(
+        ClusterRunRequest(
+            bot_alias="main",
+            user_id=1001,
+            profile=profile,
+            execution_mode="native_agent",
+        )
+    )
+
+    assert run.execution_mode == "native_agent"
+    assert runtime.build_status(run.run_id)["execution_mode"] == "native_agent"
 
 
 def test_cluster_runtime_creates_agent_task():

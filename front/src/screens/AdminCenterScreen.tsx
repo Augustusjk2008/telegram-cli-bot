@@ -198,6 +198,7 @@ export function AdminCenterScreen({
   const [lanChatSaving, setLanChatSaving] = useState(false);
   const [nativeAgentConfig, setNativeAgentConfig] = useState<NativeAgentConfigPayload | null>(null);
   const [nativeAgentDraft, setNativeAgentDraft] = useState("");
+  const [nativeAgentSystemPromptDraft, setNativeAgentSystemPromptDraft] = useState("");
   const [nativeAgentSaving, setNativeAgentSaving] = useState(false);
   const [nativeAgentPreflightRunning, setNativeAgentPreflightRunning] = useState(false);
   const [envConfig, setEnvConfig] = useState<EnvConfigSnapshot | null>(null);
@@ -462,6 +463,7 @@ export function AdminCenterScreen({
       const config = await client.getNativeAgentConfig();
       setNativeAgentConfig(config);
       setNativeAgentDraft(JSON.stringify(config.config || {}, null, 2));
+      setNativeAgentSystemPromptDraft(String(config.config?.system_prompt ?? config.config?.systemPrompt ?? ""));
       setLoadedTabs((prev) => ({ ...prev, "native-agent": true }));
       if (nextNotice) {
         setNotice(nextNotice);
@@ -797,9 +799,18 @@ export function AdminCenterScreen({
         setError("配置必须是 JSON 对象");
         return;
       }
-      const saved = await client.updateNativeAgentConfig(parsed as Record<string, unknown>);
+      const nextConfig = { ...(parsed as Record<string, unknown>) };
+      const normalizedSystemPrompt = nativeAgentSystemPromptDraft.trim();
+      if (normalizedSystemPrompt) {
+        nextConfig.system_prompt = normalizedSystemPrompt;
+      } else {
+        delete nextConfig.system_prompt;
+        delete nextConfig.systemPrompt;
+      }
+      const saved = await client.updateNativeAgentConfig(nextConfig);
       setNativeAgentConfig({ ...saved, preflight: undefined });
       setNativeAgentDraft(JSON.stringify(saved.config || {}, null, 2));
+      setNativeAgentSystemPromptDraft(String(saved.config?.system_prompt ?? saved.config?.systemPrompt ?? ""));
       setNotice(saved.needsRestart ? "配置已保存，重启原生 agent 后生效；请重新运行检查" : "原生 Agent 配置已保存；请重新运行检查");
     } catch (nextError) {
       setError(getErrorMessage(nextError, "保存原生 Agent 配置失败"));
@@ -1324,6 +1335,19 @@ export function AdminCenterScreen({
                 </div>
               ) : null}
             </div>
+
+            <label className="block space-y-2">
+              <span className="text-sm font-medium text-[var(--text)]">全局提示词</span>
+              <textarea
+                aria-label="原生 Agent 全局提示词"
+                value={nativeAgentSystemPromptDraft}
+                onChange={(event) => setNativeAgentSystemPromptDraft(event.target.value)}
+                rows={6}
+                className="min-h-32 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                placeholder="启动 Pi 时通过 --system-prompt 注入"
+              />
+              <span className="block text-xs text-[var(--muted)]">仅新启动的 Pi runtime 生效。</span>
+            </label>
 
             <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
               <label className="space-y-2">

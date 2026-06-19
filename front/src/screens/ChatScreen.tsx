@@ -1439,7 +1439,7 @@ export function ChatScreen({
   const [deletingConversationId, setDeletingConversationId] = useState("");
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [agents, setAgents] = useState<AgentSummary[]>(fallbackAgents());
-  const [activeAgentId, setActiveAgentId] = useState(() => forcedExecutionMode === "native_agent" ? "main" : readStoredAgentId(botAlias, storageScope));
+  const [activeAgentId, setActiveAgentId] = useState(() => readStoredAgentId(botAlias, storageScope));
   const [clusterRunId, setClusterRunId] = useState("");
   const [clusterTaskStatus, setClusterTaskStatus] = useState<ClusterTaskStatus | null>(null);
   const [clusterTaskError, setClusterTaskError] = useState("");
@@ -1566,7 +1566,7 @@ export function ChatScreen({
     clusterRunIdRef.current = "";
     setQueuedMessage(null);
     queuedMessageRef.current = null;
-    const storedAgentId = forcedExecutionMode === "native_agent" ? "main" : readStoredAgentId(botAlias, storageScope);
+    const storedAgentId = readStoredAgentId(botAlias, storageScope);
     setActiveAgentId(storedAgentId);
     activeAgentIdRef.current = storedAgentId;
   }, [botAlias, forcedExecutionMode, storageScope]);
@@ -2031,7 +2031,7 @@ export function ChatScreen({
 
     const storedExecutionMode = forcedExecutionMode ?? readStoredExecutionMode(botAlias, storageScope);
     const requestedExecutionMode = forcedExecutionMode ?? storedExecutionMode ?? undefined;
-    const requestedAgentId = forcedExecutionMode === "native_agent" ? "main" : activeAgentIdRef.current || "main";
+    const requestedAgentId = activeAgentIdRef.current || "main";
     const loadAgents = typeof client.listAgents === "function"
       ? client.listAgents(botAlias).catch(() => ({ items: fallbackAgents() }))
       : Promise.resolve({ items: fallbackAgents() });
@@ -2052,7 +2052,7 @@ export function ChatScreen({
             ? storedExecutionMode
             : getDefaultExecutionMode(initialOverview))
           : getDefaultExecutionMode(initialOverview);
-        const preferredAgentId = nextExecutionMode === "native_agent" ? "main" : requestedAgentId;
+        const preferredAgentId = requestedAgentId;
         const nextAgentId = nextAgents.some((agent) => agent.id === preferredAgentId) ? preferredAgentId : "main";
         let messages = initialMessages;
         let overview = initialOverview;
@@ -2691,11 +2691,7 @@ export function ChatScreen({
       setError("当前任务运行中，先终止或等待完成");
       return;
     }
-    if (executionModeRef.current === "native_agent" && activeAgentIdRef.current !== "main") {
-      setError("子智能体只读，请回主 agent 发送；可用 @ 指派");
-      return;
-    }
-    if (botOverview?.cluster?.enabled && activeAgentIdRef.current !== "main") {
+    if (executionModeRef.current !== "native_agent" && botOverview?.cluster?.enabled && activeAgentIdRef.current !== "main") {
       setError("子智能体只读，请回主 agent 发送；可用 @ 指派");
       return;
     }
@@ -3317,15 +3313,11 @@ export function ChatScreen({
     const clusterMode = Boolean(botOverview?.cluster?.enabled);
     const currentExecutionMode = executionModeRef.current;
     const nativeSend = currentExecutionMode === "native_agent";
-    if (nativeSend && activeAgentIdRef.current !== "main") {
-      setError("子智能体只读，请回主 agent 发送；可用 @ 指派");
-      return;
-    }
     if (!nativeSend && clusterMode && activeAgentIdRef.current !== "main") {
       setError("子智能体只读，请回主 agent 发送；可用 @ 指派");
       return;
     }
-    const clusterSend = clusterMode || mentions.length > 0;
+    const clusterSend = mentions.length > 0 || (clusterMode && activeAgentIdRef.current === "main");
     const isExecutingPlanPrompt = isPlanExecutionPrompt(text);
     if (planMode && isExecutingPlanPrompt) {
       setPlanMode(false);
@@ -3560,7 +3552,7 @@ export function ChatScreen({
       return;
     }
     const previousAgentId = activeAgentIdRef.current || "main";
-    const nextAgentId = mode === "native_agent" ? "main" : previousAgentId;
+    const nextAgentId = previousAgentId;
     setError("");
     setExecutionMode(mode);
     clearStoredQueuedMessage(botAlias, previousAgentId, storageScope);
@@ -3679,13 +3671,10 @@ export function ChatScreen({
     : supportedExecutionModes.includes(executionMode) ? executionMode : getDefaultExecutionMode(botOverview);
   const nativeExecutionMode = effectiveExecutionMode === "native_agent";
   const clusterMode = Boolean(botOverview?.cluster?.enabled);
-  const activeClusterChildReadOnly = clusterMode && activeAgentId !== "main";
-  const activeNativeReadOnly = nativeExecutionMode && activeAgentId !== "main";
-  const chatMutationsDisabled = readOnly || activeClusterChildReadOnly || activeNativeReadOnly;
+  const activeClusterChildReadOnly = !nativeExecutionMode && clusterMode && activeAgentId !== "main";
+  const chatMutationsDisabled = readOnly || activeClusterChildReadOnly;
   const chatDisabledReason = nativePermissionPending
     ? "等待权限处理"
-    : activeNativeReadOnly
-    ? "子智能体只读，请回主 agent 发送；可用 @ 指派"
     : activeClusterChildReadOnly
     ? "子智能体只读，请回主 agent 发送；可用 @ 指派"
     : disabledReason || readOnlyReason || (readOnly ? "主机已关闭聊天，当前无法发送消息" : "");
@@ -3734,7 +3723,7 @@ export function ChatScreen({
   }, [cliModelOptions, nativeExecutionMode, nativeModelOptions, nativeSelectedModel, selectedModel]);
   const messageContentWidthClass = embedded ? "mx-auto w-full max-w-5xl space-y-4" : "w-full space-y-4";
   const composerPlaceholder = chatDisabledReason
-    || (clusterMode ? "@ 可指定智能体集群" : (showAgentSwitcher && !nativeExecutionMode ? `发给 ${activeAgent.name}...` : "输入消息"));
+    || (clusterMode && activeAgentId === "main" ? "@ 可指定智能体集群" : (showAgentSwitcher ? `发给 ${activeAgent.name}...` : "输入消息"));
   const deletedAttachmentKeysByMessage = useMemo(() => {
     const next: Record<string, Record<string, boolean>> = {};
     for (const [key, value] of Object.entries(deletedAttachmentKeys)) {
@@ -3910,7 +3899,7 @@ export function ChatScreen({
           onExecutionModeChange={handleExecutionModeChange}
           agents={showAgentSwitcher ? agents : []}
           activeAgentId={activeAgentId}
-          agentDisabled={loading || nativeExecutionMode}
+          agentDisabled={loading}
           onSelectAgent={handleSelectAgent}
           showClusterToggle={showClusterToggle}
           clusterMode={clusterMode}

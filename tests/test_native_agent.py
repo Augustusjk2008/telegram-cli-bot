@@ -9,7 +9,7 @@ import pytest
 from ag_ui import core
 from pydantic import TypeAdapter
 
-from bot.models import BotProfile, UserSession
+from bot.models import AgentProfile, BotProfile, UserSession
 from bot.native_agent.aggregator import NativeAgentAggregator
 from bot.native_agent.ag_ui_mapper import AgUiTurnState, build_run_error_event, build_run_finished_event, map_event as map_ag_ui_event
 from bot.native_agent.events import is_relevant_event, unwrap_event
@@ -1683,6 +1683,7 @@ async def test_native_agent_service_uses_pi_runtime_and_emits_runtime_meta(
     assert registry.requests[0].runtime_key.startswith("1:1:")
     assert registry.requests[0].command == "pi"
     assert registry.requests[0].agent_id == "reviewer"
+    assert registry.requests[0].system_prompt == ""
     assert registry.requests[0].append_system_prompt == ""
     assert registry.requests[0].config_fingerprint
 
@@ -1718,6 +1719,87 @@ async def test_native_agent_service_adds_solo_prompt_only_for_solo_mode(tmp_path
     assert registry.requests[0].append_system_prompt
     assert "Plan Mode takes precedence" in registry.requests[0].append_system_prompt
     assert "do not edit files" in registry.requests[0].append_system_prompt
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_passes_global_system_prompt_to_pi(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from bot import config
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    runtime = FakePiRuntime([
+        {"type": "agent_start", "sessionId": "sess-1"},
+        {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "回"}},
+        {"type": "turn_end", "sessionId": "sess-1"},
+    ])
+    registry = FakePiRuntimeRegistry(runtime)
+    service = NativeAgentService()
+    service._runtime_registry = registry
+    profile = BotProfile(
+        alias="main",
+        working_dir=str(tmp_path),
+        native_agent={"system_prompt": "全局提示词"},
+    )
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    events = await _collect_native_stream(service.stream_chat(
+        profile=profile,
+        session=session,
+        user_text="你好",
+        prompt_text="你好",
+        history_service=history,
+    ))
+
+    request = registry.requests[0]
+    assert request.system_prompt == "全局提示词"
+    assert request.append_system_prompt == ""
+    done = next(event for event in events if event["type"] == "done")
+    conversation_native = history.store.get_conversation_native_session(done["message"]["conversation_id"])
+    assert conversation_native["meta"]["system_prompt_hash"]
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_appends_child_agent_prompt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from bot import config
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    runtime = FakePiRuntime([
+        {"type": "agent_start", "sessionId": "sess-1"},
+        {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "回"}},
+        {"type": "turn_end", "sessionId": "sess-1"},
+    ])
+    registry = FakePiRuntimeRegistry(runtime)
+    service = NativeAgentService()
+    service._runtime_registry = registry
+    profile = BotProfile(
+        alias="main",
+        working_dir=str(tmp_path),
+        native_agent={"pi_agent": "pi-reviewer"},
+        agents=[AgentProfile(id="reviewer", name="审查专家", system_prompt="先列风险")],
+    )
+    session = UserSession(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        agent_id="reviewer",
+        working_dir=str(tmp_path),
+    )
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    await _collect_native_stream(service.stream_chat(
+        profile=profile,
+        session=session,
+        user_text="你好",
+        prompt_text="你好",
+        history_service=history,
+    ))
+
+    request = registry.requests[0]
+    assert request.agent_id == "pi-reviewer"
+    assert "reviewer" in request.append_system_prompt
+    assert "审查专家" in request.append_system_prompt
+    assert "先列风险" in request.append_system_prompt
+    assert runtime.prompts == [{"text": "/pi-reviewer 你好", "conversation_id": "", "reasoning_effort": ""}]
 
 
 @pytest.mark.asyncio

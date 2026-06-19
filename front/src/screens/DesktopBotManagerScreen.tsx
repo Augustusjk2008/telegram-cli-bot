@@ -483,6 +483,7 @@ function EditPanel({
   bot,
   manager,
   canManage,
+  canConfigureBot,
   canCreateWorkdirDirectory,
   nativeAgentFeatureEnabled,
   onCancel,
@@ -492,6 +493,7 @@ function EditPanel({
   bot: BotSummary;
   manager: ReturnType<typeof useBotManager>;
   canManage: boolean;
+  canConfigureBot: boolean;
   canCreateWorkdirDirectory: boolean;
   nativeAgentFeatureEnabled: boolean | null;
   onCancel: () => void;
@@ -570,6 +572,9 @@ function EditPanel({
   }
 
   async function saveCluster(patch: Partial<BotClusterConfig>) {
+    if (!canConfigureBot) {
+      return;
+    }
     const next: BotClusterConfig = {
       ...clusterConfig,
       ...patch,
@@ -766,14 +771,14 @@ function EditPanel({
         />
       ) : null}
 
-      {(bot.botMode || "cli") === "cli" && draft.runtimeBackend === "cli" ? (
+      {(bot.botMode || "cli") === "cli" ? (
         <div className="space-y-4 border-t border-[var(--border)] pt-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <label className="inline-flex items-center gap-2 text-sm font-medium">
               <input
                 type="checkbox"
                 checked={Boolean(clusterConfig.enabled)}
-                disabled={!canManage || clusterSaving || !clusterStatus}
+                disabled={!canConfigureBot || clusterSaving || !clusterStatus}
                 onChange={(event) => {
                   if (!clusterStatus) return;
                   void saveCluster({ enabled: event.target.checked });
@@ -793,7 +798,7 @@ function EditPanel({
                   <select
                     aria-label="并发子 agent 数"
                     value={clusterConfig.maxParallelAgents}
-                    disabled={!canManage || clusterSaving}
+                    disabled={!canConfigureBot || clusterSaving}
                     onChange={(event) => void saveCluster({ maxParallelAgents: Number(event.target.value) })}
                     className="h-9 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 text-sm"
                   >
@@ -809,20 +814,20 @@ function EditPanel({
             <ClusterModelTiersPanel
               value={clusterConfig.modelTiers}
               modelOptions={cliParams?.schema.model?.enum ?? []}
-              disabled={!canManage || clusterSaving}
+              disabled={!canConfigureBot || clusterSaving}
               onChange={(modelTiers) => void saveCluster({ modelTiers })}
             />
           ) : null}
           <ClusterTemplatePanel
             botAlias={bot.alias}
             client={manager.client}
-            canManage={canManage && !clusterSaving}
+            canManage={canConfigureBot && !clusterSaving}
             onApplied={() => {
               void manager.loadBots();
               void manager.client.getClusterStatus(bot.alias).then(setClusterStatus).catch(() => undefined);
             }}
           />
-          <ClusterSetupPanel botAlias={bot.alias} client={manager.client} canManage={canManage} />
+          <ClusterSetupPanel botAlias={bot.alias} client={manager.client} canManage={canConfigureBot} />
         </div>
       ) : null}
 
@@ -830,7 +835,7 @@ function EditPanel({
         <BotCliParamsPanel
           botAlias={bot.alias}
           client={manager.client}
-          canManage={canManage}
+          canManage={canConfigureBot}
           reloadKey={`${bot.alias}:${bot.cliType}:${bot.cliPath || ""}`}
         />
       ) : null}
@@ -1545,6 +1550,7 @@ export function DesktopBotManagerScreen({
                   bot={focusedBot}
                   manager={manager}
                   canManage={canManage}
+                  canConfigureBot={canManage || focusedBot.canOperate !== false}
                   canCreateWorkdirDirectory={canCreateWorkdirDirectory}
                   nativeAgentFeatureEnabled={nativeAgentFeatureEnabled}
                   onCancel={() => {

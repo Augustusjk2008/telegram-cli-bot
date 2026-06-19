@@ -3,6 +3,7 @@ import fs from 'fs';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
+import type { IncomingMessage } from 'http';
 import {defineConfig, loadEnv} from 'vite';
 
 function getNodeModulePackageName(id: string) {
@@ -181,6 +182,32 @@ function normalizeBasePath(value?: string) {
   return `/${raw.replace(/^\/+/, '').replace(/\/+$/, '')}/`;
 }
 
+function requestPathname(req: IncomingMessage) {
+  try {
+    return new URL(req.url || '/', 'http://localhost').pathname;
+  } catch {
+    return req.url || '/';
+  }
+}
+
+export function shouldBypassNodeProxy(req: IncomingMessage, viteBasePath: string) {
+  if (!viteBasePath.startsWith('/node/')) {
+    return false;
+  }
+  const base = viteBasePath.replace(/\/+$/, '');
+  const pathname = requestPathname(req).replace(/\/+$/, '') || '/';
+  if (pathname !== base && !pathname.startsWith(`${base}/`)) {
+    return false;
+  }
+  const innerPath = pathname === base ? '/' : pathname.slice(base.length);
+  return ![
+    '/api',
+    '/terminal',
+    '/debug',
+    '/lan-chat',
+  ].some((prefix) => innerPath === prefix || innerPath.startsWith(`${prefix}/`));
+}
+
 export default defineConfig(({mode}) => {
   const repoRoot = path.resolve(__dirname, '..');
   const frontRoot = path.resolve(__dirname, '.');
@@ -265,6 +292,9 @@ export default defineConfig(({mode}) => {
           target: 'http://127.0.0.1:8765',
           changeOrigin: true,
           ws: true,
+          bypass(req) {
+            return shouldBypassNodeProxy(req, viteBasePath) ? req.url : undefined;
+          },
         },
       },
     },

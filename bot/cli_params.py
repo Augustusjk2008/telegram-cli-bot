@@ -235,13 +235,52 @@ def with_global_extra_args(
 
 
 def clamp_unsafe_cli_params(params_config: CliParamsConfig, *, allow_unsafe_cli: bool) -> CliParamsConfig:
-    """Return a copy with yolo disabled unless the caller may run unsafe CLI flags."""
+    """Return a copy with unsafe flags disabled unless the caller may run them."""
     data = params_config.to_dict()
     if not allow_unsafe_cli:
-        for params in data.values():
+        for cli_type, params in data.items():
             if isinstance(params, dict):
                 params["yolo"] = False
+                params["extra_args"] = _filter_unsafe_extra_args(cli_type, params.get("extra_args", []))
     return CliParamsConfig.from_dict(data)
+
+
+def _filter_unsafe_extra_args(cli_type: str, extra_args: Any) -> list[str]:
+    if not isinstance(extra_args, list):
+        return []
+    deny_single = {
+        "claude": {"--dangerously-skip-permissions"},
+        "codex": {"--dangerously-bypass-approvals-and-sandbox"},
+        "kimi": {"--yolo"},
+    }.get(str(cli_type or "").strip().lower(), set())
+    deny_value_flags = {
+        "claude": {"--permission-mode"},
+        "codex": {"--approval-policy", "--sandbox"},
+    }.get(str(cli_type or "").strip().lower(), set())
+    unsafe_config_keys = ("approval_policy", "sandbox_mode", "trust_level")
+    filtered: list[str] = []
+    skip_next = False
+    for item in extra_args:
+        arg = str(item).strip()
+        if not arg:
+            continue
+        if skip_next:
+            skip_next = False
+            continue
+        if arg in deny_single:
+            continue
+        if arg in deny_value_flags:
+            skip_next = True
+            continue
+        if any(arg.startswith(f"{flag}=") for flag in deny_value_flags):
+            continue
+        if str(cli_type or "").strip().lower() == "codex" and arg in {"-c", "--config"}:
+            skip_next = True
+            continue
+        if any(key in arg.lower() for key in unsafe_config_keys):
+            continue
+        filtered.append(arg)
+    return filtered
 
 
 def normalize_codex_project_path(working_dir: Optional[str]) -> Optional[str]:
