@@ -8,6 +8,7 @@ import { BotCliParamsPanel } from "../components/BotCliParamsPanel";
 import { BotIdentity } from "../components/BotIdentity";
 import { ClusterSetupPanel } from "../components/ClusterSetupPanel";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
+import { NativeAgentConfigFields } from "../components/NativeAgentConfigFields";
 import { StateBadge } from "../components/StateBadge";
 import { ThemeDropdown } from "../components/ThemeDropdown";
 import { toolbarButtonClass } from "../components/ToolbarButton";
@@ -17,9 +18,11 @@ import type {
   AvatarAsset,
   BotOverview,
   BrowserNotificationPermission,
+  ChatExecutionMode,
   CliType,
   GitProxySettings,
   NativeAgentConfigPayload,
+  NativeAgentDraft,
   NativeAgentPreflightResult,
   NotificationSettingsStatus,
   TunnelSnapshot,
@@ -30,7 +33,12 @@ import type { WebBotClient } from "../services/webBotClient";
 import { DEFAULT_AVATAR_ASSETS, readStoredUserAvatarName } from "../utils/avatar";
 import { normalizePathInput } from "../utils/pathInput";
 import { defaultCliPathForType } from "./useBotManager";
-import { getRuntimeBackend } from "./botManagerModel";
+import {
+  buildExecutionConfig,
+  DEFAULT_NATIVE_AGENT_DRAFT,
+  getRuntimeBackend,
+  isNativeAgentGloballyEnabled,
+} from "./botManagerModel";
 import {
   CHAT_BODY_FONT_FAMILY_OPTIONS,
   CHAT_BODY_FONT_SIZE_OPTIONS,
@@ -140,6 +148,28 @@ function nativePreflightSummary(preflight?: NativeAgentPreflightResult) {
   if (!preflight) return "未运行";
   if (!preflight.ok) return "失败";
   return preflight.checks.some((check) => check.severity === "warning" && !check.ok) ? "警告" : "通过";
+}
+
+function nativeAgentDraftFromOverview(overview?: Pick<BotOverview, "nativeAgent"> | null): NativeAgentDraft {
+  return {
+    ...DEFAULT_NATIVE_AGENT_DRAFT,
+    ...(overview?.nativeAgent || {}),
+    apiKey: "",
+    clearApiKey: false,
+  };
+}
+
+function normalizeNativeAgentDraft(draft: NativeAgentDraft) {
+  return {
+    ...DEFAULT_NATIVE_AGENT_DRAFT,
+    ...draft,
+    provider: "",
+    model: "",
+    piAgent: draft.piAgent.trim(),
+    baseUrl: "",
+    apiKey: "",
+    clearApiKey: false,
+  };
 }
 
 function isFixedPublicForward(tunnel: TunnelSnapshot) {
@@ -265,12 +295,15 @@ export function SettingsScreen({
   const [tunnel, setTunnel] = useState<TunnelSnapshot | null>(null);
   const [gitProxySettings, setGitProxySettings] = useState<GitProxySettings | null>(null);
   const [nativeAgentConfig, setNativeAgentConfig] = useState<NativeAgentConfigPayload | null>(null);
+  const [nativeAgentFeatureEnabled, setNativeAgentFeatureEnabled] = useState<boolean | null>(null);
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettingsStatus | null>(null);
   const [notificationEnabled, setNotificationEnabled] = useState(() => readChatCompletionWebNotificationEnabled());
   const [notificationPermission, setNotificationPermission] = useState<BrowserNotificationPermission>(() => getBrowserNotificationPermission());
   const [avatarAssets, setAvatarAssets] = useState<AvatarAsset[]>(DEFAULT_AVATAR_ASSETS);
+  const [runtimeBackendDraft, setRuntimeBackendDraft] = useState<ChatExecutionMode>("cli");
   const [cliTypeDraft, setCliTypeDraft] = useState<CliType>("codex");
   const [cliPathDraft, setCliPathDraft] = useState("");
+  const [nativeAgentDraft, setNativeAgentDraft] = useState<NativeAgentDraft>(() => ({ ...DEFAULT_NATIVE_AGENT_DRAFT }));
   const [gitProxyAddressDraft, setGitProxyAddressDraft] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -298,6 +331,8 @@ export function SettingsScreen({
   const canConfigureBot = overview ? overview.canOperate !== false : canManageBotRuntime;
   const runtimeBackend = getRuntimeBackend(overview);
   const nativeRuntime = runtimeBackend === "native_agent";
+  const draftNativeRuntime = runtimeBackendDraft === "native_agent";
+  const nativeAgentOptionVisible = nativeAgentFeatureEnabled !== false || draftNativeRuntime || nativeRuntime;
 
   useEffect(() => {
     let cancelled = false;
@@ -338,6 +373,8 @@ export function SettingsScreen({
         setAvatarAssets(avatarData);
         setCliTypeDraft(overviewData.cliType);
         setCliPathDraft(overviewData.cliPath || "");
+        setRuntimeBackendDraft(getRuntimeBackend(overviewData));
+        setNativeAgentDraft(nativeAgentDraftFromOverview(overviewData));
         setWorkdirDraft(normalizePathInput(prefilledWorkdir || overviewData.workingDir));
         setTunnel(tunnelData);
         setGitProxySettings(gitProxyData);
@@ -358,7 +395,31 @@ export function SettingsScreen({
   }, [botAlias, client, isMainBot, prefilledWorkdir]);
 
   useEffect(() => {
-    if (!nativeRuntime) {
+    let cancelled = false;
+    void client.getEnvConfig()
+      .then((snapshot) => {
+        if (!cancelled) {
+          setNativeAgentFeatureEnabled(isNativeAgentGloballyEnabled(snapshot));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setNativeAgentFeatureEnabled(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client]);
+
+  useEffect(() => {
+    if (nativeAgentFeatureEnabled === false && runtimeBackendDraft === "native_agent" && !nativeRuntime) {
+      setRuntimeBackendDraft("cli");
+    }
+  }, [nativeAgentFeatureEnabled, nativeRuntime, runtimeBackendDraft]);
+
+  useEffect(() => {
+    if (!nativeRuntime && !draftNativeRuntime) {
       setNativeAgentConfig(null);
       return;
     }
@@ -377,7 +438,7 @@ export function SettingsScreen({
     return () => {
       cancelled = true;
     };
-  }, [client, nativeRuntime]);
+  }, [client, nativeRuntime, draftNativeRuntime]);
 
   useEffect(() => {
     if (!["starting", "connected", "verifying_public"].includes(tunnel?.status || "") || !tunnel?.publicUrl || tunnelAction !== "") {
@@ -430,9 +491,9 @@ export function SettingsScreen({
     }
   };
 
-  const saveCliConfig = async () => {
+  const saveRuntimeConfig = async () => {
     const nextCliPath = cliPathDraft.trim();
-    if (!nextCliPath) {
+    if (runtimeBackendDraft === "cli" && !nextCliPath) {
       setError("CLI 路径不能为空");
       return;
     }
@@ -441,13 +502,33 @@ export function SettingsScreen({
     setError("");
     setNotice("");
     try {
-      const nextBot = await client.updateBotCli(botAlias, cliTypeDraft, nextCliPath);
+      let nextBot = overview;
+      if (runtimeBackendDraft === "cli") {
+        nextBot = await client.updateBotCli(botAlias, cliTypeDraft, nextCliPath);
+      }
+      const normalizedNativeAgent = normalizeNativeAgentDraft(nativeAgentDraft);
+      const executionChanged =
+        runtimeBackend !== runtimeBackendDraft
+        || (overview?.nativeAgent?.piAgent || "").trim() !== normalizedNativeAgent.piAgent;
+      if (executionChanged) {
+        const executionConfig = buildExecutionConfig(runtimeBackendDraft);
+        nextBot = await client.updateBotExecutionConfig(botAlias, {
+          supportedExecutionModes: executionConfig.supportedExecutionModes,
+          defaultExecutionMode: executionConfig.defaultExecutionMode,
+          nativeAgent: normalizedNativeAgent,
+        });
+      }
+      if (!nextBot) {
+        throw new Error("更新运行配置失败");
+      }
       setOverview((prev) => (prev ? { ...prev, ...nextBot } : { ...nextBot }));
       setCliTypeDraft(nextBot.cliType);
       setCliPathDraft(nextBot.cliPath || nextCliPath);
-      setNotice("CLI 配置已更新");
+      setRuntimeBackendDraft(getRuntimeBackend(nextBot));
+      setNativeAgentDraft(nativeAgentDraftFromOverview(nextBot));
+      setNotice(runtimeBackendDraft === "native_agent" ? "原生 agent 配置已更新" : "CLI 配置已更新");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "更新 CLI 配置失败");
+      setError(err instanceof Error ? err.message : "更新运行配置失败");
     } finally {
       setSavingCliConfig(false);
     }
@@ -913,11 +994,30 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 </button>
               ) : null}
 
-              {!nativeRuntime ? (
-                <div className="space-y-3 border-t border-[var(--border)] pt-4">
+              <div className="space-y-3 border-t border-[var(--border)] pt-4">
                 <h3 className="font-medium text-[var(--text)]">运行配置</h3>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <label className="space-y-1">
+                    <span className="text-sm text-[var(--text)]">运行后端</span>
+                    <select
+                      aria-label="运行后端"
+                      value={runtimeBackendDraft}
+                      disabled={!canManageBotRuntime}
+                      onChange={(event) => setRuntimeBackendDraft(event.target.value as ChatExecutionMode)}
+                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)] disabled:opacity-60"
+                    >
+                      <option value="cli">CLI</option>
+                      {nativeAgentOptionVisible ? <option value="native_agent">原生 agent</option> : null}
+                    </select>
+                    {nativeAgentFeatureEnabled === false ? (
+                      <p className="text-xs text-[var(--muted)]">原生 agent 全局未启用</p>
+                    ) : null}
+                  </label>
+                </div>
+
+                {runtimeBackendDraft === "cli" ? (
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <label className="space-y-1">
                     <span className="text-sm text-[var(--text)]">CLI 类型</span>
                     <select
                       aria-label="CLI 类型"
@@ -943,18 +1043,37 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                       placeholder={defaultCliPathForType(cliTypeDraft)}
                     />
                   </label>
-                </div>
+                  </div>
+                ) : (
+                  <NativeAgentConfigFields
+                    provider={nativeAgentDraft.provider}
+                    model={nativeAgentDraft.model}
+                    piAgent={nativeAgentDraft.piAgent}
+                    baseUrl={nativeAgentDraft.baseUrl}
+                    apiKey={nativeAgentDraft.apiKey}
+                    hasApiKey={nativeAgentDraft.hasApiKey}
+                    apiKeyMasked={nativeAgentDraft.apiKeyMasked}
+                    clearApiKey={nativeAgentDraft.clearApiKey}
+                    editing
+                    disabled={!canManageBotRuntime || savingCliConfig}
+                    onNativeAgentChange={(patch) => setNativeAgentDraft((prev) => ({
+                      ...prev,
+                      ...patch,
+                    }))}
+                  />
+                )}
                 <button
                   type="button"
-                  onClick={() => void saveCliConfig()}
+                  onClick={() => void saveRuntimeConfig()}
                   disabled={!canManageBotRuntime || savingCliConfig}
                   className={settingsButtonClass("primary")}
                 >
                   <Save className="h-4 w-4" />
-                  {savingCliConfig ? "保存中..." : "保存 CLI 配置"}
+                  {savingCliConfig
+                    ? "保存中..."
+                    : runtimeBackendDraft === "native_agent" ? "保存原生 agent 配置" : "保存 CLI 配置"}
                 </button>
-                </div>
-              ) : null}
+              </div>
 
               <div className="space-y-3 border-t border-[var(--border)] pt-4">
                 <div>

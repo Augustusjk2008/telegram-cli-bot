@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { SettingsScreen } from "../screens/SettingsScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { DirectoryListing, TunnelSnapshot } from "../services/types";
+import type { BotExecutionConfigInput, BotSummary, DirectoryListing, TunnelSnapshot } from "../services/types";
 import { CHAT_COMPLETION_WEB_NOTIFICATION_KEY } from "../utils/chatNotificationEvents";
 
 afterEach(() => {
@@ -56,6 +56,15 @@ class SettingsDirectoryPickerClient extends MockWebBotClient {
   }
 }
 
+class SettingsRuntimeClient extends MockWebBotClient {
+  updateBotExecutionConfigCalls: Array<{ botAlias: string; input: BotExecutionConfigInput }> = [];
+
+  async updateBotExecutionConfig(botAlias: string, input: BotExecutionConfigInput): Promise<BotSummary> {
+    this.updateBotExecutionConfigCalls.push({ botAlias, input });
+    return super.updateBotExecutionConfig(botAlias, input);
+  }
+}
+
 test("assistant bots lock the default workdir in settings", async () => {
   const client = new MockWebBotClient();
   await client.addBot({
@@ -99,7 +108,8 @@ test("native bots hide cli settings and params", async () => {
   render(<SettingsScreen botAlias="native1" client={client} onLogout={() => undefined} onOpenBotManager={openManager} />);
 
   expect(await screen.findByText("运行后端:")).toBeInTheDocument();
-  expect(screen.getByText("原生 agent")).toBeInTheDocument();
+  expect(screen.getAllByText("原生 agent").length).toBeGreaterThan(0);
+  expect(screen.getByLabelText("运行后端")).toHaveValue("native_agent");
   expect(screen.queryByLabelText("CLI 类型")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("CLI 路径")).not.toBeInTheDocument();
   expect(screen.queryByText("保存 CLI 配置")).not.toBeInTheDocument();
@@ -116,6 +126,77 @@ test("native bots hide cli settings and params", async () => {
   expect(await screen.findByText(/Pi 运行前置检查通过，存在警告/)).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "查看管理中心" }));
   expect(openManager).toHaveBeenCalled();
+});
+
+test("settings screen edits native agent config", async () => {
+  const user = userEvent.setup();
+  const client = new SettingsRuntimeClient();
+  await client.login({ username: "127.0.0.1", password: "test" });
+  await client.addBot({
+    alias: "native1",
+    botMode: "cli",
+    cliType: "codex",
+    cliPath: "codex",
+    workingDir: "C:\\workspace\\native1",
+    avatarName: "avatar_01.png",
+    supportedExecutionModes: ["native_agent"],
+    defaultExecutionMode: "native_agent",
+    nativeAgent: {
+      provider: "",
+      model: "",
+      piAgent: "reviewer",
+    },
+  });
+
+  render(<SettingsScreen botAlias="native1" client={client} onLogout={() => undefined} />);
+
+  expect(await screen.findByLabelText("运行后端")).toHaveValue("native_agent");
+  expect(screen.queryByLabelText("CLI 类型")).not.toBeInTheDocument();
+  await user.clear(screen.getByLabelText("Pi agent"));
+  await user.type(screen.getByLabelText("Pi agent"), "qa");
+  await user.click(screen.getByRole("button", { name: "保存原生 agent 配置" }));
+
+  await waitFor(() => {
+    expect(client.updateBotExecutionConfigCalls).toHaveLength(1);
+  });
+  expect(client.updateBotExecutionConfigCalls[0]).toMatchObject({
+    botAlias: "native1",
+    input: {
+      supportedExecutionModes: ["native_agent"],
+      defaultExecutionMode: "native_agent",
+      nativeAgent: {
+        piAgent: "qa",
+      },
+    },
+  });
+  expect(await screen.findByText("原生 agent 配置已更新")).toBeInTheDocument();
+});
+
+test("settings screen switches cli bot to native agent", async () => {
+  const user = userEvent.setup();
+  const client = new SettingsRuntimeClient();
+  await client.login({ username: "127.0.0.1", password: "test" });
+
+  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
+
+  await user.selectOptions(await screen.findByLabelText("运行后端"), "native_agent");
+  expect(screen.queryByLabelText("CLI 类型")).not.toBeInTheDocument();
+  await user.type(screen.getByLabelText("Pi agent"), "reviewer");
+  await user.click(screen.getByRole("button", { name: "保存原生 agent 配置" }));
+
+  await waitFor(() => {
+    expect(client.updateBotExecutionConfigCalls).toHaveLength(1);
+  });
+  expect(client.updateBotExecutionConfigCalls[0]).toMatchObject({
+    botAlias: "main",
+    input: {
+      supportedExecutionModes: ["native_agent"],
+      defaultExecutionMode: "native_agent",
+      nativeAgent: {
+        piAgent: "reviewer",
+      },
+    },
+  });
 });
 
 test("native settings shows pi cluster extension setup", async () => {
