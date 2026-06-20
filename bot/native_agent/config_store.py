@@ -11,10 +11,24 @@ from bot.native_agent.legacy_migration import (
 )
 
 
+def _native_agent_pi_home() -> str:
+    override = str(os.environ.get("NATIVE_AGENT_PI_HOME") or "").strip()
+    if override:
+        return override
+    try:
+        from bot import config as bot_config
+    except Exception:
+        return ""
+    return str(getattr(bot_config, "NATIVE_AGENT_PI_HOME", "") or "").strip()
+
+
 def get_pi_settings_path() -> Path:
     override = os.environ.get("PI_AGENT_SETTINGS")
     if override:
         return Path(override).expanduser()
+    pi_home = _native_agent_pi_home()
+    if pi_home:
+        return Path(pi_home).expanduser() / ".pi" / "agent" / "settings.json"
     return Path.home() / ".pi" / "agent" / "settings.json"
 
 
@@ -44,7 +58,7 @@ def save_native_agent_config(config: dict[str, Any]) -> dict[str, Any]:
     settings_path = get_pi_settings_path()
     models_path = get_pi_models_path()
     existing_settings = _read_json_object(settings_path, "原生 Agent 配置", default={})
-    settings_payload = _settings_document_from_config(normalized, existing=existing_settings)
+    settings_payload = _settings_document_from_config(config, normalized=normalized, existing=existing_settings)
     models_payload = _models_config_from_native(normalized)
     _write_json(settings_path, settings_payload)
     if _has_model_source(normalized) or _has_pi_models(models_payload):
@@ -298,7 +312,12 @@ def _merge_settings_and_models(settings: dict[str, Any], models_config: dict[str
     return merged
 
 
-def _settings_document_from_config(config: dict[str, Any], *, existing: dict[str, Any]) -> dict[str, Any]:
+def _settings_document_from_config(
+    raw_config: dict[str, Any],
+    *,
+    normalized: dict[str, Any],
+    existing: dict[str, Any],
+) -> dict[str, Any]:
     result = {
         key: value
         for key, value in dict(existing or {}).items()
@@ -310,16 +329,23 @@ def _settings_document_from_config(config: dict[str, Any], *, existing: dict[str
         "reasoning_effort",
         "pi_agent",
         "pi_command",
-        "system_prompt",
         "workspace_history_enabled",
         "thinking_depth",
         "shellPath",
         "shell_path",
     ):
-        if key in config:
-            value = config.get(key)
+        if key in normalized:
+            value = normalized.get(key)
             if value is not None:
                 result[key] = value
+    if "system_prompt" in raw_config or "systemPrompt" in raw_config:
+        system_prompt = str(normalized.get("system_prompt") or "").strip()
+        if system_prompt:
+            result["system_prompt"] = system_prompt
+        else:
+            result.pop("system_prompt", None)
+    else:
+        result.pop("system_prompt", None)
     result["backend"] = "pi"
     result.setdefault("workspace_history_enabled", True)
     return result

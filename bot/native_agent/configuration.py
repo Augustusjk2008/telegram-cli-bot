@@ -71,10 +71,16 @@ def effective_native_agent_config(fallback: Any = None) -> dict[str, Any]:
     fallback_model = str(fallback_config.get("model") or "").strip()
     if fallback_model:
         resolved["model"] = fallback_model
+        fallback_provider = _provider_from_model(fallback_model)
+        if fallback_provider:
+            resolved["provider"] = fallback_provider
     elif not resolved.get("model"):
         first_model = first_configured_model()
         if first_model:
             resolved["model"] = first_model["id"]
+            first_provider = _provider_from_model(str(first_model["id"] or ""))
+            if first_provider:
+                resolved["provider"] = first_provider
     if not resolved.get("pi_agent"):
         fallback_agent = str(fallback_config.get("pi_agent") or "").strip()
         if fallback_agent:

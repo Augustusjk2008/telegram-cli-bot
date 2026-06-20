@@ -2954,6 +2954,18 @@ async def rollback_native_agent_history(
     if record is not None and record.workspace_history_head and latest_head and record.workspace_history_head != latest_head:
         _raise(409, "workspace_history_head_drift", "工作区记录和会话历史不一致，请刷新后重试")
 
+    active_cluster_run = _find_active_cluster_run_for_session(alias, user_id, session)
+    if active_cluster_run is not None:
+        cluster_status = _CLUSTER_RUNTIME.build_task_status(active_cluster_run.run_id, include_output=False)
+        pending_count = int(cluster_status.get("pending_count") or 0)
+        if pending_count > 0:
+            _raise(
+                409,
+                "cluster_child_task_running",
+                "子 agent 正在运行，请等待完成或取消后再撤回",
+                {"cluster_run_id": active_cluster_run.run_id, "pending_count": pending_count},
+            )
+
     status = await get_native_agent_service().rollback_workspace_history(
         profile=profile,
         session=session,

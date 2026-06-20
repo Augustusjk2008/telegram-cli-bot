@@ -1759,6 +1759,119 @@ async def test_native_agent_service_passes_global_system_prompt_to_pi(tmp_path: 
 
 
 @pytest.mark.asyncio
+async def test_native_agent_service_uses_admin_native_agent_system_prompt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from bot import config
+    from bot.native_agent import config_store
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    config_store.save_native_agent_config({"system_prompt": "每轮回复前先说 Pi"})
+    runtime = FakePiRuntime([
+        {"type": "agent_start", "sessionId": "sess-1"},
+        {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "回"}},
+        {"type": "turn_end", "sessionId": "sess-1"},
+    ])
+    registry = FakePiRuntimeRegistry(runtime)
+    service = NativeAgentService()
+    service._runtime_registry = registry
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    await _collect_native_stream(service.stream_chat(
+        profile=profile,
+        session=session,
+        user_text="你好",
+        prompt_text="你好",
+        history_service=history,
+    ))
+
+    request = registry.requests[0]
+    assert request.system_prompt == "每轮回复前先说 Pi"
+    assert request.append_system_prompt == ""
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_refreshes_pi_session_when_global_system_prompt_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot.chat_identity import chat_session_user_id
+    from bot import config
+    from bot.native_agent import config_store
+    from bot.native_agent.pi_session_store import PiSessionRecord, PiSessionStore, pi_session_key
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    monkeypatch.setattr(config, "NATIVE_AGENT_PI_HOME", str(tmp_path / "pi-home"))
+    monkeypatch.delenv("PI_AGENT_SETTINGS", raising=False)
+    monkeypatch.delenv("PI_AGENT_MODELS", raising=False)
+    runtime = FakePiRuntime([
+        {"type": "agent_start", "sessionId": "sess-new"},
+        {"type": "message_update", "sessionId": "sess-new", "message": {"role": "assistant", "content": "新回复"}},
+        {"type": "turn_end", "sessionId": "sess-new"},
+    ], workspace_results={
+        "status": [
+            {"head": "head-before", "clean": True, "manual_change_count": 0},
+            {"head": "head-after", "clean": True, "manual_change_count": 0},
+        ],
+    })
+    service = NativeAgentService()
+    service._runtime_registry = FakePiRuntimeRegistry(runtime)
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    config_store.save_native_agent_config({"system_prompt": "旧全局提示词"})
+    old_handle = history.start_turn(profile=profile, session=session, user_text="旧问题", native_provider="native_agent")
+    history.complete_turn(old_handle, content="旧回复", completion_state="completed", native_session_id="sess-old")
+    old_meta = {
+        "cwd": str(tmp_path),
+        "model_id": "",
+        "pi_agent": "",
+        "reasoning_effort": "",
+        "system_prompt_hash": native_service_module.hash_agent_prompt("旧全局提示词"),
+    }
+    history.store.set_conversation_native_session(old_handle.conversation_id, "sess-old", old_meta)
+    history.store.update_turn_workspace_history(old_handle.turn_id, "head-old", 1)
+    shared_user_id = chat_session_user_id(session.user_id)
+    key = pi_session_key(cwd=str(tmp_path), bot_id=session.bot_id, user_id=shared_user_id, conversation_id=old_handle.conversation_id)
+    PiSessionStore().upsert(PiSessionRecord(
+        key=key,
+        cwd=str(tmp_path),
+        conversation_id=old_handle.conversation_id,
+        pi_session_id="sess-old",
+        session_meta=old_meta,
+        linear_index=1,
+        workspace_history_head="head-old",
+    ))
+
+    config_store.save_native_agent_config({"system_prompt": "新全局提示词"})
+    events = [
+        event async for event in service.stream_chat(
+            profile=profile,
+            session=session,
+            user_text="继续",
+            prompt_text="继续",
+            history_service=history,
+        )
+    ]
+
+    done = next(event for event in events if event["type"] == "done")
+    registry = service._runtime_registry
+    reloaded = PiSessionStore().get(key)
+    conversation_native = history.store.get_conversation_native_session(done["message"]["conversation_id"])
+
+    assert registry.requests[0].system_prompt == "新全局提示词"
+    assert registry.requests[0].native_session_id == ""
+    assert runtime.prompts[0]["conversation_id"] == ""
+    assert done["native_session_id"] == "sess-new"
+    assert reloaded is not None
+    assert reloaded.pi_session_id == "sess-new"
+    assert reloaded.session_meta["system_prompt_hash"] == native_service_module.hash_agent_prompt("新全局提示词")
+    assert conversation_native["session_id"] == "sess-new"
+    assert conversation_native["meta"]["system_prompt_hash"] == native_service_module.hash_agent_prompt("新全局提示词")
+
+
+@pytest.mark.asyncio
 async def test_native_agent_service_appends_child_agent_prompt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from bot import config
 

@@ -190,6 +190,27 @@ test("admin center shows native agent global fields", async () => {
   expect(await screen.findByText("配置已保存，重启原生 agent 后生效；请重新运行检查")).toBeInTheDocument();
 });
 
+test("admin center clears native agent global prompt when empty", async () => {
+  const user = userEvent.setup();
+  const { client, updateNativeAgentConfig } = createClient();
+  await client.login({ username: "127.0.0.1", password: "test" });
+
+  render(<AdminCenterScreen client={client} onClose={() => {}} />);
+
+  await user.click(await screen.findByRole("tab", { name: "原生 Agent" }));
+  await screen.findByRole("heading", { name: "Pi 原生 agent 配置" });
+  const editor = screen.getByLabelText("原生 Agent 配置 JSON");
+  fireEvent.change(editor, { target: { value: JSON.stringify({ provider: {} }) } });
+  const promptInput = screen.getByLabelText("原生 Agent 全局提示词");
+  await user.type(promptInput, "全局提示词");
+  await user.clear(promptInput);
+  await user.click(screen.getByRole("button", { name: "保存配置" }));
+
+  await waitFor(() => expect(updateNativeAgentConfig).toHaveBeenCalledWith({
+    provider: {},
+  }));
+});
+
 test("admin center runs native agent preflight", async () => {
   const user = userEvent.setup();
   const { client, runNativeAgentPreflight } = createClient();

@@ -127,6 +127,29 @@ def test_native_agent_config_store_loads_pi_settings(tmp_path: Path, monkeypatch
     assert config_store.load_native_agent_config()["system_prompt"] == "全局约束"
 
 
+def test_native_agent_config_store_uses_native_agent_pi_home_when_settings_override_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bot import config
+
+    pi_home = tmp_path / "pi-home"
+    expected_settings = pi_home / ".pi" / "agent" / "settings.json"
+    expected_models = pi_home / ".pi" / "agent" / "models.json"
+    monkeypatch.delenv("PI_AGENT_SETTINGS", raising=False)
+    monkeypatch.delenv("PI_AGENT_MODELS", raising=False)
+    monkeypatch.setattr(config, "NATIVE_AGENT_PI_HOME", str(pi_home))
+
+    payload = config_store.save_native_agent_config(_sample_config())
+
+    assert config_store.get_pi_settings_path() == expected_settings
+    assert config_store.get_pi_models_path() == expected_models
+    assert payload["config_path"] == str(expected_settings)
+    assert payload["models_path"] == str(expected_models)
+    assert json.loads(expected_settings.read_text(encoding="utf-8"))["system_prompt"] == "全局约束"
+    assert config_store.load_native_agent_config()["system_prompt"] == "全局约束"
+
+
 def test_native_agent_config_store_normalizes_system_prompt_alias(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings_path = tmp_path / "settings.json"
     monkeypatch.setenv("PI_AGENT_SETTINGS", str(settings_path))
@@ -359,6 +382,48 @@ def test_effective_native_agent_config_normalizes_invalid_reasoning_effort(
     })
 
     assert native_agent["reasoning_effort"] == "medium"
+
+
+def test_effective_native_agent_config_updates_provider_when_fallback_model_overrides_settings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bot import config
+    from bot.native_agent.configuration import effective_native_agent_config
+
+    settings_path = tmp_path / "settings.json"
+    monkeypatch.setenv("PI_AGENT_SETTINGS", str(settings_path))
+    config_store.save_native_agent_config({
+        "model": "corp-qwen/qwen3.6-27b-fp8",
+        "models": [
+            {
+                "id": "corp-qwen/qwen3.6-27b-fp8",
+                "provider": "corp-qwen",
+                "model": "qwen3.6-27b-fp8",
+                "name": "Qwen 3.6 27B",
+            },
+            {
+                "id": "jojocode/gpt-5.5",
+                "provider": "jojocode",
+                "model": "gpt-5.5",
+                "name": "gpt-5.5",
+            },
+        ],
+    })
+    monkeypatch.setattr(config, "NATIVE_AGENT_PROVIDER", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_MODEL", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_BASE_URL", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_API_KEY", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PI_AGENT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_PI_COMMAND", "pi")
+    monkeypatch.setattr(config, "NATIVE_AGENT_WORKSPACE_HISTORY_ENABLED", True)
+    monkeypatch.setattr(config, "NATIVE_AGENT_REASONING_EFFORT", "")
+    monkeypatch.setattr(config, "NATIVE_AGENT_THINKING_DEPTH", "")
+
+    native_agent = effective_native_agent_config({"model": "jojocode/gpt-5.5"})
+
+    assert native_agent["model"] == "jojocode/gpt-5.5"
+    assert native_agent["provider"] == "jojocode"
 
 
 def test_effective_native_agent_config_defaults_to_first_reasoning_effort(

@@ -958,7 +958,7 @@ describe("RealWebBotClient", () => {
 
     const client = new RealWebBotClient();
     const config = await client.getNativeAgentConfig();
-    const saved = await client.updateNativeAgentConfig({ provider: {} });
+    const saved = await client.updateNativeAgentConfig({ provider: {}, system_prompt: "全局提示词" });
     const models = await client.getNativeAgentModels("main");
     const updated = await client.updateNativeAgentModel("main", "jojocode_max/gpt-5.5", { reasoningEffort: "high" });
 
@@ -985,7 +985,12 @@ describe("RealWebBotClient", () => {
     expect(updated.selectedReasoningEffort).toBe("high");
     expect(updated.bot?.nativeAgent?.model).toBe("jojocode_max/gpt-5.5");
     expect(updated.bot?.nativeAgent?.reasoningEffort).toBe("high");
-    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({ config: { provider: {} } });
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
+      config: {
+        provider: {},
+        system_prompt: "全局提示词",
+      },
+    });
     expect(JSON.parse(String(fetchMock.mock.calls[3][1]?.body))).toEqual({
       model: "jojocode_max/gpt-5.5",
       reasoning_effort: "high",

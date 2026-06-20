@@ -2192,6 +2192,7 @@ async def test_admin_native_agent_config_routes_save_config(
                         "backend": "pi",
                         "model": "jojocode/gpt-5.4",
                         "workspace_history_enabled": True,
+                        "system_prompt": "全局提示词",
                         "providers": {
                             "jojocode": {
                                 "baseUrl": "https://max.jojocode.com",
@@ -2213,31 +2214,73 @@ async def test_admin_native_agent_config_routes_save_config(
             get_resp = await client.get("/api/admin/native-agent/config")
             get_payload = await get_resp.json()
 
-    assert patch_resp.status == 200
-    assert patch_payload["data"]["needs_restart"] is True
-    assert patch_payload["data"]["backend"] == "pi"
-    assert patch_payload["data"]["config_path"] == str(settings_path)
-    assert patch_payload["data"]["selected_model"] == "jojocode/gpt-5.4"
-    assert patch_payload["data"]["workspace_history_enabled"] is True
-    assert "backup_path" not in patch_payload["data"]
-    assert patch_payload["data"]["models"][0]["id"] == "jojocode/gpt-5.4"
-    assert patch_payload["data"]["config"]["providers"]["jojocode"]["headers"] == {"User-Agent": "Codex CLI"}
-    assert json.loads(settings_path.read_text(encoding="utf-8")) == {
-        "backend": "pi",
-        "model": "jojocode/gpt-5.4",
-        "workspace_history_enabled": True,
-    }
-    saved_provider = json.loads(models_path.read_text(encoding="utf-8"))["providers"]["jojocode"]
-    assert saved_provider["headers"] == {"User-Agent": "Codex CLI"}
-    assert saved_provider["models"][0] == {
-        "id": "gpt-5.4",
-        "contextWindow": 1_000_000,
-        "maxTokens": 128_000,
-    }
-    assert patch_payload["data"]["config"]["providers"] == json.loads(models_path.read_text(encoding="utf-8"))["providers"]
-    assert get_resp.status == 200
-    assert get_payload["data"]["models"][0]["context_window"] == 1_000_000
-    assert get_payload["data"]["config"]["providers"]["jojocode"]["headers"] == {"User-Agent": "Codex CLI"}
+            assert patch_resp.status == 200
+            assert patch_payload["data"]["needs_restart"] is True
+            assert patch_payload["data"]["backend"] == "pi"
+            assert patch_payload["data"]["config_path"] == str(settings_path)
+            assert patch_payload["data"]["selected_model"] == "jojocode/gpt-5.4"
+            assert patch_payload["data"]["workspace_history_enabled"] is True
+            assert patch_payload["data"]["config"]["system_prompt"] == "全局提示词"
+            assert "backup_path" not in patch_payload["data"]
+            assert patch_payload["data"]["models"][0]["id"] == "jojocode/gpt-5.4"
+            assert patch_payload["data"]["config"]["providers"]["jojocode"]["headers"] == {"User-Agent": "Codex CLI"}
+            assert json.loads(settings_path.read_text(encoding="utf-8")) == {
+                "backend": "pi",
+                "model": "jojocode/gpt-5.4",
+                "system_prompt": "全局提示词",
+                "workspace_history_enabled": True,
+            }
+            saved_provider = json.loads(models_path.read_text(encoding="utf-8"))["providers"]["jojocode"]
+            assert saved_provider["headers"] == {"User-Agent": "Codex CLI"}
+            assert saved_provider["models"][0] == {
+                "id": "gpt-5.4",
+                "contextWindow": 1_000_000,
+                "maxTokens": 128_000,
+            }
+            assert patch_payload["data"]["config"]["providers"] == json.loads(models_path.read_text(encoding="utf-8"))["providers"]
+            assert get_resp.status == 200
+            assert get_payload["data"]["models"][0]["context_window"] == 1_000_000
+            assert get_payload["data"]["config"]["system_prompt"] == "全局提示词"
+            assert get_payload["data"]["config"]["providers"]["jojocode"]["headers"] == {"User-Agent": "Codex CLI"}
+            assert json.loads(settings_path.read_text(encoding="utf-8")) == {
+                "backend": "pi",
+                "model": "jojocode/gpt-5.4",
+                "system_prompt": "全局提示词",
+                "workspace_history_enabled": True,
+            }
+
+            clear_resp = await client.patch(
+                "/api/admin/native-agent/config",
+                json={
+                    "config": {
+                        "backend": "pi",
+                        "model": "jojocode/gpt-5.4",
+                        "workspace_history_enabled": True,
+                        "providers": {
+                            "jojocode": {
+                                "baseUrl": "https://max.jojocode.com",
+                                "api": "openai-responses",
+                                "headers": {"User-Agent": "Codex CLI"},
+                                "models": [
+                                    {
+                                        "id": "gpt-5.4",
+                                        "contextWindow": 1_000_000,
+                                        "maxTokens": 128_000,
+                                    }
+                                ],
+                            }
+                        },
+                    }
+                },
+            )
+            clear_payload = await clear_resp.json()
+            clear_get_resp = await client.get("/api/admin/native-agent/config")
+            clear_get_payload = await clear_get_resp.json()
+            assert clear_resp.status == 200
+            assert "system_prompt" not in clear_payload["data"]["config"]
+            assert "system_prompt" not in json.loads(settings_path.read_text(encoding="utf-8"))
+            assert "system_prompt" not in clear_get_payload["data"]["config"]
+
     assert "preflight" in get_payload["data"]
 
 
@@ -4513,6 +4556,74 @@ async def test_native_agent_history_rollback_discards_forward_turns(
     assert reloaded.workspace_history_head == "head-1"
     assert reloaded.turns[1].status == "discarded"
     assert "changed_paths" not in json.dumps(result, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_native_agent_history_rollback_blocks_running_cluster_child_task(
+    web_manager: MultiBotManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot.cluster.runtime import AskAgentRequest
+    from bot.native_agent.pi_session_store import PiSessionRecord, PiSessionStore, pi_session_key
+
+    web_manager.main_profile.working_dir = str(tmp_path)
+    profile = web_manager.main_profile
+    session = get_session_for_alias(web_manager, "main", 1001)
+    session.working_dir = str(tmp_path)
+    history = ChatHistoryService(ChatStore(tmp_path), native_provider_filter="native_agent")
+    first = history.start_turn(profile=profile, session=session, user_text="一", native_provider="native_agent")
+    history.complete_turn(first, content="一回", completion_state="completed", native_session_id="pi-native")
+    history.store.update_turn_workspace_history(first.turn_id, "head-1", 1)
+    key = pi_session_key(
+        cwd=str(tmp_path),
+        bot_id=session.bot_id,
+        user_id=session.user_id,
+        conversation_id=first.conversation_id,
+    )
+    PiSessionStore().upsert(
+        PiSessionRecord(
+            key=key,
+            cwd=str(tmp_path),
+            conversation_id=first.conversation_id,
+            pi_session_id="pi-native",
+            workspace_history_head="head-1",
+        )
+    )
+
+    class FakeNativeService:
+        async def rollback_workspace_history(self, **_kwargs):
+            raise AssertionError("子 agent 运行中不应执行工作区 rollback")
+
+    monkeypatch.setattr(api_service, "get_native_agent_service", lambda: FakeNativeService())
+    run = api_service._CLUSTER_RUNTIME.start_run(
+        api_service.ClusterRunRequest(
+            bot_alias="main",
+            user_id=chat_session_user_id(1001),
+            profile=profile,
+            execution_mode="native_agent",
+        )
+    )
+    task = api_service._CLUSTER_RUNTIME.create_agent_task(
+        run.run_id,
+        AskAgentRequest(agent_id="tester", message="测一下", model_tier="medium", timeout_seconds=60, allow_write=False),
+    )
+    api_service._CLUSTER_RUNTIME.mark_agent_task_running(run.run_id, task.task_id)
+
+    try:
+        with pytest.raises(WebApiError) as exc_info:
+            await rollback_native_agent_history(
+                web_manager,
+                "main",
+                1001,
+                conversation_id=first.conversation_id,
+                target_turn_id=first.turn_id,
+            )
+    finally:
+        api_service._CLUSTER_RUNTIME.cancel_run_tasks(run.run_id, "测试清理")
+        api_service._CLUSTER_RUNTIME.finish_run(run.run_id, "cancelled")
+
+    assert exc_info.value.code == "cluster_child_task_running"
 
 
 @pytest.mark.asyncio
