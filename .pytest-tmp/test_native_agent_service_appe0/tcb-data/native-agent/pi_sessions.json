@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "sessions": {
+    "ca12e7bb93a2185951a803a98578faa948a9af2e7b5b131ce81c59c6916a1be5:1:1:conv_632b3e865ccc4d83a178feedc8d9a12a": {
+      "cwd": "C:\\Users\\JiangKai\\telegram_cli_bridge\\refactoring\\.pytest-tmp\\test_native_agent_service_appe0",
+      "conversation_id": "conv_632b3e865ccc4d83a178feedc8d9a12a",
+      "pi_session_id": "sess-1",
+      "session_meta": {
+        "cwd": "C:\\Users\\JiangKai\\telegram_cli_bridge\\refactoring\\.pytest-tmp\\test_native_agent_service_appe0",
+        "model_id": "",
+        "pi_agent": "pi-reviewer",
+        "reasoning_effort": "",
+        "child_agent_prompt_hash": "d57e16bb3bd37619866bb7c62c761897ca3600f6b6b091420dac104081027114"
+      },
+      "linear_index": 1,
+      "workspace_history_head": "5018b1cb3c4906eb9ad2efa253571c56df8bde22",
+      "last_turn_id": "turn_c8e7ec162ad5460196794795f89b508e",
+      "degraded": false,
+      "degraded_reason": "",
+      "updated_at": "2026-06-22T02:24:56.375567+00:00",
+      "turns": [
+        {
+          "turn_id": "turn_c8e7ec162ad5460196794795f89b508e",
+          "linear_index": 1,
+          "workspace_history_head": "5018b1cb3c4906eb9ad2efa253571c56df8bde22",
+          "status": "active",
+          "discarded_at": ""
+        }
+      ]
+    }
+  }
+}

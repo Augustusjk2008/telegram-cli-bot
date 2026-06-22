@@ -442,6 +442,8 @@ class NativeAgentAggregator:
     def _tool_part_updated(self, part: dict[str, Any]) -> NativeAgentAggregationResult:
         result = NativeAgentAggregationResult()
         self.saw_tool_activity = True
+        self.pending_followup = True
+        self.has_followup_activity = True
         call_id = _tool_call_id(part) or _part_id(part) or str(len(self.parts))
         part_id = _part_id(part)
         message_id = (

@@ -264,12 +264,16 @@ class PiSessionRuntimeRegistry:
             await runtime.close()
 
 
-def build_pi_runtime_key(*, bot_id: int, user_id: int, conversation_id: str) -> str:
-    return f"{int(bot_id)}:{int(user_id)}:{str(conversation_id or '').strip()}"
+def build_pi_runtime_key(*, bot_id: int, user_id: int, conversation_id: str, agent_id: str = "") -> str:
+    agent_scope = str(agent_id or "").strip().lower()
+    base = f"{int(bot_id)}:{int(user_id)}:{str(conversation_id or '').strip()}"
+    return f"{base}:{agent_scope}" if agent_scope and agent_scope != "main" else base
 
 
-def build_pi_owner_key(*, bot_id: int, user_id: int) -> str:
-    return f"{int(bot_id)}:{int(user_id)}"
+def build_pi_owner_key(*, bot_id: int, user_id: int, agent_id: str = "") -> str:
+    agent_scope = str(agent_id or "").strip().lower()
+    base = f"{int(bot_id)}:{int(user_id)}"
+    return f"{base}:{agent_scope}" if agent_scope and agent_scope != "main" else base
 
 
 def _normalize_request(request: PiSessionRuntimeRequest) -> PiSessionRuntimeRequest:

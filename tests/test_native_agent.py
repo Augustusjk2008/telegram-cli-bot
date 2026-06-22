@@ -1372,6 +1372,54 @@ def test_pi_events_flow_through_aggregator_and_ag_ui_mapper_without_polluting_fi
     assert done_values[-1] is True
 
 
+def test_native_agent_cluster_tool_result_does_not_become_final_summary():
+    fallback = native_service_module._completed_tool_result_fallback([
+        {
+            "kind": "tool_call",
+            "tool_name": "ask_agent",
+            "payload": {
+                "toolName": "ask_agent",
+                "arguments": "{\"agent_id\":\"tester\"}",
+            },
+        },
+        {
+            "kind": "tool_result",
+            "tool_name": "ask_agent",
+            "payload": {
+                "output": "{\"ok\":true,\"data\":{\"task_id\":\"clt_1\",\"status\":\"queued\"}}",
+            },
+        },
+    ])
+
+    assert "已启动子 agent 任务" in fallback
+    assert "clt_1" in fallback
+    assert "最后工具结果" not in fallback
+    assert "未返回最终总结" not in fallback
+
+
+def test_native_agent_cluster_tool_result_handles_prefixed_tool_and_nested_payload():
+    fallback = native_service_module._completed_tool_result_fallback([
+        {
+            "kind": "tool_result",
+            "tool_name": "tcb-cluster.ask_agent",
+            "payload": {
+                "toolName": "tcb-cluster.ask_agent",
+                "output": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "{\"ok\":true,\"data\":{\"ok\":true,\"data\":{\"task_id\":\"clt_nested\",\"status\":\"queued\"}}}",
+                        }
+                    ],
+                    "details": {"data": {"ok": True, "data": {"task_id": "clt_nested"}}},
+                },
+            },
+        }
+    ])
+
+    assert fallback == "已启动子 agent 任务：`clt_nested`。"
+
+
 def test_pi_turn_end_does_not_finish_without_activity_through_facade():
     aggregator = NativeAgentAggregator(user_message_id="user-1")
     [mapped_raw] = native_json_to_events(
@@ -1951,6 +1999,48 @@ async def test_native_agent_service_passes_cluster_run_id_to_pi_runtime_env(tmp_
 
 
 @pytest.mark.asyncio
+async def test_native_agent_service_child_runtime_owner_includes_agent_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from bot import config
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    runtime = FakePiRuntime([
+        {"type": "agent_start", "sessionId": "sess-1"},
+        {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "完成"}},
+        {"type": "turn_end", "sessionId": "sess-1"},
+    ])
+    registry = FakePiRuntimeRegistry(runtime)
+    service = NativeAgentService()
+    service._runtime_registry = registry
+    profile = BotProfile(
+        alias="main",
+        working_dir=str(tmp_path),
+        agents=[AgentProfile(id="reviewer", name="审查", system_prompt="只读审查")],
+    )
+    session = UserSession(
+        bot_id=1,
+        bot_alias="main",
+        user_id=1001,
+        working_dir=str(tmp_path),
+        agent_id="reviewer",
+    )
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    await _collect_native_stream(service.stream_chat(
+        profile=profile,
+        session=session,
+        user_text="查一下",
+        prompt_text="查一下",
+        history_service=history,
+        solo_mode=True,
+        cluster_run_id="clr_test",
+    ))
+
+    assert registry.requests[0].owner_key == "1:1:reviewer"
+    assert registry.requests[0].runtime_key.startswith("1:1:")
+    assert registry.requests[0].runtime_key.endswith(":reviewer")
+
+
+@pytest.mark.asyncio
 async def test_native_agent_service_passes_portable_pi_home_to_runtime_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from bot import config
 
@@ -2166,6 +2256,59 @@ async def test_native_agent_service_waits_after_pi_tool_use_turn_end_for_final_t
     done = next(event for event in events if event["type"] == "done")
     assert done["output"] == "顶层包含 index.html、docs 和 tmp。"
     assert "最后工具结果" not in done["output"]
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_waits_after_pi_tool_execution_turn_end_without_message_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from bot import config
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    runtime = FakePiRuntime([
+        {"type": "turn_start", "sessionId": "sess-1"},
+        {
+            "type": "tool_execution_start",
+            "sessionId": "sess-1",
+            "call_id": "call-1",
+            "tool": "ask_agent",
+            "args": {"agent_id": "tester"},
+        },
+        {
+            "type": "tool_execution_end",
+            "sessionId": "sess-1",
+            "call_id": "call-1",
+            "tool": "ask_agent",
+            "result": "{\"ok\":true,\"data\":{\"task_id\":\"clt_1\",\"status\":\"queued\"}}",
+        },
+        {"type": "turn_end", "sessionId": "sess-1"},
+        {"type": "turn_start", "sessionId": "sess-1"},
+        {"type": "message_update", "sessionId": "sess-1", "message": {"role": "assistant", "content": "子 agent 已启动，我会继续等待结果。"}},
+        {
+            "type": "message_end",
+            "sessionId": "sess-1",
+            "message": {"role": "assistant", "stopReason": "stop", "content": [{"type": "text", "text": "子 agent 已启动，我会继续等待结果。"}]},
+        },
+        {"type": "turn_end", "sessionId": "sess-1"},
+        {"type": "agent_end", "sessionId": "sess-1"},
+    ])
+    service = NativeAgentService()
+    service._runtime_registry = FakePiRuntimeRegistry(runtime)
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    events = [
+        event async for event in service.stream_chat(
+            profile=profile,
+            session=session,
+            user_text="调子 agent",
+            prompt_text="调子 agent",
+            history_service=history,
+        )
+    ]
+
+    done = next(event for event in events if event["type"] == "done")
+    assert done["output"] == "子 agent 已启动，我会继续等待结果。"
+    assert "clt_1" not in done["output"]
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
+import json
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -85,8 +86,13 @@ def normalize_execution_mode(value: Any, profile: BotProfile | None = None) -> s
 
 
 def _completed_tool_result_fallback(trace_events: list[dict[str, Any]]) -> str:
+    cluster_fallback = _cluster_async_tool_fallback(trace_events)
+    if cluster_fallback:
+        return cluster_fallback
     for trace in reversed(trace_events):
         if str(trace.get("kind") or "").strip() != "tool_result":
+            continue
+        if _is_cluster_async_tool_result(trace):
             continue
         text = _trace_text(trace.get("payload")) or _trace_text(trace.get("summary"))
         text = text.strip()
@@ -96,6 +102,104 @@ def _completed_tool_result_fallback(trace_events: list[dict[str, Any]]) -> str:
         return f"原生 agent 未返回最终总结。最后工具结果：\n\n```text\n{_escape_markdown_fence(truncated)}\n```"
     if any(str(trace.get("kind") or "").strip() == "tool_call" for trace in trace_events):
         return "原生 agent 已完成工具调用，但未返回最终总结。"
+    return ""
+
+
+def _cluster_async_tool_fallback(trace_events: list[dict[str, Any]]) -> str:
+    for trace in reversed(trace_events):
+        if str(trace.get("kind") or "").strip() != "tool_result":
+            continue
+        if not _is_cluster_async_tool_result(trace):
+            continue
+        tool_name = _cluster_tool_name(_trace_tool_name(trace))
+        if tool_name == "ask_agent":
+            task_id = _cluster_result_field(trace, "task_id")
+            if task_id:
+                return f"已启动子 agent 任务：`{task_id}`。"
+            return "已启动子 agent 任务。"
+        if tool_name == "poll_agent_tasks":
+            return "已获取子 agent 任务状态。"
+        if tool_name == "wait_agent_messages":
+            return "已收到子 agent 回告。"
+    return ""
+
+
+def _is_cluster_async_tool_result(trace: dict[str, Any]) -> bool:
+    tool_name = _trace_tool_name(trace)
+    if _cluster_tool_name(tool_name) not in {"ask_agent", "poll_agent_tasks", "wait_agent_messages"}:
+        return False
+    payload = trace.get("payload") if isinstance(trace.get("payload"), dict) else {}
+    text = _trace_text(payload) or _trace_text(trace.get("summary"))
+    normalized = text.strip()
+    return "\"task_id\"" in normalized or "\"tasks\"" in normalized or "\"messages\"" in normalized
+
+
+def _trace_tool_name(trace: dict[str, Any]) -> str:
+    payload = trace.get("payload") if isinstance(trace.get("payload"), dict) else {}
+    return str(
+        trace.get("tool_name")
+        or trace.get("tool")
+        or payload.get("toolName")
+        or payload.get("tool")
+        or payload.get("name")
+        or ""
+    ).strip()
+
+
+def _cluster_tool_name(tool_name: str) -> str:
+    normalized = str(tool_name or "").strip()
+    if "." in normalized:
+        normalized = normalized.rsplit(".", 1)[-1]
+    return normalized
+
+
+def _cluster_result_field(trace: dict[str, Any], field: str) -> str:
+    for candidate in _cluster_result_candidates(trace):
+        value = _find_nested_field(candidate, field)
+        if value:
+            return value
+    return ""
+
+
+def _cluster_result_candidates(value: Any) -> list[Any]:
+    candidates: list[Any] = []
+    if isinstance(value, dict):
+        candidates.append(value)
+        for key in ("payload", "summary", "output", "result", "details", "data", "content", "text"):
+            if key in value:
+                candidates.extend(_cluster_result_candidates(value.get(key)))
+        return candidates
+    if isinstance(value, list):
+        candidates.append(value)
+        for item in value:
+            candidates.extend(_cluster_result_candidates(item))
+        return candidates
+    text = _trace_text(value).strip()
+    if not text:
+        return candidates
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        return candidates
+    candidates.append(parsed)
+    candidates.extend(_cluster_result_candidates(parsed))
+    return candidates
+
+
+def _find_nested_field(value: Any, field: str) -> str:
+    if isinstance(value, dict):
+        direct = value.get(field)
+        if direct:
+            return str(direct).strip()
+        for item in value.values():
+            found = _find_nested_field(item, field)
+            if found:
+                return found
+    if isinstance(value, list):
+        for item in value:
+            found = _find_nested_field(item, field)
+            if found:
+                return found
     return ""
 
 
@@ -275,8 +379,13 @@ class NativeAgentService:
                     bot_id=int(session.bot_id or 0),
                     user_id=int(user_id),
                     conversation_id=conversation_id,
+                    agent_id=getattr(session, "agent_id", ""),
                 ),
-                owner_key=build_pi_owner_key(bot_id=int(session.bot_id or 0), user_id=int(user_id)),
+                owner_key=build_pi_owner_key(
+                    bot_id=int(session.bot_id or 0),
+                    user_id=int(user_id),
+                    agent_id=getattr(session, "agent_id", ""),
+                ),
                 conversation_id=conversation_id,
                 cwd=session.working_dir,
                 command=str(native_agent_config.get("pi_command") or config.NATIVE_AGENT_PI_COMMAND or config.NATIVE_AGENT_COMMAND or "pi"),
@@ -544,11 +653,16 @@ class NativeAgentService:
                 bot_id=int(session.bot_id or 0),
                 user_id=int(user_id),
                 conversation_id=turn_handle.conversation_id,
+                agent_id=getattr(session, "agent_id", ""),
             )
             active_runtime = await self._runtime_registry.open_or_create(
                 PiSessionRuntimeRequest(
                     runtime_key=runtime_key,
-                    owner_key=build_pi_owner_key(bot_id=int(session.bot_id or 0), user_id=int(user_id)),
+                    owner_key=build_pi_owner_key(
+                        bot_id=int(session.bot_id or 0),
+                        user_id=int(user_id),
+                        agent_id=getattr(session, "agent_id", ""),
+                    ),
                     conversation_id=turn_handle.conversation_id,
                     cwd=session.working_dir,
                     command=pi_command,

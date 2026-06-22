@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "conversation_id": "conv_cfad57ff8d0c4114a0edafebf9fbdf2f",
+  "cwd": "C:\\Users\\JiangKai\\telegram_cli_bridge\\refactoring\\.pytest-tmp\\test_native_agent_service_does1",
+  "created_at": "2026-06-22T02:25:12.885906+00:00",
+  "updated_at": "2026-06-22T02:25:15.605260+00:00",
+  "turns": [
+    {
+      "turn_id": "turn_97b3ca6084674c839dc61d0ce56acde0",
+      "linear_index": 1,
+      "created_at": "2026-06-22T02:25:15.605240+00:00",
+      "status": "active",
+      "discarded_at": "",
+      "before_head": "3b13cb61c3352a0fdbb6cf0ad2402f4302771d40",
+      "after_head": "78634f5fa089339e8d1a55d1ac344492a6287536",
+      "workspace_history_head": "78634f5fa089339e8d1a55d1ac344492a6287536",
+      "pi_session_id": "sess-1"
+    }
+  ]
+}

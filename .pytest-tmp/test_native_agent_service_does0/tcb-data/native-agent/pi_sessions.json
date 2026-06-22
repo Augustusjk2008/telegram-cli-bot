@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "sessions": {
+    "71a862b63f54d0c58d5b3a836004cf6d37829a8828268b2be46ade9c3513c584:1:1:conv_9f49f532d4d24ba88fc1a57781b36758": {
+      "cwd": "C:\\Users\\JiangKai\\telegram_cli_bridge\\refactoring\\.pytest-tmp\\test_native_agent_service_does0",
+      "conversation_id": "conv_9f49f532d4d24ba88fc1a57781b36758",
+      "pi_session_id": "sess-new",
+      "session_meta": {
+        "cwd": "C:\\Users\\JiangKai\\telegram_cli_bridge\\refactoring\\.pytest-tmp\\test_native_agent_service_does0",
+        "model_id": "anthropic/claude-sonnet-4",
+        "pi_agent": "reviewer",
+        "reasoning_effort": "high"
+      },
+      "linear_index": 1,
+      "workspace_history_head": "1a88882fb673853b1f8c38cb83b53686b1230587",
+      "last_turn_id": "turn_5bf69e3cbbba4869a99f7098b8f957c8",
+      "degraded": false,
+      "degraded_reason": "",
+      "updated_at": "2026-06-22T02:25:11.061337+00:00",
+      "turns": [
+        {
+          "turn_id": "turn_5bf69e3cbbba4869a99f7098b8f957c8",
+          "linear_index": 1,
+          "workspace_history_head": "1a88882fb673853b1f8c38cb83b53686b1230587",
+          "status": "active",
+          "discarded_at": ""
+        }
+      ]
+    }
+  }
+}
