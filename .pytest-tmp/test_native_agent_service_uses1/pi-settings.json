@@ -1,5 +1,0 @@
-{
-  "backend": "pi",
-  "workspace_history_enabled": true,
-  "system_prompt": "每轮回复前先说 Pi"
-}
