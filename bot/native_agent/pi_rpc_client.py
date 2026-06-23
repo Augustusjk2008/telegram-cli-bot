@@ -17,6 +17,7 @@ from bot.platform.processes import build_chat_cli_process_kwargs, terminate_proc
 
 DEFAULT_PI_COMMAND = "pi"
 DEFAULT_TIMEOUT_SECONDS = 5.0
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 30.0
 TAIL_LIMIT = 1600
 
 
@@ -85,6 +86,7 @@ class PiRpcClient:
     ) -> None:
         self.process = process
         self.timeout_seconds = timeout_seconds if timeout_seconds is not None else DEFAULT_TIMEOUT_SECONDS
+        self.request_timeout_seconds = timeout_seconds if timeout_seconds is not None else DEFAULT_REQUEST_TIMEOUT_SECONDS
         self._lock = asyncio.Lock()
         self._closed = False
         self._killed = False
@@ -93,6 +95,8 @@ class PiRpcClient:
         self._pending_events: list[dict[str, Any]] = []
         self._stderr_tail = _TailBuffer()
         self._stdout_tail = _TailBuffer()
+        self._stdout_queue: asyncio.Queue[dict[str, Any] | None] | None = None
+        self._stdout_thread: threading.Thread | None = None
         self._stderr_thread = threading.Thread(
             target=_drain_stream_to_tail,
             args=(process.stderr, self._stderr_tail),
@@ -152,7 +156,7 @@ class PiRpcClient:
             try:
                 return await asyncio.wait_for(
                     self._read_response(request_id, command_type),
-                    timeout=self.timeout_seconds,
+                    timeout=self.request_timeout_seconds,
                 )
             except asyncio.TimeoutError as exc:
                 raise PiRpcRunError(f"Pi RPC {command_type} 响应超时") from exc
@@ -264,40 +268,28 @@ class PiRpcClient:
             self._pending_events.append(payload)
 
     async def _read_stdout_payload(self) -> dict[str, Any] | None:
-        stdout = self.process.stdout
-        if stdout is None:
+        queue = self._ensure_stdout_reader()
+        if queue is None:
             await self._raise_if_failed(await self._wait_no_timeout())
             return None
-        while True:
-            try:
-                line = await asyncio.to_thread(stdout.readline)
-            except (OSError, ValueError):
-                return None
-            if line == "":
-                return None
-            raw_line = line.rstrip("\r\n")
-            if not raw_line:
-                continue
-            self._stdout_tail.append(raw_line + "\n")
-            try:
-                payload = json.loads(raw_line)
-            except json.JSONDecodeError as exc:
-                return {
-                    "type": "diagnostic",
-                    "source": "pi_rpc_transport",
-                    "level": "warning",
-                    "message": f"Pi RPC 输出不是有效 JSON: {exc.msg}",
-                    "raw": raw_line,
-                }
-            if isinstance(payload, dict):
-                return payload
-            return {
-                "type": "diagnostic",
-                "source": "pi_rpc_transport",
-                "level": "warning",
-                "message": "Pi RPC 输出不是 JSON 对象",
-                "raw": raw_line,
-            }
+        return await queue.get()
+
+    def _ensure_stdout_reader(self) -> asyncio.Queue[dict[str, Any] | None] | None:
+        stdout = self.process.stdout
+        if stdout is None:
+            return None
+        if self._stdout_queue is not None:
+            return self._stdout_queue
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+        self._stdout_queue = queue
+        self._stdout_thread = threading.Thread(
+            target=_drain_stdout_to_queue,
+            args=(stdout, self._stdout_tail, loop, queue),
+            daemon=True,
+        )
+        self._stdout_thread.start()
+        return queue
 
     async def _write_packet(self, message: dict[str, Any]) -> None:
         async with self._lock:
@@ -399,6 +391,61 @@ def _drain_stream_to_tail(stream: Any, tail: _TailBuffer) -> None:
         for line in stream:
             tail.append(str(line))
     except Exception:
+        return
+
+
+def _drain_stdout_to_queue(
+    stream: Any,
+    tail: _TailBuffer,
+    loop: asyncio.AbstractEventLoop,
+    queue: asyncio.Queue[dict[str, Any] | None],
+) -> None:
+    try:
+        while True:
+            try:
+                line = stream.readline()
+            except (OSError, ValueError):
+                break
+            if line == "":
+                break
+            raw_line = str(line).rstrip("\r\n")
+            if not raw_line:
+                continue
+            tail.append(raw_line + "\n")
+            try:
+                payload = json.loads(raw_line)
+            except json.JSONDecodeError as exc:
+                payload = {
+                    "type": "diagnostic",
+                    "source": "pi_rpc_transport",
+                    "level": "warning",
+                    "message": f"Pi RPC 输出不是有效 JSON: {exc.msg}",
+                    "raw": raw_line,
+                }
+            else:
+                if not isinstance(payload, dict):
+                    payload = {
+                        "type": "diagnostic",
+                        "source": "pi_rpc_transport",
+                        "level": "warning",
+                        "message": "Pi RPC 输出不是 JSON 对象",
+                        "raw": raw_line,
+                    }
+            _threadsafe_queue_put(loop, queue, payload)
+    finally:
+        _threadsafe_queue_put(loop, queue, None)
+
+
+def _threadsafe_queue_put(
+    loop: asyncio.AbstractEventLoop,
+    queue: asyncio.Queue[dict[str, Any] | None],
+    item: dict[str, Any] | None,
+) -> None:
+    if loop.is_closed():
+        return
+    try:
+        loop.call_soon_threadsafe(queue.put_nowait, item)
+    except RuntimeError:
         return
 
 

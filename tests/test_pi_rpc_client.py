@@ -124,6 +124,22 @@ if mode == "close_wait":
 if mode == "hang_on_close":
     sys.stdin.read()
     time.sleep(60)
+
+if mode == "delayed_state_then_events":
+    for line in sys.stdin:
+        record(line)
+        packet = json.loads(line)
+        if packet.get("type") == "get_state":
+            time.sleep(0.25)
+            emit({
+                "id": packet.get("id"),
+                "type": "response",
+                "command": "get_state",
+                "success": True,
+                "data": {"sessionId": "late-state"},
+            })
+            emit({"type": "done"})
+            raise SystemExit(0)
 """
 
 
@@ -291,6 +307,30 @@ async def test_pi_rpc_client_get_state_error_raises(
 
     with pytest.raises(PiRpcRunError, match="state failed"):
         await client.get_state()
+
+
+@pytest.mark.asyncio
+async def test_pi_rpc_client_timeout_does_not_leave_competing_stdout_reader(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = await _start_fake_client(tmp_path, monkeypatch, "delayed_state_then_events", timeout_seconds=0.05)
+
+    with pytest.raises(PiRpcRunError, match="get_state 响应超时"):
+        await client.get_state()
+
+    events = await asyncio.wait_for(_collect_unbounded(client), timeout=2)
+
+    assert events == [
+        {
+            "id": "tcb_req_1",
+            "type": "response",
+            "command": "get_state",
+            "success": True,
+            "data": {"sessionId": "late-state"},
+        },
+        {"type": "done"},
+    ]
 
 
 @pytest.mark.asyncio

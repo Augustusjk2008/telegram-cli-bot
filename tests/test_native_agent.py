@@ -1558,6 +1558,7 @@ class FakePiRuntime:
         wait_after_first_event: bool = False,
         workspace_results: dict[str, list[dict[str, object]]] | None = None,
         capture_state_payload: dict[str, object] | None = None,
+        capture_state_error: BaseException | None = None,
     ) -> None:
         self.events_payload = list(events or [])
         self.error = error
@@ -1575,6 +1576,7 @@ class FakePiRuntime:
         self.workspace_requests: list[dict[str, object]] = []
         self.workspace_results = {key: list(value) for key, value in (workspace_results or {}).items()}
         self.capture_state_payload = dict(capture_state_payload or {})
+        self.capture_state_error = capture_state_error
         self.capture_state_calls = 0
         self.state = type("State", (), {
             "native_session_id": "",
@@ -1600,6 +1602,8 @@ class FakePiRuntime:
 
     async def capture_state(self) -> dict[str, object]:
         self.capture_state_calls += 1
+        if self.capture_state_error is not None:
+            raise self.capture_state_error
         session_id = str(self.capture_state_payload.get("sessionId") or "").strip()
         if session_id:
             self.state.native_session_id = session_id
@@ -1813,6 +1817,46 @@ async def test_native_agent_service_captures_pi_state_session_id_when_events_omi
     assert record is not None
     assert record.pi_session_id == "pi-sess-1"
     assert conversation_native["session_id"] == "pi-sess-1"
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_continues_when_pi_get_state_times_out(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot import config
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    runtime = FakePiRuntime(
+        [
+            {"type": "agent_start", "sessionId": "pi-sess-1"},
+            {"type": "message_update", "sessionId": "pi-sess-1", "message": {"role": "assistant", "content": "Pi 回复"}},
+            {"type": "turn_end", "sessionId": "pi-sess-1"},
+        ],
+        capture_state_error=PiRpcRunError("Pi RPC get_state 响应超时"),
+    )
+    service = NativeAgentService()
+    service._runtime_registry = FakePiRuntimeRegistry(runtime)
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    events = [
+        event async for event in service.stream_chat(
+            profile=profile,
+            session=session,
+            user_text="你好",
+            prompt_text="你好",
+            history_service=history,
+        )
+    ]
+
+    done = next(event for event in events if event["type"] == "done")
+    warning = next(event["event"] for event in events if event["type"] == "trace")
+    assert runtime.capture_state_calls == 1
+    assert done["output"] == "Pi 回复"
+    assert done["native_session_id"] == "pi-sess-1"
+    assert "Pi get_state 失败" in warning["summary"]
 
 
 @pytest.mark.asyncio

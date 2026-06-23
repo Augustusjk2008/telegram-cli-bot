@@ -689,12 +689,21 @@ class NativeAgentService:
                 native_session_id = active_runtime.state.native_session_id
                 turn_state.native_session_id = native_session_id
             if active_runtime is not None and not native_session_id:
-                captured_state = await active_runtime.capture_state()
-                captured_session_id = str(getattr(active_runtime.state, "native_session_id", "") or "").strip()
-                if captured_session_id:
-                    remember_native_session(captured_session_id)
+                try:
+                    captured_state = await active_runtime.capture_state()
+                except PiRpcRunError as exc:
+                    startup_trace_events.append({
+                        "kind": "warning",
+                        "source": "native_agent",
+                        "summary": f"Pi get_state 失败，已继续发送消息: {exc}",
+                    })
+                    logger.warning("Pi get_state 失败，继续发送消息: %s", exc)
                 else:
-                    logger.warning("Pi get_state 未返回 sessionId: %s", captured_state)
+                    captured_session_id = str(getattr(active_runtime.state, "native_session_id", "") or "").strip()
+                    if captured_session_id:
+                        remember_native_session(captured_session_id)
+                    else:
+                        logger.warning("Pi get_state 未返回 sessionId: %s", captured_state)
             if workspace_history_enabled and pi_record is not None:
                 before_turn = await self._workspace_history.checkpoint(
                     active_runtime,
