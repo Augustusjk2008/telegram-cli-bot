@@ -16,7 +16,7 @@ from bot.native_agent.events import is_relevant_event, unwrap_event
 from bot.native_agent import service as native_service_module
 from bot.native_agent.pi_rpc_client import PiRpcRunError
 from bot.native_agent.run_events import extract_step_finish_usage, native_json_to_events, run_json_to_events
-from bot.native_agent.service import NativeAgentService, normalize_execution_mode
+from bot.native_agent.service import NATIVE_AGENT_NO_PROGRESS_MESSAGE, NativeAgentService, normalize_execution_mode
 from bot.native_agent.turn_state import NativeAgentTurnState
 from bot.web.chat_history_service import ChatHistoryService
 from bot.web.chat_store import ChatStore
@@ -49,6 +49,34 @@ def clear_native_agent_global_config(monkeypatch: pytest.MonkeyPatch, tmp_path: 
 
 async def _collect_native_stream(stream):
     return [event async for event in stream]
+
+
+async def _run_native_agent_with_runtime(
+    runtime: FakePiRuntime,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot import config
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    service = NativeAgentService()
+    service._runtime_registry = FakePiRuntimeRegistry(runtime)
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+    events = await asyncio.wait_for(
+        _collect_native_stream(
+            service.stream_chat(
+                profile=profile,
+                session=session,
+                user_text="执行",
+                prompt_text="执行",
+                history_service=history,
+            )
+        ),
+        timeout=3,
+    )
+    return service, runtime, session, history, events
 
 
 def test_unwrap_native_agent_event():
@@ -3016,6 +3044,63 @@ async def test_native_agent_service_permission_reply_requires_pending_request(
     assert result["sent"] is True
     assert runtime.replies == [{"permission_id": "perm-1", "approved": True, "message": "允许"}]
     assert next(event for event in events if event["type"] == "done")["output"] == "继续"
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_no_progress_timeout_kills_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from bot import config
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    monkeypatch.setattr(config, "NATIVE_AGENT_NO_PROGRESS_TIMEOUT_SECONDS", 0.05)
+    started = asyncio.Event()
+    gate = asyncio.Event()
+    runtime = FakePiRuntime(gate=gate, started=started)
+
+    service, runtime, session, _history, events = await _run_native_agent_with_runtime(runtime, tmp_path, monkeypatch)
+
+    assert events
+    done = next(event for event in events if event["type"] == "done")
+    assert runtime.killed is True
+    assert done["returncode"] == 1
+    assert done["message"]["meta"]["completion_state"] == "error"
+    assert done["output"] == NATIVE_AGENT_NO_PROGRESS_MESSAGE
+    assert session.is_processing is False
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_no_progress_timeout_can_be_disabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from bot import config
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    monkeypatch.setattr(config, "NATIVE_AGENT_NO_PROGRESS_TIMEOUT_SECONDS", 0)
+    started = asyncio.Event()
+    gate = asyncio.Event()
+    runtime = FakePiRuntime(gate=gate, started=started)
+    service = NativeAgentService()
+    service._runtime_registry = FakePiRuntimeRegistry(runtime)
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    task = asyncio.create_task(_collect_native_stream(service.stream_chat(
+        profile=profile,
+        session=session,
+        user_text="执行",
+        prompt_text="执行",
+        history_service=history,
+    )))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    await asyncio.sleep(0.2)
+    assert task.done() is False
+    assert runtime.killed is False
+    gate.set()
+    events = await asyncio.wait_for(task, timeout=2)
+
+    done = next(event for event in events if event["type"] == "done")
+    assert done["returncode"] == 0
+    assert done["message"]["meta"]["completion_state"] == "completed"
+    assert done["output"] == "原生 agent 未返回内容"
+    assert session.is_processing is False
 
 
 @pytest.mark.asyncio

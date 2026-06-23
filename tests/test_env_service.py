@@ -76,6 +76,9 @@ def test_env_service_exposes_native_agent_global_fields(tmp_path: Path) -> None:
     assert "HOME" in items["NATIVE_AGENT_PI_HOME"]["description"]
     assert items["NATIVE_AGENT_PI_AGENT"]["type"] == "string"
     assert items["NATIVE_AGENT_WORKSPACE_HISTORY_ENABLED"]["type"] == "boolean"
+    assert items["NATIVE_AGENT_NO_PROGRESS_TIMEOUT_SECONDS"]["type"] == "number"
+    assert items["NATIVE_AGENT_NO_PROGRESS_TIMEOUT_SECONDS"]["default"] == "0"
+    assert items["NATIVE_AGENT_NO_PROGRESS_TIMEOUT_SECONDS"]["validation"]["min"] == 0
     assert "run 命令" in items["NATIVE_AGENT_ENABLED"]["description"]
     assert "NATIVE_AGENT_" + "HOST" not in items
     assert "NATIVE_AGENT_" + "PORT" not in items

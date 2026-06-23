@@ -85,6 +85,15 @@ ENV_SCHEMA: tuple[EnvField, ...] = (
     EnvField("NATIVE_AGENT_PI_AGENT", "Pi agent", "全局 Pi agent 名称；留空使用默认。", "string", "", "advanced"),
     EnvField("NATIVE_AGENT_WORKSPACE_HISTORY_ENABLED", "Pi 工作区历史", "是否启用 Pi workspace history。", "boolean", "true", "advanced"),
     EnvField(
+        "NATIVE_AGENT_NO_PROGRESS_TIMEOUT_SECONDS",
+        "原生 agent 无进展超时",
+        "原生 agent 在无输出/无进展时的自动终止秒数；0 表示禁用。",
+        "number",
+        "0",
+        "advanced",
+        min_value=0,
+    ),
+    EnvField(
         "NATIVE_AGENT_REASONING_EFFORT",
         "Reasoning effort",
         "全局 reasoning effort，按模型支持填写。",

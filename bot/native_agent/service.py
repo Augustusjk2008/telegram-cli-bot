@@ -53,7 +53,6 @@ from bot.native_agent.turn_state import NativeAgentTurnState
 from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenceBuffer
 
 NATIVE_AGENT_PROVIDER = EXECUTION_MODE_NATIVE_AGENT
-NATIVE_AGENT_NO_PROGRESS_TIMEOUT_SECONDS = 1000.0
 NATIVE_AGENT_NO_PROGRESS_MESSAGE = "原生 agent 长时间无输出或进展"
 TOOL_RESULT_FALLBACK_LIMIT = 12000
 SOLO_NATIVE_AGENT_SYSTEM_PROMPT = """Solo native agent mode:
@@ -637,7 +636,7 @@ class NativeAgentService:
 
             def no_progress_timed_out(now: float) -> bool:
                 try:
-                    timeout = float(NATIVE_AGENT_NO_PROGRESS_TIMEOUT_SECONDS)
+                    timeout = float(config.NATIVE_AGENT_NO_PROGRESS_TIMEOUT_SECONDS)
                 except (TypeError, ValueError):
                     timeout = 0.0
                 return timeout > 0 and now - last_progress_at >= timeout
