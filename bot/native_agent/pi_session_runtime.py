@@ -101,6 +101,15 @@ class PiSessionRuntime:
             reasoning_effort=self.state.reasoning_effort,
         )
 
+    async def capture_state(self) -> dict[str, Any]:
+        if self._reader_task is not None:
+            return {}
+        state = await self.client.get_state()
+        session_id = _state_session_id(state)
+        if session_id:
+            self.state.native_session_id = session_id
+        return state
+
     async def events(self):
         self._ensure_reader()
         while True:
@@ -207,6 +216,7 @@ class PiSessionRuntimeRegistry:
                 model=normalized.model,
                 system_prompt=normalized.system_prompt,
                 append_system_prompt=normalized.append_system_prompt,
+                session_id=normalized.native_session_id,
             )
         )
         runtime = PiSessionRuntime(
@@ -301,6 +311,14 @@ def _normalize_env(env: dict[str, str] | None) -> dict[str, str] | None:
         if str(key)
     }
     return normalized or None
+
+
+def _state_session_id(state: dict[str, Any]) -> str:
+    for key in ("sessionId", "sessionID", "session_id"):
+        value = state.get(key)
+        if value:
+            return str(value).strip()
+    return ""
 
 
 _STREAM_DONE = object()

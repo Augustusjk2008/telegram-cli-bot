@@ -1557,6 +1557,7 @@ class FakePiRuntime:
         event_delay_seconds: float = 0.0,
         wait_after_first_event: bool = False,
         workspace_results: dict[str, list[dict[str, object]]] | None = None,
+        capture_state_payload: dict[str, object] | None = None,
     ) -> None:
         self.events_payload = list(events or [])
         self.error = error
@@ -1573,6 +1574,8 @@ class FakePiRuntime:
         self.workspace_history_head = "head-1"
         self.workspace_requests: list[dict[str, object]] = []
         self.workspace_results = {key: list(value) for key, value in (workspace_results or {}).items()}
+        self.capture_state_payload = dict(capture_state_payload or {})
+        self.capture_state_calls = 0
         self.state = type("State", (), {
             "native_session_id": "",
             "workspace_history_head": "head-1",
@@ -1594,6 +1597,13 @@ class FakePiRuntime:
         })
         if self.started is not None:
             self.started.set()
+
+    async def capture_state(self) -> dict[str, object]:
+        self.capture_state_calls += 1
+        session_id = str(self.capture_state_payload.get("sessionId") or "").strip()
+        if session_id:
+            self.state.native_session_id = session_id
+        return dict(self.capture_state_payload)
 
     async def request_workspace_history(self, fields: dict[str, object]) -> dict[str, object]:
         self.workspace_requests.append(dict(fields))
@@ -1734,6 +1744,75 @@ async def test_native_agent_service_uses_pi_runtime_and_emits_runtime_meta(
     assert registry.requests[0].system_prompt == ""
     assert registry.requests[0].append_system_prompt == ""
     assert registry.requests[0].config_fingerprint
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_captures_pi_state_session_id_when_events_omit_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot import config
+    from bot.native_agent.pi_session_store import PiSessionStore, pi_session_key
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    runtime = FakePiRuntime(
+        [
+            {"type": "message_update", "message": {"role": "assistant", "content": "Pi 回复"}},
+            {"type": "turn_end"},
+        ],
+        capture_state_payload={
+            "sessionId": "pi-sess-1",
+            "sessionFile": "session.jsonl",
+            "messageCount": 0,
+        },
+    )
+    service = NativeAgentService()
+    service._runtime_registry = FakePiRuntimeRegistry(runtime)
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+
+    first_events = [
+        event async for event in service.stream_chat(
+            profile=profile,
+            session=session,
+            user_text="记住 token=abc123",
+            prompt_text="记住 token=abc123",
+            history_service=history,
+        )
+    ]
+    second_events = [
+        event async for event in service.stream_chat(
+            profile=profile,
+            session=session,
+            user_text="token 是什么",
+            prompt_text="token 是什么",
+            history_service=history,
+        )
+    ]
+
+    first_done = next(event for event in first_events if event["type"] == "done")
+    second_meta = next(event for event in second_events if event["type"] == "meta" and event.get("runtime_provider") == "pi")
+    second_done = next(event for event in second_events if event["type"] == "done")
+    key = pi_session_key(
+        cwd=str(tmp_path),
+        bot_id=session.bot_id,
+        user_id=1,
+        conversation_id=first_done["message"]["conversation_id"],
+    )
+    record = PiSessionStore().get(key)
+    conversation_native = history.store.get_conversation_native_session(first_done["message"]["conversation_id"])
+
+    assert runtime.capture_state_calls == 1
+    assert runtime.prompts[0]["conversation_id"] == "pi-sess-1"
+    assert runtime.prompts[1]["conversation_id"] == "pi-sess-1"
+    assert first_done["native_session_id"] == "pi-sess-1"
+    assert second_done["native_session_id"] == "pi-sess-1"
+    assert second_meta["native_session_reused"] is True
+    assert session.native_agent_session_id == "pi-sess-1"
+    assert record is not None
+    assert record.pi_session_id == "pi-sess-1"
+    assert conversation_native["session_id"] == "pi-sess-1"
 
 
 @pytest.mark.asyncio

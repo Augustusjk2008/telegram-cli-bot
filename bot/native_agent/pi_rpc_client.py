@@ -43,6 +43,7 @@ class PiRpcStartRequest:
     model: str | None = None
     system_prompt: str = ""
     append_system_prompt: str = ""
+    session_id: str = ""
     timeout_seconds: float | None = None
 
 
@@ -87,6 +88,9 @@ class PiRpcClient:
         self._lock = asyncio.Lock()
         self._closed = False
         self._killed = False
+        self._events_started = False
+        self._request_seq = 0
+        self._pending_events: list[dict[str, Any]] = []
         self._stderr_tail = _TailBuffer()
         self._stdout_tail = _TailBuffer()
         self._stderr_thread = threading.Thread(
@@ -105,6 +109,7 @@ class PiRpcClient:
             model=request.model,
             system_prompt=request.system_prompt,
             append_system_prompt=request.append_system_prompt,
+            session_id=request.session_id,
         )
         env = _base_env(request.env)
         try:
@@ -132,6 +137,35 @@ class PiRpcClient:
             raise TypeError("Pi RPC message 必须是 dict")
         await self._write_packet(message)
 
+    async def request(self, message: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(message, dict):
+            raise TypeError("Pi RPC message 必须是 dict")
+        async with self._lock:
+            if self._events_started:
+                raise PiRpcRunError("Pi RPC stdout reader 已启动，无法同步请求")
+            self._request_seq += 1
+            request_id = f"tcb_req_{self._request_seq}"
+            packet = dict(message)
+            packet["id"] = request_id
+            command_type = str(packet.get("type") or "request").strip()
+            await self._write_packet_unlocked(packet, ignore_errors=False)
+            try:
+                return await asyncio.wait_for(
+                    self._read_response(request_id, command_type),
+                    timeout=self.timeout_seconds,
+                )
+            except asyncio.TimeoutError as exc:
+                raise PiRpcRunError(f"Pi RPC {command_type} 响应超时") from exc
+
+    async def get_state(self) -> dict[str, Any]:
+        response = await self.request({"type": "get_state"})
+        data = response.get("data")
+        if data is None:
+            data = response.get("result")
+        if not isinstance(data, dict):
+            raise PiRpcRunError("Pi RPC get_state 响应缺少 data")
+        return dict(data)
+
     async def prompt(
         self,
         text: str,
@@ -153,42 +187,14 @@ class PiRpcClient:
         await self.send(message)
 
     async def events(self) -> AsyncIterator[dict[str, Any]]:
-        stdout = self.process.stdout
-        if stdout is None:
-            await self._raise_if_failed(await self._wait_no_timeout())
-            return
+        self._events_started = True
+        while self._pending_events:
+            yield self._pending_events.pop(0)
         while True:
-            try:
-                line = await asyncio.to_thread(stdout.readline)
-            except (OSError, ValueError):
+            payload = await self._read_stdout_payload()
+            if payload is None:
                 break
-            if line == "":
-                break
-            raw_line = line.rstrip("\r\n")
-            if not raw_line:
-                continue
-            self._stdout_tail.append(raw_line + "\n")
-            try:
-                payload = json.loads(raw_line)
-            except json.JSONDecodeError as exc:
-                yield {
-                    "type": "diagnostic",
-                    "source": "pi_rpc_transport",
-                    "level": "warning",
-                    "message": f"Pi RPC 输出不是有效 JSON: {exc.msg}",
-                    "raw": raw_line,
-                }
-                continue
-            if isinstance(payload, dict):
-                yield payload
-            else:
-                yield {
-                    "type": "diagnostic",
-                    "source": "pi_rpc_transport",
-                    "level": "warning",
-                    "message": "Pi RPC 输出不是 JSON 对象",
-                    "raw": raw_line,
-                }
+            yield payload
         returncode = await self._wait_no_timeout()
         await self._raise_if_failed(returncode)
 
@@ -230,6 +236,68 @@ class PiRpcClient:
             await asyncio.to_thread(terminate_process_tree_sync, process)
         self._close_streams()
         await asyncio.to_thread(self._stderr_thread.join, 0.5)
+
+    async def _read_response(self, request_id: str, command_type: str) -> dict[str, Any]:
+        while True:
+            payload = await self._read_stdout_payload()
+            if payload is None:
+                returncode = await self._wait_no_timeout()
+                await self._raise_if_failed(returncode)
+                raise PiRpcRunError(f"Pi RPC {command_type} 未返回响应")
+            if str(payload.get("id") or "") == request_id:
+                if payload.get("type") == "response":
+                    if not bool(payload.get("success")):
+                        raise PiRpcRunError(
+                            f"Pi RPC {command_type} 失败: {str(payload.get('error') or 'unknown error')}"
+                        )
+                    return payload
+                if payload.get("error"):
+                    raise PiRpcRunError(f"Pi RPC {command_type} 失败: {str(payload.get('error'))}")
+                if "result" in payload:
+                    return {
+                        "id": request_id,
+                        "type": "response",
+                        "command": command_type,
+                        "success": True,
+                        "data": payload.get("result"),
+                    }
+            self._pending_events.append(payload)
+
+    async def _read_stdout_payload(self) -> dict[str, Any] | None:
+        stdout = self.process.stdout
+        if stdout is None:
+            await self._raise_if_failed(await self._wait_no_timeout())
+            return None
+        while True:
+            try:
+                line = await asyncio.to_thread(stdout.readline)
+            except (OSError, ValueError):
+                return None
+            if line == "":
+                return None
+            raw_line = line.rstrip("\r\n")
+            if not raw_line:
+                continue
+            self._stdout_tail.append(raw_line + "\n")
+            try:
+                payload = json.loads(raw_line)
+            except json.JSONDecodeError as exc:
+                return {
+                    "type": "diagnostic",
+                    "source": "pi_rpc_transport",
+                    "level": "warning",
+                    "message": f"Pi RPC 输出不是有效 JSON: {exc.msg}",
+                    "raw": raw_line,
+                }
+            if isinstance(payload, dict):
+                return payload
+            return {
+                "type": "diagnostic",
+                "source": "pi_rpc_transport",
+                "level": "warning",
+                "message": "Pi RPC 输出不是 JSON 对象",
+                "raw": raw_line,
+            }
 
     async def _write_packet(self, message: dict[str, Any]) -> None:
         async with self._lock:
@@ -288,11 +356,15 @@ def _build_rpc_command(
     model: str | None = None,
     system_prompt: str = "",
     append_system_prompt: str = "",
+    session_id: str = "",
 ) -> list[str]:
     command_text = str(command or DEFAULT_PI_COMMAND).strip() or DEFAULT_PI_COMMAND
     resolved = resolve_cli_executable(command_text, cwd)
     invocation = build_executable_invocation(resolved) if resolved else [command_text]
     args = [*invocation, "--mode", "rpc"]
+    normalized_session_id = str(session_id or "").strip()
+    if normalized_session_id:
+        args.extend(["--session", normalized_session_id])
     normalized_model = str(model or "").strip()
     if normalized_model:
         args.extend(["--model", normalized_model])

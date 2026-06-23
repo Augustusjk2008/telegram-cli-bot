@@ -42,6 +42,33 @@ def test_completed_turn_increments_once_per_turn(tmp_path: Path):
     assert [turn.linear_index for turn in third.turns] == [1, 2]
 
 
+def test_completed_turn_keeps_existing_session_id_and_marks_missing_binding(tmp_path: Path):
+    store = PiSessionStore(tmp_path / "pi_sessions.json")
+    bound_key = pi_session_key(cwd=str(tmp_path), bot_id=1, user_id=1001, conversation_id="conv-bound")
+    missing_key = pi_session_key(cwd=str(tmp_path), bot_id=1, user_id=1001, conversation_id="conv-missing")
+    store.upsert(PiSessionRecord(key=bound_key, cwd=str(tmp_path), conversation_id="conv-bound", pi_session_id="sess-1"))
+    store.upsert(PiSessionRecord(key=missing_key, cwd=str(tmp_path), conversation_id="conv-missing"))
+
+    bound = store.update_after_completed_turn(
+        bound_key,
+        pi_session_id="",
+        turn_id="turn-1",
+        workspace_history_head="head-1",
+    )
+    missing = store.update_after_completed_turn(
+        missing_key,
+        pi_session_id="",
+        turn_id="turn-1",
+        workspace_history_head="head-1",
+    )
+
+    assert bound.pi_session_id == "sess-1"
+    assert bound.session_binding_status == "bound"
+    assert missing.pi_session_id == ""
+    assert missing.session_binding_status == "missing"
+    assert missing.workspace_history_head == "head-1"
+
+
 def test_degraded_and_discarded_state_persist(tmp_path: Path):
     store = PiSessionStore(tmp_path / "pi_sessions.json")
     key = pi_session_key(cwd=str(tmp_path), bot_id=1, user_id=1001, conversation_id="conv-1")

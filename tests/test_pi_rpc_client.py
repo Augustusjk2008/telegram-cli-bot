@@ -69,6 +69,39 @@ if mode == "wait_input":
         emit({"type": "received", "packet": packet})
     raise SystemExit(0)
 
+if mode == "state_response":
+    for line in sys.stdin:
+        record(line)
+        packet = json.loads(line)
+        if packet.get("type") == "get_state":
+            emit({"type": "startup_event"})
+            emit({
+                "id": packet.get("id"),
+                "type": "response",
+                "command": "get_state",
+                "success": True,
+                "data": {
+                    "sessionId": "pi-sess-1",
+                    "sessionFile": "session.jsonl",
+                    "messageCount": 0,
+                },
+            })
+            raise SystemExit(0)
+
+if mode == "state_error":
+    for line in sys.stdin:
+        record(line)
+        packet = json.loads(line)
+        if packet.get("type") == "get_state":
+            emit({
+                "id": packet.get("id"),
+                "type": "response",
+                "command": "get_state",
+                "success": False,
+                "error": "state failed",
+            })
+            raise SystemExit(0)
+
 if mode == "ignore_abort":
     mark_ready()
     for line in sys.stdin:
@@ -234,6 +267,33 @@ async def test_pi_rpc_client_prompt_adds_text_and_conversation_id(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_pi_rpc_client_get_state_reads_response_before_event_reader(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = await _start_fake_client(tmp_path, monkeypatch, "state_response")
+
+    state = await client.get_state()
+    events = await _collect(client)
+
+    assert state["sessionId"] == "pi-sess-1"
+    assert state["sessionFile"] == "session.jsonl"
+    assert state["messageCount"] == 0
+    assert events == [{"type": "startup_event"}]
+
+
+@pytest.mark.asyncio
+async def test_pi_rpc_client_get_state_error_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = await _start_fake_client(tmp_path, monkeypatch, "state_error")
+
+    with pytest.raises(PiRpcRunError, match="state failed"):
+        await client.get_state()
+
+
+@pytest.mark.asyncio
 async def test_pi_rpc_client_waits_for_lf_before_parsing_stdout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     client = await _start_fake_client(tmp_path, monkeypatch, "half_line")
     stream = client.events().__aiter__()
@@ -370,7 +430,14 @@ async def test_pi_rpc_client_start_uses_default_pi_rpc_command_and_process_kwarg
     monkeypatch.setattr(pi_rpc_client, "build_chat_cli_process_kwargs", lambda: {"creationflags": 123})
     monkeypatch.setattr(pi_rpc_client.subprocess, "Popen", fake_popen)
 
-    await PiRpcClient.start(PiRpcStartRequest(command=None, cwd=tmp_path / ".", model="anthropic/claude-sonnet-4"))
+    await PiRpcClient.start(
+        PiRpcStartRequest(
+            command=None,
+            cwd=tmp_path / ".",
+            model="anthropic/claude-sonnet-4",
+            session_id="pi-sess-1",
+        )
+    )
 
     assert captured["args"] == [
         "cmd.exe",
@@ -379,6 +446,8 @@ async def test_pi_rpc_client_start_uses_default_pi_rpc_command_and_process_kwarg
         "C:/Program Files/Pi/pi.cmd",
         "--mode",
         "rpc",
+        "--session",
+        "pi-sess-1",
         "--model",
         "anthropic/claude-sonnet-4",
     ]

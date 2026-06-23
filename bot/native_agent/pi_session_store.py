@@ -16,6 +16,13 @@ def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _binding_status(value: Any, pi_session_id: str) -> str:
+    normalized = str(value or "").strip()
+    if normalized in {"bound", "missing"}:
+        return normalized
+    return "bound" if str(pi_session_id or "").strip() else "missing"
+
+
 def pi_session_key(*, cwd: str, bot_id: int, user_id: int, conversation_id: str) -> str:
     return f"{get_chat_workspace_key(cwd)}:{int(bot_id)}:{int(user_id)}:{str(conversation_id or '').strip()}"
 
@@ -54,6 +61,7 @@ class PiSessionRecord:
     cwd: str = ""
     conversation_id: str = ""
     pi_session_id: str = ""
+    session_binding_status: str = ""
     session_meta: dict[str, str] = field(default_factory=dict)
     linear_index: int = 0
     workspace_history_head: str = ""
@@ -77,11 +85,13 @@ class PiSessionRecord:
                 str(meta_key): str(meta_value or "").strip()
                 for meta_key, meta_value in raw_meta.items()
             }
+        pi_session_id = str(payload.get("pi_session_id") or "")
         return cls(
             key=str(payload.get("key") or key or ""),
             cwd=str(payload.get("cwd") or ""),
             conversation_id=str(payload.get("conversation_id") or ""),
-            pi_session_id=str(payload.get("pi_session_id") or ""),
+            pi_session_id=pi_session_id,
+            session_binding_status=_binding_status(payload.get("session_binding_status"), pi_session_id),
             session_meta=session_meta,
             linear_index=max(0, int(payload.get("linear_index") or 0)),
             workspace_history_head=str(payload.get("workspace_history_head") or ""),
@@ -97,6 +107,7 @@ class PiSessionRecord:
             "cwd": self.cwd,
             "conversation_id": self.conversation_id,
             "pi_session_id": self.pi_session_id,
+            "session_binding_status": _binding_status(self.session_binding_status, self.pi_session_id),
             "session_meta": {
                 str(key): str(value or "").strip()
                 for key, value in self.session_meta.items()
@@ -118,6 +129,7 @@ class PiSessionRecord:
             "rollback_supported": bool(self.workspace_history_head and not self.degraded),
             "degraded": bool(self.degraded),
             "degraded_reason": self.degraded_reason,
+            "session_binding_status": _binding_status(self.session_binding_status, self.pi_session_id),
         }
 
 
@@ -177,6 +189,7 @@ class PiSessionStore:
                 record.linear_index = max(record.linear_index, existing.linear_index)
                 existing.workspace_history_head = head
             record.pi_session_id = str(pi_session_id or record.pi_session_id or "").strip()
+            record.session_binding_status = _binding_status("", record.pi_session_id)
             record.workspace_history_head = head
             record.last_turn_id = normalized_turn_id
             record.degraded = False
@@ -214,6 +227,7 @@ class PiSessionStore:
                 turn.status = "discarded"
                 turn.discarded_at = now
             record.pi_session_id = ""
+            record.session_binding_status = "missing"
             record.linear_index = 0
             record.workspace_history_head = ""
             record.last_turn_id = ""

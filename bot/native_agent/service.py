@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import suppress
 import json
+import logging
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -62,6 +63,8 @@ SOLO_NATIVE_AGENT_SYSTEM_PROMPT = """Solo native agent mode:
 - Do not fabricate tool results. If blocked, report the exact blocker and what user action is needed.
 - For code changes, run appropriate checks before claiming completion. If checks cannot run, state why.
 - Keep final replies concise and include changed files plus verification status."""
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_execution_mode(value: Any, profile: BotProfile | None = None) -> str:
@@ -348,15 +351,19 @@ class NativeAgentService:
         linear_index = int((record.linear_index if record else 0) or 0)
         degraded = bool(record.degraded) if record is not None else False
         degraded_reason = str(record.degraded_reason or "") if record is not None else ""
+        binding_status = str(getattr(record, "session_binding_status", "") or "") if record is not None else ""
         if runtime is not None:
             head = head or str(getattr(runtime.state, "workspace_history_head", "") or "").strip()
             linear_index = max(linear_index, int(getattr(runtime.state, "linear_index", 0) or 0))
+            if not binding_status:
+                binding_status = "bound" if str(getattr(runtime.state, "native_session_id", "") or "").strip() else "missing"
         return {
             "workspace_history_head": head,
             "linear_index": linear_index,
             "rollback_supported": bool(head and not degraded),
             "degraded": degraded,
             "degraded_reason": degraded_reason,
+            "session_binding_status": binding_status or "missing",
         }
 
     async def rollback_workspace_history(
@@ -489,6 +496,7 @@ class NativeAgentService:
         pi_record: PiSessionRecord | None = None
         workspace_history_enabled = False
         workspace_history_before_head = ""
+        startup_trace_events: list[dict[str, Any]] = []
 
         try:
             if not config.NATIVE_AGENT_ENABLED:
@@ -680,6 +688,13 @@ class NativeAgentService:
                 self._seed_runtime_from_record(active_runtime, pi_record)
                 native_session_id = active_runtime.state.native_session_id
                 turn_state.native_session_id = native_session_id
+            if active_runtime is not None and not native_session_id:
+                captured_state = await active_runtime.capture_state()
+                captured_session_id = str(getattr(active_runtime.state, "native_session_id", "") or "").strip()
+                if captured_session_id:
+                    remember_native_session(captured_session_id)
+                else:
+                    logger.warning("Pi get_state 未返回 sessionId: %s", captured_state)
             if workspace_history_enabled and pi_record is not None:
                 before_turn = await self._workspace_history.checkpoint(
                     active_runtime,
@@ -718,13 +733,14 @@ class NativeAgentService:
                 **({"cluster_run_id": normalized_cluster_run_id} if normalized_cluster_run_id else {}),
             }
             for warning in preflight_warnings:
-                trace_event = {
+                startup_trace_events.append({
                     "kind": "warning",
                     "source": "native_agent",
                     "summary": str(warning.get("message") or "Pi preflight warning"),
                     "preflight_key": str(warning.get("key") or ""),
                     "fix": str(warning.get("fix") or ""),
-                }
+                })
+            for trace_event in startup_trace_events:
                 live_trace.append(trace_event)
                 persistence_buffer.queue_trace(trace_event)
                 yield {"type": "trace", "event": trace_event}
@@ -787,6 +803,18 @@ class NativeAgentService:
                         raise
                     discovered_session_id = extract_native_session_id(raw_event, provider="pi")
                     if discovered_session_id:
+                        previous_session_id = native_session_id
+                        if previous_session_id and discovered_session_id != previous_session_id:
+                            trace_event = {
+                                "kind": "warning",
+                                "source": "native_agent",
+                                "summary": "Pi raw event sessionId 与当前绑定不一致，已切换到 raw event sessionId",
+                                "previous_session_id": previous_session_id,
+                                "next_session_id": discovered_session_id,
+                            }
+                            live_trace.append(trace_event)
+                            persistence_buffer.queue_trace(trace_event)
+                            yield {"type": "trace", "event": trace_event}
                         remember_native_session(discovered_session_id)
                         active_runtime.state.native_session_id = discovered_session_id
                         yield {
@@ -944,7 +972,9 @@ class NativeAgentService:
                             pi_record.linear_index,
                         )
                 else:
-                    pi_record.pi_session_id = native_session_id
+                    if native_session_id:
+                        pi_record.pi_session_id = native_session_id
+                    pi_record.session_binding_status = "bound" if pi_record.pi_session_id else "missing"
                     pi_record.session_meta = dict(desired_meta)
                     pi_record = self._pi_session_store.upsert(pi_record)
             if isinstance(done_message.get("meta"), dict):
