@@ -30,6 +30,18 @@ function EntryBody({ entry }: { entry: NativeAgentTranscriptEntry }) {
   );
 }
 
+function shouldRenderEntrySummaryAsMarkdown(entry: NativeAgentTranscriptEntry) {
+  return entry.kind === "process" && entry.trace?.kind === "commentary";
+}
+
+function stripThinkingBlocks(value: string) {
+  return value
+    .replace(/<thinking\b[^>]*>[\s\S]*?<\/thinking>/gi, "")
+    .replace(/<thinking\b[^>]*>[\s\S]*$/gi, "")
+    .replace(/<\/thinking>/gi, "")
+    .trim();
+}
+
 function stringValue(value: unknown) {
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "boolean") return String(value);
@@ -257,11 +269,20 @@ export function NativeAgentTranscript({
       : "border-t border-[var(--workbench-hairline)] py-1";
 
     if (entry.kind === "process" || entry.kind === "error" || entry.kind === "cancelled") {
+      const rawSummary = compact(entry.summary, entry.label);
+      const summary = stripThinkingBlocks(rawSummary);
+      if (!summary) {
+        return null;
+      }
       return (
         <div key={entry.id} className={rowClassName}>
-          <div className={entry.kind === "error" ? "whitespace-pre-wrap break-words text-red-700" : "whitespace-pre-wrap break-words text-[var(--text)]"}>
-            {compact(entry.summary, entry.label)}
-          </div>
+          {shouldRenderEntrySummaryAsMarkdown(entry) ? (
+            <ChatMarkdownMessage content={summary} onFileLinkClick={onFileLinkClick} />
+          ) : (
+            <div className={entry.kind === "error" ? "whitespace-pre-wrap break-words text-red-700" : "whitespace-pre-wrap break-words text-[var(--text)]"}>
+              {summary}
+            </div>
+          )}
         </div>
       );
     }
@@ -288,6 +309,8 @@ export function NativeAgentTranscript({
       </details>
     );
   };
+
+  const visibleResultText = stripThinkingBlocks(resultText);
 
   return (
     <div data-testid="native-agent-transcript" className="min-w-0 text-sm text-[var(--text)]">
@@ -322,12 +345,12 @@ export function NativeAgentTranscript({
         );
       })}
 
-      {resultText.trim() ? (
+      {visibleResultText ? (
         <div data-testid="native-agent-final-result" className="border-t border-[var(--workbench-hairline)] pt-2">
           {state === "done" ? (
-            <ChatMarkdownMessage content={resultText} onFileLinkClick={onFileLinkClick} />
+            <ChatMarkdownMessage content={visibleResultText} onFileLinkClick={onFileLinkClick} />
           ) : (
-            <ChatPlainTextMessage content={resultText} className={state === "error" ? "text-red-700" : "text-[var(--text)]"} />
+            <ChatPlainTextMessage content={visibleResultText} className={state === "error" ? "text-red-700" : "text-[var(--text)]"} />
           )}
         </div>
       ) : null}

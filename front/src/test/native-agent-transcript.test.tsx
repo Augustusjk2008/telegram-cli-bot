@@ -64,6 +64,51 @@ test("native transcript groups sequential tool, result, and event entries", asyn
   expect(screen.getByText("收尾")).toBeInTheDocument();
 });
 
+test("native transcript renders commentary summaries as markdown without thinking blocks", () => {
+  const onFileLinkClick = vi.fn();
+  render(
+    <NativeAgentTranscript
+      entries={[
+        entry({
+          id: "process-md",
+          seq: 1,
+          kind: "process",
+          label: "过程",
+          summary: "<thinking>internal chain of thought</thinking>\n\n## 计划\n\n- **读取文件**\n- 打开 [README](./README.md)",
+          trace: { kind: "commentary", summary: "<thinking>internal chain of thought</thinking>\n\n## 计划\n\n- **读取文件**\n- 打开 [README](./README.md)", source: "native_agent" },
+        }),
+      ]}
+      resultText=""
+      onFileLinkClick={onFileLinkClick}
+    />,
+  );
+
+  const transcript = screen.getByTestId("native-agent-transcript");
+  expect(transcript).not.toHaveTextContent("internal chain of thought");
+  expect(transcript).not.toHaveTextContent("thinking");
+  expect(screen.getByRole("heading", { level: 2, name: "计划" })).toBeInTheDocument();
+  expect(screen.getByText("读取文件").tagName).toBe("STRONG");
+  expect(screen.getByRole("link", { name: "README" })).toHaveAttribute("href", "./README.md");
+  expect(screen.queryByText("## 计划")).not.toBeInTheDocument();
+});
+
+
+test("native transcript hides thinking blocks from final assistant markdown", () => {
+  render(
+    <NativeAgentTranscript
+      entries={[]}
+      resultText="<thinking>internal final reasoning</thinking>\n\n**完成**"
+      state="done"
+    />,
+  );
+
+  const result = screen.getByTestId("native-agent-final-result");
+  expect(result).not.toHaveTextContent("internal final reasoning");
+  expect(result).not.toHaveTextContent("thinking");
+  expect(result).toHaveTextContent("完成");
+  expect(screen.getByText("完成").tagName).toBe("STRONG");
+});
+
 test("native transcript keeps commentary outside event groups and splits surrounding events", () => {
   render(
     <NativeAgentTranscript

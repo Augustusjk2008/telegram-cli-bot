@@ -39,6 +39,7 @@ from bot.assistant.home import bootstrap_assistant_home
 from bot.assistant.runtime import AssistantRunRequest
 from bot.assistant.state import save_assistant_runtime_state
 from bot.chat_identity import chat_session_user_id
+from bot.cluster.config import BotClusterConfig
 from bot.manager import MultiBotManager
 from bot.messages import msg
 from bot.models import AgentProfile, BotProfile, UserSession
@@ -289,6 +290,55 @@ def test_create_native_conversation_allows_child_agent(web_manager: MultiBotMana
         execution_mode="native_agent",
     )
     assert listed["items"][0]["id"] == result["conversation"]["id"]
+
+
+def test_create_native_main_conversation_syncs_cluster_child_agents(web_manager: MultiBotManager, tmp_path: Path):
+    profile = web_manager.main_profile
+    profile.working_dir = str(tmp_path)
+    profile.cluster = BotClusterConfig(enabled=True)
+    profile.agents = [
+        AgentProfile(id="reviewer", name="审查专家", system_prompt="先列风险"),
+        AgentProfile(id="tester", name="测试专家", system_prompt="优先跑测试"),
+    ]
+    main_session = get_session_for_alias(web_manager, "main", 1001)
+    main_session.working_dir = str(tmp_path)
+    _profile, _agent, reviewer_session = get_chat_session_for_alias(web_manager, "main", 1001, "reviewer")
+    _profile, _agent, tester_session = get_chat_session_for_alias(web_manager, "main", 1001, "tester")
+    with reviewer_session._lock:
+        reviewer_session.active_conversation_id = "conv-old-reviewer"
+        reviewer_session.native_agent_session_id = "native-old-reviewer"
+    with tester_session._lock:
+        tester_session.active_conversation_id = "conv-old-tester"
+        tester_session.native_agent_session_id = "native-old-tester"
+    reviewer_session.persist()
+    tester_session.persist()
+
+    result = create_conversation(web_manager, "main", 1001, "原生主任务", execution_mode="native_agent")
+
+    assert result["conversation"]["agent_id"] == "main"
+    assert result["conversation"]["execution_mode"] == "native_agent"
+    reviewer_listed = list_conversations(
+        web_manager,
+        "main",
+        1001,
+        agent_id="reviewer",
+        execution_mode="native_agent",
+    )
+    tester_listed = list_conversations(
+        web_manager,
+        "main",
+        1001,
+        agent_id="tester",
+        execution_mode="native_agent",
+    )
+    assert len(reviewer_listed["items"]) == 1
+    assert len(tester_listed["items"]) == 1
+    assert reviewer_listed["items"][0]["execution_mode"] == "native_agent"
+    assert tester_listed["items"][0]["execution_mode"] == "native_agent"
+    assert reviewer_session.active_conversation_id == reviewer_listed["items"][0]["id"]
+    assert tester_session.active_conversation_id == tester_listed["items"][0]["id"]
+    assert reviewer_session.native_agent_session_id is None
+    assert tester_session.native_agent_session_id is None
 
 
 @pytest.fixture

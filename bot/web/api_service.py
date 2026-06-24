@@ -2455,9 +2455,12 @@ def _create_cluster_child_conversations(
     alias: str,
     user_id: int,
     profile: BotProfile,
+    *,
+    execution_mode: str = "",
 ) -> None:
     if not profile.cluster.enabled:
         return
+    resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     for agent in profile.normalized_agents():
         if agent.id == "main" or not agent.enabled:
             continue
@@ -2470,7 +2473,7 @@ def _create_cluster_child_conversations(
         if agent.id == "main" or not agent.enabled:
             continue
         _profile, _agent, child_session = get_chat_session_for_alias(manager, alias, user_id, agent.id)
-        _create_agent_conversation(profile, child_session)
+        _create_agent_conversation(profile, child_session, execution_mode=resolved_execution_mode)
 
 
 def create_conversation(
@@ -2488,8 +2491,14 @@ def create_conversation(
     if is_processing:
         _raise(409, "conversation_switch_blocked", "当前任务运行中，先终止或等待完成")
 
-    if session.agent_id == "main" and resolved_execution_mode != NATIVE_AGENT_PROVIDER:
-        _create_cluster_child_conversations(manager, alias, user_id, profile)
+    if session.agent_id == "main":
+        _create_cluster_child_conversations(
+            manager,
+            alias,
+            user_id,
+            profile,
+            execution_mode=resolved_execution_mode,
+        )
     store, conversation_id = _create_agent_conversation(profile, session, title=title, execution_mode=resolved_execution_mode)
     return {
         "conversation": {
