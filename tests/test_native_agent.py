@@ -1587,6 +1587,7 @@ class FakePiRuntime:
         workspace_results: dict[str, list[dict[str, object]]] | None = None,
         capture_state_payload: dict[str, object] | None = None,
         capture_state_error: BaseException | None = None,
+        prompt_error: BaseException | None = None,
     ) -> None:
         self.events_payload = list(events or [])
         self.error = error
@@ -1606,6 +1607,7 @@ class FakePiRuntime:
         self.capture_state_payload = dict(capture_state_payload or {})
         self.capture_state_error = capture_state_error
         self.capture_state_calls = 0
+        self.prompt_error = prompt_error
         self.state = type("State", (), {
             "native_session_id": "",
             "workspace_history_head": "head-1",
@@ -1627,6 +1629,8 @@ class FakePiRuntime:
         })
         if self.started is not None:
             self.started.set()
+        if self.prompt_error is not None:
+            raise self.prompt_error
 
     async def capture_state(self) -> dict[str, object]:
         self.capture_state_calls += 1
@@ -1687,16 +1691,27 @@ class FakePiRuntime:
 
 
 class FakePiRuntimeRegistry:
-    def __init__(self, runtime: FakePiRuntime | None = None, *, error: BaseException | None = None) -> None:
+    def __init__(
+        self,
+        runtime: FakePiRuntime | None = None,
+        *,
+        error: BaseException | None = None,
+        errors: list[BaseException] | None = None,
+    ) -> None:
         self.runtime = runtime
         self.error = error
+        self.errors = list(errors or [])
         self.requests: list[object] = []
+        self.closed_runtimes: list[FakePiRuntime] = []
         self.shutdown_called = False
 
     async def open_or_create(self, request):
+        self.requests.append(request)
+        if self.errors:
+            error = self.errors.pop(0)
+            raise error
         if self.error is not None:
             raise self.error
-        self.requests.append(request)
         if self.runtime is not None:
             self.runtime.state.agent_id = str(getattr(request, "agent_id", "") or "")
             self.runtime.state.reasoning_effort = str(getattr(request, "reasoning_effort", "") or "")
@@ -1711,6 +1726,10 @@ class FakePiRuntimeRegistry:
         self.shutdown_called = True
         if self.runtime is not None:
             await self.runtime.close()
+
+    async def close_runtime(self, runtime: FakePiRuntime) -> None:
+        self.closed_runtimes.append(runtime)
+        await runtime.close()
 
 
 @pytest.mark.asyncio
@@ -1727,17 +1746,19 @@ async def test_native_agent_service_shutdown_closes_pi_runtimes():
 
 
 @pytest.mark.asyncio
-async def test_native_agent_service_uses_pi_runtime_and_emits_runtime_meta(
+async def test_native_agent_service_reuses_pi_runtime_when_refreshable_metadata_changes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
     from bot import config
+    from bot.native_agent import config_store
 
     monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
     monkeypatch.setattr(config, "NATIVE_AGENT_PI_COMMAND", "pi")
     models_path = tmp_path / "models.json"
     models_path.write_text("{}", encoding="utf-8")
     monkeypatch.setenv("PI_AGENT_MODELS", str(models_path))
+    monkeypatch.setattr(config, "NATIVE_AGENT_REASONING_EFFORT", "high")
     runtime = FakePiRuntime([
         {"type": "agent_start", "sessionId": "pi-sess-1"},
         {"type": "message_update", "sessionId": "pi-sess-1", "message": {"role": "assistant", "content": "Pi 回复"}},
@@ -1769,13 +1790,177 @@ async def test_native_agent_service_uses_pi_runtime_and_emits_runtime_meta(
     assert done["session"]["session_ids"]["native_agent_session_id"] == "pi-sess-1"
     assert session.native_agent_session_id == "pi-sess-1"
     assert session.native_agent_server_key is None
-    assert runtime.prompts == [{"text": "/reviewer 你好", "conversation_id": "", "reasoning_effort": ""}]
+    assert runtime.prompts == [{"text": "/reviewer 你好", "conversation_id": "", "reasoning_effort": "high"}]
     assert registry.requests[0].runtime_key.startswith("1:1:")
     assert registry.requests[0].command == "pi"
     assert registry.requests[0].agent_id == "reviewer"
+    assert registry.requests[0].reasoning_effort == "high"
     assert registry.requests[0].system_prompt == ""
     assert registry.requests[0].append_system_prompt == ""
     assert registry.requests[0].config_fingerprint
+
+    config_store.save_native_agent_config({"system_prompt": "刷新后提示词"})
+    second_events = [
+        event async for event in service.stream_chat(
+            profile=profile,
+            session=session,
+            user_text="继续",
+            prompt_text="继续",
+            history_service=history,
+        )
+    ]
+
+    second_meta = next(event for event in second_events if event["type"] == "meta")
+    second_done = next(event for event in second_events if event["type"] == "done")
+    assert second_meta["native_session_reused"] is True
+    assert second_done["native_session_id"] == "pi-sess-1"
+    assert registry.requests[1].native_session_id == "pi-sess-1"
+    assert registry.requests[1].system_prompt == "刷新后提示词"
+    assert registry.requests[1].reasoning_effort == "high"
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_clears_binding_and_recreates_when_session_is_invalid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot import config
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    runtime = FakePiRuntime([
+        {"type": "agent_start", "sessionId": "pi-sess-new"},
+        {"type": "message_update", "sessionId": "pi-sess-new", "message": {"role": "assistant", "content": "重建后回复"}},
+        {"type": "turn_end", "sessionId": "pi-sess-new"},
+    ])
+    registry = FakePiRuntimeRegistry(runtime, errors=[PiRpcRunError("failed to resume: session not found", returncode=1)])
+    service = NativeAgentService()
+    service._runtime_registry = registry
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+    old_handle = history.start_turn(profile=profile, session=session, user_text="旧问题", native_provider="native_agent")
+    history.complete_turn(old_handle, content="旧回复", completion_state="completed", native_session_id="pi-sess-old")
+    history.store.set_conversation_native_session(old_handle.conversation_id, "pi-sess-old", {"cwd": str(tmp_path), "model_id": "", "pi_agent": ""})
+
+    events = [
+        event async for event in service.stream_chat(
+            profile=profile,
+            session=session,
+            user_text="继续",
+            prompt_text="继续",
+            history_service=history,
+        )
+    ]
+
+    done = next(event for event in events if event["type"] == "done")
+    assert registry.requests[1].native_session_id == ""
+    assert done["native_session_id"] == "pi-sess-new"
+    assert history.store.get_conversation_native_session(done["message"]["conversation_id"])["session_id"] == "pi-sess-new"
+    assert session.native_agent_session_id == "pi-sess-new"
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_keeps_binding_and_evicts_runtime_after_transient_502(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot import config
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    runtime = FakePiRuntime(
+        prompt_error=PiRpcRunError("Pi RPC prompt 失败: 502 status code (no body)", returncode=1),
+    )
+    registry = FakePiRuntimeRegistry(runtime)
+    service = NativeAgentService()
+    service._runtime_registry = registry
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+    old_handle = history.start_turn(profile=profile, session=session, user_text="旧问题", native_provider="native_agent")
+    history.complete_turn(old_handle, content="旧回复", completion_state="completed", native_session_id="pi-sess-old")
+    history.store.set_conversation_native_session(
+        old_handle.conversation_id,
+        "pi-sess-old",
+        {"cwd": str(tmp_path), "model_id": "", "pi_agent": "", "reasoning_effort": ""},
+    )
+
+    events = [
+        event async for event in service.stream_chat(
+            profile=profile,
+            session=session,
+            user_text="继续",
+            prompt_text="继续",
+            history_service=history,
+        )
+    ]
+
+    error = next(event for event in events if event["type"] == "error")
+    conversation_native = history.store.get_conversation_native_session(old_handle.conversation_id)
+
+    assert "502 status code" in error["message"]
+    assert conversation_native["session_id"] == "pi-sess-old"
+    assert session.native_agent_session_id == "pi-sess-old"
+    assert registry.closed_runtimes == [runtime]
+    assert runtime.closed is True
+
+
+@pytest.mark.asyncio
+async def test_native_agent_service_rebuilds_runtime_and_resumes_after_transient_502(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot import config
+
+    monkeypatch.setattr(config, "NATIVE_AGENT_ENABLED", True)
+    failed_runtime = FakePiRuntime(
+        prompt_error=PiRpcRunError("Bad Gateway: upstream service temporarily unavailable", returncode=1),
+    )
+    resumed_runtime = FakePiRuntime([
+        {"type": "agent_start", "sessionId": "pi-sess-old"},
+        {"type": "message_update", "sessionId": "pi-sess-old", "message": {"role": "assistant", "content": "继续完成"}},
+        {"type": "turn_end", "sessionId": "pi-sess-old"},
+    ])
+    registry = FakePiRuntimeRegistry(failed_runtime)
+    service = NativeAgentService()
+    service._runtime_registry = registry
+    profile = BotProfile(alias="main", working_dir=str(tmp_path))
+    session = UserSession(bot_id=1, bot_alias="main", user_id=1001, working_dir=str(tmp_path))
+    history = ChatHistoryService(ChatStore(tmp_path))
+    old_handle = history.start_turn(profile=profile, session=session, user_text="旧问题", native_provider="native_agent")
+    history.complete_turn(old_handle, content="旧回复", completion_state="completed", native_session_id="pi-sess-old")
+    history.store.set_conversation_native_session(
+        old_handle.conversation_id,
+        "pi-sess-old",
+        {"cwd": str(tmp_path), "model_id": "", "pi_agent": "", "reasoning_effort": ""},
+    )
+
+    first_events = await _collect_native_stream(service.stream_chat(
+        profile=profile,
+        session=session,
+        user_text="继续",
+        prompt_text="继续",
+        history_service=history,
+    ))
+    registry.runtime = resumed_runtime
+    second_events = await _collect_native_stream(service.stream_chat(
+        profile=profile,
+        session=session,
+        user_text="继续",
+        prompt_text="继续",
+        history_service=history,
+    ))
+
+    first_error = next(event for event in first_events if event["type"] == "error")
+    second_done = next(event for event in second_events if event["type"] == "done")
+    conversation_native = history.store.get_conversation_native_session(old_handle.conversation_id)
+
+    assert "Bad Gateway" in first_error["message"]
+    assert registry.requests[0].native_session_id == "pi-sess-old"
+    assert registry.requests[1].native_session_id == "pi-sess-old"
+    assert resumed_runtime.prompts[0]["conversation_id"] == "pi-sess-old"
+    assert second_done["native_session_id"] == "pi-sess-old"
+    assert second_done["output"] == "继续完成"
+    assert conversation_native["session_id"] == "pi-sess-old"
 
 
 @pytest.mark.asyncio
@@ -1990,7 +2175,7 @@ async def test_native_agent_service_uses_admin_native_agent_system_prompt(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_native_agent_service_refreshes_pi_session_when_global_system_prompt_changes(
+async def test_native_agent_service_reuses_pi_session_when_global_system_prompt_changes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -2060,8 +2245,8 @@ async def test_native_agent_service_refreshes_pi_session_when_global_system_prom
     conversation_native = history.store.get_conversation_native_session(done["message"]["conversation_id"])
 
     assert registry.requests[0].system_prompt == "新全局提示词"
-    assert registry.requests[0].native_session_id == ""
-    assert runtime.prompts[0]["conversation_id"] == ""
+    assert registry.requests[0].native_session_id == "sess-old"
+    assert runtime.prompts[0]["conversation_id"] == "sess-old"
     assert done["native_session_id"] == "sess-new"
     assert reloaded is not None
     assert reloaded.pi_session_id == "sess-new"
@@ -2628,7 +2813,7 @@ async def test_native_agent_service_workspace_history_timeout_marks_degraded_wit
 
 
 @pytest.mark.asyncio
-async def test_native_agent_service_does_not_reuse_pi_store_session_after_meta_mismatch(
+async def test_native_agent_service_reuses_pi_store_session_after_meta_mismatch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -2693,7 +2878,7 @@ async def test_native_agent_service_does_not_reuse_pi_store_session_after_meta_m
     reloaded = PiSessionStore().get(key)
     conversation_native = history.store.get_conversation_native_session(done["message"]["conversation_id"])
 
-    assert runtime.prompts[0]["conversation_id"] == ""
+    assert runtime.prompts[0]["conversation_id"] == "sess-old"
     assert runtime.prompts[0]["text"] == "/reviewer 继续"
     assert done["native_session_id"] == "sess-new"
     assert reloaded is not None
@@ -2706,7 +2891,7 @@ async def test_native_agent_service_does_not_reuse_pi_store_session_after_meta_m
     }
     assert conversation_native["session_id"] == "sess-new"
     assert conversation_native["meta"]["reasoning_effort"] == "high"
-    assert history.store.get_turn_workspace_history(old_handle.turn_id)["workspace_history_head"] == ""
+    assert history.store.get_turn_workspace_history(old_handle.turn_id)["workspace_history_head"] == "head-old"
 
 
 @pytest.mark.asyncio

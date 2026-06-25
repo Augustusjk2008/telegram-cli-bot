@@ -80,16 +80,19 @@ class PiSessionRuntime:
         return (
             self.is_running()
             and self.state.runtime_key == request.runtime_key
+            and self.state.owner_key == request.owner_key
             and str(Path(self.state.cwd or ".").expanduser().resolve()) == str(Path(request.cwd or ".").expanduser().resolve())
-            and self.state.command == str(request.command or "").strip()
-            and self.state.model == str(request.model or "").strip()
-            and self.state.agent_id == str(request.agent_id or "").strip()
-            and self.state.reasoning_effort == str(request.reasoning_effort or "").strip()
-            and self.state.system_prompt == str(request.system_prompt or "").strip()
-            and self.state.append_system_prompt == str(request.append_system_prompt or "").strip()
-            and self.state.config_fingerprint == str(request.config_fingerprint or "").strip()
-            and _normalize_env(self.state.env) == _normalize_env(request.env)
         )
+
+    def refresh_from_request(self, request: PiSessionRuntimeRequest) -> None:
+        self.state.command = str(request.command or "").strip()
+        self.state.model = str(request.model or "").strip()
+        self.state.agent_id = str(request.agent_id or "").strip()
+        self.state.reasoning_effort = str(request.reasoning_effort or "").strip()
+        self.state.system_prompt = str(request.system_prompt or "").strip()
+        self.state.append_system_prompt = str(request.append_system_prompt or "").strip()
+        self.state.config_fingerprint = str(request.config_fingerprint or "").strip()
+        self.state.env = _normalize_env(request.env)
 
     async def prompt(self, text: str, *, conversation_id: str = "") -> None:
         self.state.processing = True
@@ -203,6 +206,7 @@ class PiSessionRuntimeRegistry:
         await self._close_owner_runtimes_except(normalized.owner_key, normalized.runtime_key)
         current = self._by_key.get(normalized.runtime_key)
         if current is not None and current.matches(normalized):
+            current.refresh_from_request(normalized)
             if normalized.native_session_id and not current.state.native_session_id:
                 current.state.native_session_id = normalized.native_session_id
             return current

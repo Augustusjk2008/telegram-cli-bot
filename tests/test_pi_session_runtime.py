@@ -68,148 +68,81 @@ def _runtime(*, client: FakeClient, reasoning_effort: str = "high") -> PiSession
     )
 
 
-def test_runtime_match_rejects_reasoning_effort_change():
+def test_runtime_match_accepts_refreshable_metadata_change():
+    runtime = _runtime(client=FakeClient([]), reasoning_effort="high")
+    runtime.state.command = "pi-old"
+    runtime.state.model = "anthropic/claude-sonnet-4"
+    runtime.state.agent_id = "reviewer"
+    runtime.state.reasoning_effort = "high"
+    runtime.state.system_prompt = "全局提示"
+    runtime.state.append_system_prompt = "solo prompt"
+    runtime.state.config_fingerprint = "old"
+    runtime.state.env = {"TCB_CLUSTER_RUN_ID": "clr_old"}
+
+    request = PiSessionRuntimeRequest(
+        runtime_key="1:1:conv-1",
+        owner_key="1:1",
+        conversation_id="conv-1",
+        cwd="C:/repo",
+        command="pi-new",
+        model="anthropic/claude-haiku-3",
+        agent_id="reviewer",
+        reasoning_effort="medium",
+        system_prompt="新全局提示",
+        append_system_prompt="solo prompt v2",
+        config_fingerprint="new",
+        env={"TCB_CLUSTER_RUN_ID": "clr_new"},
+    )
+
+    assert runtime.matches(request) is True
+
+
+def test_runtime_match_rejects_owner_key_change():
     runtime = _runtime(client=FakeClient([]), reasoning_effort="high")
 
     assert runtime.matches(PiSessionRuntimeRequest(
         runtime_key="1:1:conv-1",
-        owner_key="1:1",
+        owner_key="1:1:reviewer",
         conversation_id="conv-1",
         cwd="C:/repo",
         command="pi",
         model="anthropic/claude-sonnet-4",
         agent_id="reviewer",
         reasoning_effort="high",
-    )) is True
-    assert runtime.matches(PiSessionRuntimeRequest(
+    )) is False
+
+
+def test_runtime_refresh_from_request_updates_metadata():
+    runtime = _runtime(client=FakeClient([]), reasoning_effort="high")
+    runtime.state.command = "pi-old"
+    runtime.state.model = "anthropic/claude-haiku-3"
+    runtime.state.agent_id = "main"
+    runtime.state.reasoning_effort = "high"
+    runtime.state.system_prompt = "旧提示"
+    runtime.state.append_system_prompt = "旧追加"
+    runtime.state.config_fingerprint = "old"
+    runtime.state.env = {"TCB_CLUSTER_RUN_ID": "clr_old"}
+
+    runtime.refresh_from_request(PiSessionRuntimeRequest(
         runtime_key="1:1:conv-1",
         owner_key="1:1",
         conversation_id="conv-1",
         cwd="C:/repo",
-        command="pi",
+        command="pi-new",
         model="anthropic/claude-sonnet-4",
         agent_id="reviewer",
         reasoning_effort="medium",
-    )) is False
-
-
-def test_runtime_match_rejects_append_system_prompt_change():
-    runtime = _runtime(client=FakeClient([]), reasoning_effort="high")
-    runtime.state.append_system_prompt = "solo prompt"
-
-    assert runtime.matches(PiSessionRuntimeRequest(
-        runtime_key="1:1:conv-1",
-        owner_key="1:1",
-        conversation_id="conv-1",
-        cwd="C:/repo",
-        command="pi",
-        model="anthropic/claude-sonnet-4",
-        agent_id="reviewer",
-        reasoning_effort="high",
-        append_system_prompt="solo prompt",
-    )) is True
-    assert runtime.matches(PiSessionRuntimeRequest(
-        runtime_key="1:1:conv-1",
-        owner_key="1:1",
-        conversation_id="conv-1",
-        cwd="C:/repo",
-        command="pi",
-        model="anthropic/claude-sonnet-4",
-        agent_id="reviewer",
-        reasoning_effort="high",
-        append_system_prompt="",
-    )) is False
-
-
-def test_runtime_match_rejects_system_prompt_change():
-    runtime = _runtime(client=FakeClient([]), reasoning_effort="high")
-    runtime.state.system_prompt = "全局提示"
-
-    assert runtime.matches(PiSessionRuntimeRequest(
-        runtime_key="1:1:conv-1",
-        owner_key="1:1",
-        conversation_id="conv-1",
-        cwd="C:/repo",
-        command="pi",
-        model="anthropic/claude-sonnet-4",
-        agent_id="reviewer",
-        reasoning_effort="high",
-        system_prompt="全局提示",
-    )) is True
-    assert runtime.matches(PiSessionRuntimeRequest(
-        runtime_key="1:1:conv-1",
-        owner_key="1:1",
-        conversation_id="conv-1",
-        cwd="C:/repo",
-        command="pi",
-        model="anthropic/claude-sonnet-4",
-        agent_id="reviewer",
-        reasoning_effort="high",
-        system_prompt="",
-    )) is False
-
-
-def test_runtime_match_rejects_env_change():
-    runtime = _runtime(client=FakeClient([]), reasoning_effort="high")
-    runtime.state.env = {"TCB_CLUSTER_RUN_ID": "clr_old"}
-
-    assert runtime.matches(PiSessionRuntimeRequest(
-        runtime_key="1:1:conv-1",
-        owner_key="1:1",
-        conversation_id="conv-1",
-        cwd="C:/repo",
-        command="pi",
-        model="anthropic/claude-sonnet-4",
-        agent_id="reviewer",
-        reasoning_effort="high",
-        env={"TCB_CLUSTER_RUN_ID": "clr_old"},
-    )) is True
-    assert runtime.matches(PiSessionRuntimeRequest(
-        runtime_key="1:1:conv-1",
-        owner_key="1:1",
-        conversation_id="conv-1",
-        cwd="C:/repo",
-        command="pi",
-        model="anthropic/claude-sonnet-4",
-        agent_id="reviewer",
-        reasoning_effort="high",
-        env={"TCB_CLUSTER_RUN_ID": "clr_new"},
-    )) is False
-    assert runtime.matches(PiSessionRuntimeRequest(
-        runtime_key="1:1:conv-1",
-        owner_key="1:1",
-        conversation_id="conv-1",
-        cwd="C:/repo",
-        command="pi",
-        model="anthropic/claude-sonnet-4",
-        agent_id="reviewer",
-        reasoning_effort="high",
-    )) is False
-
-
-def test_runtime_match_rejects_config_fingerprint_change():
-    runtime = _runtime(client=FakeClient([]), reasoning_effort="high")
-    runtime.state.config_fingerprint = "old"
-
-    assert runtime.matches(PiSessionRuntimeRequest(
-        runtime_key="1:1:conv-1",
-        owner_key="1:1",
-        conversation_id="conv-1",
-        cwd="C:/repo",
-        command="pi",
-        model="anthropic/claude-sonnet-4",
-        agent_id="reviewer",
-        reasoning_effort="high",
-        config_fingerprint="old",
-    )) is True
-    assert runtime.matches(PiSessionRuntimeRequest(
-        runtime_key="1:1:conv-1",
-        owner_key="1:1",
-        conversation_id="conv-1",
-        cwd="C:/repo",
-        command="pi",
-        model="anthropic/claude-sonnet-4",
-        agent_id="reviewer",
-        reasoning_effort="high",
+        system_prompt="新提示",
+        append_system_prompt="新追加",
         config_fingerprint="new",
-    )) is False
+        env={"TCB_CLUSTER_RUN_ID": "clr_new"},
+    ))
+
+    assert runtime.state.command == "pi-new"
+    assert runtime.state.model == "anthropic/claude-sonnet-4"
+    assert runtime.state.agent_id == "reviewer"
+    assert runtime.state.reasoning_effort == "medium"
+    assert runtime.state.system_prompt == "新提示"
+    assert runtime.state.append_system_prompt == "新追加"
+    assert runtime.state.config_fingerprint == "new"
+    assert runtime.state.env == {"TCB_CLUSTER_RUN_ID": "clr_new"}

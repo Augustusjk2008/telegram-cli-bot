@@ -65,6 +65,36 @@ SOLO_NATIVE_AGENT_SYSTEM_PROMPT = """Solo native agent mode:
 
 logger = logging.getLogger(__name__)
 
+_PI_SESSION_INVALID_MARKERS = (
+    "session not found",
+    "session id not found",
+    "invalid session",
+    "no such session",
+    "not a valid session",
+    "session expired",
+    "could not resume",
+    "resume failed",
+    "failed to resume",
+    "cannot resume",
+    "conversation not found",
+    "not authenticated",
+    "authentication failed",
+    "unauthorized",
+    "forbidden",
+    "invalid api key",
+    "api key invalid",
+    "invalid credentials",
+)
+
+_PI_TRANSIENT_UPSTREAM_MARKERS = (
+    "502 status code",
+    "status code 502",
+    "status code: 502",
+    "http 502",
+    "bad gateway",
+    "upstream service temporarily unavailable",
+)
+
 
 def normalize_execution_mode(value: Any, profile: BotProfile | None = None) -> str:
     has_requested_mode = bool(str(value or "").strip())
@@ -252,6 +282,14 @@ class NativeAgentService:
         if pi_home:
             env["NATIVE_AGENT_PI_HOME"] = pi_home
         return env or None
+
+    async def _evict_runtime(self, runtime: PiSessionRuntime | None) -> None:
+        if runtime is None:
+            return
+        try:
+            await self._runtime_registry.close_runtime(runtime)
+        except Exception:
+            logger.exception("Pi runtime 清理失败: %s", getattr(runtime, "runtime_id", ""))
 
     def _prompt_options(self, profile: BotProfile) -> tuple[str, str, str, str]:
         native_agent = effective_native_agent_config(getattr(profile, "native_agent", {}))
@@ -539,15 +577,17 @@ class NativeAgentService:
                 conversation_native = {}
             requested_session_id = str(conversation_native.get("session_id") or "").strip()
             stored_meta = conversation_native.get("meta") if isinstance(conversation_native.get("meta"), dict) else {}
-            if requested_session_id and _native_session_meta_mismatch(stored_meta, desired_meta):
-                history_service.store.set_conversation_native_session(turn_handle.conversation_id, None, None)
-                history_service.store.invalidate_conversation_workspace_history(turn_handle.conversation_id)
-                requested_session_id = ""
             if requested_session_id:
                 native_session_id = requested_session_id
                 with session._lock:
                     session.native_agent_session_id = native_session_id
                 session.persist()
+                if _native_session_meta_mismatch(stored_meta, desired_meta):
+                    history_service.store.set_conversation_native_session(
+                        turn_handle.conversation_id,
+                        requested_session_id,
+                        desired_meta,
+                    )
 
             pi_record_key = self._pi_record_key(session, user_id, turn_handle.conversation_id)
             pi_record = self._load_or_create_pi_record(
@@ -557,15 +597,6 @@ class NativeAgentService:
                 pi_session_id=native_session_id,
                 session_meta=desired_meta,
             )
-            if _native_session_meta_mismatch(pi_record.session_meta, desired_meta):
-                pi_record = self._pi_session_store.invalidate_binding(pi_record_key, "binding changed")
-                history_service.store.set_conversation_native_session(turn_handle.conversation_id, None, None)
-                history_service.store.invalidate_conversation_workspace_history(turn_handle.conversation_id)
-                native_session_id = ""
-                requested_session_id = ""
-                with session._lock:
-                    session.native_agent_session_id = None
-                session.persist()
             if pi_record.session_meta != desired_meta:
                 pi_record.session_meta = dict(desired_meta)
                 pi_record = self._pi_session_store.upsert(pi_record)
@@ -662,27 +693,47 @@ class NativeAgentService:
                 conversation_id=turn_handle.conversation_id,
                 agent_id=getattr(session, "agent_id", ""),
             )
-            active_runtime = await self._runtime_registry.open_or_create(
-                PiSessionRuntimeRequest(
-                    runtime_key=runtime_key,
-                    owner_key=build_pi_owner_key(
-                        bot_id=int(session.bot_id or 0),
-                        user_id=int(user_id),
-                        agent_id=getattr(session, "agent_id", ""),
-                    ),
-                    conversation_id=turn_handle.conversation_id,
-                    cwd=session.working_dir,
-                    command=pi_command,
-                    model=model_id,
-                    agent_id=agent_id,
-                    reasoning_effort=reasoning_effort,
-                    system_prompt=system_prompt,
-                    append_system_prompt=append_system_prompt,
-                    native_session_id=native_session_id,
-                    config_fingerprint=self._runtime_config_fingerprint(),
-                    env=pi_runtime_env,
-                )
+            runtime_request = PiSessionRuntimeRequest(
+                runtime_key=runtime_key,
+                owner_key=build_pi_owner_key(
+                    bot_id=int(session.bot_id or 0),
+                    user_id=int(user_id),
+                    agent_id=getattr(session, "agent_id", ""),
+                ),
+                conversation_id=turn_handle.conversation_id,
+                cwd=session.working_dir,
+                command=pi_command,
+                model=model_id,
+                agent_id=agent_id,
+                reasoning_effort=reasoning_effort,
+                system_prompt=system_prompt,
+                append_system_prompt=append_system_prompt,
+                native_session_id=native_session_id,
+                config_fingerprint=self._runtime_config_fingerprint(),
+                env=pi_runtime_env,
             )
+            try:
+                active_runtime = await self._runtime_registry.open_or_create(runtime_request)
+            except PiRpcRunError as exc:
+                if _is_pi_transient_upstream_error(exc):
+                    await self._evict_runtime(active_runtime)
+                    raise
+                if not native_session_id or not _is_pi_session_invalid_error(exc):
+                    raise
+                logger.warning("Pi session 失效，清绑定后重试: %s", exc)
+                native_session_id = ""
+                requested_session_id = ""
+                with session._lock:
+                    session.native_agent_session_id = None
+                session.persist()
+                history_service.store.set_conversation_native_session(turn_handle.conversation_id, None, None)
+                history_service.store.invalidate_conversation_workspace_history(turn_handle.conversation_id)
+                if pi_record is not None:
+                    pi_record = self._pi_session_store.invalidate_binding(pi_record_key, "session invalid")
+                runtime_request = PiSessionRuntimeRequest(
+                    **{**runtime_request.__dict__, "native_session_id": ""}
+                )
+                active_runtime = await self._runtime_registry.open_or_create(runtime_request)
             if pi_record is not None:
                 self._seed_runtime_from_record(active_runtime, pi_record)
                 native_session_id = active_runtime.state.native_session_id
@@ -1033,6 +1084,9 @@ class NativeAgentService:
                 await active_runtime.kill()
             raise
         except Exception as exc:
+            if isinstance(exc, PiRpcRunError) and _is_pi_transient_upstream_error(exc):
+                await self._evict_runtime(active_runtime)
+                active_runtime = None
             error_message = str(exc) or "原生 agent 执行失败"
             if turn_handle is not None:
                 history_service.complete_turn(
@@ -1114,6 +1168,30 @@ def _native_session_meta_mismatch(stored_meta: dict[str, Any], desired_meta: dic
         if stored_value != normalized_desired:
             return True
     return False
+
+
+def _pi_rpc_error_text(exc: BaseException) -> str:
+    text = " ".join(
+        str(part or "")
+        for part in (
+            getattr(exc, "stderr", ""),
+            getattr(exc, "stdout", ""),
+            str(exc),
+        )
+    ).lower()
+    return text
+
+
+def _is_pi_transient_upstream_error(exc: BaseException) -> bool:
+    text = _pi_rpc_error_text(exc)
+    return any(marker in text for marker in _PI_TRANSIENT_UPSTREAM_MARKERS)
+
+
+def _is_pi_session_invalid_error(exc: BaseException) -> bool:
+    if _is_pi_transient_upstream_error(exc):
+        return False
+    text = _pi_rpc_error_text(exc)
+    return any(marker in text for marker in _PI_SESSION_INVALID_MARKERS)
 
 
 def _native_agent_progress_signature(event: Any, result: Any) -> str | None:
