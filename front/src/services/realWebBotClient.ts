@@ -2283,7 +2283,10 @@ function mapMessageMeta(raw?: RawChatMessageMeta | null): ChatMessageMetaInfo | 
     .map((item) => mapTraceEvent(item))
     .filter((item): item is ChatTraceEvent => Boolean(item));
   const isNativeFlat = String(rawNativeSource?.provider || "").trim().toLowerCase() === "native_agent";
-  const trace = mergeChatTraceEvents([rawTrace], { nativeFlat: isNativeFlat });
+  const trace = mergeChatTraceEvents([rawTrace], {
+    nativeFlat: isNativeFlat,
+    autoNativeFlat: isNativeFlat,
+  });
   const traceSummary = summarizeTrace(trace);
 
   const meta: ChatMessageMetaInfo = {};
@@ -2366,9 +2369,10 @@ function mergeMessageMeta(
     || String(incoming?.nativeSource?.provider || base?.nativeSource?.provider || "").trim().toLowerCase() === "原生 agent"
   );
   const tracePresentation = incoming?.tracePresentation || base?.tracePresentation || (isNativeSource ? "native_agent_flat" : undefined);
+  const nativeFlatTrace = tracePresentation === "native_agent_flat";
   const trace = mergeChatTraceEvents(
     [base?.trace, incoming?.trace, streamedTrace],
-    { nativeFlat: tracePresentation === "native_agent_flat" },
+    { nativeFlat: nativeFlatTrace, autoNativeFlat: nativeFlatTrace },
   );
   const traceSummary = trace ? summarizeTrace(trace) : undefined;
   const pickTraceCount = (incomingValue?: number, baseValue?: number, summaryValue?: number) => {
@@ -3720,8 +3724,10 @@ function mapChatTraceDetails(raw: RawChatTraceDetails): ChatTraceDetails {
   const rawTrace = (raw.trace || [])
     .map((item) => mapTraceEvent(item))
     .filter((item): item is ChatTraceEvent => Boolean(item));
+  const nativeFlat = rawTrace.some((item) => String(item.source || "").trim().toLowerCase() === "native_agent");
   const trace = mergeChatTraceEvents([rawTrace], {
-    nativeFlat: rawTrace.some((item) => String(item.source || "").trim().toLowerCase() === "native_agent"),
+    nativeFlat,
+    autoNativeFlat: nativeFlat,
   }) || [];
   const summary = summarizeTrace(trace);
   return {
@@ -4879,8 +4885,10 @@ export class RealWebBotClient implements WebBotClient {
             const activityContent = contentForAgUiActivityEvent(agUiState.activities, agUiEvent);
             const traceEvent = mapAgUiTraceEvent(agUiEvent, activityContent);
             if (traceEvent) {
+              const nativeFlatTrace = options?.executionMode === "native_agent";
               const mergedTrace = mergeChatTraceEvents([streamedTrace, [traceEvent]], {
-                nativeFlat: options?.executionMode === "native_agent",
+                nativeFlat: nativeFlatTrace,
+                autoNativeFlat: nativeFlatTrace,
               });
               streamedTrace.splice(0, streamedTrace.length, ...(mergedTrace || []));
             }
@@ -4955,8 +4963,10 @@ export class RealWebBotClient implements WebBotClient {
         } else if (event.type === "trace") {
           const traceEvent = mapTraceEvent(event.event);
           if (traceEvent) {
+            const nativeFlatTrace = options?.executionMode === "native_agent";
             const mergedTrace = mergeChatTraceEvents([streamedTrace, [traceEvent]], {
-              nativeFlat: options?.executionMode === "native_agent",
+              nativeFlat: nativeFlatTrace,
+              autoNativeFlat: nativeFlatTrace,
             });
             streamedTrace.splice(0, streamedTrace.length, ...(mergedTrace || []));
             onTrace?.(traceEvent);
@@ -4964,16 +4974,10 @@ export class RealWebBotClient implements WebBotClient {
         } else if (event.type === "done") {
           if (event.message) {
             finalMessage = mapChatMessage(event.message, 0);
-            const finalMetaHasTrace = Boolean(
-              finalMessage.meta?.trace?.length
-              || typeof finalMessage.meta?.traceCount === "number"
-              || typeof finalMessage.meta?.toolCallCount === "number"
-              || typeof finalMessage.meta?.processCount === "number"
-            );
             finalMessage.meta = mergeMessageMeta(
               streamedContextUsage ? { contextUsage: streamedContextUsage } : undefined,
               finalMessage.meta,
-              finalMetaHasTrace ? undefined : streamedTrace,
+              streamedTrace,
             );
             finalText = finalMessage.text;
           } else {

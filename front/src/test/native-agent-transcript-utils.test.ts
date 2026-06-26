@@ -76,3 +76,15 @@ test("sorts pi trace entries by sequence and ordinal", () => {
     permission: expect.objectContaining({ uiKind: "input" }),
   }));
 });
+
+test("keeps cli trace entries in incoming order", () => {
+  const trace: ChatTraceEvent[] = [
+    { kind: "permission", sequence: 30, summary: "输入", source: "codex", payload: { id: "perm-1", uiKind: "input" } },
+    { kind: "status", ordinal: 10, summary: "启动", source: "codex" },
+    { kind: "tool_call", sequence: 20, summary: "shell", callId: "call-1", toolName: "shell", source: "codex" },
+  ];
+
+  const entries = buildNativeAgentTranscriptEntries({ trace, mode: "cli" });
+
+  expect(entries.map((entry) => entry.summary)).toEqual(["输入", "启动", "shell"]);
+});

@@ -234,7 +234,7 @@ function shouldNormalizeAsNativeFlat(trace: ChatTraceEvent[]) {
 
 export function mergeChatTraceEvents(
   sources: Array<ChatTraceEvent[] | undefined>,
-  options: { nativeFlat?: boolean } = {},
+  options: { nativeFlat?: boolean; autoNativeFlat?: boolean } = {},
 ): ChatTraceEvent[] | undefined {
   const merged: ChatTraceEvent[] = [];
   const stableIndexMap = new Map<string, number>();
@@ -281,7 +281,8 @@ export function mergeChatTraceEvents(
     }
   }
 
-  const normalized = options.nativeFlat || shouldNormalizeAsNativeFlat(merged)
+  const autoNativeFlat = options.autoNativeFlat ?? true;
+  const normalized = options.nativeFlat || (autoNativeFlat && shouldNormalizeAsNativeFlat(merged))
     ? normalizeNativeAgentTrace(merged)
     : merged;
   return normalized.length > 0 ? normalized : undefined;
@@ -317,12 +318,17 @@ export function isNativeAgentMessage(meta?: ChatMessageMetaInfo): boolean {
 export function buildNativeAgentTranscriptEntries(input: {
   trace?: ChatTraceEvent[];
   agUiState?: AgUiRunState | null;
+  mode?: "native" | "cli";
 }): NativeAgentTranscriptEntry[] {
   const liveTrace = input.agUiState?.entries
     ?.map((entry) => entry.trace)
     .filter((trace): trace is ChatTraceEvent => Boolean(trace));
   const traceSource = input.trace?.length ? input.trace : liveTrace;
-  const normalizedTrace = mergeChatTraceEvents([traceSource], { nativeFlat: true });
+  const nativeMode = input.mode !== "cli";
+  const normalizedTrace = mergeChatTraceEvents([traceSource], {
+    nativeFlat: nativeMode,
+    autoNativeFlat: nativeMode,
+  });
 
   if (normalizedTrace?.length) {
     return normalizedTrace.map((trace, index) => traceToEntry(trace, index, index + 1));

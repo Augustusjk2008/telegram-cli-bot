@@ -328,3 +328,37 @@ test("native transcript disables handled permission controls", () => {
   expect(screen.queryByLabelText("权限输入")).not.toBeInTheDocument();
   expect(screen.getByTestId("native-agent-final-result")).toHaveTextContent("完成");
 });
+
+test("cli mode renders permission trace without native actions", () => {
+  render(
+    <NativeAgentTranscript
+      mode="cli"
+      entries={[
+        entry({
+          id: "perm-1",
+          seq: 1,
+          kind: "permission",
+          label: "权限",
+          summary: "CLI 请求确认",
+          permissionId: "perm-1",
+          pending: true,
+          permission: {
+            permissionId: "perm-1",
+            summary: "CLI 请求确认",
+            state: "permission.updated",
+            content: {},
+            source: "codex",
+            uiKind: "confirm",
+          },
+        }),
+      ]}
+      resultText="最终答复"
+      state="done"
+      onReplyPermission={vi.fn()}
+    />,
+  );
+
+  expect(screen.getByText("CLI 请求确认")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "允许一次" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "拒绝" })).not.toBeInTheDocument();
+});

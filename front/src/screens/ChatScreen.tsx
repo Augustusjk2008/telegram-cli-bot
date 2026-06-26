@@ -8,7 +8,6 @@ import { ChatComposer } from "../components/ChatComposer";
 import { ChatMessageMeta } from "../components/ChatMessageMeta";
 import { ChatMarkdownMessage } from "../components/ChatMarkdownMessage";
 import { ChatPlainTextMessage } from "../components/ChatPlainTextMessage";
-import { ChatTracePanel } from "../components/ChatTracePanel";
 import { ConversationHistoryPanel } from "../components/ConversationHistoryPanel";
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import { NativeAgentTranscript } from "../components/NativeAgentTranscript";
@@ -592,7 +591,10 @@ function mergeMessageMeta(base?: ChatMessageMetaInfo, incoming?: ChatMessageMeta
   const tracePresentation = incoming?.tracePresentation || base?.tracePresentation || (isNativeSource ? "native_agent_flat" : undefined);
   const trace = mergeChatTraceEvents(
     [base?.trace, incoming?.trace],
-    { nativeFlat: tracePresentation === "native_agent_flat" },
+    {
+      nativeFlat: tracePresentation === "native_agent_flat",
+      autoNativeFlat: tracePresentation === "native_agent_flat",
+    },
   );
   const traceSummary = trace ? summarizeTrace(trace) : undefined;
   const pickTraceCount = (incomingValue?: number, baseValue?: number, summaryValue?: number) => {
@@ -635,6 +637,7 @@ function buildLiveAgUiMessageMeta(state: AgUiRunState, nativeAgent = false): Cha
   return {
     ...(buildAgUiMessageMeta(state, { nativeAgent }) || {}),
     agUiRunState: state,
+    ...(!nativeAgent && !state.nativeAgent && state.entries.length > 0 ? { tracePresentation: "generic" as const } : {}),
   };
 }
 
@@ -1082,19 +1085,14 @@ function ClusterTaskPanel({ status, agents }: { status: ClusterTaskStatus; agent
 
 type ChatMessageRowProps = {
   item: ChatMessage;
-  messageClientStateKey: string;
   assistantName: string;
   assistantAvatarName?: string;
   userAvatarName?: string;
   allowTrace: boolean;
   deletedAttachmentKeys: Record<string, boolean>;
   deletingAttachmentKeys: Record<string, boolean>;
-  tracePanelExpanded: boolean;
-  traceLoadState?: { loading: boolean; error?: string };
   onDeleteAttachment: (messageId: string, savedPath: string) => void;
   onFileLinkClick: (href: string) => void;
-  onLoadTrace: (messageId: string) => void;
-  onToggleTracePanel: (messageClientStateKey: string) => void;
   onCopyFinalAnswer: (text: string) => boolean | void | Promise<boolean | void>;
   onReplyNativePermission: (reply: NativeAgentPermissionReply) => Promise<void>;
   soloRollbackTarget?: SoloRollbackTarget;
@@ -1104,19 +1102,14 @@ type ChatMessageRowProps = {
 
 const ChatMessageRow = memo(function ChatMessageRow({
   item,
-  messageClientStateKey,
   assistantName,
   assistantAvatarName,
   userAvatarName,
   allowTrace,
   deletedAttachmentKeys,
   deletingAttachmentKeys,
-  tracePanelExpanded,
-  traceLoadState,
   onDeleteAttachment,
   onFileLinkClick,
-  onLoadTrace,
-  onToggleTracePanel,
   onCopyFinalAnswer,
   onReplyNativePermission,
   soloRollbackTarget,
@@ -1146,14 +1139,19 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const hasStreamingText = isStreamingAssistant && item.text.trim().length > 0;
   const trace = item.meta?.trace;
   const agUiRunState = item.role === "assistant" ? getAgUiRunState(item.meta) : null;
-  const isNativeAgentAssistant = item.role === "assistant" && isNativeAgentMessage(item.meta);
+  const isAssistant = item.role === "assistant";
+  const isNativeAgentAssistant = isAssistant && isNativeAgentMessage(item.meta);
+  const traceCount = typeof item.meta?.traceCount === "number" ? item.meta.traceCount : trace?.length ?? 0;
+  const hasTrace = allowTrace && isAssistant && traceCount > 0;
+  const hasCliTraceTranscript = hasTrace && !isNativeAgentAssistant && !agUiRunState && item.meta?.tracePresentation !== "generic";
+  const hasTranscript = isAssistant && (isNativeAgentAssistant || hasCliTraceTranscript);
+  const transcriptMode = isNativeAgentAssistant ? "native" : "cli";
   const showContextRing = item.role === "assistant" && shouldShowContextRing(item.meta);
   const nativeTranscriptEntries = buildNativeAgentTranscriptEntries({
     trace,
     agUiState: agUiRunState,
+    mode: transcriptMode,
   });
-  const traceCount = typeof item.meta?.traceCount === "number" ? item.meta.traceCount : trace?.length ?? 0;
-  const hasTracePanel = allowTrace && item.role === "assistant" && traceCount > 0 && !agUiRunState && !isNativeAgentAssistant;
   const showSoloRollback = Boolean(isUser && isCurrentUserMessage && soloRollbackTarget && onRequestSoloRollback);
   const inlineAvatar = (
     <ChatAvatar
@@ -1192,7 +1190,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
           ) : null}
           <div
             data-streaming={isStreamingAssistant ? "true" : "false"}
-            className={isNativeAgentAssistant
+            className={hasTranscript
               ? "min-w-0 overflow-hidden text-[var(--text)]"
               : [
                   "chat-message-bubble-delight",
@@ -1205,13 +1203,15 @@ const ChatMessageRow = memo(function ChatMessageRow({
                       : "min-w-0 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-3 text-[var(--text)] shadow-[var(--shadow-soft)]",
                 ].join(" ")}
           >
-            {isNativeAgentAssistant ? (
+            {hasTranscript ? (
               <NativeAgentTranscript
                 entries={nativeTranscriptEntries}
                 resultText={item.text}
                 state={item.state}
-                onReplyPermission={onReplyNativePermission}
+                mode={transcriptMode}
+                onReplyPermission={isNativeAgentAssistant ? onReplyNativePermission : undefined}
                 onFileLinkClick={onFileLinkClick}
+                onCopyFinalAnswer={item.text ? () => onCopyFinalAnswer(item.text) : undefined}
               />
             ) : item.role === "assistant" && item.state !== "streaming" && item.state !== "error" ? (
               <ChatMarkdownMessage content={item.text} onFileLinkClick={onFileLinkClick} />
@@ -1278,22 +1278,6 @@ const ChatMessageRow = memo(function ChatMessageRow({
             )}
           </div>
         </div>
-        {hasTracePanel ? (
-          <ChatTracePanel
-            messageId={item.id}
-            trace={trace}
-            traceCount={traceCount}
-            toolCallCount={item.meta?.toolCallCount}
-            processCount={item.meta?.processCount}
-            expanded={tracePanelExpanded}
-            onToggleExpanded={() => onToggleTracePanel(messageClientStateKey)}
-            isLoading={Boolean(traceLoadState?.loading)}
-            loadError={traceLoadState?.error}
-            onLoadTrace={() => void onLoadTrace(item.id)}
-            onCopyFinalAnswer={item.text ? () => onCopyFinalAnswer(item.text) : undefined}
-            onReplyNativePermission={(permissionId, approved) => onReplyNativePermission({ requestId: permissionId, accepted: approved })}
-          />
-        ) : null}
       </div>
     </motion.div>
   );
@@ -1305,12 +1289,8 @@ const ChatMessageList = memo(function ChatMessageList({
   assistantAvatarName,
   userAvatarName,
   allowTrace,
-  expandedTracePanels,
-  traceLoadState,
   handleDeleteAttachment,
   handleFileLinkClick,
-  loadMessageTrace,
-  handleToggleTracePanel,
   handleCopyFinalAnswer,
   handleReplyNativePermission,
   handleRequestSoloRollback,
@@ -1324,12 +1304,8 @@ const ChatMessageList = memo(function ChatMessageList({
   assistantAvatarName?: string;
   userAvatarName?: string;
   allowTrace: boolean;
-  expandedTracePanels: Record<string, boolean>;
-  traceLoadState: Record<string, { loading: boolean; error?: string }>;
   handleDeleteAttachment: (messageId: string, savedPath: string) => void;
   handleFileLinkClick: (href: string) => void;
-  loadMessageTrace: (messageId: string) => void;
-  handleToggleTracePanel: (messageClientStateKey: string) => void;
   handleCopyFinalAnswer: (text: string) => boolean | void | Promise<boolean | void>;
   handleReplyNativePermission: (reply: NativeAgentPermissionReply) => Promise<void>;
   handleRequestSoloRollback?: (target: SoloRollbackTarget) => void;
@@ -1342,19 +1318,14 @@ const ChatMessageList = memo(function ChatMessageList({
     <div key={row.item.id} className="space-y-1">
       <ChatMessageRow
         item={row.item}
-        messageClientStateKey={row.messageClientStateKey}
         assistantName={assistantName}
         assistantAvatarName={assistantAvatarName}
         userAvatarName={userAvatarName}
         allowTrace={allowTrace}
         deletedAttachmentKeys={row.deletedAttachmentKeys}
         deletingAttachmentKeys={row.deletingAttachmentKeys}
-        tracePanelExpanded={Boolean(expandedTracePanels[row.messageClientStateKey])}
-        traceLoadState={traceLoadState[row.messageClientStateKey]}
         onDeleteAttachment={handleDeleteAttachment}
         onFileLinkClick={handleFileLinkClick}
-        onLoadTrace={loadMessageTrace}
-        onToggleTracePanel={handleToggleTracePanel}
         onCopyFinalAnswer={handleCopyFinalAnswer}
         onReplyNativePermission={handleReplyNativePermission}
         soloRollbackTarget={row.soloRollbackTarget}
@@ -1431,7 +1402,6 @@ export function ChatScreen({
   const [pendingCronRuns, setPendingCronRuns] = useState<AssistantCronRunEnqueuedDetail[]>([]);
   const [deletedAttachmentKeys, setDeletedAttachmentKeys] = useState<Record<string, boolean>>({});
   const [deletingAttachmentKeys, setDeletingAttachmentKeys] = useState<Record<string, boolean>>({});
-  const [expandedTracePanels, setExpandedTracePanels] = useState<Record<string, boolean>>({});
   const [traceLoadState, setTraceLoadState] = useState<Record<string, { loading: boolean; error?: string }>>({});
   const [historyPanelOpen, setHistoryPanelOpen] = useState(false);
   const [conversationQuery, setConversationQuery] = useState("");
@@ -2022,7 +1992,6 @@ export function ChatScreen({
     setSoloRollbacking(false);
     setDeletedAttachmentKeys({});
     setDeletingAttachmentKeys({});
-    setExpandedTracePanels({});
     setTraceLoadState({});
     sseLastActivityAtRef.current = null;
     stopSseRecoveryWatch();
@@ -2429,26 +2398,6 @@ export function ChatScreen({
     void loadPreview(nextPath, "preview");
   }, [embedded, loadPreview, onRequestDesktopPreview]);
 
-  const handleToggleTracePanel = useCallback((messageClientStateKey: string) => {
-    setExpandedTracePanels((prev) => {
-      const nextExpanded = !prev[messageClientStateKey];
-      if (nextExpanded) {
-        return {
-          ...prev,
-          [messageClientStateKey]: true,
-        };
-      }
-
-      if (!prev[messageClientStateKey]) {
-        return prev;
-      }
-
-      const nextState = { ...prev };
-      delete nextState[messageClientStateKey];
-      return nextState;
-    });
-  }, []);
-
   const handleCopyFinalAnswer = useCallback(async (text: string) => {
     try {
       const ok = await copyText(text);
@@ -2673,7 +2622,6 @@ export function ChatScreen({
       setClusterTaskStatus(null);
       setClusterTaskError("");
       clusterRunIdRef.current = "";
-      setExpandedTracePanels({});
       setTraceLoadState({});
       setQueuedMessageState(null, { botAlias, agentId: activeAgentIdRef.current || "main" });
       setItems(data.messages);
@@ -2706,7 +2654,6 @@ export function ChatScreen({
       setClusterTaskStatus(null);
       setClusterTaskError("");
       clusterRunIdRef.current = "";
-      setExpandedTracePanels({});
       setTraceLoadState({});
       setQueuedMessageState(null, { botAlias, agentId: activeAgentIdRef.current || "main" });
       setItems(data.messages);
@@ -2746,7 +2693,6 @@ export function ChatScreen({
         setClusterTaskStatus(null);
         setClusterTaskError("");
         clusterRunIdRef.current = "";
-        setExpandedTracePanels({});
         setTraceLoadState({});
         setPendingCronRuns([]);
         setQueuedMessageState(null, { botAlias, agentId: activeAgentIdRef.current || "main" });
@@ -2784,7 +2730,6 @@ export function ChatScreen({
       setClusterTaskStatus(null);
       setClusterTaskError("");
       clusterRunIdRef.current = "";
-      setExpandedTracePanels({});
       setTraceLoadState({});
       setPendingCronRuns([]);
       setQueuedMessageState(null, { botAlias, agentId: activeAgentIdRef.current || "main" });
@@ -2820,7 +2765,6 @@ export function ChatScreen({
     setClusterTaskError("");
     clusterRunIdRef.current = "";
     setConversations([]);
-    setExpandedTracePanels({});
     setTraceLoadState({});
     setPendingAttachments([]);
     setQueuedMessage(null);
@@ -3280,7 +3224,6 @@ export function ChatScreen({
       setClusterTaskStatus(null);
       setClusterTaskError("");
       clusterRunIdRef.current = "";
-      setExpandedTracePanels({});
       setTraceLoadState({});
       setQueuedMessageState(null, { botAlias, agentId: activeAgentIdRef.current || "main" });
       setItems(result.messages);
@@ -3569,7 +3512,6 @@ export function ChatScreen({
     setError("");
     setItems([]);
     setConversations([]);
-    setExpandedTracePanels({});
     setTraceLoadState({});
     setPendingCronRuns([]);
     setPendingAttachments([]);
@@ -3990,12 +3932,8 @@ export function ChatScreen({
             assistantAvatarName={assistantAvatarName}
             userAvatarName={userAvatarName}
             allowTrace={allowTrace}
-            expandedTracePanels={expandedTracePanels}
-            traceLoadState={traceLoadState}
             handleDeleteAttachment={handleDeleteAttachment}
             handleFileLinkClick={handleFileLinkClick}
-            loadMessageTrace={loadMessageTrace}
-            handleToggleTracePanel={handleToggleTracePanel}
             handleCopyFinalAnswer={handleCopyFinalAnswer}
             handleReplyNativePermission={handleReplyNativePermission}
             handleRequestSoloRollback={handleRequestSoloRollback}

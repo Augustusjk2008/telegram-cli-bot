@@ -379,7 +379,55 @@ test("uses cli status preview while waiting for first output chunk", async () =>
   expect(await screen.findByText("最终答复")).toBeInTheDocument();
 });
 
-test("keeps live cli trace panel after final message", async () => {
+test("renders live cli正文和工具过程 in stream before done", async () => {
+  const user = userEvent.setup();
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias,
+    _text,
+    onChunk,
+    _onStatus,
+    onTrace,
+  ) => {
+    onChunk("正文先出");
+    onTrace?.({
+      kind: "tool_call",
+      summary: "Get-ChildItem",
+      toolName: "shell_command",
+      callId: "call-1",
+    });
+    await new Promise((resolve) => window.setTimeout(resolve, 200));
+    return {
+      id: "assistant-stream-mid-trace",
+      role: "assistant",
+      text: "最终答复",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    };
+  });
+  const client = createClient({
+    sendMessage,
+    getMessageTrace: vi.fn(async () => ({
+      trace: [
+        { kind: "tool_call", summary: "Get-ChildItem", toolName: "shell_command", callId: "call-1" },
+      ],
+      traceCount: 1,
+      toolCallCount: 1,
+      processCount: 0,
+    })) as never,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+  await user.type(screen.getByPlaceholderText("输入消息"), "继续");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(within(transcript).getByText("正文先出")).toBeInTheDocument();
+  expect(within(transcript).getByText("shell_command")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "展开过程详情" })).not.toBeInTheDocument();
+});
+
+test("renders live cli trace as transcript after final message", async () => {
   const user = userEvent.setup();
   let resolveFinal!: (message: ChatMessage) => void;
   const getMessageTrace = vi.fn(async () => ({
@@ -429,11 +477,10 @@ test("keeps live cli trace panel after final message", async () => {
   await user.click(screen.getByRole("button", { name: "发送" }));
 
   await waitFor(() => expect(sendMessage).toHaveBeenCalled());
-  const liveToggle = await screen.findByRole("button", { name: "展开过程详情" });
-  const livePanel = liveToggle.closest("section");
-  expect(livePanel?.getAttribute("data-testid")).toMatch(/^chat-trace-panel-assistant-/);
-  expect(livePanel?.textContent).toContain("1 条过程");
-  expect(screen.queryByTestId("native-agent-transcript")).not.toBeInTheDocument();
+  const liveTranscript = await screen.findByTestId("native-agent-transcript");
+  expect(within(liveTranscript).getAllByText("我先检查目录。").length).toBeGreaterThan(0);
+  expect(liveTranscript.closest("[data-streaming='true']")).not.toHaveClass("chat-message-bubble-delight");
+  expect(screen.queryByRole("button", { name: "展开过程详情" })).not.toBeInTheDocument();
 
   await act(async () => {
     resolveFinal({
@@ -446,14 +493,60 @@ test("keeps live cli trace panel after final message", async () => {
     });
   });
 
-  expect(await screen.findByText("最终答复")).toBeInTheDocument();
-  expect(screen.queryByTestId("native-agent-transcript")).not.toBeInTheDocument();
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(within(transcript).getByText("最终答复")).toBeInTheDocument();
   await waitFor(() => expect(getMessageTrace).toHaveBeenCalledWith("main", "assistant-cli-final"));
-  const panel = await screen.findByTestId("chat-trace-panel-assistant-cli-final");
-  expect(panel.textContent).toContain("5 条过程");
-  expect(panel.textContent).toContain("1 次工具");
-  await user.click(screen.getByRole("button", { name: "展开过程详情" }));
-  expect(await screen.findByText("Get-ChildItem")).toBeInTheDocument();
+  expect(await within(transcript).findByText("shell_command")).toBeInTheDocument();
+  expect(within(transcript).getAllByText("Exit code: 0").length).toBeGreaterThan(0);
+  expect(within(transcript).getAllByText("我先检查目录。").length).toBeGreaterThan(0);
+});
+
+test("keeps live cli trace when done omits trace payload", async () => {
+  const user = userEvent.setup();
+  const getMessageTrace = vi.fn(async () => ({
+    trace: [
+      { kind: "commentary", summary: "我先检查目录。", source: "codex" },
+    ],
+    traceCount: 1,
+    toolCallCount: 0,
+    processCount: 1,
+  }));
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias,
+    _text,
+    onChunk,
+    _onStatus,
+    onTrace,
+  ) => {
+    onChunk("正文先出");
+    onTrace?.({
+      kind: "commentary",
+      summary: "我先检查目录。",
+      source: "codex",
+    });
+    await new Promise((resolve) => window.setTimeout(resolve, 200));
+    return {
+      id: "assistant-cli-final-no-trace",
+      role: "assistant",
+      text: "最终答复",
+      createdAt: new Date().toISOString(),
+      state: "done",
+      meta: { traceCount: 1, toolCallCount: 0, processCount: 1 },
+    };
+  });
+  const client = createClient({ sendMessage, getMessageTrace: getMessageTrace as never });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+  await user.type(screen.getByPlaceholderText("输入消息"), "继续");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(within(transcript).getByText("正文先出")).toBeInTheDocument();
+  expect(within(transcript).getByText("我先检查目录。")).toBeInTheDocument();
+  expect(getMessageTrace).not.toHaveBeenCalled();
 });
 
 test("keeps authoritative final cli trace count when live trace matches final trace", async () => {
@@ -494,9 +587,9 @@ test("keeps authoritative final cli trace count when live trace matches final tr
   await user.type(screen.getByPlaceholderText("输入消息"), "继续");
   await user.click(screen.getByRole("button", { name: "发送" }));
 
-  expect(await screen.findByText("最终答复")).toBeInTheDocument();
-  const panel = await screen.findByTestId("chat-trace-panel-assistant-cli-authoritative-final");
-  expect(panel.textContent).toContain("1 条过程");
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(within(transcript).getByText("最终答复")).toBeInTheDocument();
+  expect(within(transcript).getByText("我先检查目录。")).toBeInTheDocument();
   expect(getMessageTrace).not.toHaveBeenCalled();
 });
 
@@ -874,8 +967,7 @@ test("native agent @mention sends cluster options", async () => {
 
 
 
-test("auto-loads trace details and groups tool call/result into one trace card", async () => {
-  const user = userEvent.setup();
+test("auto-loads trace details and groups tool call/result into transcript", async () => {
   const getMessageTrace = vi.fn(async () => ({
     trace: [
       {
@@ -946,25 +1038,14 @@ test("auto-loads trace details and groups tool call/result into one trace card",
   expect(await screen.findByText("目录已读取完成。")).toBeInTheDocument();
   await waitFor(() => expect(getMessageTrace).toHaveBeenCalledWith("main", "assistant-1"));
 
-  await user.click(screen.getByRole("button", { name: "展开过程详情" }));
-
-  expect(await screen.findByText("我先检查目录结构。")).toBeInTheDocument();
-  expect(screen.getByText("工具调用 1")).toBeInTheDocument();
-  expect(screen.getByText("Get-Content -Path todo.txt")).toBeInTheDocument();
-  expect(screen.getByText("返回")).toBeInTheDocument();
-  expect(screen.getByText("Exit 1")).toBeInTheDocument();
-  expect(screen.getByText((content) => content.includes("Wall time: 1.3 seconds") && content.includes("Output:"))).toBeInTheDocument();
-
-  const panel = screen.getByTestId("chat-trace-panel-assistant-1");
-  const traceItems = Array.from(panel.querySelectorAll("[data-trace-seq]"));
-  expect(traceItems).toHaveLength(4);
-  expect(traceItems[0]?.textContent).toContain("我先检查目录结构。");
-  expect(traceItems[1]?.textContent).toContain("工具调用 1");
-  expect(traceItems[1]?.textContent).toContain("Exit 1");
-  expect(traceItems[2]?.textContent).toContain("同步事件已记录。");
-  expect(traceItems[3]?.textContent).toContain("目录已读取完成。");
-  expect(screen.getByText("我先检查目录结构。").className).not.toContain("text-slate-800");
-  expect(traceItems[2]?.className).not.toContain("bg-violet-50");
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(await within(transcript).findByText("我先检查目录结构。")).toBeInTheDocument();
+  expect(within(transcript).getByText("Get-Content -Path todo.txt")).toBeInTheDocument();
+  expect(transcript.textContent).toContain("Exit code: 1");
+  expect(transcript.textContent).toContain("Wall time: 1.3 seconds");
+  expect(within(transcript).getByText("同步事件已记录。")).toBeInTheDocument();
+  expect(within(transcript).getAllByText("目录已读取完成。").length).toBeGreaterThan(0);
+  expect(screen.queryByRole("button", { name: "展开过程详情" })).not.toBeInTheDocument();
 });
 
 
@@ -1220,7 +1301,7 @@ test("non-native history trace auto-load does not retry immediately after failur
   render(<ChatScreen botAlias="main" client={client} />);
 
   expect(await screen.findByText("最终答复")).toBeInTheDocument();
-  expect(await screen.findByRole("button", { name: "展开过程详情" })).toBeInTheDocument();
+  expect(await screen.findByTestId("native-agent-transcript")).toBeInTheDocument();
   await waitFor(() => expect(getMessageTrace).toHaveBeenCalledTimes(1));
   await act(async () => {
     await new Promise((resolve) => window.setTimeout(resolve, 20));
@@ -1229,7 +1310,6 @@ test("non-native history trace auto-load does not retry immediately after failur
 });
 
 test("non-native permission trace hides native permission actions", async () => {
-  const user = userEvent.setup();
   const client = createClient({
     getBotOverview: async (): Promise<BotOverview> => ({
       alias: "main",
@@ -1266,7 +1346,8 @@ test("non-native permission trace hides native permission actions", async () => 
 
   render(<ChatScreen botAlias="main" client={client} />);
 
-  await user.click(await screen.findByRole("button", { name: "展开过程详情" }));
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(within(transcript).getByText("CLI 请求确认")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "允许一次" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "拒绝" })).not.toBeInTheDocument();
 });

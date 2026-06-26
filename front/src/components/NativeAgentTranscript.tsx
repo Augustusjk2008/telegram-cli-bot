@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Check, ChevronRight, LoaderCircle, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Check, CheckCheck, ChevronRight, Copy, LoaderCircle, X } from "lucide-react";
 import { ChatMarkdownMessage } from "./ChatMarkdownMessage";
 import { ChatPlainTextMessage } from "./ChatPlainTextMessage";
 import type { ChatMessage } from "../services/types";
@@ -9,8 +9,10 @@ type Props = {
   entries: NativeAgentTranscriptEntry[];
   resultText: string;
   state?: ChatMessage["state"];
+  mode?: "native" | "cli";
   onReplyPermission?: (reply: NativeAgentPermissionReply) => Promise<void>;
   onFileLinkClick?: (href: string) => void;
+  onCopyFinalAnswer?: () => boolean | void | Promise<boolean | void>;
 };
 
 function compact(value: string, fallback: string) {
@@ -245,11 +247,22 @@ export function NativeAgentTranscript({
   entries,
   resultText,
   state,
+  mode = "native",
   onReplyPermission,
   onFileLinkClick,
+  onCopyFinalAnswer,
 }: Props) {
   const [replyingPermissionId, setReplyingPermissionId] = useState("");
+  const [copiedFinalAnswer, setCopiedFinalAnswer] = useState(false);
+  const copyFeedbackTimerRef = useRef<number | null>(null);
   const renderItems = groupTranscriptEntries(entries);
+  const allowPermissionReply = mode === "native";
+
+  useEffect(() => () => {
+    if (copyFeedbackTimerRef.current !== null) {
+      window.clearTimeout(copyFeedbackTimerRef.current);
+    }
+  }, []);
 
   const replyPermission = async (reply: NativeAgentPermissionReply) => {
     if (!onReplyPermission || !reply.requestId || replyingPermissionId) {
@@ -260,6 +273,23 @@ export function NativeAgentTranscript({
       await onReplyPermission(reply);
     } finally {
       setReplyingPermissionId("");
+    }
+  };
+
+  const copyFinalAnswer = async () => {
+    if (!onCopyFinalAnswer || copiedFinalAnswer) {
+      return;
+    }
+    const result = await onCopyFinalAnswer();
+    if (result !== false) {
+      setCopiedFinalAnswer(true);
+      if (copyFeedbackTimerRef.current !== null) {
+        window.clearTimeout(copyFeedbackTimerRef.current);
+      }
+      copyFeedbackTimerRef.current = window.setTimeout(() => {
+        setCopiedFinalAnswer(false);
+        copyFeedbackTimerRef.current = null;
+      }, 2000);
     }
   };
 
@@ -294,7 +324,7 @@ export function NativeAgentTranscript({
           entry={entry}
           rowClassName={rowClassName}
           replyingPermissionId={replyingPermissionId}
-          onReply={replyPermission}
+          onReply={allowPermissionReply ? replyPermission : undefined}
         />
       );
     }
@@ -347,6 +377,22 @@ export function NativeAgentTranscript({
 
       {visibleResultText ? (
         <div data-testid="native-agent-final-result" className="border-t border-[var(--workbench-hairline)] pt-2">
+          {onCopyFinalAnswer ? (
+            <div className="mb-1 flex justify-end">
+              <button
+                type="button"
+                aria-label={copiedFinalAnswer ? "已复制最终回答" : "复制最终回答"}
+                title={copiedFinalAnswer ? "已复制最终回答" : "复制最终回答"}
+                disabled={copiedFinalAnswer}
+                onClick={() => void copyFinalAnswer()}
+                className={copiedFinalAnswer
+                  ? "inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--accent-outline)] bg-[var(--accent-soft)] text-[var(--accent)] disabled:cursor-not-allowed"
+                  : "inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] text-[var(--muted)] hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)]"}
+              >
+                {copiedFinalAnswer ? <CheckCheck className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+              </button>
+            </div>
+          ) : null}
           {state === "done" ? (
             <ChatMarkdownMessage content={visibleResultText} onFileLinkClick={onFileLinkClick} />
           ) : (
