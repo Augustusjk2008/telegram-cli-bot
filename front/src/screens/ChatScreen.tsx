@@ -1136,7 +1136,6 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const visibleUserText = parsedUserMessage?.visibleText || "";
   const userAttachments = parsedUserMessage?.attachments || [];
   const isStreamingAssistant = item.role === "assistant" && item.state === "streaming";
-  const hasStreamingText = isStreamingAssistant && item.text.trim().length > 0;
   const trace = item.meta?.trace;
   const agUiRunState = item.role === "assistant" ? getAgUiRunState(item.meta) : null;
   const isAssistant = item.role === "assistant";
@@ -1211,7 +1210,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
                 mode={transcriptMode}
                 onReplyPermission={isNativeAgentAssistant ? onReplyNativePermission : undefined}
                 onFileLinkClick={onFileLinkClick}
-                onCopyFinalAnswer={item.text ? () => onCopyFinalAnswer(item.text) : undefined}
+                onCopyFinalAnswer={item.state === "done" && item.text.trim() ? () => onCopyFinalAnswer(item.text) : undefined}
               />
             ) : item.role === "assistant" && item.state !== "streaming" && item.state !== "error" ? (
               <ChatMarkdownMessage content={item.text} onFileLinkClick={onFileLinkClick} />
@@ -1265,7 +1264,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
                   </div>
                 ) : null}
               </div>
-            ) : isStreamingAssistant && !hasStreamingText ? (
+            ) : isStreamingAssistant ? (
               <div className="inline-flex items-center gap-2 text-sm text-[var(--muted)]">
                 <LoaderCircle className="h-4 w-4 animate-spin text-[var(--accent)]" />
                 <span>正在输出...</span>

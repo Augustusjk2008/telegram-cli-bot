@@ -341,6 +341,8 @@ export function NativeAgentTranscript({
   };
 
   const visibleResultText = stripThinkingBlocks(resultText);
+  const showFinalResult = Boolean(visibleResultText) && !(mode === "cli" && state === "streaming");
+  const showCopyFinalAnswer = state === "done" && Boolean(onCopyFinalAnswer);
 
   return (
     <div data-testid="native-agent-transcript" className="min-w-0 text-sm text-[var(--text)]">
@@ -375,10 +377,15 @@ export function NativeAgentTranscript({
         );
       })}
 
-      {visibleResultText ? (
+      {showFinalResult ? (
         <div data-testid="native-agent-final-result" className="border-t border-[var(--workbench-hairline)] pt-2">
-          {onCopyFinalAnswer ? (
-            <div className="mb-1 flex justify-end">
+          {state === "done" ? (
+            <ChatMarkdownMessage content={visibleResultText} onFileLinkClick={onFileLinkClick} />
+          ) : (
+            <ChatPlainTextMessage content={visibleResultText} className={state === "error" ? "text-red-700" : "text-[var(--text)]"} />
+          )}
+          {showCopyFinalAnswer ? (
+            <div className="mt-2 flex justify-end">
               <button
                 type="button"
                 aria-label={copiedFinalAnswer ? "已复制最终回答" : "复制最终回答"}
@@ -393,11 +400,6 @@ export function NativeAgentTranscript({
               </button>
             </div>
           ) : null}
-          {state === "done" ? (
-            <ChatMarkdownMessage content={visibleResultText} onFileLinkClick={onFileLinkClick} />
-          ) : (
-            <ChatPlainTextMessage content={visibleResultText} className={state === "error" ? "text-red-700" : "text-[var(--text)]"} />
-          )}
         </div>
       ) : null}
       {state === "streaming" ? (

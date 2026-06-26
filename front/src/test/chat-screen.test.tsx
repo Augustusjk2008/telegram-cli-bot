@@ -364,8 +364,8 @@ test("uses cli status preview while waiting for first output chunk", async () =>
   await user.type(screen.getByPlaceholderText("输入消息"), "继续");
   await user.click(screen.getByRole("button", { name: "发送" }));
 
-  expect(await screen.findByText("正在检查目录")).toBeInTheDocument();
-  expect(screen.queryByText("正在输出...")).not.toBeInTheDocument();
+  expect(screen.queryByText("正在检查目录")).not.toBeInTheDocument();
+  expect(screen.getByText("正在输出...")).toBeInTheDocument();
 
   await act(async () => {
     resolveFinal({
@@ -379,7 +379,7 @@ test("uses cli status preview while waiting for first output chunk", async () =>
   expect(await screen.findByText("最终答复")).toBeInTheDocument();
 });
 
-test("renders live cli正文和工具过程 in stream before done", async () => {
+test("renders live cli trace without temporary answer while streaming", async () => {
   const user = userEvent.setup();
   const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
     _botAlias,
@@ -422,9 +422,44 @@ test("renders live cli正文和工具过程 in stream before done", async () => 
   await user.click(screen.getByRole("button", { name: "发送" }));
 
   const transcript = await screen.findByTestId("native-agent-transcript");
-  expect(within(transcript).getByText("正文先出")).toBeInTheDocument();
+  expect(within(transcript).queryByText("正文先出")).not.toBeInTheDocument();
   expect(within(transcript).getByText("shell_command")).toBeInTheDocument();
+  expect(within(transcript).queryByTestId("native-agent-final-result")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "复制最终回答" })).not.toBeInTheDocument();
+  expect(screen.getByTestId("native-agent-streaming-status")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "展开过程详情" })).not.toBeInTheDocument();
+});
+
+test("plain cli streaming text waits for done before rendering answer", async () => {
+  const user = userEvent.setup();
+  let resolveFinal!: (message: ChatMessage) => void;
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (_botAlias, _text, onChunk) => {
+    onChunk("临时正文");
+    return new Promise<ChatMessage>((resolve) => {
+      resolveFinal = resolve;
+    });
+  });
+  const client = createClient({ sendMessage });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+  await user.type(screen.getByPlaceholderText("输入消息"), "继续");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(screen.queryByText("临时正文")).not.toBeInTheDocument();
+  expect(screen.getByText("正在输出...")).toBeInTheDocument();
+
+  await act(async () => {
+    resolveFinal({
+      id: "assistant-plain-cli-final",
+      role: "assistant",
+      text: "最终答复",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    });
+  });
+
+  expect(await screen.findByText("最终答复")).toBeInTheDocument();
 });
 
 test("renders live cli trace as transcript after final message", async () => {
@@ -544,8 +579,9 @@ test("keeps live cli trace when done omits trace payload", async () => {
   await waitFor(() => expect(sendMessage).toHaveBeenCalled());
 
   const transcript = await screen.findByTestId("native-agent-transcript");
-  expect(within(transcript).getByText("正文先出")).toBeInTheDocument();
+  expect(within(transcript).queryByText("正文先出")).not.toBeInTheDocument();
   expect(within(transcript).getByText("我先检查目录。")).toBeInTheDocument();
+  expect(screen.getByTestId("native-agent-streaming-status")).toBeInTheDocument();
   expect(getMessageTrace).not.toHaveBeenCalled();
 });
 
@@ -637,7 +673,8 @@ test("replaces snapshot text and appends later stream chunks", async () => {
   await userEvent.type(screen.getByPlaceholderText("输入消息"), "查");
   await userEvent.click(screen.getByRole("button", { name: "发送" }));
 
-  expect(await screen.findByText("最终答复")).toBeInTheDocument();
+  expect(screen.queryByText("最终答复")).not.toBeInTheDocument();
+  expect(screen.getByText("正在输出...")).toBeInTheDocument();
   expect(screen.queryByText("先查一下...最终答复")).not.toBeInTheDocument();
   await act(async () => {
     resolveFinal({
@@ -648,6 +685,7 @@ test("replaces snapshot text and appends later stream chunks", async () => {
       state: "done",
     });
   });
+  expect(await screen.findByText("最终答复")).toBeInTheDocument();
 });
 
 test("uses full width chat content outside embedded workbench", async () => {
@@ -710,7 +748,12 @@ test("copies final answer using execCommand fallback when clipboard api is unava
 
   render(<ChatScreen botAlias="main" client={client} />);
 
-  await userEvent.click(await screen.findByRole("button", { name: "复制最终回答" }));
+  const copyButton = await screen.findByRole("button", { name: "复制最终回答" });
+  const finalResult = await screen.findByTestId("native-agent-final-result");
+  const finalAnswer = within(finalResult).getByText("最终答案");
+  expect(finalAnswer.compareDocumentPosition(copyButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+  await userEvent.click(copyButton);
 
   expect(execCommand).toHaveBeenCalledWith("copy");
   expect(await screen.findByRole("button", { name: "已复制最终回答" })).toBeInTheDocument();
@@ -2866,7 +2909,8 @@ test("assistant chat polls while idle and picks up scheduled cron runs", async (
   });
 
   expect(screen.getByText("定时检查邮箱")).toBeInTheDocument();
-  expect(screen.getByText("正在读取最新邮件")).toBeInTheDocument();
+  expect(screen.queryByText("正在读取最新邮件")).not.toBeInTheDocument();
+  expect(screen.getByText("正在输出...")).toBeInTheDocument();
 });
 
 

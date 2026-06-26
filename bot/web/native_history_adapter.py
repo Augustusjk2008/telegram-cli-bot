@@ -137,6 +137,46 @@ def _normalize_custom_tool_output(value: Any) -> tuple[str, Any]:
     return summary, parsed
 
 
+def _codex_command_execution_event(payload: dict[str, Any], *, event_type: str) -> dict[str, Any] | None:
+    if str(payload.get("type") or "").strip() != "command_execution":
+        return None
+
+    command = _stringify_value(payload.get("command"))
+    aggregated_output = _stringify_value(payload.get("aggregated_output"))
+    exit_code = payload.get("exit_code")
+    status = _stringify_value(payload.get("status"))
+    event_payload = {
+        "command": command,
+        "aggregated_output": aggregated_output,
+        "exit_code": "" if exit_code is None else exit_code,
+        "status": status,
+    }
+    call_id = _stringify_value(payload.get("id"))
+
+    if event_type == "item.started":
+        return _trace_event(
+            "tool_call",
+            raw_type="command_execution",
+            title="command_execution",
+            tool_name="command_execution",
+            call_id=call_id,
+            summary=command or "command_execution",
+            payload=event_payload,
+        )
+
+    if event_type == "item.completed":
+        exit_summary = f"Exit code: {exit_code}" if exit_code is not None else "工具调用已返回"
+        return _trace_event(
+            "tool_result",
+            raw_type="command_execution",
+            call_id=call_id,
+            summary=aggregated_output or exit_summary,
+            payload=event_payload,
+        )
+
+    return None
+
+
 def _extract_claude_message_blocks(item: dict[str, Any]) -> list[dict[str, Any]]:
     message = item.get("message") if isinstance(item.get("message"), dict) else {}
     content = message.get("content")
@@ -497,6 +537,13 @@ def _consume_codex_line(item: dict[str, Any], turn: dict[str, Any], *, include_t
             )
         return
 
+    if item_type in {"item.started", "item.completed"}:
+        payload = _resolve_payload(item)
+        command_event = _codex_command_execution_event(payload, event_type=item_type)
+        if command_event is not None:
+            _append_trace_event(turn, command_event, include_trace=include_trace)
+            return
+
     if item_type not in {"turn_context", "session_meta"}:
         _append_trace_event(
             turn,
@@ -848,6 +895,9 @@ def _consume_live_codex_line(item: dict[str, Any]) -> list[dict[str, Any]]:
 
     payload = _resolve_payload(item)
     payload_type = str(payload.get("type") or "").strip()
+    command_event = _codex_command_execution_event(payload, event_type=event_type)
+    if command_event is not None:
+        return [command_event]
     if event_type != "item.completed":
         return []
     if payload_type == "function_call":

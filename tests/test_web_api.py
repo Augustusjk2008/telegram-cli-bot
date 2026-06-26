@@ -224,6 +224,7 @@ from bot.web.git_service import (
     update_git_commit_message_cli_config,
     update_git_identity_config,
 )
+from bot.web.native_history_adapter import consume_stream_trace_chunk, create_stream_trace_state, load_native_transcript
 from bot.web.git_commit_message import (
     build_commit_message_prompt,
     extract_commit_message,
@@ -4980,6 +4981,123 @@ async def test_execute_shell_command_uses_exec_argv_without_shell(web_manager: M
     assert captured["kwargs"]["cwd"] == web_manager.main_profile.working_dir
 
 
+def test_codex_command_execution_stream_trace_chunks():
+    state = create_stream_trace_state("codex")
+
+    started_events = consume_stream_trace_chunk(
+        "codex",
+        json.dumps({
+            "type": "item.started",
+            "item": {
+                "id": "cmd-1",
+                "type": "command_execution",
+                "command": "Get-ChildItem -Force",
+                "status": "in_progress",
+            },
+        }) + "\n",
+        state,
+    )
+    completed_events = consume_stream_trace_chunk(
+        "codex",
+        json.dumps({
+            "type": "item.completed",
+            "item": {
+                "id": "cmd-1",
+                "type": "command_execution",
+                "command": "Get-ChildItem -Force",
+                "aggregated_output": "README.md\nbot\nfront",
+                "exit_code": 0,
+                "status": "completed",
+            },
+        }) + "\n",
+        state,
+    )
+    fallback_events = consume_stream_trace_chunk(
+        "codex",
+        json.dumps({
+            "type": "item.completed",
+            "item": {
+                "id": "cmd-2",
+                "type": "command_execution",
+                "command": "Write-Output ok",
+                "aggregated_output": "",
+                "exit_code": 0,
+                "status": "completed",
+            },
+        }) + "\n",
+        state,
+    )
+
+    assert started_events == [
+        {
+            "kind": "tool_call",
+            "source": "native",
+            "raw_type": "command_execution",
+            "title": "command_execution",
+            "tool_name": "command_execution",
+            "call_id": "cmd-1",
+            "summary": "Get-ChildItem -Force",
+            "payload": {
+                "command": "Get-ChildItem -Force",
+                "aggregated_output": "",
+                "exit_code": "",
+                "status": "in_progress",
+            },
+        }
+    ]
+    assert completed_events[0]["kind"] == "tool_result"
+    assert completed_events[0]["call_id"] == "cmd-1"
+    assert completed_events[0]["summary"] == "README.md\nbot\nfront"
+    assert completed_events[0]["payload"] == {
+        "command": "Get-ChildItem -Force",
+        "aggregated_output": "README.md\nbot\nfront",
+        "exit_code": 0,
+        "status": "completed",
+    }
+    assert fallback_events[0]["summary"] == "Exit code: 0"
+
+
+def test_codex_command_execution_native_transcript_trace(tmp_path: Path):
+    transcript_path = tmp_path / "codex.jsonl"
+    transcript_path.write_text(
+        "\n".join([
+            json.dumps({"type": "turn_context", "content": "列出目录"}),
+            json.dumps({
+                "type": "item.started",
+                "item": {
+                    "id": "cmd-1",
+                    "type": "command_execution",
+                    "command": "Get-ChildItem -Force",
+                    "status": "in_progress",
+                },
+            }),
+            json.dumps({
+                "type": "item.completed",
+                "item": {
+                    "id": "cmd-1",
+                    "type": "command_execution",
+                    "command": "Get-ChildItem -Force",
+                    "aggregated_output": "README.md\nbot\nfront",
+                    "exit_code": 0,
+                    "status": "completed",
+                },
+            }),
+            json.dumps({"type": "item.completed", "item": {"type": "assistant_message", "text": "目录已读取完成。"}}),
+        ]),
+        encoding="utf-8",
+    )
+
+    messages = load_native_transcript("codex", transcript_path, session_id="thread-1", include_trace=True)
+
+    assert len(messages) == 1
+    trace = messages[0]["meta"]["trace"]
+    assert trace[0]["kind"] == "tool_call"
+    assert trace[0]["summary"] == "Get-ChildItem -Force"
+    assert trace[1]["kind"] == "tool_result"
+    assert trace[1]["summary"] == "README.md\nbot\nfront"
+    assert messages[0]["meta"]["tool_call_count"] == 1
+
+
 @pytest.mark.asyncio
 async def test_stream_cli_chat_emits_trace_events_and_done_message(web_manager: MultiBotManager):
     web_manager.main_profile.cli_type = "codex"
@@ -4990,8 +5108,8 @@ async def test_stream_cli_chat_emits_trace_events_and_done_message(web_manager: 
             self._lines = [
                 '{"type":"thread.started","thread_id":"thread-1"}\n',
                 '{"type":"item.delta","item":{"type":"assistant_message","delta":"我先检查目录结构。"}}\n',
-                '{"type":"item.completed","item":{"type":"function_call","name":"shell_command","arguments":"{\\"command\\":\\"Get-ChildItem -Force\\"}","call_id":"call_1"}}\n',
-                '{"type":"item.completed","item":{"type":"function_call_output","call_id":"call_1","output":"README.md\\nbot\\nfront"}}\n',
+                '{"type":"item.started","item":{"id":"call_1","type":"command_execution","command":"Get-ChildItem -Force","status":"in_progress"}}\n',
+                '{"type":"item.completed","item":{"id":"call_1","type":"command_execution","command":"Get-ChildItem -Force","aggregated_output":"README.md\\nbot\\nfront","exit_code":0,"status":"completed"}}\n',
                 '{"type":"item.completed","item":{"type":"assistant_message","text":"目录已读取完成。"}}\n',
             ]
 
