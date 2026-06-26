@@ -126,6 +126,12 @@ def _summarize_tool_payload(name: str, payload: Any) -> str:
     return rendered or name
 
 
+def _extract_claude_tool_intent(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    return _stringify_value(payload.get("description"))
+
+
 def _normalize_custom_tool_output(value: Any) -> tuple[str, Any]:
     parsed = _parse_jsonish(value)
     if isinstance(parsed, dict):
@@ -581,7 +587,25 @@ def _consume_claude_line(
                 continue
             if block_type == "tool_use":
                 name = _stringify_value(block.get("name")) or "tool_use"
+                call_id = _stringify_value(block.get("id"))
                 payload = block.get("input")
+                intent = _extract_claude_tool_intent(payload)
+                if intent:
+                    _append_trace_event(
+                        turn,
+                        _trace_event(
+                            "commentary",
+                            raw_type="tool_use.intent",
+                            tool_name=name,
+                            call_id=call_id,
+                            summary=intent,
+                            payload={
+                                "tool_name": name,
+                                "input": payload,
+                            },
+                        ),
+                        include_trace=include_trace,
+                    )
                 _append_trace_event(
                     turn,
                     _trace_event(
@@ -589,7 +613,7 @@ def _consume_claude_line(
                         raw_type="tool_use",
                         title=name,
                         tool_name=name,
-                        call_id=_stringify_value(block.get("id")),
+                        call_id=call_id,
                         summary=_summarize_tool_payload(name, payload),
                         payload=payload,
                     ),
@@ -597,7 +621,7 @@ def _consume_claude_line(
                 )
                 _remember_claude_tool_use(
                     parser_state,
-                    call_id=_stringify_value(block.get("id")),
+                    call_id=call_id,
                     tool_name=name,
                 )
                 continue

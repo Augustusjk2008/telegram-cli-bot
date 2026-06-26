@@ -315,6 +315,137 @@ test("shows a user message after sending text", async () => {
   expect(screen.queryByText("用时 3 秒")).not.toBeInTheDocument();
 });
 
+test("binds direct done assistant message to backend id from stream meta", async () => {
+  const user = userEvent.setup();
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias,
+    _text,
+    _onChunk,
+    onStatus,
+  ) => {
+    onStatus?.({ turnId: "turn-direct-1", assistantMessageId: "assistant-direct-final" });
+    return {
+      id: "assistant-direct-final",
+      turnId: "turn-direct-1",
+      role: "assistant",
+      text: "直接完成",
+      createdAt: "2026-06-26T14:10:00Z",
+      state: "done",
+    };
+  });
+  const client = createClient({ sendMessage });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+  await user.type(screen.getByPlaceholderText("输入消息"), "直接返回");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(await screen.findByText("直接完成")).toBeInTheDocument();
+  expect(screen.getAllByText("直接完成")).toHaveLength(1);
+  expect(screen.getAllByTestId("chat-message-row")).toHaveLength(2);
+});
+
+test("merges history refresh assistant message by turn id while local send is settling", async () => {
+  const user = userEvent.setup();
+  let historyPolls = 0;
+  let resolveFinal!: (message: ChatMessage) => void;
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias,
+    _text,
+    _onChunk,
+    onStatus,
+  ) => {
+    onStatus?.({ turnId: "turn-history-1" });
+    return new Promise<ChatMessage>((resolve) => {
+      resolveFinal = resolve;
+    });
+  });
+  const client = createClient({
+    getBotOverview: async (): Promise<BotOverview> => ({
+      alias: "assistant1",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      botMode: "assistant",
+      isProcessing: false,
+      historyCount: historyPolls > 0 ? 2 : 0,
+    }),
+    listMessages: async () => {
+      historyPolls += 1;
+      if (historyPolls === 1) {
+        return [];
+      }
+      return [
+        {
+          id: "user-history-1",
+          turnId: "turn-history-1",
+          role: "user",
+          text: "触发刷新",
+          createdAt: "2026-06-26T14:20:00Z",
+          state: "done",
+        },
+        {
+          id: "assistant-history-final",
+          turnId: "turn-history-1",
+          role: "assistant",
+          text: "历史最终回复",
+          createdAt: "2026-06-26T14:20:01Z",
+          state: "done",
+        },
+      ];
+    },
+    sendMessage,
+  });
+
+  render(<ChatScreen botAlias="assistant1" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+  await user.type(screen.getByPlaceholderText("输入消息"), "触发刷新");
+  vi.useFakeTimers();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await Promise.resolve();
+  });
+  expect(sendMessage).toHaveBeenCalled();
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2500);
+    await Promise.resolve();
+  });
+  expect(screen.getByText("历史最终回复")).toBeInTheDocument();
+
+  await act(async () => {
+    resolveFinal({
+      id: "assistant-local-final",
+      turnId: "turn-history-1",
+      role: "assistant",
+      text: "历史最终回复",
+      createdAt: "2026-06-26T14:20:01Z",
+      state: "done",
+    });
+  });
+
+  expect(screen.getAllByText("历史最终回复")).toHaveLength(1);
+  expect(screen.getAllByTestId("chat-message-row")).toHaveLength(2);
+});
+
+test("shows send errors only in assistant bubble when placeholder exists", async () => {
+  const user = userEvent.setup();
+  const client = createClient({
+    sendMessage: async () => {
+      throw new Error("CLI 失败");
+    },
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+  await user.type(screen.getByPlaceholderText("输入消息"), "触发错误");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(await screen.findByText("CLI 失败")).toBeInTheDocument();
+  expect(screen.queryByTestId("chat-error-banner")).not.toBeInTheDocument();
+  expect(screen.getAllByTestId("chat-message-row")).toHaveLength(2);
+});
+
 
 
 

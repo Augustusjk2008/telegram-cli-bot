@@ -5098,6 +5098,108 @@ def test_codex_command_execution_native_transcript_trace(tmp_path: Path):
     assert messages[0]["meta"]["tool_call_count"] == 1
 
 
+def test_claude_tool_use_description_becomes_commentary_stream_trace():
+    state = create_stream_trace_state("claude")
+
+    events = consume_stream_trace_chunk(
+        "claude",
+        json.dumps({
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_1",
+                        "name": "Bash",
+                        "input": {
+                            "description": "统计 git 跟踪代码文件行数",
+                            "command": "git ls-files | xargs wc -l",
+                        },
+                    }
+                ]
+            },
+        }) + "\n",
+        state,
+    )
+
+    assert [event["kind"] for event in events] == ["commentary", "tool_call"]
+    assert events[0]["raw_type"] == "tool_use.intent"
+    assert events[0]["summary"] == "统计 git 跟踪代码文件行数"
+    assert events[0]["call_id"] == "toolu_1"
+    assert events[1]["summary"] == "git ls-files | xargs wc -l"
+
+
+def test_claude_tool_use_description_becomes_commentary_native_transcript_trace(tmp_path: Path):
+    transcript_path = tmp_path / "claude.jsonl"
+    transcript_path.write_text(
+        "\n".join([
+            json.dumps({
+                "type": "user",
+                "message": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "统计代码行数",
+                        }
+                    ]
+                },
+            }),
+            json.dumps({
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "Bash",
+                            "input": {
+                                "description": "统计 git 跟踪代码文件行数",
+                                "command": "git ls-files | xargs wc -l",
+                            },
+                        }
+                    ]
+                },
+            }),
+            json.dumps({
+                "type": "user",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_1",
+                            "content": "123 total",
+                        }
+                    ]
+                },
+            }),
+            json.dumps({
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "统计完成。",
+                        }
+                    ]
+                },
+            }),
+        ]),
+        encoding="utf-8",
+    )
+
+    messages = load_native_transcript("claude", transcript_path, session_id="session-1", include_trace=True)
+
+    assert len(messages) == 1
+    trace = messages[0]["meta"]["trace"]
+    assert [event["kind"] for event in trace] == ["commentary", "tool_call", "tool_result"]
+    assert trace[0]["raw_type"] == "tool_use.intent"
+    assert trace[0]["summary"] == "统计 git 跟踪代码文件行数"
+    assert trace[0]["call_id"] == "toolu_1"
+    assert trace[1]["summary"] == "git ls-files | xargs wc -l"
+    assert messages[0]["content"] == "统计完成。"
+    assert messages[0]["meta"]["tool_call_count"] == 1
+
+
 @pytest.mark.asyncio
 async def test_stream_cli_chat_emits_trace_events_and_done_message(web_manager: MultiBotManager):
     web_manager.main_profile.cli_type = "codex"

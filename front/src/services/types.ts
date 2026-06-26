@@ -840,6 +840,8 @@ export type ChatStatusUpdate = {
   previewText?: string;
   replaceText?: string;
   clusterRunId?: string;
+  turnId?: string;
+  assistantMessageId?: string;
   contextUsage?: ChatMessageContextUsage;
 };
 

@@ -847,6 +847,11 @@ function getMessageClientStateKey(item: ChatMessage) {
   return `${item.role}|${item.id}`;
 }
 
+function getMessageTurnRoleKey(item: ChatMessage) {
+  const turnId = String(item.turnId || "").trim();
+  return turnId ? `${item.role}|${turnId}` : "";
+}
+
 function isCompletedNativeHistoryPoint(item: ChatMessage) {
   return Boolean(
     item.role === "assistant"
@@ -966,11 +971,29 @@ function updateLatestAssistantMessage(
   streamStartedAtMs: number,
   updater: (item: ChatMessage) => ChatMessage,
 ) {
-  const updatedById = updateMessageById(items, preferredMessageId, updater);
-  if (updatedById !== items) {
-    return updatedById;
+  const index = findLatestAssistantMessageIndex(items, preferredMessageId, streamStartedAtMs);
+  if (index < 0) {
+    return items;
   }
+  const current = items[index];
+  const next = updater(current);
+  if (next === current) {
+    return items;
+  }
+  const nextItems = items.slice();
+  nextItems[index] = next;
+  return nextItems;
+}
 
+function findLatestAssistantMessageIndex(
+  items: ChatMessage[],
+  preferredMessageId: string,
+  streamStartedAtMs: number,
+) {
+  const preferredIndex = items.findIndex((item) => item.id === preferredMessageId);
+  if (preferredIndex >= 0) {
+    return preferredIndex;
+  }
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
     if (item.role !== "assistant") {
@@ -983,17 +1006,10 @@ function updateLatestAssistantMessage(
       continue;
     }
 
-    const next = updater(item);
-    if (next === item) {
-      return items;
-    }
-
-    const nextItems = items.slice();
-    nextItems[index] = next;
-    return nextItems;
+    return index;
   }
 
-  return items;
+  return -1;
 }
 
 function mergeMessagesPreservingClientState(previousItems: ChatMessage[], nextItems: ChatMessage[]) {
@@ -1003,9 +1019,16 @@ function mergeMessagesPreservingClientState(previousItems: ChatMessage[], nextIt
 
   const previousById = new Map(previousItems.map((item) => [item.id, item]));
   const previousByClientStateKey = new Map(previousItems.map((item) => [getMessageClientStateKey(item), item]));
+  const previousByTurnRoleKey = new Map(
+    previousItems
+      .map((item) => [getMessageTurnRoleKey(item), item] as const)
+      .filter(([key]) => key),
+  );
 
-  return nextItems.map((item) => {
-    const previousItem = previousById.get(item.id) || previousByClientStateKey.get(getMessageClientStateKey(item));
+  const mergedItems = nextItems.map((item) => {
+    const previousItem = previousById.get(item.id)
+      || previousByClientStateKey.get(getMessageClientStateKey(item))
+      || previousByTurnRoleKey.get(getMessageTurnRoleKey(item));
     if (!previousItem) {
       return item;
     }
@@ -1021,6 +1044,34 @@ function mergeMessagesPreservingClientState(previousItems: ChatMessage[], nextIt
       ...(mergedMeta ? { meta: mergedMeta } : {}),
     };
   });
+
+  const seenKeys = new Map<string, number>();
+  const dedupedItems: ChatMessage[] = [];
+  for (const item of mergedItems) {
+    const turnRoleKey = getMessageTurnRoleKey(item);
+    const existingIndex = turnRoleKey ? seenKeys.get(turnRoleKey) : undefined;
+    if (typeof existingIndex !== "number") {
+      if (turnRoleKey) {
+        seenKeys.set(turnRoleKey, dedupedItems.length);
+      }
+      dedupedItems.push(item);
+      continue;
+    }
+
+    const previousItem = dedupedItems[existingIndex];
+    const mergedMeta = mergeMessageMeta(previousItem.meta, item.meta);
+    const nextElapsedSeconds = typeof item.elapsedSeconds === "number" ? item.elapsedSeconds : previousItem.elapsedSeconds;
+    const nextState = item.state ?? previousItem.state;
+    dedupedItems[existingIndex] = {
+      ...previousItem,
+      ...item,
+      ...(typeof nextState !== "undefined" ? { state: nextState } : {}),
+      ...(typeof nextElapsedSeconds === "number" ? { elapsedSeconds: nextElapsedSeconds } : {}),
+      ...(mergedMeta ? { meta: mergedMeta } : {}),
+    };
+  }
+
+  return dedupedItems;
 }
 
 function clusterTaskStatusText(task: ClusterAgentTask) {
@@ -1314,7 +1365,7 @@ const ChatMessageList = memo(function ChatMessageList({
   wideMessages: boolean;
 }) {
   return rows.map((row) => (
-    <div key={row.item.id} className="space-y-1">
+    <div key={row.item.id} data-testid="chat-message-row" className="space-y-1">
       <ChatMessageRow
         item={row.item}
         assistantName={assistantName}
@@ -2972,6 +3023,21 @@ export function ChatScreen({
         if (typeof status.elapsedSeconds === "number") {
           setStreamStartedAtMs(resolveStreamStartMs(itemsRef.current, status.elapsedSeconds));
         }
+        if (status.turnId || status.assistantMessageId) {
+          setItems((prev) => {
+            const nextWithUserTurn = status.turnId
+              ? updateMessageById(prev, userMessage.id, (item) => ({
+                  ...item,
+                  turnId: status.turnId,
+                }))
+              : prev;
+            return updateLatestAssistantMessage(nextWithUserTurn, assistantId, localStartedAtMs, (item) => ({
+              ...item,
+              ...(status.assistantMessageId ? { id: status.assistantMessageId } : {}),
+              ...(status.turnId ? { turnId: status.turnId } : {}),
+            }));
+          });
+        }
         if (status.clusterRunId && status.clusterRunId !== clusterRunIdRef.current) {
           clusterRunIdRef.current = status.clusterRunId;
           setClusterRunId(status.clusterRunId);
@@ -3150,12 +3216,15 @@ export function ChatScreen({
         return;
       }
       const message = err instanceof Error ? err.message : "发送失败";
-      setError(message);
-      setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => ({
-        ...item,
-        text: message,
-        state: "error",
-      })));
+      if (findLatestAssistantMessageIndex(itemsRef.current, assistantId, localStartedAtMs) >= 0) {
+        setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => ({
+          ...item,
+          text: message,
+          state: "error",
+        })));
+      } else {
+        setError(message);
+      }
       options.onError?.(message);
     } finally {
       if (sendVersion !== assistantSendVersionRef.current) {
@@ -3905,7 +3974,7 @@ export function ChatScreen({
             <div className="mt-10 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-8 text-center text-sm text-[var(--muted)] shadow-[var(--shadow-soft)]">加载中...</div>
           ) : null}
           {error ? (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-[var(--shadow-soft)]">
+            <div data-testid="chat-error-banner" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-[var(--shadow-soft)]">
               {error}
             </div>
           ) : null}

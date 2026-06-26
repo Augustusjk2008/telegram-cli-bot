@@ -2691,6 +2691,43 @@ describe("RealWebBotClient", () => {
     }));
   });
 
+  test("sendMessage forwards stream meta turn and assistant ids", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode("event: meta\ndata: {\"type\":\"meta\",\"turn_id\":\"turn-meta-1\",\"assistant_message_id\":\"assistant-meta-1\"}\n\n"));
+        controller.enqueue(encoder.encode("event: done\ndata: {\"output\":\"最终结果\"}\n\n"));
+        controller.close();
+      },
+    });
+
+    fetchMock
+      .mockResolvedValueOnce(jsonOk({ user_id: 1001 }))
+      .mockResolvedValueOnce({
+        ok: true,
+        body: stream,
+        json: async () => ({
+          ok: true,
+          data: {},
+        }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+
+    const statuses: Array<{ turnId?: string; assistantMessageId?: string }> = [];
+    await client.sendMessage("main", "hello", () => undefined, (status) => {
+      statuses.push(status);
+    });
+
+    expect(statuses).toEqual([
+      expect.objectContaining({
+        turnId: "turn-meta-1",
+        assistantMessageId: "assistant-meta-1",
+      }),
+    ]);
+  });
+
   test("sendMessage deduplicates legacy live and done trace counts", async () => {
     const encoder = new TextEncoder();
     const traceEvent = {

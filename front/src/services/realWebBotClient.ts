@@ -4850,6 +4850,8 @@ export class RealWebBotClient implements WebBotClient {
     let finalText = "";
     let finalElapsedSeconds: number | undefined;
     let finalMessage: ChatMessage | null = null;
+    let streamTurnId = "";
+    let streamAssistantMessageId = "";
     const streamedTrace: ChatTraceEvent[] = [];
     let streamedContextUsage: ChatMessageContextUsage | undefined;
     let streamFinished = false;
@@ -4941,8 +4943,22 @@ export class RealWebBotClient implements WebBotClient {
           });
         } else if (event.type === "meta") {
           const clusterRunId = typeof event.cluster_run_id === "string" ? event.cluster_run_id : "";
-          if (clusterRunId) {
-            onStatus?.({ clusterRunId });
+          const turnId = typeof (event.turn_id ?? event.turnId) === "string" ? (event.turn_id ?? event.turnId) as string : "";
+          const assistantMessageId = typeof (event.assistant_message_id ?? event.assistantMessageId) === "string"
+            ? (event.assistant_message_id ?? event.assistantMessageId) as string
+            : "";
+          if (turnId) {
+            streamTurnId = turnId;
+          }
+          if (assistantMessageId) {
+            streamAssistantMessageId = assistantMessageId;
+          }
+          if (clusterRunId || turnId || assistantMessageId) {
+            onStatus?.({
+              ...(clusterRunId ? { clusterRunId } : {}),
+              ...(turnId ? { turnId } : {}),
+              ...(assistantMessageId ? { assistantMessageId } : {}),
+            });
           }
         } else if (event.type === "status") {
           if (typeof event.elapsed_seconds === "number") {
@@ -5014,6 +5030,7 @@ export class RealWebBotClient implements WebBotClient {
       }
       return normalizeResolvedFinalMessage({
         ...finalMessage,
+        ...(!finalMessage.turnId && streamTurnId ? { turnId: streamTurnId } : {}),
         elapsedSeconds: finalMessage.elapsedSeconds ?? finalElapsedSeconds,
         meta: finalMessage.meta,
       });
@@ -5026,7 +5043,8 @@ export class RealWebBotClient implements WebBotClient {
       );
       const completionState = meta?.completionState || "";
       return {
-        id: agUiState.messageId || `assistant-${Date.now()}`,
+        id: agUiState.messageId || streamAssistantMessageId || `assistant-${Date.now()}`,
+        ...(streamTurnId ? { turnId: streamTurnId } : {}),
         role: "assistant",
         text: finalText || agUiState.assistantText || streamedText,
         createdAt: new Date().toISOString(),
@@ -5045,7 +5063,8 @@ export class RealWebBotClient implements WebBotClient {
       streamedTrace,
     );
     return {
-      id: `assistant-${Date.now()}`,
+      id: streamAssistantMessageId || `assistant-${Date.now()}`,
+      ...(streamTurnId ? { turnId: streamTurnId } : {}),
       role: "assistant",
       text: messageText,
       createdAt: new Date().toISOString(),

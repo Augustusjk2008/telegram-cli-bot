@@ -14,7 +14,6 @@ import platform
 import re
 import subprocess
 import sys
-import threading
 import time
 import uuid
 import zlib
@@ -327,7 +326,6 @@ DEFAULT_TERMINAL_OWNER_ID = "default"
 # 给浏览器留出响应落地时间，避免服务重启过快导致前端请求悬挂。
 RESTART_RESPONSE_DELAY_SECONDS = 1.0
 _TUNNEL_STATUS_REFRESH_TIMEOUT = 1.0
-_TERMINAL_OUTPUT_EOF = object()
 _CLIENT_DISCONNECT_ERRORS = (
     ClientConnectionResetError,
     ConnectionResetError,
@@ -736,88 +734,6 @@ def _build_public_host_info() -> dict[str, str]:
         "hardware_platform": hardware_platform,
         "hardware_spec": " · ".join(part for part in hardware_spec_parts if part) or "规格未知",
     }
-
-
-class _TerminalOutputPump:
-    """用 daemon 线程读取终端输出，避免阻塞读把主进程退出卡住。"""
-
-    def __init__(self, process: Any, *, flush_interval_ms: int = 40, max_chunk_bytes: int = 65536):
-        self._process = process
-        self._queue: asyncio.Queue[bytes | object] = asyncio.Queue()
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._stop_event = threading.Event()
-        self._thread: threading.Thread | None = None
-        self._flush_interval = max(flush_interval_ms, 0) / 1000
-        self._max_chunk_bytes = max(max_chunk_bytes, 1)
-
-    def start(self, loop: asyncio.AbstractEventLoop) -> None:
-        if self._thread is not None:
-            return
-
-        self._loop = loop
-        self._thread = threading.Thread(
-            target=self._run,
-            name=f"terminal-output-{getattr(self._process, 'pid', 'unknown')}",
-            daemon=True,
-        )
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop_event.set()
-
-    async def read(self) -> bytes | object:
-        return await self._queue.get()
-
-    def _put(self, item: bytes | object) -> None:
-        loop = self._loop
-        if loop is None or loop.is_closed():
-            return
-        try:
-            loop.call_soon_threadsafe(self._queue.put_nowait, item)
-        except RuntimeError:
-            # 事件循环正在关闭时无需再投递。
-            return
-
-    def _run(self) -> None:
-        pending = bytearray()
-        last_flush_at = time.monotonic()
-        try:
-            while not self._stop_event.is_set():
-                try:
-                    data = self._process.read(timeout=20)
-                except Exception as exc:
-                    logger.debug("终端输出读取结束 pid=%s: %s", getattr(self._process, "pid", "unknown"), exc)
-                    break
-
-                if data:
-                    if isinstance(data, str):
-                        data = data.encode("utf-8", errors="replace")
-                    pending.extend(data)
-                    now = time.monotonic()
-                    if len(pending) >= self._max_chunk_bytes or now - last_flush_at >= self._flush_interval:
-                        self._put(bytes(pending))
-                        pending.clear()
-                        last_flush_at = now
-                    continue
-
-                if pending:
-                    self._put(bytes(pending))
-                    pending.clear()
-                    last_flush_at = time.monotonic()
-
-                try:
-                    if not self._process.isalive():
-                        break
-                except Exception:
-                    break
-
-                self._stop_event.wait(0.01)
-        finally:
-            if pending:
-                self._put(bytes(pending))
-            self._put(_TERMINAL_OUTPUT_EOF)
-
-
 def _parse_terminal_size(payload: dict[str, Any]) -> tuple[int, int] | None:
     try:
         cols = int(payload.get("cols") or 0)
