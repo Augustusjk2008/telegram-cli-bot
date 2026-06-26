@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 
+from bot.cluster.bundles import get_cluster_template, list_cluster_templates
 from bot.cluster.config import AgentClusterConfig, BotClusterConfig
 from bot.cluster.runtime import ClusterRuntime, ClusterRunRequest, ClusterToolError
 from bot.models import AgentProfile, BotProfile
@@ -64,6 +65,17 @@ def test_cluster_runtime_creates_agent_task():
     status = runtime.build_task_status(run.run_id, [task.task_id], include_output=True)
     assert status["queued_count"] == 1
     assert status["tasks"][0]["task_id"] == task.task_id
+
+
+def test_cluster_templates_include_test_expert():
+    summaries = list_cluster_templates()
+    assert "test_expert" in {item["id"] for item in summaries}
+
+    template = get_cluster_template("test_expert")
+    assert template["name"] == "测试专家开发集群"
+    assert template["cluster"]["write_policy"] == "selected_agents"
+    assert template["cluster"]["max_parallel_agents"] == 3
+    assert [agent["id"] for agent in template["agents"]] == ["implementer", "tester", "reviewer"]
 
 
 def test_cluster_runtime_ask_agent_uses_agent_timeout_by_default():

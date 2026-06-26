@@ -591,6 +591,7 @@ test("desktop bot manager exposes cluster templates in config tab", async () => 
   })));
   expect(await screen.findByText("集群模板")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "预览 全量测试集群" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "预览 测试专家开发集群" })).toBeInTheDocument();
 });
 
 test("desktop bot manager lets bot operators edit cluster and cli params without bot admin", async () => {

@@ -20,6 +20,11 @@ def test_repo_ignores_runtime_state_and_tracks_example_bot_config():
 
     example = json.loads(Path("managed_bots.example.json").read_text(encoding="utf-8"))
     assert isinstance(example["bots"], list)
+    aliases = {item["alias"] for item in example["bots"] if isinstance(item, dict)}
+    assert "test-expert" in aliases
+    test_expert = next(item for item in example["bots"] if item.get("alias") == "test-expert")
+    assert test_expert["cluster"]["max_parallel_agents"] == 3
+    assert [agent["id"] for agent in test_expert["agents"]] == ["implementer", "tester", "reviewer"]
 
 
 def test_portable_build_script_only_copies_tracked_files():

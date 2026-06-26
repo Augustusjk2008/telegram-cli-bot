@@ -110,6 +110,42 @@ export const MOCK_CLUSTER_TEMPLATES: ClusterConfigBundle[] = [
     ],
   },
   {
+    id: "test_expert",
+    name: "测试专家开发集群",
+    description: "开发、测试和审查三角色协作，适合围绕测试问题快速修复和回归验证。",
+    cluster: {
+      enabled: true,
+      writePolicy: "selected_agents",
+      conflictPolicy: "snapshot_diff",
+      maxParallelAgents: 3,
+      defaultTimeoutSeconds: 1200,
+      modelTiers: { low: "", medium: "", high: "" },
+    },
+    agents: [
+      {
+        id: "implementer",
+        name: "实现专家",
+        systemPrompt: "负责按明确范围修改代码。先说明计划和写入文件，改完列出变更文件和验证结果。",
+        enabled: true,
+        cluster: { allowCluster: true, allowWrite: true, sessionPolicy: "fork", timeoutSeconds: 1200 },
+      },
+      {
+        id: "tester",
+        name: "测试专家",
+        systemPrompt: "负责执行相关测试，记录命令、结果、失败用例和复现步骤。默认不修改代码。",
+        enabled: true,
+        cluster: { allowCluster: true, allowWrite: false, sessionPolicy: "ephemeral", timeoutSeconds: 900 },
+      },
+      {
+        id: "reviewer",
+        name: "代码审查",
+        systemPrompt: "负责审查改动正确性、回归风险和缺失验证。输出按严重程度排序的问题和建议测试。",
+        enabled: true,
+        cluster: { allowCluster: true, allowWrite: false, sessionPolicy: "ephemeral", timeoutSeconds: 900 },
+      },
+    ],
+  },
+  {
     id: "research_plan",
     name: "调研规划集群",
     description: "资料整理、架构分析和风险评估。",
