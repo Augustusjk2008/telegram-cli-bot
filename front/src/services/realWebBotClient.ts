@@ -948,6 +948,7 @@ type RawGitCommitGraphNode = {
   author_name?: string;
   authored_at?: string;
   subject?: string;
+  message?: string;
   refs?: RawGitCommitGraphRef[];
   graph?: {
     column?: number;
@@ -3009,6 +3010,7 @@ function mapGitCommitGraph(raw: RawGitCommitGraphPayload): GitCommitGraphPayload
         authorName: node.author_name || "",
         authoredAt: node.authored_at || "",
         subject: node.subject || "",
+        message: node.message || "",
         refs: (node.refs || []).map((ref) => ({
           name: ref.name || "",
           kind: (ref.kind || "local_branch") as GitCommitGraphRefKind,

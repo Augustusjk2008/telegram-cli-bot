@@ -1938,6 +1938,7 @@ export type GitCommitGraphNode = {
   authorName: string;
   authoredAt: string;
   subject: string;
+  message?: string;
   refs: GitCommitGraphRef[];
   graph: GitCommitGraphLane;
   canReset?: boolean;

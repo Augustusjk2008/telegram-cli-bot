@@ -2994,6 +2994,7 @@ describe("RealWebBotClient", () => {
           author_name: "Web Bot",
           authored_at: "2026-04-09T21:00:00+08:00",
           subject: "feat: graph",
+          message: "feat: graph\n\nshow full body on hover",
           refs: [
             { name: "HEAD", kind: "head", current: true },
             { name: "main", kind: "local_branch", current: true },
@@ -3029,6 +3030,7 @@ describe("RealWebBotClient", () => {
           authorName: "Web Bot",
           authoredAt: "2026-04-09T21:00:00+08:00",
           subject: "feat: graph",
+          message: "feat: graph\n\nshow full body on hover",
           refs: [
             { name: "HEAD", kind: "head", current: true },
             { name: "main", kind: "local_branch", current: true },

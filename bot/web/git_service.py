@@ -664,6 +664,15 @@ def _parse_git_graph_records(output: str) -> list[dict[str, Any]]:
     return commits
 
 
+def _read_git_graph_commit_message(repo_root: str, commit_hash: str) -> str:
+    if not re.fullmatch(r"[0-9a-fA-F]{7,40}", commit_hash or ""):
+        return ""
+    result = _run_git(repo_root, ["show", "-s", "--format=%B", commit_hash], check=False)
+    if result.returncode != 0:
+        return ""
+    return (result.stdout or "").rstrip("\r\n")
+
+
 def _list_git_graph_commits(repo_root: str, *, scope: str, limit: int) -> list[dict[str, Any]]:
     args = [
         "log",
@@ -676,7 +685,11 @@ def _list_git_graph_commits(repo_root: str, *, scope: str, limit: int) -> list[d
     result = _run_git(repo_root, args, check=False)
     if result.returncode != 0:
         return []
-    return _parse_git_graph_records(result.stdout or "")
+    commits = _parse_git_graph_records(result.stdout or "")
+    for commit in commits:
+        commit_hash = str(commit.get("hash") or "")
+        commit["message"] = _read_git_graph_commit_message(repo_root, commit_hash)
+    return commits
 
 
 def _git_graph_ref_kind(refname: str) -> tuple[str, str] | None:

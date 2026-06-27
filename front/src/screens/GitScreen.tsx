@@ -60,9 +60,9 @@ type GitFileGroupKey = "staged" | "unstaged" | "untracked";
 type CommitLike = Pick<GitCommitGraphNode, "hash" | "shortHash" | "subject">;
 
 const GIT_GRAPH_LIMIT = 50;
-const GIT_GRAPH_ROW_HEIGHT = 58;
-const GIT_GRAPH_LANE_GAP = 18;
-const GIT_GRAPH_LANE_PADDING = 12;
+const GIT_GRAPH_ROW_HEIGHT = 44;
+const GIT_GRAPH_LANE_GAP = 14;
+const GIT_GRAPH_LANE_PADDING = 8;
 const GIT_GRAPH_NODE_RADIUS = 4;
 
 function groupedFiles(overview: GitOverview | null) {
@@ -209,6 +209,40 @@ function graphEdgeKey(node: GitCommitGraphNode, edge: GitCommitGraphEdge, index:
   return `${node.hash}-${edge.from}-${edge.to}-${edge.commit || index}`;
 }
 
+type GraphIncomingEdge = GitCommitGraphEdge & {
+  sourceHash: string;
+  sourceIndex: number;
+};
+
+function graphIncomingEdgesByRow(nodes: GitCommitGraphNode[], laneCount: number) {
+  const activeEdges = new Map<number, GraphIncomingEdge>();
+  return nodes.map((node) => {
+    const nodeColumn = clampGraphColumn(node.graph.column, laneCount);
+    const incomingEdges = Array.from(activeEdges.values());
+    for (const [column, edge] of Array.from(activeEdges.entries())) {
+      if (column === nodeColumn && (!edge.commit || edge.commit === node.hash)) {
+        activeEdges.delete(column);
+      }
+    }
+    (node.graph.edges || []).forEach((edge, index) => {
+      const to = clampGraphColumn(edge.to, laneCount);
+      activeEdges.set(to, { ...edge, to, sourceHash: node.hash, sourceIndex: index });
+    });
+    return incomingEdges;
+  });
+}
+
+function compactGraphRefClass(ref: GitCommitGraphRef) {
+  const tone = graphRefTone(ref);
+  return clsx(
+    "inline-flex h-4 min-w-0 max-w-24 shrink items-center rounded border px-1 text-[10px] font-medium leading-none",
+    tone === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "",
+    tone === "warning" ? "border-yellow-200 bg-yellow-50 text-yellow-700" : "",
+    tone === "neutral" ? "border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] text-[var(--muted)]" : "",
+    tone === "accent" ? "border-[var(--workbench-hover-border)] bg-[var(--workbench-active-bg)] text-[var(--accent)]" : "",
+  );
+}
+
 function formatCommitGraphDate(value: string | number | Date) {
   if (!value) {
     return "-";
@@ -236,13 +270,17 @@ function GitCommitGraphLite({ nodes, selectedHash, disabled, onSelect }: GitComm
   const laneCount = graphLaneCount(nodes);
   const laneWidth = GIT_GRAPH_LANE_PADDING * 2 + (laneCount - 1) * GIT_GRAPH_LANE_GAP;
   const midY = GIT_GRAPH_ROW_HEIGHT / 2;
+  const curveOffset = Math.max(8, Math.floor(GIT_GRAPH_ROW_HEIGHT * 0.28));
+  const incomingEdgesByRow = graphIncomingEdgesByRow(nodes, laneCount);
 
   return (
     <div className="min-w-0 divide-y divide-[var(--workbench-hairline)]">
-      {nodes.map((node) => {
+      {nodes.map((node, rowIndex) => {
         const selected = selectedHash === node.hash;
         const nodeColumn = clampGraphColumn(node.graph.column, laneCount);
         const shortHash = node.shortHash || node.hash.slice(0, 7);
+        const commitTitle = (node.message || node.subject || "-").trim() || "-";
+        const incomingEdges = incomingEdgesByRow[rowIndex] || [];
         return (
           <button
             key={node.hash}
@@ -253,7 +291,7 @@ function GitCommitGraphLite({ nodes, selectedHash, disabled, onSelect }: GitComm
             onClick={() => onSelect(node.hash)}
             disabled={disabled}
             className={clsx(
-              "grid w-full min-w-0 items-stretch gap-3 px-2 py-2 text-left transition-colors",
+              "grid w-full min-w-0 items-stretch gap-2 px-2 py-0 text-left transition-colors",
               "hover:bg-[var(--workbench-hover-bg)] disabled:cursor-not-allowed disabled:opacity-70",
               selected ? "bg-[var(--workbench-active-bg)]" : "",
             )}
@@ -278,6 +316,23 @@ function GitCommitGraphLite({ nodes, selectedHash, disabled, onSelect }: GitComm
                   strokeWidth="1"
                 />
               ))}
+              {incomingEdges.map((edge, index) => {
+                const to = clampGraphColumn(edge.to, laneCount);
+                const toX = laneX(to);
+                const landsOnNode = to === nodeColumn && (!edge.commit || edge.commit === node.hash);
+                return (
+                  <path
+                    key={`incoming-${graphEdgeKey(nodes[rowIndex - 1], edge, index)}`}
+                    data-testid={`git-graph-incoming-${shortHash}-${index}`}
+                    d={`M ${toX} 0 L ${toX} ${landsOnNode ? midY : GIT_GRAPH_ROW_HEIGHT}`}
+                    fill="none"
+                    stroke="var(--accent)"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    opacity={landsOnNode ? 0.95 : 0.58}
+                  />
+                );
+              })}
               {(node.graph.edges || []).map((edge, index) => {
                 const from = clampGraphColumn(edge.from, laneCount);
                 const to = clampGraphColumn(edge.to, laneCount);
@@ -285,7 +340,7 @@ function GitCommitGraphLite({ nodes, selectedHash, disabled, onSelect }: GitComm
                 const toX = laneX(to);
                 const path = from === to
                   ? `M ${fromX} ${midY} L ${toX} ${GIT_GRAPH_ROW_HEIGHT}`
-                  : `M ${fromX} ${midY} C ${fromX} ${midY + 14}, ${toX} ${GIT_GRAPH_ROW_HEIGHT - 14}, ${toX} ${GIT_GRAPH_ROW_HEIGHT}`;
+                  : `M ${fromX} ${midY} C ${fromX} ${midY + curveOffset}, ${toX} ${GIT_GRAPH_ROW_HEIGHT - curveOffset}, ${toX} ${GIT_GRAPH_ROW_HEIGHT}`;
                 return (
                   <path
                     key={graphEdgeKey(node, edge, index)}
@@ -315,31 +370,27 @@ function GitCommitGraphLite({ nodes, selectedHash, disabled, onSelect }: GitComm
                 fill="var(--accent)"
               />
             </svg>
-            <div className="flex min-w-0 flex-col justify-center gap-1">
-              <div className="flex min-w-0 items-center gap-2 text-[11px] text-[var(--muted)]">
-                <span className="shrink-0 font-mono font-semibold text-[var(--accent)]">
+            <div className="flex min-w-0 flex-col justify-center gap-0.5 py-1.5">
+              <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-[var(--muted)]">
+                <span className="shrink-0 font-mono font-semibold text-[var(--accent)]" title={node.authorName || "-"}>
                   {shortHash} - {node.authorName || "-"}
                 </span>
                 <span className="min-w-0 truncate">{formatCommitGraphDate(node.authoredAt)}</span>
+                {node.refs.length > 0 ? (
+                  <span className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+                    {node.refs.map((ref) => (
+                      <span key={`${node.hash}-${ref.kind}-${ref.name}`} className={compactGraphRefClass(ref)}>
+                        <span data-testid={`git-graph-ref-${shortHash}-${ref.name}`} className="block min-w-0 truncate" title={ref.name}>
+                          {ref.name}
+                        </span>
+                      </span>
+                    ))}
+                  </span>
+                ) : null}
               </div>
-              <div className="min-w-0 truncate text-sm font-medium text-[var(--text)]" title={node.subject || "-"}>
+              <div className="min-w-0 truncate text-sm font-medium text-[var(--text)]" title={commitTitle}>
                 {node.subject || "-"}
               </div>
-              {node.refs.length > 0 ? (
-                <div className="flex min-w-0 flex-wrap gap-1 pt-0.5">
-                  {node.refs.map((ref) => (
-                    <StateBadge
-                      key={`${node.hash}-${ref.kind}-${ref.name}`}
-                      tone={graphRefTone(ref)}
-                      className="max-w-full min-w-0 truncate"
-                    >
-                      <span data-testid={`git-graph-ref-${shortHash}-${ref.name}`} className="block min-w-0 truncate">
-                        {ref.name}
-                      </span>
-                    </StateBadge>
-                  ))}
-                </div>
-              ) : null}
             </div>
           </button>
         );

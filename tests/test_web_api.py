@@ -2938,7 +2938,7 @@ def test_git_commit_graph_linear_history_returns_parents_and_lanes(
     repo_dir.mkdir()
     _init_git_repo(repo_dir)
     first_sha = _commit_repo_file(repo_dir, "tracked.txt", "one\n", "first")
-    second_sha = _commit_repo_file(repo_dir, "tracked.txt", "two\n", "second")
+    second_sha = _commit_repo_file(repo_dir, "tracked.txt", "two\n", "second\n\nbody line")
     _use_repo(web_manager, repo_dir)
 
     result = get_git_commit_graph(web_manager, "main", 1001, scope="current")
@@ -2951,9 +2951,28 @@ def test_git_commit_graph_linear_history_returns_parents_and_lanes(
     assert result["nodes"][0]["short_hash"] == second_sha[:7]
     assert result["nodes"][0]["author_name"] == "Web Bot Test"
     assert result["nodes"][0]["subject"] == "second"
+    assert result["nodes"][0]["message"] == "second\n\nbody line"
     assert result["nodes"][0]["graph"]["column"] == 0
     assert result["nodes"][0]["graph"]["width"] >= 1
     assert result["nodes"][1]["parents"] == []
+
+
+def test_git_commit_graph_message_separator_does_not_break_records(
+    web_manager: MultiBotManager,
+    temp_dir: Path,
+):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    first_sha = _commit_repo_file(repo_dir, "tracked.txt", "one\n", "first")
+    second_sha = _commit_repo_file(repo_dir, "tracked.txt", "two\n", "second\n\nbody \x1e \x1f line")
+    _use_repo(web_manager, repo_dir)
+
+    result = get_git_commit_graph(web_manager, "main", 1001, scope="current")
+
+    assert [node["hash"] for node in result["nodes"]] == [second_sha, first_sha]
+    assert result["nodes"][0]["subject"] == "second"
+    assert result["nodes"][0]["message"] == "second\n\nbody \x1e \x1f line"
 
 
 def test_git_commit_graph_merge_history_and_refs(

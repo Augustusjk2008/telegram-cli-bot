@@ -5442,6 +5442,7 @@ export class MockWebBotClient implements WebBotClient {
         authorName: "Web Bot",
         authoredAt: "2026-05-28T09:18:00+08:00",
         subject: "merge: sync release graph",
+        message: "merge: sync release graph\n\nMerge release graph updates into main.",
         refs: [
           { name: "HEAD", kind: "head" as const, current: true },
           { name: overview.currentBranch || "main", kind: "local_branch" as const, current: true },
@@ -5457,6 +5458,7 @@ export class MockWebBotClient implements WebBotClient {
         authorName: "Web Bot",
         authoredAt: "2026-05-27T21:40:00+08:00",
         subject: "feat: add git version tree",
+        message: "feat: add git version tree\n\nRender refs, lanes, and reset actions.",
         refs: [
           { name: "feature/git-panel", kind: "local_branch" as const, current: false },
           { name: "v0.9.0", kind: "tag" as const, current: false },
@@ -5471,6 +5473,7 @@ export class MockWebBotClient implements WebBotClient {
         authorName: "Reviewer",
         authoredAt: "2026-05-27T18:12:00+08:00",
         subject: "fix: keep graph lanes stable",
+        message: "fix: keep graph lanes stable\n\nAvoid jitter when branches merge.",
         refs: [
           { name: "origin/release", kind: "remote_branch" as const, current: false },
         ],
@@ -5484,6 +5487,7 @@ export class MockWebBotClient implements WebBotClient {
         authorName: "Web Bot",
         authoredAt: "2026-04-08T03:00:00+08:00",
         subject: "feat: 实现完整的Web前端与后端集成",
+        message: "feat: 实现完整的Web前端与后端集成",
         refs: [],
         graph: { column: 0, width: 1, edges: [] },
         canReset: true,

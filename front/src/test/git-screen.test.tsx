@@ -101,12 +101,13 @@ function buildCommitGraph(overrides: Partial<GitCommitGraphPayload> = {}): GitCo
         authorName: "Web Bot",
         authoredAt: "2026-04-09T21:00:00+08:00",
         subject: "feat: initial commit",
+        message: "feat: initial commit\n\nadd first repo snapshot",
         refs: [
           { name: "HEAD", kind: "head", current: true },
           { name: "main", kind: "local_branch", current: true },
           { name: "v1.0.0", kind: "tag", current: false },
         ],
-        graph: { column: 0, width: 2, edges: [{ from: 0, to: 0 }] },
+        graph: { column: 0, width: 2, edges: [{ from: 0, to: 0, commit: "123456789abc" }] },
         canReset: true,
       },
       {
@@ -116,8 +117,9 @@ function buildCommitGraph(overrides: Partial<GitCommitGraphPayload> = {}): GitCo
         authorName: "Web Bot",
         authoredAt: "2026-04-08T21:00:00+08:00",
         subject: "docs: older commit",
+        message: "docs: older commit",
         refs: [{ name: "origin/main", kind: "remote_branch", current: false }],
-        graph: { column: 1, width: 2, edges: [] },
+        graph: { column: 0, width: 2, edges: [] },
         canReset: true,
       },
     ],
@@ -479,8 +481,11 @@ test("renders commit graph rows, refs, and selected actions", async () => {
   expect(within(panel).getByTestId("git-graph-row-1234567")).toHaveAttribute("data-selected", "false");
   expect(within(panel).getByTestId("git-graph-node-abcdef0")).toBeInTheDocument();
   expect(within(panel).getByTestId("git-graph-edge-abcdef0-0")).toBeInTheDocument();
+  expect(within(panel).getByTestId("git-graph-incoming-1234567-0")).toHaveAttribute("d", "M 8 0 L 8 22");
+  expect(within(panel).getByTestId("git-graph-lanes-abcdef0")).toHaveAttribute("height", "44");
   expect(within(panel).getByText(/abcdef0 - Web Bot/)).toBeInTheDocument();
-  expect(within(panel).getAllByText("feat: initial commit").length).toBeGreaterThan(0);
+  const selectedRow = within(panel).getByTestId("git-graph-row-abcdef0");
+  expect(within(selectedRow).getByText("feat: initial commit")).toHaveAttribute("title", "feat: initial commit\n\nadd first repo snapshot");
   expect(within(panel).getByTestId("git-graph-ref-abcdef0-HEAD")).toBeInTheDocument();
   expect(within(panel).getByTestId("git-graph-ref-abcdef0-main")).toBeInTheDocument();
   expect(within(panel).getByTestId("git-graph-ref-abcdef0-v1.0.0")).toBeInTheDocument();
@@ -502,6 +507,7 @@ test("commit graph keeps long subjects and branch refs inside row flow", async (
             {
               ...buildCommitGraph().nodes[0],
               subject: longSubject,
+              message: `${longSubject}\n\nfull body stays readable on hover`,
               refs: [
                 { name: "HEAD", kind: "head", current: true },
                 { name: longBranch, kind: "local_branch", current: true },
@@ -516,10 +522,63 @@ test("commit graph keeps long subjects and branch refs inside row flow", async (
 
   const row = await screen.findByTestId("git-graph-row-abcdef0");
 
-  expect(within(row).getByTitle(longSubject)).toHaveClass("truncate");
+  expect(within(row).getByText(longSubject)).toHaveAttribute("title", `${longSubject}\n\nfull body stays readable on hover`);
   expect(within(row).getByTestId(`git-graph-ref-abcdef0-${longBranch}`)).toHaveClass("truncate");
+  expect(within(row).getByTestId(`git-graph-ref-abcdef0-${longBranch}`)).toHaveAttribute("title", longBranch);
   expect(row).toHaveClass("grid");
+  expect(row).toHaveClass("py-0");
+  expect(row).toHaveStyle({ gridTemplateColumns: "30px minmax(0, 1fr)" });
   expect(row).not.toHaveClass("absolute");
+});
+
+test("commit graph carries merge lanes across intermediate rows", async () => {
+  render(
+    <GitScreen
+      botAlias="main"
+      client={createClient({
+        getGitCommitGraph: async (): Promise<GitCommitGraphPayload> => buildCommitGraph({
+          nodes: [
+            {
+              ...buildCommitGraph().nodes[0],
+              hash: "merge0000000",
+              shortHash: "merge00",
+              parents: ["main1111111", "side2222222"],
+              graph: {
+                column: 0,
+                width: 2,
+                edges: [
+                  { from: 0, to: 0, commit: "main1111111" },
+                  { from: 0, to: 1, commit: "side2222222" },
+                ],
+              },
+            },
+            {
+              ...buildCommitGraph().nodes[1],
+              hash: "main1111111",
+              shortHash: "main111",
+              parents: [],
+              refs: [],
+              graph: { column: 0, width: 2, edges: [] },
+            },
+            {
+              ...buildCommitGraph().nodes[1],
+              hash: "side2222222",
+              shortHash: "side222",
+              parents: [],
+              refs: [],
+              graph: { column: 1, width: 2, edges: [] },
+            },
+          ],
+        }),
+      })}
+    />,
+  );
+
+  const panel = await screen.findByTestId("git-version-tree-panel");
+  await within(panel).findByTestId("git-commit-graph");
+
+  expect(within(panel).getByTestId("git-graph-incoming-main111-1")).toHaveAttribute("d", "M 22 0 L 22 44");
+  expect(within(panel).getByTestId("git-graph-incoming-side222-0")).toHaveAttribute("d", "M 22 0 L 22 22");
 });
 
 test("version tree scope switch reloads graph", async () => {
