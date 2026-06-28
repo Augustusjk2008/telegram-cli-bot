@@ -10,6 +10,10 @@ import type {
   NativeAgentDraft,
 } from "../services/types";
 
+export { getErrorMessage } from "../utils/errorMessage";
+export { fallbackAgents } from "../utils/defaultAgents";
+export { mergeMessageMeta, summarizeTrace } from "../utils/chatMessageMeta";
+
 export type ManagerViewFilter = "all" | BotStatus | "attention";
 export type BulkAction = "start" | "stop" | "delete";
 
@@ -155,10 +159,6 @@ const MANAGER_STATUS_PRIORITY: Record<BotStatus, number> = {
 
 function normalizeWorkdir(path: string | undefined) {
   return (path || "").trim().replace(/[\\/]+$/, "").toLowerCase();
-}
-
-export function getErrorMessage(error: unknown, fallback: string) {
-  return error instanceof Error ? error.message : fallback;
 }
 
 export function isBotOffline(bot: BotSummary) {

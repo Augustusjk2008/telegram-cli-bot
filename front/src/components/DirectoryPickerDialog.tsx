@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronLeft, FolderOpen, FolderPlus, House } from "lucide-react";
 import type { DirectoryListing } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import { getErrorMessage } from "../utils/errorMessage";
 import { normalizePathInput } from "../utils/pathInput";
 
 type Props = {
@@ -15,10 +16,6 @@ type Props = {
   onPick: (path: string) => void;
   onClose: () => void;
 };
-
-function getErrorMessage(error: unknown, fallback: string) {
-  return error instanceof Error ? error.message : fallback;
-}
 
 function joinBrowserPath(basePath: string, name: string) {
   if (!basePath || basePath === "/") {

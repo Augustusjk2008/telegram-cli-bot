@@ -26,6 +26,7 @@ import type {
   RegisterCodeItem,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import { getErrorMessage } from "../utils/errorMessage";
 
 type Props = {
   client?: WebBotClient;
@@ -93,10 +94,6 @@ const ACCOUNT_CAPABILITY_OPTIONS: Array<{ id: Capability; label: string }> = [
   { id: "admin_ops", label: "管理操作" },
   { id: "manage_register_codes", label: "邀请码/用户" },
 ];
-
-function getErrorMessage(error: unknown, fallback: string) {
-  return error instanceof Error ? error.message : fallback;
-}
 
 function formatPackageKind(kind?: string) {
   if (kind === "installer") return "Windows 安装版";

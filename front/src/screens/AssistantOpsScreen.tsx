@@ -22,6 +22,7 @@ import {
   dispatchAssistantProposalPatchRequested,
   isAssistantProposalPatchCompletedEvent,
 } from "../utils/assistantProposalPatchEvents";
+import { getErrorMessage } from "../utils/errorMessage";
 
 type Props = {
   botAlias: string;
@@ -61,10 +62,6 @@ const EMPTY_DIAGNOSTICS: AssistantPerfDiagnostics = {
     errorGroups: [],
   },
 };
-
-function getErrorMessage(error: unknown, fallback: string) {
-  return error instanceof Error ? error.message : fallback;
-}
 
 function parseEvalCases(text: string): AssistantMemoryEvalCase[] {
   const payload = JSON.parse(text);

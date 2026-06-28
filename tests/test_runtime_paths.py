@@ -5,6 +5,7 @@ import importlib
 from pathlib import Path
 
 import bot.runtime_paths as runtime_paths
+from bot.web.chat_store import ChatStore
 
 
 def test_chat_history_paths_resolve_under_home_tcb_root(monkeypatch, tmp_path: Path):
@@ -22,6 +23,14 @@ def test_chat_history_paths_resolve_under_home_tcb_root(monkeypatch, tmp_path: P
     assert workspace_dir == home / ".tcb" / "chat-history" / "workspaces" / workspace_key
     assert db_path == workspace_dir / "chat.sqlite"
     assert metadata_path == workspace_dir / "workspace.json"
+
+
+def test_legacy_project_chat_db_path_matches_chat_store_workspace_path(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    assert runtime_paths.get_legacy_project_chat_db_path(workspace) == workspace / ".tcb" / "state" / "chat.sqlite"
+    assert ChatStore(workspace).legacy_db_path == runtime_paths.get_legacy_project_chat_db_path(workspace)
 
 
 def test_runtime_paths_loads_tcb_data_dir_from_dotenv(tmp_path, monkeypatch):

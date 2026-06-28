@@ -196,6 +196,7 @@ import {
   MOCK_PLAN_PATH,
 } from "../mocks/planModeData";
 import { APP_VERSION } from "../theme";
+import { fallbackAgents } from "../utils/defaultAgents";
 
 const MOCK_RELEASE_URL = `https://github.com/example/cli-bridge/releases/tag/v${APP_VERSION}`;
 const MOCK_PERSISTENT_TERMINAL_STORAGE_KEY = "mock-web-persistent-terminal-session";
@@ -2680,23 +2681,15 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
-  private mainAgent(): AgentSummary {
-    return {
-      id: "main",
-      name: "主 agent",
-      systemPrompt: "",
-      enabled: true,
-      isMain: true,
-      cluster: { ...DEFAULT_AGENT_CLUSTER },
-    };
-  }
-
   private ensureAgents(botAlias: string) {
     const existing = this.agentsByBot.get(botAlias);
     if (existing) {
       return existing;
     }
-    const items = [this.mainAgent()];
+    const items = fallbackAgents().map((agent) => ({
+      ...agent,
+      cluster: { ...DEFAULT_AGENT_CLUSTER },
+    }));
     this.agentsByBot.set(botAlias, items);
     return items;
   }

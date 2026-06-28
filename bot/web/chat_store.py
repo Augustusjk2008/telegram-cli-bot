@@ -25,7 +25,6 @@ from bot.runtime_paths import (
 from bot.web.diagnostics import diag_log_slow
 
 LOCAL_HISTORY_BACKEND = "local_v1"
-LEGACY_PROJECT_CHAT_DB_RELATIVE_PATH = Path(".tcb") / "state" / "chat.sqlite"
 PROCESS_TRACE_RAW_TYPES = {"file.edited", "file.watcher.updated"}
 _STORE_PREPARE_LOCK = Lock()
 _PREPARED_STORES: set[Path] = set()

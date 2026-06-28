@@ -31,6 +31,7 @@ import type {
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { DEFAULT_AVATAR_ASSETS, readStoredUserAvatarName } from "../utils/avatar";
+import { getErrorMessage } from "../utils/errorMessage";
 import { normalizePathInput } from "../utils/pathInput";
 import { defaultCliPathForType } from "./useBotManager";
 import {
@@ -247,10 +248,6 @@ function pushPlusStatusText(status: NotificationSettingsStatus | null) {
   if (!status) return "后端未提供状态";
   if (!status.pushPlusEnabled) return "未启用";
   return status.pushPlusConfigured ? "已配置" : "未配置 token";
-}
-
-function getErrorMessage(error: unknown, fallback: string) {
-  return error instanceof Error ? error.message : fallback;
 }
 
 function asWebApiClientError(error: unknown): WebApiClientError | null {

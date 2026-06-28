@@ -3,6 +3,7 @@ import { RefreshCw, Save } from "lucide-react";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { CliParamField, CliParamsPayload } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import { getErrorMessage } from "../utils/errorMessage";
 
 type Props = {
   botAlias: string;
@@ -60,10 +61,6 @@ function toModelOptionValue(value: unknown, options: string[]) {
     return value;
   }
   return options.includes(MODEL_OPTION_NONE) ? MODEL_OPTION_NONE : "";
-}
-
-function getErrorMessage(error: unknown, fallback: string) {
-  return error instanceof Error ? error.message : fallback;
 }
 
 export function BotCliParamsPanel({

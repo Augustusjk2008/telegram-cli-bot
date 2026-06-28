@@ -8,6 +8,7 @@ import type {
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { defaultCliPathForType } from "../screens/useBotManager";
+import { getErrorMessage } from "../utils/errorMessage";
 
 type Props = {
   botAlias: string;
@@ -61,10 +62,6 @@ function toRequestValue(field: CliParamField, value: string | boolean) {
     return Number(trimmed);
   }
   return String(value);
-}
-
-function getErrorMessage(error: unknown, fallback: string) {
-  return error instanceof Error ? error.message : fallback;
 }
 
 export function GitCommitCliConfigPanel({

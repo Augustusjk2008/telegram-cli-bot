@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FileCopyResult, FileCreateResult, FileDownloadProgress, FileMoveResult, FileRenameResult } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import { getErrorMessage } from "../utils/errorMessage";
 import { WORKBENCH_EXPANDED_PATH_RESTORE_LIMIT, WORKBENCH_HIGHLIGHT_DURATION_MS } from "./workbenchTypes";
 
 export type FileTreeNode = {
@@ -59,10 +60,6 @@ export type UseFileTreeResult = {
   deletePath: (path: string) => Promise<void>;
   downloadFile: (path: string) => Promise<void>;
 };
-
-function getErrorMessage(error: unknown, fallback: string) {
-  return error instanceof Error ? error.message : fallback;
-}
 
 function joinTreePath(parent: string, name: string) {
   return parent ? `${parent}/${name}` : name;

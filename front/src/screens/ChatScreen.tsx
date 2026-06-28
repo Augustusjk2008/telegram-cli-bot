@@ -73,8 +73,9 @@ import {
 import {
   buildNativeAgentTranscriptEntries,
   isNativeAgentMessage,
-  mergeChatTraceEvents,
 } from "../utils/nativeAgentTranscript";
+import { fallbackAgents } from "../utils/defaultAgents";
+import { mergeMessageMeta } from "../utils/chatMessageMeta";
 
 type Props = {
   botAlias: string;
@@ -161,10 +162,6 @@ const REVEAL_SCROLL_MAX_FRAMES = 6;
 const REVEAL_SCROLL_BOTTOM_THRESHOLD_PX = 8;
 const CHAT_RENDER_WINDOW_SIZE = 80;
 const USER_SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " ", "Spacebar"]);
-
-function fallbackAgents(): AgentSummary[] {
-  return [{ id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true }];
-}
 
 function storageScopePrefix(accountId?: string) {
   const normalized = accountId?.trim();
@@ -576,56 +573,6 @@ function resolveStreamStartMs(items: ChatMessage[], elapsedSeconds?: number) {
     return Date.now() - elapsedSeconds * 1000;
   }
   return Date.now();
-}
-
-function summarizeTrace(trace?: ChatTraceEvent[]) {
-  return {
-    traceCount: trace?.length || 0,
-    toolCallCount: (trace || []).filter((item) => item.kind === "tool_call").length,
-    processCount: (trace || []).filter((item) => item.kind !== "tool_call" && item.kind !== "tool_result").length,
-  };
-}
-
-function mergeMessageMeta(base?: ChatMessageMetaInfo, incoming?: ChatMessageMetaInfo): ChatMessageMetaInfo | undefined {
-  const isNativeSource = isNativeAgentMessage(incoming) || isNativeAgentMessage(base);
-  const tracePresentation = incoming?.tracePresentation || base?.tracePresentation || (isNativeSource ? "native_agent_flat" : undefined);
-  const trace = mergeChatTraceEvents(
-    [base?.trace, incoming?.trace],
-    {
-      nativeFlat: tracePresentation === "native_agent_flat",
-      autoNativeFlat: tracePresentation === "native_agent_flat",
-    },
-  );
-  const traceSummary = trace ? summarizeTrace(trace) : undefined;
-  const pickTraceCount = (incomingValue?: number, baseValue?: number, summaryValue?: number) => {
-    if (typeof incomingValue === "number" && Number.isFinite(incomingValue)) {
-      return incomingValue;
-    }
-    if (typeof summaryValue === "number" && Number.isFinite(summaryValue)) {
-      return summaryValue;
-    }
-    return typeof baseValue === "number" && Number.isFinite(baseValue) ? baseValue : undefined;
-  };
-  const meta: ChatMessageMetaInfo = {
-    completionState: incoming?.completionState || base?.completionState,
-    summaryKind: incoming?.summaryKind || base?.summaryKind,
-    traceVersion: incoming?.traceVersion ?? base?.traceVersion ?? (trace ? 1 : undefined),
-    traceCount: pickTraceCount(incoming?.traceCount, base?.traceCount, traceSummary?.traceCount),
-    toolCallCount: pickTraceCount(incoming?.toolCallCount, base?.toolCallCount, traceSummary?.toolCallCount),
-    processCount: pickTraceCount(incoming?.processCount, base?.processCount, traceSummary?.processCount),
-    nativeSource: incoming?.nativeSource || base?.nativeSource,
-    contextUsage: incoming?.contextUsage || base?.contextUsage,
-    agUiRunState: isNativeSource ? incoming?.agUiRunState || base?.agUiRunState : undefined,
-    tracePresentation,
-    trace,
-    workspaceHistoryHead: incoming?.workspaceHistoryHead ?? base?.workspaceHistoryHead,
-    linearIndex: incoming?.linearIndex ?? base?.linearIndex,
-    rollbackSupported: incoming?.rollbackSupported ?? base?.rollbackSupported,
-    degraded: incoming?.degraded ?? base?.degraded,
-    degradedReason: incoming?.degradedReason ?? base?.degradedReason,
-  };
-
-  return Object.values(meta).some((value) => typeof value !== "undefined") ? meta : undefined;
 }
 
 function getAgUiRunState(meta?: ChatMessageMetaInfo): AgUiRunState | null {

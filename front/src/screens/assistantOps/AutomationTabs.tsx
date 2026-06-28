@@ -7,6 +7,7 @@ import type {
 } from "../../services/types";
 import type { WebBotClient } from "../../services/webBotClient";
 import { dispatchAssistantCronRunEnqueued } from "../../utils/assistantCronEvents";
+import { getErrorMessage } from "../../utils/errorMessage";
 
 export type AutomationSubTab = "queue" | "cron" | "runs";
 
@@ -17,10 +18,6 @@ type Props = {
   onNotice: (message: string) => void;
   onError: (message: string) => void;
 };
-
-function getErrorMessage(error: unknown, fallback: string) {
-  return error instanceof Error ? error.message : fallback;
-}
 
 function summarizePrompt(prompt: string) {
   const text = String(prompt || "").trim();

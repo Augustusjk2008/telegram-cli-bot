@@ -214,6 +214,7 @@ import {
   reduceAgUiRunEvent,
   type AgUiActivityItem,
 } from "../utils/agUiRunReducer";
+import { mergeMessageMeta, summarizeTrace } from "../utils/chatMessageMeta";
 import { mapChatMessageContextUsage } from "../utils/contextUsage";
 import { mergeChatTraceEvents } from "../utils/nativeAgentTranscript";
 
@@ -2352,61 +2353,6 @@ function mapMessageMeta(raw?: RawChatMessageMeta | null): ChatMessageMetaInfo | 
   }
 
   return Object.keys(meta).length > 0 ? meta : undefined;
-}
-
-function summarizeTrace(trace?: ChatTraceEvent[]) {
-  return {
-    traceCount: trace?.length || 0,
-    toolCallCount: (trace || []).filter((item) => item.kind === "tool_call").length,
-    processCount: (trace || []).filter((item) => item.kind !== "tool_call" && item.kind !== "tool_result").length,
-  };
-}
-
-function mergeMessageMeta(
-  base?: ChatMessageMetaInfo,
-  incoming?: ChatMessageMetaInfo,
-  streamedTrace?: ChatTraceEvent[],
-): ChatMessageMetaInfo | undefined {
-  const isNativeSource = (
-    incoming?.tracePresentation === "native_agent_flat"
-    || base?.tracePresentation === "native_agent_flat"
-    || String(incoming?.nativeSource?.provider || base?.nativeSource?.provider || "").trim().toLowerCase() === "原生 agent"
-  );
-  const tracePresentation = incoming?.tracePresentation || base?.tracePresentation || (isNativeSource ? "native_agent_flat" : undefined);
-  const nativeFlatTrace = tracePresentation === "native_agent_flat";
-  const trace = mergeChatTraceEvents(
-    [base?.trace, incoming?.trace, streamedTrace],
-    { nativeFlat: nativeFlatTrace, autoNativeFlat: nativeFlatTrace },
-  );
-  const traceSummary = trace ? summarizeTrace(trace) : undefined;
-  const pickTraceCount = (incomingValue?: number, baseValue?: number, summaryValue?: number) => {
-    if (typeof incomingValue === "number" && Number.isFinite(incomingValue)) {
-      return incomingValue;
-    }
-    if (typeof summaryValue === "number" && Number.isFinite(summaryValue)) {
-      return summaryValue;
-    }
-    return typeof baseValue === "number" && Number.isFinite(baseValue) ? baseValue : undefined;
-  };
-  const meta: ChatMessageMetaInfo = {
-    completionState: incoming?.completionState || base?.completionState,
-    summaryKind: incoming?.summaryKind || base?.summaryKind,
-    traceVersion: incoming?.traceVersion ?? base?.traceVersion ?? (trace ? 1 : undefined),
-    traceCount: pickTraceCount(incoming?.traceCount, base?.traceCount, traceSummary?.traceCount),
-    toolCallCount: pickTraceCount(incoming?.toolCallCount, base?.toolCallCount, traceSummary?.toolCallCount),
-    processCount: pickTraceCount(incoming?.processCount, base?.processCount, traceSummary?.processCount),
-    nativeSource: incoming?.nativeSource || base?.nativeSource,
-    contextUsage: incoming?.contextUsage || base?.contextUsage,
-    tracePresentation,
-    trace,
-    workspaceHistoryHead: incoming?.workspaceHistoryHead ?? base?.workspaceHistoryHead,
-    linearIndex: incoming?.linearIndex ?? base?.linearIndex,
-    rollbackSupported: incoming?.rollbackSupported ?? base?.rollbackSupported,
-    degraded: incoming?.degraded ?? base?.degraded,
-    degradedReason: incoming?.degradedReason ?? base?.degradedReason,
-  };
-
-  return Object.values(meta).some((value) => typeof value !== "undefined") ? meta : undefined;
 }
 
 function normalizeResolvedFinalMessage(message: ChatMessage): ChatMessage {

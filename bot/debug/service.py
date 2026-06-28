@@ -168,28 +168,6 @@ class DebugService:
                 merged_launch[str(key)] = value
         return merged_launch
 
-    def _resolve_source_path(self, workspace: Path | None, source: str, remote_dir: object = "") -> str:
-        if workspace is None:
-            return str(source or "").strip()
-        profile = DebugProfile(
-            kind="compat_source_resolver",
-            workspace=str(workspace),
-            config_name="compat",
-            program="",
-            cwd=str(workspace),
-            mi_mode="gdb",
-            mi_debugger_path="",
-            compile_commands=None,
-            prepare_command=r".\debug.bat",
-            stop_at_entry=True,
-            setup_commands=[],
-            remote_host="",
-            remote_user="",
-            remote_dir=str(remote_dir or ""),
-            remote_port=0,
-        )
-        return str(resolve_source(workspace, profile, source, {"line": 1}).get("path") or "")
-
     def _resolve_frame_source(
         self,
         runtime: _Runtime,

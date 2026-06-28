@@ -44,10 +44,7 @@ def _has_pi_agent_alias(source: Mapping[str, Any]) -> bool:
     return any(key in source for key in _PI_AGENT_ALIAS_KEYS)
 
 
-def migrate_native_agent_payload(value: Any) -> dict[str, Any]:
-    if not isinstance(value, Mapping):
-        return {}
-    payload = dict(value)
+def _normalize_pi_agent_alias_payload(payload: dict[str, Any]) -> dict[str, Any]:
     had_alias = _has_pi_agent_alias(payload)
     pi_agent = resolve_pi_agent_value(payload)
     if pi_agent or had_alias:
@@ -55,19 +52,18 @@ def migrate_native_agent_payload(value: Any) -> dict[str, Any]:
     for key in _REMOVED_PI_AGENT_ALIAS_KEYS:
         payload.pop(key, None)
     return payload
+
+
+def migrate_native_agent_payload(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {}
+    return _normalize_pi_agent_alias_payload(dict(value))
 
 
 def migrate_native_session_meta(value: Any) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         return {}
-    payload = dict(value)
-    had_alias = _has_pi_agent_alias(payload)
-    pi_agent = resolve_pi_agent_value(payload)
-    if pi_agent or had_alias:
-        payload["pi_agent"] = pi_agent
-    for key in _REMOVED_PI_AGENT_ALIAS_KEYS:
-        payload.pop(key, None)
-    return payload
+    return _normalize_pi_agent_alias_payload(dict(value))
 
 
 def resolve_pi_agent_env(getter: Callable[[str, str], str]) -> str:

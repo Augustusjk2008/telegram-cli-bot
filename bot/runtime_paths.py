@@ -14,7 +14,6 @@ except ImportError:
     dotenv_values = None  # type: ignore[assignment]
 
 _CHAT_ATTACHMENT_ALIAS_RE = re.compile(r"[^A-Za-z0-9._-]+")
-_LEGACY_PROJECT_CHAT_DB_RELATIVE_PATH = Path(".tcb") / "state" / "chat.sqlite"
 TCB_DATA_DIR_ENV: Final = "TCB_DATA_DIR"
 APP_DATA_DIR_NAME: Final = "orbit-safe-claw"
 
@@ -143,7 +142,7 @@ def get_chat_attachments_dir(alias: str, user_id: int) -> Path:
 
 
 def get_legacy_project_chat_db_path(working_dir: str | Path) -> Path:
-    return Path(str(working_dir)).expanduser() / _LEGACY_PROJECT_CHAT_DB_RELATIVE_PATH
+    return Path(str(working_dir)).expanduser() / Path(".tcb") / "state" / "chat.sqlite"
 
 
 def normalize_workspace_dir(working_dir: str | Path) -> str:
