@@ -65,13 +65,13 @@ _NODE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 
 ENV_SCHEMA: tuple[EnvField, ...] = (
-    EnvField("CLI_TYPE", "CLI 类型", "主 Bot 使用的本地 CLI。", "select", "codex", "basic", options=("codex", "claude", "kimi")),
+    EnvField("CLI_TYPE", "CLI 类型", "主 Bot 使用的本地 CLI。", "select", "codex", "basic", options=("codex", "claude")),
     EnvField("CLI_PATH", "CLI 路径", "CLI 可执行文件路径或 PATH 中的命令名。", "path", "codex", "basic"),
     EnvField("CLI_MODEL_OPTIONS", "模型选项", "聊天页模型选择器候选值。", "csv", "", "basic"),
     EnvField(
         "CLI_GLOBAL_EXTRA_ARGS",
         "全局 CLI 额外参数",
-        "JSON 对象，按 codex/claude/kimi 配置额外参数数组。",
+        "JSON 对象，按 codex/claude 配置额外参数数组。",
         "string",
         "{}",
         "basic",

@@ -191,7 +191,7 @@ class ChatHistoryService:
             return False
         raw_provider = str(context.get("native_provider") or "").strip().lower()
         provider = raw_provider if raw_provider == "native_agent" else normalize_cli_type(raw_provider)
-        if provider not in {"codex", "claude", "kimi"}:
+        if provider not in {"codex", "claude"}:
             return False
         return bool(str(context.get("native_session_id") or "").strip())
 
@@ -412,7 +412,7 @@ class ChatHistoryService:
     ) -> bool:
         provider = normalize_cli_type(getattr(profile, "cli_type", ""))
         session_id = str(native_session_id or "").strip()
-        if provider not in {"codex", "claude", "kimi"} or not session_id:
+        if provider not in {"codex", "claude"} or not session_id:
             return False
 
         try:
@@ -467,7 +467,6 @@ class ChatHistoryService:
             "session_ids": {
                 "codex_session_id": session.codex_session_id,
                 "claude_session_id": session.claude_session_id,
-                "kimi_session_id": session.kimi_session_id,
                 "native_agent_session_id": session.native_agent_session_id,
                 "claude_session_initialized": session.claude_session_initialized,
             },

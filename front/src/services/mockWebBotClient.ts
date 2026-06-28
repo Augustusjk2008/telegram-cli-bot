@@ -276,46 +276,10 @@ const DEFAULT_AGENT_CLUSTER = {
 };
 
 function defaultCliPathForType(cliType: string) {
-  return cliType === "kimi" ? "kimi" : cliType === "claude" ? "claude" : "codex";
+  return cliType === "claude" ? "claude" : "codex";
 }
 
 function buildMockCliParams(cliType: string): CliParamsPayload {
-  if (cliType === "kimi") {
-    return {
-      cliType: "kimi",
-      params: {
-        thinking: "default",
-        stream_json: true,
-        yolo: true,
-        extra_args: [],
-      },
-      defaults: {
-        thinking: "default",
-        stream_json: true,
-        yolo: true,
-        extra_args: [],
-      },
-      schema: {
-        thinking: {
-          type: "string",
-          enum: ["enabled", "disabled", "default"],
-          description: "Thinking 模式",
-        },
-        stream_json: {
-          type: "boolean",
-          description: "启用 stream-json 输出",
-        },
-        yolo: {
-          type: "boolean",
-          description: "自动批准操作",
-        },
-        extra_args: {
-          type: "string_list",
-          description: "额外参数",
-        },
-      },
-    };
-  }
   return {
     cliType: cliType === "claude" ? "claude" : "codex",
     params: {
@@ -395,7 +359,6 @@ function createMockEnvItems(): EnvConfigItem[] {
       options: [
         { value: "codex", label: "codex" },
         { value: "claude", label: "claude" },
-        { value: "kimi", label: "kimi" },
       ],
     },
     {
@@ -1587,7 +1550,7 @@ export class MockWebBotClient implements WebBotClient {
   private cliErrorStats: CliErrorStatsResult = {
     summary: {
       total: 3,
-      byCliType: { codex: 2, kimi: 1 },
+      byCliType: { codex: 2, claude: 1 },
       byBot: { main: 2, reviewer: 1 },
       byCategory: { rate_limit: 2, resume_session: 1 },
       latestAt: "2026-05-31T10:20:00+08:00",
@@ -1635,7 +1598,7 @@ export class MockWebBotClient implements WebBotClient {
       },
       {
         botAlias: "reviewer",
-        cliType: "kimi",
+        cliType: "claude",
         workingDir: DEMO_TEAM_WORKDIR,
         conversationId: "conv_demo_3",
         turnId: "turn_demo_3",
@@ -3421,7 +3384,6 @@ export class MockWebBotClient implements WebBotClient {
         runtime: { state: "runtime_ready", message: "运行态可用" },
         codex: activeCliType === "codex" ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
         claude: activeCliType === "claude" ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
-        kimi: activeCliType === "kimi" ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
         pi: activeCliType === "pi" ? { state: "installed", message: "Pi 集群扩展已配置" } : { state: "not_checked", message: "未使用" },
       },
       agents: this.ensureAgents(botAlias)
@@ -3479,12 +3441,8 @@ export class MockWebBotClient implements WebBotClient {
       launcherPath,
       configPath,
       tokenPath: "C:\\Users\\demo\\.tcb\\cluster-mcp\\token",
-      installCommand: cliType === "kimi"
-        ? [cliPath, "mcp", "add", "--transport", "stdio", "tcb-cluster", "--", launcherPath]
-        : [cliPath, "mcp", "add", "tcb-cluster", "--", launcherPath],
-      verifyCommand: cliType === "kimi"
-        ? [cliPath, "mcp", "test", "tcb-cluster"]
-        : [cliPath, "mcp", "get", "tcb-cluster"],
+      installCommand: [cliPath, "mcp", "add", "tcb-cluster", "--", launcherPath],
+      verifyCommand: [cliPath, "mcp", "get", "tcb-cluster"],
       removeCommand: [cliPath, "mcp", "remove", "tcb-cluster"],
     };
   }

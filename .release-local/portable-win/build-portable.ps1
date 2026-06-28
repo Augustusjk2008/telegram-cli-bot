@@ -770,7 +770,7 @@ WEB_API_TOKEN: $Token
 说明:
 - 绿色包无需安装 Python / Node / Git
 - 包内已带 Python、Node 22、Git、Pi CLI、Pi 扩展和前端构建产物
-- Pi 可直接用于 native_agent；codex / claude / kimi 仍可外部安装或另配
+- Pi 可直接用于 native_agent；codex / claude 仍可外部安装或另配
 - 模型 API key 需在 Web 设置页或 data\pi-home\.pi\agent\models.json 填写
 - Pi 扩展目录: data\pi-home\.pi\agent\extensions
 - 可在 Web 设置页或 .env 修改 CLI_TYPE / CLI_PATH

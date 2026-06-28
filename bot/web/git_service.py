@@ -21,7 +21,6 @@ from bot.cli import (
     build_cli_command,
     parse_claude_stream_json_output,
     parse_codex_json_output,
-    parse_kimi_stream_json_output,
     resolve_cli_executable,
 )
 from bot import config
@@ -1286,8 +1285,6 @@ async def _generate_git_commit_message_from_context(
         response_text, _ = parse_codex_json_output(raw_output)
     elif cli_type == "claude":
         response_text, _ = parse_claude_stream_json_output(raw_output)
-    elif cli_type == "kimi":
-        response_text = parse_kimi_stream_json_output(raw_output)
     else:
         response_text = raw_output.strip()
 

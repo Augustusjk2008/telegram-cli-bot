@@ -191,11 +191,10 @@ describe("RealWebBotClient", () => {
     const statusData = createClusterStatus({
       mcp: {
         serverName: "tcb-cluster",
-        activeCliType: "kimi",
+        activeCliType: "claude",
         runtime: { state: "runtime_ready", message: "运行态可用" },
         codex: { state: "not_checked", message: "未使用" },
-        claude: { state: "not_checked", message: "未使用" },
-        kimi: { state: "installed", message: "已安装" },
+        claude: { state: "installed", message: "已安装" },
         pi: { state: "not_checked", message: "未使用" },
       },
       modelTiers: { low: "fast-model", medium: "balanced-model", high: "strong-model" },
@@ -222,7 +221,6 @@ describe("RealWebBotClient", () => {
             runtime: statusData.mcp.runtime,
             codex: statusData.mcp.codex,
             claude: statusData.mcp.claude,
-            kimi: statusData.mcp.kimi,
             pi: statusData.mcp.pi,
           },
           agents: statusData.agents.map((agent) => ({
@@ -244,9 +242,9 @@ describe("RealWebBotClient", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/bots/main/cluster/status", expect.objectContaining({ cache: "no-store" }));
     expect(status.enabled).toBe(true);
     expect(status.mcp.serverName).toBe("tcb-cluster");
-    expect(status.mcp.activeCliType).toBe("kimi");
+    expect(status.mcp.activeCliType).toBe("claude");
     expect(status.mcp.runtime?.state).toBe("runtime_ready");
-    expect(status.mcp.kimi.state).toBe("installed");
+    expect(status.mcp.claude.state).toBe("installed");
     expect(status.mcp.pi?.state).toBe("not_checked");
     expect(status.modelTiers.low).toBe("fast-model");
     expect(status.agents[0].allowWrite).toBe(false);

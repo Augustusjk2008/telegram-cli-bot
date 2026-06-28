@@ -269,7 +269,6 @@ def change_working_directory(manager: MultiBotManager, alias: str, user_id: int,
         with session._lock:
             session.codex_session_id = None
             session.claude_session_id = None
-            session.kimi_session_id = None
             session.native_agent_session_id = None
             session.native_agent_run_id = None
             session.claude_session_initialized = False

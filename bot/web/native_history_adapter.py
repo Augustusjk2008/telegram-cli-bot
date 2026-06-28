@@ -662,135 +662,6 @@ def _consume_claude_line(
     return
 
 
-def _resolve_kimi_wire_event(item: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-    if item.get("method") == "event":
-        params = item.get("params") if isinstance(item.get("params"), dict) else {}
-        event_type = str(params.get("type") or "").strip()
-        payload = params.get("payload") if isinstance(params.get("payload"), dict) else {}
-        return event_type, payload
-    message = item.get("message") if isinstance(item.get("message"), dict) else {}
-    if message:
-        payload = message.get("payload") if isinstance(message.get("payload"), dict) else {}
-        return str(message.get("type") or "").strip(), payload
-    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
-    return str(item.get("type") or "").strip(), payload
-
-
-def _extract_kimi_tool_result_summary(payload: dict[str, Any]) -> tuple[str, Any]:
-    return_value = payload.get("return_value")
-    if isinstance(return_value, dict):
-        summary = _stringify_value(return_value.get("output"))
-        if not summary:
-            summary = _stringify_value(return_value.get("message"))
-        if summary:
-            return summary, return_value
-    summary = _stringify_value(payload.get("message")) or "工具调用已返回"
-    return summary, return_value if return_value is not None else payload
-
-
-def _consume_kimi_line(item: dict[str, Any], turn: dict[str, Any], *, include_trace: bool) -> str | None:
-    event_type, payload = _resolve_kimi_wire_event(item)
-    assistant_messages = turn["assistant_messages"]
-
-    if event_type in {"metadata", "StepBegin", "StepEnd", "TurnEnd"}:
-        return event_type
-
-    if event_type == "TurnBegin":
-        _assign_user_text(turn, payload.get("user_input") or payload.get("text") or payload.get("prompt"))
-        return event_type
-
-    if event_type == "ContentPart":
-        part_type = _stringify_value(payload.get("type")).lower()
-        if part_type == "text":
-            _append_assistant_text(assistant_messages, payload.get("text"))
-            return event_type
-        if part_type in {"think", "reasoning"}:
-            summary = _stringify_value(payload.get("think")) or _stringify_value(payload.get("text"))
-            if summary:
-                _append_trace_event(
-                    turn,
-                    _trace_event(
-                        "commentary",
-                        raw_type="ContentPart",
-                        summary=summary,
-                        payload=payload,
-                    ),
-                    include_trace=include_trace,
-                )
-            return event_type
-        return event_type
-
-    if event_type == "ToolCall":
-        function = payload.get("function") if isinstance(payload.get("function"), dict) else {}
-        name = _stringify_value(function.get("name")) or _stringify_value(payload.get("name")) or "ToolCall"
-        raw_arguments = function.get("arguments", payload.get("arguments"))
-        arguments = _parse_jsonish(raw_arguments)
-        _append_trace_event(
-            turn,
-            _trace_event(
-                "tool_call",
-                raw_type="ToolCall",
-                title=name,
-                tool_name=name,
-                call_id=_stringify_value(payload.get("id") or payload.get("tool_call_id")),
-                summary=_summarize_tool_payload(name, arguments),
-                payload={
-                    "arguments": arguments,
-                    "raw_arguments": raw_arguments,
-                },
-            ),
-            include_trace=include_trace,
-        )
-        return event_type
-
-    if event_type == "ToolResult":
-        summary, normalized_output = _extract_kimi_tool_result_summary(payload)
-        _append_trace_event(
-            turn,
-            _trace_event(
-                "tool_result",
-                raw_type="ToolResult",
-                call_id=_stringify_value(payload.get("tool_call_id") or payload.get("id")),
-                summary=summary,
-                payload=normalized_output,
-            ),
-            include_trace=include_trace,
-        )
-        return event_type
-
-    if event_type == "PlanDisplay":
-        summary = _stringify_value(payload.get("content")) or _stringify_value(payload.get("path"))
-        if summary:
-            _append_trace_event(
-                turn,
-                _trace_event(
-                    "commentary",
-                    raw_type="PlanDisplay",
-                    summary=summary,
-                    payload=payload,
-                ),
-                include_trace=include_trace,
-            )
-        return event_type
-
-    if event_type == "StatusUpdate":
-        summary = _stringify_value(payload.get("message")) or _stringify_value(payload.get("status"))
-        if summary:
-            _append_trace_event(
-                turn,
-                _trace_event(
-                    "commentary",
-                    raw_type="StatusUpdate",
-                    summary=summary,
-                    payload=payload,
-                ),
-                include_trace=include_trace,
-            )
-        return event_type
-
-    return event_type
-
-
 def load_native_transcript(
     provider: str,
     transcript_path: Path,
@@ -846,36 +717,12 @@ def load_native_transcript(
             elif classification == "skill_injection" and claude_parser_state is not None:
                 claude_parser_state["expect_injection_after_skill"] = False
 
-        if provider == "kimi":
-            event_type, payload = _resolve_kimi_wire_event(item)
-            if event_type == "TurnBegin":
-                finalized = _finalize_turn(provider, session_id, turn_index, current_turn or {}, include_trace=include_trace)
-                if finalized is not None:
-                    turns.append(finalized)
-                    turn_index += 1
-                current_turn = _new_turn_state(
-                    payload.get("user_input") or payload.get("text") or payload.get("prompt"),
-                    timestamp,
-                )
-            elif event_type == "TurnEnd":
-                if current_turn is None:
-                    continue
-                _touch_turn(current_turn, timestamp)
-                finalized = _finalize_turn(provider, session_id, turn_index, current_turn, include_trace=include_trace)
-                if finalized is not None:
-                    turns.append(finalized)
-                    turn_index += 1
-                current_turn = None
-                continue
-
         if current_turn is None:
             current_turn = _new_turn_state(created_at=timestamp)
 
         _touch_turn(current_turn, timestamp)
         if provider == "codex":
             _consume_codex_line(item, current_turn, include_trace=include_trace)
-        elif provider == "kimi":
-            _consume_kimi_line(item, current_turn, include_trace=include_trace)
         else:
             _consume_claude_line(
                 item,
@@ -1003,82 +850,6 @@ def _consume_live_claude_line(item: dict[str, Any]) -> list[dict[str, Any]]:
     return [dict(event) for event in turn["trace"]]
 
 
-def _consume_live_kimi_line(item: dict[str, Any]) -> list[dict[str, Any]]:
-    event_type, payload = _resolve_kimi_wire_event(item)
-    if event_type:
-        turn = _new_turn_state()
-        _consume_kimi_line(item, turn, include_trace=True)
-        return [dict(event) for event in turn["trace"]]
-
-    role = str(item.get("role") or "").strip().lower()
-    if role == "assistant":
-        events: list[dict[str, Any]] = []
-        content = item.get("content")
-        text = _stringify_value(content) if isinstance(content, str) else ""
-        if text:
-            events.append(_trace_event("commentary", raw_type="text", summary=text))
-        elif isinstance(content, list):
-            for block in content:
-                if not isinstance(block, dict):
-                    continue
-                block_type = str(block.get("type") or "").strip().lower()
-                if block_type == "text":
-                    summary = _stringify_value(block.get("text"))
-                    raw_type = "text"
-                elif block_type in {"think", "reasoning"}:
-                    summary = _stringify_value(block.get("think")) or _stringify_value(block.get("text"))
-                    raw_type = block_type
-                else:
-                    continue
-                if summary:
-                    events.append(
-                        _trace_event(
-                            "commentary",
-                            raw_type=raw_type,
-                            summary=summary,
-                            payload=block,
-                        )
-                    )
-
-        tool_calls = item.get("tool_calls")
-        if isinstance(tool_calls, list):
-            for tool_call in tool_calls:
-                if not isinstance(tool_call, dict):
-                    continue
-                function = tool_call.get("function") if isinstance(tool_call.get("function"), dict) else {}
-                name = _stringify_value(function.get("name")) or _stringify_value(tool_call.get("name")) or "ToolCall"
-                raw_arguments = function.get("arguments", tool_call.get("arguments"))
-                arguments = _parse_jsonish(raw_arguments)
-                events.append(
-                    _trace_event(
-                        "tool_call",
-                        raw_type="tool_call",
-                        title=name,
-                        tool_name=name,
-                        call_id=_stringify_value(tool_call.get("id") or tool_call.get("tool_call_id")),
-                        summary=_summarize_tool_payload(name, arguments),
-                        payload={
-                            "arguments": arguments,
-                            "raw_arguments": raw_arguments,
-                        },
-                    )
-                )
-        return events
-
-    if role == "tool":
-        summary = _stringify_value(item.get("content")) or "工具调用已返回"
-        return [
-            _trace_event(
-                "tool_result",
-                raw_type="tool",
-                call_id=_stringify_value(item.get("tool_call_id") or item.get("id")),
-                summary=summary,
-                payload={"content": item.get("content")},
-            )
-        ]
-    return []
-
-
 def consume_stream_trace_chunk(provider: str, chunk: str, state: dict[str, Any]) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     state["buffer"] = str(state.get("buffer") or "") + str(chunk or "")
@@ -1109,8 +880,6 @@ def consume_stream_trace_chunk(provider: str, chunk: str, state: dict[str, Any])
             candidate_events = _consume_live_codex_line(item)
         elif provider == "claude":
             candidate_events = _consume_live_claude_line(item)
-        elif provider == "kimi":
-            candidate_events = _consume_live_kimi_line(item)
         else:
             candidate_events = []
 

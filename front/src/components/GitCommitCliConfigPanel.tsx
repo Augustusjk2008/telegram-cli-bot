@@ -235,7 +235,6 @@ export function GitCommitCliConfigPanel({
               >
                 <option value="codex">codex</option>
                 <option value="claude">claude</option>
-                <option value="kimi">kimi</option>
               </select>
             </label>
             <label className="space-y-1">

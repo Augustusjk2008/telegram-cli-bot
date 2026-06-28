@@ -20,8 +20,6 @@ from bot.cli import (
     parse_claude_stream_json_output,
     parse_codex_json_line,
     parse_codex_json_output,
-    parse_kimi_stream_json_line,
-    parse_kimi_stream_json_output,
     read_codex_status_from_terminal,
     resolve_cli_executable,
     should_mark_claude_session_initialized,
@@ -37,7 +35,6 @@ class TestValidateCliType:
     def test_valid_types(self):
         assert validate_cli_type("claude") == "claude"
         assert validate_cli_type("codex") == "codex"
-        assert validate_cli_type("kimi") == "kimi"
 
     def test_invalid_type(self):
         with pytest.raises(ValueError):
@@ -96,7 +93,6 @@ class TestBuildCliCommand:
         params_config = CliParamsConfig()
         params_config.codex["yolo"] = True
         params_config.claude["yolo"] = True
-        params_config.kimi["yolo"] = True
 
         codex_cmd, _ = build_cli_command(
             cli_type="codex",
@@ -112,64 +108,27 @@ class TestBuildCliCommand:
             env=env,
             params_config=params_config,
         )
-        kimi_cmd, _ = build_cli_command(
-            cli_type="kimi",
-            resolved_cli="kimi",
-            user_text="hello",
-            env=env,
-            params_config=params_config,
-        )
 
         assert "--dangerously-bypass-approvals-and-sandbox" in codex_cmd
         assert "--dangerously-skip-permissions" in claude_cmd
-        assert "--yolo" in kimi_cmd
-
-    def test_kimi_command_uses_print_stream_json_stdin_and_session(self, temp_dir: Path):
-        env = {}
-        params_config = CliParamsConfig()
-
-        cmd, use_stdin = build_cli_command(
-            cli_type="kimi",
-            resolved_cli="kimi",
-            user_text="hello",
-            env=env,
-            params_config=params_config,
-            session_id="kimi-session-1",
-            resume_session=True,
-            working_dir=str(temp_dir),
-        )
-
-        assert cmd[:1] == ["kimi"]
-        assert "--print" in cmd
-        assert "--output-format" in cmd
-        assert cmd[cmd.index("--output-format") + 1] == "stream-json"
-        assert "--session" in cmd
-        assert cmd[cmd.index("--session") + 1] == "kimi-session-1"
-        assert "--work-dir" in cmd
-        assert cmd[cmd.index("--work-dir") + 1] == str(temp_dir)
-        assert use_stdin is True
 
     def test_with_global_extra_args_copies_and_appends_by_type(self):
         params_config = CliParamsConfig()
         params_config.codex["extra_args"] = ["--bot-codex"]
         params_config.claude["extra_args"] = ["--bot-claude"]
-        params_config.kimi["extra_args"] = ["--bot-kimi"]
 
         merged = with_global_extra_args(
             params_config,
             {
                 "codex": ["--global-codex"],
                 "claude": ["--global-claude"],
-                "kimi": ["--global-kimi"],
             },
         )
 
         assert params_config.codex["extra_args"] == ["--bot-codex"]
         assert params_config.claude["extra_args"] == ["--bot-claude"]
-        assert params_config.kimi["extra_args"] == ["--bot-kimi"]
         assert merged.codex["extra_args"] == ["--bot-codex", "--global-codex"]
         assert merged.claude["extra_args"] == ["--bot-claude", "--global-claude"]
-        assert merged.kimi["extra_args"] == ["--bot-kimi", "--global-kimi"]
 
     def test_clamp_unsafe_cli_params_filters_extra_args(self):
         params_config = CliParamsConfig()
@@ -188,14 +147,12 @@ class TestBuildCliCommand:
             "--permission-mode",
             "bypassPermissions",
         ]
-        params_config.kimi["extra_args"] = ["--agent", "coder", "--yolo"]
 
         clamped = clamp_unsafe_cli_params(params_config, allow_unsafe_cli=False)
         allowed = clamp_unsafe_cli_params(params_config, allow_unsafe_cli=True)
 
         assert clamped.codex["extra_args"] == ["--safe"]
         assert clamped.claude["extra_args"] == ["--keep"]
-        assert clamped.kimi["extra_args"] == ["--agent", "coder"]
         assert allowed.codex["extra_args"] == params_config.codex["extra_args"]
 
 
@@ -231,17 +188,3 @@ class TestParseClaudeStreamJsonOutput:
 
         assert text == "Hi there"
         assert session_id == "sess-1"
-
-class TestParseKimiStreamJson:
-    """测试 Kimi stream-json 输出解析"""
-
-    def test_extracts_last_assistant_text(self):
-        raw = "\n".join([
-            '{"role":"assistant","content":"我先看目录。","tool_calls":[{"type":"function","id":"tc_1","function":{"name":"Shell","arguments":"{\\"command\\":\\"Get-ChildItem\\"}"}}]}',
-            '{"role":"tool","tool_call_id":"tc_1","content":"README.md\\nbot"}',
-            '{"role":"assistant","content":[{"type":"think","think":"略"},{"type":"text","text":"目录里有 README.md 和 bot。"}]}',
-        ])
-
-        text = parse_kimi_stream_json_output(raw)
-
-        assert text == "目录里有 README.md 和 bot。"

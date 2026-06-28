@@ -86,7 +86,6 @@ def _snapshot_rank(data: dict[str, Any] | None) -> tuple[int, int, int, str]:
     session_count = (
         int(bool(snapshot.get("codex_session_id")))
         + int(bool(snapshot.get("claude_session_id")))
-        + int(bool(snapshot.get("kimi_session_id")))
         + int(bool(snapshot.get("native_agent_session_id")))
     )
     session_epoch = max(0, int(snapshot.get("session_epoch", 0) or 0))
@@ -141,8 +140,7 @@ def _merge_session_snapshots(source: dict[str, Any] | None, target: dict[str, An
         merged.pop("codex_session_id", None)
     if not merged.get("claude_session_id"):
         merged.pop("claude_session_id", None)
-    if not merged.get("kimi_session_id"):
-        merged.pop("kimi_session_id", None)
+    merged.pop("kimi_session_id", None)
     if not merged.get("native_agent_session_id"):
         merged.pop("native_agent_session_id", None)
     merged.pop("native_agent_server_key", None)
@@ -182,7 +180,7 @@ def load_session(bot_id: int, user_id: int, agent_id: str = "main") -> Optional[
     """加载指定会话的 session 信息
     
     Returns:
-        dict: 包含 codex_session_id, claude_session_id, kimi_session_id
+        dict: 包含 codex_session_id, claude_session_id, native_agent_session_id
         None: 如果没有找到
     """
     _flush_live_session_if_available(bot_id, user_id, agent_id)
@@ -236,6 +234,7 @@ def migrate_sessions_to_shared(bot_id: int, shared_user_id: int) -> int:
 
 def migrate_local_history_snapshot(data: dict[str, Any] | None, *, default_working_dir: str) -> dict[str, Any]:
     next_data = dict(data or {})
+    next_data.pop("kimi_session_id", None)
     if next_data.get("local_history_backend") == LOCAL_HISTORY_BACKEND:
         next_data["session_epoch"] = max(0, int(next_data.get("session_epoch", 0) or 0))
         if default_working_dir:
@@ -249,8 +248,8 @@ def migrate_local_history_snapshot(data: dict[str, Any] | None, *, default_worki
     next_data["browse_dir"] = next_data.get("browse_dir") or next_data["working_dir"]
     next_data["codex_session_id"] = None
     next_data["claude_session_id"] = None
-    next_data["kimi_session_id"] = None
     next_data["native_agent_session_id"] = None
+    next_data.pop("kimi_session_id", None)
     next_data.pop("native_agent_server_key", None)
     next_data["claude_session_initialized"] = False
     next_data.pop("running_user_text", None)
@@ -266,7 +265,6 @@ def save_session(
     user_id: int,
     codex_session_id: Optional[str] = None,
     claude_session_id: Optional[str] = None,
-    kimi_session_id: Optional[str] = None,
     native_agent_session_id: Optional[str] = None,
     working_dir: Optional[str] = None,
     browse_dir: Optional[str] = None,
@@ -293,8 +291,6 @@ def save_session(
         session_data["codex_session_id"] = codex_session_id
     if claude_session_id:
         session_data["claude_session_id"] = claude_session_id
-    if kimi_session_id:
-        session_data["kimi_session_id"] = kimi_session_id
     if native_agent_session_id:
         session_data["native_agent_session_id"] = native_agent_session_id
     if isinstance(working_dir, str) and working_dir:

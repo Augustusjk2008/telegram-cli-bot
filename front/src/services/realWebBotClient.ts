@@ -1608,6 +1608,10 @@ function serializePromptPresets(presets: PromptPreset[]) {
   }));
 }
 
+function mapCliType(value: unknown): CliType {
+  return value === "claude" ? "claude" : "codex";
+}
+
 function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
   const hasPendingAssistantRun = Number(raw.assistant_runtime?.pending_count || 0) > 0;
   const busyAgentIds = (raw.busy_agent_ids ?? raw.busyAgentIds ?? []).map((item) => String(item));
@@ -1628,7 +1632,7 @@ function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
   const status = mapStatus(raw.status, activityStatus === "busy");
   const summary: BotSummary = {
     alias: raw.alias,
-    cliType: raw.cli_type,
+    cliType: mapCliType(raw.cli_type),
     status,
     serviceStatus,
     activityStatus,
@@ -1782,7 +1786,6 @@ function mapClusterStatus(raw: unknown): ClusterStatus {
       runtime: mapTarget(mcp.runtime),
       codex: mapTarget(mcp.codex),
       claude: mapTarget(mcp.claude),
-      kimi: mapTarget(mcp.kimi),
       pi: mcp.pi ? mapTarget(mcp.pi) : undefined,
     },
     agents: Array.isArray(value.agents) ? value.agents.map((rawAgent) => {
@@ -3133,11 +3136,11 @@ function mapGitIdentityConfig(raw: RawGitIdentityConfig): GitIdentityConfig {
 }
 
 function defaultCliPathForType(cliType: CliType) {
-  return cliType === "kimi" ? "kimi" : cliType === "claude" ? "claude" : "codex";
+  return cliType === "claude" ? "claude" : "codex";
 }
 
 function mapGitCommitMessageCliConfig(raw: RawGitCommitMessageCliConfig): GitCommitMessageCliConfig {
-  const cliType = raw.cli_type === "claude" || raw.cli_type === "kimi" ? raw.cli_type : "codex";
+  const cliType = mapCliType(raw.cli_type);
   return {
     cliType,
     cliPath: raw.cli_path || defaultCliPathForType(cliType),

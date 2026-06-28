@@ -12,7 +12,7 @@ export const mockBots: BotSummary[] = [
   },
   {
     alias: "team2",
-    cliType: "kimi",
+    cliType: "claude",
     status: "busy",
     workingDir: DEMO_TEAM_WORKDIR,
     lastActiveText: "处理中",

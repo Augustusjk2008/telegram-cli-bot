@@ -394,7 +394,6 @@ function CreatePanel({
           >
             <option value="codex">codex</option>
             <option value="claude">claude</option>
-            <option value="kimi">kimi</option>
           </select>
           </label>
         ) : null}
@@ -677,7 +676,6 @@ function EditPanel({
           >
             <option value="codex">codex</option>
             <option value="claude">claude</option>
-            <option value="kimi">kimi</option>
           </select>
           </label>
         ) : null}

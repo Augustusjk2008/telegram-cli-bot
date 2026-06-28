@@ -153,7 +153,7 @@ def _normalize_main_bot_profile(value: Any) -> dict[str, Any]:
 
     normalized: dict[str, Any] = {}
     cli_type = str(value.get("cli_type") or "").strip().lower()
-    if cli_type in {"claude", "codex", "kimi"}:
+    if cli_type in {"claude", "codex"}:
         normalized["cli_type"] = cli_type
 
     for key in ("cli_path", "working_dir"):

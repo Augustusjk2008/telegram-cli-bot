@@ -12,7 +12,7 @@
 
 Orbit Safe Claw 是 Windows 优先的 Python Web 控制台，用于把用户消息转发给本地 AI coding CLI。
 
-- CLI 目标：`claude`、`codex`、`kimi`
+- CLI 目标：`claude`、`codex`
 - 运行模式：`cli`、`assistant`
 - Chat 执行模式：`cli`、`native_agent`
 - 主 bot 来自 `.env`；托管子 bot 来自本地 `managed_bots.json`
@@ -90,7 +90,7 @@ pwsh -ExecutionPolicy Bypass -File .release-local/publish-release.ps1 -Version <
 
 `bot/sessions.py` 按 `(bot_id, shared_user_id, agent_id)` 存 session。Web user 通过 `bot/chat_identity.py:chat_session_user_id()` 归一化。
 
-`UserSession` 跟踪当前工作目录、processing state、active subprocess、active conversation id、`codex` / `claude` / `kimi` / `native_agent` 原生 session id。
+`UserSession` 跟踪当前工作目录、processing state、active subprocess、active conversation id、`codex` / `claude` / `native_agent` 原生 session id。
 
 - 原生 session id 持久化到 `.session_store.json`
 - chat history 通过 `bot/web/chat_store.py` 持久化
@@ -104,13 +104,12 @@ pwsh -ExecutionPolicy Bypass -File .release-local/publish-release.ps1 -Version <
 - 原生 agent 路径：`bot/native_agent/service.py`、`bot/native_agent/turn_state.py`、`bot/native_agent/ag_ui_mapper.py`
 - Pi 主链模块：`bot/native_agent/pi_rpc_client.py`、`bot/native_agent/pi_events.py`、`bot/native_agent/pi_session_runtime.py`、`bot/native_agent/pi_session_store.py`、`bot/native_agent/pi_workspace_history.py`、`bot/native_agent/pi_rpc_preflight.py`
 - Pi / `pi-workspace-history` 本地资料见 `docs/reference/pi/INDEX.md`；先查本地资料，除非需确认最新版。
-- 支持的 CLI 类型：`claude`、`codex`、`kimi`
+- 支持的 CLI 类型：`claude`、`codex`
 
 关键行为：
 
 - 用户文本以 `//` 开头时改写为 `/...`
 - Codex 使用 JSON output，由 `parse_codex_json_output()` 解析
-- Kimi 使用 streaming JSON，由 `parse_kimi_stream_json_output()` 解析
 - 长 Web 回复在 Web API 层 streaming 和 finalize
 - `execution_mode=native_agent` 使用 AG-UI 协议；普通 CLI legacy SSE 保持 `delta/status/trace/done`
 - Pi runtime 只允许 `pi_session_runtime.py` 单 reader 读取 `client.events()`；工作区历史由本地 shadow git 处理，不再依赖 Pi `workspace_history` RPC

@@ -64,7 +64,6 @@ from bot.web.api_service import (
     _stream_cli_chat,
     _build_stream_status_event,
     _communicate_claude_process,
-    _communicate_kimi_process,
     _communicate_process,
     _extract_codex_stream_preview,
     stream_assistant_run_request,
@@ -5909,7 +5908,7 @@ async def test_stream_cli_chat_finishes_after_final_message_when_stdout_blocks(
 
 
 @pytest.mark.asyncio
-async def test_communicate_claude_and_kimi_do_not_wait_forever_on_blocking_stdout(
+async def test_communicate_claude_does_not_wait_forever_on_blocking_stdout(
     monkeypatch: pytest.MonkeyPatch,
 ):
     from bot.claude_done import build_claude_done_session
@@ -5934,20 +5933,11 @@ async def test_communicate_claude_and_kimi_do_not_wait_forever_on_blocking_stdou
             timeout=2,
         )
 
-    kimi_process = BlockingAfterLinesProcess(
-        ['{"role":"assistant","content":[{"type":"text","text":"完成"}]}\n']
-    )
-    kimi_process.returncode = 0
-    kimi_text, kimi_returncode = await asyncio.wait_for(_communicate_kimi_process(kimi_process), timeout=2)
-
     assert claude_text == "完成"
     assert claude_session_id == "sess-1"
     assert claude_returncode == 0
     assert claude_process.kill.called
     assert claude_process.stdout.closed.is_set()
-    assert kimi_text == "完成"
-    assert kimi_returncode == 0
-    assert kimi_process.stdout.closed.is_set()
 
 
 @pytest.mark.asyncio

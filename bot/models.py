@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from bot.config import CLI_TYPE, CLI_PATH, WORKING_DIR
-from bot.cli_params import CliParamsConfig
+from bot.cli_params import CliParamsConfig, SUPPORTED_CLI_TYPES
 from bot.cluster.config import (
     AgentClusterConfig,
     BotClusterConfig,
@@ -32,6 +32,16 @@ PROMPT_PRESET_ID_MAX_LENGTH = 128
 EXECUTION_MODE_CLI = "cli"
 EXECUTION_MODE_NATIVE_AGENT = "native_agent"
 SUPPORTED_EXECUTION_MODES = {EXECUTION_MODE_CLI, EXECUTION_MODE_NATIVE_AGENT}
+
+
+def normalize_cli_type_config(value: Any, *, default: str = CLI_TYPE) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in SUPPORTED_CLI_TYPES:
+        return normalized
+    default_value = str(default or "").strip().lower()
+    if default_value in SUPPORTED_CLI_TYPES:
+        return default_value
+    return "codex"
 
 
 def normalize_execution_mode(value: Any, *, default: str = EXECUTION_MODE_CLI) -> str:
@@ -290,7 +300,7 @@ class GitCommitMessageCliConfig:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "GitCommitMessageCliConfig":
         return cls(
-            cli_type=str(data.get("cli_type", CLI_TYPE) or CLI_TYPE),
+            cli_type=normalize_cli_type_config(data.get("cli_type", CLI_TYPE)),
             cli_path=str(data.get("cli_path", CLI_PATH) or CLI_PATH),
             cli_params=CliParamsConfig.from_dict(data.get("cli_params")),
         )
@@ -428,7 +438,7 @@ class BotProfile:
         return cls(
             alias=data["alias"],
             token=str(data.get("token", "") or ""),
-            cli_type=data.get("cli_type", CLI_TYPE),
+            cli_type=normalize_cli_type_config(data.get("cli_type", CLI_TYPE)),
             cli_path=data.get("cli_path", CLI_PATH),
             working_dir=data.get("working_dir", WORKING_DIR),
             enabled=data.get("enabled", True),
@@ -457,7 +467,6 @@ class UserSession:
     history: List[dict] = field(default_factory=list)
     codex_session_id: Optional[str] = None
     claude_session_id: Optional[str] = None
-    kimi_session_id: Optional[str] = None
     native_agent_session_id: Optional[str] = None
     native_agent_run_id: Optional[str] = None
     native_agent_server_key: Optional[str] = None
@@ -481,6 +490,16 @@ class UserSession:
     _persist_enabled: bool = field(default=True, repr=False, compare=False)
     persist_hook: Optional[PersistHook] = field(default=None, repr=False, compare=False)
     _persist_timer: Optional[threading.Timer] = field(default=None, repr=False, compare=False)
+
+    def __getattr__(self, name: str) -> Any:
+        if name == "kimi_session_id":
+            return None
+        raise AttributeError(name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "kimi_session_id":
+            return
+        super().__setattr__(name, value)
 
     def touch(self):
         with self._lock:
@@ -630,7 +649,6 @@ class UserSession:
         with self._lock:
             self.codex_session_id = None
             self.claude_session_id = None
-            self.kimi_session_id = None
             self.native_agent_session_id = None
             self.native_agent_run_id = None
             self.native_agent_server_key = None

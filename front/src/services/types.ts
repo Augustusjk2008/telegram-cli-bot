@@ -1,4 +1,4 @@
-export type CliType = "claude" | "codex" | "kimi";
+export type CliType = "claude" | "codex";
 export type ChatExecutionMode = "cli" | "native_agent";
 export type BotStatus = "running" | "busy" | "unread" | "offline";
 export type BotServiceStatus = "online" | "offline";
@@ -414,7 +414,6 @@ export type ClusterStatus = {
     runtime?: ClusterMcpTargetStatus;
     codex: ClusterMcpTargetStatus;
     claude: ClusterMcpTargetStatus;
-    kimi: ClusterMcpTargetStatus;
     pi?: ClusterMcpTargetStatus;
   };
   agents: ClusterAgentStatus[];

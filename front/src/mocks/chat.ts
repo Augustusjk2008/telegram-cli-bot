@@ -5,7 +5,7 @@ export const mockChatMessages: Record<string, ChatMessage[]> = {
     {
       id: "1",
       role: "assistant",
-      text: "你好，我是 Kimi。有什么可以帮你的？",
+      text: "你好，我是 Codex。有什么可以帮你的？",
       createdAt: new Date().toISOString(),
       state: "done"
     }

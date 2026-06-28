@@ -45,9 +45,9 @@ def _parse_cli_global_extra_args(raw_value: str) -> dict[str, list[str]]:
     parsed: dict[str, list[str]] = {}
     for key, args in payload.items():
         cli_type = str(key or "").strip().lower()
-        if cli_type not in {"codex", "claude", "kimi"}:
+        if cli_type not in {"codex", "claude"}:
             logging.warning("忽略无效的 CLI_GLOBAL_EXTRA_ARGS.%s：不支持的 CLI 类型", key)
-            return {}
+            continue
         if not isinstance(args, list) or any(not isinstance(item, str) for item in args):
             logging.warning("忽略无效的 CLI_GLOBAL_EXTRA_ARGS.%s：必须是字符串数组", key)
             return {}
@@ -232,7 +232,7 @@ PUSHPLUS_TIMEOUT_SECONDS = _get_project_float("PUSHPLUS_TIMEOUT_SECONDS", 5.0)
 PUSHPLUS_PREVIEW_CHARS = _get_project_int("PUSHPLUS_PREVIEW_CHARS", 300)
 
 # ============ 常量定义 ============
-SUPPORTED_CLI_TYPES = {"claude", "codex", "kimi"}
+SUPPORTED_CLI_TYPES = {"claude", "codex"}
 if CLI_TYPE not in SUPPORTED_CLI_TYPES:
     logging.warning("CLI_TYPE=%s 已不再受支持，自动回退为 codex", CLI_TYPE)
     CLI_TYPE = "codex"

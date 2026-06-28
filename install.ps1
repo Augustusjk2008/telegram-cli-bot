@@ -258,7 +258,6 @@ function Get-LocalCliInfo {
     return [pscustomobject]@{
         Codex  = Get-CliCommandInfo -Name "codex" -VersionArgs @("--version")
         Claude = Get-CliCommandInfo -Name "claude" -VersionArgs @("--version")
-        Kimi   = Get-CliCommandInfo -Name "kimi" -VersionArgs @("info")
     }
 }
 
@@ -533,11 +532,6 @@ function Select-DefaultCli {
             Choice = "2"
             Type   = "claude"
             Path   = if ($CliInfo.Claude) { $CliInfo.Claude.Path } else { "claude" }
-        },
-        [pscustomobject]@{
-            Choice = "3"
-            Type   = "kimi"
-            Path   = "kimi"
         }
     )
 
@@ -730,20 +724,20 @@ function Install-ExamplePlugins {
 }
 
 function Show-CliWarning {
-    Write-Warn "未检测到 codex / claude / kimi。"
-    Write-Host "请先安装 Codex CLI、Claude Code CLI 或 Kimi CLI，并完成登录。"
-    Write-Host "安装完成后，在 PowerShell / cmd 中确认可以运行 codex --version、claude --version 或 kimi info。"
+    Write-Warn "未检测到 codex / claude。"
+    Write-Host "请先安装 Codex CLI 或 Claude Code CLI，并完成登录。"
+    Write-Host "安装完成后，在 PowerShell / cmd 中确认可以运行 codex --version 或 claude --version。"
     Write-Host "然后重新运行安装器，或手动修改 .env 中的 CLI_TYPE / CLI_PATH。"
 }
 
 function Ensure-OptionalCodexInstall {
     param([object]$CliInfo)
 
-    if ($CliInfo.Codex -or $CliInfo.Claude -or $CliInfo.Kimi) {
+    if ($CliInfo.Codex -or $CliInfo.Claude) {
         return $CliInfo
     }
 
-    $choice = Read-Choice -Prompt "未检测到 codex / claude / kimi：1) 自动安装 codex  2) 跳过" -Choices @("1", "2") -DefaultChoice "1"
+    $choice = Read-Choice -Prompt "未检测到 codex / claude：1) 自动安装 codex  2) 跳过" -Choices @("1", "2") -DefaultChoice "1"
     if ($choice -ne "1") {
         return $CliInfo
     }
@@ -760,7 +754,6 @@ function Ensure-OptionalCodexInstall {
             Version = ""
         }
         Claude = $CliInfo.Claude
-        Kimi   = $CliInfo.Kimi
     }
 }
 
@@ -867,7 +860,7 @@ try {
     Write-Step "检查 Git"
     $gitInfo = Ensure-Tool -DisplayName "Git" -Detector ${function:Get-GitInfo} -MinimumVersion "2.0.0" -WingetPackageId "Git.Git" -FallbackInstaller ${function:Install-GitFallback}
 
-    Write-Step "检查 codex / claude / kimi"
+    Write-Step "检查 codex / claude"
     $cliInfo = Get-LocalCliInfo
     if ($cliInfo.Codex) {
         Write-Info ("已检测到 codex: {0}" -f $cliInfo.Codex.Path)
@@ -875,15 +868,11 @@ try {
     if ($cliInfo.Claude) {
         Write-Info ("已检测到 claude: {0}" -f $cliInfo.Claude.Path)
     }
-    if ($cliInfo.Kimi) {
-        Write-Info ("已检测到 kimi: {0}" -f $cliInfo.Kimi.Path)
-    }
 
-    if ($cliInfo.Codex -or $cliInfo.Claude -or $cliInfo.Kimi) {
+    if ($cliInfo.Codex -or $cliInfo.Claude) {
         $detectedCli = @()
         if ($cliInfo.Codex) { $detectedCli += "codex" }
         if ($cliInfo.Claude) { $detectedCli += "claude" }
-        if ($cliInfo.Kimi) { $detectedCli += "kimi" }
         Save-Summary -Key "本地 CLI" -Value ($detectedCli -join ", ")
     } else {
         Save-Summary -Key "本地 CLI" -Value "未检测到"

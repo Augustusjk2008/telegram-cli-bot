@@ -129,21 +129,6 @@ class TestClearBotSessions:
 class TestSessionPersistence:
     """测试会话持久化功能"""
 
-    def test_get_session_restores_kimi_session_id(self, temp_dir: Path):
-        from unittest.mock import patch
-        from bot.session_store import save_session
-
-        store_file = temp_dir / ".session_store.json"
-
-        with patch("bot.session_store.STORE_FILE", store_file):
-            save_session(1, 100, kimi_session_id="kimi-session-1", working_dir=str(temp_dir))
-            with sessions_lock:
-                sessions.clear()
-
-            session = get_session(1, "main", 100, str(temp_dir))
-
-        assert session.kimi_session_id == "kimi-session-1"
-
     def test_reset_session_clears_persisted_native_agent_session_id(self, temp_dir: Path):
         from unittest.mock import patch
         from bot.session_store import save_session, load_session

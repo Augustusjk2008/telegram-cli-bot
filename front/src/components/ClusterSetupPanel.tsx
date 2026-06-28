@@ -16,7 +16,6 @@ function commandText(command: string[]) {
 const CLI_LABELS: Record<string, string> = {
   claude: "Claude",
   codex: "Codex",
-  kimi: "Kimi",
   pi: "Pi",
 };
 
@@ -27,18 +26,14 @@ function cliLabel(cliType: string) {
 function targetStatus(status: ClusterStatus) {
   const activeCliType = status.mcp.activeCliType === "pi"
     ? "pi"
-    : status.mcp.activeCliType === "kimi"
-      ? "kimi"
-      : status.mcp.activeCliType === "claude"
-        ? "claude"
-        : "codex";
+    : status.mcp.activeCliType === "claude"
+      ? "claude"
+      : "codex";
   const activeStatus = activeCliType === "pi"
     ? status.mcp.pi
-    : activeCliType === "kimi"
-      ? status.mcp.kimi
-      : activeCliType === "claude"
-        ? status.mcp.claude
-        : status.mcp.codex;
+    : activeCliType === "claude"
+      ? status.mcp.claude
+      : status.mcp.codex;
   return { activeCliType, activeStatus };
 }
 

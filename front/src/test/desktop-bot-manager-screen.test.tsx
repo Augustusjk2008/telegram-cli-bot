@@ -399,11 +399,7 @@ test("desktop bot manager creates a bot from detail panel", async () => {
   expect(screen.getByLabelText("新智能体 CLI 路径")).toHaveValue("C:\\tools\\codex.exe");
   await user.selectOptions(screen.getByLabelText("新智能体 CLI 类型"), "claude");
   expect(screen.getByLabelText("新智能体 CLI 路径")).toHaveValue("C:\\tools\\claude.cmd");
-  expect(screen.getByRole("option", { name: "kimi" })).toBeInTheDocument();
-  await user.selectOptions(screen.getByLabelText("新智能体 CLI 类型"), "kimi");
-  expect(screen.getByLabelText("新智能体 CLI 路径")).toHaveValue("kimi");
   await user.type(screen.getByLabelText("新智能体别名"), "team3");
-  expect(screen.getByLabelText("新智能体 CLI 路径")).toHaveAttribute("placeholder", "kimi");
   await user.type(screen.getByLabelText("新智能体工作目录"), "C:\\workspace\\team3");
   await user.click(screen.getByRole("button", { name: "创建智能体" }));
 
@@ -412,8 +408,8 @@ test("desktop bot manager creates a bot from detail panel", async () => {
   });
   expect(client.addBotCalls[0]).toMatchObject({
     alias: "team3",
-    cliType: "kimi",
-    cliPath: "kimi",
+    cliType: "claude",
+    cliPath: "C:\\tools\\claude.cmd",
     workingDir: "C:\\workspace\\team3",
   });
 });
@@ -645,4 +641,3 @@ test("desktop bot manager bulk stops online managed bots and skips main", async 
   expect(screen.getByText("已停止 1 个，跳过 1 个")).toBeInTheDocument();
   expect(screen.getByText("main: 主 bot 不可停止")).toBeInTheDocument();
 });
-

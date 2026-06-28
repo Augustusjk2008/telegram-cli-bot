@@ -294,15 +294,12 @@ select_default_cli_type() {
     return 0
   fi
 
-  prompt="选择默认 CLI：1) codex  2) claude  3) kimi [默认 1] "
+  prompt="选择默认 CLI：1) codex  2) claude [默认 1] "
 
   read -r -p "$prompt" choice
   case "$choice" in
     2)
       printf 'claude\n'
-      ;;
-    3)
-      printf 'kimi\n'
       ;;
     *)
       printf 'codex\n'
@@ -468,14 +465,13 @@ else
   warn "未检测到 Git"
 fi
 
-step "检查 codex / claude / kimi"
-if ! command -v codex >/dev/null 2>&1 && ! command -v claude >/dev/null 2>&1 && ! command -v kimi >/dev/null 2>&1; then
-  warn "未检测到 codex / claude / kimi。"
-  printf '%s\n' "请先安装 Codex CLI、Claude Code CLI 或 Kimi CLI，并确认 codex --version / claude --version / kimi info 可运行。"
+step "检查 codex / claude"
+if ! command -v codex >/dev/null 2>&1 && ! command -v claude >/dev/null 2>&1; then
+  warn "未检测到 codex / claude。"
+  printf '%s\n' "请先安装 Codex CLI 或 Claude Code CLI，并确认 codex --version / claude --version 可运行。"
 else
   command -v codex >/dev/null 2>&1 && info "已检测到 codex"
   command -v claude >/dev/null 2>&1 && info "已检测到 claude"
-  command -v kimi >/dev/null 2>&1 && info "已检测到 kimi"
 fi
 
 if [[ "$CHECK_ONLY" == "1" ]]; then

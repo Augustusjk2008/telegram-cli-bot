@@ -44,7 +44,7 @@ export const EMPTY_CREATE_DRAFT: CreateDraft = {
 };
 
 export function defaultCliPathForType(cliType: CliType) {
-  return cliType === "kimi" ? "kimi" : cliType === "claude" ? "claude" : "codex";
+  return cliType === "claude" ? "claude" : "codex";
 }
 
 export function resolveDefaultCliPath(cliType: CliType, bots: BotSummary[]) {

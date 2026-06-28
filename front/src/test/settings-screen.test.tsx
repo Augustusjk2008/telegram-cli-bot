@@ -344,29 +344,3 @@ test("settings screen creates child agent", async () => {
   expect(await screen.findByText("agent 已新增")).toBeInTheDocument();
 });
 
-
-
-
-
-
-
-
-test("settings screen supports kimi cli type", async () => {
-  const user = userEvent.setup();
-  const client = new MockWebBotClient();
-
-  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
-
-  const cliTypeSelect = await screen.findByLabelText("CLI 类型");
-  expect(screen.getByRole("option", { name: "kimi" })).toBeInTheDocument();
-  await user.selectOptions(cliTypeSelect, "kimi");
-  expect(cliTypeSelect).toHaveValue("kimi");
-  expect(screen.getByLabelText("CLI 路径")).toHaveAttribute("placeholder", "kimi");
-});
-
-
-
-
-
-
-

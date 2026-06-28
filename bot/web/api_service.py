@@ -112,13 +112,10 @@ from bot.config import CLI_MODEL_OPTIONS, WEB_PORT
 from bot.cli import (
     build_cli_command,
     extract_codex_error_output,
-    extract_kimi_error_output,
     normalize_cli_type,
     parse_claude_stream_json_line,
     parse_claude_stream_json_output,
     parse_codex_json_output,
-    parse_kimi_stream_json_line,
-    parse_kimi_stream_json_output,
     resolve_cli_executable,
     should_mark_claude_session_initialized,
     should_reset_claude_session,
@@ -172,7 +169,6 @@ from bot.web.cli_context_usage import resolve_cli_context_usage
 from bot.web.diagnostics import diag_log_event, diag_log_slow
 from bot.web.git_commit_message import truncate_diff_text
 from bot.web.native_history_adapter import create_stream_trace_state, consume_stream_trace_chunk
-from bot.web.native_history_locator import locate_kimi_transcript
 from bot.web.plan_mode import (
     PLAN_MODE_TASK_MODE,
     build_plan_execution_prompt,
@@ -287,7 +283,6 @@ class CliAttemptState:
     cli_session_id: Optional[str]
     resume_session: bool
     codex_session_id: Optional[str] = None
-    kimi_session_id: Optional[str] = None
 
 
 def _avatar_asset_dirs() -> list[Path]:
@@ -596,7 +591,6 @@ def _build_session_ids(session: UserSession) -> dict[str, Any]:
     return {
         "codex_session_id": session.codex_session_id,
         "claude_session_id": session.claude_session_id,
-        "kimi_session_id": session.kimi_session_id,
         "native_agent_session_id": session.native_agent_session_id,
         "claude_session_initialized": session.claude_session_initialized,
     }
@@ -618,12 +612,10 @@ def _clear_all_native_sessions_locked(session: UserSession) -> bool:
     changed = bool(
         session.codex_session_id
         or session.claude_session_id
-        or session.kimi_session_id
         or session.claude_session_initialized
     )
     session.codex_session_id = None
     session.claude_session_id = None
-    session.kimi_session_id = None
     session.claude_session_initialized = False
     return _clear_native_agent_session_locked(session) or changed
 
@@ -1044,7 +1036,6 @@ def get_cluster_status(manager: MultiBotManager, alias: str) -> dict[str, Any]:
             "runtime": _cluster_runtime_mcp_status(),
             "codex": _cluster_mcp_target_status(profile, "codex", active_cli_type=active_cli_type),
             "claude": _cluster_mcp_target_status(profile, "claude", active_cli_type=active_cli_type),
-            "kimi": _cluster_mcp_target_status(profile, "kimi", active_cli_type=active_cli_type),
             "pi": _cluster_pi_mcp_target_status(active_cli_type=active_cli_type),
         },
         "agents": [
@@ -1082,7 +1073,7 @@ def prepare_cluster_setup(manager: MultiBotManager, alias: str) -> dict[str, Any
             "pi_extension_name": "tcb-cluster.ts",
             "self_test_command": build_pi_mcp_self_test_command(launcher.config_path),
         }
-    cli_type = active_cli_type if active_cli_type in {"codex", "claude", "kimi"} else profile.cli_type
+    cli_type = active_cli_type if active_cli_type in {"codex", "claude"} else profile.cli_type
     return {
         **launcher.to_dict(),
         "install_command": build_cli_install_command(
@@ -2568,8 +2559,6 @@ def select_conversation(
         if native_provider == "claude":
             session.claude_session_id = native_session_id or None
             session.claude_session_initialized = bool(native_session_id)
-        if native_provider == "kimi":
-            session.kimi_session_id = native_session_id or None
         if native_provider == NATIVE_AGENT_PROVIDER:
             session.native_agent_session_id = native_session_id or None
             session.native_agent_server_key = None
@@ -2649,9 +2638,6 @@ def delete_conversation(
             elif native_provider == "claude" and session.claude_session_id == native_session_id:
                 session.claude_session_id = None
                 session.claude_session_initialized = False
-                native_cleared = True
-            elif native_provider == "kimi" and session.kimi_session_id == native_session_id:
-                session.kimi_session_id = None
                 native_cleared = True
             elif native_provider == NATIVE_AGENT_PROVIDER and session.native_agent_session_id == native_session_id:
                 _clear_native_agent_session_locked(session)
@@ -2742,9 +2728,6 @@ def delete_all_conversations(
                 if session.claude_session_id is not None:
                     session.claude_session_id = None
                     session.claude_session_initialized = False
-                    native_cleared = True
-                if session.kimi_session_id is not None:
-                    session.kimi_session_id = None
                     native_cleared = True
     session.persist()
 
@@ -3268,9 +3251,6 @@ def _cluster_mcp_injected_params(profile: BotProfile, params_config: CliParamsCo
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
         injection = ["--mcp-config", str(config_path), "--strict-mcp-config"]
-    elif cli_type == "kimi":
-        config = {"mcpServers": {CLUSTER_MCP_SERVER_NAME: {"command": str(launcher_path)}}}
-        injection = ["--mcp-config", json.dumps(config, ensure_ascii=False)]
     else:
         injection = []
     if injection and not all(arg in extra_args for arg in injection):
@@ -3499,8 +3479,6 @@ def _current_native_session_id(session: UserSession, cli_type: str) -> str:
         return str(session.codex_session_id or "").strip()
     if normalized == "claude":
         return str(session.claude_session_id or "").strip()
-    if normalized == "kimi":
-        return str(session.kimi_session_id or "").strip()
     return ""
 
 
@@ -3524,12 +3502,6 @@ def _status_context_session_id(
             return candidate
         with session._lock:
             return str(session.claude_session_id or "").strip()
-    if normalized == "kimi":
-        candidate = str(attempt.kimi_session_id or attempt.cli_session_id or "").strip()
-        if candidate:
-            return candidate
-        with session._lock:
-            return str(session.kimi_session_id or "").strip()
     return ""
 
 
@@ -4079,15 +4051,6 @@ def _prepare_cli_attempt_state(session: UserSession, cli_type: str) -> CliAttemp
                 cli_session_id=session.claude_session_id,
                 resume_session=session.claude_session_initialized,
             )
-        if cli_type == "kimi":
-            existing_session = bool(session.kimi_session_id)
-            if not session.kimi_session_id:
-                session.kimi_session_id = str(uuid.uuid4())
-            return CliAttemptState(
-                cli_session_id=session.kimi_session_id,
-                resume_session=existing_session,
-                kimi_session_id=session.kimi_session_id,
-            )
     return CliAttemptState(cli_session_id=None, resume_session=False)
 
 
@@ -4103,11 +4066,6 @@ def _clear_invalid_cli_session(session: UserSession, cli_type: str) -> bool:
             session.claude_session_id = None
             session.claude_session_initialized = False
             return changed
-        if cli_type == "kimi":
-            if session.kimi_session_id is None:
-                return False
-            session.kimi_session_id = None
-            return True
     return False
 
 
@@ -4140,10 +4098,6 @@ def _extract_claude_error_detail(raw_output: str) -> Optional[str]:
             error_parts.append(parsed["error_text"])
     text = "\n".join(part for part in error_parts if part).strip()
     return text or _extract_plain_error_output(raw_output)
-
-
-def _extract_kimi_error_detail(raw_output: str) -> Optional[str]:
-    return extract_kimi_error_output(raw_output) or _extract_plain_error_output(raw_output)
 
 
 def _parse_codex_event(line: str) -> tuple[dict[str, Optional[str]], dict[str, Any]]:
@@ -4360,24 +4314,6 @@ def _extract_claude_stream_preview(raw_output: str) -> Optional[str]:
     return fallback_text or None
 
 
-def _extract_kimi_stream_preview(raw_output: str) -> Optional[str]:
-    parts: list[str] = []
-    fallback_parts: list[str] = []
-    for line in raw_output.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        parsed = parse_kimi_stream_json_line(stripped)
-        if parsed["completed_text"] or parsed["delta_text"]:
-            parts.append(str(parsed["completed_text"] or parsed["delta_text"]))
-        elif parsed["error_text"]:
-            fallback_parts.append(parsed["error_text"])
-        elif not stripped.startswith("{"):
-            fallback_parts.append(stripped)
-    text = "\n".join(part for part in parts if part).strip()
-    return text or "\n".join(part for part in fallback_parts if part).strip() or None
-
-
 def _build_stream_status_event(cli_type: str, elapsed_seconds: int, raw_output: str) -> dict[str, Any]:
     event: dict[str, Any] = {
         "type": "status",
@@ -4389,10 +4325,6 @@ def _build_stream_status_event(cli_type: str, elapsed_seconds: int, raw_output: 
             event["preview_text"] = preview_text[-800:]
     elif cli_type == "claude":
         preview_text = _extract_claude_stream_preview(raw_output)
-        if preview_text:
-            event["preview_text"] = preview_text[-800:]
-    elif cli_type == "kimi":
-        preview_text = _extract_kimi_stream_preview(raw_output)
         if preview_text:
             event["preview_text"] = preview_text[-800:]
     return event
@@ -4416,8 +4348,6 @@ class _StreamPreviewState:
             self._consume_codex(text)
         elif self.cli_type == "claude":
             self._consume_claude(text)
-        elif self.cli_type == "kimi":
-            self._consume_kimi(text)
 
     def _append_raw(self, text: str) -> None:
         self._raw_parts.append(text)
@@ -4494,11 +4424,6 @@ class _StreamPreviewState:
             self._preview_text += "".join(preview_parts)
         elif not self._preview_text and fallback_parts:
             self._preview_text = "\n".join(part for part in fallback_parts if part).strip()
-
-    def _consume_kimi(self, text: str) -> None:
-        preview = _extract_kimi_stream_preview(text)
-        if preview:
-            self._preview_text = preview
 
     def status_event(self, *, elapsed_seconds: int) -> dict[str, Any]:
         event: dict[str, Any] = {"type": "status", "elapsed_seconds": elapsed_seconds}
@@ -4607,46 +4532,6 @@ def _merge_trace_events(*sources: list[dict[str, Any]] | None) -> list[dict[str,
             seen.add(key)
             merged.append(dict(item))
     return merged
-
-
-class _KimiWireTail:
-    def __init__(self, session_id: str, *, skip_existing: bool = False):
-        self.session_id = str(session_id or "").strip()
-        self.path: Path | None = None
-        self.offset = 0
-        self.state = create_stream_trace_state("kimi")
-        if skip_existing:
-            self._prime_existing_offset()
-
-    def _prime_existing_offset(self) -> None:
-        ref = locate_kimi_transcript(self.session_id)
-        if ref is None:
-            return
-        try:
-            self.path = ref.path
-            self.offset = ref.path.stat().st_size
-        except OSError:
-            self.path = None
-            self.offset = 0
-
-    def poll(self) -> list[dict[str, Any]]:
-        if not self.session_id:
-            return []
-        if self.path is None:
-            ref = locate_kimi_transcript(self.session_id)
-            if ref is None:
-                return []
-            self.path = ref.path
-        try:
-            with self.path.open("r", encoding="utf-8", errors="replace") as handle:
-                handle.seek(self.offset)
-                chunk = handle.read()
-                self.offset = handle.tell()
-        except OSError:
-            return []
-        if not chunk:
-            return []
-        return consume_stream_trace_chunk("kimi", chunk, self.state)
 
 
 def _build_terminal_trace(
@@ -5113,17 +4998,6 @@ async def _communicate_claude_process(
         close_process_streams(process)
 
 
-async def _communicate_kimi_process(process: subprocess.Popen) -> tuple[str, int]:
-    try:
-        raw_output, returncode = await _communicate_process(process)
-        response = parse_kimi_stream_json_output(raw_output)
-        if returncode != 0:
-            response = _extract_kimi_error_detail(raw_output) or response
-        return response or msg("chat", "no_output"), returncode
-    finally:
-        close_process_streams(process)
-
-
 async def _stream_cli_chat(
     manager: MultiBotManager,
     alias: str,
@@ -5258,7 +5132,7 @@ async def _stream_cli_chat(
                     env=env,
                     session_id=attempt.cli_session_id,
                     resume_session=attempt.resume_session,
-                    json_output=(cli_type in ("codex", "claude", "kimi")),
+                    json_output=(cli_type in ("codex", "claude")),
                     params_config=params_for_attempt,
                     working_dir=session.working_dir,
                     task_mode=request.task_mode if request is not None else "standard",
@@ -5364,12 +5238,6 @@ async def _stream_cli_chat(
             live_trace_event_keys: set[tuple[str, str, str, str]] = set()
             latest_preview_text = ""
             last_context_usage_resolved_at = 0.0
-            kimi_wire_tail = (
-                _KimiWireTail(attempt.cli_session_id or "", skip_existing=attempt.resume_session)
-                if cli_type == "kimi"
-                else None
-            )
-
             def append_live_trace_event(trace_event: dict[str, Any]) -> dict[str, Any] | None:
                 event_key = _trace_event_key(trace_event)
                 if event_key in live_trace_event_keys:
@@ -5414,12 +5282,6 @@ async def _stream_cli_chat(
                                 )
                         elif claude_collector is not None:
                             claude_collector.consume_chunk(text_chunk, now=loop.time())
-
-                    if kimi_wire_tail is not None:
-                        for trace_event in kimi_wire_tail.poll():
-                            appended_trace = append_live_trace_event(trace_event)
-                            if appended_trace is not None:
-                                yield {"type": "trace", **turn_event_ids, "event": appended_trace}
 
                     with session._lock:
                         stop_requested = bool(session.stop_requested)
@@ -5592,11 +5454,6 @@ async def _stream_cli_chat(
                 if returncode != 0:
                     error_detail = _extract_claude_error_detail(raw_output) or ""
                     response = error_detail or response
-            elif cli_type == "kimi":
-                response = parse_kimi_stream_json_output(raw_output)
-                if returncode != 0:
-                    error_detail = _extract_kimi_error_detail(raw_output) or ""
-                    response = error_detail or response
             else:
                 response = raw_output.strip()
                 if returncode != 0:
@@ -5636,9 +5493,6 @@ async def _stream_cli_chat(
                             session.claude_session_id = None
                             session.claude_session_initialized = False
                             session_id_changed = True
-            elif cli_type == "kimi":
-                session_id_changed = True
-
             if cli_type == "codex":
                 response, should_force_error_output = _decorate_codex_resume_error(
                     response,
@@ -5972,7 +5826,7 @@ async def run_cli_chat(
                     env=env,
                     session_id=attempt.cli_session_id,
                     resume_session=attempt.resume_session,
-                    json_output=(cli_type in ("codex", "claude", "kimi")),
+                    json_output=(cli_type in ("codex", "claude")),
                     params_config=params_for_attempt,
                     working_dir=session.working_dir,
                     task_mode=request.task_mode if request is not None else "standard",
@@ -6045,8 +5899,6 @@ async def run_cli_chat(
                         process,
                         done_session=done_session,
                     )
-                elif cli_type == "kimi":
-                    response, returncode = await _communicate_kimi_process(process)
                 else:
                     response, returncode = await _communicate_process(process)
                     response = response.strip() or msg("chat", "no_output")
@@ -6093,9 +5945,6 @@ async def run_cli_chat(
                             session.claude_session_id = None
                             session.claude_session_initialized = False
                             session_id_changed = True
-            elif cli_type == "kimi":
-                session_id_changed = True
-
             if cli_type == "codex":
                 response, should_force_error_output = _decorate_codex_resume_error(
                     response,
