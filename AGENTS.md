@@ -28,14 +28,10 @@ bash start.sh
 python -m bot
 
 # 后端测试
-python -m pytest tests -q
-python -m pytest tests/test_cli.py tests/test_manager.py tests/test_sessions.py -q
-python -m pytest tests/test_web_api.py tests/test_assistant.py tests/test_updater.py tests/test_release_assets.py -q
-python -m pytest tests/test_plugin_manifest.py tests/test_plugin_service.py tests/test_plugin_runtime.py tests/test_vivado_waveform_plugin.py -q
+python -m pytest tests/test_cli.py tests/test_manager.py tests/test_sessions.py tests/test_session_store.py tests/test_web_auth_store.py tests/test_env_service.py tests/test_runtime_paths.py tests/test_runtime_web_startup.py tests/test_main_web.py -q
 
 # 前端测试 / 构建
-cd front && npm test
-cd front && npm test -- --run src/test/plugins-screen.test.tsx src/test/plugin-view-surface.test.tsx src/test/desktop-workbench.test.tsx
+cd front && npm run test:gate
 cd front && npm run build
 cd front && npm run lint
 
@@ -83,6 +79,7 @@ pwsh -ExecutionPolicy Bypass -File .release-local/publish-release.ps1 -Version <
 - `managed_bots.example.json` 是公开示例；不要提交真实 `managed_bots.json`
 - 当前 runtime 仅 Web；不再有 per-bot Telegram application lifecycle
 - 旧 `webcli` 代码仅作兼容；manager 拒绝新 `webcli` bot，并把旧 profile 降级为 `cli`
+- 测试门禁和分类见 `docs/testing-policy.md`
 
 ## 核心区域
 

@@ -313,18 +313,10 @@ APP_UPDATE_REPOSITORY=Augustusjk2008/telegram-cli-bot
 
 ```bash
 python -m bot
-python -m pytest tests -q
-cd front && npm test
+python -m pytest tests/test_cli.py tests/test_manager.py tests/test_sessions.py tests/test_session_store.py tests/test_web_auth_store.py tests/test_env_service.py tests/test_runtime_paths.py tests/test_runtime_web_startup.py tests/test_main_web.py -q
+cd front && npm run test:gate
 cd front && npm run build
 cd front && npm run lint
 ```
 
-常用聚焦测试：
-
-```bash
-python -m pytest tests/test_web_api.py -q
-python -m pytest tests/test_assistant.py -q
-python -m pytest tests/test_native_agent.py tests/test_native_agent_context_usage.py tests/test_sessions.py -q
-cd front && npm test -- --run src/test/chat-screen.test.tsx src/test/desktop-bot-manager-screen.test.tsx
-cd front && npm test -- --run src/test/real-client.test.ts src/test/ag-ui-stream-adapter.test.ts src/test/chat-screen.test.tsx
-```
+测试规范见 [docs/testing-policy.md](docs/testing-policy.md)。
