@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import threading
 from typing import Any
 
 from bot.cli import normalize_cli_type
@@ -26,16 +28,25 @@ class StreamingPersistenceBuffer:
         service: "ChatHistoryService",
         handle: ChatTurnHandle,
         *,
-        loop_time,
+        loop,
         flush_interval_seconds: float = 0.25,
+        max_batch_events: int = 32,
+        max_batch_bytes: int = 16 * 1024,
     ) -> None:
         self._service = service
         self._handle = handle
-        self._loop_time = loop_time
+        self._loop = loop
+        self._loop_time = loop.time
         self._flush_interval_seconds = max(0.05, float(flush_interval_seconds))
-        self._last_flush_at = float(loop_time())
+        self._last_flush_at = float(self._loop_time())
+        self._max_batch_events = max(1, int(max_batch_events))
+        self._max_batch_bytes = max(1024, int(max_batch_bytes))
         self._pending_preview: str | None = None
         self._pending_trace: list[dict[str, Any]] = []
+        self._pending_trace_bytes = 0
+        self._flush_task: asyncio.Task[None] | None = None
+        self._closing = False
+        self._lock = threading.Lock()
         self.flush_count = 0
         self.preview_flush_count = 0
         self.trace_flush_count = 0
@@ -43,25 +54,89 @@ class StreamingPersistenceBuffer:
     def queue_preview(self, preview_text: str) -> None:
         text = str(preview_text or "").strip()
         if text:
-            self._pending_preview = text[-800:]
+            with self._lock:
+                self._pending_preview = text[-800:]
 
     def queue_trace(self, event: dict[str, Any]) -> None:
         if isinstance(event, dict):
-            self._pending_trace.append(dict(event))
+            payload = dict(event)
+            payload_bytes = len(json.dumps(payload, ensure_ascii=False))
+            with self._lock:
+                self._pending_trace.append(payload)
+                self._pending_trace_bytes += payload_bytes
 
     def maybe_flush(self) -> None:
-        if not self._pending_preview and not self._pending_trace:
-            return
-        now = float(self._loop_time())
-        if now - self._last_flush_at < self._flush_interval_seconds:
-            return
-        self.flush()
+        if self._should_flush():
+            self.flush()
 
     def flush(self) -> None:
-        preview = self._pending_preview
-        trace = list(self._pending_trace)
-        self._pending_preview = None
-        self._pending_trace.clear()
+        self._schedule_flush(final=False)
+
+    async def close(self) -> None:
+        self._closing = True
+        try:
+            while True:
+                task = self._schedule_flush(final=True)
+                if task is None:
+                    return
+                await task
+                with self._lock:
+                    if self._flush_task is None and not self._pending_preview and not self._pending_trace:
+                        return
+        finally:
+            self._closing = False
+
+    def _should_flush(self) -> bool:
+        with self._lock:
+            if not self._pending_preview and not self._pending_trace:
+                return False
+            if len(self._pending_trace) >= self._max_batch_events:
+                return True
+            if self._pending_trace_bytes >= self._max_batch_bytes:
+                return True
+            if float(self._loop_time()) - self._last_flush_at >= self._flush_interval_seconds:
+                return True
+            return False
+
+    def _schedule_flush(self, *, final: bool) -> asyncio.Task[None] | None:
+        with self._lock:
+            if final:
+                self._closing = True
+            if self._flush_task is not None:
+                return self._flush_task
+            if not self._pending_preview and not self._pending_trace:
+                return None
+            self._flush_task = self._loop.create_task(self._run_flush())
+            return self._flush_task
+
+    async def _run_flush(self) -> None:
+        try:
+            while True:
+                preview: str | None = None
+                trace: list[dict[str, Any]] = []
+                with self._lock:
+                    if self._pending_preview:
+                        preview = self._pending_preview
+                        self._pending_preview = None
+                    if self._pending_trace:
+                        trace = list(self._pending_trace)
+                        self._pending_trace.clear()
+                        self._pending_trace_bytes = 0
+                if not preview and not trace:
+                    return
+                await asyncio.to_thread(self._flush_batch, preview, trace)
+                with self._lock:
+                    has_pending = bool(self._pending_preview or self._pending_trace)
+                if not self._closing and not has_pending:
+                    return
+        finally:
+            with self._lock:
+                self._flush_task = None
+                self._last_flush_at = float(self._loop_time())
+                if not self._pending_preview and not self._pending_trace:
+                    self._closing = False
+
+    def _flush_batch(self, preview: str | None, trace: list[dict[str, Any]]) -> None:
         if preview:
             self._service.replace_assistant_preview(self._handle, preview)
             self.preview_flush_count += 1
@@ -69,7 +144,6 @@ class StreamingPersistenceBuffer:
             self._service.append_trace_events(self._handle, trace)
             self.trace_flush_count += 1
         self.flush_count += 1
-        self._last_flush_at = float(self._loop_time())
 
 
 class ChatHistoryService:

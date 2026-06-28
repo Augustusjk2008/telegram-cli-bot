@@ -72,6 +72,60 @@ class TestClearBotSessions:
         assert main.native_agent_session_id is None
         assert reviewer.native_agent_session_id is None
 
+    def test_update_workdir_resets_all_bot_sessions(self, temp_dir: Path):
+        old_dir = temp_dir / "old"
+        new_dir = temp_dir / "new"
+        old_dir.mkdir()
+        new_dir.mkdir()
+        main = get_or_create_session(1, "main", 100, str(old_dir), agent_id="main")
+        reviewer = get_or_create_session(1, "main", 100, str(old_dir), agent_id="reviewer")
+        main.codex_session_id = "codex-main"
+        main.native_agent_session_id = "native-main"
+        main.active_conversation_id = "conv-main"
+        main.is_processing = True
+        main.running_user_text = "text"
+        main.running_preview_text = "preview"
+        main.web_turn_overlays = [{"a": 1}]
+        reviewer.codex_session_id = "codex-reviewer"
+        reviewer.native_agent_session_id = "native-reviewer"
+        reviewer.active_conversation_id = "conv-reviewer"
+        reviewer.is_processing = True
+
+        count = update_bot_working_dir("main", str(new_dir))
+
+        assert count == 2
+        for session in (main, reviewer):
+            assert session.working_dir == str(new_dir)
+            assert session.browse_dir == str(new_dir)
+            assert session.codex_session_id is None
+            assert session.native_agent_session_id is None
+            assert session.native_agent_run_id is None
+            assert session.native_agent_server_key is None
+            assert session.active_conversation_id is None
+            assert session.running_user_text is None
+            assert session.running_preview_text == ""
+            assert session.web_turn_overlays == []
+            assert session.is_processing is False
+            assert session.process is None
+            assert session.message_count == 0
+            assert session.session_epoch == 1
+
+    def test_update_workdir_does_not_touch_other_alias_sessions(self, temp_dir: Path):
+        old_dir = temp_dir / "old"
+        new_dir = temp_dir / "new"
+        other_dir = temp_dir / "other"
+        old_dir.mkdir()
+        new_dir.mkdir()
+        other_dir.mkdir()
+        main = get_or_create_session(1, "main", 100, str(old_dir), agent_id="main")
+        other = get_or_create_session(2, "other", 100, str(other_dir), agent_id="main")
+
+        count = update_bot_working_dir("main", str(new_dir))
+
+        assert count == 1
+        assert main.working_dir == str(new_dir)
+        assert other.working_dir == str(other_dir)
+
 class TestSessionPersistence:
     """测试会话持久化功能"""
 

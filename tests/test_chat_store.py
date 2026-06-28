@@ -1028,3 +1028,56 @@ def test_get_trace_recovery_context_returns_turn_native_context(monkeypatch, tmp
         "tool_call_count": 0,
         "process_count": 1,
     }
+
+
+def test_migrate_conversations_to_shared_sets_persistent_marker(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    store = ChatStore(workspace)
+    store.create_conversation(
+        bot_id=1,
+        bot_alias="main",
+        user_id=2002,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        native_provider="codex",
+    )
+
+    assert store.migrate_conversations_to_shared(1, 1001) == 1
+    metadata = json.loads(store.metadata_path.read_text(encoding="utf-8"))
+    marker_key = f"{store.db_path.resolve()}::1::1001"
+    assert marker_key in metadata["shared_user_migration_completed"]
+    assert store.migrate_conversations_to_shared(1, 1001) == 0
+
+
+def test_migrate_conversations_to_shared_sets_persistent_marker(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+
+    store = ChatStore(workspace)
+    store.create_conversation(
+        bot_id=1,
+        bot_alias="main",
+        user_id=2002,
+        bot_mode="cli",
+        cli_type="codex",
+        working_dir=str(workspace),
+        session_epoch=1,
+        native_provider="codex",
+        title="迁移前",
+    )
+
+    assert store.migrate_conversations_to_shared(1, 1001) == 1
+    metadata = json.loads(store.metadata_path.read_text(encoding="utf-8"))
+    marker_key = f"{store.db_path.resolve()}::1::1001"
+    assert marker_key in metadata["shared_user_migration_completed"]
+    assert store.migrate_conversations_to_shared(1, 1001) == 0

@@ -614,7 +614,7 @@ class NativeAgentService:
                 baseline_message_count=0,
                 baseline_known=False,
             )
-            persistence_buffer = StreamingPersistenceBuffer(history_service, turn_handle, loop_time=loop.time)
+            persistence_buffer = StreamingPersistenceBuffer(history_service, turn_handle, loop=loop)
             ag_ui_state = AgUiTurnState(
                 thread_id=turn_handle.conversation_id,
                 run_id=run_id,
@@ -979,7 +979,7 @@ class NativeAgentService:
                 final_text = _completed_tool_result_fallback(live_trace) or "原生 agent 未返回内容"
             if completion_state == "error" and not final_text:
                 final_text = error_message or "原生 agent 执行失败"
-            persistence_buffer.flush()
+            await persistence_buffer.close()
             for trace_event in live_trace:
                 if trace_event.get("kind") == "cancelled":
                     history_service.append_trace_event(turn_handle, trace_event)

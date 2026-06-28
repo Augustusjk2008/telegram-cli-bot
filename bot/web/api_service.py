@@ -156,6 +156,7 @@ from bot.session_store import rename_bot_sessions as rename_stored_bot_sessions
 from bot.sessions import (
     align_session_paths,
     clear_bot_sessions,
+    get_bot_sessions,
     get_or_create_session,
     rekey_bot_sessions,
     reset_session,
@@ -640,7 +641,9 @@ def _build_running_reply_snapshot(session: UserSession) -> Optional[dict[str, An
 
 def _get_chat_store(session: UserSession) -> ChatStore:
     store = ChatStore(Path(session.working_dir))
-    store.migrate_conversations_to_shared(session.bot_id, chat_session_user_id(session.user_id))
+    shared_user_id = chat_session_user_id(session.user_id)
+    if not store.has_shared_user_migration_marker(session.bot_id, shared_user_id):
+        store.migrate_conversations_to_shared(session.bot_id, shared_user_id)
     return store
 
 
@@ -5342,7 +5345,7 @@ async def _stream_cli_chat(
             persistence_buffer = StreamingPersistenceBuffer(
                 service,
                 turn_handle,
-                loop_time=loop.time,
+                loop=loop,
             )
             thread_id: Optional[str] = None
             last_status_signature: tuple[int, Optional[str], tuple[tuple[str, str], ...] | None] | None = None
@@ -5555,12 +5558,12 @@ async def _stream_cli_chat(
                 if done_terminate_started_at is not None:
                     returncode = 0
             except asyncio.CancelledError:
-                persistence_buffer.flush()
+                await persistence_buffer.close()
                 if process.poll() is None:
                     await loop.run_in_executor(None, _terminate_process_sync, process)
                 raise
             except Exception:
-                persistence_buffer.flush()
+                await persistence_buffer.close()
                 if process.poll() is None:
                     await loop.run_in_executor(None, _terminate_process_sync, process)
                 raise
@@ -5662,10 +5665,9 @@ async def _stream_cli_chat(
                 error_detail=response if completion_state == "error" else error_detail,
             )
             final_trace_count = len(final_trace)
-            persistence_buffer.flush()
             for trace_event in final_trace[len(live_trace_events):]:
                 persistence_buffer.queue_trace(trace_event)
-            persistence_buffer.flush()
+            await persistence_buffer.close()
             sqlite_flush_count = persistence_buffer.flush_count
             native_session_id = _current_native_session_id(session, cli_type)
             trace_started_at = time.perf_counter()
@@ -7331,6 +7333,11 @@ def _reset_session_for_workdir_change(session: UserSession, working_dir: str) ->
     session.persist()
 
 
+def _get_bot_sessions_for_workdir_change(manager: MultiBotManager, alias: str) -> list[UserSession]:
+    bot_id = resolve_session_bot_id(manager, alias)
+    return [session for session in get_bot_sessions(alias) if session.bot_id == bot_id]
+
+
 async def update_bot_workdir(
     manager: MultiBotManager,
     alias: str,
@@ -7344,25 +7351,22 @@ async def update_bot_workdir(
         _raise(400, "invalid_working_dir", f"工作目录不存在: {resolved_working_dir}")
     if profile.bot_mode == "assistant":
         _raise(409, "unsupported_bot_mode", "assistant 型 Bot 不允许修改默认工作目录")
-    session = get_session_for_alias(manager, alias, user_id) if user_id is not None else None
-
-    if session is not None:
-        service = _get_chat_history_service(session)
-        current_working_dir = session.working_dir
-        target_changed = resolved_working_dir != current_working_dir
-        if target_changed:
-            with session._lock:
-                is_processing = session.is_processing
+    target_changed = resolved_working_dir != profile.working_dir
+    target_sessions = _get_bot_sessions_for_workdir_change(manager, alias) if target_changed or force_reset else []
+    if target_changed:
+        for target_session in target_sessions:
+            service = _get_chat_history_service(target_session)
+            with target_session._lock:
+                is_processing = bool(target_session.is_processing)
             if is_processing:
                 _raise(
                     409,
                     WORKDIR_CHANGE_BLOCKED_PROCESSING,
                     "当前仍有任务运行，请先停止任务再切换工作目录",
-                    data=service.summarize_active_conversation(profile, session),
+                    data=service.summarize_active_conversation(profile, target_session),
                 )
-
-            if service.has_active_conversation(profile, session) and not force_reset:
-                summary = service.summarize_active_conversation(profile, session)
+            if service.has_active_conversation(profile, target_session) and not force_reset:
+                summary = service.summarize_active_conversation(profile, target_session)
                 summary["requested_working_dir"] = resolved_working_dir
                 _raise(
                     409,
@@ -7370,12 +7374,15 @@ async def update_bot_workdir(
                     "切换工作目录会丢失当前会话，确认后重试",
                     data=summary,
                 )
-
-        if force_reset and service.has_active_conversation(profile, session):
-            service.reset_active_conversation(profile, session)
-
-        if target_changed or force_reset:
-            _reset_session_for_workdir_change(session, resolved_working_dir)
+    session = get_session_for_alias(manager, alias, user_id) if user_id is not None else None
+    if force_reset:
+        for target_session in target_sessions:
+            service = _get_chat_history_service(target_session)
+            if service.has_active_conversation(profile, target_session):
+                service.reset_active_conversation(profile, target_session)
+    if target_changed:
+        for target_session in target_sessions:
+            _reset_session_for_workdir_change(target_session, resolved_working_dir)
 
     await manager.set_bot_workdir(alias, resolved_working_dir, update_sessions=False)
     return {"bot": build_bot_summary(manager, alias, user_id, profile=profile, session=session)}

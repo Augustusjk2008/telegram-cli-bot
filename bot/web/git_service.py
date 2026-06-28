@@ -641,13 +641,20 @@ def _encode_git_graph_cursor(*, offset: int, scope: str, head_token: str) -> str
 
 def _parse_git_graph_records(output: str) -> list[dict[str, Any]]:
     commits: list[dict[str, Any]] = []
-    for record in (output or "").split("\x1e"):
+    for record in (output or "").split("\x00"):
         record = record.rstrip("\r\n")
         if not record.strip():
             continue
-        full_hash, parents_text, short_hash, author_name, authored_at, subject = (
-            record.split("\x1f") + ["", "", "", "", "", ""]
-        )[:6]
+        parts = record.split("\x1f", 6)
+        if len(parts) < 7:
+            continue
+        full_hash = parts[0]
+        parents_text = parts[1]
+        short_hash = parts[2]
+        author_name = parts[3]
+        authored_at = parts[4]
+        subject = parts[5]
+        message = parts[6]
         full_hash = full_hash.strip()
         if not full_hash:
             continue
@@ -659,36 +666,54 @@ def _parse_git_graph_records(output: str) -> list[dict[str, Any]]:
                 "author_name": author_name.strip(),
                 "authored_at": authored_at.strip(),
                 "subject": subject.strip(),
+                "message": message.rstrip("\r\n"),
             }
         )
     return commits
 
 
-def _read_git_graph_commit_message(repo_root: str, commit_hash: str) -> str:
-    if not re.fullmatch(r"[0-9a-fA-F]{7,40}", commit_hash or ""):
-        return ""
-    result = _run_git(repo_root, ["show", "-s", "--format=%B", commit_hash], check=False)
-    if result.returncode != 0:
-        return ""
-    return (result.stdout or "").rstrip("\r\n")
-
-
-def _list_git_graph_commits(repo_root: str, *, scope: str, limit: int) -> list[dict[str, Any]]:
+def _list_git_graph_commits(repo_root: str, *, scope: str, offset: int, limit: int) -> list[dict[str, Any]]:
     args = [
         "log",
         "--topo-order",
+        f"--skip={offset}",
         f"-n{limit}",
         "--date=iso-strict",
-        "--format=%H%x1f%P%x1f%h%x1f%an%x1f%aI%x1f%s%x1e",
+        "--format=%H%x1f%P%x1f%h%x1f%an%x1f%aI%x1f%s%x1f%B%x00",
     ]
     args.append("--all" if scope == "all" else "HEAD")
     result = _run_git(repo_root, args, check=False)
     if result.returncode != 0:
         return []
-    commits = _parse_git_graph_records(result.stdout or "")
-    for commit in commits:
-        commit_hash = str(commit.get("hash") or "")
-        commit["message"] = _read_git_graph_commit_message(repo_root, commit_hash)
+    commits: list[dict[str, Any]] = []
+    for record in (result.stdout or "").split("\x00"):
+        record = record.rstrip("\r\n")
+        if not record.strip():
+            continue
+        segments = record.split("\x1f", 6)
+        if len(segments) < 7:
+            continue
+        full_hash = segments[0]
+        parents_text = segments[1]
+        short_hash = segments[2]
+        author_name = segments[3]
+        authored_at = segments[4]
+        subject = segments[5]
+        message = segments[6]
+        full_hash = full_hash.strip()
+        if not full_hash:
+            continue
+        commits.append(
+            {
+                "hash": full_hash,
+                "parents": [item.strip() for item in parents_text.split() if item.strip()],
+                "short_hash": short_hash.strip(),
+                "author_name": author_name.strip(),
+                "authored_at": authored_at.strip(),
+                "subject": subject.strip(),
+                "message": message.rstrip("\r\n"),
+            }
+        )
     return commits
 
 
@@ -1018,13 +1043,11 @@ def get_git_commit_graph(
     normalized_limit = _normalize_git_graph_limit(limit)
     offset = _decode_git_graph_cursor(cursor, scope=normalized_scope)
     _working_dir, repo_root = _require_repo_root(manager, alias, user_id)
-    fetch_count = offset + normalized_limit + 1
-
-    commits = _list_git_graph_commits(repo_root, scope=normalized_scope, limit=fetch_count)
+    commits = _list_git_graph_commits(repo_root, scope=normalized_scope, offset=offset, limit=normalized_limit + 1)
     refs_by_commit = _list_git_graph_refs(repo_root)
     nodes = _layout_git_graph_nodes(commits, refs_by_commit)
-    page_nodes = nodes[offset : offset + normalized_limit]
-    has_more = len(nodes) > offset + normalized_limit
+    has_more = len(nodes) > normalized_limit
+    page_nodes = nodes[:normalized_limit]
     return {
         "repo_found": True,
         "scope": normalized_scope,

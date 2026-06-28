@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
 from typing import Any
+import threading
 
 from bot.native_agent.legacy_migration import migrate_native_session_meta
 from bot.runtime_paths import (
@@ -29,6 +30,8 @@ PROCESS_TRACE_RAW_TYPES = {"file.edited", "file.watcher.updated"}
 _STORE_PREPARE_LOCK = Lock()
 _PREPARED_STORES: set[Path] = set()
 _SCHEMA_READY_STORES: set[Path] = set()
+_MIGRATION_MARKER_LOCK = threading.RLock()
+_MIGRATION_MARKERS: set[str] = set()
 logger = logging.getLogger(__name__)
 
 
@@ -232,6 +235,8 @@ def clear_chat_store_prepare_cache() -> None:
     with _STORE_PREPARE_LOCK:
         _PREPARED_STORES.clear()
         _SCHEMA_READY_STORES.clear()
+    with _MIGRATION_MARKER_LOCK:
+        _MIGRATION_MARKERS.clear()
 
 
 class ChatStore:
@@ -241,6 +246,9 @@ class ChatStore:
         self.db_path = get_chat_history_db_path(self.workspace_dir)
         self.metadata_path = get_chat_workspace_metadata_path(self.workspace_dir)
         self.legacy_db_path = get_legacy_project_chat_db_path(self.workspace_dir)
+
+    def _shared_user_migration_marker_key(self, bot_id: int, shared_user_id: int) -> str:
+        return f"{self.db_path.resolve()}::{int(bot_id)}::{int(shared_user_id)}"
 
     def _db_exists(self) -> bool:
         return self.db_path.is_file()
@@ -273,6 +281,46 @@ class ChatStore:
         }
         self.metadata_path.parent.mkdir(parents=True, exist_ok=True)
         self.metadata_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _read_workspace_metadata(self) -> dict[str, Any]:
+        if not self.metadata_path.is_file():
+            return {}
+        try:
+            payload = json.loads(self.metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def has_shared_user_migration_marker(self, bot_id: int, shared_user_id: int) -> bool:
+        marker_key = self._shared_user_migration_marker_key(bot_id, shared_user_id)
+        with _MIGRATION_MARKER_LOCK:
+            if marker_key in _MIGRATION_MARKERS:
+                return True
+            payload = self._read_workspace_metadata()
+            marker_map = payload.get("shared_user_migration_completed")
+            if isinstance(marker_map, dict) and marker_key in marker_map:
+                _MIGRATION_MARKERS.add(marker_key)
+                return True
+        return False
+
+    def _write_migration_marker(self, bot_id: int, shared_user_id: int, *, completed: bool) -> None:
+        marker_key = self._shared_user_migration_marker_key(bot_id, shared_user_id)
+        payload = self._read_workspace_metadata()
+        marker_map = payload.get("shared_user_migration_completed")
+        if not isinstance(marker_map, dict):
+            marker_map = {}
+        if completed:
+            marker_map[marker_key] = _utc_now()
+        else:
+            marker_map.pop(marker_key, None)
+        payload["shared_user_migration_completed"] = marker_map
+        self.metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        self.metadata_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        with _MIGRATION_MARKER_LOCK:
+            if completed:
+                _MIGRATION_MARKERS.add(marker_key)
+            else:
+                _MIGRATION_MARKERS.discard(marker_key)
 
     def _migrate_legacy_store(self) -> None:
         if self._db_exists() or not self.legacy_db_path.is_file():
@@ -928,53 +976,74 @@ class ChatStore:
         return [self._conversation_from_row(row) for row in rows]
 
     def migrate_conversations_to_shared(self, bot_id: int, shared_user_id: int) -> int:
-        conn = self._connect(create=False)
-        if conn is None:
-            return 0
+        marker_key = self._shared_user_migration_marker_key(bot_id, shared_user_id)
+        with _MIGRATION_MARKER_LOCK:
+            if marker_key in _MIGRATION_MARKERS:
+                return 0
+            payload = self._read_workspace_metadata()
+            marker_map = payload.get("shared_user_migration_completed")
+            if isinstance(marker_map, dict) and marker_key in marker_map:
+                _MIGRATION_MARKERS.add(marker_key)
+                return 0
 
-        moved = 0
-        with closing(conn):
-            with conn:
-                rows = conn.execute(
-                    """
-                    SELECT *
-                    FROM conversations
-                    WHERE bot_id = ? AND user_id != ?
-                    ORDER BY created_at ASC, id ASC
-                    """,
-                    (bot_id, shared_user_id),
-                ).fetchall()
-                for source in rows:
-                    target = conn.execute(
+            conn = self._connect(create=False)
+            if conn is None:
+                return 0
+
+            moved = 0
+            with closing(conn):
+                with conn:
+                    rows = conn.execute(
                         """
                         SELECT *
                         FROM conversations
-                        WHERE bot_id = ? AND user_id = ? AND agent_id = ? AND working_dir = ? AND session_epoch = ?
-                        ORDER BY updated_at DESC, created_at DESC, id DESC
-                        LIMIT 1
+                        WHERE bot_id = ? AND user_id != ?
+                        ORDER BY created_at ASC, id ASC
                         """,
-                        (
-                            bot_id,
-                            shared_user_id,
-                            source["agent_id"],
-                            source["working_dir"],
-                            source["session_epoch"],
-                        ),
-                    ).fetchone()
-                    if target is None:
-                        conn.execute(
-                            "UPDATE conversations SET user_id = ?, updated_at = ? WHERE id = ?",
-                            (shared_user_id, _utc_now(), str(source["id"])),
-                        )
-                    else:
-                        self._merge_conversation_into_target(
-                            conn,
-                            source=source,
-                            target=target,
-                            new_alias=_row_text(target, "bot_alias") or _row_text(source, "bot_alias"),
-                        )
-                    moved += 1
-        return moved
+                        (bot_id, shared_user_id),
+                    ).fetchall()
+                    for source in rows:
+                        target = conn.execute(
+                            """
+                            SELECT *
+                            FROM conversations
+                            WHERE bot_id = ? AND user_id = ? AND agent_id = ? AND working_dir = ? AND session_epoch = ?
+                            ORDER BY updated_at DESC, created_at DESC, id DESC
+                            LIMIT 1
+                            """,
+                            (
+                                bot_id,
+                                shared_user_id,
+                                source["agent_id"],
+                                source["working_dir"],
+                                source["session_epoch"],
+                            ),
+                        ).fetchone()
+                        if target is None:
+                            conn.execute(
+                                "UPDATE conversations SET user_id = ?, updated_at = ? WHERE id = ?",
+                                (shared_user_id, _utc_now(), str(source["id"])),
+                            )
+                        else:
+                            self._merge_conversation_into_target(
+                                conn,
+                                source=source,
+                                target=target,
+                                new_alias=_row_text(target, "bot_alias") or _row_text(source, "bot_alias"),
+                            )
+                        moved += 1
+            if moved > 0:
+                verify_conn = self._connect(create=False)
+                if verify_conn is not None:
+                    with closing(verify_conn):
+                        with verify_conn:
+                            remaining = verify_conn.execute(
+                                "SELECT COUNT(*) AS count FROM conversations WHERE bot_id = ? AND user_id != ?",
+                                (bot_id, shared_user_id),
+                            ).fetchone()
+                            if int((remaining["count"] if remaining is not None else 0) or 0) <= 0:
+                                self._write_migration_marker(bot_id, shared_user_id, completed=True)
+            return moved
 
     def begin_turn(
         self,

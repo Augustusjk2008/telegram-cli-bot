@@ -90,6 +90,16 @@ def _merge_session_state(preferred: UserSession, fallback: UserSession, *, bot_i
     return preferred
 
 
+def get_bot_sessions(bot_alias: str) -> list[UserSession]:
+    normalized_alias = str(bot_alias or "").strip().lower()
+    targets: list[UserSession] = []
+    with sessions_lock:
+        for session in sessions.values():
+            if session.bot_alias == normalized_alias:
+                targets.append(session)
+    return targets
+
+
 def get_or_create_session(
     bot_id: int,
     bot_alias: str,
@@ -352,11 +362,7 @@ def update_bot_working_dir(bot_alias: str, working_dir: str) -> int:
     
     返回更新的会话数量
     """
-    targets: list[UserSession] = []
-    with sessions_lock:
-        for session in sessions.values():
-            if session.bot_alias == bot_alias:
-                targets.append(session)
+    targets = get_bot_sessions(bot_alias)
 
     for session in targets:
         with session._lock:
@@ -367,9 +373,21 @@ def update_bot_working_dir(bot_alias: str, working_dir: str) -> int:
             session.kimi_session_id = None
             session.native_agent_session_id = None
             session.native_agent_run_id = None
+            session.native_agent_server_key = None
             session.claude_session_initialized = False
             session.active_conversation_id = None
             session.agent_prompt_hash_seen = None
+            session.managed_prompt_hash_seen = None
+            session.history = []
+            session.web_turn_overlays = []
+            session.running_user_text = None
+            session.running_preview_text = ""
+            session.running_started_at = None
+            session.running_updated_at = None
+            session.stop_requested = False
+            session.is_processing = False
+            session.process = None
+            session.message_count = 0
             session.session_epoch = max(0, int(getattr(session, "session_epoch", 0) or 0)) + 1
         session.persist()
 

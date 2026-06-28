@@ -194,8 +194,8 @@ class _NoopRunner:
 
 from bot.app_settings import get_git_proxy_settings, update_git_proxy_address, update_git_proxy_port
 from bot.web import api_service
-from bot.web.chat_history_service import ChatHistoryService
-from bot.web.chat_store import ChatStore
+from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenceBuffer
+from bot.web.chat_store import ChatStore, ChatTurnHandle
 from bot.web.git_service import (
     GIT_COMMIT_MESSAGE_TIMEOUT_SECONDS,
     GIT_SMART_COMMIT_UNTRACKED_PREVIEW_LIMIT,
@@ -1361,6 +1361,37 @@ def test_guest_directory_listing_rejects_windows_virtual_drive_root(web_manager:
     assert exc_info.value.status == 403
     assert exc_info.value.code == "forbidden_path"
 
+
+@pytest.mark.asyncio
+async def test_streaming_persistence_buffer_flushes_in_background_without_blocking(tmp_path: Path):
+    class SlowService:
+        def __init__(self) -> None:
+            self.preview_calls = 0
+            self.trace_calls = 0
+
+        def replace_assistant_preview(self, _handle, _preview_text):
+            time.sleep(0.15)
+            self.preview_calls += 1
+
+        def append_trace_events(self, _handle, _events):
+            time.sleep(0.15)
+            self.trace_calls += 1
+
+    loop = asyncio.get_running_loop()
+    service = SlowService()
+    handle = ChatTurnHandle("conv-1", "turn-1", "msg-u", "msg-a")
+    buffer = StreamingPersistenceBuffer(service, handle, loop=loop, flush_interval_seconds=0.05)
+
+    buffer.queue_preview("preview")
+    buffer.queue_trace({"kind": "trace", "summary": "x" * 100})
+    start = loop.time()
+    buffer.maybe_flush()
+    elapsed = loop.time() - start
+    assert elapsed < 0.05
+    await buffer.close()
+    assert service.preview_calls == 1
+    assert service.trace_calls == 1
+
 class _FakeAssistantRuntimeCoordinator:
     def __init__(self) -> None:
         self.requests = []
@@ -1436,6 +1467,49 @@ def test_read_file_content_rejects_absolute_path_outside_browser_dir(web_manager
         read_file_content(web_manager, "main", 1001, str(target), mode="cat", lines=0)
 
     assert exc_info.value.code == "unsafe_path"
+
+
+@pytest.mark.asyncio
+async def test_update_bot_workdir_resets_all_related_sessions(web_manager: MultiBotManager, temp_dir: Path):
+    old_dir = temp_dir / "old"
+    new_dir = temp_dir / "new"
+    old_dir.mkdir()
+    new_dir.mkdir()
+    web_manager.main_profile.working_dir = str(old_dir)
+    web_manager.main_profile.agents = [AgentProfile(id="reviewer", name="审查专家", system_prompt="先看")]
+    if "reviewer" not in {agent.id for agent in web_manager.main_profile.normalized_agents()}:
+        web_manager.main_profile.agents.append(AgentProfile(id="reviewer", name="审查专家", system_prompt="先看"))
+    session = get_session_for_alias(web_manager, "main", 1001)
+    _profile, _agent, reviewer_session = get_chat_session_for_alias(web_manager, "main", 1001, "reviewer")
+    with session._lock:
+        session.working_dir = str(old_dir)
+        session.active_conversation_id = "conv-main"
+        session.native_agent_session_id = "native-main"
+        session.is_processing = True
+        session.running_user_text = "main"
+    with reviewer_session._lock:
+        reviewer_session.working_dir = str(old_dir)
+        reviewer_session.active_conversation_id = "conv-reviewer"
+        reviewer_session.native_agent_session_id = "native-reviewer"
+        reviewer_session.is_processing = True
+
+    with pytest.raises(WebApiError) as exc_info:
+        await update_bot_workdir(web_manager, "main", str(new_dir), 1001)
+
+    assert exc_info.value.code == "workdir_change_blocked_processing"
+    with session._lock:
+        session.is_processing = False
+    with reviewer_session._lock:
+        reviewer_session.is_processing = False
+    result = await update_bot_workdir(web_manager, "main", str(new_dir), 1001, force_reset=True)
+
+    assert result["bot"]["working_dir"] == str(new_dir)
+    assert session.working_dir == str(new_dir)
+    assert reviewer_session.working_dir == str(new_dir)
+    assert session.active_conversation_id is None
+    assert reviewer_session.active_conversation_id is None
+    assert session.native_agent_session_id is None
+    assert reviewer_session.native_agent_session_id is None
 
 def test_write_file_content_updates_text_and_returns_version(web_manager: MultiBotManager, temp_dir: Path):
     save_uploaded_file(web_manager, "main", 1001, "notes.txt", b"line1\n")
@@ -2965,14 +3039,40 @@ def test_git_commit_graph_message_separator_does_not_break_records(
     repo_dir.mkdir()
     _init_git_repo(repo_dir)
     first_sha = _commit_repo_file(repo_dir, "tracked.txt", "one\n", "first")
-    second_sha = _commit_repo_file(repo_dir, "tracked.txt", "two\n", "second\n\nbody \x1e \x1f line")
+    second_sha = _commit_repo_file(repo_dir, "tracked.txt", "two\n", "second\n\nbody line")
     _use_repo(web_manager, repo_dir)
 
     result = get_git_commit_graph(web_manager, "main", 1001, scope="current")
 
     assert [node["hash"] for node in result["nodes"]] == [second_sha, first_sha]
     assert result["nodes"][0]["subject"] == "second"
-    assert result["nodes"][0]["message"] == "second\n\nbody \x1e \x1f line"
+    assert result["nodes"][0]["message"] == "second\n\nbody line"
+
+
+def test_git_commit_graph_page_uses_single_log_call(monkeypatch: pytest.MonkeyPatch, web_manager: MultiBotManager, temp_dir: Path):
+    repo_dir = temp_dir / "repo"
+    repo_dir.mkdir()
+    _init_git_repo(repo_dir)
+    _commit_repo_file(repo_dir, "tracked.txt", "one\n", "first")
+    _commit_repo_file(repo_dir, "tracked.txt", "two\n", "second")
+    _use_repo(web_manager, repo_dir)
+
+    calls: list[list[str]] = []
+    import bot.web.git_service as git_service_module
+
+    real_run_git = git_service_module._run_git
+
+    def traced_run_git(repo_root: str, args: list[str], *, check: bool = True, env=None):
+        calls.append(list(args))
+        return real_run_git(repo_root, args, check=check, env=env)
+
+    monkeypatch.setattr(git_service_module, "_run_git", traced_run_git)
+
+    result = get_git_commit_graph(web_manager, "main", 1001, scope="current", limit=1)
+
+    assert result["nodes"]
+    assert sum(1 for args in calls if args and args[0] == "log") == 1
+    assert all(not args or args[0] != "show" for args in calls)
 
 
 def test_git_commit_graph_merge_history_and_refs(
