@@ -837,8 +837,15 @@ function Test-PortableBundle {
 
     Invoke-CheckedCommand -FilePath $pythonExe -Arguments @(
         "-m", "pytest",
-        "tests/test_plugin_manifest.py",
-        "tests/test_vivado_waveform_plugin.py",
+        "tests/test_cli.py",
+        "tests/test_manager.py",
+        "tests/test_sessions.py",
+        "tests/test_session_store.py",
+        "tests/test_web_auth_store.py",
+        "tests/test_env_service.py",
+        "tests/test_runtime_paths.py",
+        "tests/test_runtime_web_startup.py",
+        "tests/test_main_web.py",
         "-q"
     ) -FailureMessage "包内插件测试失败" -WorkingDirectory $PackageRoot
 }
