@@ -19,6 +19,7 @@ from typing import Any
 
 from bot import app_settings
 from bot.config import APP_UPDATE_REPOSITORY
+from bot.runtime_paths import get_announcements_content_path
 from bot.version import APP_VERSION
 
 UPDATE_CACHE_DIR_NAME = ".updates"
@@ -473,6 +474,11 @@ def apply_pending_update(repo_root: Path, log_callback: Any | None = None) -> di
                 _emit_apply_log(log_callback, "前端资源重建完成。")
             else:
                 _emit_apply_log(log_callback, "未检测到前端改动，跳过前端重建。")
+            _sync_runtime_announcements_from_package(
+                package_path,
+                [relative_path for _target_path, relative_path in write_plan],
+                log_callback=log_callback,
+            )
     except Exception:
         raise
 
@@ -1012,6 +1018,99 @@ def _preserve_legacy_announcement_reads(
     }
     reads_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     _emit_apply_log(log_callback, "已迁移公告已读状态到本地 sidecar。")
+
+
+def _load_announcement_content_from_bytes(raw: bytes) -> dict[str, Any]:
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {"version": 1, "updated_at": _now_iso(), "items": []}
+    if not isinstance(data, dict):
+        return {"version": 1, "updated_at": _now_iso(), "items": []}
+    items = data.get("items")
+    return {
+        "version": data.get("version", 1),
+        "updated_at": str(data.get("updated_at") or _now_iso()),
+        "items": items if isinstance(items, list) else [],
+    }
+
+
+def _merge_announcement_content(target: dict[str, Any], source: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    merged_items: list[Any] = []
+    seen_ids: set[str] = set()
+    for item in target.get("items", []):
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("id") or "").strip()
+        if not item_id:
+            continue
+        merged_items.append(item)
+        seen_ids.add(item_id)
+
+    changed = False
+    for item in source.get("items", []):
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("id") or "").strip()
+        if not item_id or item_id in seen_ids:
+            continue
+        merged_items.append(item)
+        seen_ids.add(item_id)
+        changed = True
+
+    if not changed:
+        return target, False
+
+    return {
+        "version": target.get("version", source.get("version", 1)),
+        "updated_at": str(source.get("updated_at") or _now_iso()),
+        "items": merged_items,
+    }, True
+
+
+def _write_json_file(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _sync_runtime_announcements_from_package(
+    package_path: Path,
+    relative_paths: list[str],
+    *,
+    log_callback: Any | None = None,
+) -> bool:
+    normalized_paths = {str(path or "").replace("\\", "/").strip("/") for path in relative_paths}
+    if ANNOUNCEMENTS_FILE not in normalized_paths:
+        return False
+
+    package_content: dict[str, Any] | None = None
+
+    def _capture(relative_path: str, stream) -> None:
+        nonlocal package_content
+        if relative_path != ANNOUNCEMENTS_FILE or stream is None:
+            return
+        package_content = _load_announcement_content_from_bytes(stream.read())
+
+    _stream_package_entries(package_path, _capture)
+    if package_content is None:
+        return False
+
+    target_path = get_announcements_content_path()
+    if target_path.exists():
+        try:
+            target_content = _load_announcement_content_from_bytes(target_path.read_bytes())
+        except OSError:
+            target_content = {"version": 1, "updated_at": _now_iso(), "items": []}
+    else:
+        target_content = {"version": 1, "updated_at": _now_iso(), "items": []}
+
+    merged, changed = _merge_announcement_content(target_content, package_content)
+    if not changed:
+        return False
+
+    _write_json_file(target_path, merged)
+    _emit_apply_log(log_callback, "已同步发布公告到本地公告中心。")
+    return True
 
 
 def _backup_update_targets(

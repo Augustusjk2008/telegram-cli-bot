@@ -396,6 +396,28 @@ invoke_front_build() {
   run_checked_command "$front_dir" "前端构建失败" "$npm_bin" run build
 }
 
+invoke_release_front_build() {
+  write_step "构建发布包前端"
+  (cd "$front_dir" && TCB_FRONT_BUILD_ROOT_BASE=1 "$npm_bin" run build)
+}
+
+invoke_front_dist_asset_check() {
+  write_step "校验前端构建资源路径"
+  run_checked_command "$front_dir" "前端构建资源路径校验失败" node scripts/verify-build-assets.mjs
+}
+
+export_release_announcements() {
+  local destination_root="$1"
+  local runtime_path
+  runtime_path="$(cd "$repo_root" && "$python_bin" -c 'from bot.runtime_paths import get_announcements_content_path; print(get_announcements_content_path())')"
+  if [[ -z "${runtime_path//[[:space:]]/}" || ! -f "$runtime_path" ]]; then
+    write_info "未找到运行态公告内容，沿用仓库内 .web_announcements.json。"
+    return
+  fi
+  cp -p "$runtime_path" "$destination_root/.web_announcements.json"
+  write_info "已导出公告内容到发布包: .web_announcements.json"
+}
+
 restore_front_build_after_portable() {
   write_info "Windows 绿色版构建会临时使用根路径资源，正在恢复本机前端构建产物。"
   write_step "恢复本机前端构建产物"
@@ -425,6 +447,8 @@ copy_tracked_files_to_stage() {
   rm -rf "$front_dist_target"
   mkdir -p "$(dirname "$front_dist_target")"
   cp -a "$front_dist" "$front_dist_target"
+
+  export_release_announcements "$stage_dir"
 }
 
 new_zip_archive() {
@@ -799,7 +823,8 @@ main() {
       write_info "已跳过发布前测试检查。"
     fi
 
-    invoke_front_build
+    invoke_release_front_build
+    invoke_front_dist_asset_check
   else
     write_info "PublishOnly 模式，复用现有产物。"
   fi

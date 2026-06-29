@@ -69,6 +69,23 @@ function Invoke-PortableFrontBuild {
     Invoke-FrontDistAssetCheck
 }
 
+function Export-ReleaseAnnouncements {
+    param([string]$DestinationRoot)
+
+    $relativePath = ".web_announcements.json"
+    $destinationPath = Join-Path $DestinationRoot $relativePath
+    $runtimePath = (& python -c "from bot.runtime_paths import get_announcements_content_path; print(get_announcements_content_path())").Trim()
+    if ($LASTEXITCODE -ne 0) {
+        throw "读取运行态公告路径失败。"
+    }
+    if ([string]::IsNullOrWhiteSpace($runtimePath) -or -not (Test-Path -LiteralPath $runtimePath -PathType Leaf)) {
+        Write-Info "未找到运行态公告内容，沿用仓库内 .web_announcements.json。"
+        return
+    }
+    Copy-Item -LiteralPath $runtimePath -Destination $destinationPath -Force
+    Write-Info ("已导出公告内容到绿色包: {0}" -f $relativePath)
+}
+
 function Get-AppVersion {
     if (Test-Path -LiteralPath $script:VersionFile) {
         return (Get-Content -LiteralPath $script:VersionFile -Raw -Encoding UTF8).Trim()
@@ -171,6 +188,8 @@ function Copy-WorktreeFiles {
     }
     [void](New-Item -ItemType Directory -Path $frontDistTarget -Force)
     Copy-Item -Path (Join-Path $frontDist "*") -Destination $frontDistTarget -Recurse -Force
+
+    Export-ReleaseAnnouncements -DestinationRoot $DestinationRoot
 }
 
 function Install-EmbeddedPython {
