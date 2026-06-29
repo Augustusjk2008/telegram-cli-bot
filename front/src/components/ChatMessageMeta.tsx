@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { ChatMessageContextUsage } from "../services/types";
+import { ChatContextUsageBadge, clampPercent, formatCompactionCount, formatTokenNumber } from "./ChatContextUsageBadge";
 
 type Props = {
   name: string;
@@ -34,65 +35,6 @@ function formatTime(createdAt: string) {
     day: "2-digit",
   });
   return `${dateText} ${timeText}`;
-}
-
-function formatCompactionCount(count?: number) {
-  const value = Math.floor(Number(count || 0));
-  if (!Number.isFinite(value) || value <= 0) {
-    return "";
-  }
-  if (value === 1) {
-    return "compacted once";
-  }
-  if (value === 2) {
-    return "compacted twice";
-  }
-  return `compacted ${value} times`;
-}
-
-function formatTokenNumber(value?: number) {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return "";
-  }
-  return Math.max(0, Math.floor(value)).toLocaleString("zh-CN");
-}
-
-function clampPercent(value: number) {
-  if (!Number.isFinite(value)) {
-    return 0;
-  }
-  return Math.max(0, Math.min(100, value));
-}
-
-function formatTextContextUsage(contextUsage?: ChatMessageContextUsage) {
-  if (!contextUsage) {
-    return null;
-  }
-  const percent = typeof contextUsage.contextLeftPercent === "number"
-    ? `${contextUsage.contextLeftPercent}% left`
-    : "";
-  const usage = contextUsage.usedDisplay && contextUsage.windowDisplay
-    ? `${contextUsage.usedDisplay} / ${contextUsage.windowDisplay}`
-    : "";
-  const baseText = (contextUsage.statusText || [percent, usage].filter(Boolean).join(" · "))
-    .replace(/\bcontext left\b/g, "left");
-  if (!baseText) {
-    return null;
-  }
-  const compactionText = formatCompactionCount(contextUsage.compactionCount);
-  const text = [baseText, compactionText ? `(${compactionText})` : ""].filter(Boolean).join(" ");
-  if (!text) {
-    return null;
-  }
-  const baseTitle = contextUsage.usedDisplay && contextUsage.windowDisplay
-    ? `${contextUsage.usedDisplay} used / ${contextUsage.windowDisplay} window`
-    : baseText;
-  const title = compactionText ? `${baseTitle} (${compactionText})` : baseTitle;
-  return {
-    text,
-    title,
-    isLow: typeof contextUsage.contextLeftPercent === "number" && contextUsage.contextLeftPercent < 25,
-  };
 }
 
 function formatRingContextUsage(contextUsage?: ChatMessageContextUsage) {
@@ -133,7 +75,6 @@ function formatRingContextUsage(contextUsage?: ChatMessageContextUsage) {
 }
 
 export function ChatMessageMeta({ name, createdAt, align = "left", avatar, contextUsage, contextVariant = "text" }: Props) {
-  const textContext = contextVariant === "text" ? formatTextContextUsage(contextUsage) : null;
   const ringContext = contextVariant === "ring" ? formatRingContextUsage(contextUsage) : null;
   return (
     <div
@@ -144,16 +85,8 @@ export function ChatMessageMeta({ name, createdAt, align = "left", avatar, conte
       {align === "left" && avatar ? <span className="shrink-0">{avatar}</span> : null}
       <span className="min-w-0 max-w-[12rem] truncate font-medium text-[var(--text)]">{name}</span>
       <span className="shrink-0 text-[var(--muted)]">{formatTime(createdAt)}</span>
-      {textContext ? (
-        <span
-          className={textContext.isLow
-            ? "rounded-md border border-red-200 bg-red-50 px-1.5 py-0.5 font-medium text-red-600"
-            : "rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-1.5 py-0.5 text-[var(--muted)]"}
-          data-testid="chat-message-context-usage-text"
-          title={textContext.title}
-        >
-          {textContext.text}
-        </span>
+      {contextVariant === "text" ? (
+        <ChatContextUsageBadge contextUsage={contextUsage} testId="chat-message-context-usage-text" />
       ) : null}
       {ringContext ? (
         <span

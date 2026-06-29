@@ -446,6 +446,35 @@ test("shows send errors only in assistant bubble when placeholder exists", async
   expect(screen.getAllByTestId("chat-message-row")).toHaveLength(2);
 });
 
+test("hides duplicate final error text in transcript when assistant bubble already shows it", async () => {
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "assistant-error-dup",
+        role: "assistant",
+        text: "Selected model is at capacity. Please try a different model.",
+        createdAt: new Date().toISOString(),
+        state: "error",
+        meta: {
+          tracePresentation: "native_agent_flat",
+          trace: [
+            { kind: "error", summary: "Selected model is at capacity. Please try a different model.", source: "codex" },
+          ],
+          traceCount: 1,
+          processCount: 1,
+        },
+      },
+    ],
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(within(transcript).getByText("Selected model is at capacity. Please try a different model.")).toBeInTheDocument();
+  expect(screen.queryByTestId("chat-error-banner")).not.toBeInTheDocument();
+  expect(within(transcript).getAllByText("Selected model is at capacity. Please try a different model.")).toHaveLength(1);
+});
+
 
 
 
@@ -1637,6 +1666,7 @@ test("live non-native ag-ui session error stays in regular error bubble", async 
 
 test("live ag-ui stream renders flat transcript and final result last", async () => {
   const user = userEvent.setup();
+  const writeText = mockClipboardWrite();
   const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
     _botAlias,
     _text,
@@ -1706,6 +1736,16 @@ test("live ag-ui stream renders flat transcript and final result last", async ()
   expect(transcript.textContent?.trim().endsWith("answer")).toBe(true);
   expect(screen.queryByTestId("native-agent-run-timeline")).not.toBeInTheDocument();
   expect(screen.queryByTestId("chat-trace-panel-assistant-live")).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "复制完整回答" }));
+  const lastCopyCall = writeText.mock.calls.at(-1) as unknown[] | undefined;
+  const copiedText = String(lastCopyCall?.[0] ?? "");
+  expect(copiedText).toContain("[过程] 运行中");
+  expect(copiedText).toContain("[思考] 检查上下文");
+  expect(copiedText).toContain("[工具: shell_command] {\"command\":\"dir\"}");
+  expect(copiedText).toContain("[工具结果] Exit code: 0");
+  expect(copiedText).toContain("[最终回答]\n**answer**");
+  expect(await screen.findByRole("button", { name: "已复制完整回答" })).toBeInTheDocument();
 });
 
 test("native send renders streaming transcript immediately without cli bubble chrome", async () => {
@@ -2704,7 +2744,16 @@ test("shows CLI context usage as text badge without ring", async () => {
   expect(await screen.findByText("完成")).toBeInTheDocument();
   const textBadge = await screen.findByTestId("chat-message-context-usage-text");
   expect(textBadge).toHaveTextContent("74% left · 36.6K / 1M (compacted once)");
-  expect(textBadge).toHaveAttribute("title", "36.6K used / 1M window (compacted once)");
+  expect(textBadge).toHaveAttribute("title", expect.stringContaining("context left: 74%"));
+  expect(textBadge).toHaveAttribute("title", expect.stringContaining("context used: 36,565"));
+  const bottomBadge = await screen.findByTestId("chat-message-context-usage-bottom");
+  const contextCopyButton = await screen.findByRole("button", { name: "复制上下文详情" });
+  const fullCopyButton = await screen.findByRole("button", { name: "复制完整回答" });
+  const copyButton = await screen.findByRole("button", { name: "复制最终回答" });
+  expect(bottomBadge).toHaveTextContent("74% left · 36.6K / 1M (compacted once)");
+  expect(contextCopyButton.compareDocumentPosition(fullCopyButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(fullCopyButton.compareDocumentPosition(copyButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(bottomBadge.compareDocumentPosition(copyButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(screen.queryByTestId("chat-message-context-usage")).not.toBeInTheDocument();
 });
 
@@ -2743,6 +2792,93 @@ test("shows context usage ring with native token details", async () => {
   expect(ring).toHaveAttribute("aria-label", "context 已用 4%");
   expect(ring).toHaveAttribute("title", expect.stringContaining("context window: 1,000,000"));
   expect(ring).toHaveAttribute("title", expect.stringContaining("cache read: 35,328"));
+  const bottomBadge = await screen.findByTestId("chat-message-context-usage-bottom");
+  const copyButton = await screen.findByRole("button", { name: "复制最终回答" });
+  expect(bottomBadge).toHaveTextContent("96% left");
+  expect(bottomBadge.compareDocumentPosition(copyButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+test("copies context usage details from final answer actions", async () => {
+  const writeText = vi.fn(async () => undefined);
+  Object.defineProperty(window.navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
+  Object.defineProperty(globalThis.navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "assistant-copy-context",
+        role: "assistant",
+        text: "完成",
+        createdAt: new Date().toISOString(),
+        state: "done",
+        meta: {
+          contextUsage: {
+            provider: "codex",
+            contextUsed: 36565,
+            contextWindow: 1000000,
+            contextLeftPercent: 74,
+            usedDisplay: "36.6K",
+            windowDisplay: "1M",
+          },
+        },
+      },
+    ],
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await userEvent.click(await screen.findByRole("button", { name: "复制上下文详情" }));
+
+  expect(writeText).toHaveBeenCalledWith(expect.stringContaining("context left: 74%"));
+  expect(writeText).toHaveBeenCalledWith(expect.stringContaining("context used: 36,565"));
+  expect(await screen.findByRole("button", { name: "已复制上下文详情" })).toBeInTheDocument();
+});
+
+test("full answer copy skips process text duplicated by final answer", async () => {
+  const user = userEvent.setup();
+  const writeText = mockClipboardWrite();
+  const answer = "不太必要。\n\n建议：\n- 复制\n- 导出";
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "assistant-duplicate-process",
+        role: "assistant",
+        text: answer,
+        createdAt: new Date().toISOString(),
+        state: "done",
+        meta: {
+          tracePresentation: "native_agent_flat",
+          trace: [
+            { kind: "commentary", summary: answer, source: "native_agent" },
+          ],
+          traceCount: 1,
+          processCount: 1,
+        },
+      },
+    ],
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(within(transcript).queryByText("过程")).not.toBeInTheDocument();
+  const finalResult = within(transcript).getByTestId("native-agent-final-result");
+  expect(finalResult).toHaveTextContent("不太必要。");
+  expect(finalResult).toHaveTextContent("建议：");
+  expect(finalResult).toHaveTextContent("复制");
+  expect(finalResult).toHaveTextContent("导出");
+
+  await user.click(await screen.findByRole("button", { name: "复制完整回答" }));
+
+  const lastCopyCall = writeText.mock.calls.at(-1) as unknown[] | undefined;
+  const copiedText = String(lastCopyCall?.[0] ?? "");
+  expect(copiedText).toBe(`[最终回答]\n${answer}`);
+  expect(copiedText).not.toContain("[过程]");
 });
 
 test("execution mode switch reloads scoped history", async () => {

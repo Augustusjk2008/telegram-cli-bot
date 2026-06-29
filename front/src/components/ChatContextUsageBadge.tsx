@@ -1,0 +1,141 @@
+import type { ChatMessageContextUsage } from "../services/types";
+
+export function formatCompactionCount(count?: number) {
+  const value = Math.floor(Number(count || 0));
+  if (!Number.isFinite(value) || value <= 0) {
+    return "";
+  }
+  if (value === 1) {
+    return "compacted once";
+  }
+  if (value === 2) {
+    return "compacted twice";
+  }
+  return `compacted ${value} times`;
+}
+
+export function formatTokenNumber(value?: number) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "";
+  }
+  return Math.max(0, Math.floor(value)).toLocaleString("zh-CN");
+}
+
+export function clampPercent(value: number) {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, value));
+}
+
+function formatPercent(value: number) {
+  const rounded = Math.round(clampPercent(value) * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
+export function contextLeftPercent(contextUsage?: ChatMessageContextUsage) {
+  if (!contextUsage) {
+    return undefined;
+  }
+  if (typeof contextUsage.contextLeftPercent === "number") {
+    return clampPercent(contextUsage.contextLeftPercent);
+  }
+  if (typeof contextUsage.contextUsedPercent === "number") {
+    return clampPercent(100 - contextUsage.contextUsedPercent);
+  }
+  const contextUsed = typeof contextUsage.contextUsed === "number"
+    ? contextUsage.contextUsed
+    : contextUsage.usedTokens;
+  if (
+    typeof contextUsed === "number"
+    && typeof contextUsage.contextWindow === "number"
+    && contextUsage.contextWindow > 0
+  ) {
+    return clampPercent(100 - (contextUsed / contextUsage.contextWindow) * 100);
+  }
+  return undefined;
+}
+
+export function formatContextUsageDetails(contextUsage?: ChatMessageContextUsage) {
+  if (!contextUsage) {
+    return "";
+  }
+  const contextUsed = typeof contextUsage.contextUsed === "number"
+    ? contextUsage.contextUsed
+    : contextUsage.usedTokens;
+  const leftPercent = contextLeftPercent(contextUsage);
+  const rows = [
+    typeof leftPercent === "number" ? `context left: ${formatPercent(leftPercent)}%` : "",
+    typeof contextUsage.contextWindow === "number" ? `context window: ${formatTokenNumber(contextUsage.contextWindow)}` : "",
+    typeof contextUsed === "number" ? `context used: ${formatTokenNumber(contextUsed)}` : "",
+    typeof contextUsage.inputTokens === "number" ? `input: ${formatTokenNumber(contextUsage.inputTokens)}` : "",
+    typeof contextUsage.cacheReadTokens === "number" ? `cache read: ${formatTokenNumber(contextUsage.cacheReadTokens)}` : "",
+    typeof contextUsage.cacheWriteTokens === "number" ? `cache write: ${formatTokenNumber(contextUsage.cacheWriteTokens)}` : "",
+    typeof contextUsage.outputTokens === "number" ? `output: ${formatTokenNumber(contextUsage.outputTokens)}` : "",
+    typeof contextUsage.reasoningTokens === "number" ? `reasoning: ${formatTokenNumber(contextUsage.reasoningTokens)}` : "",
+    contextUsage.usedDisplay && contextUsage.windowDisplay ? `display: ${contextUsage.usedDisplay} / ${contextUsage.windowDisplay}` : "",
+    contextUsage.model ? `model: ${contextUsage.model}` : "",
+    contextUsage.provider ? `provider: ${contextUsage.provider}` : "",
+    contextUsage.sessionId ? `session: ${contextUsage.sessionId}` : "",
+    formatCompactionCount(contextUsage.compactionCount),
+  ].filter(Boolean);
+  return rows.join("\n");
+}
+
+export function formatTextContextUsage(contextUsage?: ChatMessageContextUsage, options: { preferLeft?: boolean } = {}) {
+  if (!contextUsage) {
+    return null;
+  }
+  const leftPercent = contextLeftPercent(contextUsage);
+  const percent = typeof leftPercent === "number"
+    ? `${formatPercent(leftPercent)}% left`
+    : "";
+  const usage = contextUsage.usedDisplay && contextUsage.windowDisplay
+    ? `${contextUsage.usedDisplay} / ${contextUsage.windowDisplay}`
+    : "";
+  const statusText = (contextUsage.statusText || "").replace(/\bcontext left\b/g, "left");
+  const baseText = options.preferLeft
+    ? [percent, usage].filter(Boolean).join(" · ") || statusText
+    : statusText || [percent, usage].filter(Boolean).join(" · ");
+  if (!baseText) {
+    return null;
+  }
+  const compactionText = formatCompactionCount(contextUsage.compactionCount);
+  const text = [baseText, compactionText ? `(${compactionText})` : ""].filter(Boolean).join(" ");
+  if (!text) {
+    return null;
+  }
+  const details = formatContextUsageDetails(contextUsage);
+  const title = details || baseText;
+  return {
+    text,
+    title,
+    isLow: typeof leftPercent === "number" && leftPercent < 25,
+  };
+}
+
+type Props = {
+  contextUsage?: ChatMessageContextUsage;
+  className?: string;
+  testId?: string;
+  preferLeft?: boolean;
+};
+
+export function ChatContextUsageBadge({ contextUsage, className = "", testId, preferLeft = false }: Props) {
+  const textContext = formatTextContextUsage(contextUsage, { preferLeft });
+  if (!textContext) {
+    return null;
+  }
+  const baseClassName = textContext.isLow
+    ? "rounded-md border border-red-200 bg-red-50 px-1.5 py-0.5 font-medium text-red-600"
+    : "rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-1.5 py-0.5 text-[var(--muted)]";
+  return (
+    <span
+      className={[baseClassName, className].filter(Boolean).join(" ")}
+      data-testid={testId}
+      title={textContext.title}
+    >
+      {textContext.text}
+    </span>
+  );
+}

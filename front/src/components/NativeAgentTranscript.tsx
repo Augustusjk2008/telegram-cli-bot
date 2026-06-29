@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
-import { Check, CheckCheck, ChevronRight, Copy, LoaderCircle, X } from "lucide-react";
+import { useState } from "react";
+import { Check, ChevronRight, LoaderCircle, X } from "lucide-react";
 import { ChatMarkdownMessage } from "./ChatMarkdownMessage";
 import { ChatPlainTextMessage } from "./ChatPlainTextMessage";
-import type { ChatMessage } from "../services/types";
+import type { ChatMessage, ChatMessageContextUsage } from "../services/types";
 import type { AgUiPermissionRequest, NativeAgentPermissionReply, NativeAgentTranscriptEntry } from "../utils/agUiRunReducer";
+import { ChatFinalAnswerActions } from "./ChatFinalAnswerActions";
 
 type Props = {
   entries: NativeAgentTranscriptEntry[];
@@ -13,6 +14,7 @@ type Props = {
   onReplyPermission?: (reply: NativeAgentPermissionReply) => Promise<void>;
   onFileLinkClick?: (href: string) => void;
   onCopyFinalAnswer?: () => boolean | void | Promise<boolean | void>;
+  contextUsage?: ChatMessageContextUsage;
 };
 
 function compact(value: string, fallback: string) {
@@ -243,6 +245,129 @@ function describeTranscriptGroup(entries: NativeAgentTranscriptEntry[]) {
   return `${entries.length} 条事件${toolCount > 0 ? ` · ${toolCount} 次工具` : ""}`;
 }
 
+function entryCopyLabel(entry: NativeAgentTranscriptEntry) {
+  if (entry.kind === "process") return entry.trace?.kind === "reasoning" ? "思考" : "过程";
+  if (entry.kind === "tool") return `工具: ${entry.label}`;
+  if (entry.kind === "permission") return "权限";
+  if (entry.kind === "error") return "错误";
+  if (entry.kind === "cancelled") return "已取消";
+  return entry.label || "事件";
+}
+
+function formatTranscriptEntryForCopy(entry: NativeAgentTranscriptEntry) {
+  const summary = stripThinkingBlocks(compact(entry.summary, entry.label));
+  const body = (entry.body || "").trim();
+  const bodyText = body && body !== summary ? `\n${body}` : "";
+  const parts = [
+    `[${entryCopyLabel(entry)}] ${summary}`.trim(),
+    bodyText,
+  ].filter(Boolean);
+  return parts.join("");
+}
+
+function normalizedCopyText(value: string) {
+  return stripThinkingBlocks(value)
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .trim();
+}
+
+function normalizedDisplayText(value: string) {
+  return value
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .trim();
+}
+
+function isDuplicateFinalProcess(entry: NativeAgentTranscriptEntry, finalText: string) {
+  if (entry.kind !== "process" || !finalText) {
+    return false;
+  }
+  const kind = String(entry.trace?.kind || "").trim();
+  if (kind && kind !== "commentary" && kind !== "reasoning") {
+    return false;
+  }
+  return normalizedCopyText(entry.summary || "") === finalText;
+}
+
+function isDuplicateFinalError(entry: NativeAgentTranscriptEntry, finalText: string) {
+  if (entry.kind !== "error" || !finalText) {
+    return false;
+  }
+  return normalizedDisplayText(entry.summary || "") === finalText;
+}
+
+function formatTranscriptFullAnswer(renderItems: TranscriptRenderItem[], resultText: string) {
+  const blocks: string[] = [];
+  const finalText = normalizedCopyText(resultText);
+  for (const item of renderItems) {
+    if (item.kind === "entry") {
+      if (isDuplicateFinalProcess(item.entry, finalText)) {
+        continue;
+      }
+      const text = formatTranscriptEntryForCopy(item.entry);
+      if (text) {
+        blocks.push(text);
+      }
+      continue;
+    }
+    const groupEntries = item.entries
+      .filter((entry) => !isDuplicateFinalProcess(entry, finalText))
+      .map(formatTranscriptEntryForCopy)
+      .filter(Boolean)
+      .join("\n\n");
+    if (groupEntries) {
+      blocks.push(`[过程 ${item.groupIndex}]\n${groupEntries}`);
+    }
+  }
+  if (finalText) {
+    blocks.push(`[最终回答]\n${finalText}`);
+  }
+  return blocks.join("\n\n");
+}
+
+function filterDuplicateFinalProcessItems(renderItems: TranscriptRenderItem[], resultText: string): TranscriptRenderItem[] {
+  const finalText = normalizedCopyText(resultText);
+  if (!finalText) {
+    return renderItems;
+  }
+  const filtered: TranscriptRenderItem[] = [];
+  for (const item of renderItems) {
+    if (item.kind === "entry") {
+      if (!isDuplicateFinalProcess(item.entry, finalText)) {
+        filtered.push(item);
+      }
+      continue;
+    }
+    const entries = item.entries.filter((entry) => !isDuplicateFinalProcess(entry, finalText));
+    if (entries.length > 0) {
+      filtered.push({ ...item, entries });
+    }
+  }
+  return filtered;
+}
+
+function filterDuplicateFinalErrorItems(renderItems: TranscriptRenderItem[], resultText: string): TranscriptRenderItem[] {
+  const finalText = normalizedDisplayText(resultText);
+  if (!finalText) {
+    return renderItems;
+  }
+  const filtered: TranscriptRenderItem[] = [];
+  for (const item of renderItems) {
+    if (item.kind === "entry") {
+      if (!isDuplicateFinalError(item.entry, finalText)) {
+        filtered.push(item);
+      }
+      continue;
+    }
+    const entries = item.entries.filter((entry) => !isDuplicateFinalError(entry, finalText));
+    if (entries.length > 0) {
+      filtered.push({ ...item, entries });
+    }
+  }
+  return filtered;
+}
+
 export function NativeAgentTranscript({
   entries,
   resultText,
@@ -251,18 +376,16 @@ export function NativeAgentTranscript({
   onReplyPermission,
   onFileLinkClick,
   onCopyFinalAnswer,
+  contextUsage,
 }: Props) {
   const [replyingPermissionId, setReplyingPermissionId] = useState("");
-  const [copiedFinalAnswer, setCopiedFinalAnswer] = useState(false);
-  const copyFeedbackTimerRef = useRef<number | null>(null);
   const renderItems = groupTranscriptEntries(entries);
+  const shouldFilterDuplicateFinal = state !== "streaming" && Boolean(normalizedDisplayText(resultText));
+  const displayRenderItems = shouldFilterDuplicateFinal
+    ? filterDuplicateFinalErrorItems(filterDuplicateFinalProcessItems(renderItems, resultText), resultText)
+    : renderItems;
   const allowPermissionReply = mode === "native";
-
-  useEffect(() => () => {
-    if (copyFeedbackTimerRef.current !== null) {
-      window.clearTimeout(copyFeedbackTimerRef.current);
-    }
-  }, []);
+  const fullAnswerText = formatTranscriptFullAnswer(renderItems, resultText);
 
   const replyPermission = async (reply: NativeAgentPermissionReply) => {
     if (!onReplyPermission || !reply.requestId || replyingPermissionId) {
@@ -273,23 +396,6 @@ export function NativeAgentTranscript({
       await onReplyPermission(reply);
     } finally {
       setReplyingPermissionId("");
-    }
-  };
-
-  const copyFinalAnswer = async () => {
-    if (!onCopyFinalAnswer || copiedFinalAnswer) {
-      return;
-    }
-    const result = await onCopyFinalAnswer();
-    if (result !== false) {
-      setCopiedFinalAnswer(true);
-      if (copyFeedbackTimerRef.current !== null) {
-        window.clearTimeout(copyFeedbackTimerRef.current);
-      }
-      copyFeedbackTimerRef.current = window.setTimeout(() => {
-        setCopiedFinalAnswer(false);
-        copyFeedbackTimerRef.current = null;
-      }, 2000);
     }
   };
 
@@ -346,7 +452,7 @@ export function NativeAgentTranscript({
 
   return (
     <div data-testid="native-agent-transcript" className="min-w-0 text-sm text-[var(--text)]">
-      {renderItems.map((item) => {
+      {displayRenderItems.map((item) => {
         if (item.kind === "entry") {
           return renderEntry(item.entry);
         }
@@ -385,20 +491,11 @@ export function NativeAgentTranscript({
             <ChatPlainTextMessage content={visibleResultText} className={state === "error" ? "text-red-700" : "text-[var(--text)]"} />
           )}
           {showCopyFinalAnswer ? (
-            <div className="mt-2 flex justify-end">
-              <button
-                type="button"
-                aria-label={copiedFinalAnswer ? "已复制最终回答" : "复制最终回答"}
-                title={copiedFinalAnswer ? "已复制最终回答" : "复制最终回答"}
-                disabled={copiedFinalAnswer}
-                onClick={() => void copyFinalAnswer()}
-                className={copiedFinalAnswer
-                  ? "inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--accent-outline)] bg-[var(--accent-soft)] text-[var(--accent)] disabled:cursor-not-allowed"
-                  : "inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] text-[var(--muted)] hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)]"}
-              >
-                {copiedFinalAnswer ? <CheckCheck className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-              </button>
-            </div>
+            <ChatFinalAnswerActions
+              contextUsage={contextUsage}
+              fullAnswerText={fullAnswerText}
+              onCopyFinalAnswer={onCopyFinalAnswer}
+            />
           ) : null}
         </div>
       ) : null}

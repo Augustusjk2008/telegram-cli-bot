@@ -5,6 +5,7 @@ import { motion, useReducedMotion } from "motion/react";
 import { ChatAvatar } from "../components/ChatAvatar";
 import { ChatActionBar, type ChatModelOption } from "../components/ChatActionBar";
 import { ChatComposer } from "../components/ChatComposer";
+import { ChatFinalAnswerActions } from "../components/ChatFinalAnswerActions";
 import { ChatMessageMeta } from "../components/ChatMessageMeta";
 import { ChatMarkdownMessage } from "../components/ChatMarkdownMessage";
 import { ChatPlainTextMessage } from "../components/ChatPlainTextMessage";
@@ -1209,9 +1210,17 @@ const ChatMessageRow = memo(function ChatMessageRow({
                 onReplyPermission={isNativeAgentAssistant ? onReplyNativePermission : undefined}
                 onFileLinkClick={onFileLinkClick}
                 onCopyFinalAnswer={item.state === "done" && item.text.trim() ? () => onCopyFinalAnswer(item.text) : undefined}
+                contextUsage={item.meta?.contextUsage}
               />
             ) : item.role === "assistant" && item.state !== "streaming" && item.state !== "error" ? (
-              <ChatMarkdownMessage content={item.text} onFileLinkClick={onFileLinkClick} />
+              <>
+                <ChatMarkdownMessage content={item.text} onFileLinkClick={onFileLinkClick} />
+                <ChatFinalAnswerActions
+                  contextUsage={item.meta?.contextUsage}
+                  fullAnswerText={item.text}
+                  onCopyFinalAnswer={item.state === "done" && item.text.trim() ? () => onCopyFinalAnswer(item.text) : undefined}
+                />
+              </>
             ) : isUser ? (
               <div className={userAttachments.length > 0 && visibleUserText ? "space-y-2" : undefined}>
                 {visibleUserText ? (
