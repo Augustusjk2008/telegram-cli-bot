@@ -308,7 +308,7 @@ export function MarkdownContent({ content, variant = "preview", onFileLinkClick,
           h4: ({ children }) => <h4 className={isChat ? "break-words text-lg font-semibold [overflow-wrap:anywhere]" : "mb-2 mt-5 break-words text-lg font-semibold [overflow-wrap:anywhere]"}>{children}</h4>,
           p: ({ children }) => <p className={isChat ? "break-words [overflow-wrap:anywhere]" : "my-3 break-words [overflow-wrap:anywhere]"}>{children}</p>,
           ul: ({ children }) => <ul className={isChat ? "list-disc space-y-2 pl-6" : "my-4 list-disc space-y-2 pl-6"}>{children}</ul>,
-          ol: ({ children }) => <ol className={isChat ? "list-decimal space-y-2 pl-6" : "my-4 list-decimal space-y-2 pl-6"}>{children}</ol>,
+          ol: ({ children, node: _node, ...props }) => <ol {...props} className={isChat ? "list-decimal space-y-2 pl-6" : "my-4 list-decimal space-y-2 pl-6"}>{children}</ol>,
           li: ({ children }) => <li className="break-words pl-1 [overflow-wrap:anywhere]">{children}</li>,
           blockquote: ({ children }) => (
             <blockquote className={isChat
