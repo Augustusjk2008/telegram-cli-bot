@@ -101,12 +101,18 @@ async def test_web_base_path_serves_api_and_spa(monkeypatch: pytest.MonkeyPatch,
         async with TestClient(test_server) as client:
             root_health = await client.get("/api/health")
             sub_health = await client.get("/node/nanjing-laptop/api/health")
+            root_transfer_health = await client.get("/api/transfer/health")
+            sub_transfer_health = await client.get("/node/nanjing-laptop/api/transfer/health")
+            sub_responses_unauthorized = await client.post("/node/nanjing-laptop/v1/responses", json={"input": "hello"})
             root_asset = await client.get("/assets/app.js")
             sub_asset = await client.get("/node/nanjing-laptop/assets/app.js")
             sub_spa = await client.get("/node/nanjing-laptop/xxx")
 
             assert root_health.status == 200
             assert sub_health.status == 200
+            assert root_transfer_health.status == 200
+            assert sub_transfer_health.status == 200
+            assert sub_responses_unauthorized.status != 404
             assert root_asset.status == 200
             assert sub_asset.status == 200
             assert sub_spa.status == 200

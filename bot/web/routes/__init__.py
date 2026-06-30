@@ -13,4 +13,5 @@ from . import (
     lan_chat_routes,
     plugin_routes,
     terminal_routes,
+    transfer_routes,
 )

@@ -176,6 +176,7 @@ import type {
   TerminalActionRunResult,
   TerminalActionsConfig,
   TerminalActionsEditableConfig,
+  TransferBridgeStatus,
   TunnelSnapshot,
   UpdateAssistantCronJobInput,
   UpdateBotWorkdirOptions,
@@ -322,6 +323,27 @@ type RawHealthResponse = {
   host?: string;
   port?: number;
   host_info?: RawPublicHostInfo;
+};
+
+type RawTransferBridgeStatus = {
+  enabled?: boolean;
+  running?: boolean;
+  status?: string;
+  local_url?: string;
+  bridge_page_url?: string;
+  responses_base_url?: string;
+  chat_completions_base_url?: string;
+  remote_base_url?: string;
+  remote_model?: string;
+  remote_api_key_set?: boolean;
+  request_count?: number;
+  total_input_tokens?: number;
+  total_output_tokens?: number;
+  total_bytes_in?: number;
+  total_bytes_out?: number;
+  started_at?: string;
+  last_request_at?: string;
+  last_error?: string;
 };
 
 type RawNotificationSettings = {
@@ -3156,6 +3178,30 @@ function mapAppUpdateDownloadProgress(raw: RawAppUpdateDownloadProgress): AppUpd
   };
 }
 
+function mapTransferBridgeStatus(raw: RawTransferBridgeStatus): TransferBridgeStatus {
+  const status = String(raw.status || "unknown") as TransferBridgeStatus["status"];
+  return {
+    enabled: Boolean(raw.enabled),
+    running: Boolean(raw.running),
+    status,
+    localUrl: String(raw.local_url || ""),
+    bridgePageUrl: String(raw.bridge_page_url || ""),
+    responsesBaseUrl: String(raw.responses_base_url || ""),
+    chatCompletionsBaseUrl: String(raw.chat_completions_base_url || ""),
+    remoteBaseUrl: raw.remote_base_url ? String(raw.remote_base_url) : undefined,
+    remoteModel: raw.remote_model ? String(raw.remote_model) : undefined,
+    remoteApiKeySet: Boolean(raw.remote_api_key_set),
+    requestCount: Number(raw.request_count || 0),
+    totalInputTokens: Number(raw.total_input_tokens || 0),
+    totalOutputTokens: Number(raw.total_output_tokens || 0),
+    totalBytesIn: Number(raw.total_bytes_in || 0),
+    totalBytesOut: Number(raw.total_bytes_out || 0),
+    startedAt: raw.started_at ? String(raw.started_at) : undefined,
+    lastRequestAt: raw.last_request_at ? String(raw.last_request_at) : undefined,
+    lastError: raw.last_error !== undefined ? String(raw.last_error) : undefined,
+  };
+}
+
 function mapCliErrorStatsSummary(raw: RawCliErrorStatsSummary | undefined): CliErrorStatsSummary {
   return {
     total: Number(raw?.total || 0),
@@ -4307,6 +4353,11 @@ export class RealWebBotClient implements WebBotClient {
       },
     );
     return mapUserBotPermissions(data);
+  }
+
+  async getTransferBridgeStatus(): Promise<TransferBridgeStatus> {
+    const data = await this.requestJson<RawTransferBridgeStatus>("/api/transfer/status");
+    return mapTransferBridgeStatus(data);
   }
 
   async getEnvConfig(): Promise<EnvConfigSnapshot> {

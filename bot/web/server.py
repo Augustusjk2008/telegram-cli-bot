@@ -135,6 +135,7 @@ from .terminal_manager import (
     TerminalNotRunningError,
     TerminalSessionManager,
 )
+from .transfer_service import TransferService
 from .tunnel_service import TunnelService
 from .routes import (
     admin_routes,
@@ -149,6 +150,7 @@ from .routes import (
     lan_chat_routes,
     plugin_routes,
     terminal_routes,
+    transfer_routes,
 )
 from .api_service import (
     approve_assistant_proposal,
@@ -928,6 +930,7 @@ class WebApiServer:
             node_id=TCB_NODE_ID,
             base_path=WEB_BASE_PATH,
         )
+        self.transfer_service = TransferService(host=self._host, port=self._port)
 
     def _auth_context(self, request: web.Request) -> AuthContext:
         token_info = _extract_auth_token_info(request)
@@ -4764,6 +4767,7 @@ class WebApiServer:
             git_routes,
             admin_routes,
             lan_chat_routes,
+            transfer_routes,
         ):
             module.register(app, self)
         app.router.add_get("/api/notifications/settings", self.get_notification_settings)
@@ -4851,6 +4855,7 @@ class WebApiServer:
         if self._runner is not None:
             return
         app = self._build_app()
+        await self.transfer_service.start()
         self._runner = web.AppRunner(app)
         await self._runner.setup()
         self._site = web.TCPSite(self._runner, host=self._host, port=self._port)
@@ -4981,6 +4986,7 @@ class WebApiServer:
         else:
             await self._tunnel_service.stop()
         await self._fixed_forward_service.stop()
+        await self.transfer_service.close()
         await self._runner.cleanup()
         self._runner = None
         self._site = None

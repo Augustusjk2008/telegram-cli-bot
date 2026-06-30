@@ -155,6 +155,7 @@ import type {
   TerminalActionsConfig,
   TerminalActionsEditableConfig,
   TerminalRuntimePlatform,
+  TransferBridgeStatus,
   TreeViewPayload,
   TunnelSnapshot,
   UpdateAssistantCronJobInput,
@@ -3099,6 +3100,28 @@ export class MockWebBotClient implements WebBotClient {
     return {
       accountId,
       allowedBots: [...normalized],
+    };
+  }
+
+  async getTransferBridgeStatus(): Promise<TransferBridgeStatus> {
+    return {
+      enabled: true,
+      running: true,
+      status: "running",
+      localUrl: "http://127.0.0.1:8080",
+      bridgePageUrl: "/api/transfer/page",
+      responsesBaseUrl: "http://127.0.0.1:8080/v1",
+      chatCompletionsBaseUrl: "http://127.0.0.1:8080/v1",
+      remoteBaseUrl: "https://max.jojocode.com/v1",
+      remoteModel: "gpt-5.5",
+      remoteApiKeySet: true,
+      requestCount: 1,
+      totalInputTokens: 15381,
+      totalOutputTokens: 30,
+      totalBytesIn: 75420,
+      totalBytesOut: 3400,
+      startedAt: "2026-06-29T12:00:00Z",
+      lastRequestAt: "2026-06-29T12:01:00Z",
     };
   }
 

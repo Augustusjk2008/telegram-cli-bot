@@ -99,6 +99,14 @@ def get_lan_chat_messages_path() -> Path:
     return get_app_data_root() / "lan_chat" / "messages.json"
 
 
+def get_transfer_config_path() -> Path:
+    return get_app_data_root() / "transfer" / "config.json"
+
+
+def get_transfer_trace_path() -> Path:
+    return get_app_data_root() / "transfer" / "trace.jsonl"
+
+
 def get_tunnel_state_path() -> Path:
     return get_app_data_root() / "tunnel" / "state.json"
 

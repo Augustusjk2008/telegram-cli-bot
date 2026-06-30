@@ -99,6 +99,27 @@ export type UserBotPermissions = {
   allowedBots: string[];
 };
 
+export type TransferBridgeStatus = {
+  enabled: boolean;
+  running: boolean;
+  status: "running" | "stopped" | "not_configured" | "error" | "unknown";
+  localUrl: string;
+  bridgePageUrl: string;
+  responsesBaseUrl: string;
+  chatCompletionsBaseUrl: string;
+  remoteBaseUrl?: string;
+  remoteModel?: string;
+  remoteApiKeySet: boolean;
+  requestCount: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalBytesIn: number;
+  totalBytesOut: number;
+  startedAt?: string;
+  lastRequestAt?: string;
+  lastError?: string;
+};
+
 export type EnvConfigFieldType = "string" | "number" | "boolean" | "select" | "csv" | "path" | "password";
 
 export type EnvConfigValue = string | number | boolean | string[];

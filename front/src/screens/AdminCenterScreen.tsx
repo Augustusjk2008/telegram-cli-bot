@@ -24,6 +24,7 @@ import type {
   OfflineUpdatePackageList,
   RegisterCodeCreateResult,
   RegisterCodeItem,
+  TransferBridgeStatus,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { getErrorMessage } from "../utils/errorMessage";
@@ -37,7 +38,7 @@ type Props = {
   canManageEnvConfig?: boolean;
 };
 
-type AdminCenterTab = "users" | "invites" | "cli-errors" | "updates" | "announcements" | "lan-chat" | "native-agent" | "env";
+type AdminCenterTab = "users" | "invites" | "cli-errors" | "updates" | "announcements" | "transfer" | "lan-chat" | "native-agent" | "env";
 
 const ENV_CATEGORY_LABELS: Record<string, string> = {
   basic: "基础",
@@ -149,6 +150,22 @@ function shortErrorText(value: string) {
   return text.length > 120 ? `${text.slice(0, 117).trim()}...` : text;
 }
 
+function transferStatusLabel(status: TransferBridgeStatus | null) {
+  if (!status) return "未知";
+  if (status.status === "running") return "运行中";
+  if (status.status === "not_configured") return "未配置";
+  if (status.status === "error") return "错误";
+  if (status.status === "stopped") return "已停止";
+  return "未知";
+}
+
+function transferStatusClass(status: TransferBridgeStatus | null) {
+  if (status?.status === "running") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (status?.status === "error") return "border-red-200 bg-red-50 text-red-700";
+  if (status?.status === "not_configured") return "border-amber-200 bg-amber-50 text-amber-700";
+  return "border-[var(--border)] bg-[var(--bg)] text-[var(--muted)]";
+}
+
 function envValueEquals(left: EnvConfigValue | undefined, right: EnvConfigValue | undefined) {
   return formatEnvValue(left) === formatEnvValue(right);
 }
@@ -190,6 +207,7 @@ export function AdminCenterScreen({
   const [announcementDraft, setAnnouncementDraft] = useState<CreateAnnouncementInput>(DEFAULT_ANNOUNCEMENT_DRAFT);
   const [announcementSaving, setAnnouncementSaving] = useState(false);
   const [announcementDeletingId, setAnnouncementDeletingId] = useState("");
+  const [transferStatus, setTransferStatus] = useState<TransferBridgeStatus | null>(null);
   const [lanChatConfig, setLanChatConfig] = useState<LanChatConfig | null>(null);
   const [lanChatDraft, setLanChatDraft] = useState<LanChatConfigInput>({});
   const [lanChatSaving, setLanChatSaving] = useState(false);
@@ -213,6 +231,7 @@ export function AdminCenterScreen({
     "cli-errors": false,
     updates: false,
     announcements: false,
+    transfer: false,
     "lan-chat": false,
     "native-agent": false,
     env: false,
@@ -237,6 +256,7 @@ export function AdminCenterScreen({
       "cli-errors",
       "updates",
       "announcements",
+      "transfer",
       "lan-chat",
       "native-agent",
       ...(canManageEnvConfig ? (["env"] as AdminCenterTab[]) : []),
@@ -413,6 +433,31 @@ export function AdminCenterScreen({
     }
   }
 
+  async function loadTransferStatus(nextNotice = "", refresh = false) {
+    if (refresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+    setError("");
+    if (!nextNotice) {
+      setNotice("");
+    }
+    try {
+      const status = await client.getTransferBridgeStatus();
+      setTransferStatus(status);
+      setLoadedTabs((prev) => ({ ...prev, transfer: true }));
+      if (nextNotice) {
+        setNotice(nextNotice);
+      }
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "加载桥接状态失败"));
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }
+
   async function loadLanChat(nextNotice = "", refresh = false) {
     if (refresh) {
       setRefreshing(true);
@@ -517,6 +562,8 @@ export function AdminCenterScreen({
       await loadCliErrorStats(nextNotice, refresh);
     } else if (activeTab === "updates") {
       await loadUpdates(nextNotice, refresh);
+    } else if (activeTab === "transfer") {
+      await loadTransferStatus(nextNotice, refresh);
     } else if (activeTab === "lan-chat") {
       await loadLanChat(nextNotice, refresh);
     } else if (activeTab === "native-agent") {
@@ -957,9 +1004,11 @@ export function AdminCenterScreen({
                   : tab === "updates"
                     ? "升级"
                     : tab === "cli-errors"
-                      ? "CLI 错误"
+                    ? "CLI 错误"
                     : tab === "announcements"
                       ? "公告"
+                    : tab === "transfer"
+                      ? "桥接"
                     : tab === "native-agent"
                       ? "原生 Agent"
                       : tab === "env"
@@ -1172,6 +1221,88 @@ export function AdminCenterScreen({
               )}
             </section>
           </div>
+        ) : null}
+
+        {!loading && activeTab === "transfer" ? (
+          <section aria-labelledby="transfer-bridge-title" className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 id="transfer-bridge-title" className="text-base font-semibold text-[var(--text)]">桥接状态</h2>
+                <p className="text-sm text-[var(--muted)]">OpenAI-compatible Responses / Chat Completions 转接状态。</p>
+              </div>
+              <span className={`rounded-full border px-3 py-1 text-sm font-medium ${transferStatusClass(transferStatus)}`}>
+                {transferStatusLabel(transferStatus)}
+              </span>
+            </div>
+
+            {transferStatus?.status === "not_configured" ? (
+              <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+                桥接尚未配置 remote provider。
+              </p>
+            ) : null}
+            {transferStatus?.lastError ? (
+              <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                最近错误: {transferStatus.lastError}
+              </p>
+            ) : null}
+
+            <div className="grid gap-3 text-sm sm:grid-cols-2">
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                <p className="text-xs text-[var(--muted)]">Responses base URL</p>
+                <p className="mt-1 break-all font-mono text-[var(--text)]">{transferStatus?.responsesBaseUrl || "-"}</p>
+              </div>
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                <p className="text-xs text-[var(--muted)]">Chat Completions base URL</p>
+                <p className="mt-1 break-all font-mono text-[var(--text)]">chat = {transferStatus?.chatCompletionsBaseUrl || "-"}</p>
+              </div>
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                <p className="text-xs text-[var(--muted)]">remote model</p>
+                <p className="mt-1 break-all text-[var(--text)]">{transferStatus?.remoteModel || "-"}</p>
+              </div>
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                <p className="text-xs text-[var(--muted)]">remote key</p>
+                <p className="mt-1 text-[var(--text)]">{transferStatus?.remoteApiKeySet ? "已设置" : "未设置"}</p>
+              </div>
+            </div>
+
+            <div className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 font-mono">
+                request_count = {transferStatus?.requestCount ?? 0}
+              </p>
+              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                input tokens: {transferStatus?.totalInputTokens ?? 0}
+              </p>
+              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                output tokens: {transferStatus?.totalOutputTokens ?? 0}
+              </p>
+              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                bytes: {transferStatus?.totalBytesIn ?? 0} / {transferStatus?.totalBytesOut ?? 0}
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <a
+                href={transferStatus?.bridgePageUrl || "/api/transfer/page"}
+                target="_blank"
+                rel="noreferrer"
+                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
+              >
+                打开桥接调试页面
+              </a>
+              <span className="text-xs text-[var(--muted)]">
+                {transferStatus?.startedAt ? `启动: ${formatShortTime(transferStatus.startedAt)}` : "启动: -"}
+              </span>
+              <span className="text-xs text-[var(--muted)]">
+                {transferStatus?.lastRequestAt ? `最近请求: ${formatShortTime(transferStatus.lastRequestAt)}` : "最近请求: -"}
+              </span>
+            </div>
+
+            <pre className="overflow-x-auto rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3 text-xs text-[var(--text)]">
+              <code className="block">[model_providers.OpenAI]</code>
+              <code className="block">base_url = "{transferStatus?.responsesBaseUrl || "http://127.0.0.1:<WEB_PORT>/v1"}"</code>
+              <code className="block">wire_api = "responses"</code>
+            </pre>
+          </section>
         ) : null}
 
         {!loading && activeTab === "lan-chat" ? (

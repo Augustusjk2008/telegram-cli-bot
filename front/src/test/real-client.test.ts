@@ -186,7 +186,58 @@ describe("RealWebBotClient", () => {
     }]);
   });
 
-  
+  test("transfer bridge status maps snake case response", async () => {
+    fetchMock.mockResolvedValue(jsonOk({
+      enabled: true,
+      running: true,
+      status: "running",
+      local_url: "http://127.0.0.1:8080",
+      bridge_page_url: "/api/transfer/page",
+      responses_base_url: "http://127.0.0.1:8080/v1",
+      chat_completions_base_url: "http://127.0.0.1:8080/v1",
+      remote_base_url: "https://max.jojocode.com/v1",
+      remote_model: "gpt-5.5",
+      remote_api_key_set: true,
+      request_count: 2,
+      total_input_tokens: 15381,
+      total_output_tokens: 30,
+      total_bytes_in: 75420,
+      total_bytes_out: 3400,
+      started_at: "2026-06-29T12:00:00Z",
+      last_request_at: "2026-06-29T12:01:00Z",
+      last_error: "",
+    }));
+
+    const client = new RealWebBotClient();
+    const status = await client.getTransferBridgeStatus();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/transfer/status",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+    expect(status).toEqual({
+      enabled: true,
+      running: true,
+      status: "running",
+      localUrl: "http://127.0.0.1:8080",
+      bridgePageUrl: "/api/transfer/page",
+      responsesBaseUrl: "http://127.0.0.1:8080/v1",
+      chatCompletionsBaseUrl: "http://127.0.0.1:8080/v1",
+      remoteBaseUrl: "https://max.jojocode.com/v1",
+      remoteModel: "gpt-5.5",
+      remoteApiKeySet: true,
+      requestCount: 2,
+      totalInputTokens: 15381,
+      totalOutputTokens: 30,
+      totalBytesIn: 75420,
+      totalBytesOut: 3400,
+      startedAt: "2026-06-29T12:00:00Z",
+      lastRequestAt: "2026-06-29T12:01:00Z",
+      lastError: "",
+    });
+  });
+
+
   test("cluster setup endpoints map snake case responses", async () => {
     const statusData = createClusterStatus({
       mcp: {
