@@ -46,6 +46,9 @@ import type {
   ConversationBulkDeleteResult,
   ConversationDeleteResult,
   ConversationListResult,
+  FavoriteAnswerInput,
+  FavoriteAnswerItem,
+  FavoriteAnswerListResult,
   PlanExecuteInput,
   PlanExecuteResult,
   ConversationSelectResult,
@@ -1428,6 +1431,7 @@ export class MockWebBotClient implements WebBotClient {
   private workdirOverrides = new Map<string, string>();
   private conversationsByBot = new Map<string, ConversationSummary[]>();
   private activeConversationByBot = new Map<string, string>();
+  private favoriteAnswersByBot = new Map<string, FavoriteAnswerItem[]>();
   private agentsByBot = new Map<string, AgentSummary[]>();
   private terminalActionsConfig: TerminalActionsConfig = {
     schemaVersion: 1,
@@ -2654,6 +2658,35 @@ export class MockWebBotClient implements WebBotClient {
     return agentId === "main" ? botAlias : this.agentKey(botAlias, agentId);
   }
 
+  private getFavoriteKey(botAlias: string, agentId = "main", executionMode?: string) {
+    return `${this.getConversationKey(botAlias, agentId)}:${executionMode === "native_agent" ? "native_agent" : "cli"}`;
+  }
+
+  private getMessageKeyForFavorite(message: ChatMessage) {
+    const provider = message.meta?.nativeSource?.provider || "";
+    const sessionId = message.meta?.nativeSource?.sessionId || "";
+    if (message.role === "assistant" && (provider || sessionId) && message.createdAt) {
+      return [message.role, provider, sessionId, message.createdAt].join("|");
+    }
+    return `${message.role}|${message.id}`;
+  }
+
+  private getFavoriteId(input: FavoriteAnswerInput, botAlias: string, agentId: string, executionMode?: string) {
+    const source = [
+      botAlias,
+      agentId || "main",
+      executionMode === "native_agent" ? "native_agent" : "cli",
+      input.conversationId,
+      input.messageId,
+      input.messageKey,
+    ].join("|");
+    let hash = 0;
+    for (let index = 0; index < source.length; index += 1) {
+      hash = ((hash << 5) - hash + source.charCodeAt(index)) | 0;
+    }
+    return `fav-${Math.abs(hash).toString(36)}`;
+  }
+
   private isNativeExecution(botAlias: string, executionMode?: string) {
     const bot = this.getBotSummary(botAlias);
     return executionMode === "native_agent"
@@ -3763,6 +3796,69 @@ export class MockWebBotClient implements WebBotClient {
     return { conversation, messages: this.getAgentMessages(botAlias, agentId) };
   }
 
+  async listFavoriteAnswers(botAlias: string, query = "", options: AgentScopedOptions = {}): Promise<FavoriteAnswerListResult> {
+    const agentId = options.agentId || "main";
+    const executionMode = options.executionMode === "native_agent" ? "native_agent" : "cli";
+    const key = this.getFavoriteKey(botAlias, agentId, executionMode);
+    const normalizedQuery = query.trim().toLowerCase();
+    const items = (this.favoriteAnswersByBot.get(key) || [])
+      .filter((item) => !normalizedQuery || `${item.title} ${item.preview} ${item.answerText}`.toLowerCase().includes(normalizedQuery))
+      .sort((a, b) => b.favoritedAt.localeCompare(a.favoritedAt));
+    return { items, executionMode };
+  }
+
+  async favoriteAnswer(botAlias: string, input: FavoriteAnswerInput, options: AgentScopedOptions = {}): Promise<FavoriteAnswerItem> {
+    const agentId = options.agentId || "main";
+    const executionMode = options.executionMode === "native_agent" ? "native_agent" : "cli";
+    const key = this.getFavoriteKey(botAlias, agentId, executionMode);
+    const conversation = this.ensureConversations(botAlias, agentId, executionMode).find((item) => item.id === input.conversationId);
+    if (!conversation) {
+      throw new WebApiClientError("未找到会话", { status: 404, code: "conversation_not_found" });
+    }
+    const message = this.getAgentMessages(botAlias, agentId).find((item) => item.id === input.messageId);
+    if (!message || (message.conversationId && message.conversationId !== input.conversationId)) {
+      throw new WebApiClientError("未找到回答", { status: 404, code: "message_not_found" });
+    }
+    if (message.role !== "assistant") {
+      throw new WebApiClientError("只能收藏 assistant 回答", { status: 409, code: "favorite_message_not_assistant" });
+    }
+    const now = new Date().toISOString();
+    const id = this.getFavoriteId(input, botAlias, agentId, executionMode);
+    const existing = (this.favoriteAnswersByBot.get(key) || []).find((item) => item.id === id);
+    const favorite: FavoriteAnswerItem = {
+      id,
+      botId: 1,
+      botAlias,
+      userId: 1,
+      agentId,
+      executionMode,
+      conversationId: input.conversationId,
+      messageId: input.messageId,
+      messageKey: input.messageKey || this.getMessageKeyForFavorite(message),
+      turnId: input.turnId || message.turnId || "",
+      title: input.title || conversation.title || "新会话",
+      preview: input.preview || message.text.slice(0, 240),
+      answerText: message.text || input.answerText || "",
+      createdAt: message.createdAt,
+      favoritedAt: existing?.favoritedAt || now,
+    };
+    this.favoriteAnswersByBot.set(key, [
+      favorite,
+      ...(this.favoriteAnswersByBot.get(key) || []).filter((item) => item.id !== id),
+    ]);
+    return favorite;
+  }
+
+  async deleteFavoriteAnswer(botAlias: string, favoriteId: string, options: AgentScopedOptions = {}): Promise<{ deleted: boolean; favoriteId: string }> {
+    const agentId = options.agentId || "main";
+    const executionMode = options.executionMode === "native_agent" ? "native_agent" : "cli";
+    const key = this.getFavoriteKey(botAlias, agentId, executionMode);
+    const previous = this.favoriteAnswersByBot.get(key) || [];
+    const next = previous.filter((item) => item.id !== favoriteId);
+    this.favoriteAnswersByBot.set(key, next);
+    return { deleted: next.length !== previous.length, favoriteId };
+  }
+
   async deleteConversation(
     botAlias: string,
     conversationId: string,
@@ -3789,6 +3885,7 @@ export class MockWebBotClient implements WebBotClient {
     }
     return {
       deletedConversationId: conversationId,
+      deletedFavoriteCount: 0,
       activeConversationId: this.activeConversationByBot.get(key) || "",
       nativeSessionCleared: Boolean(options.deleteNativeSession),
       items: nextItems,
@@ -3813,6 +3910,7 @@ export class MockWebBotClient implements WebBotClient {
     }
     return {
       deletedCount,
+      deletedFavoriteCount: 0,
       activeConversationId: "",
       nativeSessionCleared: Boolean(options.deleteNativeSession),
       items: [],

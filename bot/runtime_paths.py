@@ -175,5 +175,9 @@ def get_chat_history_db_path(working_dir: str | Path) -> Path:
     return get_chat_workspace_dir(working_dir) / "chat.sqlite"
 
 
+def get_chat_favorites_path(working_dir: str | Path) -> Path:
+    return get_chat_workspace_dir(working_dir) / "favorites.json"
+
+
 def get_chat_workspace_metadata_path(working_dir: str | Path) -> Path:
     return get_chat_workspace_dir(working_dir) / "workspace.json"

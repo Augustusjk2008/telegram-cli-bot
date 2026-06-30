@@ -2050,9 +2050,108 @@ describe("RealWebBotClient", () => {
     expect(data.items[0].nativeSource?.sessionId).toBe("thread-1");
   });
 
+  test("favorite answer endpoints map scoped params and snake case fields", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonOk({
+        execution_mode: "native_agent",
+        items: [{
+          id: "fav-1",
+          bot_id: 7,
+          bot_alias: "main",
+          user_id: 42,
+          agent_id: "reviewer",
+          execution_mode: "native_agent",
+          conversation_id: "conv-1",
+          message_id: "msg-1",
+          message_key: "assistant|msg-1",
+          turn_id: "turn-1",
+          title: "收藏标题",
+          preview: "收藏预览",
+          answer_text: "完整回答",
+          created_at: "2026-06-30T00:00:00Z",
+          favorited_at: "2026-06-30T00:01:00Z",
+        }],
+      }))
+      .mockResolvedValueOnce(jsonOk({
+        item: {
+          id: "fav-1",
+          bot_id: 7,
+          bot_alias: "main",
+          user_id: 42,
+          agent_id: "reviewer",
+          execution_mode: "native_agent",
+          conversation_id: "conv-1",
+          message_id: "msg-1",
+          message_key: "assistant|msg-1",
+          turn_id: "turn-1",
+          title: "收藏标题",
+          preview: "收藏预览",
+          answer_text: "完整回答",
+          created_at: "2026-06-30T00:00:00Z",
+          favorited_at: "2026-06-30T00:01:00Z",
+        },
+      }))
+      .mockResolvedValueOnce(jsonOk({
+        deleted: true,
+        favorite_id: "fav-1",
+      }));
+
+    const client = new RealWebBotClient();
+    const listed = await client.listFavoriteAnswers("main", "收藏", { agentId: "reviewer", executionMode: "native_agent" });
+    const created = await client.favoriteAnswer("main", {
+      conversationId: "conv-1",
+      messageId: "msg-1",
+      messageKey: "assistant|msg-1",
+      turnId: "turn-1",
+      title: "收藏标题",
+      preview: "收藏预览",
+      answerText: "完整回答",
+    }, { agentId: "reviewer", executionMode: "native_agent" });
+    const deleted = await client.deleteFavoriteAnswer("main", "fav-1", { agentId: "reviewer", executionMode: "native_agent" });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/bots/main/favorites?q=%E6%94%B6%E8%97%8F&agent_id=reviewer&execution_mode=native_agent",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/bots/main/favorites",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          conversation_id: "conv-1",
+          message_id: "msg-1",
+          message_key: "assistant|msg-1",
+          turn_id: "turn-1",
+          title: "收藏标题",
+          preview: "收藏预览",
+          answer_text: "完整回答",
+          agent_id: "reviewer",
+          execution_mode: "native_agent",
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/bots/main/favorites/fav-1?agent_id=reviewer&execution_mode=native_agent",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(listed.items[0]).toEqual(expect.objectContaining({
+      id: "fav-1",
+      botId: 7,
+      executionMode: "native_agent",
+      messageKey: "assistant|msg-1",
+      answerText: "完整回答",
+    }));
+    expect(created.messageId).toBe("msg-1");
+    expect(deleted).toEqual({ deleted: true, favoriteId: "fav-1" });
+  });
+
   test("deleteAllConversations calls collection delete and maps result", async () => {
     fetchMock.mockResolvedValueOnce(jsonOk({
       deleted_count: 3,
+      deleted_favorite_count: 2,
       active_conversation_id: "",
       native_session_cleared: true,
       items: [],
@@ -2067,6 +2166,7 @@ describe("RealWebBotClient", () => {
       expect.objectContaining({ method: "DELETE" }),
     );
     expect(data.deletedCount).toBe(3);
+    expect(data.deletedFavoriteCount).toBe(2);
     expect(data.messages).toEqual([]);
     expect(data.nativeSessionCleared).toBe(true);
   });

@@ -164,6 +164,7 @@ from bot.sessions import (
 from bot.updater import download_latest_update
 from bot.utils import is_dangerous_command, split_command_argv
 from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenceBuffer
+from bot.web.chat_favorite_store import ChatFavoriteStore, FavoriteScope, build_favorite_item
 from bot.web.chat_store import ChatStore
 from bot.web.cli_context_usage import resolve_cli_context_usage
 from bot.web.diagnostics import diag_log_event, diag_log_slow
@@ -2348,6 +2349,11 @@ def _ensure_conversation_execution_mode(conversation: dict[str, Any], requested_
     return conversation_mode
 
 
+def _favorite_execution_mode_for_request(execution_mode: str, profile: BotProfile) -> str:
+    resolved = _resolve_requested_execution_mode(execution_mode, profile)
+    return NATIVE_AGENT_PROVIDER if resolved == NATIVE_AGENT_PROVIDER else EXECUTION_MODE_CLI
+
+
 def _active_conversation_matches_execution_mode(
     store: ChatStore,
     conversation_id: str,
@@ -2409,6 +2415,155 @@ def list_conversations(
     return {
         "items": [decorate(item) for item in items],
         "active_conversation_id": visible_active_id,
+        "execution_mode": resolved_execution_mode,
+    }
+
+
+def list_favorite_answers(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    *,
+    agent_id: str = "main",
+    execution_mode: str = "",
+    query: str = "",
+) -> dict[str, Any]:
+    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    resolved_execution_mode = _favorite_execution_mode_for_request(execution_mode, profile)
+    scope = _favorite_scope_for_session(session, resolved_execution_mode)
+    store = ChatFavoriteStore(session.working_dir)
+    return {
+        "items": store.list_favorites(scope, query=query),
+        "execution_mode": resolved_execution_mode,
+    }
+
+
+def _favorite_scope_for_session(session: UserSession, execution_mode: str) -> FavoriteScope:
+    return FavoriteScope(
+        bot_id=session.bot_id,
+        user_id=session.user_id,
+        agent_id=session.agent_id,
+        execution_mode=execution_mode,
+    )
+
+
+def _validate_favorite_conversation(
+    store: ChatStore,
+    session: UserSession,
+    conversation_id: str,
+    requested_execution_mode: str,
+) -> dict[str, Any]:
+    normalized_conversation_id = str(conversation_id or "").strip()
+    if not normalized_conversation_id:
+        _raise(400, "conversation_id_required", "缺少会话 ID")
+    try:
+        conversation = store.get_conversation(normalized_conversation_id)
+    except KeyError:
+        _raise(404, "conversation_not_found", "未找到会话")
+    if int(conversation.get("bot_id") or 0) != session.bot_id or int(conversation.get("user_id") or 0) != session.user_id:
+        _raise(404, "conversation_not_found", "未找到会话")
+    if str(conversation.get("agent_id") or "main") != session.agent_id:
+        _raise(404, "conversation_not_found", "未找到会话")
+    if str(conversation.get("working_dir") or "") != session.working_dir:
+        _raise(409, "conversation_workdir_mismatch", "会话工作目录和当前 Bot 不一致")
+    if str(conversation.get("archived_at") or "").strip():
+        _raise(404, "conversation_not_found", "未找到会话")
+    _ensure_conversation_execution_mode(conversation, requested_execution_mode)
+    return conversation
+
+
+def _message_key_from_message(message: dict[str, Any]) -> str:
+    meta = message.get("meta")
+    native_source = meta.get("native_source") if isinstance(meta, dict) else None
+    provider = str((native_source or {}).get("provider") or "").strip() if isinstance(native_source, dict) else ""
+    session_id = str((native_source or {}).get("session_id") or "").strip() if isinstance(native_source, dict) else ""
+    if str(message.get("role") or "") == "assistant" and (provider or session_id) and str(message.get("created_at") or ""):
+        return "|".join([
+            str(message.get("role") or ""),
+            provider,
+            session_id,
+            str(message.get("created_at") or ""),
+        ])
+    return f"{message.get('role') or ''}|{message.get('id') or ''}"
+
+
+def _favorite_preview(answer_text: str, fallback: str = "") -> str:
+    text = " ".join(str(answer_text or fallback or "").strip().split())
+    if len(text) <= 240:
+        return text
+    return f"{text[:237].rstrip()}..."
+
+
+def upsert_favorite_answer(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    payload: dict[str, Any],
+    *,
+    agent_id: str = "main",
+    execution_mode: str = "",
+) -> dict[str, Any]:
+    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    resolved_execution_mode = _favorite_execution_mode_for_request(execution_mode, profile)
+    store = _get_chat_store(session)
+    conversation = _validate_favorite_conversation(
+        store,
+        session,
+        str(payload.get("conversation_id") or payload.get("conversationId") or ""),
+        resolved_execution_mode,
+    )
+    message_id = str(payload.get("message_id") or payload.get("messageId") or "").strip()
+    message_key = str(payload.get("message_key") or payload.get("messageKey") or "").strip()
+    if not message_id:
+        _raise(400, "message_id_required", "缺少消息 ID")
+    try:
+        message = store.get_message(message_id)
+    except KeyError:
+        _raise(404, "message_not_found", "未找到回答")
+    if str(message.get("conversation_id") or "") != str(conversation.get("id") or ""):
+        _raise(404, "message_not_found", "未找到回答")
+    if str(message.get("role") or "") != "assistant":
+        _raise(409, "favorite_message_not_assistant", "只能收藏 assistant 回答")
+    if str(message.get("state") or "done") != "done":
+        _raise(409, "favorite_message_not_done", "只能收藏已完成回答")
+    answer_text = str(message.get("content") or payload.get("answer_text") or payload.get("answerText") or "")
+    if not answer_text.strip():
+        _raise(409, "favorite_message_empty", "回答内容为空，不能收藏")
+    if not message_key:
+        message_key = _message_key_from_message(message)
+    scope = _favorite_scope_for_session(session, resolved_execution_mode)
+    item = build_favorite_item(
+        scope=scope,
+        bot_alias=session.bot_alias,
+        conversation_id=str(conversation.get("id") or ""),
+        message_id=message_id,
+        message_key=message_key,
+        turn_id=str(message.get("turn_id") or payload.get("turn_id") or payload.get("turnId") or ""),
+        title=str(conversation.get("title") or payload.get("title") or ""),
+        preview=_favorite_preview(answer_text, str(payload.get("preview") or "")),
+        answer_text=answer_text,
+        created_at=str(message.get("created_at") or payload.get("created_at") or payload.get("createdAt") or ""),
+    )
+    favorite_store = ChatFavoriteStore(session.working_dir)
+    return {"item": favorite_store.upsert_favorite(item)}
+
+
+def delete_favorite_answer(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    favorite_id: str,
+    *,
+    agent_id: str = "main",
+    execution_mode: str = "",
+) -> dict[str, Any]:
+    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    resolved_execution_mode = _favorite_execution_mode_for_request(execution_mode, profile)
+    scope = _favorite_scope_for_session(session, resolved_execution_mode)
+    deleted = ChatFavoriteStore(session.working_dir).delete_favorite(favorite_id, scope)
+    return {
+        "deleted": deleted,
+        "favorite_id": str(favorite_id or "").strip(),
         "execution_mode": resolved_execution_mode,
     }
 
@@ -2647,9 +2802,14 @@ def delete_conversation(
     session.persist()
 
     store.delete_conversation_by_id(conversation_id)
+    deleted_favorite_count = ChatFavoriteStore(session.working_dir).delete_favorites_for_conversations(
+        [conversation_id],
+        _favorite_scope_for_session(session, requested_execution_mode),
+    )
     listed = list_conversations(manager, alias, user_id, agent_id=agent_id, execution_mode=requested_execution_mode)
     return {
         "deleted_conversation_id": conversation_id,
+        "deleted_favorite_count": deleted_favorite_count,
         "active_conversation_id": str(session.active_conversation_id or ""),
         "native_session_cleared": native_cleared,
         "items": listed["items"],
@@ -2710,6 +2870,9 @@ def delete_all_conversations(
                 user_id=session.user_id,
                 conversation_id=str(item.get("id") or ""),
             )
+    deleted_favorite_count = ChatFavoriteStore(session.working_dir).delete_favorites_for_scope(
+        _favorite_scope_for_session(session, resolved_execution_mode)
+    )
 
     native_cleared = False
     with session._lock:
@@ -2733,6 +2896,7 @@ def delete_all_conversations(
 
     return {
         "deleted_count": deleted_count,
+        "deleted_favorite_count": deleted_favorite_count,
         "active_conversation_id": str(session.active_conversation_id or ""),
         "native_session_cleared": native_cleared,
         "items": [],

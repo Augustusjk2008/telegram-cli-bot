@@ -82,14 +82,32 @@ export function formatContextUsageDetails(contextUsage?: ChatMessageContextUsage
   return rows.join("\n");
 }
 
-export function formatTextContextUsage(contextUsage?: ChatMessageContextUsage, options: { preferLeft?: boolean } = {}) {
+export function formatTextContextUsage(
+  contextUsage?: ChatMessageContextUsage,
+  options: { compact?: boolean; preferLeft?: boolean } = {},
+) {
   if (!contextUsage) {
     return null;
   }
   const leftPercent = contextLeftPercent(contextUsage);
   const percent = typeof leftPercent === "number"
-    ? `${formatPercent(leftPercent)}% left`
+    ? options.compact
+      ? `ctx ${formatPercent(leftPercent)}%`
+      : `${formatPercent(leftPercent)}% left`
     : "";
+  if (options.compact) {
+    const statusText = (contextUsage.statusText || "").replace(/\bcontext left\b/g, "left");
+    const baseText = percent || statusText;
+    if (!baseText) {
+      return null;
+    }
+    const details = formatContextUsageDetails(contextUsage);
+    return {
+      text: baseText,
+      title: details || baseText,
+      isLow: typeof leftPercent === "number" && leftPercent < 25,
+    };
+  }
   const usage = contextUsage.usedDisplay && contextUsage.windowDisplay
     ? `${contextUsage.usedDisplay} / ${contextUsage.windowDisplay}`
     : "";
@@ -117,12 +135,13 @@ export function formatTextContextUsage(contextUsage?: ChatMessageContextUsage, o
 type Props = {
   contextUsage?: ChatMessageContextUsage;
   className?: string;
+  compact?: boolean;
   testId?: string;
   preferLeft?: boolean;
 };
 
-export function ChatContextUsageBadge({ contextUsage, className = "", testId, preferLeft = false }: Props) {
-  const textContext = formatTextContextUsage(contextUsage, { preferLeft });
+export function ChatContextUsageBadge({ contextUsage, className = "", compact = false, testId, preferLeft = false }: Props) {
+  const textContext = formatTextContextUsage(contextUsage, { compact, preferLeft });
   if (!textContext) {
     return null;
   }

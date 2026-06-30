@@ -4,7 +4,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
 import { EventType } from "../services/agUiProtocol";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { BotOverview, ChatMessage, ChatTraceDetails, CliParamsPayload, ClusterTaskStatus, ConversationBulkDeleteResult, ConversationDeleteResult, ConversationListResult, ConversationSelectResult, GitActionResult, GitDiffPayload, GitOverview, PromptPreset } from "../services/types";
+import type { BotOverview, ChatMessage, ChatTraceDetails, CliParamsPayload, ClusterTaskStatus, ConversationBulkDeleteResult, ConversationDeleteResult, ConversationListResult, ConversationSelectResult, FavoriteAnswerItem, GitActionResult, GitDiffPayload, GitOverview, PromptPreset } from "../services/types";
 import { WebApiClientError } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
@@ -990,6 +990,160 @@ test("copies final answer using execCommand fallback when clipboard api is unava
 
   expect(execCommand).toHaveBeenCalledWith("copy");
   expect(await screen.findByRole("button", { name: "已复制最终回答" })).toBeInTheDocument();
+});
+
+test("favorites final answers through backend and restores from server", async () => {
+  const now = new Date().toISOString();
+  const favoriteItems: FavoriteAnswerItem[] = [];
+  const favoriteAnswer = vi.fn<WebBotClient["favoriteAnswer"]>(async (_botAlias, input) => {
+    const item: FavoriteAnswerItem = {
+      id: "fav-assistant-favorite",
+      botId: 1,
+      botAlias: "main",
+      userId: 1,
+      agentId: "main",
+      executionMode: "cli",
+      conversationId: input.conversationId,
+      messageId: input.messageId,
+      messageKey: input.messageKey,
+      turnId: input.turnId || "",
+      title: input.title || "测试会话",
+      preview: input.preview || "",
+      answerText: input.answerText || "",
+      createdAt: now,
+      favoritedAt: now,
+    };
+    favoriteItems.splice(0, favoriteItems.length, item);
+    return item;
+  });
+  const client = createClient({
+    listFavoriteAnswers: async () => ({ items: [...favoriteItems], executionMode: "cli" }),
+    favoriteAnswer,
+    listMessages: async () => [{
+      id: "assistant-favorite",
+      conversationId: "conv-favorite",
+      role: "assistant",
+      text: "值得收藏的答案",
+      createdAt: now,
+      state: "done",
+    }],
+    listConversations: async () => ({
+      activeConversationId: "conv-favorite",
+      items: [{
+        id: "conv-favorite",
+        title: "测试会话",
+        lastMessagePreview: "值得收藏的答案",
+        messageCount: 1,
+        pinned: false,
+        active: true,
+        status: "active",
+        botAlias: "main",
+        botMode: "cli",
+        cliType: "codex",
+        workingDir: "C:\\workspace",
+        createdAt: now,
+        updatedAt: now,
+      }],
+    }),
+  });
+
+  const { unmount } = render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByText("值得收藏的答案")).toBeInTheDocument();
+  const favoriteButton = screen.getByRole("button", { name: "收藏回答" });
+  await userEvent.click(favoriteButton);
+
+  expect(await screen.findByRole("button", { name: "取消收藏回答" })).toHaveAttribute("aria-pressed", "true");
+  await waitFor(() => expect(favoriteAnswer).toHaveBeenCalled());
+  expect(favoriteAnswer.mock.calls[0][1]).toMatchObject({
+    conversationId: "conv-favorite",
+    messageId: "assistant-favorite",
+    messageKey: "assistant|assistant-favorite",
+  });
+
+  unmount();
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByText("值得收藏的答案")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "取消收藏回答" })).toHaveAttribute("aria-pressed", "true");
+});
+
+test("opens favorites panel from toolbar", async () => {
+  const now = new Date().toISOString();
+  const client = createClient({
+    listFavoriteAnswers: async () => ({
+      executionMode: "cli",
+      items: [{
+        id: "fav-toolbar",
+        botId: 1,
+        botAlias: "main",
+        userId: 1,
+        agentId: "main",
+        executionMode: "cli",
+        conversationId: "conv-toolbar",
+        messageId: "msg-toolbar",
+        messageKey: "assistant|msg-toolbar",
+        turnId: "turn-toolbar",
+        title: "工具栏收藏",
+        preview: "收藏预览",
+        answerText: "收藏预览",
+        createdAt: now,
+        favoritedAt: now,
+      }],
+    }),
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await userEvent.click(await screen.findByRole("button", { name: "收藏" }));
+
+  expect(await screen.findByRole("button", { name: "收藏", pressed: true })).toBeInTheDocument();
+  expect(await screen.findByText("工具栏收藏")).toBeInTheDocument();
+  expect(screen.getByText("收藏预览")).toBeInTheDocument();
+});
+
+test("continues from the latest final answer", async () => {
+  const user = userEvent.setup();
+  const now = new Date().toISOString();
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (_botAlias, text, onChunk) => {
+    onChunk(`收到：${text}`);
+    return {
+      id: "assistant-continued",
+      role: "assistant",
+      text: `收到：${text}`,
+      createdAt: now,
+      state: "done",
+    };
+  });
+  const client = createClient({
+    listMessages: async () => [
+      {
+        id: "assistant-old",
+        role: "assistant",
+        text: "旧回答",
+        createdAt: now,
+        state: "done",
+      },
+      {
+        id: "assistant-latest",
+        role: "assistant",
+        text: "最新回答",
+        createdAt: now,
+        state: "done",
+      },
+    ],
+    sendMessage,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByText("最新回答")).toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: "继续" })).toHaveLength(1);
+  await user.click(screen.getByRole("button", { name: "继续" }));
+
+  await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+  expect(sendMessage.mock.calls[0][1]).toBe("继续");
+  expect(sendMessage.mock.calls[0][5]).toMatchObject({ taskMode: "standard" });
 });
 
 test("renders prompt preset editor in a high level document portal", async () => {
@@ -2326,13 +2480,34 @@ test("chat screen blocks conversation switch while streaming", async () => {
 test("chat screen can delete all conversations for current bot", async () => {
   const user = userEvent.setup();
   const now = new Date().toISOString();
-  const deleteAllConversations = vi.fn(async (): Promise<ConversationBulkDeleteResult> => ({
-    deletedCount: 2,
-    activeConversationId: "",
-    nativeSessionCleared: true,
-    items: [],
-    messages: [],
-  }));
+  const favoriteItems: FavoriteAnswerItem[] = [{
+    id: "fav-old",
+    botId: 1,
+    botAlias: "main",
+    userId: 1,
+    agentId: "main",
+    executionMode: "cli",
+    conversationId: "conv-1",
+    messageId: "assistant-1",
+    messageKey: "assistant|assistant-1",
+    turnId: "",
+    title: "旧会话",
+    preview: "旧收藏",
+    answerText: "旧收藏",
+    createdAt: now,
+    favoritedAt: now,
+  }];
+  const deleteAllConversations = vi.fn(async (): Promise<ConversationBulkDeleteResult> => {
+    favoriteItems.splice(0, favoriteItems.length);
+    return {
+      deletedCount: 2,
+      deletedFavoriteCount: 1,
+      activeConversationId: "",
+      nativeSessionCleared: true,
+      items: [],
+      messages: [],
+    };
+  });
   const client = createClient({
     listMessages: async (): Promise<ChatMessage[]> => [{
       id: "assistant-1",
@@ -2359,6 +2534,10 @@ test("chat screen can delete all conversations for current bot", async () => {
         updatedAt: now,
       }],
     }),
+    listFavoriteAnswers: async () => ({
+      executionMode: "cli",
+      items: [...favoriteItems],
+    }),
     deleteAllConversations,
   });
 
@@ -2372,6 +2551,9 @@ test("chat screen can delete all conversations for current bot", async () => {
   expect(deleteAllConversations).toHaveBeenCalledWith("main", { deleteNativeSession: true });
   expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
   expect(screen.queryByText("旧会话")).not.toBeInTheDocument();
+  await user.click(await screen.findByRole("button", { name: "收藏" }));
+  expect(await screen.findByText("暂无收藏")).toBeInTheDocument();
+  expect(screen.queryByText("旧收藏")).not.toBeInTheDocument();
 });
 
 
@@ -2823,7 +3005,7 @@ test("shows CLI context usage as text badge without ring", async () => {
   const contextCopyButton = await screen.findByRole("button", { name: "复制上下文详情" });
   const fullCopyButton = await screen.findByRole("button", { name: "复制完整回答" });
   const copyButton = await screen.findByRole("button", { name: "复制最终回答" });
-  expect(bottomBadge).toHaveTextContent("74% left · 36.6K / 1M (compacted once)");
+  expect(bottomBadge).toHaveTextContent("ctx 74%");
   expect(contextCopyButton.compareDocumentPosition(fullCopyButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(fullCopyButton.compareDocumentPosition(copyButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(bottomBadge.compareDocumentPosition(copyButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -2867,7 +3049,7 @@ test("shows context usage ring with native token details", async () => {
   expect(ring).toHaveAttribute("title", expect.stringContaining("cache read: 35,328"));
   const bottomBadge = await screen.findByTestId("chat-message-context-usage-bottom");
   const copyButton = await screen.findByRole("button", { name: "复制最终回答" });
-  expect(bottomBadge).toHaveTextContent("96% left");
+  expect(bottomBadge).toHaveTextContent("ctx 96%");
   expect(bottomBadge.compareDocumentPosition(copyButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
 

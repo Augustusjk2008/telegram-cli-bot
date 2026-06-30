@@ -117,6 +117,9 @@ import type {
   ConversationListResult,
   ConversationBulkDeleteResult,
   ConversationDeleteResult,
+  FavoriteAnswerInput,
+  FavoriteAnswerItem,
+  FavoriteAnswerListResult,
   PlanExecuteInput,
   PlanExecuteResult,
   ConversationSelectResult,
@@ -208,6 +211,9 @@ export interface WebBotClient {
   listConversations(botAlias: string, query?: string, options?: AgentScopedOptions): Promise<ConversationListResult>;
   createConversation(botAlias: string, title?: string, options?: AgentScopedOptions): Promise<ConversationSelectResult>;
   selectConversation(botAlias: string, conversationId: string, options?: AgentScopedOptions): Promise<ConversationSelectResult>;
+  listFavoriteAnswers(botAlias: string, query?: string, options?: AgentScopedOptions): Promise<FavoriteAnswerListResult>;
+  favoriteAnswer(botAlias: string, input: FavoriteAnswerInput, options?: AgentScopedOptions): Promise<FavoriteAnswerItem>;
+  deleteFavoriteAnswer(botAlias: string, favoriteId: string, options?: AgentScopedOptions): Promise<{ deleted: boolean; favoriteId: string }>;
   deleteConversation(
     botAlias: string,
     conversationId: string,

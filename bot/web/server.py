@@ -170,6 +170,7 @@ from .api_service import (
     create_conversation,
     delete_all_conversations,
     delete_conversation,
+    delete_favorite_answer,
     execute_plan,
     create_directory,
     create_workdir_directory,
@@ -217,6 +218,7 @@ from .api_service import (
     list_bots,
     list_agents,
     list_conversations,
+    list_favorite_answers,
     list_assistant_cron_jobs,
     list_assistant_cron_runs,
     list_installable_plugins,
@@ -265,6 +267,7 @@ from .api_service import (
     update_bot_native_agent_model,
     update_bot_prompt_presets,
     update_plugin,
+    upsert_favorite_answer,
     rename_managed_bot,
     update_bot_workdir,
     write_file_content,
@@ -2888,6 +2891,54 @@ class WebApiServer:
         agent_id = self._request_agent_id(request)
         execution_mode = self._request_execution_mode(request, include_body=False)
         return _json({"ok": True, "data": list_conversations(self.manager, alias, self._chat_user_id(auth), limit=limit, query=query, agent_id=agent_id, execution_mode=execution_mode)})
+
+    async def get_favorites_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_VIEW_CHAT_HISTORY)
+        alias = self._manager_alias(request)
+        query = request.query.get("q", "")
+        agent_id = self._request_agent_id(request)
+        execution_mode = self._request_execution_mode(request, include_body=False)
+        data = list_favorite_answers(
+            self.manager,
+            alias,
+            self._chat_user_id(auth),
+            agent_id=agent_id,
+            execution_mode=execution_mode,
+            query=query,
+        )
+        return _json({"ok": True, "data": data})
+
+    async def post_favorite_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_CHAT_SEND)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        agent_id = self._request_agent_id(request, body)
+        execution_mode = self._request_execution_mode(request, body, include_query=False)
+        data = upsert_favorite_answer(
+            self.manager,
+            alias,
+            self._chat_user_id(auth),
+            body,
+            agent_id=agent_id,
+            execution_mode=execution_mode,
+        )
+        return _json({"ok": True, "data": data})
+
+    async def delete_favorite_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_CHAT_SEND)
+        alias = self._manager_alias(request)
+        favorite_id = request.match_info.get("favorite_id", "")
+        agent_id = self._request_agent_id(request)
+        execution_mode = self._request_execution_mode(request, include_body=False)
+        data = delete_favorite_answer(
+            self.manager,
+            alias,
+            self._chat_user_id(auth),
+            favorite_id,
+            agent_id=agent_id,
+            execution_mode=execution_mode,
+        )
+        return _json({"ok": True, "data": data})
 
     async def post_conversation_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_CHAT_SEND)

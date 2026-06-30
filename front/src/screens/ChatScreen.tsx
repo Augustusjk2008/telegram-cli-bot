@@ -21,7 +21,7 @@ import { ChatFinalAnswerActions } from "../components/ChatFinalAnswerActions";
 import { ChatMessageMeta } from "../components/ChatMessageMeta";
 import { ChatMarkdownMessage } from "../components/ChatMarkdownMessage";
 import { ChatPlainTextMessage } from "../components/ChatPlainTextMessage";
-import { ConversationHistoryPanel } from "../components/ConversationHistoryPanel";
+import { ConversationHistoryPanel, type ConversationHistoryPanelTab } from "../components/ConversationHistoryPanel";
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import { NativeAgentTranscript } from "../components/NativeAgentTranscript";
 import { PlanDraftCard } from "../components/PlanDraftCard";
@@ -44,6 +44,7 @@ import type {
   CliParamsPayload,
   ChatTraceEvent,
   ConversationSummary,
+  FavoriteAnswerItem,
   FileDownloadProgress,
   FileReadResult,
   PromptPreset,
@@ -136,6 +137,8 @@ type ChatMessageRowModel = {
   item: ChatMessage;
   messageClientStateKey: string;
   planDraft: string;
+  favorite: boolean;
+  canContinue: boolean;
   deletedAttachmentKeys: Record<string, boolean>;
   deletingAttachmentKeys: Record<string, boolean>;
   soloRollbackTarget?: SoloRollbackTarget;
@@ -205,6 +208,10 @@ function executionModeStorageKey(botAlias: string, accountId?: string) {
 
 function immersiveButtonPositionStorageKey(botAlias: string, accountId?: string) {
   return `tcb.chatImmersiveButton.${storageScopePrefix(accountId)}${botAlias}`;
+}
+
+function favoriteAnswersStorageKey(botAlias: string, accountId?: string) {
+  return `tcb.favoriteAnswers.${storageScopePrefix(accountId)}${botAlias}`;
 }
 
 function readStoredImmersiveButtonPosition(storageKey: string): FloatingButtonPosition | null {
@@ -859,6 +866,65 @@ function getMessageTurnRoleKey(item: ChatMessage) {
   return turnId ? `${item.role}|${turnId}` : "";
 }
 
+function favoriteItemsByMessageKey(items: FavoriteAnswerItem[]) {
+  const next = new Map<string, FavoriteAnswerItem>();
+  for (const item of items) {
+    if (item.messageKey) {
+      next.set(item.messageKey, item);
+    }
+  }
+  return next;
+}
+
+function readLegacyFavoriteAnswerKeys(botAlias: string, accountId?: string) {
+  if (typeof window === "undefined") {
+    return [];
+  }
+  const storageKey = favoriteAnswersStorageKey(botAlias, accountId);
+  try {
+    const rawValue = window.localStorage.getItem(storageKey);
+    const parsed = rawValue ? JSON.parse(rawValue) : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === "string" && item.length > 0)
+      : [];
+  } catch {
+    window.localStorage.removeItem(storageKey);
+    return [];
+  }
+}
+
+function removeLegacyFavoriteAnswerKeys(botAlias: string, accountId?: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.removeItem(favoriteAnswersStorageKey(botAlias, accountId));
+}
+
+function favoriteAnswerInputForMessage(
+  item: ChatMessage,
+  messageKey: string,
+  conversations: ConversationSummary[],
+) {
+  const conversationId = item.conversationId || resolveActiveConversationId(conversations, [item]);
+  const conversation = conversations.find((entry) => entry.id === conversationId);
+  return {
+    conversationId,
+    messageId: item.id,
+    messageKey,
+    turnId: item.turnId || "",
+    title: conversation?.title || "",
+    preview: item.text,
+    answerText: item.text,
+  };
+}
+
+function escapeAttrSelector(value: string) {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+    return CSS.escape(value);
+  }
+  return value.replace(/["\\]/g, "\\$&");
+}
+
 function isCompletedNativeHistoryPoint(item: ChatMessage) {
   return Boolean(
     item.role === "assistant"
@@ -1152,7 +1218,12 @@ type ChatMessageRowProps = {
   onDeleteAttachment: (messageId: string, savedPath: string) => void;
   onFileLinkClick: (href: string) => void;
   onCopyFinalAnswer: (text: string) => boolean | void | Promise<boolean | void>;
+  onContinueFinalAnswer?: () => void;
+  onToggleFavoriteAnswer?: (messageKey: string, item: ChatMessage) => void;
   onReplyNativePermission: (reply: NativeAgentPermissionReply) => Promise<void>;
+  messageClientStateKey: string;
+  favorite: boolean;
+  canContinue: boolean;
   soloRollbackTarget?: SoloRollbackTarget;
   onRequestSoloRollback?: (target: SoloRollbackTarget) => void;
   wideMessages: boolean;
@@ -1169,7 +1240,12 @@ const ChatMessageRow = memo(function ChatMessageRow({
   onDeleteAttachment,
   onFileLinkClick,
   onCopyFinalAnswer,
+  onContinueFinalAnswer,
+  onToggleFavoriteAnswer,
   onReplyNativePermission,
+  messageClientStateKey,
+  favorite,
+  canContinue,
   soloRollbackTarget,
   onRequestSoloRollback,
   wideMessages,
@@ -1221,6 +1297,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
 
   return (
     <motion.div
+      data-message-id={item.id}
+      data-message-key={messageClientStateKey}
       className={messageAlign === "right" ? "flex justify-end" : "flex justify-start"}
       {...resolveMotionProps(delightMotion.messagePop, reduceMotion)}
     >
@@ -1269,15 +1347,23 @@ const ChatMessageRow = memo(function ChatMessageRow({
                 onReplyPermission={isNativeAgentAssistant ? onReplyNativePermission : undefined}
                 onFileLinkClick={onFileLinkClick}
                 onCopyFinalAnswer={item.state === "done" && item.text.trim() ? () => onCopyFinalAnswer(item.text) : undefined}
+                onContinue={canContinue ? onContinueFinalAnswer : undefined}
+                onToggleFavorite={item.state === "done" && item.text.trim() ? () => onToggleFavoriteAnswer?.(messageClientStateKey, item) : undefined}
+                favorite={favorite}
+                canContinue={canContinue}
                 contextUsage={item.meta?.contextUsage}
               />
             ) : item.role === "assistant" && item.state !== "streaming" && item.state !== "error" ? (
               <>
                 <ChatMarkdownMessage content={item.text} onFileLinkClick={onFileLinkClick} />
                 <ChatFinalAnswerActions
+                  canContinue={canContinue}
                   contextUsage={item.meta?.contextUsage}
+                  favorite={favorite}
                   fullAnswerText={item.text}
+                  onContinue={canContinue ? onContinueFinalAnswer : undefined}
                   onCopyFinalAnswer={item.state === "done" && item.text.trim() ? () => onCopyFinalAnswer(item.text) : undefined}
+                  onToggleFavorite={item.state === "done" && item.text.trim() ? () => onToggleFavoriteAnswer?.(messageClientStateKey, item) : undefined}
                 />
               </>
             ) : isUser ? (
@@ -1357,6 +1443,8 @@ const ChatMessageList = memo(function ChatMessageList({
   handleDeleteAttachment,
   handleFileLinkClick,
   handleCopyFinalAnswer,
+  handleContinueFinalAnswer,
+  handleToggleFavoriteAnswer,
   handleReplyNativePermission,
   handleRequestSoloRollback,
   executingPlanMessageId,
@@ -1372,6 +1460,8 @@ const ChatMessageList = memo(function ChatMessageList({
   handleDeleteAttachment: (messageId: string, savedPath: string) => void;
   handleFileLinkClick: (href: string) => void;
   handleCopyFinalAnswer: (text: string) => boolean | void | Promise<boolean | void>;
+  handleContinueFinalAnswer: () => void;
+  handleToggleFavoriteAnswer: (messageKey: string, item: ChatMessage) => void;
   handleReplyNativePermission: (reply: NativeAgentPermissionReply) => Promise<void>;
   handleRequestSoloRollback?: (target: SoloRollbackTarget) => void;
   executingPlanMessageId: string;
@@ -1392,7 +1482,12 @@ const ChatMessageList = memo(function ChatMessageList({
         onDeleteAttachment={handleDeleteAttachment}
         onFileLinkClick={handleFileLinkClick}
         onCopyFinalAnswer={handleCopyFinalAnswer}
+        onContinueFinalAnswer={handleContinueFinalAnswer}
+        onToggleFavoriteAnswer={handleToggleFavoriteAnswer}
         onReplyNativePermission={handleReplyNativePermission}
+        messageClientStateKey={row.messageClientStateKey}
+        favorite={row.favorite}
+        canContinue={row.canContinue}
         soloRollbackTarget={row.soloRollbackTarget}
         onRequestSoloRollback={handleRequestSoloRollback}
         wideMessages={wideMessages}
@@ -1674,7 +1769,13 @@ export function ChatScreen({
   const [deletedAttachmentKeys, setDeletedAttachmentKeys] = useState<Record<string, boolean>>({});
   const [deletingAttachmentKeys, setDeletingAttachmentKeys] = useState<Record<string, boolean>>({});
   const [traceLoadState, setTraceLoadState] = useState<Record<string, { loading: boolean; error?: string }>>({});
+  const [favoriteItems, setFavoriteItems] = useState<FavoriteAnswerItem[]>([]);
+  const [favoriteLoading, setFavoriteLoading] = useState(false);
+  const [favoriteError, setFavoriteError] = useState("");
+  const [deletingFavoriteId, setDeletingFavoriteId] = useState("");
+  const migratedFavoriteScopeRef = useRef("");
   const [historyPanelOpen, setHistoryPanelOpen] = useState(false);
+  const [historyPanelTab, setHistoryPanelTab] = useState<ConversationHistoryPanelTab>("history");
   const [conversationQuery, setConversationQuery] = useState("");
   const [conversationLoading, setConversationLoading] = useState(false);
   const [deletingConversationId, setDeletingConversationId] = useState("");
@@ -2684,6 +2785,61 @@ export function ChatScreen({
     }
   }, []);
 
+  const handleToggleFavoriteAnswer = useCallback((messageKey: string, item: ChatMessage) => {
+    if (!messageKey || item.role !== "assistant" || item.state !== "done") {
+      return;
+    }
+    const currentFavorite = favoriteItemsByMessageKey(favoriteItems).get(messageKey);
+    if (currentFavorite) {
+      const previous = favoriteItems;
+      setFavoriteItems((current) => current.filter((entry) => entry.id !== currentFavorite.id));
+      void client.deleteFavoriteAnswer(botAlias, currentFavorite.id, {
+        agentId: activeAgentIdRef.current || "main",
+        executionMode: executionModeRef.current,
+      }).catch((err) => {
+        setFavoriteItems(previous);
+        setError(err instanceof Error ? err.message : "取消收藏失败");
+      });
+      return;
+    }
+    const input = favoriteAnswerInputForMessage(item, messageKey, conversations);
+    if (!input.conversationId) {
+      setError("缺少会话 ID，无法收藏");
+      return;
+    }
+    const optimistic: FavoriteAnswerItem = {
+      id: `pending-${messageKey}`,
+      botId: 0,
+      botAlias,
+      userId: 0,
+      agentId: activeAgentIdRef.current || "main",
+      executionMode: executionModeRef.current,
+      conversationId: input.conversationId,
+      messageId: input.messageId,
+      messageKey,
+      turnId: input.turnId || "",
+      title: input.title || "新会话",
+      preview: input.preview || item.text,
+      answerText: item.text,
+      createdAt: item.createdAt,
+      favoritedAt: new Date().toISOString(),
+    };
+    const previous = favoriteItems;
+    setFavoriteItems((current) => [optimistic, ...current.filter((entry) => entry.messageKey !== messageKey)]);
+    void client.favoriteAnswer(botAlias, input, {
+      agentId: activeAgentIdRef.current || "main",
+      executionMode: executionModeRef.current,
+    }).then((saved) => {
+      setFavoriteItems((current) => [
+        saved,
+        ...current.filter((entry) => entry.id !== optimistic.id && entry.id !== saved.id && entry.messageKey !== saved.messageKey),
+      ]);
+    }).catch((err) => {
+      setFavoriteItems(previous);
+      setError(err instanceof Error ? err.message : "收藏失败");
+    });
+  }, [botAlias, client, conversations, favoriteItems]);
+
   const handleReplyNativePermission = useCallback(async (reply: NativeAgentPermissionReply) => {
     try {
       await client.replyNativeAgentPermission(botAlias, reply.requestId, {
@@ -2793,6 +2949,97 @@ export function ChatScreen({
     }
   }, [botAlias, client]);
 
+  const loadFavorites = useCallback(async (query = "") => {
+    setFavoriteLoading(true);
+    setFavoriteError("");
+    try {
+      const data = await client.listFavoriteAnswers(botAlias, query, {
+        agentId: activeAgentIdRef.current || "main",
+        executionMode: executionModeRef.current,
+      });
+      setFavoriteItems(data.items);
+      return data.items;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "加载收藏失败";
+      setFavoriteError(message);
+      return null;
+    } finally {
+      setFavoriteLoading(false);
+    }
+  }, [botAlias, client]);
+
+  useEffect(() => {
+    setFavoriteItems([]);
+    setFavoriteError("");
+    migratedFavoriteScopeRef.current = "";
+    void loadFavorites("");
+  }, [activeAgentId, executionMode, loadFavorites]);
+
+  useEffect(() => {
+    if (favoriteLoading) {
+      return;
+    }
+    const scopeKey = `${botAlias}:${storageScope || ""}:${activeAgentId}:${executionMode}`;
+    if (migratedFavoriteScopeRef.current === scopeKey) {
+      return;
+    }
+    migratedFavoriteScopeRef.current = scopeKey;
+    const legacyKeys = readLegacyFavoriteAnswerKeys(botAlias, storageScope);
+    if (legacyKeys.length === 0) {
+      return;
+    }
+    const favoriteMap = favoriteItemsByMessageKey(favoriteItems);
+    const messagesByKey = new Map<string, ChatMessage>();
+    for (const item of itemsRef.current) {
+      if (item.role === "assistant" && item.state === "done" && item.text.trim()) {
+        messagesByKey.set(getMessageClientStateKey(item), item);
+      }
+    }
+    const migratable = legacyKeys
+      .filter((key) => !favoriteMap.has(key) && messagesByKey.has(key))
+      .map((key) => ({ key, message: messagesByKey.get(key) as ChatMessage }));
+    if (migratable.length === 0) {
+      removeLegacyFavoriteAnswerKeys(botAlias, storageScope);
+      return;
+    }
+    void (async () => {
+      try {
+        const created: FavoriteAnswerItem[] = [];
+        for (const entry of migratable) {
+          const input = favoriteAnswerInputForMessage(entry.message, entry.key, conversations);
+          if (!input.conversationId) {
+            continue;
+          }
+          created.push(await client.favoriteAnswer(botAlias, input, {
+            agentId: activeAgentIdRef.current || "main",
+            executionMode: executionModeRef.current,
+          }));
+        }
+        if (created.length > 0) {
+          setFavoriteItems((current) => {
+            const byId = new Map(current.map((item) => [item.id, item]));
+            for (const item of created) {
+              byId.set(item.id, item);
+            }
+            return [...byId.values()].sort((a, b) => b.favoritedAt.localeCompare(a.favoritedAt));
+          });
+        }
+        removeLegacyFavoriteAnswerKeys(botAlias, storageScope);
+      } catch (err) {
+        setFavoriteError(err instanceof Error ? err.message : "迁移旧收藏失败");
+      }
+    })();
+  }, [
+    activeAgentId,
+    botAlias,
+    client,
+    conversations,
+    executionMode,
+    favoriteItems,
+    favoriteLoading,
+    storageScope,
+  ]);
+
   const refreshSoloNativeHistory = useCallback(async () => {
     if (executionModeRef.current !== "native_agent") {
       return;
@@ -2873,8 +3120,13 @@ export function ChatScreen({
     soloRollbacking,
   ]);
 
-  async function handleOpenHistoryPanel() {
+  async function handleOpenHistoryPanel(defaultTab: ConversationHistoryPanelTab = "history") {
+    setHistoryPanelTab(defaultTab);
     setHistoryPanelOpen(true);
+    if (defaultTab === "favorites") {
+      await loadFavorites(conversationQuery);
+      return;
+    }
     await loadConversations(conversationQuery);
   }
 
@@ -2903,6 +3155,76 @@ export function ChatScreen({
       setError(err instanceof Error ? err.message : "切换会话失败");
     } finally {
       setConversationLoading(false);
+    }
+  }
+
+  function scrollToFavoriteMessage(messageId: string, messageKey: string) {
+    window.setTimeout(() => {
+      const container = scrollContainerRef.current;
+      if (!container) {
+        return;
+      }
+      const messages = itemsRef.current;
+      const index = messages.findIndex((item) => item.id === messageId || getMessageClientStateKey(item) === messageKey);
+      if (index < 0) {
+        setError("原回答已不在当前会话历史中");
+        return;
+      }
+      const content = scrollContentRef.current;
+      const target = content?.querySelector<HTMLElement>(
+        `[data-message-id="${escapeAttrSelector(messageId)}"], [data-message-key="${escapeAttrSelector(messageKey)}"]`,
+      );
+      if (target && typeof target.scrollIntoView === "function") {
+        target.scrollIntoView({ block: "center" });
+      }
+    }, 0);
+  }
+
+  async function handleSelectFavorite(favorite: FavoriteAnswerItem) {
+    if (isStreaming) {
+      setError("当前任务运行中，先终止或等待完成");
+      return;
+    }
+    setConversationLoading(true);
+    setError("");
+    try {
+      const data = await selectScopedConversation(client, botAlias, favorite.conversationId, activeAgentIdRef.current, executionModeRef.current);
+      stopAssistantPoll();
+      stopSseRecoveryWatch();
+      stopClusterTaskPoll();
+      setClusterRunId("");
+      setClusterTaskStatus(null);
+      setClusterTaskError("");
+      clusterRunIdRef.current = "";
+      setTraceLoadState({});
+      setQueuedMessageState(null, { botAlias, agentId: activeAgentIdRef.current || "main" });
+      setItems(data.messages);
+      itemsRef.current = data.messages;
+      setConversations((prev) => prev.map((item) => ({ ...item, active: item.id === favorite.conversationId })));
+      setHistoryPanelOpen(false);
+      scrollToFavoriteMessage(favorite.messageId, favorite.messageKey);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "打开收藏失败");
+    } finally {
+      setConversationLoading(false);
+    }
+  }
+
+  async function handleDeleteFavorite(favorite: FavoriteAnswerItem) {
+    setDeletingFavoriteId(favorite.id);
+    setFavoriteError("");
+    const previous = favoriteItems;
+    setFavoriteItems((current) => current.filter((item) => item.id !== favorite.id));
+    try {
+      await client.deleteFavoriteAnswer(botAlias, favorite.id, {
+        agentId: activeAgentIdRef.current || "main",
+        executionMode: executionModeRef.current,
+      });
+    } catch (err) {
+      setFavoriteItems(previous);
+      setFavoriteError(err instanceof Error ? err.message : "取消收藏失败");
+    } finally {
+      setDeletingFavoriteId("");
     }
   }
 
@@ -2956,6 +3278,7 @@ export function ChatScreen({
         executionModeRef.current,
       );
       setConversations(data.items);
+      setFavoriteItems((current) => current.filter((favorite) => favorite.conversationId !== conversation.id));
       if (conversation.active || data.messages) {
         const nextMessages = data.messages || [];
         stopAssistantPoll();
@@ -3006,6 +3329,7 @@ export function ChatScreen({
       setPendingCronRuns([]);
       setQueuedMessageState(null, { botAlias, agentId: activeAgentIdRef.current || "main" });
       setConversations(data.items);
+      setFavoriteItems([]);
       setItems(data.messages);
       itemsRef.current = data.messages;
       setHistoryPanelOpen(false);
@@ -3608,6 +3932,20 @@ export function ChatScreen({
     });
   }, [botOverview?.cluster?.enabled, pendingAttachments, planMode, sendMessageInternal, setPlanMode, soloMode]);
 
+  const handleContinueFinalAnswer = useCallback(() => {
+    const currentExecutionMode = executionModeRef.current;
+    const nativeSend = currentExecutionMode === "native_agent";
+    const clusterSend = Boolean(botOverview?.cluster?.enabled) && activeAgentIdRef.current === "main";
+    void sendMessageInternal("继续", {
+      sendOptions: {
+        taskMode: "standard",
+        ...(nativeSend ? { executionMode: currentExecutionMode } : {}),
+        ...(soloMode && nativeSend ? { soloMode: true } : {}),
+        ...(clusterSend ? { cluster: true, mentions: [] } : {}),
+      },
+    });
+  }, [botOverview?.cluster?.enabled, sendMessageInternal, soloMode]);
+
   async function handleToggleClusterMode() {
     if (!botOverview?.cluster || clusterSaving) {
       return;
@@ -3835,7 +4173,11 @@ export function ChatScreen({
         loadingRef.current = false;
         setLoading(false);
         if (historyPanelOpen) {
-          void loadConversations(conversationQuery);
+          if (historyPanelTab === "favorites") {
+            void loadFavorites(conversationQuery);
+          } else {
+            void loadConversations(conversationQuery);
+          }
         }
         if (!shouldPoll) {
           void drainQueuedMessageIfIdleRef.current?.({ botAlias, agentId: nextAgentId });
@@ -3854,7 +4196,9 @@ export function ChatScreen({
     botAlias,
     client,
     conversationQuery,
+    historyPanelTab,
     historyPanelOpen,
+    loadFavorites,
     loadConversations,
     restoreClusterRunFromOverview,
     setExecutionMode,
@@ -3988,6 +4332,19 @@ export function ChatScreen({
     () => (hiddenHistoryCount > 0 ? items.slice(hiddenHistoryCount) : items),
     [hiddenHistoryCount, items],
   );
+  const latestContinuableAssistantKey = useMemo(() => {
+    if (loading || isStreaming || chatMutationsDisabled || nativePermissionPending) {
+      return "";
+    }
+    for (let index = visibleItems.length - 1; index >= 0; index -= 1) {
+      const item = visibleItems[index];
+      if (item.role === "assistant" && item.state === "done" && item.text.trim()) {
+        return getMessageClientStateKey(item);
+      }
+    }
+    return "";
+  }, [chatMutationsDisabled, isStreaming, loading, nativePermissionPending, visibleItems]);
+  const favoriteAnswerByMessageKey = useMemo(() => favoriteItemsByMessageKey(favoriteItems), [favoriteItems]);
   const soloRollbackTargets = useMemo(() => (
     nativeExecutionMode && !isStreaming && !loading && !readOnly
       ? buildSoloRollbackTargets(items)
@@ -4003,11 +4360,13 @@ export function ChatScreen({
       item: displayItem,
       messageClientStateKey,
       planDraft,
+      favorite: favoriteAnswerByMessageKey.has(messageClientStateKey),
+      canContinue: messageClientStateKey === latestContinuableAssistantKey,
       deletedAttachmentKeys: deletedAttachmentKeysByMessage[item.id] || EMPTY_ATTACHMENT_STATE,
       deletingAttachmentKeys: deletingAttachmentKeysByMessage[item.id] || EMPTY_ATTACHMENT_STATE,
       soloRollbackTarget: soloRollbackTargets.get(item.id),
     };
-  }), [deletedAttachmentKeysByMessage, deletingAttachmentKeysByMessage, soloRollbackTargets, visibleItems]);
+  }), [deletedAttachmentKeysByMessage, deletingAttachmentKeysByMessage, favoriteAnswerByMessageKey, latestContinuableAssistantKey, soloRollbackTargets, visibleItems]);
 
   const soloConversationLoadKeyRef = useRef("");
 
@@ -4145,7 +4504,8 @@ export function ChatScreen({
           embedded={embedded}
           focused={focused}
           onToggleFocus={onToggleFocus}
-          onOpenHistoryPanel={() => void handleOpenHistoryPanel()}
+          onOpenHistoryPanel={() => void handleOpenHistoryPanel("history")}
+          onOpenFavoritesPanel={() => void handleOpenHistoryPanel("favorites")}
           onKillTask={terminateVisible ? () => void handleKillTask() : undefined}
           killTaskDisabled={killTaskDisabled}
           killTaskBusy={actionLoading === "kill"}
@@ -4226,6 +4586,8 @@ export function ChatScreen({
             handleDeleteAttachment={handleDeleteAttachment}
             handleFileLinkClick={handleFileLinkClick}
             handleCopyFinalAnswer={handleCopyFinalAnswer}
+            handleContinueFinalAnswer={handleContinueFinalAnswer}
+            handleToggleFavoriteAnswer={handleToggleFavoriteAnswer}
             handleReplyNativePermission={handleReplyNativePermission}
             handleRequestSoloRollback={handleRequestSoloRollback}
             executingPlanMessageId={executingPlanMessageId}
@@ -4249,18 +4611,37 @@ export function ChatScreen({
       </section>
       <ConversationHistoryPanel
         open={historyPanelOpen}
+        activeTab={historyPanelTab}
         loading={conversationLoading}
+        favoritesLoading={favoriteLoading}
         conversations={conversations}
+        favorites={favoriteItems}
         query={conversationQuery}
         disabled={isStreaming}
         deletingConversationId={deletingConversationId}
+        deletingFavoriteId={deletingFavoriteId}
+        favoriteError={favoriteError}
+        onTabChange={(tab) => {
+          setHistoryPanelTab(tab);
+          if (tab === "favorites") {
+            void loadFavorites(conversationQuery);
+          } else {
+            void loadConversations(conversationQuery);
+          }
+        }}
         onQueryChange={(nextQuery) => {
           setConversationQuery(nextQuery);
-          void loadConversations(nextQuery);
+          if (historyPanelTab === "favorites") {
+            void loadFavorites(nextQuery);
+          } else {
+            void loadConversations(nextQuery);
+          }
         }}
         onClose={() => setHistoryPanelOpen(false)}
         onNewConversation={() => void handleNewConversation()}
         onSelectConversation={(conversationId) => void handleSelectConversation(conversationId)}
+        onSelectFavorite={(favorite) => void handleSelectFavorite(favorite)}
+        onDeleteFavorite={(favorite) => void handleDeleteFavorite(favorite)}
         onDeleteConversation={(conversation, deleteNativeSession) => void handleDeleteConversation(conversation, deleteNativeSession)}
         onDeleteAllConversations={(deleteNativeSession) => void handleDeleteAllConversations(deleteNativeSession)}
       />

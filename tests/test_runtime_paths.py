@@ -19,10 +19,12 @@ def test_chat_history_paths_resolve_under_home_tcb_root(monkeypatch, tmp_path: P
     workspace_dir = runtime_paths.get_chat_workspace_dir(workspace)
     db_path = runtime_paths.get_chat_history_db_path(workspace)
     metadata_path = runtime_paths.get_chat_workspace_metadata_path(workspace)
+    favorites_path = runtime_paths.get_chat_favorites_path(workspace)
 
     assert workspace_dir == home / ".tcb" / "chat-history" / "workspaces" / workspace_key
     assert db_path == workspace_dir / "chat.sqlite"
     assert metadata_path == workspace_dir / "workspace.json"
+    assert favorites_path == workspace_dir / "favorites.json"
 
 
 def test_legacy_project_chat_db_path_matches_chat_store_workspace_path(tmp_path: Path):

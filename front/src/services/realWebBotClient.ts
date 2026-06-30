@@ -123,6 +123,9 @@ import type {
   ConversationBulkDeleteResult,
   ConversationListResult,
   ConversationDeleteResult,
+  FavoriteAnswerInput,
+  FavoriteAnswerItem,
+  FavoriteAnswerListResult,
   PlanExecuteInput,
   PlanExecuteResult,
   ConversationSelectResult,
@@ -422,6 +425,36 @@ type RawConversationSummary = {
   updatedAt?: string;
 };
 
+type RawFavoriteAnswerItem = {
+  id?: string;
+  bot_id?: number;
+  botId?: number;
+  bot_alias?: string;
+  botAlias?: string;
+  user_id?: number;
+  userId?: number;
+  agent_id?: string;
+  agentId?: string;
+  execution_mode?: string;
+  executionMode?: string;
+  conversation_id?: string;
+  conversationId?: string;
+  message_id?: string;
+  messageId?: string;
+  message_key?: string;
+  messageKey?: string;
+  turn_id?: string;
+  turnId?: string;
+  title?: string;
+  preview?: string;
+  answer_text?: string;
+  answerText?: string;
+  created_at?: string;
+  createdAt?: string;
+  favorited_at?: string;
+  favoritedAt?: string;
+};
+
 type RawPlanExecuteResult = {
   plan_path?: string;
   conversation: RawConversationSummary;
@@ -431,6 +464,7 @@ type RawPlanExecuteResult = {
 
 type RawConversationDeleteResult = {
   deleted_conversation_id?: string;
+  deleted_favorite_count?: number;
   active_conversation_id?: string;
   native_session_cleared?: boolean;
   items?: RawConversationSummary[];
@@ -439,6 +473,7 @@ type RawConversationDeleteResult = {
 
 type RawConversationBulkDeleteResult = {
   deleted_count?: number;
+  deleted_favorite_count?: number;
   active_conversation_id?: string;
   native_session_cleared?: boolean;
   items?: RawConversationSummary[];
@@ -2513,6 +2548,30 @@ function mapConversationSummary(raw: RawConversationSummary): ConversationSummar
     ...(typeof degradedReason === "string" ? { degradedReason } : {}),
     createdAt: String(raw.created_at ?? raw.createdAt ?? ""),
     updatedAt: String(raw.updated_at ?? raw.updatedAt ?? ""),
+  };
+}
+
+function normalizeFavoriteExecutionMode(value: unknown): ChatExecutionMode {
+  return String(value || "").trim() === "native_agent" ? "native_agent" : "cli";
+}
+
+function mapFavoriteAnswerItem(raw: RawFavoriteAnswerItem): FavoriteAnswerItem {
+  return {
+    id: String(raw.id || ""),
+    botId: Number(raw.bot_id ?? raw.botId ?? 0),
+    botAlias: String(raw.bot_alias ?? raw.botAlias ?? ""),
+    userId: Number(raw.user_id ?? raw.userId ?? 0),
+    agentId: String(raw.agent_id ?? raw.agentId ?? "main"),
+    executionMode: normalizeFavoriteExecutionMode(raw.execution_mode ?? raw.executionMode),
+    conversationId: String(raw.conversation_id ?? raw.conversationId ?? ""),
+    messageId: String(raw.message_id ?? raw.messageId ?? ""),
+    messageKey: String(raw.message_key ?? raw.messageKey ?? ""),
+    turnId: String(raw.turn_id ?? raw.turnId ?? ""),
+    title: String(raw.title || ""),
+    preview: String(raw.preview || ""),
+    answerText: String(raw.answer_text ?? raw.answerText ?? ""),
+    createdAt: String(raw.created_at ?? raw.createdAt ?? ""),
+    favoritedAt: String(raw.favorited_at ?? raw.favoritedAt ?? ""),
   };
 }
 
@@ -4714,6 +4773,62 @@ export class RealWebBotClient implements WebBotClient {
     };
   }
 
+  async listFavoriteAnswers(botAlias: string, query = "", options: AgentScopedOptions = {}): Promise<FavoriteAnswerListResult> {
+    const params = new URLSearchParams();
+    if (query.trim()) {
+      params.set("q", query.trim());
+    }
+    appendAgentParam(params, options.agentId);
+    appendExecutionModeParam(params, options.executionMode);
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    const data = await this.requestJson<{ items?: RawFavoriteAnswerItem[]; execution_mode?: string; executionMode?: string }>(
+      `/api/bots/${encodeURIComponent(botAlias)}/favorites${suffix}`,
+    );
+    return {
+      items: (data.items || []).map(mapFavoriteAnswerItem),
+      executionMode: normalizeFavoriteExecutionMode(data.execution_mode ?? data.executionMode ?? options.executionMode),
+    };
+  }
+
+  async favoriteAnswer(botAlias: string, input: FavoriteAnswerInput, options: AgentScopedOptions = {}): Promise<FavoriteAnswerItem> {
+    const data = await this.requestJson<{ item: RawFavoriteAnswerItem }>(
+      `/api/bots/${encodeURIComponent(botAlias)}/favorites`,
+      {
+        method: "POST",
+        headers: this.headers({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          conversation_id: input.conversationId,
+          message_id: input.messageId,
+          message_key: input.messageKey,
+          ...(input.turnId ? { turn_id: input.turnId } : {}),
+          ...(input.title ? { title: input.title } : {}),
+          ...(input.preview ? { preview: input.preview } : {}),
+          ...(input.answerText ? { answer_text: input.answerText } : {}),
+          ...scopedRequestBody(options),
+        }),
+      },
+    );
+    return mapFavoriteAnswerItem(data.item);
+  }
+
+  async deleteFavoriteAnswer(botAlias: string, favoriteId: string, options: AgentScopedOptions = {}): Promise<{ deleted: boolean; favoriteId: string }> {
+    const params = new URLSearchParams();
+    appendAgentParam(params, options.agentId);
+    appendExecutionModeParam(params, options.executionMode);
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    const data = await this.requestJson<{ deleted?: boolean; favorite_id?: string; favoriteId?: string }>(
+      `/api/bots/${encodeURIComponent(botAlias)}/favorites/${encodeURIComponent(favoriteId)}${suffix}`,
+      {
+        method: "DELETE",
+        headers: this.headers(),
+      },
+    );
+    return {
+      deleted: Boolean(data.deleted),
+      favoriteId: String(data.favorite_id ?? data.favoriteId ?? favoriteId),
+    };
+  }
+
   async deleteConversation(
     botAlias: string,
     conversationId: string,
@@ -4735,6 +4850,7 @@ export class RealWebBotClient implements WebBotClient {
     );
     return {
       deletedConversationId: String(data.deleted_conversation_id || ""),
+      deletedFavoriteCount: Number(data.deleted_favorite_count || 0),
       activeConversationId: String(data.active_conversation_id || ""),
       nativeSessionCleared: Boolean(data.native_session_cleared),
       items: (data.items || []).map(mapConversationSummary),
@@ -4762,6 +4878,7 @@ export class RealWebBotClient implements WebBotClient {
     );
     return {
       deletedCount: Number(data.deleted_count || 0),
+      deletedFavoriteCount: Number(data.deleted_favorite_count || 0),
       activeConversationId: String(data.active_conversation_id || ""),
       nativeSessionCleared: Boolean(data.native_session_cleared),
       items: (data.items || []).map(mapConversationSummary),

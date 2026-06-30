@@ -1,16 +1,28 @@
 import { useEffect, useRef, useState } from "react";
-import { CheckCheck, ClipboardList, Copy, Gauge } from "lucide-react";
+import { CheckCheck, ClipboardList, Copy, Gauge, Play, Star } from "lucide-react";
 import type { ChatMessageContextUsage } from "../services/types";
 import { copyText } from "../utils/clipboard";
 import { ChatContextUsageBadge, formatContextUsageDetails } from "./ChatContextUsageBadge";
 
 type Props = {
+  canContinue?: boolean;
   contextUsage?: ChatMessageContextUsage;
+  favorite?: boolean;
   fullAnswerText?: string;
+  onContinue?: () => void;
   onCopyFinalAnswer?: () => boolean | void | Promise<boolean | void>;
+  onToggleFavorite?: () => void;
 };
 
-export function ChatFinalAnswerActions({ contextUsage, fullAnswerText, onCopyFinalAnswer }: Props) {
+export function ChatFinalAnswerActions({
+  canContinue = false,
+  contextUsage,
+  favorite = false,
+  fullAnswerText,
+  onContinue,
+  onCopyFinalAnswer,
+  onToggleFavorite,
+}: Props) {
   const [copiedFinalAnswer, setCopiedFinalAnswer] = useState(false);
   const [copiedContextUsage, setCopiedContextUsage] = useState(false);
   const [copiedFullAnswer, setCopiedFullAnswer] = useState(false);
@@ -32,7 +44,7 @@ export function ChatFinalAnswerActions({ contextUsage, fullAnswerText, onCopyFin
     }
   }, []);
 
-  if (!onCopyFinalAnswer && !contextDetails && !fullAnswer) {
+  if (!onCopyFinalAnswer && !contextDetails && !fullAnswer && !onToggleFavorite && !(canContinue && onContinue)) {
     return null;
   }
 
@@ -94,10 +106,36 @@ export function ChatFinalAnswerActions({ contextUsage, fullAnswerText, onCopyFin
     <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
       <ChatContextUsageBadge
         contextUsage={contextUsage}
+        compact
         preferLeft
         testId="chat-message-context-usage-bottom"
         className="max-w-full truncate text-[11px]"
       />
+      {onToggleFavorite ? (
+        <button
+          type="button"
+          aria-label={favorite ? "取消收藏回答" : "收藏回答"}
+          title={favorite ? "取消收藏回答" : "收藏回答"}
+          aria-pressed={favorite}
+          onClick={onToggleFavorite}
+          className={favorite
+            ? "inline-flex h-6 w-6 items-center justify-center rounded-md border border-amber-300 bg-amber-50 text-amber-600 hover:bg-amber-100"
+            : "inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] text-[var(--muted)] hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)]"}
+        >
+          <Star className={favorite ? "h-3.5 w-3.5 fill-current" : "h-3.5 w-3.5"} />
+        </button>
+      ) : null}
+      {canContinue && onContinue ? (
+        <button
+          type="button"
+          aria-label="继续"
+          title="继续"
+          onClick={onContinue}
+          className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] text-[var(--muted)] hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)]"
+        >
+          <Play className="h-3.5 w-3.5" />
+        </button>
+      ) : null}
       {contextDetails ? (
         <button
           type="button"

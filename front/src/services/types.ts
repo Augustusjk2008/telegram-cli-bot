@@ -841,6 +841,7 @@ export type ConversationSelectResult = {
 
 export type ConversationDeleteResult = {
   deletedConversationId: string;
+  deletedFavoriteCount?: number;
   activeConversationId: string;
   nativeSessionCleared: boolean;
   items: ConversationSummary[];
@@ -849,10 +850,44 @@ export type ConversationDeleteResult = {
 
 export type ConversationBulkDeleteResult = {
   deletedCount: number;
+  deletedFavoriteCount?: number;
   activeConversationId: string;
   nativeSessionCleared: boolean;
   items: ConversationSummary[];
   messages: ChatMessage[];
+};
+
+export type FavoriteAnswerItem = {
+  id: string;
+  botId: number;
+  botAlias: string;
+  userId: number;
+  agentId: string;
+  executionMode: ChatExecutionMode;
+  conversationId: string;
+  messageId: string;
+  messageKey: string;
+  turnId: string;
+  title: string;
+  preview: string;
+  answerText: string;
+  createdAt: string;
+  favoritedAt: string;
+};
+
+export type FavoriteAnswerListResult = {
+  items: FavoriteAnswerItem[];
+  executionMode: ChatExecutionMode;
+};
+
+export type FavoriteAnswerInput = {
+  conversationId: string;
+  messageId: string;
+  messageKey: string;
+  turnId?: string;
+  title?: string;
+  preview?: string;
+  answerText?: string;
 };
 
 export type ChatStatusUpdate = {

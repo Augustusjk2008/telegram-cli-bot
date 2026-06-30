@@ -14,6 +14,10 @@ type Props = {
   onReplyPermission?: (reply: NativeAgentPermissionReply) => Promise<void>;
   onFileLinkClick?: (href: string) => void;
   onCopyFinalAnswer?: () => boolean | void | Promise<boolean | void>;
+  onContinue?: () => void;
+  onToggleFavorite?: () => void;
+  favorite?: boolean;
+  canContinue?: boolean;
   contextUsage?: ChatMessageContextUsage;
 };
 
@@ -376,6 +380,10 @@ export function NativeAgentTranscript({
   onReplyPermission,
   onFileLinkClick,
   onCopyFinalAnswer,
+  onContinue,
+  onToggleFavorite,
+  favorite = false,
+  canContinue = false,
   contextUsage,
 }: Props) {
   const [replyingPermissionId, setReplyingPermissionId] = useState("");
@@ -492,9 +500,13 @@ export function NativeAgentTranscript({
           )}
           {showCopyFinalAnswer ? (
             <ChatFinalAnswerActions
+              canContinue={canContinue}
               contextUsage={contextUsage}
+              favorite={favorite}
               fullAnswerText={fullAnswerText}
+              onContinue={onContinue}
               onCopyFinalAnswer={onCopyFinalAnswer}
+              onToggleFavorite={onToggleFavorite}
             />
           ) : null}
         </div>
