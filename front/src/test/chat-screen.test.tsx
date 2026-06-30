@@ -1068,7 +1068,7 @@ test("favorites final answers through backend and restores from server", async (
   expect(screen.getByRole("button", { name: "取消收藏回答" })).toHaveAttribute("aria-pressed", "true");
 });
 
-test("opens favorites panel from toolbar", async () => {
+test("opens favorites panel from history sheet", async () => {
   const now = new Date().toISOString();
   const client = createClient({
     listFavoriteAnswers: async () => ({
@@ -1095,6 +1095,7 @@ test("opens favorites panel from toolbar", async () => {
 
   render(<ChatScreen botAlias="main" client={client} />);
 
+  await userEvent.click(await screen.findByRole("button", { name: "历史会话" }));
   await userEvent.click(await screen.findByRole("button", { name: "收藏" }));
 
   expect(await screen.findByRole("button", { name: "收藏", pressed: true })).toBeInTheDocument();
@@ -2551,6 +2552,7 @@ test("chat screen can delete all conversations for current bot", async () => {
   expect(deleteAllConversations).toHaveBeenCalledWith("main", { deleteNativeSession: true });
   expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
   expect(screen.queryByText("旧会话")).not.toBeInTheDocument();
+  await user.click(await screen.findByRole("button", { name: "历史会话" }));
   await user.click(await screen.findByRole("button", { name: "收藏" }));
   expect(await screen.findByText("暂无收藏")).toBeInTheDocument();
   expect(screen.queryByText("旧收藏")).not.toBeInTheDocument();

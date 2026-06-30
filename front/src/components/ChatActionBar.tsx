@@ -1,4 +1,4 @@
-import { ClipboardList, History, LoaderCircle, Maximize2, Minimize2, Network, Square, Star } from "lucide-react";
+import { ClipboardList, History, LoaderCircle, Maximize2, Minimize2, Network, Square } from "lucide-react";
 import { AgentSwitcher } from "./AgentSwitcher";
 import { toolbarButtonClass } from "./ToolbarButton";
 import type { AgentSummary, ChatExecutionMode } from "../services/types";
@@ -38,7 +38,6 @@ type Props = {
   focused?: boolean;
   onToggleFocus?: () => void;
   onOpenHistoryPanel: () => void;
-  onOpenFavoritesPanel?: () => void;
   onKillTask?: () => void;
   killTaskDisabled?: boolean;
   killTaskBusy?: boolean;
@@ -81,7 +80,6 @@ export function ChatActionBar({
   focused = false,
   onToggleFocus,
   onOpenHistoryPanel,
-  onOpenFavoritesPanel,
   onKillTask,
   killTaskDisabled = false,
   killTaskBusy = false,
@@ -195,15 +193,6 @@ export function ChatActionBar({
           >
             <History className="h-4 w-4" />
             会话
-          </button>
-          <button
-            type="button"
-            aria-label="收藏"
-            onClick={onOpenFavoritesPanel || onOpenHistoryPanel}
-            className={toolbarButtonClass("plain", "sm", "h-8 rounded-md px-2.5")}
-          >
-            <Star className="h-4 w-4" />
-            收藏
           </button>
           {embedded && onToggleFocus ? (
             <button

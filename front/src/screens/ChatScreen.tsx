@@ -4505,7 +4505,6 @@ export function ChatScreen({
           focused={focused}
           onToggleFocus={onToggleFocus}
           onOpenHistoryPanel={() => void handleOpenHistoryPanel("history")}
-          onOpenFavoritesPanel={() => void handleOpenHistoryPanel("favorites")}
           onKillTask={terminateVisible ? () => void handleKillTask() : undefined}
           killTaskDisabled={killTaskDisabled}
           killTaskBusy={actionLoading === "kill"}
