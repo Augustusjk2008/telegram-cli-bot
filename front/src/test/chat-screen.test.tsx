@@ -861,6 +861,79 @@ test("keeps embedded chat content capped", async () => {
   expect(await screen.findByTestId("chat-scroll-content")).toHaveClass("max-w-5xl");
 });
 
+test("toggles mobile immersive mode from the floating button", async () => {
+  const onToggleImmersive = vi.fn();
+  render(<ChatScreen botAlias="main" client={createClient()} onToggleImmersive={onToggleImmersive} />);
+
+  await screen.findByText("暂无消息，开始聊天吧");
+  await userEvent.click(screen.getByRole("button", { name: "进入沉浸模式" }));
+
+  expect(onToggleImmersive).toHaveBeenCalledTimes(1);
+});
+
+test("lets the mobile immersive button move without triggering toggle", async () => {
+  const onToggleImmersive = vi.fn();
+  window.localStorage.setItem("tcb.chatImmersiveButton.main", JSON.stringify({ x: 296, y: 512 }));
+  render(<ChatScreen botAlias="main" client={createClient()} onToggleImmersive={onToggleImmersive} />);
+
+  await screen.findByText("暂无消息，开始聊天吧");
+  const button = screen.getByRole("button", { name: "进入沉浸模式" });
+  const chatRoot = button.closest("main");
+  expect(chatRoot).not.toBeNull();
+  vi.spyOn(chatRoot as HTMLElement, "getBoundingClientRect").mockReturnValue({
+    x: 0,
+    y: 0,
+    top: 0,
+    left: 0,
+    right: 360,
+    bottom: 640,
+    width: 360,
+    height: 640,
+    toJSON: () => ({}),
+  } as DOMRect);
+
+  fireEvent.pointerDown(button, { pointerId: 1, pointerType: "touch", clientX: 296, clientY: 512 });
+  fireEvent.pointerMove(button, { pointerId: 1, pointerType: "touch", clientX: 216, clientY: 252 });
+  fireEvent.pointerUp(button, { pointerId: 1, pointerType: "touch", clientX: 216, clientY: 252 });
+  fireEvent.click(button);
+
+  expect(onToggleImmersive).not.toHaveBeenCalled();
+  expect(button).toHaveStyle({ transform: "translate3d(216px, 252px, 0)" });
+  expect(JSON.parse(window.localStorage.getItem("tcb.chatImmersiveButton.main") || "{}")).toEqual({
+    x: 216,
+    y: 252,
+  });
+});
+
+test("toggles on the first tap after moving the mobile immersive button", async () => {
+  const onToggleImmersive = vi.fn();
+  window.localStorage.setItem("tcb.chatImmersiveButton.main", JSON.stringify({ x: 296, y: 512 }));
+  render(<ChatScreen botAlias="main" client={createClient()} onToggleImmersive={onToggleImmersive} />);
+
+  await screen.findByText("暂无消息，开始聊天吧");
+  const button = screen.getByRole("button", { name: "进入沉浸模式" });
+  const chatRoot = button.closest("main");
+  expect(chatRoot).not.toBeNull();
+  vi.spyOn(chatRoot as HTMLElement, "getBoundingClientRect").mockReturnValue({
+    x: 0,
+    y: 0,
+    top: 0,
+    left: 0,
+    right: 360,
+    bottom: 640,
+    width: 360,
+    height: 640,
+    toJSON: () => ({}),
+  } as DOMRect);
+
+  fireEvent.pointerDown(button, { pointerId: 1, pointerType: "touch", clientX: 296, clientY: 512 });
+  fireEvent.pointerMove(button, { pointerId: 1, pointerType: "touch", clientX: 216, clientY: 252 });
+  fireEvent.pointerUp(button, { pointerId: 1, pointerType: "touch", clientX: 216, clientY: 252 });
+  await userEvent.click(button);
+
+  expect(onToggleImmersive).toHaveBeenCalledTimes(1);
+});
+
 test("shows read only reason and disables composer", async () => {
   render(
     <ChatScreen
