@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from bot.git_runtime import build_git_fsmonitor_disabled_command
+
 
 def parse_patch_files(diff_text: str) -> list[dict[str, Any]]:
     files: list[dict[str, Any]] = []
@@ -56,7 +58,7 @@ def run_upgrade_dry_run(*, repo_root: Path, patch_path: Path) -> dict[str, Any]:
     resolved_repo_root = Path(repo_root).resolve()
     resolved_patch_path = Path(patch_path).resolve()
     completed = subprocess.run(
-        ["git", "apply", "--check", str(resolved_patch_path)],
+        build_git_fsmonitor_disabled_command(["apply", "--check", str(resolved_patch_path)]),
         cwd=resolved_repo_root,
         check=False,
         capture_output=True,

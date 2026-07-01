@@ -74,14 +74,44 @@ def test_resolve_runtime_web_bind_raises_typed_error_without_fallback() -> None:
 
 
 @pytest.mark.asyncio
-async def test_health_reports_runtime_port() -> None:
-    server = WebApiServer(object(), host="127.0.0.1", port=8768, tunnel_service=DummyTunnelService())
+async def test_health_reports_runtime_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("bot.web.server.TCB_NODE_ID", "")
+    monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "")
+    server = WebApiServer(
+        object(),
+        host="127.0.0.1",
+        port=8768,
+        tunnel_service=DummyTunnelService(),
+        instance_id="test-instance",
+    )
 
     response = await server.health(None)
     payload = json.loads(response.text)
 
     assert payload["host"] == "127.0.0.1"
     assert payload["port"] == 8768
+    assert payload["instance_id"] == "test-instance"
+    assert payload["node_id"] == ""
+    assert payload["base_path"] == ""
+
+
+@pytest.mark.asyncio
+async def test_health_reports_stable_instance_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("bot.web.server.TCB_NODE_ID", "")
+    monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "")
+    server = WebApiServer(
+        object(),
+        host="127.0.0.1",
+        port=8768,
+        tunnel_service=DummyTunnelService(),
+        instance_id="stable-instance",
+    )
+
+    first = json.loads((await server.health(None)).text)
+    second = json.loads((await server.health(None)).text)
+
+    assert first["instance_id"] == "stable-instance"
+    assert second["instance_id"] == "stable-instance"
 
 
 @pytest.mark.asyncio

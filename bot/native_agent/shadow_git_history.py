@@ -325,6 +325,8 @@ class ShadowGitHistory:
             f"user.email={SHADOW_GIT_AUTHOR_EMAIL}",
             "-c",
             "core.autocrlf=false",
+            "-c",
+            "core.fsmonitor=false",
             *args,
         )
         return self._run(command, cwd=context.cwd, check=check)

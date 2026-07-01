@@ -9,6 +9,7 @@ from typing import Any
 
 from bot.assistant.home import AssistantHome
 from bot.assistant.proposals import get_proposal
+from bot.git_runtime import build_git_fsmonitor_disabled_command
 
 
 def _upgrade_state_dir(home: AssistantHome, state: str) -> Path:
@@ -72,7 +73,7 @@ def read_upgrade_apply_failure(home: AssistantHome, proposal_id: str) -> dict | 
 
 def _git_rev_parse(repo_root: Path, ref: str) -> str:
     completed = subprocess.run(
-        ["git", "rev-parse", ref],
+        build_git_fsmonitor_disabled_command(["rev-parse", ref]),
         cwd=repo_root,
         check=False,
         capture_output=True,
@@ -83,7 +84,7 @@ def _git_rev_parse(repo_root: Path, ref: str) -> str:
 
 def dirty_status_lines(repo_root: Path) -> list[str]:
     completed = subprocess.run(
-        ["git", "status", "--porcelain"],
+        build_git_fsmonitor_disabled_command(["status", "--porcelain"]),
         cwd=repo_root,
         check=False,
         capture_output=True,
@@ -184,14 +185,14 @@ def apply_approved_upgrade(home: AssistantHome, proposal_id: str, *, repo_root: 
     ensure_upgrade_repo_clean(repo_root)
 
     subprocess.run(
-        ["git", "apply", "--check", str(patch_path)],
+        build_git_fsmonitor_disabled_command(["apply", "--check", str(patch_path)]),
         cwd=repo_root,
         check=True,
         capture_output=True,
         text=True,
     )
     subprocess.run(
-        ["git", "apply", str(patch_path)],
+        build_git_fsmonitor_disabled_command(["apply", str(patch_path)]),
         cwd=repo_root,
         check=True,
         capture_output=True,

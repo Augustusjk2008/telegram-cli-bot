@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from bot.cli import resolve_cli_executable
+from bot.git_runtime import apply_git_fsmonitor_disabled_env
 from bot.platform.executables import build_executable_invocation
 from bot.platform.processes import build_chat_cli_process_kwargs, terminate_process_tree_sync
 
@@ -381,6 +382,7 @@ def _base_env(extra_env: dict[str, str] | None) -> dict[str, str]:
     if pi_home:
         env["HOME"] = pi_home
         env["USERPROFILE"] = pi_home
+    apply_git_fsmonitor_disabled_env(env)
     return env
 
 

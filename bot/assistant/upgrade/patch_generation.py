@@ -16,6 +16,7 @@ from bot.assistant.upgrade.diff import parse_patch_files
 from bot.cli import build_cli_command, normalize_cli_type, resolve_cli_executable
 from bot import config
 from bot.cli_params import CliParamsConfig, with_global_extra_args
+from bot.git_runtime import apply_git_fsmonitor_disabled_env, build_git_fsmonitor_disabled_command
 from bot.platform.processes import build_hidden_process_kwargs
 
 SENSITIVE_PATH_PATTERNS = (
@@ -40,8 +41,9 @@ _ACTIVE_PATCH_GENERATIONS_LOCK = threading.Lock()
 
 
 def _run_git(cwd: Path, args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+    cmd = build_git_fsmonitor_disabled_command(args)
     completed = subprocess.run(
-        ["git", *args],
+        cmd,
         cwd=cwd,
         check=False,
         capture_output=True,
@@ -52,7 +54,7 @@ def _run_git(cwd: Path, args: list[str], *, check: bool = True) -> subprocess.Co
     if check and completed.returncode != 0:
         raise subprocess.CalledProcessError(
             completed.returncode,
-            ["git", *args],
+            cmd,
             output=completed.stdout,
             stderr=completed.stderr,
         )
@@ -171,6 +173,7 @@ def _run_generator_cli(worktree_path: Path, prompt: str, metadata: dict[str, Any
     if resolved_cli is None:
         raise FileNotFoundError(cli_path)
     env = os.environ.copy()
+    apply_git_fsmonitor_disabled_env(env)
     params_config = with_global_extra_args(CliParamsConfig(), config.CLI_GLOBAL_EXTRA_ARGS)
     cmd, use_stdin = build_cli_command(
         cli_type=cli_type,

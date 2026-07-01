@@ -4,13 +4,14 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from bot.git_runtime import build_git_fsmonitor_disabled_command
 from bot.manager import MultiBotManager
 from bot.models import BotProfile
 
 
 def _run_git(cwd: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["git", *args],
+        build_git_fsmonitor_disabled_command(args),
         cwd=cwd,
         check=False,
         capture_output=True,

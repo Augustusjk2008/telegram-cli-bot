@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 from bot.platform.processes import build_subprocess_group_kwargs, terminate_process_tree_sync
@@ -119,6 +119,7 @@ class FixedForwardService:
         frps_token: str = "",
         frpc_path: str = "",
         runtime_dir: str | Path | None = None,
+        instance_id: str = "",
         heartbeat_interval: float = _DEFAULT_HEARTBEAT_INTERVAL,
         startup_timeout: float = _DEFAULT_STARTUP_TIMEOUT,
         connect_timeout: float = _DEFAULT_CONNECT_TIMEOUT,
@@ -136,6 +137,7 @@ class FixedForwardService:
         self._frps_token = str(frps_token or "").strip()
         self._frpc_path = str(frpc_path or "").strip() or "frpc"
         self._runtime_dir = Path(runtime_dir or Path.cwd() / ".tcb" / "fixed-forward").expanduser()
+        self._instance_id = str(instance_id or "").strip()
         self._heartbeat_interval = max(0.1, float(heartbeat_interval))
         self._startup_timeout = max(0.0, float(startup_timeout))
         self._connect_timeout = max(0.1, float(connect_timeout))
@@ -242,17 +244,39 @@ class FixedForwardService:
 
     async def start(self) -> dict[str, Any]:
         if not self._enabled:
-            self._set_snapshot(status="stopped", last_error="", verified=False, pid=None)
+            self._set_snapshot(
+                status="stopped",
+                last_error="",
+                verified=False,
+                pid=None,
+                frpc_managed=False,
+                frpc_external=False,
+                frpc_note="",
+            )
             return self.snapshot()
 
         error = self._validate_config()
         if error:
-            self._set_snapshot(status="error", last_error=error, verified=False, pid=None)
+            self._set_snapshot(
+                status="error",
+                last_error=error,
+                verified=False,
+                pid=None,
+                frpc_managed=False,
+                frpc_external=False,
+                frpc_note="",
+            )
             return self.snapshot()
 
         with self._state_lock:
             if self._process is not None and self._process.poll() is None:
                 return self.snapshot()
+
+        external_frpc_running = await asyncio.to_thread(self._public_health_matches_current_instance)
+        if external_frpc_running:
+            self._mark_external_frpc_running()
+            self._ensure_heartbeat_task()
+            return self.snapshot()
 
         connectivity = await asyncio.to_thread(self.check_frps_connectivity)
         if not connectivity.get("ok"):
@@ -261,13 +285,24 @@ class FixedForwardService:
                 last_error=str(connectivity.get("error_text") or "frps 端口连接失败"),
                 verified=False,
                 pid=None,
+                frpc_managed=False,
+                frpc_external=False,
+                frpc_note="",
             )
             return self.snapshot()
 
         try:
             config_path = await asyncio.to_thread(self.write_frpc_config)
         except Exception as exc:
-            self._set_snapshot(status="error", last_error=str(exc), verified=False, pid=None)
+            self._set_snapshot(
+                status="error",
+                last_error=str(exc),
+                verified=False,
+                pid=None,
+                frpc_managed=False,
+                frpc_external=False,
+                frpc_note="",
+            )
             return self.snapshot()
 
         self._set_snapshot(
@@ -278,6 +313,9 @@ class FixedForwardService:
             registered_at="",
             log_tail=[],
             frpc_config_path=str(config_path),
+            frpc_managed=True,
+            frpc_external=False,
+            frpc_note="",
         )
 
         try:
@@ -293,10 +331,26 @@ class FixedForwardService:
                 **build_subprocess_group_kwargs(),
             )
         except FileNotFoundError:
-            self._set_snapshot(status="error", last_error="未找到 frpc 可执行文件", verified=False, pid=None)
+            self._set_snapshot(
+                status="error",
+                last_error="未找到 frpc 可执行文件",
+                verified=False,
+                pid=None,
+                frpc_managed=False,
+                frpc_external=False,
+                frpc_note="",
+            )
             return self.snapshot()
         except Exception as exc:
-            self._set_snapshot(status="error", last_error=str(exc), verified=False, pid=None)
+            self._set_snapshot(
+                status="error",
+                last_error=str(exc),
+                verified=False,
+                pid=None,
+                frpc_managed=False,
+                frpc_external=False,
+                frpc_note="",
+            )
             return self.snapshot()
 
         ready_event = threading.Event()
@@ -310,14 +364,27 @@ class FixedForwardService:
 
         snapshot = self.snapshot()
         if snapshot.get("status") == "error":
-            await asyncio.to_thread(terminate_process_tree_sync, process)
+            if process.poll() is None:
+                await asyncio.to_thread(terminate_process_tree_sync, process)
             with self._state_lock:
                 if self._process is process:
                     self._process = None
                 self._snapshot["pid"] = None
             return snapshot
 
+        if snapshot.get("frpc_external"):
+            self._ensure_heartbeat_task()
+            return snapshot
+
         if process.poll() is not None:
+            if self._public_health_matches_current_instance():
+                with self._state_lock:
+                    if self._process is process:
+                        self._process = None
+                    self._snapshot["pid"] = None
+                self._mark_external_frpc_running()
+                self._ensure_heartbeat_task()
+                return self.snapshot()
             with self._state_lock:
                 if self._process is process:
                     self._process = None
@@ -326,6 +393,9 @@ class FixedForwardService:
                 last_error=f"frpc 已退出 (exit={process.returncode})",
                 verified=False,
                 pid=None,
+                frpc_managed=False,
+                frpc_external=False,
+                frpc_note="",
             )
             return self.snapshot()
 
@@ -335,6 +405,9 @@ class FixedForwardService:
             verified=True,
             pid=process.pid,
             registered_at=_utc_timestamp(),
+            frpc_managed=True,
+            frpc_external=False,
+            frpc_note="",
         )
         self._ensure_heartbeat_task()
         return self.snapshot()
@@ -356,6 +429,9 @@ class FixedForwardService:
                     "last_error": "",
                     "verified": False,
                     "pid": None,
+                    "frpc_managed": False,
+                    "frpc_external": False,
+                    "frpc_note": "",
                 }
             )
         return self.snapshot()
@@ -382,6 +458,9 @@ class FixedForwardService:
             "frpc_status": str(snapshot.get("status") or ""),
             "frpc_pid": snapshot.get("pid"),
             "frpc_last_error": str(snapshot.get("last_error") or ""),
+            "frpc_managed": bool(snapshot.get("frpc_managed")),
+            "frpc_external": bool(snapshot.get("frpc_external")),
+            "frpc_note": str(snapshot.get("frpc_note") or ""),
             "heartbeat_status": heartbeat_status,
             "heartbeat_last_at": str(heartbeat.get("last_at") or ""),
             "heartbeat_last_error": heartbeat_error,
@@ -409,6 +488,9 @@ class FixedForwardService:
             "node_id": self._node_id,
             "base_path": self._base_path,
             "frpc_config_path": str(self._frpc_config_path()),
+            "frpc_managed": False,
+            "frpc_external": False,
+            "frpc_note": "",
             "heartbeat": self._default_heartbeat(),
         }
 
@@ -509,6 +591,91 @@ class FixedForwardService:
         with self._state_lock:
             self._snapshot["heartbeat"] = heartbeat
 
+    def _build_health_url(self) -> str:
+        parsed = urlsplit(self._public_url)
+        if not parsed.scheme or not parsed.netloc:
+            return ""
+        path = _normalize_base_path(parsed.path)
+        health_path = f"{path}/api/health" if path else "/api/health"
+        return urlunsplit((parsed.scheme, parsed.netloc, health_path, "", ""))
+
+    def _fetch_public_health(self) -> dict[str, Any]:
+        started_at = time.perf_counter()
+        url = self._build_health_url()
+        if not url:
+            result = self._probe_result(False, "invalid_url", "固定公网入口 URL 无效", started_at)
+            self._set_public_probe(result)
+            return result
+        request = Request(url, headers={"Accept": "application/json"}, method="GET")
+        try:
+            with urlopen(request, timeout=self._connect_timeout) as response:
+                status_code = int(getattr(response, "status", response.getcode()) or 0)
+                raw_body = response.read().decode("utf-8", errors="replace")
+            try:
+                payload = json.loads(raw_body)
+            except json.JSONDecodeError as exc:
+                result = {
+                    **self._probe_result(False, "invalid_json", f"公网 health 返回非 JSON: {exc}", started_at),
+                    "status_code": status_code,
+                }
+            else:
+                if isinstance(payload, dict):
+                    result = {
+                        **payload,
+                        **self._probe_result(200 <= status_code < 300, "", "", started_at),
+                        "status_code": status_code,
+                    }
+                else:
+                    result = {
+                        **self._probe_result(False, "invalid_json", "公网 health 返回格式无效", started_at),
+                        "status_code": status_code,
+                    }
+        except HTTPError as exc:
+            result = {
+                **self._probe_result(False, "http_status", f"HTTP {int(getattr(exc, 'code', 0) or 0)}", started_at),
+                "status_code": int(getattr(exc, "code", 0) or 0),
+            }
+        except (TimeoutError, socket.timeout):
+            result = self._probe_result(False, "health_timeout", "公网 health 超时", started_at)
+        except URLError as exc:
+            result = self._probe_result(False, "health_error", f"公网 health 失败: {getattr(exc, 'reason', exc)}", started_at)
+        except Exception as exc:
+            result = self._probe_result(False, type(exc).__name__, f"公网 health 失败: {exc}", started_at)
+
+        self._set_public_probe(result)
+        return result
+
+    def _set_public_probe(self, result: dict[str, Any]) -> None:
+        self._set_snapshot(
+            last_probe_at=_utc_timestamp(),
+            last_probe_elapsed_ms=int(result.get("elapsed_ms") or 0),
+            last_probe_error={}
+            if result.get("ok")
+            else {
+                "class": str(result.get("error_class") or ""),
+                "text": str(result.get("error_text") or ""),
+                "status_code": result.get("status_code"),
+            },
+        )
+
+    def _public_health_matches_current_instance(self) -> bool:
+        if not self._instance_id:
+            return False
+        health = self._fetch_public_health()
+        return bool(health.get("ok")) and str(health.get("instance_id") or "").strip() == self._instance_id
+
+    def _mark_external_frpc_running(self) -> None:
+        self._set_snapshot(
+            status="running",
+            last_error="",
+            verified=True,
+            pid=None,
+            registered_at=_utc_timestamp(),
+            frpc_managed=False,
+            frpc_external=True,
+            frpc_note="已检测到公网入口正转发到当前 Web 实例，复用现有 frpc。",
+        )
+
     def _map_frpc_output_error(self, line: str) -> str:
         if _is_frpc_auth_error(line):
             return "frps token 错"
@@ -521,7 +688,15 @@ class FixedForwardService:
     def _consume_output(self, process: subprocess.Popen, ready_event: threading.Event) -> None:
         try:
             if process.stdout is None:
-                self._set_snapshot(status="error", last_error="frpc 没有可读取的输出", verified=False, pid=None)
+                self._set_snapshot(
+                    status="error",
+                    last_error="frpc 没有可读取的输出",
+                    verified=False,
+                    pid=None,
+                    frpc_managed=False,
+                    frpc_external=False,
+                    frpc_note="",
+                )
                 ready_event.set()
                 return
 
@@ -531,9 +706,25 @@ class FixedForwardService:
                 line = raw_line.rstrip()
                 self._append_log_tail(line)
                 logger.info("[frpc] %s", line)
+                if _is_frpc_proxy_already_exists_error(line) and self._public_health_matches_current_instance():
+                    terminate_process_tree_sync(process)
+                    with self._state_lock:
+                        if self._process is process:
+                            self._process = None
+                    self._mark_external_frpc_running()
+                    ready_event.set()
+                    return
                 mapped_error = self._map_frpc_output_error(line)
                 if mapped_error:
-                    self._set_snapshot(status="error", last_error=mapped_error, verified=False, pid=None)
+                    self._set_snapshot(
+                        status="error",
+                        last_error=mapped_error,
+                        verified=False,
+                        pid=None,
+                        frpc_managed=False,
+                        frpc_external=False,
+                        frpc_note="",
+                    )
                     ready_event.set()
                     terminate_process_tree_sync(process)
                     return
@@ -550,6 +741,9 @@ class FixedForwardService:
                     last_error=f"frpc 已退出 (exit={returncode})",
                     verified=False,
                     pid=None,
+                    frpc_managed=False,
+                    frpc_external=False,
+                    frpc_note="",
                 )
         except Exception as exc:
             logger.warning("读取 frpc 输出失败: %s", exc)
@@ -562,6 +756,9 @@ class FixedForwardService:
                             "last_error": str(exc),
                             "verified": False,
                             "pid": None,
+                            "frpc_managed": False,
+                            "frpc_external": False,
+                            "frpc_note": "",
                         }
                     )
             ready_event.set()
@@ -571,7 +768,8 @@ class FixedForwardService:
             process = self._process
             expected_stop = self._expected_stop
             status = str(self._snapshot.get("status") or "")
-        if process is None or expected_stop or status not in _ACTIVE_STATUSES:
+            frpc_external = bool(self._snapshot.get("frpc_external"))
+        if process is None or expected_stop or frpc_external or status not in _ACTIVE_STATUSES:
             return
         returncode = process.poll()
         if returncode is None:
@@ -581,6 +779,9 @@ class FixedForwardService:
             last_error=f"frpc 已退出 (exit={returncode})",
             verified=False,
             pid=None,
+            frpc_managed=False,
+            frpc_external=False,
+            frpc_note="",
         )
         with self._state_lock:
             if self._process is process:

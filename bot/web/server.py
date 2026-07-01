@@ -859,10 +859,12 @@ class WebApiServer:
         port: int | None = None,
         tunnel_service: TunnelService | None = None,
         fixed_forward_service: FixedForwardService | None = None,
+        instance_id: str | None = None,
     ):
         self.manager = manager
         self._host = str(host or WEB_HOST or "").strip() or "0.0.0.0"
         self._port = int(port if port is not None else WEB_PORT)
+        self._instance_id = str(instance_id or "").strip() or uuid.uuid4().hex
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
         self._loop_lag_task: asyncio.Task[None] | None = None
@@ -923,6 +925,7 @@ class WebApiServer:
             frps_token=TCB_HUB_FRPS_TOKEN,
             frpc_path=TCB_HUB_FRPC_PATH,
             runtime_dir=get_tunnel_state_path().parent / "fixed-forward",
+            instance_id=self._instance_id,
         )
         self._exposure_service = WebExposureService(
             tunnel_service=self._tunnel_service,
@@ -1510,6 +1513,9 @@ class WebApiServer:
                 "web_enabled": True,
                 "host": self._host,
                 "port": self._port,
+                "instance_id": self._instance_id,
+                "node_id": TCB_NODE_ID,
+                "base_path": self._web_base_path(),
                 "host_info": _build_public_host_info(),
             }
         )

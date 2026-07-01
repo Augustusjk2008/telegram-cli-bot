@@ -237,6 +237,14 @@ function fixedForwardErrorHint(value: string | null | undefined) {
   return "";
 }
 
+function isSameNameFrpcProxyMessage(value: string | null | undefined) {
+  const text = String(value || "").trim().toLowerCase();
+  return Boolean(text) && (
+    (text.includes("同名") && text.includes("proxy"))
+    || (text.includes("proxy [") && text.includes("already exists"))
+  );
+}
+
 function notificationPermissionText(permission: BrowserNotificationPermission) {
   if (permission === "granted") return "已允许";
   if (permission === "denied") return "已拒绝";
@@ -1196,10 +1204,24 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
           <div className={settingsPanelClass("space-y-4")}>
             {(() => {
               const fixedForward = isFixedPublicForward(tunnel);
-              const frpcStatus = fixedForward ? frpcStatusText(tunnel.frpcStatus, tunnel.status) : "";
               const heartbeatStatus = fixedForward ? heartbeatStatusText(tunnel.heartbeatStatus) : "";
-              const frpcErrorHint = fixedForwardErrorHint(tunnel.frpcLastError || tunnel.lastError);
+              const externalSameNameProxy = Boolean(
+                tunnel.frpcExternal
+                && (
+                  isSameNameFrpcProxyMessage(tunnel.frpcLastError)
+                  || isSameNameFrpcProxyMessage(tunnel.lastError)
+                ),
+              );
+              const frpcErrorHint = externalSameNameProxy ? "" : fixedForwardErrorHint(tunnel.frpcLastError || tunnel.lastError);
               const heartbeatErrorHint = fixedForwardErrorHint(tunnel.heartbeatLastError);
+              const showTunnelLastError = Boolean(tunnel.lastError) && !externalSameNameProxy;
+              const showFrpcLastError = Boolean(tunnel.frpcLastError) && !externalSameNameProxy;
+              const frpcStatus = externalSameNameProxy
+                ? "复用外部进程"
+                : fixedForward ? frpcStatusText(tunnel.frpcStatus, tunnel.status) : "";
+              const frpcStatusTone = externalSameNameProxy
+                ? "neutral"
+                : tunnelServiceTone(tunnel.frpcStatus || tunnel.status);
 
               return (
                 <>
@@ -1228,7 +1250,13 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
               {tunnel.publicUrl && tunnel.source === "quick_tunnel" && tunnel.status !== "running" && !tunnel.lastError ? (
                 <p className="break-all">公网地址已创建，正在验证</p>
               ) : null}
-              {tunnel.lastError ? (
+              {fixedForward && tunnel.frpcNote ? (
+                <p className="break-all"><span className="font-medium text-[var(--text)]">frpc 说明:</span> {tunnel.frpcNote}</p>
+              ) : null}
+              {externalSameNameProxy && (tunnel.frpcLastError || tunnel.lastError) ? (
+                <p className="break-all"><span className="font-medium text-[var(--text)]">frpc:</span> 已复用外部 frpc</p>
+              ) : null}
+              {showTunnelLastError ? (
                 <p className="break-all text-red-700"><span className="font-medium">错误:</span> {tunnel.lastError}</p>
               ) : null}
             </div>
@@ -1238,12 +1266,15 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-3 text-[var(--muted)]">
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-medium text-[var(--text)]">frpc 状态</span>
-                    <StateBadge tone={tunnelServiceTone(tunnel.frpcStatus || tunnel.status)}>{frpcStatus}</StateBadge>
+                    <StateBadge tone={frpcStatusTone}>{frpcStatus}</StateBadge>
                   </div>
                   <div className="mt-2 space-y-1">
-                    <p>PID: {tunnel.frpcPid ?? tunnel.pid ?? "未启动"}</p>
-                    {tunnel.frpcLastError ? (
+                    <p>PID: {tunnel.frpcExternal ? "外部进程" : tunnel.frpcPid ?? tunnel.pid ?? "未启动"}</p>
+                    {showFrpcLastError ? (
                       <p className="break-all text-red-700">错误: {tunnel.frpcLastError}</p>
+                    ) : null}
+                    {externalSameNameProxy && tunnel.frpcLastError ? (
+                      <p className="break-all">外部 frpc 已占用同名 proxy，当前配置按复用处理。</p>
                     ) : null}
                     {frpcErrorHint ? (
                       <p className="text-red-700">提示: {frpcErrorHint}</p>

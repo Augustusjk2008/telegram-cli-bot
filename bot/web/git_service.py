@@ -26,6 +26,7 @@ from bot.cli import (
 from bot import config
 from bot.cli_params import CliParamsConfig, coerce_param_value, with_global_extra_args
 from bot.app_settings import get_git_proxy_config_args
+from bot.git_runtime import apply_git_fsmonitor_disabled_env
 from bot.manager import MultiBotManager
 from bot.platform.processes import build_hidden_process_kwargs, terminate_process_tree_sync
 from bot.platform.subprocess_streams import close_process_streams
@@ -43,8 +44,14 @@ GIT_DIFF_OUTPUT_CHAR_LIMIT = 128 * 1024
 GIT_COMMIT_GRAPH_DEFAULT_LIMIT = 100
 GIT_COMMIT_GRAPH_MAX_LIMIT = 300
 _GIT_STATUS_CACHE_TTL_SECONDS = 0.75
+_GIT_STATUS_RETRY_DELAY_SECONDS = 0.15
 _GIT_STATUS_CACHE_LOCK = threading.Lock()
 _GIT_STATUS_CACHE: dict[str, dict[str, Any]] = {}
+_GIT_STATUS_REPO_LOCKS: dict[str, threading.Lock] = {}
+_GIT_TRANSIENT_INDEX_ERROR_RE = re.compile(
+    r"(index file open failed|Permission denied|unable to create .*index\.lock|File exists)",
+    re.IGNORECASE,
+)
 _SSH_STRICT_HOST_KEY_OPTION_RE = re.compile(
     r"(?:^|\s)-o\s*['\"]?stricthostkeychecking(?:\s*=|\s|=|$)",
     re.IGNORECASE,
@@ -238,6 +245,7 @@ def _build_git_commit_cli_env() -> dict[str, str]:
     if sys.platform == "win32":
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUTF8"] = "1"
+    apply_git_fsmonitor_disabled_env(env)
     return env
 
 
@@ -458,6 +466,15 @@ def _read_git_head_token(repo_root: str) -> str:
     return head_value
 
 
+def _read_git_index_token(repo_root: str) -> tuple[int, int]:
+    index_path = Path(repo_root) / ".git" / "index"
+    try:
+        index_stat = index_path.stat()
+        return (int(index_stat.st_mtime_ns), int(index_stat.st_size))
+    except OSError:
+        return (0, 0)
+
+
 def _status_path_token(repo_root: str, lines: list[str]) -> tuple[tuple[str, int, int], ...]:
     tokens: list[tuple[str, int, int]] = []
     for raw_line in lines:
@@ -479,6 +496,16 @@ def _status_path_token(repo_root: str, lines: list[str]) -> tuple[tuple[str, int
 
 def _git_status_cache_key(repo_root: str) -> str:
     return os.path.normcase(os.path.abspath(repo_root))
+
+
+def _git_status_repo_lock(repo_root: str) -> threading.Lock:
+    cache_key = _git_status_cache_key(repo_root)
+    with _GIT_STATUS_CACHE_LOCK:
+        lock = _GIT_STATUS_REPO_LOCKS.get(cache_key)
+        if lock is None:
+            lock = threading.Lock()
+            _GIT_STATUS_REPO_LOCKS[cache_key] = lock
+        return lock
 
 
 def _read_git_status_cache(repo_root: str) -> dict[str, Any] | None:
@@ -505,45 +532,95 @@ def _invalidate_git_status_cache(repo_root: str) -> None:
         _GIT_STATUS_CACHE.pop(cache_key, None)
 
 
-def _build_repo_status_snapshot(repo_root: str) -> dict[str, Any]:
+def _is_git_transient_index_error(error: BaseException | str) -> bool:
+    return bool(_GIT_TRANSIENT_INDEX_ERROR_RE.search(str(error)))
+
+
+def _raise_git_index_busy() -> None:
+    _raise(409, "git_index_busy", "Git 索引暂时被其它进程占用，请稍后重试")
+
+
+def _run_git_status_command_with_retry(repo_root: str, args: list[str]) -> subprocess.CompletedProcess[str]:
+    return _run_git_status_command(repo_root, args, check=True)
+
+
+def _run_git_status_command(
+    repo_root: str,
+    args: list[str],
+    *,
+    check: bool,
+) -> subprocess.CompletedProcess[str]:
+    try:
+        result = _run_git(repo_root, args, check=check)
+    except GitCommandError as exc:
+        if not _is_git_transient_index_error(exc):
+            raise
+    else:
+        if check or result.returncode == 0 or not _is_git_transient_index_error(result.stderr or result.stdout or ""):
+            return result
+
+    time.sleep(_GIT_STATUS_RETRY_DELAY_SECONDS)
+    try:
+        result = _run_git(repo_root, args, check=check)
+    except GitCommandError as exc:
+        if _is_git_transient_index_error(exc):
+            _raise_git_index_busy()
+        raise
+    if not check and result.returncode != 0 and _is_git_transient_index_error(result.stderr or result.stdout or ""):
+        _raise_git_index_busy()
+    return result
+
+
+def _read_git_status_text_with_retry(repo_root: str, args: list[str]) -> str:
+    return _run_git_status_command(repo_root, args, check=False).stdout or ""
+
+
+def _read_fresh_git_status_cache(repo_root: str) -> tuple[dict[str, Any] | None, str, tuple[int, int]]:
     cached = _read_git_status_cache(repo_root)
     head_token = _read_git_head_token(repo_root)
-    index_path = Path(repo_root) / ".git" / "index"
-    try:
-        index_stat = index_path.stat()
-        index_token = (int(index_stat.st_mtime_ns), int(index_stat.st_size))
-    except OSError:
-        index_token = (0, 0)
+    index_token = _read_git_index_token(repo_root)
     if (
         cached
         and cached.get("head_token") == head_token
         and cached.get("index_token") == index_token
         and cached.get("status_path_token") == _status_path_token(repo_root, cached.get("tree_lines") or [])
     ):
+        return cached, head_token, index_token
+    return None, head_token, index_token
+
+
+def _build_repo_status_snapshot(repo_root: str) -> dict[str, Any]:
+    cached, head_token, index_token = _read_fresh_git_status_cache(repo_root)
+    if cached:
         return cached
 
-    branch_result = _run_git(repo_root, ["status", "--porcelain=1", "--branch"])
-    tree_result = _run_git(
-        repo_root,
-        [
-            "status",
-            "--porcelain=1",
-            "--ignored=matching",
-            "--untracked-files=all",
-        ],
-    )
-    tree_lines = (tree_result.stdout or "").splitlines()
-    entry = {
-        "created_at": time.monotonic(),
-        "head_token": head_token,
-        "index_token": index_token,
-        "branch_lines": (branch_result.stdout or "").splitlines(),
-        "tree_lines": tree_lines,
-        "status_path_token": _status_path_token(repo_root, tree_lines),
-    }
-    if tree_lines:
-        _write_git_status_cache(repo_root, entry)
-    return entry
+    with _git_status_repo_lock(repo_root):
+        cached, head_token, index_token = _read_fresh_git_status_cache(repo_root)
+        if cached:
+            return cached
+
+        branch_result = _run_git_status_command_with_retry(repo_root, ["status", "--porcelain=1", "--branch"])
+        tree_result = _run_git_status_command_with_retry(
+            repo_root,
+            [
+                "status",
+                "--porcelain=1",
+                "--ignored=matching",
+                "--untracked-files=all",
+            ],
+        )
+        tree_lines = (tree_result.stdout or "").splitlines()
+        entry = {
+            "created_at": time.monotonic(),
+            "head_token": head_token,
+            "index_token": index_token,
+            "branch_lines": (branch_result.stdout or "").splitlines(),
+            "tree_lines": tree_lines,
+            "status_path_token": _status_path_token(repo_root, tree_lines),
+        }
+        if tree_lines:
+            _write_git_status_cache(repo_root, entry)
+        return entry
 
 
 def _list_recent_commits(repo_root: str, limit: int = 8) -> list[dict[str, str]]:
@@ -1115,7 +1192,7 @@ def _read_git_commit_message_context(repo_root: str) -> dict[str, Any]:
     staged_diff = _run_git(repo_root, ["diff", "--cached", "--find-renames"], check=False).stdout or ""
     unstaged_stat = _run_git(repo_root, ["diff", "--stat"], check=False).stdout or ""
     unstaged_diff = _run_git(repo_root, ["diff", "--find-renames"], check=False).stdout or ""
-    status_text = _run_git(repo_root, ["status", "--short"], check=False).stdout or ""
+    status_text = _read_git_status_text_with_retry(repo_root, ["status", "--short"])
 
     use_staged_diff = bool(staged_diff.strip())
     selected_diff = staged_diff if use_staged_diff else "\n".join(
@@ -1160,7 +1237,7 @@ def _read_untracked_file_preview(repo_root: str, relative_path: str) -> str:
 
 
 def _read_git_smart_commit_message_context(repo_root: str) -> dict[str, Any]:
-    status_text = _run_git(repo_root, ["status", "--short", "--untracked-files=all"], check=False).stdout or ""
+    status_text = _read_git_status_text_with_retry(repo_root, ["status", "--short", "--untracked-files=all"])
     staged_stat = _run_git(repo_root, ["diff", "--cached", "--stat"], check=False).stdout or ""
     staged_diff = _run_git(repo_root, ["diff", "--cached", "--find-renames"], check=False).stdout or ""
     unstaged_stat = _run_git(repo_root, ["diff", "--stat"], check=False).stdout or ""
@@ -1207,7 +1284,7 @@ def _read_git_smart_commit_message_context(repo_root: str) -> dict[str, Any]:
 
 
 def _build_git_worktree_snapshot(repo_root: str) -> str:
-    status_text = _run_git(repo_root, ["status", "--porcelain=1", "--untracked-files=all"], check=False).stdout or ""
+    status_text = _read_git_status_text_with_retry(repo_root, ["status", "--porcelain=1", "--untracked-files=all"])
     staged_diff = _run_git(repo_root, ["diff", "--cached", "--find-renames"], check=False).stdout or ""
     unstaged_diff = _run_git(repo_root, ["diff", "--find-renames"], check=False).stdout or ""
     untracked_paths = _extract_untracked_paths(status_text)
@@ -1361,7 +1438,7 @@ def get_git_status_porcelain_snapshot(repo_root: str) -> str:
 
 
 def get_git_status_porcelain_text(repo_root: str) -> str:
-    return _run_git(repo_root, ["status", "--porcelain=1", "--untracked-files=all"], check=False).stdout or ""
+    return _read_git_status_text_with_retry(repo_root, ["status", "--porcelain=1", "--untracked-files=all"])
 
 
 def get_git_smart_commit_repo_hint(manager: MultiBotManager, alias: str) -> tuple[str, str]:
@@ -1510,7 +1587,7 @@ def _get_status_entries(repo_root: str, paths: list[str] | None = None) -> list[
     args = ["status", "--porcelain=1", "--untracked-files=all"]
     if paths:
         args.extend(["--", *paths])
-    result = _run_git(repo_root, args)
+    result = _run_git_status_command_with_retry(repo_root, args)
     entries: list[dict[str, Any]] = []
     for raw_line in (result.stdout or "").splitlines():
         entry = _parse_porcelain_entry(raw_line)

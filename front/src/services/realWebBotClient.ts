@@ -941,6 +941,9 @@ type RawTunnelSnapshot = {
   fixed_public_forward_enabled?: boolean;
   node_id?: string;
   base_path?: string;
+  frpc_managed?: boolean;
+  frpc_external?: boolean;
+  frpc_note?: string;
   frpc_status?: string;
   frpc_pid?: number | null;
   frpc_last_error?: string;
@@ -2609,6 +2612,9 @@ function mapTunnelSnapshot(raw: RawTunnelSnapshot): TunnelSnapshot {
     fixedPublicForwardEnabled: Boolean(raw.fixed_public_forward_enabled),
     nodeId: raw.node_id || "",
     basePath: raw.base_path || "",
+    frpcManaged: Boolean(raw.frpc_managed),
+    frpcExternal: Boolean(raw.frpc_external),
+    frpcNote: raw.frpc_note || "",
     frpcStatus: raw.frpc_status || "",
     frpcPid: raw.frpc_pid ?? null,
     frpcLastError: raw.frpc_last_error || "",

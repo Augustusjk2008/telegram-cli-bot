@@ -106,6 +106,7 @@ from bot.cluster.setup import (
     prepare_cluster_mcp_launcher,
     write_pi_cluster_extension,
 )
+from bot.git_runtime import apply_git_fsmonitor_disabled_env
 from bot.prompts import render_prompt
 from bot import config
 from bot.config import CLI_MODEL_OPTIONS, WEB_PORT
@@ -3352,6 +3353,7 @@ def _build_cli_env(cli_type: str) -> dict[str, str]:
         env["PYTHONUTF8"] = "1"
     if cli_type == "codex":
         env["CI"] = "true"
+    apply_git_fsmonitor_disabled_env(env)
     return env
 
 

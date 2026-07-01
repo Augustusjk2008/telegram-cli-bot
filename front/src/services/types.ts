@@ -1922,6 +1922,9 @@ export type PublicExposureSnapshot = {
   fixedPublicForwardEnabled?: boolean;
   nodeId?: string;
   basePath?: string;
+  frpcManaged?: boolean;
+  frpcExternal?: boolean;
+  frpcNote?: string;
   frpcStatus?: string;
   frpcPid?: number | null;
   frpcLastError?: string;
