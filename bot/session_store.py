@@ -10,6 +10,7 @@
 
 import json
 import logging
+import os
 import threading
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -368,6 +369,69 @@ def remove_session(bot_id: int, user_id: int, agent_id: str = "main") -> bool:
 
     logger.debug(f"已删除会话: bot={bot_id}, user={user_id}")
     return True
+
+
+def _same_workspace_path(left: str, right: str) -> bool:
+    if str(left) == str(right):
+        return True
+    try:
+        return os.path.normcase(str(Path(left).expanduser().resolve())) == os.path.normcase(
+            str(Path(right).expanduser().resolve())
+        )
+    except Exception:
+        return False
+
+
+def remove_sessions_for_workspace(
+    bot_id: int,
+    user_id: int,
+    *,
+    working_dir: str,
+    agent_ids: set[str] | list[str] | tuple[str, ...] | None = None,
+) -> int:
+    """删除同一 bot/user/workdir 下的持久化会话快照。"""
+    normalized_agents = {_normalize_agent_id(agent_id) for agent_id in (agent_ids or [])}
+    removed = 0
+
+    with _store_lock:
+        if not STORE_FILE.exists():
+            return 0
+        try:
+            with open(STORE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                return 0
+        except (json.JSONDecodeError, IOError):
+            return 0
+
+        keys_to_remove: list[str] = []
+        for key, value in data.items():
+            parsed = _parse_key(key)
+            if parsed is None:
+                continue
+            item_bot_id, item_user_id, item_agent_id = parsed
+            if item_bot_id != int(bot_id) or item_user_id != int(user_id):
+                continue
+            if normalized_agents and item_agent_id not in normalized_agents:
+                continue
+            if not isinstance(value, dict) or not _same_workspace_path(str(value.get("working_dir") or ""), str(working_dir)):
+                continue
+            keys_to_remove.append(key)
+
+        if not keys_to_remove:
+            return 0
+        for key in keys_to_remove:
+            del data[key]
+            removed += 1
+        try:
+            with open(STORE_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+        except IOError as e:
+            logger.error(f"保存会话存储文件失败: {e}")
+            return 0
+
+    logger.debug("已删除工作区会话快照: bot=%s user=%s count=%s", bot_id, user_id, removed)
+    return removed
 
 
 def remove_all_sessions_for_bot(bot_id: int):

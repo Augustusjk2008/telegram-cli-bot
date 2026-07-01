@@ -4,6 +4,7 @@ import { toolbarButtonClass } from "./ToolbarButton";
 import type { ConversationSummary, FavoriteAnswerItem } from "../services/types";
 
 export type ConversationHistoryPanelTab = "history" | "favorites";
+const PERMANENT_DELETE_CONFIRM_TEXT = "永久删除";
 
 type Props = {
   open: boolean;
@@ -25,7 +26,7 @@ type Props = {
   onSelectFavorite?: (favorite: FavoriteAnswerItem) => void;
   onDeleteFavorite?: (favorite: FavoriteAnswerItem) => void;
   onDeleteConversation: (conversation: ConversationSummary, deleteNativeSession: boolean) => void;
-  onDeleteAllConversations: (deleteNativeSession: boolean) => void;
+  onDeleteAllConversations: (deleteNativeSession: boolean, permanent?: boolean) => void;
 };
 
 function formatConversationTime(value: string) {
@@ -64,13 +65,19 @@ export function ConversationHistoryPanel({
   onDeleteAllConversations,
 }: Props) {
   const [pendingDelete, setPendingDelete] = useState<ConversationSummary | null>(null);
-  const [pendingDeleteAll, setPendingDeleteAll] = useState(false);
+  const [pendingDeleteAllMode, setPendingDeleteAllMode] = useState<"" | "normal" | "permanent">("");
+  const [permanentConfirmStep, setPermanentConfirmStep] = useState(false);
+  const [permanentConfirmText, setPermanentConfirmText] = useState("");
   const [deleteNativeSession, setDeleteNativeSession] = useState(true);
+  const pendingDeleteAll = Boolean(pendingDeleteAllMode);
+  const pendingPermanentDeleteAll = pendingDeleteAllMode === "permanent";
 
   useEffect(() => {
     if (!open) {
       setPendingDelete(null);
-      setPendingDeleteAll(false);
+      setPendingDeleteAllMode("");
+      setPermanentConfirmStep(false);
+      setPermanentConfirmText("");
       return;
     }
     const onKeyDown = (event: KeyboardEvent) => {
@@ -97,7 +104,10 @@ export function ConversationHistoryPanel({
 
   const deleting = Boolean(deletingConversationId);
   const favoriteDeleting = Boolean(deletingFavoriteId);
-  const deleteDialogTitle = pendingDeleteAll ? "删除全部会话" : "删除会话";
+  const deleteDialogTitle = pendingDeleteAll
+    ? (pendingPermanentDeleteAll ? (permanentConfirmStep ? "确认彻底删除" : "彻底删除全部会话") : "删除全部会话")
+    : "删除会话";
+  const permanentConfirmMatched = permanentConfirmText.trim() === PERMANENT_DELETE_CONFIRM_TEXT;
   const panelLoading = activeTab === "favorites" ? favoritesLoading : loading;
   const emptyText = activeTab === "favorites" ? "暂无收藏" : "暂无历史";
   const searchLabel = activeTab === "favorites" ? "搜索收藏" : "搜索会话";
@@ -119,12 +129,28 @@ export function ConversationHistoryPanel({
                     disabled={disabled}
                     onClick={() => {
                       setDeleteNativeSession(true);
-                      setPendingDeleteAll(true);
+                      setPendingDeleteAllMode("normal");
+                      setPermanentConfirmStep(false);
+                      setPermanentConfirmText("");
                     }}
                     className={toolbarButtonClass("danger", "sm", "h-8")}
                   >
                     <Trash2 className="h-4 w-4" />
                     清空
+                  </button>
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => {
+                      setDeleteNativeSession(true);
+                      setPendingDeleteAllMode("permanent");
+                      setPermanentConfirmStep(false);
+                      setPermanentConfirmText("");
+                    }}
+                    className={toolbarButtonClass("danger", "sm", "h-8")}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    彻底删除
                   </button>
                   <button
                     type="button"
@@ -299,45 +325,84 @@ export function ConversationHistoryPanel({
           >
             <h2 id="delete-conversation-title" className="text-sm font-semibold text-[var(--text)]">{deleteDialogTitle}</h2>
             <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-              {pendingDeleteAll ? "将删除本 bot 当前工作区全部历史会话，影响所有可访问该 bot 的用户。" : "共享会话，删除会影响所有可访问该 bot 的用户。"}
+              {pendingDeleteAll
+                ? (pendingPermanentDeleteAll
+                    ? "将永久删除本 bot 当前工作区的会话记录、关联 session 存储和工作区目录。"
+                    : "将删除本 bot 当前工作区全部历史会话，影响所有可访问该 bot 的用户。")
+                : "共享会话，删除会影响所有可访问该 bot 的用户。"}
             </p>
-            <label className="mt-3 flex items-center gap-2 text-sm text-[var(--text)]">
-              <input
-                type="checkbox"
-                checked={deleteNativeSession}
-                onChange={(event) => setDeleteNativeSession(event.target.checked)}
-                className="h-4 w-4 rounded border-[var(--border)]"
-              />
-              <span>同时清除关联会话 session 存储</span>
-            </label>
+            {pendingPermanentDeleteAll ? (
+              permanentConfirmStep ? (
+                <label className="mt-3 block text-sm text-[var(--text)]">
+                  <span>输入“{PERMANENT_DELETE_CONFIRM_TEXT}”确认</span>
+                  <input
+                    aria-label="输入永久删除确认词"
+                    value={permanentConfirmText}
+                    onChange={(event) => setPermanentConfirmText(event.target.value)}
+                    className="mt-2 h-9 w-full rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-3 text-sm text-[var(--text)] outline-none focus:border-[var(--accent)]"
+                    autoFocus
+                  />
+                </label>
+              ) : (
+                <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs leading-5 text-red-800">
+                  这会删除磁盘工作区目录；工作区不存在时视为已删除，目录删除失败会返回错误。
+                </div>
+              )
+            ) : (
+              <label className="mt-3 flex items-center gap-2 text-sm text-[var(--text)]">
+                <input
+                  type="checkbox"
+                  checked={deleteNativeSession}
+                  onChange={(event) => setDeleteNativeSession(event.target.checked)}
+                  className="h-4 w-4 rounded border-[var(--border)]"
+                />
+                <span>同时清除关联会话 session 存储</span>
+              </label>
+            )}
             <div className="mt-4 flex justify-end gap-2">
               <button
                 type="button"
                 disabled={deleting}
                 onClick={() => {
                   setPendingDelete(null);
-                  setPendingDeleteAll(false);
+                  setPendingDeleteAllMode("");
+                  setPermanentConfirmStep(false);
+                  setPermanentConfirmText("");
                 }}
                 className={toolbarButtonClass("plain", "md")}
               >
                 取消
               </button>
-              <button
-                type="button"
-                disabled={deleting}
-                onClick={() => {
-                  if (pendingDeleteAll) {
-                    onDeleteAllConversations(deleteNativeSession);
-                    return;
-                  }
-                  if (pendingDelete) {
-                    onDeleteConversation(pendingDelete, deleteNativeSession);
-                  }
-                }}
-                className={toolbarButtonClass("danger", "md")}
-              >
-                删除
-              </button>
+              {pendingPermanentDeleteAll && !permanentConfirmStep ? (
+                <button
+                  type="button"
+                  disabled={deleting}
+                  onClick={() => {
+                    setPermanentConfirmStep(true);
+                    setPermanentConfirmText("");
+                  }}
+                  className={toolbarButtonClass("danger", "md")}
+                >
+                  继续
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={deleting || (pendingPermanentDeleteAll && !permanentConfirmMatched)}
+                  onClick={() => {
+                    if (pendingDeleteAll) {
+                      onDeleteAllConversations(pendingPermanentDeleteAll ? true : deleteNativeSession, pendingPermanentDeleteAll);
+                      return;
+                    }
+                    if (pendingDelete) {
+                      onDeleteConversation(pendingDelete, deleteNativeSession);
+                    }
+                  }}
+                  className={toolbarButtonClass("danger", "md")}
+                >
+                  {pendingPermanentDeleteAll ? "确认彻底删除" : "删除"}
+                </button>
+              )}
             </div>
           </div>
         </div>

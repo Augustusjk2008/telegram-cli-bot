@@ -292,6 +292,36 @@ class ChatFavoriteStore:
             self._write_payload(payload)
             return deleted_count
 
+    def delete_favorites_for_conversations_any_scope(
+        self,
+        conversation_ids: list[str] | set[str] | tuple[str, ...],
+        *,
+        bot_id: int,
+        user_id: int,
+    ) -> int:
+        normalized_ids = {str(conversation_id or "").strip() for conversation_id in conversation_ids}
+        normalized_ids.discard("")
+        if not normalized_ids:
+            return 0
+        with self._lock:
+            payload = self._read_payload()
+            previous_items = list(payload["items"])
+            next_items = [
+                item
+                for item in previous_items
+                if not (
+                    str(item.get("conversation_id") or "").strip() in normalized_ids
+                    and int(item.get("bot_id") or 0) == int(bot_id)
+                    and int(item.get("user_id") or 0) == int(user_id)
+                )
+            ]
+            deleted_count = len(previous_items) - len(next_items)
+            if deleted_count <= 0:
+                return 0
+            payload["items"] = next_items
+            self._write_payload(payload)
+            return deleted_count
+
     def delete_favorites_for_scope(self, scope: FavoriteScope) -> int:
         with self._lock:
             payload = self._read_payload()

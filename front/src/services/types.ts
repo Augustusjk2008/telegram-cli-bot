@@ -871,6 +871,11 @@ export type ConversationBulkDeleteResult = {
   deletedFavoriteCount?: number;
   activeConversationId: string;
   nativeSessionCleared: boolean;
+  permanent?: boolean;
+  workspacePath?: string;
+  workspaceDeleted?: boolean;
+  workspaceMissing?: boolean;
+  errors?: Array<{ code?: string; message: string }>;
   items: ConversationSummary[];
   messages: ChatMessage[];
 };

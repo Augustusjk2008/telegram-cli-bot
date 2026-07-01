@@ -493,6 +493,11 @@ type RawConversationBulkDeleteResult = {
   deleted_favorite_count?: number;
   active_conversation_id?: string;
   native_session_cleared?: boolean;
+  permanent?: boolean;
+  workspace_path?: string;
+  workspace_deleted?: boolean;
+  workspace_missing?: boolean;
+  errors?: Array<{ code?: string; message?: string }>;
   items?: RawConversationSummary[];
   messages?: RawHistoryItem[] | null;
 };
@@ -4901,13 +4906,16 @@ export class RealWebBotClient implements WebBotClient {
 
   async deleteAllConversations(
     botAlias: string,
-    options: AgentScopedOptions & { deleteNativeSession?: boolean } = {},
+    options: AgentScopedOptions & { deleteNativeSession?: boolean; permanent?: boolean } = {},
   ): Promise<ConversationBulkDeleteResult> {
     const params = new URLSearchParams();
     appendAgentParam(params, options.agentId);
     appendExecutionModeParam(params, options.executionMode);
     if (options.deleteNativeSession) {
       params.set("delete_native_session", "true");
+    }
+    if (options.permanent) {
+      params.set("permanent", "true");
     }
     const suffix = params.toString() ? `?${params.toString()}` : "";
     const data = await this.requestJson<RawConversationBulkDeleteResult>(
@@ -4922,6 +4930,13 @@ export class RealWebBotClient implements WebBotClient {
       deletedFavoriteCount: Number(data.deleted_favorite_count || 0),
       activeConversationId: String(data.active_conversation_id || ""),
       nativeSessionCleared: Boolean(data.native_session_cleared),
+      permanent: Boolean(data.permanent),
+      workspacePath: String(data.workspace_path || ""),
+      workspaceDeleted: Boolean(data.workspace_deleted),
+      workspaceMissing: Boolean(data.workspace_missing),
+      errors: Array.isArray(data.errors)
+        ? data.errors.map((item) => ({ code: item?.code ? String(item.code) : undefined, message: String(item?.message || "") }))
+        : [],
       items: (data.items || []).map(mapConversationSummary),
       messages: Array.isArray(data.messages) ? data.messages.map((item, index) => mapChatMessage(item, index)) : [],
     };

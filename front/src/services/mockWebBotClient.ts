@@ -3913,7 +3913,7 @@ export class MockWebBotClient implements WebBotClient {
 
   async deleteAllConversations(
     botAlias: string,
-    options: AgentScopedOptions & { deleteNativeSession?: boolean } = {},
+    options: AgentScopedOptions & { deleteNativeSession?: boolean; permanent?: boolean } = {},
   ): Promise<ConversationBulkDeleteResult> {
     const agentId = options.agentId || "main";
     const key = this.getConversationKey(botAlias, agentId);
@@ -3931,6 +3931,11 @@ export class MockWebBotClient implements WebBotClient {
       deletedFavoriteCount: 0,
       activeConversationId: "",
       nativeSessionCleared: Boolean(options.deleteNativeSession),
+      permanent: Boolean(options.permanent),
+      workspacePath: options.permanent ? "C:\\workspace" : "",
+      workspaceDeleted: Boolean(options.permanent),
+      workspaceMissing: false,
+      errors: [],
       items: [],
       messages: [],
     };

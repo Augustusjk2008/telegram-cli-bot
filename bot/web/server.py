@@ -2961,6 +2961,9 @@ class WebApiServer:
         body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
         agent_id = self._request_agent_id(request, body)
         delete_native = str(request.query.get("delete_native_session", "")).lower() in {"1", "true", "yes", "on"}
+        permanent = str(request.query.get("permanent", body.get("permanent", ""))).lower() in {"1", "true", "yes", "on"}
+        if permanent:
+            _require_capability(auth, CAP_WRITE_FILES)
         execution_mode = self._request_execution_mode(request, body)
         data = delete_all_conversations(
             self.manager,
@@ -2969,6 +2972,7 @@ class WebApiServer:
             agent_id=agent_id,
             execution_mode=execution_mode,
             delete_native_session=delete_native,
+            permanent=permanent,
         )
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 

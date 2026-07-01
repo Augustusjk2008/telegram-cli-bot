@@ -26,6 +26,7 @@ import {
   shouldAutoLoadFullHtmlPreview,
   withDetectedPreviewKind,
 } from "../utils/filePreview";
+import { WORKSPACE_DELETED_EVENT, isWorkspaceDeletedEvent } from "../utils/workspaceEvents";
 import { ChatPane } from "./ChatPane";
 import { CommandPalette } from "./CommandPalette";
 import { DebugPane } from "./DebugPane";
@@ -63,6 +64,11 @@ const RASTER_IMAGE_PREVIEW_RE = /\.(?:png|jpe?g|gif|webp)$/i;
 
 function normalizeWorkbenchPath(value: string) {
   return String(value || "").replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+function normalizeWorkbenchPathForCompare(value: string) {
+  const normalized = normalizeWorkbenchPath(value);
+  return /^[a-z]:/i.test(normalized) ? normalized.toLowerCase() : normalized;
 }
 
 function resolveRepoRelativeDiffPath(path: string, absolutePath: string, repoPath: string) {
@@ -374,6 +380,23 @@ export function DesktopWorkbench({
     await refreshGitDecorations();
     return nextRootPath;
   }, [fileTree, refreshGitDecorations]);
+
+  useEffect(() => {
+    const handleWorkspaceDeleted = (event: Event) => {
+      if (!isWorkspaceDeletedEvent(event) || event.detail.botAlias !== botAlias) {
+        return;
+      }
+      const deletedPath = normalizeWorkbenchPathForCompare(event.detail.workspacePath);
+      const currentRootPath = normalizeWorkbenchPathForCompare(fileTree.rootPath);
+      if (deletedPath && currentRootPath && deletedPath !== currentRootPath) {
+        return;
+      }
+      void tabs.restoreFromSnapshot([], "");
+      void refreshWorkspaceChrome({ preserveExpandedPaths: false }).catch(() => undefined);
+    };
+    window.addEventListener(WORKSPACE_DELETED_EVENT, handleWorkspaceDeleted);
+    return () => window.removeEventListener(WORKSPACE_DELETED_EVENT, handleWorkspaceDeleted);
+  }, [botAlias, fileTree.rootPath, refreshWorkspaceChrome, tabs]);
 
   useEffect(() => {
     onDirtyTabsChange?.(tabs.hasDirtyTabs);

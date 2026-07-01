@@ -974,6 +974,106 @@ class ChatStore:
                 ).fetchall()
         return [self._conversation_from_row(row) for row in rows]
 
+    def list_conversation_records(
+        self,
+        *,
+        bot_id: int,
+        user_id: int,
+        working_dir: str | None = None,
+        agent_id: str | None = "main",
+        include_archived: bool = False,
+    ) -> list[dict[str, Any]]:
+        conn = self._connect(create=False)
+        if conn is None:
+            return []
+
+        archived_clause = "" if include_archived else "AND archived_at IS NULL"
+        working_dir_clause = ""
+        agent_clause = ""
+        params: list[Any] = [bot_id, user_id]
+        normalized_working_dir = str(working_dir or "").strip()
+        if normalized_working_dir:
+            working_dir_clause = "AND working_dir = ?"
+            params.append(normalized_working_dir)
+        normalized_agent_id = str(agent_id or "").strip()
+        if normalized_agent_id:
+            agent_clause = "AND agent_id = ?"
+            params.append(normalized_agent_id)
+
+        with closing(conn):
+            with conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT id, agent_id, native_provider, working_dir
+                    FROM conversations
+                    WHERE bot_id = ? AND user_id = ?
+                    {working_dir_clause}
+                    {agent_clause}
+                    {archived_clause}
+                    ORDER BY updated_at DESC, created_at DESC, id DESC
+                    """,
+                    params,
+                ).fetchall()
+        return [
+            {
+                "id": str(row["id"] or ""),
+                "agent_id": str(row["agent_id"] or "main"),
+                "native_provider": str(row["native_provider"] or ""),
+                "working_dir": str(row["working_dir"] or ""),
+            }
+            for row in rows
+            if str(row["id"] or "").strip()
+        ]
+
+    def delete_conversations_by_ids(self, conversation_ids: list[str] | set[str] | tuple[str, ...]) -> int:
+        normalized_ids = [str(conversation_id or "").strip() for conversation_id in conversation_ids]
+        normalized_ids = [conversation_id for conversation_id in normalized_ids if conversation_id]
+        if not normalized_ids:
+            return 0
+        conn = self._connect(create=False)
+        if conn is None:
+            return 0
+        placeholders = ",".join("?" for _ in normalized_ids)
+        with closing(conn):
+            with conn:
+                result = conn.execute(
+                    f"DELETE FROM conversations WHERE id IN ({placeholders})",
+                    normalized_ids,
+                )
+                return int(result.rowcount or 0)
+
+    def delete_conversations_for_workspace(
+        self,
+        *,
+        bot_id: int,
+        user_id: int,
+        working_dir: str,
+        agent_id: str | None = "main",
+        include_archived: bool = True,
+    ) -> int:
+        conn = self._connect(create=False)
+        if conn is None:
+            return 0
+        archived_clause = "" if include_archived else "AND archived_at IS NULL"
+        agent_clause = ""
+        params: list[Any] = [bot_id, user_id, working_dir]
+        normalized_agent_id = str(agent_id or "").strip()
+        if normalized_agent_id:
+            agent_clause = "AND agent_id = ?"
+            params.append(normalized_agent_id)
+        with closing(conn):
+            with conn:
+                result = conn.execute(
+                    f"""
+                    DELETE FROM conversations
+                    WHERE bot_id = ? AND user_id = ? AND working_dir = ?
+                    {agent_clause}
+                    {archived_clause}
+                    """,
+                    params,
+                )
+                return int(result.rowcount or 0)
+
     def migrate_conversations_to_shared(self, bot_id: int, shared_user_id: int) -> int:
         marker_key = self._shared_user_migration_marker_key(bot_id, shared_user_id)
         with _MIGRATION_MARKER_LOCK:

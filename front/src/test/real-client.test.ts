@@ -2229,6 +2229,35 @@ describe("RealWebBotClient", () => {
     );
   });
 
+  test("deleteAllConversations forwards permanent flag and maps workspace result", async () => {
+    fetchMock.mockResolvedValueOnce(jsonOk({
+      deleted_count: 1,
+      active_conversation_id: "",
+      native_session_cleared: true,
+      permanent: true,
+      workspace_path: "C:\\workspace",
+      workspace_deleted: true,
+      workspace_missing: false,
+      errors: [],
+      items: [],
+      messages: [],
+    }));
+
+    const client = new RealWebBotClient();
+    const data = await client.deleteAllConversations("main", {
+      deleteNativeSession: true,
+      permanent: true,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/bots/main/conversations?delete_native_session=true&permanent=true",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(data.permanent).toBe(true);
+    expect(data.workspaceDeleted).toBe(true);
+    expect(data.workspacePath).toBe("C:\\workspace");
+  });
+
   
   
   test("getMessageTrace maps rich native trace payload for one history message", async () => {
