@@ -99,11 +99,27 @@ export type UserBotPermissions = {
   allowedBots: string[];
 };
 
+export type TransferTrafficRecord = {
+  id: string;
+  timestamp: string;
+  method: string;
+  endpoint: string;
+  status: number;
+  bytesIn: number;
+  bytesOut: number;
+  durationMs: number;
+  model: string;
+  error: string;
+};
+
 export type TransferBridgeStatus = {
   enabled: boolean;
   running: boolean;
   status: "running" | "stopped" | "not_configured" | "error" | "unknown";
   localUrl: string;
+  localEndpoint?: string;
+  localHost?: string;
+  localPort?: number;
   bridgePageUrl: string;
   responsesBaseUrl: string;
   chatCompletionsBaseUrl: string;
@@ -115,6 +131,8 @@ export type TransferBridgeStatus = {
   totalOutputTokens: number;
   totalBytesIn: number;
   totalBytesOut: number;
+  uptimeSeconds?: number;
+  recentTraffic?: TransferTrafficRecord[];
   startedAt?: string;
   lastRequestAt?: string;
   lastError?: string;

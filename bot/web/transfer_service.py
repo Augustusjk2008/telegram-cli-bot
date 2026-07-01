@@ -35,6 +35,8 @@ UNSUPPORTED_RESPONSE_TOOLS = {
 PROVIDER_REASONING_EFFORT_FALLBACKS = {
     ("max.jojocode.com", "gpt-5.5", "minimal"): "low",
 }
+TRACE_STRING_LIMIT = 500
+TRACE_STRING_HEAD = 240
 
 
 @dataclass
@@ -193,6 +195,14 @@ class ProtocolConverter:
         if item_type == "input_file":
             ref = item.get("file_id") or item.get("filename") or item.get("file_url") or "unknown"
             return {"role": "user", "content": f"[File: {ref}]"}
+        if item_type == "input_audio":
+            audio_data = item.get("input_audio") or {}
+            if not isinstance(audio_data, dict):
+                audio_data = {}
+            return {
+                "role": "user",
+                "content": [{"type": "input_audio", "input_audio": {"data": audio_data.get("data", ""), "format": audio_data.get("format", "mp3")}}],
+            }
         if item_type == "function_call":
             return {
                 "role": "assistant",
@@ -202,9 +212,13 @@ class ProtocolConverter:
             return {"role": "tool", "tool_call_id": item.get("call_id", ""), "content": item.get("output", "")}
         if item_type == "reasoning":
             return {"role": "system", "content": f"[Previous reasoning context: {item.get('id', '')}]"}
+        if item_type in ("custom_tool_call", "mcp_call", "web_search_call", "file_search_call", "code_interpreter_call", "local_shell_call", "image_generation_call"):
+            return {"role": "assistant", "content": f"[{item_type}: {json.dumps(item, ensure_ascii=False)}]"}
+        if item_type in ("custom_tool_call_output", "mcp_list_tools", "mcp_approval_request", "mcp_approval_response", "local_shell_call_output"):
+            return {"role": "user", "content": f"[{item_type} result: {json.dumps(item, ensure_ascii=False)}]"}
         if item_type == "item_reference":
             return None
-        return {"role": "user", "content": f"[{item_type}: {json.dumps(item, ensure_ascii=False)}]"}
+        return None
 
     @staticmethod
     def _convert_content_part(part: dict[str, Any]) -> dict[str, Any] | None:
@@ -217,8 +231,15 @@ class ProtocolConverter:
         if part_type == "input_file":
             ref = part.get("file_id") or part.get("filename") or "unknown"
             return {"type": "text", "text": f"[File: {ref}]"}
+        if part_type == "input_audio":
+            audio_data = part.get("input_audio") or {}
+            if not isinstance(audio_data, dict):
+                audio_data = {}
+            return {"type": "input_audio", "input_audio": {"data": audio_data.get("data", ""), "format": audio_data.get("format", "mp3")}}
         if part_type == "output_text":
             return {"type": "text", "text": part.get("text", "")}
+        if part_type == "refusal":
+            return {"type": "text", "text": f"[Refused: {part.get('text', '')}]"}
         return {"type": "text", "text": str(part)}
 
     def _convert_tools_to_chat(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -264,11 +285,24 @@ class ProtocolConverter:
         output: list[dict[str, Any]] = []
         content = message.get("content", "")
         if content:
-            output.append({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": content}]})
+            if isinstance(content, str):
+                output.append({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": content}]})
+            elif isinstance(content, list):
+                converted_parts = [part for part in (self._convert_chat_content_part_to_response(p) for p in content if isinstance(p, dict)) if part]
+                if converted_parts:
+                    output.append({"type": "message", "role": "assistant", "content": converted_parts})
+        if message.get("refusal") and not any(item.get("type") == "message" for item in output):
+            output.append({"type": "message", "role": "assistant", "content": [{"type": "refusal", "text": str(message.get("refusal") or "")}]})
         for tc in message.get("tool_calls") or []:
             if tc.get("type") == "function":
                 func = tc.get("function") or {}
                 output.append({"type": "function_call", "call_id": tc.get("id", f"call_{uuid.uuid4().hex[:24]}"), "name": func.get("name", ""), "arguments": func.get("arguments", "")})
+            elif tc.get("type") == "computer_use":
+                output.append({"type": "computer_call", "call_id": tc.get("id", ""), "action": tc.get("action", {})})
+        reasoning = {"effort": None, "summary": None}
+        reasoning_content = message.get("reasoning_content", "")
+        if reasoning_content:
+            reasoning = {"effort": "high", "summary": str(reasoning_content)}
         usage = self.normalize_chat_usage_to_response_usage(chat_response.get("usage"))
         response = {
             "id": chat_response.get("id", f"resp_{uuid.uuid4().hex[:24]}"),
@@ -283,7 +317,7 @@ class ProtocolConverter:
             "output": output,
             "parallel_tool_calls": True,
             "previous_response_id": None,
-            "reasoning": {"effort": None, "summary": None},
+            "reasoning": reasoning,
             "store": True,
             "temperature": 1.0,
             "text": {"format": {"type": "text"}},
@@ -303,6 +337,19 @@ class ProtocolConverter:
             response["incomplete_details"] = {"reason": "content_filter"}
             response["status"] = "incomplete"
         return response
+
+    @staticmethod
+    def _convert_chat_content_part_to_response(part: dict[str, Any]) -> dict[str, Any] | None:
+        part_type = part.get("type", "text")
+        if part_type == "text":
+            return {"type": "output_text", "text": part.get("text", "")}
+        if part_type == "image_url":
+            image = part.get("image_url") or {}
+            image_url = image.get("url", "") if isinstance(image, dict) else str(image)
+            return {"type": "output_image", "image_url": image_url}
+        if part_type == "refusal":
+            return {"type": "refusal", "text": part.get("text", "")}
+        return {"type": "output_text", "text": str(part)}
 
 
 class ChatStreamAccumulator:
@@ -526,12 +573,34 @@ class TransferService:
         self.config_path.write_text(json.dumps(self.config.to_file_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
 
     def update_config(self, data: dict[str, Any], *, save: bool = True) -> dict[str, Any]:
+        restart_required = False
+        if any(key in data for key in ("local_host", "local_port")):
+            restart_required = True
+        if "remote_base_url" in data:
+            remote_base_url = str(data.get("remote_base_url") or "").strip()
+            if remote_base_url:
+                parsed = urlparse(remote_base_url)
+                if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                    raise TransferServiceError(400, "remote_base_url 仅支持 http/https URL", code="invalid_remote_base_url")
+            self.config.remote_base_url = remote_base_url
+        if data.get("clear_remote_api_key") is True:
+            self.config.remote_api_key = ""
+        elif "remote_api_key" in data:
+            remote_api_key = data.get("remote_api_key")
+            if remote_api_key is not None and str(remote_api_key) != "":
+                self.config.remote_api_key = str(remote_api_key)
         for key in self.config.to_file_dict():
+            if key in {"remote_base_url", "remote_api_key"}:
+                continue
             if key in data:
                 setattr(self.config, key, data[key])
         if save:
             self.save_config()
-        return self.get_status()
+        status = self.get_status()
+        if restart_required:
+            status["restart_required"] = True
+            status["restart_required_reason"] = "local_endpoint_readonly"
+        return status
 
     def reset_stats(self) -> dict[str, Any]:
         self.request_count = 0
@@ -550,11 +619,18 @@ class TransferService:
         if self.last_error:
             status = "error"
         base = self._local_base_url(base_path)
+        uptime_seconds = 0
+        if self.started_at:
+            uptime_seconds = max(0, int((datetime.now() - self.started_at).total_seconds()))
         return {
             "enabled": enabled,
             "running": bool(self.is_running and enabled),
+            "is_running": bool(self.is_running),
             "status": status,
             "local_url": base,
+            "local_endpoint": base,
+            "local_host": self.host,
+            "local_port": self.port,
             "bridge_page_url": f"{base_path}/api/transfer/page" if base_path else "/api/transfer/page",
             "responses_base_url": f"{base}/v1",
             "chat_completions_base_url": f"{base}/v1",
@@ -566,6 +642,7 @@ class TransferService:
             "total_output_tokens": self.total_output_tokens,
             "total_bytes_in": self.total_bytes_in,
             "total_bytes_out": self.total_bytes_out,
+            "uptime_seconds": uptime_seconds,
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "last_request_at": self.last_request_at.isoformat() if self.last_request_at else None,
             "last_error": self.last_error,
@@ -606,7 +683,16 @@ class TransferService:
         if body.get("stream"):
             stream = self._stream_response(chat_body, original_model, bytes_in, start_time)
             return TransferResult(stream=stream, content_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-        data = await self._post_json(self._remote_chat_url(), chat_body)
+        try:
+            data = await self._post_json(self._remote_chat_url(), chat_body)
+        except TransferServiceError as exc:
+            self._record_failure("/v1/responses", original_model, bytes_in, 0, start_time, exc.message, status=exc.status)
+            raise
+        except Exception as exc:
+            self.last_error = str(exc)
+            self.trace_event("error", {"detail": str(exc), "stack": traceback.format_exc()})
+            self._record_failure("/v1/responses", original_model, bytes_in, 0, start_time, str(exc), status=502)
+            raise
         converted = self.converter.chat_response_to_response(data, original_model)
         bytes_out = len(json.dumps(converted, ensure_ascii=False).encode("utf-8"))
         self._record_success("/v1/responses", original_model, bytes_in, bytes_out, start_time, converted.get("usage") or {})
@@ -624,7 +710,17 @@ class TransferService:
                 content_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
-        data = await self._post_json(self._remote_chat_url(), body)
+        model = str(body.get("model") or "")
+        try:
+            data = await self._post_json(self._remote_chat_url(), body)
+        except TransferServiceError as exc:
+            self._record_failure("/v1/chat/completions", model, bytes_in, 0, start_time, exc.message, status=exc.status)
+            raise
+        except Exception as exc:
+            self.last_error = str(exc)
+            self.trace_event("error", {"detail": str(exc), "stack": traceback.format_exc()})
+            self._record_failure("/v1/chat/completions", model, bytes_in, 0, start_time, str(exc), status=502)
+            raise
         bytes_out = len(json.dumps(data, ensure_ascii=False).encode("utf-8"))
         usage = data.get("usage") or {}
         self._record_success(
@@ -660,6 +756,8 @@ class TransferService:
             if failed:
                 self._record_failure("/v1/chat/completions (stream)", model, bytes_in, total_out, start_time, self.last_error)
             else:
+                if not usage:
+                    self.trace_event("warning", {"message": "usage_missing", "endpoint": "/v1/chat/completions (stream)", "model": model})
                 self._record_success("/v1/chat/completions (stream)", model, bytes_in, total_out, start_time, usage)
 
     async def _post_json(self, url: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -697,6 +795,8 @@ class TransferService:
             if failed:
                 self._record_failure("/v1/responses (stream)", original_model, bytes_in, total_out, start_time, self.last_error)
             else:
+                if accumulator.usage is None:
+                    self.trace_event("warning", {"message": "usage_missing", "endpoint": "/v1/responses (stream)", "model": original_model})
                 self._record_success("/v1/responses (stream)", original_model, bytes_in, total_out, start_time, usage)
 
     async def _iter_remote_sse_events(self, body: dict[str, Any], accumulator: ChatStreamAccumulator) -> AsyncIterator[dict[str, Any]]:
@@ -787,10 +887,11 @@ class TransferService:
         self.last_error = ""
         self.traffic_log.append(TrafficRecord("POST", endpoint, 200, bytes_in, bytes_out, duration, model=model).to_dict())
 
-    def _record_failure(self, endpoint: str, model: str, bytes_in: int, bytes_out: int, start_time: float, error: str) -> None:
+    def _record_failure(self, endpoint: str, model: str, bytes_in: int, bytes_out: int, start_time: float, error: str, *, status: int = 502) -> None:
         duration = (time.time() - start_time) * 1000
         self.last_request_at = datetime.now()
-        self.traffic_log.append(TrafficRecord("POST", endpoint, 502, bytes_in, bytes_out, duration, model=model, error=error[:200]).to_dict())
+        self.last_error = error[:500]
+        self.traffic_log.append(TrafficRecord("POST", endpoint, status, bytes_in, bytes_out, duration, model=model, error=error[:200]).to_dict())
 
     def trace_event(self, kind: str, payload: Any) -> None:
         if os.environ.get("TRANSFER_TRACE") != "1":
@@ -810,6 +911,8 @@ class TransferService:
             return redacted
         if isinstance(value, list):
             return [cls._redact(item) for item in value]
+        if isinstance(value, str) and len(value) > TRACE_STRING_LIMIT:
+            return f"{value[:TRACE_STRING_HEAD]}...<truncated {len(value) - TRACE_STRING_HEAD} chars>"
         return value
 
     @staticmethod

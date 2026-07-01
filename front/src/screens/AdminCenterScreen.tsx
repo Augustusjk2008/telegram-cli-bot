@@ -166,6 +166,16 @@ function transferStatusClass(status: TransferBridgeStatus | null) {
   return "border-[var(--border)] bg-[var(--bg)] text-[var(--muted)]";
 }
 
+function formatDurationSeconds(seconds?: number) {
+  const total = Math.max(0, Number(seconds || 0));
+  const hours = Math.floor(total / 3600);
+  const mins = Math.floor((total % 3600) / 60);
+  const secs = Math.floor(total % 60);
+  if (hours) return `${hours}h ${mins}m ${secs}s`;
+  if (mins) return `${mins}m ${secs}s`;
+  return `${secs}s`;
+}
+
 function envValueEquals(left: EnvConfigValue | undefined, right: EnvConfigValue | undefined) {
   return formatEnvValue(left) === formatEnvValue(right);
 }
@@ -1277,6 +1287,12 @@ export function AdminCenterScreen({
               </p>
               <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
                 bytes: {transferStatus?.totalBytesIn ?? 0} / {transferStatus?.totalBytesOut ?? 0}
+              </p>
+              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                uptime: {formatDurationSeconds(transferStatus?.uptimeSeconds)}
+              </p>
+              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                recent traffic: {transferStatus?.recentTraffic?.length ?? 0}
               </p>
             </div>
 

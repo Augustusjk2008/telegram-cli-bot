@@ -12,7 +12,7 @@ from bot.web.api_common import WebApiError
 from bot.web.auth_store import CAP_ADMIN_OPS
 from bot.web.transfer_service import TransferServiceError
 
-HTML_PAGE = """
+HTML_PAGE = r"""
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -20,23 +20,397 @@ HTML_PAGE = """
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Response ↔ Chat API 转接器</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; }
-    main { max-width: 920px; margin: 0 auto; padding: 40px 20px; }
-    h1 { color: #38bdf8; }
-    code { background: #1e293b; border: 1px solid #334155; border-radius: 6px; padding: 2px 6px; color: #7dd3fc; }
-    .card { background: #1e293b; border: 1px solid #334155; border-radius: 14px; padding: 20px; margin-top: 18px; }
+    :root {
+      color-scheme: dark;
+      --bg: #101418;
+      --surface: #171d23;
+      --surface-strong: #202832;
+      --border: #2b3642;
+      --text: #e6edf3;
+      --muted: #9aa8b6;
+      --accent: #4fb477;
+      --accent-strong: #2f9e5d;
+      --warn: #e6b450;
+      --danger: #e05d5d;
+      --info: #5aa9e6;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+    .container { width: min(1180px, calc(100vw - 32px)); margin: 0 auto; padding: 28px 0 36px; }
+    header { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+    h1 { margin: 0; font-size: clamp(1.5rem, 2vw, 2rem); font-weight: 700; }
+    h2 { margin: 0 0 16px; font-size: 1rem; font-weight: 650; }
+    p { margin: 0; }
+    code {
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      background: #0d1117;
+      color: #8bd4ff;
+      padding: 2px 6px;
+      font-family: "SF Mono", Consolas, monospace;
+      font-size: 0.85em;
+    }
+    .muted { color: var(--muted); }
+    .subhead { margin-top: 6px; color: var(--muted); font-size: 0.92rem; }
+    .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 0.8fr); gap: 16px; align-items: start; }
+    .card { border: 1px solid var(--border); border-radius: 8px; background: var(--surface); padding: 18px; }
+    .info { margin-bottom: 16px; border-left: 3px solid var(--info); background: #142333; border-radius: 0 8px 8px 0; padding: 12px 14px; line-height: 1.7; color: #c8d6e3; }
+    .form-row { display: grid; gap: 7px; margin-bottom: 12px; }
+    label { color: var(--muted); font-size: 0.84rem; }
+    input {
+      width: 100%;
+      min-height: 38px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: #0d1117;
+      color: var(--text);
+      padding: 8px 10px;
+      font: inherit;
+    }
+    input[readonly] { color: var(--muted); background: #111820; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+    button, .button {
+      min-height: 38px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--surface-strong);
+      color: var(--text);
+      padding: 8px 12px;
+      font: inherit;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    button:hover, .button:hover { border-color: #506171; }
+    button:disabled { cursor: not-allowed; opacity: 0.6; }
+    .primary { border-color: var(--accent-strong); background: var(--accent-strong); color: white; }
+    .danger { border-color: #7a3030; background: #542727; color: #ffd7d7; }
+    .status-line { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 14px; }
+    .badge { display: inline-flex; align-items: center; gap: 8px; border-radius: 999px; border: 1px solid var(--border); padding: 5px 10px; font-size: 0.86rem; font-weight: 650; }
+    .badge.running { color: #b8f5cd; border-color: #2a6840; background: #153322; }
+    .badge.stopped, .badge.not_configured { color: #ffe5a3; border-color: #765c24; background: #352a14; }
+    .badge.error { color: #ffd0d0; border-color: #784044; background: #3a1e22; }
+    .pulse { width: 8px; height: 8px; border-radius: 999px; background: currentColor; animation: pulse 1.8s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+    .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .stat { min-width: 0; border: 1px solid var(--border); border-radius: 7px; background: #111820; padding: 10px; }
+    .stat-value { overflow: hidden; text-overflow: ellipsis; font-size: 1.25rem; font-weight: 700; white-space: nowrap; }
+    .stat-label { color: var(--muted); font-size: 0.78rem; margin-top: 3px; }
+    .config-list { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px; display: grid; gap: 8px; }
+    .config-row { display: flex; justify-content: space-between; gap: 12px; font-size: 0.87rem; }
+    .config-row span:last-child { text-align: right; word-break: break-all; font-family: "SF Mono", Consolas, monospace; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; min-width: 860px; }
+    th, td { border-bottom: 1px solid var(--border); padding: 10px 8px; text-align: left; vertical-align: top; font-size: 0.84rem; }
+    th { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; font-weight: 650; }
+    tr.error-row td { background: rgba(224, 93, 93, 0.08); }
+    .endpoint { display: inline-block; border: 1px solid var(--border); border-radius: 5px; padding: 2px 6px; background: #0d1117; font-family: "SF Mono", Consolas, monospace; font-size: 0.78rem; }
+    .ok { color: #82e6a1; font-weight: 700; }
+    .err { color: #ff9696; font-weight: 700; }
+    .toast {
+      position: fixed;
+      top: 18px;
+      right: 18px;
+      max-width: min(420px, calc(100vw - 36px));
+      transform: translateX(calc(100% + 24px));
+      transition: transform 0.2s ease;
+      border-radius: 8px;
+      padding: 12px 14px;
+      background: var(--surface-strong);
+      border: 1px solid var(--border);
+      box-shadow: 0 12px 30px rgba(0,0,0,0.28);
+    }
+    .toast.show { transform: translateX(0); }
+    .toast.success { border-color: #34764a; }
+    .toast.error { border-color: #8a3d3d; }
+    .empty { padding: 28px 10px; text-align: center; color: var(--muted); }
+    @media (max-width: 820px) {
+      header { align-items: flex-start; flex-direction: column; }
+      .grid, .stats { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
-  <main>
-    <h1>Response ↔ Chat API 转接器</h1>
-    <p>本页面用于调试项目内置 OpenAI-compatible transfer bridge。</p>
-    <div class="card">
-      <p>Responses endpoint：<code>/v1/responses</code></p>
-      <p>Chat Completions endpoint：<code>/v1/chat/completions</code></p>
-      <p>状态 API：<code>/api/transfer/status</code></p>
+  <div class="container">
+    <header>
+      <div>
+        <h1>Response ↔ Chat API 转接器</h1>
+        <p class="subhead">配置 remote provider，查看本地桥接状态、统计和最近请求。</p>
+      </div>
+      <a id="status-link" class="button" href="#" target="_blank" rel="noreferrer">状态 JSON</a>
+    </header>
+
+    <div class="info">
+      将 Codex 或其他 Responses 客户端的 <code>base_url</code> 指向 <code id="local-url">-</code>。桥接端点为 <code>/v1/responses</code> 和 <code>/v1/chat/completions</code>。
     </div>
-  </main>
+
+    <div class="grid">
+      <section class="card">
+        <h2>配置</h2>
+        <div class="form-row">
+          <label for="remote-url">远端 API 地址</label>
+          <input id="remote-url" autocomplete="off" placeholder="https://api.openai.com/v1">
+        </div>
+        <div class="form-row">
+          <label for="remote-key">远端 API Key</label>
+          <input id="remote-key" type="password" autocomplete="new-password" placeholder="留空表示不修改现有 Key">
+        </div>
+        <div class="form-row">
+          <label for="remote-model">默认模型</label>
+          <input id="remote-model" autocomplete="off" placeholder="gpt-4o">
+        </div>
+        <div class="form-row">
+          <label for="local-endpoint">本地端点</label>
+          <input id="local-endpoint" readonly value="-">
+        </div>
+        <div class="actions">
+          <button id="save-btn" class="primary" type="button">保存配置</button>
+          <button id="health-btn" type="button">健康检查</button>
+          <button id="clear-key-btn" type="button">清除 Key</button>
+        </div>
+        <div class="config-list">
+          <div class="config-row"><span class="muted">远端地址</span><span id="cfg-remote-url">-</span></div>
+          <div class="config-row"><span class="muted">默认模型</span><span id="cfg-remote-model">-</span></div>
+          <div class="config-row"><span class="muted">Key 状态</span><span id="cfg-key">-</span></div>
+          <div class="config-row"><span class="muted">本地 host / port</span><span id="cfg-local">-</span></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>运行状态</h2>
+        <div class="status-line">
+          <span id="status-badge" class="badge not_configured">未配置</span>
+          <span id="uptime" class="muted">运行时间: 0s</span>
+        </div>
+        <div class="stats">
+          <div class="stat"><div id="stat-req" class="stat-value">0</div><div class="stat-label">总请求</div></div>
+          <div class="stat"><div id="stat-in" class="stat-value">0</div><div class="stat-label">流入 KB</div></div>
+          <div class="stat"><div id="stat-out" class="stat-value">0</div><div class="stat-label">流出 KB</div></div>
+          <div class="stat"><div id="stat-tokens-in" class="stat-value">0</div><div class="stat-label">输入 Tokens</div></div>
+          <div class="stat"><div id="stat-tokens-out" class="stat-value">0</div><div class="stat-label">输出 Tokens</div></div>
+          <div class="stat"><div id="stat-traffic" class="stat-value">0</div><div class="stat-label">最近请求</div></div>
+        </div>
+        <div class="actions">
+          <button id="reset-btn" class="danger" type="button">重置统计</button>
+        </div>
+        <p id="last-error" class="muted" style="margin-top:12px;"></p>
+      </section>
+    </div>
+
+    <section class="card" style="margin-top:16px;">
+      <h2>实时流量</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>方法</th>
+              <th>端点</th>
+              <th>状态</th>
+              <th>流入</th>
+              <th>流出</th>
+              <th>耗时</th>
+              <th>模型</th>
+              <th>错误提示</th>
+            </tr>
+          </thead>
+          <tbody id="traffic-body">
+            <tr><td colspan="9" class="empty">暂无流量记录</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const BASE_PATH = (() => {
+      const marker = "/api/transfer/page";
+      const path = window.location.pathname || "";
+      return path.endsWith(marker) ? path.slice(0, -marker.length) : "";
+    })();
+    const routePath = (path) => `${BASE_PATH}${path}`;
+    let toastTimer = null;
+
+    function showToast(message, type = "success") {
+      const toast = $("toast");
+      toast.textContent = message;
+      toast.className = `toast ${type} show`;
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove("show"), 3200);
+    }
+
+    async function parseJsonResponse(response) {
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload.ok === false) {
+        const message = payload.error?.message || `请求失败 (${response.status})`;
+        throw new Error(message);
+      }
+      return payload.data || payload;
+    }
+
+    function formatBytes(bytes) {
+      const value = Number(bytes || 0);
+      if (value < 1024) return `${value} B`;
+      return `${(value / 1024).toFixed(1)} KB`;
+    }
+
+    function formatDuration(ms) {
+      const value = Number(ms || 0);
+      return value < 1000 ? `${value.toFixed(0)}ms` : `${(value / 1000).toFixed(1)}s`;
+    }
+
+    function formatUptime(seconds) {
+      const total = Math.max(0, Number(seconds || 0));
+      const hours = Math.floor(total / 3600);
+      const mins = Math.floor((total % 3600) / 60);
+      const secs = Math.floor(total % 60);
+      if (hours) return `${hours}h ${mins}m ${secs}s`;
+      if (mins) return `${mins}m ${secs}s`;
+      return `${secs}s`;
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      }[ch]));
+    }
+
+    function statusLabel(status) {
+      if (status === "running") return "运行中";
+      if (status === "stopped") return "已停止";
+      if (status === "error") return "异常";
+      if (status === "not_configured") return "未配置";
+      return "未知";
+    }
+
+    function updateStatus(data) {
+      $("local-url").textContent = data.local_endpoint || data.local_url || "-";
+      $("local-endpoint").value = data.local_endpoint || data.local_url || "-";
+      $("remote-url").value = data.remote_base_url || "";
+      $("remote-model").value = data.remote_model || "";
+      $("cfg-remote-url").textContent = data.remote_base_url || "-";
+      $("cfg-remote-model").textContent = data.remote_model || "-";
+      $("cfg-key").textContent = data.remote_api_key_set ? "已设置" : "未设置";
+      $("cfg-local").textContent = `${data.local_host || "-"}:${data.local_port || "-"}`;
+
+      const badge = $("status-badge");
+      badge.className = `badge ${data.status || "unknown"}`;
+      badge.innerHTML = data.status === "running" ? `<span class="pulse"></span>${statusLabel(data.status)}` : statusLabel(data.status);
+      $("uptime").textContent = `运行时间: ${formatUptime(data.uptime_seconds)}`;
+      $("stat-req").textContent = Number(data.request_count || 0).toLocaleString();
+      $("stat-in").textContent = formatBytes(data.total_bytes_in);
+      $("stat-out").textContent = formatBytes(data.total_bytes_out);
+      $("stat-tokens-in").textContent = Number(data.total_input_tokens || 0).toLocaleString();
+      $("stat-tokens-out").textContent = Number(data.total_output_tokens || 0).toLocaleString();
+      $("stat-traffic").textContent = Number((data.recent_traffic || []).length).toLocaleString();
+      $("last-error").textContent = data.last_error ? `最近错误: ${data.last_error}` : "";
+      renderTraffic(data.recent_traffic || []);
+    }
+
+    function renderTraffic(records) {
+      const body = $("traffic-body");
+      if (!records.length) {
+        body.innerHTML = '<tr><td colspan="9" class="empty">暂无流量记录</td></tr>';
+        return;
+      }
+      body.innerHTML = records.slice().reverse().map((record) => {
+        const failed = Number(record.status || 0) >= 400 || record.error;
+        return `<tr class="${failed ? "error-row" : ""}">
+          <td>${escapeHtml(record.timestamp)}</td>
+          <td>${escapeHtml(record.method || "-")}</td>
+          <td><span class="endpoint">${escapeHtml(record.endpoint || "-")}</span></td>
+          <td class="${failed ? "err" : "ok"}">${escapeHtml(record.status || "-")}</td>
+          <td>${formatBytes(record.bytes_in)}</td>
+          <td>${formatBytes(record.bytes_out)}</td>
+          <td>${formatDuration(record.duration_ms)}</td>
+          <td>${escapeHtml(record.model || "-")}</td>
+          <td title="${escapeHtml(record.error || "")}">${escapeHtml(record.error || "-")}</td>
+        </tr>`;
+      }).join("");
+    }
+
+    async function refreshStatus({ quiet = false } = {}) {
+      try {
+        const data = await parseJsonResponse(await fetch(routePath("/api/transfer/status"), { cache: "no-store" }));
+        updateStatus(data);
+      } catch (error) {
+        $("status-badge").className = "badge error";
+        $("status-badge").textContent = "异常";
+        if (!quiet) showToast(error.message, "error");
+      }
+    }
+
+    async function saveConfig(clearKey = false) {
+      const body = {
+        remote_base_url: $("remote-url").value.trim(),
+        remote_model: $("remote-model").value.trim(),
+      };
+      const key = $("remote-key").value;
+      if (clearKey) {
+        body.clear_remote_api_key = true;
+      } else if (key) {
+        body.remote_api_key = key;
+      }
+      $("save-btn").disabled = true;
+      try {
+        const data = await parseJsonResponse(await fetch(routePath("/api/admin/transfer/config"), {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }));
+        $("remote-key").value = "";
+        updateStatus(data);
+        showToast(data.restart_required ? "配置已保存，本地端点调整需重启生效" : "配置已保存");
+      } catch (error) {
+        showToast(error.message, "error");
+      } finally {
+        $("save-btn").disabled = false;
+      }
+    }
+
+    async function testConnection() {
+      const started = performance.now();
+      try {
+        const data = await parseJsonResponse(await fetch(routePath("/api/transfer/health"), { cache: "no-store" }));
+        showToast(`健康检查正常，状态: ${data.status || "unknown"}，耗时 ${Math.round(performance.now() - started)}ms`);
+      } catch (error) {
+        showToast(error.message, "error");
+      }
+    }
+
+    async function resetStats() {
+      if (!confirm("确定要重置桥接统计和最近流量记录吗？")) return;
+      try {
+        const data = await parseJsonResponse(await fetch(routePath("/api/admin/transfer/reset"), { method: "POST" }));
+        updateStatus(data);
+        showToast("统计已重置");
+      } catch (error) {
+        showToast(error.message, "error");
+      }
+    }
+
+    $("status-link").href = routePath("/api/transfer/status");
+    $("save-btn").addEventListener("click", () => saveConfig(false));
+    $("clear-key-btn").addEventListener("click", () => saveConfig(true));
+    $("health-btn").addEventListener("click", testConnection);
+    $("reset-btn").addEventListener("click", resetStats);
+
+    refreshStatus();
+    setInterval(() => refreshStatus({ quiet: true }), 2000);
+  </script>
 </body>
 </html>
 """
@@ -176,7 +550,10 @@ async def reset(request: web.Request) -> web.Response:
 async def config(request: web.Request) -> web.Response:
     server = _server(request)
     await server._with_capability(request, CAP_ADMIN_OPS)
-    data = server.transfer_service.update_config(await _read_json(request))
+    try:
+        data = server.transfer_service.update_config(await _read_json(request))
+    except TransferServiceError as exc:
+        raise _transfer_error(exc) from exc
     return _json({"ok": True, "data": data})
 
 

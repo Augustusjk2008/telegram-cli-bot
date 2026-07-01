@@ -166,6 +166,29 @@ async def test_admin_transfer_reset_and_config_require_admin_capability(
 
 
 @pytest.mark.asyncio
+async def test_admin_transfer_config_validation_error_returns_json(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "project-token")
+    monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "")
+    monkeypatch.setenv("TCB_DATA_DIR", str(tmp_path))
+    server = WebApiServer(object(), host="127.0.0.1", port=8765, tunnel_service=DummyTunnelService())
+    app = server._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            response = await client.patch(
+                "/api/admin/transfer/config",
+                json={"remote_base_url": "file:///tmp/provider"},
+                headers={"X-API-Token": "project-token"},
+            )
+            payload = await response.json()
+
+    assert response.status == 400
+    assert payload["error"]["code"] == "invalid_remote_base_url"
+
+
+@pytest.mark.asyncio
 async def test_transfer_page_is_served_as_html(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     server = _build_server(monkeypatch, tmp_path)
     app = server._build_app()
@@ -177,6 +200,15 @@ async def test_transfer_page_is_served_as_html(monkeypatch: pytest.MonkeyPatch, 
     assert response.status == 200
     assert response.content_type == "text/html"
     assert "Response ↔ Chat API 转接器" in text
+    assert "/api/transfer/status" in text
+    assert "/api/admin/transfer/config" in text
+    assert "/api/admin/transfer/reset" in text
+    assert "/api/transfer/health" in text
+    assert "/api/config" not in text
+    assert "/api/reset" not in text
+    assert "window.location.pathname" in text
+    assert "setInterval" in text
+    assert "2000" in text
 
 
 @pytest.mark.asyncio

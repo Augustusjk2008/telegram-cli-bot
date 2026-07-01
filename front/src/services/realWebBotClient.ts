@@ -331,8 +331,12 @@ type RawHealthResponse = {
 type RawTransferBridgeStatus = {
   enabled?: boolean;
   running?: boolean;
+  is_running?: boolean;
   status?: string;
   local_url?: string;
+  local_endpoint?: string;
+  local_host?: string;
+  local_port?: number;
   bridge_page_url?: string;
   responses_base_url?: string;
   chat_completions_base_url?: string;
@@ -344,6 +348,19 @@ type RawTransferBridgeStatus = {
   total_output_tokens?: number;
   total_bytes_in?: number;
   total_bytes_out?: number;
+  uptime_seconds?: number;
+  recent_traffic?: Array<{
+    id?: string;
+    timestamp?: string;
+    method?: string;
+    endpoint?: string;
+    status?: number;
+    bytes_in?: number;
+    bytes_out?: number;
+    duration_ms?: number;
+    model?: string;
+    error?: string;
+  }>;
   started_at?: string;
   last_request_at?: string;
   last_error?: string;
@@ -3250,6 +3267,9 @@ function mapTransferBridgeStatus(raw: RawTransferBridgeStatus): TransferBridgeSt
     running: Boolean(raw.running),
     status,
     localUrl: String(raw.local_url || ""),
+    localEndpoint: raw.local_endpoint ? String(raw.local_endpoint) : undefined,
+    localHost: raw.local_host ? String(raw.local_host) : undefined,
+    localPort: typeof raw.local_port === "number" ? raw.local_port : undefined,
     bridgePageUrl: String(raw.bridge_page_url || ""),
     responsesBaseUrl: String(raw.responses_base_url || ""),
     chatCompletionsBaseUrl: String(raw.chat_completions_base_url || ""),
@@ -3261,6 +3281,21 @@ function mapTransferBridgeStatus(raw: RawTransferBridgeStatus): TransferBridgeSt
     totalOutputTokens: Number(raw.total_output_tokens || 0),
     totalBytesIn: Number(raw.total_bytes_in || 0),
     totalBytesOut: Number(raw.total_bytes_out || 0),
+    uptimeSeconds: typeof raw.uptime_seconds === "number" ? raw.uptime_seconds : undefined,
+    recentTraffic: Array.isArray(raw.recent_traffic)
+      ? raw.recent_traffic.map((record) => ({
+          id: String(record.id || ""),
+          timestamp: String(record.timestamp || ""),
+          method: String(record.method || ""),
+          endpoint: String(record.endpoint || ""),
+          status: Number(record.status || 0),
+          bytesIn: Number(record.bytes_in || 0),
+          bytesOut: Number(record.bytes_out || 0),
+          durationMs: Number(record.duration_ms || 0),
+          model: String(record.model || ""),
+          error: String(record.error || ""),
+        }))
+      : undefined,
     startedAt: raw.started_at ? String(raw.started_at) : undefined,
     lastRequestAt: raw.last_request_at ? String(raw.last_request_at) : undefined,
     lastError: raw.last_error !== undefined ? String(raw.last_error) : undefined,
