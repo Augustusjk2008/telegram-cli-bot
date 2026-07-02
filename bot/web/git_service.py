@@ -1387,6 +1387,7 @@ async def update_git_commit_message_cli_config(
     *,
     cli_type: Any = None,
     cli_path: Any = None,
+    params: Any = None,
     key: Any = None,
     value: Any = None,
 ) -> dict[str, Any]:
@@ -1395,6 +1396,19 @@ async def update_git_commit_message_cli_config(
     next_cli_type = str(cli_type or current.cli_type or profile.cli_type).strip().lower()
     next_cli_path = str(cli_path if cli_path is not None else current.cli_path).strip()
     next_params = CliParamsConfig.from_dict(current.cli_params.to_dict())
+
+    if params is not None:
+        if not isinstance(params, dict):
+            _raise(400, "invalid_params", "params 必须是 JSON 对象")
+        for param_key, param_value in params.items():
+            key_text = str(param_key or "").strip()
+            if not key_text:
+                continue
+            try:
+                coerced_value = coerce_param_value(next_cli_type, key_text, param_value)
+            except ValueError as exc:
+                _raise(400, "invalid_param_value", str(exc))
+            next_params.set_param(next_cli_type, key_text, coerced_value)
 
     key_text = str(key or "").strip()
     if key_text:

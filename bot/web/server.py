@@ -3297,6 +3297,7 @@ class WebApiServer:
             alias,
             cli_type=body.get("cli_type"),
             cli_path=body.get("cli_path"),
+            params=body.get("params"),
             key=body.get("key"),
             value=body.get("value"),
         )
