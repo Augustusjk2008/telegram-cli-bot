@@ -134,6 +134,8 @@ import type {
   LanChatMessage,
   LanChatParticipant,
   LanChatStatus,
+  NotificationSettingsStatus,
+  NotificationTestResult,
   HostEffect,
   InstallablePluginSummary,
   OfflineUpdatePackageList,
@@ -159,6 +161,7 @@ import type {
   TerminalActionsConfig,
   TerminalActionsEditableConfig,
   TerminalRuntimePlatform,
+  TransferBridgeConfigInput,
   TransferBridgeStatus,
   TreeViewPayload,
   TunnelSnapshot,
@@ -1428,6 +1431,48 @@ export class MockWebBotClient implements WebBotClient {
       defaultReasoningEffort: "medium",
     },
   ];
+  private transferBridgeStatus: TransferBridgeStatus = {
+    enabled: true,
+    running: true,
+    status: "running",
+    localUrl: "http://127.0.0.1:8080",
+    localEndpoint: "http://127.0.0.1:8080",
+    localHost: "127.0.0.1",
+    localPort: 8080,
+    bridgePageUrl: "/api/transfer/page",
+    responsesBaseUrl: "http://127.0.0.1:8080/v1",
+    chatCompletionsBaseUrl: "http://127.0.0.1:8080/v1",
+    remoteBaseUrl: "https://max.jojocode.com/v1",
+    remoteModel: "gpt-5.5",
+    remoteApiKeySet: true,
+    requestCount: 1,
+    totalInputTokens: 15381,
+    totalOutputTokens: 30,
+    totalBytesIn: 75420,
+    totalBytesOut: 3400,
+    uptimeSeconds: 61,
+    requestStreamUsage: true,
+    retryWithoutStreamOptions: true,
+    reasoningMode: "chat_reasoning_effort",
+    downgradeDeveloperToSystem: false,
+    useLegacyMaxTokens: false,
+    recentTraffic: [
+      {
+        id: "mock",
+        timestamp: "12:01:00.000",
+        method: "POST",
+        endpoint: "/v1/responses",
+        status: 200,
+        bytesIn: 100,
+        bytesOut: 200,
+        durationMs: 15,
+        model: "gpt-5.5",
+        error: "",
+      },
+    ],
+    startedAt: "2026-06-29T12:00:00Z",
+    lastRequestAt: "2026-06-29T12:01:00Z",
+  };
   private currentPaths = new Map<string, string>();
   private pluginSessions = new Map<
     string,
@@ -3144,42 +3189,66 @@ export class MockWebBotClient implements WebBotClient {
 
   async getTransferBridgeStatus(): Promise<TransferBridgeStatus> {
     return {
-      enabled: true,
-      running: true,
-      status: "running",
-      localUrl: "http://127.0.0.1:8080",
-      localEndpoint: "http://127.0.0.1:8080",
-      localHost: "127.0.0.1",
-      localPort: 8080,
-      bridgePageUrl: "/api/transfer/page",
-      responsesBaseUrl: "http://127.0.0.1:8080/v1",
-      chatCompletionsBaseUrl: "http://127.0.0.1:8080/v1",
-      remoteBaseUrl: "https://max.jojocode.com/v1",
-      remoteModel: "gpt-5.5",
-      remoteApiKeySet: true,
-      requestCount: 1,
-      totalInputTokens: 15381,
-      totalOutputTokens: 30,
-      totalBytesIn: 75420,
-      totalBytesOut: 3400,
-      uptimeSeconds: 61,
-      recentTraffic: [
-        {
-          id: "mock",
-          timestamp: "12:01:00.000",
-          method: "POST",
-          endpoint: "/v1/responses",
-          status: 200,
-          bytesIn: 100,
-          bytesOut: 200,
-          durationMs: 15,
-          model: "gpt-5.5",
-          error: "",
-        },
-      ],
-      startedAt: "2026-06-29T12:00:00Z",
-      lastRequestAt: "2026-06-29T12:01:00Z",
+      ...this.transferBridgeStatus,
+      recentTraffic: this.transferBridgeStatus.recentTraffic?.map((item) => ({ ...item })),
     };
+  }
+
+  async getTransferAdminStatus(): Promise<TransferBridgeStatus> {
+    return this.getTransferBridgeStatus();
+  }
+
+  async updateTransferBridgeConfig(input: TransferBridgeConfigInput): Promise<TransferBridgeStatus> {
+    const nextRemoteBaseUrl = input.remoteBaseUrl !== undefined ? input.remoteBaseUrl.trim() : this.transferBridgeStatus.remoteBaseUrl || "";
+    const nextRemoteModel = input.remoteModel !== undefined ? input.remoteModel.trim() : this.transferBridgeStatus.remoteModel || "";
+    const nextRemoteApiKeySet = input.clearRemoteApiKey
+      ? false
+      : input.remoteApiKey
+        ? true
+        : this.transferBridgeStatus.remoteApiKeySet;
+    this.transferBridgeStatus = {
+      ...this.transferBridgeStatus,
+      remoteBaseUrl: nextRemoteBaseUrl,
+      remoteModel: nextRemoteModel,
+      remoteApiKeySet: nextRemoteApiKeySet,
+      enabled: Boolean(nextRemoteBaseUrl && nextRemoteModel && nextRemoteApiKeySet),
+      status: nextRemoteBaseUrl && nextRemoteModel && nextRemoteApiKeySet ? "running" : "not_configured",
+      requestStreamUsage: input.requestStreamUsage ?? this.transferBridgeStatus.requestStreamUsage,
+      retryWithoutStreamOptions: input.retryWithoutStreamOptions ?? this.transferBridgeStatus.retryWithoutStreamOptions,
+      reasoningMode: input.reasoningMode ?? this.transferBridgeStatus.reasoningMode,
+      downgradeDeveloperToSystem: input.downgradeDeveloperToSystem ?? this.transferBridgeStatus.downgradeDeveloperToSystem,
+      useLegacyMaxTokens: input.useLegacyMaxTokens ?? this.transferBridgeStatus.useLegacyMaxTokens,
+      restartRequired: false,
+      restartRequiredReason: "",
+    };
+    return this.getTransferBridgeStatus();
+  }
+
+  async resetTransferBridgeStats(): Promise<TransferBridgeStatus> {
+    this.transferBridgeStatus = {
+      ...this.transferBridgeStatus,
+      requestCount: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalBytesIn: 0,
+      totalBytesOut: 0,
+      recentTraffic: [],
+      lastRequestAt: "",
+      lastError: "",
+    };
+    return this.getTransferBridgeStatus();
+  }
+
+  async getNotificationSettings(): Promise<NotificationSettingsStatus> {
+    return {
+      pushPlusEnabled: true,
+      pushPlusConfigured: true,
+      pushPlusTopicConfigured: false,
+    };
+  }
+
+  async sendPushPlusTest(): Promise<NotificationTestResult> {
+    return { sent: true };
   }
 
   async getEnvConfig(): Promise<EnvConfigSnapshot> {

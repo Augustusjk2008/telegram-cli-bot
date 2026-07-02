@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, ArrowLeft, Eye, EyeOff, RefreshCw, RotateCcw, Save, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Bell, Copy, Eye, EyeOff, Globe, RefreshCw, RotateCcw, Save, Trash2 } from "lucide-react";
+import { StateBadge } from "../components/StateBadge";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
   AdminUser,
@@ -16,6 +17,7 @@ import type {
   EnvConfigPatchValue,
   EnvConfigSnapshot,
   EnvConfigValue,
+  GitProxySettings,
   LanChatConfig,
   LanChatConfigInput,
   NativeAgentConfigPayload,
@@ -24,7 +26,10 @@ import type {
   OfflineUpdatePackageList,
   RegisterCodeCreateResult,
   RegisterCodeItem,
+  NotificationSettingsStatus,
+  TransferBridgeConfigInput,
   TransferBridgeStatus,
+  TunnelSnapshot,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { getErrorMessage } from "../utils/errorMessage";
@@ -38,7 +43,20 @@ type Props = {
   canManageEnvConfig?: boolean;
 };
 
-type AdminCenterTab = "users" | "invites" | "cli-errors" | "updates" | "announcements" | "transfer" | "lan-chat" | "native-agent" | "env";
+type AdminCenterTab = "users" | "invites" | "cli-errors" | "updates" | "announcements" | "network" | "notifications" | "transfer" | "lan-chat" | "native-agent" | "env";
+
+type TransferDraft = Required<Pick<
+  TransferBridgeConfigInput,
+  "remoteBaseUrl"
+  | "remoteModel"
+  | "remoteApiKey"
+  | "clearRemoteApiKey"
+  | "requestStreamUsage"
+  | "retryWithoutStreamOptions"
+  | "reasoningMode"
+  | "downgradeDeveloperToSystem"
+  | "useLegacyMaxTokens"
+>>;
 
 const ENV_CATEGORY_LABELS: Record<string, string> = {
   basic: "基础",
@@ -166,6 +184,132 @@ function transferStatusClass(status: TransferBridgeStatus | null) {
   return "border-[var(--border)] bg-[var(--bg)] text-[var(--muted)]";
 }
 
+function isValidGitProxyAddress(value: string) {
+  const address = value.trim();
+  if (!address) return true;
+  const port = /^\d+$/.test(address) ? address : address.split(":").pop() || "";
+  if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) {
+    return false;
+  }
+  if (/^\d+$/.test(address)) {
+    return true;
+  }
+  return /^[A-Za-z0-9.-]+:\d+$/.test(address) || /^\[[^\]\s]+\]:\d+$/.test(address);
+}
+
+function gitProxyStatusText(settings: GitProxySettings | null) {
+  return settings?.address ? settings.address : "直连";
+}
+
+function tunnelStatusText(status: TunnelSnapshot["status"]) {
+  if (status === "running") return "运行中";
+  if (status === "waiting_local") return "等待本地服务";
+  if (status === "waiting_url") return "等待公网地址";
+  if (status === "connected") return "公网地址已创建";
+  if (status === "verifying_public") return "正在验证公网地址";
+  if (status === "starting") return "启动中";
+  if (status === "error") return "异常";
+  return "已停止";
+}
+
+function tunnelSourceText(tunnel: TunnelSnapshot) {
+  if (tunnel.source === "fixed_public_forward" || tunnel.mode === "fixed_public_forward") return "固定公网转发";
+  if (tunnel.source === "manual_config") return "手工地址";
+  return "Quick Tunnel";
+}
+
+function isFixedPublicForward(tunnel: TunnelSnapshot) {
+  return tunnel.source === "fixed_public_forward" || tunnel.mode === "fixed_public_forward";
+}
+
+function normalizeTunnelServiceStatus(value: string | null | undefined) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function tunnelServiceTone(value: string | null | undefined): "neutral" | "success" | "warning" | "danger" | "accent" {
+  const status = normalizeTunnelServiceStatus(value);
+  if (!status || ["stopped", "disabled", "offline"].includes(status)) return "neutral";
+  if (["running", "connected", "online", "ok", "healthy", "success"].includes(status)) return "success";
+  if (["starting", "pending", "waiting", "verifying"].some((token) => status.includes(token))) return "warning";
+  if (["error", "failed", "timeout", "forbidden"].some((token) => status.includes(token))) return "danger";
+  return "accent";
+}
+
+function frpcStatusText(value: string | null | undefined, fallbackStatus?: TunnelSnapshot["status"]) {
+  const status = normalizeTunnelServiceStatus(value) || normalizeTunnelServiceStatus(fallbackStatus);
+  if (!status || status === "stopped") return "已停止";
+  if (["running", "connected", "online", "ok", "healthy", "success"].includes(status)) return "运行中";
+  if (status === "starting") return "启动中";
+  if (["waiting", "pending"].some((token) => status.includes(token))) return "等待中";
+  if (["error", "failed", "timeout", "forbidden"].some((token) => status.includes(token))) return "异常";
+  return value || tunnelStatusText(fallbackStatus || "stopped");
+}
+
+function heartbeatStatusText(value: string | null | undefined) {
+  const status = normalizeTunnelServiceStatus(value);
+  if (!status || ["stopped", "disabled", "offline"].includes(status)) return "未上报";
+  if (["running", "connected", "online", "ok", "healthy", "success"].includes(status)) return "正常";
+  if (status === "starting") return "启动中";
+  if (["waiting", "pending"].some((token) => status.includes(token))) return "等待中";
+  if (["error", "failed", "timeout", "forbidden"].some((token) => status.includes(token))) return "异常";
+  return value || "未上报";
+}
+
+function fixedForwardErrorHint(value: string | null | undefined) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const normalized = text.toLowerCase();
+  if (
+    normalized.includes("403")
+    || (normalized.includes("node") && normalized.includes("token"))
+  ) {
+    return "节点 token 错";
+  }
+  if (
+    normalized.includes("login to server failed")
+    || normalized.includes("authorization failed")
+    || normalized.includes("auth failed")
+    || (normalized.includes("frps") && normalized.includes("token"))
+  ) {
+    return "frps token 错";
+  }
+  if (
+    ["timeout", "timed out", "10060", "10061", "refused", "unreachable", "no route", "i/o timeout"].some((token) => normalized.includes(token))
+    && (normalized.includes("7000") || normalized.includes("frps") || normalized.includes("dial tcp") || normalized.includes("connect"))
+  ) {
+    return "frps 端口不通/安全组未放通";
+  }
+  return "";
+}
+
+function isSameNameFrpcProxyMessage(value: string | null | undefined) {
+  const text = String(value || "").trim().toLowerCase();
+  return Boolean(text) && (
+    (text.includes("同名") && text.includes("proxy"))
+    || (text.includes("proxy [") && text.includes("already exists"))
+  );
+}
+
+function pushPlusStatusText(status: NotificationSettingsStatus | null) {
+  if (!status) return "后端未提供状态";
+  if (!status.pushPlusEnabled) return "未启用";
+  return status.pushPlusConfigured ? "已配置" : "未配置 token";
+}
+
+function transferDraftFromStatus(status: TransferBridgeStatus | null): TransferDraft {
+  return {
+    remoteBaseUrl: status?.remoteBaseUrl || "",
+    remoteModel: status?.remoteModel || "",
+    remoteApiKey: "",
+    clearRemoteApiKey: false,
+    requestStreamUsage: status?.requestStreamUsage ?? true,
+    retryWithoutStreamOptions: status?.retryWithoutStreamOptions ?? true,
+    reasoningMode: status?.reasoningMode || "chat_reasoning_effort",
+    downgradeDeveloperToSystem: status?.downgradeDeveloperToSystem ?? false,
+    useLegacyMaxTokens: status?.useLegacyMaxTokens ?? false,
+  };
+}
+
 function formatDurationSeconds(seconds?: number) {
   const total = Math.max(0, Number(seconds || 0));
   const hours = Math.floor(total / 3600);
@@ -218,6 +362,17 @@ export function AdminCenterScreen({
   const [announcementSaving, setAnnouncementSaving] = useState(false);
   const [announcementDeletingId, setAnnouncementDeletingId] = useState("");
   const [transferStatus, setTransferStatus] = useState<TransferBridgeStatus | null>(null);
+  const [transferDraft, setTransferDraft] = useState<TransferDraft>(() => transferDraftFromStatus(null));
+  const [transferSaving, setTransferSaving] = useState(false);
+  const [transferResetting, setTransferResetting] = useState(false);
+  const [gitProxySettings, setGitProxySettings] = useState<GitProxySettings | null>(null);
+  const [gitProxyAddressDraft, setGitProxyAddressDraft] = useState("");
+  const [savingGitProxy, setSavingGitProxy] = useState(false);
+  const [tunnel, setTunnel] = useState<TunnelSnapshot | null>(null);
+  const [tunnelAction, setTunnelAction] = useState<"" | "start" | "stop" | "restart" | "copy">("");
+  const [notificationSettings, setNotificationSettings] = useState<NotificationSettingsStatus | null>(null);
+  const [testingPushPlus, setTestingPushPlus] = useState(false);
+  const [showPushPlusGuide, setShowPushPlusGuide] = useState(false);
   const [lanChatConfig, setLanChatConfig] = useState<LanChatConfig | null>(null);
   const [lanChatDraft, setLanChatDraft] = useState<LanChatConfigInput>({});
   const [lanChatSaving, setLanChatSaving] = useState(false);
@@ -241,6 +396,8 @@ export function AdminCenterScreen({
     "cli-errors": false,
     updates: false,
     announcements: false,
+    network: false,
+    notifications: false,
     transfer: false,
     "lan-chat": false,
     "native-agent": false,
@@ -266,6 +423,8 @@ export function AdminCenterScreen({
       "cli-errors",
       "updates",
       "announcements",
+      "network",
+      "notifications",
       "transfer",
       "lan-chat",
       "native-agent",
@@ -443,6 +602,63 @@ export function AdminCenterScreen({
     }
   }
 
+  async function loadNetworkAccess(nextNotice = "", refresh = false) {
+    if (refresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+    setError("");
+    if (!nextNotice) {
+      setNotice("");
+    }
+    try {
+      const [gitProxyResult, tunnelResult] = await Promise.all([
+        client.getGitProxySettings(),
+        client.getTunnelStatus(),
+      ]);
+      setGitProxySettings(gitProxyResult);
+      setGitProxyAddressDraft(gitProxyResult.address || (gitProxyResult.port ? `127.0.0.1:${gitProxyResult.port}` : ""));
+      setTunnel(tunnelResult);
+      setLoadedTabs((prev) => ({ ...prev, network: true }));
+      if (nextNotice) {
+        setNotice(nextNotice);
+      }
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "加载网络访问配置失败"));
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }
+
+  async function loadNotificationSettings(nextNotice = "", refresh = false) {
+    if (refresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+    setError("");
+    if (!nextNotice) {
+      setNotice("");
+    }
+    try {
+      const settings = client.getNotificationSettings
+        ? await client.getNotificationSettings()
+        : null;
+      setNotificationSettings(settings);
+      setLoadedTabs((prev) => ({ ...prev, notifications: true }));
+      if (nextNotice) {
+        setNotice(nextNotice);
+      }
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "加载通知配置失败"));
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }
+
   async function loadTransferStatus(nextNotice = "", refresh = false) {
     if (refresh) {
       setRefreshing(true);
@@ -454,8 +670,9 @@ export function AdminCenterScreen({
       setNotice("");
     }
     try {
-      const status = await client.getTransferBridgeStatus();
+      const status = await client.getTransferAdminStatus();
       setTransferStatus(status);
+      setTransferDraft(transferDraftFromStatus(status));
       setLoadedTabs((prev) => ({ ...prev, transfer: true }));
       if (nextNotice) {
         setNotice(nextNotice);
@@ -572,6 +789,10 @@ export function AdminCenterScreen({
       await loadCliErrorStats(nextNotice, refresh);
     } else if (activeTab === "updates") {
       await loadUpdates(nextNotice, refresh);
+    } else if (activeTab === "network") {
+      await loadNetworkAccess(nextNotice, refresh);
+    } else if (activeTab === "notifications") {
+      await loadNotificationSettings(nextNotice, refresh);
     } else if (activeTab === "transfer") {
       await loadTransferStatus(nextNotice, refresh);
     } else if (activeTab === "lan-chat") {
@@ -819,6 +1040,138 @@ export function AdminCenterScreen({
     }
   };
 
+  const saveGitProxy = async () => {
+    const nextAddress = gitProxyAddressDraft.trim();
+    if (!isValidGitProxyAddress(nextAddress)) {
+      setError("代理地址必须是 host:port，或 1 到 65535 之间的端口");
+      return;
+    }
+
+    setSavingGitProxy(true);
+    setError("");
+    setNotice("");
+    try {
+      const nextSettings = await client.updateGitProxySettings(nextAddress);
+      setGitProxySettings(nextSettings);
+      setGitProxyAddressDraft(nextSettings.address);
+      setNotice("Git 代理设置已保存");
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "保存 Git 代理失败"));
+    } finally {
+      setSavingGitProxy(false);
+    }
+  };
+
+  const runTunnelAction = async (action: "start" | "stop" | "restart") => {
+    setTunnelAction(action);
+    setError("");
+    setNotice("");
+    try {
+      const next = action === "start"
+        ? await client.startTunnel()
+        : action === "stop"
+          ? await client.stopTunnel()
+          : await client.restartTunnel();
+      setTunnel(next);
+      setNotice(action === "restart" ? "Tunnel 已重启" : action === "start" ? "Tunnel 已启动" : "Tunnel 已停止");
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "Tunnel 操作失败"));
+    } finally {
+      setTunnelAction("");
+    }
+  };
+
+  const copyTunnelUrl = async () => {
+    if (!tunnel?.publicUrl) return;
+    setTunnelAction("copy");
+    setError("");
+    setNotice("");
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(tunnel.publicUrl);
+      }
+      setNotice("公网地址已复制");
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "复制公网地址失败"));
+    } finally {
+      setTunnelAction("");
+    }
+  };
+
+  const sendPushPlusTest = async () => {
+    if (!client.sendPushPlusTest) {
+      setError("当前后端不支持 PushPlus 测试推送");
+      return;
+    }
+    setTestingPushPlus(true);
+    setError("");
+    setNotice("");
+    try {
+      await client.sendPushPlusTest();
+      setNotice("PushPlus 测试推送已发送");
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "PushPlus 测试推送失败"));
+    } finally {
+      setTestingPushPlus(false);
+    }
+  };
+
+  const openNotificationEnv = () => {
+    if (!canManageEnvConfig) {
+      setError("当前账号无权查看环境配置");
+      return;
+    }
+    setActiveEnvCategory("notifications");
+    setActiveTab("env");
+    setLoadedTabs((prev) => ({ ...prev, env: false }));
+  };
+
+  const saveTransferConfig = async () => {
+    setTransferSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      const saved = await client.updateTransferBridgeConfig({
+        remoteBaseUrl: transferDraft.remoteBaseUrl.trim(),
+        remoteModel: transferDraft.remoteModel.trim(),
+        ...(transferDraft.remoteApiKey ? { remoteApiKey: transferDraft.remoteApiKey } : {}),
+        clearRemoteApiKey: transferDraft.clearRemoteApiKey,
+        requestStreamUsage: transferDraft.requestStreamUsage,
+        retryWithoutStreamOptions: transferDraft.retryWithoutStreamOptions,
+        reasoningMode: transferDraft.reasoningMode,
+        downgradeDeveloperToSystem: transferDraft.downgradeDeveloperToSystem,
+        useLegacyMaxTokens: transferDraft.useLegacyMaxTokens,
+      });
+      setTransferStatus(saved);
+      setTransferDraft(transferDraftFromStatus(saved));
+      setNotice(saved.restartRequired ? "桥接配置已保存，重启服务后本地端点变更生效" : "桥接配置已保存");
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "保存桥接配置失败"));
+    } finally {
+      setTransferSaving(false);
+    }
+  };
+
+  const resetTransferStats = async () => {
+    setTransferResetting(true);
+    setError("");
+    setNotice("");
+    try {
+      const nextStatus = await client.resetTransferBridgeStats();
+      setTransferStatus(nextStatus);
+      setTransferDraft((prev) => ({
+        ...prev,
+        ...transferDraftFromStatus(nextStatus),
+        remoteApiKey: "",
+      }));
+      setNotice("桥接统计已重置");
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "重置桥接统计失败"));
+    } finally {
+      setTransferResetting(false);
+    }
+  };
+
   const saveLanChatConfig = async () => {
     setLanChatSaving(true);
     setError("");
@@ -1014,9 +1367,13 @@ export function AdminCenterScreen({
                   : tab === "updates"
                     ? "升级"
                     : tab === "cli-errors"
-                    ? "CLI 错误"
+                      ? "CLI 错误"
                     : tab === "announcements"
                       ? "公告"
+                    : tab === "network"
+                      ? "网络访问"
+                    : tab === "notifications"
+                      ? "通知"
                     : tab === "transfer"
                       ? "桥接"
                     : tab === "native-agent"
@@ -1233,6 +1590,280 @@ export function AdminCenterScreen({
           </div>
         ) : null}
 
+        {!loading && activeTab === "network" ? (
+          <div className="space-y-4">
+            <section className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+              <div className="flex items-start gap-2">
+                <Globe className="mt-0.5 h-5 w-5 text-[var(--accent)]" />
+                <div>
+                  <h2 className="text-base font-semibold text-[var(--text)]">网络访问</h2>
+                  <p className="text-sm text-[var(--muted)]">Git 代理、Tunnel 和公网访问集中在这里维护。</p>
+                </div>
+              </div>
+
+              <div className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3">
+                <h3 className="text-sm font-semibold text-[var(--text)]">Git 代理</h3>
+                <div data-testid="git-proxy-control-row" className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <input
+                    aria-label="Git 代理地址"
+                    type="text"
+                    inputMode="text"
+                    value={gitProxyAddressDraft}
+                    onChange={(event) => setGitProxyAddressDraft(event.target.value)}
+                    placeholder="例如 192.168.1.10:7897 或 7897"
+                    className="w-full min-w-0 flex-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
+                  />
+                  <button
+                    type="button"
+                    aria-label="保存 Git 代理"
+                    onClick={() => void saveGitProxy()}
+                    disabled={savingGitProxy}
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm tcb-solid-accent hover:opacity-90 disabled:opacity-60 sm:w-auto"
+                  >
+                    <Save className="h-4 w-4" />
+                    {savingGitProxy ? "保存中..." : "保存"}
+                  </button>
+                </div>
+                <p className="text-xs text-[var(--muted)]">当前状态: {gitProxyStatusText(gitProxySettings)}</p>
+              </div>
+            </section>
+
+            {tunnel ? (
+              <section className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+                {(() => {
+                  const fixedForward = isFixedPublicForward(tunnel);
+                  const heartbeatStatus = fixedForward ? heartbeatStatusText(tunnel.heartbeatStatus) : "";
+                  const externalSameNameProxy = Boolean(
+                    tunnel.frpcExternal
+                    && (
+                      isSameNameFrpcProxyMessage(tunnel.frpcLastError)
+                      || isSameNameFrpcProxyMessage(tunnel.lastError)
+                    ),
+                  );
+                  const frpcErrorHint = externalSameNameProxy ? "" : fixedForwardErrorHint(tunnel.frpcLastError || tunnel.lastError);
+                  const heartbeatErrorHint = fixedForwardErrorHint(tunnel.heartbeatLastError);
+                  const showTunnelLastError = Boolean(tunnel.lastError) && !externalSameNameProxy;
+                  const showFrpcLastError = Boolean(tunnel.frpcLastError) && !externalSameNameProxy;
+                  const frpcStatus = externalSameNameProxy
+                    ? "复用外部进程"
+                    : fixedForward ? frpcStatusText(tunnel.frpcStatus, tunnel.status) : "";
+                  const frpcStatusTone = externalSameNameProxy
+                    ? "neutral"
+                    : tunnelServiceTone(tunnel.frpcStatus || tunnel.status);
+
+                  return (
+                    <>
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <Globe className="h-5 w-5 text-[var(--accent)]" />
+                            <h2 className="text-base font-semibold text-[var(--text)]">公网访问</h2>
+                          </div>
+                          <p className="text-sm text-[var(--muted)]">状态: {tunnelStatusText(tunnel.status)}</p>
+                        </div>
+                        <StateBadge tone="neutral">
+                          {tunnelSourceText(tunnel)}
+                        </StateBadge>
+                      </div>
+
+                      <div className="space-y-2 text-sm text-[var(--muted)]">
+                        <p className="break-all"><span className="font-medium text-[var(--text)]">HTTPS 访问:</span> {tunnel.publicUrl || "未建立公网地址"}</p>
+                        <p className="break-all"><span className="font-medium text-[var(--text)]">本地转发目标:</span> {tunnel.localUrl}</p>
+                        {fixedForward && tunnel.nodeId ? (
+                          <p className="break-all"><span className="font-medium text-[var(--text)]">Node ID:</span> {tunnel.nodeId}</p>
+                        ) : null}
+                        {fixedForward && tunnel.basePath ? (
+                          <p className="break-all"><span className="font-medium text-[var(--text)]">Base Path:</span> {tunnel.basePath}</p>
+                        ) : null}
+                        {tunnel.publicUrl && tunnel.source === "quick_tunnel" && tunnel.status !== "running" && !tunnel.lastError ? (
+                          <p className="break-all">公网地址已创建，正在验证</p>
+                        ) : null}
+                        {fixedForward && tunnel.frpcNote ? (
+                          <p className="break-all"><span className="font-medium text-[var(--text)]">frpc 说明:</span> {tunnel.frpcNote}</p>
+                        ) : null}
+                        {externalSameNameProxy && (tunnel.frpcLastError || tunnel.lastError) ? (
+                          <p className="break-all"><span className="font-medium text-[var(--text)]">frpc:</span> 已复用外部 frpc</p>
+                        ) : null}
+                        {showTunnelLastError ? (
+                          <p className="break-all text-red-700"><span className="font-medium">错误:</span> {tunnel.lastError}</p>
+                        ) : null}
+                      </div>
+
+                      {fixedForward ? (
+                        <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+                          <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-3 text-[var(--muted)]">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-medium text-[var(--text)]">frpc 状态</span>
+                              <StateBadge tone={frpcStatusTone}>{frpcStatus}</StateBadge>
+                            </div>
+                            <div className="mt-2 space-y-1">
+                              <p>PID: {tunnel.frpcExternal ? "外部进程" : tunnel.frpcPid ?? tunnel.pid ?? "未启动"}</p>
+                              {showFrpcLastError ? (
+                                <p className="break-all text-red-700">错误: {tunnel.frpcLastError}</p>
+                              ) : null}
+                              {externalSameNameProxy && tunnel.frpcLastError ? (
+                                <p className="break-all">外部 frpc 已占用同名 proxy，当前配置按复用处理。</p>
+                              ) : null}
+                              {frpcErrorHint ? (
+                                <p className="text-red-700">提示: {frpcErrorHint}</p>
+                              ) : null}
+                            </div>
+                          </div>
+
+                          <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-3 text-[var(--muted)]">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-medium text-[var(--text)]">Heartbeat</span>
+                              <StateBadge tone={tunnelServiceTone(tunnel.heartbeatStatus)}>{heartbeatStatus}</StateBadge>
+                            </div>
+                            <div className="mt-2 space-y-1">
+                              <p className="break-all">最近上报: {tunnel.heartbeatLastAt || "暂无"}</p>
+                              {tunnel.heartbeatLastError ? (
+                                <p className="break-all text-red-700">错误: {tunnel.heartbeatLastError}</p>
+                              ) : null}
+                              {heartbeatErrorHint ? (
+                                <p className="text-red-700">提示: {heartbeatErrorHint}</p>
+                              ) : null}
+                            </div>
+                          </div>
+                        </div>
+                      ) : null}
+
+                      <div className="flex flex-wrap gap-2">
+                        {tunnel.source === "quick_tunnel" ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => void runTunnelAction("start")}
+                              disabled={tunnelAction !== "" || tunnel.status === "running" || tunnel.status === "starting" || tunnel.status === "connected" || tunnel.status === "verifying_public" || tunnel.status === "waiting_url"}
+                              className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                            >
+                              启动 Tunnel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void runTunnelAction("stop")}
+                              disabled={tunnelAction !== "" || tunnel.status === "stopped"}
+                              className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                            >
+                              停止 Tunnel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void runTunnelAction("restart")}
+                              disabled={tunnelAction !== ""}
+                              className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                            >
+                              <RefreshCw className="h-4 w-4" />
+                              重启 Tunnel
+                            </button>
+                          </>
+                        ) : (
+                          <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--muted)]">
+                            {tunnel.source === "fixed_public_forward"
+                              ? "固定公网转发通过环境配置维护"
+                              : "当前使用 WEB_PUBLIC_URL 手工配置地址"}
+                          </div>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => void copyTunnelUrl()}
+                          disabled={tunnelAction !== "" || !tunnel.publicUrl}
+                          className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                        >
+                          <Copy className="h-4 w-4" />
+                          复制公网地址
+                        </button>
+                      </div>
+                    </>
+                  );
+                })()}
+              </section>
+            ) : null}
+          </div>
+        ) : null}
+
+        {!loading && activeTab === "notifications" ? (
+          <section className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+            <div className="flex items-start gap-2">
+              <Bell className="mt-0.5 h-5 w-5 text-[var(--accent)]" />
+              <div>
+                <h2 className="text-base font-semibold text-[var(--text)]">通知</h2>
+                <p className="text-sm text-[var(--muted)]">PushPlus 服务端推送和相关环境配置入口。</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
+              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                PushPlus: <span className="font-medium text-[var(--text)]">{pushPlusStatusText(notificationSettings)}</span>
+              </p>
+              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                Token: <span className="font-medium text-[var(--text)]">{notificationSettings?.pushPlusConfigured ? "已设置" : "未设置"}</span>
+              </p>
+              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                Topic: <span className="font-medium text-[var(--text)]">{notificationSettings?.pushPlusTopicConfigured ? "已设置" : "未设置"}</span>
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void sendPushPlusTest()}
+                disabled={testingPushPlus || !notificationSettings?.pushPlusEnabled}
+                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+              >
+                {testingPushPlus ? "发送中..." : "测试 PushPlus 推送"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowPushPlusGuide(true)}
+                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
+              >
+                PushPlus 配置教程
+              </button>
+              <button
+                type="button"
+                onClick={openNotificationEnv}
+                disabled={!canManageEnvConfig}
+                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+              >
+                打开环境配置
+              </button>
+            </div>
+
+            {showPushPlusGuide ? (
+              <div
+                className="rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4"
+                role="dialog"
+                aria-label="PushPlus 配置教程"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <h3 className="text-sm font-semibold text-[var(--text)]">PushPlus 配置教程</h3>
+                  <button
+                    type="button"
+                    onClick={() => setShowPushPlusGuide(false)}
+                    className="rounded-lg border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--surface-strong)]"
+                  >
+                    关闭
+                  </button>
+                </div>
+                <ol className="mt-3 list-decimal space-y-1 pl-5 text-sm text-[var(--text)]">
+                  <li>关注 PushPlus 公众号</li>
+                  <li>完成实名制认证</li>
+                  <li>登录 PushPlus 网站</li>
+                  <li>复制 token</li>
+                  <li>在环境配置的通知分类写入变量</li>
+                </ol>
+                <pre className="mt-3 overflow-x-auto rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 text-xs text-[var(--text)]">
+                  <code>{`PUSHPLUS_ENABLED=true
+PUSHPLUS_TOKEN=你的token
+PUSHPLUS_TOPIC=可选群组编码`}</code>
+                </pre>
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+
         {!loading && activeTab === "transfer" ? (
           <section aria-labelledby="transfer-bridge-title" className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1255,6 +1886,118 @@ export function AdminCenterScreen({
                 最近错误: {transferStatus.lastError}
               </p>
             ) : null}
+
+            <div className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3">
+              <h3 className="text-sm font-semibold text-[var(--text)]">桥接配置</h3>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="space-y-1">
+                  <span className="text-sm text-[var(--text)]">remote base URL</span>
+                  <input
+                    aria-label="remote base URL"
+                    value={transferDraft.remoteBaseUrl}
+                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, remoteBaseUrl: event.target.value }))}
+                    placeholder="https://api.openai.com/v1"
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-sm text-[var(--text)]">remote model</span>
+                  <input
+                    aria-label="remote model"
+                    value={transferDraft.remoteModel}
+                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, remoteModel: event.target.value }))}
+                    placeholder="gpt-4o"
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
+                  />
+                </label>
+                <label className="space-y-1 sm:col-span-2">
+                  <span className="text-sm text-[var(--text)]">remote API key</span>
+                  <input
+                    aria-label="remote API key"
+                    type="password"
+                    value={transferDraft.remoteApiKey}
+                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, remoteApiKey: event.target.value, clearRemoteApiKey: false }))}
+                    placeholder={transferStatus?.remoteApiKeySet ? "留空表示不修改现有 Key" : "填写远端 API Key"}
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
+                  />
+                </label>
+              </div>
+
+              <div className="grid gap-2 text-sm sm:grid-cols-2">
+                <label className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2">
+                  <input
+                    type="checkbox"
+                    checked={transferDraft.clearRemoteApiKey}
+                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, clearRemoteApiKey: event.target.checked, remoteApiKey: event.target.checked ? "" : prev.remoteApiKey }))}
+                  />
+                  清除 remote API key
+                </label>
+                <label className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2">
+                  <input
+                    type="checkbox"
+                    checked={transferDraft.requestStreamUsage}
+                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, requestStreamUsage: event.target.checked }))}
+                  />
+                  请求 stream usage
+                </label>
+                <label className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2">
+                  <input
+                    type="checkbox"
+                    checked={transferDraft.retryWithoutStreamOptions}
+                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, retryWithoutStreamOptions: event.target.checked }))}
+                  />
+                  stream options 失败后重试
+                </label>
+                <label className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2">
+                  <input
+                    type="checkbox"
+                    checked={transferDraft.downgradeDeveloperToSystem}
+                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, downgradeDeveloperToSystem: event.target.checked }))}
+                  />
+                  developer 消息降级为 system
+                </label>
+                <label className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2">
+                  <input
+                    type="checkbox"
+                    checked={transferDraft.useLegacyMaxTokens}
+                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, useLegacyMaxTokens: event.target.checked }))}
+                  />
+                  使用 legacy max_tokens
+                </label>
+                <label className="space-y-1 rounded-lg border border-[var(--border)] px-3 py-2">
+                  <span className="text-sm text-[var(--text)]">reasoning mode</span>
+                  <select
+                    aria-label="reasoning mode"
+                    value={transferDraft.reasoningMode}
+                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, reasoningMode: event.target.value }))}
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
+                  >
+                    <option value="chat_reasoning_effort">chat_reasoning_effort</option>
+                    <option value="drop">drop</option>
+                  </select>
+                </label>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void saveTransferConfig()}
+                  disabled={transferSaving}
+                  className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm tcb-solid-accent hover:opacity-90 disabled:opacity-60"
+                >
+                  <Save className="h-4 w-4" />
+                  {transferSaving ? "保存中..." : "保存桥接配置"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void resetTransferStats()}
+                  disabled={transferResetting}
+                  className="rounded-lg border border-red-200 px-3 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
+                >
+                  {transferResetting ? "重置中..." : "重置统计"}
+                </button>
+              </div>
+            </div>
 
             <div className="grid gap-3 text-sm sm:grid-cols-2">
               <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">

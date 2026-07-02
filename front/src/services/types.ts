@@ -136,6 +136,25 @@ export type TransferBridgeStatus = {
   startedAt?: string;
   lastRequestAt?: string;
   lastError?: string;
+  requestStreamUsage?: boolean;
+  retryWithoutStreamOptions?: boolean;
+  reasoningMode?: string;
+  downgradeDeveloperToSystem?: boolean;
+  useLegacyMaxTokens?: boolean;
+  restartRequired?: boolean;
+  restartRequiredReason?: string;
+};
+
+export type TransferBridgeConfigInput = {
+  remoteBaseUrl?: string;
+  remoteModel?: string;
+  remoteApiKey?: string;
+  clearRemoteApiKey?: boolean;
+  requestStreamUsage?: boolean;
+  retryWithoutStreamOptions?: boolean;
+  reasoningMode?: string;
+  downgradeDeveloperToSystem?: boolean;
+  useLegacyMaxTokens?: boolean;
 };
 
 export type EnvConfigFieldType = "string" | "number" | "boolean" | "select" | "csv" | "path" | "password";

@@ -143,6 +143,7 @@ import type {
   TerminalActionRunResult,
   TerminalActionsConfig,
   TerminalActionsEditableConfig,
+  TransferBridgeConfigInput,
   TransferBridgeStatus,
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
@@ -173,6 +174,9 @@ export interface WebBotClient {
   updateUser(accountId: string, input: AdminUserUpdateInput): Promise<AdminUser>;
   updateUserBotPermissions(accountId: string, allowedBots: string[]): Promise<UserBotPermissions>;
   getTransferBridgeStatus(): Promise<TransferBridgeStatus>;
+  getTransferAdminStatus(): Promise<TransferBridgeStatus>;
+  updateTransferBridgeConfig(input: TransferBridgeConfigInput): Promise<TransferBridgeStatus>;
+  resetTransferBridgeStats(): Promise<TransferBridgeStatus>;
   getEnvConfig(): Promise<EnvConfigSnapshot>;
   previewEnvConfig(input: EnvConfigPatchInput): Promise<EnvConfigPatchResult>;
   updateEnvConfig(input: EnvConfigPatchInput): Promise<EnvConfigPatchResult>;

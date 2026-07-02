@@ -537,6 +537,12 @@ async def status(request: web.Request) -> web.Response:
     return _json({"ok": True, "data": server.transfer_service.get_status(base_path=server._web_base_path())})
 
 
+async def admin_status(request: web.Request) -> web.Response:
+    server = _server(request)
+    await server._with_capability(request, CAP_ADMIN_OPS)
+    return _json({"ok": True, "data": server.transfer_service.get_status(base_path=server._web_base_path())})
+
+
 async def page(request: web.Request) -> web.Response:
     return web.Response(text=HTML_PAGE, content_type="text/html")
 
@@ -544,7 +550,8 @@ async def page(request: web.Request) -> web.Response:
 async def reset(request: web.Request) -> web.Response:
     server = _server(request)
     await server._with_capability(request, CAP_ADMIN_OPS)
-    return _json({"ok": True, "data": server.transfer_service.reset_stats()})
+    server.transfer_service.reset_stats()
+    return _json({"ok": True, "data": server.transfer_service.get_status(base_path=server._web_base_path())})
 
 
 async def config(request: web.Request) -> web.Response:
@@ -554,7 +561,11 @@ async def config(request: web.Request) -> web.Response:
         data = server.transfer_service.update_config(await _read_json(request))
     except TransferServiceError as exc:
         raise _transfer_error(exc) from exc
-    return _json({"ok": True, "data": data})
+    status_data = server.transfer_service.get_status(base_path=server._web_base_path())
+    if data.get("restart_required"):
+        status_data["restart_required"] = data.get("restart_required")
+        status_data["restart_required_reason"] = data.get("restart_required_reason", "")
+    return _json({"ok": True, "data": status_data})
 
 
 def register(app: web.Application, server) -> None:
@@ -569,6 +580,7 @@ def register(app: web.Application, server) -> None:
     app.router.add_post("/chat/completions", proxy_chat_completions)
     app.router.add_get("/api/transfer/health", health)
     app.router.add_get("/api/transfer/status", status)
+    app.router.add_get("/api/admin/transfer/status", admin_status)
     app.router.add_get("/api/transfer/page", page)
     app.router.add_post("/api/admin/transfer/reset", reset)
     app.router.add_patch("/api/admin/transfer/config", config)

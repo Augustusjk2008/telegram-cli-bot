@@ -182,6 +182,11 @@ describe("RealWebBotClient", () => {
       total_bytes_in: 75420,
       total_bytes_out: 3400,
       uptime_seconds: 61,
+      request_stream_usage: true,
+      retry_without_stream_options: true,
+      reasoning_mode: "chat_reasoning_effort",
+      downgrade_developer_to_system: false,
+      use_legacy_max_tokens: true,
       recent_traffic: [
         {
           id: "abc",
@@ -228,6 +233,11 @@ describe("RealWebBotClient", () => {
       totalBytesIn: 75420,
       totalBytesOut: 3400,
       uptimeSeconds: 61,
+      requestStreamUsage: true,
+      retryWithoutStreamOptions: true,
+      reasoningMode: "chat_reasoning_effort",
+      downgradeDeveloperToSystem: false,
+      useLegacyMaxTokens: true,
       recentTraffic: [
         {
           id: "abc",
@@ -246,6 +256,104 @@ describe("RealWebBotClient", () => {
       lastRequestAt: "2026-06-29T12:01:00Z",
       lastError: "",
     });
+  });
+
+  test("transfer admin endpoints use admin paths and serialize config", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonOk({
+        enabled: true,
+        running: true,
+        status: "running",
+        local_url: "http://127.0.0.1:8080",
+        bridge_page_url: "/api/transfer/page",
+        responses_base_url: "http://127.0.0.1:8080/v1",
+        chat_completions_base_url: "http://127.0.0.1:8080/v1",
+        remote_base_url: "https://api.example.test/v1",
+        remote_model: "gpt-next",
+        remote_api_key_set: true,
+        request_count: 1,
+        total_input_tokens: 2,
+        total_output_tokens: 3,
+        total_bytes_in: 4,
+        total_bytes_out: 5,
+      }))
+      .mockResolvedValueOnce(jsonOk({
+        enabled: true,
+        running: true,
+        status: "running",
+        local_url: "http://127.0.0.1:8080",
+        bridge_page_url: "/api/transfer/page",
+        responses_base_url: "http://127.0.0.1:8080/v1",
+        chat_completions_base_url: "http://127.0.0.1:8080/v1",
+        remote_base_url: "https://api.example.test/v1",
+        remote_model: "gpt-next",
+        remote_api_key_set: true,
+        request_count: 1,
+        total_input_tokens: 2,
+        total_output_tokens: 3,
+        total_bytes_in: 4,
+        total_bytes_out: 5,
+      }))
+      .mockResolvedValueOnce(jsonOk({
+        enabled: true,
+        running: true,
+        status: "running",
+        local_url: "http://127.0.0.1:8080",
+        bridge_page_url: "/api/transfer/page",
+        responses_base_url: "http://127.0.0.1:8080/v1",
+        chat_completions_base_url: "http://127.0.0.1:8080/v1",
+        remote_api_key_set: true,
+        request_count: 0,
+        total_input_tokens: 0,
+        total_output_tokens: 0,
+        total_bytes_in: 0,
+        total_bytes_out: 0,
+      }));
+
+    const client = new RealWebBotClient();
+    const status = await client.getTransferAdminStatus();
+    const saved = await client.updateTransferBridgeConfig({
+      remoteBaseUrl: "https://api.example.test/v1",
+      remoteModel: "gpt-next",
+      remoteApiKey: "sk-new",
+      requestStreamUsage: false,
+      retryWithoutStreamOptions: true,
+      reasoningMode: "drop",
+      downgradeDeveloperToSystem: true,
+      useLegacyMaxTokens: true,
+    });
+    const reset = await client.resetTransferBridgeStats();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/admin/transfer/status",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/admin/transfer/config",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({
+          remote_base_url: "https://api.example.test/v1",
+          remote_model: "gpt-next",
+          remote_api_key: "sk-new",
+          request_stream_usage: false,
+          retry_without_stream_options: true,
+          reasoning_mode: "drop",
+          downgrade_developer_to_system: true,
+          use_legacy_max_tokens: true,
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/admin/transfer/reset",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(status.remoteBaseUrl).toBe("https://api.example.test/v1");
+    expect(saved.remoteModel).toBe("gpt-next");
+    expect(reset.requestCount).toBe(0);
   });
 
 

@@ -5,6 +5,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from bot.web.auth_store import CAP_ADMIN_OPS, WebAuthStore
 from bot.web.server import WebApiServer
 
 
@@ -44,6 +45,17 @@ def _build_server(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> WebApiServ
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
     monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "")
     return WebApiServer(object(), host="127.0.0.1", port=8765, tunnel_service=DummyTunnelService())
+
+
+def _build_member_session(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    auth_store = WebAuthStore(
+        users_path=tmp_path / ".web_users.json",
+        register_codes_path=tmp_path / ".web_register_codes.json",
+    )
+    invite_code = auth_store.create_register_code(created_by="127.0.0.1")["code"]
+    session = auth_store.register_member("alice", "pw-123456", invite_code)
+    monkeypatch.setattr("bot.web.server._WEB_AUTH_STORE", auth_store)
+    return session
 
 
 @pytest.mark.asyncio
@@ -129,6 +141,43 @@ async def test_transfer_status_requires_project_auth_and_does_not_echo_remote_ke
     data = payload["data"]
     assert data["remote_api_key_set"] is True
     assert "remote_api_key" not in data
+    assert "sk-remote" not in json.dumps(data)
+
+
+@pytest.mark.asyncio
+async def test_admin_transfer_status_requires_admin_capability(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "project-token")
+    monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "")
+    monkeypatch.setenv("TCB_DATA_DIR", str(tmp_path))
+    member_session = _build_member_session(monkeypatch, tmp_path)
+    assert CAP_ADMIN_OPS not in member_session.capabilities
+
+    server = WebApiServer(object(), host="8.8.8.8", port=8765, tunnel_service=DummyTunnelService())
+    server.transfer_service.update_config(
+        {
+            "remote_base_url": "http://remote.test/v1",
+            "remote_api_key": "sk-remote",
+            "remote_model": "gpt-remote",
+        }
+    )
+    app = server._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            member_response = await client.get(
+                "/api/admin/transfer/status",
+                headers={"Authorization": f"Bearer {member_session.token}", "X-Forwarded-For": "203.0.113.9"},
+            )
+            admin_response = await client.get("/api/admin/transfer/status", headers={"X-API-Token": "project-token"})
+            payload = await admin_response.json()
+
+    assert member_response.status == 403
+    assert admin_response.status == 200
+    data = payload["data"]
+    assert data["remote_api_key_set"] is True
+    assert data["remote_model"] == "gpt-remote"
     assert "sk-remote" not in json.dumps(data)
 
 

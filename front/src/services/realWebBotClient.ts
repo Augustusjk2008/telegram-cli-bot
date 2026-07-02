@@ -180,6 +180,7 @@ import type {
   TerminalActionRunResult,
   TerminalActionsConfig,
   TerminalActionsEditableConfig,
+  TransferBridgeConfigInput,
   TransferBridgeStatus,
   TunnelSnapshot,
   UpdateAssistantCronJobInput,
@@ -359,6 +360,13 @@ type RawTransferBridgeStatus = {
   started_at?: string;
   last_request_at?: string;
   last_error?: string;
+  request_stream_usage?: boolean;
+  retry_without_stream_options?: boolean;
+  reasoning_mode?: string;
+  downgrade_developer_to_system?: boolean;
+  use_legacy_max_tokens?: boolean;
+  restart_required?: boolean;
+  restart_required_reason?: string;
 };
 
 type RawNotificationSettings = {
@@ -3298,6 +3306,27 @@ function mapTransferBridgeStatus(raw: RawTransferBridgeStatus): TransferBridgeSt
     startedAt: raw.started_at ? String(raw.started_at) : undefined,
     lastRequestAt: raw.last_request_at ? String(raw.last_request_at) : undefined,
     lastError: raw.last_error !== undefined ? String(raw.last_error) : undefined,
+    requestStreamUsage: typeof raw.request_stream_usage === "boolean" ? raw.request_stream_usage : undefined,
+    retryWithoutStreamOptions: typeof raw.retry_without_stream_options === "boolean" ? raw.retry_without_stream_options : undefined,
+    reasoningMode: raw.reasoning_mode ? String(raw.reasoning_mode) : undefined,
+    downgradeDeveloperToSystem: typeof raw.downgrade_developer_to_system === "boolean" ? raw.downgrade_developer_to_system : undefined,
+    useLegacyMaxTokens: typeof raw.use_legacy_max_tokens === "boolean" ? raw.use_legacy_max_tokens : undefined,
+    restartRequired: typeof raw.restart_required === "boolean" ? raw.restart_required : undefined,
+    restartRequiredReason: raw.restart_required_reason ? String(raw.restart_required_reason) : undefined,
+  };
+}
+
+function mapTransferBridgeConfigInput(input: TransferBridgeConfigInput) {
+  return {
+    ...(input.remoteBaseUrl !== undefined ? { remote_base_url: input.remoteBaseUrl } : {}),
+    ...(input.remoteModel !== undefined ? { remote_model: input.remoteModel } : {}),
+    ...(input.remoteApiKey ? { remote_api_key: input.remoteApiKey } : {}),
+    ...(input.clearRemoteApiKey !== undefined ? { clear_remote_api_key: input.clearRemoteApiKey } : {}),
+    ...(input.requestStreamUsage !== undefined ? { request_stream_usage: input.requestStreamUsage } : {}),
+    ...(input.retryWithoutStreamOptions !== undefined ? { retry_without_stream_options: input.retryWithoutStreamOptions } : {}),
+    ...(input.reasoningMode !== undefined ? { reasoning_mode: input.reasoningMode } : {}),
+    ...(input.downgradeDeveloperToSystem !== undefined ? { downgrade_developer_to_system: input.downgradeDeveloperToSystem } : {}),
+    ...(input.useLegacyMaxTokens !== undefined ? { use_legacy_max_tokens: input.useLegacyMaxTokens } : {}),
   };
 }
 
@@ -4456,6 +4485,29 @@ export class RealWebBotClient implements WebBotClient {
 
   async getTransferBridgeStatus(): Promise<TransferBridgeStatus> {
     const data = await this.requestJson<RawTransferBridgeStatus>("/api/transfer/status");
+    return mapTransferBridgeStatus(data);
+  }
+
+  async getTransferAdminStatus(): Promise<TransferBridgeStatus> {
+    const data = await this.requestJson<RawTransferBridgeStatus>("/api/admin/transfer/status");
+    return mapTransferBridgeStatus(data);
+  }
+
+  async updateTransferBridgeConfig(input: TransferBridgeConfigInput): Promise<TransferBridgeStatus> {
+    const data = await this.requestJson<RawTransferBridgeStatus>("/api/admin/transfer/config", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(mapTransferBridgeConfigInput(input)),
+    });
+    return mapTransferBridgeStatus(data);
+  }
+
+  async resetTransferBridgeStats(): Promise<TransferBridgeStatus> {
+    const data = await this.requestJson<RawTransferBridgeStatus>("/api/admin/transfer/reset", {
+      method: "POST",
+    });
     return mapTransferBridgeStatus(data);
   }
 

@@ -1,13 +1,11 @@
 import { clsx } from "clsx";
 import { useEffect, useState } from "react";
-import { createPortal } from "react-dom";
-import { AlertTriangle, Bell, Copy, Globe, LogOut, RotateCw, Save, SlidersHorizontal, Square } from "lucide-react";
+import { AlertTriangle, Bell, LogOut, Save, SlidersHorizontal, Square } from "lucide-react";
 import { AgentSettingsPanel } from "../components/AgentSettingsPanel";
 import { BotCliParamsPanel } from "../components/BotCliParamsPanel";
 import { ClusterSetupPanel } from "../components/ClusterSetupPanel";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
 import { NativeAgentConfigFields } from "../components/NativeAgentConfigFields";
-import { StateBadge } from "../components/StateBadge";
 import { ThemeDropdown } from "../components/ThemeDropdown";
 import { toolbarButtonClass } from "../components/ToolbarButton";
 import { MockWebBotClient } from "../services/mockWebBotClient";
@@ -17,12 +15,8 @@ import type {
   BrowserNotificationPermission,
   ChatExecutionMode,
   CliType,
-  GitProxySettings,
-  NativeAgentConfigPayload,
   NativeAgentDraft,
-  NativeAgentPreflightResult,
-  NotificationSettingsStatus,
-  TunnelSnapshot,
+  NativeAgentModelsPayload,
   UpdateBotWorkdirOptions,
   WorkdirChangeConflict,
 } from "../services/types";
@@ -34,7 +28,6 @@ import {
   buildExecutionConfig,
   DEFAULT_NATIVE_AGENT_DRAFT,
   getRuntimeBackend,
-  isNativeAgentGloballyEnabled,
 } from "./botManagerModel";
 import {
   CHAT_BODY_FONT_FAMILY_OPTIONS,
@@ -81,8 +74,6 @@ type Props = {
   onOpenBotManager?: () => void;
 };
 
-const TUNNEL_STATUS_REFRESH_INTERVAL_MS = 5000;
-
 function settingsPanelClass(extra = "") {
   return clsx(
     "rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-4 shadow-[var(--shadow-soft)]",
@@ -104,46 +95,6 @@ function settingsButtonClass(kind: "plain" | "primary" | "danger" = "plain", ext
   return toolbarButtonClass(kind, "md", extra);
 }
 
-function isValidGitProxyAddress(value: string) {
-  const address = value.trim();
-  if (!address) return true;
-  const port = /^\d+$/.test(address) ? address : address.split(":").pop() || "";
-  if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) {
-    return false;
-  }
-  if (/^\d+$/.test(address)) {
-    return true;
-  }
-  return /^[A-Za-z0-9.-]+:\d+$/.test(address) || /^\[[^\]\s]+\]:\d+$/.test(address);
-}
-
-function gitProxyStatusText(settings: GitProxySettings | null) {
-  return settings?.address ? settings.address : "直连";
-}
-
-function tunnelStatusText(status: TunnelSnapshot["status"]) {
-  if (status === "running") return "运行中";
-  if (status === "waiting_local") return "等待本地服务";
-  if (status === "waiting_url") return "等待公网地址";
-  if (status === "connected") return "公网地址已创建";
-  if (status === "verifying_public") return "正在验证公网地址";
-  if (status === "starting") return "启动中";
-  if (status === "error") return "异常";
-  return "已停止";
-}
-
-function tunnelSourceText(tunnel: TunnelSnapshot) {
-  if (tunnel.source === "fixed_public_forward" || tunnel.mode === "fixed_public_forward") return "固定公网转发";
-  if (tunnel.source === "manual_config") return "手工地址";
-  return "Quick Tunnel";
-}
-
-function nativePreflightSummary(preflight?: NativeAgentPreflightResult) {
-  if (!preflight) return "未运行";
-  if (!preflight.ok) return "失败";
-  return preflight.checks.some((check) => check.severity === "warning" && !check.ok) ? "警告" : "通过";
-}
-
 function nativeAgentDraftFromOverview(overview?: Pick<BotOverview, "nativeAgent"> | null): NativeAgentDraft {
   return {
     ...DEFAULT_NATIVE_AGENT_DRAFT,
@@ -158,84 +109,13 @@ function normalizeNativeAgentDraft(draft: NativeAgentDraft) {
     ...DEFAULT_NATIVE_AGENT_DRAFT,
     ...draft,
     provider: "",
-    model: "",
+    model: draft.model.trim(),
     piAgent: draft.piAgent.trim(),
     baseUrl: "",
     apiKey: "",
     clearApiKey: false,
+    reasoningEffort: draft.reasoningEffort?.trim(),
   };
-}
-
-function isFixedPublicForward(tunnel: TunnelSnapshot) {
-  return tunnel.source === "fixed_public_forward" || tunnel.mode === "fixed_public_forward";
-}
-
-function normalizeTunnelServiceStatus(value: string | null | undefined) {
-  return String(value || "").trim().toLowerCase();
-}
-
-function tunnelServiceTone(value: string | null | undefined): "neutral" | "success" | "warning" | "danger" | "accent" {
-  const status = normalizeTunnelServiceStatus(value);
-  if (!status || ["stopped", "disabled", "offline"].includes(status)) return "neutral";
-  if (["running", "connected", "online", "ok", "healthy", "success"].includes(status)) return "success";
-  if (["starting", "pending", "waiting", "verifying"].some((token) => status.includes(token))) return "warning";
-  if (["error", "failed", "timeout", "forbidden"].some((token) => status.includes(token))) return "danger";
-  return "accent";
-}
-
-function frpcStatusText(value: string | null | undefined, fallbackStatus?: TunnelSnapshot["status"]) {
-  const status = normalizeTunnelServiceStatus(value) || normalizeTunnelServiceStatus(fallbackStatus);
-  if (!status || status === "stopped") return "已停止";
-  if (["running", "connected", "online", "ok", "healthy", "success"].includes(status)) return "运行中";
-  if (status === "starting") return "启动中";
-  if (["waiting", "pending"].some((token) => status.includes(token))) return "等待中";
-  if (["error", "failed", "timeout", "forbidden"].some((token) => status.includes(token))) return "异常";
-  return value || tunnelStatusText(fallbackStatus || "stopped");
-}
-
-function heartbeatStatusText(value: string | null | undefined) {
-  const status = normalizeTunnelServiceStatus(value);
-  if (!status || ["stopped", "disabled", "offline"].includes(status)) return "未上报";
-  if (["running", "connected", "online", "ok", "healthy", "success"].includes(status)) return "正常";
-  if (status === "starting") return "启动中";
-  if (["waiting", "pending"].some((token) => status.includes(token))) return "等待中";
-  if (["error", "failed", "timeout", "forbidden"].some((token) => status.includes(token))) return "异常";
-  return value || "未上报";
-}
-
-function fixedForwardErrorHint(value: string | null | undefined) {
-  const text = String(value || "").trim();
-  if (!text) return "";
-  const normalized = text.toLowerCase();
-  if (
-    normalized.includes("403")
-    || (normalized.includes("node") && normalized.includes("token"))
-  ) {
-    return "节点 token 错";
-  }
-  if (
-    normalized.includes("login to server failed")
-    || normalized.includes("authorization failed")
-    || normalized.includes("auth failed")
-    || (normalized.includes("frps") && normalized.includes("token"))
-  ) {
-    return "frps token 错";
-  }
-  if (
-    ["timeout", "timed out", "10060", "10061", "refused", "unreachable", "no route", "i/o timeout"].some((token) => normalized.includes(token))
-    && (normalized.includes("7000") || normalized.includes("frps") || normalized.includes("dial tcp") || normalized.includes("connect"))
-  ) {
-    return "frps 端口不通/安全组未放通";
-  }
-  return "";
-}
-
-function isSameNameFrpcProxyMessage(value: string | null | undefined) {
-  const text = String(value || "").trim().toLowerCase();
-  return Boolean(text) && (
-    (text.includes("同名") && text.includes("proxy"))
-    || (text.includes("proxy [") && text.includes("already exists"))
-  );
 }
 
 function notificationPermissionText(permission: BrowserNotificationPermission) {
@@ -243,12 +123,6 @@ function notificationPermissionText(permission: BrowserNotificationPermission) {
   if (permission === "denied") return "已拒绝";
   if (permission === "unsupported") return "浏览器不支持";
   return "未询问";
-}
-
-function pushPlusStatusText(status: NotificationSettingsStatus | null) {
-  if (!status) return "后端未提供状态";
-  if (!status.pushPlusEnabled) return "未启用";
-  return status.pushPlusConfigured ? "已配置" : "未配置 token";
 }
 
 function asWebApiClientError(error: unknown): WebApiClientError | null {
@@ -287,18 +161,13 @@ export function SettingsScreen({
   onOpenBotManager,
 }: Props) {
   const [overview, setOverview] = useState<BotOverview | null>(null);
-  const [tunnel, setTunnel] = useState<TunnelSnapshot | null>(null);
-  const [gitProxySettings, setGitProxySettings] = useState<GitProxySettings | null>(null);
-  const [nativeAgentConfig, setNativeAgentConfig] = useState<NativeAgentConfigPayload | null>(null);
-  const [nativeAgentFeatureEnabled, setNativeAgentFeatureEnabled] = useState<boolean | null>(null);
-  const [notificationSettings, setNotificationSettings] = useState<NotificationSettingsStatus | null>(null);
+  const [nativeAgentModels, setNativeAgentModels] = useState<NativeAgentModelsPayload | null>(null);
   const [notificationEnabled, setNotificationEnabled] = useState(() => readChatCompletionWebNotificationEnabled());
   const [notificationPermission, setNotificationPermission] = useState<BrowserNotificationPermission>(() => getBrowserNotificationPermission());
   const [runtimeBackendDraft, setRuntimeBackendDraft] = useState<ChatExecutionMode>("cli");
   const [cliTypeDraft, setCliTypeDraft] = useState<CliType>("codex");
   const [cliPathDraft, setCliPathDraft] = useState("");
   const [nativeAgentDraft, setNativeAgentDraft] = useState<NativeAgentDraft>(() => ({ ...DEFAULT_NATIVE_AGENT_DRAFT }));
-  const [gitProxyAddressDraft, setGitProxyAddressDraft] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -306,14 +175,10 @@ export function SettingsScreen({
   const [pendingWorkdirConflict, setPendingWorkdirConflict] = useState<WorkdirChangeConflict | null>(null);
   const [showWorkdirPicker, setShowWorkdirPicker] = useState(false);
   const [showKillConfirm, setShowKillConfirm] = useState(false);
-  const [showPushPlusGuide, setShowPushPlusGuide] = useState(false);
   const [actionLoading, setActionLoading] = useState<"" | "kill">("");
   const [savingCliConfig, setSavingCliConfig] = useState(false);
   const [savingWorkdir, setSavingWorkdir] = useState(false);
-  const [savingGitProxy, setSavingGitProxy] = useState(false);
   const [requestingNotificationPermission, setRequestingNotificationPermission] = useState(false);
-  const [testingPushPlus, setTestingPushPlus] = useState(false);
-  const [tunnelAction, setTunnelAction] = useState<"" | "start" | "stop" | "restart" | "copy">("");
   const isMainBot = botAlias === "main";
   const workdirLocked = overview?.botMode === "assistant";
   const canManageBotRuntime = sessionCapabilities.length === 0 || sessionCapabilities.includes("manage_bots") || sessionCapabilities.includes("admin_ops");
@@ -326,7 +191,10 @@ export function SettingsScreen({
   const runtimeBackend = getRuntimeBackend(overview);
   const nativeRuntime = runtimeBackend === "native_agent";
   const draftNativeRuntime = runtimeBackendDraft === "native_agent";
-  const nativeAgentOptionVisible = nativeAgentFeatureEnabled !== false || draftNativeRuntime || nativeRuntime;
+  const nativeAgentOptionVisible = true;
+  const nativeSelectedModel = nativeAgentDraft.model || nativeAgentModels?.selectedModel || "";
+  const nativeSelectedModelItem = nativeAgentModels?.items.find((item) => item.id === nativeSelectedModel);
+  const nativeReasoningEffortOptions = nativeSelectedModelItem?.reasoningEfforts || [];
 
   useEffect(() => {
     let cancelled = false;
@@ -335,16 +203,8 @@ export function SettingsScreen({
 
     Promise.allSettled([
       client.getBotOverview(botAlias),
-      client.getTunnelStatus(),
-      isMainBot ? client.getGitProxySettings() : Promise.resolve(null),
-      client.getNotificationSettings?.() ?? Promise.resolve(null),
     ])
-      .then(([
-        overviewResult,
-        tunnelResult,
-        gitProxyResult,
-        notificationSettingsResult,
-      ]) => {
+      .then(([overviewResult]) => {
         if (cancelled) return;
 
         if (overviewResult.status !== "fulfilled") {
@@ -354,9 +214,6 @@ export function SettingsScreen({
         }
 
         const overviewData = overviewResult.value;
-        const tunnelData = tunnelResult.status === "fulfilled" ? tunnelResult.value : null;
-        const gitProxyData = gitProxyResult.status === "fulfilled" ? gitProxyResult.value : null;
-        const notificationData = notificationSettingsResult.status === "fulfilled" ? notificationSettingsResult.value : null;
 
         setOverview(overviewData);
         setCliTypeDraft(overviewData.cliType);
@@ -364,11 +221,7 @@ export function SettingsScreen({
         setRuntimeBackendDraft(getRuntimeBackend(overviewData));
         setNativeAgentDraft(nativeAgentDraftFromOverview(overviewData));
         setWorkdirDraft(normalizePathInput(prefilledWorkdir || overviewData.workingDir));
-        setTunnel(tunnelData);
-        setGitProxySettings(gitProxyData);
-        setNotificationSettings(notificationData);
         setNotificationPermission(getBrowserNotificationPermission());
-        setGitProxyAddressDraft(gitProxyData?.address || (gitProxyData?.port ? `127.0.0.1:${gitProxyData.port}` : ""));
         setLoading(false);
       })
       .catch((err: unknown) => {
@@ -380,81 +233,34 @@ export function SettingsScreen({
     return () => {
       cancelled = true;
     };
-  }, [botAlias, client, isMainBot, prefilledWorkdir]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void client.getEnvConfig()
-      .then((snapshot) => {
-        if (!cancelled) {
-          setNativeAgentFeatureEnabled(isNativeAgentGloballyEnabled(snapshot));
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setNativeAgentFeatureEnabled(null);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [client]);
-
-  useEffect(() => {
-    if (nativeAgentFeatureEnabled === false && runtimeBackendDraft === "native_agent" && !nativeRuntime) {
-      setRuntimeBackendDraft("cli");
-    }
-  }, [nativeAgentFeatureEnabled, nativeRuntime, runtimeBackendDraft]);
+  }, [botAlias, client, prefilledWorkdir]);
 
   useEffect(() => {
     if (!nativeRuntime && !draftNativeRuntime) {
-      setNativeAgentConfig(null);
+      setNativeAgentModels(null);
       return;
     }
     let cancelled = false;
-    void client.getNativeAgentConfig()
-      .then((config) => {
+    void client.getNativeAgentModels(botAlias)
+      .then((models) => {
         if (!cancelled) {
-          setNativeAgentConfig(config);
+          setNativeAgentModels(models);
+          setNativeAgentDraft((prev) => ({
+            ...prev,
+            model: prev.model || models.selectedModel || models.items[0]?.id || "",
+            reasoningEffort: prev.reasoningEffort || models.selectedReasoningEffort || models.items[0]?.defaultReasoningEffort || "",
+          }));
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setNativeAgentConfig(null);
+          setNativeAgentModels(null);
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [client, nativeRuntime, draftNativeRuntime]);
-
-  useEffect(() => {
-    if (!["starting", "connected", "verifying_public"].includes(tunnel?.status || "") || !tunnel?.publicUrl || tunnelAction !== "") {
-      return;
-    }
-
-    let cancelled = false;
-    const timer = window.setInterval(() => {
-      void client.getTunnelStatus()
-        .then((next) => {
-          if (cancelled) return;
-          setError("");
-          setTunnel(next);
-          if (next.status === "running") {
-            setNotice("Tunnel 已连接");
-          }
-        })
-        .catch((err: unknown) => {
-          if (cancelled) return;
-          setError(getErrorMessage(err, "刷新 Tunnel 状态失败"));
-        });
-    }, TUNNEL_STATUS_REFRESH_INTERVAL_MS);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [client, tunnel?.status, tunnel?.publicUrl, tunnelAction]);
+  }, [botAlias, client, nativeRuntime, draftNativeRuntime]);
 
   useEffect(() => {
     if (!prefilledWorkdir) {
@@ -498,7 +304,10 @@ export function SettingsScreen({
       const executionChanged =
         runtimeBackend !== runtimeBackendDraft
         || (overview?.nativeAgent?.piAgent || "").trim() !== normalizedNativeAgent.piAgent;
-      if (executionChanged) {
+      const nativeModelChanged =
+        (overview?.nativeAgent?.model || "").trim() !== normalizedNativeAgent.model
+        || (overview?.nativeAgent?.reasoningEffort || "").trim() !== (normalizedNativeAgent.reasoningEffort || "");
+      if (executionChanged || (runtimeBackendDraft === "native_agent" && nativeModelChanged)) {
         const executionConfig = buildExecutionConfig(runtimeBackendDraft);
         nextBot = await client.updateBotExecutionConfig(botAlias, {
           supportedExecutionModes: executionConfig.supportedExecutionModes,
@@ -583,28 +392,6 @@ export function SettingsScreen({
     }
   };
 
-  const saveGitProxy = async () => {
-    const nextAddress = gitProxyAddressDraft.trim();
-    if (!isValidGitProxyAddress(nextAddress)) {
-      setError("代理地址必须是 host:port，或 1 到 65535 之间的端口");
-      return;
-    }
-
-    setSavingGitProxy(true);
-    setError("");
-    setNotice("");
-    try {
-      const nextSettings = await client.updateGitProxySettings(nextAddress);
-      setGitProxySettings(nextSettings);
-      setGitProxyAddressDraft(nextSettings.address);
-      setNotice("Git 代理设置已保存");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "保存 Git 代理失败");
-    } finally {
-      setSavingGitProxy(false);
-    }
-  };
-
   const handleThemeChange = (nextTheme: UiThemeName) => {
     if (nextTheme === themeName) {
       return;
@@ -635,24 +422,6 @@ export function SettingsScreen({
       }
     } finally {
       setRequestingNotificationPermission(false);
-    }
-  };
-
-  const sendPushPlusTest = async () => {
-    if (!client.sendPushPlusTest) {
-      setError("当前后端不支持 PushPlus 测试推送");
-      return;
-    }
-    setTestingPushPlus(true);
-    setError("");
-    setNotice("");
-    try {
-      await client.sendPushPlusTest();
-      setNotice("PushPlus 测试推送已发送");
-    } catch (err) {
-      setError(getErrorMessage(err, "PushPlus 测试推送失败"));
-    } finally {
-      setTestingPushPlus(false);
     }
   };
 
@@ -688,79 +457,6 @@ export function SettingsScreen({
     onChatBodyParagraphSpacingChange?.(nextParagraphSpacing);
   };
 
-  const runTunnelAction = async (action: "start" | "stop" | "restart") => {
-    setTunnelAction(action);
-    setError("");
-    setNotice("");
-    try {
-      const next = action === "start"
-        ? await client.startTunnel()
-        : action === "stop"
-          ? await client.stopTunnel()
-          : await client.restartTunnel();
-      setTunnel(next);
-      setNotice(action === "restart" ? "Tunnel 已重启" : action === "start" ? "Tunnel 已启动" : "Tunnel 已停止");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Tunnel 操作失败");
-    } finally {
-      setTunnelAction("");
-    }
-  };
-
-  const copyTunnelUrl = async () => {
-    if (!tunnel?.publicUrl) return;
-    setTunnelAction("copy");
-    setError("");
-    setNotice("");
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(tunnel.publicUrl);
-      }
-      setNotice("公网地址已复制");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "复制公网地址失败");
-    } finally {
-      setTunnelAction("");
-    }
-  };
-
-  const pushPlusGuideDialog = showPushPlusGuide ? (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-label="PushPlus 配置教程"
-    >
-      <div className="w-[min(32rem,calc(100vw-2rem))] rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-2xl">
-        <h2 className="text-base font-semibold text-[var(--text)]">PushPlus 配置教程</h2>
-        <ol className="mt-4 list-decimal space-y-2 pl-5 text-sm text-[var(--text)]">
-          <li>关注 PushPlus 公众号</li>
-          <li>完成实名制认证</li>
-          <li>登录 PushPlus 网站</li>
-          <li>复制 token</li>
-          <li>编辑项目 `.env`</li>
-        </ol>
-        <pre className="mt-4 overflow-x-auto rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3 text-xs text-[var(--text)]">
-          <code>{`PUSHPLUS_ENABLED=true
-PUSHPLUS_TOKEN=你的token
-PUSHPLUS_TOPIC=可选群组编码`}</code>
-        </pre>
-        <p className="mt-3 text-sm text-[var(--muted)]">
-          PUSHPLUS_TOPIC 可不填；不填时只推送给 token 所属账号。
-        </p>
-        <div className="mt-5 flex justify-end">
-          <button
-            type="button"
-            onClick={() => setShowPushPlusGuide(false)}
-            className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm hover:bg-[var(--surface-strong)]"
-          >
-            关闭
-          </button>
-        </div>
-      </div>
-    </div>
-  ) : null;
-
   return (
     <main className={clsx("flex h-full min-h-0 flex-col", embedded ? "bg-[var(--workbench-titlebar-bg)]" : "bg-[var(--bg)]")}>
       {embedded ? null : (
@@ -785,74 +481,72 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
           </div>
         ) : null}
 
-        {botAlias === "main" ? (
-          <div className={settingsPanelClass("space-y-4")}>
-            <h2 className="text-base font-semibold text-[var(--text)]">界面与阅读</h2>
+        <div className={settingsPanelClass("space-y-4")}>
+          <h2 className="text-base font-semibold text-[var(--text)]">界面与阅读</h2>
 
-            <div className="space-y-2">
-              <div className="text-sm font-medium text-[var(--text)]">界面主题</div>
-              <ThemeDropdown value={themeName} onChange={handleThemeChange} />
-            </div>
-
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <label className="space-y-2">
-                <div className="text-sm font-medium text-[var(--text)]">聊天正文字体</div>
-                <select
-                  aria-label="聊天正文字体"
-                  value={chatBodyFontFamily}
-                  onChange={(event) => handleChatBodyFontFamilyChange(event.target.value as ChatBodyFontFamilyName)}
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-                >
-                  {CHAT_BODY_FONT_FAMILY_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="space-y-2">
-                <div className="text-sm font-medium text-[var(--text)]">聊天行间距</div>
-                <select
-                  aria-label="聊天行间距"
-                  value={chatBodyLineHeight}
-                  onChange={(event) => handleChatBodyLineHeightChange(event.target.value as ChatBodyLineHeightName)}
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-                >
-                  {CHAT_BODY_LINE_HEIGHT_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="space-y-2">
-                <div className="text-sm font-medium text-[var(--text)]">聊天正文字号</div>
-                <select
-                  aria-label="聊天正文字号"
-                  value={chatBodyFontSize}
-                  onChange={(event) => handleChatBodyFontSizeChange(event.target.value as ChatBodyFontSizeName)}
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-                >
-                  {CHAT_BODY_FONT_SIZE_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="space-y-2">
-                <div className="text-sm font-medium text-[var(--text)]">聊天段间距</div>
-                <select
-                  aria-label="聊天段间距"
-                  value={chatBodyParagraphSpacing}
-                  onChange={(event) => handleChatBodyParagraphSpacingChange(event.target.value as ChatBodyParagraphSpacingName)}
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-                >
-                  {CHAT_BODY_PARAGRAPH_SPACING_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </label>
-            </div>
+          <div className="space-y-2">
+            <div className="text-sm font-medium text-[var(--text)]">界面主题</div>
+            <ThemeDropdown value={themeName} onChange={handleThemeChange} />
           </div>
-        ) : null}
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <label className="space-y-2">
+              <div className="text-sm font-medium text-[var(--text)]">聊天正文字体</div>
+              <select
+                aria-label="聊天正文字体"
+                value={chatBodyFontFamily}
+                onChange={(event) => handleChatBodyFontFamilyChange(event.target.value as ChatBodyFontFamilyName)}
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+              >
+                {CHAT_BODY_FONT_FAMILY_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+
+            <label className="space-y-2">
+              <div className="text-sm font-medium text-[var(--text)]">聊天行间距</div>
+              <select
+                aria-label="聊天行间距"
+                value={chatBodyLineHeight}
+                onChange={(event) => handleChatBodyLineHeightChange(event.target.value as ChatBodyLineHeightName)}
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+              >
+                {CHAT_BODY_LINE_HEIGHT_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+
+            <label className="space-y-2">
+              <div className="text-sm font-medium text-[var(--text)]">聊天正文字号</div>
+              <select
+                aria-label="聊天正文字号"
+                value={chatBodyFontSize}
+                onChange={(event) => handleChatBodyFontSizeChange(event.target.value as ChatBodyFontSizeName)}
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+              >
+                {CHAT_BODY_FONT_SIZE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+
+            <label className="space-y-2">
+              <div className="text-sm font-medium text-[var(--text)]">聊天段间距</div>
+              <select
+                aria-label="聊天段间距"
+                value={chatBodyParagraphSpacing}
+                onChange={(event) => handleChatBodyParagraphSpacingChange(event.target.value as ChatBodyParagraphSpacingName)}
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+              >
+                {CHAT_BODY_PARAGRAPH_SPACING_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </div>
 
         <div className={settingsPanelClass("space-y-4")}>
           <div className="flex items-center gap-2">
@@ -876,7 +570,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
               浏览器权限: <span className="font-medium text-[var(--text)]">{notificationPermissionText(notificationPermission)}</span>
             </div>
             <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-              PushPlus: <span className="font-medium text-[var(--text)]">{pushPlusStatusText(notificationSettings)}</span>
+              本地开关: <span className="font-medium text-[var(--text)]">{notificationEnabled ? "已开启" : "已关闭"}</span>
             </div>
           </div>
 
@@ -889,21 +583,6 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             >
               <Bell className="h-4 w-4" />
               {requestingNotificationPermission ? "请求中..." : "请求浏览器通知权限"}
-            </button>
-            <button
-              type="button"
-              onClick={() => void sendPushPlusTest()}
-              disabled={testingPushPlus || !notificationSettings?.pushPlusEnabled}
-              className={settingsButtonClass("plain")}
-            >
-              {testingPushPlus ? "发送中..." : "测试 PushPlus 推送"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowPushPlusGuide(true)}
-              className={settingsButtonClass("plain")}
-            >
-              PushPlus 配置教程
             </button>
           </div>
         </div>
@@ -932,15 +611,19 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 {!nativeRuntime && overview.cliPath ? (
                   <p className="break-all"><span className="font-medium text-[var(--text)]">CLI 路径:</span> {overview.cliPath}</p>
                 ) : null}
-                {nativeRuntime ? <p><span className="font-medium text-[var(--text)]">Provider/Model:</span> 全局环境配置</p> : null}
-                {nativeRuntime ? <p><span className="font-medium text-[var(--text)]">Pi agent:</span> {overview.nativeAgent?.piAgent || "未设置"}</p> : null}
                 {nativeRuntime ? (
                   <p>
-                    <span className="font-medium text-[var(--text)]">运行检查:</span>{" "}
-                    {nativePreflightSummary(nativeAgentConfig?.preflight)}
-                    {nativeAgentConfig?.preflight?.message ? ` · ${nativeAgentConfig.preflight.message}` : ""}
+                    <span className="font-medium text-[var(--text)]">Model:</span>{" "}
+                    {overview.nativeAgent?.model || nativeAgentModels?.selectedModel || "使用全局默认"}
                   </p>
                 ) : null}
+                {nativeRuntime && (overview.nativeAgent?.reasoningEffort || nativeAgentModels?.selectedReasoningEffort) ? (
+                  <p>
+                    <span className="font-medium text-[var(--text)]">Reasoning:</span>{" "}
+                    {overview.nativeAgent?.reasoningEffort || nativeAgentModels?.selectedReasoningEffort}
+                  </p>
+                ) : null}
+                {nativeRuntime ? <p><span className="font-medium text-[var(--text)]">Pi agent:</span> {overview.nativeAgent?.piAgent || "未设置"}</p> : null}
                 <p><span className="font-medium text-[var(--text)]">状态:</span> {overview.status}</p>
                 <p className="break-all"><span className="font-medium text-[var(--text)]">目录:</span> {overview.workingDir}</p>
               </div>
@@ -971,9 +654,6 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                       <option value="cli">CLI</option>
                       {nativeAgentOptionVisible ? <option value="native_agent">原生 agent</option> : null}
                     </select>
-                    {nativeAgentFeatureEnabled === false ? (
-                      <p className="text-xs text-[var(--muted)]">原生 agent 全局未启用</p>
-                    ) : null}
                   </label>
                 </div>
 
@@ -1006,22 +686,68 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                   </label>
                   </div>
                 ) : (
-                  <NativeAgentConfigFields
-                    provider={nativeAgentDraft.provider}
-                    model={nativeAgentDraft.model}
-                    piAgent={nativeAgentDraft.piAgent}
-                    baseUrl={nativeAgentDraft.baseUrl}
-                    apiKey={nativeAgentDraft.apiKey}
-                    hasApiKey={nativeAgentDraft.hasApiKey}
-                    apiKeyMasked={nativeAgentDraft.apiKeyMasked}
-                    clearApiKey={nativeAgentDraft.clearApiKey}
-                    editing
-                    disabled={!canManageBotRuntime || savingCliConfig}
-                    onNativeAgentChange={(patch) => setNativeAgentDraft((prev) => ({
-                      ...prev,
-                      ...patch,
-                    }))}
-                  />
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <label className="space-y-1">
+                        <span className="text-sm text-[var(--text)]">Native model</span>
+                        <select
+                          aria-label="Native model"
+                          value={nativeSelectedModel}
+                          disabled={!canManageBotRuntime || savingCliConfig || !nativeAgentModels?.items.length}
+                          onChange={(event) => {
+                            const selected = nativeAgentModels?.items.find((item) => item.id === event.target.value);
+                            setNativeAgentDraft((prev) => ({
+                              ...prev,
+                              model: event.target.value,
+                              reasoningEffort: selected?.defaultReasoningEffort || selected?.reasoningEfforts?.[0] || "",
+                            }));
+                          }}
+                          className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)] disabled:opacity-60"
+                        >
+                          {nativeSelectedModel && !nativeAgentModels?.items.some((model) => model.id === nativeSelectedModel) ? (
+                            <option value={nativeSelectedModel}>{nativeSelectedModel}</option>
+                          ) : null}
+                          {nativeAgentModels?.items.length ? nativeAgentModels.items.map((model) => (
+                            <option key={model.id} value={model.id}>{model.label || model.id}</option>
+                          )) : (
+                            <option value="">使用全局默认</option>
+                          )}
+                        </select>
+                      </label>
+                      <label className="space-y-1">
+                        <span className="text-sm text-[var(--text)]">Reasoning effort</span>
+                        <select
+                          aria-label="Reasoning effort"
+                          value={nativeAgentDraft.reasoningEffort || nativeAgentModels?.selectedReasoningEffort || ""}
+                          disabled={!canManageBotRuntime || savingCliConfig || nativeReasoningEffortOptions.length === 0}
+                          onChange={(event) => setNativeAgentDraft((prev) => ({ ...prev, reasoningEffort: event.target.value }))}
+                          className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)] disabled:opacity-60"
+                        >
+                          {nativeReasoningEffortOptions.length ? nativeReasoningEffortOptions.map((effort) => (
+                            <option key={effort} value={effort}>{effort}</option>
+                          )) : (
+                            <option value="">使用模型默认</option>
+                          )}
+                        </select>
+                      </label>
+                    </div>
+                    <NativeAgentConfigFields
+                      provider={nativeAgentDraft.provider}
+                      model={nativeAgentDraft.model}
+                      piAgent={nativeAgentDraft.piAgent}
+                      baseUrl={nativeAgentDraft.baseUrl}
+                      apiKey={nativeAgentDraft.apiKey}
+                      hasApiKey={nativeAgentDraft.hasApiKey}
+                      apiKeyMasked={nativeAgentDraft.apiKeyMasked}
+                      clearApiKey={nativeAgentDraft.clearApiKey}
+                      editing
+                      disabled={!canManageBotRuntime || savingCliConfig}
+                      onNativeAgentChange={(patch) => setNativeAgentDraft((prev) => ({
+                        ...prev,
+                        ...patch,
+                      }))}
+                    />
+                  </div>
                 )}
                 <button
                   type="button"
@@ -1101,36 +827,6 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
           />
         ) : null}
 
-        {isMainBot ? (
-          <div className={settingsPanelClass("space-y-4")}>
-            <h2 className="text-base font-semibold text-[var(--text)]">Git 代理</h2>
-            <div data-testid="git-proxy-control-row" className="flex flex-col gap-2 sm:flex-row sm:items-center">
-              <input
-                aria-label="Git 代理地址"
-                type="text"
-                inputMode="text"
-                value={gitProxyAddressDraft}
-                onChange={(event) => setGitProxyAddressDraft(event.target.value)}
-                placeholder="例如 192.168.1.10:7897 或 7897"
-                className="w-full min-w-0 flex-1 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-              />
-              <button
-                type="button"
-                aria-label="保存 Git 代理"
-                onClick={() => void saveGitProxy()}
-                disabled={savingGitProxy}
-                className={settingsButtonClass("primary", "w-full sm:w-auto")}
-              >
-                <Save className="h-4 w-4" />
-                {savingGitProxy ? "保存中..." : "保存"}
-              </button>
-            </div>
-            <p className="text-xs text-[var(--muted)]">
-              当前状态: {gitProxyStatusText(gitProxySettings)}
-            </p>
-          </div>
-        ) : null}
-
         {overview && showBotRuntimeSettings && nativeRuntime ? (
           <ClusterSetupPanel
             botAlias={botAlias}
@@ -1155,159 +851,6 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             canManage={canConfigureBot}
             reloadKey={`${botAlias}:${overview.cliType}:${overview.cliPath || ""}`}
           />
-        ) : null}
-
-        {tunnel ? (
-          <div className={settingsPanelClass("space-y-4")}>
-            {(() => {
-              const fixedForward = isFixedPublicForward(tunnel);
-              const heartbeatStatus = fixedForward ? heartbeatStatusText(tunnel.heartbeatStatus) : "";
-              const externalSameNameProxy = Boolean(
-                tunnel.frpcExternal
-                && (
-                  isSameNameFrpcProxyMessage(tunnel.frpcLastError)
-                  || isSameNameFrpcProxyMessage(tunnel.lastError)
-                ),
-              );
-              const frpcErrorHint = externalSameNameProxy ? "" : fixedForwardErrorHint(tunnel.frpcLastError || tunnel.lastError);
-              const heartbeatErrorHint = fixedForwardErrorHint(tunnel.heartbeatLastError);
-              const showTunnelLastError = Boolean(tunnel.lastError) && !externalSameNameProxy;
-              const showFrpcLastError = Boolean(tunnel.frpcLastError) && !externalSameNameProxy;
-              const frpcStatus = externalSameNameProxy
-                ? "复用外部进程"
-                : fixedForward ? frpcStatusText(tunnel.frpcStatus, tunnel.status) : "";
-              const frpcStatusTone = externalSameNameProxy
-                ? "neutral"
-                : tunnelServiceTone(tunnel.frpcStatus || tunnel.status);
-
-              return (
-                <>
-            <div className="flex items-start justify-between gap-4">
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <Globe className="h-5 w-5 text-[var(--accent)]" />
-                  <h2 className="text-base font-semibold text-[var(--text)]">公网访问</h2>
-                </div>
-                <p className="text-sm text-[var(--muted)]">状态: {tunnelStatusText(tunnel.status)}</p>
-              </div>
-              <StateBadge tone="neutral">
-                {tunnelSourceText(tunnel)}
-              </StateBadge>
-            </div>
-
-            <div className="space-y-2 text-sm text-[var(--muted)]">
-              <p className="break-all"><span className="font-medium text-[var(--text)]">HTTPS 访问:</span> {tunnel.publicUrl || "未建立公网地址"}</p>
-              <p className="break-all"><span className="font-medium text-[var(--text)]">本地转发目标:</span> {tunnel.localUrl}</p>
-              {fixedForward && tunnel.nodeId ? (
-                <p className="break-all"><span className="font-medium text-[var(--text)]">Node ID:</span> {tunnel.nodeId}</p>
-              ) : null}
-              {fixedForward && tunnel.basePath ? (
-                <p className="break-all"><span className="font-medium text-[var(--text)]">Base Path:</span> {tunnel.basePath}</p>
-              ) : null}
-              {tunnel.publicUrl && tunnel.source === "quick_tunnel" && tunnel.status !== "running" && !tunnel.lastError ? (
-                <p className="break-all">公网地址已创建，正在验证</p>
-              ) : null}
-              {fixedForward && tunnel.frpcNote ? (
-                <p className="break-all"><span className="font-medium text-[var(--text)]">frpc 说明:</span> {tunnel.frpcNote}</p>
-              ) : null}
-              {externalSameNameProxy && (tunnel.frpcLastError || tunnel.lastError) ? (
-                <p className="break-all"><span className="font-medium text-[var(--text)]">frpc:</span> 已复用外部 frpc</p>
-              ) : null}
-              {showTunnelLastError ? (
-                <p className="break-all text-red-700"><span className="font-medium">错误:</span> {tunnel.lastError}</p>
-              ) : null}
-            </div>
-
-            {fixedForward ? (
-              <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
-                <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-3 text-[var(--muted)]">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-medium text-[var(--text)]">frpc 状态</span>
-                    <StateBadge tone={frpcStatusTone}>{frpcStatus}</StateBadge>
-                  </div>
-                  <div className="mt-2 space-y-1">
-                    <p>PID: {tunnel.frpcExternal ? "外部进程" : tunnel.frpcPid ?? tunnel.pid ?? "未启动"}</p>
-                    {showFrpcLastError ? (
-                      <p className="break-all text-red-700">错误: {tunnel.frpcLastError}</p>
-                    ) : null}
-                    {externalSameNameProxy && tunnel.frpcLastError ? (
-                      <p className="break-all">外部 frpc 已占用同名 proxy，当前配置按复用处理。</p>
-                    ) : null}
-                    {frpcErrorHint ? (
-                      <p className="text-red-700">提示: {frpcErrorHint}</p>
-                    ) : null}
-                  </div>
-                </div>
-
-                <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-3 text-[var(--muted)]">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-medium text-[var(--text)]">Heartbeat</span>
-                    <StateBadge tone={tunnelServiceTone(tunnel.heartbeatStatus)}>{heartbeatStatus}</StateBadge>
-                  </div>
-                  <div className="mt-2 space-y-1">
-                    <p className="break-all">最近上报: {tunnel.heartbeatLastAt || "暂无"}</p>
-                    {tunnel.heartbeatLastError ? (
-                      <p className="break-all text-red-700">错误: {tunnel.heartbeatLastError}</p>
-                    ) : null}
-                    {heartbeatErrorHint ? (
-                      <p className="text-red-700">提示: {heartbeatErrorHint}</p>
-                    ) : null}
-                  </div>
-                </div>
-              </div>
-            ) : null}
-
-            <div className="flex flex-wrap gap-2">
-              {tunnel.source === "quick_tunnel" ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => void runTunnelAction("start")}
-                    disabled={tunnelAction !== "" || tunnel.status === "running" || tunnel.status === "starting" || tunnel.status === "connected" || tunnel.status === "verifying_public" || tunnel.status === "waiting_url"}
-                    className={settingsButtonClass("plain")}
-                  >
-                    启动 Tunnel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void runTunnelAction("stop")}
-                    disabled={tunnelAction !== "" || tunnel.status === "stopped"}
-                    className={settingsButtonClass("plain")}
-                  >
-                    停止 Tunnel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void runTunnelAction("restart")}
-                    disabled={tunnelAction !== ""}
-                    className={settingsButtonClass("plain")}
-                  >
-                    <RotateCw className="h-4 w-4" />
-                    重启 Tunnel
-                  </button>
-                </>
-              ) : (
-                <div className="rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-3 py-2 text-sm text-[var(--muted)]">
-                  {tunnel.source === "fixed_public_forward"
-                    ? "固定公网转发在管理中心配置"
-                    : "当前使用 `WEB_PUBLIC_URL` 手工配置地址"}
-                </div>
-              )}
-
-              <button
-                type="button"
-                onClick={() => void copyTunnelUrl()}
-                disabled={tunnelAction !== "" || !tunnel.publicUrl}
-                className={settingsButtonClass("plain")}
-              >
-                <Copy className="h-4 w-4" />
-                复制公网地址
-              </button>
-            </div>
-                </>
-              );
-            })()}
-          </div>
         ) : null}
 
         <div className={settingsActionPanelClass("divide-y divide-[var(--workbench-hairline)]")}>
@@ -1403,8 +946,6 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
           </div>
         </div>
       ) : null}
-
-      {pushPlusGuideDialog && typeof document !== "undefined" ? createPortal(pushPlusGuideDialog, document.body) : pushPlusGuideDialog}
 
     </main>
   );

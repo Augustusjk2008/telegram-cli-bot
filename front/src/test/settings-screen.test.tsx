@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { SettingsScreen } from "../screens/SettingsScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { BotExecutionConfigInput, BotSummary, DirectoryListing, TunnelSnapshot } from "../services/types";
+import type { BotExecutionConfigInput, BotSummary, DirectoryListing } from "../services/types";
 import { CHAT_COMPLETION_WEB_NOTIFICATION_KEY } from "../utils/chatNotificationEvents";
 
 afterEach(() => {
@@ -111,17 +111,16 @@ test("native bots hide cli settings and params", async () => {
   expect(screen.queryByLabelText("CLI 类型")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("CLI 路径")).not.toBeInTheDocument();
   expect(screen.queryByText("保存 CLI 配置")).not.toBeInTheDocument();
-  expect(screen.getByText("Provider/Model:")).toBeInTheDocument();
-  expect(screen.getByText("全局环境配置")).toBeInTheDocument();
+  expect(screen.getByText("Model:")).toBeInTheDocument();
+  expect(screen.getAllByText("claude-sonnet-4-5").length).toBeGreaterThan(0);
+  expect(screen.getByLabelText("Native model")).toHaveValue("claude-sonnet-4-5");
+  expect(screen.getByLabelText("Reasoning effort")).toBeInTheDocument();
   expect(screen.queryByText("anthropic")).not.toBeInTheDocument();
-  expect(screen.queryByText("claude-sonnet-4-5")).not.toBeInTheDocument();
   expect(screen.queryByText("https://cdn.codeflow.asia/v1")).not.toBeInTheDocument();
   expect(screen.queryByText("已保存 sk-****1234")).not.toBeInTheDocument();
   expect(screen.queryByText("sk-settings-1234")).not.toBeInTheDocument();
   expect(screen.getByText("Pi agent:")).toBeInTheDocument();
   expect(screen.getByText("reviewer")).toBeInTheDocument();
-  expect(await screen.findByText("运行检查:")).toBeInTheDocument();
-  expect(await screen.findByText(/Pi 运行前置检查通过，存在警告/)).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "查看管理中心" }));
   expect(openManager).toHaveBeenCalled();
 });
@@ -227,91 +226,18 @@ test("native settings shows pi cluster extension setup", async () => {
   expect(screen.getByText(/当前 run_id 调 cluster_status/)).toBeInTheDocument();
 });
 
-test("git proxy controls stack on narrow screens", async () => {
+test("settings screen keeps system admin controls out", async () => {
   render(<SettingsScreen botAlias="main" client={new MockWebBotClient()} onLogout={() => undefined} />);
 
-  const row = await screen.findByTestId("git-proxy-control-row");
-  expect(row).toHaveClass("flex-col", "sm:flex-row", "sm:items-center");
-  expect(screen.getByLabelText("Git 代理地址")).toHaveClass("w-full", "min-w-0", "flex-1");
-  expect(screen.getByRole("button", { name: "保存 Git 代理" })).toHaveClass("tcb-solid-accent", "w-full", "sm:w-auto");
-});
-
-class FixedForwardSettingsClient extends MockWebBotClient {
-  async getTunnelStatus(): Promise<TunnelSnapshot> {
-    return {
-      mode: "fixed_public_forward",
-      status: "running",
-      source: "fixed_public_forward",
-      publicUrl: "http://124.221.226.63:18088/node/nanjing-laptop",
-      localUrl: "http://127.0.0.1:8765",
-      lastError: "",
-      verified: true,
-      fixedPublicForwardEnabled: true,
-      nodeId: "nanjing-laptop",
-      basePath: "/node/nanjing-laptop",
-      frpcStatus: "running",
-      frpcPid: 2468,
-      frpcLastError: "",
-      heartbeatStatus: "online",
-      heartbeatLastAt: "2026-06-03T10:01:02+08:00",
-      heartbeatLastError: "",
-    };
-  }
-}
-
-test("fixed public forward hides quick tunnel controls in settings", async () => {
-  render(<SettingsScreen botAlias="main" client={new FixedForwardSettingsClient()} onLogout={() => undefined} />);
-
-  expect(await screen.findByText("固定公网转发")).toBeInTheDocument();
-  expect(screen.getByText("固定公网转发在管理中心配置")).toBeInTheDocument();
+  expect(await screen.findByText("界面与阅读")).toBeInTheDocument();
+  expect(screen.queryByLabelText("Git 代理地址")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "保存 Git 代理" })).not.toBeInTheDocument();
+  expect(screen.queryByText("公网访问")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "启动 Tunnel" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "停止 Tunnel" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /重启 Tunnel/ })).not.toBeInTheDocument();
-});
-
-test("fixed public forward shows frpc and heartbeat details", async () => {
-  render(<SettingsScreen botAlias="main" client={new FixedForwardSettingsClient()} onLogout={() => undefined} />);
-
-  expect(await screen.findByText("frpc 状态")).toBeInTheDocument();
-  expect(screen.getByText("Heartbeat")).toBeInTheDocument();
-  expect(screen.getByText("Node ID:")).toBeInTheDocument();
-  expect(screen.getByText("nanjing-laptop")).toBeInTheDocument();
-  expect(screen.getByText("Base Path:")).toBeInTheDocument();
-  expect(screen.getByText("/node/nanjing-laptop")).toBeInTheDocument();
-  expect(screen.getByText("PID: 2468")).toBeInTheDocument();
-  expect(screen.getByText("最近上报: 2026-06-03T10:01:02+08:00")).toBeInTheDocument();
-});
-
-class FixedForwardErrorSettingsClient extends MockWebBotClient {
-  async getTunnelStatus(): Promise<TunnelSnapshot> {
-    return {
-      mode: "fixed_public_forward",
-      status: "error",
-      source: "fixed_public_forward",
-      publicUrl: "http://124.221.226.63:18088/node/nanjing-laptop",
-      localUrl: "http://127.0.0.1:8765",
-      lastError: "dial tcp 124.221.226.63:7000: i/o timeout",
-      verified: false,
-      fixedPublicForwardEnabled: true,
-      nodeId: "nanjing-laptop",
-      basePath: "/node/nanjing-laptop",
-      frpcStatus: "error",
-      frpcPid: null,
-      frpcLastError: "login to server failed: authorization failed",
-      heartbeatStatus: "error",
-      heartbeatLastAt: "",
-      heartbeatLastError: "heartbeat 403 forbidden: invalid node token",
-    };
-  }
-}
-
-test("fixed public forward maps token and port errors", async () => {
-  render(<SettingsScreen botAlias="main" client={new FixedForwardErrorSettingsClient()} onLogout={() => undefined} />);
-
-  expect(await screen.findByText("错误: login to server failed: authorization failed")).toBeInTheDocument();
-  expect(screen.getByText("提示: frps token 错")).toBeInTheDocument();
-  expect(screen.getByText("错误: heartbeat 403 forbidden: invalid node token")).toBeInTheDocument();
-  expect(screen.getByText("提示: 节点 token 错")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "测试 PushPlus 推送" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "PushPlus 配置教程" })).not.toBeInTheDocument();
 });
 
 
