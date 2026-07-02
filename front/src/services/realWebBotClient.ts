@@ -45,7 +45,6 @@ import type {
   AgentSummary,
   CreateAssistantCronJobInput,
   GitActionResult,
-  GitBlamePayload,
   GitBranchResetResult,
   GitBranchList,
   GitCommitGraphEdge,
@@ -990,6 +989,12 @@ type RawGitChangedFile = {
   staged: boolean;
   unstaged: boolean;
   untracked: boolean;
+  additions?: number;
+  deletions?: number;
+  staged_additions?: number;
+  staged_deletions?: number;
+  unstaged_additions?: number;
+  unstaged_deletions?: number;
 };
 
 type RawGitCommitSummary = {
@@ -1101,22 +1106,6 @@ type RawGitStashEntry = {
 
 type RawGitStashList = {
   items?: RawGitStashEntry[];
-};
-
-type RawGitBlameLine = {
-  line: number;
-  commit?: string;
-  short_commit?: string;
-  author_name?: string;
-  author_mail?: string;
-  authored_at?: string;
-  summary?: string;
-  content?: string;
-};
-
-type RawGitBlamePayload = {
-  path?: string;
-  lines?: RawGitBlameLine[];
 };
 
 type RawGitIdentity = {
@@ -3017,6 +3006,12 @@ function mapGitChangedFile(raw: RawGitChangedFile) {
     staged: Boolean(raw.staged),
     unstaged: Boolean(raw.unstaged),
     untracked: Boolean(raw.untracked),
+    additions: Number(raw.additions || 0),
+    deletions: Number(raw.deletions || 0),
+    stagedAdditions: Number(raw.staged_additions || 0),
+    stagedDeletions: Number(raw.staged_deletions || 0),
+    unstagedAdditions: Number(raw.unstaged_additions || 0),
+    unstagedDeletions: Number(raw.unstaged_deletions || 0),
   };
 }
 
@@ -3157,22 +3152,6 @@ function mapGitStashList(raw: RawGitStashList): GitStashList {
       hash: item.hash || "",
       createdAt: item.created_at || "",
       message: item.message || "",
-    })),
-  };
-}
-
-function mapGitBlamePayload(raw: RawGitBlamePayload): GitBlamePayload {
-  return {
-    path: raw.path || "",
-    lines: (raw.lines || []).map((item) => ({
-      line: Number(item.line || 0),
-      commit: item.commit || "",
-      shortCommit: item.short_commit || "",
-      authorName: item.author_name || "",
-      authorMail: item.author_mail || "",
-      authoredAt: item.authored_at || "",
-      summary: item.summary || "",
-      content: item.content || "",
     })),
   };
 }
@@ -6255,12 +6234,6 @@ export class RealWebBotClient implements WebBotClient {
       body: JSON.stringify({ ref }),
     });
     return mapGitActionResult(data);
-  }
-
-  async getGitBlame(botAlias: string, path: string): Promise<GitBlamePayload> {
-    const params = new URLSearchParams({ path });
-    const data = await this.requestJson<RawGitBlamePayload>(`/api/bots/${encodeURIComponent(botAlias)}/git/blame?${params.toString()}`);
-    return mapGitBlamePayload(data);
   }
 
   async getGitIdentityConfig(botAlias: string): Promise<GitIdentityConfig> {

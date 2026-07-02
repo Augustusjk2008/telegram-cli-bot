@@ -108,9 +108,9 @@ import type {
   FileEntry,
   FileReadResult,
   GitActionResult,
-  GitBlamePayload,
   GitBranchResetResult,
   GitBranchList,
+  GitChangedFile,
   GitCommitGraphOptions,
   GitCommitGraphPayload,
   GitCommitMessageCliConfig,
@@ -260,6 +260,17 @@ const GUEST_CAPABILITIES: Capability[] = [
 const MOCK_GIT_IGNORED_ITEMS: Record<string, string[]> = {
   main: ["dist"],
 };
+const MOCK_GIT_FILE_STATS = {
+  additions: 0,
+  deletions: 0,
+  stagedAdditions: 0,
+  stagedDeletions: 0,
+  unstagedAdditions: 0,
+  unstagedDeletions: 0,
+} satisfies Pick<
+  GitChangedFile,
+  "additions" | "deletions" | "stagedAdditions" | "stagedDeletions" | "unstagedAdditions" | "unstagedDeletions"
+>;
 const MOCK_CLI_MODEL_OPTIONS = [
   "gpt-5.5",
   "gpt-5.4",
@@ -1538,18 +1549,26 @@ export class MockWebBotClient implements WebBotClient {
         behindCount: 0,
         changedFiles: [
           {
+            ...MOCK_GIT_FILE_STATS,
             path: "bot/web/server.py",
             status: "M ",
             staged: true,
             unstaged: false,
             untracked: false,
+            additions: 12,
+            deletions: 3,
+            stagedAdditions: 12,
+            stagedDeletions: 3,
           },
           {
+            ...MOCK_GIT_FILE_STATS,
             path: "front/src/screens/GitScreen.tsx",
             status: "??",
             staged: false,
             unstaged: false,
             untracked: true,
+            additions: 96,
+            unstagedAdditions: 96,
           },
         ],
         recentCommits: [
@@ -5818,11 +5837,16 @@ export class MockWebBotClient implements WebBotClient {
       isClean: false,
       changedFiles: [
         {
+          ...MOCK_GIT_FILE_STATS,
           path: "restored.txt",
           status: " M",
           staged: false,
           unstaged: true,
           untracked: false,
+          additions: 3,
+          deletions: 1,
+          unstagedAdditions: 3,
+          unstagedDeletions: 1,
         },
       ],
     }));
@@ -5944,7 +5968,18 @@ export class MockWebBotClient implements WebBotClient {
     const result = await this.actionWithOverview(botAlias, "已应用 stash", (overview) => ({
       ...overview,
       isClean: false,
-      changedFiles: [{ path: "restored.txt", status: " M", staged: false, unstaged: true, untracked: false }],
+      changedFiles: [{
+        ...MOCK_GIT_FILE_STATS,
+        path: "restored.txt",
+        status: " M",
+        staged: false,
+        unstaged: true,
+        untracked: false,
+        additions: 3,
+        deletions: 1,
+        unstagedAdditions: 3,
+        unstagedDeletions: 1,
+      }],
     }));
     this.gitStashes.set(botAlias, {
       items: (this.gitStashes.get(botAlias)?.items || []).filter((item) => item.ref !== ref),
@@ -5957,24 +5992,6 @@ export class MockWebBotClient implements WebBotClient {
       items: (this.gitStashes.get(botAlias)?.items || []).filter((item) => item.ref !== ref),
     });
     return this.actionWithOverview(botAlias, "已删除 stash");
-  }
-
-  async getGitBlame(_botAlias: string, path: string): Promise<GitBlamePayload> {
-    return {
-      path,
-      lines: [
-        {
-          line: 1,
-          commit: "abcdef0123456789",
-          shortCommit: "abcdef0",
-          authorName: "Web Bot",
-          authorMail: "web-bot@example.com",
-          authoredAt: "2026-04-28T02:30:00",
-          summary: "feat: initial commit",
-          content: "mock line",
-        },
-      ],
-    };
   }
 
   async getGitIdentityConfig(botAlias: string): Promise<GitIdentityConfig> {

@@ -292,7 +292,6 @@ from .git_service import (
     fetch_git_remote,
     generate_git_smart_commit_message,
     generate_git_commit_message,
-    get_git_blame,
     get_git_commit_graph,
     get_git_commit_message_cli_config,
     get_git_diff,
@@ -3269,13 +3268,6 @@ class WebApiServer:
         body = await self._parse_json(request)
         overview = await asyncio.to_thread(drop_git_stash, self.manager, alias, auth.user_id, str(body.get("ref") or ""))
         return _json({"ok": True, "data": {"message": "已删除 stash", "overview": overview}})
-
-    async def get_git_blame_view(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_GIT_OPS)
-        alias = self._manager_alias(request)
-        path = request.query.get("path", "")
-        data = await asyncio.to_thread(get_git_blame, self.manager, alias, auth.user_id, path)
-        return _json({"ok": True, "data": data})
 
     async def get_git_identity_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)

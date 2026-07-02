@@ -1983,6 +1983,12 @@ export type GitChangedFile = {
   staged: boolean;
   unstaged: boolean;
   untracked: boolean;
+  additions: number;
+  deletions: number;
+  stagedAdditions: number;
+  stagedDeletions: number;
+  unstagedAdditions: number;
+  unstagedDeletions: number;
 };
 
 export type GitCommitSummary = {
@@ -2125,22 +2131,6 @@ export type GitStashEntry = {
 
 export type GitStashList = {
   items: GitStashEntry[];
-};
-
-export type GitBlameLine = {
-  line: number;
-  commit: string;
-  shortCommit: string;
-  authorName: string;
-  authorMail: string;
-  authoredAt: string;
-  summary: string;
-  content: string;
-};
-
-export type GitBlamePayload = {
-  path: string;
-  lines: GitBlameLine[];
 };
 
 export type GitIdentityScope = "global" | "local";

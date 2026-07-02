@@ -41,6 +41,7 @@ from .git_commit_message import (
 GIT_COMMIT_MESSAGE_TIMEOUT_SECONDS = 30 * 60
 GIT_SMART_COMMIT_UNTRACKED_PREVIEW_LIMIT = 4096
 GIT_DIFF_OUTPUT_CHAR_LIMIT = 128 * 1024
+GIT_OVERVIEW_UNTRACKED_STATS_MAX_BYTES = 512 * 1024
 GIT_COMMIT_GRAPH_DEFAULT_LIMIT = 100
 GIT_COMMIT_GRAPH_MAX_LIMIT = 300
 _GIT_STATUS_CACHE_TTL_SECONDS = 0.75
@@ -368,6 +369,109 @@ def _parse_changed_files(lines: list[str]) -> list[dict[str, Any]]:
             }
         )
     return items
+
+
+def _zero_changed_file_stats() -> dict[str, int]:
+    return {
+        "additions": 0,
+        "deletions": 0,
+        "staged_additions": 0,
+        "staged_deletions": 0,
+        "unstaged_additions": 0,
+        "unstaged_deletions": 0,
+    }
+
+
+def _parse_numstat_value(value: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return parsed if parsed >= 0 else 0
+
+
+def _normalize_numstat_path(path: str) -> str:
+    normalized = path.strip().replace("\\", "/")
+    brace_match = re.match(r"^(?P<prefix>.*)\{(?P<old>.*) => (?P<new>.*)\}(?P<suffix>.*)$", normalized)
+    if brace_match:
+        return f"{brace_match.group('prefix')}{brace_match.group('new')}{brace_match.group('suffix')}".strip()
+    if " => " in normalized:
+        normalized = normalized.split(" => ", 1)[1].strip()
+        if normalized.endswith("}"):
+            normalized = normalized.rstrip("}").strip()
+    return normalized
+
+
+def _parse_git_numstat(output: str) -> dict[str, dict[str, int]]:
+    stats: dict[str, dict[str, int]] = {}
+    for raw_line in output.splitlines():
+        if not raw_line.strip():
+            continue
+        parts = raw_line.split("\t", 2)
+        if len(parts) < 3:
+            continue
+        path = _normalize_numstat_path(parts[2])
+        if not path:
+            continue
+        current = stats.setdefault(path, {"additions": 0, "deletions": 0})
+        current["additions"] += _parse_numstat_value(parts[0])
+        current["deletions"] += _parse_numstat_value(parts[1])
+    return stats
+
+
+def _read_git_numstat(repo_root: str, args: list[str]) -> dict[str, dict[str, int]]:
+    result = _run_git(repo_root, args, check=False)
+    if result.returncode != 0:
+        return {}
+    return _parse_git_numstat(result.stdout or "")
+
+
+def _count_untracked_file_additions(repo_root: str, relative_path: str) -> int:
+    safe_path = _normalize_repo_relative_path(relative_path)
+    path = (Path(repo_root) / safe_path).resolve()
+    try:
+        repo_path = Path(repo_root).resolve()
+        path.relative_to(repo_path)
+        stat = path.stat()
+    except (OSError, ValueError):
+        return 0
+    if not path.is_file() or stat.st_size > GIT_OVERVIEW_UNTRACKED_STATS_MAX_BYTES:
+        return 0
+    try:
+        content = path.read_bytes()
+    except OSError:
+        return 0
+    if b"\x00" in content:
+        return 0
+    if not content:
+        return 0
+    return content.count(b"\n") + (0 if content.endswith(b"\n") else 1)
+
+
+def _merge_changed_file_stats(repo_root: str, changed_files: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    unstaged_stats = _read_git_numstat(repo_root, ["diff", "--numstat", "--"])
+    staged_stats = _read_git_numstat(repo_root, ["diff", "--cached", "--numstat", "--"])
+
+    merged: list[dict[str, Any]] = []
+    for item in changed_files:
+        path = str(item.get("path") or "")
+        stats = _zero_changed_file_stats()
+        staged = staged_stats.get(path, {"additions": 0, "deletions": 0})
+        unstaged = unstaged_stats.get(path, {"additions": 0, "deletions": 0})
+
+        stats["staged_additions"] = int(staged.get("additions") or 0)
+        stats["staged_deletions"] = int(staged.get("deletions") or 0)
+        stats["unstaged_additions"] = int(unstaged.get("additions") or 0)
+        stats["unstaged_deletions"] = int(unstaged.get("deletions") or 0)
+
+        if item.get("untracked"):
+            stats["unstaged_additions"] = _count_untracked_file_additions(repo_root, path)
+            stats["unstaged_deletions"] = 0
+
+        stats["additions"] = stats["staged_additions"] + stats["unstaged_additions"]
+        stats["deletions"] = stats["staged_deletions"] + stats["unstaged_deletions"]
+        merged.append({**item, **stats})
+    return merged
 
 
 def _parse_porcelain_entry(raw_line: str) -> dict[str, Any] | None:
@@ -969,49 +1073,6 @@ def _parse_stash_lines(lines: list[str]) -> list[dict[str, Any]]:
     return items
 
 
-def _format_git_author_time(value: str) -> str:
-    try:
-        return datetime.fromtimestamp(int(value)).isoformat()
-    except (TypeError, ValueError, OSError):
-        return ""
-
-
-def _parse_blame_porcelain(output: str) -> list[dict[str, Any]]:
-    lines: list[dict[str, Any]] = []
-    current: dict[str, Any] | None = None
-    for raw_line in output.splitlines():
-        if not raw_line:
-            continue
-        if re.match(r"^[0-9a-f]{40} ", raw_line):
-            parts = raw_line.split()
-            current = {
-                "commit": parts[0],
-                "short_commit": parts[0][:7],
-                "line": int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else len(lines) + 1,
-                "author_name": "",
-                "author_mail": "",
-                "authored_at": "",
-                "summary": "",
-                "content": "",
-            }
-            continue
-        if current is None:
-            continue
-        if raw_line.startswith("author "):
-            current["author_name"] = raw_line.removeprefix("author ").strip()
-        elif raw_line.startswith("author-mail "):
-            current["author_mail"] = raw_line.removeprefix("author-mail ").strip().strip("<>")
-        elif raw_line.startswith("author-time "):
-            current["authored_at"] = _format_git_author_time(raw_line.removeprefix("author-time ").strip())
-        elif raw_line.startswith("summary "):
-            current["summary"] = raw_line.removeprefix("summary ").strip()
-        elif raw_line.startswith("\t"):
-            current["content"] = raw_line[1:]
-            lines.append(current)
-            current = None
-    return lines
-
-
 def _build_git_overview(working_dir: str, repo_root: Optional[str]) -> dict[str, Any]:
     if not repo_root:
         return {
@@ -1032,6 +1093,7 @@ def _build_git_overview(working_dir: str, repo_root: Optional[str]) -> dict[str,
     header = status_lines[0] if status_lines else ""
     current_branch, ahead_count, behind_count = _parse_status_header(header)
     changed_files = _parse_changed_files(status_lines[1:] if status_lines else [])
+    changed_files = _merge_changed_file_stats(repo_root, changed_files)
 
     return {
         "repo_found": True,
@@ -1921,16 +1983,3 @@ def pop_git_stash(manager: MultiBotManager, alias: str, user_id: int) -> dict[st
         error_code="git_stash_pop_failed",
         error_message="恢复暂存失败",
     )
-
-
-def get_git_blame(manager: MultiBotManager, alias: str, user_id: int, path: str) -> dict[str, Any]:
-    _, repo_root = _require_repo_root(manager, alias, user_id)
-    relative_path = _normalize_repo_relative_path(path)
-    try:
-        result = _run_git(repo_root, ["blame", "--line-porcelain", "--", relative_path])
-    except GitCommandError as exc:
-        _raise(400, "git_blame_failed", str(exc))
-    return {
-        "path": relative_path,
-        "lines": _parse_blame_porcelain(result.stdout or ""),
-    }

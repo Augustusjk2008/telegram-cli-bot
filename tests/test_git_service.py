@@ -87,3 +87,108 @@ def test_build_repo_status_snapshot_rechecks_cache_after_repo_lock(monkeypatch: 
 
     assert git_service._build_repo_status_snapshot("repo") is cached
     assert reads == ["repo", "repo"]
+
+
+def test_parse_git_numstat_counts_text_and_binary_fallback() -> None:
+    stats = git_service._parse_git_numstat(
+        "\n".join(
+            [
+                "3\t2\tsrc/a.py",
+                "-\t-\tassets/logo.png",
+                "5\t1\told => new.txt",
+                "4\t0\tsrc/{old => new}.py",
+            ]
+        )
+    )
+
+    assert stats["src/a.py"] == {"additions": 3, "deletions": 2}
+    assert stats["assets/logo.png"] == {"additions": 0, "deletions": 0}
+    assert stats["new.txt"] == {"additions": 5, "deletions": 1}
+    assert stats["src/new.py"] == {"additions": 4, "deletions": 0}
+
+
+def test_build_git_overview_merges_staged_unstaged_and_untracked_stats(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "new.txt").write_text("first\nsecond\n", encoding="utf-8")
+
+    def fake_snapshot(repo_root: str) -> dict[str, object]:
+        assert repo_root == str(repo)
+        return {
+            "branch_lines": [
+                "## main...origin/main [ahead 1, behind 2]",
+                "M  staged.py",
+                " M worktree.py",
+                "MM both.py",
+                "?? new.txt",
+            ],
+            "tree_lines": [],
+        }
+
+    def fake_numstat(repo_root: str, args: list[str]) -> dict[str, dict[str, int]]:
+        assert repo_root == str(repo)
+        if "--cached" in args:
+            return {
+                "staged.py": {"additions": 4, "deletions": 1},
+                "both.py": {"additions": 2, "deletions": 0},
+            }
+        return {
+            "worktree.py": {"additions": 1, "deletions": 3},
+            "both.py": {"additions": 5, "deletions": 6},
+        }
+
+    monkeypatch.setattr(git_service, "_build_repo_status_snapshot", fake_snapshot)
+    monkeypatch.setattr(git_service, "_read_git_numstat", fake_numstat)
+    monkeypatch.setattr(git_service, "_list_recent_commits", lambda _repo_root: [])
+
+    overview = git_service._build_git_overview(str(repo), str(repo))
+    files = {item["path"]: item for item in overview["changed_files"]}
+
+    def stats_for(path: str) -> dict[str, int]:
+        return {
+            "additions": files[path]["additions"],
+            "deletions": files[path]["deletions"],
+            "staged_additions": files[path]["staged_additions"],
+            "staged_deletions": files[path]["staged_deletions"],
+            "unstaged_additions": files[path]["unstaged_additions"],
+            "unstaged_deletions": files[path]["unstaged_deletions"],
+        }
+
+    assert overview["current_branch"] == "main"
+    assert overview["ahead_count"] == 1
+    assert overview["behind_count"] == 2
+    assert stats_for("staged.py") == {
+        "additions": 4,
+        "deletions": 1,
+        "staged_additions": 4,
+        "staged_deletions": 1,
+        "unstaged_additions": 0,
+        "unstaged_deletions": 0,
+    }
+    assert stats_for("worktree.py") == {
+        "additions": 1,
+        "deletions": 3,
+        "staged_additions": 0,
+        "staged_deletions": 0,
+        "unstaged_additions": 1,
+        "unstaged_deletions": 3,
+    }
+    assert stats_for("both.py") == {
+        "additions": 7,
+        "deletions": 6,
+        "staged_additions": 2,
+        "staged_deletions": 0,
+        "unstaged_additions": 5,
+        "unstaged_deletions": 6,
+    }
+    assert stats_for("new.txt") == {
+        "additions": 2,
+        "deletions": 0,
+        "staged_additions": 0,
+        "staged_deletions": 0,
+        "unstaged_additions": 2,
+        "unstaged_deletions": 0,
+    }

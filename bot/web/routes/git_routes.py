@@ -14,7 +14,6 @@ def register(app: web.Application, server) -> None:
     app.router.add_get("/api/bots/{alias}/git/stashes", server.get_git_stashes_view)
     app.router.add_post("/api/bots/{alias}/git/stashes/apply", server.post_git_stash_apply)
     app.router.add_post("/api/bots/{alias}/git/stashes/drop", server.post_git_stash_drop)
-    app.router.add_get("/api/bots/{alias}/git/blame", server.get_git_blame_view)
     app.router.add_get("/api/bots/{alias}/git/identity", server.get_git_identity_view)
     app.router.add_get("/api/bots/{alias}/git/commit-message/config", server.get_git_commit_message_config_view)
     app.router.add_patch("/api/bots/{alias}/git/commit-message/config", server.patch_git_commit_message_config_view)

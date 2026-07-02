@@ -7,8 +7,6 @@ import {
   ChevronRight,
   CheckCircle2,
   DownloadCloud,
-  Eye,
-  FileDiff,
   GitBranch,
   GitFork,
   GitPullRequest,
@@ -23,14 +21,15 @@ import {
   Trash2,
   UploadCloud,
   UserRound,
+  X,
 } from "lucide-react";
 import { GitCommitCliConfigPanel } from "../components/GitCommitCliConfigPanel";
 import { StateBadge } from "../components/StateBadge";
 import { toolbarButtonClass } from "../components/ToolbarButton";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
-  GitBlamePayload,
   GitBranchList,
+  GitChangedFile,
   GitCommitGraphEdge,
   GitCommitGraphNode,
   GitCommitGraphPayload,
@@ -39,6 +38,7 @@ import type {
   GitIdentityConfig,
   GitIdentityScope,
   GitOverview,
+  GitDiffPayload,
   GitResetMode,
   GitSmartCommitJob,
   GitStashList,
@@ -56,6 +56,7 @@ type Props = {
 
 type GitFileGroupKey = "staged" | "unstaged" | "untracked";
 type CommitLike = Pick<GitCommitGraphNode, "hash" | "shortHash" | "subject">;
+type SelectedGitDiff = GitDiffPayload & { label: string };
 
 const GIT_GRAPH_LIMIT = 50;
 const GIT_GRAPH_ROW_HEIGHT = 44;
@@ -74,6 +75,31 @@ function groupedFiles(overview: GitOverview | null) {
 
 function countLabel(title: string, count: number) {
   return `${title} (${count})`;
+}
+
+function displayGitPath(path: string) {
+  const normalized = path.replace(/\\/g, "/").replace(/\/+$/g, "");
+  const parts = normalized.split("/").filter(Boolean);
+  return parts[parts.length - 1] || path;
+}
+
+function changeStatsForGroup(item: GitChangedFile, key: GitFileGroupKey) {
+  if (key === "staged") {
+    return {
+      additions: Number(item.stagedAdditions || 0),
+      deletions: Number(item.stagedDeletions || 0),
+    };
+  }
+  if (key === "untracked") {
+    return {
+      additions: Number(item.unstagedAdditions || item.additions || 0),
+      deletions: Number(item.unstagedDeletions || 0),
+    };
+  }
+  return {
+    additions: Number(item.unstagedAdditions || 0),
+    deletions: Number(item.unstagedDeletions || 0),
+  };
 }
 
 function changeGroupTone(key: GitFileGroupKey) {
@@ -417,8 +443,9 @@ export function GitScreen({
   const [selectedBranch, setSelectedBranch] = useState("");
   const [stashes, setStashes] = useState<GitStashList>({ items: [] });
   const [stashesLoading, setStashesLoading] = useState(false);
-  const [blame, setBlame] = useState<GitBlamePayload | null>(null);
-  const [blameLoadingPath, setBlameLoadingPath] = useState("");
+  const [selectedDiff, setSelectedDiff] = useState<SelectedGitDiff | null>(null);
+  const [diffLoadingPath, setDiffLoadingPath] = useState("");
+  const [diffError, setDiffError] = useState("");
   const [changesCollapsed, setChangesCollapsed] = useState(false);
   const [graphCollapsed, setGraphCollapsed] = useState(false);
   const [graphScope, setGraphScope] = useState<GitGraphScope>("all");
@@ -603,7 +630,8 @@ export function GitScreen({
       setBranches({ currentBranch: "", branches: [] });
       setSelectedBranch("");
       setStashes({ items: [] });
-      setBlame(null);
+      setSelectedDiff(null);
+      setDiffError("");
     }
   }, [botAlias, client, overview?.repoFound]);
 
@@ -831,25 +859,29 @@ export function GitScreen({
     await loadStashes();
   }
 
-  async function loadBlame(path: string) {
-    setBlameLoadingPath(path);
-    setError("");
-    try {
-      setBlame(await client.getGitBlame(botAlias, path));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "加载 blame 失败");
-    } finally {
-      setBlameLoadingPath("");
-    }
-  }
-
   async function openChangedDiff(path: string, staged: boolean) {
-    if (!onOpenDiff) {
-      setNotice("当前视图未连接文件编辑器");
+    setNotice("");
+    setDiffError("");
+    if (onOpenDiff) {
+      try {
+        await onOpenDiff(path, staged);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "打开 diff 失败");
+      }
       return;
     }
-    setNotice("");
-    await onOpenDiff(path, staged);
+
+    const loadingKey = `${staged ? "staged" : "worktree"}:${path}`;
+    setDiffLoadingPath(loadingKey);
+    try {
+      const diff = await client.getGitDiff(botAlias, path, staged);
+      setSelectedDiff({ ...diff, label: displayGitPath(diff.path || path) });
+    } catch (err) {
+      setSelectedDiff(null);
+      setDiffError(err instanceof Error ? err.message : "加载 diff 失败");
+    } finally {
+      setDiffLoadingPath("");
+    }
   }
 
   async function saveGitIdentity() {
@@ -1018,9 +1050,9 @@ export function GitScreen({
                   </div>
                 </div>
                 {!changesCollapsed ? (
-                  <div data-testid="git-changes-content" className={sectionBodyClass("space-y-4")}>
+                  <div data-testid="git-changes-content" className={sectionBodyClass("space-y-2")}>
                     {changeGroups.map(([key, title, items]) => (
-                      <div key={key} className="space-y-2 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] p-2">
+                      <div key={key} className="space-y-1.5">
                         <div className="flex items-center justify-between text-xs font-medium text-[var(--muted)]">
                           <span>{countLabel(title, items.length)}</span>
                           <StateBadge tone={changeGroupTone(key)}>
@@ -1032,19 +1064,43 @@ export function GitScreen({
                             当前分组暂无文件
                           </div>
                         ) : (
-                          <div className="space-y-1">
-                            {items.map((item) => (
-                              <div
-                                key={`${key}-${item.path}`}
-                                data-testid={`git-change-row-${item.path}`}
-                                className={listRowClass()}
-                              >
-                                <div className="flex min-w-0 items-center justify-between gap-2">
-                                  <div className="flex min-w-0 items-center gap-2">
-                                    <div className="min-w-0 break-all text-sm font-medium text-[var(--text)]">{item.path}</div>
-                                    <span className="shrink-0 rounded border border-[var(--border)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--muted)]">
+                          <div className="divide-y divide-[var(--workbench-hairline)] rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)]">
+                            {items.map((item) => {
+                              const stats = changeStatsForGroup(item, key);
+                              const stagedDiff = key === "staged";
+                              const diffLoadingKey = `${stagedDiff ? "staged" : "worktree"}:${item.path}`;
+                              const diffLoading = diffLoadingPath === diffLoadingKey;
+                              return (
+                                <div
+                                  key={`${key}-${item.path}`}
+                                  data-testid={`git-change-row-${item.path}`}
+                                  data-full-path={item.path}
+                                  className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 px-2 py-1.5 text-xs transition-colors hover:bg-[var(--workbench-hover-bg)]"
+                                >
+                                  <button
+                                    type="button"
+                                    aria-label={`打开 diff ${item.path}`}
+                                    title={item.path}
+                                    data-full-path={item.path}
+                                    onClick={() => void openChangedDiff(item.path, stagedDiff)}
+                                    disabled={diffLoading}
+                                    className="min-w-0 truncate text-left font-medium text-[var(--text)] hover:text-[var(--accent)] disabled:opacity-60"
+                                  >
+                                    {diffLoading ? (
+                                      <span className="inline-flex min-w-0 items-center gap-1">
+                                        <LoaderCircle className="h-3 w-3 shrink-0 animate-spin" />
+                                        <span className="min-w-0 truncate">{displayGitPath(item.path)}</span>
+                                      </span>
+                                    ) : (
+                                      displayGitPath(item.path)
+                                    )}
+                                  </button>
+                                  <div className="flex shrink-0 items-center gap-1.5">
+                                    <span className="rounded border border-[var(--border)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--muted)]">
                                       {item.status.trim() || item.status}
                                     </span>
+                                    <span className="font-mono text-[10px] text-emerald-600">+{stats.additions}</span>
+                                    <span className="font-mono text-[10px] text-red-600">-{stats.deletions}</span>
                                   </div>
                                   <div className="flex shrink-0 items-center gap-1">
                                     {(item.untracked || item.unstaged || !item.staged) ? (
@@ -1086,66 +1142,59 @@ export function GitScreen({
                                     >
                                       <Trash2 className="h-3 w-3" />
                                     </button>
-                                    <button
-                                      type="button"
-                                      aria-label={`查看 blame ${item.path}`}
-                                      title={`查看 blame ${item.path}`}
-                                      onClick={() => void loadBlame(item.path)}
-                                      disabled={blameLoadingPath !== ""}
-                                      className={iconButtonClass()}
-                                    >
-                                      <Eye className="h-3 w-3" />
-                                    </button>
-                                    <button
-                                      type="button"
-                                      aria-label={`在编辑器打开 ${item.path}`}
-                                      title={`在编辑器打开 ${item.path}`}
-                                      onClick={() => void openChangedDiff(item.path, key === "staged")}
-                                      className={iconButtonClass()}
-                                    >
-                                      <FileDiff className="h-3 w-3" />
-                                    </button>
                                   </div>
                                 </div>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         )}
                       </div>
                     ))}
+                    {diffError ? (
+                      <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                        {diffError}
+                      </div>
+                    ) : null}
+                    {selectedDiff ? (
+                      <div data-testid="git-diff-panel" className="min-w-0 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)]">
+                        <div className="flex min-w-0 items-center justify-between gap-2 border-b border-[var(--workbench-hairline)] px-2 py-1.5">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <h3 className="min-w-0 truncate text-xs font-semibold text-[var(--text)]" title={selectedDiff.path}>
+                              {selectedDiff.label}
+                            </h3>
+                            <StateBadge tone={selectedDiff.staged ? "success" : "warning"}>
+                              {selectedDiff.staged ? "Index" : "Worktree"}
+                            </StateBadge>
+                          </div>
+                          <button
+                            type="button"
+                            aria-label="关闭 diff"
+                            title="关闭 diff"
+                            onClick={() => {
+                              setSelectedDiff(null);
+                              setDiffError("");
+                            }}
+                            className={iconButtonClass()}
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
+                        {selectedDiff.truncated ? (
+                          <div className="border-b border-[var(--workbench-hairline)] px-2 py-1 text-[10px] text-[var(--muted)]">
+                            Diff 已截断
+                          </div>
+                        ) : null}
+                        <pre
+                          data-testid="git-diff-content"
+                          className="max-h-80 overflow-auto whitespace-pre-wrap break-words px-2 py-2 font-mono text-[11px] leading-5 text-[var(--text)]"
+                        >
+                          {selectedDiff.diff || "无 diff"}
+                        </pre>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
               </section>
-
-              {blame ? (
-                <section className={sectionClass()}>
-                  <div className={sectionHeaderClass()}>
-                    <h2 className="min-w-0 truncate text-sm font-semibold">{blame.path} blame</h2>
-                    <button type="button" onClick={() => setBlame(null)} className={buttonClass()}>
-                      关闭
-                    </button>
-                  </div>
-                  <div className={sectionBodyClass("mt-3")}>
-                    <div className="max-h-80 overflow-auto rounded-md border border-[var(--border)] bg-[var(--bg)]">
-                      {blame.lines.map((line) => (
-                        <div
-                          key={`${line.line}-${line.commit}`}
-                          className="grid min-w-[520px] grid-cols-[48px_88px_minmax(100px,160px)_minmax(160px,1fr)] gap-2 border-b border-[var(--border)] px-2 py-1.5 text-xs last:border-b-0"
-                        >
-                          <span className="text-right font-mono text-[var(--muted)]">{line.line}</span>
-                          <span className="font-mono text-[var(--text)]">{line.shortCommit}</span>
-                          <span className="truncate text-[var(--muted)]" title={`${line.authorName} · ${line.summary}`}>
-                            {line.authorName}
-                          </span>
-                          <span className="min-w-0 truncate font-mono text-[var(--text)]" title={line.content}>
-                            {line.content}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </section>
-              ) : null}
 
               <div
                 data-testid="git-commit-panel"

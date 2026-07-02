@@ -3201,6 +3201,12 @@ describe("RealWebBotClient", () => {
                 staged: true,
                 unstaged: false,
                 untracked: false,
+                additions: 8,
+                deletions: 2,
+                staged_additions: 8,
+                staged_deletions: 2,
+                unstaged_additions: 0,
+                unstaged_deletions: 0,
               },
             ],
             recent_commits: [
@@ -3231,7 +3237,15 @@ describe("RealWebBotClient", () => {
     );
     expect(overview.repoFound).toBe(true);
     expect(overview.currentBranch).toBe("main");
-    expect(overview.changedFiles[0].path).toBe("tracked.txt");
+    expect(overview.changedFiles[0]).toMatchObject({
+      path: "tracked.txt",
+      additions: 8,
+      deletions: 2,
+      stagedAdditions: 8,
+      stagedDeletions: 2,
+      unstagedAdditions: 0,
+      unstagedDeletions: 0,
+    });
     expect(overview.recentCommits[0]).toMatchObject({
       subject: "feat: initial commit",
       message: "feat: initial commit\n\nadd first repo snapshot",
