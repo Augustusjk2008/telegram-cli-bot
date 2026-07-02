@@ -957,6 +957,17 @@ function clonePluginActions(actions: PluginAction[] | undefined) {
   }));
 }
 
+function buildPluginPermissions(
+  permissions: Partial<PluginSummary["runtime"]["permissions"]> = {},
+): PluginSummary["runtime"]["permissions"] {
+  return {
+    workspaceRead: false,
+    workspaceList: false,
+    tempArtifacts: false,
+    ...permissions,
+  };
+}
+
 function clonePromptPresets(presets: PromptPreset[] = []) {
   return presets.map((preset) => ({ ...preset }));
 }
@@ -1660,11 +1671,12 @@ export class MockWebBotClient implements WebBotClient {
       },
       views: [{ id: "waveform", title: "波形预览", renderer: "waveform", viewMode: "session", dataProfile: "heavy" }],
       fileHandlers: [{ id: "wave-vcd", label: "VCD 波形预览", extensions: [".vcd"], viewId: "waveform" }],
+      catalogActions: [],
       runtime: {
         type: "python",
         entry: "backend/main.py",
         protocol: "jsonrpc-stdio",
-        permissions: {},
+        permissions: buildPluginPermissions(),
       },
     },
     {
@@ -1699,7 +1711,7 @@ export class MockWebBotClient implements WebBotClient {
         type: "python",
         entry: "backend/main.py",
         protocol: "jsonrpc-stdio",
-        permissions: { workspaceRead: true, tempArtifacts: true },
+        permissions: buildPluginPermissions({ workspaceRead: true, tempArtifacts: true }),
       },
     },
     {
@@ -1756,7 +1768,7 @@ export class MockWebBotClient implements WebBotClient {
         type: "python",
         entry: "backend/main.py",
         protocol: "jsonrpc-stdio",
-        permissions: { workspaceRead: true, workspaceList: true },
+        permissions: buildPluginPermissions({ workspaceRead: true, workspaceList: true }),
       },
     },
     {
@@ -1788,7 +1800,7 @@ export class MockWebBotClient implements WebBotClient {
         type: "python",
         entry: "backend/main.py",
         protocol: "jsonrpc-stdio",
-        permissions: { workspaceRead: true },
+        permissions: buildPluginPermissions({ workspaceRead: true }),
       },
     },
   ];
@@ -2454,12 +2466,10 @@ export class MockWebBotClient implements WebBotClient {
       catalogActions: clonePluginActions(plugin.catalogActions),
       views: plugin.views.map((view) => ({ ...view })),
       fileHandlers: plugin.fileHandlers.map((handler) => ({ ...handler, extensions: [...handler.extensions] })),
-      runtime: plugin.runtime
-        ? {
-            ...plugin.runtime,
-            permissions: plugin.runtime.permissions ? { ...plugin.runtime.permissions } : undefined,
-          }
-        : undefined,
+      runtime: {
+        ...plugin.runtime,
+        permissions: { ...plugin.runtime.permissions },
+      },
     };
   }
 
@@ -2483,11 +2493,12 @@ export class MockWebBotClient implements WebBotClient {
       config: {},
       views: [{ id: "document-view", title: "文档预览", renderer: "document", viewMode: "snapshot", dataProfile: "light" }],
       fileHandlers: [{ id: "docx-preview", label: "文档预览", extensions: [".docx"], viewId: "document-view" }],
+      catalogActions: [],
       runtime: {
         type: "python",
         entry: "backend/main.py",
         protocol: "jsonrpc-stdio",
-        permissions: { workspaceRead: true },
+        permissions: buildPluginPermissions({ workspaceRead: true }),
       },
     };
   }
@@ -2510,11 +2521,12 @@ export class MockWebBotClient implements WebBotClient {
       config: {},
       views: [],
       fileHandlers: [],
+      catalogActions: [],
       runtime: {
         type: "python",
         entry: "backend/main.py",
         protocol: "jsonrpc-stdio",
-        permissions: {},
+        permissions: buildPluginPermissions(),
       },
     };
   }
@@ -3324,12 +3336,10 @@ export class MockWebBotClient implements WebBotClient {
       fileHandlers: current.fileHandlers.map((handler) => ({ ...handler, extensions: [...handler.extensions] })),
       configSchema: current.configSchema,
       catalogActions: clonePluginActions(current.catalogActions),
-      runtime: current.runtime
-        ? {
-            ...current.runtime,
-            permissions: current.runtime.permissions ? { ...current.runtime.permissions } : undefined,
-          }
-        : undefined,
+      runtime: {
+        ...current.runtime,
+        permissions: { ...current.runtime.permissions },
+      },
     };
     this.plugins[index] = updated;
     return this.clonePluginSummary(updated);

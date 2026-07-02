@@ -47,9 +47,12 @@ def _resolve_safe_path(workspace_root: str, base_dir: str, filename: str) -> str
 
 async def list_plugins(manager: MultiBotManager, auth: AuthContext, refresh: bool = False) -> list[dict[str, Any]]:
     _require_capability(auth, CAP_VIEW_PLUGINS)
-    if refresh:
-        return await manager.plugin_service.reload_plugins()
-    return manager.plugin_service.list_plugins()
+    try:
+        if refresh:
+            return await manager.plugin_service.reload_plugins()
+        return manager.plugin_service.list_plugins()
+    except ValueError as exc:
+        _raise(400, "invalid_plugin_manifest", str(exc))
 
 
 async def list_installable_plugins(manager: MultiBotManager, auth: AuthContext) -> list[dict[str, Any]]:
@@ -126,7 +129,10 @@ def resolve_plugin_file_target(
 ) -> dict[str, Any]:
     _require_capability(auth, CAP_VIEW_PLUGINS)
     get_profile_or_raise(manager, alias)
-    return manager.plugin_service.resolve_file_target(path)
+    try:
+        return manager.plugin_service.resolve_file_target(path)
+    except ValueError as exc:
+        _raise(400, "invalid_plugin_manifest", str(exc))
 
 
 def _resolve_plugin_render_input(

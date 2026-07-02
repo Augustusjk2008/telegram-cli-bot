@@ -1193,14 +1193,14 @@ export type PluginConfigSchema = {
 };
 
 export type PluginRuntimePermissions = {
-  workspaceRead?: boolean;
-  workspaceList?: boolean;
-  tempArtifacts?: boolean;
+  workspaceRead: boolean;
+  workspaceList: boolean;
+  tempArtifacts: boolean;
 };
 
 export type PluginSummary = {
   id: string;
-  schemaVersion?: number;
+  schemaVersion: 2;
   name: string;
   version: string;
   description: string;
@@ -1210,17 +1210,17 @@ export type PluginSummary = {
     id: string;
     title: string;
     renderer: PluginViewRenderer;
-    viewMode?: PluginViewMode;
-    dataProfile?: PluginViewDataProfile;
+    viewMode: PluginViewMode;
+    dataProfile: PluginViewDataProfile;
   }>;
   fileHandlers: Array<{ id: string; label: string; extensions: string[]; viewId: string }>;
   configSchema?: PluginConfigSchema;
-  catalogActions?: PluginAction[];
-  runtime?: {
-    type?: string;
-    entry?: string;
-    protocol?: string;
-    permissions?: PluginRuntimePermissions;
+  catalogActions: PluginAction[];
+  runtime: {
+    type: string;
+    entry: string;
+    protocol: string;
+    permissions: PluginRuntimePermissions;
   };
 };
 

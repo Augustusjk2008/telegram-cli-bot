@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 import secrets
 
+from bot.plugins.paths import default_plugins_root
 from bot.runtime_paths import (
     get_announcements_content_path,
     get_announcements_reads_path,
@@ -36,7 +37,8 @@ from bot.runtime_paths import (
 from bot.web.auth_store import WebAuthStore
 
 MIGRATION_REPO_STATE_TO_USER_HOME = "001_repo_state_to_user_home"
-MIGRATION_IDS = (MIGRATION_REPO_STATE_TO_USER_HOME,)
+MIGRATION_PLUGIN_MANIFEST_V2 = "002_plugin_manifest_v2"
+MIGRATION_IDS = (MIGRATION_REPO_STATE_TO_USER_HOME, MIGRATION_PLUGIN_MANIFEST_V2)
 _LEGACY_APP_SETTING_KEYS = (
     "git_proxy_address",
     "git_proxy_port",
@@ -184,6 +186,14 @@ def _backup_legacy_files(paths: dict[str, Path]) -> tuple[Path | None, dict[str,
         shutil.copy2(source, target)
         index[name] = str(target)
     return backup_dir, index
+
+
+def _backup_migration_file(source: Path, migration_id: str, relative_path: Path) -> Path:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    backup_path = get_migrations_backup_root() / migration_id / stamp / relative_path
+    backup_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, backup_path)
+    return backup_path
 
 
 def _write_secret_permissions(path: Path) -> None:
@@ -395,6 +405,150 @@ def _run_repo_state_migration(repo_root: Path) -> dict[str, Any]:
     }
 
 
+def _plugin_manifest_backup_relative_path(plugins_root: Path, manifest_path: Path) -> Path:
+    try:
+        return Path("plugins") / manifest_path.relative_to(plugins_root)
+    except ValueError:
+        return Path("plugins") / manifest_path.parent.name / manifest_path.name
+
+
+def _migrate_plugin_manifest_v1_to_v2(
+    plugins_root: Path,
+    manifest_path: Path,
+) -> dict[str, Any]:
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("manifest root 必须是对象")
+    if int(raw.get("schemaVersion") or 0) != 1:
+        raise ValueError("manifest 不是 schemaVersion=1")
+    runtime_raw = raw.get("runtime")
+    if not isinstance(runtime_raw, dict):
+        raise ValueError("runtime 必须是对象")
+    if runtime_raw.get("permissions") is not None:
+        raise ValueError("schemaVersion=1 不支持 runtime.permissions")
+    if raw.get("configSchema") is not None:
+        raise ValueError("schemaVersion=1 不支持 configSchema")
+    if raw.get("catalogActions") is not None:
+        raise ValueError("schemaVersion=1 不支持 catalogActions")
+    config_raw = raw.get("config") or {}
+    if not isinstance(config_raw, dict):
+        raise ValueError("config 必须是对象")
+    views_raw = raw.get("views") or []
+    if not isinstance(views_raw, list):
+        raise ValueError("views 必须是数组")
+    if any(not isinstance(view, dict) for view in views_raw):
+        raise ValueError("view 必须是对象")
+    seen_view_ids: set[str] = set()
+    for view in views_raw:
+        view_id = str(view.get("id") or "").strip()
+        if not view_id:
+            raise ValueError("view.id 不能为空")
+        if view_id in seen_view_ids:
+            raise ValueError(f"重复的 view.id: {view_id}")
+        seen_view_ids.add(view_id)
+        if str(view.get("renderer") or "").strip() != "waveform":
+            raise ValueError("schemaVersion=1 仅支持 waveform renderer")
+    handlers_raw = raw.get("fileHandlers") or []
+    if not isinstance(handlers_raw, list):
+        raise ValueError("fileHandlers 必须是数组")
+    if any(not isinstance(handler, dict) for handler in handlers_raw):
+        raise ValueError("fileHandler 必须是对象")
+    for handler in handlers_raw:
+        view_id = str(handler.get("viewId") or "").strip()
+        if view_id not in seen_view_ids:
+            raise ValueError(f"fileHandler.viewId 未定义: {view_id}")
+        extensions_raw = handler.get("extensions") or []
+        if not isinstance(extensions_raw, list):
+            raise ValueError("fileHandler.extensions 必须是数组")
+        if any(not str(value or "").strip() for value in extensions_raw):
+            raise ValueError("插件扩展名不能为空")
+
+    relative_path = _plugin_manifest_backup_relative_path(plugins_root, manifest_path)
+    backup_path = _backup_migration_file(manifest_path, MIGRATION_PLUGIN_MANIFEST_V2, relative_path)
+    migrated: dict[str, Any] = {
+        "schemaVersion": 2,
+    }
+    for key in ("id", "name", "version", "description", "enabled"):
+        if key in raw:
+            migrated[key] = raw[key]
+    migrated["config"] = dict(config_raw)
+    migrated["runtime"] = {
+        "type": runtime_raw.get("type"),
+        "entry": runtime_raw.get("entry"),
+        "protocol": runtime_raw.get("protocol"),
+        "permissions": {},
+    }
+
+    migrated["views"] = [
+        {
+            "id": view.get("id"),
+            "title": view.get("title"),
+            "renderer": view.get("renderer"),
+            "viewMode": str(view.get("viewMode") or "").strip() or "snapshot",
+            "dataProfile": str(view.get("dataProfile") or "").strip() or "light",
+        }
+        for view in views_raw
+    ]
+    migrated["fileHandlers"] = [
+        {
+            "id": handler.get("id"),
+            "label": handler.get("label"),
+            "extensions": list(handler.get("extensions") or []),
+            "viewId": handler.get("viewId"),
+        }
+        for handler in handlers_raw
+    ]
+    _atomic_write_json(manifest_path, migrated)
+    return {
+        "path": str(manifest_path),
+        "backup_path": str(backup_path),
+        "plugin_id": str(raw.get("id") or manifest_path.parent.name),
+    }
+
+
+def _run_plugin_manifest_v2_migration() -> dict[str, Any]:
+    plugins_root = default_plugins_root()
+    migrated: list[dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
+    invalid: list[dict[str, str]] = []
+    if not plugins_root.exists():
+        return {
+            "plugins_root": str(plugins_root),
+            "migrated": migrated,
+            "skipped": skipped,
+            "invalid": invalid,
+        }
+
+    for manifest_path in sorted(plugins_root.glob("*/plugin.json")):
+        try:
+            raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            invalid.append({"path": str(manifest_path), "error": str(exc)})
+            continue
+        if not isinstance(raw, dict):
+            invalid.append({"path": str(manifest_path), "error": "manifest root 必须是对象"})
+            continue
+        try:
+            schema_version = int(raw.get("schemaVersion") or 0)
+        except (TypeError, ValueError):
+            invalid.append({"path": str(manifest_path), "error": f"无效 schemaVersion: {raw.get('schemaVersion')}"})
+            continue
+        if schema_version != 1:
+            skipped.append({"path": str(manifest_path), "schemaVersion": str(raw.get("schemaVersion") or "")})
+            continue
+        try:
+            migrated.append(_migrate_plugin_manifest_v1_to_v2(plugins_root, manifest_path))
+        except ValueError as exc:
+            invalid.append({"path": str(manifest_path), "error": str(exc)})
+
+    return {
+        "plugins_root": str(plugins_root),
+        "migrated": migrated,
+        "skipped": skipped,
+        "invalid": invalid,
+    }
+
+
 def _completed_repair_targets(state: dict[str, Any]) -> set[str]:
     completed: set[str] = set()
     repairs = state.get("completed_repairs")
@@ -457,6 +611,8 @@ def run_pending_migrations(repo_root: str | Path | None = None) -> MigrationRunR
         try:
             if migration_id == MIGRATION_REPO_STATE_TO_USER_HOME:
                 detail = _run_repo_state_migration(root)
+            elif migration_id == MIGRATION_PLUGIN_MANIFEST_V2:
+                detail = _run_plugin_manifest_v2_migration()
             else:
                 detail = {}
             state.setdefault("completed", []).append(

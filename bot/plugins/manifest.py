@@ -172,8 +172,11 @@ def _parse_action(value: Any, *, label: str) -> PluginActionSpec:
 
 def load_plugin_manifest(path: Path) -> PluginManifest:
     raw = _expect_mapping(json.loads(path.read_text(encoding="utf-8")), str(path))
-    schema_version = int(raw.get("schemaVersion") or 0)
-    if schema_version not in {1, 2}:
+    try:
+        schema_version = int(raw.get("schemaVersion") or 0)
+    except (TypeError, ValueError):
+        raise ValueError(f"不支持的插件 schemaVersion: {raw.get('schemaVersion')}")
+    if schema_version != 2:
         raise ValueError(f"不支持的插件 schemaVersion: {raw.get('schemaVersion')}")
 
     runtime_raw = _expect_mapping(raw.get("runtime"), "runtime")
@@ -184,14 +187,11 @@ def load_plugin_manifest(path: Path) -> PluginManifest:
     if not isinstance(handlers_raw, list):
         raise ValueError("fileHandlers 必须是数组")
 
-    permissions_raw = runtime_raw.get("permissions")
-    if schema_version == 1 and permissions_raw is not None:
-        raise ValueError("schemaVersion=1 不支持 runtime.permissions")
-    permissions = _parse_permissions(permissions_raw or {}) if schema_version == 2 else PluginPermissions()
+    permissions = _parse_permissions(runtime_raw.get("permissions") or {})
 
     views: list[PluginViewSpec] = []
     seen_view_ids: set[str] = set()
-    allowed_renderers = {"waveform"} if schema_version == 1 else {"waveform", "table", "tree", "document", "hex"}
+    allowed_renderers = {"waveform", "table", "tree", "document", "hex"}
     for item in views_raw:
         current = _expect_mapping(item, "view")
         view_id = str(current.get("id") or "").strip()
@@ -228,19 +228,14 @@ def load_plugin_manifest(path: Path) -> PluginManifest:
             )
         )
 
-    if schema_version == 1 and raw.get("configSchema") is not None:
-        raise ValueError("schemaVersion=1 不支持 configSchema")
-    if schema_version == 1 and raw.get("catalogActions") is not None:
-        raise ValueError("schemaVersion=1 不支持 catalogActions")
-
-    config_schema = _parse_config_schema(raw.get("configSchema")) if schema_version == 2 and raw.get("configSchema") is not None else None
+    config_schema = _parse_config_schema(raw.get("configSchema")) if raw.get("configSchema") is not None else None
     catalog_actions_raw = raw.get("catalogActions") or []
     if not isinstance(catalog_actions_raw, list):
         raise ValueError("catalogActions 必须是数组")
     catalog_actions = tuple(
         _parse_action(item, label="catalogActions.item")
         for item in catalog_actions_raw
-    ) if schema_version == 2 else ()
+    )
 
     return PluginManifest(
         root=path.parent.resolve(),

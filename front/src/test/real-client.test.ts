@@ -2601,13 +2601,25 @@ describe("RealWebBotClient", () => {
   test("installPlugin sends allowDevSourcePath for local source paths", async () => {
     fetchMock.mockResolvedValue(jsonOk({
       id: "local-plugin",
+      schemaVersion: 2,
       name: "Local Plugin",
       version: "1.0.0",
       description: "",
       enabled: true,
       views: [],
-      actions: [],
+      fileHandlers: [],
+      catalogActions: [],
       config: {},
+      runtime: {
+        type: "python",
+        entry: "backend/main.py",
+        protocol: "jsonrpc-stdio",
+        permissions: {
+          workspaceRead: false,
+          workspaceList: false,
+          tempArtifacts: false,
+        },
+      },
     }));
 
     const client = new RealWebBotClient();
