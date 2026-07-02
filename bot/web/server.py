@@ -142,6 +142,7 @@ from .routes import (
     announcement_routes,
     assistant_routes,
     auth_routes,
+    bot_settings_routes,
     chat_routes,
     cluster_routes,
     debug_routes,
@@ -4817,6 +4818,7 @@ class WebApiServer:
             assistant_routes,
             git_routes,
             admin_routes,
+            bot_settings_routes,
             lan_chat_routes,
             transfer_routes,
         ):

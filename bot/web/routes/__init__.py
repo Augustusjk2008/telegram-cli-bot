@@ -5,6 +5,7 @@ from . import (
     announcement_routes,
     assistant_routes,
     auth_routes,
+    bot_settings_routes,
     chat_routes,
     cluster_routes,
     debug_routes,
