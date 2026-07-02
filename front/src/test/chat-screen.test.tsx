@@ -2558,20 +2558,14 @@ test("chat screen can delete all conversations for current bot", async () => {
   expect(screen.queryByText("旧收藏")).not.toBeInTheDocument();
 });
 
-test("chat screen requires strong confirmation before permanent conversation delete", async () => {
+test("chat screen history panel no longer exposes permanent conversation delete", async () => {
   const user = userEvent.setup();
   const now = new Date().toISOString();
-  const dispatchSpy = vi.spyOn(window, "dispatchEvent");
   const deleteAllConversations = vi.fn(async (): Promise<ConversationBulkDeleteResult> => ({
     deletedCount: 1,
     deletedFavoriteCount: 0,
     activeConversationId: "",
     nativeSessionCleared: true,
-    permanent: true,
-    workspacePath: "C:\\workspace",
-    workspaceDeleted: true,
-    workspaceMissing: false,
-    errors: [],
     items: [],
     messages: [],
   }));
@@ -2606,25 +2600,10 @@ test("chat screen requires strong confirmation before permanent conversation del
 
   render(<ChatScreen botAlias="main" client={client} />);
   await user.click(screen.getByRole("button", { name: "历史会话" }));
-  await user.click(await screen.findByRole("button", { name: "彻底删除" }));
-  await user.click(within(await screen.findByRole("dialog", { name: "彻底删除全部会话" })).getByRole("button", { name: "继续" }));
 
-  const confirmDialog = await screen.findByRole("dialog", { name: "确认彻底删除" });
-  const confirmButton = within(confirmDialog).getByRole("button", { name: "确认彻底删除" });
-  expect(confirmButton).toBeDisabled();
-  await user.type(within(confirmDialog).getByLabelText("输入永久删除确认词"), "删除");
-  expect(confirmButton).toBeDisabled();
-  await user.clear(within(confirmDialog).getByLabelText("输入永久删除确认词"));
-  await user.type(within(confirmDialog).getByLabelText("输入永久删除确认词"), "永久删除");
-  expect(confirmButton).toBeEnabled();
-  await user.click(confirmButton);
-
-  expect(deleteAllConversations).toHaveBeenCalledWith("main", { deleteNativeSession: true, permanent: true });
-  await waitFor(() => expect(screen.getByText("暂无消息，开始聊天吧")).toBeInTheDocument());
-  const workspaceEvent = dispatchSpy.mock.calls
-    .map(([event]) => event)
-    .find((event) => event instanceof CustomEvent && event.type === "tcb-workspace-deleted") as CustomEvent | undefined;
-  expect(workspaceEvent?.detail).toEqual({ botAlias: "main", workspacePath: "C:\\workspace" });
+  expect(await screen.findByRole("button", { name: "清空" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "彻底删除" })).not.toBeInTheDocument();
+  expect(deleteAllConversations).not.toHaveBeenCalled();
 });
 
 

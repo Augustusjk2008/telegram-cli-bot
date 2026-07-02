@@ -54,6 +54,8 @@ import type {
   ConversationSelectResult,
   ConversationSummary,
   CreateAssistantCronJobInput,
+  RemoveBotOptions,
+  RemoveBotResult,
   BotOverview,
   BotExecutionConfigInput,
   BotWorkdirOpenResult,
@@ -3915,7 +3917,7 @@ export class MockWebBotClient implements WebBotClient {
 
   async deleteAllConversations(
     botAlias: string,
-    options: AgentScopedOptions & { deleteNativeSession?: boolean; permanent?: boolean } = {},
+    options: AgentScopedOptions & { deleteNativeSession?: boolean } = {},
   ): Promise<ConversationBulkDeleteResult> {
     const agentId = options.agentId || "main";
     const key = this.getConversationKey(botAlias, agentId);
@@ -3933,11 +3935,6 @@ export class MockWebBotClient implements WebBotClient {
       deletedFavoriteCount: 0,
       activeConversationId: "",
       nativeSessionCleared: Boolean(options.deleteNativeSession),
-      permanent: Boolean(options.permanent),
-      workspacePath: options.permanent ? "C:\\workspace" : "",
-      workspaceDeleted: Boolean(options.permanent),
-      workspaceMissing: false,
-      errors: [],
       items: [],
       messages: [],
     };
@@ -7108,10 +7105,21 @@ export class MockWebBotClient implements WebBotClient {
     return this.getBotSummary(alias);
   }
 
-  async removeBot(botAlias: string, _options: { deleteHistory?: boolean } = {}): Promise<void> {
+  async removeBot(botAlias: string, options: RemoveBotOptions = {}): Promise<RemoveBotResult> {
     if (botAlias === "main") {
-      return;
+      return {
+        removed: false,
+        alias: botAlias,
+        historyDeleted: false,
+        historyDeletedCount: 0,
+        favoriteDeletedCount: 0,
+        workspacePath: "",
+        workspaceDeleted: false,
+        workspaceMissing: false,
+        errors: [],
+      };
     }
+    const workspacePath = this.bots.get(botAlias)?.workingDir || "";
     this.bots.delete(botAlias);
     this.botOwners.delete(botAlias);
     for (const accountId of Array.from(this.adminUsers.keys())) {
@@ -7159,6 +7167,17 @@ export class MockWebBotClient implements WebBotClient {
         this.assistantCronRuns.delete(key);
       }
     }
+    return {
+      removed: true,
+      alias: botAlias,
+      historyDeleted: Boolean(options.deleteHistory || options.deleteWorkspace),
+      historyDeletedCount: options.deleteHistory || options.deleteWorkspace ? 1 : 0,
+      favoriteDeletedCount: options.deleteHistory || options.deleteWorkspace ? 1 : 0,
+      workspacePath: options.deleteWorkspace ? workspacePath : "",
+      workspaceDeleted: Boolean(options.deleteWorkspace && workspacePath),
+      workspaceMissing: false,
+      errors: [],
+    };
   }
 
   async startBot(botAlias: string): Promise<BotSummary> {

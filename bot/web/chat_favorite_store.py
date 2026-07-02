@@ -333,3 +333,15 @@ class ChatFavoriteStore:
             payload["items"] = next_items
             self._write_payload(payload)
             return deleted_count
+
+    def delete_favorites_for_bot(self, *, bot_id: int) -> int:
+        with self._lock:
+            payload = self._read_payload()
+            previous_items = list(payload["items"])
+            next_items = [item for item in previous_items if int(item.get("bot_id") or 0) != int(bot_id)]
+            deleted_count = len(previous_items) - len(next_items)
+            if deleted_count <= 0:
+                return 0
+            payload["items"] = next_items
+            self._write_payload(payload)
+            return deleted_count

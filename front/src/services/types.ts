@@ -615,6 +615,19 @@ export type UpdateBotWorkdirOptions = {
 
 export type RemoveBotOptions = {
   deleteHistory?: boolean;
+  deleteWorkspace?: boolean;
+};
+
+export type RemoveBotResult = {
+  removed: boolean;
+  alias: string;
+  historyDeleted: boolean;
+  historyDeletedCount: number;
+  favoriteDeletedCount: number;
+  workspacePath: string;
+  workspaceDeleted: boolean;
+  workspaceMissing: boolean;
+  errors: Array<{ code?: string; message: string }>;
 };
 
 export class WebApiClientError extends Error {
@@ -869,11 +882,6 @@ export type ConversationBulkDeleteResult = {
   deletedFavoriteCount?: number;
   activeConversationId: string;
   nativeSessionCleared: boolean;
-  permanent?: boolean;
-  workspacePath?: string;
-  workspaceDeleted?: boolean;
-  workspaceMissing?: boolean;
-  errors?: Array<{ code?: string; message: string }>;
   items: ConversationSummary[];
   messages: ChatMessage[];
 };

@@ -75,7 +75,6 @@ import type { BotActivityChange } from "../app/botActivity";
 import type { ChatWorkbenchStatus } from "../workbench/workbenchTypes";
 import type { SoloSessionSnapshot } from "../workbench/soloTypes";
 import { extractPlanDraft, stripPlanDraftTags } from "../utils/planDraft";
-import { dispatchWorkspaceDeleted } from "../utils/workspaceEvents";
 import type { AgUiEvent } from "../services/agUiProtocol";
 import {
   buildAgUiMessageMeta,
@@ -440,14 +439,12 @@ function deleteAllScopedConversations(
   botAlias: string,
   agentId: string,
   deleteNativeSession: boolean,
-  permanent: boolean,
   executionMode?: ChatExecutionMode,
 ) {
   const options = agentOptions(agentId, executionMode);
   return client.deleteAllConversations(botAlias, {
     ...(options || {}),
     deleteNativeSession,
-    ...(permanent ? { permanent: true } : {}),
   });
 }
 
@@ -3281,7 +3278,7 @@ export function ChatScreen({
     }
   }
 
-  async function handleDeleteAllConversations(deleteNativeSession: boolean, permanent = false) {
+  async function handleDeleteAllConversations(deleteNativeSession: boolean) {
     if (isStreamingRef.current) {
       setError("当前任务运行中，先终止或等待完成");
       return;
@@ -3295,7 +3292,6 @@ export function ChatScreen({
         botAlias,
         activeAgentIdRef.current,
         deleteNativeSession,
-        permanent,
         executionModeRef.current,
       );
       stopAssistantPoll();
@@ -3312,12 +3308,6 @@ export function ChatScreen({
       setFavoriteItems([]);
       setItems(data.messages);
       itemsRef.current = data.messages;
-      if (data.permanent) {
-        dispatchWorkspaceDeleted({
-          botAlias,
-          workspacePath: data.workspacePath || "",
-        });
-      }
       setHistoryPanelOpen(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "删除全部会话失败");
@@ -4625,7 +4615,7 @@ export function ChatScreen({
         onSelectFavorite={(favorite) => void handleSelectFavorite(favorite)}
         onDeleteFavorite={(favorite) => void handleDeleteFavorite(favorite)}
         onDeleteConversation={(conversation, deleteNativeSession) => void handleDeleteConversation(conversation, deleteNativeSession)}
-        onDeleteAllConversations={(deleteNativeSession, permanent) => void handleDeleteAllConversations(deleteNativeSession, permanent)}
+        onDeleteAllConversations={(deleteNativeSession) => void handleDeleteAllConversations(deleteNativeSession)}
       />
       {showImmersiveButton ? (
         <ImmersiveToggleButton

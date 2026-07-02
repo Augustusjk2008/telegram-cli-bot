@@ -229,8 +229,13 @@ export function useBotManager({
     setError("");
     setNotice("");
     try {
-      await client.removeBot(bot.alias, options);
-      setNotice(options.deleteHistory ? `已删除 ${bot.alias} 和历史记录` : `已删除 ${bot.alias}`);
+      const result = await client.removeBot(bot.alias, options);
+      if (options.deleteWorkspace) {
+        const workspaceText = result.workspaceDeleted ? "，工作区已删除" : result.workspaceMissing ? "，工作区不存在" : "";
+        setNotice(`已彻底删除 ${bot.alias}${workspaceText}`);
+      } else {
+        setNotice(options.deleteHistory ? `已删除 ${bot.alias} 和历史记录` : `已删除 ${bot.alias}`);
+      }
       await loadBots();
       return true;
     } catch (err) {

@@ -78,6 +78,7 @@ const RESIZER_WIDTH = 8;
 const INSPECTOR_MIN_WIDTH = 320;
 const INSPECTOR_MAX_WIDTH = 720;
 const INSPECTOR_DEFAULT_WIDTH = 400;
+const DELETE_WORKSPACE_CONFIRM_TEXT = "永久删除";
 const DEFAULT_CLUSTER_CONFIG: BotClusterConfig = {
   enabled: false,
   writePolicy: "selected_agents",
@@ -861,34 +862,84 @@ function DeleteBotDialog({
   title,
   description,
   deleteHistory,
+  deleteWorkspace,
+  workspacePath,
+  workspaceConfirmText,
+  allowWorkspaceDelete = true,
   busy,
   onDeleteHistoryChange,
+  onDeleteWorkspaceChange,
+  onWorkspaceConfirmTextChange,
   onCancel,
   onConfirm,
 }: {
   title: string;
   description?: string;
   deleteHistory: boolean;
+  deleteWorkspace: boolean;
+  workspacePath?: string;
+  workspaceConfirmText: string;
+  allowWorkspaceDelete?: boolean;
   busy: boolean;
   onDeleteHistoryChange: (value: boolean) => void;
+  onDeleteWorkspaceChange: (value: boolean) => void;
+  onWorkspaceConfirmTextChange: (value: string) => void;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const workspaceConfirmMatched = workspaceConfirmText.trim() === DELETE_WORKSPACE_CONFIRM_TEXT;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="w-full max-w-md rounded-2xl bg-[var(--surface)] p-5 shadow-[var(--shadow-card)]">
-        <h2 className="text-base font-semibold">{title}</h2>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="delete-bot-dialog-title"
+        className="w-full max-w-md rounded-2xl bg-[var(--surface)] p-5 shadow-[var(--shadow-card)]"
+      >
+        <h2 id="delete-bot-dialog-title" className="text-base font-semibold">{title}</h2>
         <p className="mt-2 text-sm text-[var(--muted)]">{description || "可只删智能体，或连历史记录一起删。"}</p>
         <label className="mt-4 flex items-start gap-3 text-sm">
           <input
             type="checkbox"
-            checked={deleteHistory}
+            checked={deleteWorkspace || deleteHistory}
             onChange={(event) => onDeleteHistoryChange(event.target.checked)}
-            disabled={busy}
+            disabled={busy || deleteWorkspace}
             className="mt-0.5 h-4 w-4 rounded border-[var(--border)]"
           />
           <span>同时删除历史记录（包含所有子 agents）</span>
         </label>
+        {allowWorkspaceDelete ? (
+          <>
+            <label className="mt-3 flex items-start gap-3 text-sm">
+              <input
+                type="checkbox"
+                checked={deleteWorkspace}
+                onChange={(event) => onDeleteWorkspaceChange(event.target.checked)}
+                disabled={busy}
+                className="mt-0.5 h-4 w-4 rounded border-[var(--border)]"
+              />
+              <span>同时删除工作区和所有记录</span>
+            </label>
+            {deleteWorkspace ? (
+              <div className="mt-3 space-y-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+                <p>将删除该 Bot 的磁盘工作区目录，且会一并删除历史记录和 session 记录。</p>
+                <div className="break-all font-mono text-xs">{workspacePath || "未设置工作区"}</div>
+                <label className="block text-sm">
+                  <span>输入“{DELETE_WORKSPACE_CONFIRM_TEXT}”确认</span>
+                  <input
+                    aria-label="输入永久删除确认词"
+                    value={workspaceConfirmText}
+                    onChange={(event) => onWorkspaceConfirmTextChange(event.target.value)}
+                    className="mt-2 h-9 w-full rounded-md border border-red-200 bg-white px-3 text-sm text-red-900 outline-none focus:border-red-500"
+                    autoFocus
+                  />
+                </label>
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <p className="mt-3 text-xs text-[var(--muted)]">彻底删除工作区请逐个操作。</p>
+        )}
         <div className="mt-5 flex justify-end gap-2">
           <button
             type="button"
@@ -901,10 +952,10 @@ function DeleteBotDialog({
           <button
             type="button"
             onClick={onConfirm}
-            disabled={busy}
+            disabled={busy || (deleteWorkspace && !workspaceConfirmMatched)}
             className="rounded-lg border border-red-200 px-3 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
           >
-            {busy ? "删除中..." : "删除"}
+            {busy ? "删除中..." : deleteWorkspace ? "彻底删除" : "删除"}
           </button>
         </div>
       </div>
@@ -934,6 +985,8 @@ export function DesktopBotManagerScreen({
   const [pendingDeleteAlias, setPendingDeleteAlias] = useState("");
   const [pendingBulkDeleteCount, setPendingBulkDeleteCount] = useState(0);
   const [deleteHistory, setDeleteHistory] = useState(false);
+  const [deleteWorkspace, setDeleteWorkspace] = useState(false);
+  const [deleteWorkspaceConfirmText, setDeleteWorkspaceConfirmText] = useState("");
   const layoutRef = useRef<HTMLDivElement>(null);
 
   const visibleBots = useMemo(() => getVisibleManagedBots({
@@ -1022,12 +1075,16 @@ export function DesktopBotManagerScreen({
     setPendingDeleteAlias(alias);
     setPendingBulkDeleteCount(0);
     setDeleteHistory(false);
+    setDeleteWorkspace(false);
+    setDeleteWorkspaceConfirmText("");
   }
 
   function openBulkDeleteDialog(count: number) {
     setPendingDeleteAlias("");
     setPendingBulkDeleteCount(count);
     setDeleteHistory(false);
+    setDeleteWorkspace(false);
+    setDeleteWorkspaceConfirmText("");
   }
 
   async function confirmDelete() {
@@ -1038,13 +1095,17 @@ export function DesktopBotManagerScreen({
     if (!bot) {
       setPendingDeleteAlias("");
       setDeleteHistory(false);
+      setDeleteWorkspace(false);
+      setDeleteWorkspaceConfirmText("");
       return;
     }
-    const removed = await manager.deleteBot(bot, { deleteHistory });
+    const removed = await manager.deleteBot(bot, { deleteHistory: deleteHistory || deleteWorkspace, deleteWorkspace });
     if (removed) {
       setPendingDeleteAlias("");
       setPendingBulkDeleteCount(0);
       setDeleteHistory(false);
+      setDeleteWorkspace(false);
+      setDeleteWorkspaceConfirmText("");
     }
   }
 
@@ -1079,6 +1140,8 @@ export function DesktopBotManagerScreen({
     clearSelection();
     setPendingBulkDeleteCount(0);
     setDeleteHistory(false);
+    setDeleteWorkspace(false);
+    setDeleteWorkspaceConfirmText("");
     await manager.loadBots();
   }
 
@@ -1700,8 +1763,20 @@ export function DesktopBotManagerScreen({
           title={pendingDeleteAlias ? `删除智能体 ${pendingDeleteAlias}` : `批量删除 ${pendingBulkDeleteCount} 个智能体`}
           description={pendingDeleteAlias ? undefined : "可只删智能体，或连历史记录一起删。主 bot 等不可删除项会自动跳过。"}
           deleteHistory={deleteHistory}
+          deleteWorkspace={pendingDeleteAlias ? deleteWorkspace : false}
+          workspacePath={manager.bots.find((item) => item.alias === pendingDeleteAlias)?.workingDir || ""}
+          workspaceConfirmText={deleteWorkspaceConfirmText}
+          allowWorkspaceDelete={Boolean(pendingDeleteAlias)}
           busy={pendingDeleteAlias ? manager.savingAction === `${pendingDeleteAlias}:delete` : false}
           onDeleteHistoryChange={setDeleteHistory}
+          onDeleteWorkspaceChange={(value) => {
+            setDeleteWorkspace(value);
+            if (value) {
+              setDeleteHistory(true);
+            }
+            setDeleteWorkspaceConfirmText("");
+          }}
+          onWorkspaceConfirmTextChange={setDeleteWorkspaceConfirmText}
           onCancel={() => {
             if (pendingDeleteAlias && manager.savingAction === `${pendingDeleteAlias}:delete`) {
               return;
@@ -1709,6 +1784,8 @@ export function DesktopBotManagerScreen({
             setPendingDeleteAlias("");
             setPendingBulkDeleteCount(0);
             setDeleteHistory(false);
+            setDeleteWorkspace(false);
+            setDeleteWorkspaceConfirmText("");
           }}
           onConfirm={() => void (pendingDeleteAlias ? confirmDelete() : confirmBulkDelete())}
         />

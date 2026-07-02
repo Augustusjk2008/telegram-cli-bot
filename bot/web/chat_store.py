@@ -1025,6 +1025,36 @@ class ChatStore:
             if str(row["id"] or "").strip()
         ]
 
+    def list_bot_conversation_records(self, *, bot_id: int, include_archived: bool = True) -> list[dict[str, Any]]:
+        conn = self._connect(create=False)
+        if conn is None:
+            return []
+
+        archived_clause = "" if include_archived else "AND archived_at IS NULL"
+        with closing(conn):
+            with conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT id, user_id, agent_id, native_provider, working_dir
+                    FROM conversations
+                    WHERE bot_id = ?
+                    {archived_clause}
+                    ORDER BY updated_at DESC, created_at DESC, id DESC
+                    """,
+                    (bot_id,),
+                ).fetchall()
+        return [
+            {
+                "id": str(row["id"] or ""),
+                "user_id": int(row["user_id"] or 0),
+                "agent_id": str(row["agent_id"] or "main"),
+                "native_provider": str(row["native_provider"] or ""),
+                "working_dir": str(row["working_dir"] or ""),
+            }
+            for row in rows
+            if str(row["id"] or "").strip()
+        ]
+
     def delete_conversations_by_ids(self, conversation_ids: list[str] | set[str] | tuple[str, ...]) -> int:
         normalized_ids = [str(conversation_id or "").strip() for conversation_id in conversation_ids]
         normalized_ids = [conversation_id for conversation_id in normalized_ids if conversation_id]

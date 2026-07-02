@@ -127,6 +127,7 @@ import type {
   PluginViewWindowRequest,
   PluginViewWindowPayload,
   RemoveBotOptions,
+  RemoveBotResult,
   InstallablePluginSummary,
   PluginRenderResult,
   PluginSummary,
@@ -220,7 +221,7 @@ export interface WebBotClient {
   ): Promise<ConversationDeleteResult>;
   deleteAllConversations(
     botAlias: string,
-    options?: AgentScopedOptions & { deleteNativeSession?: boolean; permanent?: boolean },
+    options?: AgentScopedOptions & { deleteNativeSession?: boolean },
   ): Promise<ConversationBulkDeleteResult>;
   executePlan(botAlias: string, input: PlanExecuteInput): Promise<PlanExecuteResult>;
   listMessages(botAlias: string, options?: AgentScopedOptions): Promise<ChatMessage[]>;
@@ -376,7 +377,7 @@ export interface WebBotClient {
   updateBotWorkdir(botAlias: string, workingDir: string, options?: UpdateBotWorkdirOptions): Promise<BotSummary>;
   addBot(input: CreateBotInput): Promise<BotSummary>;
   renameBot(botAlias: string, newAlias: string): Promise<BotSummary>;
-  removeBot(botAlias: string, options?: RemoveBotOptions): Promise<void>;
+  removeBot(botAlias: string, options?: RemoveBotOptions): Promise<RemoveBotResult>;
   startBot(botAlias: string): Promise<BotSummary>;
   stopBot(botAlias: string): Promise<BotSummary>;
   listAssistantProposals(botAlias: string, status?: string): Promise<AssistantProposal[]>;

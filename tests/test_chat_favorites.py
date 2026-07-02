@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import ctypes
 from pathlib import Path
 
@@ -8,16 +9,18 @@ import pytest
 
 from bot.manager import MultiBotManager
 from bot.models import AgentProfile, BotProfile
+from bot.native_agent.pi_session_store import PiSessionRecord, PiSessionStore, pi_session_key
 from bot.session_store import load_session, save_session
 from bot.runtime_paths import get_chat_favorites_path
 from bot.chat_identity import chat_session_user_id
 from bot.web.api_common import AuthContext, WebApiError, resolve_session_bot_id
-from bot.web.auth_store import CAP_CHAT_SEND
+from bot.web.auth_store import CAP_ADMIN_OPS, CAP_CHAT_SEND
 from bot.web.api_service import (
     delete_all_conversations,
     delete_conversation,
     delete_favorite_answer,
     list_favorite_answers,
+    remove_managed_bot_with_history,
     upsert_favorite_answer,
 )
 from bot.web.chat_favorite_store import ChatFavoriteStore, FavoriteScope, build_favorite_item
@@ -39,10 +42,24 @@ def _manager(tmp_path: Path, *, agents: list[AgentProfile] | None = None) -> Mul
     )
 
 
+def _add_managed_profile(manager: MultiBotManager, alias: str, working_dir: Path, *, agents: list[AgentProfile] | None = None) -> None:
+    manager.managed_profiles[alias] = BotProfile(
+        alias=alias,
+        working_dir=str(working_dir),
+        supported_execution_modes=["cli", "native_agent"],
+        agents=agents or [],
+    )
+
+
+def _remove_bot_with_history(manager: MultiBotManager, alias: str, **options):
+    return asyncio.run(remove_managed_bot_with_history(manager, alias, **options))
+
+
 def _completed_turn(
     manager: MultiBotManager,
     tmp_path: Path,
     *,
+    alias: str = "main",
     user_id: int = 123,
     agent_id: str = "main",
     native_provider: str = "codex",
@@ -50,11 +67,11 @@ def _completed_turn(
     working_dir: str | None = None,
 ):
     store = ChatStore(tmp_path)
-    bot_id = resolve_session_bot_id(manager, "main")
+    bot_id = resolve_session_bot_id(manager, alias)
     shared_user_id = chat_session_user_id(user_id)
     handle = store.begin_turn(
         bot_id=bot_id,
-        bot_alias="main",
+        bot_alias=alias,
         user_id=shared_user_id,
         agent_id=agent_id,
         bot_mode="cli",
@@ -201,179 +218,193 @@ def test_deleting_all_conversations_removes_scoped_favorites(tmp_path: Path):
     assert list_favorite_answers(manager, "main", 123, execution_mode="cli")["items"] == []
 
 
-def test_permanent_delete_all_conversations_removes_workspace(tmp_path: Path):
+def test_delete_all_conversations_ignores_legacy_permanent_query(tmp_path: Path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    (workspace / "artifact.txt").write_text("leftover", encoding="utf-8")
     manager = _manager(workspace)
-    _store, _handle, _message = _completed_turn(manager, workspace)
+    _completed_turn(manager, workspace)
+    (workspace / "artifact.txt").write_text("keep", encoding="utf-8")
 
-    deleted = delete_all_conversations(manager, "main", 123, execution_mode="cli", permanent=True)
+    deleted = delete_all_conversations(manager, "main", 123, execution_mode="cli")
 
     assert deleted["deleted_count"] == 1
-    assert deleted["workspace_deleted"] is True
-    assert deleted["workspace_path"] == str(workspace)
-    assert deleted["errors"] == []
-    assert not workspace.exists()
-    assert ChatStore(workspace).list_conversations(
-        bot_id=resolve_session_bot_id(manager, "main"),
-        user_id=chat_session_user_id(123),
-        working_dir=str(workspace),
-    ) == []
+    assert "workspace_deleted" not in deleted
+    assert workspace.exists()
+    assert (workspace / "artifact.txt").is_file()
 
 
-def test_permanent_delete_all_conversations_removes_agent_records_and_sessions(tmp_path: Path):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    manager = _manager(workspace, agents=[AgentProfile(id="reviewer", name="Reviewer")])
-    _main_store, main_handle, main_message = _completed_turn(manager, workspace)
-    _reviewer_store, reviewer_handle, reviewer_message = _completed_turn(manager, workspace, agent_id="reviewer")
+def test_remove_bot_with_workspace_deletes_workspace_history_favorites_and_sessions(tmp_path: Path):
+    main_workspace = tmp_path / "main"
+    bot_workspace = tmp_path / "bot"
+    main_workspace.mkdir()
+    bot_workspace.mkdir()
+    (bot_workspace / "artifact.txt").write_text("leftover", encoding="utf-8")
+    manager = _manager(main_workspace)
+    _add_managed_profile(manager, "team", bot_workspace, agents=[AgentProfile(id="reviewer", name="Reviewer")])
+    _main_store, main_handle, main_message = _completed_turn(manager, bot_workspace, alias="team", agent_id="main")
+    _reviewer_store, reviewer_handle, reviewer_message = _completed_turn(
+        manager,
+        bot_workspace,
+        alias="team",
+        agent_id="reviewer",
+        native_provider="native_agent",
+    )
     from bot.web.api_common import get_chat_session_for_alias
 
-    bot_id = resolve_session_bot_id(manager, "main")
+    bot_id = resolve_session_bot_id(manager, "team")
     shared_user_id = chat_session_user_id(123)
     upsert_favorite_answer(
         manager,
-        "main",
+        "team",
         123,
         {"conversation_id": main_handle.conversation_id, "message_id": main_message["id"]},
         execution_mode="cli",
     )
     upsert_favorite_answer(
         manager,
-        "main",
+        "team",
         123,
         {"conversation_id": reviewer_handle.conversation_id, "message_id": reviewer_message["id"]},
         agent_id="reviewer",
-        execution_mode="cli",
+        execution_mode="native_agent",
     )
-    _profile, _agent, main_session = get_chat_session_for_alias(manager, "main", 123, "main")
-    _profile, _agent, reviewer_session = get_chat_session_for_alias(manager, "main", 123, "reviewer")
+    _profile, _agent, main_session = get_chat_session_for_alias(manager, "team", 123, "main")
+    _profile, _agent, reviewer_session = get_chat_session_for_alias(manager, "team", 123, "reviewer")
     with main_session._lock:
         main_session.codex_session_id = "codex-main"
     with reviewer_session._lock:
         reviewer_session.codex_session_id = "codex-reviewer"
     main_session.persist()
     reviewer_session.persist()
-
-    deleted = delete_all_conversations(manager, "main", 123, execution_mode="cli", permanent=True)
-
-    assert deleted["deleted_count"] == 2
-    assert deleted["deleted_favorite_count"] == 2
-    assert load_session(bot_id, shared_user_id, agent_id="main") is None
-    assert load_session(bot_id, shared_user_id, agent_id="reviewer") is None
-    assert ChatStore(workspace).list_conversation_records(
+    save_session(
+        bot_id,
+        shared_user_id,
+        codex_session_id="old-agent-session",
+        working_dir=str(bot_workspace) + "/",
+        agent_id="old-agent",
+    )
+    pi_key = pi_session_key(
+        cwd=str(bot_workspace),
         bot_id=bot_id,
         user_id=shared_user_id,
-        working_dir=str(workspace),
-        agent_id=None,
-        include_archived=True,
-    ) == []
-    assert list_favorite_answers(manager, "main", 123, execution_mode="cli")["items"] == []
-    assert list_favorite_answers(manager, "main", 123, agent_id="reviewer", execution_mode="cli")["items"] == []
-
-
-def test_permanent_delete_all_conversations_matches_resolved_workspace_paths(tmp_path: Path):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    manager = _manager(workspace)
-    variant_working_dir = str(workspace) + "/"
-    _store, handle, message = _completed_turn(manager, workspace, working_dir=variant_working_dir)
-    bot_id = resolve_session_bot_id(manager, "main")
-    shared_user_id = chat_session_user_id(123)
-    ChatFavoriteStore(workspace).upsert_favorite(
-        build_favorite_item(
-            scope=FavoriteScope(bot_id=bot_id, user_id=shared_user_id, agent_id="main", execution_mode="cli"),
-            bot_alias="main",
-            conversation_id=handle.conversation_id,
-            message_id=message["id"],
-            message_key=f"assistant|{message['id']}",
-            answer_text=str(message["content"]),
-        )
+        conversation_id=reviewer_handle.conversation_id,
     )
+    PiSessionStore().upsert(PiSessionRecord(
+        key=pi_key,
+        cwd=str(bot_workspace),
+        conversation_id=reviewer_handle.conversation_id,
+        pi_session_id="pi-reviewer",
+    ))
 
-    deleted = delete_all_conversations(manager, "main", 123, execution_mode="cli", permanent=True)
+    deleted = _remove_bot_with_history(manager, "team", delete_workspace=True)
 
-    assert deleted["deleted_count"] == 1
-    assert deleted["deleted_favorite_count"] == 1
-    assert ChatStore(workspace).list_conversation_records(
+    assert deleted["removed"] is True
+    assert deleted["history_deleted"] is True
+    assert deleted["history_deleted_count"] == 2
+    assert deleted["favorite_deleted_count"] == 2
+    assert deleted["workspace_deleted"] is True
+    assert deleted["workspace_path"] == str(bot_workspace)
+    assert deleted["errors"] == []
+    assert "team" not in manager.managed_profiles
+    assert not bot_workspace.exists()
+    assert load_session(bot_id, shared_user_id, agent_id="main") is None
+    assert load_session(bot_id, shared_user_id, agent_id="reviewer") is None
+    assert load_session(bot_id, shared_user_id, agent_id="old-agent") is None
+    assert PiSessionStore().get(pi_key) is None
+    assert ChatStore(bot_workspace).list_conversation_records(
         bot_id=bot_id,
         user_id=shared_user_id,
         working_dir=None,
         agent_id=None,
         include_archived=True,
     ) == []
-    assert list_favorite_answers(manager, "main", 123, execution_mode="cli")["items"] == []
+    assert ChatFavoriteStore(bot_workspace).list_favorites(FavoriteScope(bot_id=bot_id, user_id=shared_user_id)) == []
 
 
-def test_permanent_delete_all_conversations_rejects_overlapping_managed_bot_workspace(tmp_path: Path):
+def test_remove_bot_with_history_only_keeps_workspace(tmp_path: Path):
+    main_workspace = tmp_path / "main"
+    bot_workspace = tmp_path / "bot"
+    main_workspace.mkdir()
+    bot_workspace.mkdir()
+    (bot_workspace / "artifact.txt").write_text("keep", encoding="utf-8")
+    manager = _manager(main_workspace)
+    _add_managed_profile(manager, "team", bot_workspace)
+    _completed_turn(manager, bot_workspace, alias="team")
+    bot_id = resolve_session_bot_id(manager, "team")
+
+    deleted = _remove_bot_with_history(manager, "team", delete_history=True)
+
+    assert deleted["removed"] is True
+    assert deleted["history_deleted"] is True
+    assert deleted["history_deleted_count"] == 1
+    assert deleted["workspace_deleted"] is False
+    assert bot_workspace.exists()
+    assert (bot_workspace / "artifact.txt").is_file()
+    assert ChatStore(bot_workspace).list_conversation_records(
+        bot_id=bot_id,
+        user_id=chat_session_user_id(123),
+        working_dir=None,
+        agent_id=None,
+        include_archived=True,
+    ) == []
+
+
+def test_remove_bot_with_workspace_rejects_overlapping_managed_bot_workspace(tmp_path: Path):
+    main_workspace = tmp_path / "main"
     workspace = tmp_path / "workspace"
     child_workspace = workspace / "child"
+    main_workspace.mkdir()
     child_workspace.mkdir(parents=True)
     (child_workspace / "keep.txt").write_text("keep", encoding="utf-8")
-    manager = _manager(workspace)
-    manager.managed_profiles["child"] = BotProfile(alias="child", working_dir=str(child_workspace))
-    _completed_turn(manager, workspace)
+    manager = _manager(main_workspace)
+    _add_managed_profile(manager, "team", workspace)
+    _add_managed_profile(manager, "child", child_workspace)
 
     with pytest.raises(WebApiError) as exc:
-        delete_all_conversations(manager, "main", 123, execution_mode="cli", permanent=True)
+        _remove_bot_with_history(manager, "team", delete_workspace=True)
 
     assert exc.value.status == 409
     assert exc.value.code == "workspace_delete_scope_mismatch"
+    assert "team" in manager.managed_profiles
     assert (child_workspace / "keep.txt").is_file()
     assert workspace.exists()
 
 
-def test_permanent_delete_all_conversations_rejects_same_managed_bot_workspace(tmp_path: Path):
+def test_remove_bot_with_workspace_rejects_same_managed_bot_workspace(tmp_path: Path):
+    main_workspace = tmp_path / "main"
     workspace = tmp_path / "workspace"
+    main_workspace.mkdir()
     workspace.mkdir()
-    manager = _manager(workspace)
-    manager.managed_profiles["same"] = BotProfile(alias="same", working_dir=str(workspace))
-    _completed_turn(manager, workspace)
+    manager = _manager(main_workspace)
+    _add_managed_profile(manager, "team", workspace)
+    _add_managed_profile(manager, "same", workspace)
 
     with pytest.raises(WebApiError) as exc:
-        delete_all_conversations(manager, "main", 123, execution_mode="cli", permanent=True)
+        _remove_bot_with_history(manager, "team", delete_workspace=True)
 
     assert exc.value.status == 409
     assert exc.value.code == "workspace_delete_scope_mismatch"
+    assert "team" in manager.managed_profiles
     assert workspace.exists()
 
 
-def test_permanent_delete_all_conversations_rejects_parent_managed_bot_workspace(tmp_path: Path):
+def test_remove_bot_with_workspace_rejects_parent_managed_bot_workspace(tmp_path: Path):
+    main_workspace = tmp_path / "main"
     parent_workspace = tmp_path / "workspace"
     child_workspace = parent_workspace / "child"
+    main_workspace.mkdir()
     child_workspace.mkdir(parents=True)
-    manager = _manager(child_workspace)
-    manager.managed_profiles["parent"] = BotProfile(alias="parent", working_dir=str(parent_workspace))
-    _completed_turn(manager, child_workspace)
+    manager = _manager(main_workspace)
+    _add_managed_profile(manager, "team", child_workspace)
+    _add_managed_profile(manager, "parent", parent_workspace)
 
     with pytest.raises(WebApiError) as exc:
-        delete_all_conversations(manager, "main", 123, execution_mode="cli", permanent=True)
+        _remove_bot_with_history(manager, "team", delete_workspace=True)
 
     assert exc.value.status == 409
     assert exc.value.code == "workspace_delete_scope_mismatch"
+    assert "team" in manager.managed_profiles
     assert child_workspace.exists()
-
-
-def test_permanent_delete_all_conversations_removes_legacy_agent_session_without_history(tmp_path: Path):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    manager = _manager(workspace)
-    _completed_turn(manager, workspace)
-    bot_id = resolve_session_bot_id(manager, "main")
-    shared_user_id = chat_session_user_id(123)
-    save_session(
-        bot_id,
-        shared_user_id,
-        codex_session_id="old-agent-session",
-        working_dir=str(workspace) + "/",
-        agent_id="old-agent",
-    )
-
-    deleted = delete_all_conversations(manager, "main", 123, execution_mode="cli", permanent=True)
-
-    assert deleted["deleted_count"] == 1
-    assert load_session(bot_id, shared_user_id, agent_id="old-agent") is None
 
 
 def test_permanent_delete_workspace_reparse_fallback_detects_windows_junction(
@@ -396,7 +427,7 @@ def test_permanent_delete_workspace_reparse_fallback_detects_windows_junction(
     assert api_service._is_symlink_or_junction(tmp_path) is True
 
 
-def test_permanent_delete_all_conversations_rejects_symlink_workspace(tmp_path: Path):
+def test_remove_bot_with_workspace_rejects_symlink_workspace(tmp_path: Path):
     target_workspace = tmp_path / "target"
     target_workspace.mkdir()
     (target_workspace / "keep.txt").write_text("keep", encoding="utf-8")
@@ -405,55 +436,68 @@ def test_permanent_delete_all_conversations_rejects_symlink_workspace(tmp_path: 
         link_workspace.symlink_to(target_workspace, target_is_directory=True)
     except OSError as exc:
         pytest.skip(f"symlink unavailable: {exc}")
-    manager = _manager(link_workspace)
-    _completed_turn(manager, link_workspace)
+    main_workspace = tmp_path / "main"
+    main_workspace.mkdir()
+    manager = _manager(main_workspace)
+    _add_managed_profile(manager, "team", link_workspace)
 
     with pytest.raises(WebApiError) as exc:
-        delete_all_conversations(manager, "main", 123, execution_mode="cli", permanent=True)
+        _remove_bot_with_history(manager, "team", delete_workspace=True)
 
     assert exc.value.status == 409
     assert exc.value.code == "workspace_delete_scope_mismatch"
+    assert "team" in manager.managed_profiles
     assert (target_workspace / "keep.txt").is_file()
     assert link_workspace.exists()
 
 
-def test_permanent_delete_all_conversations_rejects_processing_session(tmp_path: Path):
-    manager = _manager(tmp_path)
-    _completed_turn(manager, tmp_path)
+def test_remove_bot_with_workspace_rejects_processing_session(tmp_path: Path):
+    main_workspace = tmp_path / "main"
+    bot_workspace = tmp_path / "bot"
+    main_workspace.mkdir()
+    bot_workspace.mkdir()
+    manager = _manager(main_workspace)
+    _add_managed_profile(manager, "team", bot_workspace)
+    _completed_turn(manager, bot_workspace, alias="team")
     from bot.web.api_common import get_chat_session_for_alias
 
-    _profile, _agent, session = get_chat_session_for_alias(manager, "main", 123)
+    _profile, _agent, session = get_chat_session_for_alias(manager, "team", 123)
     with session._lock:
         session.is_processing = True
 
     with pytest.raises(WebApiError) as exc:
-        delete_all_conversations(manager, "main", 123, execution_mode="cli", permanent=True)
+        _remove_bot_with_history(manager, "team", delete_workspace=True)
 
     assert exc.value.status == 409
     assert exc.value.code == "conversation_switch_blocked"
-    assert tmp_path.exists()
+    assert "team" in manager.managed_profiles
+    assert bot_workspace.exists()
 
 
-def test_permanent_delete_all_conversations_rejects_processing_sibling_agent(tmp_path: Path):
+def test_remove_bot_with_workspace_rejects_processing_sibling_agent(tmp_path: Path):
+    main_workspace = tmp_path / "main"
     workspace = tmp_path / "workspace"
+    main_workspace.mkdir()
     workspace.mkdir()
-    manager = _manager(workspace, agents=[AgentProfile(id="reviewer", name="Reviewer")])
-    _completed_turn(manager, workspace)
-    _completed_turn(manager, workspace, agent_id="reviewer")
+    manager = _manager(main_workspace)
+    _add_managed_profile(manager, "team", workspace, agents=[AgentProfile(id="reviewer", name="Reviewer")])
+    _completed_turn(manager, workspace, alias="team")
+    _completed_turn(manager, workspace, alias="team", agent_id="reviewer")
     from bot.web.api_common import get_chat_session_for_alias
 
-    _profile, _agent, reviewer_session = get_chat_session_for_alias(manager, "main", 123, "reviewer")
+    _profile, _agent, reviewer_session = get_chat_session_for_alias(manager, "team", 123, "reviewer")
     with reviewer_session._lock:
         reviewer_session.is_processing = True
 
     with pytest.raises(WebApiError) as exc:
-        delete_all_conversations(manager, "main", 123, execution_mode="cli", permanent=True)
+        _remove_bot_with_history(manager, "team", delete_workspace=True)
 
     assert exc.value.status == 409
     assert exc.value.code == "conversation_switch_blocked"
+    assert "team" in manager.managed_profiles
     assert workspace.exists()
     assert len(ChatStore(workspace).list_conversation_records(
-        bot_id=resolve_session_bot_id(manager, "main"),
+        bot_id=resolve_session_bot_id(manager, "team"),
         user_id=chat_session_user_id(123),
         working_dir=str(workspace),
         agent_id=None,
@@ -461,14 +505,17 @@ def test_permanent_delete_all_conversations_rejects_processing_sibling_agent(tmp
     )) == 2
 
 
-def test_permanent_delete_all_conversations_keeps_records_when_workspace_delete_fails(
+def test_remove_bot_with_workspace_keeps_records_when_workspace_delete_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
+    main_workspace = tmp_path / "main"
     workspace = tmp_path / "workspace"
+    main_workspace.mkdir()
     workspace.mkdir()
-    manager = _manager(workspace)
-    _completed_turn(manager, workspace)
+    manager = _manager(main_workspace)
+    _add_managed_profile(manager, "team", workspace)
+    _completed_turn(manager, workspace, alias="team")
     import bot.web.api_service as api_service
 
     def fail_delete(_path: Path) -> None:
@@ -477,13 +524,14 @@ def test_permanent_delete_all_conversations_keeps_records_when_workspace_delete_
     monkeypatch.setattr(api_service.shutil, "rmtree", fail_delete)
 
     with pytest.raises(WebApiError) as exc:
-        delete_all_conversations(manager, "main", 123, execution_mode="cli", permanent=True)
+        _remove_bot_with_history(manager, "team", delete_workspace=True)
 
     assert exc.value.status == 500
     assert exc.value.code == "workspace_delete_failed"
+    assert "team" in manager.managed_profiles
     assert workspace.exists()
     assert len(ChatStore(workspace).list_conversation_records(
-        bot_id=resolve_session_bot_id(manager, "main"),
+        bot_id=resolve_session_bot_id(manager, "team"),
         user_id=chat_session_user_id(123),
         working_dir=str(workspace),
         agent_id=None,
@@ -492,7 +540,7 @@ def test_permanent_delete_all_conversations_keeps_records_when_workspace_delete_
 
 
 @pytest.mark.asyncio
-async def test_permanent_delete_conversations_view_requires_write_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+async def test_delete_conversations_view_ignores_legacy_permanent_without_write_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     manager = _manager(tmp_path)
     server = WebApiServer(manager)
 
@@ -507,51 +555,89 @@ async def test_permanent_delete_conversations_view_requires_write_files(tmp_path
 
     monkeypatch.setattr(server, "_with_capability", chat_send_only)
 
+    response = await server.delete_conversations_view(Request())
+
+    assert response.status == 200
+
+
+@pytest.mark.asyncio
+async def test_remove_bot_with_workspace_view_requires_write_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    main_workspace = tmp_path / "main"
+    workspace = tmp_path / "workspace"
+    main_workspace.mkdir()
+    workspace.mkdir()
+    manager = _manager(main_workspace)
+    _add_managed_profile(manager, "team", workspace)
+    server = WebApiServer(manager)
+
+    class Request(dict):
+        match_info = {"alias": "team"}
+        query = {"delete_workspace": "true"}
+
+    async def admin_only(_request, capability: str) -> AuthContext:
+        assert capability == CAP_ADMIN_OPS
+        return AuthContext(user_id=123, token_used=True, capabilities={CAP_ADMIN_OPS})
+
+    monkeypatch.setattr(server, "_with_capability", admin_only)
+
     with pytest.raises(WebApiError) as exc:
-        await server.delete_conversations_view(Request())
+        await server.admin_remove_bot(Request())
 
     assert exc.value.status == 403
     assert exc.value.code == "forbidden"
+    assert "team" in manager.managed_profiles
+    assert workspace.exists()
 
 
-def test_permanent_delete_all_conversations_treats_missing_workspace_as_success(tmp_path: Path):
+def test_remove_bot_with_workspace_treats_missing_workspace_as_success(tmp_path: Path):
+    main_workspace = tmp_path / "main"
     workspace = tmp_path / "workspace"
+    main_workspace.mkdir()
     workspace.mkdir()
-    manager = _manager(workspace)
-    _completed_turn(manager, workspace)
+    manager = _manager(main_workspace)
+    _add_managed_profile(manager, "team", workspace)
+    _completed_turn(manager, workspace, alias="team")
     (workspace / "marker.txt").write_text("gone", encoding="utf-8")
     for path in workspace.iterdir():
         path.unlink()
     workspace.rmdir()
 
-    deleted = delete_all_conversations(manager, "main", 123, execution_mode="cli", permanent=True)
+    deleted = _remove_bot_with_history(manager, "team", delete_workspace=True)
 
-    assert deleted["deleted_count"] == 1
+    assert deleted["history_deleted_count"] == 1
     assert deleted["workspace_deleted"] is False
     assert deleted["workspace_missing"] is True
     assert deleted["errors"] == []
+    assert "team" not in manager.managed_profiles
 
 
-def test_permanent_delete_all_conversations_rejects_workspace_mismatch(tmp_path: Path):
-    profile_workspace = tmp_path / "profile"
-    conversation_workspace = tmp_path / "conversation"
-    profile_workspace.mkdir()
-    conversation_workspace.mkdir()
-    manager = _manager(profile_workspace)
-    _completed_turn(manager, conversation_workspace)
-    from bot.web.api_common import get_chat_session_for_alias
-
-    _profile, _agent, session = get_chat_session_for_alias(manager, "main", 123)
-    with session._lock:
-        session.working_dir = str(conversation_workspace)
-        session.browse_dir = str(conversation_workspace)
+def test_remove_bot_with_workspace_rejects_main_bot_before_deleting_workspace(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "keep.txt").write_text("keep", encoding="utf-8")
+    manager = _manager(workspace)
 
     with pytest.raises(WebApiError) as exc:
-        delete_all_conversations(manager, "main", 123, execution_mode="cli", permanent=True)
+        _remove_bot_with_history(manager, "main", delete_workspace=True)
+
+    assert exc.value.status == 400
+    assert exc.value.code == "invalid_bot_config"
+    assert workspace.exists()
+    assert (workspace / "keep.txt").is_file()
+
+
+def test_remove_bot_with_workspace_rejects_root_directory(tmp_path: Path):
+    main_workspace = tmp_path / "main"
+    main_workspace.mkdir()
+    root = tmp_path.anchor or str(tmp_path.resolve().anchor)
+    manager = _manager(main_workspace)
+    _add_managed_profile(manager, "team", Path(root))
+
+    with pytest.raises(WebApiError) as exc:
+        _remove_bot_with_history(manager, "team", delete_workspace=True)
 
     assert exc.value.status == 409
     assert exc.value.code == "workspace_delete_scope_mismatch"
-    assert conversation_workspace.exists()
 
 
 def test_favorite_answer_rejects_invalid_message_and_execution_mode(tmp_path: Path):

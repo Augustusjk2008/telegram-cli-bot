@@ -2959,9 +2959,6 @@ class WebApiServer:
         body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
         agent_id = self._request_agent_id(request, body)
         delete_native = str(request.query.get("delete_native_session", "")).lower() in {"1", "true", "yes", "on"}
-        permanent = str(request.query.get("permanent", body.get("permanent", ""))).lower() in {"1", "true", "yes", "on"}
-        if permanent:
-            _require_capability(auth, CAP_WRITE_FILES)
         execution_mode = self._request_execution_mode(request, body)
         data = delete_all_conversations(
             self.manager,
@@ -2970,7 +2967,6 @@ class WebApiServer:
             agent_id=agent_id,
             execution_mode=execution_mode,
             delete_native_session=delete_native,
-            permanent=permanent,
         )
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
@@ -3727,10 +3723,18 @@ class WebApiServer:
         return _json({"ok": True, "data": data})
 
     async def admin_remove_bot(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
+        auth = await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
         delete_history = str(request.query.get("delete_history", "")).strip().lower() in {"1", "true", "yes", "on"}
-        data = await remove_managed_bot_with_history(self.manager, alias, delete_history=delete_history)
+        delete_workspace = str(request.query.get("delete_workspace", "")).strip().lower() in {"1", "true", "yes", "on"}
+        if delete_workspace:
+            _require_capability(auth, CAP_WRITE_FILES)
+        data = await remove_managed_bot_with_history(
+            self.manager,
+            alias,
+            delete_history=delete_history,
+            delete_workspace=delete_workspace,
+        )
         _BOT_PERMISSION_STORE.remove_bot_owner(alias)
         return _json({"ok": True, "data": data})
 

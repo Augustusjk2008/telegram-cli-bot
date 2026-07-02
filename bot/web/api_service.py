@@ -150,7 +150,6 @@ from bot.platform.output import strip_ansi_escape
 from bot.platform.processes import build_chat_cli_process_kwargs, build_hidden_process_kwargs, terminate_process_tree_sync
 from bot.platform.subprocess_streams import close_process_streams
 from bot.session_store import (
-    remove_sessions_for_workspace,
     rename_bot_sessions as rename_stored_bot_sessions,
 )
 from bot.sessions import (
@@ -2673,8 +2672,8 @@ def _is_symlink_or_junction(path: Path) -> bool:
     return False
 
 
-def _resolve_permanent_delete_workspace(profile: BotProfile, session: UserSession) -> Path:
-    workspace = Path(str(session.working_dir or "").strip())
+def _resolve_bot_delete_workspace(profile: BotProfile) -> Path:
+    workspace = Path(str(profile.working_dir or "").strip())
     if not str(workspace).strip():
         _raise(409, "workspace_delete_scope_mismatch", "工作区路径为空，已拒绝彻底删除")
     try:
@@ -2687,8 +2686,6 @@ def _resolve_permanent_delete_workspace(profile: BotProfile, session: UserSessio
         ) from exc
     if resolved_workspace.parent == resolved_workspace:
         _raise(409, "workspace_delete_scope_mismatch", "不能删除磁盘根目录")
-    if not _same_resolved_path(resolved_workspace, profile.working_dir):
-        _raise(409, "workspace_delete_scope_mismatch", "工作区和当前 Bot 配置不一致，已拒绝删除目录")
     if workspace.exists() and _is_symlink_or_junction(workspace):
         _raise(409, "workspace_delete_scope_mismatch", "工作区是符号链接或 junction，已拒绝彻底删除")
     return resolved_workspace
@@ -2745,54 +2742,15 @@ def _delete_workspace_directory(resolved_workspace: Path) -> dict[str, Any]:
     return result
 
 
-def _ensure_permanent_delete_workspace_idle(target_session: UserSession, resolved_workspace: Path) -> set[str]:
-    affected_agent_ids: set[str] = set()
+def _ensure_bot_delete_idle(bot_id: int) -> None:
     with sessions_lock:
         candidates = list(sessions.values())
     for candidate in candidates:
         with candidate._lock:
-            same_scope = (
-                candidate.bot_id == target_session.bot_id
-                and candidate.user_id == target_session.user_id
-                and _same_resolved_path(candidate.working_dir, resolved_workspace)
-            )
+            same_scope = candidate.bot_id == bot_id
             busy = bool(candidate.is_processing or candidate.process is not None)
-            candidate_agent_id = str(candidate.agent_id or "main").strip().lower() or "main"
         if same_scope and busy:
-            _raise(409, "conversation_switch_blocked", "当前工作区有任务运行中，先终止或等待完成")
-        if same_scope:
-            affected_agent_ids.add(candidate_agent_id)
-    return affected_agent_ids
-
-
-def _permanent_delete_conversation_records(
-    store: ChatStore,
-    *,
-    bot_id: int,
-    user_id: int,
-    resolved_workspace: Path,
-) -> list[dict[str, Any]]:
-    records = store.list_conversation_records(
-        bot_id=bot_id,
-        user_id=user_id,
-        working_dir=None,
-        agent_id=None,
-        include_archived=True,
-    )
-    return [
-        record
-        for record in records
-        if _same_resolved_path(record.get("working_dir") or "", resolved_workspace)
-    ]
-
-
-def _agent_ids_for_profile(profile: BotProfile) -> list[str]:
-    ids: list[str] = []
-    for agent in profile.normalized_agents():
-        agent_id = str(agent.id or "main").strip().lower() or "main"
-        if agent_id not in ids:
-            ids.append(agent_id)
-    return ids or ["main"]
+            _raise(409, "conversation_switch_blocked", "当前 Bot 工作区有任务运行中，先终止或等待完成")
 
 
 def delete_all_conversations(
@@ -2803,7 +2761,6 @@ def delete_all_conversations(
     agent_id: str = "main",
     execution_mode: str = "",
     delete_native_session: bool = False,
-    permanent: bool = False,
 ) -> dict[str, Any]:
     profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
     resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
@@ -2811,59 +2768,30 @@ def delete_all_conversations(
         if bool(session.is_processing):
             _raise(409, "conversation_switch_blocked", "当前任务运行中，先终止或等待完成")
         active_conversation_id = str(session.active_conversation_id or "")
-        resolved_workspace = _resolve_permanent_delete_workspace(profile, session) if permanent else None
-        session_bot_id = session.bot_id
-        session_user_id = session.user_id
-        session_agent_id = session.agent_id
-    affected_session_agent_ids: set[str] = set()
-    if permanent and resolved_workspace:
-        _ensure_no_other_bot_workspace_overlap(manager, alias, resolved_workspace)
-        affected_session_agent_ids = _ensure_permanent_delete_workspace_idle(session, resolved_workspace)
 
     store = _get_chat_store(session)
-    if permanent:
-        conversations_to_delete = _permanent_delete_conversation_records(
-            store,
-            bot_id=session.bot_id,
-            user_id=session.user_id,
-            resolved_workspace=resolved_workspace,
-        )
-        workspace_result = _delete_workspace_directory(resolved_workspace) if resolved_workspace else {
-            "workspace_path": "",
-            "workspace_deleted": False,
-            "workspace_missing": False,
-            "errors": [],
-        }
-        deleted_count = store.delete_conversations_by_ids([str(item.get("id") or "") for item in conversations_to_delete])
-    else:
-        workspace_result = {
-            "workspace_path": "",
-            "workspace_deleted": False,
-            "workspace_missing": False,
-            "errors": [],
-        }
-        conversations_to_delete = store.list_conversations(
-            bot_id=session.bot_id,
-            user_id=session.user_id,
-            working_dir=session.working_dir,
-            agent_id=session.agent_id,
-            native_provider=NATIVE_AGENT_PROVIDER if resolved_execution_mode == NATIVE_AGENT_PROVIDER else None,
-            native_provider_exclude=NATIVE_AGENT_PROVIDER if resolved_execution_mode != NATIVE_AGENT_PROVIDER else None,
-            limit=100,
-        )
-        deleted_count = store.archive_bot_conversations(
-            bot_id=session.bot_id,
-            user_id=session.user_id,
-            working_dir=session.working_dir,
-            agent_id=session.agent_id,
-            native_provider=NATIVE_AGENT_PROVIDER if resolved_execution_mode == NATIVE_AGENT_PROVIDER else None,
-            native_provider_exclude=NATIVE_AGENT_PROVIDER if resolved_execution_mode != NATIVE_AGENT_PROVIDER else None,
-        )
+    conversations_to_delete = store.list_conversations(
+        bot_id=session.bot_id,
+        user_id=session.user_id,
+        working_dir=session.working_dir,
+        agent_id=session.agent_id,
+        native_provider=NATIVE_AGENT_PROVIDER if resolved_execution_mode == NATIVE_AGENT_PROVIDER else None,
+        native_provider_exclude=NATIVE_AGENT_PROVIDER if resolved_execution_mode != NATIVE_AGENT_PROVIDER else None,
+        limit=100,
+    )
+    deleted_count = store.archive_bot_conversations(
+        bot_id=session.bot_id,
+        user_id=session.user_id,
+        working_dir=session.working_dir,
+        agent_id=session.agent_id,
+        native_provider=NATIVE_AGENT_PROVIDER if resolved_execution_mode == NATIVE_AGENT_PROVIDER else None,
+        native_provider_exclude=NATIVE_AGENT_PROVIDER if resolved_execution_mode != NATIVE_AGENT_PROVIDER else None,
+    )
     native_conversations_to_delete = [
         item for item in conversations_to_delete
         if str(item.get("native_provider") or "").strip().lower() == NATIVE_AGENT_PROVIDER
     ]
-    if native_conversations_to_delete and (permanent or delete_native_session):
+    if native_conversations_to_delete and delete_native_session:
         pi_store = _pi_store()
         for item in native_conversations_to_delete:
             pi_store.delete_conversation(
@@ -2872,23 +2800,16 @@ def delete_all_conversations(
                 user_id=session.user_id,
                 conversation_id=str(item.get("id") or ""),
             )
-    if permanent:
-        deleted_favorite_count = ChatFavoriteStore(session.working_dir).delete_favorites_for_conversations_any_scope(
-            [str(item.get("id") or "") for item in conversations_to_delete],
-            bot_id=session.bot_id,
-            user_id=session.user_id,
-        )
-    else:
-        deleted_favorite_count = ChatFavoriteStore(session.working_dir).delete_favorites_for_scope(
-            _favorite_scope_for_session(session, resolved_execution_mode)
-        )
+    deleted_favorite_count = ChatFavoriteStore(session.working_dir).delete_favorites_for_scope(
+        _favorite_scope_for_session(session, resolved_execution_mode)
+    )
 
     native_cleared = False
     with session._lock:
         if _active_conversation_matches_execution_mode(store, active_conversation_id, resolved_execution_mode):
             session.active_conversation_id = None
             session.message_count = 0
-        if permanent or delete_native_session:
+        if delete_native_session:
             if resolved_execution_mode == NATIVE_AGENT_PROVIDER:
                 if session.native_agent_session_id:
                     _clear_native_agent_session_locked(session)
@@ -2901,41 +2822,13 @@ def delete_all_conversations(
                     session.claude_session_id = None
                     session.claude_session_initialized = False
                     native_cleared = True
-    if permanent:
-        reset_agent_ids = _agent_ids_for_profile(profile)
-        for item_agent_id in sorted(affected_session_agent_ids):
-            if item_agent_id not in reset_agent_ids:
-                reset_agent_ids.append(item_agent_id)
-        for item in conversations_to_delete:
-            item_agent_id = str(item.get("agent_id") or "main").strip().lower() or "main"
-            if item_agent_id not in reset_agent_ids:
-                reset_agent_ids.append(item_agent_id)
-        if session_agent_id not in reset_agent_ids:
-            reset_agent_ids.append(session_agent_id)
-        for reset_agent_id in reset_agent_ids:
-            reset_session(session_bot_id, session_user_id, agent_id=reset_agent_id)
-        session_working_dirs = {
-            str(session.working_dir or "").strip(),
-            *[str(item.get("working_dir") or "").strip() for item in conversations_to_delete],
-        }
-        for item_working_dir in session_working_dirs:
-            if item_working_dir:
-                remove_sessions_for_workspace(
-                    session_bot_id,
-                    session_user_id,
-                    working_dir=item_working_dir,
-                )
-        native_cleared = True
-    else:
-        session.persist()
+    session.persist()
 
     return {
         "deleted_count": deleted_count,
         "deleted_favorite_count": deleted_favorite_count,
-        "active_conversation_id": "" if permanent else str(session.active_conversation_id or ""),
+        "active_conversation_id": str(session.active_conversation_id or ""),
         "native_session_cleared": native_cleared,
-        "permanent": permanent,
-        **workspace_result,
         "items": [],
         "messages": [],
     }
@@ -7296,7 +7189,10 @@ async def add_managed_bot(
 
 
 async def remove_managed_bot(manager: MultiBotManager, alias: str) -> dict[str, Any]:
-    await manager.remove_bot(alias)
+    try:
+        await manager.remove_bot(alias)
+    except ValueError as exc:
+        _raise(400, "invalid_bot_config", str(exc))
     return {"removed": True, "alias": alias}
 
 
@@ -7305,19 +7201,57 @@ async def remove_managed_bot_with_history(
     alias: str,
     *,
     delete_history: bool = False,
+    delete_workspace: bool = False,
 ) -> dict[str, Any]:
+    normalized_alias = str(alias or "").strip().lower()
+    if normalized_alias == str(manager.main_profile.alias or "").strip().lower():
+        _raise(400, "invalid_bot_config", f"无法移除主 Bot `{normalized_alias}`")
     profile = get_profile_or_raise(manager, alias)
     bot_id = resolve_session_bot_id(manager, alias)
+    should_delete_history = bool(delete_history or delete_workspace)
+    workspace_result: dict[str, Any] = {
+        "workspace_path": "",
+        "workspace_deleted": False,
+        "workspace_missing": False,
+        "errors": [],
+    }
+    if delete_workspace:
+        resolved_workspace = _resolve_bot_delete_workspace(profile)
+        _ensure_no_other_bot_workspace_overlap(manager, alias, resolved_workspace)
+        _ensure_bot_delete_idle(bot_id)
+        workspace_result = _delete_workspace_directory(resolved_workspace)
     history_deleted = 0
-    if delete_history:
-        history_deleted = ChatStore(Path(profile.working_dir)).delete_bot_history(bot_id=bot_id)
+    favorite_deleted = 0
+    if should_delete_history:
+        chat_store = ChatStore(Path(profile.working_dir))
+        conversations_to_delete = chat_store.list_bot_conversation_records(bot_id=bot_id, include_archived=True)
+        native_conversations_to_delete = [
+            item for item in conversations_to_delete
+            if str(item.get("native_provider") or "").strip().lower() == NATIVE_AGENT_PROVIDER
+        ]
+        if native_conversations_to_delete:
+            pi_store = _pi_store()
+            for item in native_conversations_to_delete:
+                pi_store.delete_conversation(
+                    cwd=str(item.get("working_dir") or profile.working_dir),
+                    bot_id=bot_id,
+                    user_id=int(item.get("user_id") or 0),
+                    conversation_id=str(item.get("id") or ""),
+                )
+        favorite_deleted = ChatFavoriteStore(Path(profile.working_dir)).delete_favorites_for_bot(bot_id=bot_id)
+        history_deleted = chat_store.delete_bot_history(bot_id=bot_id)
         clear_bot_sessions(bot_id)
-    await manager.remove_bot(alias)
+    try:
+        await manager.remove_bot(alias)
+    except ValueError as exc:
+        _raise(400, "invalid_bot_config", str(exc))
     return {
         "removed": True,
         "alias": alias,
-        "history_deleted": bool(delete_history),
+        "history_deleted": should_delete_history,
         "history_deleted_count": history_deleted,
+        "favorite_deleted_count": favorite_deleted,
+        **workspace_result,
     }
 
 

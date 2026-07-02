@@ -131,6 +131,8 @@ import type {
   ConversationSelectResult,
   ConversationSummary,
   CreateBotInput,
+  RemoveBotOptions,
+  RemoveBotResult,
   DebugBreakpoint,
   DebugCapabilityMap,
   DebugFrame,
@@ -486,13 +488,20 @@ type RawConversationBulkDeleteResult = {
   deleted_favorite_count?: number;
   active_conversation_id?: string;
   native_session_cleared?: boolean;
-  permanent?: boolean;
+  items?: RawConversationSummary[];
+  messages?: RawHistoryItem[] | null;
+};
+
+type RawRemoveBotResult = {
+  removed?: boolean;
+  alias?: string;
+  history_deleted?: boolean;
+  history_deleted_count?: number;
+  favorite_deleted_count?: number;
   workspace_path?: string;
   workspace_deleted?: boolean;
   workspace_missing?: boolean;
   errors?: Array<{ code?: string; message?: string }>;
-  items?: RawConversationSummary[];
-  messages?: RawHistoryItem[] | null;
 };
 
 type RawChatTraceEvent = {
@@ -4891,16 +4900,13 @@ export class RealWebBotClient implements WebBotClient {
 
   async deleteAllConversations(
     botAlias: string,
-    options: AgentScopedOptions & { deleteNativeSession?: boolean; permanent?: boolean } = {},
+    options: AgentScopedOptions & { deleteNativeSession?: boolean } = {},
   ): Promise<ConversationBulkDeleteResult> {
     const params = new URLSearchParams();
     appendAgentParam(params, options.agentId);
     appendExecutionModeParam(params, options.executionMode);
     if (options.deleteNativeSession) {
       params.set("delete_native_session", "true");
-    }
-    if (options.permanent) {
-      params.set("permanent", "true");
     }
     const suffix = params.toString() ? `?${params.toString()}` : "";
     const data = await this.requestJson<RawConversationBulkDeleteResult>(
@@ -4915,13 +4921,6 @@ export class RealWebBotClient implements WebBotClient {
       deletedFavoriteCount: Number(data.deleted_favorite_count || 0),
       activeConversationId: String(data.active_conversation_id || ""),
       nativeSessionCleared: Boolean(data.native_session_cleared),
-      permanent: Boolean(data.permanent),
-      workspacePath: String(data.workspace_path || ""),
-      workspaceDeleted: Boolean(data.workspace_deleted),
-      workspaceMissing: Boolean(data.workspace_missing),
-      errors: Array.isArray(data.errors)
-        ? data.errors.map((item) => ({ code: item?.code ? String(item.code) : undefined, message: String(item?.message || "") }))
-        : [],
       items: (data.items || []).map(mapConversationSummary),
       messages: Array.isArray(data.messages) ? data.messages.map((item, index) => mapChatMessage(item, index)) : [],
     };
@@ -6993,15 +6992,31 @@ export class RealWebBotClient implements WebBotClient {
     return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
   }
 
-  async removeBot(botAlias: string, options: { deleteHistory?: boolean } = {}): Promise<void> {
+  async removeBot(botAlias: string, options: RemoveBotOptions = {}): Promise<RemoveBotResult> {
     const params = new URLSearchParams();
-    if (options.deleteHistory) {
+    if (options.deleteHistory || options.deleteWorkspace) {
       params.set("delete_history", "true");
     }
+    if (options.deleteWorkspace) {
+      params.set("delete_workspace", "true");
+    }
     const suffix = params.toString() ? `?${params.toString()}` : "";
-    await this.requestJson(`/api/admin/bots/${encodeURIComponent(botAlias)}${suffix}`, {
+    const data = await this.requestJson<RawRemoveBotResult>(`/api/admin/bots/${encodeURIComponent(botAlias)}${suffix}`, {
       method: "DELETE",
     });
+    return {
+      removed: Boolean(data.removed),
+      alias: String(data.alias || botAlias),
+      historyDeleted: Boolean(data.history_deleted),
+      historyDeletedCount: Number(data.history_deleted_count || 0),
+      favoriteDeletedCount: Number(data.favorite_deleted_count || 0),
+      workspacePath: String(data.workspace_path || ""),
+      workspaceDeleted: Boolean(data.workspace_deleted),
+      workspaceMissing: Boolean(data.workspace_missing),
+      errors: Array.isArray(data.errors)
+        ? data.errors.map((item) => ({ code: item?.code ? String(item.code) : undefined, message: String(item?.message || "") }))
+        : [],
+    };
   }
 
   async startBot(botAlias: string): Promise<BotSummary> {

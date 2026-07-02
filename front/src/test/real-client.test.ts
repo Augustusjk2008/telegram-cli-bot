@@ -2202,31 +2202,32 @@ describe("RealWebBotClient", () => {
     );
   });
 
-  test("deleteAllConversations forwards permanent flag and maps workspace result", async () => {
+  test("removeBot forwards workspace delete flag and maps result", async () => {
     fetchMock.mockResolvedValueOnce(jsonOk({
-      deleted_count: 1,
-      active_conversation_id: "",
-      native_session_cleared: true,
-      permanent: true,
+      removed: true,
+      alias: "team",
+      history_deleted: true,
+      history_deleted_count: 3,
+      favorite_deleted_count: 2,
       workspace_path: "C:\\workspace",
       workspace_deleted: true,
       workspace_missing: false,
       errors: [],
-      items: [],
-      messages: [],
     }));
 
     const client = new RealWebBotClient();
-    const data = await client.deleteAllConversations("main", {
-      deleteNativeSession: true,
-      permanent: true,
+    const data = await client.removeBot("team", {
+      deleteWorkspace: true,
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/bots/main/conversations?delete_native_session=true&permanent=true",
+      "/api/admin/bots/team?delete_history=true&delete_workspace=true",
       expect.objectContaining({ method: "DELETE" }),
     );
-    expect(data.permanent).toBe(true);
+    expect(data.removed).toBe(true);
+    expect(data.historyDeleted).toBe(true);
+    expect(data.historyDeletedCount).toBe(3);
+    expect(data.favoriteDeletedCount).toBe(2);
     expect(data.workspaceDeleted).toBe(true);
     expect(data.workspacePath).toBe("C:\\workspace");
   });
