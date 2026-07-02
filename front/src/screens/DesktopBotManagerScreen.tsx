@@ -15,10 +15,8 @@ import {
   Undo2,
 } from "lucide-react";
 import { AgentSettingsPanel } from "../components/AgentSettingsPanel";
-import { AvatarPicker } from "../components/AvatarPicker";
 import { BotCliParamsPanel } from "../components/BotCliParamsPanel";
 import { BotActivitySummary } from "../components/BotActivitySummary";
-import { ChatAvatar } from "../components/ChatAvatar";
 import { ClusterModelTiersPanel } from "../components/ClusterModelTiersPanel";
 import { ClusterSetupPanel } from "../components/ClusterSetupPanel";
 import { ClusterTemplatePanel } from "../components/ClusterTemplatePanel";
@@ -26,6 +24,7 @@ import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
 import { NativeAgentConfigFields } from "../components/NativeAgentConfigFields";
 import { StatusPill } from "../components/StatusPill";
 import { MockWebBotClient } from "../services/mockWebBotClient";
+import { getBotAccentColor, getBotAccentStyle } from "../utils/botVisual";
 import type {
   BotClusterConfig,
   BotSummary,
@@ -123,7 +122,6 @@ function normalizeCreateDraft(draft: CreateDraft): CreateDraft {
     cliType: draft.cliType,
     cliPath: draft.cliPath.trim(),
     workingDir: draft.workingDir.trim(),
-    avatarName: draft.avatarName.trim(),
     runtimeBackend: draft.runtimeBackend,
     supportedExecutionModes: executionConfig.supportedExecutionModes,
     defaultExecutionMode: executionConfig.defaultExecutionMode,
@@ -141,7 +139,6 @@ function normalizeEditDraft(draft: EditDraft): EditDraft {
     cliType: draft.cliType,
     cliPath: draft.cliPath.trim(),
     workingDir: draft.workingDir.trim(),
-    avatarName: draft.avatarName.trim(),
     runtimeBackend: draft.runtimeBackend,
     nativeAgent: {
       ...DEFAULT_NATIVE_AGENT_DRAFT,
@@ -280,7 +277,7 @@ function CreatePanel({
     }
     setDraft((prev) => {
       const userEditedPath = prev.cliPath.trim() && prev.cliPath.trim() !== defaultCliPathForType(prev.cliType);
-      if (prev.alias.trim() || prev.workingDir.trim() || prev.avatarName.trim() || userEditedPath) {
+      if (prev.alias.trim() || prev.workingDir.trim() || userEditedPath) {
         return prev;
       }
       return { ...prev, cliPath: buildCreateDraft(prev.cliType, manager.bots).cliPath };
@@ -314,19 +311,9 @@ function CreatePanel({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h2 className="text-base font-semibold">新增智能体</h2>
-          <p className="mt-1 text-sm text-[var(--muted)]">创建后会出现在左侧列表。</p>
-        </div>
-        <AvatarPicker
-          assets={manager.avatarAssets}
-          selectedName={draft.avatarName}
-          previewAlt="新智能体头像预览"
-          selectLabel="新智能体头像"
-          disabled={!canManage || manager.savingAction !== ""}
-          onSelect={(avatarName) => setDraft((prev) => ({ ...prev, avatarName }))}
-        />
+      <div>
+        <h2 className="text-base font-semibold">新增智能体</h2>
+        <p className="mt-1 text-sm text-[var(--muted)]">创建后会出现在左侧列表。</p>
       </div>
       <div className="grid grid-cols-2 gap-3">
         <label className="space-y-1 text-sm">
@@ -604,19 +591,9 @@ function EditPanel({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h2 className="text-base font-semibold">编辑 {bot.alias}</h2>
-          <p className="mt-1 text-sm text-[var(--muted)]">横屏版支持在右侧直接编辑和保存。</p>
-        </div>
-        <AvatarPicker
-          assets={manager.avatarAssets}
-          selectedName={draft.avatarName}
-          previewAlt={`${bot.alias} 头像`}
-          selectLabel={`${bot.alias} 头像`}
-          disabled={!canManage || manager.savingAction !== ""}
-          onSelect={(avatarName) => setDraft((prev) => ({ ...prev, avatarName }))}
-        />
+      <div>
+        <h2 className="text-base font-semibold">编辑 {bot.alias}</h2>
+        <p className="mt-1 text-sm text-[var(--muted)]">横屏版支持在右侧直接编辑和保存。</p>
       </div>
       {pendingWorkdirConflict ? (
         <WorkdirConflictNotice
@@ -976,6 +953,7 @@ export function DesktopBotManagerScreen({
   );
 
   const stats = countBotManagerStats(manager.bots);
+  const focusedBotIssues = focusedBot ? detectBotIssues(focusedBot, manager.bots) : [];
 
   useEffect(() => {
     let cancelled = false;
@@ -1437,12 +1415,19 @@ export function DesktopBotManagerScreen({
                           }}
                           className="flex w-full min-w-0 items-center gap-2 text-left"
                         >
-                          <ChatAvatar alt={`${bot.alias} 头像`} avatarName={bot.avatarName} kind="bot" size={28} />
+                          <span
+                            aria-hidden="true"
+                            className="h-8 w-[3px] shrink-0 rounded-full"
+                            style={getBotAccentStyle(bot.alias)}
+                          />
                           <span className="min-w-0">
-                            <span className="flex min-w-0 items-center gap-1.5">
-                              <span className="truncate font-semibold">{bot.alias}</span>
-                              {isMainBot(bot) ? <span className="rounded border border-[var(--border)] px-1 text-[10px] text-[var(--muted)]">主</span> : null}
-                              {current ? <span className="rounded border border-transparent px-1 text-[10px] tcb-selected-accent">当前</span> : null}
+                            <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+                              <span className="min-w-0 max-w-full truncate text-sm font-semibold text-[var(--text)]">{bot.alias}</span>
+                              {isMainBot(bot) ? <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">主</span> : null}
+                              {current ? <span className="rounded border border-transparent px-1.5 py-0.5 text-[10px] leading-none tcb-selected-accent">当前</span> : null}
+                              {bot.canOperate === false ? (
+                                <span className="rounded border border-zinc-500 bg-white px-1.5 py-0.5 text-[10px] font-semibold leading-none text-zinc-900">无权限 · 只读</span>
+                              ) : null}
                             </span>
                             {issues.length > 0 ? (
                               <span className="mt-1 flex flex-wrap gap-1">
@@ -1571,12 +1556,25 @@ export function DesktopBotManagerScreen({
                 />
               ) : (
                 <div className="space-y-4">
-                  <div className="flex items-start gap-3">
-                    <ChatAvatar alt={`${focusedBot.alias} 头像`} avatarName={focusedBot.avatarName} kind="bot" size={44} />
+                  <div
+                    className="flex items-start border-l-4 pl-3"
+                    style={{ borderLeftColor: getBotAccentColor(focusedBot.alias) }}
+                  >
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <h2 className="truncate text-base font-semibold">{focusedBot.alias}</h2>
-                        {isMainBot(focusedBot) ? <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-xs text-[var(--muted)]">主</span> : null}
+                      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                        <h2 className="min-w-0 max-w-full truncate text-lg font-semibold">{focusedBot.alias}</h2>
+                        {isMainBot(focusedBot) ? <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">主</span> : null}
+                        {focusedBot.alias === currentAlias ? (
+                          <span className="rounded border border-transparent px-1.5 py-0.5 text-[10px] leading-none tcb-selected-accent">当前</span>
+                        ) : null}
+                        {focusedBot.canOperate === false ? (
+                          <span className="rounded border border-zinc-500 bg-white px-1.5 py-0.5 text-[10px] font-semibold leading-none text-zinc-900">无权限 · 只读</span>
+                        ) : null}
+                        {focusedBotIssues.slice(0, 2).map((issue) => (
+                          <span key={issue.code} className={clsx("rounded border px-1.5 py-0.5 text-[10px] leading-none", issueClassName(issue.severity))}>
+                            {issue.label}
+                          </span>
+                        ))}
                         <StatusPill status={managerPillStatus(focusedBot)} />
                       </div>
                       <div className="mt-1 text-sm text-[var(--muted)]">
@@ -1613,9 +1611,9 @@ export function DesktopBotManagerScreen({
                   <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-3">
                     <div className="text-xs font-medium text-[var(--muted)]">状态</div>
                     <BotActivitySummary bot={focusedBot} className="mt-1" />
-                    {detectBotIssues(focusedBot, manager.bots).length > 0 ? (
+                    {focusedBotIssues.length > 0 ? (
                       <div className="mt-2 flex flex-wrap gap-1">
-                        {detectBotIssues(focusedBot, manager.bots).map((issue) => (
+                        {focusedBotIssues.map((issue) => (
                           <span key={issue.code} className={clsx("rounded border px-1.5 py-0.5 text-xs", issueClassName(issue.severity))}>
                             {issue.label}
                           </span>

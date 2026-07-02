@@ -13,7 +13,6 @@ const DEFAULT_ASSISTANT_BOT: CreateBotInput = {
   cliType: "codex",
   cliPath: "codex",
   workingDir: "C:\\workspace\\assistant1",
-  avatarName: "avatar_01.png",
 };
 
 export const assistantProposalIds = MOCK_ASSISTANT_PROPOSAL_IDS;

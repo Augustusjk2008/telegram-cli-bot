@@ -73,7 +73,6 @@ test("assistant bots lock the default workdir in settings", async () => {
     cliType: "codex",
     cliPath: "codex",
     workingDir: "C:\\workspace\\assistant1",
-    avatarName: "avatar_01.png",
   });
 
   render(<SettingsScreen botAlias="assistant1" client={client} onLogout={() => undefined} />);
@@ -93,7 +92,6 @@ test("native bots hide cli settings and params", async () => {
     cliType: "codex",
     cliPath: "codex",
     workingDir: "C:\\workspace\\native1",
-    avatarName: "avatar_01.png",
     supportedExecutionModes: ["native_agent"],
     defaultExecutionMode: "native_agent",
     nativeAgent: {
@@ -138,7 +136,6 @@ test("settings screen edits native agent config", async () => {
     cliType: "codex",
     cliPath: "codex",
     workingDir: "C:\\workspace\\native1",
-    avatarName: "avatar_01.png",
     supportedExecutionModes: ["native_agent"],
     defaultExecutionMode: "native_agent",
     nativeAgent: {
@@ -208,7 +205,6 @@ test("native settings shows pi cluster extension setup", async () => {
     cliType: "codex",
     cliPath: "codex",
     workingDir: "C:\\workspace\\native1",
-    avatarName: "avatar_01.png",
     supportedExecutionModes: ["native_agent"],
     defaultExecutionMode: "native_agent",
     nativeAgent: {

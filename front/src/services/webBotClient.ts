@@ -59,7 +59,6 @@ import type {
   FileReadResult,
   FileRenameResult,
   FileWriteResult,
-  AvatarAsset,
   AppUpdateDownloadProgress,
   AppUpdateStatus,
   OfflineUpdatePackageList,
@@ -375,7 +374,6 @@ export interface WebBotClient {
   updateBotCli(botAlias: string, cliType: string, cliPath: string): Promise<BotSummary>;
   updateBotExecutionConfig(botAlias: string, input: BotExecutionConfigInput): Promise<BotSummary>;
   updateBotWorkdir(botAlias: string, workingDir: string, options?: UpdateBotWorkdirOptions): Promise<BotSummary>;
-  updateBotAvatar(botAlias: string, avatarName: string): Promise<BotSummary>;
   addBot(input: CreateBotInput): Promise<BotSummary>;
   renameBot(botAlias: string, newAlias: string): Promise<BotSummary>;
   removeBot(botAlias: string, options?: RemoveBotOptions): Promise<void>;
@@ -425,7 +423,6 @@ export interface WebBotClient {
     botAlias: string,
     filters?: { limit?: number; action?: string; resource?: string; status?: "ok" | "failed" | "" },
   ): Promise<AssistantAdminAuditResult>;
-  listAvatarAssets(): Promise<AvatarAsset[]>;
   getCliParams(botAlias: string): Promise<CliParamsPayload>;
   updateCliParam(botAlias: string, key: string, value: unknown, cliType?: string): Promise<CliParamsPayload>;
   resetCliParams(botAlias: string, cliType?: string): Promise<CliParamsPayload>;

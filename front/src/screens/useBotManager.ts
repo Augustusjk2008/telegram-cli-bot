@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { WebApiClientError } from "../services/types";
 import type {
-  AvatarAsset,
   BotSummary,
   ChatExecutionMode,
   CliType,
@@ -12,7 +11,6 @@ import type {
   WorkdirChangeConflict,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
-import { DEFAULT_AVATAR_ASSETS, pickAvailableAvatarName } from "../utils/avatar";
 import { normalizePathInput } from "../utils/pathInput";
 import {
   buildExecutionConfig,
@@ -36,7 +34,6 @@ export const EMPTY_CREATE_DRAFT: CreateDraft = {
   cliType: "codex",
   cliPath: "",
   workingDir: "",
-  avatarName: "",
   supportedExecutionModes: ["cli"],
   defaultExecutionMode: "cli",
   runtimeBackend: "cli",
@@ -112,28 +109,17 @@ export function useBotManager({
   onBotsChange,
 }: UseBotManagerArgs = {}) {
   const [bots, setBots] = useState<BotSummary[]>([]);
-  const [avatarAssets, setAvatarAssets] = useState<AvatarAsset[]>(DEFAULT_AVATAR_ASSETS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [savingAction, setSavingAction] = useState("");
 
-  const resolvedAvatarAssets = useMemo(
-    () => (avatarAssets.length > 0 ? avatarAssets : DEFAULT_AVATAR_ASSETS),
-    [avatarAssets],
-  );
-
   async function loadBots() {
     setLoading(true);
     setError("");
     try {
-      const [data, assets] = await Promise.all([
-        client.listBots(),
-        client.listAvatarAssets().catch(() => DEFAULT_AVATAR_ASSETS),
-      ]);
-      const nextAssets = assets.length > 0 ? assets : DEFAULT_AVATAR_ASSETS;
+      const data = await client.listBots();
       setBots(data);
-      setAvatarAssets(nextAssets);
       onBotsChange?.(data);
       return data;
     } catch (err) {
@@ -166,7 +152,6 @@ export function useBotManager({
         alias: draft.alias.trim(),
         cliPath: normalizePathInput(draft.cliPath),
         workingDir: normalizePathInput(draft.workingDir),
-        avatarName: pickAvailableAvatarName(draft.avatarName, resolvedAvatarAssets, "bot"),
         nativeAgent: normalizeNativeAgentInput(draft.nativeAgent),
       });
       setNotice("智能体已创建");
@@ -251,34 +236,6 @@ export function useBotManager({
     } catch (err) {
       setError(getErrorMessage(err, "删除智能体失败"));
       return false;
-    } finally {
-      setSavingAction("");
-    }
-  }
-
-  async function updateBotAvatar(bot: BotSummary, avatarName: string) {
-    const nextAvatarName = pickAvailableAvatarName(avatarName, resolvedAvatarAssets, "bot");
-    if (nextAvatarName === pickAvailableAvatarName(bot.avatarName, resolvedAvatarAssets, "bot")) {
-      return bot;
-    }
-
-    setSavingAction(`${bot.alias}:avatar`);
-    setError("");
-    setNotice("");
-    setBots((prev) => prev.map((item) => (
-      item.alias === bot.alias
-        ? { ...item, avatarName: nextAvatarName }
-        : item
-    )));
-    try {
-      const updated = await client.updateBotAvatar(bot.alias, nextAvatarName);
-      setNotice(`已更新 ${bot.alias} 的头像`);
-      await loadBots();
-      return updated;
-    } catch (err) {
-      await loadBots();
-      setError(getErrorMessage(err, "更新头像失败"));
-      return null;
     } finally {
       setSavingAction("");
     }
@@ -403,18 +360,12 @@ export function useBotManager({
     }
     nextBot = workdirResult.bot;
 
-    const avatarUpdated = await updateBotAvatar(nextBot, draft.avatarName);
-    if (avatarUpdated) {
-      nextBot = avatarUpdated;
-    }
-
     return { ok: true, bot: nextBot };
   }
 
   return {
     client,
     bots,
-    avatarAssets: resolvedAvatarAssets,
     loading,
     error,
     notice,
@@ -426,7 +377,6 @@ export function useBotManager({
     toggleBot,
     renameBot,
     deleteBot,
-    updateBotAvatar,
     updateBotCli,
     updateBotWorkdir,
     saveBotEdits,

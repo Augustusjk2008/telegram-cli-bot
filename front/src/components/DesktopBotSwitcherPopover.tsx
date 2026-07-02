@@ -5,9 +5,9 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { BotStatus, BotSummary } from "../services/types";
 import { premiumMotion, resolveMotionProps } from "../motion/premiumMotion";
 import { BotActivitySummary, getBotActivityText } from "./BotActivitySummary";
-import { ChatAvatar } from "./ChatAvatar";
 import { StatusPill } from "./StatusPill";
 import { getBotRuntimeLabel } from "./botRuntimeLabel";
+import { getBotAccentColor, getBotAccentStyle } from "../utils/botVisual";
 
 type StatusFilter = "all" | BotStatus;
 
@@ -276,7 +276,7 @@ export function DesktopBotSwitcherPopover({
                   onMouseEnter={() => setFocusedAlias(bot.alias)}
                   onClick={() => void selectBot(bot)}
                   className={clsx(
-                    "mb-1 grid w-full grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-3 rounded-md border px-2.5 py-2 text-left",
+                    "relative mb-1 grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3 overflow-hidden rounded-md border py-2 pl-3.5 pr-2.5 text-left",
                     "focus:outline-none focus:ring-2 focus:ring-[var(--accent)]",
                     current ? "tcb-soft-selected" : "border-transparent hover:bg-[var(--surface-strong)]",
                     focusedAlias === bot.alias && !current ? "bg-[var(--surface-strong)]" : "",
@@ -284,28 +284,32 @@ export function DesktopBotSwitcherPopover({
                     noAccess ? "border-zinc-500 bg-zinc-100 text-zinc-950 shadow-inner grayscale saturate-0 contrast-125 blur-[0.2px] hover:bg-zinc-200" : "",
                   )}
                 >
-                  <ChatAvatar alt={`${bot.alias} 头像`} avatarName={bot.avatarName} kind="bot" size={32} />
+                  <span
+                    aria-hidden="true"
+                    className="absolute left-0 top-0 h-full w-[3px]"
+                    style={getBotAccentStyle(bot.alias)}
+                  />
                   <span className="min-w-0">
-                    <span className="flex min-w-0 items-center gap-1.5">
-                      <span className="truncate text-sm font-semibold text-[var(--text)]">{bot.alias}</span>
+                    <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+                      <span className="min-w-0 max-w-full truncate text-sm font-semibold text-[var(--text)]">{bot.alias}</span>
                       {bot.isMain || bot.alias === "main" ? (
-                        <span className="rounded border border-[var(--border)] px-1 text-[10px] text-[var(--muted)]">主</span>
+                        <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">主</span>
                       ) : null}
                       {current ? (
-                        <span className="rounded border border-transparent px-1 text-[10px] tcb-selected-accent">当前</span>
+                        <span className="rounded border border-transparent px-1.5 py-0.5 text-[10px] leading-none tcb-selected-accent">当前</span>
                       ) : null}
                       {noAccess ? (
-                        <span className="rounded border border-zinc-500 bg-white px-1 text-[10px] font-semibold text-zinc-900">无权限 · 只读</span>
+                        <span className="rounded border border-zinc-500 bg-white px-1.5 py-0.5 text-[10px] font-semibold leading-none text-zinc-900">无权限 · 只读</span>
                       ) : null}
                     </span>
                     <span className={clsx(
-                      "mt-0.5 flex min-w-0 items-center gap-2 text-xs",
+                      "mt-1 flex min-w-0 items-center gap-2 text-xs",
                       current ? "text-[var(--text)]" : "text-[var(--muted)]",
                     )}>
-                      <span className="shrink-0">{bot.botMode || "cli"} · {getBotRuntimeLabel(bot)}</span>
-                      <span className="truncate" title={bot.workingDir}>{bot.workingDir}</span>
+                      <span className="shrink-0 font-medium">{bot.botMode || "cli"} · {getBotRuntimeLabel(bot)}</span>
+                      <span className="min-w-0 truncate" title={bot.workingDir}>{bot.workingDir}</span>
                     </span>
-                    <BotActivitySummary bot={bot} className="mt-0.5" />
+                    <BotActivitySummary bot={bot} className="mt-1" />
                   </span>
                   <span className="flex shrink-0 flex-col items-end gap-1">
                     {status === "unread" ? <StatusPill status="unread" /> : null}
@@ -326,14 +330,24 @@ export function DesktopBotSwitcherPopover({
               >
                 {focusedBot ? (
                   <div className="space-y-3">
-                    <div className="flex items-start gap-3">
-                      <ChatAvatar alt={`${focusedBot.alias} 头像`} avatarName={focusedBot.avatarName} kind="bot" size={40} />
+                    <div
+                      className="flex items-start border-l-4 pl-3"
+                      style={{ borderLeftColor: getBotAccentColor(focusedBot.alias) }}
+                    >
                       <div className="min-w-0 flex-1">
-                        <div className="flex min-w-0 items-center gap-2">
-                          <h2 className="truncate text-base font-semibold text-[var(--text)]">智能体切换</h2>
+                        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                          <h2 className="truncate text-lg font-semibold text-[var(--text)]">{focusedBot.alias}</h2>
+                          {focusedBot.isMain || focusedBot.alias === "main" ? (
+                            <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">主</span>
+                          ) : null}
+                          {focusedBot.alias === currentAlias ? (
+                            <span className="rounded border border-transparent px-1.5 py-0.5 text-[10px] leading-none tcb-selected-accent">当前</span>
+                          ) : null}
+                          {focusedBot.canOperate === false ? (
+                            <span className="rounded border border-zinc-500 bg-white px-1.5 py-0.5 text-[10px] font-semibold leading-none text-zinc-900">无权限 · 只读</span>
+                          ) : null}
                           <StatusPill status={effectiveStatus(focusedBot) === "unread" ? "online" : effectiveStatus(focusedBot)} />
                         </div>
-                        <div className="mt-1 truncate text-sm font-medium text-[var(--text)]">{focusedBot.alias}</div>
                         <div className="text-xs text-[var(--muted)]">{focusedBot.botMode || "cli"} · {getBotRuntimeLabel(focusedBot)}</div>
                       </div>
                     </div>

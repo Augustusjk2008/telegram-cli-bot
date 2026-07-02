@@ -1,4 +1,3 @@
-import type { ReactNode } from "react";
 import type { ChatMessageContextUsage } from "../services/types";
 import { ChatContextUsageBadge, clampPercent, formatCompactionCount, formatTokenNumber } from "./ChatContextUsageBadge";
 
@@ -6,7 +5,6 @@ type Props = {
   name: string;
   createdAt: string;
   align?: "left" | "right";
-  avatar?: ReactNode;
   contextUsage?: ChatMessageContextUsage;
   contextVariant?: "text" | "ring";
 };
@@ -74,7 +72,7 @@ function formatRingContextUsage(contextUsage?: ChatMessageContextUsage) {
   };
 }
 
-export function ChatMessageMeta({ name, createdAt, align = "left", avatar, contextUsage, contextVariant = "text" }: Props) {
+export function ChatMessageMeta({ name, createdAt, align = "left", contextUsage, contextVariant = "text" }: Props) {
   const ringContext = contextVariant === "ring" ? formatRingContextUsage(contextUsage) : null;
   return (
     <div
@@ -82,8 +80,13 @@ export function ChatMessageMeta({ name, createdAt, align = "left", avatar, conte
         ? "mb-1.5 flex min-w-0 items-center justify-end gap-2 text-xs"
         : "mb-1.5 flex min-w-0 items-center gap-2 text-xs"}
     >
-      {align === "left" && avatar ? <span className="shrink-0">{avatar}</span> : null}
-      <span className="min-w-0 max-w-[12rem] truncate font-medium text-[var(--text)]">{name}</span>
+      <span
+        className={align === "left"
+          ? "min-w-0 max-w-[12rem] truncate text-sm font-semibold text-[var(--text)]"
+          : "min-w-0 max-w-[12rem] truncate font-medium text-[var(--text)]"}
+      >
+        {name}
+      </span>
       <span className="shrink-0 text-[var(--muted)]">{formatTime(createdAt)}</span>
       {contextVariant === "text" ? (
         <ChatContextUsageBadge contextUsage={contextUsage} testId="chat-message-context-usage-text" />
@@ -112,7 +115,6 @@ export function ChatMessageMeta({ name, createdAt, align = "left", avatar, conte
           </svg>
         </span>
       ) : null}
-      {align === "right" && avatar ? <span className="shrink-0">{avatar}</span> : null}
     </div>
   );
 }

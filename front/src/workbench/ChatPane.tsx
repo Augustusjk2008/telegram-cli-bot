@@ -4,8 +4,6 @@ import type { ChatWorkbenchStatus } from "./workbenchTypes";
 
 type Props = {
   botAlias: string;
-  botAvatarName?: string;
-  userAvatarName?: string;
   client: WebBotClient;
   readOnly?: boolean;
   readOnlyReason?: string;
@@ -21,8 +19,6 @@ type Props = {
 
 export function ChatPane({
   botAlias,
-  botAvatarName,
-  userAvatarName,
   client,
   readOnly = false,
   readOnlyReason,
@@ -38,8 +34,6 @@ export function ChatPane({
   return (
     <ChatScreen
       botAlias={botAlias}
-      botAvatarName={botAvatarName}
-      userAvatarName={userAvatarName}
       client={client}
       readOnly={readOnly}
       readOnlyReason={readOnlyReason}

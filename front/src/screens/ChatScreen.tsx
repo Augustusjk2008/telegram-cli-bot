@@ -14,7 +14,6 @@ import {
 import { createPortal } from "react-dom";
 import { LoaderCircle, Maximize2, Minimize2, Paperclip, RotateCcw, Trash2 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
-import { ChatAvatar } from "../components/ChatAvatar";
 import { ChatActionBar, type ChatModelOption } from "../components/ChatActionBar";
 import { ChatComposer } from "../components/ChatComposer";
 import { ChatFinalAnswerActions } from "../components/ChatFinalAnswerActions";
@@ -96,8 +95,6 @@ type Props = {
   botAlias: string;
   accountId?: string;
   client?: WebBotClient;
-  botAvatarName?: string;
-  userAvatarName?: string;
   readOnly?: boolean;
   readOnlyReason?: string;
   disabledReason?: string;
@@ -1213,8 +1210,6 @@ function ClusterTaskPanel({ status, agents }: { status: ClusterTaskStatus; agent
 type ChatMessageRowProps = {
   item: ChatMessage;
   assistantName: string;
-  assistantAvatarName?: string;
-  userAvatarName?: string;
   allowTrace: boolean;
   deletedAttachmentKeys: Record<string, boolean>;
   deletingAttachmentKeys: Record<string, boolean>;
@@ -1235,8 +1230,6 @@ type ChatMessageRowProps = {
 const ChatMessageRow = memo(function ChatMessageRow({
   item,
   assistantName,
-  assistantAvatarName,
-  userAvatarName,
   allowTrace,
   deletedAttachmentKeys,
   deletingAttachmentKeys,
@@ -1289,14 +1282,6 @@ const ChatMessageRow = memo(function ChatMessageRow({
     mode: transcriptMode,
   });
   const showSoloRollback = Boolean(isUser && isCurrentUserMessage && soloRollbackTarget && onRequestSoloRollback);
-  const inlineAvatar = (
-    <ChatAvatar
-      alt={`${messageName} 头像`}
-      avatarName={isUser ? userAvatarName : assistantAvatarName}
-      kind={isUser ? "user" : "bot"}
-      size={24}
-    />
-  );
 
   return (
     <motion.div
@@ -1310,7 +1295,6 @@ const ChatMessageRow = memo(function ChatMessageRow({
           name={messageName}
           createdAt={chatMessageDisplayTime(item)}
           align={messageAlign}
-          avatar={inlineAvatar}
           contextUsage={!isUser ? item.meta?.contextUsage : undefined}
           contextVariant={showContextRing ? "ring" : "text"}
         />
@@ -1440,8 +1424,6 @@ const ChatMessageRow = memo(function ChatMessageRow({
 const ChatMessageList = memo(function ChatMessageList({
   rows,
   assistantName,
-  assistantAvatarName,
-  userAvatarName,
   allowTrace,
   handleDeleteAttachment,
   handleFileLinkClick,
@@ -1457,8 +1439,6 @@ const ChatMessageList = memo(function ChatMessageList({
 }: {
   rows: ChatMessageRowModel[];
   assistantName: string;
-  assistantAvatarName?: string;
-  userAvatarName?: string;
   allowTrace: boolean;
   handleDeleteAttachment: (messageId: string, savedPath: string) => void;
   handleFileLinkClick: (href: string) => void;
@@ -1477,8 +1457,6 @@ const ChatMessageList = memo(function ChatMessageList({
       <ChatMessageRow
         item={row.item}
         assistantName={assistantName}
-        assistantAvatarName={assistantAvatarName}
-        userAvatarName={userAvatarName}
         allowTrace={allowTrace}
         deletedAttachmentKeys={row.deletedAttachmentKeys}
         deletingAttachmentKeys={row.deletingAttachmentKeys}
@@ -1721,8 +1699,6 @@ export function ChatScreen({
   botAlias,
   accountId,
   client = new MockWebBotClient(),
-  botAvatarName,
-  userAvatarName,
   readOnly = false,
   readOnlyReason,
   disabledReason,
@@ -4246,7 +4222,6 @@ export function ChatScreen({
 
   const terminateVisible = isStreaming || actionLoading === "kill";
   const assistantName = botAlias;
-  const assistantAvatarName = botOverview?.avatarName || botAvatarName;
   const activeAgent = agents.find((agent) => agent.id === activeAgentId) || agents[0] || fallbackAgents()[0];
   const rawSupportedExecutionModes = getSupportedExecutionModes(botOverview);
   const forcedNativeSupported = forcedExecutionMode === "native_agent"
@@ -4589,8 +4564,6 @@ export function ChatScreen({
           <ChatMessageList
             rows={messageRowModels}
             assistantName={assistantName}
-            assistantAvatarName={assistantAvatarName}
-            userAvatarName={userAvatarName}
             allowTrace={allowTrace}
             handleDeleteAttachment={handleDeleteAttachment}
             handleFileLinkClick={handleFileLinkClick}

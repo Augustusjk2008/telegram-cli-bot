@@ -110,7 +110,6 @@ function nativeBotSummary(alias = "pi"): BotSummary {
     status: "running",
     workingDir: `C:\\workspace\\${alias}`,
     lastActiveText: "运行中",
-    avatarName: "avatar_01.png",
     cliPath: "codex",
     botMode: "cli",
     supportedExecutionModes: ["cli", "native_agent"],
@@ -338,7 +337,6 @@ test("member can enter ungranted bot in read-only mode and hits create quota cop
   await createManagedBot(user, "owned3");
   expect(await screen.findByText("普通用户最多只能创建 3 个 Bot")).toBeInTheDocument();
 });
-
 
 
 

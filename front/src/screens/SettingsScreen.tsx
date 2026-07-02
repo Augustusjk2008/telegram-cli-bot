@@ -2,10 +2,8 @@ import { clsx } from "clsx";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { AlertTriangle, Bell, Copy, Globe, LogOut, RotateCw, Save, SlidersHorizontal, Square } from "lucide-react";
-import { AvatarPicker } from "../components/AvatarPicker";
 import { AgentSettingsPanel } from "../components/AgentSettingsPanel";
 import { BotCliParamsPanel } from "../components/BotCliParamsPanel";
-import { BotIdentity } from "../components/BotIdentity";
 import { ClusterSetupPanel } from "../components/ClusterSetupPanel";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
 import { NativeAgentConfigFields } from "../components/NativeAgentConfigFields";
@@ -15,7 +13,6 @@ import { toolbarButtonClass } from "../components/ToolbarButton";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { WebApiClientError } from "../services/types";
 import type {
-  AvatarAsset,
   BotOverview,
   BrowserNotificationPermission,
   ChatExecutionMode,
@@ -30,7 +27,6 @@ import type {
   WorkdirChangeConflict,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
-import { DEFAULT_AVATAR_ASSETS, readStoredUserAvatarName } from "../utils/avatar";
 import { getErrorMessage } from "../utils/errorMessage";
 import { normalizePathInput } from "../utils/pathInput";
 import { defaultCliPathForType } from "./useBotManager";
@@ -65,7 +61,6 @@ import {
 
 type Props = {
   botAlias: string;
-  botAvatarName?: string;
   client?: WebBotClient;
   onLogout: () => void;
   embedded?: boolean;
@@ -81,8 +76,6 @@ type Props = {
   onChatBodyLineHeightChange?: (lineHeight: ChatBodyLineHeightName) => void;
   chatBodyParagraphSpacing?: ChatBodyParagraphSpacingName;
   onChatBodyParagraphSpacingChange?: (paragraphSpacing: ChatBodyParagraphSpacingName) => void;
-  userAvatarName?: string;
-  onUserAvatarChange?: (avatarName: string) => void;
   sessionCapabilities?: string[];
   showBotRuntimeSettings?: boolean;
   onOpenBotManager?: () => void;
@@ -274,7 +267,6 @@ function asWebApiClientError(error: unknown): WebApiClientError | null {
 
 export function SettingsScreen({
   botAlias,
-  botAvatarName,
   client = new MockWebBotClient(),
   onLogout,
   embedded = false,
@@ -290,8 +282,6 @@ export function SettingsScreen({
   onChatBodyLineHeightChange,
   chatBodyParagraphSpacing = DEFAULT_CHAT_BODY_PARAGRAPH_SPACING,
   onChatBodyParagraphSpacingChange,
-  userAvatarName = readStoredUserAvatarName(),
-  onUserAvatarChange,
   sessionCapabilities = [],
   showBotRuntimeSettings = true,
   onOpenBotManager,
@@ -304,7 +294,6 @@ export function SettingsScreen({
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettingsStatus | null>(null);
   const [notificationEnabled, setNotificationEnabled] = useState(() => readChatCompletionWebNotificationEnabled());
   const [notificationPermission, setNotificationPermission] = useState<BrowserNotificationPermission>(() => getBrowserNotificationPermission());
-  const [avatarAssets, setAvatarAssets] = useState<AvatarAsset[]>(DEFAULT_AVATAR_ASSETS);
   const [runtimeBackendDraft, setRuntimeBackendDraft] = useState<ChatExecutionMode>("cli");
   const [cliTypeDraft, setCliTypeDraft] = useState<CliType>("codex");
   const [cliPathDraft, setCliPathDraft] = useState("");
@@ -349,14 +338,12 @@ export function SettingsScreen({
       client.getTunnelStatus(),
       isMainBot ? client.getGitProxySettings() : Promise.resolve(null),
       client.getNotificationSettings?.() ?? Promise.resolve(null),
-      client.listAvatarAssets(),
     ])
       .then(([
         overviewResult,
         tunnelResult,
         gitProxyResult,
         notificationSettingsResult,
-        avatarAssetsResult,
       ]) => {
         if (cancelled) return;
 
@@ -370,12 +357,8 @@ export function SettingsScreen({
         const tunnelData = tunnelResult.status === "fulfilled" ? tunnelResult.value : null;
         const gitProxyData = gitProxyResult.status === "fulfilled" ? gitProxyResult.value : null;
         const notificationData = notificationSettingsResult.status === "fulfilled" ? notificationSettingsResult.value : null;
-        const avatarData = avatarAssetsResult.status === "fulfilled" && avatarAssetsResult.value.length > 0
-          ? avatarAssetsResult.value
-          : DEFAULT_AVATAR_ASSETS;
 
         setOverview(overviewData);
-        setAvatarAssets(avatarData);
         setCliTypeDraft(overviewData.cliType);
         setCliPathDraft(overviewData.cliPath || "");
         setRuntimeBackendDraft(getRuntimeBackend(overviewData));
@@ -782,17 +765,8 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
     <main className={clsx("flex h-full min-h-0 flex-col", embedded ? "bg-[var(--workbench-titlebar-bg)]" : "bg-[var(--bg)]")}>
       {embedded ? null : (
         <header className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] p-4">
-          {botAvatarName || overview?.avatarName ? (
-            <BotIdentity
-              alias={overview?.alias || botAlias}
-              avatarName={botAvatarName || overview?.avatarName}
-              size={32}
-              nameClassName="truncate text-xl font-bold text-[var(--text)]"
-              subtitle={<p className="text-sm text-[var(--muted)]">设置</p>}
-            />
-          ) : (
-            <h1 className="text-xl font-bold">设置</h1>
-          )}
+          <h1 className="text-xl font-bold">设置</h1>
+          <p className="text-sm text-[var(--muted)]">{overview?.alias || botAlias}</p>
         </header>
       )}
 
@@ -931,23 +905,6 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             >
               PushPlus 配置教程
             </button>
-          </div>
-        </div>
-
-        <div className={settingsPanelClass("space-y-4")}>
-          <div className="flex items-center justify-between gap-4">
-            <h2 className="text-base font-semibold text-[var(--text)]">我的头像</h2>
-            <AvatarPicker
-              assets={avatarAssets}
-              selectedName={userAvatarName}
-              previewAlt="我的头像预览"
-              selectLabel="我的头像"
-              kind="user"
-              onSelect={(avatarName) => {
-                onUserAvatarChange?.(avatarName);
-                setNotice("我的头像已更新");
-              }}
-            />
           </div>
         </div>
 

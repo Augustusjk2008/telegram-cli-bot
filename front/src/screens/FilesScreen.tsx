@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronLeft, FilePlus, FolderOpen, FolderPlus, House, Upload } from "lucide-react";
-import { BotIdentity } from "../components/BotIdentity";
 import { FileEditorSurface } from "../components/FileEditorSurface";
 import { FileList } from "../components/FileList";
 import { FileNameDialog } from "../components/FileNameDialog";
@@ -20,7 +19,6 @@ import {
 
 type Props = {
   botAlias: string;
-  botAvatarName?: string;
   client?: WebBotClient;
   structureOnly?: boolean;
   canWriteFiles?: boolean;
@@ -79,7 +77,6 @@ function formatDownloadDetail(progress: ActiveDownload) {
 
 export function FilesScreen({
   botAlias,
-  botAvatarName,
   client = new MockWebBotClient(),
   structureOnly = false,
   canWriteFiles = true,
@@ -538,17 +535,7 @@ export function FilesScreen({
             </ToolbarButton>
           ) : null}
           <div className="min-w-0">
-            {botAvatarName ? (
-              <BotIdentity
-                alias={botAlias}
-                avatarName={botAvatarName}
-                size={28}
-                className="flex min-w-0 items-center gap-2"
-                nameClassName="truncate text-lg font-semibold text-[var(--text)]"
-              />
-            ) : (
-              <h1 className="text-lg font-semibold truncate">{botAlias}</h1>
-            )}
+            <h1 className="text-lg font-semibold truncate">{botAlias}</h1>
             <p className="truncate text-xs text-[var(--muted)]">{currentPath || "加载中..."}</p>
           </div>
         </div>

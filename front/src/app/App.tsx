@@ -43,7 +43,6 @@ import { DesktopWorkbench } from "../workbench/DesktopWorkbench";
 import { SoloWorkbench } from "../workbench/SoloWorkbench";
 import type { ChatWorkbenchStatus, WorkbenchProductMode } from "../workbench/workbenchTypes";
 import { soloModeStorageKey, type SoloSessionSnapshot } from "../workbench/soloTypes";
-import { readStoredUserAvatarName, storeUserAvatarName } from "../utils/avatar";
 import {
   APP_NAME,
   applyChatReadingPreferences,
@@ -248,7 +247,6 @@ export function App() {
   const [soloHistoryRevisionByBot, setSoloHistoryRevisionByBot] = useState<Record<string, number>>({});
   const [isChatImmersive, setIsChatImmersive] = useState(false);
   const [isTerminalImmersive, setIsTerminalImmersive] = useState(false);
-  const [userAvatarName, setUserAvatarName] = useState(() => readStoredUserAvatarName());
   const [announcementState, setAnnouncementState] = useState<AnnouncementListResult>(EMPTY_ANNOUNCEMENT_STATE);
   const [announcementOpen, setAnnouncementOpen] = useState(false);
   const announcementAutoOpenedRef = useRef(false);
@@ -737,11 +735,6 @@ export function App() {
     setChatBodyParagraphSpacing(nextParagraphSpacing);
   }
 
-  function handleUserAvatarChange(nextAvatarName: string) {
-    setUserAvatarName(nextAvatarName);
-    storeUserAvatarName(nextAvatarName);
-  }
-
   useEffect(() => {
     if (!currentBot) {
       return;
@@ -879,8 +872,6 @@ export function App() {
                 botAlias={alias}
                 accountId={accountKey}
                 client={client}
-                botAvatarName={botSummaryByAlias.get(alias)?.avatarName || bots.find((bot) => bot.alias === alias)?.avatarName}
-                userAvatarName={userAvatarName}
                 isVisible={instanceKey === chatInstanceKey && currentVisible}
                 readOnly={chatReadOnly || !canOperateCurrentBot}
                 disabledReason={chatDisabledReason}
@@ -930,8 +921,6 @@ export function App() {
               botAlias={alias}
               accountId={accountKey}
               client={client}
-              botAvatarName={botSummaryByAlias.get(alias)?.avatarName || bots.find((bot) => bot.alias === alias)?.avatarName}
-              userAvatarName={userAvatarName}
               isVisible={instanceKey === chatInstanceKey}
               readOnly={chatReadOnly || !canOperateCurrentBot}
               disabledReason={chatDisabledReason}
@@ -954,7 +943,6 @@ export function App() {
         <FilesScreen
           key={`files-${currentBot}`}
           botAlias={currentBot}
-          botAvatarName={currentBotSummary?.avatarName}
           client={client}
           structureOnly={structureOnly}
           canWriteFiles={canWriteCurrentBotFiles}
@@ -996,7 +984,6 @@ export function App() {
         <GitScreen
           key={`git-${currentBot}`}
           botAlias={currentBot}
-          botAvatarName={currentBotSummary?.avatarName}
           client={client}
           sessionCapabilities={session?.capabilities}
         />
@@ -1019,7 +1006,6 @@ export function App() {
         <SettingsScreen
           key={`settings-${currentBot}`}
           botAlias={currentBot}
-          botAvatarName={currentBotSummary?.avatarName}
           client={client}
           onLogout={handleLogout}
           themeName={themeName}
@@ -1032,8 +1018,6 @@ export function App() {
           onChatBodyLineHeightChange={handleChatBodyLineHeightChange}
           chatBodyParagraphSpacing={chatBodyParagraphSpacing}
           onChatBodyParagraphSpacingChange={handleChatBodyParagraphSpacingChange}
-          userAvatarName={userAvatarName}
-          onUserAvatarChange={handleUserAvatarChange}
           sessionCapabilities={session?.capabilities}
         />
       </div>
@@ -1132,8 +1116,6 @@ export function App() {
               authToken={session?.token || ""}
               accountId={accountKey}
               botAlias={currentBot}
-              botAvatarName={currentBotSummary?.avatarName}
-              userAvatarName={userAvatarName}
               client={client}
               structureOnly={structureOnly}
               canWriteFiles={canWriteCurrentBotFiles}
@@ -1154,7 +1136,6 @@ export function App() {
               onChatBodyLineHeightChange={handleChatBodyLineHeightChange}
               chatBodyParagraphSpacing={chatBodyParagraphSpacing}
               onChatBodyParagraphSpacingChange={handleChatBodyParagraphSpacingChange}
-              onUserAvatarChange={handleUserAvatarChange}
               sessionCapabilities={session?.capabilities}
               canViewAssistantOps={canViewAssistantOps}
               viewMode={viewMode}

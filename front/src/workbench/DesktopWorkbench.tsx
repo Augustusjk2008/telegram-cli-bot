@@ -107,8 +107,6 @@ type Props = {
   authToken?: string;
   accountId?: string;
   botAlias: string;
-  botAvatarName?: string;
-  userAvatarName?: string;
   client?: WebBotClient;
   structureOnly?: boolean;
   canWriteFiles?: boolean;
@@ -130,7 +128,6 @@ type Props = {
   onChatBodyLineHeightChange?: (lineHeight: ChatBodyLineHeightName) => void;
   chatBodyParagraphSpacing?: ChatBodyParagraphSpacingName;
   onChatBodyParagraphSpacingChange?: (paragraphSpacing: ChatBodyParagraphSpacingName) => void;
-  onUserAvatarChange?: (avatarName: string) => void;
   sessionCapabilities?: string[];
   canViewAssistantOps?: boolean;
   viewMode?: ViewMode;
@@ -153,10 +150,8 @@ type Props = {
 export function DesktopWorkbench({
   authToken = "",
   accountId,
-  botAvatarName,
   client = new MockWebBotClient(),
   botAlias,
-  userAvatarName,
   structureOnly = false,
   canWriteFiles = true,
   canOpenSystemFolder = false,
@@ -177,7 +172,6 @@ export function DesktopWorkbench({
   onChatBodyLineHeightChange,
   chatBodyParagraphSpacing,
   onChatBodyParagraphSpacingChange,
-  onUserAvatarChange,
   sessionCapabilities = [],
   canViewAssistantOps = false,
   viewMode = "desktop",
@@ -919,7 +913,6 @@ export function DesktopWorkbench({
       return (
         <GitScreen
           botAlias={botAlias}
-          botAvatarName={botAvatarName}
           client={client}
           embedded
           sessionCapabilities={sessionCapabilities}
@@ -949,7 +942,6 @@ export function DesktopWorkbench({
       return (
         <SettingsScreen
           botAlias={botAlias}
-          botAvatarName={botAvatarName}
           client={client}
           onLogout={() => onLogout?.()}
           embedded
@@ -968,8 +960,6 @@ export function DesktopWorkbench({
           onChatBodyLineHeightChange={onChatBodyLineHeightChange}
           chatBodyParagraphSpacing={chatBodyParagraphSpacing}
           onChatBodyParagraphSpacingChange={onChatBodyParagraphSpacingChange}
-          userAvatarName={userAvatarName}
-          onUserAvatarChange={onUserAvatarChange}
           sessionCapabilities={sessionCapabilities}
           showBotRuntimeSettings={false}
           onOpenBotManager={onOpenBotManager}
@@ -1232,8 +1222,6 @@ export function DesktopWorkbench({
             {resolvedChatPaneContent || (
               <ChatPane
                 botAlias={botAlias}
-                botAvatarName={botAvatarName}
-                userAvatarName={userAvatarName}
                 client={client}
                 readOnly={chatReadOnly}
                 readOnlyReason={chatReadOnlyReason}

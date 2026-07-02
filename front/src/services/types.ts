@@ -343,7 +343,6 @@ export type BotSummary = {
   busyAgentNames?: string[];
   busyAgentCount?: number;
   agents?: AgentSummary[];
-  avatarName?: string;
   cliPath?: string;
   botMode?: string;
   enabled?: boolean;
@@ -664,7 +663,6 @@ export type BotOverview = {
   cliType: CliType;
   status: BotStatus;
   workingDir: string;
-  avatarName?: string;
   cliPath?: string;
   botMode?: string;
   enabled?: boolean;
@@ -1912,15 +1910,9 @@ export type CreateBotInput = {
   cliType: CliType;
   cliPath: string;
   workingDir: string;
-  avatarName: string;
   supportedExecutionModes?: ChatExecutionMode[];
   defaultExecutionMode?: ChatExecutionMode;
   nativeAgent?: NativeAgentConfigInput;
-};
-
-export type AvatarAsset = {
-  name: string;
-  url: string;
 };
 
 export type PublicExposureSnapshot = {

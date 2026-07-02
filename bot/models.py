@@ -354,7 +354,6 @@ class BotProfile:
     working_dir: str = WORKING_DIR
     enabled: bool = True
     bot_mode: str = "cli"  # "cli" | "assistant"
-    avatar_name: str = ""
     cli_params: CliParamsConfig = field(default_factory=CliParamsConfig)
     git_commit_cli_config: Optional[GitCommitMessageCliConfig] = None
     agents: List[AgentProfile] = field(default_factory=list)
@@ -381,8 +380,6 @@ class BotProfile:
             "default_execution_mode": default_execution_mode,
             "native_agent": normalize_native_agent_config(self.native_agent),
         }
-        if self.avatar_name:
-            result["avatar_name"] = self.avatar_name
         # 添加 CLI 参数配置（如果有非默认配置）
         params_dict = self.cli_params.to_dict()
         # 检查是否有自定义配置
@@ -443,7 +440,6 @@ class BotProfile:
             working_dir=data.get("working_dir", WORKING_DIR),
             enabled=data.get("enabled", True),
             bot_mode=bot_mode,
-            avatar_name=str(data.get("avatar_name", "") or ""),
             cli_params=cli_params,
             agents=agents,
             cluster=normalize_bot_cluster_config(data.get("cluster")),

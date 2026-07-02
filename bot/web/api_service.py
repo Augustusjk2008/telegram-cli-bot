@@ -11,7 +11,6 @@ import os
 import queue
 import re
 import shutil
-import struct
 import subprocess
 import sys
 import threading
@@ -22,7 +21,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
-from xml.etree import ElementTree
 
 from bot.assistant.cron.store import (
     delete_job_run_audit,
@@ -270,8 +268,6 @@ class _ClusterRunControl:
 
 
 _CLUSTER_RUN_CONTROLS: dict[str, _ClusterRunControl] = {}
-_ALLOWED_AVATAR_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
-_AVATAR_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _WINDOWS_DRIVES_VIRTUAL_ROOT = "::windows-drives::"
 _WINDOWS_DRIVES_DISPLAY_ROOT = "盘符列表"
 _WINDOWS_DRIVE_ROOT_RE = re.compile(r"^[A-Za-z]:[\\/]*$")
@@ -289,200 +285,6 @@ class CliAttemptState:
     cli_session_id: Optional[str]
     resume_session: bool
     codex_session_id: Optional[str] = None
-
-
-def _avatar_asset_dirs() -> list[Path]:
-    repo_root = Path(__file__).resolve().parents[2]
-    return [
-        repo_root / "front" / "public" / "assets" / "avatars",
-        repo_root / "front" / "dist" / "assets" / "avatars",
-    ]
-
-
-def _is_safe_avatar_name(name: str) -> bool:
-    candidate = str(name or "").strip()
-    if not candidate:
-        return False
-    if Path(candidate).name != candidate:
-        return False
-    if not _AVATAR_NAME_RE.fullmatch(candidate):
-        return False
-    return Path(candidate).suffix.lower() in _ALLOWED_AVATAR_EXTENSIONS
-
-
-def _read_png_dimensions(path: Path) -> Optional[tuple[int, int]]:
-    header = path.read_bytes()[:24]
-    if len(header) < 24 or header[:8] != b"\x89PNG\r\n\x1a\n" or header[12:16] != b"IHDR":
-        return None
-    width, height = struct.unpack(">II", header[16:24])
-    return width, height
-
-
-def _read_gif_dimensions(path: Path) -> Optional[tuple[int, int]]:
-    header = path.read_bytes()[:10]
-    if len(header) < 10 or header[:6] not in (b"GIF87a", b"GIF89a"):
-        return None
-    width, height = struct.unpack("<HH", header[6:10])
-    return width, height
-
-
-def _read_jpeg_dimensions(path: Path) -> Optional[tuple[int, int]]:
-    with path.open("rb") as handle:
-        if handle.read(2) != b"\xff\xd8":
-            return None
-        while True:
-            marker_prefix = handle.read(1)
-            while marker_prefix and marker_prefix != b"\xff":
-                marker_prefix = handle.read(1)
-            if not marker_prefix:
-                return None
-            marker = handle.read(1)
-            while marker == b"\xff":
-                marker = handle.read(1)
-            if not marker:
-                return None
-            marker_value = marker[0]
-            if marker_value in {0xD8, 0xD9}:
-                continue
-            length_bytes = handle.read(2)
-            if len(length_bytes) < 2:
-                return None
-            segment_length = struct.unpack(">H", length_bytes)[0]
-            if segment_length < 2:
-                return None
-            if marker_value in {
-                0xC0, 0xC1, 0xC2, 0xC3,
-                0xC5, 0xC6, 0xC7,
-                0xC9, 0xCA, 0xCB,
-                0xCD, 0xCE, 0xCF,
-            }:
-                payload = handle.read(segment_length - 2)
-                if len(payload) < 5:
-                    return None
-                height, width = struct.unpack(">HH", payload[1:5])
-                return width, height
-            handle.seek(segment_length - 2, os.SEEK_CUR)
-
-
-def _read_webp_dimensions(path: Path) -> Optional[tuple[int, int]]:
-    header = path.read_bytes()[:30]
-    if len(header) < 16 or header[:4] != b"RIFF" or header[8:12] != b"WEBP":
-        return None
-    chunk = header[12:16]
-    if chunk == b"VP8X" and len(header) >= 30:
-        width = 1 + int.from_bytes(header[24:27], "little")
-        height = 1 + int.from_bytes(header[27:30], "little")
-        return width, height
-    if chunk == b"VP8 " and len(header) >= 30:
-        width, height = struct.unpack("<HH", header[26:30])
-        return width & 0x3FFF, height & 0x3FFF
-    if chunk == b"VP8L" and len(header) >= 25:
-        b0, b1, b2, b3 = header[21:25]
-        width = 1 + (((b1 & 0x3F) << 8) | b0)
-        height = 1 + (((b3 & 0x0F) << 10) | (b2 << 2) | ((b1 & 0xC0) >> 6))
-        return width, height
-    return None
-
-
-def _parse_svg_dimension(value: Optional[str]) -> Optional[int]:
-    if not value:
-        return None
-    matched = re.fullmatch(r"\s*([0-9]+(?:\.[0-9]+)?)\s*(px)?\s*", value)
-    if not matched:
-        return None
-    return int(round(float(matched.group(1))))
-
-
-def _read_svg_dimensions(path: Path) -> Optional[tuple[int, int]]:
-    root = ElementTree.fromstring(path.read_text(encoding="utf-8"))
-    width = _parse_svg_dimension(root.attrib.get("width"))
-    height = _parse_svg_dimension(root.attrib.get("height"))
-    if width and height:
-        return width, height
-    view_box = root.attrib.get("viewBox") or root.attrib.get("viewbox")
-    if not view_box:
-        return None
-    parts = re.split(r"[\s,]+", view_box.strip())
-    if len(parts) != 4:
-        return None
-    try:
-        return int(round(float(parts[2]))), int(round(float(parts[3])))
-    except ValueError:
-        return None
-
-
-def _read_avatar_dimensions(path: Path) -> Optional[tuple[int, int]]:
-    suffix = path.suffix.lower()
-    try:
-        if suffix == ".png":
-            return _read_png_dimensions(path)
-        if suffix == ".gif":
-            return _read_gif_dimensions(path)
-        if suffix in {".jpg", ".jpeg"}:
-            return _read_jpeg_dimensions(path)
-        if suffix == ".webp":
-            return _read_webp_dimensions(path)
-        if suffix == ".svg":
-            return _read_svg_dimensions(path)
-    except (ElementTree.ParseError, OSError, UnicodeDecodeError, ValueError, struct.error):
-        return None
-    return None
-
-
-def _is_supported_avatar_asset(path: Path) -> bool:
-    dimensions = _read_avatar_dimensions(path)
-    return dimensions == (64, 64)
-
-
-def _normalize_public_base_path(base_path: str | None) -> str:
-    value = str(base_path if base_path is not None else config.WEB_BASE_PATH or "").strip()
-    if not value or value == "/":
-        return ""
-    return f"/{value.strip('/')}"
-
-
-def _public_asset_url(path: str, *, base_path: str | None = None) -> str:
-    normalized_path = f"/{str(path or '').lstrip('/')}"
-    base = _normalize_public_base_path(base_path)
-    if base and normalized_path != base and not normalized_path.startswith(f"{base}/"):
-        return f"{base}{normalized_path}"
-    return normalized_path
-
-
-def list_avatar_assets(*, base_path: str | None = None) -> dict[str, Any]:
-    items_by_name: dict[str, dict[str, str]] = {}
-    for directory in _avatar_asset_dirs():
-        if not directory.exists():
-            continue
-        for path in sorted(directory.iterdir(), key=lambda item: item.name.lower()):
-            if not path.is_file():
-                continue
-            if not _is_safe_avatar_name(path.name):
-                continue
-            if not _is_supported_avatar_asset(path):
-                continue
-            items_by_name.setdefault(
-                path.name,
-                {
-                    "name": path.name,
-                    "url": _public_asset_url(f"/assets/avatars/{path.name}", base_path=base_path),
-                },
-            )
-
-    return {"items": [items_by_name[name] for name in sorted(items_by_name.keys())]}
-
-
-def _normalize_avatar_name(value: Any, *, require_existing: bool) -> str:
-    candidate = str(value or "").strip()
-    if not candidate:
-        return ""
-    if not _is_safe_avatar_name(candidate):
-        _raise(400, "invalid_avatar_name", "头像文件名不合法")
-    if require_existing:
-        available_names = {item["name"] for item in list_avatar_assets()["items"]}
-        if available_names and candidate not in available_names:
-            _raise(400, "invalid_avatar_name", "头像文件不存在")
-    return candidate
 
 
 def _assistant_home_or_raise(manager: MultiBotManager, alias: str):
@@ -820,7 +622,6 @@ def build_bot_summary(
         "default_execution_mode": profile.default_execution_mode,
         "native_agent": public_native_agent_config(effective_native_agent_config(profile.native_agent)),
         "working_dir": working_dir,
-        "avatar_name": profile.avatar_name or "",
         "prompt_presets": [dict(item) for item in profile.prompt_presets],
         "global_prompt_presets": app_settings.get_global_prompt_presets(manager.app_settings_file),
         "is_main": alias == manager.main_profile.alias,
@@ -7472,13 +7273,11 @@ async def add_managed_bot(
     cli_type: Optional[str],
     cli_path: Optional[str],
     working_dir: Optional[str],
-    avatar_name: Optional[str] = None,
     token: str = "",
     supported_execution_modes: Any = None,
     default_execution_mode: Any = None,
     native_agent: Any = None,
 ) -> dict[str, Any]:
-    resolved_avatar_name = _normalize_avatar_name(avatar_name, require_existing=bool(str(avatar_name or "").strip()))
     try:
         profile = await manager.add_bot(
             alias=alias,
@@ -7487,7 +7286,6 @@ async def add_managed_bot(
             cli_path=cli_path,
             working_dir=working_dir,
             bot_mode=bot_mode,
-            avatar_name=resolved_avatar_name,
             supported_execution_modes=supported_execution_modes,
             default_execution_mode=default_execution_mode,
             native_agent=native_agent,
@@ -7636,17 +7434,6 @@ async def update_bot_workdir(
 
     await manager.set_bot_workdir(alias, resolved_working_dir, update_sessions=False)
     return {"bot": build_bot_summary(manager, alias, user_id, profile=profile, session=session)}
-
-
-async def update_bot_avatar(
-    manager: MultiBotManager,
-    alias: str,
-    avatar_name: Any,
-    user_id: Optional[int] = None,
-) -> dict[str, Any]:
-    resolved_avatar_name = _normalize_avatar_name(avatar_name, require_existing=True)
-    await manager.set_bot_avatar(alias, resolved_avatar_name)
-    return {"bot": build_bot_summary(manager, alias, user_id)}
 
 
 async def update_bot_prompt_presets(

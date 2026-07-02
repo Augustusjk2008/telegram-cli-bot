@@ -161,31 +161,6 @@ describe("RealWebBotClient", () => {
     );
   });
 
-  test("applies public base path to listed avatar asset urls", async () => {
-    window.history.replaceState(null, "", "/node/nanjing-laptop/");
-    vi.stubGlobal("__PUBLIC_ENV__", {
-      VITE_API_BASE_URL: "/node/nanjing-laptop",
-    });
-    fetchMock.mockResolvedValue(jsonOk({
-      items: [{
-        name: "avatar_01.png",
-        url: "/assets/avatars/avatar_01.png",
-      }],
-    }));
-
-    const client = new RealWebBotClient();
-    const assets = await client.listAvatarAssets();
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/node/nanjing-laptop/api/admin/assets/avatars",
-      expect.objectContaining({ cache: "no-store" }),
-    );
-    expect(assets).toEqual([{
-      name: "avatar_01.png",
-      url: "/node/nanjing-laptop/assets/avatars/avatar_01.png",
-    }]);
-  });
-
   test("transfer bridge status maps snake case response", async () => {
     fetchMock.mockResolvedValue(jsonOk({
       enabled: true,
@@ -1570,7 +1545,6 @@ describe("RealWebBotClient", () => {
         busyAgentCount: 1,
         workingDir: "C:\\workspace\\demo",
         lastActiveText: "处理中",
-        avatarName: "",
       },
     ]);
     expect(fetchMock).toHaveBeenLastCalledWith(
@@ -1671,7 +1645,6 @@ describe("RealWebBotClient", () => {
       cliType: "codex",
       cliPath: "codex",
       workingDir: "C:\\workspace\\native1",
-      avatarName: "",
       supportedExecutionModes: ["native_agent"],
       defaultExecutionMode: "native_agent",
       nativeAgent: {

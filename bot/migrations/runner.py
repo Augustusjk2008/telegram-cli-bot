@@ -40,7 +40,6 @@ MIGRATION_IDS = (MIGRATION_REPO_STATE_TO_USER_HOME,)
 _LEGACY_APP_SETTING_KEYS = (
     "git_proxy_address",
     "git_proxy_port",
-    "bot_avatar_names",
     "main_bot_profile",
     "global_prompt_presets",
     "update_enabled",

@@ -6,7 +6,6 @@ from aiohttp import web
 def register(app: web.Application, server) -> None:
     app.router.add_get("/api/admin/bots", server.admin_bots)
     app.router.add_get("/api/admin/cli-errors", server.admin_cli_error_stats)
-    app.router.add_get("/api/admin/assets/avatars", server.admin_list_avatar_assets)
     app.router.add_get("/api/admin/bots/{alias}/processing", server.admin_processing)
     app.router.add_post("/api/admin/bots", server.admin_add_bot)
     app.router.add_get("/api/admin/bots/{alias}", server.admin_single_bot)
@@ -22,7 +21,6 @@ def register(app: web.Application, server) -> None:
     app.router.add_patch("/api/admin/bots/{alias}/execution", server.admin_update_execution)
     app.router.add_patch("/api/admin/bots/{alias}/alias", server.admin_rename_bot)
     app.router.add_patch("/api/admin/bots/{alias}/workdir", server.admin_update_workdir)
-    app.router.add_patch("/api/admin/bots/{alias}/avatar", server.admin_update_avatar)
     app.router.add_patch("/api/admin/bots/{alias}/prompt-presets", server.admin_update_prompt_presets)
     app.router.add_patch("/api/admin/prompt-presets/global", server.admin_update_global_prompt_presets)
     app.router.add_get("/api/admin/update", server.admin_get_update)

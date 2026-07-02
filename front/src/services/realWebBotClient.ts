@@ -1,5 +1,5 @@
 import { WebApiClientError } from "./types";
-import { buildWsUrl, withApiBase, withPublicBase } from "../utils/publicBase";
+import { buildWsUrl, withApiBase } from "../utils/publicBase";
 import type {
   AdminUser,
   AdminUserUpdateInput,
@@ -147,7 +147,6 @@ import type {
   EnvConfigPatchResult,
   EnvConfigPatchValue,
   EnvConfigSnapshot,
-  AvatarAsset,
   FileOpenTarget,
   FileTreeRevealResult,
   FileCopyResult,
@@ -251,7 +250,6 @@ type RawBotSummary = {
   agents?: RawAgentSummary[];
   assistant_runtime?: RawAssistantRuntimeSnapshot | null;
   working_dir: string;
-  avatar_name?: string;
   bot_mode?: string;
   enabled?: boolean;
   is_main?: boolean;
@@ -305,11 +303,6 @@ type RawAgentSummary = {
   updated_at?: string;
   updatedAt?: string;
   cluster?: Record<string, unknown>;
-};
-
-type RawAvatarAsset = {
-  name: string;
-  url: string;
 };
 
 type RawPublicHostInfo = {
@@ -1724,7 +1717,6 @@ function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
     busyAgentCount: hasExplicitBusyAgentCount || resolvedBusyAgentIds.length > 0 ? busyAgentCount : 0,
     workingDir: raw.working_dir,
     lastActiveText: mapStatusText(status),
-    avatarName: raw.avatar_name || "",
   };
   if (Array.isArray(raw.agents)) {
     summary.agents = raw.agents.map(mapAgentSummary);
@@ -2643,13 +2635,6 @@ function mapTunnelSnapshot(raw: RawTunnelSnapshot): TunnelSnapshot {
     heartbeatStatus: raw.heartbeat_status || "",
     heartbeatLastAt: raw.heartbeat_last_at || "",
     heartbeatLastError: raw.heartbeat_last_error || "",
-  };
-}
-
-function mapAvatarAsset(raw: RawAvatarAsset): AvatarAsset {
-  return {
-    name: raw.name,
-    url: withPublicBase(raw.url),
   };
 }
 
@@ -6449,17 +6434,6 @@ export class RealWebBotClient implements WebBotClient {
     return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
   }
 
-  async updateBotAvatar(botAlias: string, avatarName: string): Promise<BotSummary> {
-    const data = await this.requestJson<{ bot: RawBotSummary }>(`/api/admin/bots/${encodeURIComponent(botAlias)}/avatar`, {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ avatar_name: avatarName }),
-    });
-    return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
-  }
-
   async updateBotPromptPresets(botAlias: string, presets: PromptPreset[]): Promise<BotSummary> {
     const data = await this.requestJson<{ bot: RawBotSummary }>(`/api/admin/bots/${encodeURIComponent(botAlias)}/prompt-presets`, {
       method: "PATCH",
@@ -6998,7 +6972,6 @@ export class RealWebBotClient implements WebBotClient {
         cli_type: input.cliType,
         cli_path: input.cliPath,
         working_dir: input.workingDir,
-        avatar_name: input.avatarName,
         ...(input.supportedExecutionModes ? { supported_execution_modes: input.supportedExecutionModes } : {}),
         ...(input.defaultExecutionMode ? { default_execution_mode: input.defaultExecutionMode } : {}),
         ...(input.nativeAgent ? {
@@ -7043,11 +7016,6 @@ export class RealWebBotClient implements WebBotClient {
       method: "POST",
     });
     return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
-  }
-
-  async listAvatarAssets(): Promise<AvatarAsset[]> {
-    const data = await this.requestJson<{ items: RawAvatarAsset[] }>("/api/admin/assets/avatars");
-    return (data.items || []).map(mapAvatarAsset);
   }
 
   async getCliParams(botAlias: string): Promise<CliParamsPayload> {

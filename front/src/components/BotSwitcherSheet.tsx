@@ -2,9 +2,9 @@ import { BotSummary } from "../services/types";
 import { clsx } from "clsx";
 import { X } from "lucide-react";
 import { BotActivitySummary } from "./BotActivitySummary";
-import { ChatAvatar } from "./ChatAvatar";
 import { StatusPill } from "./StatusPill";
 import { getBotRuntimeLabel } from "./botRuntimeLabel";
+import { getBotAccentStyle } from "../utils/botVisual";
 
 type Props = {
   bots: BotSummary[];
@@ -71,7 +71,7 @@ export function BotSwitcherSheet({
                   }
                 }}
                 className={clsx(
-                  "w-full flex items-center justify-between p-4 rounded-xl border transition",
+                  "relative w-full overflow-hidden rounded-xl border p-4 pl-5 text-left transition",
                   isOffline
                     ? "cursor-not-allowed border-red-200 bg-red-50/80 opacity-95"
                     : currentAlias === bot.alias
@@ -82,33 +82,55 @@ export function BotSwitcherSheet({
                     : "",
                 )}
               >
-                <div className="flex min-w-0 items-start gap-3">
-                  <ChatAvatar alt={`${bot.alias} 头像`} avatarName={bot.avatarName} kind="bot" size={32} />
-                  <div className="flex min-w-0 flex-col items-start">
-                    <span className="font-semibold">{bot.alias}</span>
+                <span
+                  aria-hidden="true"
+                  className="absolute left-0 top-0 h-full w-[3px]"
+                  style={getBotAccentStyle(bot.alias)}
+                />
+                <div className="flex min-w-0 items-start justify-between gap-3">
+                  <div className="flex min-w-0 flex-1 flex-col items-start">
+                    <span className="flex max-w-full flex-wrap items-center gap-1.5">
+                      <span className="min-w-0 max-w-full truncate text-base font-semibold text-[var(--text)]">{bot.alias}</span>
+                      {bot.isMain || bot.alias === "main" ? (
+                        <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">
+                          主
+                        </span>
+                      ) : null}
+                      {currentAlias === bot.alias ? (
+                        <span className="rounded border border-transparent px-1.5 py-0.5 text-[10px] leading-none tcb-selected-accent">
+                          当前
+                        </span>
+                      ) : null}
+                      {noAccess ? (
+                        <span className="rounded border border-zinc-500 bg-white px-1.5 py-0.5 text-[10px] font-semibold leading-none text-zinc-900">
+                          无权限 · 只读
+                        </span>
+                      ) : null}
+                    </span>
                     <span
                       className={clsx(
-                        "max-w-full truncate text-xs",
+                        "mt-1 max-w-full truncate text-xs font-medium",
                         currentAlias === bot.alias ? "text-[var(--text)]" : "text-[var(--muted)]",
                       )}
-                      title={`${getBotRuntimeLabel(bot)}: ${bot.workingDir}`}
+                      title={`${bot.botMode || "cli"} · ${getBotRuntimeLabel(bot)}`}
                     >
-                      {getBotRuntimeLabel(bot)}: {bot.workingDir}
+                      {bot.botMode || "cli"} · {getBotRuntimeLabel(bot)}
+                    </span>
+                    <span
+                      className="mt-0.5 max-w-full truncate text-xs text-[var(--muted)]"
+                      title={bot.workingDir}
+                    >
+                      {bot.workingDir || "未设置"}
                     </span>
                     {isOffline ? (
                       <span className="mt-1 text-xs font-medium text-red-700">离线中，暂不可切换</span>
                     ) : null}
-                    {noAccess ? (
-                      <span className="mt-1 rounded border border-zinc-500 bg-white px-1.5 py-0.5 text-xs font-semibold text-zinc-900">
-                        无权限 · 只读
-                      </span>
-                    ) : null}
                     {!isOffline ? <BotActivitySummary bot={bot} className="mt-1" /> : null}
                   </div>
-                </div>
-                <div className="flex shrink-0 flex-col items-end gap-1">
-                  {bot.status === "unread" ? <StatusPill status="unread" /> : null}
-                  <StatusPill status={isOffline ? "offline" : "online"} />
+                  <div className="flex shrink-0 flex-col items-end gap-1">
+                    {bot.status === "unread" ? <StatusPill status="unread" /> : null}
+                    <StatusPill status={isOffline ? "offline" : "online"} />
+                  </div>
                 </div>
               </button>
             );

@@ -98,7 +98,6 @@ import type {
   EnvConfigPatchResult,
   EnvConfigPatchValue,
   EnvConfigSnapshot,
-  AvatarAsset,
   FileOpenTarget,
   FileTreeRevealResult,
   FileCopyResult,
@@ -1633,12 +1632,6 @@ export class MockWebBotClient implements WebBotClient {
     pendingUpdatePackageKind: "",
     lastError: "",
   };
-  private readonly avatarAssets: AvatarAsset[] = [
-    { name: "avatar_01.png", url: "/assets/avatars/avatar_01.png" },
-    { name: "avatar_02.png", url: "/assets/avatars/avatar_02.png" },
-    { name: "avatar_03.png", url: "/assets/avatars/avatar_03.png" },
-    { name: "avatar_04.png", url: "/assets/avatars/avatar_04.png" },
-  ];
   private plugins: PluginSummary[] = [
     {
       id: "vivado-waveform",
@@ -2403,7 +2396,6 @@ export class MockWebBotClient implements WebBotClient {
         status: "running",
         workingDir: DEMO_MAIN_WORKDIR,
         lastActiveText: "运行中",
-        avatarName: "avatar_01.png",
         cliPath: "codex",
         botMode: "cli",
         enabled: true,
@@ -6262,15 +6254,6 @@ export class MockWebBotClient implements WebBotClient {
     return this.getBotSummary(botAlias);
   }
 
-  async updateBotAvatar(botAlias: string, avatarName: string): Promise<BotSummary> {
-    const current = this.getBotSummary(botAlias);
-    this.bots.set(botAlias, {
-      ...current,
-      avatarName: avatarName.trim(),
-    });
-    return this.getBotSummary(botAlias);
-  }
-
   async updateBotPromptPresets(botAlias: string, presets: PromptPreset[]): Promise<BotSummary> {
     if (!this.hasAdminOps()) {
       throw new WebApiClientError("无权保存提示词预设", { status: 403, code: "forbidden" });
@@ -6997,7 +6980,6 @@ export class MockWebBotClient implements WebBotClient {
       status: "running",
       workingDir: input.workingDir.trim(),
       lastActiveText: "运行中",
-      avatarName: input.avatarName,
       enabled: true,
       isMain: false,
       serviceStatus: "online",
@@ -7195,10 +7177,6 @@ export class MockWebBotClient implements WebBotClient {
       busyAgentCount: 0,
     });
     return this.getBotSummary(botAlias);
-  }
-
-  async listAvatarAssets(): Promise<AvatarAsset[]> {
-    return [...this.avatarAssets];
   }
 
   async getCliParams(botAlias: string): Promise<CliParamsPayload> {

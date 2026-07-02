@@ -6,8 +6,7 @@
       "cli_path": "codex",
       "working_dir": "/path/to/project",
       "enabled": false,
-      "bot_mode": "cli",
-      "avatar_name": "avatar_01.png"
+      "bot_mode": "cli"
     },
     {
       "alias": "test-expert",

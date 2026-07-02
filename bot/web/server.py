@@ -201,7 +201,6 @@ from .api_service import (
     get_overview,
     get_cluster_task_status,
     get_terminal_actions_config,
-    list_avatar_assets,
     list_assistant_upgrade_targets,
     list_assistant_memory_eval_reports,
     list_assistant_proposals,
@@ -259,7 +258,6 @@ from .api_service import (
     update_cluster_config,
     update_assistant_cron_job,
     update_agent,
-    update_bot_avatar,
     update_bot_cli,
     update_bot_execution_config,
     update_global_prompt_presets,
@@ -3718,7 +3716,6 @@ class WebApiServer:
             cli_type=body.get("cli_type"),
             cli_path=body.get("cli_path"),
             working_dir=body.get("working_dir"),
-            avatar_name=body.get("avatar_name"),
             supported_execution_modes=body.get("supported_execution_modes", body.get("supportedExecutionModes")),
             default_execution_mode=body.get("default_execution_mode", body.get("defaultExecutionMode")),
             native_agent=body.get("native_agent", body.get("nativeAgent")),
@@ -3728,10 +3725,6 @@ class WebApiServer:
             _BOT_PERMISSION_STORE.set_bot_owner(alias, auth.account_id, grant_owner=True)
         data = {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}
         return _json({"ok": True, "data": data})
-
-    async def admin_list_avatar_assets(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
-        return _json({"ok": True, "data": list_avatar_assets(base_path=self._web_base_path())})
 
     async def admin_remove_bot(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
@@ -3793,13 +3786,6 @@ class WebApiServer:
             self._chat_user_id(auth),
             force_reset=bool(body.get("force_reset")),
         )
-        return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})
-
-    async def admin_update_avatar(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_MANAGE_BOTS)
-        alias = self._manager_alias(request)
-        body = await self._parse_json(request)
-        data = await update_bot_avatar(self.manager, alias, body.get("avatar_name"), auth.user_id)
         return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})
 
     async def admin_update_prompt_presets(self, request: web.Request) -> web.Response:

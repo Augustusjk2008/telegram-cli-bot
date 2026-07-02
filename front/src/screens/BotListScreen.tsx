@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import { AvatarPicker } from "../components/AvatarPicker";
 import { BotActivitySummary } from "../components/BotActivitySummary";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
 import { NativeAgentConfigFields } from "../components/NativeAgentConfigFields";
 import { StatusPill } from "../components/StatusPill";
 import { MockWebBotClient } from "../services/mockWebBotClient";
+import { getBotAccentStyle } from "../utils/botVisual";
 import type { BotSummary, CliType, CreateBotInput } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import {
@@ -13,7 +13,7 @@ import {
   useBotManager,
   type CreateDraft,
 } from "./useBotManager";
-import { DEFAULT_NATIVE_AGENT_DRAFT, isBotOffline, isMainBot, isNativeAgentGloballyEnabled } from "./botManagerModel";
+import { DEFAULT_NATIVE_AGENT_DRAFT, getRuntimeBackend, isBotOffline, isMainBot, isNativeAgentGloballyEnabled } from "./botManagerModel";
 
 type Props = {
   client?: WebBotClient;
@@ -90,7 +90,6 @@ export function BotListScreen({
   const [nativeAgentFeatureEnabled, setNativeAgentFeatureEnabled] = useState<boolean | null>(null);
   const {
     bots,
-    avatarAssets,
     loading,
     error,
     notice,
@@ -100,7 +99,6 @@ export function BotListScreen({
     toggleBot,
     renameBot,
     deleteBot,
-    updateBotAvatar,
   } = useBotManager({ client, onBotsChange });
   const [createDraft, setCreateDraft] = useState<CreateDraft>(() => buildCreateDraft());
 
@@ -112,7 +110,7 @@ export function BotListScreen({
     }
     setCreateDraft((prev) => {
       const userEditedPath = prev.cliPath.trim() && prev.cliPath.trim() !== defaultCliPathForType(prev.cliType);
-      if (prev.alias.trim() || prev.workingDir.trim() || prev.avatarName.trim() || userEditedPath) {
+      if (prev.alias.trim() || prev.workingDir.trim() || userEditedPath) {
         return prev;
       }
       return { ...prev, cliPath: buildCreateDraft(prev.cliType, bots).cliPath };
@@ -203,16 +201,7 @@ export function BotListScreen({
 
       {canManage ? (
         <section className="mb-6 space-y-4 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
-        <div className="flex items-center justify-between gap-3">
-          <h2 className="text-lg font-semibold">新增智能体</h2>
-          <AvatarPicker
-            assets={avatarAssets}
-            selectedName={createDraft.avatarName}
-            previewAlt="新智能体头像预览"
-            selectLabel="新智能体头像"
-            onSelect={(avatarName) => setCreateDraft((prev) => ({ ...prev, avatarName }))}
-          />
-        </div>
+        <h2 className="text-lg font-semibold">新增智能体</h2>
         <div className="space-y-3">
           <input
             aria-label="新智能体别名"
@@ -353,29 +342,33 @@ export function BotListScreen({
                 key={bot.alias}
                 className={
                   isOffline
-                    ? "space-y-3 rounded-2xl border border-red-200 bg-[var(--surface)] p-4"
-                    : "space-y-3 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4"
+                    ? "relative space-y-3 overflow-hidden rounded-2xl border border-red-200 bg-[var(--surface)] p-4 pl-5"
+                    : "relative space-y-3 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 pl-5"
                 }
               >
-                <div className="flex items-start gap-3">
-                  <AvatarPicker
-                    assets={avatarAssets}
-                    selectedName={bot.avatarName || ""}
-                    previewAlt={`${bot.alias} 头像`}
-                    selectLabel={`${bot.alias} 头像`}
-                    disabled={savingAction !== ""}
-                    onSelect={(avatarName) => {
-                      void updateBotAvatar(bot, avatarName);
-                    }}
-                  />
+                <span
+                  aria-hidden="true"
+                  className="absolute left-0 top-0 h-full w-[3px]"
+                  style={getBotAccentStyle(bot.alias)}
+                />
+                <div className="flex items-start">
                   <div className="min-w-0 flex-1 space-y-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="text-lg font-semibold">{bot.alias}</h3>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <h3 className="min-w-0 max-w-full truncate text-lg font-semibold text-[var(--text)]">{bot.alias}</h3>
                       {isMain ? (
-                        <span className="rounded-full bg-[var(--surface-strong)] px-2 py-0.5 text-xs text-[var(--muted)]">主智能体</span>
+                        <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">主</span>
+                      ) : null}
+                      {bot.canOperate === false ? (
+                        <span className="rounded border border-zinc-500 bg-white px-1.5 py-0.5 text-[10px] font-semibold leading-none text-zinc-900">无权限 · 只读</span>
                       ) : null}
                       {bot.status === "unread" ? <StatusPill status="unread" /> : null}
                       <StatusPill status={servicePillStatus} />
+                    </div>
+                    <div className="truncate text-xs font-medium text-[var(--muted)]">
+                      {bot.botMode || "cli"} · {getRuntimeBackend(bot) === "cli" ? `CLI / ${bot.cliType}` : "原生 agent"}
+                    </div>
+                    <div className="truncate font-mono text-xs text-[var(--muted)]" title={bot.workingDir}>
+                      {bot.workingDir || "未设置"}
                     </div>
                     <BotActivitySummary bot={bot} />
                   </div>

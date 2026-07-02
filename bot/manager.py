@@ -34,7 +34,6 @@ from bot.native_agent.legacy_migration import migrate_native_agent_payload
 from bot.plugins.service import PluginService
 from bot.platform.paths import truncate_path_for_display
 from bot.profile_store import (
-    apply_persisted_avatar_names,
     apply_persisted_main_profile,
     load_managed_profiles,
     persist_main_profile,
@@ -103,7 +102,6 @@ class MultiBotManager:
 
         self._load_profiles()
         self._apply_persisted_main_profile()
-        self._apply_persisted_avatar_names()
         self._apply_persisted_git_commit_cli_configs()
 
     @staticmethod
@@ -119,9 +117,6 @@ class MultiBotManager:
 
     def _save_profiles(self) -> None:
         save_managed_profiles(self.storage_file, self.managed_profiles)
-
-    def _apply_persisted_avatar_names(self) -> None:
-        apply_persisted_avatar_names(self.main_profile, self.managed_profiles, self.app_settings_file)
 
     def _apply_persisted_main_profile(self) -> None:
         apply_persisted_main_profile(self.main_profile, self.app_settings_file)
@@ -487,7 +482,6 @@ class MultiBotManager:
         cli_path: Optional[str] = None,
         working_dir: Optional[str] = None,
         bot_mode: Optional[str] = None,
-        avatar_name: Optional[str] = None,
         supported_execution_modes: Any = None,
         default_execution_mode: Any = None,
         native_agent: Any = None,
@@ -546,7 +540,6 @@ class MultiBotManager:
                 working_dir=resolved_working_dir,
                 enabled=True,
                 bot_mode=resolved_bot_mode,
-                avatar_name=str(avatar_name or "").strip(),
                 supported_execution_modes=resolved_supported_execution_modes,
                 default_execution_mode=resolved_default_execution_mode,
                 native_agent=resolved_native_agent,
@@ -556,22 +549,10 @@ class MultiBotManager:
                 self._bootstrap_and_sync_assistant_home(resolved_working_dir)
 
             self.managed_profiles[normalized_alias] = profile
-            app_settings.update_bot_avatar_name(normalized_alias, profile.avatar_name, self.app_settings_file)
             self._save_profiles()
             await self._start_profile(profile, is_main=False)
             await self._ensure_assistant_services()
             return profile
-
-    async def set_bot_avatar(self, alias: str, avatar_name: str) -> None:
-        normalized_alias = str(alias or "").strip().lower()
-        normalized_avatar_name = str(avatar_name or "").strip()
-
-        async with self._lock:
-            profile = self._get_profile_for_update(normalized_alias)
-            profile.avatar_name = normalized_avatar_name
-            app_settings.update_bot_avatar_name(normalized_alias, normalized_avatar_name, self.app_settings_file)
-            if normalized_alias != self.main_profile.alias:
-                self._save_profiles()
 
     async def set_bot_prompt_presets(self, alias: str, presets: Any) -> list[dict[str, str]]:
         normalized_alias = str(alias or "").strip().lower()
@@ -596,7 +577,6 @@ class MultiBotManager:
                 raise ValueError(f"不存在 alias `{normalized_alias}`")
             await self._stop_application(normalized_alias)
             del self.managed_profiles[normalized_alias]
-            app_settings.remove_bot_avatar_name(normalized_alias, self.app_settings_file)
             self._save_profiles()
             await self._ensure_assistant_services()
 
@@ -738,7 +718,6 @@ class MultiBotManager:
                         self.bot_id_to_alias[bot_id] = normalized_new_alias
 
             update_bot_alias(normalized_alias, normalized_new_alias)
-            app_settings.rename_bot_avatar_name(normalized_alias, normalized_new_alias, self.app_settings_file)
             self._save_profiles()
             await self._ensure_assistant_services()
             return profile

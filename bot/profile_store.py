@@ -67,7 +67,6 @@ def load_managed_profiles(
             ),
             "enabled": bool(item.get("enabled", True)),
             "bot_mode": bot_mode,
-            "avatar_name": str(item.get("avatar_name", "") or ""),
         }
         if "cli_params" in item:
             profile_data["cli_params"] = item["cli_params"]
@@ -106,21 +105,6 @@ def save_managed_profiles(storage_file: Path, profiles: dict[str, BotProfile]) -
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-
-
-def apply_persisted_avatar_names(
-    main_profile: BotProfile,
-    managed_profiles: dict[str, BotProfile],
-    app_settings_file: Path,
-) -> None:
-    main_avatar_name = app_settings.get_bot_avatar_name(main_profile.alias, app_settings_file)
-    if main_avatar_name:
-        main_profile.avatar_name = main_avatar_name
-
-    for alias, profile in managed_profiles.items():
-        avatar_name = app_settings.get_bot_avatar_name(alias, app_settings_file)
-        if avatar_name:
-            profile.avatar_name = avatar_name
 
 
 def apply_persisted_main_profile(main_profile: BotProfile, app_settings_file: Path) -> None:

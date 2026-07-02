@@ -23,7 +23,6 @@ export type EditDraft = {
   cliType: CliType;
   cliPath: string;
   workingDir: string;
-  avatarName: string;
   runtimeBackend: ChatExecutionMode;
   nativeAgent: NativeAgentDraft;
 };
@@ -64,7 +63,6 @@ export type BotConfigSnapshot = {
   cliType: CliType;
   cliPath: string;
   workingDir: string;
-  avatarName: string;
   runtimeBackend: ChatExecutionMode;
   nativeAgent: NativeAgentDraft;
   agents: AgentSummary[];
@@ -252,7 +250,6 @@ export function draftFromBot(bot: BotSummary): EditDraft {
     cliType: bot.cliType,
     cliPath: bot.cliPath || bot.cliType,
     workingDir: bot.workingDir,
-    avatarName: bot.avatarName || "",
     runtimeBackend: getRuntimeBackend(bot),
     nativeAgent: nativeAgentDraftFromBot(bot),
   };
@@ -375,7 +372,6 @@ export function getBotConfigSnapshot(bot: BotSummary): BotConfigSnapshot {
     cliType: bot.cliType,
     cliPath: bot.cliPath || bot.cliType,
     workingDir: bot.workingDir,
-    avatarName: bot.avatarName || "",
     runtimeBackend: getRuntimeBackend(bot),
     nativeAgent: nativeAgentDraftFromBot(bot),
     agents: bot.agents || [],

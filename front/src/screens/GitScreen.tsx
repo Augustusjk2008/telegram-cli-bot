@@ -24,7 +24,6 @@ import {
   UploadCloud,
   UserRound,
 } from "lucide-react";
-import { BotIdentity } from "../components/BotIdentity";
 import { GitCommitCliConfigPanel } from "../components/GitCommitCliConfigPanel";
 import { StateBadge } from "../components/StateBadge";
 import { toolbarButtonClass } from "../components/ToolbarButton";
@@ -48,7 +47,6 @@ import type { WebBotClient } from "../services/webBotClient";
 
 type Props = {
   botAlias: string;
-  botAvatarName?: string;
   client?: WebBotClient;
   embedded?: boolean;
   onOpenDiff?: (path: string, staged: boolean) => void | Promise<void>;
@@ -401,7 +399,6 @@ function GitCommitGraphLite({ nodes, selectedHash, disabled, onSelect }: GitComm
 
 export function GitScreen({
   botAlias,
-  botAvatarName,
   client = new MockWebBotClient(),
   embedded = false,
   onOpenDiff,
@@ -920,17 +917,7 @@ export function GitScreen({
                 <GitBranch className="h-4 w-4 text-[var(--accent)]" />
                 <h1 className="text-lg font-semibold">Git</h1>
               </div>
-              {botAvatarName ? (
-                <BotIdentity
-                  alias={botAlias}
-                  avatarName={botAvatarName}
-                  size={24}
-                  className="mt-1 flex min-w-0 items-center gap-2"
-                  nameClassName="truncate text-xs font-medium text-[var(--muted)]"
-                />
-              ) : (
-                <p className="truncate text-xs text-[var(--muted)]">{botAlias}</p>
-              )}
+              <p className="truncate text-xs text-[var(--muted)]">{botAlias}</p>
             </div>
             <button
               type="button"
