@@ -78,7 +78,6 @@ pwsh -ExecutionPolicy Bypass -File .release-local/publish-release.ps1 -Version <
 
 - `managed_bots.example.json` 是公开示例；不要提交真实 `managed_bots.json`
 - 当前 runtime 仅 Web；不再有 per-bot Telegram application lifecycle
-- 旧 `webcli` 代码仅作兼容；manager 拒绝新 `webcli` bot，并把旧 profile 降级为 `cli`
 - 测试门禁和分类见 `docs/testing-policy.md`
 
 ## 核心区域

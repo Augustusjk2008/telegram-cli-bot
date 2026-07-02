@@ -43,7 +43,6 @@ from bot.profile_store import (
 from bot.sessions import clear_bot_sessions, is_bot_processing, terminate_bot_processes, update_bot_alias, update_bot_working_dir
 
 logger = logging.getLogger(__name__)
-REMOVED_LEGACY_CLI_TYPES: set[str] = set()
 
 
 def _normalize_bot_native_agent_config(value: Any, *, existing: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -113,13 +112,10 @@ class MultiBotManager:
         sync_managed_prompt_files(home)
 
     def _load_profiles(self) -> None:
-        self.managed_profiles, migrated_legacy_mode = load_managed_profiles(
+        self.managed_profiles = load_managed_profiles(
             self.storage_file,
-            removed_legacy_cli_types=REMOVED_LEGACY_CLI_TYPES,
             bootstrap_assistant_home=self._bootstrap_and_sync_assistant_home,
         )
-        if migrated_legacy_mode:
-            self._save_profiles()
 
     def _save_profiles(self) -> None:
         save_managed_profiles(self.storage_file, self.managed_profiles)
@@ -504,8 +500,6 @@ class MultiBotManager:
         resolved_cli_path = str(cli_path or "").strip() or self._default_cli_path_for_type(resolved_cli_type)
         resolved_bot_mode = str(bot_mode or "cli").strip().lower()
 
-        if resolved_bot_mode == "webcli":
-            raise ValueError("webcli 模式已弃用，请使用 'cli' 或 'assistant'")
         if resolved_bot_mode not in {"cli", "assistant"}:
             raise ValueError(f"bot_mode 必须是 'cli' 或 'assistant'，当前值: {resolved_bot_mode}")
         requested_supported_execution_modes = normalize_execution_modes(supported_execution_modes)

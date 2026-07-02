@@ -1,5 +1,5 @@
 import { clsx } from "clsx";
-import { BookOpenCheck, Bug, Files, Gauge, GitBranch, ListTree, PanelLeftClose, PanelLeftOpen, Puzzle, Search, Settings2 } from "lucide-react";
+import { Bug, Files, Gauge, GitBranch, ListTree, PanelLeftClose, PanelLeftOpen, Puzzle, Search, Settings2 } from "lucide-react";
 import type { WorkbenchActivityId } from "./workbenchTypes";
 
 type Props = {
@@ -14,7 +14,6 @@ const ITEMS: Array<{ id: WorkbenchActivityId; label: string; icon: typeof Files 
   { id: "files", label: "文件", icon: Files },
   { id: "search", label: "搜索", icon: Search },
   { id: "outline", label: "大纲", icon: ListTree },
-  { id: "guide", label: "指南", icon: BookOpenCheck },
   { id: "debug", label: "调试", icon: Bug },
   { id: "git", label: "Git", icon: GitBranch },
   { id: "assistant-ops", label: "运维", icon: Gauge },

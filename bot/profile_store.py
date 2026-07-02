@@ -21,26 +21,24 @@ logger = logging.getLogger(__name__)
 def load_managed_profiles(
     storage_file: Path,
     *,
-    removed_legacy_cli_types: set[str],
     bootstrap_assistant_home: Callable[[str], None],
-) -> tuple[dict[str, BotProfile], bool]:
+) -> dict[str, BotProfile]:
     if not storage_file.exists():
-        return {}, False
+        return {}
 
     try:
         raw = storage_file.read_text(encoding="utf-8")
         data = json.loads(raw)
     except Exception as exc:
         logger.error("读取托管 Bot 配置失败: %s", exc)
-        return {}, False
+        return {}
 
     items = data.get("bots", []) if isinstance(data, dict) else data
     if not isinstance(items, list):
         logger.warning("托管 Bot 配置格式无效，已忽略")
-        return {}, False
+        return {}
 
     profiles: dict[str, BotProfile] = {}
-    migrated_legacy_mode = False
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -51,8 +49,6 @@ def load_managed_profiles(
             continue
 
         raw_cli_type = str(item.get("cli_type", CLI_TYPE)).strip() or CLI_TYPE
-        if raw_cli_type.lower() in removed_legacy_cli_types:
-            raise ValueError(f"子Bot `{alias}` 使用了已移除的 legacy cli_type: {raw_cli_type}")
         try:
             cli_type = validate_cli_type(raw_cli_type)
         except ValueError:
@@ -60,10 +56,6 @@ def load_managed_profiles(
             cli_type = CLI_TYPE
 
         bot_mode = str(item.get("bot_mode", "cli")).strip().lower() or "cli"
-        if bot_mode == "webcli":
-            logger.warning("子Bot `%s` 的 webcli 模式已弃用，自动回退为 cli", alias)
-            bot_mode = "cli"
-            migrated_legacy_mode = True
 
         profile_data = {
             "alias": alias,
@@ -105,7 +97,7 @@ def load_managed_profiles(
     if len(assistant_aliases) == 1:
         bootstrap_assistant_home(profiles[assistant_aliases[0]].working_dir)
 
-    return profiles, migrated_legacy_mode
+    return profiles
 
 
 def save_managed_profiles(storage_file: Path, profiles: dict[str, BotProfile]) -> None:

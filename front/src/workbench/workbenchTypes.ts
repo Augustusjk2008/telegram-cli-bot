@@ -1,8 +1,7 @@
 import type { PluginOpenTarget, PluginRenderResult } from "../services/types";
 
 export type DesktopSidebarView = "files" | "search" | "outline" | "debug" | "git" | "plugins" | "settings";
-export type DesktopWorkspaceView = "editor" | "assistant-ops" | "guide";
-export type WorkbenchActivityId = DesktopSidebarView | "assistant-ops" | "guide";
+export type WorkbenchActivityId = DesktopSidebarView | "assistant-ops";
 export type WorkbenchProductMode = "build" | "solo";
 
 export type PersistedTabContentPersistence = "none" | "clean_snapshot" | "dirty_snapshot";

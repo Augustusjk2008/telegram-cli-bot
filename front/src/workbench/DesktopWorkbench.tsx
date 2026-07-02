@@ -8,7 +8,6 @@ import type { FileReadResult, GitTreeStatus, HostEffect, PluginOpenTarget, Works
 import type { WebBotClient } from "../services/webBotClient";
 import { premiumMotion, resolveMotionProps } from "../motion/premiumMotion";
 import { GitScreen } from "../screens/GitScreen";
-import { AiCapabilityGuideScreen } from "../screens/AiCapabilityGuideScreen";
 import { PluginsScreen } from "../screens/PluginsScreen";
 import { SettingsScreen } from "../screens/SettingsScreen";
 import { AssistantOpsScreen } from "../screens/AssistantOpsScreen";
@@ -52,7 +51,6 @@ import {
   MIN_TERMINAL_HEIGHT_PX,
   PANE_RESIZER_SIZE_PX,
   type ChatWorkbenchStatus,
-  type DesktopWorkspaceView,
   type FocusedWorkbenchPane,
   type TerminalOverrideState,
   type TerminalWorkbenchStatus,
@@ -226,7 +224,7 @@ export function DesktopWorkbench({
   const previewRequestSeqRef = useRef(0);
   const [focusedPane, setFocusedPane] = useState<FocusedWorkbenchPane>(null);
   const [isResizingPane, setIsResizingPane] = useState(false);
-  const [workspaceView, setWorkspaceView] = useState<DesktopWorkspaceView>("editor");
+  const [assistantOpsOpen, setAssistantOpsOpen] = useState(false);
   const [terminalOverride, setTerminalOverride] = useState<TerminalOverrideState | null>(null);
   const [pendingTerminalOverride, setPendingTerminalOverride] = useState<TerminalOverrideState | null>(null);
   const [localChatStatus, setLocalChatStatus] = useState<ChatWorkbenchStatus>({
@@ -259,19 +257,14 @@ export function DesktopWorkbench({
   const activeSidebarView = !canViewPlugins && layoutState.sidebarView === "plugins"
     ? "files"
     : layoutState.sidebarView;
-  const showAssistantOpsWorkspace = !structureOnly && canViewAssistantOps && workspaceView === "assistant-ops";
-  const showGuideWorkspace = !structureOnly && workspaceView === "guide";
-  const showSpecialWorkspace = showAssistantOpsWorkspace || showGuideWorkspace;
-  const activeActivityItem: WorkbenchActivityId = showGuideWorkspace
-    ? "guide"
-    : showAssistantOpsWorkspace
-      ? "assistant-ops"
-      : activeSidebarView;
+  const showAssistantOpsWorkspace = !structureOnly && canViewAssistantOps && assistantOpsOpen;
+  const showSpecialWorkspace = showAssistantOpsWorkspace;
+  const activeActivityItem: WorkbenchActivityId = showAssistantOpsWorkspace ? "assistant-ops" : activeSidebarView;
   const debug = useDebugSession({
     authToken,
     botAlias,
     client,
-    enabled: !structureOnly && !showGuideWorkspace && layoutState.sidebarView === "debug",
+    enabled: !structureOnly && layoutState.sidebarView === "debug",
     onRevealLocation: ({ sourcePath, line }) => {
       void openWorkspaceFile(toWorkspaceRelativeSourcePath(sourcePath, fileTree.rootPath), line || undefined);
     },
@@ -294,11 +287,9 @@ export function DesktopWorkbench({
       : null,
   });
 
-  const showTerminalPane = !structureOnly && !showGuideWorkspace && (focusedPane === "terminal" || (!focusedPane && !layoutState.terminalCollapsed));
-  const showChatPane = !showGuideWorkspace && (focusedPane === "chat" || (!focusedPane && !layoutState.chatCollapsed));
-  const columnTemplate = showGuideWorkspace
-    ? `${COLLAPSED_SIDEBAR_SIZE_PX}px 0px minmax(0, 1fr) 0px 0px`
-    : structureOnly
+  const showTerminalPane = !structureOnly && (focusedPane === "terminal" || (!focusedPane && !layoutState.terminalCollapsed));
+  const showChatPane = focusedPane === "chat" || (!focusedPane && !layoutState.chatCollapsed);
+  const columnTemplate = structureOnly
     ? focusedPane === "sidebar"
       ? "minmax(0, 1fr) 0px 0px 0px 0px"
       : focusedPane === "chat"
@@ -311,9 +302,7 @@ export function DesktopWorkbench({
         : focusedPane === "editor" || focusedPane === "terminal"
           ? "0px 0px minmax(0, 1fr) 0px 0px"
           : `${layoutState.sidebarCollapsed ? COLLAPSED_SIDEBAR_SIZE_PX : layoutState.sidebarWidthPx}px ${PANE_RESIZER_SIZE_PX}px minmax(0, 1fr) ${layoutState.chatCollapsed ? 0 : PANE_RESIZER_SIZE_PX}px ${layoutState.chatCollapsed ? 0 : layoutState.chatWidthPx}px`;
-  const centerRowTemplate = showGuideWorkspace
-    ? "minmax(0, 1fr) 0px 0px"
-    : structureOnly
+  const centerRowTemplate = structureOnly
     ? "0px 0px 0px"
     : focusedPane === "editor"
       ? "minmax(0, 1fr) 0px 0px"
@@ -331,7 +320,7 @@ export function DesktopWorkbench({
   const canLoadFull = canPreviewFiles && !isFilePreviewFullyLoaded(previewResult);
   const canEditPreview = canMutateFiles && previewResult?.previewKind !== "image";
   const previewDownloadProgress = fileTree.downloadProgress?.path === previewName ? fileTree.downloadProgress : null;
-  const showSidebarContent = !showGuideWorkspace && (focusedPane === "sidebar" || !layoutState.sidebarCollapsed);
+  const showSidebarContent = focusedPane === "sidebar" || !layoutState.sidebarCollapsed;
   const sidebarContentMotion = resolveMotionProps(premiumMotion.sidebarContent, reduceMotion);
   const dialogPanelMotion = resolveMotionProps(premiumMotion.dialogPanel, reduceMotion);
   const availableActivityItems: WorkbenchActivityId[] = structureOnly
@@ -340,7 +329,6 @@ export function DesktopWorkbench({
         "files",
         "search",
         "outline",
-        "guide",
         "debug",
         "git",
         ...(canViewAssistantOps ? ["assistant-ops" as const] : []),
@@ -458,7 +446,7 @@ export function DesktopWorkbench({
     setTerminalOverride(null);
     setPendingTerminalOverride(null);
     setPendingSidebarWorkdir("");
-    setWorkspaceView("editor");
+    setAssistantOpsOpen(false);
   }, [botAlias, restoreSidebarView]);
 
   useEffect(() => {
@@ -475,7 +463,7 @@ export function DesktopWorkbench({
     setTerminalOverride(null);
     setPendingTerminalOverride(null);
     setPendingSidebarWorkdir("");
-    setWorkspaceView("editor");
+    setAssistantOpsOpen(false);
     void tabs.restoreFromSnapshot([], "");
   }, [fileTree.rootPath, restoreSidebarView, tabs]);
 
@@ -565,10 +553,10 @@ export function DesktopWorkbench({
   }, [layoutState.sidebarView, setSidebarView, structureOnly]);
 
   useEffect(() => {
-    if (showSpecialWorkspace && (structureOnly || (workspaceView === "assistant-ops" && !canViewAssistantOps))) {
-      setWorkspaceView("editor");
+    if (showSpecialWorkspace && (structureOnly || !canViewAssistantOps)) {
+      setAssistantOpsOpen(false);
     }
-  }, [canViewAssistantOps, showSpecialWorkspace, structureOnly, workspaceView]);
+  }, [canViewAssistantOps, showSpecialWorkspace, structureOnly]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -587,7 +575,7 @@ export function DesktopWorkbench({
       }
       if (event.shiftKey && key === "f") {
         event.preventDefault();
-        setWorkspaceView("editor");
+        setAssistantOpsOpen(false);
         setSidebarView("search");
       }
     };
@@ -604,16 +592,11 @@ export function DesktopWorkbench({
 
   function selectActivityItem(item: WorkbenchActivityId) {
     if (item === "assistant-ops") {
-      setWorkspaceView("assistant-ops");
+      setAssistantOpsOpen(true);
       setFocusedPane(null);
       return;
     }
-    if (item === "guide") {
-      setWorkspaceView("guide");
-      setFocusedPane(null);
-      return;
-    }
-    setWorkspaceView("editor");
+    setAssistantOpsOpen(false);
     setSidebarView(item);
   }
 
@@ -686,7 +669,7 @@ export function DesktopWorkbench({
         fileTree.revealPath(path),
       ]);
       setEditorReveal(typeof line === "number" && line > 0 ? { path, line } : null);
-      setWorkspaceView("editor");
+      setAssistantOpsOpen(false);
       return;
     }
     if (isRasterImagePath(path) || isHtmlPreviewPath(path)) {
@@ -711,7 +694,7 @@ export function DesktopWorkbench({
       tabs.openFile(path, target.pluginTargets),
       fileTree.revealPath(path),
     ]);
-    setWorkspaceView("editor");
+    setAssistantOpsOpen(false);
     if (line && line > 0) {
       setEditorReveal({ path, line });
       return;
@@ -733,12 +716,12 @@ export function DesktopWorkbench({
       kind: "git-diff",
       statusText: `${path} · ${staged ? "已暂存" : "工作区"} Diff · 只读${diff.truncated ? " · 已截断" : ""}`,
     });
-    setWorkspaceView("editor");
+    setAssistantOpsOpen(false);
   }
 
   async function openPluginViewTab(target: PluginOpenTarget) {
     await tabs.openPluginView(target);
-    setWorkspaceView("editor");
+    setAssistantOpsOpen(false);
     const sourcePath = typeof target.input.path === "string" ? target.input.path : "";
     if (sourcePath) {
       setSidebarView("files");
@@ -1028,10 +1011,10 @@ export function DesktopWorkbench({
         viewMode={viewMode}
         hasUnreadOtherBots={hasUnreadOtherBots}
         announcementAction={announcementAction}
-        sidebarVisible={!showGuideWorkspace && !layoutState.sidebarCollapsed}
-        terminalVisible={!structureOnly && !showGuideWorkspace && !layoutState.terminalCollapsed}
-        chatVisible={!showGuideWorkspace && !layoutState.chatCollapsed}
-        availableLayoutControls={showGuideWorkspace ? [] : structureOnly ? ["sidebar", "chat"] : undefined}
+        sidebarVisible={!layoutState.sidebarCollapsed}
+        terminalVisible={!structureOnly && !layoutState.terminalCollapsed}
+        chatVisible={!layoutState.chatCollapsed}
+        availableLayoutControls={structureOnly ? ["sidebar", "chat"] : undefined}
         productMode={productMode}
         soloAvailable={soloAvailable}
         onProductModeChange={onProductModeChange}
@@ -1108,14 +1091,7 @@ export function DesktopWorkbench({
             className="grid min-h-0 overflow-hidden"
             style={{ gridTemplateRows: centerRowTemplate }}
           >
-            {!structureOnly && showGuideWorkspace ? (
-              <section
-                data-testid="desktop-pane-guide"
-                className="desktop-workbench-pane min-h-0 overflow-hidden"
-              >
-                <AiCapabilityGuideScreen embedded />
-              </section>
-            ) : !structureOnly ? (
+            {!structureOnly ? (
               <section
                 data-testid="desktop-pane-editor"
                 ref={editorPaneRef}
@@ -1176,7 +1152,7 @@ export function DesktopWorkbench({
               </section>
             ) : null}
 
-            {!structureOnly && !showGuideWorkspace && !focusedPane && showTerminalPane ? (
+            {!structureOnly && !focusedPane && showTerminalPane ? (
               <PaneResizer
                 ariaLabel="调整编辑器高度"
                 axis="y"
@@ -1192,7 +1168,7 @@ export function DesktopWorkbench({
               <div aria-hidden="true" />
             )}
 
-            {!structureOnly && !showGuideWorkspace ? (
+            {!structureOnly ? (
               <section
                 data-testid="desktop-pane-terminal"
                 data-collapsed={layoutState.terminalCollapsed ? "true" : "false"}
@@ -1228,7 +1204,7 @@ export function DesktopWorkbench({
             ) : null}
           </div>
 
-          {!showGuideWorkspace && !focusedPane && showChatPane ? (
+          {!focusedPane && showChatPane ? (
             <PaneResizer
               ariaLabel="调整聊天区宽度"
               axis="x"
@@ -1244,36 +1220,34 @@ export function DesktopWorkbench({
             <div aria-hidden="true" />
           )}
 
-          {!showGuideWorkspace ? (
-            <section
-              data-testid="desktop-pane-chat"
-              data-collapsed={layoutState.chatCollapsed ? "true" : "false"}
-              data-focused={focusedPane === "chat" ? "true" : "false"}
-              className={clsx(
-                "desktop-workbench-pane min-h-0 overflow-hidden",
-                !showChatPane && "hidden",
-              )}
-            >
-              {resolvedChatPaneContent || (
-                <ChatPane
-                  botAlias={botAlias}
-                  botAvatarName={botAvatarName}
-                  userAvatarName={userAvatarName}
-                  client={client}
-                  readOnly={chatReadOnly}
-                  readOnlyReason={chatReadOnlyReason}
-                  disabledReason={chatDisabledReason}
-                  allowTrace={allowTrace}
-                  visible={showChatPane}
-                  focused={focusedPane === "chat"}
-                  onToggleFocus={() => toggleFocusedPane("chat")}
-                  onUnreadResult={onUnreadResult}
-                  onWorkbenchStatusChange={setLocalChatStatus}
-                  onRequestDesktopPreview={handleRequestPreview}
-                />
-              )}
-            </section>
-          ) : null}
+          <section
+            data-testid="desktop-pane-chat"
+            data-collapsed={layoutState.chatCollapsed ? "true" : "false"}
+            data-focused={focusedPane === "chat" ? "true" : "false"}
+            className={clsx(
+              "desktop-workbench-pane min-h-0 overflow-hidden",
+              !showChatPane && "hidden",
+            )}
+          >
+            {resolvedChatPaneContent || (
+              <ChatPane
+                botAlias={botAlias}
+                botAvatarName={botAvatarName}
+                userAvatarName={userAvatarName}
+                client={client}
+                readOnly={chatReadOnly}
+                readOnlyReason={chatReadOnlyReason}
+                disabledReason={chatDisabledReason}
+                allowTrace={allowTrace}
+                visible={showChatPane}
+                focused={focusedPane === "chat"}
+                onToggleFocus={() => toggleFocusedPane("chat")}
+                onUnreadResult={onUnreadResult}
+                onWorkbenchStatusChange={setLocalChatStatus}
+                onRequestDesktopPreview={handleRequestPreview}
+              />
+            )}
+          </section>
         </div>
       </div>
 
@@ -1286,7 +1260,7 @@ export function DesktopWorkbench({
         restoreState={session.restoreState}
         branchName={gitBranchName}
         viewMode={viewMode}
-        rightAction={showGuideWorkspace ? null : (
+        rightAction={(
           <div className="flex items-center gap-2">
             {fileTree.downloadProgress ? (
               <span role="status" aria-label="下载进度" className="max-w-[18rem] truncate">

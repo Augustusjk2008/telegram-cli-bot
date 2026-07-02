@@ -159,7 +159,6 @@ test("shows bottom navigation after entering demo app shell", async () => {
   await userEvent.click(screen.getByRole("button", { name: "登录" }));
   expect(await screen.findByRole("button", { name: "聊天" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "文件" })).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "指南" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "终端" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Git" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "插件" })).toBeInTheDocument();
@@ -193,7 +192,6 @@ test("guest login trims member-only navigation", async () => {
 
   expect(await screen.findByRole("button", { name: "聊天" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "文件" })).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "指南" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "设置" })).not.toBeInTheDocument();
 });
 
@@ -340,7 +338,6 @@ test("member can enter ungranted bot in read-only mode and hits create quota cop
   await createManagedBot(user, "owned3");
   expect(await screen.findByText("普通用户最多只能创建 3 个 Bot")).toBeInTheDocument();
 });
-
 
 
 
