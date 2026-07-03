@@ -31,3 +31,35 @@ def test_start_sh_rebuilds_frontend_when_frontend_inputs_change() -> None:
     assert "front/public" in content
     assert "scripts/build_web_frontend.sh" in content
     assert "frontend-build.sha256" in content
+
+
+def test_start_ps1_syncs_python_dependencies_before_env_migration() -> None:
+    content = Path("start.ps1").read_text(encoding="utf-8")
+
+    python_sync_index = content.index("$pythonRuntime = Sync-PythonDependencies")
+    env_migration_index = content.index("bot.env_migration")
+
+    assert python_sync_index < env_migration_index
+    assert '"-m", "pip", "install", "-r", $requirementsPath' in content
+    assert '"-m", "venv", $venvDir' in content
+
+
+def test_start_ps1_resyncs_dependencies_after_pending_update_before_boot() -> None:
+    content = Path("start.ps1").read_text(encoding="utf-8")
+
+    update_index = content.index('"bot.updater", "apply-pending"')
+    runtime_sync_index = content.index("$pythonRuntime = Sync-RuntimeDependencies", update_index)
+    migration_index = content.index('"bot.migrations", "run"')
+    boot_index = content.index('@("-m", "bot")')
+
+    assert update_index < runtime_sync_index < migration_index < boot_index
+
+
+def test_start_ps1_rebuilds_frontend_when_frontend_inputs_change() -> None:
+    content = Path("start.ps1").read_text(encoding="utf-8")
+
+    assert "front\\package-lock.json" in content
+    assert "front\\src" in content
+    assert "front\\public" in content
+    assert "scripts\\build_web_frontend.bat" in content
+    assert "frontend-build-windows.sha256" in content
