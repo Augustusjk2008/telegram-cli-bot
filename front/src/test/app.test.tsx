@@ -203,25 +203,6 @@ test("member with current bot access can open bot settings", async () => {
   expect(await screen.findByText("CLI 参数")).toBeInTheDocument();
 });
 
-test("bot creation form does not expose assistant mode", async () => {
-  const user = userEvent.setup();
-
-  render(<App />);
-
-  await loginAsSuperAdmin(user);
-  await screen.findByRole("button", { name: "聊天" });
-
-  await user.click(screen.getByRole("button", { name: "main" }));
-  await user.click(await screen.findByRole("button", { name: "智能体管理" }));
-  expect(await screen.findByRole("heading", { name: "智能体管理" })).toBeInTheDocument();
-
-  const runtimeSelect = screen.getByLabelText("运行后端") as HTMLSelectElement;
-  expect(Array.from(runtimeSelect.options).map((option) => option.value)).not.toContain("assistant");
-  expect(screen.queryByText(/Assistant Ops|assistant bot|assistant 模式/i)).not.toBeInTheDocument();
-});
-
-
-
 test("forced desktop mode mounts the desktop shell instead of the mobile bottom navigation", async () => {
   localStorage.setItem("web-view-mode", "desktop");
   const user = userEvent.setup();

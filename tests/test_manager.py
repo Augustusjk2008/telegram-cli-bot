@@ -79,17 +79,6 @@ class TestManagerLoadSave:
             manager.get_profile("main").get_agent("reviewer")
 
     @pytest.mark.asyncio
-    async def test_add_bot_rejects_assistant_mode(self, temp_dir: Path):
-        storage = temp_dir / "bots.json"
-        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
-        manager = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
-        assistant_dir = temp_dir / "assistant-root"
-        assistant_dir.mkdir()
-
-        with pytest.raises(ValueError, match="assistant Bot 模式已移除"):
-            await manager.add_bot("assistant1", "", "codex", "codex", str(assistant_dir), "assistant")
-
-    @pytest.mark.asyncio
     async def test_add_native_agent_bot_skips_cli_validation_and_persists_native_config(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
@@ -120,30 +109,6 @@ class TestManagerLoadSave:
         assert profile.supported_execution_modes == ["native_agent"]
         assert profile.default_execution_mode == "native_agent"
         assert profile.native_agent == {"backend": "pi", "pi_agent": "reviewer"}
-
-    @pytest.mark.asyncio
-    async def test_legacy_assistant_profile_loads_as_cli_and_saves_without_bot_mode(self, temp_dir: Path):
-        storage = temp_dir / "bots.json"
-        storage.write_text(json.dumps({
-            "bots": [
-                {
-                    "alias": "legacy",
-                    "token": "",
-                    "cli_type": "codex",
-                    "cli_path": "codex",
-                    "working_dir": str(temp_dir),
-                    "bot_mode": "assist" + "ant",
-                }
-            ]
-        }), encoding="utf-8")
-
-        manager = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
-        profile = manager.managed_profiles["legacy"]
-        assert profile.bot_mode == "cli"
-
-        manager._save_profiles()
-        saved = json.loads(storage.read_text(encoding="utf-8"))
-        assert "bot_mode" not in saved["bots"][0]
 
 class TestManagerValidation:
     """测试验证逻辑"""

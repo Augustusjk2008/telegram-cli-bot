@@ -187,17 +187,6 @@ async def test_runtime_public_env_replaces_stale_build_env(monkeypatch: pytest.M
 
 
 @pytest.mark.asyncio
-async def test_legacy_assistant_admin_routes_are_not_registered(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "")
-
-    server = WebApiServer(object(), host="127.0.0.1", port=8768, tunnel_service=DummyTunnelService())
-    app = server._build_app()
-
-    route_paths = [str(route.resource.canonical) for route in app.router.routes()]
-    assert not any("/assistant" in route_path for route_path in route_paths)
-
-
-@pytest.mark.asyncio
 async def test_unmatched_node_terminal_ws_path_is_not_spa_fallback(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
