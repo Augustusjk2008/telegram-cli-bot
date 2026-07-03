@@ -19,7 +19,8 @@ logger = logging.getLogger(__name__)
 TERMINAL_REPLAY_MAX_BYTES = 8 * 1024 * 1024
 TERMINAL_CLIENT_EOF = object()
 _TERMINAL_OUTPUT_EOF = object()
-TERMINAL_PROCESS_CLEANUP_JOIN_SECONDS = 0.05
+TERMINAL_PROCESS_CLEANUP_JOIN_SECONDS = 1.0
+TERMINAL_PROCESS_CLEANUP_WARNING_SECONDS = 5.0
 
 
 @dataclass(slots=True)
@@ -135,6 +136,19 @@ def _cleanup_terminal_process(process: PtyWrapper) -> None:
         pass
 
 
+def _monitor_terminal_cleanup(thread: threading.Thread, *, pid: object, waited_seconds: float) -> None:
+    warning_after_seconds = max(waited_seconds, TERMINAL_PROCESS_CLEANUP_WARNING_SECONDS)
+    thread.join(max(0.0, warning_after_seconds - waited_seconds))
+    if thread.is_alive():
+        logger.warning(
+            "终端进程清理超过 %.2f 秒仍未完成，继续后台等待: pid=%s",
+            warning_after_seconds,
+            pid,
+        )
+        return
+    logger.debug("终端进程后台清理已完成: pid=%s", pid)
+
+
 def _request_windows_process_tree_kill(process: PtyWrapper) -> None:
     if os.name != "nt":
         return
@@ -160,20 +174,28 @@ def _request_windows_process_tree_kill(process: PtyWrapper) -> None:
 
 def _cleanup_terminal_process_without_blocking(process: PtyWrapper) -> None:
     _request_windows_process_tree_kill(process)
+    pid = getattr(process, "pid", "unknown")
     thread = threading.Thread(
         target=_cleanup_terminal_process,
         args=(process,),
-        name=f"terminal-cleanup-{getattr(process, 'pid', 'unknown')}",
+        name=f"terminal-cleanup-{pid}",
         daemon=True,
     )
     thread.start()
     thread.join(TERMINAL_PROCESS_CLEANUP_JOIN_SECONDS)
     if thread.is_alive():
-        logger.warning(
+        logger.debug(
             "终端进程清理未在 %.2f 秒内完成，已转后台继续: pid=%s",
             TERMINAL_PROCESS_CLEANUP_JOIN_SECONDS,
-            getattr(process, "pid", "unknown"),
+            pid,
         )
+        monitor = threading.Thread(
+            target=_monitor_terminal_cleanup,
+            kwargs={"thread": thread, "pid": pid, "waited_seconds": TERMINAL_PROCESS_CLEANUP_JOIN_SECONDS},
+            name=f"terminal-cleanup-monitor-{pid}",
+            daemon=True,
+        )
+        monitor.start()
 
 
 class TerminalSessionManager:
