@@ -658,6 +658,46 @@ describe("RealWebBotClient", () => {
     expect(message.elapsedSeconds).toBe(2);
   });
 
+  test("sendMessage treats CLI error completion as done event with error assistant message", async () => {
+    const encoder = new TextEncoder();
+    const chunks: string[] = [];
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(`event: done\ndata: ${JSON.stringify({
+          type: "done",
+          output: "命令退出码 1\n错误信息",
+          elapsed_seconds: 2,
+          returncode: 1,
+          message: {
+            id: "msg-error-final",
+            role: "assistant",
+            content: "命令退出码 1\n错误信息",
+            state: "error",
+            created_at: "2026-06-06T00:00:00Z",
+          },
+        })}\n\n`));
+        controller.close();
+      },
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: stream,
+      json: async () => ({ ok: true, data: {} }),
+    });
+
+    const client = new RealWebBotClient();
+    const message = await client.sendMessage("main", "hi", (chunk) => chunks.push(chunk));
+
+    expect(chunks).toEqual([]);
+    expect(message).toMatchObject({
+      id: "msg-error-final",
+      role: "assistant",
+      text: "命令退出码 1\n错误信息",
+      state: "error",
+      elapsedSeconds: 2,
+    });
+  });
+
   test("sendMessage parses ag-ui stream without legacy trace callbacks", async () => {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({

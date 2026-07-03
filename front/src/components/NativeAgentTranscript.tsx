@@ -298,7 +298,11 @@ function isDuplicateFinalError(entry: NativeAgentTranscriptEntry, finalText: str
   if (entry.kind !== "error" || !finalText) {
     return false;
   }
-  return normalizedDisplayText(entry.summary || "") === finalText;
+  const summary = normalizedDisplayText(entry.summary || "");
+  if (summary === finalText) {
+    return true;
+  }
+  return /^命令退出码\s+\d+\n/.test(summary) && normalizedDisplayText(summary.replace(/^命令退出码\s+\d+\n/, "")) === finalText;
 }
 
 function formatTranscriptFullAnswer(renderItems: TranscriptRenderItem[], resultText: string) {
@@ -306,7 +310,7 @@ function formatTranscriptFullAnswer(renderItems: TranscriptRenderItem[], resultT
   const finalText = normalizedCopyText(resultText);
   for (const item of renderItems) {
     if (item.kind === "entry") {
-      if (isDuplicateFinalProcess(item.entry, finalText)) {
+      if (isDuplicateFinalProcess(item.entry, finalText) || isDuplicateFinalError(item.entry, finalText)) {
         continue;
       }
       const text = formatTranscriptEntryForCopy(item.entry);
@@ -316,7 +320,7 @@ function formatTranscriptFullAnswer(renderItems: TranscriptRenderItem[], resultT
       continue;
     }
     const groupEntries = item.entries
-      .filter((entry) => !isDuplicateFinalProcess(entry, finalText))
+      .filter((entry) => !isDuplicateFinalProcess(entry, finalText) && !isDuplicateFinalError(entry, finalText))
       .map(formatTranscriptEntryForCopy)
       .filter(Boolean)
       .join("\n\n");
@@ -456,7 +460,7 @@ export function NativeAgentTranscript({
 
   const visibleResultText = stripThinkingBlocks(resultText);
   const showFinalResult = Boolean(visibleResultText) && !(mode === "cli" && state === "streaming");
-  const showCopyFinalAnswer = state === "done" && Boolean(onCopyFinalAnswer);
+  const showCopyFinalAnswer = state !== "streaming" && Boolean(visibleResultText.trim()) && Boolean(onCopyFinalAnswer);
 
   return (
     <div data-testid="native-agent-transcript" className="min-w-0 text-sm text-[var(--text)]">

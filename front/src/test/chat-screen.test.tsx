@@ -475,6 +475,166 @@ test("hides duplicate final error text in transcript when assistant bubble alrea
   expect(within(transcript).getAllByText("Selected model is at capacity. Please try a different model.")).toHaveLength(1);
 });
 
+test("hides duplicate CLI exit-code error text when final message includes the diagnostic prefix", async () => {
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "assistant-cli-error-prefix-dup",
+        role: "assistant",
+        text: "错误信息",
+        createdAt: new Date().toISOString(),
+        state: "error",
+        meta: {
+          trace: [
+            { kind: "error", summary: "命令退出码 1\n错误信息", source: "runtime" },
+          ],
+          traceCount: 1,
+          processCount: 1,
+        },
+      },
+    ],
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(within(transcript).getByText("错误信息")).toBeInTheDocument();
+  expect(transcript).not.toHaveTextContent("命令退出码 1");
+  expect(transcript.textContent?.match(/错误信息/g) || []).toHaveLength(1);
+});
+
+test("hides duplicate CLI error text when final message already includes exit-code prefix", async () => {
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "assistant-cli-error-new-format",
+        role: "assistant",
+        text: "命令退出码 1\n错误信息",
+        createdAt: new Date().toISOString(),
+        state: "error",
+        meta: {
+          trace: [
+            { kind: "error", summary: "命令退出码 1\n错误信息", source: "runtime" },
+          ],
+          traceCount: 1,
+          processCount: 1,
+        },
+      },
+    ],
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(transcript.textContent?.match(/命令退出码 1/g) || []).toHaveLength(1);
+  expect(transcript.textContent?.match(/错误信息/g) || []).toHaveLength(1);
+});
+
+test("shows final answer actions for failed assistant messages", async () => {
+  const user = userEvent.setup();
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async () => ({
+    id: "assistant-after-error-continue",
+    role: "assistant",
+    text: "继续后的回答",
+    createdAt: new Date().toISOString(),
+    state: "done",
+  }));
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "assistant-error-actions",
+        role: "assistant",
+        text: "错误信息",
+        createdAt: new Date().toISOString(),
+        state: "error",
+        meta: {
+          contextUsage: {
+            provider: "codex",
+            contextUsed: 36565,
+            contextWindow: 1000000,
+            contextLeftPercent: 74,
+            usedDisplay: "36.6K",
+            windowDisplay: "1M",
+          },
+        },
+      },
+    ],
+    sendMessage,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByText("错误信息")).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "复制最终回答" })).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "复制上下文详情" })).toBeInTheDocument();
+  expect(await screen.findByTestId("chat-message-context-usage-bottom")).toHaveTextContent("ctx 74%");
+  expect(screen.getAllByRole("button", { name: "继续" })).toHaveLength(1);
+  expect(screen.queryByRole("button", { name: "收藏回答" })).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "继续" }));
+
+  await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+  expect(sendMessage.mock.calls[0][1]).toBe("继续");
+});
+
+test("shows final answer actions for failed CLI transcript messages", async () => {
+  const user = userEvent.setup();
+  const writeText = mockClipboardWrite();
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async () => ({
+    id: "assistant-after-cli-error-continue",
+    role: "assistant",
+    text: "继续后的回答",
+    createdAt: new Date().toISOString(),
+    state: "done",
+  }));
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [
+      {
+        id: "assistant-cli-error-actions",
+        role: "assistant",
+        text: "命令退出码 1\n错误信息",
+        createdAt: new Date().toISOString(),
+        state: "error",
+        meta: {
+          trace: [
+            { kind: "error", summary: "命令退出码 1\n错误信息", source: "runtime" },
+          ],
+          traceCount: 1,
+          processCount: 1,
+          contextUsage: {
+            provider: "codex",
+            contextUsed: 36565,
+            contextWindow: 1000000,
+            contextLeftPercent: 74,
+            usedDisplay: "36.6K",
+            windowDisplay: "1M",
+          },
+        },
+      },
+    ],
+    sendMessage,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(transcript).toHaveTextContent("命令退出码 1错误信息");
+  expect(await screen.findByRole("button", { name: "复制最终回答" })).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "复制上下文详情" })).toBeInTheDocument();
+  expect(await screen.findByTestId("chat-message-context-usage-bottom")).toHaveTextContent("ctx 74%");
+  expect(screen.getAllByRole("button", { name: "继续" })).toHaveLength(1);
+  expect(screen.queryByRole("button", { name: "收藏回答" })).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "复制完整回答" }));
+  const lastCopyCall = writeText.mock.calls.at(-1) as unknown[] | undefined;
+  expect(String(lastCopyCall?.[0] ?? "")).toBe("[最终回答]\n命令退出码 1\n错误信息");
+
+  await user.click(screen.getByRole("button", { name: "继续" }));
+
+  await waitFor(() => expect(sendMessage).toHaveBeenCalled());
+  expect(sendMessage.mock.calls[0][1]).toBe("继续");
+});
+
 
 
 

@@ -1272,6 +1272,9 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const hasCliTraceTranscript = hasTrace && !isNativeAgentAssistant && !agUiRunState && item.meta?.tracePresentation !== "generic";
   const hasTranscript = isAssistant && (isNativeAgentAssistant || hasCliTraceTranscript);
   const transcriptMode = isNativeAgentAssistant ? "native" : "cli";
+  const hasFinalAnswerText = item.role === "assistant" && item.state !== "streaming" && Boolean(item.text.trim());
+  const canCopyFinalAnswer = hasFinalAnswerText && (item.state === "done" || item.state === "error");
+  const canFavoriteFinalAnswer = item.role === "assistant" && item.state === "done" && Boolean(item.text.trim());
   const showContextRing = item.role === "assistant" && shouldShowContextRing(item.meta);
   const nativeTranscriptEntries = buildNativeAgentTranscriptEntries({
     trace,
@@ -1330,24 +1333,28 @@ const ChatMessageRow = memo(function ChatMessageRow({
                 mode={transcriptMode}
                 onReplyPermission={isNativeAgentAssistant ? onReplyNativePermission : undefined}
                 onFileLinkClick={onFileLinkClick}
-                onCopyFinalAnswer={item.state === "done" && item.text.trim() ? () => onCopyFinalAnswer(item.text) : undefined}
+                onCopyFinalAnswer={canCopyFinalAnswer ? () => onCopyFinalAnswer(item.text) : undefined}
                 onContinue={canContinue ? onContinueFinalAnswer : undefined}
-                onToggleFavorite={item.state === "done" && item.text.trim() ? () => onToggleFavoriteAnswer?.(messageClientStateKey, item) : undefined}
+                onToggleFavorite={canFavoriteFinalAnswer ? () => onToggleFavoriteAnswer?.(messageClientStateKey, item) : undefined}
                 favorite={favorite}
                 canContinue={canContinue}
                 contextUsage={item.meta?.contextUsage}
               />
-            ) : item.role === "assistant" && item.state !== "streaming" && item.state !== "error" ? (
+            ) : item.role === "assistant" && item.state !== "streaming" ? (
               <>
-                <ChatMarkdownMessage content={item.text} onFileLinkClick={onFileLinkClick} />
+                {item.state === "error" ? (
+                  <ChatPlainTextMessage content={item.text} className="text-red-700" />
+                ) : (
+                  <ChatMarkdownMessage content={item.text} onFileLinkClick={onFileLinkClick} />
+                )}
                 <ChatFinalAnswerActions
                   canContinue={canContinue}
                   contextUsage={item.meta?.contextUsage}
                   favorite={favorite}
                   fullAnswerText={item.text}
                   onContinue={canContinue ? onContinueFinalAnswer : undefined}
-                  onCopyFinalAnswer={item.state === "done" && item.text.trim() ? () => onCopyFinalAnswer(item.text) : undefined}
-                  onToggleFavorite={item.state === "done" && item.text.trim() ? () => onToggleFavoriteAnswer?.(messageClientStateKey, item) : undefined}
+                  onCopyFinalAnswer={canCopyFinalAnswer ? () => onCopyFinalAnswer(item.text) : undefined}
+                  onToggleFavorite={canFavoriteFinalAnswer ? () => onToggleFavoriteAnswer?.(messageClientStateKey, item) : undefined}
                 />
               </>
             ) : isUser ? (
@@ -4313,7 +4320,7 @@ export function ChatScreen({
     }
     for (let index = visibleItems.length - 1; index >= 0; index -= 1) {
       const item = visibleItems[index];
-      if (item.role === "assistant" && item.state === "done" && item.text.trim()) {
+      if (item.role === "assistant" && (item.state === "done" || item.state === "error") && item.text.trim()) {
         return getMessageClientStateKey(item);
       }
     }

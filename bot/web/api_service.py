@@ -4654,6 +4654,25 @@ def _build_terminal_trace(
     return trace
 
 
+def _format_cli_error_display(
+    response: str,
+    *,
+    returncode: int,
+    completion_state: str,
+) -> str:
+    raw_text = str(response or "")
+    if completion_state != "error" or not isinstance(returncode, int) or returncode == 0:
+        return raw_text
+
+    text = raw_text.strip()
+    prefix = f"命令退出码 {returncode}"
+    if text == prefix or text.startswith(f"{prefix}\n"):
+        return text
+    if not text:
+        return prefix
+    return f"{prefix}\n{text}"
+
+
 async def _reconcile_native_trace_before_completion(
     service: ChatHistoryService,
     turn_handle,
@@ -5605,6 +5624,11 @@ async def _stream_cli_chat(
                 returncode=returncode,
                 response_text=response,
             )
+            display_response = _format_cli_error_display(
+                response,
+                returncode=returncode,
+                completion_state=completion_state,
+            )
             with session._lock:
                 stop_requested = bool(session.stop_requested)
             final_trace = _build_terminal_trace(
@@ -5626,15 +5650,15 @@ async def _stream_cli_chat(
                 profile=profile,
                 session=session,
                 user_text=text,
-                assistant_text=response,
+                assistant_text=display_response,
                 completion_state=completion_state,
                 native_session_id=native_session_id,
             )
             assistant_stage_durations["trace_ms"] += max(0, int(round((time.perf_counter() - trace_started_at) * 1000)))
             fallback_output = (
-                response
+                display_response
                 if completion_state == "completed" or should_force_error_output
-                else (response or latest_preview_text)
+                else (display_response or latest_preview_text)
             )
             context_usage = await _resolve_cli_context_usage_bounded(
                 cli_type,
@@ -6056,6 +6080,11 @@ async def run_cli_chat(
                 returncode=returncode,
                 response_text=response,
             )
+            display_response = _format_cli_error_display(
+                response,
+                returncode=returncode,
+                completion_state=completion_state,
+            )
             error_detail = response if completion_state == "error" else ""
             with session._lock:
                 stop_requested = bool(session.stop_requested)
@@ -6076,7 +6105,7 @@ async def run_cli_chat(
                 profile=profile,
                 session=session,
                 user_text=text,
-                assistant_text=response,
+                assistant_text=display_response,
                 completion_state=completion_state,
                 native_session_id=native_session_id,
             )
@@ -6090,9 +6119,9 @@ async def run_cli_chat(
             done_message = service.complete_turn(
                 turn_handle,
                 content=(
-                    response
+                    display_response
                     if completion_state == "completed" or should_force_error_output
-                    else (response or msg("chat", "no_output"))
+                    else (display_response or msg("chat", "no_output"))
                 ),
                 completion_state=completion_state,
                 native_session_id=native_session_id,

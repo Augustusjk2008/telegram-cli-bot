@@ -144,3 +144,48 @@ def test_web_runtime_state_records_actual_port(monkeypatch, tmp_path):
 
     assert not state_path.exists()
 
+
+def test_format_cli_error_display_prefixes_exit_code_once():
+    from bot.web.api_service import _format_cli_error_display
+
+    assert _format_cli_error_display(
+        "错误信息",
+        returncode=1,
+        completion_state="error",
+    ) == "命令退出码 1\n错误信息"
+
+    assert _format_cli_error_display(
+        "命令退出码 1\n错误信息",
+        returncode=1,
+        completion_state="error",
+    ) == "命令退出码 1\n错误信息"
+
+
+def test_format_cli_error_display_leaves_non_error_response_unchanged():
+    from bot.web.api_service import _format_cli_error_display
+
+    assert _format_cli_error_display(
+        " 正常输出\n",
+        returncode=0,
+        completion_state="completed",
+    ) == " 正常输出\n"
+
+
+def test_terminal_trace_and_cli_error_display_keep_single_exit_code_prefix():
+    from bot.web.api_service import _build_terminal_trace, _format_cli_error_display
+
+    trace = _build_terminal_trace(
+        live_trace=[],
+        stop_requested=False,
+        returncode=1,
+        error_detail="错误信息",
+    )
+    display = _format_cli_error_display(
+        trace[0]["summary"],
+        returncode=1,
+        completion_state="error",
+    )
+
+    assert trace == [{"kind": "error", "source": "runtime", "summary": "命令退出码 1\n错误信息"}]
+    assert display == "命令退出码 1\n错误信息"
+
