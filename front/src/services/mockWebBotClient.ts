@@ -5,38 +5,10 @@ import type {
   CreateAnnouncementInput,
   AnnouncementItem,
   AnnouncementListResult,
-  AssistantAdminAuditItem,
-  AssistantAdminAuditResult,
   Capability,
   AppUpdateDownloadProgress,
   AppUpdatePackageKind,
   AppUpdateStatus,
-  AssistantCronJob,
-  AssistantCronRun,
-  AssistantCronRunRequestResult,
-  AssistantDiagnosticsFilters,
-  AssistantMemoryEvalCase,
-  AssistantMemoryEvalReport,
-  AssistantMemoryEvalRun,
-  AssistantMemoryBulkInvalidateResult,
-  AssistantMemoryInvalidateResult,
-  AssistantMemoryReindexResult,
-  AssistantMemorySearchItem,
-  AssistantMemorySearchOptions,
-  AssistantMemorySearchResult,
-  AssistantPatchGenerationHandlers,
-  AssistantPatchMetadata,
-  AssistantPerfDiagnostics,
-  AssistantPerfRecord,
-  AssistantPerfSummary,
-  AssistantProposal,
-  AssistantProposalDiffFile,
-  AssistantProposalDetail,
-  AssistantRuntimeSnapshot,
-  AssistantUpgradeApplyLog,
-  AssistantUpgradeApplyResult,
-  AssistantUpgradeDryRunResult,
-  AssistantUpgradeTarget,
   AgentInput,
   AgentListResult,
   AgentMutationResult,
@@ -53,7 +25,6 @@ import type {
   PlanExecuteResult,
   ConversationSelectResult,
   ConversationSummary,
-  CreateAssistantCronJobInput,
   RemoveBotOptions,
   RemoveBotResult,
   BotOverview,
@@ -165,7 +136,6 @@ import type {
   TransferBridgeStatus,
   TreeViewPayload,
   TunnelSnapshot,
-  UpdateAssistantCronJobInput,
   UpdateBotWorkdirOptions,
   UserBotPermissions,
   WorkspaceDefinitionResult,
@@ -190,7 +160,6 @@ import { EventType, type AgUiEvent } from "./agUiProtocol";
 import { mockBots } from "../mocks/bots";
 import { mockChatMessages } from "../mocks/chat";
 import { mockFiles } from "../mocks/files";
-import { createMockAssistantOpsState } from "../mocks/assistantOpsData";
 import {
   findMockClusterTemplate,
   listMockClusterTemplateSummaries,
@@ -749,106 +718,6 @@ function resolveMemberCapabilities(username: string) {
     : [...MEMBER_CAPABILITIES];
 }
 
-function parseMockAssistantDiffFiles(diffText: string): AssistantProposalDiffFile[] {
-  const text = diffText.trim();
-  if (!text) {
-    return [];
-  }
-  const matches = Array.from(text.matchAll(/^diff --git a\/(.+?) b\/(.+)$/gm));
-  if (matches.length === 0) {
-    return [{
-      path: "patch.diff",
-      status: "unknown",
-      additions: (text.match(/^\+(?!\+\+)/gm) || []).length,
-      deletions: (text.match(/^-(?!--)/gm) || []).length,
-      text,
-    }];
-  }
-  return matches.map((match, index) => {
-    const start = match.index || 0;
-    const end = index + 1 < matches.length ? (matches[index + 1].index || text.length) : text.length;
-    const chunk = text.slice(start, end).trim();
-    const path = (chunk.match(/^rename to (.+)$/m)?.[1] || match[2] || match[1]).trim();
-    const oldPath = chunk.match(/^rename from (.+)$/m)?.[1]?.trim() || match[1];
-    const status = chunk.includes("new file mode")
-      ? "added"
-      : chunk.includes("deleted file mode")
-        ? "deleted"
-        : chunk.includes("rename from") || oldPath !== path
-          ? "renamed"
-          : "modified";
-    return {
-      path,
-      oldPath: status === "renamed" ? oldPath : undefined,
-      status,
-      additions: (chunk.match(/^\+(?!\+\+)/gm) || []).length,
-      deletions: (chunk.match(/^-(?!--)/gm) || []).length,
-      text: chunk,
-    } satisfies AssistantProposalDiffFile;
-  });
-}
-
-function summarizeMockAssistantDiagnostics(records: AssistantPerfRecord[]): AssistantPerfSummary {
-  const total = records.length;
-  const success = records.filter((item) => item.status === "completed").length;
-  const failed = total - success;
-  const avgElapsedMs = total ? Math.round(records.reduce((sum, item) => sum + item.elapsedMs, 0) / total) : 0;
-  const sortedElapsed = records.map((item) => item.elapsedMs).sort((left, right) => left - right);
-  const p95Index = sortedElapsed.length ? Math.max(0, Math.ceil(sortedElapsed.length * 0.95) - 1) : 0;
-  const p95ElapsedMs = sortedElapsed[p95Index] || 0;
-  const bySource: Record<string, number> = {};
-  const byStatus: Record<string, number> = {};
-  const stageTotals = {
-    syncMs: 0,
-    indexMs: 0,
-    recallMs: 0,
-    cliMs: 0,
-    dbMs: 0,
-    traceMs: 0,
-    pluginMs: 0,
-  };
-  const errorGroups = new Map<string, { count: number; latestAt: string }>();
-  for (const record of records) {
-    bySource[record.source] = (bySource[record.source] || 0) + 1;
-    byStatus[record.status] = (byStatus[record.status] || 0) + 1;
-    stageTotals.syncMs += record.stageDurations.syncMs;
-    stageTotals.indexMs += record.stageDurations.indexMs;
-    stageTotals.recallMs += record.stageDurations.recallMs;
-    stageTotals.cliMs += record.stageDurations.cliMs;
-    stageTotals.dbMs += record.stageDurations.dbMs;
-    stageTotals.traceMs += record.stageDurations.traceMs;
-    stageTotals.pluginMs += record.stageDurations.pluginMs;
-    if (record.error) {
-      const current = errorGroups.get(record.error);
-      errorGroups.set(record.error, {
-        count: (current?.count || 0) + 1,
-        latestAt: !current || record.createdAt > current.latestAt ? record.createdAt : current.latestAt,
-      });
-    }
-  }
-  const slowStages = Object.entries(stageTotals)
-    .map(([stage, totalMs]) => ({
-      stage: stage.replace(/Ms$/, ""),
-      totalMs,
-      avgMs: total ? Math.round(totalMs / total) : 0,
-    }))
-    .sort((left, right) => right.totalMs - left.totalMs)
-    .slice(0, 5);
-  return {
-    total,
-    success,
-    failed,
-    avgElapsedMs,
-    p95ElapsedMs,
-    bySource,
-    byStatus,
-    slowStages,
-    errorGroups: Array.from(errorGroups.entries())
-      .map(([message, info]) => ({ message, count: info.count, latestAt: info.latestAt }))
-      .sort((left, right) => right.count - left.count || right.latestAt.localeCompare(left.latestAt)),
-  };
-}
-
 function buildMockWaveformTracks(): WaveformTrack[] {
   return [
     {
@@ -1400,7 +1269,6 @@ export class MockWebBotClient implements WebBotClient {
       {
         ...item,
         cliPath: defaultCliPathForType(item.cliType),
-        botMode: "cli",
         enabled: true,
         isMain: item.alias === "main",
         serviceStatus: item.status === "offline" ? "offline" : "online",
@@ -1880,17 +1748,6 @@ export class MockWebBotClient implements WebBotClient {
       installed: false,
     },
   ];
-  private assistantCronJobs = new Map<string, AssistantCronJob[]>();
-  private assistantCronRuns = new Map<string, AssistantCronRun[]>();
-  private assistantProposals = new Map<string, AssistantProposal[]>();
-  private assistantProposalDiffs = new Map<string, string>();
-  private assistantProposalPatchDiffs = new Map<string, string>();
-  private assistantProposalPatchMetadata = new Map<string, AssistantPatchMetadata>();
-  private assistantProposalApplyLogs = new Map<string, AssistantUpgradeApplyLog>();
-  private assistantMemories = new Map<string, AssistantMemorySearchItem[]>();
-  private assistantMemoryEvalReports = new Map<string, AssistantMemoryEvalReport[]>();
-  private assistantPerfRecords = new Map<string, AssistantPerfRecord[]>();
-  private assistantAdminAudit = new Map<string, AssistantAdminAuditItem[]>();
   private fileContents = new Map<string, string>();
   private fileVersions = new Map<string, number>();
   private registerCodes: RegisterCodeItem[] = [
@@ -2475,7 +2332,6 @@ export class MockWebBotClient implements WebBotClient {
         workingDir: DEMO_MAIN_WORKDIR,
         lastActiveText: "运行中",
         cliPath: "codex",
-        botMode: "cli",
         enabled: true,
         isMain: false,
         promptPresets: [],
@@ -2667,36 +2523,6 @@ export class MockWebBotClient implements WebBotClient {
     });
   }
 
-  private cronRunKey(botAlias: string, jobId: string): string {
-    return `${botAlias}:${jobId}`;
-  }
-
-  private assistantProposalKey(botAlias: string, proposalId: string): string {
-    return `${botAlias}:${proposalId}`;
-  }
-
-  private buildMockUpgradeTarget(botAlias: string): AssistantUpgradeTarget {
-    const bot = this.getBotSummary(botAlias);
-    const dirty = bot.alias === "assistant1";
-    return {
-      alias: bot.alias,
-      workingDir: bot.workingDir,
-      repoRoot: bot.workingDir,
-      head: bot.alias === "main" ? "a1b2c3d4" : "b2c3d4e5",
-      dirty,
-      dirtyPaths: dirty ? [" M bot/assistant_memory_recall.py"] : [],
-      botMode: bot.botMode || "cli",
-      cliType: bot.cliType || "",
-      cliPath: bot.cliPath || "",
-      available: Boolean(bot.workingDir) && !dirty,
-      reason: !bot.workingDir ? "working_dir_not_found" : (dirty ? "upgrade_target_dirty" : ""),
-    };
-  }
-
-  private getAssistantPatchMetadata(botAlias: string, proposalId: string): AssistantPatchMetadata | null {
-    return this.assistantProposalPatchMetadata.get(this.assistantProposalKey(botAlias, proposalId)) || null;
-  }
-
   private appendChatMessage(botAlias: string, message: ChatMessage) {
     this.appendAgentChatMessage(botAlias, "main", message);
   }
@@ -2802,80 +2628,6 @@ export class MockWebBotClient implements WebBotClient {
     return { ...agent, cluster: agent.cluster ? { ...agent.cluster } : { ...DEFAULT_AGENT_CLUSTER } };
   }
 
-  private buildAssistantUpgradeState(botAlias: string, proposal: AssistantProposal) {
-    const metadata = this.getAssistantPatchMetadata(botAlias, proposal.id);
-    const key = this.assistantProposalKey(botAlias, proposal.id);
-    const hasPatch = this.assistantProposalPatchDiffs.has(key);
-    const lifecycle = metadata?.lifecycle || metadata?.state || "";
-    const state = proposal.status === "applied"
-      ? "applied"
-      : (lifecycle === "failed" ? "failed" : (metadata?.state || "none"));
-    return {
-      state,
-      targetAlias: metadata?.targetAlias || "",
-      targetRepoRoot: metadata?.targetRepoRoot || "",
-      baseCommit: metadata?.baseCommit || "",
-      patchSource: hasPatch && metadata ? `upgrades/${metadata.state}/${proposal.id}.patch` : "",
-      generationStatus: metadata?.generator.status || "",
-      chatConclusion: String((metadata as Record<string, unknown> | null)?.chatConclusion || ""),
-      sensitiveHits: metadata?.sensitiveHits || [],
-      dryRun: metadata?.dryRun || {
-        ok: false,
-        checkedAt: "",
-        stdout: "",
-        stderr: "",
-        patchPath: "",
-        repoRoot: "",
-      },
-      canGenerate: proposal.status === "approved",
-      canApprovePatch: metadata?.state === "pending" && lifecycle !== "failed" && (metadata.sensitiveHits?.length || 0) === 0,
-      canDryRun: metadata?.state === "approved",
-      canApply: metadata?.state === "approved" && proposal.status !== "applied",
-    };
-  }
-
-  private pushAssistantAdminAudit(
-    botAlias: string,
-    input: {
-      action: string;
-      resource: string;
-      resourceId?: string;
-      requestSummary?: Record<string, unknown>;
-      ok?: boolean;
-      statusCode?: number;
-      errorCode?: string;
-      errorMessage?: string;
-      method?: string;
-      path?: string;
-      elapsedMs?: number;
-    },
-  ) {
-    const current = this.assistantAdminAudit.get(botAlias) || [];
-    const ok = input.ok !== false;
-    const createdAt = new Date().toISOString();
-    this.assistantAdminAudit.set(botAlias, [{
-      id: `audit_${Date.now()}_${current.length + 1}`,
-      createdAt,
-      accountId: this.session.accountId || this.session.username || "demo",
-      userId: this.session.userId || 1001,
-      username: this.session.username || "demo",
-      method: input.method || "POST",
-      path: input.path || `/api/admin/bots/${botAlias}/assistant/${input.resource}`,
-      action: input.action,
-      target: {
-        botAlias,
-        resource: input.resource,
-        resourceId: input.resourceId || "",
-      },
-      requestSummary: input.requestSummary || {},
-      statusCode: input.statusCode || (ok ? 200 : 400),
-      ok,
-      errorCode: input.errorCode,
-      errorMessage: input.errorMessage,
-      elapsedMs: input.elapsedMs || 12,
-    }, ...current]);
-  }
-
   private fileKey(botAlias: string, browserPath: string, filename: string): string {
     return `${botAlias}:${browserPath}:${filename}`;
   }
@@ -2902,102 +2654,6 @@ export class MockWebBotClient implements WebBotClient {
     this.fileContents.set(key, content);
     this.fileVersions.set(key, version);
     return version;
-  }
-
-  private ensureAssistantOpsState(botAlias: string) {
-    const state = createMockAssistantOpsState(botAlias);
-    if (!this.assistantProposals.has(botAlias)) {
-      this.assistantProposals.set(botAlias, structuredClone(state.proposals));
-    }
-    for (const [proposalId, diffText] of Object.entries(state.proposalDiffs)) {
-      const key = this.assistantProposalKey(botAlias, proposalId);
-      if (!this.assistantProposalDiffs.has(key)) {
-        this.assistantProposalDiffs.set(key, diffText);
-      }
-    }
-    for (const [proposalId, diffText] of Object.entries(state.proposalPatchDiffs)) {
-      const key = this.assistantProposalKey(botAlias, proposalId);
-      if (!this.assistantProposalPatchDiffs.has(key)) {
-        this.assistantProposalPatchDiffs.set(key, diffText);
-      }
-    }
-    for (const [proposalId, metadata] of Object.entries(state.proposalPatchMetadata)) {
-      const key = this.assistantProposalKey(botAlias, proposalId);
-      if (!this.assistantProposalPatchMetadata.has(key)) {
-        this.assistantProposalPatchMetadata.set(key, structuredClone(metadata));
-      }
-    }
-    if (!this.assistantMemories.has(botAlias)) {
-      this.assistantMemories.set(botAlias, structuredClone(state.memories));
-    }
-    if (!this.assistantMemoryEvalReports.has(botAlias)) {
-      this.assistantMemoryEvalReports.set(botAlias, structuredClone(state.evalReports));
-    }
-    if (!this.assistantPerfRecords.has(botAlias)) {
-      this.assistantPerfRecords.set(botAlias, structuredClone(state.perfRecords));
-    }
-    if (!this.assistantAdminAudit.has(botAlias)) {
-      this.assistantAdminAudit.set(botAlias, []);
-    }
-  }
-
-  private getAssistantCronJobs(botAlias: string): AssistantCronJob[] {
-    return [...(this.assistantCronJobs.get(botAlias) || [])];
-  }
-
-  private getAssistantProposals(botAlias: string): AssistantProposal[] {
-    this.ensureAssistantOpsState(botAlias);
-    return [...(this.assistantProposals.get(botAlias) || [])];
-  }
-
-  private getAssistantMemories(botAlias: string): AssistantMemorySearchItem[] {
-    this.ensureAssistantOpsState(botAlias);
-    return [...(this.assistantMemories.get(botAlias) || [])];
-  }
-
-  private getAssistantMemoryEvalReports(botAlias: string): AssistantMemoryEvalReport[] {
-    this.ensureAssistantOpsState(botAlias);
-    return [...(this.assistantMemoryEvalReports.get(botAlias) || [])];
-  }
-
-  private getAssistantPerfRecords(botAlias: string): AssistantPerfRecord[] {
-    this.ensureAssistantOpsState(botAlias);
-    return [...(this.assistantPerfRecords.get(botAlias) || [])];
-  }
-
-  private getAssistantAdminAudit(botAlias: string): AssistantAdminAuditItem[] {
-    this.ensureAssistantOpsState(botAlias);
-    return [...(this.assistantAdminAudit.get(botAlias) || [])];
-  }
-
-  private buildAssistantRuntime(botAlias: string): AssistantRuntimeSnapshot | null {
-    const bot = this.bots.get(botAlias);
-    if (!bot || bot.botMode !== "assistant") {
-      return null;
-    }
-    const queue = this.getAssistantCronJobs(botAlias)
-      .filter((job) => job.pending && job.pendingRunId)
-      .map((job) => {
-        const run = (this.assistantCronRuns.get(this.cronRunKey(botAlias, job.id)) || [])
-          .find((item) => item.runId === job.pendingRunId);
-        return {
-          runId: job.pendingRunId,
-          source: "manual" as const,
-          status: "queued" as const,
-          taskMode: job.task.mode || "standard",
-          interactive: false,
-          jobId: job.id,
-          jobTitle: job.title,
-          visibleText: job.task.prompt,
-          enqueuedAt: run?.enqueuedAt || "",
-        };
-      });
-    return {
-      pendingCount: queue.length,
-      queuedCount: queue.length,
-      active: null,
-      queue,
-    };
   }
 
   async getPublicHostInfo(): Promise<PublicHostInfo> {
@@ -3442,9 +3098,6 @@ export class MockWebBotClient implements WebBotClient {
 
   async createAgent(botAlias: string, input: AgentInput): Promise<AgentMutationResult> {
     const bot = this.getBotSummary(botAlias);
-    if ((bot.botMode || "cli") !== "cli") {
-      throw new WebApiClientError("仅 CLI Bot 支持子 agent", { status: 400, code: "agent_not_supported" });
-    }
     const id = (input.id || "").trim().toLowerCase();
     const name = (input.name || "").trim();
     if (!id || id === "main" || !/^[a-z][a-z0-9_-]{1,31}$/.test(id)) {
@@ -3674,14 +3327,12 @@ export class MockWebBotClient implements WebBotClient {
     const messages = this.getAgentMessages(bot.alias, agentId);
     return {
       ...bot,
-      botMode: bot.botMode || "cli",
       cliPath: bot.cliPath,
       enabled: bot.enabled,
       isMain: bot.isMain,
       messageCount: messages.length,
       historyCount: messages.length,
       isProcessing: false,
-      assistantRuntime: this.buildAssistantRuntime(botAlias),
       agents: this.ensureAgents(botAlias).map((agent) => this.cloneAgent(agent)),
       activeAgentId: agentId,
       busyAgentIds: [],
@@ -3802,7 +3453,6 @@ export class MockWebBotClient implements WebBotClient {
       status: "active",
       botAlias,
       agentId,
-      botMode: this.getBotSummary(botAlias).botMode || "cli",
       cliType: this.getBotSummary(botAlias).cliType,
       workingDir: this.getBotSummary(botAlias).workingDir,
       ...(this.isNativeExecution(botAlias, executionMode) ? {
@@ -3848,7 +3498,6 @@ export class MockWebBotClient implements WebBotClient {
       status: "active",
       botAlias,
       agentId,
-      botMode: bot.botMode || "cli",
       cliType: bot.cliType,
       workingDir: bot.workingDir,
       ...(this.isNativeExecution(botAlias, options.executionMode) ? {
@@ -4295,84 +3944,6 @@ export class MockWebBotClient implements WebBotClient {
       createdAt,
       state: "done",
     });
-
-    if (options?.taskMode === "proposal_patch") {
-      onStatus?.({ elapsedSeconds: 1, previewText: "开始生成 patch" });
-      onTrace?.({
-        kind: "tool_call",
-        summary: "git worktree add",
-        toolName: "git",
-        callId: "call_git_worktree_add",
-      });
-      onAgUiEvent?.({
-        type: EventType.RUN_STARTED,
-        threadId: "mock-thread",
-        runId: "mock-run",
-      });
-      onAgUiEvent?.({
-        type: EventType.ACTIVITY_SNAPSHOT,
-        messageId: "mock-message",
-        activityType: "TCB_STATUS",
-        replace: true,
-        content: {
-          elapsedSeconds: 1,
-          previewText: "开始生成 patch",
-        },
-      });
-      onAgUiEvent?.({
-        type: EventType.TOOL_CALL_START,
-        toolCallId: "call_git_worktree_add",
-        toolCallName: "git",
-      });
-      const proposalId = String(options.taskPayload?.proposalId || options.taskPayload?.proposal_id || "").trim();
-      const targetAlias = String(options.taskPayload?.targetAlias || options.taskPayload?.target_alias || "").trim();
-      const metadata = await this.generateAssistantProposalPatch(botAlias, proposalId, {
-        targetAlias,
-        regenerate: Boolean(options.taskPayload?.regenerate),
-      });
-      const summary = [
-        "patch 已生成",
-        `目标工程: ${metadata.targetAlias}`,
-        `变更文件: ${metadata.changedFiles.length}`,
-      ].join("\n");
-      this.assistantProposalPatchMetadata.set(this.assistantProposalKey(botAlias, proposalId), {
-        ...metadata,
-        chatConclusion: summary,
-      } as AssistantPatchMetadata);
-      const assistantMessage: ChatMessage = {
-        id: `assistant-${Date.now()}`,
-        role: "assistant",
-        text: summary,
-        createdAt: new Date().toISOString(),
-        elapsedSeconds: 1,
-        state: "done",
-        meta: {
-          traceCount: 1,
-          toolCallCount: 1,
-          processCount: 0,
-          trace: [{
-            kind: "tool_call",
-            summary: "git worktree add",
-            toolName: "git",
-            callId: "call_git_worktree_add",
-          }],
-        },
-      };
-      onAgUiEvent?.({
-        type: EventType.TOOL_CALL_RESULT,
-        messageId: assistantMessage.id,
-        toolCallId: "call_git_worktree_add",
-        content: summary,
-      });
-      onAgUiEvent?.({
-        type: EventType.RUN_FINISHED,
-        threadId: "mock-thread",
-        runId: "mock-run",
-        outcome: { type: "success" },
-      });
-      this.appendAgentChatMessage(botAlias, agentId, assistantMessage);
-      return assistantMessage;
-    }
 
     if (options?.taskMode === "plan") {
       const summary = [
@@ -6319,9 +5890,6 @@ export class MockWebBotClient implements WebBotClient {
     options: UpdateBotWorkdirOptions = {},
   ): Promise<BotSummary> {
     const current = this.getBotSummary(botAlias);
-    if (current.botMode === "assistant") {
-      throw new Error("assistant 型 Bot 不允许修改默认工作目录");
-    }
     const nextDir = workingDir.trim();
     const historyCount = this.ensureAgents(botAlias)
       .reduce((count, agent) => count + this.getAgentMessages(botAlias, agent.id).length, 0);
@@ -6334,7 +5902,6 @@ export class MockWebBotClient implements WebBotClient {
           requestedWorkingDir: nextDir,
           historyCount,
           messageCount: historyCount,
-          botMode: current.botMode || "cli",
         },
       });
     }
@@ -6367,688 +5934,6 @@ export class MockWebBotClient implements WebBotClient {
     return clonePromptPresets(this.globalPromptPresets);
   }
 
-  async listAssistantProposals(botAlias: string, status?: string): Promise<AssistantProposal[]> {
-    return this.getAssistantProposals(botAlias).filter((item) => !status || item.status === status);
-  }
-
-  async listAssistantUpgradeTargets(botAlias: string): Promise<AssistantUpgradeTarget[]> {
-    this.ensureAssistantOpsState(botAlias);
-    return Array.from(this.bots.keys()).sort().map((alias) => this.buildMockUpgradeTarget(alias));
-  }
-
-  async getAssistantProposal(botAlias: string, proposalId: string): Promise<AssistantProposalDetail> {
-    const proposal = this.getAssistantProposals(botAlias).find((item) => item.id === proposalId);
-    if (!proposal) {
-      throw new WebApiClientError("proposal 不存在", { status: 404, code: "proposal_not_found" });
-    }
-    const key = this.assistantProposalKey(botAlias, proposalId);
-    const log = this.assistantProposalApplyLogs.get(key);
-    const patchMetadata = this.getAssistantPatchMetadata(botAlias, proposalId);
-    const patchDiffText = this.assistantProposalPatchDiffs.get(key) || "";
-    const proposalDiffText = this.assistantProposalDiffs.get(key) || "";
-    const diffText = patchDiffText || proposalDiffText;
-    const diffSource = patchMetadata
-      ? `upgrades/${patchMetadata.state}/${proposalId}.patch`
-      : (proposalDiffText ? `proposals/${proposalId}.diff` : "");
-    const upgrade = this.buildAssistantUpgradeState(botAlias, proposal);
-    return {
-      proposal,
-      diff: {
-        available: Boolean(diffText),
-        source: diffSource,
-        text: diffText,
-        files: parseMockAssistantDiffFiles(diffText),
-      },
-      apply: {
-        available: upgrade.canApply || upgrade.canDryRun,
-        applied: proposal.status === "applied",
-        lastError: log?.status === "failed" ? (log.error || "") : "",
-        lastErrorAt: log?.status === "failed" ? (log.failedAt || "") : "",
-        lastErrorLogPath: log?.status === "failed" ? `upgrades/applied/${proposalId}.last-error.json` : "",
-      },
-      upgrade,
-      generationLog: {
-        available: Boolean(patchMetadata),
-        source: patchMetadata ? `upgrades/logs/${proposalId}.generate.jsonl` : "",
-        items: patchMetadata ? [
-          {
-            event: "started",
-            createdAt: patchMetadata.generatedAt,
-            status: "",
-            message: "",
-            error: "",
-            code: "",
-            raw: { event: "started", created_at: patchMetadata.generatedAt, proposal_id: proposalId },
-          },
-          {
-            event: patchMetadata.generator.status === "failed" ? "failed" : "succeeded",
-            createdAt: patchMetadata.generatedAt,
-            status: patchMetadata.generator.status,
-            message: "",
-            error: "",
-            code: "",
-            raw: { event: patchMetadata.generator.status === "failed" ? "failed" : "succeeded", status: patchMetadata.generator.status },
-          },
-        ] : [],
-      },
-    };
-  }
-
-  async getAssistantProposalApplyLog(botAlias: string, proposalId: string): Promise<AssistantUpgradeApplyLog> {
-    const key = this.assistantProposalKey(botAlias, proposalId);
-    const log = this.assistantProposalApplyLogs.get(key);
-    if (!log) {
-      throw new WebApiClientError("apply 日志不存在", { status: 404, code: "assistant_upgrade_log_not_found" });
-    }
-    return { ...log };
-  }
-
-  async approveAssistantProposal(botAlias: string, proposalId: string): Promise<AssistantProposal> {
-    const items = this.getAssistantProposals(botAlias);
-    const next = items.map((item) => (
-      item.id === proposalId
-        ? {
-            ...item,
-            status: "approved",
-            reviewedBy: "127.0.0.1",
-            reviewedAt: new Date().toISOString(),
-          }
-        : item
-    ));
-    const updated = next.find((item) => item.id === proposalId);
-    if (!updated) {
-      throw new WebApiClientError("proposal 不存在", { status: 404, code: "proposal_not_found" });
-    }
-    this.assistantProposals.set(botAlias, next);
-    this.pushAssistantAdminAudit(botAlias, {
-      action: "assistant.proposal.approve",
-      resource: "proposal",
-      resourceId: proposalId,
-      requestSummary: { proposalId },
-      path: `/api/admin/bots/${botAlias}/assistant/proposals/${proposalId}/approve`,
-    });
-    return updated;
-  }
-
-  async generateAssistantProposalPatch(
-    botAlias: string,
-    proposalId: string,
-    input: { targetAlias: string; regenerate?: boolean },
-  ): Promise<AssistantPatchMetadata> {
-    const proposal = this.getAssistantProposals(botAlias).find((item) => item.id === proposalId);
-    if (!proposal) {
-      throw new WebApiClientError("proposal 不存在", { status: 404, code: "proposal_not_found" });
-    }
-    if (proposal.status !== "approved") {
-      throw new WebApiClientError("proposal 尚未批准", { status: 409, code: "proposal_not_approved" });
-    }
-    const target = this.buildMockUpgradeTarget(input.targetAlias);
-    if (!target.available) {
-      throw new WebApiClientError(
-        target.reason === "upgrade_target_dirty" ? "目标仓库不干净，先提交或清理改动" : "目标工程不可用",
-        {
-          status: 409,
-          code: target.reason || "upgrade_target_unavailable",
-          data: { dirtyPaths: target.dirtyPaths },
-        },
-      );
-    }
-    const key = this.assistantProposalKey(botAlias, proposalId);
-    const diffText = [
-      "diff --git a/bot/assistant_memory_recall.py b/bot/assistant_memory_recall.py",
-      "@@ -20,3 +20,8 @@",
-      " def recall_assistant_memories(...):",
-      "+    emit_audit('memory_recall')",
-      "+    return []",
-      "",
-      "diff --git a/bot/assistant_memory_store.py b/bot/assistant_memory_store.py",
-      "@@ -40,2 +40,5 @@",
-      "+def record_recall_trace(...):",
-      "+    return None",
-      "",
-    ].join("\n");
-    this.assistantProposalPatchDiffs.set(key, diffText);
-    const metadata: AssistantPatchMetadata = {
-      id: proposalId,
-      proposalId,
-      state: "pending",
-      lifecycle: "pending",
-      chatConclusion: [
-        "patch 已生成",
-        `目标工程: ${target.alias}`,
-        "变更文件: 2",
-      ].join("\n"),
-      targetAlias: target.alias,
-      targetWorkingDir: target.workingDir,
-      targetRepoRoot: target.repoRoot,
-      baseCommit: target.head,
-      worktreePath: `${botAlias}\\.assistant\\upgrades\\worktrees\\${proposalId}`,
-      patchPath: `upgrades/pending/${proposalId}.patch`,
-      generatedAt: new Date().toISOString(),
-      generatedBy: String(this.session.userId || "1001"),
-      generator: {
-        cliType: target.cliType,
-        cliPath: target.cliPath,
-        status: "succeeded",
-        elapsedSeconds: 3,
-      },
-      dryRun: {
-        ok: false,
-        checkedAt: "",
-        stdout: "",
-        stderr: "",
-        patchPath: "",
-        repoRoot: "",
-      },
-      sensitiveHits: [],
-      changedFiles: [
-        "bot/assistant_memory_recall.py",
-        "bot/assistant_memory_store.py",
-      ],
-      additions: 5,
-      deletions: 0,
-    };
-    this.assistantProposalPatchMetadata.set(key, metadata);
-    this.pushAssistantAdminAudit(botAlias, {
-      action: "assistant.proposal.patch.generate",
-      resource: "proposal",
-      resourceId: proposalId,
-      requestSummary: { proposalId, targetAlias: input.targetAlias, regenerate: Boolean(input.regenerate) },
-      path: `/api/admin/bots/${botAlias}/assistant/proposals/${proposalId}/patch`,
-    });
-    return metadata;
-  }
-
-  async generateAssistantProposalPatchStream(
-    botAlias: string,
-    proposalId: string,
-    input: { targetAlias: string; regenerate?: boolean },
-    handlers?: AssistantPatchGenerationHandlers,
-  ): Promise<AssistantPatchMetadata> {
-    handlers?.onStatus?.({ phase: "setup", message: "准备生成", lifecycle: "running" });
-    handlers?.onLog?.("开始生成 patch");
-    handlers?.onTrace?.({
-      kind: "tool_call",
-      summary: "git worktree add",
-      toolName: "git",
-      callId: "call_git_worktree_add",
-    });
-    handlers?.onTrace?.({
-      kind: "tool_result",
-      summary: "Exit code: 0\nWall time: 1s",
-      toolName: "git",
-      callId: "call_git_worktree_add",
-    });
-    return this.generateAssistantProposalPatch(botAlias, proposalId, input);
-  }
-
-  async approveAssistantProposalPatch(botAlias: string, proposalId: string): Promise<AssistantPatchMetadata> {
-    const key = this.assistantProposalKey(botAlias, proposalId);
-    const current = this.getAssistantPatchMetadata(botAlias, proposalId);
-    if (!current) {
-      throw new WebApiClientError("pending patch 不存在", { status: 404, code: "pending_patch_not_found" });
-    }
-    if (current.state !== "pending") {
-      return current;
-    }
-    const next: AssistantPatchMetadata = {
-      ...current,
-      state: "approved",
-      lifecycle: "approved",
-      patchPath: `upgrades/approved/${proposalId}.patch`,
-      approvedBy: String(this.session.userId || "1001"),
-      approvedAt: new Date().toISOString(),
-    };
-    this.assistantProposalPatchMetadata.set(key, next);
-    this.pushAssistantAdminAudit(botAlias, {
-      action: "assistant.proposal.patch.approve",
-      resource: "proposal",
-      resourceId: proposalId,
-      requestSummary: { proposalId },
-      path: `/api/admin/bots/${botAlias}/assistant/proposals/${proposalId}/patch/approve`,
-    });
-    return next;
-  }
-
-  async rejectAssistantProposal(botAlias: string, proposalId: string): Promise<AssistantProposal> {
-    const items = this.getAssistantProposals(botAlias);
-    const next = items.map((item) => (
-      item.id === proposalId
-        ? {
-            ...item,
-            status: "rejected",
-            reviewedBy: "127.0.0.1",
-            reviewedAt: new Date().toISOString(),
-          }
-        : item
-    ));
-    const updated = next.find((item) => item.id === proposalId);
-    if (!updated) {
-      throw new WebApiClientError("proposal 不存在", { status: 404, code: "proposal_not_found" });
-    }
-    this.assistantProposals.set(botAlias, next);
-    this.pushAssistantAdminAudit(botAlias, {
-      action: "assistant.proposal.reject",
-      resource: "proposal",
-      resourceId: proposalId,
-      requestSummary: { proposalId },
-      path: `/api/admin/bots/${botAlias}/assistant/proposals/${proposalId}/reject`,
-    });
-    return updated;
-  }
-
-  async applyAssistantUpgrade(botAlias: string, proposalId: string): Promise<AssistantUpgradeApplyResult> {
-    const items = this.getAssistantProposals(botAlias);
-    const proposal = items.find((item) => item.id === proposalId);
-    if (!proposal) {
-      throw new WebApiClientError("proposal 不存在", { status: 404, code: "proposal_not_found" });
-    }
-    if (proposal.status !== "approved") {
-      throw new WebApiClientError("proposal 尚未批准", { status: 409, code: "proposal_not_approved" });
-    }
-    const patch = this.getAssistantPatchMetadata(botAlias, proposalId);
-    if (!patch || patch.state !== "approved") {
-      throw new WebApiClientError("approved patch 不存在", { status: 404, code: "upgrade_patch_not_found" });
-    }
-    const appliedAt = new Date().toISOString();
-    this.assistantProposals.set(
-      botAlias,
-      items.map((item) => (item.id === proposalId ? { ...item, status: "applied", appliedAt } : item)),
-    );
-    this.assistantProposalApplyLogs.set(this.assistantProposalKey(botAlias, proposalId), {
-      id: proposalId,
-      status: "applied",
-      repoRoot: patch.targetRepoRoot,
-      patchPath: patch.patchPath,
-      appliedAt,
-    });
-    this.pushAssistantAdminAudit(botAlias, {
-      action: "assistant.upgrade.apply",
-      resource: "proposal",
-      resourceId: proposalId,
-      requestSummary: { proposalId },
-      path: `/api/admin/bots/${botAlias}/assistant/upgrades/${proposalId}/apply`,
-    });
-    return {
-      id: proposalId,
-      status: "applied",
-      patchPath: patch.patchPath,
-      repoRoot: patch.targetRepoRoot,
-      appliedAt,
-    };
-  }
-
-  async dryRunAssistantUpgrade(botAlias: string, proposalId: string): Promise<AssistantUpgradeDryRunResult> {
-    const proposal = this.getAssistantProposals(botAlias).find((item) => item.id === proposalId);
-    if (!proposal) {
-      throw new WebApiClientError("proposal 不存在", { status: 404, code: "proposal_not_found" });
-    }
-    const patch = this.getAssistantPatchMetadata(botAlias, proposalId);
-    const checkedAt = new Date().toISOString();
-    const result: AssistantUpgradeDryRunResult = {
-      ok: proposal.status === "approved" && patch?.state === "approved",
-      checkedAt,
-      stdout: proposal.status === "approved" && patch?.state === "approved" ? "Patch cleanly applies" : "",
-      stderr: proposal.status !== "approved"
-        ? "proposal 尚未批准"
-        : (patch?.state === "approved" ? "" : "approved patch 不存在"),
-      patchPath: patch?.patchPath || "",
-      repoRoot: patch?.targetRepoRoot || "",
-    };
-    if (patch) {
-      this.assistantProposalPatchMetadata.set(this.assistantProposalKey(botAlias, proposalId), {
-        ...patch,
-        dryRun: result,
-      });
-    }
-    this.pushAssistantAdminAudit(botAlias, {
-      action: "assistant.upgrade.dry_run",
-      resource: "proposal",
-      resourceId: proposalId,
-      requestSummary: { proposalId },
-      ok: result.ok,
-      statusCode: result.ok ? 200 : 409,
-      errorCode: result.ok ? undefined : "proposal_not_approved",
-      errorMessage: result.ok ? undefined : result.stderr,
-      path: `/api/admin/bots/${botAlias}/assistant/upgrades/${proposalId}/dry-run`,
-    });
-    return result;
-  }
-
-  async searchAssistantMemories(
-    botAlias: string,
-    query: string,
-    options: AssistantMemorySearchOptions = {},
-  ): Promise<AssistantMemorySearchResult> {
-    const needle = query.trim().toLowerCase();
-    const items = this.getAssistantMemories(botAlias)
-      .filter((item) => options.includeInvalidated || !item.invalidatedAt)
-      .filter((item) => !options.kinds?.length || options.kinds.includes(item.kind))
-      .filter((item) => !options.scopes?.length || options.scopes.includes(item.scope))
-      .filter((item) => {
-        if (typeof options.userId !== "number") {
-          return true;
-        }
-        return item.sourceRef?.includes(String(options.userId)) || options.userId === 1001;
-      })
-      .filter((item) => !needle || `${item.title}\n${item.summary}\n${item.body}`.toLowerCase().includes(needle))
-      .slice(0, options.limit || 10);
-    return { items };
-  }
-
-  async bulkInvalidateAssistantMemories(
-    botAlias: string,
-    memoryIds: string[],
-    reason: string,
-  ): Promise<AssistantMemoryBulkInvalidateResult> {
-    const now = new Date().toISOString();
-    const items = this.getAssistantMemories(botAlias);
-    const wanted = new Set(memoryIds);
-    let invalidated = 0;
-    const missing: string[] = [];
-    for (const memoryId of memoryIds) {
-      if (!items.some((item) => item.id === memoryId)) {
-        missing.push(memoryId);
-      }
-    }
-    this.assistantMemories.set(botAlias, items.map((item) => {
-      if (!wanted.has(item.id) || item.invalidatedAt) {
-        return item;
-      }
-      invalidated += 1;
-      return {
-        ...item,
-        invalidatedAt: now,
-      };
-    }));
-    this.pushAssistantAdminAudit(botAlias, {
-      action: "assistant.memory.bulk_invalidate",
-      resource: "memory",
-      resourceId: "bulk",
-      requestSummary: { memoryIds, reason },
-      path: `/api/admin/bots/${botAlias}/assistant/memory/bulk-invalidate`,
-    });
-    return {
-      invalidated,
-      missing,
-      reason,
-    };
-  }
-
-  async invalidateAssistantMemory(
-    botAlias: string,
-    memoryId: string,
-    reason: string,
-  ): Promise<AssistantMemoryInvalidateResult> {
-    const now = new Date().toISOString();
-    const items = this.getAssistantMemories(botAlias);
-    const exists = items.some((item) => item.id === memoryId);
-    if (!exists) {
-      throw new WebApiClientError("memory 不存在", { status: 404, code: "assistant_memory_not_found" });
-    }
-    this.assistantMemories.set(
-      botAlias,
-      items.map((item) => (item.id === memoryId ? { ...item, invalidatedAt: now } : item)),
-    );
-    this.pushAssistantAdminAudit(botAlias, {
-      action: "assistant.memory.invalidate",
-      resource: "memory",
-      resourceId: memoryId,
-      requestSummary: { memoryId, reason },
-      path: `/api/admin/bots/${botAlias}/assistant/memory/${memoryId}/invalidate`,
-    });
-    return {
-      memoryId,
-      invalidated: true,
-      reason,
-    };
-  }
-
-  async reindexAssistantMemory(
-    botAlias: string,
-    _options: { userId?: number; force?: boolean } = {},
-  ): Promise<AssistantMemoryReindexResult> {
-    this.ensureAssistantOpsState(botAlias);
-    this.pushAssistantAdminAudit(botAlias, {
-      action: "assistant.memory.reindex",
-      resource: "memory",
-      resourceId: "index",
-      requestSummary: { ..._options },
-      path: `/api/admin/bots/${botAlias}/assistant/memory/reindex`,
-    });
-    return {
-      working: {
-        indexedCount: 4,
-        memoryIds: ["wm_1", "wm_2", "wm_3", "wm_4"],
-      },
-      knowledge: {
-        indexedCount: 2,
-        memoryIds: ["kg_1", "kg_2"],
-      },
-    };
-  }
-
-  async runAssistantMemoryEval(
-    botAlias: string,
-    input: { userId?: number; cases: AssistantMemoryEvalCase[] },
-  ): Promise<AssistantMemoryEvalRun> {
-    const createdAt = new Date().toISOString();
-    const reportPath = `.assistant/evals/memory/${createdAt.replace(/[-:.]/g, "").slice(0, 15)}Z.json`;
-    const report: AssistantMemoryEvalReport = {
-      reportPath,
-      createdAt,
-      metrics: {
-        hitAt5: input.cases.length ? 1 : 0,
-        staleRecallRate: 0,
-      },
-      rows: input.cases.map((item) => ({
-        query: item.query,
-        promptBlock: `<ASSISTANT_MEMORY_RECALL>\n1. [${item.expectedMemoryKind}/user] ${item.expectedHitTerms[0] || item.query}\n</ASSISTANT_MEMORY_RECALL>`,
-        hit: true,
-        stale: false,
-        auditPath: `.assistant/audit/memory/${Date.now()}-${input.userId || 1001}.json`,
-      })),
-    };
-    this.assistantMemoryEvalReports.set(botAlias, [report, ...this.getAssistantMemoryEvalReports(botAlias)]);
-    this.pushAssistantAdminAudit(botAlias, {
-      action: "assistant.memory.eval",
-      resource: "eval",
-      resourceId: "memory",
-      requestSummary: { userId: input.userId, cases: input.cases.length },
-      path: `/api/admin/bots/${botAlias}/assistant/evals/memory/run`,
-    });
-    return {
-      metrics: report.metrics,
-      reportPath,
-    };
-  }
-
-  async listAssistantMemoryEvalReports(botAlias: string, limit = 10): Promise<AssistantMemoryEvalReport[]> {
-    return this.getAssistantMemoryEvalReports(botAlias).slice(0, limit);
-  }
-
-  async getAssistantDiagnostics(
-    botAlias: string,
-    filters: AssistantDiagnosticsFilters = {},
-  ): Promise<AssistantPerfDiagnostics> {
-    const items = this.getAssistantPerfRecords(botAlias)
-      .filter((item) => !filters.source || item.source === filters.source)
-      .filter((item) => !filters.status || item.status === filters.status)
-      .filter((item) => typeof filters.userId !== "number" || item.userId === filters.userId)
-      .filter((item) => !filters.from || item.createdAt >= filters.from)
-      .filter((item) => !filters.to || item.createdAt <= filters.to)
-      .slice(0, filters.limit || 20);
-    return {
-      items,
-      summary: summarizeMockAssistantDiagnostics(items),
-    };
-  }
-
-  async listAssistantCronJobs(botAlias: string): Promise<AssistantCronJob[]> {
-    return this.getAssistantCronJobs(botAlias);
-  }
-
-  async createAssistantCronJob(botAlias: string, input: CreateAssistantCronJobInput): Promise<AssistantCronJob> {
-    const current = this.getAssistantCronJobs(botAlias);
-    const taskMode = input.task.mode || "standard";
-    const job: AssistantCronJob = {
-      ...input,
-      task: {
-        prompt: input.task.prompt,
-        mode: taskMode,
-        lookbackHours: input.task.lookbackHours ?? 24,
-        historyLimit: input.task.historyLimit ?? 40,
-        captureLimit: input.task.captureLimit ?? 20,
-        deliverMode: input.task.deliverMode ?? (taskMode === "dream" ? "silent" : "chat_handoff"),
-      },
-      nextRunAt: input.schedule.type === "daily"
-        ? "2026-04-17T09:00:00+08:00"
-        : "2026-04-16T10:00:00+08:00",
-      lastStatus: "",
-      lastError: "",
-      lastSuccessAt: "",
-      pending: false,
-      pendingRunId: "",
-      coalescedCount: 0,
-    };
-    this.assistantCronJobs.set(botAlias, [...current.filter((item) => item.id !== job.id), job]);
-    this.pushAssistantAdminAudit(botAlias, {
-      action: "assistant.cron.create",
-      resource: "cron",
-      resourceId: job.id,
-      requestSummary: { jobId: job.id, title: job.title },
-      path: `/api/admin/bots/${botAlias}/assistant/cron/jobs`,
-    });
-    return job;
-  }
-
-  async updateAssistantCronJob(
-    botAlias: string,
-    jobId: string,
-    input: UpdateAssistantCronJobInput,
-  ): Promise<AssistantCronJob> {
-    const current = this.getAssistantCronJobs(botAlias);
-    const existing = current.find((item) => item.id === jobId);
-    if (!existing) {
-      throw new Error("任务不存在");
-    }
-    const updated: AssistantCronJob = {
-      ...existing,
-      ...(typeof input.enabled === "boolean" ? { enabled: input.enabled } : {}),
-      ...(input.title ? { title: input.title } : {}),
-      schedule: {
-        ...existing.schedule,
-        ...(input.schedule || {}),
-      },
-      task: {
-        ...existing.task,
-        ...(input.task || {}),
-        mode: input.task?.mode || existing.task.mode || "standard",
-        lookbackHours: input.task?.lookbackHours ?? existing.task.lookbackHours ?? 24,
-        historyLimit: input.task?.historyLimit ?? existing.task.historyLimit ?? 40,
-        captureLimit: input.task?.captureLimit ?? existing.task.captureLimit ?? 20,
-        deliverMode: input.task?.deliverMode
-          ?? existing.task.deliverMode
-          ?? ((input.task?.mode || existing.task.mode) === "dream" ? "silent" : "chat_handoff"),
-      },
-      execution: {
-        ...existing.execution,
-        ...(input.execution || {}),
-      },
-    };
-    this.assistantCronJobs.set(
-      botAlias,
-      current.map((item) => (item.id === jobId ? updated : item)),
-    );
-    this.pushAssistantAdminAudit(botAlias, {
-      action: "assistant.cron.update",
-      resource: "cron",
-      resourceId: jobId,
-      requestSummary: { jobId },
-      method: "PATCH",
-      path: `/api/admin/bots/${botAlias}/assistant/cron/jobs/${jobId}`,
-    });
-    return updated;
-  }
-
-  async deleteAssistantCronJob(botAlias: string, jobId: string): Promise<void> {
-    this.assistantCronJobs.set(
-      botAlias,
-      this.getAssistantCronJobs(botAlias).filter((item) => item.id !== jobId),
-    );
-    this.assistantCronRuns.delete(this.cronRunKey(botAlias, jobId));
-    this.pushAssistantAdminAudit(botAlias, {
-      action: "assistant.cron.delete",
-      resource: "cron",
-      resourceId: jobId,
-      requestSummary: { jobId },
-      method: "DELETE",
-      path: `/api/admin/bots/${botAlias}/assistant/cron/jobs/${jobId}`,
-    });
-  }
-
-  async runAssistantCronJob(botAlias: string, jobId: string): Promise<AssistantCronRunRequestResult> {
-    const job = this.getAssistantCronJobs(botAlias).find((item) => item.id === jobId);
-    const runId = `run_${Date.now()}`;
-    const runs = this.assistantCronRuns.get(this.cronRunKey(botAlias, jobId)) || [];
-    this.assistantCronRuns.set(this.cronRunKey(botAlias, jobId), [
-      {
-        runId,
-        jobId,
-        triggerSource: "manual",
-        scheduledAt: new Date().toISOString(),
-        enqueuedAt: new Date().toISOString(),
-        startedAt: "",
-        finishedAt: "",
-        status: "queued",
-        elapsedSeconds: 0,
-        queueWaitSeconds: 0,
-        timedOut: false,
-        promptExcerpt: "",
-        outputExcerpt: "",
-        error: "",
-      },
-      ...runs,
-    ]);
-    this.assistantCronJobs.set(
-      botAlias,
-      this.getAssistantCronJobs(botAlias).map((item) =>
-        item.id === jobId
-          ? { ...item, pending: true, pendingRunId: runId, lastStatus: "queued" }
-          : item,
-      ),
-    );
-    this.pushAssistantAdminAudit(botAlias, {
-      action: "assistant.cron.run",
-      resource: "cron",
-      resourceId: jobId,
-      requestSummary: { jobId, runId },
-      path: `/api/admin/bots/${botAlias}/assistant/cron/jobs/${jobId}/run`,
-    });
-    return {
-      runId,
-      status: "queued",
-      taskMode: job?.task.mode || "standard",
-      deliverMode: job?.task.deliverMode || "chat_handoff",
-    };
-  }
-
-  async listAssistantCronRuns(botAlias: string, jobId: string, limit = 5): Promise<AssistantCronRun[]> {
-    return (this.assistantCronRuns.get(this.cronRunKey(botAlias, jobId)) || []).slice(0, limit);
-  }
-
-  async listAssistantAdminAudit(
-    botAlias: string,
-    filters: { limit?: number; action?: string; resource?: string; status?: "ok" | "failed" | "" } = {},
-  ): Promise<AssistantAdminAuditResult> {
-    const items = this.getAssistantAdminAudit(botAlias)
-      .filter((item) => !filters.action || item.action === filters.action)
-      .filter((item) => !filters.resource || item.target.resource === filters.resource)
-      .filter((item) => !filters.status || item.ok === (filters.status === "ok"))
-      .slice(0, filters.limit || 20);
-    return { items };
-  }
-
   async addBot(input: CreateBotInput): Promise<BotSummary> {
     const alias = input.alias.trim().toLowerCase();
     if (!alias) {
@@ -7069,7 +5954,6 @@ export class MockWebBotClient implements WebBotClient {
       alias,
       cliType: input.cliType,
       cliPath: input.cliPath.trim() || defaultCliPathForType(input.cliType),
-      botMode: input.botMode,
       status: "running",
       workingDir: input.workingDir.trim(),
       lastActiveText: "运行中",
@@ -7092,10 +5976,6 @@ export class MockWebBotClient implements WebBotClient {
     }
     this.currentPaths.set(alias, bot.workingDir);
     this.workdirOverrides.set(alias, bot.workingDir);
-    if (bot.botMode === "assistant" && !this.assistantCronJobs.has(alias)) {
-      this.assistantCronJobs.set(alias, []);
-      this.ensureAssistantOpsState(alias);
-    }
     return this.getBotSummary(alias);
   }
 
@@ -7147,47 +6027,6 @@ export class MockWebBotClient implements WebBotClient {
         this.gitSmartCommitJobs.set(jobId, { ...job, alias });
       }
     }
-    this.moveKey(this.assistantCronJobs, botAlias, alias);
-    this.moveKey(this.assistantProposals, botAlias, alias);
-    this.moveKey(this.assistantMemories, botAlias, alias);
-    this.moveKey(this.assistantMemoryEvalReports, botAlias, alias);
-    this.moveKey(this.assistantPerfRecords, botAlias, alias);
-    this.moveKey(this.assistantAdminAudit, botAlias, alias);
-    for (const [key, value] of Array.from(this.assistantProposalDiffs.entries())) {
-      if (!key.startsWith(`${botAlias}:`)) {
-        continue;
-      }
-      this.assistantProposalDiffs.delete(key);
-      this.assistantProposalDiffs.set(`${alias}:${key.slice(botAlias.length + 1)}`, value);
-    }
-    for (const [key, value] of Array.from(this.assistantProposalPatchDiffs.entries())) {
-      if (!key.startsWith(`${botAlias}:`)) {
-        continue;
-      }
-      this.assistantProposalPatchDiffs.delete(key);
-      this.assistantProposalPatchDiffs.set(`${alias}:${key.slice(botAlias.length + 1)}`, value);
-    }
-    for (const [key, value] of Array.from(this.assistantProposalPatchMetadata.entries())) {
-      if (!key.startsWith(`${botAlias}:`)) {
-        continue;
-      }
-      this.assistantProposalPatchMetadata.delete(key);
-      this.assistantProposalPatchMetadata.set(`${alias}:${key.slice(botAlias.length + 1)}`, value);
-    }
-    for (const [key, value] of Array.from(this.assistantProposalApplyLogs.entries())) {
-      if (!key.startsWith(`${botAlias}:`)) {
-        continue;
-      }
-      this.assistantProposalApplyLogs.delete(key);
-      this.assistantProposalApplyLogs.set(`${alias}:${key.slice(botAlias.length + 1)}`, value);
-    }
-    for (const [key, value] of Array.from(this.assistantCronRuns.entries())) {
-      if (!key.startsWith(`${botAlias}:`)) {
-        continue;
-      }
-      this.assistantCronRuns.delete(key);
-      this.assistantCronRuns.set(`${alias}:${key.slice(botAlias.length + 1)}`, value);
-    }
     return this.getBotSummary(alias);
   }
 
@@ -7220,37 +6059,6 @@ export class MockWebBotClient implements WebBotClient {
     for (const [jobId, job] of Array.from(this.gitSmartCommitJobs.entries())) {
       if (job.alias === botAlias) {
         this.gitSmartCommitJobs.delete(jobId);
-      }
-    }
-    this.assistantCronJobs.delete(botAlias);
-    this.assistantProposals.delete(botAlias);
-    this.assistantMemories.delete(botAlias);
-    this.assistantMemoryEvalReports.delete(botAlias);
-    this.assistantPerfRecords.delete(botAlias);
-    this.assistantAdminAudit.delete(botAlias);
-    for (const key of Array.from(this.assistantProposalDiffs.keys())) {
-      if (key.startsWith(`${botAlias}:`)) {
-        this.assistantProposalDiffs.delete(key);
-      }
-    }
-    for (const key of Array.from(this.assistantProposalPatchDiffs.keys())) {
-      if (key.startsWith(`${botAlias}:`)) {
-        this.assistantProposalPatchDiffs.delete(key);
-      }
-    }
-    for (const key of Array.from(this.assistantProposalPatchMetadata.keys())) {
-      if (key.startsWith(`${botAlias}:`)) {
-        this.assistantProposalPatchMetadata.delete(key);
-      }
-    }
-    for (const key of Array.from(this.assistantProposalApplyLogs.keys())) {
-      if (key.startsWith(`${botAlias}:`)) {
-        this.assistantProposalApplyLogs.delete(key);
-      }
-    }
-    for (const key of Array.from(this.assistantCronRuns.keys())) {
-      if (key.startsWith(`${botAlias}:`)) {
-        this.assistantCronRuns.delete(key);
       }
     }
     return {
@@ -7422,3 +6230,4 @@ export async function streamAssistantReply(onChunk: (chunk: string) => void) {
     onChunk(chunk);
   }
 }
+

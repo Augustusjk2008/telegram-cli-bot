@@ -44,7 +44,6 @@ from bot.models import BotProfile
 from bot.native_agent.service import get_native_agent_service
 from bot.version import APP_VERSION
 from bot.web import WebApiServer
-from bot.web.api_service import execute_assistant_run_request, stream_assistant_run_request
 from bot.web.runtime_binding import RuntimeWebBind, WebPortInUseError, resolve_runtime_web_bind
 from bot.runtime_paths import get_web_runtime_state_path
 
@@ -425,10 +424,6 @@ async def run_all_bots():
     web_server = WebApiServer(manager, host=runtime_bind.host, port=runtime_bind.actual_port)
     try:
         await web_server.start()
-        await manager.start_background_services(
-            result_executor=lambda request: execute_assistant_run_request(manager, request),
-            stream_executor=lambda request: stream_assistant_run_request(manager, request),
-        )
         logger.info("Web API 已附加到主进程")
         _print_web_access_lines(runtime_bind)
         await _open_local_browser(runtime_bind)

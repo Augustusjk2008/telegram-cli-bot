@@ -3,7 +3,6 @@
 from . import (
     admin_routes,
     announcement_routes,
-    assistant_routes,
     auth_routes,
     bot_settings_routes,
     chat_routes,

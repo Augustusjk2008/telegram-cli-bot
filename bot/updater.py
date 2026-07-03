@@ -33,7 +33,6 @@ PROTECTED_UPDATE_PATHS = {
     ".web_tunnel_state.json",
     ".web_lan_chat.json",
     ".web_lan_chat_messages.json",
-    ".assistant",
     ".claude",
     ".git",
     ".updates",

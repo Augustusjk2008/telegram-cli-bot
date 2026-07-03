@@ -69,11 +69,9 @@ def normalize_execution_mode_config(
     *,
     bot_mode: str = "cli",
 ) -> tuple[list[str], str]:
-    normalized_bot_mode = str(bot_mode or "cli").strip().lower()
+    _ = bot_mode
     supported = normalize_execution_modes(supported_value)
     default = normalize_execution_mode(default_value, default=supported[0])
-    if normalized_bot_mode not in {"cli", "assistant"}:
-        return [EXECUTION_MODE_CLI], EXECUTION_MODE_CLI
     if supported == [EXECUTION_MODE_NATIVE_AGENT] or default == EXECUTION_MODE_NATIVE_AGENT:
         return [EXECUTION_MODE_NATIVE_AGENT], EXECUTION_MODE_NATIVE_AGENT
     return [EXECUTION_MODE_CLI], EXECUTION_MODE_CLI
@@ -353,7 +351,7 @@ class BotProfile:
     cli_path: str = CLI_PATH
     working_dir: str = WORKING_DIR
     enabled: bool = True
-    bot_mode: str = "cli"  # "cli" | "assistant"
+    bot_mode: str = "cli"
     cli_params: CliParamsConfig = field(default_factory=CliParamsConfig)
     git_commit_cli_config: Optional[GitCommitMessageCliConfig] = None
     agents: List[AgentProfile] = field(default_factory=list)
@@ -375,7 +373,6 @@ class BotProfile:
             "cli_path": self.cli_path,
             "working_dir": self.working_dir,
             "enabled": self.enabled,
-            "bot_mode": self.bot_mode,
             "supported_execution_modes": supported_execution_modes,
             "default_execution_mode": default_execution_mode,
             "native_agent": normalize_native_agent_config(self.native_agent),
@@ -425,11 +422,10 @@ class BotProfile:
             for item in data.get("agents", [])
             if isinstance(item, dict)
         ]
-        bot_mode = data.get("bot_mode", "cli")
+        bot_mode = "cli"
         supported_execution_modes, default_execution_mode = normalize_execution_mode_config(
             data.get("supported_execution_modes", data.get("supportedExecutionModes")),
             data.get("default_execution_mode", data.get("defaultExecutionMode", "cli")),
-            bot_mode=str(bot_mode or "cli"),
         )
         
         return cls(

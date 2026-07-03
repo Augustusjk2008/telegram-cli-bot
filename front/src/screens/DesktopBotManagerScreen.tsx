@@ -119,7 +119,6 @@ function normalizeCreateDraft(draft: CreateDraft): CreateDraft {
   };
   return {
     alias: draft.alias.trim(),
-    botMode: draft.botMode,
     cliType: draft.cliType,
     cliPath: draft.cliPath.trim(),
     workingDir: draft.workingDir.trim(),
@@ -136,7 +135,6 @@ function normalizeEditDraft(draft: EditDraft): EditDraft {
   const baseUrlInput = draft.nativeAgent.baseUrl.trim();
   return {
     alias: draft.alias.trim(),
-    botMode: draft.botMode,
     cliType: draft.cliType,
     cliPath: draft.cliPath.trim(),
     workingDir: draft.workingDir.trim(),
@@ -328,24 +326,6 @@ function CreatePanel({
           />
         </label>
         <label className="space-y-1 text-sm">
-          <span className="text-[var(--muted)]">模式</span>
-          <select
-            aria-label="新智能体模式"
-            value={draft.botMode}
-            onChange={(event) => {
-              const botMode = event.target.value as CreateDraft["botMode"];
-              setDraft((prev) => ({
-                ...prev,
-                botMode,
-              }));
-            }}
-            className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm"
-          >
-            <option value="cli">cli</option>
-            <option value="assistant">assistant</option>
-          </select>
-        </label>
-        <label className="space-y-1 text-sm">
           <span className="text-[var(--muted)]">运行后端</span>
           <select
             aria-label="运行后端"
@@ -519,11 +499,6 @@ function EditPanel({
   }, [bot, draft.runtimeBackend, nativeAgentFeatureEnabled]);
 
   useEffect(() => {
-    if ((bot.botMode || "cli") !== "cli") {
-      setClusterStatus(null);
-      setCliParams(null);
-      return;
-    }
     let cancelled = false;
     setClusterError("");
     void Promise.all([
@@ -544,7 +519,7 @@ function EditPanel({
     return () => {
       cancelled = true;
     };
-  }, [bot.alias, bot.botMode, manager.client]);
+  }, [bot.alias, manager.client]);
 
   async function submit(options: UpdateBotWorkdirOptions = {}) {
     const result = await manager.saveBotEdits(bot, draft, options);
@@ -613,18 +588,6 @@ function EditPanel({
             onChange={(event) => setDraft((prev) => ({ ...prev, alias: event.target.value }))}
             className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm disabled:opacity-60"
           />
-        </label>
-        <label className="space-y-1 text-sm">
-          <span className="text-[var(--muted)]">模式</span>
-          <select
-            aria-label="智能体模式"
-            value={draft.botMode}
-            disabled
-            className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm opacity-60"
-          >
-            <option value="cli">cli</option>
-            <option value="assistant">assistant</option>
-          </select>
         </label>
         <label className="space-y-1 text-sm">
           <span className="text-[var(--muted)]">运行后端</span>
@@ -747,8 +710,7 @@ function EditPanel({
         />
       ) : null}
 
-      {(bot.botMode || "cli") === "cli" ? (
-        <div className="space-y-4 border-t border-[var(--border)] pt-4">
+      <div className="space-y-4 border-t border-[var(--border)] pt-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <label className="inline-flex items-center gap-2 text-sm font-medium">
               <input
@@ -804,8 +766,7 @@ function EditPanel({
             }}
           />
           <ClusterSetupPanel botAlias={bot.alias} client={manager.client} canManage={canConfigureBot} />
-        </div>
-      ) : null}
+      </div>
 
       {draft.runtimeBackend === "cli" ? (
         <BotCliParamsPanel
@@ -1514,7 +1475,7 @@ export function DesktopBotManagerScreen({
                         "px-2 py-2 align-middle text-xs",
                         focused ? "text-[var(--text)]" : "text-[var(--muted)]",
                       )}>
-                        {bot.botMode || "cli"} · {runtimeBackend === "cli" ? `CLI / ${bot.cliType}` : "原生 agent"}
+                        {runtimeBackend === "cli" ? `CLI / ${bot.cliType}` : "原生 agent"}
                       </td>
                       <td
                         className={clsx(
@@ -1613,7 +1574,6 @@ export function DesktopBotManagerScreen({
               ) : inspectorTab === "agents" ? (
                 <AgentSettingsPanel
                   botAlias={focusedBot.alias}
-                  botMode={focusedBot.botMode || "cli"}
                   client={client}
                   canManage={canManage}
                 />
@@ -1641,7 +1601,7 @@ export function DesktopBotManagerScreen({
                         <StatusPill status={managerPillStatus(focusedBot)} />
                       </div>
                       <div className="mt-1 text-sm text-[var(--muted)]">
-                        {focusedBot.botMode || "cli"} · {runtimeBackendLabel(getRuntimeBackend(focusedBot))}
+                        {runtimeBackendLabel(getRuntimeBackend(focusedBot))}
                       </div>
                     </div>
                   </div>

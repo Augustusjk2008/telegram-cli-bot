@@ -261,19 +261,7 @@ export function BotListScreen({
             className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
             placeholder="team3"
           />
-          <div className="grid grid-cols-2 gap-3">
-            <label className="space-y-1 text-sm">
-              <span className="text-[var(--muted)]">新智能体模式</span>
-              <select
-                aria-label="新智能体模式"
-                value={createDraft.botMode}
-                onChange={(event) => setCreateDraft((prev) => ({ ...prev, botMode: event.target.value as CreateBotInput["botMode"] }))}
-                className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2"
-              >
-                <option value="cli">cli</option>
-                <option value="assistant">assistant</option>
-              </select>
-            </label>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="space-y-1 text-sm">
               <span className="text-[var(--muted)]">运行后端</span>
               <select
@@ -415,7 +403,7 @@ export function BotListScreen({
                       <StatusPill status={servicePillStatus} />
                     </div>
                     <div className="truncate text-xs font-medium text-[var(--muted)]">
-                      {bot.botMode || "cli"} · {getRuntimeBackend(bot) === "cli" ? `CLI / ${bot.cliType}` : "原生 agent"}
+                      {getRuntimeBackend(bot) === "cli" ? `CLI / ${bot.cliType}` : "原生 agent"}
                     </div>
                     <div className="truncate font-mono text-xs text-[var(--muted)]" title={bot.workingDir}>
                       {bot.workingDir || "未设置"}

@@ -27,7 +27,6 @@ import { PlanDraftCard } from "../components/PlanDraftCard";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { WebApiClientError } from "../services/types";
 import type {
-  AssistantRuntimePendingRun,
   AgentMention,
   AgentSummary,
   BotOverview,
@@ -51,16 +50,6 @@ import type {
   NativeAgentModelOption,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
-import {
-  ASSISTANT_CRON_RUN_ENQUEUED_EVENT,
-  isAssistantCronRunEnqueuedEvent,
-  type AssistantCronRunEnqueuedDetail,
-} from "../utils/assistantCronEvents";
-import {
-  ASSISTANT_PROPOSAL_PATCH_REQUESTED_EVENT,
-  dispatchAssistantProposalPatchCompleted,
-  isAssistantProposalPatchRequestedEvent,
-} from "../utils/assistantProposalPatchEvents";
 import { delightMotion, resolveMotionProps } from "../motion/premiumMotion";
 import { resolvePreviewFilePath } from "../utils/fileLinks";
 import { copyText } from "../utils/clipboard";
@@ -165,8 +154,7 @@ function formatDownloadProgress(progress: FileDownloadProgress) {
   return formatBytes(progress.downloadedBytes);
 }
 
-const ACTIVE_ASSISTANT_POLL_INTERVAL_MS = 1000;
-const IDLE_ASSISTANT_POLL_INTERVAL_MS = 5000;
+const ACTIVE_CHAT_POLL_INTERVAL_MS = 1000;
 const CLUSTER_TASK_POLL_INTERVAL_MS = 1200;
 const SSE_STALL_RECOVERY_DELAY_MS = 2500;
 const CHAT_ATTACHMENT_LINE_RE = /^附件路径为[:：]\s*(.+?)\s*$/;
@@ -448,10 +436,6 @@ function deleteAllScopedConversations(
   });
 }
 
-function pendingCronUserId(runId: string) {
-  return `assistant-cron-user-${runId}`;
-}
-
 function toModelOptionValue(value: unknown, options: string[]) {
   if (typeof value === "string" && value.trim()) {
     return value;
@@ -482,79 +466,11 @@ function resolveNativeReasoningEffort(model: NativeAgentModelOption | undefined,
   return efforts[0] || "";
 }
 
-function pendingCronAssistantId(runId: string) {
-  return `assistant-cron-assistant-${runId}`;
-}
-
-function summarizeRuntimeText(text: string | undefined, limit = 28) {
-  const value = (text || "").trim();
-  if (!value) {
-    return "";
-  }
-  if (value.length <= limit) {
-    return value;
-  }
-  return `${value.slice(0, limit).trimEnd()}...`;
-}
-
-function assistantRuntimeSourceLabel(run: AssistantRuntimePendingRun) {
-  if (run.taskMode === "proposal_patch") {
-    return run.interactive ? "生成 Patch" : "后台生成 Patch";
-  }
-  if (run.source === "cron") {
-    return run.taskMode === "dream" ? "定时 dream" : "定时任务";
-  }
-  if (run.source === "manual") {
-    return run.interactive ? "手动执行" : "后台手动任务";
-  }
-  return run.interactive ? "聊天消息" : "后台任务";
-}
-
-function assistantRuntimeRunLabel(run: AssistantRuntimePendingRun) {
-  const detail = summarizeRuntimeText(run.jobTitle || run.visibleText);
-  if (!detail) {
-    return assistantRuntimeSourceLabel(run);
-  }
-  return `${assistantRuntimeSourceLabel(run)} · ${detail}`;
-}
-
-function isSilentDreamRuntimeRun(run: AssistantRuntimePendingRun | null | undefined) {
-  return Boolean(run && run.taskMode === "dream" && !run.interactive);
-}
-
-function mergePendingCronRuns(items: ChatMessage[], pendingRuns: AssistantCronRunEnqueuedDetail[]) {
-  if (pendingRuns.length === 0) {
-    return items;
-  }
-
-  const nextItems = items.filter((item) => (
-    !pendingRuns.some((pendingRun) => (
-      item.id === pendingCronUserId(pendingRun.runId) || item.id === pendingCronAssistantId(pendingRun.runId)
-    ))
+function hasPersistedStreamingAssistant(items: ChatMessage[]) {
+  return items.some((item) => (
+    item.role === "assistant"
+    && item.state === "streaming"
   ));
-
-  for (const pendingRun of pendingRuns) {
-    const hasUserMessage = nextItems.some((item) => item.role === "user" && item.text === pendingRun.prompt);
-    if (!hasUserMessage) {
-      nextItems.push({
-        id: pendingCronUserId(pendingRun.runId),
-        role: "user",
-        text: pendingRun.prompt,
-        createdAt: pendingRun.queuedAt,
-        state: "done",
-      });
-    }
-
-    nextItems.push({
-      id: pendingCronAssistantId(pendingRun.runId),
-      role: "assistant",
-      text: "",
-      createdAt: pendingRun.queuedAt,
-      state: "streaming",
-    });
-  }
-
-  return nextItems;
 }
 
 function normalizeInactiveStreamingRows(items: ChatMessage[], runtimeActive: boolean) {
@@ -592,15 +508,7 @@ function normalizeResolvedFinalMessage(message: ChatMessage): ChatMessage {
 }
 
 function countPersistedHistoryItems(items: ChatMessage[]) {
-  return items.filter((item) => !item.id.startsWith("assistant-cron-")).length;
-}
-
-function hasPersistedStreamingAssistant(items: ChatMessage[]) {
-  return items.some((item) => (
-    !item.id.startsWith("assistant-cron-")
-    && item.role === "assistant"
-    && item.state === "streaming"
-  ));
+  return items.length;
 }
 
 function chatMessageDisplayTime(item: ChatMessage) {
@@ -608,21 +516,6 @@ function chatMessageDisplayTime(item: ChatMessage) {
     return item.updatedAt;
   }
   return item.createdAt;
-}
-
-function resolvePendingCronRuns(
-  pendingRuns: AssistantCronRunEnqueuedDetail[],
-  items: ChatMessage[],
-) {
-  if (pendingRuns.length === 0) {
-    return pendingRuns;
-  }
-
-  return pendingRuns.filter((pendingRun) => {
-    const hasPromptUserMessage = items.some((item) => item.role === "user" && item.text === pendingRun.prompt);
-    const hasAssistantMessage = items.some((item) => item.role === "assistant");
-    return !(hasPromptUserMessage && hasAssistantMessage);
-  });
 }
 
 function resolveStreamStartMs(items: ChatMessage[], elapsedSeconds?: number) {
@@ -1748,7 +1641,6 @@ export function ChatScreen({
   const [previewDownloadProgress, setPreviewDownloadProgress] = useState<FileDownloadProgress | null>(null);
   const previewRequestSeqRef = useRef(0);
   const [botOverview, setBotOverview] = useState<BotOverview | null>(null);
-  const [pendingCronRuns, setPendingCronRuns] = useState<AssistantCronRunEnqueuedDetail[]>([]);
   const [deletedAttachmentKeys, setDeletedAttachmentKeys] = useState<Record<string, boolean>>({});
   const [deletingAttachmentKeys, setDeletingAttachmentKeys] = useState<Record<string, boolean>>({});
   const [traceLoadState, setTraceLoadState] = useState<Record<string, { loading: boolean; error?: string }>>({});
@@ -1791,7 +1683,6 @@ export function ChatScreen({
   const traceLoadStateRef = useRef<Record<string, { loading: boolean; error?: string }>>({});
   const workingDirRef = useRef("");
   const botOverviewRef = useRef<BotOverview | null>(null);
-  const pendingCronRunsRef = useRef<AssistantCronRunEnqueuedDetail[]>([]);
   const queuedMessageRef = useRef<QueuedChatMessage | null>(null);
   const agentsRef = useRef<AgentSummary[]>(fallbackAgents());
   const activeAgentIdRef = useRef(activeAgentId);
@@ -1940,9 +1831,6 @@ export function ChatScreen({
     botOverviewRef.current = botOverview;
   }, [botOverview]);
 
-  useEffect(() => {
-    pendingCronRunsRef.current = pendingCronRuns;
-  }, [pendingCronRuns]);
 
   useEffect(() => {
     queuedMessageRef.current = queuedMessage;
@@ -2029,17 +1917,12 @@ export function ChatScreen({
   const applyHistoryView = useCallback((
     messages: ChatMessage[],
     overview: BotOverview,
-    pendingRuns: AssistantCronRunEnqueuedDetail[],
   ) => {
-    const runtimeActive = Boolean(
-      overview.isProcessing
-      || pendingRuns.length > 0
-      || (overview.assistantRuntime?.pendingCount || 0) > 0
-    );
-    const nextItems = normalizeInactiveStreamingRows(mergePendingCronRuns(messages, pendingRuns), runtimeActive);
+    const runtimeActive = Boolean(overview.isProcessing);
+    const nextItems = normalizeInactiveStreamingRows(messages, runtimeActive);
     const hasStreamingRow = runtimeActive
       && nextItems.some((item) => item.role === "assistant" && item.state === "streaming");
-    const shouldPoll = Boolean(overview.isProcessing || hasStreamingRow || pendingRuns.length > 0);
+    const shouldPoll = Boolean(overview.isProcessing || hasStreamingRow);
 
     setItems((prev) => mergeMessagesPreservingClientState(prev, nextItems));
     isStreamingRef.current = shouldPoll;
@@ -2131,7 +2014,7 @@ export function ChatScreen({
     void pollClusterTasks();
   }, [pollClusterTasks]);
 
-  const scheduleAssistantPoll = useCallback((delayMs = ACTIVE_ASSISTANT_POLL_INTERVAL_MS) => {
+  const scheduleAssistantPoll = useCallback((delayMs = ACTIVE_CHAT_POLL_INTERVAL_MS) => {
     stopAssistantPoll();
     assistantPollTimerRef.current = window.setTimeout(() => {
       assistantPollTimerRef.current = null;
@@ -2167,9 +2050,8 @@ export function ChatScreen({
           setBotOverview(overview);
           setWorkingDir(overview.workingDir || "");
           restoreClusterRunFromOverview(overview);
-          const runtimePendingCount = overview.assistantRuntime?.pendingCount || 0;
 
-          if (overview.isProcessing || runtimePendingCount > 0) {
+          if (overview.isProcessing) {
             sseLastActivityAtRef.current = Date.now();
             scheduleSseRecoveryWatch();
             return;
@@ -2180,15 +2062,8 @@ export function ChatScreen({
             return;
           }
 
-          const refreshedPendingRuns = resolvePendingCronRuns(
-            pendingCronRunsRef.current,
-            messages,
-          );
-          if (refreshedPendingRuns.length !== pendingCronRunsRef.current.length) {
-            setPendingCronRuns(refreshedPendingRuns);
-          }
           assistantSendVersionRef.current += 1;
-          const { shouldPoll } = applyHistoryView(messages, overview, refreshedPendingRuns);
+          const { shouldPoll } = applyHistoryView(messages, overview);
           if (!shouldPoll) {
             void drainQueuedMessageIfIdleRef.current?.({ botAlias, agentId });
           }
@@ -2224,23 +2099,13 @@ export function ChatScreen({
       setBotOverview(overview);
       setWorkingDir(overview.workingDir || "");
       restoreClusterRunFromOverview(overview);
-      const previousItems = itemsRef.current.filter((item) => !item.id.startsWith("assistant-cron-"));
+      const previousItems = itemsRef.current;
       const previousCount = countPersistedHistoryItems(itemsRef.current);
       const hasStreamingAssistant = hasPersistedStreamingAssistant(previousItems);
 
-      const nextPendingRuns = resolvePendingCronRuns(
-        pendingCronRunsRef.current,
-        itemsRef.current,
-      );
-      if (nextPendingRuns.length !== pendingCronRunsRef.current.length) {
-        setPendingCronRuns(nextPendingRuns);
-      }
-
       const shouldRefreshMessages = Boolean(
         overview.isProcessing
-        || (overview.assistantRuntime?.pendingCount || 0) > 0
         || overview.runningReply
-        || nextPendingRuns.length > 0
         || hasStreamingAssistant
         || (typeof overview.historyCount === "number" && overview.historyCount !== previousCount),
       );
@@ -2261,12 +2126,7 @@ export function ChatScreen({
         return;
       }
 
-      const refreshedPendingRuns = resolvePendingCronRuns(nextPendingRuns, messages);
-      if (refreshedPendingRuns.length !== nextPendingRuns.length) {
-        setPendingCronRuns(refreshedPendingRuns);
-      }
-
-      const { nextItems, shouldPoll } = applyHistoryView(messages, overview, refreshedPendingRuns);
+      const { nextItems, shouldPoll } = applyHistoryView(messages, overview);
       if (!isVisibleRef.current && !shouldPoll && nextItems.length > previousCount) {
         onUnreadResult?.(botAlias);
       }
@@ -2281,13 +2141,9 @@ export function ChatScreen({
     } finally {
       const shouldContinue = isVisibleRef.current && (
         streamModeRef.current === "poll"
-        || (Boolean(botOverviewRef.current?.botMode) && botOverviewRef.current?.botMode === "assistant" && !loadingRef.current && !isStreamingRef.current)
       );
       if (shouldContinue) {
-        const nextDelay = streamModeRef.current === "poll" || botOverviewRef.current?.isProcessing
-          ? ACTIVE_ASSISTANT_POLL_INTERVAL_MS
-          : IDLE_ASSISTANT_POLL_INTERVAL_MS;
-        scheduleAssistantPoll(nextDelay);
+        scheduleAssistantPoll(ACTIVE_CHAT_POLL_INTERVAL_MS);
       } else {
         stopAssistantPoll();
       }
@@ -2341,7 +2197,6 @@ export function ChatScreen({
     setPreviewContent("");
     setPreviewResult(null);
     setBotOverview(null);
-    setPendingCronRuns([]);
     setPendingAttachments([]);
     setUploadingAttachments(false);
     setSoloRollbackTarget(null);
@@ -2411,13 +2266,11 @@ export function ChatScreen({
         restoreClusterRunFromOverview(overview);
         const storedQueuedMessage = readStoredQueuedMessage(botAlias, nextAgentId, storageScope);
         setQueuedMessageState(storedQueuedMessage, { botAlias, agentId: nextAgentId });
-        const { shouldPoll } = applyHistoryView(messages, overview, []);
+        const { shouldPoll } = applyHistoryView(messages, overview);
         loadingRef.current = false;
         setLoading(false);
-        if (isVisibleRef.current && (overview.isProcessing || overview.botMode === "assistant")) {
-          scheduleAssistantPoll(
-            overview.isProcessing ? ACTIVE_ASSISTANT_POLL_INTERVAL_MS : IDLE_ASSISTANT_POLL_INTERVAL_MS,
-          );
+        if (isVisibleRef.current && overview.isProcessing) {
+          scheduleAssistantPoll(ACTIVE_CHAT_POLL_INTERVAL_MS);
         } else {
           stopAssistantPoll();
         }
@@ -2452,39 +2305,6 @@ export function ChatScreen({
     storageScope,
   ]);
 
-  useEffect(() => {
-    const handleAssistantCronRunEnqueued = (event: Event) => {
-      if (!isAssistantCronRunEnqueuedEvent(event)) {
-        return;
-      }
-
-      const detail = event.detail;
-      if (!detail || detail.botAlias !== botAlias) {
-        return;
-      }
-
-      setError("");
-      forceAutoScrollRef.current = true;
-      shouldStickToBottomRef.current = true;
-      setPendingCronRuns((prev) => {
-        if (prev.some((item) => item.runId === detail.runId)) {
-          return prev;
-        }
-        return [...prev, detail];
-      });
-      const nextItems = mergePendingCronRuns(itemsRef.current, [detail]);
-      setItems(nextItems);
-      setIsStreaming(true);
-      setStreamMode("poll");
-      setStreamStartedAtMs(resolveStreamStartMs(nextItems));
-      scheduleAssistantPoll();
-    };
-
-    window.addEventListener(ASSISTANT_CRON_RUN_ENQUEUED_EVENT, handleAssistantCronRunEnqueued);
-    return () => {
-      window.removeEventListener(ASSISTANT_CRON_RUN_ENQUEUED_EVENT, handleAssistantCronRunEnqueued);
-    };
-  }, [botAlias, scheduleAssistantPoll]);
 
   useEffect(() => {
     if (!isStreaming || !streamStartedAtMs) {
@@ -2505,32 +2325,6 @@ export function ChatScreen({
     };
   }, [isStreaming, streamStartedAtMs]);
 
-  const isAssistantBot = botOverview?.botMode === "assistant";
-  const assistantRuntime = botOverview?.assistantRuntime || null;
-  const assistantRuntimeActive = assistantRuntime?.active || null;
-  const hasHiddenAssistantRuntimeActive = isSilentDreamRuntimeRun(assistantRuntimeActive);
-  const visibleAssistantRuntimeQueue = (assistantRuntime?.queue || []).filter((run) => !isSilentDreamRuntimeRun(run));
-  const visibleAssistantRuntimeActive = isSilentDreamRuntimeRun(assistantRuntimeActive) ? null : assistantRuntimeActive;
-  const assistantRuntimeQueuedCount = visibleAssistantRuntimeQueue.length;
-  const assistantRuntimeQueueLabels = visibleAssistantRuntimeQueue.slice(0, 2).map(assistantRuntimeRunLabel);
-  const showAssistantRuntimeBanner = Boolean(
-    isAssistantBot
-    && (visibleAssistantRuntimeActive || assistantRuntimeQueuedCount > 0 || hasHiddenAssistantRuntimeActive)
-    && (
-      assistantRuntimeQueuedCount > 0
-      || (visibleAssistantRuntimeActive && !visibleAssistantRuntimeActive.interactive)
-      || (hasHiddenAssistantRuntimeActive && assistantRuntimeQueuedCount > 0)
-    ),
-  );
-  let assistantRuntimeHeadline = "";
-  if ((visibleAssistantRuntimeActive || hasHiddenAssistantRuntimeActive) && assistantRuntimeQueuedCount > 0) {
-    assistantRuntimeHeadline = "assistant 队列忙碌中，新消息会按顺序执行";
-  } else if (visibleAssistantRuntimeActive && !visibleAssistantRuntimeActive.interactive) {
-    assistantRuntimeHeadline = "assistant 后台任务执行中，新消息会等待当前任务完成";
-  } else if (assistantRuntimeQueuedCount > 0) {
-    assistantRuntimeHeadline = `assistant 队列中 ${assistantRuntimeQueuedCount} 项，新消息会按顺序执行`;
-  }
-  const assistantRuntimeActiveLabel = visibleAssistantRuntimeActive ? assistantRuntimeRunLabel(visibleAssistantRuntimeActive) : "";
 
   useEffect(() => {
     onWorkbenchStatusChange?.({
@@ -2553,13 +2347,13 @@ export function ChatScreen({
   }, [isVisible, scheduleSseRecoveryWatch, stopSseRecoveryWatch, streamMode]);
 
   useLayoutEffect(() => {
-    const shouldPoll = streamMode === "poll" || (Boolean(isAssistantBot) && isVisible && !loading && !isStreaming);
+    const shouldPoll = streamMode === "poll";
     if (!shouldPoll) {
       stopAssistantPoll();
       return;
     }
-    scheduleAssistantPoll(streamMode === "poll" ? ACTIVE_ASSISTANT_POLL_INTERVAL_MS : IDLE_ASSISTANT_POLL_INTERVAL_MS);
-  }, [isAssistantBot, isStreaming, isVisible, loading, scheduleAssistantPoll, stopAssistantPoll, streamMode]);
+    scheduleAssistantPoll(ACTIVE_CHAT_POLL_INTERVAL_MS);
+  }, [scheduleAssistantPoll, stopAssistantPoll, streamMode]);
 
   const lastItem = items[items.length - 1];
 
@@ -3034,12 +2828,11 @@ export function ChatScreen({
         listScopedMessages(client, botAlias, agentId, "native_agent"),
         listScopedConversations(client, botAlias, conversationQuery, agentId, "native_agent"),
       ]);
-      setPendingCronRuns([]);
       setConversations(conversationData.items);
       itemsRef.current = messages;
       const overview = botOverviewRef.current;
       if (overview) {
-        applyHistoryView(messages, overview, []);
+        applyHistoryView(messages, overview);
       } else {
         setItems(messages);
       }
@@ -3272,7 +3065,6 @@ export function ChatScreen({
         setClusterTaskError("");
         clusterRunIdRef.current = "";
         setTraceLoadState({});
-        setPendingCronRuns([]);
         setQueuedMessageState(null, { botAlias, agentId: activeAgentIdRef.current || "main" });
         setItems(nextMessages);
         itemsRef.current = nextMessages;
@@ -3309,7 +3101,6 @@ export function ChatScreen({
       setClusterTaskError("");
       clusterRunIdRef.current = "";
       setTraceLoadState({});
-      setPendingCronRuns([]);
       setQueuedMessageState(null, { botAlias, agentId: activeAgentIdRef.current || "main" });
       setConversations(data.items);
       setFavoriteItems([]);
@@ -3371,7 +3162,7 @@ export function ChatScreen({
         }
         const storedQueuedMessage = readStoredQueuedMessage(botAlias, normalized, storageScope);
         setQueuedMessageState(storedQueuedMessage, { botAlias, agentId: normalized });
-        const { shouldPoll } = applyHistoryView(messages, overview, []);
+        const { shouldPoll } = applyHistoryView(messages, overview);
         loadingRef.current = false;
         setLoading(false);
         if (!shouldPoll) {
@@ -3472,7 +3263,7 @@ export function ChatScreen({
     const sendBotAlias = botAlias;
     const sendAgentId = activeAgentIdRef.current || "main";
     const composedText = buildComposedMessageText(text, options.attachments || []);
-    const hideProcessPreview = options.sendOptions?.taskMode === "dream";
+    const hideProcessPreview = false;
     if (!composedText) {
       return;
     }
@@ -3962,67 +3753,6 @@ export function ChatScreen({
     }
   }
 
-  useEffect(() => {
-    const handleAssistantProposalPatchRequested = (event: Event) => {
-      if (!isAssistantProposalPatchRequestedEvent(event)) {
-        return;
-      }
-
-      const detail = event.detail;
-      if (!detail || detail.botAlias !== botAlias) {
-        return;
-      }
-      if (loadingRef.current || isStreamingRef.current) {
-        const message = "聊天正忙，等会再试";
-        setError(message);
-        dispatchAssistantProposalPatchCompleted({
-          botAlias,
-          proposalId: detail.proposalId,
-          ok: false,
-          targetAlias: detail.targetAlias,
-          summary: message,
-          error: message,
-        });
-        return;
-      }
-
-      void sendMessageInternal(detail.visibleText, {
-        sendOptions: {
-          taskMode: "proposal_patch",
-          taskPayload: {
-            proposalId: detail.proposalId,
-            targetAlias: detail.targetAlias,
-            regenerate: Boolean(detail.regenerate),
-          },
-          visibleText: detail.visibleText,
-        },
-        onSuccess: (message) => {
-          dispatchAssistantProposalPatchCompleted({
-            botAlias,
-            proposalId: detail.proposalId,
-            ok: true,
-            targetAlias: detail.targetAlias,
-            summary: message.text,
-          });
-        },
-        onError: (message) => {
-          dispatchAssistantProposalPatchCompleted({
-            botAlias,
-            proposalId: detail.proposalId,
-            ok: false,
-            targetAlias: detail.targetAlias,
-            summary: message,
-            error: message,
-          });
-        },
-      });
-    };
-
-    window.addEventListener(ASSISTANT_PROPOSAL_PATCH_REQUESTED_EVENT, handleAssistantProposalPatchRequested);
-    return () => {
-      window.removeEventListener(ASSISTANT_PROPOSAL_PATCH_REQUESTED_EVENT, handleAssistantProposalPatchRequested);
-    };
-  }, [botAlias, sendMessageInternal]);
 
   async function handleKillTask() {
     setActionLoading("kill");
@@ -4124,7 +3854,6 @@ export function ChatScreen({
     setItems([]);
     setConversations([]);
     setTraceLoadState({});
-    setPendingCronRuns([]);
     setPendingAttachments([]);
     setQueuedMessage(null);
     queuedMessageRef.current = null;
@@ -4152,7 +3881,7 @@ export function ChatScreen({
         if (overview.agents && overview.agents.length > 0) {
           setAgents(overview.agents);
         }
-        const { shouldPoll } = applyHistoryView(messages, overview, []);
+        const { shouldPoll } = applyHistoryView(messages, overview);
         loadingRef.current = false;
         setLoading(false);
         if (historyPanelOpen) {
@@ -4240,7 +3969,7 @@ export function ChatScreen({
   const overviewAgents = botOverview?.agents && botOverview.agents.length > 0 ? botOverview.agents : agents;
   const clusterAgents = overviewAgents.filter((agent) => !agent.isMain && agent.enabled);
   const showAgentSwitcher = agents.length > 1;
-  const showClusterToggle = Boolean(botOverview?.cluster) && botOverview?.botMode !== "assistant";
+  const showClusterToggle = Boolean(botOverview?.cluster);
   const showActionBar = !isImmersive;
   const showImmersiveButton = !embedded && isVisible && Boolean(onToggleImmersive);
   const immersiveButtonStorageKey = immersiveButtonPositionStorageKey(botAlias, storageScope);
@@ -4492,33 +4221,6 @@ export function ChatScreen({
           killTaskBusy={actionLoading === "kill"}
         />
       ) : null}
-      {showAssistantRuntimeBanner ? (
-        <section
-          data-workbench-status="active"
-          className="chat-runtime-banner border-b border-amber-200 bg-amber-50 px-4 py-3 text-amber-900 shadow-[var(--shadow-soft)]"
-        >
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <LoaderCircle className="h-4 w-4 animate-spin" />
-            <span
-              key={assistantRuntimeHeadline}
-              data-runtime-status-settle="true"
-            >
-              {assistantRuntimeHeadline}
-            </span>
-          </div>
-          {assistantRuntimeActiveLabel ? (
-            <p className="mt-1 text-xs text-amber-800 break-all">当前：{assistantRuntimeActiveLabel}</p>
-          ) : null}
-          {assistantRuntimeQueueLabels.length > 0 ? (
-            <p className="mt-1 text-xs text-amber-800 break-all">
-              排队：{assistantRuntimeQueueLabels.join("；")}
-              {assistantRuntimeQueuedCount > assistantRuntimeQueueLabels.length
-                ? `；还有 ${assistantRuntimeQueuedCount - assistantRuntimeQueueLabels.length} 项`
-                : ""}
-            </p>
-          ) : null}
-        </section>
-      ) : null}
       {chatDisabledReason ? (
         <section className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900 shadow-[var(--shadow-soft)]">
           {chatDisabledReason}
@@ -4693,3 +4395,6 @@ export function ChatScreen({
     </main>
   );
 }
+
+
+

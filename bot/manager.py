@@ -6,15 +6,10 @@ import asyncio
 import json
 import logging
 import os
-from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from bot import app_settings
-from bot.assistant.cron.service import AssistantCronService
-from bot.assistant.docs import sync_managed_prompt_files
-from bot.assistant.home import bootstrap_assistant_home
-from bot.assistant.runtime import AssistantRunRequest, AssistantRuntimeCoordinator
 from bot.cli import resolve_cli_executable, validate_cli_type
 from bot.cli_params import CliParamsConfig, coerce_param_value
 from bot.cluster.config import normalize_agent_cluster_config, normalize_bot_cluster_config
@@ -95,25 +90,13 @@ class MultiBotManager:
         self.bot_id_to_alias: Dict[int, str] = {}
         self._watchdog_task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
-        self.assistant_runtime: AssistantRuntimeCoordinator | None = None
-        self.assistant_cron_service: Any | None = None
-        self._assistant_result_executor: Callable[[AssistantRunRequest], Awaitable[dict[str, Any]]] | None = None
-        self._assistant_stream_executor: Callable[[AssistantRunRequest], AsyncIterator[dict[str, Any]]] | None = None
 
         self._load_profiles()
         self._apply_persisted_main_profile()
         self._apply_persisted_git_commit_cli_configs()
 
-    @staticmethod
-    def _bootstrap_and_sync_assistant_home(working_dir: str) -> None:
-        home = bootstrap_assistant_home(working_dir)
-        sync_managed_prompt_files(home)
-
     def _load_profiles(self) -> None:
-        self.managed_profiles = load_managed_profiles(
-            self.storage_file,
-            bootstrap_assistant_home=self._bootstrap_and_sync_assistant_home,
-        )
+        self.managed_profiles = load_managed_profiles(self.storage_file)
 
     def _save_profiles(self) -> None:
         save_managed_profiles(self.storage_file, self.managed_profiles)
@@ -201,9 +184,6 @@ class MultiBotManager:
         if alias in RESERVED_ALIASES:
             raise ValueError(f"alias `{alias}` 为保留名称")
 
-    def _count_assistant_profiles(self) -> int:
-        return sum(1 for profile in self.managed_profiles.values() if profile.bot_mode == "assistant")
-
     def _default_cli_path_for_type(self, cli_type: str) -> str:
         normalized_cli_type = validate_cli_type(cli_type or CLI_TYPE)
         env_cli_path = str(os.environ.get("CLI_PATH") or _DOTENV_VALUES.get("CLI_PATH") or "").strip()
@@ -223,14 +203,6 @@ class MultiBotManager:
                 return profile_cli_path
 
         return normalized_cli_type
-
-    def assistant_alias(self) -> str | None:
-        if self.main_profile.bot_mode == "assistant":
-            return self.main_profile.alias
-        for alias, profile in self.managed_profiles.items():
-            if profile.bot_mode == "assistant":
-                return alias
-        return None
 
     def _agent_to_summary(self, profile: BotProfile, agent: AgentProfile) -> dict[str, Any]:
         return {
@@ -361,55 +333,6 @@ class MultiBotManager:
                 "agents": [self._agent_to_summary(profile, agent) for agent in profile.normalized_agents() if agent.id != "main"],
             }
 
-    async def _ensure_assistant_runtime(self) -> None:
-        if self._assistant_result_executor is None:
-            return
-        if self.assistant_alias() is None:
-            if self.assistant_runtime is not None:
-                await self.assistant_runtime.stop()
-                self.assistant_runtime = None
-            return
-        if self.assistant_runtime is not None:
-            return
-        self.assistant_runtime = AssistantRuntimeCoordinator(
-            result_executor=self._assistant_result_executor,
-            stream_executor=self._assistant_stream_executor,
-        )
-        await self.assistant_runtime.start()
-
-    async def _ensure_assistant_cron_service(self) -> None:
-        assistant_alias = self.assistant_alias()
-        if assistant_alias is None or self.assistant_runtime is None:
-            if self.assistant_cron_service is not None:
-                await self.assistant_cron_service.stop()
-                self.assistant_cron_service = None
-            return
-
-        profile = self.get_profile(assistant_alias)
-        assistant_home = bootstrap_assistant_home(profile.working_dir)
-        current_service = self.assistant_cron_service
-        if (
-            current_service is not None
-            and current_service.bot_alias == assistant_alias
-            and current_service.assistant_home.root == assistant_home.root
-            and current_service.coordinator is self.assistant_runtime
-        ):
-            return
-
-        if current_service is not None:
-            await current_service.stop()
-
-        self.assistant_cron_service = AssistantCronService(
-            assistant_home=assistant_home,
-            bot_alias=assistant_alias,
-            coordinator=self.assistant_runtime,
-        )
-        await self.assistant_cron_service.start()
-
-    async def _ensure_assistant_services(self) -> None:
-        await self._ensure_assistant_runtime()
-        await self._ensure_assistant_cron_service()
-
     async def _start_profile(self, profile: BotProfile, is_main: bool = False) -> object | None:
         existing = self.applications.get(profile.alias)
         if existing is not None:
@@ -434,15 +357,8 @@ class MultiBotManager:
     async def start_all(self) -> None:
         return None
 
-    async def start_background_services(
-        self,
-        *,
-        result_executor: Callable[[AssistantRunRequest], Awaitable[dict[str, Any]]],
-        stream_executor: Callable[[AssistantRunRequest], AsyncIterator[dict[str, Any]]] | None = None,
-    ) -> None:
-        self._assistant_result_executor = result_executor
-        self._assistant_stream_executor = stream_executor
-        await self._ensure_assistant_services()
+    async def start_background_services(self, **_: Any) -> None:
+        return None
 
     async def start_watchdog(self) -> None:
         self._watchdog_task = None
@@ -451,21 +367,7 @@ class MultiBotManager:
         self._watchdog_task = None
 
     async def stop_background_services(self) -> None:
-        assistant_alias = self.assistant_alias()
-        wait_for_watch_tasks = self.assistant_runtime is not None
-        if assistant_alias is not None:
-            terminate_bot_processes(assistant_alias)
-        if self.assistant_runtime is not None:
-            await self.assistant_runtime.stop()
-            self.assistant_runtime = None
-        if self.assistant_cron_service is not None:
-            stop = getattr(self.assistant_cron_service, "stop", None)
-            if callable(stop):
-                if isinstance(self.assistant_cron_service, AssistantCronService):
-                    await stop(cancel_watch_tasks=not wait_for_watch_tasks)
-                else:
-                    await stop()
-            self.assistant_cron_service = None
+        return None
 
     async def shutdown_all(self) -> None:
         await self.stop_background_services()
@@ -492,10 +394,12 @@ class MultiBotManager:
 
         resolved_cli_type = validate_cli_type(cli_type or CLI_TYPE)
         resolved_cli_path = str(cli_path or "").strip() or self._default_cli_path_for_type(resolved_cli_type)
-        resolved_bot_mode = str(bot_mode or "cli").strip().lower()
+        resolved_mode = str(bot_mode or "cli").strip().lower()
 
-        if resolved_bot_mode not in {"cli", "assistant"}:
-            raise ValueError(f"bot_mode 必须是 'cli' 或 'assistant'，当前值: {resolved_bot_mode}")
+        if resolved_mode == "assistant":
+            raise ValueError("assistant Bot 模式已移除，请创建普通 CLI Bot")
+        if resolved_mode != "cli":
+            raise ValueError(f"bot_mode 必须是 'cli'，当前值: {resolved_mode}")
         requested_supported_execution_modes = normalize_execution_modes(supported_execution_modes)
         requested_default_execution_mode = normalize_execution_mode(
             default_execution_mode,
@@ -504,16 +408,11 @@ class MultiBotManager:
         resolved_supported_execution_modes, resolved_default_execution_mode = normalize_execution_mode_config(
             requested_supported_execution_modes,
             default_execution_mode,
-            bot_mode=resolved_bot_mode,
+            bot_mode=resolved_mode,
         )
         resolved_native_agent = _normalize_bot_native_agent_config(native_agent)
 
-        if resolved_bot_mode == "assistant":
-            if working_dir is None or not str(working_dir).strip():
-                raise ValueError("assistant 型 Bot 必须显式提供工作目录")
-            resolved_working_dir = os.path.abspath(os.path.expanduser(str(working_dir).strip()))
-        else:
-            resolved_working_dir = os.path.abspath(os.path.expanduser((working_dir or WORKING_DIR).strip()))
+        resolved_working_dir = os.path.abspath(os.path.expanduser((working_dir or WORKING_DIR).strip()))
 
         if not os.path.isdir(resolved_working_dir):
             raise ValueError(f"工作目录不存在: {resolved_working_dir}")
@@ -529,9 +428,6 @@ class MultiBotManager:
         async with self._lock:
             if normalized_alias in self.managed_profiles:
                 raise ValueError(f"alias `{normalized_alias}` 已存在")
-            if resolved_bot_mode == "assistant" and self._count_assistant_profiles() >= 1:
-                raise ValueError("当前机器只允许一个 assistant 型 Bot")
-
             profile = BotProfile(
                 alias=normalized_alias,
                 token=normalized_token,
@@ -539,19 +435,15 @@ class MultiBotManager:
                 cli_path=resolved_cli_path,
                 working_dir=resolved_working_dir,
                 enabled=True,
-                bot_mode=resolved_bot_mode,
+                bot_mode=resolved_mode,
                 supported_execution_modes=resolved_supported_execution_modes,
                 default_execution_mode=resolved_default_execution_mode,
                 native_agent=resolved_native_agent,
             )
 
-            if resolved_bot_mode == "assistant":
-                self._bootstrap_and_sync_assistant_home(resolved_working_dir)
-
             self.managed_profiles[normalized_alias] = profile
             self._save_profiles()
             await self._start_profile(profile, is_main=False)
-            await self._ensure_assistant_services()
             return profile
 
     async def set_bot_prompt_presets(self, alias: str, presets: Any) -> list[dict[str, str]]:
@@ -578,7 +470,6 @@ class MultiBotManager:
             await self._stop_application(normalized_alias)
             del self.managed_profiles[normalized_alias]
             self._save_profiles()
-            await self._ensure_assistant_services()
 
     async def start_bot(self, alias: str) -> None:
         normalized_alias = str(alias or "").strip().lower()
@@ -719,7 +610,6 @@ class MultiBotManager:
 
             update_bot_alias(normalized_alias, normalized_new_alias)
             self._save_profiles()
-            await self._ensure_assistant_services()
             return profile
 
     async def set_bot_workdir(self, alias: str, working_dir: str, *, update_sessions: bool = False) -> None:
@@ -730,8 +620,6 @@ class MultiBotManager:
 
         async with self._lock:
             profile = self._get_profile_for_update(normalized_alias)
-            if profile.bot_mode == "assistant":
-                raise ValueError("assistant 型 Bot 不允许修改默认工作目录")
             profile.working_dir = resolved_working_dir
             if normalized_alias == self.main_profile.alias:
                 self._persist_main_profile()

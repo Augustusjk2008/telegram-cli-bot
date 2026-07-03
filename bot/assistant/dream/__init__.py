@@ -1,1 +1,0 @@
-"""Assistant dream package."""

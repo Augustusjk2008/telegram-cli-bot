@@ -18,30 +18,6 @@ import type {
   CliErrorStatsFilters,
   CliErrorStatsResult,
   BotExecutionConfigInput,
-  AssistantAdminAuditResult,
-  AssistantDiagnosticsFilters,
-  AssistantMemoryBulkInvalidateResult,
-  AssistantProposal,
-  AssistantProposalDetail,
-  AssistantPerfDiagnostics,
-  AssistantMemoryEvalCase,
-  AssistantMemoryEvalReport,
-  AssistantMemoryEvalRun,
-  AssistantMemoryInvalidateResult,
-  AssistantMemoryReindexResult,
-  AssistantMemorySearchOptions,
-  AssistantMemorySearchResult,
-  AssistantPatchGenerationHandlers,
-  AssistantPatchMetadata,
-  AssistantUpgradeApplyLog,
-  AssistantUpgradeApplyResult,
-  AssistantUpgradeDryRunResult,
-  AssistantUpgradeTarget,
-  AssistantCronJob,
-  AssistantCronRun,
-  AssistantCronRunRequestResult,
-  CreateAssistantCronJobInput,
-  UpdateAssistantCronJobInput,
   CliParamsPayload,
   CreateBotInput,
   DebugProfile,
@@ -382,50 +358,6 @@ export interface WebBotClient {
   removeBot(botAlias: string, options?: RemoveBotOptions): Promise<RemoveBotResult>;
   startBot(botAlias: string): Promise<BotSummary>;
   stopBot(botAlias: string): Promise<BotSummary>;
-  listAssistantProposals(botAlias: string, status?: string): Promise<AssistantProposal[]>;
-  listAssistantUpgradeTargets(botAlias: string): Promise<AssistantUpgradeTarget[]>;
-  getAssistantProposal(botAlias: string, proposalId: string): Promise<AssistantProposalDetail>;
-  getAssistantProposalApplyLog(botAlias: string, proposalId: string): Promise<AssistantUpgradeApplyLog>;
-  approveAssistantProposal(botAlias: string, proposalId: string): Promise<AssistantProposal>;
-  generateAssistantProposalPatch(
-    botAlias: string,
-    proposalId: string,
-    input: { targetAlias: string; regenerate?: boolean },
-  ): Promise<AssistantPatchMetadata>;
-  generateAssistantProposalPatchStream(
-    botAlias: string,
-    proposalId: string,
-    input: { targetAlias: string; regenerate?: boolean },
-    handlers?: AssistantPatchGenerationHandlers,
-  ): Promise<AssistantPatchMetadata>;
-  approveAssistantProposalPatch(botAlias: string, proposalId: string): Promise<AssistantPatchMetadata>;
-  rejectAssistantProposal(botAlias: string, proposalId: string): Promise<AssistantProposal>;
-  applyAssistantUpgrade(botAlias: string, proposalId: string): Promise<AssistantUpgradeApplyResult>;
-  dryRunAssistantUpgrade(botAlias: string, proposalId: string): Promise<AssistantUpgradeDryRunResult>;
-  searchAssistantMemories(botAlias: string, query: string, options?: AssistantMemorySearchOptions): Promise<AssistantMemorySearchResult>;
-  bulkInvalidateAssistantMemories(botAlias: string, memoryIds: string[], reason: string): Promise<AssistantMemoryBulkInvalidateResult>;
-  invalidateAssistantMemory(
-    botAlias: string,
-    memoryId: string,
-    reason: string,
-  ): Promise<AssistantMemoryInvalidateResult>;
-  reindexAssistantMemory(botAlias: string, options?: { userId?: number; force?: boolean }): Promise<AssistantMemoryReindexResult>;
-  runAssistantMemoryEval(
-    botAlias: string,
-    input: { userId?: number; cases: AssistantMemoryEvalCase[] },
-  ): Promise<AssistantMemoryEvalRun>;
-  listAssistantMemoryEvalReports(botAlias: string, limit?: number): Promise<AssistantMemoryEvalReport[]>;
-  getAssistantDiagnostics(botAlias: string, filters?: AssistantDiagnosticsFilters): Promise<AssistantPerfDiagnostics>;
-  listAssistantCronJobs(botAlias: string): Promise<AssistantCronJob[]>;
-  createAssistantCronJob(botAlias: string, input: CreateAssistantCronJobInput): Promise<AssistantCronJob>;
-  updateAssistantCronJob(botAlias: string, jobId: string, input: UpdateAssistantCronJobInput): Promise<AssistantCronJob>;
-  deleteAssistantCronJob(botAlias: string, jobId: string): Promise<void>;
-  runAssistantCronJob(botAlias: string, jobId: string): Promise<AssistantCronRunRequestResult>;
-  listAssistantCronRuns(botAlias: string, jobId: string, limit?: number): Promise<AssistantCronRun[]>;
-  listAssistantAdminAudit(
-    botAlias: string,
-    filters?: { limit?: number; action?: string; resource?: string; status?: "ok" | "failed" | "" },
-  ): Promise<AssistantAdminAuditResult>;
   getCliParams(botAlias: string): Promise<CliParamsPayload>;
   updateCliParam(botAlias: string, key: string, value: unknown, cliType?: string): Promise<CliParamsPayload>;
   resetCliParams(botAlias: string, cliType?: string): Promise<CliParamsPayload>;
@@ -434,3 +366,4 @@ export interface WebBotClient {
   stopTunnel(): Promise<TunnelSnapshot>;
   restartTunnel(): Promise<TunnelSnapshot>;
 }
+

@@ -4,13 +4,6 @@ import zlib
 from dataclasses import dataclass, field
 from typing import Any
 
-from bot.assistant.home import bootstrap_assistant_home
-from bot.assistant.memory.store import AssistantMemoryStore
-from bot.assistant.state import (
-    attach_assistant_persist_hook,
-    migrate_assistant_runtime_state_to_shared,
-    restore_assistant_runtime_state,
-)
 from bot.chat_identity import chat_session_user_id
 from bot.manager import MultiBotManager
 from bot.models import AgentProfile, BotProfile, UserSession
@@ -98,15 +91,7 @@ def get_session_for_alias(manager: MultiBotManager, alias: str, user_id: int) ->
         bot_alias=alias,
         user_id=shared_user_id,
         default_working_dir=profile.working_dir,
-        load_persisted_state=profile.bot_mode != "assistant",
     )
-
-    if profile.bot_mode == "assistant" and session.persist_hook is None:
-        home = bootstrap_assistant_home(profile.working_dir)
-        migrate_assistant_runtime_state_to_shared(home, shared_user_id)
-        AssistantMemoryStore(home).migrate_chat_memories_to_shared(shared_user_id)
-        attach_assistant_persist_hook(session, home, shared_user_id)
-        restore_assistant_runtime_state(session, home, shared_user_id)
 
     return align_session_paths(session, profile.working_dir, profile.bot_mode)
 
@@ -133,7 +118,6 @@ def get_chat_session_for_alias(
         bot_alias=alias,
         user_id=shared_user_id,
         default_working_dir=profile.working_dir,
-        load_persisted_state=profile.bot_mode != "assistant",
         agent_id=agent.id,
     )
     return profile, agent, align_session_paths(session, profile.working_dir, profile.bot_mode)

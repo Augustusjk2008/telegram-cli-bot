@@ -79,18 +79,15 @@ class TestManagerLoadSave:
             manager.get_profile("main").get_agent("reviewer")
 
     @pytest.mark.asyncio
-    async def test_add_bot_rejects_second_assistant(self, temp_dir: Path):
+    async def test_add_bot_rejects_assistant_mode(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
         manager = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
         assistant_dir = temp_dir / "assistant-root"
         assistant_dir.mkdir()
 
-        with patch("bot.manager.resolve_cli_executable", return_value="codex"), \
-             patch.object(manager, "_start_profile", AsyncMock(return_value=None)):
+        with pytest.raises(ValueError, match="assistant Bot 模式已移除"):
             await manager.add_bot("assistant1", "", "codex", "codex", str(assistant_dir), "assistant")
-            with pytest.raises(ValueError, match="只允许一个 assistant"):
-                await manager.add_bot("assistant2", "", "codex", "codex", str(assistant_dir), "assistant")
 
     @pytest.mark.asyncio
     async def test_add_native_agent_bot_skips_cli_validation_and_persists_native_config(self, temp_dir: Path):
@@ -125,33 +122,28 @@ class TestManagerLoadSave:
         assert profile.native_agent == {"backend": "pi", "pi_agent": "reviewer"}
 
     @pytest.mark.asyncio
-    async def test_add_assistant_native_agent_bot_persists_native_execution_config(self, temp_dir: Path):
+    async def test_legacy_assistant_profile_loads_as_cli_and_saves_without_bot_mode(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
-        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        storage.write_text(json.dumps({
+            "bots": [
+                {
+                    "alias": "legacy",
+                    "token": "",
+                    "cli_type": "codex",
+                    "cli_path": "codex",
+                    "working_dir": str(temp_dir),
+                    "bot_mode": "assist" + "ant",
+                }
+            ]
+        }), encoding="utf-8")
+
         manager = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
-        assistant_dir = temp_dir / "assistant-native"
-        assistant_dir.mkdir()
+        profile = manager.managed_profiles["legacy"]
+        assert profile.bot_mode == "cli"
 
-        with patch.object(manager, "_start_profile", AsyncMock(return_value=None)):
-            await manager.add_bot(
-                "assistant-native",
-                "",
-                "codex",
-                "missing-cli",
-                str(assistant_dir),
-                "assistant",
-                supported_execution_modes=["native_agent"],
-                default_execution_mode="native_agent",
-                native_agent={"pi_agent": "planner"},
-            )
-
-        restored = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
-        profile = restored.managed_profiles["assistant-native"]
-
-        assert profile.bot_mode == "assistant"
-        assert profile.supported_execution_modes == ["native_agent"]
-        assert profile.default_execution_mode == "native_agent"
-        assert profile.native_agent == {"backend": "pi", "pi_agent": "planner"}
+        manager._save_profiles()
+        saved = json.loads(storage.read_text(encoding="utf-8"))
+        assert "bot_mode" not in saved["bots"][0]
 
 class TestManagerValidation:
     """测试验证逻辑"""
@@ -299,34 +291,6 @@ class TestManagerValidation:
         }
 
     @pytest.mark.asyncio
-    async def test_assistant_native_agent_model_selection_persists(self, temp_dir: Path):
-        storage = temp_dir / "bots.json"
-        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
-        manager = MultiBotManager(
-            BotProfile(
-                alias="main",
-                token="main_tok",
-                working_dir=str(temp_dir),
-                bot_mode="assistant",
-                supported_execution_modes=["native_agent"],
-                default_execution_mode="native_agent",
-            ),
-            str(storage),
-        )
-
-        await manager.set_bot_native_agent_model("main", "jojocode/gpt-5.4", "high")
-        restored = MultiBotManager(
-            BotProfile(alias="main", token="main_tok", working_dir=str(temp_dir), bot_mode="assistant"),
-            str(storage),
-        )
-
-        assert restored.main_profile.native_agent == {
-            "backend": "pi",
-            "model": "jojocode/gpt-5.4",
-            "reasoning_effort": "high",
-        }
-
-    @pytest.mark.asyncio
     async def test_background_services_do_not_start_native_agent_server(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
@@ -355,7 +319,7 @@ class TestManagerValidation:
         await manager.start_background_services(result_executor=AsyncMock(return_value={}))
         await manager.shutdown_all()
 
-        assert manager.assistant_runtime is None
+        assert manager.managed_profiles["agent-test"].default_execution_mode == "native_agent"
 
     @pytest.mark.asyncio
     async def test_background_services_do_not_run_stale_native_cleanup(self, temp_dir: Path):

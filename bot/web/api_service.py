@@ -18,63 +18,11 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
-from bot.assistant.cron.store import (
-    delete_job_run_audit,
-    delete_job_runtime_state,
-    read_job_definition,
-    read_job_run_audit,
-)
 from bot import app_settings
-from bot.assistant.dream.service import AssistantDreamConfig, apply_dream_result, prepare_dream_prompt
-from bot.assistant.dream.managed_context import collect_managed_bot_dream_context
-from bot.assistant.cron.types import AssistantCronJob
-from bot.assistant.diagnostics import get_perf_diagnostics
-from bot.assistant.compaction import (
-    finalize_compaction,
-    is_compaction_prompt_active,
-    list_pending_capture_ids,
-    refresh_compaction_state,
-    snapshot_managed_surface,
-)
-from bot.assistant.context import compile_assistant_prompt
-from bot.assistant.memory.knowledge_indexer import index_knowledge_memories
-from bot.assistant.memory.eval import MemoryEvalCase, run_memory_eval
-from bot.assistant.memory.store import AssistantMemoryStore, MemorySearchRow
-from bot.assistant.memory.recall import recall_assistant_memories
-from bot.assistant.perf import activate_perf_capture, list_perf_records, new_stage_durations, write_perf_record
-from bot.assistant.memory.working_indexer import index_working_memories
-from bot.assistant.memory.writer import write_hot_path_memories
 from bot.claude_done import ClaudeDoneCollector, build_claude_done_session
-from bot.assistant.docs import sync_managed_prompt_files
-from bot.assistant.home import bootstrap_assistant_home
-from bot.assistant.upgrade.patch_generation import generate_pending_patch
-from bot.assistant.upgrade.diff import parse_patch_files, run_upgrade_dry_run
-from bot.assistant.proposals import get_proposal, list_proposals, set_proposal_status
-from bot.assistant.runtime import AssistantRunRequest
-from bot.assistant.upgrade.service import (
-    approve_pending_upgrade_patch,
-    apply_approved_upgrade,
-    read_upgrade_apply_failure,
-    read_upgrade_apply_result,
-    read_upgrade_metadata,
-    resolve_approved_upgrade_patch_path,
-    resolve_approved_upgrade_repo_root,
-    write_upgrade_apply_failure,
-    write_upgrade_dry_run_result,
-    write_upgrade_metadata,
-)
-from bot.assistant.upgrade.targets import list_upgrade_targets, resolve_upgrade_target
-from bot.assistant.state import (
-    attach_assistant_persist_hook,
-    clear_assistant_runtime_state,
-    migrate_assistant_runtime_state_to_shared,
-    record_assistant_capture,
-    restore_assistant_runtime_state,
-)
 from bot.agents import build_agent_prompt_input
 from bot.chat_identity import chat_session_user_id
 from bot.cli_params import (
@@ -286,70 +234,75 @@ class CliAttemptState:
     codex_session_id: Optional[str] = None
 
 
-def _assistant_home_or_raise(manager: MultiBotManager, alias: str):
-    profile = get_profile_or_raise(manager, alias)
-    if profile.bot_mode != "assistant":
-        _raise(409, "unsupported_bot_mode", "仅 assistant Bot 支持 proposal 审批")
-    home = bootstrap_assistant_home(profile.working_dir)
-    _migrate_assistant_home_to_shared(home)
-    return home
+@dataclass
+class _ChatRunRequest:
+    bot_alias: str
+    user_id: int
+    text: str
+    visible_text: str | None = None
+    task_mode: str = "standard"
+    task_payload: dict[str, Any] | None = None
+    actor_user_id: int | None = None
+    actor_account_id: str | None = None
+    actor_username: str | None = None
 
 
-def _migrate_assistant_home_to_shared(home: Any) -> None:
-    shared_user_id = chat_session_user_id(None)
-    migrate_assistant_runtime_state_to_shared(home, shared_user_id)
-    AssistantMemoryStore(home).migrate_chat_memories_to_shared(shared_user_id)
+def _new_stage_durations() -> dict[str, int]:
+    return {"cli_ms": 0, "trace_ms": 0, "db_ms": 0}
 
 
-def _assistant_cron_service_or_raise(manager: MultiBotManager, alias: str):
-    profile = get_profile_or_raise(manager, alias)
-    if profile.bot_mode != "assistant":
-        _raise(409, "unsupported_bot_mode", "仅 assistant Bot 支持定时任务")
-    service = manager.assistant_cron_service
-    if service is None or service.bot_alias != profile.alias:
-        _raise(503, "assistant_cron_unavailable", "assistant cron 服务尚未启动")
-    return service
+def _is_plan_request(request: _ChatRunRequest | None) -> bool:
+    return bool(request is not None and request.task_mode == PLAN_MODE_TASK_MODE)
 
 
-def _deep_merge_dict(base: dict[str, Any], patch_payload: dict[str, Any]) -> dict[str, Any]:
-    merged = dict(base)
-    for key, value in patch_payload.items():
-        if isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key] = _deep_merge_dict(merged[key], value)
-        else:
-            merged[key] = value
-    return merged
-
-
-def _split_csv_query(value: str | None) -> list[str] | None:
-    items = [item.strip() for item in str(value or "").split(",") if item.strip()]
-    return items or None
-
-
-def _build_assistant_cron_job_item(job: AssistantCronJob, *, state: Any) -> dict[str, Any]:
-    return {
-        **job.to_dict(),
-        "next_run_at": state.next_run_at,
-        "last_status": state.last_status,
-        "last_error": state.last_error,
-        "last_success_at": state.last_success_at,
-        "pending": bool(state.pending_run_id or state.current_run_id),
-        "pending_run_id": state.pending_run_id or state.current_run_id,
-        "coalesced_count": state.coalesced_count,
-    }
-
-
-def _build_assistant_runtime_item(manager: MultiBotManager, profile: BotProfile) -> dict[str, Any] | None:
-    if profile.bot_mode != "assistant":
+def _optional_int(value: Any) -> int | None:
+    if value is None:
         return None
-    runtime = manager.assistant_runtime
-    if runtime is None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
         return None
-    snapshot_for_bot = getattr(runtime, "snapshot_for_bot", None)
-    if not callable(snapshot_for_bot):
+
+
+def _build_chat_run_request(
+    alias: str,
+    user_id: int,
+    user_text: str,
+    *,
+    task_mode: str = "standard",
+    task_payload: dict[str, Any] | None = None,
+    visible_text: str | None = None,
+    actor: dict[str, Any] | None = None,
+) -> _ChatRunRequest:
+    normalized_task_mode = task_mode if task_mode in {"standard", PLAN_MODE_TASK_MODE} else "standard"
+    if normalized_task_mode == PLAN_MODE_TASK_MODE and is_plan_execution_prompt(user_text):
+        normalized_task_mode = "standard"
+    shared_user_id = chat_session_user_id(user_id)
+    actor_data = dict(actor or {})
+    return _ChatRunRequest(
+        bot_alias=alias,
+        user_id=shared_user_id,
+        text=user_text,
+        visible_text=visible_text if visible_text is not None else user_text,
+        task_mode=normalized_task_mode,
+        task_payload=task_payload,
+        actor_user_id=_optional_int(actor_data.get("user_id")),
+        actor_account_id=str(actor_data.get("account_id") or "").strip() or None,
+        actor_username=str(actor_data.get("username") or "").strip() or None,
+    )
+
+
+def _actor_from_request(request: _ChatRunRequest | None) -> dict[str, Any] | None:
+    if request is None:
         return None
-    snapshot = snapshot_for_bot(profile.alias)
-    return snapshot if isinstance(snapshot, dict) else None
+    actor: dict[str, Any] = {}
+    if request.actor_user_id is not None:
+        actor["user_id"] = request.actor_user_id
+    if request.actor_account_id:
+        actor["account_id"] = request.actor_account_id
+    if request.actor_username:
+        actor["username"] = request.actor_username
+    return actor or None
 
 
 def get_chat_session_for_alias(
@@ -374,14 +327,13 @@ def get_chat_session_for_alias(
         bot_alias=alias,
         user_id=shared_user_id,
         default_working_dir=profile.working_dir,
-        load_persisted_state=profile.bot_mode != "assistant",
         agent_id=agent.id,
     )
     return profile, agent, align_session_paths(session, profile.working_dir, profile.bot_mode)
 
 
 def _supports_cli_runtime(profile: BotProfile) -> bool:
-    return profile.bot_mode in ("cli", "assistant")
+    return profile.bot_mode == "cli"
 
 
 def _supports_native_agent_runtime(profile: BotProfile) -> bool:
@@ -468,10 +420,6 @@ def _resolve_chat_execution_mode(profile: BotProfile, execution_mode: str) -> st
     if resolved_execution_mode == NATIVE_AGENT_PROVIDER and not _supports_native_agent_runtime(profile):
         _raise(409, "native_agent_unavailable", "当前 Bot 未启用原生 agent")
     return resolved_execution_mode
-
-
-def _should_route_assistant_runtime(task_mode: str, resolved_execution_mode: str) -> bool:
-    return task_mode == "proposal_patch" or resolved_execution_mode != NATIVE_AGENT_PROVIDER
 
 
 def _pi_store() -> PiSessionStore:
@@ -614,7 +562,6 @@ def build_bot_summary(
     return {
         "alias": profile.alias,
         "enabled": profile.enabled,
-        "bot_mode": profile.bot_mode,
         "cli_type": profile.cli_type,
         "cli_path": profile.cli_path,
         "supported_execution_modes": list(profile.supported_execution_modes),
@@ -630,7 +577,6 @@ def build_bot_summary(
         **activity,
         "bot_username": (app.bot_data.get("bot_username") if app else "") or "",
         "capabilities": _build_capabilities(profile, alias == manager.main_profile.alias),
-        "assistant_runtime": _build_assistant_runtime_item(manager, profile),
     }
 
 
@@ -1145,798 +1091,6 @@ async def delete_agent(manager: MultiBotManager, alias: str, agent_id: str) -> d
         _raise(400, "invalid_agent", str(exc))
     return {"deleted": True}
 
-
-def list_assistant_proposals(
-    manager: MultiBotManager,
-    alias: str,
-    *,
-    status: str | None = None,
-) -> dict[str, Any]:
-    home = _assistant_home_or_raise(manager, alias)
-    return {"items": list_proposals(home, status=status)}
-
-
-def list_assistant_upgrade_targets(manager: MultiBotManager, alias: str) -> dict[str, Any]:
-    _assistant_home_or_raise(manager, alias)
-    return {"items": list_upgrade_targets(manager)}
-
-
-def _assistant_upgrade_patch_candidates(home, proposal_id: str) -> list[tuple[str, Path]]:
-    return [
-        ("approved", home.root / "upgrades" / "approved" / f"{proposal_id}.patch"),
-        ("pending", home.root / "upgrades" / "pending" / f"{proposal_id}.patch"),
-    ]
-
-
-def _read_assistant_upgrade_diff(home, proposal_id: str) -> dict[str, Any]:
-    for state, path in _assistant_upgrade_patch_candidates(home, proposal_id):
-        if path.exists():
-            text = path.read_text(encoding="utf-8")
-            return {
-                "available": True,
-                "state": state,
-                "source": path.relative_to(home.root).as_posix(),
-                "text": text,
-                "files": parse_patch_files(text),
-            }
-    return {"available": False, "state": "", "source": "", "text": "", "files": []}
-
-
-def _read_assistant_generation_log(home, proposal_id: str, *, limit: int = 100) -> dict[str, Any]:
-    path = home.root / "upgrades" / "logs" / f"{proposal_id}.generate.jsonl"
-    if not path.exists():
-        return {"available": False, "source": "", "items": []}
-    items: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines()[-limit:]:
-        try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
-            payload = {"event": "unparsed", "message": line}
-        if isinstance(payload, dict):
-            items.append(payload)
-    return {"available": True, "source": path.relative_to(home.root).as_posix(), "items": items}
-
-
-def _read_assistant_apply_state(home, proposal_id: str, *, proposal: dict[str, Any], diff: dict[str, Any]) -> dict[str, Any]:
-    applied = read_upgrade_apply_result(home, proposal_id)
-    failed = read_upgrade_apply_failure(home, proposal_id)
-    diff_state = str(diff.get("state") or "")
-    return {
-        "available": bool(diff.get("available")) and diff_state == "approved",
-        "applied": proposal.get("status") == "applied" or bool(applied),
-        "last_error": str((failed or {}).get("error") or ""),
-        "last_error_at": str((failed or {}).get("failed_at") or ""),
-        "last_error_log_path": (
-            f"upgrades/applied/{proposal_id}.last-error.json" if failed else ""
-        ),
-    }
-
-
-def _read_assistant_upgrade_state(home, proposal_id: str, *, proposal: dict[str, Any]) -> dict[str, Any]:
-    approved = read_upgrade_metadata(home, proposal_id, "approved")
-    pending = read_upgrade_metadata(home, proposal_id, "pending")
-    applied = read_upgrade_apply_result(home, proposal_id)
-    approved_patch = home.root / "upgrades" / "approved" / f"{proposal_id}.patch"
-    pending_patch = home.root / "upgrades" / "pending" / f"{proposal_id}.patch"
-    metadata = approved or pending or {}
-    pending_lifecycle = str((pending or {}).get("lifecycle") or "").strip()
-    if applied:
-        state = "applied"
-    elif approved is not None or approved_patch.exists():
-        state = "approved"
-    elif pending is not None or pending_patch.exists():
-        state = pending_lifecycle if pending_lifecycle in {"running", "failed"} else "pending"
-    else:
-        state = "none"
-    sensitive_hits = [str(item) for item in metadata.get("sensitive_hits") or [] if str(item)]
-    can_generate = proposal.get("status") == "approved"
-    can_approve_patch = state == "pending" and pending is not None and not sensitive_hits
-    can_dry_run = approved is not None or approved_patch.exists()
-    return {
-        "state": state,
-        "target_alias": str(metadata.get("target_alias") or ""),
-        "target_repo_root": str(metadata.get("target_repo_root") or ""),
-        "base_commit": str(metadata.get("base_commit") or ""),
-        "patch_source": str(metadata.get("patch_path") or ""),
-        "generation_status": str((metadata.get("generator") or {}).get("status") or pending_lifecycle or ""),
-        "chat_conclusion": str(metadata.get("chat_conclusion") or ""),
-        "sensitive_hits": sensitive_hits,
-        "dry_run": dict(metadata.get("dry_run") or {}),
-        "can_generate": can_generate,
-        "can_approve_patch": can_approve_patch,
-        "can_dry_run": can_dry_run,
-        "can_apply": can_dry_run and proposal.get("status") != "applied",
-    }
-
-
-def get_assistant_proposal_detail(
-    manager: MultiBotManager,
-    alias: str,
-    proposal_id: str,
-) -> dict[str, Any]:
-    home = _assistant_home_or_raise(manager, alias)
-    try:
-        proposal = get_proposal(home, proposal_id)
-    except FileNotFoundError as exc:
-        _raise(404, "proposal_not_found", str(exc))
-    diff = _read_assistant_upgrade_diff(home, proposal_id)
-    return {
-        "proposal": proposal,
-        "diff": diff,
-        "apply": _read_assistant_apply_state(home, proposal_id, proposal=proposal, diff=diff),
-        "upgrade": _read_assistant_upgrade_state(home, proposal_id, proposal=proposal),
-        "generation_log": _read_assistant_generation_log(home, proposal_id),
-    }
-
-
-def get_assistant_upgrade_apply_log(
-    manager: MultiBotManager,
-    alias: str,
-    proposal_id: str,
-) -> dict[str, Any]:
-    home = _assistant_home_or_raise(manager, alias)
-    failed = read_upgrade_apply_failure(home, proposal_id)
-    if failed is not None:
-        return failed
-    applied = read_upgrade_apply_result(home, proposal_id)
-    if applied is not None:
-        return applied
-    _raise(404, "assistant_upgrade_log_not_found", f"未找到 `{proposal_id}` 的 apply 日志")
-
-
-async def approve_assistant_proposal(
-    manager: MultiBotManager,
-    alias: str,
-    proposal_id: str,
-    *,
-    reviewer: str,
-) -> dict[str, Any]:
-    home = _assistant_home_or_raise(manager, alias)
-    try:
-        return set_proposal_status(home, proposal_id, "approved", reviewer=reviewer)
-    except FileNotFoundError as exc:
-        _raise(404, "proposal_not_found", str(exc))
-
-
-async def reject_assistant_proposal(
-    manager: MultiBotManager,
-    alias: str,
-    proposal_id: str,
-    *,
-    reviewer: str,
-) -> dict[str, Any]:
-    home = _assistant_home_or_raise(manager, alias)
-    try:
-        return set_proposal_status(home, proposal_id, "rejected", reviewer=reviewer)
-    except FileNotFoundError as exc:
-        _raise(404, "proposal_not_found", str(exc))
-
-
-def _raise_patch_generation_error(exc: Exception) -> None:
-    if isinstance(exc, RuntimeError) and str(exc).startswith("upgrade_target_dirty"):
-        _raise(
-            409,
-            "upgrade_target_dirty",
-            "目标工程有未提交改动，请清理后再生成 patch",
-            data={"dirty_status": str(exc)},
-        )
-    if isinstance(exc, PermissionError):
-        if str(exc) == "proposal_not_approved":
-            _raise(409, "proposal_not_approved", "proposal 尚未批准，不能生成 patch")
-        raise exc
-    if isinstance(exc, FileExistsError):
-        _raise(409, "patch_generation_already_running", str(exc))
-    if isinstance(exc, ValueError):
-        _raise(409, str(exc), str(exc))
-    if isinstance(exc, (FileNotFoundError, subprocess.CalledProcessError)):
-        detail = (
-            exc.stderr if isinstance(exc, subprocess.CalledProcessError)
-            else str(exc)
-        ) or (
-            exc.stdout if isinstance(exc, subprocess.CalledProcessError)
-            else ""
-        ) or str(exc)
-        _raise(500, "patch_generation_failed", str(detail).strip() or "生成 patch 失败")
-    raise exc
-
-
-def _raise_unavailable_upgrade_target(target: dict[str, Any]) -> None:
-    reason = str(target.get("reason") or "upgrade_target_unavailable")
-    dirty_paths = [str(item) for item in target.get("dirty_paths") or [] if str(item)]
-    if reason == "upgrade_target_dirty":
-        _raise(
-            409,
-            reason,
-            "目标工程有未提交改动，请清理后再生成 patch",
-            data={"dirty_paths": dirty_paths},
-        )
-    _raise(409, reason, "目标工程不可用", data={"dirty_paths": dirty_paths})
-
-
-async def generate_assistant_proposal_patch(
-    manager: MultiBotManager,
-    alias: str,
-    proposal_id: str,
-    *,
-    target_alias: str,
-    regenerate: bool,
-    generated_by: str,
-) -> dict[str, Any]:
-    home = _assistant_home_or_raise(manager, alias)
-    try:
-        proposal = get_proposal(home, proposal_id)
-    except FileNotFoundError as exc:
-        _raise(404, "proposal_not_found", str(exc))
-    if proposal.get("status") != "approved":
-        _raise(409, "proposal_not_approved", "proposal 尚未批准，不能生成 patch")
-    try:
-        target = resolve_upgrade_target(manager, target_alias)
-    except KeyError:
-        _raise(404, "upgrade_target_not_found", target_alias)
-    if not target.get("available"):
-        _raise_unavailable_upgrade_target(target)
-    try:
-        return generate_pending_patch(
-            home,
-            proposal,
-            target=target,
-            generated_by=generated_by,
-            regenerate=regenerate,
-        )
-    except Exception as exc:
-        _raise_patch_generation_error(exc)
-
-
-async def stream_generate_assistant_proposal_patch(
-    manager: MultiBotManager,
-    alias: str,
-    proposal_id: str,
-    *,
-    target_alias: str,
-    regenerate: bool,
-    generated_by: str,
-) -> AsyncIterator[dict[str, Any]]:
-    home = _assistant_home_or_raise(manager, alias)
-    try:
-        proposal = get_proposal(home, proposal_id)
-    except FileNotFoundError as exc:
-        _raise(404, "proposal_not_found", str(exc))
-    if proposal.get("status") != "approved":
-        _raise(409, "proposal_not_approved", "proposal 尚未批准，不能生成 patch")
-    try:
-        target = resolve_upgrade_target(manager, target_alias)
-    except KeyError:
-        _raise(404, "upgrade_target_not_found", target_alias)
-    if not target.get("available"):
-        _raise_unavailable_upgrade_target(target)
-
-    event_queue: queue.Queue[Any] = queue.Queue()
-    worker_done = threading.Event()
-
-    def on_event(event: dict[str, Any]) -> None:
-        event_queue.put(event)
-
-    def run_generation() -> None:
-        try:
-            metadata = generate_pending_patch(
-                home,
-                proposal,
-                target=target,
-                generated_by=generated_by,
-                regenerate=regenerate,
-                event_callback=on_event,
-            )
-            event_queue.put({"type": "done", "metadata": metadata})
-        except Exception as exc:  # pragma: no cover - event body is asserted at stream boundary
-            logger.warning("assistant patch stream failed: alias=%s proposal=%s err=%s", alias, proposal_id, exc)
-            event_queue.put({
-                "type": "error",
-                "code": "patch_generation_failed",
-                "message": _normalize_error_message(exc).strip() or "patch_generation_failed",
-                "metadata": read_upgrade_metadata(home, proposal_id, "pending"),
-            })
-        finally:
-            worker_done.set()
-
-    threading.Thread(target=run_generation, daemon=True).start()
-
-    while not worker_done.is_set() or not event_queue.empty():
-        try:
-            item = event_queue.get_nowait()
-        except queue.Empty:
-            await asyncio.sleep(0.05)
-            continue
-        yield item
-
-
-async def approve_assistant_proposal_patch(
-    manager: MultiBotManager,
-    alias: str,
-    proposal_id: str,
-    *,
-    reviewer: str,
-) -> dict[str, Any]:
-    home = _assistant_home_or_raise(manager, alias)
-    try:
-        return approve_pending_upgrade_patch(home, proposal_id, reviewer=reviewer)
-    except PermissionError as exc:
-        if str(exc) == "proposal_not_approved":
-            _raise(409, "proposal_not_approved", "proposal 尚未批准，不能批准 patch")
-        if str(exc) == "sensitive_patch_path":
-            _raise(409, "sensitive_patch_path", "patch 命中敏感路径，不能批准")
-        raise
-    except FileNotFoundError as exc:
-        _raise(404, "pending_patch_not_found", str(exc))
-
-
-async def apply_assistant_upgrade(
-    manager: MultiBotManager,
-    alias: str,
-    proposal_id: str,
-) -> dict[str, Any]:
-    home = _assistant_home_or_raise(manager, alias)
-    repo_root = resolve_approved_upgrade_repo_root(
-        home,
-        proposal_id,
-        fallback_repo_root=Path(__file__).resolve().parents[2],
-    )
-    try:
-        return apply_approved_upgrade(home, proposal_id, repo_root=repo_root)
-    except PermissionError as exc:
-        if str(exc) == "proposal_not_approved":
-            _raise(409, "proposal_not_approved", "proposal 尚未批准，不能 apply")
-        raise
-    except FileNotFoundError as exc:
-        _raise(404, "upgrade_patch_not_found", str(exc))
-    except RuntimeError as exc:
-        detail = str(exc)
-        if detail.startswith("upgrade_target_dirty"):
-            try:
-                patch_path = resolve_approved_upgrade_patch_path(home, proposal_id)
-            except FileNotFoundError:
-                patch_path = home.root / "upgrades" / "approved" / f"{proposal_id}.patch"
-            write_upgrade_apply_failure(
-                home,
-                proposal_id,
-                repo_root=repo_root,
-                patch_path=patch_path,
-                error=detail,
-            )
-            _raise(
-                409,
-                "upgrade_target_dirty",
-                "目标工程有未提交改动，请清理后再 apply",
-                data={"dirty_status": detail},
-            )
-        raise
-    except subprocess.CalledProcessError as exc:
-        detail = (exc.stderr or exc.stdout or str(exc)).strip()
-        try:
-            patch_path = resolve_approved_upgrade_patch_path(home, proposal_id)
-        except FileNotFoundError:
-            patch_path = home.root / "upgrades" / "approved" / f"{proposal_id}.patch"
-        write_upgrade_apply_failure(
-            home,
-            proposal_id,
-            repo_root=repo_root,
-            patch_path=patch_path,
-            error=detail or "应用 upgrade 失败",
-        )
-        _raise(500, "assistant_upgrade_failed", detail or "应用 upgrade 失败")
-
-
-async def dry_run_assistant_upgrade(
-    manager: MultiBotManager,
-    alias: str,
-    proposal_id: str,
-) -> dict[str, Any]:
-    home = _assistant_home_or_raise(manager, alias)
-    try:
-        patch_path = resolve_approved_upgrade_patch_path(home, proposal_id)
-    except FileNotFoundError as exc:
-        _raise(404, "upgrade_patch_not_found", str(exc))
-    repo_root = resolve_approved_upgrade_repo_root(
-        home,
-        proposal_id,
-        fallback_repo_root=Path(__file__).resolve().parents[2],
-    )
-    result = run_upgrade_dry_run(repo_root=repo_root, patch_path=patch_path)
-    write_upgrade_dry_run_result(home, proposal_id, result)
-    return result
-
-
-def _assistant_memory_score(row: MemorySearchRow) -> float:
-    lexical_component = 1.0 / (1.0 + max(0.0, abs(float(row.lexical_score))))
-    score = (lexical_component * 0.35) + (row.importance * 0.25) + (row.confidence * 0.25) + (row.freshness * 0.15)
-    if row.scope == "user":
-        score += 0.04
-    if row.kind == "semantic":
-        score += 0.02
-    return round(min(score, 1.0), 4)
-
-
-def search_assistant_memories(
-    manager: MultiBotManager,
-    alias: str,
-    *,
-    user_id: int,
-    query_text: str,
-    limit: int = 10,
-    kinds: list[str] | None = None,
-    scopes: list[str] | None = None,
-    include_invalidated: bool = False,
-) -> dict[str, Any]:
-    home = _assistant_home_or_raise(manager, alias)
-    store = AssistantMemoryStore(home)
-    stage_durations = new_stage_durations()
-    started_at = time.perf_counter()
-    with activate_perf_capture(stage_durations):
-        recall_started_at = time.perf_counter()
-        rows = store.search_lexical(
-            user_id=user_id,
-            query_text=query_text,
-            kinds=kinds,
-            scopes=scopes,
-            include_invalidated=include_invalidated,
-            limit=limit,
-        )
-        stage_durations["recall_ms"] += max(0, int(round((time.perf_counter() - recall_started_at) * 1000)))
-    items = [
-        {
-            "id": row.id,
-            "kind": row.kind,
-            "scope": row.scope,
-            "source_type": row.source_type,
-            "source_ref": row.source_ref,
-            "title": row.title,
-            "summary": row.summary,
-            "body": row.body,
-            "updated_at": row.updated_at,
-            "invalidated_at": row.invalidated_at,
-            "score": _assistant_memory_score(row),
-        }
-        for row in rows
-    ]
-    elapsed_ms = max(0, int(round((time.perf_counter() - started_at) * 1000)))
-    write_perf_record(
-        home,
-        run_id=f"memory-search-{uuid.uuid4().hex[:8]}",
-        bot_alias=alias,
-        source="memory_search",
-        task_mode="admin",
-        interactive=False,
-        user_id=user_id,
-        status="completed",
-        stage_durations=stage_durations,
-        elapsed_ms=elapsed_ms,
-        prompt_chars=len(query_text),
-        output_chars=len(json.dumps(items, ensure_ascii=False)),
-    )
-    return {"items": items}
-
-
-def invalidate_assistant_memory(
-    manager: MultiBotManager,
-    alias: str,
-    memory_id: str,
-    *,
-    reason: str,
-    user_id: int,
-) -> dict[str, Any]:
-    home = _assistant_home_or_raise(manager, alias)
-    store = AssistantMemoryStore(home)
-    stage_durations = new_stage_durations()
-    started_at = time.perf_counter()
-    with activate_perf_capture(stage_durations):
-        invalidated = store.invalidate(memory_id, reason=reason)
-    if not invalidated:
-        _raise(404, "assistant_memory_not_found", f"memory `{memory_id}` 不存在")
-    elapsed_ms = max(0, int(round((time.perf_counter() - started_at) * 1000)))
-    write_perf_record(
-        home,
-        run_id=f"memory-invalidate-{uuid.uuid4().hex[:8]}",
-        bot_alias=alias,
-        source="memory_invalidate",
-        task_mode="admin",
-        interactive=False,
-        user_id=user_id,
-        status="completed",
-        stage_durations=stage_durations,
-        elapsed_ms=elapsed_ms,
-        prompt_chars=len(memory_id),
-    )
-    return {"memory_id": memory_id, "invalidated": True, "reason": reason}
-
-
-def bulk_invalidate_assistant_memories(
-    manager: MultiBotManager,
-    alias: str,
-    *,
-    memory_ids: list[str],
-    reason: str,
-    user_id: int,
-) -> dict[str, Any]:
-    home = _assistant_home_or_raise(manager, alias)
-    store = AssistantMemoryStore(home)
-    stage_durations = new_stage_durations()
-    started_at = time.perf_counter()
-    invalidated = 0
-    missing: list[str] = []
-    with activate_perf_capture(stage_durations):
-        for memory_id in memory_ids:
-            clean_id = str(memory_id or "").strip()
-            if not clean_id:
-                continue
-            if store.invalidate(clean_id, reason=reason):
-                invalidated += 1
-            else:
-                missing.append(clean_id)
-    elapsed_ms = max(0, int(round((time.perf_counter() - started_at) * 1000)))
-    write_perf_record(
-        home,
-        run_id=f"memory-bulk-invalidate-{uuid.uuid4().hex[:8]}",
-        bot_alias=alias,
-        source="memory_bulk_invalidate",
-        task_mode="admin",
-        interactive=False,
-        user_id=user_id,
-        status="completed",
-        stage_durations=stage_durations,
-        elapsed_ms=elapsed_ms,
-        prompt_chars=sum(len(str(item)) for item in memory_ids),
-    )
-    return {"invalidated": invalidated, "missing": missing, "reason": reason}
-
-
-def reindex_assistant_memory(
-    manager: MultiBotManager,
-    alias: str,
-    *,
-    user_id: int,
-    force: bool = False,
-) -> dict[str, Any]:
-    home = _assistant_home_or_raise(manager, alias)
-    stage_durations = new_stage_durations()
-    started_at = time.perf_counter()
-    with activate_perf_capture(stage_durations):
-        index_started_at = time.perf_counter()
-        working = index_working_memories(home, user_id=user_id, force=force)
-        knowledge = index_knowledge_memories(home, user_id=0)
-        stage_durations["index_ms"] += max(0, int(round((time.perf_counter() - index_started_at) * 1000)))
-    payload = {
-        "working": {
-            "indexed_count": working.indexed_count,
-            "memory_ids": working.memory_ids,
-        },
-        "knowledge": {
-            "indexed_count": knowledge.indexed_count,
-            "memory_ids": knowledge.memory_ids,
-        },
-    }
-    elapsed_ms = max(0, int(round((time.perf_counter() - started_at) * 1000)))
-    write_perf_record(
-        home,
-        run_id=f"memory-reindex-{uuid.uuid4().hex[:8]}",
-        bot_alias=alias,
-        source="memory_reindex",
-        task_mode="admin",
-        interactive=False,
-        user_id=user_id,
-        status="completed",
-        stage_durations=stage_durations,
-        elapsed_ms=elapsed_ms,
-        output_chars=len(json.dumps(payload, ensure_ascii=False)),
-    )
-    return payload
-
-
-def _parse_memory_eval_cases(payload: dict[str, Any]) -> list[MemoryEvalCase]:
-    rows = payload.get("cases")
-    if not isinstance(rows, list) or not rows:
-        _raise(400, "invalid_eval_cases", "cases 不能为空")
-    items: list[MemoryEvalCase] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            _raise(400, "invalid_eval_cases", "cases 必须为对象数组")
-        query = str(row.get("query") or "").strip()
-        expected_memory_kind = str(row.get("expected_memory_kind") or "").strip()
-        if not query or not expected_memory_kind:
-            _raise(400, "invalid_eval_cases", "case 缺少 query 或 expected_memory_kind")
-        items.append(
-            MemoryEvalCase(
-                query=query,
-                expected_memory_kind=expected_memory_kind,
-                expected_hit_terms=[str(item) for item in row.get("expected_hit_terms", [])],
-                must_not_hit_terms=[str(item) for item in row.get("must_not_hit_terms", [])],
-            )
-        )
-    return items
-
-
-def run_assistant_memory_eval_task(
-    manager: MultiBotManager,
-    alias: str,
-    *,
-    user_id: int,
-    cases: list[MemoryEvalCase],
-) -> dict[str, Any]:
-    home = _assistant_home_or_raise(manager, alias)
-    stage_durations = new_stage_durations()
-    started_at = time.perf_counter()
-    with activate_perf_capture(stage_durations):
-        recall_started_at = time.perf_counter()
-        run = run_memory_eval(home, user_id=user_id, cases=cases)
-        stage_durations["recall_ms"] += max(0, int(round((time.perf_counter() - recall_started_at) * 1000)))
-    payload = {
-        "metrics": {
-            "hit_at_5": run.metrics["hit_at_5"],
-            "stale_recall_rate": run.metrics["stale_recall_rate"],
-        },
-        "report_path": run.report_path,
-    }
-    elapsed_ms = max(0, int(round((time.perf_counter() - started_at) * 1000)))
-    write_perf_record(
-        home,
-        run_id=f"memory-eval-{uuid.uuid4().hex[:8]}",
-        bot_alias=alias,
-        source="memory_eval",
-        task_mode="admin",
-        interactive=False,
-        user_id=user_id,
-        status="completed",
-        stage_durations=stage_durations,
-        elapsed_ms=elapsed_ms,
-        output_chars=len(json.dumps(payload, ensure_ascii=False)),
-    )
-    return payload
-
-
-def list_assistant_memory_eval_reports(
-    manager: MultiBotManager,
-    alias: str,
-    *,
-    limit: int = 10,
-) -> dict[str, Any]:
-    home = _assistant_home_or_raise(manager, alias)
-    items: list[dict[str, Any]] = []
-    for path in sorted((home.root / "evals" / "memory").glob("*.json"), reverse=True):
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        try:
-            created_at = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC).isoformat()
-        except OSError:
-            created_at = ""
-        items.append(
-            {
-                "report_path": str(path),
-                "created_at": created_at,
-                "metrics": {
-                    "hit_at_5": float((payload.get("metrics") or {}).get("hit_at_5") or 0.0),
-                    "stale_recall_rate": float((payload.get("metrics") or {}).get("stale_recall_rate") or 0.0),
-                },
-                "rows": [
-                    {
-                        "query": str(row.get("query") or ""),
-                        "prompt_block": str(row.get("prompt_block") or ""),
-                        "hit": bool(row.get("hit")),
-                        "stale": bool(row.get("stale")),
-                        "audit_path": row.get("audit_path"),
-                    }
-                    for row in payload.get("rows", [])
-                    if isinstance(row, dict)
-                ],
-            }
-        )
-        if len(items) >= max(1, int(limit)):
-            break
-    return {"items": items}
-
-
-def get_assistant_diagnostics(
-    manager: MultiBotManager,
-    alias: str,
-    *,
-    limit: int = 20,
-    source: str = "",
-    status: str = "",
-    user_id: int | None = None,
-    from_value: str = "",
-    to_value: str = "",
-) -> dict[str, Any]:
-    home = _assistant_home_or_raise(manager, alias)
-    return get_perf_diagnostics(
-        home,
-        limit=limit,
-        source=source,
-        status=status,
-        user_id=user_id,
-        from_value=from_value,
-        to_value=to_value,
-    )
-
-
-def list_assistant_cron_jobs(manager: MultiBotManager, alias: str) -> dict[str, Any]:
-    service = _assistant_cron_service_or_raise(manager, alias)
-    items = []
-    for job in service.list_jobs():
-        state = service.get_job_state(job.id)
-        items.append(_build_assistant_cron_job_item(job, state=state))
-    return {"items": items}
-
-
-async def create_assistant_cron_job(manager: MultiBotManager, alias: str, payload: dict[str, Any]) -> dict[str, Any]:
-    service = _assistant_cron_service_or_raise(manager, alias)
-    try:
-        job = AssistantCronJob.from_dict(payload)
-        try:
-            read_job_definition(service.assistant_home, job.id)
-        except FileNotFoundError:
-            pass
-        else:
-            _raise(409, "cron_job_exists", f"job `{job.id}` 已存在")
-        saved = await service.save_job(job)
-    except ValueError as exc:
-        _raise(400, "invalid_cron_job", str(exc))
-    state = service.get_job_state(saved.id)
-    return {"job": _build_assistant_cron_job_item(saved, state=state)}
-
-
-async def update_assistant_cron_job(
-    manager: MultiBotManager,
-    alias: str,
-    job_id: str,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    service = _assistant_cron_service_or_raise(manager, alias)
-    try:
-        current = read_job_definition(service.assistant_home, job_id)
-    except FileNotFoundError:
-        _raise(404, "cron_job_not_found", f"job `{job_id}` 不存在")
-
-    merged = _deep_merge_dict(current.to_dict(), payload)
-    merged["id"] = job_id
-    try:
-        saved = await service.save_job(AssistantCronJob.from_dict(merged))
-    except ValueError as exc:
-        _raise(400, "invalid_cron_job", str(exc))
-    state = service.get_job_state(saved.id)
-    return {"job": _build_assistant_cron_job_item(saved, state=state)}
-
-
-async def delete_assistant_cron_job(manager: MultiBotManager, alias: str, job_id: str) -> dict[str, Any]:
-    service = _assistant_cron_service_or_raise(manager, alias)
-    if not await service.delete_job(job_id):
-        _raise(404, "cron_job_not_found", f"job `{job_id}` 不存在")
-    delete_job_runtime_state(service.assistant_home, job_id)
-    delete_job_run_audit(service.assistant_home, job_id)
-    return {"removed": True, "job_id": job_id}
-
-
-async def run_assistant_cron_job_now(manager: MultiBotManager, alias: str, job_id: str) -> dict[str, Any]:
-    service = _assistant_cron_service_or_raise(manager, alias)
-    try:
-        return await service.run_job_now(job_id)
-    except FileNotFoundError:
-        _raise(404, "cron_job_not_found", f"job `{job_id}` 不存在")
-
-
-def list_assistant_cron_runs(
-    manager: MultiBotManager,
-    alias: str,
-    job_id: str,
-    *,
-    limit: int = 20,
-) -> dict[str, Any]:
-    service = _assistant_cron_service_or_raise(manager, alias)
-    try:
-        read_job_definition(service.assistant_home, job_id)
-    except FileNotFoundError:
-        _raise(404, "cron_job_not_found", f"job `{job_id}` 不存在")
-    items = read_job_run_audit(service.assistant_home, job_id, limit=max(1, limit))
-    items.reverse()
-    return {"items": items}
 
 
 def _apply_cli_model_options(schema: dict[str, Any]) -> dict[str, Any]:
@@ -3103,16 +2257,11 @@ def reset_user_session(manager: MultiBotManager, alias: str, user_id: int, agent
     profile = get_profile_or_raise(manager, alias)
     bot_id = resolve_session_bot_id(manager, alias)
     normalized_agent_id = str(agent_id or "main").strip().lower() or "main"
-    state_path = None
-    if profile.bot_mode == "assistant" and normalized_agent_id == "main":
-        state_path = Path(profile.working_dir) / ".assistant" / "state" / "users" / f"{user_id}.json"
 
     with sessions_lock:
         session = sessions.get((bot_id, user_id, normalized_agent_id))
 
     if session is None:
-        if profile.bot_mode == "assistant" and (state_path is None or not state_path.exists()):
-            return {"reset": reset_session(bot_id, user_id, agent_id=normalized_agent_id)}
         if normalized_agent_id == "main":
             session = get_session_for_alias(manager, alias, user_id)
         else:
@@ -3126,9 +2275,6 @@ def reset_user_session(manager: MultiBotManager, alias: str, user_id: int, agent
 
     _get_chat_history_service(session).reset_active_conversation(profile, session)
     removed = reset_session(bot_id, user_id, agent_id=normalized_agent_id)
-    if profile.bot_mode == "assistant" and normalized_agent_id == "main" and state_path is not None and state_path.exists():
-        home = bootstrap_assistant_home(profile.working_dir)
-        removed = clear_assistant_runtime_state(home, user_id) or removed
     return {"reset": removed}
 
 
@@ -3710,417 +2856,6 @@ def _apply_agent_prompt_if_needed(prompt_text: str, agent: AgentProfile, session
         session.agent_prompt_hash_seen = prompt_hash or None
     return wrapped
 
-
-def _prepare_assistant_prompt(
-    profile: BotProfile,
-    session: UserSession,
-    *,
-    user_id: int,
-    user_text: str,
-    cli_type: str,
-) -> tuple[Any, dict[str, str], str, bool, dict[str, int]]:
-    started_at = time.perf_counter()
-    assistant_home = bootstrap_assistant_home(profile.working_dir)
-    assistant_pre_surface = snapshot_managed_surface(assistant_home)
-    compaction_prompt_active = is_compaction_prompt_active(assistant_home)
-    stage_durations = new_stage_durations()
-    with activate_perf_capture(stage_durations):
-        sync_started_at = time.perf_counter()
-        sync_result = sync_managed_prompt_files(assistant_home)
-        stage_durations["sync_ms"] += max(0, int(round((time.perf_counter() - sync_started_at) * 1000)))
-    prompt_source_text = user_text
-    try:
-        with activate_perf_capture(stage_durations):
-            index_started_at = time.perf_counter()
-            index_working_memories(assistant_home)
-            stage_durations["index_ms"] += max(0, int(round((time.perf_counter() - index_started_at) * 1000)))
-    except Exception as exc:
-        logger.warning("assistant working memory index failed user=%s error=%s", user_id, exc)
-    try:
-        with activate_perf_capture(stage_durations):
-            recall_started_at = time.perf_counter()
-            recall = recall_assistant_memories(assistant_home, user_id=user_id, user_text=user_text)
-            stage_durations["recall_ms"] += max(0, int(round((time.perf_counter() - recall_started_at) * 1000)))
-        if recall.prompt_block:
-            prompt_source_text = f"{recall.prompt_block}\n\n{user_text}"
-    except Exception as exc:
-        logger.warning("assistant memory recall failed user=%s error=%s", user_id, exc)
-    compiled_prompt = compile_assistant_prompt(
-        prompt_source_text,
-        managed_prompt_hash=sync_result.managed_prompt_hash,
-        seen_managed_prompt_hash=session.managed_prompt_hash_seen,
-    )
-    if compiled_prompt.managed_prompt_hash_seen != session.managed_prompt_hash_seen:
-        session.managed_prompt_hash_seen = compiled_prompt.managed_prompt_hash_seen
-        session.persist()
-    elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
-    diag_log_slow(
-        logger,
-        "assistant_prompt_prepare",
-        elapsed_ms,
-        alias=profile.alias,
-        agent=session.agent_id,
-        user_id=user_id,
-        prompt_chars=len(compiled_prompt.prompt_text),
-        sync_ms=stage_durations.get("sync_ms", 0),
-        index_ms=stage_durations.get("index_ms", 0),
-        recall_ms=stage_durations.get("recall_ms", 0),
-    )
-    return assistant_home, assistant_pre_surface, compiled_prompt.prompt_text, compaction_prompt_active, stage_durations
-
-
-def _normalize_assistant_prompt_preparation(
-    value: tuple[Any, dict[str, str], str, bool] | tuple[Any, dict[str, str], str, bool, dict[str, int]],
-) -> tuple[Any, dict[str, str], str, bool, dict[str, int]]:
-    if len(value) == 5:
-        return value
-    assistant_home, assistant_pre_surface, prompt_text, compaction_prompt_active = value
-    return assistant_home, assistant_pre_surface, prompt_text, compaction_prompt_active, new_stage_durations()
-
-
-def _is_dream_request(request: AssistantRunRequest | None) -> bool:
-    return bool(request is not None and request.task_mode == "dream")
-
-
-def _is_plan_request(request: AssistantRunRequest | None) -> bool:
-    return bool(request is not None and request.task_mode == PLAN_MODE_TASK_MODE)
-
-
-def _is_proposal_patch_request(request: AssistantRunRequest | None) -> bool:
-    return bool(request is not None and request.task_mode == "proposal_patch")
-
-
-def _proposal_patch_request_payload(request: AssistantRunRequest) -> tuple[str, str, bool]:
-    payload = dict(request.task_payload or {})
-    proposal_id = str(payload.get("proposal_id") or payload.get("proposalId") or "").strip()
-    target_alias = str(payload.get("target_alias") or payload.get("targetAlias") or "").strip()
-    regenerate = bool(payload.get("regenerate"))
-    return proposal_id, target_alias, regenerate
-
-
-def _build_patch_generation_summary(metadata: dict[str, Any] | None, *, error_message: str = "") -> str:
-    if error_message:
-        return "\n".join([
-            "patch 生成失败",
-            f"原因: {error_message}",
-        ])
-    data = dict(metadata or {})
-    files = [str(item) for item in data.get("changed_files") or [] if str(item)]
-    summary = [
-        "patch 已生成",
-        f"目标工程: {str(data.get('target_alias') or '-')}",
-        f"变更: {len(files)} 文件 · +{int(data.get('additions') or 0)} / -{int(data.get('deletions') or 0)}",
-    ]
-    if files:
-        preview = ", ".join(files[:3])
-        if len(files) > 3:
-            preview += " ..."
-        summary.append(f"文件: {preview}")
-    sensitive_hits = [str(item) for item in data.get("sensitive_hits") or [] if str(item)]
-    if sensitive_hits:
-        summary.append(f"敏感路径: {', '.join(sensitive_hits)}")
-    return "\n".join(summary)
-
-
-def _persist_patch_chat_conclusion(
-    home,
-    proposal_id: str,
-    metadata: dict[str, Any] | None,
-    *,
-    summary: str,
-    message_id: str = "",
-) -> dict[str, Any] | None:
-    if metadata is None:
-        return None
-    next_metadata = dict(metadata)
-    next_metadata["chat_conclusion"] = summary
-    if message_id:
-        next_metadata["chat_message_id"] = message_id
-    write_upgrade_metadata(home, proposal_id, str(next_metadata.get("state") or "pending"), next_metadata)
-    return next_metadata
-
-
-def _append_patch_preview_text(current: str, message: str) -> str:
-    parts = [part for part in (current.strip(), str(message or "").strip()) if part]
-    if not parts:
-        return ""
-    merged = "\n".join(parts[-8:])
-    return merged[-800:]
-
-
-def _prepare_dream_assistant_prompt(
-    manager: MultiBotManager,
-    profile: BotProfile,
-    session: UserSession,
-    request: AssistantRunRequest,
-    *,
-    user_text: str,
-) -> tuple[Any, str, dict[str, Any], dict[str, int]]:
-    started_at = time.perf_counter()
-    assistant_home = bootstrap_assistant_home(profile.working_dir)
-    stage_durations = new_stage_durations()
-    with activate_perf_capture(stage_durations):
-        sync_started_at = time.perf_counter()
-        sync_result = sync_managed_prompt_files(assistant_home)
-        stage_durations["sync_ms"] += max(0, int(round((time.perf_counter() - sync_started_at) * 1000)))
-    context_user_id = request.context_user_id if request.context_user_id is not None else request.user_id
-    context_session = get_session_for_alias(manager, profile.alias, context_user_id)
-    config = AssistantDreamConfig.from_task_payload(request.task_payload)
-    managed_context = collect_managed_bot_dream_context(
-        manager,
-        current_alias=profile.alias,
-        context_user_id=context_user_id,
-        lookback_hours=config.lookback_hours,
-        history_limit=config.history_limit,
-        capture_limit=config.capture_limit,
-        session_resolver=lambda alias, user_id: get_session_for_alias(manager, alias, user_id),
-        history_service_factory=_get_chat_history_service,
-    )
-    prepared_prompt = prepare_dream_prompt(
-        assistant_home,
-        profile=profile,
-        session=context_session,
-        history_service=_get_chat_history_service(context_session),
-        config=config,
-        visible_text=user_text,
-        managed_context_text=managed_context.text,
-        managed_context_stats=managed_context.stats,
-    )
-    compiled_prompt = compile_assistant_prompt(
-        prepared_prompt.prompt_text,
-        managed_prompt_hash=sync_result.managed_prompt_hash,
-        seen_managed_prompt_hash=session.managed_prompt_hash_seen,
-    )
-    if compiled_prompt.managed_prompt_hash_seen != session.managed_prompt_hash_seen:
-        session.managed_prompt_hash_seen = compiled_prompt.managed_prompt_hash_seen
-        session.persist()
-    elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
-    diag_log_slow(
-        logger,
-        "assistant_dream_prepare",
-        elapsed_ms,
-        alias=profile.alias,
-        agent=session.agent_id,
-        user_id=request.user_id,
-        prompt_chars=len(compiled_prompt.prompt_text),
-        sync_ms=stage_durations.get("sync_ms", 0),
-    )
-    return assistant_home, compiled_prompt.prompt_text, prepared_prompt.context_stats, stage_durations
-
-
-def _normalize_dream_prompt_preparation(
-    value: tuple[Any, str, dict[str, Any]] | tuple[Any, str, dict[str, Any], dict[str, int]],
-) -> tuple[Any, str, dict[str, Any], dict[str, int]]:
-    if len(value) == 4:
-        return value
-    assistant_home, prompt_text, context_stats = value
-    return assistant_home, prompt_text, context_stats, new_stage_durations()
-
-
-@dataclass
-class _AssistantRequestPromptPreparation:
-    assistant_home: Any | None
-    assistant_pre_surface: dict[str, str]
-    prompt_text: str
-    compaction_prompt_active: bool
-    finalize_assistant_turn: bool
-    dream_context_stats: dict[str, Any] | None
-    dream_prompt_text: str
-    stage_durations: dict[str, int] = field(default_factory=new_stage_durations)
-
-
-def _prepare_assistant_request_prompt(
-    manager: MultiBotManager,
-    profile: BotProfile,
-    session: UserSession,
-    request: AssistantRunRequest | None,
-    *,
-    user_id: int,
-    user_text: str,
-    cli_type: str,
-) -> _AssistantRequestPromptPreparation:
-    _migrate_assistant_home_to_shared(bootstrap_assistant_home(profile.working_dir))
-    if _is_dream_request(request):
-        assert request is not None
-        assistant_home, prompt_text, dream_context_stats, stage_durations = _normalize_dream_prompt_preparation(
-            _prepare_dream_assistant_prompt(
-                manager,
-                profile,
-                session,
-                request,
-                user_text=user_text,
-            )
-        )
-        return _AssistantRequestPromptPreparation(
-            assistant_home=assistant_home,
-            assistant_pre_surface={},
-            prompt_text=prompt_text,
-            compaction_prompt_active=False,
-            finalize_assistant_turn=False,
-            dream_context_stats=dream_context_stats,
-            dream_prompt_text=prompt_text,
-            stage_durations=stage_durations,
-        )
-
-    context_user_id = request.context_user_id if request is not None and request.context_user_id is not None else user_id
-    assistant_home, assistant_pre_surface, prompt_text, compaction_prompt_active, stage_durations = (
-        _normalize_assistant_prompt_preparation(
-            _prepare_assistant_prompt(
-                profile,
-                session,
-                user_id=context_user_id,
-                user_text=user_text,
-                cli_type=cli_type,
-            )
-        )
-    )
-    return _AssistantRequestPromptPreparation(
-        assistant_home=assistant_home,
-        assistant_pre_surface=assistant_pre_surface,
-        prompt_text=prompt_text,
-        compaction_prompt_active=compaction_prompt_active,
-        finalize_assistant_turn=True,
-        dream_context_stats=None,
-        dream_prompt_text="",
-        stage_durations=stage_durations,
-    )
-
-
-def _finalize_dream_execution(
-    manager: MultiBotManager,
-    request: AssistantRunRequest,
-    result: dict[str, Any],
-) -> dict[str, Any]:
-    profile = get_profile_or_raise(manager, request.bot_alias)
-    assistant_home = bootstrap_assistant_home(profile.working_dir)
-    raw_output = str(result.get("output") or "")
-    applied = apply_dream_result(
-        assistant_home,
-        raw_output=raw_output,
-        visible_text=str(request.visible_text or request.text or "").strip(),
-        prompt_excerpt=str(result.get("dream_prompt_text") or "").strip()[:400],
-        context_stats=dict(result.get("dream_context_stats") or {}),
-        run_id=request.run_id,
-        job_id=request.job_id,
-        scheduled_at=request.scheduled_at,
-        context_user_id=request.context_user_id,
-        synthetic_user_id=request.user_id,
-    )
-    finalized = dict(result)
-    finalized["output"] = applied.summary
-    finalized["summary"] = applied.summary
-    finalized["applied_paths"] = list(applied.applied_paths)
-    finalized["audit_path"] = applied.audit_path
-    message = finalized.get("message")
-    if isinstance(message, dict):
-        next_message = dict(message)
-        next_message["content"] = applied.summary
-        next_message["state"] = "done"
-        finalized["message"] = next_message
-        message_id = str(next_message.get("id") or "").strip()
-        if message_id:
-            session = get_session_for_alias(manager, request.bot_alias, request.user_id)
-            service = _get_chat_history_service(session)
-            try:
-                finalized["message"] = service.replace_message_content(
-                    message_id,
-                    applied.summary,
-                    state="done",
-                )
-            except KeyError:
-                pass
-    if applied.proposal_id:
-        finalized["proposal_id"] = applied.proposal_id
-    return finalized
-
-
-def _finalize_assistant_chat_turn(
-    assistant_home,
-    *,
-    user_id: int,
-    user_text: str,
-    response: str,
-    assistant_pre_surface: dict[str, str],
-    compaction_prompt_active: bool,
-) -> None:
-    started_at = time.perf_counter()
-    capture_ms = 0
-    hot_path_ms = 0
-    compaction_ms = 0
-    capture = record_assistant_capture(assistant_home, user_id, user_text, response)
-    capture_ms = int(round((time.perf_counter() - started_at) * 1000))
-    try:
-        hot_path_started_at = time.perf_counter()
-        write_hot_path_memories(
-            assistant_home,
-            user_id=user_id,
-            user_text=user_text,
-            assistant_text=response,
-            source_ref=str(capture.get("id") or "chat"),
-        )
-        hot_path_ms = int(round((time.perf_counter() - hot_path_started_at) * 1000))
-    except Exception as exc:
-        logger.warning("assistant memory hot-path write failed user=%s error=%s", user_id, exc)
-        hot_path_ms = int(round((time.perf_counter() - hot_path_started_at) * 1000))
-    compaction_started_at = time.perf_counter()
-    refresh_compaction_state(assistant_home, latest_capture=capture)
-    consumed_capture_ids = list_pending_capture_ids(assistant_home) or [capture["id"]]
-    sync_managed_prompt_files(assistant_home)
-    assistant_post_surface = snapshot_managed_surface(assistant_home)
-    compaction_result = finalize_compaction(
-        assistant_home,
-        before=assistant_pre_surface,
-        after=assistant_post_surface,
-        consumed_capture_ids=consumed_capture_ids,
-        review_prompt_active=compaction_prompt_active,
-    )
-    if compaction_result in {"changed", "noop"}:
-        sync_managed_prompt_files(assistant_home)
-    compaction_ms = int(round((time.perf_counter() - compaction_started_at) * 1000))
-    elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
-    diag_log_slow(
-        logger,
-        "assistant_chat_finalize",
-        elapsed_ms,
-        user_id=user_id,
-        capture_id=str(capture.get("id") or ""),
-        capture_ms=capture_ms,
-        hot_path_ms=hot_path_ms,
-        compaction_ms=compaction_ms,
-        compaction_result=compaction_result,
-    )
-
-
-def _log_assistant_chat_finalize_failure(task: asyncio.Task[Any], *, user_id: int) -> None:
-    try:
-        task.result()
-    except asyncio.CancelledError:
-        return
-    except Exception as exc:
-        logger.warning("处理 assistant chat 收尾失败 user=%s error=%s", user_id, exc)
-
-
-def _schedule_assistant_chat_turn_finalization(
-    assistant_home,
-    *,
-    user_id: int,
-    user_text: str,
-    response: str,
-    assistant_pre_surface: dict[str, str],
-    compaction_prompt_active: bool,
-) -> None:
-    task = asyncio.create_task(
-        asyncio.to_thread(
-            _finalize_assistant_chat_turn,
-            assistant_home,
-            user_id=user_id,
-            user_text=user_text,
-            response=response,
-            assistant_pre_surface=assistant_pre_surface,
-            compaction_prompt_active=compaction_prompt_active,
-        )
-    )
-    task.add_done_callback(lambda done_task: _log_assistant_chat_finalize_failure(done_task, user_id=user_id))
 
 
 def _chunk_text(text: str, size: int = 160) -> list[str]:
@@ -5118,7 +3853,7 @@ async def _stream_cli_chat(
     user_id: int,
     user_text: str,
     *,
-    request: AssistantRunRequest | None = None,
+    request: _ChatRunRequest | None = None,
     agent_id: str = "main",
     cli_params_override: CliParamsConfig | None = None,
     allow_unsafe_cli: bool = False,
@@ -5145,10 +3880,7 @@ async def _stream_cli_chat(
         cluster_run_id=cluster_run_id,
         cluster_mentions=cluster_mentions,
     )
-    assistant_home = None
-    assistant_pre_surface: dict[str, str] = {}
-    compaction_prompt_active = False
-    assistant_stage_durations = new_stage_durations()
+    stage_durations = _new_stage_durations()
 
     cli_type = normalize_cli_type(profile.cli_type)
     env = _build_cli_env(cli_type)
@@ -5161,28 +3893,7 @@ async def _stream_cli_chat(
     if resolved_cli is None:
         _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
 
-    if profile.bot_mode == "assistant":
-        context_user_id = request.context_user_id if request is not None and request.context_user_id is not None else user_id
-        assistant_home, assistant_pre_surface, prompt_text, compaction_prompt_active, assistant_stage_durations = (
-            _normalize_assistant_prompt_preparation(
-                _prepare_assistant_prompt(
-                    profile,
-                    session,
-                    user_id=context_user_id,
-                    user_text=text,
-                    cli_type=cli_type,
-                )
-            )
-        )
-        if is_plan_mode:
-            prompt_text = build_plan_mode_prompt(prompt_text, cluster_active=bool(cluster_run_id))
-        prompt_text = _apply_cluster_prompt(
-            profile,
-            prompt_text,
-            cluster_run_id=cluster_run_id,
-            cluster_mentions=cluster_mentions,
-        )
-    elif agent.id != "main":
+    if agent.id != "main":
         prompt_text = _apply_agent_prompt_if_needed(prompt_text, agent, session, cli_type)
 
     done_session = None
@@ -5218,12 +3929,10 @@ async def _stream_cli_chat(
             session=session,
             user_text=text,
             native_provider=cli_type,
-            assistant_home=str(assistant_home.root) if assistant_home is not None else None,
             managed_prompt_hash=session.managed_prompt_hash_seen,
-            prompt_surface_version="v1" if assistant_home is not None else None,
             actor=_actor_from_request(request),
         )
-        assistant_stage_durations["db_ms"] += max(
+        stage_durations["db_ms"] += max(
             0,
             int(round((time.perf_counter() - persist_started_at) * 1000)),
         )
@@ -5547,7 +4256,7 @@ async def _stream_cli_chat(
                 with session._lock:
                     session.process = None
                 close_process_streams(process)
-            assistant_stage_durations["cli_ms"] += max(0, int(round((time.perf_counter() - cli_started_at) * 1000)))
+            stage_durations["cli_ms"] += max(0, int(round((time.perf_counter() - cli_started_at) * 1000)))
             sqlite_flush_count = persistence_buffer.flush_count
 
             raw_output = preview_state.raw_output_for_parse()
@@ -5654,7 +4363,7 @@ async def _stream_cli_chat(
                 completion_state=completion_state,
                 native_session_id=native_session_id,
             )
-            assistant_stage_durations["trace_ms"] += max(0, int(round((time.perf_counter() - trace_started_at) * 1000)))
+            stage_durations["trace_ms"] += max(0, int(round((time.perf_counter() - trace_started_at) * 1000)))
             fallback_output = (
                 display_response
                 if completion_state == "completed" or should_force_error_output
@@ -5687,49 +4396,11 @@ async def _stream_cli_chat(
                 error_message=None if completion_state == "completed" else response,
                 context_usage=context_usage,
             )
-            assistant_stage_durations["db_ms"] += max(
+            stage_durations["db_ms"] += max(
                 0,
                 int(round((time.perf_counter() - complete_started_at) * 1000)),
             )
             completion_state_for_diag = completion_state
-            if assistant_home is not None:
-                _schedule_assistant_chat_turn_finalization(
-                    assistant_home,
-                    user_id=user_id,
-                    user_text=text,
-                    response=str(done_message.get("content") or response),
-                    assistant_pre_surface=assistant_pre_surface,
-                    compaction_prompt_active=compaction_prompt_active,
-                )
-            if assistant_home is not None:
-                meta = done_message.get("meta") if isinstance(done_message.get("meta"), dict) else {}
-                perf_request = request or AssistantRunRequest(
-                    run_id=f"run_{uuid.uuid4().hex[:12]}",
-                    source="web",
-                    bot_alias=alias,
-                    user_id=user_id,
-                    text=user_text,
-                    interactive=True,
-                    visible_text=text,
-                )
-                write_perf_record(
-                    assistant_home,
-                    run_id=perf_request.run_id,
-                    bot_alias=alias,
-                    source=perf_request.source,
-                    task_mode=perf_request.task_mode,
-                    interactive=perf_request.interactive,
-                    user_id=perf_request.user_id,
-                    status=completion_state,
-                    stage_durations=assistant_stage_durations,
-                    elapsed_ms=max(0, int(elapsed_seconds * 1000)),
-                    prompt_chars=len(prompt_text),
-                    output_chars=len(str(done_message.get("content") or response)),
-                    trace_count=int(meta.get("traceCount") or len(final_trace)),
-                    tool_call_count=int(meta.get("toolCallCount") or 0),
-                    process_count=int(meta.get("processCount") or len(final_trace)),
-                    error="" if completion_state == "completed" else str(response or ""),
-                )
             with session._lock:
                 session.is_processing = False
             done_event = {
@@ -5756,9 +4427,9 @@ async def _stream_cli_chat(
                 output_bytes=output_bytes,
                 trace_count=final_trace_count,
                 sqlite_flush_count=sqlite_flush_count,
-                cli_ms=assistant_stage_durations.get("cli_ms", 0),
-                trace_ms=assistant_stage_durations.get("trace_ms", 0),
-                db_ms=assistant_stage_durations.get("db_ms", 0),
+                cli_ms=stage_durations.get("cli_ms", 0),
+                trace_ms=stage_durations.get("trace_ms", 0),
+                db_ms=stage_durations.get("db_ms", 0),
             )
             diag_log_slow(
                 logger,
@@ -5813,7 +4484,7 @@ async def run_cli_chat(
     user_id: int,
     user_text: str,
     *,
-    request: AssistantRunRequest | None = None,
+    request: _ChatRunRequest | None = None,
     agent_id: str = "main",
     cli_params_override: CliParamsConfig | None = None,
     allow_unsafe_cli: bool = False,
@@ -5840,13 +4511,7 @@ async def run_cli_chat(
         cluster_run_id=cluster_run_id,
         cluster_mentions=cluster_mentions,
     )
-    assistant_home = None
-    assistant_pre_surface: dict[str, str] = {}
-    compaction_prompt_active = False
-    finalize_assistant_turn = True
-    dream_context_stats: dict[str, Any] | None = None
-    dream_prompt_text = ""
-    assistant_stage_durations = new_stage_durations()
+    stage_durations = _new_stage_durations()
 
     cli_type = normalize_cli_type(profile.cli_type)
     env = _build_cli_env(cli_type)
@@ -5859,34 +4524,7 @@ async def run_cli_chat(
     if resolved_cli is None:
         _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
 
-    if profile.bot_mode == "assistant":
-        prepared_prompt = _prepare_assistant_request_prompt(
-            manager,
-            profile,
-            session,
-            request,
-            user_id=user_id,
-            user_text=text,
-            cli_type=cli_type,
-        )
-        assistant_home = prepared_prompt.assistant_home
-        assistant_pre_surface = prepared_prompt.assistant_pre_surface
-        prompt_text = prepared_prompt.prompt_text
-        compaction_prompt_active = prepared_prompt.compaction_prompt_active
-        finalize_assistant_turn = prepared_prompt.finalize_assistant_turn
-        dream_context_stats = prepared_prompt.dream_context_stats
-        dream_prompt_text = prepared_prompt.dream_prompt_text
-        assistant_stage_durations = prepared_prompt.stage_durations
-        if not _is_dream_request(request):
-            if is_plan_mode:
-                prompt_text = build_plan_mode_prompt(prompt_text, cluster_active=bool(cluster_run_id))
-        prompt_text = _apply_cluster_prompt(
-            profile,
-            prompt_text,
-            cluster_run_id=cluster_run_id,
-            cluster_mentions=cluster_mentions,
-        )
-    elif agent.id != "main":
+    if agent.id != "main":
         prompt_text = _apply_agent_prompt_if_needed(prompt_text, agent, session, cli_type)
 
     done_session = None
@@ -5919,12 +4557,10 @@ async def run_cli_chat(
             session=session,
             user_text=text,
             native_provider=cli_type,
-            assistant_home=str(assistant_home.root) if assistant_home is not None else None,
             managed_prompt_hash=session.managed_prompt_hash_seen,
-            prompt_surface_version="v1" if assistant_home is not None else None,
             actor=_actor_from_request(request),
         )
-        assistant_stage_durations["db_ms"] += max(
+        stage_durations["db_ms"] += max(
             0,
             int(round((time.perf_counter() - persist_started_at) * 1000)),
         )
@@ -6030,7 +4666,7 @@ async def run_cli_chat(
                 with session._lock:
                     session.process = None
                 close_process_streams(process)
-            assistant_stage_durations["cli_ms"] += max(0, int(round((time.perf_counter() - cli_started_at) * 1000)))
+            stage_durations["cli_ms"] += max(0, int(round((time.perf_counter() - cli_started_at) * 1000)))
             should_force_error_output = False
 
             if (
@@ -6109,7 +4745,7 @@ async def run_cli_chat(
                 completion_state=completion_state,
                 native_session_id=native_session_id,
             )
-            assistant_stage_durations["trace_ms"] += max(0, int(round((time.perf_counter() - trace_started_at) * 1000)))
+            stage_durations["trace_ms"] += max(0, int(round((time.perf_counter() - trace_started_at) * 1000)))
             context_usage = await _resolve_cli_context_usage_bounded(
                 cli_type,
                 native_session_id,
@@ -6129,52 +4765,11 @@ async def run_cli_chat(
                 error_message=None if completion_state == "completed" else response,
                 context_usage=context_usage,
             )
-            assistant_stage_durations["db_ms"] += max(
+            stage_durations["db_ms"] += max(
                 0,
                 int(round((time.perf_counter() - complete_started_at) * 1000)),
             )
             completion_state_for_diag = completion_state
-            if assistant_home is not None and finalize_assistant_turn:
-                try:
-                    _finalize_assistant_chat_turn(
-                        assistant_home,
-                        user_id=user_id,
-                        user_text=text,
-                        response=str(done_message.get("content") or response),
-                        assistant_pre_surface=assistant_pre_surface,
-                        compaction_prompt_active=compaction_prompt_active,
-                    )
-                except Exception as exc:
-                    logger.warning("处理 assistant chat 收尾失败 user=%s error=%s", user_id, exc)
-            if assistant_home is not None:
-                meta = done_message.get("meta") if isinstance(done_message.get("meta"), dict) else {}
-                perf_request = request or AssistantRunRequest(
-                    run_id=f"run_{uuid.uuid4().hex[:12]}",
-                    source="web",
-                    bot_alias=alias,
-                    user_id=user_id,
-                    text=user_text,
-                    interactive=True,
-                    visible_text=text,
-                )
-                write_perf_record(
-                    assistant_home,
-                    run_id=perf_request.run_id,
-                    bot_alias=alias,
-                    source=perf_request.source,
-                    task_mode=perf_request.task_mode,
-                    interactive=perf_request.interactive,
-                    user_id=perf_request.user_id,
-                    status=completion_state,
-                    stage_durations=assistant_stage_durations,
-                    elapsed_ms=max(0, int(elapsed_seconds * 1000)),
-                    prompt_chars=len(prompt_text),
-                    output_chars=len(str(done_message.get("content") or response)),
-                    trace_count=int(meta.get("traceCount") or len(terminal_trace)),
-                    tool_call_count=int(meta.get("toolCallCount") or 0),
-                    process_count=int(meta.get("processCount") or len(terminal_trace)),
-                    error="" if completion_state == "completed" else str(response or ""),
-                )
             with session._lock:
                 session.is_processing = False
             response_payload = {
@@ -6184,9 +4779,6 @@ async def run_cli_chat(
                 "returncode": returncode,
                 "session": build_session_snapshot(profile, session),
             }
-            if dream_context_stats is not None:
-                response_payload["dream_context_stats"] = dream_context_stats
-                response_payload["dream_prompt_text"] = dream_prompt_text
             elapsed_ms = int(round((time.perf_counter() - total_started_at) * 1000))
             diag_log_event(
                 logger,
@@ -6201,9 +4793,9 @@ async def run_cli_chat(
                 elapsed_ms=elapsed_ms,
                 output_bytes=output_bytes,
                 trace_count=final_trace_count,
-                cli_ms=assistant_stage_durations.get("cli_ms", 0),
-                trace_ms=assistant_stage_durations.get("trace_ms", 0),
-                db_ms=assistant_stage_durations.get("db_ms", 0),
+                cli_ms=stage_durations.get("cli_ms", 0),
+                trace_ms=stage_durations.get("trace_ms", 0),
+                db_ms=stage_durations.get("db_ms", 0),
             )
             diag_log_slow(
                 logger,
@@ -6248,7 +4840,7 @@ async def run_cli_chat(
 def _normalized_chat_text(
     user_text: str,
     *,
-    request: AssistantRunRequest | None = None,
+    request: _ChatRunRequest | None = None,
     visible_text: str | None = None,
 ) -> str:
     visible_input = request.visible_text if request is not None and request.visible_text is not None else visible_text
@@ -6266,7 +4858,7 @@ async def _run_native_agent_chat(
     user_id: int,
     user_text: str,
     *,
-    request: AssistantRunRequest | None = None,
+    request: _ChatRunRequest | None = None,
     task_mode: str = "standard",
     task_payload: dict[str, Any] | None = None,
     visible_text: str | None = None,
@@ -6276,7 +4868,6 @@ async def _run_native_agent_chat(
     solo_mode: bool = False,
     actor: dict[str, Any] | None = None,
     allow_unsafe_cli: bool = False,
-    prepare_assistant_request: bool = False,
 ) -> dict[str, Any]:
     shared_user_id = chat_session_user_id(user_id)
     profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, agent_id)
@@ -6286,7 +4877,7 @@ async def _run_native_agent_chat(
     effective_task_mode = request.task_mode if request is not None else task_mode
     effective_task_payload = request.task_payload if request is not None else task_payload
     text = _normalized_chat_text(user_text, request=request, visible_text=visible_text)
-    request_obj = request or build_assistant_run_request(
+    request_obj = request or _build_chat_run_request(
         alias,
         shared_user_id,
         user_text,
@@ -6305,24 +4896,9 @@ async def _run_native_agent_chat(
         mentions=mentions,
         allow_unsafe_cli=allow_unsafe_cli,
     )
-    prepared_prompt: _AssistantRequestPromptPreparation | None = None
     run_status = "completed"
     try:
-        if prepare_assistant_request and profile.bot_mode == "assistant":
-            prepared_prompt = _prepare_assistant_request_prompt(
-                manager,
-                profile,
-                session,
-                request_obj,
-                user_id=shared_user_id,
-                user_text=text,
-                cli_type=normalize_cli_type(profile.cli_type),
-            )
-            prompt_text = prepared_prompt.prompt_text
-            if not _is_dream_request(request_obj) and is_plan_mode:
-                prompt_text = build_plan_mode_prompt(prompt_text, cluster_active=bool(cluster_run))
-        else:
-            prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run)) if is_plan_mode else text
+        prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run)) if is_plan_mode else text
         prompt_text = _apply_cluster_prompt(
             profile,
             prompt_text,
@@ -6339,24 +4915,6 @@ async def _run_native_agent_chat(
             cluster_run_id=cluster_run.run_id if cluster_run else "",
             solo_mode=solo_mode,
         )
-        if prepared_prompt is not None:
-            result = dict(result)
-            if prepared_prompt.assistant_home is not None and prepared_prompt.finalize_assistant_turn:
-                try:
-                    _finalize_assistant_chat_turn(
-                        prepared_prompt.assistant_home,
-                        user_id=shared_user_id,
-                        user_text=text,
-                        response=str(result.get("output") or ""),
-                        assistant_pre_surface=prepared_prompt.assistant_pre_surface,
-                        compaction_prompt_active=prepared_prompt.compaction_prompt_active,
-                    )
-                except Exception as exc:
-                    logger.warning("处理 assistant native chat 收尾失败 user=%s error=%s", shared_user_id, exc)
-            result["assistant_stage_durations"] = dict(prepared_prompt.stage_durations)
-            if prepared_prompt.dream_context_stats is not None:
-                result["dream_context_stats"] = prepared_prompt.dream_context_stats
-                result["dream_prompt_text"] = prepared_prompt.dream_prompt_text
         return result
     except Exception:
         run_status = "error"
@@ -6373,7 +4931,7 @@ async def _stream_native_agent_chat(
     user_id: int,
     user_text: str,
     *,
-    request: AssistantRunRequest | None = None,
+    request: _ChatRunRequest | None = None,
     task_mode: str = "standard",
     task_payload: dict[str, Any] | None = None,
     visible_text: str | None = None,
@@ -6384,7 +4942,6 @@ async def _stream_native_agent_chat(
     actor: dict[str, Any] | None = None,
     protocol: str = "",
     allow_unsafe_cli: bool = False,
-    prepare_assistant_request: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
     shared_user_id = chat_session_user_id(user_id)
     profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, agent_id)
@@ -6394,7 +4951,7 @@ async def _stream_native_agent_chat(
     effective_task_mode = request.task_mode if request is not None else task_mode
     effective_task_payload = request.task_payload if request is not None else task_payload
     text = _normalized_chat_text(user_text, request=request, visible_text=visible_text)
-    request_obj = request or build_assistant_run_request(
+    request_obj = request or _build_chat_run_request(
         alias,
         shared_user_id,
         user_text,
@@ -6413,25 +4970,9 @@ async def _stream_native_agent_chat(
         mentions=mentions,
         allow_unsafe_cli=allow_unsafe_cli,
     )
-    prepared_prompt: _AssistantRequestPromptPreparation | None = None
-    finalization_scheduled = False
     run_status = "completed"
     try:
-        if prepare_assistant_request and profile.bot_mode == "assistant":
-            prepared_prompt = _prepare_assistant_request_prompt(
-                manager,
-                profile,
-                session,
-                request_obj,
-                user_id=shared_user_id,
-                user_text=text,
-                cli_type=normalize_cli_type(profile.cli_type),
-            )
-            prompt_text = prepared_prompt.prompt_text
-            if not _is_dream_request(request_obj) and is_plan_mode:
-                prompt_text = build_plan_mode_prompt(prompt_text, cluster_active=bool(cluster_run))
-        else:
-            prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run)) if is_plan_mode else text
+        prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run)) if is_plan_mode else text
         prompt_text = _apply_cluster_prompt(
             profile,
             prompt_text,
@@ -6451,26 +4992,6 @@ async def _stream_native_agent_chat(
         ):
             if event.get("type") == "error":
                 run_status = "error"
-            if prepared_prompt is not None and event.get("type") == "done":
-                event = dict(event)
-                if (
-                    not finalization_scheduled
-                    and prepared_prompt.assistant_home is not None
-                    and prepared_prompt.finalize_assistant_turn
-                ):
-                    finalization_scheduled = True
-                    _schedule_assistant_chat_turn_finalization(
-                        prepared_prompt.assistant_home,
-                        user_id=shared_user_id,
-                        user_text=text,
-                        response=str(event.get("output") or ""),
-                        assistant_pre_surface=prepared_prompt.assistant_pre_surface,
-                        compaction_prompt_active=prepared_prompt.compaction_prompt_active,
-                    )
-                event["assistant_stage_durations"] = dict(prepared_prompt.stage_durations)
-                if prepared_prompt.dream_context_stats is not None:
-                    event["dream_context_stats"] = prepared_prompt.dream_context_stats
-                    event["dream_prompt_text"] = prepared_prompt.dream_prompt_text
             yield event
     except Exception:
         run_status = "error"
@@ -6501,21 +5022,6 @@ async def run_chat(
     profile = get_profile_or_raise(manager, alias)
     shared_user_id = chat_session_user_id(user_id)
     resolved_execution_mode = _resolve_chat_execution_mode(profile, execution_mode)
-    if profile.bot_mode == "assistant" and _should_route_assistant_runtime(task_mode, resolved_execution_mode):
-        if manager.assistant_runtime is None:
-            _raise(503, "assistant_runtime_unavailable", "assistant 运行时尚未启动")
-        if task_mode == "proposal_patch":
-            _ensure_proposal_patch_chat_available(manager, alias, shared_user_id)
-        request = build_assistant_run_request(
-            alias,
-            shared_user_id,
-            user_text,
-            task_mode=task_mode,
-            task_payload=task_payload,
-            visible_text=visible_text,
-            actor=actor,
-        )
-        return await manager.assistant_runtime.submit_interactive(request)
     if _supports_cli_runtime(profile):
         if resolved_execution_mode == NATIVE_AGENT_PROVIDER:
             return await _run_native_agent_chat(
@@ -6543,7 +5049,7 @@ async def run_chat(
             allow_unsafe_cli=allow_unsafe_cli,
         )
         run_status = "completed"
-        request = build_assistant_run_request(
+        request = _build_chat_run_request(
             alias,
             shared_user_id,
             user_text,
@@ -6596,23 +5102,6 @@ async def stream_chat(
         profile = get_profile_or_raise(manager, alias)
         shared_user_id = chat_session_user_id(user_id)
         resolved_execution_mode = _resolve_chat_execution_mode(profile, execution_mode)
-        if profile.bot_mode == "assistant" and _should_route_assistant_runtime(task_mode, resolved_execution_mode):
-            if manager.assistant_runtime is None:
-                _raise(503, "assistant_runtime_unavailable", "assistant 运行时尚未启动")
-            if task_mode == "proposal_patch":
-                _ensure_proposal_patch_chat_available(manager, alias, shared_user_id)
-            request = build_assistant_run_request(
-                alias,
-                shared_user_id,
-                user_text,
-                task_mode=task_mode,
-                task_payload=task_payload,
-                visible_text=visible_text,
-                actor=actor,
-            )
-            async for event in manager.assistant_runtime.stream_interactive(request):
-                yield event
-            return
         if _supports_cli_runtime(profile):
             if resolved_execution_mode == NATIVE_AGENT_PROVIDER:
                 async for event in _stream_native_agent_chat(
@@ -6643,7 +5132,7 @@ async def stream_chat(
                 allow_unsafe_cli=allow_unsafe_cli,
             )
             run_status = "completed"
-            request = build_assistant_run_request(
+            request = _build_chat_run_request(
                 alias,
                 shared_user_id,
                 user_text,
@@ -6730,59 +5219,6 @@ async def execute_shell_command(manager: MultiBotManager, alias: str, user_id: i
     }
 
 
-def build_assistant_run_request(
-    alias: str,
-    user_id: int,
-    user_text: str,
-    *,
-    task_mode: str = "standard",
-    task_payload: dict[str, Any] | None = None,
-    visible_text: str | None = None,
-    actor: dict[str, Any] | None = None,
-) -> AssistantRunRequest:
-    normalized_task_mode = task_mode if task_mode in {"standard", "dream", "proposal_patch", PLAN_MODE_TASK_MODE} else "standard"
-    if normalized_task_mode == PLAN_MODE_TASK_MODE and is_plan_execution_prompt(user_text):
-        normalized_task_mode = "standard"
-    shared_user_id = chat_session_user_id(user_id)
-    actor_data = dict(actor or {})
-    return AssistantRunRequest(
-        run_id=f"run_{uuid.uuid4().hex[:12]}",
-        source="web",
-        bot_alias=alias,
-        user_id=shared_user_id,
-        text=user_text,
-        interactive=True,
-        visible_text=visible_text if visible_text is not None else user_text,
-        context_user_id=shared_user_id,
-        task_mode=normalized_task_mode,
-        task_payload=task_payload,
-        actor_user_id=_optional_int(actor_data.get("user_id")),
-        actor_account_id=str(actor_data.get("account_id") or "").strip() or None,
-        actor_username=str(actor_data.get("username") or "").strip() or None,
-    )
-
-
-def _optional_int(value: Any) -> int | None:
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _actor_from_request(request: AssistantRunRequest | None) -> dict[str, Any] | None:
-    if request is None:
-        return None
-    actor: dict[str, Any] = {}
-    if request.actor_user_id is not None:
-        actor["user_id"] = request.actor_user_id
-    if request.actor_account_id:
-        actor["account_id"] = request.actor_account_id
-    if request.actor_username:
-        actor["username"] = request.actor_username
-    return actor or None
-
 
 def execute_plan(
     manager: MultiBotManager,
@@ -6817,275 +5253,6 @@ def execute_plan(
         "bot_mode": profile.bot_mode,
     }
 
-
-def _ensure_proposal_patch_chat_available(
-    manager: MultiBotManager,
-    alias: str,
-    user_id: int,
-) -> None:
-    user_id = chat_session_user_id(user_id)
-    session = get_session_for_alias(manager, alias, user_id)
-    with session._lock:
-        if session.is_processing:
-            _raise(409, "session_busy", "聊天正忙，等会再试")
-    runtime = manager.assistant_runtime
-    if runtime is None:
-        return
-    snapshot = runtime.snapshot_for_bot(alias)
-    if int(snapshot.get("pending_count") or 0) > 0:
-        _raise(409, "session_busy", "聊天正忙，等会再试")
-
-
-async def _stream_assistant_proposal_patch_request(
-    manager: MultiBotManager,
-    request: AssistantRunRequest,
-) -> AsyncIterator[dict[str, Any]]:
-    profile = get_profile_or_raise(manager, request.bot_alias)
-    session = get_session_for_alias(manager, request.bot_alias, request.user_id)
-    home = _assistant_home_or_raise(manager, request.bot_alias)
-    proposal_id, target_alias, regenerate = _proposal_patch_request_payload(request)
-    if not proposal_id:
-        _raise(400, "missing_proposal_id", "缺少 proposal_id")
-    if not target_alias:
-        _raise(400, "missing_target_alias", "缺少 target_alias")
-    try:
-        proposal = get_proposal(home, proposal_id)
-    except FileNotFoundError as exc:
-        _raise(404, "proposal_not_found", str(exc))
-    if proposal.get("status") != "approved":
-        _raise(409, "proposal_not_approved", "proposal 尚未批准，不能生成 patch")
-    try:
-        target = resolve_upgrade_target(manager, target_alias)
-    except KeyError:
-        _raise(404, "upgrade_target_not_found", target_alias)
-    if not target.get("available"):
-        _raise_unavailable_upgrade_target(target)
-
-    with session._lock:
-        if session.is_processing:
-            _raise(409, "session_busy", msg("chat", "busy"))
-        session.stop_requested = False
-        session.is_processing = True
-
-    try:
-        service = _get_chat_history_service(session)
-        turn_handle = service.start_turn(
-            profile=profile,
-            session=session,
-            user_text=str(request.visible_text or request.text or "").strip(),
-            native_provider=profile.cli_type,
-            assistant_home=str(home.root),
-            managed_prompt_hash=session.managed_prompt_hash_seen,
-            prompt_surface_version="v1",
-            actor=_actor_from_request(request),
-        )
-        started_at = time.perf_counter()
-        event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
-        worker_done = threading.Event()
-        preview_text = ""
-    except Exception:
-        with session._lock:
-            session.is_processing = False
-        raise
-
-    def on_event(event: dict[str, Any]) -> None:
-        event_queue.put(dict(event))
-
-    def run_generation() -> None:
-        try:
-            metadata = generate_pending_patch(
-                home,
-                proposal,
-                target=target,
-                generated_by=str(request.actor_user_id or request.user_id),
-                regenerate=regenerate,
-                event_callback=on_event,
-            )
-            summary = _build_patch_generation_summary(metadata)
-            done_message = service.complete_turn(
-                turn_handle,
-                content=summary,
-                completion_state="completed",
-            )
-            persisted = _persist_patch_chat_conclusion(
-                home,
-                proposal_id,
-                metadata,
-                summary=summary,
-                message_id=str(done_message.get("id") or ""),
-            )
-            event_queue.put({
-                "type": "done",
-                "metadata": persisted or metadata,
-                "output": summary,
-                "message": done_message,
-                "elapsed_seconds": int(round(max(time.perf_counter() - started_at, 0))),
-            })
-        except Exception as exc:
-            error_message = _normalize_error_message(exc).strip() or "patch_generation_failed"
-            metadata_dict = read_upgrade_metadata(home, proposal_id, "pending")
-            summary = _build_patch_generation_summary(metadata_dict, error_message=error_message)
-            done_message = service.complete_turn(
-                turn_handle,
-                content=summary,
-                completion_state="failed",
-                error_code="patch_generation_failed",
-                error_message=error_message,
-            )
-            persisted = _persist_patch_chat_conclusion(
-                home,
-                proposal_id,
-                metadata_dict,
-                summary=summary,
-                message_id=str(done_message.get("id") or ""),
-            )
-            event_queue.put({
-                "type": "done",
-                "metadata": persisted or metadata_dict or {},
-                "output": summary,
-                "message": done_message,
-                "elapsed_seconds": int(round(max(time.perf_counter() - started_at, 0))),
-            })
-        finally:
-            with session._lock:
-                session.is_processing = False
-            worker_done.set()
-
-    try:
-        threading.Thread(target=run_generation, daemon=True).start()
-    except Exception:
-        with session._lock:
-            session.is_processing = False
-        raise
-
-    while not worker_done.is_set() or not event_queue.empty():
-        try:
-            item = event_queue.get_nowait()
-        except queue.Empty:
-            await asyncio.sleep(0.05)
-            continue
-
-        item_type = str(item.get("type") or "")
-        if item_type == "trace":
-            event = dict(item.get("event") or {})
-            if event:
-                service.append_trace_event(turn_handle, event)
-            yield item
-            continue
-        if item_type == "log":
-            preview_text = _append_patch_preview_text(preview_text, str(item.get("text") or ""))
-            if preview_text:
-                service.replace_assistant_preview(turn_handle, preview_text)
-            yield item
-            continue
-        if item_type == "status":
-            preview_text = _append_patch_preview_text(preview_text, str(item.get("message") or ""))
-            if preview_text:
-                service.replace_assistant_preview(turn_handle, preview_text)
-            yield item
-            continue
-        if item_type == "done":
-            yield {
-                "type": "done",
-                "metadata": dict(item.get("metadata") or {}),
-                "output": str(item.get("output") or ""),
-                "message": item.get("message"),
-                "elapsed_seconds": int(item.get("elapsed_seconds") or round(max(time.perf_counter() - started_at, 0))),
-            }
-            return
-        if item_type == "error":
-            error_message = str(item.get("message") or "patch_generation_failed").strip() or "patch_generation_failed"
-            metadata = item.get("metadata")
-            metadata_dict = dict(metadata) if isinstance(metadata, dict) else read_upgrade_metadata(home, proposal_id, "pending")
-            summary = _build_patch_generation_summary(metadata_dict, error_message=error_message)
-            done_message = service.complete_turn(
-                turn_handle,
-                content=summary,
-                completion_state="failed",
-                error_code=str(item.get("code") or "patch_generation_failed"),
-                error_message=error_message,
-            )
-            persisted = _persist_patch_chat_conclusion(
-                home,
-                proposal_id,
-                metadata_dict,
-                summary=summary,
-                message_id=str(done_message.get("id") or ""),
-            )
-            yield {
-                "type": "done",
-                "metadata": persisted or metadata_dict or {},
-                "output": summary,
-                "message": done_message,
-                "elapsed_seconds": int(round(max(time.perf_counter() - started_at, 0))),
-            }
-            return
-    return
-
-
-async def execute_assistant_run_request(manager: MultiBotManager, request: AssistantRunRequest) -> dict[str, Any]:
-    if _is_proposal_patch_request(request):
-        async for event in _stream_assistant_proposal_patch_request(manager, request):
-            if str(event.get("type") or "") == "done":
-                return {key: value for key, value in event.items() if key != "type"}
-        return {"output": "", "message": None, "metadata": None}
-    profile = get_profile_or_raise(manager, request.bot_alias)
-    resolved_execution_mode = _resolve_chat_execution_mode(profile, "")
-    if resolved_execution_mode == NATIVE_AGENT_PROVIDER:
-        result = await _run_native_agent_chat(
-            manager,
-            request.bot_alias,
-            request.user_id,
-            request.text,
-            request=request,
-            prepare_assistant_request=True,
-        )
-    else:
-        result = await run_cli_chat(
-            manager,
-            request.bot_alias,
-            request.user_id,
-            request.text,
-            request=request,
-        )
-    if _is_dream_request(request):
-        return _finalize_dream_execution(manager, request, result)
-    return result
-
-
-async def stream_assistant_run_request(
-    manager: MultiBotManager,
-    request: AssistantRunRequest,
-) -> AsyncIterator[dict[str, Any]]:
-    if _is_proposal_patch_request(request):
-        async for event in _stream_assistant_proposal_patch_request(manager, request):
-            yield event
-        return
-    if _is_dream_request(request):
-        result = await execute_assistant_run_request(manager, request)
-        yield {"type": "done", **result}
-        return
-    profile = get_profile_or_raise(manager, request.bot_alias)
-    resolved_execution_mode = _resolve_chat_execution_mode(profile, "")
-    if resolved_execution_mode == NATIVE_AGENT_PROVIDER:
-        async for event in _stream_native_agent_chat(
-            manager,
-            request.bot_alias,
-            request.user_id,
-            request.text,
-            request=request,
-            prepare_assistant_request=True,
-        ):
-            yield event
-        return
-    async for event in _stream_cli_chat(
-        manager,
-        request.bot_alias,
-        request.user_id,
-        request.text,
-        request=request,
-    ):
-        yield event
 
 
 def get_terminal_actions_config(manager: MultiBotManager, alias: str, auth: AuthContext) -> dict[str, Any]:
@@ -7360,8 +5527,6 @@ async def update_bot_workdir(
     resolved_working_dir = os.path.abspath(os.path.expanduser(str(working_dir or "").strip()))
     if not os.path.isdir(resolved_working_dir):
         _raise(400, "invalid_working_dir", f"工作目录不存在: {resolved_working_dir}")
-    if profile.bot_mode == "assistant":
-        _raise(409, "unsupported_bot_mode", "assistant 型 Bot 不允许修改默认工作目录")
     target_changed = resolved_working_dir != profile.working_dir
     target_sessions = _get_bot_sessions_for_workdir_change(manager, alias) if target_changed or force_reset else []
     if target_changed:
@@ -7442,3 +5607,5 @@ def get_processing_sessions(alias: str) -> list[dict[str, Any]]:
                 }
             )
     return items
+
+

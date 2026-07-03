@@ -112,9 +112,9 @@ export function BotSwitcherSheet({
                         "mt-1 max-w-full truncate text-xs font-medium",
                         currentAlias === bot.alias ? "text-[var(--text)]" : "text-[var(--muted)]",
                       )}
-                      title={`${bot.botMode || "cli"} · ${getBotRuntimeLabel(bot)}`}
+                      title={getBotRuntimeLabel(bot)}
                     >
-                      {bot.botMode || "cli"} · {getBotRuntimeLabel(bot)}
+                      {getBotRuntimeLabel(bot)}
                     </span>
                     <span
                       className="mt-0.5 max-w-full truncate text-xs text-[var(--muted)]"

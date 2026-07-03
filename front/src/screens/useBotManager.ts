@@ -30,7 +30,6 @@ export type { EditDraft } from "./botManagerModel";
 
 export const EMPTY_CREATE_DRAFT: CreateDraft = {
   alias: "",
-  botMode: "cli",
   cliType: "codex",
   cliPath: "",
   workingDir: "",

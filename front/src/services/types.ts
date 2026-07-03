@@ -363,7 +363,6 @@ export type BotSummary = {
   busyAgentCount?: number;
   agents?: AgentSummary[];
   cliPath?: string;
-  botMode?: string;
   enabled?: boolean;
   isMain?: boolean;
   canOperate?: boolean;
@@ -625,7 +624,6 @@ export type WorkdirChangeConflict = {
   requestedWorkingDir: string;
   historyCount: number;
   messageCount: number;
-  botMode: string;
 };
 
 export type UpdateBotWorkdirOptions = {
@@ -671,39 +669,18 @@ export type RunningReply = {
   updatedAt?: string;
 };
 
-export type AssistantRuntimePendingRun = {
-  runId: string;
-  source: "web" | "cron" | "manual";
-  status: "queued" | "running";
-  taskMode: ChatTaskMode | string;
-  interactive: boolean;
-  jobId?: string;
-  jobTitle?: string;
-  visibleText?: string;
-  enqueuedAt?: string;
-};
-
-export type AssistantRuntimeSnapshot = {
-  pendingCount: number;
-  queuedCount: number;
-  active?: AssistantRuntimePendingRun | null;
-  queue: AssistantRuntimePendingRun[];
-};
-
 export type BotOverview = {
   alias: string;
   cliType: CliType;
   status: BotStatus;
   workingDir: string;
   cliPath?: string;
-  botMode?: string;
   enabled?: boolean;
   isMain?: boolean;
   messageCount?: number;
   historyCount?: number;
   isProcessing?: boolean;
   runningReply?: RunningReply | null;
-  assistantRuntime?: AssistantRuntimeSnapshot | null;
   agents?: AgentSummary[];
   cluster?: BotClusterConfig;
   activeClusterRun?: ActiveClusterRun | null;
@@ -863,7 +840,6 @@ export type ConversationSummary = {
   active: boolean;
   status: string;
   botAlias: string;
-  botMode: string;
   cliType: string;
   agentId?: string;
   workingDir: string;
@@ -948,7 +924,7 @@ export type ChatStatusUpdate = {
   contextUsage?: ChatMessageContextUsage;
 };
 
-export type ChatTaskMode = "standard" | "dream" | "proposal_patch" | "plan";
+export type ChatTaskMode = "standard" | "plan";
 
 export type PlanExecuteInput = {
   content: string;
@@ -1933,7 +1909,6 @@ export type CliParamsPayload = {
 
 export type CreateBotInput = {
   alias: string;
-  botMode: "cli" | "assistant";
   cliType: CliType;
   cliPath: string;
   workingDir: string;
@@ -2212,414 +2187,6 @@ export type OfflineUpdatePackageList = {
   items: OfflineUpdatePackageItem[];
 };
 
-export type AssistantProposalStatus = "proposed" | "approved" | "rejected" | "applied";
-
-export type AssistantProposal = {
-  id: string;
-  kind: string;
-  title: string;
-  body: string;
-  status: AssistantProposalStatus | string;
-  createdAt: string;
-  reviewedBy?: string;
-  reviewedAt?: string;
-  appliedAt?: string;
-};
-
-export type AssistantUpgradeApplyState = {
-  available: boolean;
-  applied: boolean;
-  lastError: string;
-  lastErrorAt: string;
-  lastErrorLogPath: string;
-};
-
-export type AssistantUpgradeTarget = {
-  alias: string;
-  workingDir: string;
-  repoRoot: string;
-  head: string;
-  dirty: boolean;
-  dirtyPaths: string[];
-  botMode: string;
-  cliType: string;
-  cliPath: string;
-  available: boolean;
-  reason: string;
-};
-
-export type AssistantUpgradeState = {
-  state: string;
-  targetAlias: string;
-  targetRepoRoot: string;
-  baseCommit: string;
-  patchSource: string;
-  generationStatus: string;
-  chatConclusion: string;
-  sensitiveHits: string[];
-  dryRun: AssistantUpgradeDryRunResult;
-  canGenerate: boolean;
-  canApprovePatch: boolean;
-  canDryRun: boolean;
-  canApply: boolean;
-};
-
-export type AssistantPatchMetadata = {
-  id: string;
-  proposalId: string;
-  state: string;
-  lifecycle?: string;
-  chatConclusion?: string;
-  chatMessageId?: string;
-  targetAlias: string;
-  targetWorkingDir: string;
-  targetRepoRoot: string;
-  baseCommit: string;
-  worktreePath: string;
-  patchPath: string;
-  generatedAt: string;
-  generatedBy: string;
-  approvedBy?: string;
-  approvedAt?: string;
-  generator: {
-    cliType: string;
-    cliPath: string;
-    status: string;
-    elapsedSeconds: number;
-  };
-  dryRun: {
-    ok: boolean;
-    checkedAt: string;
-    stdout: string;
-    stderr: string;
-    patchPath: string;
-    repoRoot: string;
-  };
-  sensitiveHits: string[];
-  changedFiles: string[];
-  additions: number;
-  deletions: number;
-};
-
-export type AssistantPatchGenerationStatus = {
-  phase?: string;
-  message?: string;
-  lifecycle?: string;
-};
-
-export type AssistantPatchGenerationHandlers = {
-  onStatus?: (event: AssistantPatchGenerationStatus) => void;
-  onLog?: (text: string) => void;
-  onTrace?: (event: ChatTraceEvent) => void;
-};
-
-export type AssistantProposalDiffFile = {
-  path: string;
-  oldPath?: string;
-  status: "added" | "modified" | "deleted" | "renamed" | "unknown";
-  additions: number;
-  deletions: number;
-  text: string;
-};
-
-export type AssistantProposalDetail = {
-  proposal: AssistantProposal;
-  diff: {
-    available: boolean;
-    source: string;
-    text: string;
-    files: AssistantProposalDiffFile[];
-  };
-  apply: AssistantUpgradeApplyState;
-  upgrade: AssistantUpgradeState;
-  generationLog: AssistantGenerationLog;
-};
-
-export type AssistantGenerationLogItem = {
-  event: string;
-  createdAt: string;
-  status: string;
-  message: string;
-  error: string;
-  code: string;
-  raw: Record<string, unknown>;
-};
-
-export type AssistantGenerationLog = {
-  available: boolean;
-  source: string;
-  items: AssistantGenerationLogItem[];
-};
-
-export type AssistantUpgradeApplyResult = {
-  id: string;
-  status: string;
-  patchPath: string;
-  repoRoot: string;
-  appliedAt: string;
-};
-
-export type AssistantUpgradeApplyLog = {
-  id: string;
-  status: string;
-  repoRoot?: string;
-  patchPath?: string;
-  appliedAt?: string;
-  failedAt?: string;
-  error?: string;
-};
-
-export type AssistantUpgradeDryRunResult = {
-  ok: boolean;
-  checkedAt: string;
-  stdout: string;
-  stderr: string;
-  patchPath: string;
-  repoRoot: string;
-};
-
-export type AssistantMemorySearchItem = {
-  id: string;
-  kind: string;
-  scope: string;
-  title: string;
-  summary: string;
-  body: string;
-  score: number;
-  sourceType?: string;
-  sourceRef?: string;
-  updatedAt?: string;
-  invalidatedAt?: string;
-};
-
-export type AssistantMemorySearchResult = {
-  items: AssistantMemorySearchItem[];
-};
-
-export type AssistantMemorySearchOptions = {
-  userId?: number;
-  limit?: number;
-  kinds?: string[];
-  scopes?: string[];
-  includeInvalidated?: boolean;
-};
-
-export type AssistantMemoryInvalidateResult = {
-  memoryId: string;
-  invalidated: boolean;
-  reason: string;
-};
-
-export type AssistantMemoryBulkInvalidateResult = {
-  invalidated: number;
-  missing: string[];
-  reason: string;
-};
-
-export type AssistantMemoryReindexResult = {
-  working: {
-    indexedCount: number;
-    memoryIds: string[];
-  };
-  knowledge: {
-    indexedCount: number;
-    memoryIds: string[];
-  };
-};
-
-export type AssistantMemoryEvalCase = {
-  query: string;
-  expectedMemoryKind: string;
-  expectedHitTerms: string[];
-  mustNotHitTerms: string[];
-};
-
-export type AssistantMemoryEvalRun = {
-  metrics: {
-    hitAt5: number;
-    staleRecallRate: number;
-  };
-  reportPath: string;
-};
-
-export type AssistantMemoryEvalReportRow = {
-  query: string;
-  promptBlock: string;
-  hit: boolean;
-  stale: boolean;
-  auditPath?: string | null;
-};
-
-export type AssistantMemoryEvalReport = {
-  reportPath: string;
-  createdAt: string;
-  metrics: {
-    hitAt5: number;
-    staleRecallRate: number;
-  };
-  rows: AssistantMemoryEvalReportRow[];
-};
-
-export type AssistantPerfStageDurations = {
-  syncMs: number;
-  indexMs: number;
-  recallMs: number;
-  cliMs: number;
-  dbMs: number;
-  traceMs: number;
-  pluginMs: number;
-};
-
-export type AssistantPerfRecord = {
-  runId: string;
-  createdAt: string;
-  botAlias: string;
-  source: string;
-  taskMode: string;
-  interactive: boolean;
-  userId: number;
-  status: string;
-  stageDurations: AssistantPerfStageDurations;
-  elapsedMs: number;
-  promptChars: number;
-  outputChars: number;
-  traceCount: number;
-  toolCallCount: number;
-  processCount: number;
-  error?: string;
-};
-
-export type AssistantPerfSummary = {
-  total: number;
-  success: number;
-  failed: number;
-  avgElapsedMs: number;
-  p95ElapsedMs: number;
-  bySource: Record<string, number>;
-  byStatus: Record<string, number>;
-  slowStages: Array<{ stage: string; totalMs: number; avgMs: number }>;
-  errorGroups: Array<{ message: string; count: number; latestAt: string }>;
-};
-
-export type AssistantDiagnosticsFilters = {
-  source?: string;
-  status?: string;
-  userId?: number;
-  from?: string;
-  to?: string;
-  limit?: number;
-};
-
-export type AssistantPerfDiagnostics = {
-  items: AssistantPerfRecord[];
-  summary: AssistantPerfSummary;
-};
-
-export type AssistantCronScheduleType = "daily" | "interval";
-export type AssistantCronMisfirePolicy = "skip" | "once";
-export type AssistantCronTaskMode = "standard" | "dream";
-export type AssistantCronDeliverMode = "chat_handoff" | "silent";
-
-export type AssistantCronSchedule = {
-  type: AssistantCronScheduleType;
-  time?: string;
-  timezone: string;
-  everySeconds?: number;
-  misfirePolicy: AssistantCronMisfirePolicy;
-};
-
-export type AssistantCronTask = {
-  prompt: string;
-  mode?: AssistantCronTaskMode;
-  lookbackHours?: number;
-  historyLimit?: number;
-  captureLimit?: number;
-  deliverMode?: AssistantCronDeliverMode;
-};
-
-export type AssistantCronExecution = {
-  timeoutSeconds: number;
-};
-
-export type AssistantCronJob = {
-  id: string;
-  enabled: boolean;
-  title: string;
-  schedule: AssistantCronSchedule;
-  task: AssistantCronTask;
-  execution: AssistantCronExecution;
-  nextRunAt: string;
-  lastStatus: string;
-  lastError: string;
-  lastSuccessAt: string;
-  pending: boolean;
-  pendingRunId: string;
-  coalescedCount: number;
-};
-
-export type CreateAssistantCronJobInput = {
-  id: string;
-  enabled: boolean;
-  title: string;
-  schedule: AssistantCronSchedule;
-  task: AssistantCronTask;
-  execution: AssistantCronExecution;
-};
-
-export type UpdateAssistantCronJobInput = Partial<{
-  enabled: boolean;
-  title: string;
-  schedule: Partial<AssistantCronSchedule>;
-  task: Partial<AssistantCronTask>;
-  execution: Partial<AssistantCronExecution>;
-}>;
-
-export type AssistantCronRun = {
-  runId: string;
-  jobId: string;
-  triggerSource: string;
-  scheduledAt: string;
-  enqueuedAt: string;
-  startedAt: string;
-  finishedAt: string;
-  status: string;
-  elapsedSeconds: number;
-  queueWaitSeconds: number;
-  timedOut: boolean;
-  promptExcerpt: string;
-  outputExcerpt: string;
-  error: string;
-};
-
-export type AssistantCronRunRequestResult = {
-  runId: string;
-  status: string;
-  taskMode?: AssistantCronTaskMode;
-  deliverMode?: AssistantCronDeliverMode;
-};
-
-export type AssistantAdminAuditItem = {
-  id: string;
-  createdAt: string;
-  accountId: string;
-  userId: number;
-  username: string;
-  method: string;
-  path: string;
-  action: string;
-  target: { botAlias?: string; resource?: string; resourceId?: string };
-  requestSummary: Record<string, unknown>;
-  statusCode: number;
-  ok: boolean;
-  errorCode?: string;
-  errorMessage?: string;
-  elapsedMs: number;
-};
-
-export type AssistantAdminAuditResult = {
-  items: AssistantAdminAuditItem[];
-};
-
 export type LanChatMode = "off" | "host" | "join";
 export type LanChatConversationKind = "group" | "dm";
 
@@ -2693,3 +2260,4 @@ export type LanChatEvent =
   | { type: "presence_updated"; status?: LanChatStatus }
   | { type: "read_updated"; conversationId: string; lastReadSeq: number }
   | { type: "config_updated"; config: LanChatConfig };
+

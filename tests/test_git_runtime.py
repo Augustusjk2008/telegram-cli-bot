@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from bot.assistant.upgrade import patch_generation
 from bot.git_runtime import (
     GIT_FSMONITOR_DISABLED,
     GIT_FSMONITOR_DISABLED_ARG,
@@ -98,29 +97,3 @@ def test_git_commit_cli_env_disables_git_fsmonitor() -> None:
     env = git_service._build_git_commit_cli_env()
     _assert_fsmonitor_disabled(env)
 
-
-def test_upgrade_generator_env_disables_git_fsmonitor(monkeypatch, tmp_path: Path) -> None:
-    captured_envs: list[dict[str, str]] = []
-
-    monkeypatch.setattr(patch_generation, "resolve_cli_executable", lambda *_args: "codex")
-
-    def fake_build_cli_command(**kwargs):
-        captured_envs.append(kwargs["env"])
-        return ["codex", "exec"], False
-
-    monkeypatch.setattr(patch_generation, "build_cli_command", fake_build_cli_command)
-    monkeypatch.setattr(
-        patch_generation.subprocess,
-        "run",
-        lambda *args, **kwargs: patch_generation.subprocess.CompletedProcess(
-            args=args,
-            returncode=0,
-            stdout="ok",
-            stderr="",
-        ),
-    )
-
-    patch_generation._run_generator_cli(tmp_path, "prompt", {"cli_type": "codex", "cli_path": "codex"})
-
-    assert len(captured_envs) == 1
-    _assert_fsmonitor_disabled(captured_envs[0])

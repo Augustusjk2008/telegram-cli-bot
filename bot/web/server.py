@@ -140,7 +140,6 @@ from .tunnel_service import TunnelService
 from .routes import (
     admin_routes,
     announcement_routes,
-    assistant_routes,
     auth_routes,
     bot_settings_routes,
     chat_routes,
@@ -154,17 +153,10 @@ from .routes import (
     transfer_routes,
 )
 from .api_service import (
-    approve_assistant_proposal,
-    approve_assistant_proposal_patch,
-    apply_assistant_upgrade,
     AuthContext,
-    _assistant_home_or_raise,
     _require_capability,
-    _parse_memory_eval_cases,
-    _split_csv_query,
     WebApiError,
     add_managed_bot,
-    bulk_invalidate_assistant_memories,
     build_bot_summary,
     change_working_directory,
     create_agent,
@@ -195,18 +187,12 @@ from .api_service import (
     get_native_agent_history_diff,
     get_history_trace,
     rollback_native_agent_history,
-    get_assistant_diagnostics,
     get_native_agent_config_payload,
     get_native_agent_preflight_payload,
     get_native_agent_models_payload,
     get_overview,
     get_cluster_task_status,
     get_terminal_actions_config,
-    list_assistant_upgrade_targets,
-    list_assistant_memory_eval_reports,
-    list_assistant_proposals,
-    get_assistant_proposal_detail,
-    get_assistant_upgrade_apply_log,
     get_cluster_bundle_schema,
     get_cli_params_payload,
     get_cluster_status,
@@ -219,28 +205,19 @@ from .api_service import (
     list_agents,
     list_conversations,
     list_favorite_answers,
-    list_assistant_cron_jobs,
-    list_assistant_cron_runs,
     list_installable_plugins,
     list_plugins,
     open_plugin_view,
-    invalidate_assistant_memory,
     read_file_content,
-    reindex_assistant_memory,
     rename_path,
     move_path,
     remove_managed_bot,
     remove_managed_bot_with_history,
-    reject_assistant_proposal,
     reset_user_session,
     reset_cli_params,
     resolve_terminal_action_for_bot,
     run_chat,
     handle_cluster_mcp_tool,
-    run_assistant_memory_eval_task,
-    run_assistant_cron_job_now,
-    dry_run_assistant_upgrade,
-    search_assistant_memories,
     render_plugin_view,
     resolve_plugin_file_target,
     reveal_directory_tree,
@@ -252,12 +229,9 @@ from .api_service import (
     stream_update_download,
     stream_chat,
     select_conversation,
-    create_assistant_cron_job,
     delete_chat_attachment,
-    delete_assistant_cron_job,
     update_cli_params,
     update_cluster_config,
-    update_assistant_cron_job,
     update_agent,
     update_bot_cli,
     update_bot_execution_config,
@@ -270,8 +244,6 @@ from .api_service import (
     rename_managed_bot,
     update_bot_workdir,
     write_file_content,
-    generate_assistant_proposal_patch,
-    stream_generate_assistant_proposal_patch,
     prepare_cluster_setup,
     preview_cluster_config_bundle,
     preview_cluster_template,
@@ -279,7 +251,6 @@ from .api_service import (
     apply_cluster_template,
     verify_cluster_mcp_request,
 )
-from bot.assistant.admin_audit import list_admin_audit, summarize_request, write_admin_audit
 from bot.migrations.runner import migration_diagnostics
 from .git_service import (
     apply_git_stash,
@@ -1168,7 +1139,6 @@ class WebApiServer:
             "prompt_presets",
             "global_prompt_presets",
             "cluster",
-            "assistant_runtime",
             "active_cluster_run",
             "agents",
         ):
@@ -1193,82 +1163,6 @@ class WebApiServer:
             for item in items
             if self._normalize_bot_alias(str(item.get("alias") or "")) in allowed
         ]
-
-    def _assistant_admin_action(self, request: web.Request) -> tuple[str, dict[str, str]] | None:
-        method = request.method.upper()
-        path = request.path
-        alias = request.match_info.get("alias", "")
-        proposal_id = request.match_info.get("proposal_id", "")
-        memory_id = request.match_info.get("memory_id", "")
-        job_id = request.match_info.get("job_id", "")
-        if method == "POST" and path.endswith("/patch/approve"):
-            return "assistant.proposal.patch.approve", {"bot_alias": alias, "resource": "proposal", "resource_id": proposal_id}
-        if method == "POST" and path.endswith("/patch"):
-            return "assistant.proposal.patch.generate", {"bot_alias": alias, "resource": "proposal", "resource_id": proposal_id}
-        if method == "POST" and path.endswith("/approve"):
-            return "assistant.proposal.approve", {"bot_alias": alias, "resource": "proposal", "resource_id": proposal_id}
-        if method == "POST" and path.endswith("/reject"):
-            return "assistant.proposal.reject", {"bot_alias": alias, "resource": "proposal", "resource_id": proposal_id}
-        if method == "POST" and "/assistant/upgrades/" in path and path.endswith("/apply"):
-            return "assistant.upgrade.apply", {"bot_alias": alias, "resource": "proposal", "resource_id": proposal_id}
-        if method == "POST" and "/assistant/upgrades/" in path and path.endswith("/dry-run"):
-            return "assistant.upgrade.dry_run", {"bot_alias": alias, "resource": "proposal", "resource_id": proposal_id}
-        if method == "POST" and path.endswith("/bulk-invalidate"):
-            return "assistant.memory.bulk_invalidate", {"bot_alias": alias, "resource": "memory", "resource_id": "bulk"}
-        if method == "POST" and path.endswith("/invalidate"):
-            return "assistant.memory.invalidate", {"bot_alias": alias, "resource": "memory", "resource_id": memory_id}
-        if method == "POST" and path.endswith("/memory/reindex"):
-            return "assistant.memory.reindex", {"bot_alias": alias, "resource": "memory", "resource_id": "index"}
-        if method == "POST" and path.endswith("/evals/memory/run"):
-            return "assistant.memory.eval", {"bot_alias": alias, "resource": "eval", "resource_id": "memory"}
-        if path.endswith("/assistant/cron/jobs") and method == "POST":
-            return "assistant.cron.create", {"bot_alias": alias, "resource": "cron", "resource_id": ""}
-        if "/assistant/cron/jobs/" in path and method == "PATCH":
-            return "assistant.cron.update", {"bot_alias": alias, "resource": "cron", "resource_id": job_id}
-        if "/assistant/cron/jobs/" in path and method == "DELETE":
-            return "assistant.cron.delete", {"bot_alias": alias, "resource": "cron", "resource_id": job_id}
-        if "/assistant/cron/jobs/" in path and path.endswith("/run") and method == "POST":
-            return "assistant.cron.run", {"bot_alias": alias, "resource": "cron", "resource_id": job_id}
-        return None
-
-    def _write_assistant_admin_audit(
-        self,
-        request: web.Request,
-        auth: AuthContext,
-        body: dict[str, Any],
-        *,
-        ok: bool,
-        status_code: int,
-        error_code: str = "",
-        error_message: str = "",
-        elapsed_ms: int = 0,
-    ) -> None:
-        action_target = self._assistant_admin_action(request)
-        if action_target is None:
-            return
-        alias = request.match_info.get("alias", "").strip()
-        if not alias:
-            return
-        action, target = action_target
-        home = _assistant_home_or_raise(self.manager, alias)
-        write_admin_audit(
-            home,
-            {
-                "account_id": auth.account_id,
-                "user_id": auth.user_id,
-                "username": auth.username,
-                "method": request.method,
-                "path": request.path,
-                "action": action,
-                "target": target,
-                "request_summary": summarize_request(body),
-                "status_code": status_code,
-                "ok": ok,
-                "error_code": error_code,
-                "error_message": error_message,
-                "elapsed_ms": elapsed_ms,
-            },
-        )
 
     def _copy_text_to_clipboard(self, text: str) -> bool:
         value = str(text or "").strip()
@@ -4042,743 +3936,6 @@ class WebApiServer:
         alias = self._manager_alias(request)
         return _json({"ok": True, "data": {"bot": self._decorate_bot_for_auth(auth, build_bot_summary(self.manager, alias))}})
 
-    async def admin_assistant_proposals(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
-        alias = self._manager_alias(request)
-        status = request.query.get("status") or None
-        return _json({"ok": True, "data": list_assistant_proposals(self.manager, alias, status=status)})
-
-    async def admin_assistant_upgrade_targets(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
-        alias = self._manager_alias(request)
-        return _json({"ok": True, "data": list_assistant_upgrade_targets(self.manager, alias)})
-
-    async def admin_assistant_proposal_detail(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
-        alias = self._manager_alias(request)
-        proposal_id = request.match_info["proposal_id"]
-        return _json({"ok": True, "data": get_assistant_proposal_detail(self.manager, alias, proposal_id)})
-
-    async def admin_assistant_upgrade_apply_log(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
-        alias = self._manager_alias(request)
-        proposal_id = request.match_info["proposal_id"]
-        return _json({"ok": True, "data": get_assistant_upgrade_apply_log(self.manager, alias, proposal_id)})
-
-    async def admin_assistant_upgrade_dry_run(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_ADMIN_OPS)
-        alias = self._manager_alias(request)
-        proposal_id = request.match_info["proposal_id"]
-        started_at = time.perf_counter()
-        body: dict[str, Any] = {}
-        ok = False
-        status_code = 500
-        error_code = ""
-        error_message = ""
-        try:
-            data = await dry_run_assistant_upgrade(self.manager, alias, proposal_id)
-            response = _json({"ok": True, "data": data})
-            ok = True
-            status_code = response.status
-            return response
-        except WebApiError as exc:
-            status_code = exc.status
-            error_code = exc.code
-            error_message = exc.message
-            raise
-        finally:
-            self._write_assistant_admin_audit(
-                request,
-                auth,
-                body,
-                ok=ok,
-                status_code=status_code,
-                error_code=error_code,
-                error_message=error_message,
-                elapsed_ms=int(round((time.perf_counter() - started_at) * 1000)),
-            )
-
-    async def admin_assistant_proposal_approve(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_ADMIN_OPS)
-        alias = self._manager_alias(request)
-        proposal_id = request.match_info["proposal_id"]
-        started_at = time.perf_counter()
-        body: dict[str, Any] = {}
-        ok = False
-        status_code = 500
-        error_code = ""
-        error_message = ""
-        try:
-            data = await approve_assistant_proposal(
-                self.manager,
-                alias,
-                proposal_id,
-                reviewer=str(auth.user_id),
-            )
-            response = _json({"ok": True, "data": data})
-            ok = True
-            status_code = response.status
-            return response
-        except WebApiError as exc:
-            status_code = exc.status
-            error_code = exc.code
-            error_message = exc.message
-            raise
-        finally:
-            self._write_assistant_admin_audit(
-                request,
-                auth,
-                body,
-                ok=ok,
-                status_code=status_code,
-                error_code=error_code,
-                error_message=error_message,
-                elapsed_ms=int(round((time.perf_counter() - started_at) * 1000)),
-            )
-
-    async def admin_assistant_proposal_patch_generate(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_ADMIN_OPS)
-        alias = self._manager_alias(request)
-        proposal_id = request.match_info["proposal_id"]
-        body = await self._parse_json(request)
-        started_at = time.perf_counter()
-        ok = False
-        status_code = 500
-        error_code = ""
-        error_message = ""
-        try:
-            data = await generate_assistant_proposal_patch(
-                self.manager,
-                alias,
-                proposal_id,
-                target_alias=str(body.get("target_alias") or ""),
-                regenerate=bool(body.get("regenerate")),
-                generated_by=str(auth.user_id),
-            )
-            response = _json({"ok": True, "data": data})
-            ok = True
-            status_code = response.status
-            return response
-        except WebApiError as exc:
-            status_code = exc.status
-            error_code = exc.code
-            error_message = exc.message
-            raise
-        finally:
-            self._write_assistant_admin_audit(
-                request,
-                auth,
-                body,
-                ok=ok,
-                status_code=status_code,
-                error_code=error_code,
-                error_message=error_message,
-                elapsed_ms=int(round((time.perf_counter() - started_at) * 1000)),
-            )
-
-    async def admin_assistant_proposal_patch_generate_stream(self, request: web.Request) -> web.StreamResponse:
-        auth = await self._with_capability(request, CAP_ADMIN_OPS)
-        alias = self._manager_alias(request)
-        proposal_id = request.match_info["proposal_id"]
-        body = await self._parse_json(request)
-        started_at = time.perf_counter()
-        ok = False
-        status_code = 200
-        error_code = ""
-        error_message = ""
-        event_stream = stream_generate_assistant_proposal_patch(
-            self.manager,
-            alias,
-            proposal_id,
-            target_alias=str(body.get("target_alias") or ""),
-            regenerate=bool(body.get("regenerate")),
-            generated_by=str(auth.user_id),
-        )
-        event_iterator = event_stream.__aiter__()
-        first_event = await event_iterator.__anext__()
-
-        response = web.StreamResponse(
-            status=200,
-            headers={
-                "Content-Type": "text/event-stream",
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-            },
-        )
-        await response.prepare(request)
-
-        client_disconnected = False
-        try:
-            for event in [first_event]:
-                if event.get("type") == "done":
-                    ok = True
-                    status_code = 200
-                elif event.get("type") == "error":
-                    status_code = 500
-                    error_code = str(event.get("code") or "patch_generation_failed")
-                    error_message = str(event.get("message") or "生成 patch 失败")
-                try:
-                    await response.write(_format_sse(str(event.get("type") or "message"), event))
-                except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
-                    client_disconnected = True
-                    logger.info("assistant patch SSE 客户端已断开: alias=%s proposal=%s", alias, proposal_id)
-            async for event in event_iterator:
-                if event.get("type") == "done":
-                    ok = True
-                    status_code = 200
-                elif event.get("type") == "error":
-                    status_code = 500
-                    error_code = str(event.get("code") or "patch_generation_failed")
-                    error_message = str(event.get("message") or "生成 patch 失败")
-                if client_disconnected:
-                    continue
-                try:
-                    await response.write(_format_sse(str(event.get("type") or "message"), event))
-                except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
-                    client_disconnected = True
-                    logger.info("assistant patch SSE 客户端已断开: alias=%s proposal=%s", alias, proposal_id)
-        except WebApiError:
-            raise
-        finally:
-            if not client_disconnected:
-                try:
-                    await response.write_eof()
-                except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
-                    logger.info("assistant patch SSE 客户端在结束前断开: alias=%s proposal=%s", alias, proposal_id)
-            self._write_assistant_admin_audit(
-                request,
-                auth,
-                body,
-                ok=ok,
-                status_code=status_code,
-                error_code=error_code,
-                error_message=error_message,
-                elapsed_ms=int(round((time.perf_counter() - started_at) * 1000)),
-            )
-        return response
-
-    async def admin_assistant_proposal_patch_approve(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_ADMIN_OPS)
-        alias = self._manager_alias(request)
-        proposal_id = request.match_info["proposal_id"]
-        body: dict[str, Any] = {}
-        started_at = time.perf_counter()
-        ok = False
-        status_code = 500
-        error_code = ""
-        error_message = ""
-        try:
-            data = await approve_assistant_proposal_patch(
-                self.manager,
-                alias,
-                proposal_id,
-                reviewer=str(auth.user_id),
-            )
-            response = _json({"ok": True, "data": data})
-            ok = True
-            status_code = response.status
-            return response
-        except WebApiError as exc:
-            status_code = exc.status
-            error_code = exc.code
-            error_message = exc.message
-            raise
-        finally:
-            self._write_assistant_admin_audit(
-                request,
-                auth,
-                body,
-                ok=ok,
-                status_code=status_code,
-                error_code=error_code,
-                error_message=error_message,
-                elapsed_ms=int(round((time.perf_counter() - started_at) * 1000)),
-            )
-
-    async def admin_assistant_proposal_reject(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_ADMIN_OPS)
-        alias = self._manager_alias(request)
-        proposal_id = request.match_info["proposal_id"]
-        started_at = time.perf_counter()
-        body: dict[str, Any] = {}
-        ok = False
-        status_code = 500
-        error_code = ""
-        error_message = ""
-        try:
-            data = await reject_assistant_proposal(
-                self.manager,
-                alias,
-                proposal_id,
-                reviewer=str(auth.user_id),
-            )
-            response = _json({"ok": True, "data": data})
-            ok = True
-            status_code = response.status
-            return response
-        except WebApiError as exc:
-            status_code = exc.status
-            error_code = exc.code
-            error_message = exc.message
-            raise
-        finally:
-            self._write_assistant_admin_audit(
-                request,
-                auth,
-                body,
-                ok=ok,
-                status_code=status_code,
-                error_code=error_code,
-                error_message=error_message,
-                elapsed_ms=int(round((time.perf_counter() - started_at) * 1000)),
-            )
-
-    async def admin_assistant_upgrade_apply(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_ADMIN_OPS)
-        alias = self._manager_alias(request)
-        proposal_id = request.match_info["proposal_id"]
-        started_at = time.perf_counter()
-        body: dict[str, Any] = {}
-        ok = False
-        status_code = 500
-        error_code = ""
-        error_message = ""
-        try:
-            data = await apply_assistant_upgrade(self.manager, alias, proposal_id)
-            response = _json({"ok": True, "data": data})
-            ok = True
-            status_code = response.status
-            return response
-        except WebApiError as exc:
-            status_code = exc.status
-            error_code = exc.code
-            error_message = exc.message
-            raise
-        finally:
-            self._write_assistant_admin_audit(
-                request,
-                auth,
-                body,
-                ok=ok,
-                status_code=status_code,
-                error_code=error_code,
-                error_message=error_message,
-                elapsed_ms=int(round((time.perf_counter() - started_at) * 1000)),
-            )
-
-    async def admin_assistant_memory_search(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_ADMIN_OPS)
-        alias = self._manager_alias(request)
-        query_text = str(request.query.get("query") or "").strip()
-        try:
-            limit = int(request.query.get("limit") or 10)
-        except ValueError:
-            limit = 10
-        try:
-            user_id = int(request.query.get("user_id") or auth.user_id)
-        except ValueError:
-            user_id = auth.user_id
-        data = search_assistant_memories(
-            self.manager,
-            alias,
-            user_id=user_id,
-            query_text=query_text,
-            limit=limit,
-            kinds=_split_csv_query(request.query.get("kinds")),
-            scopes=_split_csv_query(request.query.get("scopes")),
-            include_invalidated=str(request.query.get("include_invalidated", "")).lower() == "true",
-        )
-        return _json({"ok": True, "data": data})
-
-    async def admin_assistant_memory_invalidate(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_ADMIN_OPS)
-        alias = self._manager_alias(request)
-        memory_id = request.match_info["memory_id"]
-        body = await self._parse_json(request)
-        reason = str(body.get("reason") or "").strip() or "web_admin"
-        started_at = time.perf_counter()
-        ok = False
-        status_code = 500
-        error_code = ""
-        error_message = ""
-        try:
-            data = invalidate_assistant_memory(self.manager, alias, memory_id, reason=reason, user_id=auth.user_id)
-            response = _json({"ok": True, "data": data})
-            ok = True
-            status_code = response.status
-            return response
-        except WebApiError as exc:
-            status_code = exc.status
-            error_code = exc.code
-            error_message = exc.message
-            raise
-        finally:
-            self._write_assistant_admin_audit(
-                request,
-                auth,
-                body,
-                ok=ok,
-                status_code=status_code,
-                error_code=error_code,
-                error_message=error_message,
-                elapsed_ms=int(round((time.perf_counter() - started_at) * 1000)),
-            )
-
-    async def admin_assistant_memory_bulk_invalidate(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_ADMIN_OPS)
-        alias = self._manager_alias(request)
-        body = await self._parse_json(request)
-        ids = body.get("memory_ids")
-        if not isinstance(ids, list) or not ids:
-            raise WebApiError(400, "invalid_memory_ids", "memory_ids 不能为空")
-        reason = str(body.get("reason") or "web_admin_bulk").strip()
-        started_at = time.perf_counter()
-        ok = False
-        status_code = 500
-        error_code = ""
-        error_message = ""
-        try:
-            data = bulk_invalidate_assistant_memories(
-                self.manager,
-                alias,
-                memory_ids=[str(item) for item in ids],
-                reason=reason,
-                user_id=auth.user_id,
-            )
-            response = _json({"ok": True, "data": data})
-            ok = True
-            status_code = response.status
-            return response
-        except WebApiError as exc:
-            status_code = exc.status
-            error_code = exc.code
-            error_message = exc.message
-            raise
-        finally:
-            self._write_assistant_admin_audit(
-                request,
-                auth,
-                body,
-                ok=ok,
-                status_code=status_code,
-                error_code=error_code,
-                error_message=error_message,
-                elapsed_ms=int(round((time.perf_counter() - started_at) * 1000)),
-            )
-
-    async def admin_assistant_memory_reindex(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_ADMIN_OPS)
-        alias = self._manager_alias(request)
-        body = await self._parse_json(request)
-        try:
-            user_id = int(body.get("user_id") or auth.user_id)
-        except (TypeError, ValueError):
-            user_id = auth.user_id
-        started_at = time.perf_counter()
-        ok = False
-        status_code = 500
-        error_code = ""
-        error_message = ""
-        try:
-            data = reindex_assistant_memory(
-                self.manager,
-                alias,
-                user_id=user_id,
-                force=bool(body.get("force")),
-            )
-            response = _json({"ok": True, "data": data})
-            ok = True
-            status_code = response.status
-            return response
-        except WebApiError as exc:
-            status_code = exc.status
-            error_code = exc.code
-            error_message = exc.message
-            raise
-        finally:
-            self._write_assistant_admin_audit(
-                request,
-                auth,
-                body,
-                ok=ok,
-                status_code=status_code,
-                error_code=error_code,
-                error_message=error_message,
-                elapsed_ms=int(round((time.perf_counter() - started_at) * 1000)),
-            )
-
-    async def admin_assistant_memory_eval_run(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_ADMIN_OPS)
-        alias = self._manager_alias(request)
-        body = await self._parse_json(request)
-        try:
-            user_id = int(body.get("user_id") or auth.user_id)
-        except (TypeError, ValueError):
-            user_id = auth.user_id
-        started_at = time.perf_counter()
-        ok = False
-        status_code = 500
-        error_code = ""
-        error_message = ""
-        try:
-            data = run_assistant_memory_eval_task(
-                self.manager,
-                alias,
-                user_id=user_id,
-                cases=_parse_memory_eval_cases(body),
-            )
-            response = _json({"ok": True, "data": data})
-            ok = True
-            status_code = response.status
-            return response
-        except WebApiError as exc:
-            status_code = exc.status
-            error_code = exc.code
-            error_message = exc.message
-            raise
-        finally:
-            self._write_assistant_admin_audit(
-                request,
-                auth,
-                body,
-                ok=ok,
-                status_code=status_code,
-                error_code=error_code,
-                error_message=error_message,
-                elapsed_ms=int(round((time.perf_counter() - started_at) * 1000)),
-            )
-
-    async def admin_assistant_memory_eval_reports(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
-        alias = self._manager_alias(request)
-        try:
-            limit = int(request.query.get("limit") or 10)
-        except ValueError:
-            limit = 10
-        data = list_assistant_memory_eval_reports(self.manager, alias, limit=limit)
-        return _json({"ok": True, "data": data})
-
-    async def admin_assistant_diagnostics(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
-        alias = self._manager_alias(request)
-        try:
-            limit = int(request.query.get("limit") or 20)
-        except ValueError:
-            limit = 20
-        user_id_text = str(request.query.get("user_id", "")).strip()
-        if user_id_text:
-            try:
-                user_id = int(user_id_text)
-            except ValueError as exc:
-                raise WebApiError(400, "invalid_user_id", "user_id 必须是整数") from exc
-        else:
-            user_id = None
-        data = get_assistant_diagnostics(
-            self.manager,
-            alias,
-            limit=limit,
-            source=str(request.query.get("source", "")).strip(),
-            status=str(request.query.get("status", "")).strip(),
-            user_id=user_id,
-            from_value=str(request.query.get("from", "")).strip(),
-            to_value=str(request.query.get("to", "")).strip(),
-        )
-        return _json({"ok": True, "data": data})
-
-    async def admin_assistant_cron_jobs(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
-        alias = self._manager_alias(request)
-        return _json({"ok": True, "data": list_assistant_cron_jobs(self.manager, alias)})
-
-    async def admin_assistant_cron_job_create(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_ADMIN_OPS)
-        alias = self._manager_alias(request)
-        body = await self._parse_json(request)
-        started_at = time.perf_counter()
-        ok = False
-        status_code = 500
-        error_code = ""
-        error_message = ""
-        try:
-            data = await create_assistant_cron_job(self.manager, alias, body)
-            response = _json({"ok": True, "data": data})
-            ok = True
-            status_code = response.status
-            return response
-        except WebApiError as exc:
-            status_code = exc.status
-            error_code = exc.code
-            error_message = exc.message
-            raise
-        finally:
-            self._write_assistant_admin_audit(
-                request,
-                auth,
-                body,
-                ok=ok,
-                status_code=status_code,
-                error_code=error_code,
-                error_message=error_message,
-                elapsed_ms=int(round((time.perf_counter() - started_at) * 1000)),
-            )
-
-    async def admin_assistant_cron_job_update(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_ADMIN_OPS)
-        alias = self._manager_alias(request)
-        job_id = request.match_info["job_id"]
-        body = await self._parse_json(request)
-        started_at = time.perf_counter()
-        ok = False
-        status_code = 500
-        error_code = ""
-        error_message = ""
-        try:
-            data = await update_assistant_cron_job(self.manager, alias, job_id, body)
-            response = _json({"ok": True, "data": data})
-            ok = True
-            status_code = response.status
-            return response
-        except WebApiError as exc:
-            status_code = exc.status
-            error_code = exc.code
-            error_message = exc.message
-            raise
-        finally:
-            self._write_assistant_admin_audit(
-                request,
-                auth,
-                body,
-                ok=ok,
-                status_code=status_code,
-                error_code=error_code,
-                error_message=error_message,
-                elapsed_ms=int(round((time.perf_counter() - started_at) * 1000)),
-            )
-
-    async def admin_assistant_cron_job_delete(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_ADMIN_OPS)
-        alias = self._manager_alias(request)
-        job_id = request.match_info["job_id"]
-        started_at = time.perf_counter()
-        body: dict[str, Any] = {}
-        ok = False
-        status_code = 500
-        error_code = ""
-        error_message = ""
-        try:
-            data = await delete_assistant_cron_job(self.manager, alias, job_id)
-            response = _json({"ok": True, "data": data})
-            ok = True
-            status_code = response.status
-            return response
-        except WebApiError as exc:
-            status_code = exc.status
-            error_code = exc.code
-            error_message = exc.message
-            raise
-        finally:
-            self._write_assistant_admin_audit(
-                request,
-                auth,
-                body,
-                ok=ok,
-                status_code=status_code,
-                error_code=error_code,
-                error_message=error_message,
-                elapsed_ms=int(round((time.perf_counter() - started_at) * 1000)),
-            )
-
-    async def admin_assistant_cron_job_run(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_ADMIN_OPS)
-        alias = self._manager_alias(request)
-        job_id = request.match_info["job_id"]
-        started_at = time.perf_counter()
-        body: dict[str, Any] = {}
-        ok = False
-        status_code = 500
-        error_code = ""
-        error_message = ""
-        try:
-            data = await run_assistant_cron_job_now(self.manager, alias, job_id)
-            response = _json({"ok": True, "data": data})
-            ok = True
-            status_code = response.status
-            return response
-        except WebApiError as exc:
-            status_code = exc.status
-            error_code = exc.code
-            error_message = exc.message
-            raise
-        finally:
-            self._write_assistant_admin_audit(
-                request,
-                auth,
-                body,
-                ok=ok,
-                status_code=status_code,
-                error_code=error_code,
-                error_message=error_message,
-                elapsed_ms=int(round((time.perf_counter() - started_at) * 1000)),
-            )
-
-    async def admin_assistant_cron_job_runs(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
-        alias = self._manager_alias(request)
-        job_id = request.match_info["job_id"]
-        limit = request.query.get("limit", "").strip()
-        if limit:
-            try:
-                resolved_limit = int(limit)
-            except ValueError as exc:
-                raise WebApiError(400, "invalid_limit", "limit 必须是整数") from exc
-        else:
-            resolved_limit = 20
-        data = list_assistant_cron_runs(self.manager, alias, job_id, limit=resolved_limit)
-        return _json({"ok": True, "data": data})
-
-    async def admin_assistant_audit(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
-        alias = self._manager_alias(request)
-        home = _assistant_home_or_raise(self.manager, alias)
-        try:
-            limit = int(request.query.get("limit", "50"))
-        except ValueError:
-            limit = 50
-        return _json(
-            {
-                "ok": True,
-                "data": {
-                    "items": list_admin_audit(
-                        home,
-                        limit=limit,
-                        action=str(request.query.get("action", "")).strip(),
-                        resource=str(request.query.get("resource", "")).strip(),
-                        status=str(request.query.get("status", "")).strip(),
-                    )
-                },
-            }
-        )
-
-    async def _auto_refresh_update_status(self) -> None:
-        status = get_update_status(_REPO_ROOT)
-        if not status.get("update_enabled"):
-            return
-        try:
-            checked_status = await asyncio.to_thread(check_for_updates, _REPO_ROOT)
-            latest_version = str(checked_status.get("last_available_version") or "").strip()
-            current_version = str(checked_status.get("current_version") or "").strip()
-            pending_version = str(
-                checked_status.get("pending_update_version")
-                or status.get("pending_update_version")
-                or ""
-            ).strip()
-            if latest_version and latest_version != current_version and latest_version != pending_version:
-                repo_root = Path(__file__).resolve().parents[2]
-                logger.info("检测到新版本 %s，开始后台下载更新包", latest_version)
-                await asyncio.to_thread(download_latest_update, repo_root)
-        except Exception as exc:
-            logger.warning("自动后台下载更新失败: %s", exc)
-
     def _build_app(self) -> web.Application:
         app = web.Application(
             middlewares=[cors_middleware, diag_slow_request_middleware, error_middleware],
@@ -4808,7 +3965,6 @@ class WebApiServer:
             debug_routes,
             files_routes,
             plugin_routes,
-            assistant_routes,
             git_routes,
             admin_routes,
             bot_settings_routes,
@@ -5037,3 +4193,4 @@ class WebApiServer:
         self._runner = None
         self._site = None
         logger.info("Web API 已停止")
+

@@ -441,7 +441,7 @@ def resolve_action_parent_dir(session: UserSession, parent_path: str | None = No
 
 def ensure_file_browser_supported(manager: MultiBotManager, alias: str) -> BotProfile:
     profile = get_profile_or_raise(manager, alias)
-    if profile.bot_mode not in ("cli", "assistant"):
+    if profile.bot_mode != "cli":
         _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，不支持文件操作")
     return profile
 

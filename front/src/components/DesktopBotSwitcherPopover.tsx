@@ -57,7 +57,6 @@ function botMatchesQuery(bot: BotSummary, query: string) {
     bot.alias,
     bot.workingDir,
     bot.cliType,
-    bot.botMode || "",
     ...(bot.busyAgentNames || []),
   ].join(" ").toLowerCase();
   return haystack.includes(normalized);
@@ -306,7 +305,7 @@ export function DesktopBotSwitcherPopover({
                       "mt-1 flex min-w-0 items-center gap-2 text-xs",
                       current ? "text-[var(--text)]" : "text-[var(--muted)]",
                     )}>
-                      <span className="shrink-0 font-medium">{bot.botMode || "cli"} · {getBotRuntimeLabel(bot)}</span>
+                      <span className="shrink-0 font-medium">{getBotRuntimeLabel(bot)}</span>
                       <span className="min-w-0 truncate" title={bot.workingDir}>{bot.workingDir}</span>
                     </span>
                     <BotActivitySummary bot={bot} className="mt-1" />
@@ -348,7 +347,7 @@ export function DesktopBotSwitcherPopover({
                           ) : null}
                           <StatusPill status={effectiveStatus(focusedBot) === "unread" ? "online" : effectiveStatus(focusedBot)} />
                         </div>
-                        <div className="text-xs text-[var(--muted)]">{focusedBot.botMode || "cli"} · {getBotRuntimeLabel(focusedBot)}</div>
+                        <div className="text-xs text-[var(--muted)]">{getBotRuntimeLabel(focusedBot)}</div>
                       </div>
                     </div>
 

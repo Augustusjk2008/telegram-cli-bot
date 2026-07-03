@@ -385,7 +385,8 @@ def update_bot_working_dir(bot_alias: str, working_dir: str) -> int:
 
 
 def align_session_paths(session: UserSession, default_working_dir: str, bot_mode: str) -> UserSession:
-    """按 bot_mode 统一修正真实工作目录与文件浏览目录。"""
+    """统一修正真实工作目录与文件浏览目录。"""
+    _ = bot_mode
     changed = False
     with session._lock:
         current_browse_dir = (
@@ -395,10 +396,6 @@ def align_session_paths(session: UserSession, default_working_dir: str, bot_mode
         )
         if session.browse_dir != current_browse_dir:
             session.browse_dir = current_browse_dir
-            changed = True
-
-        if bot_mode == "assistant" and default_working_dir and session.working_dir != default_working_dir:
-            session.working_dir = default_working_dir
             changed = True
 
     if changed:

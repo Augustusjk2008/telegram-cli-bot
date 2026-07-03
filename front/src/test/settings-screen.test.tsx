@@ -65,22 +65,6 @@ class SettingsRuntimeClient extends MockWebBotClient {
   }
 }
 
-test("assistant bots lock the default workdir in settings", async () => {
-  const client = new MockWebBotClient();
-  await client.addBot({
-    alias: "assistant1",
-    botMode: "assistant",
-    cliType: "codex",
-    cliPath: "codex",
-    workingDir: "C:\\workspace\\assistant1",
-  });
-
-  render(<SettingsScreen botAlias="assistant1" client={client} onLogout={() => undefined} />);
-
-  expect(await screen.findByLabelText("工作目录")).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "保存工作目录" })).not.toBeInTheDocument();
-  expect(screen.getByText("assistant 型 Bot 的默认工作目录已锁定")).toBeInTheDocument();
-});
 
 test("native bots hide cli settings and params", async () => {
   const client = new MockWebBotClient();
@@ -88,7 +72,6 @@ test("native bots hide cli settings and params", async () => {
   await client.login({ username: "127.0.0.1", password: "test" });
   await client.addBot({
     alias: "native1",
-    botMode: "cli",
     cliType: "codex",
     cliPath: "codex",
     workingDir: "C:\\workspace\\native1",
@@ -131,7 +114,6 @@ test("settings screen edits native agent config", async () => {
   await client.login({ username: "127.0.0.1", password: "test" });
   await client.addBot({
     alias: "native1",
-    botMode: "cli",
     cliType: "codex",
     cliPath: "codex",
     workingDir: "C:\\workspace\\native1",
@@ -200,7 +182,6 @@ test("native settings shows pi cluster extension setup", async () => {
   const client = new MockWebBotClient();
   await client.addBot({
     alias: "native1",
-    botMode: "cli",
     cliType: "codex",
     cliPath: "codex",
     workingDir: "C:\\workspace\\native1",
@@ -265,4 +246,6 @@ test("settings screen creates child agent", async () => {
   });
   expect(await screen.findByText("agent 已新增")).toBeInTheDocument();
 });
+
+
 

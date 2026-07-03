@@ -111,7 +111,6 @@ function nativeBotSummary(alias = "pi"): BotSummary {
     workingDir: `C:\\workspace\\${alias}`,
     lastActiveText: "运行中",
     cliPath: "codex",
-    botMode: "cli",
     supportedExecutionModes: ["cli", "native_agent"],
     defaultExecutionMode: "native_agent",
     nativeAgent: {
@@ -133,7 +132,6 @@ function mockNativeDesktopSession(bot: BotSummary) {
   vi.spyOn(MockWebBotClient.prototype, "listBots").mockResolvedValue([bot]);
   vi.spyOn(MockWebBotClient.prototype, "getBotOverview").mockImplementation(async (_botAlias, options = {}) => ({
     ...bot,
-    botMode: bot.botMode || "cli",
     cliPath: bot.cliPath,
     enabled: true,
     isMain: false,
@@ -141,7 +139,6 @@ function mockNativeDesktopSession(bot: BotSummary) {
     historyCount: 0,
     isProcessing: false,
     runningReply: null,
-    assistantRuntime: null,
     agents: [{ id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true }],
     activeAgentId: options.agentId || "main",
     busyAgentIds: [],
@@ -204,6 +201,23 @@ test("member with current bot access can open bot settings", async () => {
   expect(await screen.findByRole("button", { name: "设置" })).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "设置" }));
   expect(await screen.findByText("CLI 参数")).toBeInTheDocument();
+});
+
+test("bot creation form does not expose assistant mode", async () => {
+  const user = userEvent.setup();
+
+  render(<App />);
+
+  await loginAsSuperAdmin(user);
+  await screen.findByRole("button", { name: "聊天" });
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+  await user.click(await screen.findByRole("button", { name: "智能体管理" }));
+  expect(await screen.findByRole("heading", { name: "智能体管理" })).toBeInTheDocument();
+
+  const runtimeSelect = screen.getByLabelText("运行后端") as HTMLSelectElement;
+  expect(Array.from(runtimeSelect.options).map((option) => option.value)).not.toContain("assistant");
+  expect(screen.queryByText(/Assistant Ops|assistant bot|assistant 模式/i)).not.toBeInTheDocument();
 });
 
 
@@ -337,6 +351,7 @@ test("member can enter ungranted bot in read-only mode and hits create quota cop
   await createManagedBot(user, "owned3");
   expect(await screen.findByText("普通用户最多只能创建 3 个 Bot")).toBeInTheDocument();
 });
+
 
 
 

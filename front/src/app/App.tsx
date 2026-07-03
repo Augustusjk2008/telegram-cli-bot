@@ -295,9 +295,6 @@ export function App() {
     : canUseCurrentBotTerminal
       ? ""
       : "你无权限使用此智能体终端";
-  const canViewAssistantOps = effectiveLayoutMode === "desktop"
-    && currentBotSummary?.botMode === "assistant"
-    && hasCapability(session, "admin_ops");
   const accountKey = sessionAccountKey(session);
   const chatInstanceKey = chatInstanceKeyFor(accountKey, currentBot);
   const productModeKey = currentBot ? soloModeStorageKey(accountKey, currentBot) : "";
@@ -1137,7 +1134,6 @@ export function App() {
               chatBodyParagraphSpacing={chatBodyParagraphSpacing}
               onChatBodyParagraphSpacingChange={handleChatBodyParagraphSpacingChange}
               sessionCapabilities={session?.capabilities}
-              canViewAssistantOps={canViewAssistantOps}
               viewMode={viewMode}
               hasUnreadOtherBots={hasUnreadOtherBots}
               announcementAction={announcementButton}

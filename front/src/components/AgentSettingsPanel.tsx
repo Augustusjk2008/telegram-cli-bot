@@ -5,7 +5,6 @@ import type { WebBotClient } from "../services/webBotClient";
 
 type AgentSettingsPanelProps = {
   botAlias: string;
-  botMode?: string;
   client: WebBotClient;
   canManage?: boolean;
   className?: string;
@@ -58,7 +57,6 @@ function validateForm(form: FormState, editingId: string) {
 
 export function AgentSettingsPanel({
   botAlias,
-  botMode,
   client,
   canManage = true,
   className = "",
@@ -75,9 +73,6 @@ export function AgentSettingsPanel({
   const nameInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
-    if (botMode !== "cli") {
-      return;
-    }
     let cancelled = false;
     setLoading(true);
     setError("");
@@ -106,17 +101,13 @@ export function AgentSettingsPanel({
     return () => {
       cancelled = true;
     };
-  }, [botAlias, botMode, client]);
+  }, [botAlias, client]);
 
   useEffect(() => {
     if (formOpen) {
       nameInputRef.current?.focus();
     }
   }, [formOpen, editingId]);
-
-  if (botMode !== "cli") {
-    return null;
-  }
 
   const childAgents = agents.filter((agent) => !agent.isMain);
   const formError = validateForm(form, editingId);

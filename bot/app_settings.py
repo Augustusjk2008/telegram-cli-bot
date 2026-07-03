@@ -160,10 +160,6 @@ def _normalize_main_bot_profile(value: Any) -> dict[str, Any]:
         if text:
             normalized[key] = text
 
-    bot_mode = str(value.get("bot_mode") or "").strip().lower()
-    if bot_mode in {"cli", "assistant"}:
-        normalized["bot_mode"] = bot_mode
-
     cli_params = value.get("cli_params")
     if isinstance(cli_params, dict):
         normalized["cli_params"] = copy.deepcopy(cli_params)
@@ -207,7 +203,6 @@ def _normalize_main_bot_profile(value: Any) -> dict[str, Any]:
         supported_execution_modes, default_execution_mode = normalize_execution_mode_config(
             value.get("supported_execution_modes", value.get("supportedExecutionModes")),
             value.get("default_execution_mode", value.get("defaultExecutionMode")),
-            bot_mode=normalized.get("bot_mode", bot_mode or "cli"),
         )
         normalized["supported_execution_modes"] = supported_execution_modes
         normalized["default_execution_mode"] = default_execution_mode

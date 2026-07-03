@@ -180,7 +180,6 @@ export function SettingsScreen({
   const [savingWorkdir, setSavingWorkdir] = useState(false);
   const [requestingNotificationPermission, setRequestingNotificationPermission] = useState(false);
   const isMainBot = botAlias === "main";
-  const workdirLocked = overview?.botMode === "assistant";
   const canManageBotRuntime = sessionCapabilities.length === 0 || sessionCapabilities.includes("manage_bots") || sessionCapabilities.includes("admin_ops");
   const canCreateWorkdirDirectory =
     sessionCapabilities.length === 0
@@ -765,7 +764,6 @@ export function SettingsScreen({
               <div className="space-y-3 border-t border-[var(--border)] pt-4">
                 <div>
                   <label htmlFor="bot-workdir" className="font-medium text-[var(--text)]">工作目录</label>
-                  {workdirLocked ? <p className="mt-1 text-xs text-[var(--muted)]">assistant 型 Bot 的默认工作目录已锁定</p> : null}
                 </div>
                 <div>
                   <input
@@ -779,38 +777,36 @@ export function SettingsScreen({
                         setPendingWorkdirConflict(null);
                       }
                     }}
-                    readOnly={workdirLocked || !canManageBotRuntime}
+                    readOnly={!canManageBotRuntime}
                     className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
                   />
                 </div>
-                {workdirLocked ? null : (
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      aria-label="浏览工作目录"
-                      onClick={() => setShowWorkdirPicker(true)}
-                      disabled={!canManageBotRuntime || savingWorkdir}
-                      className={settingsButtonClass("plain")}
-                    >
-                      浏览目录
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void saveWorkdir()}
-                      disabled={!canManageBotRuntime || savingWorkdir}
-                      className={settingsButtonClass("primary")}
-                    >
-                      <Save className="h-4 w-4" />
-                      {savingWorkdir ? "保存中..." : "保存工作目录"}
-                    </button>
-                  </div>
-                )}
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    aria-label="浏览工作目录"
+                    onClick={() => setShowWorkdirPicker(true)}
+                    disabled={!canManageBotRuntime || savingWorkdir}
+                    className={settingsButtonClass("plain")}
+                  >
+                    浏览目录
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void saveWorkdir()}
+                    disabled={!canManageBotRuntime || savingWorkdir}
+                    className={settingsButtonClass("primary")}
+                  >
+                    <Save className="h-4 w-4" />
+                    {savingWorkdir ? "保存中..." : "保存工作目录"}
+                  </button>
+                </div>
               </div>
             </section>
           ) : null
         ) : null}
 
-        {showWorkdirPicker && !workdirLocked ? (
+        {showWorkdirPicker ? (
           <DirectoryPickerDialog
             title="选择工作目录"
             botAlias={botAlias}
@@ -838,7 +834,6 @@ export function SettingsScreen({
         {overview && showBotRuntimeSettings ? (
           <AgentSettingsPanel
             botAlias={botAlias}
-            botMode={overview.botMode || "cli"}
             client={client}
             canManage={canManageBotRuntime}
           />

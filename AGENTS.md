@@ -13,11 +13,10 @@
 Orbit Safe Claw 是 Windows 优先的 Python Web 控制台，用于把用户消息转发给本地 AI coding CLI。
 
 - CLI 目标：`claude`、`codex`
-- 运行模式：`cli`、`assistant`
+- 运行模式：`cli`
 - Chat 执行模式：`cli`、`native_agent`
 - 主 bot 来自 `.env`；托管子 bot 来自本地 `managed_bots.json`
-- 同时最多允许一个 `assistant` bot profile
-- Web UI 覆盖 chat、assistant ops、files、Git、terminal/debug、plugins、settings、admin center、announcements、updates、tunnel status
+- Web UI 覆盖 chat、files、Git、terminal/debug、plugins、settings、admin center、announcements、updates、tunnel status
 
 ## 常用命令
 
@@ -165,7 +164,7 @@ Pi 模型配置写 Web 设置页，或直接写 `~/.pi/agent/settings.json` 和 
 
 - 后端 API：`bot/web/server.py`、`bot/web/api_service.py`、`bot/web/git_service.py`
 - 前端 app：`front/`
-- 前端 screen 包括 chat、files、Git、terminal、debug、plugins、settings、assistant ops、admin center
+- 前端 screen 包括 chat、files、Git、terminal、debug、plugins、settings、admin center
 - 已完成 assistant 回复用 Markdown 渲染，失败时 fallback 到 raw text
 - plugin file view 支持 session-backed heavy views 和 VCD waveform rendering
 - Git UI 支持 overview、diff、stage/unstage、commit、fetch/pull/push、stash/pop

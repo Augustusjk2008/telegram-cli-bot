@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import Callable
 from pathlib import Path
 
 from bot import app_settings
@@ -18,11 +17,7 @@ from bot.models import AgentProfile, BotProfile, normalize_execution_mode_config
 logger = logging.getLogger(__name__)
 
 
-def load_managed_profiles(
-    storage_file: Path,
-    *,
-    bootstrap_assistant_home: Callable[[str], None],
-) -> dict[str, BotProfile]:
+def load_managed_profiles(storage_file: Path) -> dict[str, BotProfile]:
     if not storage_file.exists():
         return {}
 
@@ -55,8 +50,6 @@ def load_managed_profiles(
             logger.warning("子Bot `%s` 的 cli_type 无效(%s)，回退为 %s", alias, raw_cli_type, CLI_TYPE)
             cli_type = CLI_TYPE
 
-        bot_mode = str(item.get("bot_mode", "cli")).strip().lower() or "cli"
-
         profile_data = {
             "alias": alias,
             "token": token,
@@ -66,7 +59,6 @@ def load_managed_profiles(
                 os.path.expanduser(str(item.get("working_dir", WORKING_DIR)).strip() or WORKING_DIR)
             ),
             "enabled": bool(item.get("enabled", True)),
-            "bot_mode": bot_mode,
         }
         if "cli_params" in item:
             profile_data["cli_params"] = item["cli_params"]
@@ -89,12 +81,6 @@ def load_managed_profiles(
         if "native_agent" in item or "nativeAgent" in item:
             profile_data["native_agent"] = item.get("native_agent", item.get("nativeAgent"))
         profiles[alias] = BotProfile.from_dict(profile_data)
-
-    assistant_aliases = [alias for alias, profile in profiles.items() if profile.bot_mode == "assistant"]
-    if len(assistant_aliases) > 1:
-        raise ValueError("配置中只允许一个 assistant 型 Bot")
-    if len(assistant_aliases) == 1:
-        bootstrap_assistant_home(profiles[assistant_aliases[0]].working_dir)
 
     return profiles
 
@@ -127,10 +113,6 @@ def apply_persisted_main_profile(main_profile: BotProfile, app_settings_file: Pa
     if working_dir:
         main_profile.working_dir = os.path.abspath(os.path.expanduser(working_dir))
 
-    bot_mode = str(profile_data.get("bot_mode") or "").strip().lower()
-    if bot_mode in {"cli", "assistant"}:
-        main_profile.bot_mode = bot_mode
-
     cli_params = profile_data.get("cli_params")
     if isinstance(cli_params, dict):
         main_profile.cli_params = CliParamsConfig.from_dict(cli_params)
@@ -150,7 +132,6 @@ def apply_persisted_main_profile(main_profile: BotProfile, app_settings_file: Pa
         supported_execution_modes, default_execution_mode = normalize_execution_mode_config(
             profile_data.get("supported_execution_modes", profile_data.get("supportedExecutionModes")),
             profile_data.get("default_execution_mode", profile_data.get("defaultExecutionMode")),
-            bot_mode=main_profile.bot_mode,
         )
         main_profile.supported_execution_modes = supported_execution_modes
         main_profile.default_execution_mode = default_execution_mode

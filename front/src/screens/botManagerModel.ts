@@ -19,7 +19,6 @@ export type BulkAction = "start" | "stop" | "delete";
 
 export type EditDraft = {
   alias: string;
-  botMode: "cli" | "assistant";
   cliType: CliType;
   cliPath: string;
   workingDir: string;
@@ -59,7 +58,6 @@ export type BulkActionResult = {
 
 export type BotConfigSnapshot = {
   alias: string;
-  botMode: string;
   cliType: CliType;
   cliPath: string;
   workingDir: string;
@@ -204,7 +202,6 @@ export function botMatchesManagerQuery(bot: BotSummary, query: string) {
     bot.alias,
     bot.workingDir,
     bot.cliType,
-    bot.botMode || "",
     getRuntimeBackend(bot),
     bot.nativeAgent?.provider || "",
     bot.nativeAgent?.model || "",
@@ -246,7 +243,6 @@ export function countBotManagerStats(items: BotSummary[]) {
 export function draftFromBot(bot: BotSummary): EditDraft {
   return {
     alias: bot.alias,
-    botMode: bot.botMode === "assistant" ? "assistant" : "cli",
     cliType: bot.cliType,
     cliPath: bot.cliPath || bot.cliType,
     workingDir: bot.workingDir,
@@ -368,7 +364,6 @@ export function buildBulkActionPlan(action: BulkAction, bots: BotSummary[]): Bul
 export function getBotConfigSnapshot(bot: BotSummary): BotConfigSnapshot {
   return {
     alias: bot.alias,
-    botMode: bot.botMode || "cli",
     cliType: bot.cliType,
     cliPath: bot.cliPath || bot.cliType,
     workingDir: bot.workingDir,

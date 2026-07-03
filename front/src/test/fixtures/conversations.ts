@@ -14,7 +14,6 @@ export function createConversation(overrides: ConversationOverrides = {}): Conve
     active: true,
     status: "active",
     botAlias: "main",
-    botMode: "cli",
     cliType: "codex",
     workingDir: "C:\\workspace",
     createdAt,
@@ -41,3 +40,4 @@ export function createAssistantMessage(text = "已完成", overrides: MessageOve
 export function createUserMessage(text = "你好", overrides: MessageOverrides = {}): ChatMessage {
   return createChatMessage({ role: "user", text, ...overrides });
 }
+

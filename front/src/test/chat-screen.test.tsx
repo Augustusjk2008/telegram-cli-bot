@@ -59,7 +59,6 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
         active: true,
         status: "active",
         botAlias: "main",
-        botMode: "cli",
         cliType: "codex",
         workingDir: "C:\\workspace",
         createdAt: new Date().toISOString(),
@@ -77,7 +76,6 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
         active: true,
         status: "active",
         botAlias: "main",
-        botMode: "cli",
         cliType: "codex",
         workingDir: "C:\\workspace",
         createdAt: new Date().toISOString(),
@@ -366,7 +364,6 @@ test("merges history refresh assistant message by turn id while local send is se
       cliType: "codex",
       status: "running",
       workingDir: "C:\\workspace",
-      botMode: "assistant",
       isProcessing: false,
       historyCount: historyPolls > 0 ? 2 : 0,
     }),
@@ -1198,7 +1195,6 @@ test("favorites final answers through backend and restores from server", async (
         active: true,
         status: "active",
         botAlias: "main",
-        botMode: "cli",
         cliType: "codex",
         workingDir: "C:\\workspace",
         createdAt: now,
@@ -2620,7 +2616,6 @@ test("chat screen blocks conversation switch while streaming", async () => {
         active: false,
         status: "active",
         botAlias: "main",
-        botMode: "cli",
         cliType: "codex",
         workingDir: "C:\\workspace",
         createdAt: now,
@@ -2688,7 +2683,6 @@ test("chat screen can delete all conversations for current bot", async () => {
         active: true,
         status: "active",
         botAlias: "main",
-        botMode: "cli",
         cliType: "codex",
         workingDir: "C:\\workspace",
         createdAt: now,
@@ -2748,7 +2742,6 @@ test("chat screen history panel no longer exposes permanent conversation delete"
         active: true,
         status: "active",
         botAlias: "main",
-        botMode: "cli",
         cliType: "codex",
         workingDir: "C:\\workspace",
         createdAt: now,
@@ -2998,7 +2991,6 @@ test("execute plan in native cluster keeps cluster options for create and auto-s
       active: true,
       status: "active",
       botAlias: "main",
-      botMode: "cli",
       cliType: "codex",
       workingDir: "C:\\workspace",
       createdAt: new Date().toISOString(),
@@ -3489,7 +3481,6 @@ test("native user bubble rollback confirms and refreshes history outside solo mo
       active: true,
       status: "active",
       botAlias: "main",
-      botMode: "cli",
       cliType: "codex",
       workingDir: "C:\\workspace",
       createdAt: now,
@@ -3571,168 +3562,10 @@ test("native user bubble rollback confirms and refreshes history outside solo mo
 
 
 
-test("assistant chat polls while idle and picks up scheduled cron runs", async () => {
-  vi.useFakeTimers();
-
-  let overviewCalls = 0;
-  let historyCalls = 0;
-  const client = createClient({
-    getBotOverview: async () => {
-      overviewCalls += 1;
-      if (overviewCalls < 3) {
-        return {
-          alias: "assistant1",
-          cliType: "codex",
-          status: "running",
-          workingDir: "C:\\workspace",
-          botMode: "assistant",
-          isProcessing: false,
-        };
-      }
-      return {
-        alias: "assistant1",
-        cliType: "codex",
-        status: "busy",
-        workingDir: "C:\\workspace",
-        botMode: "assistant",
-        isProcessing: true,
-        runningReply: {
-          userText: "定时检查邮箱",
-          previewText: "正在读取最新邮件",
-          startedAt: "2026-04-16T18:00:00",
-          updatedAt: "2026-04-16T18:00:02",
-        },
-      };
-    },
-    listMessages: async (): Promise<ChatMessage[]> => {
-      historyCalls += 1;
-      if (historyCalls < 2) {
-        return [];
-      }
-      return [
-        {
-          id: "user-cron-1",
-          role: "user",
-          text: "定时检查邮箱",
-          createdAt: "2026-04-16T18:00:00",
-          state: "done",
-        },
-        {
-          id: "assistant-cron-1",
-          role: "assistant",
-          text: "正在读取最新邮件",
-          createdAt: "2026-04-16T18:00:01",
-          state: "streaming",
-        },
-      ];
-    },
-  });
-
-  render(<ChatScreen botAlias="assistant1" client={client} />);
-
-  await act(async () => {
-    await Promise.resolve();
-  });
-
-  expect(screen.queryByText("定时检查邮箱")).not.toBeInTheDocument();
-
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(10100);
-  });
-
-  expect(screen.getByText("定时检查邮箱")).toBeInTheDocument();
-  expect(screen.queryByText("正在读取最新邮件")).not.toBeInTheDocument();
-  expect(screen.getByText("正在输出...")).toBeInTheDocument();
-});
 
 
 
 
 
-test("assistant proposal patch request event sends structured chat task and dispatches completion", async () => {
-  const dispatchSpy = vi.spyOn(window, "dispatchEvent");
-  const sendMessage = vi.fn(async (
-    _botAlias: string,
-    _text: string,
-    _onChunk: (chunk: string) => void,
-    _onStatus?: unknown,
-    onTrace?: (trace: unknown) => void,
-    _options?: unknown,
-  ) => {
-    onTrace?.({
-      kind: "tool_call",
-      summary: "git worktree add",
-      toolName: "git",
-      callId: "call_git_worktree_add",
-    });
-    return {
-      id: "assistant-patch-1",
-      role: "assistant",
-      text: "patch 已生成\n目标工程: main",
-      createdAt: new Date().toISOString(),
-      state: "done",
-    } satisfies ChatMessage;
-  });
-  const client = createClient({
-    getBotOverview: async () => ({
-      alias: "assistant1",
-      cliType: "codex",
-      status: "running",
-      workingDir: "C:\\workspace",
-      botMode: "assistant",
-      isProcessing: false,
-    }),
-    listMessages: async () => [],
-    sendMessage,
-  });
 
-  render(<ChatScreen botAlias="assistant1" client={client} />);
 
-  await act(async () => {
-    await Promise.resolve();
-  });
-  dispatchSpy.mockClear();
-
-  await act(async () => {
-    window.dispatchEvent(new CustomEvent("assistant-proposal-patch-requested", {
-      detail: {
-        botAlias: "assistant1",
-        proposalId: "pr_sync_memory_index",
-        proposalTitle: "补 memory index 审计",
-        targetAlias: "main",
-        regenerate: false,
-        visibleText: "为已批准 proposal《补 memory index 审计》在目标工程 main 生成 patch",
-      },
-    }));
-    await Promise.resolve();
-  });
-
-  await waitFor(() => {
-    expect(sendMessage).toHaveBeenCalled();
-  });
-
-  const sendArgs = sendMessage.mock.calls[0];
-  expect(sendArgs?.[1]).toBe("为已批准 proposal《补 memory index 审计》在目标工程 main 生成 patch");
-  expect(sendArgs?.[5]).toEqual({
-    taskMode: "proposal_patch",
-    taskPayload: {
-      proposalId: "pr_sync_memory_index",
-      targetAlias: "main",
-      regenerate: false,
-    },
-    visibleText: "为已批准 proposal《补 memory index 审计》在目标工程 main 生成 patch",
-  });
-  expect(await screen.findByText("为已批准 proposal《补 memory index 审计》在目标工程 main 生成 patch")).toBeInTheDocument();
-  expect(await screen.findByText(/patch 已生成\s*目标工程: main/)).toBeInTheDocument();
-
-  const completeEvent = dispatchSpy.mock.calls
-    .map(([value]) => value)
-    .find((value) => value instanceof CustomEvent && value.type === "assistant-proposal-patch-completed") as CustomEvent | undefined;
-  expect(completeEvent?.detail).toMatchObject({
-    botAlias: "assistant1",
-    proposalId: "pr_sync_memory_index",
-    ok: true,
-    targetAlias: "main",
-    summary: "patch 已生成\n目标工程: main",
-  });
-});
