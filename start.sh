@@ -63,6 +63,31 @@ fi
 export CLI_BRIDGE_SUPERVISOR=1
 export WEB_ENABLED="true"
 
+info() {
+  printf '[信息] %s\n' "$1"
+}
+
+warn() {
+  printf '[提示] %s\n' "$1"
+}
+
+fail() {
+  printf '[错误] %s\n' "$1" >&2
+}
+
+is_truthy() {
+  local value
+  value="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  case "$value" in
+    1|true|yes|on)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 raise_nofile_limit() {
   local target="${TCB_NOFILE_LIMIT:-8192}"
   if ! [[ "$target" =~ ^[0-9]+$ ]] || [[ "$target" -le 0 ]]; then
@@ -114,12 +139,190 @@ else
   exit 127
 fi
 
+STARTUP_STATE_DIR="$SCRIPT_DIR/.tcb/startup"
+
+ensure_project_venv() {
+  if [[ -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
+    PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
+    return 0
+  fi
+
+  if is_truthy "${TCB_STARTUP_USE_SYSTEM_PYTHON:-}"; then
+    return 0
+  fi
+
+  info "未检测到 .venv，正在创建项目虚拟环境..."
+  if ! "$PYTHON_BIN" -m venv "$SCRIPT_DIR/.venv"; then
+    fail "创建 .venv 失败。请先运行 bash install.sh，或安装 python3-venv 后重试。"
+    exit 1
+  fi
+  PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
+}
+
+ensure_pip() {
+  if "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
+    return 0
+  fi
+  if "$PYTHON_BIN" -m ensurepip --upgrade >/dev/null 2>&1; then
+    return 0
+  fi
+  fail "当前 Python 无法使用 pip。请先运行 bash install.sh 修复运行环境。"
+  exit 1
+}
+
+hash_startup_paths() {
+  "$PYTHON_BIN" - "$SCRIPT_DIR" "$@" <<'PY'
+from __future__ import annotations
+
+import hashlib
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+files: list[Path] = []
+ignored_parts = {"node_modules", "dist", "test-results", "__pycache__"}
+
+for raw_path in sys.argv[2:]:
+    path = root / raw_path
+    if not path.exists():
+        continue
+    if path.is_file():
+        files.append(path)
+        continue
+    if path.is_dir():
+        for child in path.rglob("*"):
+            if not child.is_file():
+                continue
+            try:
+                rel_parts = child.relative_to(root).parts
+            except ValueError:
+                continue
+            if any(part in ignored_parts for part in rel_parts):
+                continue
+            files.append(child)
+
+digest = hashlib.sha256()
+for file_path in sorted(set(files), key=lambda item: item.relative_to(root).as_posix()):
+    rel_path = file_path.relative_to(root).as_posix()
+    digest.update(rel_path.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(file_path.read_bytes())
+    digest.update(b"\0")
+
+print(digest.hexdigest())
+PY
+}
+
+stamp_matches() {
+  local stamp_path="$1"
+  local expected_hash="$2"
+
+  [[ -f "$stamp_path" ]] && [[ "$(cat "$stamp_path")" == "$expected_hash" ]]
+}
+
+write_stamp() {
+  local stamp_path="$1"
+  local value="$2"
+
+  mkdir -p "$(dirname "$stamp_path")"
+  printf '%s\n' "$value" > "${stamp_path}.tmp"
+  mv "${stamp_path}.tmp" "$stamp_path"
+}
+
+sync_python_dependencies() {
+  if is_truthy "${TCB_STARTUP_SKIP_DEP_SYNC:-}"; then
+    warn "已跳过启动依赖同步。"
+    return 0
+  fi
+  if [[ ! -f "$SCRIPT_DIR/requirements.txt" ]]; then
+    fail "未找到 requirements.txt，无法检查后端依赖。"
+    exit 1
+  fi
+
+  ensure_project_venv
+
+  local requirements_hash stamp_path
+  requirements_hash="$(hash_startup_paths requirements.txt)"
+  stamp_path="$STARTUP_STATE_DIR/python-requirements.sha256"
+
+  if stamp_matches "$stamp_path" "$requirements_hash" && ! is_truthy "${TCB_STARTUP_FORCE_DEP_INSTALL:-}"; then
+    return 0
+  fi
+
+  info "检测到后端依赖清单变化，正在安装 requirements.txt..."
+  ensure_pip
+  "$PYTHON_BIN" -m pip install --upgrade pip
+  "$PYTHON_BIN" -m pip install -r "$SCRIPT_DIR/requirements.txt"
+  write_stamp "$stamp_path" "$requirements_hash"
+}
+
+sync_frontend_assets() {
+  if is_truthy "${TCB_STARTUP_SKIP_DEP_SYNC:-}" || is_truthy "${TCB_STARTUP_SKIP_FRONTEND_BUILD:-}"; then
+    return 0
+  fi
+  if [[ ! -f "$SCRIPT_DIR/front/package.json" ]]; then
+    return 0
+  fi
+
+  local frontend_hash stamp_path build_script dist_index
+  frontend_hash="$(
+    hash_startup_paths \
+      front/package.json \
+      front/package-lock.json \
+      front/index.html \
+      front/vite.config.ts \
+      front/tsconfig.json \
+      front/src \
+      front/public \
+      scripts/build_web_frontend.sh
+  )"
+  stamp_path="$STARTUP_STATE_DIR/frontend-build.sha256"
+  dist_index="$SCRIPT_DIR/front/dist/index.html"
+
+  if stamp_matches "$stamp_path" "$frontend_hash" && [[ -f "$dist_index" ]] && ! is_truthy "${TCB_STARTUP_FORCE_FRONTEND_BUILD:-}"; then
+    return 0
+  fi
+
+  if ! command -v npm >/dev/null 2>&1; then
+    fail "检测到前端资源需要重建，但未找到 npm。请先运行 bash install.sh 安装 Node.js 依赖。"
+    exit 1
+  fi
+
+  info "检测到前端源码或依赖变化，正在安装并构建前端..."
+  build_script="$SCRIPT_DIR/scripts/build_web_frontend.sh"
+  if [[ -f "$build_script" ]]; then
+    bash "$build_script"
+  else
+    (cd "$SCRIPT_DIR/front" && npm install && npm run build)
+  fi
+  frontend_hash="$(
+    hash_startup_paths \
+      front/package.json \
+      front/package-lock.json \
+      front/index.html \
+      front/vite.config.ts \
+      front/tsconfig.json \
+      front/src \
+      front/public \
+      scripts/build_web_frontend.sh
+  )"
+  write_stamp "$stamp_path" "$frontend_hash"
+}
+
+sync_runtime_dependencies() {
+  sync_python_dependencies
+  sync_frontend_assets
+}
+
+sync_python_dependencies
+
 if ! "$PYTHON_BIN" -m bot.env_migration --env-path "$SCRIPT_DIR/.env"; then
   echo "[错误] 迁移旧版 .env 配置失败。" >&2
   exit 1
 fi
 
 "$PYTHON_BIN" -m bot.updater apply-pending --repo-root "$SCRIPT_DIR"
+sync_runtime_dependencies
 if ! "$PYTHON_BIN" -m bot.migrations run --repo-root "$SCRIPT_DIR"; then
   echo "[错误] 运行数据迁移失败。" >&2
   exit 1
