@@ -5366,6 +5366,7 @@ async def add_managed_bot(
     supported_execution_modes: Any = None,
     default_execution_mode: Any = None,
     native_agent: Any = None,
+    bypass_approval_and_sandbox: bool = False,
 ) -> dict[str, Any]:
     try:
         profile = await manager.add_bot(
@@ -5378,6 +5379,7 @@ async def add_managed_bot(
             supported_execution_modes=supported_execution_modes,
             default_execution_mode=default_execution_mode,
             native_agent=native_agent,
+            bypass_approval_and_sandbox=bypass_approval_and_sandbox,
         )
     except ValueError as exc:
         _raise(400, "invalid_bot_config", str(exc))

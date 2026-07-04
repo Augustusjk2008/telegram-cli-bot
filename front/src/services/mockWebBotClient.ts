@@ -276,7 +276,7 @@ function buildMockCliParams(cliType: string): CliParamsPayload {
       model: "gpt-5.4",
       skip_git_check: true,
       json_output: true,
-      yolo: true,
+      yolo: false,
       extra_args: [],
     },
     defaults: {
@@ -284,7 +284,7 @@ function buildMockCliParams(cliType: string): CliParamsPayload {
       model: "gpt-5.4",
       skip_git_check: true,
       json_output: true,
-      yolo: true,
+      yolo: false,
       extra_args: [],
     },
     schema: {
@@ -316,6 +316,23 @@ function buildMockCliParams(cliType: string): CliParamsPayload {
         description: "额外参数",
       },
     },
+  };
+}
+
+function cloneCliParamsPayload(payload: CliParamsPayload): CliParamsPayload {
+  return {
+    cliType: payload.cliType,
+    params: { ...payload.params },
+    defaults: { ...payload.defaults },
+    schema: Object.fromEntries(
+      Object.entries(payload.schema).map(([key, field]) => [
+        key,
+        {
+          ...field,
+          ...(field.enum ? { enum: [...field.enum] } : {}),
+        },
+      ]),
+    ),
   };
 }
 
@@ -1353,6 +1370,7 @@ export class MockWebBotClient implements WebBotClient {
     lastRequestAt: "2026-06-29T12:01:00Z",
   };
   private currentPaths = new Map<string, string>();
+  private cliParamsByBot = new Map<string, CliParamsPayload>();
   private pluginSessions = new Map<
     string,
     | { pluginId: string; renderer: "waveform"; summary: WaveformViewSummary; window: WaveformWindowPayload }
@@ -5864,6 +5882,9 @@ export class MockWebBotClient implements WebBotClient {
 
   async updateBotCli(botAlias: string, cliType: string, cliPath: string): Promise<BotSummary> {
     const current = this.getBotSummary(botAlias);
+    if (current.cliType !== cliType) {
+      this.cliParamsByBot.delete(botAlias);
+    }
     const next = {
       ...current,
       cliType: cliType as BotSummary["cliType"],
@@ -5970,6 +5991,12 @@ export class MockWebBotClient implements WebBotClient {
       cluster: { ...DEFAULT_CLUSTER, modelTiers: { ...DEFAULT_CLUSTER.modelTiers } },
     };
     this.bots.set(alias, bot);
+    const cliParams = buildMockCliParams(bot.cliType);
+    cliParams.params = {
+      ...cliParams.params,
+      yolo: Boolean(input.bypassApprovalAndSandbox),
+    };
+    this.cliParamsByBot.set(alias, cloneCliParamsPayload(cliParams));
     if (!this.isLocalAdminSession()) {
       this.botOwners.set(alias, accountId);
       this.setAllowedBotsForAccount(accountId, [...this.getAllowedBotsForAccount(accountId), alias]);
@@ -5988,11 +6015,16 @@ export class MockWebBotClient implements WebBotClient {
     if (alias !== botAlias && this.bots.has(alias)) {
       throw new WebApiClientError("Bot 已存在", { status: 409, code: "bot_already_exists" });
     }
+    const cliParams = this.cliParamsByBot.get(botAlias);
     this.bots.delete(botAlias);
     this.bots.set(alias, {
       ...current,
       alias,
     });
+    if (cliParams) {
+      this.cliParamsByBot.delete(botAlias);
+      this.cliParamsByBot.set(alias, cloneCliParamsPayload(cliParams));
+    }
     if (this.botOwners.has(botAlias)) {
       const owner = this.botOwners.get(botAlias) || "";
       this.botOwners.delete(botAlias);
@@ -6046,6 +6078,7 @@ export class MockWebBotClient implements WebBotClient {
     }
     const workspacePath = this.bots.get(botAlias)?.workingDir || "";
     this.bots.delete(botAlias);
+    this.cliParamsByBot.delete(botAlias);
     this.botOwners.delete(botAlias);
     for (const accountId of Array.from(this.adminUsers.keys())) {
       const filtered = this.getAllowedBotsForAccount(accountId).filter((item) => item !== botAlias);
@@ -6103,7 +6136,13 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async getCliParams(botAlias: string): Promise<CliParamsPayload> {
-    return buildMockCliParams(this.getBotSummary(botAlias).cliType);
+    const stored = this.cliParamsByBot.get(botAlias);
+    if (stored) {
+      return cloneCliParamsPayload(stored);
+    }
+    const payload = buildMockCliParams(this.getBotSummary(botAlias).cliType);
+    this.cliParamsByBot.set(botAlias, cloneCliParamsPayload(payload));
+    return cloneCliParamsPayload(payload);
   }
 
   async getNativeAgentModels(botAlias: string): Promise<NativeAgentModelsPayload> {
@@ -6156,16 +6195,19 @@ export class MockWebBotClient implements WebBotClient {
   async updateCliParam(botAlias: string, key: string, value: unknown): Promise<CliParamsPayload> {
     const payload = await this.getCliParams(botAlias);
     const nextValue = key === "model" && value === "none" ? null : value;
-    return {
+    const next = {
       ...payload,
       params: {
         ...payload.params,
         [key]: nextValue,
       },
     };
+    this.cliParamsByBot.set(botAlias, cloneCliParamsPayload(next));
+    return cloneCliParamsPayload(next);
   }
 
   async resetCliParams(botAlias: string): Promise<CliParamsPayload> {
+    this.cliParamsByBot.delete(botAlias);
     return this.getCliParams(botAlias);
   }
 

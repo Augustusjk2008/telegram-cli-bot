@@ -33,6 +33,7 @@ export const EMPTY_CREATE_DRAFT: CreateDraft = {
   cliType: "codex",
   cliPath: "",
   workingDir: "",
+  bypassApprovalAndSandbox: false,
   supportedExecutionModes: ["cli"],
   defaultExecutionMode: "cli",
   runtimeBackend: "cli",
@@ -151,6 +152,7 @@ export function useBotManager({
         alias: draft.alias.trim(),
         cliPath: normalizePathInput(draft.cliPath),
         workingDir: normalizePathInput(draft.workingDir),
+        bypassApprovalAndSandbox: runtimeBackend === "cli" ? Boolean(draft.bypassApprovalAndSandbox) : false,
         nativeAgent: normalizeNativeAgentInput(draft.nativeAgent),
       });
       setNotice("智能体已创建");

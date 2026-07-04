@@ -330,6 +330,80 @@ test("member can enter ungranted bot in read-only mode and hits create quota cop
   expect(await screen.findByText("普通用户最多只能创建 10 个 Bot")).toBeInTheDocument();
 });
 
+test("create bot unsafe bypass toggle defaults off and submits checked value", async () => {
+  const user = userEvent.setup();
+  const addBot = vi.spyOn(MockWebBotClient.prototype, "addBot");
+
+  render(<App />);
+
+  await loginAsSuperAdmin(user);
+  await screen.findByRole("button", { name: "聊天" });
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+  await user.click(await screen.findByRole("button", { name: "智能体管理" }));
+  await screen.findByRole("heading", { name: "智能体管理" });
+
+  const toggle = screen.getByLabelText("新智能体默认绕过审批和沙箱");
+  expect(toggle).not.toBeChecked();
+  expect(toggle).not.toBeDisabled();
+
+  await user.selectOptions(screen.getByLabelText("运行后端"), "native_agent");
+  expect(screen.queryByLabelText("新智能体默认绕过审批和沙箱")).not.toBeInTheDocument();
+  await user.selectOptions(screen.getByLabelText("运行后端"), "cli");
+
+  await user.click(screen.getByLabelText("新智能体默认绕过审批和沙箱"));
+  await createManagedBot(user, "unsafe1");
+
+  await waitFor(() => {
+    expect(addBot).toHaveBeenCalledWith(expect.objectContaining({
+      alias: "unsafe1",
+      bypassApprovalAndSandbox: true,
+    }));
+  });
+  await waitFor(() => {
+    expect(screen.getByLabelText("新智能体默认绕过审批和沙箱")).not.toBeChecked();
+  });
+});
+
+test("create bot unsafe bypass toggle is disabled without unsafe capability", async () => {
+  const user = userEvent.setup();
+  const addBot = vi.spyOn(MockWebBotClient.prototype, "addBot");
+  vi.spyOn(MockWebBotClient.prototype, "login").mockResolvedValue({
+    ...SUPER_ADMIN_SESSION,
+    accountId: "limited-manager",
+    username: "limited-manager",
+    token: "mock-session-limited-manager",
+    isLocalAdmin: false,
+    capabilities: [
+      ...SUPER_ADMIN_SESSION.capabilities.filter((capability) => capability !== "admin_ops" && capability !== "run_unsafe_cli"),
+      "manage_bots",
+      "create_workdir_directory",
+    ],
+  });
+
+  render(<App />);
+
+  await loginWithPasscode(user, "limited-manager");
+  await screen.findByRole("button", { name: "聊天" });
+
+  await user.click(screen.getByRole("button", { name: "main" }));
+  await user.click(await screen.findByRole("button", { name: "智能体管理" }));
+  await screen.findByRole("heading", { name: "智能体管理" });
+
+  const toggle = screen.getByLabelText("新智能体默认绕过审批和沙箱");
+  expect(toggle).not.toBeChecked();
+  expect(toggle).toBeDisabled();
+
+  await createManagedBot(user, "safe1");
+
+  await waitFor(() => {
+    expect(addBot).toHaveBeenCalledWith(expect.objectContaining({
+      alias: "safe1",
+      bypassApprovalAndSandbox: false,
+    }));
+  });
+});
+
 
 
 

@@ -68,6 +68,7 @@ type Props = {
   onBotsChange?: (bots: BotSummary[]) => void;
   canManage?: boolean;
   canCreateWorkdirDirectory?: boolean;
+  canRunUnsafeCli?: boolean;
 };
 
 type Mode = "inspect" | "create";
@@ -122,6 +123,7 @@ function normalizeCreateDraft(draft: CreateDraft): CreateDraft {
     cliType: draft.cliType,
     cliPath: draft.cliPath.trim(),
     workingDir: draft.workingDir.trim(),
+    bypassApprovalAndSandbox: draft.runtimeBackend === "cli" ? Boolean(draft.bypassApprovalAndSandbox) : false,
     runtimeBackend: draft.runtimeBackend,
     supportedExecutionModes: executionConfig.supportedExecutionModes,
     defaultExecutionMode: executionConfig.defaultExecutionMode,
@@ -253,6 +255,7 @@ function CreatePanel({
   manager,
   canManage,
   canCreateWorkdirDirectory,
+  canRunUnsafeCli,
   nativeAgentFeatureEnabled,
   onCreated,
   onDirtyChange,
@@ -260,6 +263,7 @@ function CreatePanel({
   manager: ReturnType<typeof useBotManager>;
   canManage: boolean;
   canCreateWorkdirDirectory: boolean;
+  canRunUnsafeCli: boolean;
   nativeAgentFeatureEnabled: boolean | null;
   onCreated: (alias: string) => void;
   onDirtyChange: (dirty: boolean) => void;
@@ -297,6 +301,12 @@ function CreatePanel({
       }));
     }
   }, [draft.runtimeBackend, nativeAgentFeatureEnabled]);
+
+  useEffect(() => {
+    if (!canRunUnsafeCli && draft.bypassApprovalAndSandbox) {
+      setDraft((prev) => ({ ...prev, bypassApprovalAndSandbox: false }));
+    }
+  }, [canRunUnsafeCli, draft.bypassApprovalAndSandbox]);
 
   async function submit() {
     const created = await manager.createBot(draft);
@@ -375,6 +385,22 @@ function CreatePanel({
             className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm"
             placeholder={cliPathPlaceholder(draft.cliType)}
           />
+          </label>
+        ) : null}
+        {draft.runtimeBackend === "cli" ? (
+          <label className="col-span-2 flex items-start gap-2 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm">
+            <input
+              type="checkbox"
+              aria-label="新智能体默认绕过审批和沙箱"
+              checked={canRunUnsafeCli ? Boolean(draft.bypassApprovalAndSandbox) : false}
+              onChange={(event) => setDraft((prev) => ({
+                ...prev,
+                bypassApprovalAndSandbox: canRunUnsafeCli ? event.target.checked : false,
+              }))}
+              disabled={!canManage || !canRunUnsafeCli || manager.savingAction !== ""}
+              className="mt-0.5 h-4 w-4 rounded border-[var(--border)]"
+            />
+            <span>默认绕过审批和沙箱</span>
           </label>
         ) : null}
       </div>
@@ -931,6 +957,7 @@ export function DesktopBotManagerScreen({
   onBotsChange,
   canManage = true,
   canCreateWorkdirDirectory = true,
+  canRunUnsafeCli = false,
 }: Props) {
   const manager = useBotManager({ client, onBotsChange });
   const [nativeAgentFeatureEnabled, setNativeAgentFeatureEnabled] = useState<boolean | null>(null);
@@ -1538,6 +1565,7 @@ export function DesktopBotManagerScreen({
               manager={manager}
               canManage={canManage}
               canCreateWorkdirDirectory={canCreateWorkdirDirectory}
+              canRunUnsafeCli={canRunUnsafeCli}
               nativeAgentFeatureEnabled={nativeAgentFeatureEnabled}
               onCreated={(alias) => {
                 setDirty(false);

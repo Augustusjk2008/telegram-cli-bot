@@ -1792,6 +1792,7 @@ describe("RealWebBotClient", () => {
       cliType: "codex",
       cliPath: "codex",
       workingDir: "C:\\workspace\\native1",
+      bypassApprovalAndSandbox: true,
       supportedExecutionModes: ["native_agent"],
       defaultExecutionMode: "native_agent",
       nativeAgent: {
@@ -1812,6 +1813,7 @@ describe("RealWebBotClient", () => {
       backend: "pi",
       pi_agent: "main",
     });
+    expect(body.bypass_approval_and_sandbox).toBe(true);
   });
 
   

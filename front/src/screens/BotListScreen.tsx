@@ -23,6 +23,7 @@ type Props = {
   onBotsChange?: (bots: BotSummary[]) => void;
   canManage?: boolean;
   canCreateWorkdirDirectory?: boolean;
+  canRunUnsafeCli?: boolean;
 };
 
 function DeleteBotDialog({
@@ -125,6 +126,7 @@ export function BotListScreen({
   onBotsChange,
   canManage = true,
   canCreateWorkdirDirectory = true,
+  canRunUnsafeCli = false,
 }: Props) {
   const [renamingAlias, setRenamingAlias] = useState("");
   const [renameDrafts, setRenameDrafts] = useState<Record<string, string>>({});
@@ -189,6 +191,12 @@ export function BotListScreen({
       }));
     }
   }, [createDraft.runtimeBackend, nativeAgentFeatureEnabled]);
+
+  useEffect(() => {
+    if (!canRunUnsafeCli && createDraft.bypassApprovalAndSandbox) {
+      setCreateDraft((prev) => ({ ...prev, bypassApprovalAndSandbox: false }));
+    }
+  }, [canRunUnsafeCli, createDraft.bypassApprovalAndSandbox]);
 
   async function handleCreateBot() {
     const created = await createBot(createDraft);
@@ -314,6 +322,22 @@ export function BotListScreen({
               className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
               placeholder={defaultCliPathForType(createDraft.cliType)}
             />
+          ) : null}
+          {createDraft.runtimeBackend === "cli" ? (
+            <label className="flex items-start gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm">
+              <input
+                type="checkbox"
+                aria-label="新智能体默认绕过审批和沙箱"
+                checked={canRunUnsafeCli ? Boolean(createDraft.bypassApprovalAndSandbox) : false}
+                onChange={(event) => setCreateDraft((prev) => ({
+                  ...prev,
+                  bypassApprovalAndSandbox: canRunUnsafeCli ? event.target.checked : false,
+                }))}
+                disabled={!canManage || !canRunUnsafeCli || savingAction !== ""}
+                className="mt-0.5 h-4 w-4 rounded border-[var(--border)]"
+              />
+              <span>默认绕过审批和沙箱</span>
+            </label>
           ) : null}
           {createDraft.runtimeBackend === "native_agent" ? (
             <NativeAgentConfigFields

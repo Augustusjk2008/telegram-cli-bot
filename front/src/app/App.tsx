@@ -260,6 +260,7 @@ export function App() {
   const canUseHostSettings = hasCapability(session, "admin_ops");
   const canManageBots = hasCapability(session, "manage_bots") || hasCapability(session, "admin_ops");
   const canCreateWorkdirDirectory = hasCapability(session, "create_workdir_directory") || canManageBots;
+  const canRunUnsafeCli = hasCapability(session, "run_unsafe_cli") || hasCapability(session, "admin_ops");
   const canOpenAdminCenter = hasCapability(session, "admin_ops");
   const canManageEnvConfig = hasCapability(session, "admin_ops");
   const canManageRegisterCodes = hasCapability(session, "manage_register_codes");
@@ -824,6 +825,7 @@ export function App() {
             onBotsChange={setBots}
             canManage={canManageBots}
             canCreateWorkdirDirectory={canCreateWorkdirDirectory}
+            canRunUnsafeCli={canRunUnsafeCli}
           />
           {notificationCenter}
           {announcementDialog}
@@ -838,6 +840,7 @@ export function App() {
           onBotsChange={setBots}
           canManage={canManageBots}
           canCreateWorkdirDirectory={canCreateWorkdirDirectory}
+          canRunUnsafeCli={canRunUnsafeCli}
         />
         {notificationCenter}
         {announcementDialog}

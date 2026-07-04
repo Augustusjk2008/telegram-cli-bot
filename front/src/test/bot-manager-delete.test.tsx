@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { BotListScreen } from "../screens/BotListScreen";
@@ -40,4 +40,46 @@ test("desktop bulk delete does not expose workspace delete", async () => {
   expect(within(dialog).getByLabelText("同时删除历史记录（包含所有子 agents）")).toBeInTheDocument();
   expect(within(dialog).queryByLabelText("同时删除工作区和所有记录")).not.toBeInTheDocument();
   expect(within(dialog).getByText("彻底删除工作区请逐个操作。")).toBeInTheDocument();
+});
+
+test("desktop create panel submits unsafe bypass when explicitly checked", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const addBot = vi.spyOn(client, "addBot");
+
+  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} canRunUnsafeCli />);
+
+  await user.click(await screen.findByRole("button", { name: "新增智能体" }));
+  const toggle = await screen.findByLabelText("新智能体默认绕过审批和沙箱");
+  expect(toggle).not.toBeChecked();
+  expect(toggle).not.toBeDisabled();
+
+  await user.click(toggle);
+  await user.type(screen.getByLabelText("新智能体别名"), "desktopunsafe");
+  await user.clear(screen.getByLabelText("新智能体工作目录"));
+  await user.type(screen.getByLabelText("新智能体工作目录"), "C:\\workspace\\desktopunsafe");
+  await user.click(screen.getByRole("button", { name: "创建智能体" }));
+
+  await waitFor(() => {
+    expect(addBot).toHaveBeenCalledWith(expect.objectContaining({
+      alias: "desktopunsafe",
+      bypassApprovalAndSandbox: true,
+    }));
+  });
+});
+
+test("mock client stores unsafe bypass in new bot cli params", async () => {
+  const client = new MockWebBotClient();
+
+  expect((await client.getCliParams("main")).params.yolo).toBe(false);
+
+  await client.addBot({
+    alias: "unsafeparams",
+    cliType: "codex",
+    cliPath: "codex",
+    workingDir: "C:\\workspace\\unsafeparams",
+    bypassApprovalAndSandbox: true,
+  });
+
+  expect((await client.getCliParams("unsafeparams")).params.yolo).toBe(true);
 });

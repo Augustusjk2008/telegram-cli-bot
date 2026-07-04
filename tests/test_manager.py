@@ -110,6 +110,52 @@ class TestManagerLoadSave:
         assert profile.default_execution_mode == "native_agent"
         assert profile.native_agent == {"backend": "pi", "pi_agent": "reviewer"}
 
+    @pytest.mark.asyncio
+    async def test_add_bot_defaults_yolo_false_without_persisting_cli_params(self, temp_dir: Path):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        manager = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
+
+        with patch("bot.manager.resolve_cli_executable", return_value="codex"), \
+             patch.object(manager, "_start_profile", AsyncMock(return_value=None)):
+            profile = await manager.add_bot(
+                "safe1",
+                "",
+                "codex",
+                "codex",
+                str(temp_dir),
+                "cli",
+            )
+
+        data = json.loads(storage.read_text(encoding="utf-8"))
+        assert profile.cli_params.get_param("codex", "yolo") is False
+        assert "cli_params" not in data["bots"][0]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("cli_type", ["codex", "claude"])
+    async def test_add_bot_persists_bypass_approval_and_sandbox_yolo(self, temp_dir: Path, cli_type: str):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        manager = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
+
+        with patch("bot.manager.resolve_cli_executable", return_value=cli_type), \
+             patch.object(manager, "_start_profile", AsyncMock(return_value=None)):
+            await manager.add_bot(
+                f"{cli_type}unsafe",
+                "",
+                cli_type,
+                cli_type,
+                str(temp_dir),
+                "cli",
+                bypass_approval_and_sandbox=True,
+            )
+
+        data = json.loads(storage.read_text(encoding="utf-8"))
+        assert data["bots"][0]["cli_params"][cli_type]["yolo"] is True
+
+        restored = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
+        assert restored.managed_profiles[f"{cli_type}unsafe"].cli_params.get_param(cli_type, "yolo") is True
+
 class TestManagerValidation:
     """测试验证逻辑"""
 

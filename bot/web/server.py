@@ -619,6 +619,23 @@ def _parse_optional_int(value: object, *, field_name: str) -> int | None:
         raise WebApiError(400, "invalid_request", f"{field_name} 必须是整数") from exc
 
 
+def _parse_optional_bool(value: object, *, field_name: str, default: bool = False) -> bool:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+        raise WebApiError(400, "invalid_request", f"{field_name} 必须是布尔值")
+    if isinstance(value, (int, float)) and value in {0, 1}:
+        return bool(value)
+    raise WebApiError(400, "invalid_request", f"{field_name} 必须是布尔值")
+
+
 def _normalize_origin(origin: str) -> str:
     return origin.rstrip("/")
 
@@ -3589,6 +3606,16 @@ class WebApiServer:
     async def admin_add_bot(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_MANAGE_BOTS)
         body = await self._parse_json(request)
+        raw_bypass = body.get("bypass_approval_and_sandbox")
+        if raw_bypass is None and "bypassApprovalAndSandbox" in body:
+            raw_bypass = body.get("bypassApprovalAndSandbox")
+        bypass_approval_and_sandbox = _parse_optional_bool(
+            raw_bypass,
+            field_name="bypass_approval_and_sandbox",
+            default=False,
+        )
+        if bypass_approval_and_sandbox and not ({CAP_RUN_UNSAFE_CLI, CAP_ADMIN_OPS} & auth.capabilities):
+            raise WebApiError(403, "forbidden", "当前账号无权限默认绕过审批和沙箱")
         try:
             _BOT_PERMISSION_STORE.assert_can_create_bot(auth.account_id, is_local_admin=self._is_local_admin(auth))
         except ValueError as exc:
@@ -3603,6 +3630,7 @@ class WebApiServer:
             supported_execution_modes=body.get("supported_execution_modes", body.get("supportedExecutionModes")),
             default_execution_mode=body.get("default_execution_mode", body.get("defaultExecutionMode")),
             native_agent=body.get("native_agent", body.get("nativeAgent")),
+            bypass_approval_and_sandbox=bypass_approval_and_sandbox,
         )
         alias = data["bot"]["alias"]
         if not self._is_local_admin(auth):

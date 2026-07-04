@@ -5730,6 +5730,7 @@ export class RealWebBotClient implements WebBotClient {
         cli_type: input.cliType,
         cli_path: input.cliPath,
         working_dir: input.workingDir,
+        bypass_approval_and_sandbox: Boolean(input.bypassApprovalAndSandbox),
         ...(input.supportedExecutionModes ? { supported_execution_modes: input.supportedExecutionModes } : {}),
         ...(input.defaultExecutionMode ? { default_execution_mode: input.defaultExecutionMode } : {}),
         ...(input.nativeAgent ? {

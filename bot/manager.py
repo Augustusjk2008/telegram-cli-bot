@@ -387,6 +387,7 @@ class MultiBotManager:
         supported_execution_modes: Any = None,
         default_execution_mode: Any = None,
         native_agent: Any = None,
+        bypass_approval_and_sandbox: bool = False,
     ) -> BotProfile:
         normalized_alias = str(alias or "").strip().lower()
         normalized_token = str(token or "").strip()
@@ -440,6 +441,12 @@ class MultiBotManager:
                 default_execution_mode=resolved_default_execution_mode,
                 native_agent=resolved_native_agent,
             )
+            if bypass_approval_and_sandbox:
+                profile.cli_params.set_param(
+                    resolved_cli_type,
+                    "yolo",
+                    coerce_param_value(resolved_cli_type, "yolo", True),
+                )
 
             self.managed_profiles[normalized_alias] = profile
             self._save_profiles()

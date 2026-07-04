@@ -1912,6 +1912,7 @@ export type CreateBotInput = {
   cliType: CliType;
   cliPath: string;
   workingDir: string;
+  bypassApprovalAndSandbox?: boolean;
   supportedExecutionModes?: ChatExecutionMode[];
   defaultExecutionMode?: ChatExecutionMode;
   nativeAgent?: NativeAgentConfigInput;
