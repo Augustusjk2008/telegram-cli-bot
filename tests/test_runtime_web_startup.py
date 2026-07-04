@@ -1,3 +1,4 @@
+import asyncio
 import json
 import socket
 from contextlib import closing
@@ -40,6 +41,20 @@ class DummyTunnelService:
 
     def snapshot(self) -> dict[str, object]:
         return dict(self._snapshot)
+
+
+class DummyFixedForwardService:
+    def should_autostart(self) -> bool:
+        return False
+
+    async def start(self) -> dict[str, object]:
+        return {"status": "stopped", "public_url": ""}
+
+    async def stop(self) -> dict[str, object]:
+        return {"status": "stopped", "public_url": ""}
+
+    async def restart(self) -> dict[str, object]:
+        return {"status": "stopped", "public_url": ""}
 
 
 def _hold_tcp_port(host: str) -> tuple[socket.socket, int]:
@@ -112,6 +127,35 @@ async def test_health_reports_stable_instance_id(monkeypatch: pytest.MonkeyPatch
 
     assert first["instance_id"] == "stable-instance"
     assert second["instance_id"] == "stable-instance"
+
+
+@pytest.mark.asyncio
+async def test_web_server_start_with_updates_enabled_creates_refresh_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checks: list[object] = []
+
+    def fake_check_for_updates(*args: object, **_kwargs: object) -> dict[str, object]:
+        checks.append(args[0] if args else None)
+        return {"update_enabled": True}
+
+    monkeypatch.setattr("bot.web.server.get_update_status", lambda *_args, **_kwargs: {"update_enabled": True})
+    monkeypatch.setattr("bot.web.server.check_for_updates", fake_check_for_updates)
+    server = WebApiServer(
+        object(),
+        host="127.0.0.1",
+        port=0,
+        tunnel_service=DummyTunnelService(),
+        fixed_forward_service=DummyFixedForwardService(),
+    )
+
+    try:
+        await server.start()
+        assert server._update_task is not None
+        await asyncio.wait_for(server._update_task, timeout=1)
+        assert len(checks) == 1
+    finally:
+        await server.stop()
 
 
 @pytest.mark.asyncio
