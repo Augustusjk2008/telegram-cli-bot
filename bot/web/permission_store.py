@@ -9,7 +9,7 @@ from typing import Any
 
 
 class BotPermissionStore:
-    MEMBER_BOT_LIMIT = 3
+    MEMBER_BOT_LIMIT = 10
 
     def __init__(self, path: Path | str, *, legacy_path: Path | str | None = None) -> None:
         self.path = Path(path)
@@ -204,7 +204,7 @@ class BotPermissionStore:
         if is_local_admin:
             return
         if self.count_owned_bots(account_id) >= self.MEMBER_BOT_LIMIT:
-            raise ValueError("普通用户最多只能创建 3 个 Bot")
+            raise ValueError(f"普通用户最多只能创建 {self.MEMBER_BOT_LIMIT} 个 Bot")
 
     def remove_account(self, account_id: str) -> None:
         account_key = str(account_id or "").strip()

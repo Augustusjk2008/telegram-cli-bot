@@ -177,7 +177,7 @@ import { fallbackAgents } from "../utils/defaultAgents";
 
 const MOCK_RELEASE_URL = `https://github.com/example/cli-bridge/releases/tag/v${APP_VERSION}`;
 const MOCK_PERSISTENT_TERMINAL_STORAGE_KEY = "mock-web-persistent-terminal-session";
-const MEMBER_BOT_LIMIT = 3;
+const MEMBER_BOT_LIMIT = 10;
 
 function getMockUpdatePath(packageKind: AppUpdatePackageKind) {
   if (packageKind === "portable") return ".updates/orbit-safe-claw-windows-x64.zip";
@@ -5947,7 +5947,7 @@ export class MockWebBotClient implements WebBotClient {
       const ownedBots = this.getOwnedBotsForAccount(accountId);
       const limit = this.adminUsers.get(accountId)?.botCreateLimit || MEMBER_BOT_LIMIT;
       if (ownedBots.length >= limit) {
-        throw new WebApiClientError("普通用户最多只能创建 3 个 Bot", { status: 403, code: "bot_quota_exceeded" });
+        throw new WebApiClientError(`普通用户最多只能创建 ${limit} 个 Bot`, { status: 403, code: "bot_quota_exceeded" });
       }
     }
     const bot: BotSummary = {

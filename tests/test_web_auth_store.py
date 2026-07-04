@@ -158,13 +158,13 @@ def test_permission_store_grants_allowed_bots(tmp_path: Path):
 def test_permission_store_tracks_bot_owners_and_quota(tmp_path: Path):
     store = BotPermissionStore(tmp_path / ".web_permissions.json")
 
-    store.set_bot_owner("alpha", "member_1", grant_owner=True)
-    store.set_bot_owner("beta", "member_1", grant_owner=True)
-    store.set_bot_owner("gamma", "member_1", grant_owner=True)
+    for index in range(BotPermissionStore.MEMBER_BOT_LIMIT):
+        store.set_bot_owner(f"bot-{index}", "member_1", grant_owner=True)
 
-    assert store.owned_bot_aliases("member_1") == {"alpha", "beta", "gamma"}
-    assert store.count_owned_bots("member_1") == 3
-    assert store.allowed_bots_for_account("member_1") == {"alpha", "beta", "gamma"}
-    with pytest.raises(ValueError, match="最多只能创建 3 个 Bot"):
+    expected_aliases = {f"bot-{index}" for index in range(BotPermissionStore.MEMBER_BOT_LIMIT)}
+    assert store.owned_bot_aliases("member_1") == expected_aliases
+    assert store.count_owned_bots("member_1") == BotPermissionStore.MEMBER_BOT_LIMIT
+    assert store.allowed_bots_for_account("member_1") == expected_aliases
+    with pytest.raises(ValueError, match=f"最多只能创建 {BotPermissionStore.MEMBER_BOT_LIMIT} 个 Bot"):
         store.assert_can_create_bot("member_1", is_local_admin=False)
     store.assert_can_create_bot("local-admin", is_local_admin=True)

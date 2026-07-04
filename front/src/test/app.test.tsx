@@ -318,19 +318,16 @@ test("member can enter ungranted bot in read-only mode and hits create quota cop
   await user.click(await screen.findByRole("button", { name: "智能体管理" }));
   await screen.findByRole("heading", { name: "智能体管理" });
 
-  await createManagedBot(user, "owned1");
-  await waitFor(() => {
-    expect(screen.getByLabelText("新智能体别名")).toHaveValue("");
-  });
+  for (let index = 1; index <= 9; index += 1) {
+    await createManagedBot(user, `owned${index}`);
+    await waitFor(() => {
+      expect(screen.getByLabelText("新智能体别名")).toHaveValue("");
+    });
+  }
   expect(await screen.findByText("智能体已创建")).toBeInTheDocument();
 
-  await createManagedBot(user, "owned2");
-  await waitFor(() => {
-    expect(screen.getByLabelText("新智能体别名")).toHaveValue("");
-  });
-
-  await createManagedBot(user, "owned3");
-  expect(await screen.findByText("普通用户最多只能创建 3 个 Bot")).toBeInTheDocument();
+  await createManagedBot(user, "owned10");
+  expect(await screen.findByText("普通用户最多只能创建 10 个 Bot")).toBeInTheDocument();
 });
 
 

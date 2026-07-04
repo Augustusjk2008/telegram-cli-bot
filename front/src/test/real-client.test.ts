@@ -3459,7 +3459,7 @@ describe("RealWebBotClient", () => {
               allowed_bots: ["main"],
               owned_bots: ["team1"],
               owned_bot_count: 1,
-              bot_create_limit: 3,
+              bot_create_limit: 10,
             }],
           },
         }),
@@ -3481,7 +3481,7 @@ describe("RealWebBotClient", () => {
 
     expect(users[0].allowedBots).toEqual(["main"]);
     expect(users[0].ownedBotCount).toBe(1);
-    expect(users[0].botCreateLimit).toBe(3);
+    expect(users[0].botCreateLimit).toBe(10);
     expect(updated.allowedBots).toEqual(["main", "sub1"]);
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
