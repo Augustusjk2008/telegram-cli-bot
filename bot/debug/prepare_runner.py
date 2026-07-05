@@ -7,6 +7,8 @@ from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from pathlib import Path
 
+from bot.platform.processes import build_subprocess_group_kwargs, terminate_async_process_tree
+
 _DEFAULT_PREPARE_COMMAND = r".\debug.bat"
 _EXITED_STDOUT_DRAIN_TIMEOUT_SECONDS = 0.2
 
@@ -106,18 +108,8 @@ def _cancel_requested(request: dict[str, object]) -> bool:
 
 
 async def _kill_process(process: object) -> None:
-    kill = getattr(process, "kill", None)
-    terminate = getattr(process, "terminate", None)
-    if callable(kill):
-        with contextlib.suppress(Exception):
-            kill()
-    elif callable(terminate):
-        with contextlib.suppress(Exception):
-            terminate()
-    wait = getattr(process, "wait", None)
-    if callable(wait):
-        with contextlib.suppress(Exception, asyncio.TimeoutError):
-            await asyncio.wait_for(wait(), timeout=0.1)
+    with contextlib.suppress(Exception):
+        await terminate_async_process_tree(process)
 
 
 async def stream_prepare_events(workspace: str | Path, request: dict[str, object]) -> AsyncIterator[dict[str, object]]:
@@ -135,6 +127,7 @@ async def stream_prepare_events(workspace: str | Path, request: dict[str, object
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            **build_subprocess_group_kwargs(),
         )
     except FileNotFoundError as exc:
         raise PrepareRunError("prepare_spawn_failed", "无法启动调试准备命令", command=command_line) from exc

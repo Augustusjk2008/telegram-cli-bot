@@ -154,6 +154,8 @@ class ClusterRuntime:
         run = self._runs.get(str(run_id or "").strip())
         if run is None:
             return
+        if run.status == "cancelled" and status != "cancelled":
+            return
         now = self._now_iso()
         run.status = status
         run.updated_at = now
@@ -262,6 +264,8 @@ class ClusterRuntime:
 
     def complete_agent_task(self, run_id: str, task_id: str, output: str) -> ClusterAgentTask:
         task = self._runs[str(run_id)].tasks[str(task_id)]
+        if task.status == "cancelled":
+            return task
         now = self._now_iso()
         task.status = "completed"
         task.completed_at = now
@@ -276,6 +280,8 @@ class ClusterRuntime:
 
     def fail_agent_task(self, run_id: str, task_id: str, error: str) -> ClusterAgentTask:
         task = self._runs[str(run_id)].tasks[str(task_id)]
+        if task.status == "cancelled":
+            return task
         now = self._now_iso()
         task.status = "failed"
         task.completed_at = now

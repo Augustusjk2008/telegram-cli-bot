@@ -13,11 +13,21 @@ class PluginPermissions:
 
 
 @dataclass(frozen=True)
+class PluginHostLimits:
+    read_bytes: int = 32 * 1024 * 1024
+    directory_entries: int = 2000
+    artifact_bytes: int = 32 * 1024 * 1024
+    artifact_count: int = 128
+    total_artifact_bytes: int = 256 * 1024 * 1024
+
+
+@dataclass(frozen=True)
 class PluginRuntimeSpec:
     runtime_type: str
     entry: str
     protocol: str
     permissions: PluginPermissions = field(default_factory=PluginPermissions)
+    limits: PluginHostLimits = field(default_factory=PluginHostLimits)
 
 
 @dataclass(frozen=True)

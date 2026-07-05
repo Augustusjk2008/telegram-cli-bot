@@ -25,3 +25,25 @@ def test_terminal_cleanup_does_not_warn_for_short_background_cleanup(monkeypatch
 
     assert finished.wait(1.0)
     assert "终端进程清理未在" not in caplog.text
+
+
+def test_pty_wrapper_terminate_uses_process_tree_for_plain_popen(monkeypatch):
+    import bot.platform.terminal as terminal
+
+    calls = []
+
+    class FakeProcess:
+        pid = 12345
+
+        def terminate(self) -> None:
+            raise AssertionError("plain terminate should not be called directly")
+
+        def kill(self) -> None:
+            raise AssertionError("plain kill should not be called directly")
+
+    process = FakeProcess()
+    monkeypatch.setattr(terminal, "terminate_process_tree_sync", lambda current: calls.append(current), raising=False)
+
+    terminal.PtyWrapper(process, is_pty=False).terminate()
+
+    assert calls == [process]

@@ -374,20 +374,13 @@ reset_directory() {
 
 invoke_release_prep_checks() {
   write_step "运行后端发布检查"
-  run_checked_command "$repo_root" "后端发布检查失败" "$python_bin" -m pytest \
-    tests/test_cli.py \
-    tests/test_manager.py \
-    tests/test_sessions.py \
-    tests/test_session_store.py \
-    tests/test_web_auth_store.py \
-    tests/test_env_service.py \
-    tests/test_runtime_paths.py \
-    tests/test_runtime_web_startup.py \
-    tests/test_main_web.py \
-    -q
+  run_checked_command "$repo_root" "后端发布检查失败" "$python_bin" -m pytest tests -q
 
-  write_step "运行前端发布检查"
-  run_checked_command "$front_dir" "前端发布检查失败" "$npm_bin" run test:gate
+  write_step "运行前端测试门禁"
+  run_checked_command "$front_dir" "前端测试门禁失败" "$npm_bin" run test:gate
+
+  write_step "运行前端 lint"
+  run_checked_command "$front_dir" "前端 lint 失败" "$npm_bin" run lint
 }
 
 invoke_front_build() {

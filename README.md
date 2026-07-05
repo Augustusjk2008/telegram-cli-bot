@@ -153,7 +153,7 @@ http://<固定IP>:18088/node/<节点ID>/
 WEB_ENABLED=true
 WEB_HOST=0.0.0.0
 WEB_PORT=8765
-WEB_API_TOKEN=change-this-password
+WEB_API_TOKEN=<本机随机口令>
 TCB_NODE_ID=my-laptop
 WEB_BASE_PATH=/node/my-laptop
 WEB_PUBLIC_URL=http://<固定IP>:18088/node/my-laptop
@@ -253,7 +253,7 @@ WORKING_DIR=C:\Users\YourName\project
 WEB_ENABLED=true
 WEB_HOST=0.0.0.0
 WEB_PORT=8765
-WEB_API_TOKEN=change-this-password
+WEB_API_TOKEN=<本机随机口令>
 ```
 
 如需托管更多 Bot，可参考仓库内 `managed_bots.example.json` 新建本地 `managed_bots.json`：
@@ -302,7 +302,7 @@ APP_UPDATE_REPOSITORY=Augustusjk2008/telegram-cli-bot
 
 ```bash
 python -m bot
-python -m pytest tests/test_cli.py tests/test_manager.py tests/test_sessions.py tests/test_session_store.py tests/test_web_auth_store.py tests/test_env_service.py tests/test_runtime_paths.py tests/test_runtime_web_startup.py tests/test_main_web.py -q
+python -m pytest tests -q
 cd front && npm run test:gate
 cd front && npm run build
 cd front && npm run lint

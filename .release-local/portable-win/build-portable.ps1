@@ -93,17 +93,6 @@ function Get-AppVersion {
     return "dev"
 }
 
-function New-WebToken {
-    $bytes = New-Object byte[] 24
-    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-    try {
-        $rng.GetBytes($bytes)
-    } finally {
-        $rng.Dispose()
-    }
-    return ([Convert]::ToBase64String($bytes)).TrimEnd("=") -replace "[+/]", "A"
-}
-
 function Reset-Directory {
     param([string]$Path)
     if (Test-Path -LiteralPath $Path) {
@@ -419,10 +408,7 @@ function Initialize-PortablePiConfig {
 }
 
 function Write-PortableEnv {
-    param(
-        [string]$PackageRoot,
-        [string]$Token
-    )
+    param([string]$PackageRoot)
 
     Write-Step "写入包内 .env"
     $content = @"
@@ -430,9 +416,9 @@ CLI_TYPE=codex
 CLI_PATH=codex
 WORKING_DIR=.
 WEB_ENABLED=true
-WEB_HOST=0.0.0.0
+WEB_HOST=127.0.0.1
 WEB_PORT=8765
-WEB_API_TOKEN=$Token
+WEB_API_TOKEN=
 WEB_PUBLIC_URL=
 WEB_TUNNEL_MODE=disabled
 WEB_TUNNEL_AUTOSTART=false
@@ -525,6 +511,49 @@ function Import-DotEnv {
         }
         [Environment]::SetEnvironmentVariable($Matches["key"], $Matches["value"], "Process")
     }
+}
+
+function New-PortableWebToken {
+    $bytes = New-Object byte[] 32
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $rng.GetBytes($bytes)
+    } finally {
+        $rng.Dispose()
+    }
+    return ([Convert]::ToBase64String($bytes)).TrimEnd("=") -replace "\+", "-" -replace "/", "_"
+}
+
+function Ensure-PortableWebToken {
+    param([string]$Path)
+
+    if ($env:TCB_PORTABLE_SMOKE_IMPORT_ONLY -eq "1") {
+        return
+    }
+
+    $lines = @()
+    if (Test-Path -LiteralPath $Path) {
+        $lines = @(Get-Content -LiteralPath $Path -Encoding UTF8)
+    }
+    $tokenIndex = -1
+    $currentToken = ""
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        if ($lines[$index] -match "^\s*WEB_API_TOKEN\s*=\s*(?<value>.*)$") {
+            $tokenIndex = $index
+            $currentToken = $Matches["value"].Trim()
+            break
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($currentToken) -and $currentToken -ne "__GENERATE_ON_FIRST_START__") {
+        return
+    }
+    $token = New-PortableWebToken
+    if ($tokenIndex -ge 0) {
+        $lines[$tokenIndex] = "WEB_API_TOKEN=$token"
+    } else {
+        $lines += "WEB_API_TOKEN=$token"
+    }
+    Set-Content -LiteralPath $Path -Value $lines -Encoding UTF8
 }
 
 function Set-PortablePiShellPath {
@@ -628,6 +657,7 @@ $migrationExitCode = Invoke-RepoModule -Module "bot.env_migration" -Arguments @(
 if ($migrationExitCode -ne 0) {
     throw "Copy .env failed."
 }
+Ensure-PortableWebToken -Path $envPath
 Import-DotEnv -Path $envPath
 Set-PortablePiShellPath -PackageRoot $scriptDir
 Set-PortableRuntimeEnv -PackageRoot $scriptDir
@@ -771,7 +801,6 @@ exit /b 0
 function Write-PortableReadme {
     param(
         [string]$PackageRoot,
-        [string]$Token,
         [string]$Version
     )
 
@@ -779,15 +808,15 @@ function Write-PortableReadme {
 Orbit Safe Claw Windows 绿色版
 
 版本: $Version
-WEB_API_TOKEN: $Token
 
 使用:
 1. 直接运行 start.bat
 2. 浏览器打开 http://127.0.0.1:8765
-3. 用上面的 WEB_API_TOKEN 登录
+3. 使用 .env 内的 WEB_API_TOKEN 登录；首次启动会自动生成并写入本机 .env
 
 说明:
 - 绿色包无需安装 Python / Node / Git
+- 登录口令仅保存在本机解压目录的 .env
 - 包内已带 Python、Node 22、Git、Pi CLI、Pi 扩展和前端构建产物
 - Pi 可直接用于 native_agent；codex / claude 仍可外部安装或另配
 - 模型 API key 需在 Web 设置页或 data\pi-home\.pi\agent\models.json 填写
@@ -856,15 +885,7 @@ function Test-PortableBundle {
 
     Invoke-CheckedCommand -FilePath $pythonExe -Arguments @(
         "-m", "pytest",
-        "tests/test_cli.py",
-        "tests/test_manager.py",
-        "tests/test_sessions.py",
-        "tests/test_session_store.py",
-        "tests/test_web_auth_store.py",
-        "tests/test_env_service.py",
-        "tests/test_runtime_paths.py",
-        "tests/test_runtime_web_startup.py",
-        "tests/test_main_web.py",
+        "tests",
         "-q"
     ) -FailureMessage "包内插件测试失败" -WorkingDirectory $PackageRoot
 }
@@ -921,8 +942,6 @@ try {
     } else {
         $ArtifactPath
     }
-    $token = New-WebToken
-
     [void](New-Item -ItemType Directory -Force -Path $script:StageRoot, $script:ArtifactsRoot, $script:DownloadsRoot)
     Reset-Directory -Path $packageRoot
 
@@ -939,9 +958,9 @@ try {
     Install-PortablePi -PackageRoot $packageRoot
     Install-PortablePiExtensions -PackageRoot $packageRoot
     Initialize-PortablePiConfig -PackageRoot $packageRoot
-    Write-PortableEnv -PackageRoot $packageRoot -Token $token
+    Write-PortableEnv -PackageRoot $packageRoot
     Write-PortableScripts -PackageRoot $packageRoot
-    Write-PortableReadme -PackageRoot $packageRoot -Token $token -Version $version
+    Write-PortableReadme -PackageRoot $packageRoot -Version $version
     Test-PortableBundle -PackageRoot $packageRoot
     Write-DistributionMarker -Root $packageRoot -PackageKind "portable" -Platform "windows-x64" -Version $version
 
@@ -951,7 +970,6 @@ try {
     Write-Host ""
     Write-Host ("[完成] 绿色包目录: {0}" -f $packageRoot) -ForegroundColor Green
     Write-Host ("[完成] ZIP: {0}" -f $artifactPath) -ForegroundColor Green
-    Write-Host ("[完成] WEB_API_TOKEN: {0}" -f $token) -ForegroundColor Green
 } catch {
     Write-Host ("[错误] {0}" -f $_.Exception.Message) -ForegroundColor Red
     exit 1

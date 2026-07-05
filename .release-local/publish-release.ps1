@@ -325,23 +325,21 @@ function Invoke-ReleasePrepChecks {
     Write-Step "运行后端发布检查"
     Invoke-CheckedCommand -FilePath "python" -Arguments @(
         "-m", "pytest",
-        "tests/test_cli.py",
-        "tests/test_manager.py",
-        "tests/test_sessions.py",
-        "tests/test_session_store.py",
-        "tests/test_web_auth_store.py",
-        "tests/test_env_service.py",
-        "tests/test_runtime_paths.py",
-        "tests/test_runtime_web_startup.py",
-        "tests/test_main_web.py",
+        "tests",
         "-q"
     ) -FailureMessage "后端发布检查失败"
 
-    Write-Step "运行前端发布检查"
+    Write-Step "运行前端测试门禁"
     Invoke-CheckedCommand -FilePath "npm.cmd" -Arguments @(
         "run",
         "test:gate"
-    ) -FailureMessage "前端发布检查失败" -WorkingDirectory $script:FrontDir
+    ) -FailureMessage "前端测试门禁失败" -WorkingDirectory $script:FrontDir
+
+    Write-Step "运行前端 lint"
+    Invoke-CheckedCommand -FilePath "npm.cmd" -Arguments @(
+        "run",
+        "lint"
+    ) -FailureMessage "前端 lint 失败" -WorkingDirectory $script:FrontDir
 }
 
 function Invoke-FrontBuild {

@@ -12,6 +12,17 @@ def serialize_permissions(manifest) -> dict[str, Any]:
     }
 
 
+def serialize_limits(manifest) -> dict[str, Any]:
+    limits = manifest.runtime.limits
+    return {
+        "readBytes": limits.read_bytes,
+        "directoryEntries": limits.directory_entries,
+        "artifactBytes": limits.artifact_bytes,
+        "artifactCount": limits.artifact_count,
+        "totalArtifactBytes": limits.total_artifact_bytes,
+    }
+
+
 def serialize_config_schema(manifest) -> dict[str, Any] | None:
     if manifest.config_schema is None:
         return None
@@ -89,6 +100,7 @@ def build_manifest_signature(manifest) -> str:
                 "entry": manifest.runtime.entry,
                 "protocol": manifest.runtime.protocol,
                 "permissions": serialize_permissions(manifest),
+                "limits": serialize_limits(manifest),
             },
             "views": [(view.id, view.renderer, view.view_mode, view.data_profile) for view in manifest.views],
             "handlers": [(handler.id, handler.extensions, handler.view_id) for handler in manifest.file_handlers],
@@ -138,9 +150,9 @@ def build_manifest_payload(manifest) -> dict[str, Any]:
             "entry": manifest.runtime.entry,
             "protocol": manifest.runtime.protocol,
             "permissions": serialize_permissions(manifest),
+            "limits": serialize_limits(manifest),
         },
     }
     if manifest.config_schema is not None:
         payload["configSchema"] = serialize_config_schema(manifest)
     return payload
-

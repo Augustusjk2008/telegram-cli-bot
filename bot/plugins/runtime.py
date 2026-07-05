@@ -66,6 +66,7 @@ class PluginRuntime:
 
     def _context_payload(self, bot_alias: str, manifest: PluginManifest) -> dict[str, Any]:
         workspace_root = self._workspace_root_for(bot_alias).expanduser().resolve()
+        limits = manifest.runtime.limits
         return {
             "plugin": {
                 "id": manifest.plugin_id,
@@ -80,6 +81,13 @@ class PluginRuntime:
                     "workspaceRead": manifest.runtime.permissions.workspace_read,
                     "workspaceList": manifest.runtime.permissions.workspace_list,
                     "tempArtifacts": manifest.runtime.permissions.temp_artifacts,
+                },
+                "limits": {
+                    "readBytes": limits.read_bytes,
+                    "directoryEntries": limits.directory_entries,
+                    "artifactBytes": limits.artifact_bytes,
+                    "artifactCount": limits.artifact_count,
+                    "totalArtifactBytes": limits.total_artifact_bytes,
                 },
             },
         }

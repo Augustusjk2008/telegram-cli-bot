@@ -13,7 +13,7 @@ import sys
 import threading
 from typing import Union
 
-from bot.platform.processes import build_subprocess_group_kwargs
+from bot.platform.processes import build_subprocess_group_kwargs, terminate_process_tree_sync
 from bot.platform.subprocess_streams import close_process_streams
 
 logger = logging.getLogger(__name__)
@@ -114,11 +114,7 @@ class PtyWrapper:
                 pass
             return
 
-        try:
-            self.process.terminate()
-            self.process.wait(timeout=3)
-        except Exception:
-            self.process.kill()
+        terminate_process_tree_sync(self.process)
 
     def close(self) -> None:
         with self._lock:
@@ -166,7 +162,7 @@ class PosixPtyProcess:
         return self._process.poll() is None
 
     def terminate(self) -> None:
-        self._process.terminate()
+        terminate_process_tree_sync(self._process)
 
     def close(self) -> None:
         try:

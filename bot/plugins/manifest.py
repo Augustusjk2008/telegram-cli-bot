@@ -11,6 +11,7 @@ from .models import (
     PluginConfigSchemaSpec,
     PluginConfigSectionSpec,
     PluginFileHandlerSpec,
+    PluginHostLimits,
     PluginManifest,
     PluginPermissions,
     PluginRuntimeSpec,
@@ -52,6 +53,60 @@ def _parse_permissions(value: Any) -> PluginPermissions:
         workspace_read=bool(current.get("workspaceRead", False)),
         workspace_list=bool(current.get("workspaceList", False)),
         temp_artifacts=bool(current.get("tempArtifacts", False)),
+    )
+
+
+def _parse_limit_value(value: Any, default: int, cap: int, label: str) -> int:
+    if value is None or value == "":
+        return default
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{label} 必须是整数")
+    return max(1, min(number, cap))
+
+
+def _parse_limits(value: Any) -> PluginHostLimits:
+    hard_cap = PluginHostLimits()
+    if value is None:
+        return hard_cap
+    current = _expect_mapping(value, "runtime.limits")
+    allowed = {
+        "readBytes": "read_bytes",
+        "directoryEntries": "directory_entries",
+        "artifactBytes": "artifact_bytes",
+        "artifactCount": "artifact_count",
+        "totalArtifactBytes": "total_artifact_bytes",
+    }
+    unknown = sorted(key for key in current.keys() if key not in allowed)
+    if unknown:
+        raise ValueError(f"runtime.limits 包含未知字段: {', '.join(unknown)}")
+    return PluginHostLimits(
+        read_bytes=_parse_limit_value(current.get("readBytes"), hard_cap.read_bytes, hard_cap.read_bytes, "runtime.limits.readBytes"),
+        directory_entries=_parse_limit_value(
+            current.get("directoryEntries"),
+            hard_cap.directory_entries,
+            hard_cap.directory_entries,
+            "runtime.limits.directoryEntries",
+        ),
+        artifact_bytes=_parse_limit_value(
+            current.get("artifactBytes"),
+            hard_cap.artifact_bytes,
+            hard_cap.artifact_bytes,
+            "runtime.limits.artifactBytes",
+        ),
+        artifact_count=_parse_limit_value(
+            current.get("artifactCount"),
+            hard_cap.artifact_count,
+            hard_cap.artifact_count,
+            "runtime.limits.artifactCount",
+        ),
+        total_artifact_bytes=_parse_limit_value(
+            current.get("totalArtifactBytes"),
+            hard_cap.total_artifact_bytes,
+            hard_cap.total_artifact_bytes,
+            "runtime.limits.totalArtifactBytes",
+        ),
     )
 
 
@@ -188,6 +243,7 @@ def load_plugin_manifest(path: Path) -> PluginManifest:
         raise ValueError("fileHandlers 必须是数组")
 
     permissions = _parse_permissions(runtime_raw.get("permissions") or {})
+    limits = _parse_limits(runtime_raw.get("limits"))
 
     views: list[PluginViewSpec] = []
     seen_view_ids: set[str] = set()
@@ -251,6 +307,7 @@ def load_plugin_manifest(path: Path) -> PluginManifest:
             entry=str(runtime_raw.get("entry") or "").strip(),
             protocol=str(runtime_raw.get("protocol") or "").strip(),
             permissions=permissions,
+            limits=limits,
         ),
         views=tuple(views),
         file_handlers=tuple(file_handlers),

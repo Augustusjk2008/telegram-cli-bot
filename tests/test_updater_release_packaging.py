@@ -66,3 +66,42 @@ def test_release_scripts_force_root_base_and_export_announcements() -> None:
     assert 'export_release_announcements "$stage_dir"' in sh
 
     assert "Export-ReleaseAnnouncements -DestinationRoot $DestinationRoot" in portable
+
+
+def test_portable_build_does_not_embed_fixed_web_token() -> None:
+    portable = Path(".release-local/portable-win/build-portable.ps1").read_text(encoding="utf-8")
+
+    assert "WEB_HOST=127.0.0.1" in portable
+    assert "WEB_API_TOKEN=" in portable
+    assert "WEB_API_TOKEN=$Token" not in portable
+    assert "WEB_API_TOKEN: $Token" not in portable
+    assert "[完成] WEB_API_TOKEN" not in portable
+    assert "$token = New-WebToken" not in portable
+    assert "Write-PortableEnv -PackageRoot $packageRoot -Token" not in portable
+    assert "Write-PortableReadme -PackageRoot $packageRoot -Token" not in portable
+
+    migration_index = portable.index('Invoke-RepoModule -Module "bot.env_migration"')
+    ensure_token_index = portable.index("Ensure-PortableWebToken -Path $envPath")
+    import_index = portable.index("Import-DotEnv -Path $envPath")
+    assert migration_index < ensure_token_index < import_index
+    assert '$env:TCB_PORTABLE_SMOKE_IMPORT_ONLY -eq "1"' in portable
+    assert portable.index('$env:TCB_PORTABLE_SMOKE_IMPORT_ONLY -eq "1"') < ensure_token_index
+
+
+def test_release_checks_run_complete_backend_tests_and_frontend_lint() -> None:
+    ps1 = Path(".release-local/publish-release.ps1").read_text(encoding="utf-8")
+    sh = Path(".release-local/publish-release.sh").read_text(encoding="utf-8")
+    portable = Path(".release-local/portable-win/build-portable.ps1").read_text(encoding="utf-8")
+
+    assert '"-m", "pytest",\n        "tests",\n        "-q"' in ps1
+    assert "tests/test_main_web.py" not in ps1
+    assert '"run",\n        "test:gate"' in ps1
+    assert '"run",\n        "lint"' in ps1
+
+    assert '"$python_bin" -m pytest tests -q' in sh
+    assert "tests/test_main_web.py" not in sh
+    assert '"$npm_bin" run test:gate' in sh
+    assert '"$npm_bin" run lint' in sh
+
+    assert '"-m", "pytest",\n        "tests",\n        "-q"' in portable
+    assert "tests/test_main_web.py" not in portable

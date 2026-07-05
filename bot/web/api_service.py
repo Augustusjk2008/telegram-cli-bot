@@ -212,6 +212,7 @@ class _ClusterRunControl:
     semaphore: asyncio.Semaphore
     agent_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
     tasks: set[asyncio.Task[Any]] = field(default_factory=set)
+    cancel_requested: bool = False
 
 
 _CLUSTER_RUN_CONTROLS: dict[str, _ClusterRunControl] = {}
@@ -2535,6 +2536,16 @@ def _cleanup_cluster_run_control_if_idle(run_id: str) -> None:
     _CLUSTER_RUN_CONTROLS.pop(run_id, None)
 
 
+def _cluster_task_is_cancelled(run_id: str, task_id: str, control: _ClusterRunControl | None = None) -> bool:
+    if control is not None and control.cancel_requested:
+        return True
+    run = _CLUSTER_RUNTIME.get_run(run_id)
+    if run is None or run.status == "cancelled":
+        return True
+    task = run.tasks.get(task_id)
+    return task is None or task.status == "cancelled"
+
+
 async def _cancel_cluster_run(run_id: str, message: str = "已取消") -> None:
     normalized_run_id = str(run_id or "").strip()
     if not normalized_run_id:
@@ -2543,10 +2554,21 @@ async def _cancel_cluster_run(run_id: str, message: str = "已取消") -> None:
     if run is None:
         _CLUSTER_RUN_CONTROLS.pop(normalized_run_id, None)
         return
+    control = _CLUSTER_RUN_CONTROLS.get(normalized_run_id)
+    if control is not None:
+        control.cancel_requested = True
     _CLUSTER_RUNTIME.cancel_run_tasks(normalized_run_id, message)
     _CLUSTER_RUNTIME.finish_run(normalized_run_id, "cancelled")
     await _CLUSTER_RUNTIME.notify_agent_task_message(normalized_run_id)
-    _CLUSTER_RUN_CONTROLS.pop(normalized_run_id, None)
+    running_tasks = [
+        task
+        for task in list(control.tasks if control is not None else [])
+        if not task.done()
+    ]
+    for task in running_tasks:
+        task.cancel()
+    if running_tasks:
+        await asyncio.wait(running_tasks, timeout=0.2)
 
 
 def _start_cluster_run_if_requested(
@@ -2607,6 +2629,8 @@ async def _run_cluster_agent_task(
     try:
         async with control.semaphore:
             async with agent_lock:
+                if _cluster_task_is_cancelled(run_id, task_id, control):
+                    return
                 live_run = _CLUSTER_RUNTIME.get_run(run_id)
                 if live_run is None:
                     return
@@ -2614,6 +2638,8 @@ async def _run_cluster_agent_task(
                 if live_task is None or live_task.status != "queued":
                     return
                 live_task = _CLUSTER_RUNTIME.mark_agent_task_running(run_id, task_id)
+                if _cluster_task_is_cancelled(run_id, task_id, control):
+                    return
                 final_output = ""
                 returncode = 0
                 event_stream = (
@@ -2638,6 +2664,8 @@ async def _run_cluster_agent_task(
                     )
                 )
                 async for event in event_stream:
+                    if _cluster_task_is_cancelled(run_id, task_id, control):
+                        return
                     event_type = str(event.get("type") or "")
                     if event_type == "status":
                         progress_text = str(event.get("preview_text") or "").strip()
@@ -2662,6 +2690,8 @@ async def _run_cluster_agent_task(
                         returncode = 1
                         break
 
+                if _cluster_task_is_cancelled(run_id, task_id, control):
+                    return
                 result = {"output": final_output, "returncode": returncode}
                 error = _cluster_agent_result_error(result)
                 if error:
@@ -2670,11 +2700,13 @@ async def _run_cluster_agent_task(
                     _CLUSTER_RUNTIME.complete_agent_task(run_id, task_id, final_output)
                 await _CLUSTER_RUNTIME.notify_agent_task_message(run_id)
     except asyncio.TimeoutError:
-        _CLUSTER_RUNTIME.fail_agent_task(run_id, task_id, "子 agent 执行超时")
-        await _CLUSTER_RUNTIME.notify_agent_task_message(run_id)
+        if not _cluster_task_is_cancelled(run_id, task_id, control):
+            _CLUSTER_RUNTIME.fail_agent_task(run_id, task_id, "子 agent 执行超时")
+            await _CLUSTER_RUNTIME.notify_agent_task_message(run_id)
     except Exception as exc:
-        _CLUSTER_RUNTIME.fail_agent_task(run_id, task_id, str(exc))
-        await _CLUSTER_RUNTIME.notify_agent_task_message(run_id)
+        if not _cluster_task_is_cancelled(run_id, task_id, control):
+            _CLUSTER_RUNTIME.fail_agent_task(run_id, task_id, str(exc))
+            await _CLUSTER_RUNTIME.notify_agent_task_message(run_id)
 
 
 def _build_cluster_prompt(mentions: list[dict[str, Any]] | None, run_id: str = "") -> str:

@@ -27,7 +27,7 @@ bash start.sh
 python -m bot
 
 # 后端测试
-python -m pytest tests/test_cli.py tests/test_manager.py tests/test_sessions.py tests/test_session_store.py tests/test_web_auth_store.py tests/test_env_service.py tests/test_runtime_paths.py tests/test_runtime_web_startup.py tests/test_main_web.py -q
+python -m pytest tests -q
 
 # 前端测试 / 构建
 cd front && npm run test:gate

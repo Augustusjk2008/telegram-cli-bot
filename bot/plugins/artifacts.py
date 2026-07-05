@@ -5,6 +5,8 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from .models import PluginHostLimits
+
 
 def _sanitize_filename(filename: str) -> str:
     cleaned = re.sub(r"[^\w.\-]+", "_", str(filename or "").strip(), flags=re.UNICODE)
@@ -35,7 +37,23 @@ class ArtifactStore:
         filename: str,
         content: bytes,
         content_type: str = "application/octet-stream",
+        limits: PluginHostLimits | None = None,
     ) -> ArtifactRecord:
+        effective_limits = limits or PluginHostLimits()
+        content_size = len(content)
+        if content_size > effective_limits.artifact_bytes:
+            raise ValueError("插件产物大小超过限额")
+        records = [
+            record
+            for record in self._records.values()
+            if record.bot_alias == bot_alias and record.plugin_id == plugin_id
+        ]
+        if len(records) >= effective_limits.artifact_count:
+            raise ValueError("插件产物数量超过限额")
+        current_total = sum(record.size_bytes for record in records)
+        if current_total + content_size > effective_limits.total_artifact_bytes:
+            raise ValueError("插件产物总大小超过限额")
+
         artifact_id = f"artifact-{uuid.uuid4().hex}"
         target_dir = self.root / bot_alias / plugin_id
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -47,7 +65,7 @@ class ArtifactStore:
             plugin_id=plugin_id,
             filename=cleaned_filename,
             path=target_dir / f"{artifact_id}-{cleaned_filename}",
-            size_bytes=len(content),
+            size_bytes=content_size,
             content_type=normalized_content_type,
         )
         record.path.write_bytes(content)
