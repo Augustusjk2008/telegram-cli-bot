@@ -102,6 +102,8 @@ def parse_flowchart(code: str) -> FlowchartIR:
             ir.groups[node.group_id].node_ids.append(node.id)
     if group_stack:
         raise FlowchartParseError(len(lines), "subgraph 未关闭")
+    if not ir.nodes and not ir.edges:
+        raise FlowchartParseError(1, "Mermaid 图为空")
     return ir
 
 

@@ -28,13 +28,14 @@ def _heading_before(text: str, offset: int) -> str:
 
 def extract_diagrams(path: str, content: str) -> list[DiagramSource]:
     suffix = Path(path).suffix.lower()
-    matches = list(FENCE_RE.finditer(content))
+    normalized_content = content.replace("\r\n", "\n").replace("\r", "\n")
+    matches = list(FENCE_RE.finditer(normalized_content))
     if suffix == ".md" or matches:
         diagrams: list[DiagramSource] = []
         for index, match in enumerate(matches, start=1):
-            heading = _heading_before(content, match.start())
+            heading = _heading_before(normalized_content, match.start())
             title = heading or f"diagram-{index}"
-            start_line = content[:match.start("body")].count("\n") + 1
+            start_line = normalized_content[:match.start("body")].count("\n") + 1
             diagrams.append(
                 DiagramSource(
                     source_id=f"diagram-{index}",
@@ -51,7 +52,7 @@ def extract_diagrams(path: str, content: str) -> list[DiagramSource]:
         DiagramSource(
             source_id="diagram-1",
             title=title,
-            code=content.strip(),
+            code=normalized_content.strip(),
             start_line=1,
             suggested_filename=f"{safe_stem(title, 'diagram-1')}.vsdx",
         )
