@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import asyncio
 import json
-import sys
 import zipfile
 from dataclasses import replace
 from pathlib import Path
@@ -14,19 +12,14 @@ from bot.plugins.host_api import PluginHostApi
 from bot.plugins.manifest import load_plugin_manifest
 from bot.plugins.runtime import PluginRuntime
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-PLUGIN_BACKEND = REPO_ROOT / "examples" / "plugins" / "mermaid-visio" / "backend"
+REPO_ROOT = Path(__file__).resolve().parents[4]
 SAMPLES_ROOT = REPO_ROOT / "examples" / "mermaid-visio-samples"
-if str(PLUGIN_BACKEND) not in sys.path:
-    sys.path.insert(0, str(PLUGIN_BACKEND))
 
 from mermaid_visio.flowchart_parser import FlowchartParseError, parse_flowchart
 from mermaid_visio.models import PluginConfig
 from mermaid_visio.normalizer import normalize_ir
 from mermaid_visio.source_extractor import extract_diagrams
-
-sys.path.insert(0, str(Path(__file__).parent))
-from mermaid_visio_vsdx_assertions import assert_vsdx_package
+from vsdx_assertions import assert_vsdx_package
 
 
 def _read_sample(name: str) -> str:

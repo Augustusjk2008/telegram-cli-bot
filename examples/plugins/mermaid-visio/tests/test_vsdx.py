@@ -1,22 +1,14 @@
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from xml.etree import ElementTree as ET
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-PLUGIN_BACKEND = REPO_ROOT / "examples" / "plugins" / "mermaid-visio" / "backend"
-if str(PLUGIN_BACKEND) not in sys.path:
-    sys.path.insert(0, str(PLUGIN_BACKEND))
 
 from mermaid_visio.flowchart_parser import parse_flowchart
 from mermaid_visio.models import PluginConfig
 from mermaid_visio.normalizer import normalize_ir
 from mermaid_visio.simple_layout import simple_layout
 from mermaid_visio.vsdx_writer import write_vsdx
-
-sys.path.insert(0, str(Path(__file__).parent))
-from mermaid_visio_vsdx_assertions import NS, VsdxPackage, assert_vsdx_package
+from vsdx_assertions import NS, VsdxPackage, assert_vsdx_package
 
 
 def _render_vsdx(tmp_path: Path, code: str, *, filename: str = "diagram.vsdx") -> VsdxPackage:

@@ -326,6 +326,7 @@ function Invoke-ReleasePrepChecks {
     Invoke-CheckedCommand -FilePath "python" -Arguments @(
         "-m", "pytest",
         "tests",
+        "examples/plugins",
         "-q"
     ) -FailureMessage "后端发布检查失败"
 

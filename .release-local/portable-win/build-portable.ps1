@@ -886,6 +886,7 @@ function Test-PortableBundle {
     Invoke-CheckedCommand -FilePath $pythonExe -Arguments @(
         "-m", "pytest",
         "tests",
+        "examples/plugins",
         "-q"
     ) -FailureMessage "包内插件测试失败" -WorkingDirectory $PackageRoot
 }

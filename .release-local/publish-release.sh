@@ -374,7 +374,7 @@ reset_directory() {
 
 invoke_release_prep_checks() {
   write_step "运行后端发布检查"
-  run_checked_command "$repo_root" "后端发布检查失败" "$python_bin" -m pytest tests -q
+  run_checked_command "$repo_root" "后端发布检查失败" "$python_bin" -m pytest tests examples/plugins -q
 
   write_step "运行前端测试门禁"
   run_checked_command "$front_dir" "前端测试门禁失败" "$npm_bin" run test:gate

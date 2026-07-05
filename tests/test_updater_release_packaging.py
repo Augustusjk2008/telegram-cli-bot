@@ -93,15 +93,15 @@ def test_release_checks_run_complete_backend_tests_and_frontend_lint() -> None:
     sh = Path(".release-local/publish-release.sh").read_text(encoding="utf-8")
     portable = Path(".release-local/portable-win/build-portable.ps1").read_text(encoding="utf-8")
 
-    assert '"-m", "pytest",\n        "tests",\n        "-q"' in ps1
+    assert '"-m", "pytest",\n        "tests",\n        "examples/plugins",\n        "-q"' in ps1
     assert "tests/test_main_web.py" not in ps1
     assert '"run",\n        "test:gate"' in ps1
     assert '"run",\n        "lint"' in ps1
 
-    assert '"$python_bin" -m pytest tests -q' in sh
+    assert '"$python_bin" -m pytest tests examples/plugins -q' in sh
     assert "tests/test_main_web.py" not in sh
     assert '"$npm_bin" run test:gate' in sh
     assert '"$npm_bin" run lint' in sh
 
-    assert '"-m", "pytest",\n        "tests",\n        "-q"' in portable
+    assert '"-m", "pytest",\n        "tests",\n        "examples/plugins",\n        "-q"' in portable
     assert "tests/test_main_web.py" not in portable
