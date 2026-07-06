@@ -7,6 +7,9 @@ pypdf>=5.4.0
 tzdata>=2025.2
 ag-ui-protocol==0.1.19
 
+# Windows PTY support for Web terminal
+pywinpty>=2.0.15; platform_system == "Windows"
+
 # Process management (optional, for better /exec timeout handling)
 psutil>=5.9.0
 

@@ -47,3 +47,29 @@ def test_pty_wrapper_terminate_uses_process_tree_for_plain_popen(monkeypatch):
     terminal.PtyWrapper(process, is_pty=False).terminate()
 
     assert calls == [process]
+
+
+def test_pipe_line_ending_normalizer_adds_cr_before_lone_lf():
+    from bot.web.terminal_manager import _normalize_pipe_line_endings
+
+    output, previous_cr = _normalize_pipe_line_endings(b"A\nB\r\nC\r", previous_ended_with_cr=False)
+
+    assert output == b"A\r\nB\r\nC\r"
+    assert previous_cr is True
+
+    output, previous_cr = _normalize_pipe_line_endings(b"\nD\n", previous_ended_with_cr=previous_cr)
+
+    assert output == b"\nD\r\n"
+    assert previous_cr is False
+
+
+def test_pipe_line_ending_normalizer_preserves_carriage_return_updates():
+    from bot.web.terminal_manager import _normalize_pipe_line_endings
+
+    output, previous_cr = _normalize_pipe_line_endings(
+        b"\r\x1b[K| scanning\r\x1b[K* done\n",
+        previous_ended_with_cr=False,
+    )
+
+    assert output == b"\r\x1b[K| scanning\r\x1b[K* done\r\n"
+    assert previous_cr is False

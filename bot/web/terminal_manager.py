@@ -23,6 +23,21 @@ TERMINAL_PROCESS_CLEANUP_JOIN_SECONDS = 1.0
 TERMINAL_PROCESS_CLEANUP_WARNING_SECONDS = 5.0
 
 
+def _normalize_pipe_line_endings(data: bytes, *, previous_ended_with_cr: bool = False) -> tuple[bytes, bool]:
+    if not data:
+        return data, previous_ended_with_cr
+
+    normalized = bytearray()
+    previous_was_cr = previous_ended_with_cr
+    for byte in data:
+        if byte == 0x0A and not previous_was_cr:
+            normalized.append(0x0D)
+        normalized.append(byte)
+        previous_was_cr = byte == 0x0D
+
+    return bytes(normalized), previous_was_cr
+
+
 @dataclass(slots=True)
 class TerminalChunk:
     seq: int
@@ -406,6 +421,7 @@ class TerminalSessionManager:
         process: PtyWrapper,
         output_pump: _TerminalOutputPump,
     ) -> None:
+        pipe_previous_ended_with_cr = False
         try:
             while True:
                 data = await output_pump.read()
@@ -414,6 +430,11 @@ class TerminalSessionManager:
                 if isinstance(data, str):
                     data = data.encode("utf-8", errors="replace")
                 if data:
+                    if not process.is_pty:
+                        data, pipe_previous_ended_with_cr = _normalize_pipe_line_endings(
+                            data,
+                            previous_ended_with_cr=pipe_previous_ended_with_cr,
+                        )
                     async with self._lock:
                         if session.process is not process:
                             return
