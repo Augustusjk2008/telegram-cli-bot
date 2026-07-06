@@ -123,7 +123,16 @@ function createGitScreenClient() {
   const getGitDiff = vi.fn(async (_botAlias: string, path: string, staged = false): Promise<GitDiffPayload> => ({
     path,
     staged,
-    diff: `diff --git a/${path} b/${path}\n+changed`,
+    diff: [
+      `diff --git a/${path} b/${path}`,
+      "index abc..def 100644",
+      `--- a/${path}`,
+      `+++ b/${path}`,
+      "@@ -1,3 +1,3 @@",
+      " unchanged line",
+      "-old line",
+      "+new line",
+    ].join("\n"),
     truncated: false,
   }));
   const client = {
@@ -192,5 +201,15 @@ test("loads readonly diff panel when no external diff opener is provided", async
     expect(getGitDiff).toHaveBeenCalledWith("main", "src/deep/same.ts", false);
   });
   expect(await screen.findByTestId("git-diff-panel")).toBeInTheDocument();
-  expect(screen.getByTestId("git-diff-content")).toHaveTextContent("diff --git a/src/deep/same.ts b/src/deep/same.ts");
+  const diffContent = await screen.findByTestId("git-diff-content");
+  expect(within(diffContent).queryByText(/diff --git/)).not.toBeInTheDocument();
+  expect(within(diffContent).queryByText(/@@/)).not.toBeInTheDocument();
+  expect(within(diffContent).queryByText(" unchanged line")).not.toBeInTheDocument();
+
+  const deleteRow = within(diffContent).getByText("-old line").closest("[data-diff-kind]");
+  const addRow = within(diffContent).getByText("+new line").closest("[data-diff-kind]");
+  expect(deleteRow).toHaveAttribute("data-diff-kind", "delete");
+  expect(deleteRow).toHaveClass("bg-red-50");
+  expect(addRow).toHaveAttribute("data-diff-kind", "add");
+  expect(addRow).toHaveClass("bg-emerald-50");
 });

@@ -24,6 +24,7 @@ import {
   X,
 } from "lucide-react";
 import { GitCommitCliConfigPanel } from "../components/GitCommitCliConfigPanel";
+import { GitDiffViewer } from "../components/GitDiffViewer";
 import { StateBadge } from "../components/StateBadge";
 import { toolbarButtonClass } from "../components/ToolbarButton";
 import { MockWebBotClient } from "../services/mockWebBotClient";
@@ -1184,12 +1185,12 @@ export function GitScreen({
                             Diff 已截断
                           </div>
                         ) : null}
-                        <pre
-                          data-testid="git-diff-content"
-                          className="max-h-80 overflow-auto whitespace-pre-wrap break-words px-2 py-2 font-mono text-[11px] leading-5 text-[var(--text)]"
-                        >
-                          {selectedDiff.diff || "无 diff"}
-                        </pre>
+                        <GitDiffViewer
+                          content={selectedDiff.diff || ""}
+                          testId="git-diff-content"
+                          className="max-h-80 px-2 py-2 text-[11px] leading-5"
+                          ariaLabel={`Git Diff 内容：${selectedDiff.label}`}
+                        />
                       </div>
                     ) : null}
                   </div>
