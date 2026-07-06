@@ -356,6 +356,188 @@ describe("RealWebBotClient", () => {
     expect(reset.requestCount).toBe(0);
   });
 
+  test("inline completion endpoints map config and request payloads", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonOk({
+        enabled: true,
+        provider_type: "openai_compatible",
+        base_url: "https://provider.test/v1",
+        model: "coder",
+        api_key_set: true,
+        configured: true,
+        temperature: 0.2,
+        max_output_tokens: 96,
+        request_timeout_seconds: 8,
+        auto_trigger_enabled: true,
+        auto_trigger_delay_ms: 500,
+        manual_trigger_enabled: true,
+        max_prefix_chars: 16000,
+        max_suffix_chars: 4000,
+        max_related_files: 4,
+        max_related_file_bytes: 4096,
+        deny_globs: [".env*"],
+      }))
+      .mockResolvedValueOnce(jsonOk({
+        enabled: true,
+        provider_type: "openai_compatible",
+        base_url: "https://provider.test/v1",
+        model: "coder-lite",
+        api_key_set: true,
+        configured: true,
+        temperature: 0.1,
+        max_output_tokens: 64,
+        request_timeout_seconds: 8,
+        auto_trigger_enabled: true,
+        auto_trigger_delay_ms: 400,
+        manual_trigger_enabled: true,
+        max_prefix_chars: 12000,
+        max_suffix_chars: 3000,
+        max_related_files: 2,
+        max_related_file_bytes: 2048,
+        deny_globs: [".env*"],
+      }))
+      .mockResolvedValueOnce(jsonOk({
+        requestId: "req-1",
+        model: "coder-lite",
+        items: [{ insertText: "print('ok')", displayText: "print('ok')" }],
+        usage: { inputTokens: 12, outputTokens: 3 },
+        latencyMs: 20,
+        context: { relatedFiles: ["pkg/helper.py"], truncated: false },
+      }));
+
+    const client = new RealWebBotClient();
+    const config = await client.getInlineCompletionConfig();
+    const saved = await client.updateInlineCompletionConfig({
+      model: "coder-lite",
+      apiKey: "sk-new",
+      temperature: 0.1,
+      maxOutputTokens: 64,
+      autoTriggerDelayMs: 400,
+      maxPrefixChars: 12000,
+      maxSuffixChars: 3000,
+      maxRelatedFiles: 2,
+      maxRelatedFileBytes: 2048,
+    });
+    const result = await client.requestInlineCompletion("main", {
+      requestId: "req-1",
+      editorId: "editor-1",
+      path: "app.py",
+      languageId: "python",
+      cursor: { line: 1, column: 1, offset: 0 },
+      prefix: "",
+      suffix: "",
+      trigger: "manual",
+      lastModifiedNs: "42",
+    });
+
+    expect(config.apiKeySet).toBe(true);
+    expect(saved.model).toBe("coder-lite");
+    expect(result.items[0].insertText).toBe("print('ok')");
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/admin/inline-completion/config",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/admin/inline-completion/config",
+      expect.objectContaining({
+        method: "PATCH",
+      }),
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
+      api_key: "sk-new",
+      model: "coder-lite",
+      temperature: 0.1,
+      max_output_tokens: 64,
+      auto_trigger_delay_ms: 400,
+      max_prefix_chars: 12000,
+      max_suffix_chars: 3000,
+      max_related_files: 2,
+      max_related_file_bytes: 2048,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/bots/main/workspace/inline-completion",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          requestId: "req-1",
+          editorId: "editor-1",
+          path: "app.py",
+          languageId: "python",
+          cursor: { line: 1, column: 1, offset: 0 },
+          prefix: "",
+          suffix: "",
+          trigger: "manual",
+          lastModifiedNs: "42",
+        }),
+      }),
+    );
+  });
+
+  test("inline completion config preserves zero limits", async () => {
+    fetchMock.mockResolvedValueOnce(jsonOk({
+      enabled: true,
+      provider_type: "openai_compatible",
+      base_url: "https://provider.test/v1",
+      model: "coder",
+      api_key_set: true,
+      configured: true,
+      temperature: 0,
+      max_output_tokens: 96,
+      request_timeout_seconds: 8,
+      auto_trigger_enabled: true,
+      auto_trigger_delay_ms: 700,
+      manual_trigger_enabled: true,
+      max_prefix_chars: 16000,
+      max_suffix_chars: 0,
+      max_related_files: 0,
+      max_related_file_bytes: 4096,
+      deny_globs: [],
+    }));
+
+    const client = new RealWebBotClient();
+    const config = await client.getInlineCompletionConfig();
+
+    expect(config.temperature).toBe(0);
+    expect(config.maxSuffixChars).toBe(0);
+    expect(config.maxRelatedFiles).toBe(0);
+  });
+
+  test("inline completion runtime config uses workspace path", async () => {
+    fetchMock.mockResolvedValueOnce(jsonOk({
+      enabled: true,
+      provider_type: "openai_compatible",
+      base_url: "https://provider.test/v1",
+      model: "coder",
+      api_key_set: true,
+      configured: true,
+      temperature: 0.2,
+      max_output_tokens: 96,
+      request_timeout_seconds: 8,
+      auto_trigger_enabled: false,
+      auto_trigger_delay_ms: 1200,
+      manual_trigger_enabled: false,
+      max_prefix_chars: 16000,
+      max_suffix_chars: 4000,
+      max_related_files: 4,
+      max_related_file_bytes: 4096,
+      deny_globs: [],
+    }));
+
+    const client = new RealWebBotClient();
+    const config = await client.getInlineCompletionRuntimeConfig("main");
+
+    expect(config.autoTriggerEnabled).toBe(false);
+    expect(config.manualTriggerEnabled).toBe(false);
+    expect(config.autoTriggerDelayMs).toBe(1200);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/bots/main/workspace/inline-completion/config",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+  });
+
 
   test("cluster setup endpoints map snake case responses", async () => {
     const statusData = createClusterStatus({
@@ -3548,6 +3730,3 @@ describe("RealWebBotClient", () => {
 
   
   });
-
-
-

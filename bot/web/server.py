@@ -95,6 +95,8 @@ from .diagnostics import diag_enabled, diag_log_event, diag_log_slow, diag_loop_
 from .env_service import EnvConfigService, EnvValidationError
 from .exposure_service import WebExposureService
 from .fixed_forward_service import FixedForwardService
+from .inline_completion_config import InlineCompletionConfigError, InlineCompletionConfigStore
+from .inline_completion_service import InlineCompletionService, InlineCompletionServiceError
 from .lan_chat_service import LanChatService
 from .notification_service import ChatNotificationService
 from .os_open_service import DesktopOpenError, open_directory_in_desktop
@@ -105,6 +107,7 @@ from .auth_store import (
     CAP_CHAT_SEND,
     CAP_DEBUG_EXEC,
     CAP_GIT_OPS,
+    CAP_INLINE_COMPLETION,
     CAP_CREATE_WORKDIR_DIRECTORY,
     CAP_MANAGE_BOTS,
     CAP_MANAGE_REGISTER_CODES,
@@ -922,6 +925,8 @@ class WebApiServer:
             base_path=WEB_BASE_PATH,
         )
         self.transfer_service = TransferService(host=self._host, port=self._port)
+        self.inline_completion_config_store = InlineCompletionConfigStore()
+        self.inline_completion_service = InlineCompletionService(config_store=self.inline_completion_config_store)
 
     def _auth_context(self, request: web.Request) -> AuthContext:
         token_info = _extract_auth_token_info(request)
@@ -2683,6 +2688,28 @@ class WebApiServer:
         )
         return _json({"ok": True, "data": data})
 
+    async def get_workspace_inline_completion_config(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_INLINE_COMPLETION)
+        _require_capability(auth, CAP_READ_FILE_CONTENT)
+        return _json({"ok": True, "data": self.inline_completion_config_store.get_public_config()})
+
+    async def post_workspace_inline_completion(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_INLINE_COMPLETION)
+        _require_capability(auth, CAP_READ_FILE_CONTENT)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        workspace = Path(self._workspace_file_root(alias, auth)).expanduser().resolve()
+        try:
+            data = await self.inline_completion_service.complete(
+                account_id=auth.account_id,
+                alias=alias,
+                workspace_root=workspace,
+                request=body,
+            )
+        except InlineCompletionServiceError as exc:
+            raise WebApiError(exc.status, exc.code, exc.message) from exc
+        return _json({"ok": True, "data": data})
+
     async def post_cd(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_MUTATE_BROWSE_STATE)
         alias = self._manager_alias(request)
@@ -3874,6 +3901,18 @@ class WebApiServer:
         await self._with_capability(request, CAP_ADMIN_OPS)
         return _json({"ok": True, "data": self.env_config_service.snapshot()})
 
+    async def admin_inline_completion_config_get(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        return _json({"ok": True, "data": self.inline_completion_config_store.get_public_config()})
+
+    async def admin_inline_completion_config_patch(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        try:
+            data = self.inline_completion_config_store.update(await self._parse_json(request))
+        except InlineCompletionConfigError as exc:
+            raise WebApiError(exc.status, exc.code, exc.message) from exc
+        return _json({"ok": True, "data": data})
+
     async def admin_native_agent_config_get(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
         return _json({"ok": True, "data": get_native_agent_config_payload()})
@@ -4229,6 +4268,7 @@ class WebApiServer:
         if plugin_service is not None:
             await plugin_service.shutdown()
         await self.lan_chat_service.close()
+        await self.inline_completion_service.close()
         if preserve_tunnel:
             self._tunnel_service.preserve_for_restart()
         else:

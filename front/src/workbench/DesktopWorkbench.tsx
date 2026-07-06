@@ -110,6 +110,7 @@ type Props = {
   structureOnly?: boolean;
   canWriteFiles?: boolean;
   canOpenSystemFolder?: boolean;
+  canUseInlineCompletion?: boolean;
   chatReadOnly?: boolean;
   chatReadOnlyReason?: string;
   chatDisabledReason?: string;
@@ -153,6 +154,7 @@ export function DesktopWorkbench({
   structureOnly = false,
   canWriteFiles = true,
   canOpenSystemFolder = false,
+  canUseInlineCompletion = false,
   chatReadOnly = false,
   chatReadOnlyReason,
   chatDisabledReason,
@@ -1065,6 +1067,7 @@ export function DesktopWorkbench({
                   breakpointLines={tabs.activeTab ? debug.breakpointLinesForPath(tabs.activeTab.path) : []}
                   currentLine={activeEditorLine}
                   allowCodeJump={allowCodeJump}
+                  canUseInlineCompletion={canUseInlineCompletion}
                   onResolveDefinition={(input) => {
                     void handleResolveDefinition(input);
                   }}
@@ -1316,4 +1319,3 @@ export function DesktopWorkbench({
     </div>
   );
 }
-

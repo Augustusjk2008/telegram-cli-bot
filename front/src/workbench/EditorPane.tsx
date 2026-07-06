@@ -1,10 +1,10 @@
 import { clsx } from "clsx";
 import { ChevronDown, Maximize2, Minimize2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { FileEditorSurface } from "../components/FileEditorSurface";
 import { GitDiffViewer } from "../components/GitDiffViewer";
 import { PluginViewSurface } from "../components/plugin-renderers/PluginViewSurface";
-import type { HostEffect, PluginOpenTarget } from "../services/types";
+import type { HostEffect, InlineCompletionConfig, PluginOpenTarget } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import type { EditorTab } from "./workbenchTypes";
 
@@ -17,6 +17,7 @@ type Props = {
   breakpointLines?: number[];
   currentLine?: number | null;
   allowCodeJump?: boolean;
+  canUseInlineCompletion?: boolean;
   onToggleBreakpoint?: (line: number) => void;
   onResolveDefinition?: (input: { path: string; line: number; column: number; symbol?: string }) => void;
   onActivateTab: (path: string) => void | Promise<void>;
@@ -37,6 +38,22 @@ type Props = {
 
 function pluginTargetLabel(target: PluginOpenTarget) {
   return target.title.trim() || "Mermaid 转 Visio";
+}
+
+function inferLanguageId(path: string) {
+  const normalized = path.toLowerCase();
+  if (/\.py$/.test(normalized)) return "python";
+  if (/\.tsx$/.test(normalized)) return "typescriptreact";
+  if (/\.ts$/.test(normalized)) return "typescript";
+  if (/\.jsx$/.test(normalized)) return "javascriptreact";
+  if (/\.(js|mjs|cjs)$/.test(normalized)) return "javascript";
+  if (/\.json$/.test(normalized)) return "json";
+  if (/\.(md|markdown)$/.test(normalized)) return "markdown";
+  if (/\.(html|htm)$/.test(normalized)) return "html";
+  if (/\.css$/.test(normalized)) return "css";
+  if (/\.(v|vh|sv|svh)$/.test(normalized)) return "verilog";
+  if (/\.(c|cc|cp|cpp|cxx|h|hh|hpp|hxx)$/.test(normalized)) return "cpp";
+  return "";
 }
 
 function PluginViewLoading() {
@@ -68,6 +85,7 @@ export function EditorPane({
   breakpointLines = [],
   currentLine = null,
   allowCodeJump = true,
+  canUseInlineCompletion = false,
   onToggleBreakpoint,
   onResolveDefinition,
   onActivateTab,
@@ -85,6 +103,49 @@ export function EditorPane({
   focused,
   onToggleFocus,
 }: Props) {
+  const [inlineCompletionConfig, setInlineCompletionConfig] = useState<InlineCompletionConfig | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!canUseInlineCompletion) {
+      setInlineCompletionConfig(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+    void client.getInlineCompletionRuntimeConfig(botAlias)
+      .then((config) => {
+        if (!cancelled) {
+          setInlineCompletionConfig(config);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setInlineCompletionConfig(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [botAlias, canUseInlineCompletion, client]);
+
+  const inlineCompletion = useMemo(() => {
+    if (!activeTab || !canUseInlineCompletion || activeTab.kind !== "file" || !inlineCompletionConfig?.configured) {
+      return undefined;
+    }
+    return {
+      editorId: `workbench:${botAlias}:${activeTab.path}`,
+      path: activeTab.path,
+      languageId: inferLanguageId(activeTab.path),
+      lastModifiedNs: activeTab.lastModifiedNs,
+      disabled: activeTab.loading || activeTab.saving || Boolean(activeTab.readOnly),
+      autoTriggerEnabled: inlineCompletionConfig.autoTriggerEnabled,
+      manualTriggerEnabled: inlineCompletionConfig.manualTriggerEnabled,
+      autoTriggerDelayMs: Math.max(700, inlineCompletionConfig.autoTriggerDelayMs),
+      request: (input, signal) => client.requestInlineCompletion(botAlias, input, signal),
+    };
+  }, [activeTab, botAlias, canUseInlineCompletion, client, inlineCompletionConfig]);
+
   const [menuPath, setMenuPath] = useState("");
   const [pluginMenuOpen, setPluginMenuOpen] = useState(false);
 
@@ -350,6 +411,7 @@ export function EditorPane({
             statusText=""
             error=""
             hideHeader
+            inlineCompletion={inlineCompletion}
             onToggleBreakpoint={onToggleBreakpoint}
             onResolveDefinition={allowCodeJump ? onResolveDefinition : undefined}
             onChange={onChangeActiveContent}

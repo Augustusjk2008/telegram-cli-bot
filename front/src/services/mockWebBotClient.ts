@@ -98,6 +98,10 @@ import type {
   GitTreeStatus,
   FileMoveResult,
   FileRenameResult,
+  InlineCompletionConfig,
+  InlineCompletionConfigInput,
+  InlineCompletionRequest,
+  InlineCompletionResult,
   LanChatConfig,
   LanChatConfigInput,
   LanChatConversation,
@@ -219,7 +223,7 @@ const MEMBER_CAPABILITIES: Capability[] = [
   "run_plugins",
   "admin_ops",
 ];
-const SUPER_ADMIN_CAPABILITIES: Capability[] = [...MEMBER_CAPABILITIES, "manage_register_codes"];
+const SUPER_ADMIN_CAPABILITIES: Capability[] = [...MEMBER_CAPABILITIES, "inline_completion", "manage_register_codes"];
 const GUEST_CAPABILITIES: Capability[] = [
   "view_bots",
   "view_bot_status",
@@ -1419,6 +1423,25 @@ export class MockWebBotClient implements WebBotClient {
         enabled: true,
       },
     ],
+  };
+  private inlineCompletionConfig: InlineCompletionConfig = {
+    enabled: false,
+    providerType: "openai_compatible",
+    baseUrl: "",
+    apiKeySet: false,
+    configured: false,
+    model: "",
+    temperature: 0.2,
+    maxOutputTokens: 96,
+    requestTimeoutSeconds: 8,
+    autoTriggerEnabled: true,
+    autoTriggerDelayMs: 700,
+    manualTriggerEnabled: true,
+    maxPrefixChars: 16000,
+    maxSuffixChars: 4000,
+    maxRelatedFiles: 4,
+    maxRelatedFileBytes: 4096,
+    denyGlobs: [".env*", "managed_bots.json", "*.pem", "*.key", ".git/**", "node_modules/**", "dist/**", "build/**"],
   };
   private gitOverviews = new Map<string, GitOverview>([
     [
@@ -2930,6 +2953,76 @@ export class MockWebBotClient implements WebBotClient {
       lastError: "",
     };
     return this.getTransferBridgeStatus();
+  }
+
+  async getInlineCompletionConfig(): Promise<InlineCompletionConfig> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权查看 AI inline 补全配置", { status: 403, code: "forbidden" });
+    }
+    return { ...this.inlineCompletionConfig, denyGlobs: [...this.inlineCompletionConfig.denyGlobs] };
+  }
+
+  async updateInlineCompletionConfig(input: InlineCompletionConfigInput): Promise<InlineCompletionConfig> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权修改 AI inline 补全配置", { status: 403, code: "forbidden" });
+    }
+    const apiKeySet = input.clearApiKey
+      ? false
+      : input.apiKey
+        ? true
+        : this.inlineCompletionConfig.apiKeySet;
+    const next: InlineCompletionConfig = {
+      ...this.inlineCompletionConfig,
+      enabled: input.enabled ?? this.inlineCompletionConfig.enabled,
+      providerType: input.providerType ?? this.inlineCompletionConfig.providerType,
+      baseUrl: input.baseUrl ?? this.inlineCompletionConfig.baseUrl,
+      apiKeySet,
+      model: input.model ?? this.inlineCompletionConfig.model,
+      temperature: input.temperature ?? this.inlineCompletionConfig.temperature,
+      maxOutputTokens: input.maxOutputTokens ?? this.inlineCompletionConfig.maxOutputTokens,
+      requestTimeoutSeconds: input.requestTimeoutSeconds ?? this.inlineCompletionConfig.requestTimeoutSeconds,
+      autoTriggerEnabled: input.autoTriggerEnabled ?? this.inlineCompletionConfig.autoTriggerEnabled,
+      autoTriggerDelayMs: input.autoTriggerDelayMs ?? this.inlineCompletionConfig.autoTriggerDelayMs,
+      manualTriggerEnabled: input.manualTriggerEnabled ?? this.inlineCompletionConfig.manualTriggerEnabled,
+      maxPrefixChars: input.maxPrefixChars ?? this.inlineCompletionConfig.maxPrefixChars,
+      maxSuffixChars: input.maxSuffixChars ?? this.inlineCompletionConfig.maxSuffixChars,
+      maxRelatedFiles: input.maxRelatedFiles ?? this.inlineCompletionConfig.maxRelatedFiles,
+      maxRelatedFileBytes: input.maxRelatedFileBytes ?? this.inlineCompletionConfig.maxRelatedFileBytes,
+      denyGlobs: input.denyGlobs ? [...input.denyGlobs] : [...this.inlineCompletionConfig.denyGlobs],
+      configured: false,
+    };
+    next.configured = Boolean(next.enabled && next.baseUrl && next.model && next.apiKeySet);
+    this.inlineCompletionConfig = next;
+    return this.getInlineCompletionConfig();
+  }
+
+  async getInlineCompletionRuntimeConfig(_botAlias: string): Promise<InlineCompletionConfig> {
+    return { ...this.inlineCompletionConfig, denyGlobs: [...this.inlineCompletionConfig.denyGlobs] };
+  }
+
+  async requestInlineCompletion(
+    _botAlias: string,
+    input: InlineCompletionRequest,
+    signal?: AbortSignal,
+  ): Promise<InlineCompletionResult> {
+    signal?.throwIfAborted?.();
+    if (!this.inlineCompletionConfig.configured) {
+      return {
+        requestId: input.requestId,
+        model: this.inlineCompletionConfig.model,
+        items: [],
+        latencyMs: 0,
+        context: { relatedFiles: [], truncated: false },
+      };
+    }
+    return {
+      requestId: input.requestId,
+      model: this.inlineCompletionConfig.model,
+      items: [{ insertText: "console.log(value)", displayText: "console.log(value)" }],
+      usage: { inputTokens: 12, outputTokens: 4 },
+      latencyMs: 12,
+      context: { relatedFiles: [], truncated: false },
+    };
   }
 
   async getNotificationSettings(): Promise<NotificationSettingsStatus> {
@@ -6272,4 +6365,3 @@ export async function streamAssistantReply(onChunk: (chunk: string) => void) {
     onChunk(chunk);
   }
 }
-

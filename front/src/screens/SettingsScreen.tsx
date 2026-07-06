@@ -2,6 +2,7 @@ import { clsx } from "clsx";
 import { useEffect, useState } from "react";
 import { AlertTriangle, Bell, LogOut, Save, SlidersHorizontal, Square } from "lucide-react";
 import { AgentSettingsPanel } from "../components/AgentSettingsPanel";
+import { AiInlineCompletionSettingsPanel } from "../components/AiInlineCompletionSettingsPanel";
 import { BotCliParamsPanel } from "../components/BotCliParamsPanel";
 import { ClusterSetupPanel } from "../components/ClusterSetupPanel";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
@@ -187,6 +188,7 @@ export function SettingsScreen({
     || sessionCapabilities.includes("manage_bots")
     || sessionCapabilities.includes("admin_ops");
   const canConfigureBot = overview ? overview.canOperate !== false : canManageBotRuntime;
+  const canManageInlineCompletion = sessionCapabilities.length === 0 || sessionCapabilities.includes("admin_ops");
   const runtimeBackend = getRuntimeBackend(overview);
   const nativeRuntime = runtimeBackend === "native_agent";
   const draftNativeRuntime = runtimeBackendDraft === "native_agent";
@@ -585,6 +587,20 @@ export function SettingsScreen({
             </button>
           </div>
         </div>
+
+        {canManageInlineCompletion ? (
+          <AiInlineCompletionSettingsPanel
+            client={client}
+            onSaved={() => {
+              setError("");
+              setNotice("AI inline 补全配置已保存");
+            }}
+            onError={(message) => {
+              setNotice("");
+              setError(message);
+            }}
+          />
+        ) : null}
 
         {overview ? (
           showBotRuntimeSettings ? (

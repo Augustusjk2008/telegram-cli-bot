@@ -257,6 +257,7 @@ export function App() {
   const canUseDebug = hasCapability(session, "debug_exec");
   const canUseGit = hasCapability(session, "git_ops");
   const canViewPlugins = hasCapability(session, "view_plugins");
+  const canUseInlineCompletion = hasCapability(session, "inline_completion");
   const canUseHostSettings = hasCapability(session, "admin_ops");
   const canManageBots = hasCapability(session, "manage_bots") || hasCapability(session, "admin_ops");
   const canCreateWorkdirDirectory = hasCapability(session, "create_workdir_directory") || canManageBots;
@@ -947,6 +948,7 @@ export function App() {
           structureOnly={structureOnly}
           canWriteFiles={canWriteCurrentBotFiles}
           canOpenSystemFolder={Boolean(session?.isLocalAdmin) && hasCapability(session, "admin_ops") && canOperateCurrentBot}
+          canUseInlineCompletion={canOperateCurrentBot && canUseInlineCompletion}
         />
       </div>
     );
@@ -1120,6 +1122,7 @@ export function App() {
               structureOnly={structureOnly}
               canWriteFiles={canWriteCurrentBotFiles}
               canOpenSystemFolder={Boolean(session?.isLocalAdmin) && hasCapability(session, "admin_ops") && canOperateCurrentBot}
+              canUseInlineCompletion={canOperateCurrentBot && canUseInlineCompletion}
               chatReadOnly={chatReadOnly || !canOperateCurrentBot}
               chatDisabledReason={chatDisabledReason}
               botCanOperate={canOperateCurrentBot}

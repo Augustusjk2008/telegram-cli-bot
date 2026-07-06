@@ -9,10 +9,12 @@ def register(app: web.Application, server) -> None:
     app.router.add_get("/api/bots/{alias}/workspace/quick-open", server.get_workspace_quick_open)
     app.router.add_get("/api/bots/{alias}/workspace/search", server.get_workspace_search)
     app.router.add_get("/api/bots/{alias}/workspace/outline", server.get_workspace_outline)
+    app.router.add_get("/api/bots/{alias}/workspace/inline-completion/config", server.get_workspace_inline_completion_config)
     app.router.add_post(
         "/api/bots/{alias}/workspace/resolve-definition",
         server.post_workspace_resolve_definition,
     )
+    app.router.add_post("/api/bots/{alias}/workspace/inline-completion", server.post_workspace_inline_completion)
     app.router.add_post("/api/bots/{alias}/cd", server.post_cd)
     app.router.add_post("/api/bots/{alias}/files/upload", server.upload_file)
     app.router.add_post("/api/bots/{alias}/chat/attachments", server.upload_chat_attachment)

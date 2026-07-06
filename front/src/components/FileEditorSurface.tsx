@@ -1,5 +1,6 @@
 import { type ComponentType, useEffect, useMemo, useState } from "react";
 import { isLightUiTheme } from "../theme";
+import { createFileEditorInlineCompletion, type FileEditorInlineCompletionOptions } from "../utils/fileEditorInlineCompletion";
 import { loadFileEditorExtensions } from "../utils/fileEditorLanguage";
 
 type Props = {
@@ -15,6 +16,7 @@ type Props = {
   statusText?: string;
   error?: string;
   hideHeader?: boolean;
+  inlineCompletion?: FileEditorInlineCompletionOptions;
   onToggleBreakpoint?: (line: number) => void;
   onResolveDefinition?: (input: { path: string; line: number; column: number; symbol?: string }) => void;
   onChange: (value: string) => void;
@@ -246,6 +248,7 @@ export function FileEditorSurface({
   statusText = "",
   error = "",
   hideHeader = false,
+  inlineCompletion,
   onToggleBreakpoint,
   onResolveDefinition,
   onChange,
@@ -304,7 +307,7 @@ export function FileEditorSurface({
     if (!editorRuntime) {
       return [];
     }
-    return [
+    const extensions = [
       ...editorRuntime.languageExtensions,
       ...createDebugExtensions(
         editorRuntime.viewModule,
@@ -315,7 +318,11 @@ export function FileEditorSurface({
       ),
       createEditorTheme(editorRuntime.viewModule.EditorView, codeMirrorTheme),
     ];
-  }, [codeMirrorTheme, currentLine, editorRuntime, normalizedBreakpointLines, onToggleBreakpoint]);
+    if (inlineCompletion) {
+      extensions.push(...createFileEditorInlineCompletion(inlineCompletion));
+    }
+    return extensions;
+  }, [codeMirrorTheme, currentLine, editorRuntime, inlineCompletion, normalizedBreakpointLines, onToggleBreakpoint]);
 
   const CodeMirrorEditor = editorRuntime?.CodeMirrorEditor ?? null;
 

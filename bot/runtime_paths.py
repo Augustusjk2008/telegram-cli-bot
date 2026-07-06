@@ -107,6 +107,10 @@ def get_transfer_trace_path() -> Path:
     return get_app_data_root() / "transfer" / "trace.jsonl"
 
 
+def get_inline_completion_config_path() -> Path:
+    return get_app_data_root() / "inline-completion" / "config.json"
+
+
 def get_tunnel_state_path() -> Path:
     return get_app_data_root() / "tunnel" / "state.json"
 

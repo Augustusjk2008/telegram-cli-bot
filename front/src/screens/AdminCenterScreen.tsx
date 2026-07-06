@@ -102,6 +102,7 @@ const DEFAULT_ANNOUNCEMENT_DRAFT: CreateAnnouncementInput = {
 const ACCOUNT_CAPABILITY_OPTIONS: Array<{ id: Capability; label: string }> = [
   { id: "chat_send", label: "聊天" },
   { id: "read_file_content", label: "读文件" },
+  { id: "inline_completion", label: "AI 补全" },
   { id: "write_files", label: "写文件" },
   { id: "terminal_exec", label: "终端" },
   { id: "debug_exec", label: "调试" },

@@ -12,6 +12,7 @@ export type Capability =
   | "view_chat_history"
   | "view_chat_trace"
   | "read_file_content"
+  | "inline_completion"
   | "write_files"
   | "chat_send"
   | "terminal_exec"
@@ -155,6 +156,61 @@ export type TransferBridgeConfigInput = {
   reasoningMode?: string;
   downgradeDeveloperToSystem?: boolean;
   useLegacyMaxTokens?: boolean;
+};
+
+export type InlineCompletionConfig = {
+  enabled: boolean;
+  providerType: "openai_compatible" | string;
+  baseUrl: string;
+  apiKeySet: boolean;
+  configured: boolean;
+  model: string;
+  temperature: number;
+  maxOutputTokens: number;
+  requestTimeoutSeconds: number;
+  autoTriggerEnabled: boolean;
+  autoTriggerDelayMs: number;
+  manualTriggerEnabled: boolean;
+  maxPrefixChars: number;
+  maxSuffixChars: number;
+  maxRelatedFiles: number;
+  maxRelatedFileBytes: number;
+  denyGlobs: string[];
+};
+
+export type InlineCompletionConfigInput = Partial<Omit<InlineCompletionConfig, "apiKeySet" | "configured" | "providerType">> & {
+  providerType?: string;
+  apiKey?: string;
+  clearApiKey?: boolean;
+};
+
+export type InlineCompletionRequest = {
+  requestId: string;
+  editorId: string;
+  path: string;
+  languageId: string;
+  cursor: { line: number; column: number; offset: number };
+  prefix: string;
+  suffix: string;
+  trigger: "auto" | "manual";
+  lastModifiedNs?: string;
+};
+
+export type InlineCompletionResult = {
+  requestId: string;
+  model: string;
+  items: Array<{
+    insertText: string;
+    displayText?: string;
+    replaceFrom?: number;
+    replaceTo?: number;
+  }>;
+  usage?: { inputTokens?: number; outputTokens?: number };
+  latencyMs: number;
+  context: {
+    relatedFiles: string[];
+    truncated: boolean;
+  };
 };
 
 export type EnvConfigFieldType = "string" | "number" | "boolean" | "select" | "csv" | "path" | "password";
@@ -2261,4 +2317,3 @@ export type LanChatEvent =
   | { type: "presence_updated"; status?: LanChatStatus }
   | { type: "read_updated"; conversationId: string; lastReadSeq: number }
   | { type: "config_updated"; config: LanChatConfig };
-

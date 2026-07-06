@@ -120,6 +120,10 @@ import type {
   TerminalActionsEditableConfig,
   TransferBridgeConfigInput,
   TransferBridgeStatus,
+  InlineCompletionConfig,
+  InlineCompletionConfigInput,
+  InlineCompletionRequest,
+  InlineCompletionResult,
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
   UserBotPermissions,
@@ -152,6 +156,10 @@ export interface WebBotClient {
   getTransferAdminStatus(): Promise<TransferBridgeStatus>;
   updateTransferBridgeConfig(input: TransferBridgeConfigInput): Promise<TransferBridgeStatus>;
   resetTransferBridgeStats(): Promise<TransferBridgeStatus>;
+  getInlineCompletionConfig(): Promise<InlineCompletionConfig>;
+  updateInlineCompletionConfig(input: InlineCompletionConfigInput): Promise<InlineCompletionConfig>;
+  getInlineCompletionRuntimeConfig(botAlias: string): Promise<InlineCompletionConfig>;
+  requestInlineCompletion(botAlias: string, input: InlineCompletionRequest, signal?: AbortSignal): Promise<InlineCompletionResult>;
   getEnvConfig(): Promise<EnvConfigSnapshot>;
   previewEnvConfig(input: EnvConfigPatchInput): Promise<EnvConfigPatchResult>;
   updateEnvConfig(input: EnvConfigPatchInput): Promise<EnvConfigPatchResult>;
@@ -366,4 +374,3 @@ export interface WebBotClient {
   stopTunnel(): Promise<TunnelSnapshot>;
   restartTunnel(): Promise<TunnelSnapshot>;
 }
-

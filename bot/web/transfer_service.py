@@ -17,6 +17,11 @@ from urllib.parse import urlparse
 from aiohttp import ClientResponse, ClientSession, ClientTimeout
 
 from bot.runtime_paths import get_transfer_config_path, get_transfer_trace_path
+from bot.web.openai_compatible_client import (
+    OpenAICompatibleClient,
+    OpenAICompatibleClientError,
+    build_openai_compatible_headers,
+)
 
 REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh"}
 UNSUPPORTED_RESPONSE_TOOLS = {
@@ -664,10 +669,7 @@ class TransferService:
         return f"{self.config.remote_base_url.rstrip('/')}/chat/completions"
 
     def build_remote_headers(self) -> dict[str, str]:
-        headers = {"Content-Type": "application/json"}
-        if self.config.remote_api_key:
-            headers["Authorization"] = f"Bearer {self.config.remote_api_key}"
-        return headers
+        return build_openai_compatible_headers(self.config.remote_api_key)
 
     def apply_reasoning_effort_fallback(self, effort: str, model: str) -> str:
         host = urlparse(self.config.remote_base_url).netloc.lower()
@@ -767,12 +769,12 @@ class TransferService:
 
     async def _post_json(self, url: str, body: dict[str, Any]) -> dict[str, Any]:
         assert self._client is not None
-        async with self._client.post(url, json=body, headers=self.build_remote_headers()) as response:
-            await self._raise_for_status(response)
-            data = await response.json(content_type=None)
-            if not isinstance(data, dict):
-                raise TransferServiceError(502, "Remote API returned non-object JSON", code="invalid_remote_response")
-            return data
+        client = OpenAICompatibleClient(self._client)
+        try:
+            return await client.post_json(url=url, api_key=self.config.remote_api_key, body=body)
+        except OpenAICompatibleClientError as exc:
+            self.last_error = exc.message[:500]
+            raise TransferServiceError(exc.status, exc.message, code=exc.code) from exc
 
     async def _stream_response(self, chat_body: dict[str, Any], original_model: str, bytes_in: int, start_time: float) -> AsyncIterator[dict[str, Any]]:
         assert self._client is not None

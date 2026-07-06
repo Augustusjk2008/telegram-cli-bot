@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, FilePlus, FolderOpen, FolderPlus, House, Upload } from "lucide-react";
 import { FileEditorSurface } from "../components/FileEditorSurface";
 import { FileList } from "../components/FileList";
@@ -7,7 +7,7 @@ import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import { SurfacePanel } from "../components/SurfacePanel";
 import { ToolbarButton } from "../components/ToolbarButton";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { FileDownloadProgress, FileEntry, FileReadResult } from "../services/types";
+import type { FileDownloadProgress, FileEntry, FileReadResult, InlineCompletionConfig } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import {
   getFilePreviewStatusText,
@@ -23,6 +23,7 @@ type Props = {
   structureOnly?: boolean;
   canWriteFiles?: boolean;
   canOpenSystemFolder?: boolean;
+  canUseInlineCompletion?: boolean;
 };
 
 function joinBrowserPath(basePath: string, name: string) {
@@ -75,12 +76,29 @@ function formatDownloadDetail(progress: ActiveDownload) {
   return formatBytes(progress.downloadedBytes);
 }
 
+function inferLanguageId(path: string) {
+  const normalized = path.toLowerCase();
+  if (/\.py$/.test(normalized)) return "python";
+  if (/\.tsx$/.test(normalized)) return "typescriptreact";
+  if (/\.ts$/.test(normalized)) return "typescript";
+  if (/\.jsx$/.test(normalized)) return "javascriptreact";
+  if (/\.(js|mjs|cjs)$/.test(normalized)) return "javascript";
+  if (/\.json$/.test(normalized)) return "json";
+  if (/\.(md|markdown)$/.test(normalized)) return "markdown";
+  if (/\.(html|htm)$/.test(normalized)) return "html";
+  if (/\.css$/.test(normalized)) return "css";
+  if (/\.(v|vh|sv|svh)$/.test(normalized)) return "verilog";
+  if (/\.(c|cc|cp|cpp|cxx|h|hh|hpp|hxx)$/.test(normalized)) return "cpp";
+  return "";
+}
+
 export function FilesScreen({
   botAlias,
   client = new MockWebBotClient(),
   structureOnly = false,
   canWriteFiles = true,
   canOpenSystemFolder = false,
+  canUseInlineCompletion = false,
 }: Props) {
   const [currentPath, setCurrentPath] = useState("");
   const [files, setFiles] = useState<FileEntry[]>([]);
@@ -112,10 +130,52 @@ export function FilesScreen({
   const [renameError, setRenameError] = useState("");
   const [downloadProgress, setDownloadProgress] = useState<ActiveDownload | null>(null);
   const [statusText, setStatusText] = useState("");
+  const [inlineCompletionConfig, setInlineCompletionConfig] = useState<InlineCompletionConfig | null>(null);
   const listingRequestSeqRef = useRef(0);
   const previewRequestSeqRef = useRef(0);
   const canPreviewFiles = !structureOnly;
   const canMutateFiles = canPreviewFiles && canWriteFiles;
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!canUseInlineCompletion) {
+      setInlineCompletionConfig(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+    void client.getInlineCompletionRuntimeConfig(botAlias)
+      .then((config) => {
+        if (!cancelled) {
+          setInlineCompletionConfig(config);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setInlineCompletionConfig(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [botAlias, canUseInlineCompletion, client]);
+
+  const inlineCompletion = useMemo(() => {
+    if (!canUseInlineCompletion || !editorPath || !inlineCompletionConfig?.configured) {
+      return undefined;
+    }
+    return {
+      editorId: `files:${botAlias}:${editorPath}`,
+      path: editorPath,
+      languageId: inferLanguageId(editorPath),
+      lastModifiedNs: editorLastModifiedNs,
+      disabled: editorLoading || editorSaving,
+      autoTriggerEnabled: inlineCompletionConfig.autoTriggerEnabled,
+      manualTriggerEnabled: inlineCompletionConfig.manualTriggerEnabled,
+      autoTriggerDelayMs: Math.max(700, inlineCompletionConfig.autoTriggerDelayMs),
+      request: (input, signal) => client.requestInlineCompletion(botAlias, input, signal),
+    };
+  }, [botAlias, canUseInlineCompletion, client, editorLastModifiedNs, editorLoading, editorPath, editorSaving, inlineCompletionConfig]);
 
   async function loadListing(targetPath?: string) {
     const requestSeq = listingRequestSeqRef.current + 1;
@@ -618,6 +678,7 @@ export function FilesScreen({
           canSave={isDirty}
           statusText={editorStatusText}
           error={editorError}
+          inlineCompletion={inlineCompletion}
           onChange={handleEditorChange}
           onSave={() => void handleSaveEditor()}
           onClose={handleCloseEditor}

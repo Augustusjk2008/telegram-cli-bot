@@ -24,6 +24,7 @@ CAP_MUTATE_BROWSE_STATE = "mutate_browse_state"
 CAP_VIEW_CHAT_HISTORY = "view_chat_history"
 CAP_VIEW_CHAT_TRACE = "view_chat_trace"
 CAP_READ_FILE_CONTENT = "read_file_content"
+CAP_INLINE_COMPLETION = "inline_completion"
 CAP_WRITE_FILES = "write_files"
 CAP_CHAT_SEND = "chat_send"
 CAP_TERMINAL_EXEC = "terminal_exec"
@@ -46,6 +47,7 @@ _HIGH_RISK_MEMBER_CAPABILITIES = frozenset(
         CAP_CREATE_WORKDIR_DIRECTORY,
         CAP_DEBUG_EXEC,
         CAP_GIT_OPS,
+        CAP_INLINE_COMPLETION,
         CAP_MANAGE_BOTS,
         CAP_MANAGE_CLI_PARAMS,
         CAP_RUN_UNSAFE_CLI,

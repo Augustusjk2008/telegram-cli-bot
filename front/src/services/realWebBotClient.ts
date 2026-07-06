@@ -133,6 +133,10 @@ import type {
   FileReadResult,
   FileRenameResult,
   FileWriteResult,
+  InlineCompletionConfig,
+  InlineCompletionConfigInput,
+  InlineCompletionRequest,
+  InlineCompletionResult,
   PluginActionInvokeInput,
   PluginActionResult,
   InstallablePluginSummary,
@@ -337,6 +341,26 @@ type RawTransferBridgeStatus = {
   use_legacy_max_tokens?: boolean;
   restart_required?: boolean;
   restart_required_reason?: string;
+};
+
+type RawInlineCompletionConfig = {
+  enabled?: boolean;
+  provider_type?: string;
+  base_url?: string;
+  api_key_set?: boolean;
+  configured?: boolean;
+  model?: string;
+  temperature?: number;
+  max_output_tokens?: number;
+  request_timeout_seconds?: number;
+  auto_trigger_enabled?: boolean;
+  auto_trigger_delay_ms?: number;
+  manual_trigger_enabled?: boolean;
+  max_prefix_chars?: number;
+  max_suffix_chars?: number;
+  max_related_files?: number;
+  max_related_file_bytes?: number;
+  deny_globs?: string[];
 };
 
 type RawNotificationSettings = {
@@ -2964,6 +2988,50 @@ function mapTransferBridgeConfigInput(input: TransferBridgeConfigInput) {
   };
 }
 
+function mapInlineCompletionConfig(raw: RawInlineCompletionConfig): InlineCompletionConfig {
+  return {
+    enabled: Boolean(raw.enabled),
+    providerType: String(raw.provider_type || "openai_compatible"),
+    baseUrl: String(raw.base_url || ""),
+    apiKeySet: Boolean(raw.api_key_set),
+    configured: Boolean(raw.configured),
+    model: String(raw.model || ""),
+    temperature: Number(raw.temperature ?? 0.2),
+    maxOutputTokens: Number(raw.max_output_tokens ?? 96),
+    requestTimeoutSeconds: Number(raw.request_timeout_seconds ?? 8),
+    autoTriggerEnabled: raw.auto_trigger_enabled !== false,
+    autoTriggerDelayMs: Number(raw.auto_trigger_delay_ms ?? 700),
+    manualTriggerEnabled: raw.manual_trigger_enabled !== false,
+    maxPrefixChars: Number(raw.max_prefix_chars ?? 16000),
+    maxSuffixChars: Number(raw.max_suffix_chars ?? 4000),
+    maxRelatedFiles: Number(raw.max_related_files ?? 4),
+    maxRelatedFileBytes: Number(raw.max_related_file_bytes ?? 4096),
+    denyGlobs: Array.isArray(raw.deny_globs) ? raw.deny_globs.map((item) => String(item)) : [],
+  };
+}
+
+function mapInlineCompletionConfigInput(input: InlineCompletionConfigInput) {
+  return {
+    ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+    ...(input.providerType !== undefined ? { provider_type: input.providerType } : {}),
+    ...(input.baseUrl !== undefined ? { base_url: input.baseUrl } : {}),
+    ...(input.apiKey ? { api_key: input.apiKey } : {}),
+    ...(input.clearApiKey !== undefined ? { clear_api_key: input.clearApiKey } : {}),
+    ...(input.model !== undefined ? { model: input.model } : {}),
+    ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+    ...(input.maxOutputTokens !== undefined ? { max_output_tokens: input.maxOutputTokens } : {}),
+    ...(input.requestTimeoutSeconds !== undefined ? { request_timeout_seconds: input.requestTimeoutSeconds } : {}),
+    ...(input.autoTriggerEnabled !== undefined ? { auto_trigger_enabled: input.autoTriggerEnabled } : {}),
+    ...(input.autoTriggerDelayMs !== undefined ? { auto_trigger_delay_ms: input.autoTriggerDelayMs } : {}),
+    ...(input.manualTriggerEnabled !== undefined ? { manual_trigger_enabled: input.manualTriggerEnabled } : {}),
+    ...(input.maxPrefixChars !== undefined ? { max_prefix_chars: input.maxPrefixChars } : {}),
+    ...(input.maxSuffixChars !== undefined ? { max_suffix_chars: input.maxSuffixChars } : {}),
+    ...(input.maxRelatedFiles !== undefined ? { max_related_files: input.maxRelatedFiles } : {}),
+    ...(input.maxRelatedFileBytes !== undefined ? { max_related_file_bytes: input.maxRelatedFileBytes } : {}),
+    ...(input.denyGlobs !== undefined ? { deny_globs: input.denyGlobs } : {}),
+  };
+}
+
 function mapCliErrorStatsSummary(raw: RawCliErrorStatsSummary | undefined): CliErrorStatsSummary {
   return {
     total: Number(raw?.total || 0),
@@ -3728,6 +3796,47 @@ export class RealWebBotClient implements WebBotClient {
       method: "POST",
     });
     return mapTransferBridgeStatus(data);
+  }
+
+  async getInlineCompletionConfig(): Promise<InlineCompletionConfig> {
+    const data = await this.requestJson<RawInlineCompletionConfig>("/api/admin/inline-completion/config");
+    return mapInlineCompletionConfig(data);
+  }
+
+  async updateInlineCompletionConfig(input: InlineCompletionConfigInput): Promise<InlineCompletionConfig> {
+    const data = await this.requestJson<RawInlineCompletionConfig>("/api/admin/inline-completion/config", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(mapInlineCompletionConfigInput(input)),
+    });
+    return mapInlineCompletionConfig(data);
+  }
+
+  async getInlineCompletionRuntimeConfig(botAlias: string): Promise<InlineCompletionConfig> {
+    const data = await this.requestJson<RawInlineCompletionConfig>(
+      `/api/bots/${encodeURIComponent(botAlias)}/workspace/inline-completion/config`,
+    );
+    return mapInlineCompletionConfig(data);
+  }
+
+  async requestInlineCompletion(
+    botAlias: string,
+    input: InlineCompletionRequest,
+    signal?: AbortSignal,
+  ): Promise<InlineCompletionResult> {
+    return this.requestJson<InlineCompletionResult>(
+      `/api/bots/${encodeURIComponent(botAlias)}/workspace/inline-completion`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(input),
+        signal,
+      },
+    );
   }
 
   async getEnvConfig(): Promise<EnvConfigSnapshot> {
@@ -5949,4 +6058,3 @@ export class RealWebBotClient implements WebBotClient {
   }
 
 }
-

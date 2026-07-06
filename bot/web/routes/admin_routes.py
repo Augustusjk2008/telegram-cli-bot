@@ -28,6 +28,8 @@ def register(app: web.Application, server) -> None:
     app.router.add_post("/api/admin/update/offline/prepare", server.admin_update_offline_prepare)
     app.router.add_post("/api/admin/update/offline/prepare/stream", server.admin_update_offline_prepare_stream)
     app.router.add_get("/api/admin/env", server.admin_env_get)
+    app.router.add_get("/api/admin/inline-completion/config", server.admin_inline_completion_config_get)
+    app.router.add_patch("/api/admin/inline-completion/config", server.admin_inline_completion_config_patch)
     app.router.add_get("/api/admin/native-agent/config", server.admin_native_agent_config_get)
     app.router.add_get("/api/admin/native-agent/preflight", server.admin_native_agent_preflight_get)
     app.router.add_patch("/api/admin/native-agent/config", server.admin_native_agent_config_patch)
