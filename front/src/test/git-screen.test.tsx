@@ -156,6 +156,17 @@ function createGitScreenClient() {
   };
 }
 
+test("allows git users to manage commit message cli config", async () => {
+  const { client } = createGitScreenClient();
+  render(<GitScreen botAlias="main" client={client} sessionCapabilities={["git_ops"]} />);
+
+  const panel = await screen.findByTestId("git-commit-cli-panel");
+  await waitFor(() => {
+    expect(within(panel).getByRole("button", { name: /恢复默认/ })).toBeEnabled();
+  });
+  expect(within(panel).queryByText("当前模式只读")).not.toBeInTheDocument();
+});
+
 test("renders compact change rows with basename, stats, and retained actions", async () => {
   const { client } = createGitScreenClient();
   const openDiff = vi.fn();

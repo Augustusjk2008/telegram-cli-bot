@@ -107,7 +107,6 @@ from .auth_store import (
     CAP_GIT_OPS,
     CAP_CREATE_WORKDIR_DIRECTORY,
     CAP_MANAGE_BOTS,
-    CAP_MANAGE_CLI_PARAMS,
     CAP_MANAGE_REGISTER_CODES,
     CAP_MUTATE_BROWSE_STATE,
     CAP_READ_FILE_CONTENT,
@@ -3187,12 +3186,12 @@ class WebApiServer:
         return _json({"ok": True, "data": data})
 
     async def get_git_commit_message_config_view(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_MANAGE_CLI_PARAMS)
+        await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         return _json({"ok": True, "data": get_git_commit_message_cli_config(self.manager, alias)})
 
     async def patch_git_commit_message_config_view(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_MANAGE_CLI_PARAMS)
+        await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         data = await update_git_commit_message_cli_config(
@@ -3207,7 +3206,7 @@ class WebApiServer:
         return _json({"ok": True, "data": data})
 
     async def post_git_commit_message_config_reset_view(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_MANAGE_CLI_PARAMS)
+        await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         data = await reset_git_commit_message_cli_config(self.manager, alias)
         return _json({"ok": True, "data": data})

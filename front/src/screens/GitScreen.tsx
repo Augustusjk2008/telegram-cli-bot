@@ -462,7 +462,7 @@ export function GitScreen({
   const [identityLoading, setIdentityLoading] = useState(false);
   const [smartCommitJob, setSmartCommitJob] = useState<GitSmartCommitJob | null>(null);
   const canManageBotRuntime = sessionCapabilities.length === 0 || sessionCapabilities.includes("admin_ops");
-  const canManageCliParams = canManageBotRuntime || sessionCapabilities.includes("manage_cli_params");
+  const canManageGitCommitCli = canManageBotRuntime || sessionCapabilities.includes("git_ops");
   const isGeneratingCommitMessage = actionLoading === "generate-commit-message";
   const isSmartCommitRunning = isGitSmartCommitRunning(smartCommitJob);
   const mutationBusy = actionLoading !== "" || isSmartCommitRunning;
@@ -1734,7 +1734,7 @@ export function GitScreen({
                   <GitCommitCliConfigPanel
                     botAlias={botAlias}
                     client={client}
-                    canManage={canManageCliParams}
+                    canManage={canManageGitCommitCli}
                   />
                 </div>
               </section>

@@ -8,6 +8,8 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from bot.manager import MultiBotManager
 from bot.models import BotProfile
+from bot.web.api_common import AuthContext
+from bot.web.auth_store import CAP_GIT_OPS
 from bot.web.server import WebApiServer
 
 
@@ -58,6 +60,72 @@ def _build_server(manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
     monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "")
     return WebApiServer(manager, host="127.0.0.1", port=8765, tunnel_service=DummyTunnelService())
+
+
+def _auth_context(*capabilities: str) -> AuthContext:
+    return AuthContext(
+        user_id=123,
+        token_used=True,
+        account_id="member-1",
+        username="alice",
+        capabilities=set(capabilities),
+        is_local_admin=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_git_commit_message_config_routes_allow_git_ops_member(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("bot.manager.resolve_cli_executable", lambda cli_path, _cwd=None: str(cli_path))
+    manager = _build_manager(tmp_path)
+    server = _build_server(manager, monkeypatch)
+    monkeypatch.setattr(server, "_auth_context", lambda _request: _auth_context(CAP_GIT_OPS))
+    monkeypatch.setattr(server, "_can_operate_bot", lambda _auth, _alias: True)
+
+    app = server._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            get_response = await client.get("/api/bots/main/git/commit-message/config")
+            get_payload = await get_response.json()
+            patch_response = await client.patch(
+                "/api/bots/main/git/commit-message/config",
+                json={
+                    "cli_type": "codex",
+                    "cli_path": "codex",
+                    "key": "reasoning_effort",
+                    "value": "low",
+                },
+            )
+            patch_payload = await patch_response.json()
+            reset_response = await client.post("/api/bots/main/git/commit-message/config/reset")
+            reset_payload = await reset_response.json()
+
+    assert get_response.status == 200, get_payload
+    assert patch_response.status == 200, patch_payload
+    assert reset_response.status == 200, reset_payload
+    assert patch_payload["data"]["params"]["reasoning_effort"] == "low"
+
+
+@pytest.mark.asyncio
+async def test_git_commit_message_config_routes_reject_member_without_git_ops(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    manager = _build_manager(tmp_path)
+    server = _build_server(manager, monkeypatch)
+    monkeypatch.setattr(server, "_auth_context", lambda _request: _auth_context())
+    monkeypatch.setattr(server, "_can_operate_bot", lambda _auth, _alias: True)
+
+    app = server._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            response = await client.get("/api/bots/main/git/commit-message/config")
+            payload = await response.json()
+
+    assert response.status == 403
+    assert payload["error"]["code"] == "forbidden"
 
 
 @pytest.mark.asyncio
