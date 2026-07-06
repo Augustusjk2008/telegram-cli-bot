@@ -165,6 +165,32 @@ test("shows bottom navigation after entering demo app shell", async () => {
   expect(localStorage.getItem("web-session-token")).toBeNull();
 });
 
+test("mobile terminal Shift+Tab key sends back-tab control sequence", async () => {
+  const user = userEvent.setup();
+  vi.spyOn(MockWebBotClient.prototype, "getTerminalSession").mockResolvedValue({
+    started: true,
+    closed: false,
+    cwd: DEMO_MAIN_WORKDIR,
+    ptyMode: true,
+    connectionText: "运行中",
+    lastSeq: 0,
+  });
+
+  render(<App />);
+
+  await loginAsSuperAdmin(user);
+  await user.click(await screen.findByRole("button", { name: "终端" }));
+  await screen.findByTestId("terminal-screen-root");
+  await waitFor(() => {
+    expect(terminalSessionMock.focus).toHaveBeenCalled();
+  });
+
+  await user.click(screen.getByRole("button", { name: "Shift+Tab" }));
+
+  expect(terminalSessionMock.sendControl).toHaveBeenCalledWith("\u001b[Z");
+  expect(screen.queryByRole("button", { name: "Tab" })).not.toBeInTheDocument();
+});
+
 test("restores legacy token once and clears storage after successful migration", async () => {
   sessionStorage.setItem("web-api-token", "legacy-session-token");
 
@@ -403,7 +429,6 @@ test("create bot unsafe bypass toggle is disabled without unsafe capability", as
     }));
   });
 });
-
 
 
 

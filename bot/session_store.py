@@ -26,6 +26,10 @@ STORE_FILE = get_session_store_path()
 _store_lock = threading.Lock()
 
 
+def _ensure_store_parent() -> None:
+    STORE_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+
 def load_session_ids() -> Dict[str, dict]:
     """加载所有持久化的会话ID
 
@@ -51,6 +55,7 @@ def save_session_ids(data: Dict[str, dict]):
     """保存所有会话ID到文件"""
     try:
         with _store_lock:
+            _ensure_store_parent()
             with open(STORE_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
     except IOError as e:
@@ -223,6 +228,7 @@ def migrate_sessions_to_shared(bot_id: int, shared_user_id: int) -> int:
             return 0
 
         try:
+            _ensure_store_parent()
             with open(STORE_FILE, "w", encoding="utf-8") as f:
                 json.dump(next_data, f, indent=2, ensure_ascii=False)
         except IOError as e:
@@ -335,6 +341,7 @@ def save_session(
             data[key] = session_data
 
         try:
+            _ensure_store_parent()
             with open(STORE_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
         except IOError as e:
@@ -361,6 +368,7 @@ def remove_session(bot_id: int, user_id: int, agent_id: str = "main") -> bool:
 
         del data[key]
         try:
+            _ensure_store_parent()
             with open(STORE_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
         except IOError as e:
@@ -424,6 +432,7 @@ def remove_sessions_for_workspace(
             del data[key]
             removed += 1
         try:
+            _ensure_store_parent()
             with open(STORE_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
         except IOError as e:
@@ -455,6 +464,7 @@ def remove_all_sessions_for_bot(bot_id: int):
         for key in keys_to_remove:
             del data[key]
         try:
+            _ensure_store_parent()
             with open(STORE_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
         except IOError as e:
@@ -498,6 +508,7 @@ def rename_bot_sessions(old_bot_id: int, new_bot_id: int) -> int:
             return 0
 
         try:
+            _ensure_store_parent()
             with open(STORE_FILE, "w", encoding="utf-8") as f:
                 json.dump(next_data, f, indent=2, ensure_ascii=False)
         except IOError as e:

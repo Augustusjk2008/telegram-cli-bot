@@ -709,12 +709,12 @@ export function TerminalScreen({
           <button
             type="button"
             onClick={() => {
-              if (!terminalDisabled) sessionRef.current?.sendControl("\t");
+              if (!terminalDisabled) sessionRef.current?.sendControl("\u001b[Z");
             }}
             disabled={terminalDisabled}
             className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-3 py-3 text-sm font-medium hover:bg-[var(--workbench-hover-bg)] disabled:opacity-60"
           >
-            Tab
+            Shift+Tab
           </button>
           <button
             type="button"
