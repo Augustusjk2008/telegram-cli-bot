@@ -57,6 +57,18 @@ class TestSaveAndLoadSession:
         assert data is not None
         assert data["native_agent_session_id"] == "native-session-1"
 
+    def test_save_session_creates_missing_parent_directory(self, temp_dir: Path):
+        store_file = temp_dir / "runtime-data" / "sessions" / "session_store.json"
+
+        with patch("bot.session_store.STORE_FILE", store_file):
+            save_session(1, 100, codex_session_id="thread-created")
+
+            assert store_file.exists()
+            data = load_session(1, 100)
+
+        assert data is not None
+        assert data["codex_session_id"] == "thread-created"
+
 
 class TestRemoveAllSessionsForBot:
     """测试删除指定bot的所有会话"""
