@@ -213,8 +213,7 @@ Vivado waveform plugin 使用 Python JSON-RPC stdio backend。它按 source fing
 
 - 跨模块修改、架构分析、重构、调用链或影响面分析前，优先用可用的 CodeGraph MCP 工具，如 `codegraph_context`、`codegraph_search`、`codegraph_trace`、`codegraph_node`
 - CodeGraph 只作导航；细节仍需用源码阅读、`rg`、测试、日志、`git diff` 核对
-- 普通改动由 watcher 自动同步；大规模结构变更后，运行 `codegraph sync .` 或 `codegraph index .` 刷新 `.codegraph/codegraph.db`
-- 已知文件小改、配置改动、文案改动、单文件 bug 不强制用 CodeGraph
+- 普通改动由 watcher 自动同步；一次大的变更后，运行 `codegraph sync .` 刷新 `.codegraph/codegraph.db`
 - 如 CodeGraph 不可用，简述原因后改用 `rg` / 读源码，不要卡住任务
 
 ## 测试说明
