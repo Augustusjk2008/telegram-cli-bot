@@ -155,6 +155,7 @@ function formatDownloadProgress(progress: FileDownloadProgress) {
 }
 
 const ACTIVE_CHAT_POLL_INTERVAL_MS = 1000;
+const IDLE_CHAT_POLL_INTERVAL_MS = 5000;
 const CLUSTER_TASK_POLL_INTERVAL_MS = 1200;
 const SSE_STALL_RECOVERY_DELAY_MS = 2500;
 const CHAT_ATTACHMENT_LINE_RE = /^附件路径为[:：]\s*(.+?)\s*$/;
@@ -2139,11 +2140,12 @@ export function ChatScreen({
       setStreamMode("");
       setStreamStartedAtMs(null);
     } finally {
-      const shouldContinue = isVisibleRef.current && (
-        streamModeRef.current === "poll"
-      );
+      const shouldContinue = isVisibleRef.current && !loadingRef.current;
       if (shouldContinue) {
-        scheduleAssistantPoll(ACTIVE_CHAT_POLL_INTERVAL_MS);
+        const nextDelay = streamModeRef.current === "poll" || botOverviewRef.current?.isProcessing
+          ? ACTIVE_CHAT_POLL_INTERVAL_MS
+          : IDLE_CHAT_POLL_INTERVAL_MS;
+        scheduleAssistantPoll(nextDelay);
       } else {
         stopAssistantPoll();
       }
@@ -2347,13 +2349,13 @@ export function ChatScreen({
   }, [isVisible, scheduleSseRecoveryWatch, stopSseRecoveryWatch, streamMode]);
 
   useLayoutEffect(() => {
-    const shouldPoll = streamMode === "poll";
+    const shouldPoll = isVisible && !loading;
     if (!shouldPoll) {
       stopAssistantPoll();
       return;
     }
-    scheduleAssistantPoll(ACTIVE_CHAT_POLL_INTERVAL_MS);
-  }, [scheduleAssistantPoll, stopAssistantPoll, streamMode]);
+    scheduleAssistantPoll(streamMode === "poll" ? ACTIVE_CHAT_POLL_INTERVAL_MS : IDLE_CHAT_POLL_INTERVAL_MS);
+  }, [isVisible, loading, scheduleAssistantPoll, stopAssistantPoll, streamMode]);
 
   const lastItem = items[items.length - 1];
 
@@ -4395,6 +4397,5 @@ export function ChatScreen({
     </main>
   );
 }
-
 
 

@@ -343,6 +343,55 @@ test("binds direct done assistant message to backend id from stream meta", async
   expect(screen.getAllByTestId("chat-message-row")).toHaveLength(2);
 });
 
+test("refreshes visible idle chat when history count changes", async () => {
+  vi.useFakeTimers();
+  let overviewCalls = 0;
+  const oldMessage: ChatMessage = {
+    id: "user-1",
+    role: "user",
+    text: "旧消息",
+    createdAt: "2026-07-07T10:00:00Z",
+    state: "done",
+  };
+  const newMessage: ChatMessage = {
+    id: "assistant-2",
+    role: "assistant",
+    text: "自动出现的新回复",
+    createdAt: "2026-07-07T10:00:05Z",
+    state: "done",
+  };
+  const listMessageDelta = vi.fn<WebBotClient["listMessageDelta"]>(async () => ({
+    reset: false,
+    items: [newMessage],
+  }));
+  const client = createClient({
+    getBotOverview: vi.fn(async (): Promise<BotOverview> => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+      historyCount: overviewCalls++ === 0 ? 1 : 2,
+    })),
+    listMessages: vi.fn(async () => [oldMessage]),
+    listMessageDelta,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await act(async () => {
+    await Promise.resolve();
+  });
+  expect(screen.getByText("旧消息")).toBeInTheDocument();
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(5000);
+  });
+
+  expect(screen.getByText("自动出现的新回复")).toBeInTheDocument();
+  expect(listMessageDelta).toHaveBeenCalledWith("main", "user-1", 50);
+});
+
 test("merges history refresh assistant message by turn id while local send is settling", async () => {
   const user = userEvent.setup();
   let historyPolls = 0;
@@ -3542,8 +3591,6 @@ test("native user bubble rollback confirms and refreshes history outside solo mo
   expect(listMessages.mock.calls.filter(([, options]) => options?.executionMode === "native_agent").length).toBeGreaterThan(1);
   expect(listConversations).toHaveBeenCalled();
 });
-
-
 
 
 
