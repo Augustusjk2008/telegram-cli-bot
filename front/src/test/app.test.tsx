@@ -189,6 +189,9 @@ test("guest login trims member-only navigation", async () => {
   expect(await screen.findByRole("button", { name: "聊天" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "文件" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "设置" })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "main" }));
+  expect(await screen.findByRole("dialog", { name: "智能体切换" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "智能体管理" })).not.toBeInTheDocument();
 });
 
 test("member with current bot access can open bot settings", async () => {
@@ -403,7 +406,6 @@ test("create bot unsafe bypass toggle is disabled without unsafe capability", as
     }));
   });
 });
-
 
 
 

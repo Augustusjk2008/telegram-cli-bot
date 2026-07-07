@@ -1121,6 +1121,8 @@ class WebApiServer:
 
     def _can_operate_bot(self, auth: AuthContext, alias: str) -> bool:
         normalized_alias = self._normalize_bot_alias(alias)
+        if auth.role == ROLE_GUEST:
+            return normalized_alias == self._normalize_bot_alias(self.manager.main_profile.alias)
         return self._is_local_admin(auth) or _BOT_PERMISSION_STORE.can_operate_bot(auth.account_id, normalized_alias)
 
     def _bot_auth(self, auth: AuthContext, alias: str) -> AuthContext:
@@ -1169,6 +1171,8 @@ class WebApiServer:
     def _authorized_bot_aliases(self, auth: AuthContext) -> set[str]:
         if self._is_local_admin(auth):
             return {self._normalize_bot_alias(self.manager.main_profile.alias), *self.manager.managed_profiles.keys()}
+        if auth.role == ROLE_GUEST:
+            return {self._normalize_bot_alias(self.manager.main_profile.alias)}
         return {
             alias
             for alias in set(auth.allowed_bot_aliases) | set(auth.owned_bot_aliases)

@@ -564,6 +564,13 @@ export function App() {
   }, [canOpenAdminCenter, showAdminCenter]);
 
   useEffect(() => {
+    if (canManageBots || !showBotManager || !currentBot) {
+      return;
+    }
+    setShowBotManager(false);
+  }, [canManageBots, currentBot, showBotManager]);
+
+  useEffect(() => {
     if (!isLoggedIn || bots.length === 0) {
       return;
     }
@@ -1035,6 +1042,7 @@ export function App() {
         onSelect={(alias) => {
           return requestBotSelection(alias);
         }}
+        showManageButton={canManageBots}
         onManage={() => {
           setShowBotManager(true);
           setShowAdminCenter(false);
@@ -1056,6 +1064,7 @@ export function App() {
         onSelect={(alias) => {
           return requestBotSelection(alias);
         }}
+        showManageButton={canManageBots}
         onManage={() => {
           setShowBotManager(true);
           setShowAdminCenter(false);
@@ -1154,13 +1163,15 @@ export function App() {
               onOpenBotSwitcher={(anchorRect) => {
                 void openBotSwitcher(anchorRect);
               }}
-              onOpenBotManager={() => {
-                setShowBotManager(true);
-                setShowAdminCenter(false);
-                setShowSwitcher(false);
-                setIsChatImmersive(false);
-                setIsTerminalImmersive(false);
-              }}
+              onOpenBotManager={canManageBots
+                ? () => {
+                    setShowBotManager(true);
+                    setShowAdminCenter(false);
+                    setShowSwitcher(false);
+                    setIsChatImmersive(false);
+                    setIsTerminalImmersive(false);
+                  }
+                : undefined}
               onLogout={handleLogout}
               onDirtyTabsChange={setDesktopHasDirtyTabs}
               onChatPaneVisibilityChange={setDesktopChatPaneVisible}

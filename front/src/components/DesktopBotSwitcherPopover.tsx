@@ -17,6 +17,7 @@ type Props = {
   anchorRect?: DOMRect | null;
   onSelect: (alias: string) => boolean | Promise<boolean>;
   onManage: () => void;
+  showManageButton?: boolean;
   showInviteManager?: boolean;
   inviteManagerActive?: boolean;
   onOpenInviteManager?: () => void;
@@ -96,6 +97,7 @@ export function DesktopBotSwitcherPopover({
   anchorRect,
   onSelect,
   onManage,
+  showManageButton = true,
   showInviteManager = false,
   inviteManagerActive = false,
   onOpenInviteManager,
@@ -408,14 +410,16 @@ export function DesktopBotSwitcherPopover({
                         <Copy className="h-4 w-4" />
                         复制目录
                       </button>
-                      <button
-                        type="button"
-                        onClick={onManage}
-                        className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm font-medium hover:bg-[var(--surface-strong)]"
-                      >
-                        <Settings className="h-4 w-4" />
-                        智能体管理
-                      </button>
+                      {showManageButton ? (
+                        <button
+                          type="button"
+                          onClick={onManage}
+                          className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm font-medium hover:bg-[var(--surface-strong)]"
+                        >
+                          <Settings className="h-4 w-4" />
+                          智能体管理
+                        </button>
+                      ) : null}
                       {showInviteManager ? (
                         <button
                           type="button"

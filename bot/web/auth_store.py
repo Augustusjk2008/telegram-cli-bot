@@ -57,7 +57,14 @@ _HIGH_RISK_MEMBER_CAPABILITIES = frozenset(
     }
 )
 
-GUEST_CAPABILITIES = frozenset()
+GUEST_CAPABILITIES = frozenset(
+    {
+        CAP_VIEW_BOTS,
+        CAP_VIEW_BOT_STATUS,
+        CAP_VIEW_FILE_TREE,
+        CAP_VIEW_CHAT_HISTORY,
+    }
+)
 
 MEMBER_CAPABILITIES = frozenset(
     {

@@ -11,6 +11,7 @@ type Props = {
   currentAlias: string | null;
   onSelect: (alias: string) => boolean | Promise<boolean>;
   onManage: () => void;
+  showManageButton?: boolean;
   showInviteManager?: boolean;
   inviteManagerActive?: boolean;
   onOpenInviteManager?: () => void;
@@ -22,6 +23,7 @@ export function BotSwitcherSheet({
   currentAlias,
   onSelect,
   onManage,
+  showManageButton = true,
   showInviteManager = false,
   inviteManagerActive = false,
   onOpenInviteManager,
@@ -42,17 +44,19 @@ export function BotSwitcherSheet({
             <X className="w-5 h-5" />
           </button>
         </div>
-        <div className="p-4 pb-0">
-          <button
-            type="button"
-            onClick={() => {
-              onManage();
-            }}
-            className="w-full rounded-xl border border-[var(--border)] px-4 py-3 text-left font-medium hover:bg-[var(--surface-strong)]"
-          >
-            智能体管理
-          </button>
-        </div>
+        {showManageButton ? (
+          <div className="p-4 pb-0">
+            <button
+              type="button"
+              onClick={() => {
+                onManage();
+              }}
+              className="w-full rounded-xl border border-[var(--border)] px-4 py-3 text-left font-medium hover:bg-[var(--surface-strong)]"
+            >
+              智能体管理
+            </button>
+          </div>
+        ) : null}
         <div className="overflow-y-auto p-4 space-y-2">
           {bots.map((bot) => {
             const isOffline = bot.serviceStatus === "offline" || bot.status === "offline";

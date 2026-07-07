@@ -2147,6 +2147,9 @@ export class MockWebBotClient implements WebBotClient {
     if (this.isLocalAdminSession()) {
       return true;
     }
+    if (this.session.role === "guest") {
+      return alias === "main";
+    }
     if (this.session.role !== "member") {
       return false;
     }
@@ -3107,7 +3110,11 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async listBots(): Promise<BotSummary[]> {
-    return Array.from(this.bots.values()).map((item) => this.getBotSummary(item.alias));
+    const aliases = Array.from(this.bots.keys());
+    const visibleAliases = this.session.role === "guest"
+      ? aliases.filter((alias) => alias === "main")
+      : aliases;
+    return visibleAliases.map((alias) => this.getBotSummary(alias));
   }
 
   async listPlugins(_refresh = false): Promise<PluginSummary[]> {
