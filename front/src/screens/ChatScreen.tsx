@@ -1691,6 +1691,7 @@ export function ChatScreen({
   const assistantPollTimerRef = useRef<number | null>(null);
   const sseRecoveryTimerRef = useRef<number | null>(null);
   const sseLastActivityAtRef = useRef<number | null>(null);
+  const sseAbortControllerRef = useRef<AbortController | null>(null);
   const pollAssistantStateRef = useRef<(() => Promise<void>) | null>(null);
   const drainQueuedMessageIfIdleRef = useRef<((context?: { botAlias: string; agentId: string }) => Promise<void>) | null>(null);
   const clusterTaskPollTimerRef = useRef<number | null>(null);
@@ -1918,11 +1919,12 @@ export function ChatScreen({
   const applyHistoryView = useCallback((
     messages: ChatMessage[],
     overview: BotOverview,
+    options: { keepStreamingRowsActive?: boolean } = {},
   ) => {
-    const runtimeActive = Boolean(overview.isProcessing);
+    const hasStreamingMessage = hasPersistedStreamingAssistant(messages);
+    const runtimeActive = Boolean(overview.isProcessing || (options.keepStreamingRowsActive && hasStreamingMessage));
     const nextItems = normalizeInactiveStreamingRows(messages, runtimeActive);
-    const hasStreamingRow = runtimeActive
-      && nextItems.some((item) => item.role === "assistant" && item.state === "streaming");
+    const hasStreamingRow = nextItems.some((item) => item.role === "assistant" && item.state === "streaming");
     const shouldPoll = Boolean(overview.isProcessing || hasStreamingRow);
 
     setItems((prev) => mergeMessagesPreservingClientState(prev, nextItems));
@@ -1951,6 +1953,15 @@ export function ChatScreen({
       window.clearTimeout(sseRecoveryTimerRef.current);
       sseRecoveryTimerRef.current = null;
     }
+  }, []);
+
+  const abortActiveSseRequest = useCallback(() => {
+    const controller = sseAbortControllerRef.current;
+    if (!controller) {
+      return;
+    }
+    sseAbortControllerRef.current = null;
+    controller.abort();
   }, []);
 
   const stopClusterTaskPoll = useCallback(() => {
@@ -2052,20 +2063,19 @@ export function ChatScreen({
           setWorkingDir(overview.workingDir || "");
           restoreClusterRunFromOverview(overview);
 
-          if (overview.isProcessing) {
-            sseLastActivityAtRef.current = Date.now();
-            scheduleSseRecoveryWatch();
-            return;
-          }
-
           const messages = await listScopedMessages(client, botAlias, agentId, currentExecutionMode);
           if (sendVersion !== assistantSendVersionRef.current || !isSseStreaming()) {
             return;
           }
 
           assistantSendVersionRef.current += 1;
-          const { shouldPoll } = applyHistoryView(messages, overview);
-          if (!shouldPoll) {
+          abortActiveSseRequest();
+          const recoveredMessages = messages.length > 0 ? messages : itemsRef.current;
+          const keepStreamingRowsActive = overview.isProcessing || hasPersistedStreamingAssistant(messages);
+          const { shouldPoll } = applyHistoryView(recoveredMessages, overview, { keepStreamingRowsActive });
+          if (shouldPoll) {
+            scheduleAssistantPoll(ACTIVE_CHAT_POLL_INTERVAL_MS);
+          } else {
             void drainQueuedMessageIfIdleRef.current?.({ botAlias, agentId });
           }
         } catch {
@@ -2074,7 +2084,7 @@ export function ChatScreen({
         }
       })();
     }, delayMs);
-  }, [applyHistoryView, botAlias, client, restoreClusterRunFromOverview, stopSseRecoveryWatch]);
+  }, [abortActiveSseRequest, applyHistoryView, botAlias, client, restoreClusterRunFromOverview, scheduleAssistantPoll, stopSseRecoveryWatch]);
 
   const markSseActivity = useCallback(() => {
     sseLastActivityAtRef.current = Date.now();
@@ -2127,7 +2137,7 @@ export function ChatScreen({
         return;
       }
 
-      const { nextItems, shouldPoll } = applyHistoryView(messages, overview);
+      const { nextItems, shouldPoll } = applyHistoryView(messages, overview, { keepStreamingRowsActive: overview.isProcessing });
       if (!isVisibleRef.current && !shouldPoll && nextItems.length > previousCount) {
         onUnreadResult?.(botAlias);
       }
@@ -3271,6 +3281,8 @@ export function ChatScreen({
     }
 
     const localStartedAtMs = Date.now();
+    const sseAbortController = typeof AbortController !== "undefined" ? new AbortController() : null;
+    sseAbortControllerRef.current = sseAbortController;
     assistantSendVersionRef.current += 1;
     const sendVersion = assistantSendVersionRef.current;
     const displayUserText = options.sendOptions?.visibleText || composedText;
@@ -3320,6 +3332,22 @@ export function ChatScreen({
       let usingPreviewReplace = false;
       let agUiState: AgUiRunState | null = null;
       let sawAgUiEvent = false;
+      const requestSendOptions: ChatSendOptions | undefined = (() => {
+        const baseOptions = options.sendOptions
+          ? (
+            options.sendOptions.cluster || activeAgentIdRef.current === "main"
+              ? options.sendOptions
+              : { ...options.sendOptions, agentId: activeAgentIdRef.current }
+          )
+          : (
+            activeAgentIdRef.current === "main"
+              ? undefined
+              : { agentId: activeAgentIdRef.current }
+          );
+        return sseAbortController
+          ? { ...(baseOptions || {}), signal: sseAbortController.signal }
+          : baseOptions;
+      })();
       const onChunk = (chunk: string) => {
         if (sendVersion !== assistantSendVersionRef.current) {
           return;
@@ -3476,25 +3504,15 @@ export function ChatScreen({
         ));
         setNativePermissionPending(hasPendingAgUiPermission(nextAgUiState));
       };
-      const finalMessage = options.sendOptions
-        ? await client.sendMessage(
-          botAlias,
-          composedText,
-          onChunk,
-          onStatus,
-          onTrace,
-          options.sendOptions.cluster || activeAgentIdRef.current === "main"
-            ? options.sendOptions
-            : { ...options.sendOptions, agentId: activeAgentIdRef.current },
-          onAgUiEvent,
-        )
-        : (
-          activeAgentIdRef.current === "main"
-            ? await client.sendMessage(botAlias, composedText, onChunk, onStatus, onTrace, undefined, onAgUiEvent)
-            : await client.sendMessage(botAlias, composedText, onChunk, onStatus, onTrace, {
-              agentId: activeAgentIdRef.current,
-            }, onAgUiEvent)
-        );
+      const finalMessage = await client.sendMessage(
+        botAlias,
+        composedText,
+        onChunk,
+        onStatus,
+        onTrace,
+        requestSendOptions,
+        onAgUiEvent,
+      );
 
       if (sendVersion !== assistantSendVersionRef.current) {
         return;
@@ -3549,6 +3567,9 @@ export function ChatScreen({
       }
       options.onError?.(message);
     } finally {
+      if (sseAbortControllerRef.current === sseAbortController) {
+        sseAbortControllerRef.current = null;
+      }
       if (sendVersion !== assistantSendVersionRef.current) {
         return;
       }
@@ -4397,5 +4418,3 @@ export function ChatScreen({
     </main>
   );
 }
-
-

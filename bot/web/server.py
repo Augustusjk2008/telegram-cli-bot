@@ -654,6 +654,17 @@ def _format_sse(event_type: str, data: dict[str, Any]) -> bytes:
     return f"event: {event_type}\ndata: {payload}\n\n".encode("utf-8")
 
 
+def _sse_headers() -> dict[str, str]:
+    return {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-store, no-cache, must-revalidate, no-transform",
+        "Pragma": "no-cache",
+        "Expires": "0",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
+
+
 def _get_total_memory_bytes() -> int | None:
     try:
         if sys.platform == "win32":
@@ -1982,13 +1993,10 @@ class WebApiServer:
 
         response = web.StreamResponse(
             status=200,
-            headers={
-                "Content-Type": "text/event-stream",
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-            },
+            headers=_sse_headers(),
         )
         await response.prepare(request)
+        await response.write(b": ready\n\n")
 
         client_disconnected = False
         stream_kwargs: dict[str, Any] = {

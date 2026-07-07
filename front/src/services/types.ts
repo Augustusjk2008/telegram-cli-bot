@@ -1007,6 +1007,7 @@ export type ChatSendOptions = {
   mentions?: AgentMention[];
   executionMode?: ChatExecutionMode;
   soloMode?: boolean;
+  signal?: AbortSignal;
 };
 
 export type NativeAgentPermissionReplyOptions = AgentScopedOptions & {

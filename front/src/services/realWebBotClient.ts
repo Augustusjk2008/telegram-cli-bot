@@ -4343,6 +4343,7 @@ export class RealWebBotClient implements WebBotClient {
     const response = await fetch(withApiBase(streamUrl), {
       method: "POST",
       credentials: "same-origin",
+      signal: options?.signal,
       headers: this.headers({
         "Content-Type": "application/json",
       }),

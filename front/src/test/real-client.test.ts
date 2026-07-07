@@ -730,6 +730,29 @@ describe("RealWebBotClient", () => {
     expect(onAgUiEvent).not.toHaveBeenCalled();
   });
 
+  test("sendMessage ignores SSE comment chunks before CLI events", async () => {
+    const encoder = new TextEncoder();
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: vi.fn()
+            .mockResolvedValueOnce({
+              value: encoder.encode(": ready\n\ndata: {\"type\":\"done\",\"output\":\"ok\"}\n\n"),
+              done: false,
+            })
+            .mockResolvedValueOnce({ value: undefined, done: true }),
+          cancel: vi.fn().mockResolvedValue(undefined),
+        }),
+      },
+    });
+
+    const client = new RealWebBotClient();
+    const message = await client.sendMessage("main", "hi", vi.fn());
+
+    expect(message.text).toBe("ok");
+  });
+
   test("sendMessage keeps task mode on plain stream protocol", async () => {
     const encoder = new TextEncoder();
     fetchMock.mockResolvedValue({
