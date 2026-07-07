@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ArrowLeft, Bell, Copy, Eye, EyeOff, Globe, RefreshCw, RotateCcw, Save, Trash2 } from "lucide-react";
+import { AiInlineCompletionSettingsPanel } from "../components/AiInlineCompletionSettingsPanel";
 import { StateBadge } from "../components/StateBadge";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
@@ -43,7 +44,19 @@ type Props = {
   canManageEnvConfig?: boolean;
 };
 
-type AdminCenterTab = "users" | "invites" | "cli-errors" | "updates" | "announcements" | "network" | "notifications" | "transfer" | "lan-chat" | "native-agent" | "env";
+type AdminCenterTab =
+  | "users"
+  | "invites"
+  | "cli-errors"
+  | "updates"
+  | "announcements"
+  | "network"
+  | "notifications"
+  | "inline-completion"
+  | "transfer"
+  | "lan-chat"
+  | "native-agent"
+  | "env";
 
 type TransferDraft = Required<Pick<
   TransferBridgeConfigInput,
@@ -372,6 +385,7 @@ export function AdminCenterScreen({
   const [tunnel, setTunnel] = useState<TunnelSnapshot | null>(null);
   const [tunnelAction, setTunnelAction] = useState<"" | "start" | "stop" | "restart" | "copy">("");
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettingsStatus | null>(null);
+  const [inlineCompletionPanelKey, setInlineCompletionPanelKey] = useState(0);
   const [testingPushPlus, setTestingPushPlus] = useState(false);
   const [showPushPlusGuide, setShowPushPlusGuide] = useState(false);
   const [lanChatConfig, setLanChatConfig] = useState<LanChatConfig | null>(null);
@@ -399,6 +413,7 @@ export function AdminCenterScreen({
     announcements: false,
     network: false,
     notifications: false,
+    "inline-completion": false,
     transfer: false,
     "lan-chat": false,
     "native-agent": false,
@@ -426,6 +441,7 @@ export function AdminCenterScreen({
       "announcements",
       "network",
       "notifications",
+      "inline-completion",
       "transfer",
       "lan-chat",
       "native-agent",
@@ -660,6 +676,27 @@ export function AdminCenterScreen({
     }
   }
 
+  async function loadInlineCompletionSettings(nextNotice = "", refresh = false) {
+    if (refresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+    setError("");
+    if (!nextNotice) {
+      setNotice("");
+    }
+
+    setInlineCompletionPanelKey((prev) => prev + 1);
+    setLoadedTabs((prev) => ({ ...prev, "inline-completion": true }));
+
+    if (nextNotice) {
+      setNotice(nextNotice);
+    }
+    setLoading(false);
+    setRefreshing(false);
+  }
+
   async function loadTransferStatus(nextNotice = "", refresh = false) {
     if (refresh) {
       setRefreshing(true);
@@ -794,6 +831,8 @@ export function AdminCenterScreen({
       await loadNetworkAccess(nextNotice, refresh);
     } else if (activeTab === "notifications") {
       await loadNotificationSettings(nextNotice, refresh);
+    } else if (activeTab === "inline-completion") {
+      await loadInlineCompletionSettings(nextNotice, refresh);
     } else if (activeTab === "transfer") {
       await loadTransferStatus(nextNotice, refresh);
     } else if (activeTab === "lan-chat") {
@@ -1375,6 +1414,8 @@ export function AdminCenterScreen({
                       ? "网络访问"
                     : tab === "notifications"
                       ? "通知"
+                    : tab === "inline-completion"
+                      ? "AI 补全"
                     : tab === "transfer"
                       ? "桥接"
                     : tab === "native-agent"
@@ -1863,6 +1904,21 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
               </div>
             ) : null}
           </section>
+        ) : null}
+
+        {!loading && activeTab === "inline-completion" ? (
+          <AiInlineCompletionSettingsPanel
+            key={inlineCompletionPanelKey}
+            client={client}
+            onSaved={() => {
+              setError("");
+              setNotice("AI inline 补全配置已保存");
+            }}
+            onError={(message) => {
+              setNotice("");
+              setError(message);
+            }}
+          />
         ) : null}
 
         {!loading && activeTab === "transfer" ? (

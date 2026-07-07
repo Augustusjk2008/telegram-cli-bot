@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { AdminCenterScreen } from "../screens/AdminCenterScreen";
@@ -159,6 +159,38 @@ test("管理中心通知 tab 显示 PushPlus 状态、测试和教程", async ()
   await user.click(screen.getByRole("button", { name: "PushPlus 配置教程" }));
   expect(await screen.findByRole("dialog", { name: "PushPlus 配置教程" })).toBeInTheDocument();
   expect(screen.getByText(/PUSHPLUS_ENABLED=true/)).toBeInTheDocument();
+});
+
+test("管理中心 AI 补全 tab 保存全局配置", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const updateInlineCompletionConfig = vi.spyOn(client, "updateInlineCompletionConfig");
+  vi.spyOn(client, "listAdminUsers").mockResolvedValue([]);
+
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+
+  await screen.findByText("用户权限");
+  await user.click(screen.getByRole("tab", { name: "AI 补全" }));
+
+  expect(await screen.findByText("AI inline 补全（全局）")).toBeInTheDocument();
+
+  await user.click(screen.getByLabelText("启用 AI inline 补全"));
+  await user.clear(screen.getByLabelText("服务地址"));
+  await user.type(screen.getByLabelText("服务地址"), "https://provider.test/v1");
+  await user.clear(screen.getByLabelText("模型"));
+  await user.type(screen.getByLabelText("模型"), "coder");
+  await user.type(screen.getByLabelText("API 密钥"), "sk-test");
+  await user.click(screen.getByRole("button", { name: "保存 AI inline 补全配置" }));
+
+  await waitFor(() => {
+    expect(updateInlineCompletionConfig).toHaveBeenCalledWith(expect.objectContaining({
+      enabled: true,
+      baseUrl: "https://provider.test/v1",
+      model: "coder",
+      apiKey: "sk-test",
+    }));
+  });
+  expect(await screen.findByText("AI inline 补全配置已保存")).toBeInTheDocument();
 });
 
 test("管理中心桥接 tab 保存配置并重置统计", async () => {
