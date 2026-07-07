@@ -5,6 +5,10 @@ import sys
 import tempfile
 from pathlib import Path
 
+BACKEND_ROOT = Path(__file__).resolve().parent
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
+
 from mermaid_visio.converter import convert_source_to_vsdx
 from mermaid_visio.models import DiagramSource, PluginConfig
 

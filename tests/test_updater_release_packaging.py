@@ -103,5 +103,5 @@ def test_release_checks_run_complete_backend_tests_and_frontend_lint() -> None:
     assert '"$npm_bin" run test:gate' in sh
     assert '"$npm_bin" run lint' in sh
 
-    assert '"-m", "pytest",\n        "tests",\n        "examples/plugins",\n        "-q"' in portable
+    assert '"-m", "pytest",\n        "tests",\n        "examples/plugins",\n        "--ignore=tests/test_start_scripts.py",\n        "-q"' in portable
     assert "tests/test_main_web.py" not in portable

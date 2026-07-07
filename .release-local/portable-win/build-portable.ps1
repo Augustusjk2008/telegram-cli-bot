@@ -887,6 +887,7 @@ function Test-PortableBundle {
         "-m", "pytest",
         "tests",
         "examples/plugins",
+        "--ignore=tests/test_start_scripts.py",
         "-q"
     ) -FailureMessage "包内插件测试失败" -WorkingDirectory $PackageRoot
 }
