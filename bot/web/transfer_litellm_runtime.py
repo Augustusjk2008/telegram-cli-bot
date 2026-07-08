@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import os
 import secrets
 import shlex
+import shutil
 import socket
+import sys
 from pathlib import Path
 from typing import Any
 
 from aiohttp import ClientSession, ClientTimeout
 
 from bot.web.transfer_litellm_config import LiteLLMTransferConfig, write_litellm_proxy_config
+
+_PYTHON_LITELLM_ENTRYPOINT = "import sys; from litellm import run_server; sys.exit(run_server())"
 
 
 def _choose_local_port() -> int:
@@ -22,8 +27,23 @@ def _choose_local_port() -> int:
 
 
 def _split_command(command: str) -> list[str]:
-    normalized = str(command or "").strip() or "litellm"
+    normalized = str(command or "").strip()
     return shlex.split(normalized, posix=os.name != "nt")
+
+
+def _resolve_command(command: str | None) -> list[str]:
+    normalized = str(command or "").strip()
+    if normalized:
+        return _split_command(normalized)
+    litellm_script = shutil.which("litellm")
+    if litellm_script:
+        return [litellm_script]
+    if importlib.util.find_spec("litellm") is not None:
+        return [sys.executable, "-c", _PYTHON_LITELLM_ENTRYPOINT]
+    raise RuntimeError(
+        "LiteLLM 未安装在当前 Python 环境，且 PATH 中找不到 litellm 命令。"
+        "请运行 python -m pip install -r requirements.txt，或设置 TRANSFER_LITELLM_COMMAND。"
+    )
 
 
 class LiteLLMProxyRuntime:
@@ -32,7 +52,7 @@ class LiteLLMProxyRuntime:
         *,
         config_path: Path,
         log_path: Path,
-        command: str = "litellm",
+        command: str | None = None,
         host: str = "127.0.0.1",
         ready_timeout_seconds: float = 30,
     ) -> None:
@@ -74,7 +94,7 @@ class LiteLLMProxyRuntime:
         write_litellm_proxy_config(self.config_path, config, self.master_key)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         self._log_handle = self.log_path.open("ab")
-        command = _split_command(self.command)
+        command = _resolve_command(self.command)
         args = [
             *command,
             "--config",

@@ -1,4 +1,5 @@
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ from bot.runtime_paths import (
     get_transfer_trace_path,
 )
 from bot.web.transfer_litellm_config import LiteLLMTransferConfig, write_litellm_proxy_config
+from bot.web.transfer_litellm_runtime import _PYTHON_LITELLM_ENTRYPOINT, _resolve_command
 from bot.web.transfer_service import TransferService, TransferServiceError
 
 
@@ -200,6 +202,23 @@ def test_litellm_runtime_config_yaml_contains_model_and_master_key_only(tmp_path
     }
     assert payload["litellm_settings"]["drop_params"] is True
     assert payload["general_settings"]["master_key"] == "sk-master"
+
+
+def test_litellm_runtime_default_command_uses_current_python_module_when_script_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("bot.web.transfer_litellm_runtime.shutil.which", lambda command: None)
+    monkeypatch.setattr("bot.web.transfer_litellm_runtime.importlib.util.find_spec", lambda name: object() if name == "litellm" else None)
+
+    assert _resolve_command(None) == [sys.executable, "-c", _PYTHON_LITELLM_ENTRYPOINT]
+
+
+def test_litellm_runtime_default_command_explains_install_when_litellm_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("bot.web.transfer_litellm_runtime.shutil.which", lambda command: None)
+    monkeypatch.setattr("bot.web.transfer_litellm_runtime.importlib.util.find_spec", lambda name: None)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        _resolve_command(None)
+
+    assert "python -m pip install -r requirements.txt" in str(exc_info.value)
 
 
 @pytest.mark.asyncio

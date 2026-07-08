@@ -200,7 +200,7 @@ class TransferService:
         self.runtime: TransferRuntime = runtime or LiteLLMProxyRuntime(
             config_path=get_transfer_litellm_config_path(),
             log_path=get_transfer_litellm_log_path(),
-            command=os.environ.get("TRANSFER_LITELLM_COMMAND", "litellm"),
+            command=os.environ.get("TRANSFER_LITELLM_COMMAND"),
         )
         self.request_count = 0
         self.total_input_tokens = 0
