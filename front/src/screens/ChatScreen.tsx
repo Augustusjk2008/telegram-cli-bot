@@ -976,7 +976,37 @@ function findLatestAssistantMessageIndex(
   return -1;
 }
 
-function mergeMessagesPreservingClientState(previousItems: ChatMessage[], nextItems: ChatMessage[]) {
+function comparableObjectKeys(value: Record<string, unknown>) {
+  return Object.keys(value)
+    .filter((key) => typeof value[key] !== "undefined")
+    .sort();
+}
+
+function areMessageValuesEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) {
+    return true;
+  }
+  if (left === null || right === null || typeof left !== "object" || typeof right !== "object") {
+    return false;
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+      return false;
+    }
+    return left.every((item, index) => areMessageValuesEqual(item, right[index]));
+  }
+
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const leftKeys = comparableObjectKeys(leftRecord);
+  const rightKeys = comparableObjectKeys(rightRecord);
+  if (leftKeys.length !== rightKeys.length) {
+    return false;
+  }
+  return leftKeys.every((key, index) => key === rightKeys[index] && areMessageValuesEqual(leftRecord[key], rightRecord[key]));
+}
+
+export function mergeMessagesPreservingClientState(previousItems: ChatMessage[], nextItems: ChatMessage[]) {
   if (previousItems.length === 0 || nextItems.length === 0) {
     return nextItems;
   }
@@ -1001,12 +1031,13 @@ function mergeMessagesPreservingClientState(previousItems: ChatMessage[], nextIt
     const nextElapsedSeconds = typeof item.elapsedSeconds === "number" ? item.elapsedSeconds : previousItem.elapsedSeconds;
     const nextState = item.state ?? previousItem.state;
 
-    return {
+    const mergedItem = {
       ...item,
       ...(typeof nextState !== "undefined" ? { state: nextState } : {}),
       ...(typeof nextElapsedSeconds === "number" ? { elapsedSeconds: nextElapsedSeconds } : {}),
       ...(mergedMeta ? { meta: mergedMeta } : {}),
     };
+    return areMessageValuesEqual(previousItem, mergedItem) ? previousItem : mergedItem;
   });
 
   const seenKeys = new Map<string, number>();
@@ -1026,13 +1057,18 @@ function mergeMessagesPreservingClientState(previousItems: ChatMessage[], nextIt
     const mergedMeta = mergeMessageMeta(previousItem.meta, item.meta);
     const nextElapsedSeconds = typeof item.elapsedSeconds === "number" ? item.elapsedSeconds : previousItem.elapsedSeconds;
     const nextState = item.state ?? previousItem.state;
-    dedupedItems[existingIndex] = {
+    const mergedItem = {
       ...previousItem,
       ...item,
       ...(typeof nextState !== "undefined" ? { state: nextState } : {}),
       ...(typeof nextElapsedSeconds === "number" ? { elapsedSeconds: nextElapsedSeconds } : {}),
       ...(mergedMeta ? { meta: mergedMeta } : {}),
     };
+    dedupedItems[existingIndex] = areMessageValuesEqual(previousItem, mergedItem) ? previousItem : mergedItem;
+  }
+
+  if (dedupedItems.length === previousItems.length && dedupedItems.every((item, index) => item === previousItems[index])) {
+    return previousItems;
   }
 
   return dedupedItems;
