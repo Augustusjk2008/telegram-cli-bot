@@ -254,8 +254,10 @@ async def test_admin_transfer_reset_and_config_require_admin_capability(
                 json={
                     "litellm_model": "openai/gpt-5",
                     "model_alias": "codex-gpt-5",
+                    "endpoint_mode": "responses",
                     "provider_base_url": "http://remote.test/v1",
                     "provider_api_key": "sk",
+                    "extra_litellm_params": {"rpm": 120},
                 },
                 headers={"X-API-Token": "project-token"},
             )
@@ -266,6 +268,10 @@ async def test_admin_transfer_reset_and_config_require_admin_capability(
     assert reset_auth.status == 200
     assert patch_auth.status == 200
     assert payload["data"]["provider_api_key_set"] is True
+    assert payload["data"]["endpoint_mode"] == "responses"
+    assert payload["data"]["extra_litellm_params"] == {"rpm": 120}
+    assert "conversion_type" not in json.dumps(payload["data"])
+    assert "upstream_api" not in json.dumps(payload["data"])
 
 
 @pytest.mark.asyncio
@@ -292,6 +298,35 @@ async def test_admin_transfer_config_validation_error_returns_json(
 
 
 @pytest.mark.asyncio
+async def test_admin_transfer_config_rejects_reserved_extra_litellm_params(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "project-token")
+    monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "")
+    monkeypatch.setenv("TCB_DATA_DIR", str(tmp_path))
+    server = WebApiServer(object(), host="127.0.0.1", port=8765, tunnel_service=DummyTunnelService())
+    app = server._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            response = await client.patch(
+                "/api/admin/transfer/config",
+                json={
+                    "litellm_model": "openai/gpt-5",
+                    "model_alias": "gpt-5",
+                    "provider_api_key": "sk",
+                    "extra_litellm_params": {"api_key": "sk-override"},
+                },
+                headers={"X-API-Token": "project-token"},
+            )
+            payload = await response.json()
+
+    assert response.status == 400
+    assert payload["error"]["code"] == "invalid_transfer_config"
+    assert "extra_litellm_params" in payload["error"]["message"]
+
+
+@pytest.mark.asyncio
 async def test_transfer_page_is_served_as_html(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     server = _build_server(monkeypatch, tmp_path)
     app = server._build_app()
@@ -312,6 +347,11 @@ async def test_transfer_page_is_served_as_html(monkeypatch: pytest.MonkeyPatch, 
     assert "window.location.pathname" in text
     assert "setInterval" in text
     assert "2000" in text
+    assert "endpoint-mode" in text
+    assert "extra-litellm-params" in text
+    assert "extra_litellm_params" in text
+    assert "conversion-type" not in text
+    assert "upstream-api" not in text
     assert "reasoning_mode" not in text
     assert "downgrade_developer_to_system" not in text
 

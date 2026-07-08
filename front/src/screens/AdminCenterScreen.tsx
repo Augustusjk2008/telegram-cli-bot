@@ -29,9 +29,8 @@ import type {
   RegisterCodeItem,
   NotificationSettingsStatus,
   TransferBridgeStatus,
-  TransferConversionType,
+  TransferEndpointMode,
   TransferRouteConfig,
-  TransferUpstreamApi,
   TunnelSnapshot,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
@@ -63,8 +62,7 @@ type AdminCenterTab =
 type TransferRouteDraft = Required<Pick<
   TransferRouteConfig,
   "id"
-  | "conversionType"
-  | "upstreamApi"
+  | "endpointMode"
   | "litellmModel"
   | "modelAlias"
   | "providerBaseUrl"
@@ -73,6 +71,7 @@ type TransferRouteDraft = Required<Pick<
 >> & {
   name: string;
   providerApiKeySet: boolean;
+  extraLitellmParamsJson: string;
 };
 
 type TransferDraft = {
@@ -319,26 +318,43 @@ function pushPlusStatusText(status: NotificationSettingsStatus | null) {
   return status.pushPlusConfigured ? "已配置" : "未配置 token";
 }
 
-function transferConversionLabel(type: TransferConversionType | undefined) {
-  if (type === "model") return "模型转换";
-  if (type === "api") return "API 转换";
-  return "模型 + API";
+const TRANSFER_RESERVED_EXTRA_PARAMS = new Set(["model", "api_key", "api_base"]);
+
+function transferEndpointModeLabel(type: TransferEndpointMode | undefined) {
+  if (type === "chat_completions") return "Chat Completions";
+  if (type === "responses") return "Responses";
+  return "auto";
 }
 
-function transferUpstreamApiLabel(type: TransferUpstreamApi | undefined) {
-  if (type === "chat_completions") return "Chat Completions";
-  return "Responses";
+function formatTransferExtraParams(value: Record<string, unknown> | undefined) {
+  if (!value || Object.keys(value).length === 0) return "{}";
+  return JSON.stringify(value, null, 2);
+}
+
+function parseTransferExtraParams(text: string): Record<string, unknown> {
+  const trimmed = text.trim();
+  if (!trimmed) return {};
+  const parsed = JSON.parse(trimmed) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("高级 LiteLLM params 必须是 JSON 对象");
+  }
+  const value = parsed as Record<string, unknown>;
+  const reserved = Object.keys(value).filter((key) => TRANSFER_RESERVED_EXTRA_PARAMS.has(key));
+  if (reserved.length) {
+    throw new Error(`高级 LiteLLM params 不能包含 ${reserved.join(", ")}`);
+  }
+  return value;
 }
 
 function createBlankTransferRoute(index: number): TransferRouteDraft {
   return {
     id: `route-${Date.now()}-${index}`,
     name: "",
-    conversionType: "model_api",
-    upstreamApi: "responses",
+    endpointMode: "auto",
     litellmModel: "",
     modelAlias: "",
     providerBaseUrl: "",
+    extraLitellmParamsJson: "{}",
     providerApiKey: "",
     clearProviderApiKey: false,
     providerApiKeySet: false,
@@ -350,11 +366,11 @@ function transferRouteDraftFromRoute(route: TransferRouteConfig | undefined, ind
   return {
     id: route.id || `route-${index + 1}`,
     name: route.name || "",
-    conversionType: route.conversionType || "model_api",
-    upstreamApi: route.upstreamApi || "responses",
+    endpointMode: route.endpointMode || "auto",
     litellmModel: route.litellmModel || "",
     modelAlias: route.modelAlias || "",
     providerBaseUrl: route.providerBaseUrl || "",
+    extraLitellmParamsJson: formatTransferExtraParams(route.extraLitellmParams),
     providerApiKey: "",
     clearProviderApiKey: false,
     providerApiKeySet: Boolean(route.providerApiKeySet),
@@ -366,11 +382,11 @@ function transferDraftFromStatus(status: TransferBridgeStatus | null): TransferD
     ? status.routes.map((route, index) => transferRouteDraftFromRoute(route, index))
     : [transferRouteDraftFromRoute(status ? {
         id: "route-1",
-        conversionType: status.conversionType || "model_api",
-        upstreamApi: status.upstreamApi || "responses",
+        endpointMode: status.endpointMode || "auto",
         litellmModel: status.litellmModel || "",
         modelAlias: status.modelAlias || "",
         providerBaseUrl: status.providerBaseUrl || "",
+        extraLitellmParams: status.extraLitellmParams || {},
         providerApiKeySet: status.providerApiKeySet,
       } : undefined, 0)];
   return {
@@ -386,11 +402,11 @@ function transferRoutesFromStatus(status: TransferBridgeStatus | null): Transfer
   return [
     {
       id: "route-1",
-      conversionType: status.conversionType || "model_api",
-      upstreamApi: status.upstreamApi || "responses",
+      endpointMode: status.endpointMode || "auto",
       litellmModel: status.litellmModel || "",
       modelAlias: status.modelAlias || "",
       providerBaseUrl: status.providerBaseUrl || "",
+      extraLitellmParams: status.extraLitellmParams || {},
       providerApiKeySet: status.providerApiKeySet,
       configured: status.enabled,
     },
@@ -1269,19 +1285,20 @@ export function AdminCenterScreen({
     setError("");
     setNotice("");
     try {
+      const routes = transferDraft.routes.map((route) => ({
+        id: route.id,
+        name: route.name.trim(),
+        endpointMode: route.endpointMode,
+        litellmModel: route.litellmModel.trim(),
+        modelAlias: route.modelAlias.trim(),
+        providerBaseUrl: route.providerBaseUrl.trim(),
+        extraLitellmParams: parseTransferExtraParams(route.extraLitellmParamsJson),
+        providerApiKeySet: route.providerApiKeySet,
+        ...(route.providerApiKey ? { providerApiKey: route.providerApiKey } : {}),
+        clearProviderApiKey: route.clearProviderApiKey,
+      }));
       const saved = await client.updateTransferBridgeConfig({
-        routes: transferDraft.routes.map((route) => ({
-          id: route.id,
-          name: route.name.trim(),
-          conversionType: route.conversionType,
-          upstreamApi: route.upstreamApi,
-          litellmModel: route.litellmModel.trim(),
-          modelAlias: route.modelAlias.trim(),
-          providerBaseUrl: route.providerBaseUrl.trim(),
-          providerApiKeySet: route.providerApiKeySet,
-          ...(route.providerApiKey ? { providerApiKey: route.providerApiKey } : {}),
-          clearProviderApiKey: route.clearProviderApiKey,
-        })),
+        routes,
         dropParams: transferDraft.dropParams,
       });
       setTransferStatus(saved);
@@ -1304,7 +1321,6 @@ export function AdminCenterScreen({
       setTransferDraft((prev) => ({
         ...prev,
         ...transferDraftFromStatus(nextStatus),
-        providerApiKey: "",
       }));
       setNotice("网关统计已重置");
     } catch (nextError) {
@@ -2028,7 +2044,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h2 id="transfer-bridge-title" className="text-base font-semibold text-[var(--text)]">LiteLLM 网关</h2>
-                <p className="text-sm text-[var(--muted)]">Responses / Chat Completions 由本地 LiteLLM sidecar 代理。</p>
+                <p className="text-sm text-[var(--muted)]">本层仅反代；Responses / Chat Completions bridge 由 LiteLLM 原生配置处理。</p>
               </div>
               <span className={`rounded-full border px-3 py-1 text-sm font-medium ${transferStatusClass(transferStatus)}`}>
                 {transferStatusLabel(transferStatus)}
@@ -2084,28 +2100,16 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
 
                       <div className="grid gap-3 sm:grid-cols-2">
                         <label className="space-y-1">
-                          <span className="text-sm text-[var(--text)]">转换类型</span>
+                          <span className="text-sm text-[var(--text)]">LiteLLM endpoint mode</span>
                           <select
-                            aria-label={`转换类型${labelSuffix}`}
-                            value={route.conversionType}
-                            onChange={(event) => updateTransferRouteDraft(route.id, { conversionType: event.target.value as TransferConversionType })}
+                            aria-label={`LiteLLM endpoint mode${labelSuffix}`}
+                            value={route.endpointMode}
+                            onChange={(event) => updateTransferRouteDraft(route.id, { endpointMode: event.target.value as TransferEndpointMode })}
                             className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
                           >
-                            <option value="model_api">模型 + API</option>
-                            <option value="model">模型转换</option>
-                            <option value="api">API 转换</option>
-                          </select>
-                        </label>
-                        <label className="space-y-1">
-                          <span className="text-sm text-[var(--text)]">上游 API</span>
-                          <select
-                            aria-label={`上游 API${labelSuffix}`}
-                            value={route.upstreamApi}
-                            onChange={(event) => updateTransferRouteDraft(route.id, { upstreamApi: event.target.value as TransferUpstreamApi })}
-                            className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
-                          >
-                            <option value="responses">Responses</option>
-                            <option value="chat_completions">Chat Completions</option>
+                            <option value="auto">auto</option>
+                            <option value="chat_completions">chat_completions</option>
+                            <option value="responses">responses</option>
                           </select>
                         </label>
                         <label className="space-y-1">
@@ -2157,6 +2161,18 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                             onChange={(event) => updateTransferRouteDraft(route.id, { providerApiKey: event.target.value, clearProviderApiKey: false })}
                             placeholder={route.providerApiKeySet ? "留空表示不修改现有 Key" : "填写上游 API Key"}
                             className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
+                          />
+                        </label>
+                        <label className="space-y-1 sm:col-span-2">
+                          <span className="text-sm text-[var(--text)]">高级 LiteLLM params JSON</span>
+                          <textarea
+                            aria-label={`高级 LiteLLM params JSON${labelSuffix}`}
+                            value={route.extraLitellmParamsJson}
+                            onChange={(event) => updateTransferRouteDraft(route.id, { extraLitellmParamsJson: event.target.value })}
+                            rows={4}
+                            spellCheck={false}
+                            placeholder='{"rpm": 120}'
+                            className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 font-mono text-sm text-[var(--text)]"
                           />
                         </label>
                       </div>
@@ -2227,8 +2243,8 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 <p className="mt-1 text-[var(--text)]">{transferStatus?.providerApiKeySet ? "已设置" : "未设置"}</p>
               </div>
               <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                <p className="text-xs text-[var(--muted)]">第一路转换</p>
-                <p className="mt-1 text-[var(--text)]">{transferConversionLabel(transferStatus?.conversionType)}</p>
+                <p className="text-xs text-[var(--muted)]">第一路 endpoint mode</p>
+                <p className="mt-1 text-[var(--text)]">{transferEndpointModeLabel(transferStatus?.endpointMode)}</p>
               </div>
               <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
                 <p className="text-xs text-[var(--muted)]">LiteLLM PID</p>
@@ -2241,11 +2257,10 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
               {transferRoutes.length ? (
                 <div className="space-y-2">
                   {transferRoutes.map((route, index) => (
-                    <div key={route.id || index} className="grid gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 sm:grid-cols-[1fr_1fr_auto_auto_auto]">
+                    <div key={route.id || index} className="grid gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 sm:grid-cols-[1fr_1fr_auto_auto]">
                       <span className="break-all text-[var(--text)]">{route.modelAlias || "-"}</span>
                       <span className="break-all text-[var(--text)]">{route.litellmModel || "-"}</span>
-                      <span className="text-[var(--muted)]">{transferConversionLabel(route.conversionType)}</span>
-                      <span className="text-[var(--muted)]">{transferUpstreamApiLabel(route.upstreamApi)}</span>
+                      <span className="text-[var(--muted)]">{transferEndpointModeLabel(route.endpointMode)}</span>
                       <span className={route.configured ? "text-emerald-600" : "text-amber-600"}>{route.configured ? "已配置" : "未完成"}</span>
                     </div>
                   ))}

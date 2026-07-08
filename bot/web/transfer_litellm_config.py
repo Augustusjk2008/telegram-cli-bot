@@ -10,22 +10,21 @@ from urllib.parse import urlparse
 
 import yaml
 
-DEFAULT_CONVERSION_TYPE = "model_api"
-CONVERSION_TYPES = {"model", "api", DEFAULT_CONVERSION_TYPE}
-DEFAULT_UPSTREAM_API = "responses"
-UPSTREAM_APIS = {DEFAULT_UPSTREAM_API, "chat_completions"}
+DEFAULT_ENDPOINT_MODE = "auto"
+ENDPOINT_MODES = {DEFAULT_ENDPOINT_MODE, "chat_completions", "responses"}
+RESERVED_EXTRA_LITELLM_PARAMS = {"model", "api_key", "api_base"}
 
 
 @dataclass
 class LiteLLMRouteConfig:
     id: str = ""
     name: str = ""
-    conversion_type: str = DEFAULT_CONVERSION_TYPE
-    upstream_api: str = DEFAULT_UPSTREAM_API
+    endpoint_mode: str = DEFAULT_ENDPOINT_MODE
     litellm_model: str = ""
     model_alias: str = ""
     provider_base_url: str = ""
     provider_api_key: str = ""
+    extra_litellm_params: dict[str, Any] = field(default_factory=dict)
 
     @property
     def configured(self) -> bool:
@@ -35,11 +34,11 @@ class LiteLLMRouteConfig:
         return {
             "id": self.id,
             "name": self.name,
-            "conversion_type": self.conversion_type,
-            "upstream_api": self.upstream_api,
+            "endpoint_mode": self.endpoint_mode,
             "litellm_model": self.litellm_model,
             "model_alias": self.model_alias,
             "provider_base_url": self.provider_base_url,
+            "extra_litellm_params": dict(self.extra_litellm_params),
             "provider_api_key": self.provider_api_key,
         }
 
@@ -47,11 +46,11 @@ class LiteLLMRouteConfig:
         return {
             "id": self.id,
             "name": self.name,
-            "conversion_type": self.conversion_type,
-            "upstream_api": self.upstream_api,
+            "endpoint_mode": self.endpoint_mode,
             "litellm_model": self.litellm_model,
             "model_alias": self.model_alias,
             "provider_base_url": self.provider_base_url,
+            "extra_litellm_params": dict(self.extra_litellm_params),
             "provider_api_key_set": bool(self.provider_api_key),
             "configured": self.configured,
         }
@@ -63,7 +62,6 @@ class LiteLLMTransferConfig:
     model_alias: str = ""
     provider_base_url: str = ""
     provider_api_key: str = ""
-    conversion_type: str = DEFAULT_CONVERSION_TYPE
     drop_params: bool = True
     routes: list[LiteLLMRouteConfig] = field(default_factory=list)
 
@@ -95,13 +93,11 @@ class LiteLLMTransferConfig:
         self.model_alias = first.model_alias
         self.provider_base_url = first.provider_base_url
         self.provider_api_key = first.provider_api_key
-        self.conversion_type = first.conversion_type or DEFAULT_CONVERSION_TYPE
 
     def _legacy_route(self) -> LiteLLMRouteConfig:
         return LiteLLMRouteConfig(
             id="route-1",
-            conversion_type=normalize_conversion_type(self.conversion_type),
-            upstream_api=DEFAULT_UPSTREAM_API,
+            endpoint_mode=DEFAULT_ENDPOINT_MODE,
             litellm_model=self.litellm_model,
             model_alias=self.model_alias,
             provider_base_url=self.provider_base_url,
@@ -118,14 +114,29 @@ def default_model_alias(litellm_model: str) -> str:
     return model
 
 
-def normalize_conversion_type(value: object) -> str:
-    text = str(value or "").strip().lower()
-    return text if text in CONVERSION_TYPES else DEFAULT_CONVERSION_TYPE
-
-
-def normalize_upstream_api(value: object) -> str:
+def normalize_endpoint_mode(value: object) -> str:
     text = str(value or "").strip().lower().replace("-", "_").replace("/", "_")
-    return text if text in UPSTREAM_APIS else DEFAULT_UPSTREAM_API
+    return text if text in ENDPOINT_MODES else DEFAULT_ENDPOINT_MODE
+
+
+def _endpoint_mode_from_data(data: dict[str, Any], existing: LiteLLMRouteConfig) -> str:
+    if "endpoint_mode" in data:
+        return normalize_endpoint_mode(data.get("endpoint_mode"))
+    if "upstream_api" in data:
+        return normalize_endpoint_mode(data.get("upstream_api"))
+    return normalize_endpoint_mode(existing.endpoint_mode)
+
+
+def _normalize_extra_litellm_params(value: object) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("extra_litellm_params 必须是对象")
+    reserved = sorted(RESERVED_EXTRA_LITELLM_PARAMS.intersection(str(key) for key in value.keys()))
+    if reserved:
+        names = ", ".join(reserved)
+        raise ValueError(f"extra_litellm_params 不能覆盖核心字段: {names}")
+    return dict(value)
 
 
 def validate_optional_http_url(value: object, *, field_name: str) -> str:
@@ -143,10 +154,12 @@ def _route_has_content(route: LiteLLMRouteConfig) -> bool:
         bool(value)
         for value in (
             route.name,
+            route.endpoint_mode != DEFAULT_ENDPOINT_MODE,
             route.litellm_model,
             route.model_alias,
             route.provider_base_url,
             route.provider_api_key,
+            route.extra_litellm_params,
         )
     )
 
@@ -214,15 +227,19 @@ def _route_from_data(
     if not model_alias and litellm_model:
         model_alias = default_model_alias(litellm_model)
 
+    extra_litellm_params = existing.extra_litellm_params
+    if "extra_litellm_params" in data:
+        extra_litellm_params = _normalize_extra_litellm_params(data.get("extra_litellm_params"))
+
     return LiteLLMRouteConfig(
         id=_route_id(data.get("id", data.get("route_id", existing.id)), index),
         name=str(data.get("name", existing.name) or "").strip(),
-        conversion_type=normalize_conversion_type(data.get("conversion_type", existing.conversion_type)),
-        upstream_api=normalize_upstream_api(data.get("upstream_api", existing.upstream_api)),
+        endpoint_mode=_endpoint_mode_from_data(data, existing),
         litellm_model=litellm_model,
         model_alias=model_alias,
         provider_base_url=provider_base_url,
         provider_api_key=provider_api_key,
+        extra_litellm_params=extra_litellm_params,
     )
 
 
@@ -276,12 +293,16 @@ def load_litellm_transfer_config(path: Path) -> LiteLLMTransferConfig:
 def build_litellm_proxy_config(config: LiteLLMTransferConfig, master_key: str) -> dict[str, Any]:
     model_list: list[dict[str, Any]] = []
     for route in config.configured_routes():
+        model = _litellm_model_for_endpoint_mode(route.litellm_model, route.endpoint_mode)
         litellm_params: dict[str, Any] = {
-            "model": route.litellm_model,
+            "model": model,
             "api_key": route.provider_api_key,
         }
         if route.provider_base_url:
             litellm_params["api_base"] = route.provider_base_url
+        litellm_params.update(_normalize_extra_litellm_params(route.extra_litellm_params))
+        if route.endpoint_mode == "chat_completions":
+            litellm_params["use_chat_completions_api"] = True
         model_list.append(
             {
                 "model_name": route.model_alias,
@@ -295,8 +316,20 @@ def build_litellm_proxy_config(config: LiteLLMTransferConfig, master_key: str) -
         },
         "general_settings": {
             "master_key": master_key,
+            "always_include_stream_usage": True,
         },
     }
+
+
+def _litellm_model_for_endpoint_mode(model: str, endpoint_mode: str) -> str:
+    normalized = str(model or "").strip()
+    if endpoint_mode != "responses":
+        return normalized
+    if normalized.startswith("openai/responses/"):
+        return normalized
+    if normalized.startswith("openai/"):
+        return f"openai/responses/{normalized.removeprefix('openai/')}"
+    return normalized
 
 
 def write_litellm_proxy_config(path: Path, config: LiteLLMTransferConfig, master_key: str) -> None:

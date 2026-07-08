@@ -12,7 +12,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Protocol
+from typing import Any, AsyncIterator, Protocol
 
 from aiohttp import ClientConnectionError, ClientResponse, ClientSession, ClientTimeout
 
@@ -23,7 +23,6 @@ from bot.runtime_paths import (
     get_transfer_trace_path,
 )
 from bot.web.transfer_litellm_config import (
-    LiteLLMRouteConfig,
     LiteLLMTransferConfig,
     load_litellm_transfer_config,
     update_litellm_transfer_config,
@@ -183,222 +182,6 @@ def _copy_response_headers(response: ClientResponse) -> dict[str, str]:
     return headers
 
 
-def _normalize_chat_usage_to_response_usage(usage: Any) -> dict[str, Any]:
-    usage_data = usage if isinstance(usage, dict) else {}
-    prompt_details = usage_data.get("prompt_tokens_details")
-    if not isinstance(prompt_details, dict):
-        prompt_details = {}
-    completion_details = usage_data.get("completion_tokens_details")
-    if not isinstance(completion_details, dict):
-        completion_details = {}
-    input_tokens = int(usage_data.get("input_tokens") or usage_data.get("prompt_tokens") or 0)
-    output_tokens = int(usage_data.get("output_tokens") or usage_data.get("completion_tokens") or 0)
-    total_tokens = int(usage_data.get("total_tokens") or input_tokens + output_tokens)
-    return {
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "total_tokens": total_tokens,
-        "input_tokens_details": {
-            "cached_tokens": int(prompt_details.get("cached_tokens") or 0),
-        },
-        "output_tokens_details": {
-            "reasoning_tokens": int(completion_details.get("reasoning_tokens") or 0),
-        },
-    }
-
-
-def _response_part_text(part: Any) -> str:
-    if isinstance(part, str):
-        return part
-    if not isinstance(part, dict):
-        return ""
-    part_type = str(part.get("type") or "")
-    if part_type in {"input_text", "output_text", "text"}:
-        return str(part.get("text") or "")
-    if part.get("text") is not None:
-        return str(part.get("text") or "")
-    return ""
-
-
-def _response_content_to_chat_content(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "".join(_response_part_text(part) for part in content)
-    if content is None:
-        return ""
-    return str(content)
-
-
-def _response_input_item_to_chat_message(item: Any) -> dict[str, Any] | None:
-    if isinstance(item, str):
-        return {"role": "user", "content": item}
-    if not isinstance(item, dict):
-        return {"role": "user", "content": str(item)}
-    item_type = str(item.get("type") or "")
-    if item_type == "function_call_output":
-        message: dict[str, Any] = {
-            "role": "tool",
-            "content": _response_content_to_chat_content(item.get("output")),
-        }
-        call_id = str(item.get("call_id") or "").strip()
-        if call_id:
-            message["tool_call_id"] = call_id
-        return message
-    role = str(item.get("role") or "user")
-    if role not in {"system", "developer", "user", "assistant", "tool"}:
-        role = "user"
-    message = {
-        "role": role,
-        "content": _response_content_to_chat_content(item.get("content", item.get("text", ""))),
-    }
-    if role == "tool" and item.get("tool_call_id"):
-        message["tool_call_id"] = str(item.get("tool_call_id"))
-    return message
-
-
-def _responses_input_to_chat_messages(body: dict[str, Any]) -> list[dict[str, Any]]:
-    messages: list[dict[str, Any]] = []
-    instructions = str(body.get("instructions") or "").strip()
-    if instructions:
-        messages.append({"role": "system", "content": instructions})
-    raw_messages = body.get("messages")
-    if isinstance(raw_messages, list):
-        for item in raw_messages:
-            message = _response_input_item_to_chat_message(item)
-            if message is not None:
-                messages.append(message)
-        return messages or [{"role": "user", "content": ""}]
-    raw_input = body.get("input", "")
-    if isinstance(raw_input, list):
-        for item in raw_input:
-            message = _response_input_item_to_chat_message(item)
-            if message is not None:
-                messages.append(message)
-    else:
-        messages.append({"role": "user", "content": _response_content_to_chat_content(raw_input)})
-    return messages or [{"role": "user", "content": ""}]
-
-
-def _responses_tools_to_chat_tools(tools: Any) -> list[dict[str, Any]]:
-    if not isinstance(tools, list):
-        return []
-    chat_tools: list[dict[str, Any]] = []
-    for tool in tools:
-        if not isinstance(tool, dict):
-            continue
-        if tool.get("type") == "function" and isinstance(tool.get("function"), dict):
-            chat_tools.append(tool)
-            continue
-        if tool.get("type") in {"function", "custom"} and tool.get("name"):
-            chat_tools.append(
-                {
-                    "type": "function",
-                    "function": {
-                        "name": str(tool.get("name")),
-                        "description": str(tool.get("description") or ""),
-                        "parameters": tool.get("parameters") if isinstance(tool.get("parameters"), dict) else {"type": "object", "properties": {}},
-                    },
-                }
-            )
-    return chat_tools
-
-
-def _responses_to_chat_completion_request(body: dict[str, Any]) -> dict[str, Any]:
-    chat: dict[str, Any] = {
-        "model": str(body.get("model") or ""),
-        "messages": _responses_input_to_chat_messages(body),
-    }
-    for key in ("temperature", "top_p", "presence_penalty", "frequency_penalty", "stop", "user", "seed"):
-        if key in body:
-            chat[key] = body[key]
-    if "max_output_tokens" in body:
-        chat["max_completion_tokens"] = body["max_output_tokens"]
-    elif "max_completion_tokens" in body:
-        chat["max_completion_tokens"] = body["max_completion_tokens"]
-    elif "max_tokens" in body:
-        chat["max_tokens"] = body["max_tokens"]
-    reasoning = body.get("reasoning")
-    if isinstance(reasoning, dict) and reasoning.get("effort"):
-        chat["reasoning_effort"] = reasoning.get("effort")
-    elif body.get("reasoning_effort"):
-        chat["reasoning_effort"] = body.get("reasoning_effort")
-    tools = _responses_tools_to_chat_tools(body.get("tools"))
-    if tools:
-        chat["tools"] = tools
-    if "tool_choice" in body:
-        chat["tool_choice"] = body["tool_choice"]
-    if body.get("stream"):
-        chat["stream"] = True
-        stream_options = body.get("stream_options") if isinstance(body.get("stream_options"), dict) else {}
-        chat["stream_options"] = {**stream_options, "include_usage": True}
-    return {key: value for key, value in chat.items() if value is not None}
-
-
-def _chat_message_text(message: dict[str, Any]) -> str:
-    content = message.get("content")
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "".join(_response_part_text(part) for part in content)
-    return "" if content is None else str(content)
-
-
-def _build_response_payload(
-    *,
-    response_id: str,
-    model: str,
-    created_at: int,
-    text: str,
-    usage: dict[str, Any],
-    status: str = "completed",
-    message_id: str | None = None,
-) -> dict[str, Any]:
-    message_id = message_id or f"msg_{uuid.uuid4().hex[:24]}"
-    return {
-        "id": response_id,
-        "object": "response",
-        "created_at": created_at,
-        "status": status,
-        "model": model,
-        "output": [
-            {
-                "id": message_id,
-                "type": "message",
-                "status": status,
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "output_text",
-                        "text": text,
-                        "annotations": [],
-                    }
-                ],
-            }
-        ],
-        "usage": usage,
-    }
-
-
-def _chat_completion_to_response(chat: dict[str, Any], request_body: dict[str, Any]) -> dict[str, Any]:
-    choices = chat.get("choices") if isinstance(chat.get("choices"), list) else []
-    first_choice = choices[0] if choices and isinstance(choices[0], dict) else {}
-    message = first_choice.get("message") if isinstance(first_choice.get("message"), dict) else {}
-    text = _chat_message_text(message)
-    return _build_response_payload(
-        response_id=str(chat.get("id") or f"resp_{uuid.uuid4().hex[:24]}"),
-        model=str(chat.get("model") or request_body.get("model") or ""),
-        created_at=int(chat.get("created") or time.time()),
-        text=text,
-        usage=_normalize_chat_usage_to_response_usage(chat.get("usage")),
-    )
-
-
-def _sse_event(event_type: str, payload: dict[str, Any]) -> bytes:
-    payload.setdefault("type", event_type)
-    return f"event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
-
-
 class TransferService:
     def __init__(
         self,
@@ -551,8 +334,8 @@ class TransferService:
             "litellm_pid": self.runtime.pid,
             "litellm_model": first_route.litellm_model if first_route else "",
             "model_alias": first_route.model_alias if first_route else "",
-            "conversion_type": first_route.conversion_type if first_route else "model_api",
-            "upstream_api": first_route.upstream_api if first_route else "responses",
+            "endpoint_mode": first_route.endpoint_mode if first_route else "auto",
+            "extra_litellm_params": dict(first_route.extra_litellm_params) if first_route else {},
             "provider_base_url": first_route.provider_base_url if first_route else "",
             "provider_api_key_set": bool(first_route.provider_api_key) if first_route else False,
             "routes": [route.to_status_dict() for route in routes],
@@ -580,9 +363,6 @@ class TransferService:
         return f"http://{host}:{self.port}{base_path}"
 
     async def create_response(self, body: dict[str, Any]) -> TransferResult:
-        route = self._route_for_model(str(body.get("model") or ""))
-        if route is not None and route.upstream_api == "chat_completions":
-            return await self._proxy_response_via_chat_completions(body)
         return await self._proxy_post("responses", "/v1/responses", body)
 
     async def proxy_chat_completions(self, body: dict[str, Any]) -> TransferResult:
@@ -593,42 +373,6 @@ class TransferService:
 
     async def delete_response(self, response_id: str) -> TransferResult:
         return await self._proxy_request("DELETE", f"responses/{response_id}", f"/v1/responses/{response_id}")
-
-    def _route_for_model(self, model: str) -> LiteLLMRouteConfig | None:
-        routes = self.config.effective_routes()
-        normalized = str(model or "").strip()
-        if normalized:
-            for route in routes:
-                if route.model_alias == normalized:
-                    return route
-        return routes[0] if routes else None
-
-    async def _proxy_response_via_chat_completions(self, body: dict[str, Any]) -> TransferResult:
-        chat_body = _responses_to_chat_completion_request(body)
-        model = str(chat_body.get("model") or body.get("model") or self.config.model_alias or "")
-        bytes_in = _json_size(body)
-        if body.get("stream"):
-            start_time = time.time()
-            try:
-                return await self._open_response_chat_stream(chat_body, model, bytes_in, start_time)
-            except TransferServiceError as exc:
-                self._record_failure("POST", "/v1/responses -> /v1/chat/completions", model, bytes_in, 0, start_time, exc.message, status=exc.status)
-                raise
-            except Exception as exc:
-                self.last_error = str(exc)
-                self.trace_event("error", {"detail": str(exc), "stack": traceback.format_exc()})
-                self._record_failure("POST", "/v1/responses -> /v1/chat/completions", model, bytes_in, 0, start_time, str(exc), status=502)
-                raise TransferServiceError(502, f"LiteLLM proxy request failed: {exc}", code="litellm_proxy_error") from exc
-        result = await self._proxy_request(
-            "POST",
-            "chat/completions",
-            "/v1/responses -> /v1/chat/completions",
-            body=chat_body,
-            model=model,
-            bytes_in=bytes_in,
-            transform_json=lambda data: _chat_completion_to_response(data, body),
-        )
-        return result
 
     async def _proxy_post(self, runtime_endpoint: str, traffic_endpoint: str, body: dict[str, Any]) -> TransferResult:
         method = "POST"
@@ -657,7 +401,6 @@ class TransferService:
         body: dict[str, Any] | None = None,
         model: str = "",
         bytes_in: int = 0,
-        transform_json: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> TransferResult:
         await self.ensure_runtime()
         assert self._client is not None
@@ -680,8 +423,6 @@ class TransferService:
                         data = json.loads(raw.decode("utf-8")) if raw else {}
                         raw_body = None
                         if isinstance(data, dict):
-                            if transform_json is not None:
-                                data = transform_json(data)
                             model = str(data.get("model") or model)
                             usage = _extract_usage(data)
                     except json.JSONDecodeError:
@@ -755,220 +496,6 @@ class TransferService:
             headers=_copy_response_headers(response),
             stream=stream(),
             content_type=_content_type_header(response),
-        )
-
-    async def _open_response_chat_stream(
-        self,
-        chat_body: dict[str, Any],
-        model: str,
-        bytes_in: int,
-        start_time: float,
-    ) -> TransferResult:
-        await self.ensure_runtime()
-        assert self._client is not None
-        url = self._runtime_url("chat/completions")
-        response = await self._client.request("POST", url, json=chat_body, headers=self._runtime_headers())
-        if response.status >= 400:
-            raw = await response.read()
-            response.release()
-            raise TransferServiceError(response.status, _extract_error_message(response.status, raw), code="litellm_proxy_error")
-
-        response_id = f"resp_{uuid.uuid4().hex[:24]}"
-        message_id = f"msg_{uuid.uuid4().hex[:24]}"
-        created_at = int(time.time())
-        full_text = ""
-        usage = _normalize_chat_usage_to_response_usage(None)
-        total_out = 0
-        failed = False
-
-        async def stream() -> AsyncIterator[bytes]:
-            nonlocal full_text, usage, total_out, failed, model
-            buffer = ""
-            text_started = False
-            try:
-                yield _sse_event(
-                    "response.created",
-                    {
-                        "response": _build_response_payload(
-                            response_id=response_id,
-                            model=model,
-                            created_at=created_at,
-                            text="",
-                            usage=usage,
-                            status="in_progress",
-                            message_id=message_id,
-                        )
-                    },
-                )
-                yield _sse_event(
-                    "response.in_progress",
-                    {
-                        "response": _build_response_payload(
-                            response_id=response_id,
-                            model=model,
-                            created_at=created_at,
-                            text="",
-                            usage=usage,
-                            status="in_progress",
-                            message_id=message_id,
-                        )
-                    },
-                )
-
-                async for chunk in response.content.iter_any():
-                    total_out += len(chunk)
-                    buffer += chunk.decode("utf-8", errors="ignore")
-                    while "\n" in buffer:
-                        line, buffer = buffer.split("\n", 1)
-                        line = line.rstrip("\r")
-                        if not line.startswith("data:"):
-                            continue
-                        data = line[5:].strip()
-                        if not data:
-                            continue
-                        if data == "[DONE]":
-                            continue
-                        try:
-                            payload = json.loads(data)
-                        except json.JSONDecodeError:
-                            continue
-                        if not isinstance(payload, dict):
-                            continue
-                        if payload.get("model"):
-                            model = str(payload.get("model") or model)
-                        if isinstance(payload.get("usage"), dict):
-                            usage = _normalize_chat_usage_to_response_usage(payload.get("usage"))
-                        choices = payload.get("choices") if isinstance(payload.get("choices"), list) else []
-                        for choice in choices:
-                            if not isinstance(choice, dict):
-                                continue
-                            delta = choice.get("delta") if isinstance(choice.get("delta"), dict) else {}
-                            content = delta.get("content")
-                            if not content:
-                                continue
-                            text_delta = str(content)
-                            if not text_started:
-                                text_started = True
-                                yield _sse_event(
-                                    "response.output_item.added",
-                                    {
-                                        "output_index": 0,
-                                        "item": {
-                                            "id": message_id,
-                                            "type": "message",
-                                            "status": "in_progress",
-                                            "role": "assistant",
-                                            "content": [],
-                                        },
-                                    },
-                                )
-                                yield _sse_event(
-                                    "response.content_part.added",
-                                    {
-                                        "item_id": message_id,
-                                        "output_index": 0,
-                                        "content_index": 0,
-                                        "part": {"type": "output_text", "text": "", "annotations": []},
-                                    },
-                                )
-                            full_text += text_delta
-                            yield _sse_event(
-                                "response.output_text.delta",
-                                {
-                                    "item_id": message_id,
-                                    "output_index": 0,
-                                    "content_index": 0,
-                                    "delta": text_delta,
-                                },
-                            )
-                if not text_started:
-                    yield _sse_event(
-                        "response.output_item.added",
-                        {
-                            "output_index": 0,
-                            "item": {
-                                "id": message_id,
-                                "type": "message",
-                                "status": "in_progress",
-                                "role": "assistant",
-                                "content": [],
-                            },
-                        },
-                    )
-                    yield _sse_event(
-                        "response.content_part.added",
-                        {
-                            "item_id": message_id,
-                            "output_index": 0,
-                            "content_index": 0,
-                            "part": {"type": "output_text", "text": "", "annotations": []},
-                        },
-                    )
-                yield _sse_event(
-                    "response.output_text.done",
-                    {
-                        "item_id": message_id,
-                        "output_index": 0,
-                        "content_index": 0,
-                        "text": full_text,
-                    },
-                )
-                yield _sse_event(
-                    "response.content_part.done",
-                    {
-                        "item_id": message_id,
-                        "output_index": 0,
-                        "content_index": 0,
-                        "part": {"type": "output_text", "text": full_text, "annotations": []},
-                    },
-                )
-                output_item = {
-                    "id": message_id,
-                    "type": "message",
-                    "status": "completed",
-                    "role": "assistant",
-                    "content": [{"type": "output_text", "text": full_text, "annotations": []}],
-                }
-                yield _sse_event(
-                    "response.output_item.done",
-                    {
-                        "output_index": 0,
-                        "item": output_item,
-                    },
-                )
-                yield _sse_event(
-                    "response.completed",
-                    {
-                        "response": _build_response_payload(
-                            response_id=response_id,
-                            model=model,
-                            created_at=created_at,
-                            text=full_text,
-                            usage=usage,
-                            status="completed",
-                            message_id=message_id,
-                        )
-                    },
-                )
-            except Exception as exc:
-                failed = True
-                self.last_error = str(exc)
-                self.trace_event("error", {"detail": str(exc), "stack": traceback.format_exc()})
-                yield _sse_event("error", {"error": {"message": str(exc), "code": "stream_error"}})
-            finally:
-                response.release()
-                if failed:
-                    self._record_failure("POST", "/v1/responses -> /v1/chat/completions (stream)", model, bytes_in, total_out, start_time, self.last_error)
-                else:
-                    if usage["total_tokens"] == 0:
-                        self.trace_event("warning", {"message": "usage_missing", "endpoint": "/v1/responses -> /v1/chat/completions (stream)", "model": model})
-                    self._record_success("POST", "/v1/responses -> /v1/chat/completions (stream)", model, bytes_in, total_out, start_time, usage, status=response.status)
-
-        return TransferResult(
-            status=response.status,
-            headers=_copy_response_headers(response),
-            stream=stream(),
-            content_type="text/event-stream",
         )
 
     def _runtime_url(self, runtime_endpoint: str) -> str:

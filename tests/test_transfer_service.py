@@ -101,18 +101,18 @@ async def test_transfer_config_uses_runtime_paths_and_never_echoes_provider_key(
     assert status["local_host"] == "127.0.0.1"
     assert status["local_port"] == 8765
     assert status["provider_api_key_set"] is True
-    assert status["conversion_type"] == "model_api"
+    assert status["endpoint_mode"] == "auto"
     assert status["route_count"] == 1
     assert status["configured_route_count"] == 1
     assert status["routes"] == [
         {
             "id": "route-1",
             "name": "",
-            "conversion_type": "model_api",
-            "upstream_api": "responses",
+            "endpoint_mode": "auto",
             "litellm_model": "openai/gpt-5",
             "model_alias": "codex-gpt-5",
             "provider_base_url": "http://example.test/v1",
+            "extra_litellm_params": {},
             "provider_api_key_set": True,
             "configured": True,
         }
@@ -125,11 +125,11 @@ async def test_transfer_config_uses_runtime_paths_and_never_echoes_provider_key(
             {
                 "id": "route-1",
                 "name": "",
-                "conversion_type": "model_api",
-                "upstream_api": "responses",
+                "endpoint_mode": "auto",
                 "litellm_model": "openai/gpt-5",
                 "model_alias": "codex-gpt-5",
                 "provider_base_url": "http://example.test/v1",
+                "extra_litellm_params": {},
                 "provider_api_key": "sk-secret-value",
             }
         ],
@@ -179,8 +179,7 @@ def test_transfer_config_accepts_multiple_routes_and_preserves_route_secrets(tmp
                 {
                     "id": "route-ab",
                     "name": "AB 转",
-                    "conversion_type": "model_api",
-                    "upstream_api": "responses",
+                    "endpoint_mode": "auto",
                     "model_alias": "A",
                     "litellm_model": "openai/B",
                     "provider_base_url": "https://provider-ab.test/v1",
@@ -189,12 +188,12 @@ def test_transfer_config_accepts_multiple_routes_and_preserves_route_secrets(tmp
                 {
                     "id": "route-cd",
                     "name": "CD 转",
-                    "conversion_type": "api",
-                    "upstream_api": "chat_completions",
+                    "endpoint_mode": "chat_completions",
                     "model_alias": "C",
                     "litellm_model": "anthropic/D",
                     "provider_base_url": "https://provider-cd.test/v1",
                     "provider_api_key": "sk-cd",
+                    "extra_litellm_params": {"rpm": 120},
                 },
             ],
             "drop_params": False,
@@ -206,8 +205,8 @@ def test_transfer_config_accepts_multiple_routes_and_preserves_route_secrets(tmp
     assert status["route_count"] == 2
     assert status["configured_route_count"] == 2
     assert [route["model_alias"] for route in status["routes"]] == ["A", "C"]
-    assert status["routes"][1]["conversion_type"] == "api"
-    assert status["routes"][1]["upstream_api"] == "chat_completions"
+    assert status["routes"][1]["endpoint_mode"] == "chat_completions"
+    assert status["routes"][1]["extra_litellm_params"] == {"rpm": 120}
     assert "sk-ab" not in json.dumps(status)
     assert "sk-cd" not in json.dumps(status)
 
@@ -217,8 +216,7 @@ def test_transfer_config_accepts_multiple_routes_and_preserves_route_secrets(tmp
                 {
                     "id": "route-ab",
                     "name": "AB 转",
-                    "conversion_type": "model_api",
-                    "upstream_api": "responses",
+                    "endpoint_mode": "auto",
                     "model_alias": "A",
                     "litellm_model": "openai/B2",
                     "provider_base_url": "https://provider-ab.test/v2",
@@ -226,8 +224,7 @@ def test_transfer_config_accepts_multiple_routes_and_preserves_route_secrets(tmp
                 {
                     "id": "route-cd",
                     "name": "CD 转",
-                    "conversion_type": "api",
-                    "upstream_api": "chat_completions",
+                    "endpoint_mode": "chat_completions",
                     "model_alias": "C",
                     "litellm_model": "anthropic/D",
                     "provider_base_url": "https://provider-cd.test/v1",
@@ -238,11 +235,15 @@ def test_transfer_config_accepts_multiple_routes_and_preserves_route_secrets(tmp
 
     assert service.config.routes[0].provider_api_key == "sk-ab"
     assert service.config.routes[1].provider_api_key == "sk-cd"
-    assert service.config.routes[1].upstream_api == "chat_completions"
+    assert service.config.routes[1].endpoint_mode == "chat_completions"
+    assert service.config.routes[1].extra_litellm_params == {"rpm": 120}
     saved = json.loads((tmp_path / "transfer.json").read_text(encoding="utf-8"))
     assert saved["routes"][0]["litellm_model"] == "openai/B2"
     assert saved["routes"][0]["provider_api_key"] == "sk-ab"
-    assert saved["routes"][1]["upstream_api"] == "chat_completions"
+    assert saved["routes"][1]["endpoint_mode"] == "chat_completions"
+    assert saved["routes"][1]["extra_litellm_params"] == {"rpm": 120}
+    assert "conversion_type" not in json.dumps(saved)
+    assert "upstream_api" not in json.dumps(saved)
 
 
 def test_legacy_transfer_config_migrates_to_litellm_schema_and_drops_converter_fields(tmp_path: Path) -> None:
@@ -276,16 +277,51 @@ def test_legacy_transfer_config_migrates_to_litellm_schema_and_drops_converter_f
             {
                 "id": "route-1",
                 "name": "",
-                "conversion_type": "model_api",
-                "upstream_api": "responses",
+                "endpoint_mode": "auto",
                 "litellm_model": "gpt-legacy",
                 "model_alias": "gpt-legacy",
                 "provider_base_url": "https://legacy.test/v1",
+                "extra_litellm_params": {},
                 "provider_api_key": "sk-legacy",
             }
         ],
         "drop_params": False,
     }
+
+
+def test_old_route_upstream_api_migrates_to_endpoint_mode_and_saves_new_schema(tmp_path: Path) -> None:
+    config_path = tmp_path / "transfer.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "routes": [
+                    {
+                        "id": "route-chat",
+                        "name": "旧配置",
+                        "conversion_type": "api",
+                        "upstream_api": "chat_completions",
+                        "litellm_model": "openai/gpt-5",
+                        "model_alias": "codex-gpt-5",
+                        "provider_base_url": "https://provider.test/v1",
+                        "provider_api_key": "sk-provider",
+                    }
+                ],
+                "drop_params": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    service = TransferService(host="127.0.0.1", port=8765, config_path=config_path, runtime=FakeLiteLLMRuntime())
+
+    assert service.config.routes[0].endpoint_mode == "chat_completions"
+
+    service.update_config({"drop_params": False})
+
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["routes"][0]["endpoint_mode"] == "chat_completions"
+    assert "conversion_type" not in saved["routes"][0]
+    assert "upstream_api" not in saved["routes"][0]
 
 
 def test_litellm_runtime_config_yaml_contains_model_and_master_key_only(tmp_path: Path) -> None:
@@ -309,6 +345,7 @@ def test_litellm_runtime_config_yaml_contains_model_and_master_key_only(tmp_path
     }
     assert payload["litellm_settings"]["drop_params"] is True
     assert payload["general_settings"]["master_key"] == "sk-master"
+    assert payload["general_settings"]["always_include_stream_usage"] is True
 
 
 def test_litellm_runtime_config_yaml_contains_multiple_routes(tmp_path: Path) -> None:
@@ -316,7 +353,7 @@ def test_litellm_runtime_config_yaml_contains_multiple_routes(tmp_path: Path) ->
     config.routes = [
         LiteLLMRouteConfig(
             id="route-ab",
-            conversion_type="model_api",
+            endpoint_mode="auto",
             model_alias="A",
             litellm_model="openai/B",
             provider_base_url="https://provider-ab.test/v1",
@@ -324,11 +361,12 @@ def test_litellm_runtime_config_yaml_contains_multiple_routes(tmp_path: Path) ->
         ),
         LiteLLMRouteConfig(
             id="route-cd",
-            conversion_type="api",
+            endpoint_mode="chat_completions",
             model_alias="C",
             litellm_model="anthropic/D",
             provider_base_url="https://provider-cd.test/v1",
             provider_api_key="sk-cd",
+            extra_litellm_params={"rpm": 120},
         ),
     ]
 
@@ -346,8 +384,52 @@ def test_litellm_runtime_config_yaml_contains_multiple_routes(tmp_path: Path) ->
         "model": "anthropic/D",
         "api_key": "sk-cd",
         "api_base": "https://provider-cd.test/v1",
+        "rpm": 120,
+        "use_chat_completions_api": True,
     }
     assert payload["litellm_settings"]["drop_params"] is False
+
+
+def test_litellm_runtime_config_yaml_normalizes_openai_responses_model(tmp_path: Path) -> None:
+    config = LiteLLMTransferConfig(drop_params=True)
+    config.routes = [
+        LiteLLMRouteConfig(
+            id="route-responses",
+            endpoint_mode="responses",
+            model_alias="gpt-5",
+            litellm_model="openai/gpt-5",
+            provider_api_key="sk-provider",
+        )
+    ]
+
+    path = tmp_path / "litellm.yaml"
+    write_litellm_proxy_config(path, config, "sk-master")
+
+    payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert payload["model_list"][0]["litellm_params"]["model"] == "openai/responses/gpt-5"
+
+
+def test_litellm_extra_params_reject_core_field_overrides(tmp_path: Path) -> None:
+    service = TransferService(host="127.0.0.1", port=8765, config_path=tmp_path / "transfer.json", runtime=FakeLiteLLMRuntime())
+
+    with pytest.raises(TransferServiceError) as exc_info:
+        service.update_config(
+            {
+                "routes": [
+                    {
+                        "id": "route-1",
+                        "endpoint_mode": "auto",
+                        "litellm_model": "openai/gpt-5",
+                        "model_alias": "gpt-5",
+                        "provider_api_key": "sk-provider",
+                        "extra_litellm_params": {"api_key": "sk-override"},
+                    }
+                ]
+            }
+        )
+
+    assert exc_info.value.status == 400
+    assert "extra_litellm_params" in exc_info.value.message
 
 
 def test_litellm_runtime_default_command_uses_current_python_module_when_script_missing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -423,26 +505,25 @@ async def test_create_response_proxies_raw_body_and_preserves_response_tools(tmp
 
 
 @pytest.mark.asyncio
-async def test_create_response_can_target_chat_completions_upstream(tmp_path: Path) -> None:
+async def test_create_response_ignores_endpoint_mode_and_proxies_to_responses(tmp_path: Path) -> None:
     captured: dict[str, object] = {}
 
-    async def chat_completions(request: web.Request) -> web.Response:
+    async def responses(request: web.Request) -> web.Response:
         captured["path"] = request.path
         captured["authorization"] = request.headers.get("Authorization")
         captured["body"] = await request.json()
         return web.json_response(
             {
-                "id": "chatcmpl_1",
-                "object": "chat.completion",
-                "created": 123456,
+                "id": "resp_1",
+                "object": "response",
                 "model": "codex-gpt-5",
-                "choices": [{"message": {"role": "assistant", "content": "chat-ok"}, "finish_reason": "stop"}],
-                "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+                "output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}],
+                "usage": {"input_tokens": 7, "output_tokens": 3, "total_tokens": 10},
             }
         )
 
     app = web.Application()
-    app.router.add_post("/v1/chat/completions", chat_completions)
+    app.router.add_post("/v1/responses", responses)
     async with TestServer(app) as upstream_server:
         runtime = FakeLiteLLMRuntime(str(upstream_server.make_url("/v1")))
         service = _configured_service(runtime, tmp_path)
@@ -451,8 +532,7 @@ async def test_create_response_can_target_chat_completions_upstream(tmp_path: Pa
                 "routes": [
                     {
                         "id": "route-chat",
-                        "conversion_type": "api",
-                        "upstream_api": "chat_completions",
+                        "endpoint_mode": "chat_completions",
                         "model_alias": "codex-gpt-5",
                         "litellm_model": "openai/gpt-5",
                         "provider_base_url": "https://provider.test/v1",
@@ -473,46 +553,35 @@ async def test_create_response_can_target_chat_completions_upstream(tmp_path: Pa
         finally:
             await service.close()
 
-    assert captured["path"] == "/v1/chat/completions"
+    assert captured["path"] == "/v1/responses"
     assert captured["authorization"] == "Bearer sk-internal-master"
     assert captured["body"] == {
         "model": "codex-gpt-5",
-        "messages": [
-            {"role": "system", "content": "You are concise."},
-            {"role": "user", "content": "hello"},
-        ],
-        "reasoning_effort": "minimal",
-        "max_completion_tokens": 64,
+        "instructions": "You are concise.",
+        "input": "hello",
+        "reasoning": {"effort": "minimal"},
+        "max_output_tokens": 64,
     }
     assert result.data["object"] == "response"
-    assert result.data["id"] == "chatcmpl_1"
-    assert result.data["output"][0]["content"][0]["text"] == "chat-ok"
-    assert result.data["usage"] == {
-        "input_tokens": 7,
-        "output_tokens": 3,
-        "total_tokens": 10,
-        "input_tokens_details": {"cached_tokens": 0},
-        "output_tokens_details": {"reasoning_tokens": 0},
-    }
+    assert result.data["id"] == "resp_1"
     status = service.get_status()
-    assert status["recent_traffic"][0]["endpoint"] == "/v1/responses -> /v1/chat/completions"
+    assert status["recent_traffic"][0]["endpoint"] == "/v1/responses"
     assert status["total_input_tokens"] == 7
     assert status["total_output_tokens"] == 3
 
 
 @pytest.mark.asyncio
-async def test_create_response_stream_can_target_chat_completions_upstream(tmp_path: Path) -> None:
+async def test_create_response_streaming_proxies_raw_sse_bytes(tmp_path: Path) -> None:
     chunks = [
-        b'data: {"id":"chatcmpl_1","model":"codex-gpt-5","choices":[{"delta":{"content":"he"}}]}\n\n',
-        b'data: {"id":"chatcmpl_1","model":"codex-gpt-5","choices":[{"delta":{"content":"llo"},"finish_reason":"stop"}]}\n\n',
-        b'data: {"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}\n\n',
+        b'event: response.output_text.delta\ndata: {"delta":"he","model":"codex-gpt-5"}\n\n',
+        b'event: response.output_text.delta\ndata: {"delta":"llo","model":"codex-gpt-5"}\n\n',
+        b'event: response.completed\ndata: {"response":{"usage":{"input_tokens":5,"output_tokens":2,"total_tokens":7}}}\n\n',
         b"data: [DONE]\n\n",
     ]
 
-    async def chat_completions(request: web.Request) -> web.StreamResponse:
+    async def responses(request: web.Request) -> web.StreamResponse:
         body = await request.json()
         assert body["stream"] is True
-        assert body["stream_options"] == {"include_usage": True}
         response = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
         await response.prepare(request)
         for chunk in chunks:
@@ -521,7 +590,7 @@ async def test_create_response_stream_can_target_chat_completions_upstream(tmp_p
         return response
 
     app = web.Application()
-    app.router.add_post("/v1/chat/completions", chat_completions)
+    app.router.add_post("/v1/responses", responses)
     async with TestServer(app) as upstream_server:
         runtime = FakeLiteLLMRuntime(str(upstream_server.make_url("/v1")))
         service = _configured_service(runtime, tmp_path)
@@ -530,8 +599,7 @@ async def test_create_response_stream_can_target_chat_completions_upstream(tmp_p
                 "routes": [
                     {
                         "id": "route-chat",
-                        "conversion_type": "api",
-                        "upstream_api": "chat_completions",
+                        "endpoint_mode": "chat_completions",
                         "model_alias": "codex-gpt-5",
                         "litellm_model": "openai/gpt-5",
                         "provider_base_url": "https://provider.test/v1",
@@ -545,15 +613,9 @@ async def test_create_response_stream_can_target_chat_completions_upstream(tmp_p
         finally:
             await service.close()
 
-    assert "event: response.output_text.delta" in text
-    assert '"delta": "he"' in text
-    assert '"delta": "llo"' in text
-    assert "event: response.completed" in text
-    assert '"input_tokens": 5' in text
-    assert '"output_tokens": 2' in text
-    assert "[DONE]" not in text
+    assert text == b"".join(chunks).decode("utf-8")
     status = service.get_status()
-    assert status["recent_traffic"][0]["endpoint"] == "/v1/responses -> /v1/chat/completions (stream)"
+    assert status["recent_traffic"][0]["endpoint"] == "/v1/responses (stream)"
     assert status["total_input_tokens"] == 5
     assert status["total_output_tokens"] == 2
 

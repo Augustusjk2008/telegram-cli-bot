@@ -148,7 +148,7 @@ HTML_PAGE = r"""
     </header>
 
     <div class="info">
-      将 Codex 或其他 Responses 客户端的 <code>base_url</code> 指向 <code id="local-url">-</code>。Responses / Chat Completions 协议兼容由 LiteLLM 处理。
+      将 Codex 或其他 OpenAI 兼容客户端的 <code>base_url</code> 指向 <code id="local-url">-</code>。本层仅反代；Responses / Chat Completions bridge 由 LiteLLM 原生配置处理。
     </div>
 
     <div class="grid">
@@ -171,26 +171,23 @@ HTML_PAGE = r"""
           <input id="model-alias" autocomplete="off" placeholder="gpt-5">
         </div>
         <div class="form-row">
-          <label for="conversion-type">转换类型</label>
-          <select id="conversion-type">
-            <option value="model_api">模型 + API</option>
-            <option value="model">模型转换</option>
-            <option value="api">API 转换</option>
+          <label for="endpoint-mode">LiteLLM endpoint mode</label>
+          <select id="endpoint-mode">
+            <option value="auto">auto</option>
+            <option value="chat_completions">chat_completions</option>
+            <option value="responses">responses</option>
           </select>
         </div>
         <div class="form-row">
-          <label for="upstream-api">上游 API</label>
-          <select id="upstream-api">
-            <option value="responses">Responses</option>
-            <option value="chat_completions">Chat Completions</option>
-          </select>
+          <label for="extra-litellm-params">高级 LiteLLM params JSON</label>
+          <textarea id="extra-litellm-params" spellcheck="false" placeholder='{"rpm":120}'></textarea>
         </div>
         <div class="form-row">
           <label><input id="drop-params" type="checkbox" checked> drop params</label>
         </div>
         <div class="form-row">
           <label for="routes-json">多路由 JSON</label>
-          <textarea id="routes-json" spellcheck="false" placeholder='[{"id":"route-1","conversion_type":"model_api","model_alias":"A","litellm_model":"openai/B","provider_base_url":"https://api.example.com/v1"}]'></textarea>
+          <textarea id="routes-json" spellcheck="false" placeholder='[{"id":"route-1","endpoint_mode":"auto","model_alias":"A","litellm_model":"openai/B","provider_base_url":"https://api.example.com/v1","extra_litellm_params":{}}]'></textarea>
         </div>
         <div class="form-row">
           <label for="local-endpoint">本地端点</label>
@@ -205,8 +202,8 @@ HTML_PAGE = r"""
           <div class="config-row"><span class="muted">上游地址</span><span id="cfg-remote-url">-</span></div>
           <div class="config-row"><span class="muted">LiteLLM model</span><span id="cfg-remote-model">-</span></div>
           <div class="config-row"><span class="muted">模型别名</span><span id="cfg-model-alias">-</span></div>
-          <div class="config-row"><span class="muted">转换类型</span><span id="cfg-conversion-type">-</span></div>
-          <div class="config-row"><span class="muted">上游 API</span><span id="cfg-upstream-api">-</span></div>
+          <div class="config-row"><span class="muted">Endpoint mode</span><span id="cfg-endpoint-mode">-</span></div>
+          <div class="config-row"><span class="muted">高级 params</span><span id="cfg-extra-params">-</span></div>
           <div class="config-row"><span class="muted">路由数</span><span id="cfg-route-count">-</span></div>
           <div class="config-row"><span class="muted">Key 状态</span><span id="cfg-key">-</span></div>
           <div class="config-row"><span class="muted">本地 host / port</span><span id="cfg-local">-</span></div>
@@ -327,15 +324,43 @@ HTML_PAGE = r"""
       return "未知";
     }
 
-    function conversionTypeLabel(value) {
-      if (value === "model") return "模型转换";
-      if (value === "api") return "API 转换";
-      return "模型 + API";
+    const RESERVED_EXTRA_PARAMS = new Set(["model", "api_key", "api_base"]);
+
+    function endpointModeLabel(value) {
+      if (value === "chat_completions") return "chat_completions";
+      if (value === "responses") return "responses";
+      return "auto";
     }
 
-    function upstreamApiLabel(value) {
-      if (value === "chat_completions") return "Chat Completions";
-      return "Responses";
+    function formatJsonObject(value) {
+      if (!value || typeof value !== "object" || Array.isArray(value) || !Object.keys(value).length) return "{}";
+      return JSON.stringify(value, null, 2);
+    }
+
+    function validateExtraParams(value) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error("extra_litellm_params 必须是 JSON 对象");
+      }
+      const reserved = Object.keys(value).filter((key) => RESERVED_EXTRA_PARAMS.has(key));
+      if (reserved.length) {
+        throw new Error(`extra_litellm_params 不能包含 ${reserved.join(", ")}`);
+      }
+      return value;
+    }
+
+    function parseExtraParamsText(text) {
+      const raw = text.trim();
+      if (!raw) return {};
+      return validateExtraParams(JSON.parse(raw));
+    }
+
+    function normalizeRoutePayload(route) {
+      const next = { ...route };
+      delete next.conversion_type;
+      delete next.upstream_api;
+      next.endpoint_mode = endpointModeLabel(next.endpoint_mode);
+      next.extra_litellm_params = validateExtraParams(next.extra_litellm_params || {});
+      return next;
     }
 
     function routeEditorValue(data) {
@@ -343,11 +368,11 @@ HTML_PAGE = r"""
       return JSON.stringify(routes.map((route) => ({
         id: route.id || "",
         name: route.name || "",
-        conversion_type: route.conversion_type || "model_api",
-        upstream_api: route.upstream_api || "responses",
+        endpoint_mode: route.endpoint_mode || "auto",
         model_alias: route.model_alias || "",
         litellm_model: route.litellm_model || "",
         provider_base_url: route.provider_base_url || "",
+        extra_litellm_params: route.extra_litellm_params || {},
         clear_provider_api_key: false,
       })), null, 2);
     }
@@ -358,15 +383,15 @@ HTML_PAGE = r"""
       $("remote-url").value = data.provider_base_url || "";
       $("remote-model").value = data.litellm_model || "";
       $("model-alias").value = data.model_alias || "";
-      $("conversion-type").value = data.conversion_type || "model_api";
-      $("upstream-api").value = data.upstream_api || "responses";
+      $("endpoint-mode").value = data.endpoint_mode || "auto";
+      $("extra-litellm-params").value = formatJsonObject(data.extra_litellm_params || {});
       $("routes-json").value = routeEditorValue(data);
       $("drop-params").checked = data.drop_params !== false;
       $("cfg-remote-url").textContent = data.provider_base_url || "-";
       $("cfg-remote-model").textContent = data.litellm_model || "-";
       $("cfg-model-alias").textContent = data.model_alias || "-";
-      $("cfg-conversion-type").textContent = conversionTypeLabel(data.conversion_type);
-      $("cfg-upstream-api").textContent = upstreamApiLabel(data.upstream_api);
+      $("cfg-endpoint-mode").textContent = endpointModeLabel(data.endpoint_mode);
+      $("cfg-extra-params").textContent = formatJsonObject(data.extra_litellm_params || {});
       $("cfg-route-count").textContent = `${data.configured_route_count || 0} / ${data.route_count || 0}`;
       $("cfg-key").textContent = data.provider_api_key_set ? "已设置" : "未设置";
       $("cfg-local").textContent = `${data.local_host || "-"}:${data.local_port || "-"}`;
@@ -423,16 +448,31 @@ HTML_PAGE = r"""
         provider_base_url: $("remote-url").value.trim(),
         litellm_model: $("remote-model").value.trim(),
         model_alias: $("model-alias").value.trim(),
-        conversion_type: $("conversion-type").value,
-        upstream_api: $("upstream-api").value,
+        endpoint_mode: $("endpoint-mode").value,
         drop_params: $("drop-params").checked,
       };
+      try {
+        body.extra_litellm_params = parseExtraParamsText($("extra-litellm-params").value);
+      } catch (error) {
+        showToast(error.message || "高级 LiteLLM params JSON 格式错误", "error");
+        return;
+      }
       const routesText = $("routes-json").value.trim();
       if (routesText) {
         try {
           const routes = JSON.parse(routesText);
           if (!Array.isArray(routes)) throw new Error("多路由 JSON 必须是数组");
-          body.routes = routes;
+          body.routes = routes.map(normalizeRoutePayload);
+          if (body.routes.length) {
+            body.routes[0] = {
+              ...body.routes[0],
+              provider_base_url: body.provider_base_url,
+              litellm_model: body.litellm_model,
+              model_alias: body.model_alias,
+              endpoint_mode: body.endpoint_mode,
+              extra_litellm_params: body.extra_litellm_params,
+            };
+          }
         } catch (error) {
           showToast(error.message || "多路由 JSON 格式错误", "error");
           return;

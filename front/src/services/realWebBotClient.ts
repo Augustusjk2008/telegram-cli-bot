@@ -159,9 +159,8 @@ import type {
   TerminalActionsEditableConfig,
   TransferBridgeConfigInput,
   TransferBridgeStatus,
-  TransferConversionType,
+  TransferEndpointMode,
   TransferRouteConfig,
-  TransferUpstreamApi,
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
   UserBotPermissions,
@@ -317,8 +316,8 @@ type RawTransferBridgeStatus = {
   litellm_pid?: number | null;
   litellm_model?: string;
   model_alias?: string;
-  conversion_type?: string;
-  upstream_api?: string;
+  endpoint_mode?: string;
+  extra_litellm_params?: Record<string, unknown>;
   provider_base_url?: string;
   provider_api_key_set?: boolean;
   routes?: RawTransferRouteConfig[];
@@ -355,11 +354,11 @@ type RawTransferBridgeStatus = {
 type RawTransferRouteConfig = {
   id?: string;
   name?: string;
-  conversion_type?: string;
-  upstream_api?: string;
+  endpoint_mode?: string;
   litellm_model?: string;
   model_alias?: string;
   provider_base_url?: string;
+  extra_litellm_params?: Record<string, unknown>;
   provider_api_key_set?: boolean;
   configured?: boolean;
 };
@@ -2966,8 +2965,8 @@ function mapTransferBridgeStatus(raw: RawTransferBridgeStatus): TransferBridgeSt
     modelAlias: raw.model_alias ? String(raw.model_alias) : undefined,
     providerBaseUrl: raw.provider_base_url ? String(raw.provider_base_url) : undefined,
     providerApiKeySet: Boolean(raw.provider_api_key_set),
-    ...(raw.conversion_type !== undefined ? { conversionType: normalizeTransferConversionType(raw.conversion_type) } : {}),
-    ...(raw.upstream_api !== undefined ? { upstreamApi: normalizeTransferUpstreamApi(raw.upstream_api) } : {}),
+    ...(raw.endpoint_mode !== undefined ? { endpointMode: normalizeTransferEndpointMode(raw.endpoint_mode) } : {}),
+    ...(raw.extra_litellm_params !== undefined ? { extraLitellmParams: normalizeRecord(raw.extra_litellm_params) } : {}),
     ...(routes !== undefined ? { routes } : {}),
     ...(typeof raw.route_count === "number" ? { routeCount: raw.route_count } : {}),
     ...(typeof raw.configured_route_count === "number" ? { configuredRouteCount: raw.configured_route_count } : {}),
@@ -3002,27 +3001,26 @@ function mapTransferBridgeStatus(raw: RawTransferBridgeStatus): TransferBridgeSt
   };
 }
 
-function normalizeTransferConversionType(value: unknown): TransferConversionType {
-  const text = String(value || "").trim();
-  if (text === "model" || text === "api" || text === "model_api") return text;
-  return "model_api";
-}
-
-function normalizeTransferUpstreamApi(value: unknown): TransferUpstreamApi {
+function normalizeTransferEndpointMode(value: unknown): TransferEndpointMode {
   const text = String(value || "").trim();
   if (text === "chat_completions") return "chat_completions";
-  return "responses";
+  if (text === "responses") return "responses";
+  return "auto";
+}
+
+function normalizeRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? { ...(value as Record<string, unknown>) } : {};
 }
 
 function mapTransferRouteConfig(raw: RawTransferRouteConfig): TransferRouteConfig {
   return {
     id: String(raw.id || ""),
     name: raw.name ? String(raw.name) : "",
-    conversionType: normalizeTransferConversionType(raw.conversion_type),
-    upstreamApi: normalizeTransferUpstreamApi(raw.upstream_api),
+    endpointMode: normalizeTransferEndpointMode(raw.endpoint_mode),
     litellmModel: String(raw.litellm_model || ""),
     modelAlias: String(raw.model_alias || ""),
     providerBaseUrl: String(raw.provider_base_url || ""),
+    extraLitellmParams: normalizeRecord(raw.extra_litellm_params),
     providerApiKeySet: Boolean(raw.provider_api_key_set),
     configured: typeof raw.configured === "boolean" ? raw.configured : undefined,
   };
@@ -3032,8 +3030,8 @@ function mapTransferBridgeConfigInput(input: TransferBridgeConfigInput) {
   return {
     ...(input.litellmModel !== undefined ? { litellm_model: input.litellmModel } : {}),
     ...(input.modelAlias !== undefined ? { model_alias: input.modelAlias } : {}),
-    ...(input.conversionType !== undefined ? { conversion_type: input.conversionType } : {}),
-    ...(input.upstreamApi !== undefined ? { upstream_api: input.upstreamApi } : {}),
+    ...(input.endpointMode !== undefined ? { endpoint_mode: input.endpointMode } : {}),
+    ...(input.extraLitellmParams !== undefined ? { extra_litellm_params: input.extraLitellmParams } : {}),
     ...(input.providerBaseUrl !== undefined ? { provider_base_url: input.providerBaseUrl } : {}),
     ...(input.providerApiKey ? { provider_api_key: input.providerApiKey } : {}),
     ...(input.clearProviderApiKey !== undefined ? { clear_provider_api_key: input.clearProviderApiKey } : {}),
@@ -3046,11 +3044,11 @@ function mapTransferRouteConfigInput(route: TransferRouteConfig) {
   return {
     id: route.id,
     ...(route.name !== undefined ? { name: route.name } : {}),
-    conversion_type: route.conversionType,
-    upstream_api: route.upstreamApi,
+    endpoint_mode: route.endpointMode,
     litellm_model: route.litellmModel,
     model_alias: route.modelAlias,
     provider_base_url: route.providerBaseUrl,
+    extra_litellm_params: route.extraLitellmParams || {},
     ...(route.providerApiKey ? { provider_api_key: route.providerApiKey } : {}),
     ...(route.clearProviderApiKey !== undefined ? { clear_provider_api_key: route.clearProviderApiKey } : {}),
   };

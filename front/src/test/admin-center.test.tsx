@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { AdminCenterScreen } from "../screens/AdminCenterScreen";
@@ -29,6 +29,8 @@ test("管理中心 LiteLLM 网关 tab 显示状态、链接和 Codex 配置提�
     litellmPid: 4321,
     litellmModel: "openai/gpt-5",
     modelAlias: "gpt-5",
+    endpointMode: "auto",
+    extraLitellmParams: {},
     providerBaseUrl: "https://max.jojocode.com/v1",
     providerApiKeySet: true,
     dropParams: true,
@@ -57,8 +59,12 @@ test("管理中心 LiteLLM 网关 tab 显示状态、链接和 Codex 配置提�
   expect(screen.getByLabelText("上游 base URL")).toHaveValue("https://max.jojocode.com/v1");
   expect(screen.getByLabelText("LiteLLM model")).toHaveValue("openai/gpt-5");
   expect(screen.getByLabelText("模型别名")).toHaveValue("gpt-5");
+  expect(screen.getByLabelText("LiteLLM endpoint mode")).toHaveValue("auto");
+  expect(screen.getByLabelText("高级 LiteLLM params JSON")).toHaveValue("{}");
   expect(screen.getByText("request_count = 1")).toBeInTheDocument();
   expect(screen.getByText("wire_api = \"responses\"")).toBeInTheDocument();
+  expect(screen.queryByLabelText("转换类型")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("上游 API")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("reasoning mode")).not.toBeInTheDocument();
   expect(screen.queryByText("developer 消息降级为 system")).not.toBeInTheDocument();
 });
@@ -215,12 +221,12 @@ test("管理中心 LiteLLM 网关 tab 保存配置并重置统计", async () => 
   await user.type(screen.getByLabelText("模型别名"), "gpt-next");
   await user.type(screen.getByLabelText("上游 API key"), "sk-new");
   await user.click(screen.getByRole("button", { name: "添加路由" }));
-  await user.selectOptions(screen.getByLabelText("转换类型 2"), "api");
-  await user.selectOptions(screen.getByLabelText("上游 API 2"), "chat_completions");
+  await user.selectOptions(screen.getByLabelText("LiteLLM endpoint mode 2"), "chat_completions");
   await user.type(screen.getByLabelText("LiteLLM model 2"), "anthropic/claude-next");
   await user.type(screen.getByLabelText("模型别名 2"), "claude-next");
   await user.type(screen.getByLabelText("上游 base URL 2"), "https://api.anthropic.test/v1");
   await user.type(screen.getByLabelText("上游 API key 2"), "sk-route-2");
+  fireEvent.change(screen.getByLabelText("高级 LiteLLM params JSON 2"), { target: { value: '{"rpm":120}' } });
   await user.click(screen.getByLabelText("LiteLLM drop params"));
   await user.click(screen.getByRole("button", { name: "保存网关配置" }));
 
@@ -228,8 +234,8 @@ test("管理中心 LiteLLM 网关 tab 保存配置并重置统计", async () => 
     dropParams: false,
     routes: [
       expect.objectContaining({
-        conversionType: "model_api",
-        upstreamApi: "responses",
+        endpointMode: "auto",
+        extraLitellmParams: {},
         providerBaseUrl: "https://api.example.test/v1",
         litellmModel: "openai/gpt-next",
         modelAlias: "gpt-next",
@@ -237,8 +243,8 @@ test("管理中心 LiteLLM 网关 tab 保存配置并重置统计", async () => 
         clearProviderApiKey: false,
       }),
       expect.objectContaining({
-        conversionType: "api",
-        upstreamApi: "chat_completions",
+        endpointMode: "chat_completions",
+        extraLitellmParams: { rpm: 120 },
         providerBaseUrl: "https://api.anthropic.test/v1",
         litellmModel: "anthropic/claude-next",
         modelAlias: "claude-next",
@@ -253,4 +259,21 @@ test("管理中心 LiteLLM 网关 tab 保存配置并重置统计", async () => 
   expect(resetTransferBridgeStats).toHaveBeenCalled();
   expect(await screen.findByText("网关统计已重置")).toBeInTheDocument();
   expect(screen.getByText("request_count = 0")).toBeInTheDocument();
+});
+
+test("管理中心 LiteLLM 网关 tab 拒绝高级参数覆盖核心字段", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const updateTransferBridgeConfig = vi.spyOn(client, "updateTransferBridgeConfig");
+  vi.spyOn(client, "listAdminUsers").mockResolvedValue([]);
+
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+
+  await screen.findByText("用户权限");
+  await user.click(screen.getByRole("tab", { name: "LiteLLM 网关" }));
+  fireEvent.change(await screen.findByLabelText("高级 LiteLLM params JSON"), { target: { value: '{"api_key":"sk-override"}' } });
+  await user.click(screen.getByRole("button", { name: "保存网关配置" }));
+
+  expect(updateTransferBridgeConfig).not.toHaveBeenCalled();
+  expect(await screen.findByText("高级 LiteLLM params 不能包含 api_key")).toBeInTheDocument();
 });

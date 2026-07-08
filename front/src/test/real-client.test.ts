@@ -177,19 +177,19 @@ describe("RealWebBotClient", () => {
       litellm_pid: 4321,
       litellm_model: "openai/gpt-5",
       model_alias: "gpt-5",
-      conversion_type: "model_api",
-      upstream_api: "responses",
+      endpoint_mode: "responses",
+      extra_litellm_params: { rpm: 120 },
       provider_base_url: "https://max.jojocode.com/v1",
       provider_api_key_set: true,
       routes: [
         {
           id: "route-1",
           name: "默认",
-          conversion_type: "model_api",
-          upstream_api: "responses",
+          endpoint_mode: "responses",
           litellm_model: "openai/gpt-5",
           model_alias: "gpt-5",
           provider_base_url: "https://max.jojocode.com/v1",
+          extra_litellm_params: { rpm: 120 },
           provider_api_key_set: true,
           configured: true,
         },
@@ -246,19 +246,19 @@ describe("RealWebBotClient", () => {
       litellmPid: 4321,
       litellmModel: "openai/gpt-5",
       modelAlias: "gpt-5",
-      conversionType: "model_api",
-      upstreamApi: "responses",
+      endpointMode: "responses",
+      extraLitellmParams: { rpm: 120 },
       providerBaseUrl: "https://max.jojocode.com/v1",
       providerApiKeySet: true,
       routes: [
         {
           id: "route-1",
           name: "默认",
-          conversionType: "model_api",
-          upstreamApi: "responses",
+          endpointMode: "responses",
           litellmModel: "openai/gpt-5",
           modelAlias: "gpt-5",
           providerBaseUrl: "https://max.jojocode.com/v1",
+          extraLitellmParams: { rpm: 120 },
           providerApiKeySet: true,
           configured: true,
         },
@@ -356,6 +356,8 @@ describe("RealWebBotClient", () => {
       providerBaseUrl: "https://api.example.test/v1",
       litellmModel: "openai/gpt-next",
       modelAlias: "gpt-next",
+      endpointMode: "chat_completions",
+      extraLitellmParams: { rpm: 120 },
       providerApiKey: "sk-new",
       dropParams: false,
     });
@@ -374,12 +376,16 @@ describe("RealWebBotClient", () => {
         body: JSON.stringify({
           litellm_model: "openai/gpt-next",
           model_alias: "gpt-next",
+          endpoint_mode: "chat_completions",
+          extra_litellm_params: { rpm: 120 },
           provider_base_url: "https://api.example.test/v1",
           provider_api_key: "sk-new",
           drop_params: false,
         }),
       }),
     );
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).not.toHaveProperty("conversion_type");
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).not.toHaveProperty("upstream_api");
     expect(fetchMock).toHaveBeenNthCalledWith(
       3,
       "/api/admin/transfer/reset",
