@@ -113,6 +113,23 @@ export type TransferTrafficRecord = {
   error: string;
 };
 
+export type TransferConversionType = "model" | "api" | "model_api";
+export type TransferUpstreamApi = "responses" | "chat_completions";
+
+export type TransferRouteConfig = {
+  id: string;
+  name?: string;
+  conversionType: TransferConversionType;
+  upstreamApi: TransferUpstreamApi;
+  litellmModel: string;
+  modelAlias: string;
+  providerBaseUrl: string;
+  providerApiKeySet: boolean;
+  providerApiKey?: string;
+  clearProviderApiKey?: boolean;
+  configured?: boolean;
+};
+
 export type TransferBridgeStatus = {
   enabled: boolean;
   running: boolean;
@@ -128,8 +145,13 @@ export type TransferBridgeStatus = {
   litellmPid?: number | null;
   litellmModel?: string;
   modelAlias?: string;
+  conversionType?: TransferConversionType;
+  upstreamApi?: TransferUpstreamApi;
   providerBaseUrl?: string;
   providerApiKeySet: boolean;
+  routes?: TransferRouteConfig[];
+  routeCount?: number;
+  configuredRouteCount?: number;
   dropParams?: boolean;
   litellmProxyBaseUrl?: string;
   litellmLogTail?: string[];
@@ -150,9 +172,12 @@ export type TransferBridgeStatus = {
 export type TransferBridgeConfigInput = {
   litellmModel?: string;
   modelAlias?: string;
+  conversionType?: TransferConversionType;
+  upstreamApi?: TransferUpstreamApi;
   providerBaseUrl?: string;
   providerApiKey?: string;
   clearProviderApiKey?: boolean;
+  routes?: TransferRouteConfig[];
   dropParams?: boolean;
 };
 

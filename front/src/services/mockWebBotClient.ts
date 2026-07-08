@@ -138,6 +138,7 @@ import type {
   TerminalRuntimePlatform,
   TransferBridgeConfigInput,
   TransferBridgeStatus,
+  TransferRouteConfig,
   TreeViewPayload,
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
@@ -1283,6 +1284,27 @@ function buildMockZipTreePayload(sourcePath: string): TreeViewPayload {
   };
 }
 
+function normalizeTransferRouteDraft(route: TransferRouteConfig, existing?: TransferRouteConfig): TransferRouteConfig {
+  const providerApiKeySet = route.clearProviderApiKey
+    ? false
+    : route.providerApiKey
+      ? true
+      : Boolean(existing?.providerApiKeySet ?? route.providerApiKeySet);
+  const litellmModel = route.litellmModel.trim();
+  const modelAlias = route.modelAlias.trim();
+  return {
+    id: route.id || existing?.id || "route-1",
+    name: route.name !== undefined ? route.name.trim() : existing?.name || "",
+    conversionType: route.conversionType || existing?.conversionType || "model_api",
+    upstreamApi: route.upstreamApi || existing?.upstreamApi || "responses",
+    litellmModel,
+    modelAlias,
+    providerBaseUrl: route.providerBaseUrl.trim(),
+    providerApiKeySet,
+    configured: Boolean(litellmModel && modelAlias && providerApiKeySet),
+  };
+}
+
 export class MockWebBotClient implements WebBotClient {
   private bots = new Map<string, BotSummary>(
     mockBots.map((item) => [
@@ -1346,8 +1368,24 @@ export class MockWebBotClient implements WebBotClient {
     litellmPid: 4321,
     litellmModel: "openai/gpt-5",
     modelAlias: "gpt-5",
+    conversionType: "model_api",
+    upstreamApi: "responses",
     providerBaseUrl: "https://max.jojocode.com/v1",
     providerApiKeySet: true,
+    routes: [
+      {
+        id: "route-1",
+        conversionType: "model_api",
+        upstreamApi: "responses",
+        litellmModel: "openai/gpt-5",
+        modelAlias: "gpt-5",
+        providerBaseUrl: "https://max.jojocode.com/v1",
+        providerApiKeySet: true,
+        configured: true,
+      },
+    ],
+    routeCount: 1,
+    configuredRouteCount: 1,
     dropParams: true,
     litellmProxyBaseUrl: "http://127.0.0.1:49152/v1",
     requestCount: 1,
@@ -2909,6 +2947,7 @@ export class MockWebBotClient implements WebBotClient {
   async getTransferBridgeStatus(): Promise<TransferBridgeStatus> {
     return {
       ...this.transferBridgeStatus,
+      routes: this.transferBridgeStatus.routes?.map((item) => ({ ...item })),
       recentTraffic: this.transferBridgeStatus.recentTraffic?.map((item) => ({ ...item })),
     };
   }
@@ -2918,21 +2957,33 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async updateTransferBridgeConfig(input: TransferBridgeConfigInput): Promise<TransferBridgeStatus> {
-    const nextProviderBaseUrl = input.providerBaseUrl !== undefined ? input.providerBaseUrl.trim() : this.transferBridgeStatus.providerBaseUrl || "";
-    const nextLiteLLMModel = input.litellmModel !== undefined ? input.litellmModel.trim() : this.transferBridgeStatus.litellmModel || "";
-    const nextModelAlias = input.modelAlias !== undefined ? input.modelAlias.trim() : this.transferBridgeStatus.modelAlias || "";
-    const nextProviderApiKeySet = input.clearProviderApiKey
-      ? false
-      : input.providerApiKey
-        ? true
-        : this.transferBridgeStatus.providerApiKeySet;
-    const enabled = Boolean(nextLiteLLMModel && nextModelAlias && nextProviderApiKeySet);
+    const existingRoutes = this.transferBridgeStatus.routes || [];
+    const nextRoutes = input.routes
+      ? input.routes.map((route, index) => normalizeTransferRouteDraft(route, existingRoutes[index]))
+      : [normalizeTransferRouteDraft({
+          id: "route-1",
+          conversionType: input.conversionType || this.transferBridgeStatus.conversionType || "model_api",
+          upstreamApi: input.upstreamApi || this.transferBridgeStatus.upstreamApi || "responses",
+          litellmModel: input.litellmModel !== undefined ? input.litellmModel : this.transferBridgeStatus.litellmModel || "",
+          modelAlias: input.modelAlias !== undefined ? input.modelAlias : this.transferBridgeStatus.modelAlias || "",
+          providerBaseUrl: input.providerBaseUrl !== undefined ? input.providerBaseUrl : this.transferBridgeStatus.providerBaseUrl || "",
+          providerApiKey: input.providerApiKey,
+          clearProviderApiKey: input.clearProviderApiKey,
+          providerApiKeySet: this.transferBridgeStatus.providerApiKeySet,
+        }, existingRoutes[0])];
+    const firstRoute = nextRoutes[0];
+    const enabled = nextRoutes.some((route) => route.configured);
     this.transferBridgeStatus = {
       ...this.transferBridgeStatus,
-      providerBaseUrl: nextProviderBaseUrl,
-      litellmModel: nextLiteLLMModel,
-      modelAlias: nextModelAlias,
-      providerApiKeySet: nextProviderApiKeySet,
+      routes: nextRoutes,
+      routeCount: nextRoutes.length,
+      configuredRouteCount: nextRoutes.filter((route) => route.configured).length,
+      providerBaseUrl: firstRoute?.providerBaseUrl || "",
+      litellmModel: firstRoute?.litellmModel || "",
+      modelAlias: firstRoute?.modelAlias || "",
+      conversionType: firstRoute?.conversionType || "model_api",
+      upstreamApi: firstRoute?.upstreamApi || "responses",
+      providerApiKeySet: Boolean(firstRoute?.providerApiKeySet),
       dropParams: input.dropParams ?? this.transferBridgeStatus.dropParams,
       enabled,
       running: enabled,

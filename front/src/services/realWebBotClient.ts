@@ -159,6 +159,9 @@ import type {
   TerminalActionsEditableConfig,
   TransferBridgeConfigInput,
   TransferBridgeStatus,
+  TransferConversionType,
+  TransferRouteConfig,
+  TransferUpstreamApi,
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
   UserBotPermissions,
@@ -314,8 +317,13 @@ type RawTransferBridgeStatus = {
   litellm_pid?: number | null;
   litellm_model?: string;
   model_alias?: string;
+  conversion_type?: string;
+  upstream_api?: string;
   provider_base_url?: string;
   provider_api_key_set?: boolean;
+  routes?: RawTransferRouteConfig[];
+  route_count?: number;
+  configured_route_count?: number;
   drop_params?: boolean;
   litellm_proxy_base_url?: string;
   litellm_log_tail?: string[];
@@ -342,6 +350,18 @@ type RawTransferBridgeStatus = {
   last_error?: string;
   restart_required?: boolean;
   restart_required_reason?: string;
+};
+
+type RawTransferRouteConfig = {
+  id?: string;
+  name?: string;
+  conversion_type?: string;
+  upstream_api?: string;
+  litellm_model?: string;
+  model_alias?: string;
+  provider_base_url?: string;
+  provider_api_key_set?: boolean;
+  configured?: boolean;
 };
 
 type RawInlineCompletionConfig = {
@@ -2928,6 +2948,7 @@ function mapAppUpdateDownloadProgress(raw: RawAppUpdateDownloadProgress): AppUpd
 
 function mapTransferBridgeStatus(raw: RawTransferBridgeStatus): TransferBridgeStatus {
   const status = String(raw.status || "unknown") as TransferBridgeStatus["status"];
+  const routes = Array.isArray(raw.routes) ? raw.routes.map(mapTransferRouteConfig) : undefined;
   return {
     enabled: Boolean(raw.enabled),
     running: Boolean(raw.running),
@@ -2945,6 +2966,11 @@ function mapTransferBridgeStatus(raw: RawTransferBridgeStatus): TransferBridgeSt
     modelAlias: raw.model_alias ? String(raw.model_alias) : undefined,
     providerBaseUrl: raw.provider_base_url ? String(raw.provider_base_url) : undefined,
     providerApiKeySet: Boolean(raw.provider_api_key_set),
+    ...(raw.conversion_type !== undefined ? { conversionType: normalizeTransferConversionType(raw.conversion_type) } : {}),
+    ...(raw.upstream_api !== undefined ? { upstreamApi: normalizeTransferUpstreamApi(raw.upstream_api) } : {}),
+    ...(routes !== undefined ? { routes } : {}),
+    ...(typeof raw.route_count === "number" ? { routeCount: raw.route_count } : {}),
+    ...(typeof raw.configured_route_count === "number" ? { configuredRouteCount: raw.configured_route_count } : {}),
     dropParams: typeof raw.drop_params === "boolean" ? raw.drop_params : undefined,
     litellmProxyBaseUrl: raw.litellm_proxy_base_url ? String(raw.litellm_proxy_base_url) : undefined,
     litellmLogTail: Array.isArray(raw.litellm_log_tail) ? raw.litellm_log_tail.map((line) => String(line)) : undefined,
@@ -2971,8 +2997,34 @@ function mapTransferBridgeStatus(raw: RawTransferBridgeStatus): TransferBridgeSt
     startedAt: raw.started_at ? String(raw.started_at) : undefined,
     lastRequestAt: raw.last_request_at ? String(raw.last_request_at) : undefined,
     lastError: raw.last_error !== undefined ? String(raw.last_error) : undefined,
-    restartRequired: typeof raw.restart_required === "boolean" ? raw.restart_required : undefined,
-    restartRequiredReason: raw.restart_required_reason ? String(raw.restart_required_reason) : undefined,
+    ...(typeof raw.restart_required === "boolean" ? { restartRequired: raw.restart_required } : {}),
+    ...(raw.restart_required_reason ? { restartRequiredReason: String(raw.restart_required_reason) } : {}),
+  };
+}
+
+function normalizeTransferConversionType(value: unknown): TransferConversionType {
+  const text = String(value || "").trim();
+  if (text === "model" || text === "api" || text === "model_api") return text;
+  return "model_api";
+}
+
+function normalizeTransferUpstreamApi(value: unknown): TransferUpstreamApi {
+  const text = String(value || "").trim();
+  if (text === "chat_completions") return "chat_completions";
+  return "responses";
+}
+
+function mapTransferRouteConfig(raw: RawTransferRouteConfig): TransferRouteConfig {
+  return {
+    id: String(raw.id || ""),
+    name: raw.name ? String(raw.name) : "",
+    conversionType: normalizeTransferConversionType(raw.conversion_type),
+    upstreamApi: normalizeTransferUpstreamApi(raw.upstream_api),
+    litellmModel: String(raw.litellm_model || ""),
+    modelAlias: String(raw.model_alias || ""),
+    providerBaseUrl: String(raw.provider_base_url || ""),
+    providerApiKeySet: Boolean(raw.provider_api_key_set),
+    configured: typeof raw.configured === "boolean" ? raw.configured : undefined,
   };
 }
 
@@ -2980,10 +3032,27 @@ function mapTransferBridgeConfigInput(input: TransferBridgeConfigInput) {
   return {
     ...(input.litellmModel !== undefined ? { litellm_model: input.litellmModel } : {}),
     ...(input.modelAlias !== undefined ? { model_alias: input.modelAlias } : {}),
+    ...(input.conversionType !== undefined ? { conversion_type: input.conversionType } : {}),
+    ...(input.upstreamApi !== undefined ? { upstream_api: input.upstreamApi } : {}),
     ...(input.providerBaseUrl !== undefined ? { provider_base_url: input.providerBaseUrl } : {}),
     ...(input.providerApiKey ? { provider_api_key: input.providerApiKey } : {}),
     ...(input.clearProviderApiKey !== undefined ? { clear_provider_api_key: input.clearProviderApiKey } : {}),
+    ...(input.routes !== undefined ? { routes: input.routes.map(mapTransferRouteConfigInput) } : {}),
     ...(input.dropParams !== undefined ? { drop_params: input.dropParams } : {}),
+  };
+}
+
+function mapTransferRouteConfigInput(route: TransferRouteConfig) {
+  return {
+    id: route.id,
+    ...(route.name !== undefined ? { name: route.name } : {}),
+    conversion_type: route.conversionType,
+    upstream_api: route.upstreamApi,
+    litellm_model: route.litellmModel,
+    model_alias: route.modelAlias,
+    provider_base_url: route.providerBaseUrl,
+    ...(route.providerApiKey ? { provider_api_key: route.providerApiKey } : {}),
+    ...(route.clearProviderApiKey !== undefined ? { clear_provider_api_key: route.clearProviderApiKey } : {}),
   };
 }
 

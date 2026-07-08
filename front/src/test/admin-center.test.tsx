@@ -214,15 +214,38 @@ test("管理中心 LiteLLM 网关 tab 保存配置并重置统计", async () => 
   await user.clear(screen.getByLabelText("模型别名"));
   await user.type(screen.getByLabelText("模型别名"), "gpt-next");
   await user.type(screen.getByLabelText("上游 API key"), "sk-new");
+  await user.click(screen.getByRole("button", { name: "添加路由" }));
+  await user.selectOptions(screen.getByLabelText("转换类型 2"), "api");
+  await user.selectOptions(screen.getByLabelText("上游 API 2"), "chat_completions");
+  await user.type(screen.getByLabelText("LiteLLM model 2"), "anthropic/claude-next");
+  await user.type(screen.getByLabelText("模型别名 2"), "claude-next");
+  await user.type(screen.getByLabelText("上游 base URL 2"), "https://api.anthropic.test/v1");
+  await user.type(screen.getByLabelText("上游 API key 2"), "sk-route-2");
   await user.click(screen.getByLabelText("LiteLLM drop params"));
   await user.click(screen.getByRole("button", { name: "保存网关配置" }));
 
   expect(updateTransferBridgeConfig).toHaveBeenCalledWith(expect.objectContaining<Partial<TransferBridgeConfigInput>>({
-    providerBaseUrl: "https://api.example.test/v1",
-    litellmModel: "openai/gpt-next",
-    modelAlias: "gpt-next",
-    providerApiKey: "sk-new",
     dropParams: false,
+    routes: [
+      expect.objectContaining({
+        conversionType: "model_api",
+        upstreamApi: "responses",
+        providerBaseUrl: "https://api.example.test/v1",
+        litellmModel: "openai/gpt-next",
+        modelAlias: "gpt-next",
+        providerApiKey: "sk-new",
+        clearProviderApiKey: false,
+      }),
+      expect.objectContaining({
+        conversionType: "api",
+        upstreamApi: "chat_completions",
+        providerBaseUrl: "https://api.anthropic.test/v1",
+        litellmModel: "anthropic/claude-next",
+        modelAlias: "claude-next",
+        providerApiKey: "sk-route-2",
+        clearProviderApiKey: false,
+      }),
+    ],
   }));
   expect(await screen.findByText("网关配置已保存")).toBeInTheDocument();
 

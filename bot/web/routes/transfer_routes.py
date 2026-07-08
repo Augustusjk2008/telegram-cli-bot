@@ -64,7 +64,7 @@ HTML_PAGE = r"""
     .info { margin-bottom: 16px; border-left: 3px solid var(--info); background: #142333; border-radius: 0 8px 8px 0; padding: 12px 14px; line-height: 1.7; color: #c8d6e3; }
     .form-row { display: grid; gap: 7px; margin-bottom: 12px; }
     label { color: var(--muted); font-size: 0.84rem; }
-    input {
+    input, select, textarea {
       width: 100%;
       min-height: 38px;
       border: 1px solid var(--border);
@@ -74,6 +74,7 @@ HTML_PAGE = r"""
       padding: 8px 10px;
       font: inherit;
     }
+    textarea { min-height: 160px; resize: vertical; font-family: "SF Mono", Consolas, monospace; font-size: 0.84rem; }
     input[readonly] { color: var(--muted); background: #111820; }
     .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
     button, .button {
@@ -170,7 +171,26 @@ HTML_PAGE = r"""
           <input id="model-alias" autocomplete="off" placeholder="gpt-5">
         </div>
         <div class="form-row">
+          <label for="conversion-type">转换类型</label>
+          <select id="conversion-type">
+            <option value="model_api">模型 + API</option>
+            <option value="model">模型转换</option>
+            <option value="api">API 转换</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="upstream-api">上游 API</label>
+          <select id="upstream-api">
+            <option value="responses">Responses</option>
+            <option value="chat_completions">Chat Completions</option>
+          </select>
+        </div>
+        <div class="form-row">
           <label><input id="drop-params" type="checkbox" checked> drop params</label>
+        </div>
+        <div class="form-row">
+          <label for="routes-json">多路由 JSON</label>
+          <textarea id="routes-json" spellcheck="false" placeholder='[{"id":"route-1","conversion_type":"model_api","model_alias":"A","litellm_model":"openai/B","provider_base_url":"https://api.example.com/v1"}]'></textarea>
         </div>
         <div class="form-row">
           <label for="local-endpoint">本地端点</label>
@@ -185,6 +205,9 @@ HTML_PAGE = r"""
           <div class="config-row"><span class="muted">上游地址</span><span id="cfg-remote-url">-</span></div>
           <div class="config-row"><span class="muted">LiteLLM model</span><span id="cfg-remote-model">-</span></div>
           <div class="config-row"><span class="muted">模型别名</span><span id="cfg-model-alias">-</span></div>
+          <div class="config-row"><span class="muted">转换类型</span><span id="cfg-conversion-type">-</span></div>
+          <div class="config-row"><span class="muted">上游 API</span><span id="cfg-upstream-api">-</span></div>
+          <div class="config-row"><span class="muted">路由数</span><span id="cfg-route-count">-</span></div>
           <div class="config-row"><span class="muted">Key 状态</span><span id="cfg-key">-</span></div>
           <div class="config-row"><span class="muted">本地 host / port</span><span id="cfg-local">-</span></div>
         </div>
@@ -304,16 +327,47 @@ HTML_PAGE = r"""
       return "未知";
     }
 
+    function conversionTypeLabel(value) {
+      if (value === "model") return "模型转换";
+      if (value === "api") return "API 转换";
+      return "模型 + API";
+    }
+
+    function upstreamApiLabel(value) {
+      if (value === "chat_completions") return "Chat Completions";
+      return "Responses";
+    }
+
+    function routeEditorValue(data) {
+      const routes = Array.isArray(data.routes) ? data.routes : [];
+      return JSON.stringify(routes.map((route) => ({
+        id: route.id || "",
+        name: route.name || "",
+        conversion_type: route.conversion_type || "model_api",
+        upstream_api: route.upstream_api || "responses",
+        model_alias: route.model_alias || "",
+        litellm_model: route.litellm_model || "",
+        provider_base_url: route.provider_base_url || "",
+        clear_provider_api_key: false,
+      })), null, 2);
+    }
+
     function updateStatus(data) {
       $("local-url").textContent = data.local_endpoint || data.local_url || "-";
       $("local-endpoint").value = data.local_endpoint || data.local_url || "-";
       $("remote-url").value = data.provider_base_url || "";
       $("remote-model").value = data.litellm_model || "";
       $("model-alias").value = data.model_alias || "";
+      $("conversion-type").value = data.conversion_type || "model_api";
+      $("upstream-api").value = data.upstream_api || "responses";
+      $("routes-json").value = routeEditorValue(data);
       $("drop-params").checked = data.drop_params !== false;
       $("cfg-remote-url").textContent = data.provider_base_url || "-";
       $("cfg-remote-model").textContent = data.litellm_model || "-";
       $("cfg-model-alias").textContent = data.model_alias || "-";
+      $("cfg-conversion-type").textContent = conversionTypeLabel(data.conversion_type);
+      $("cfg-upstream-api").textContent = upstreamApiLabel(data.upstream_api);
+      $("cfg-route-count").textContent = `${data.configured_route_count || 0} / ${data.route_count || 0}`;
       $("cfg-key").textContent = data.provider_api_key_set ? "已设置" : "未设置";
       $("cfg-local").textContent = `${data.local_host || "-"}:${data.local_port || "-"}`;
 
@@ -369,9 +423,31 @@ HTML_PAGE = r"""
         provider_base_url: $("remote-url").value.trim(),
         litellm_model: $("remote-model").value.trim(),
         model_alias: $("model-alias").value.trim(),
+        conversion_type: $("conversion-type").value,
+        upstream_api: $("upstream-api").value,
         drop_params: $("drop-params").checked,
       };
+      const routesText = $("routes-json").value.trim();
+      if (routesText) {
+        try {
+          const routes = JSON.parse(routesText);
+          if (!Array.isArray(routes)) throw new Error("多路由 JSON 必须是数组");
+          body.routes = routes;
+        } catch (error) {
+          showToast(error.message || "多路由 JSON 格式错误", "error");
+          return;
+        }
+      }
       const key = $("remote-key").value;
+      if (body.routes) {
+        if (clearKey) {
+          body.routes = body.routes.map((route) => ({ ...route, clear_provider_api_key: true }));
+        } else if (key && body.routes.length) {
+          body.routes = body.routes.map((route, index) => (
+            index === 0 && !route.provider_api_key ? { ...route, provider_api_key: key } : route
+          ));
+        }
+      }
       if (clearKey) {
         body.clear_provider_api_key = true;
       } else if (key) {

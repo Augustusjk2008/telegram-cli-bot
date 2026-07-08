@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, ArrowLeft, Bell, Copy, Eye, EyeOff, Globe, RefreshCw, RotateCcw, Save, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Bell, Copy, Eye, EyeOff, Globe, Plus, RefreshCw, RotateCcw, Save, Trash2 } from "lucide-react";
 import { AiInlineCompletionSettingsPanel } from "../components/AiInlineCompletionSettingsPanel";
 import { StateBadge } from "../components/StateBadge";
 import { MockWebBotClient } from "../services/mockWebBotClient";
@@ -28,8 +28,10 @@ import type {
   RegisterCodeCreateResult,
   RegisterCodeItem,
   NotificationSettingsStatus,
-  TransferBridgeConfigInput,
   TransferBridgeStatus,
+  TransferConversionType,
+  TransferRouteConfig,
+  TransferUpstreamApi,
   TunnelSnapshot,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
@@ -58,15 +60,25 @@ type AdminCenterTab =
   | "native-agent"
   | "env";
 
-type TransferDraft = Required<Pick<
-  TransferBridgeConfigInput,
-  "litellmModel"
+type TransferRouteDraft = Required<Pick<
+  TransferRouteConfig,
+  "id"
+  | "conversionType"
+  | "upstreamApi"
+  | "litellmModel"
   | "modelAlias"
   | "providerBaseUrl"
   | "providerApiKey"
   | "clearProviderApiKey"
-  | "dropParams"
->>;
+>> & {
+  name: string;
+  providerApiKeySet: boolean;
+};
+
+type TransferDraft = {
+  routes: TransferRouteDraft[];
+  dropParams: boolean;
+};
 
 const ENV_CATEGORY_LABELS: Record<string, string> = {
   basic: "基础",
@@ -307,15 +319,82 @@ function pushPlusStatusText(status: NotificationSettingsStatus | null) {
   return status.pushPlusConfigured ? "已配置" : "未配置 token";
 }
 
-function transferDraftFromStatus(status: TransferBridgeStatus | null): TransferDraft {
+function transferConversionLabel(type: TransferConversionType | undefined) {
+  if (type === "model") return "模型转换";
+  if (type === "api") return "API 转换";
+  return "模型 + API";
+}
+
+function transferUpstreamApiLabel(type: TransferUpstreamApi | undefined) {
+  if (type === "chat_completions") return "Chat Completions";
+  return "Responses";
+}
+
+function createBlankTransferRoute(index: number): TransferRouteDraft {
   return {
-    litellmModel: status?.litellmModel || "",
-    modelAlias: status?.modelAlias || "",
-    providerBaseUrl: status?.providerBaseUrl || "",
+    id: `route-${Date.now()}-${index}`,
+    name: "",
+    conversionType: "model_api",
+    upstreamApi: "responses",
+    litellmModel: "",
+    modelAlias: "",
+    providerBaseUrl: "",
     providerApiKey: "",
     clearProviderApiKey: false,
+    providerApiKeySet: false,
+  };
+}
+
+function transferRouteDraftFromRoute(route: TransferRouteConfig | undefined, index: number): TransferRouteDraft {
+  if (!route) return createBlankTransferRoute(index);
+  return {
+    id: route.id || `route-${index + 1}`,
+    name: route.name || "",
+    conversionType: route.conversionType || "model_api",
+    upstreamApi: route.upstreamApi || "responses",
+    litellmModel: route.litellmModel || "",
+    modelAlias: route.modelAlias || "",
+    providerBaseUrl: route.providerBaseUrl || "",
+    providerApiKey: "",
+    clearProviderApiKey: false,
+    providerApiKeySet: Boolean(route.providerApiKeySet),
+  };
+}
+
+function transferDraftFromStatus(status: TransferBridgeStatus | null): TransferDraft {
+  const routes = status?.routes?.length
+    ? status.routes.map((route, index) => transferRouteDraftFromRoute(route, index))
+    : [transferRouteDraftFromRoute(status ? {
+        id: "route-1",
+        conversionType: status.conversionType || "model_api",
+        upstreamApi: status.upstreamApi || "responses",
+        litellmModel: status.litellmModel || "",
+        modelAlias: status.modelAlias || "",
+        providerBaseUrl: status.providerBaseUrl || "",
+        providerApiKeySet: status.providerApiKeySet,
+      } : undefined, 0)];
+  return {
+    routes,
     dropParams: status?.dropParams ?? true,
   };
+}
+
+function transferRoutesFromStatus(status: TransferBridgeStatus | null): TransferRouteConfig[] {
+  if (!status) return [];
+  if (status.routes?.length) return status.routes;
+  if (!status.litellmModel && !status.modelAlias && !status.providerBaseUrl && !status.providerApiKeySet) return [];
+  return [
+    {
+      id: "route-1",
+      conversionType: status.conversionType || "model_api",
+      upstreamApi: status.upstreamApi || "responses",
+      litellmModel: status.litellmModel || "",
+      modelAlias: status.modelAlias || "",
+      providerBaseUrl: status.providerBaseUrl || "",
+      providerApiKeySet: status.providerApiKeySet,
+      configured: status.enabled,
+    },
+  ];
 }
 
 function formatDurationSeconds(seconds?: number) {
@@ -425,6 +504,7 @@ export function AdminCenterScreen({
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
+  const transferRoutes = useMemo(() => transferRoutesFromStatus(transferStatus), [transferStatus]);
   const totalOwnedBots = useMemo(() => users.reduce((sum, user) => sum + user.ownedBotCount, 0), [users]);
   const visibleTabs = useMemo<AdminCenterTab[]>(
     () => [
@@ -1160,17 +1240,48 @@ export function AdminCenterScreen({
     setLoadedTabs((prev) => ({ ...prev, env: false }));
   };
 
+  const updateTransferRouteDraft = (routeId: string, patch: Partial<TransferRouteDraft>) => {
+    setTransferDraft((prev) => ({
+      ...prev,
+      routes: prev.routes.map((route) => (route.id === routeId ? { ...route, ...patch } : route)),
+    }));
+  };
+
+  const addTransferRoute = () => {
+    setTransferDraft((prev) => ({
+      ...prev,
+      routes: [...prev.routes, createBlankTransferRoute(prev.routes.length)],
+    }));
+  };
+
+  const removeTransferRoute = (routeId: string) => {
+    setTransferDraft((prev) => {
+      const routes = prev.routes.filter((route) => route.id !== routeId);
+      return {
+        ...prev,
+        routes: routes.length ? routes : [createBlankTransferRoute(0)],
+      };
+    });
+  };
+
   const saveTransferConfig = async () => {
     setTransferSaving(true);
     setError("");
     setNotice("");
     try {
       const saved = await client.updateTransferBridgeConfig({
-        litellmModel: transferDraft.litellmModel.trim(),
-        modelAlias: transferDraft.modelAlias.trim(),
-        providerBaseUrl: transferDraft.providerBaseUrl.trim(),
-        ...(transferDraft.providerApiKey ? { providerApiKey: transferDraft.providerApiKey } : {}),
-        clearProviderApiKey: transferDraft.clearProviderApiKey,
+        routes: transferDraft.routes.map((route) => ({
+          id: route.id,
+          name: route.name.trim(),
+          conversionType: route.conversionType,
+          upstreamApi: route.upstreamApi,
+          litellmModel: route.litellmModel.trim(),
+          modelAlias: route.modelAlias.trim(),
+          providerBaseUrl: route.providerBaseUrl.trim(),
+          providerApiKeySet: route.providerApiKeySet,
+          ...(route.providerApiKey ? { providerApiKey: route.providerApiKey } : {}),
+          clearProviderApiKey: route.clearProviderApiKey,
+        })),
         dropParams: transferDraft.dropParams,
       });
       setTransferStatus(saved);
@@ -1936,69 +2047,146 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             ) : null}
 
             <div className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3">
-              <h3 className="text-sm font-semibold text-[var(--text)]">网关配置</h3>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="space-y-1">
-                  <span className="text-sm text-[var(--text)]">LiteLLM model</span>
-                  <input
-                    aria-label="LiteLLM model"
-                    value={transferDraft.litellmModel}
-                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, litellmModel: event.target.value }))}
-                    placeholder="openai/gpt-5"
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
-                  />
-                </label>
-                <label className="space-y-1">
-                  <span className="text-sm text-[var(--text)]">模型别名</span>
-                  <input
-                    aria-label="模型别名"
-                    value={transferDraft.modelAlias}
-                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, modelAlias: event.target.value }))}
-                    placeholder="gpt-5"
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
-                  />
-                </label>
-                <label className="space-y-1">
-                  <span className="text-sm text-[var(--text)]">上游 base URL</span>
-                  <input
-                    aria-label="上游 base URL"
-                    value={transferDraft.providerBaseUrl}
-                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, providerBaseUrl: event.target.value }))}
-                    placeholder="https://api.openai.com/v1"
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
-                  />
-                </label>
-                <label className="space-y-1">
-                  <span className="text-sm text-[var(--text)]">上游 API key</span>
-                  <input
-                    aria-label="上游 API key"
-                    type="password"
-                    value={transferDraft.providerApiKey}
-                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, providerApiKey: event.target.value, clearProviderApiKey: false }))}
-                    placeholder={transferStatus?.providerApiKeySet ? "留空表示不修改现有 Key" : "填写上游 API Key"}
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
-                  />
-                </label>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-[var(--text)]">路由配置</h3>
+                <button
+                  type="button"
+                  onClick={addTransferRoute}
+                  className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--text)] hover:bg-[var(--surface)]"
+                >
+                  <Plus className="h-4 w-4" />
+                  添加路由
+                </button>
               </div>
 
-              <div className="grid gap-2 text-sm sm:grid-cols-2">
-                <label className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2">
-                  <input
-                    type="checkbox"
-                    checked={transferDraft.clearProviderApiKey}
-                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, clearProviderApiKey: event.target.checked, providerApiKey: event.target.checked ? "" : prev.providerApiKey }))}
-                  />
-                  清除上游 API key
-                </label>
-                <label className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2">
-                  <input
-                    type="checkbox"
-                    checked={transferDraft.dropParams}
-                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, dropParams: event.target.checked }))}
-                  />
-                  LiteLLM drop params
-                </label>
+              <div className="space-y-3">
+                {transferDraft.routes.map((route, index) => {
+                  const labelSuffix = index === 0 ? "" : ` ${index + 1}`;
+                  return (
+                    <div key={route.id} className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <p className="text-sm font-medium text-[var(--text)]">路由 {index + 1}</p>
+                          <p className="text-xs text-[var(--muted)]">{route.modelAlias || "本地模型"} -&gt; {route.litellmModel || "LiteLLM/provider 模型"}</p>
+                        </div>
+                        {transferDraft.routes.length > 1 ? (
+                          <button
+                            type="button"
+                            aria-label={`删除路由 ${index + 1}`}
+                            onClick={() => removeTransferRoute(route.id)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            删除
+                          </button>
+                        ) : null}
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <label className="space-y-1">
+                          <span className="text-sm text-[var(--text)]">转换类型</span>
+                          <select
+                            aria-label={`转换类型${labelSuffix}`}
+                            value={route.conversionType}
+                            onChange={(event) => updateTransferRouteDraft(route.id, { conversionType: event.target.value as TransferConversionType })}
+                            className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
+                          >
+                            <option value="model_api">模型 + API</option>
+                            <option value="model">模型转换</option>
+                            <option value="api">API 转换</option>
+                          </select>
+                        </label>
+                        <label className="space-y-1">
+                          <span className="text-sm text-[var(--text)]">上游 API</span>
+                          <select
+                            aria-label={`上游 API${labelSuffix}`}
+                            value={route.upstreamApi}
+                            onChange={(event) => updateTransferRouteDraft(route.id, { upstreamApi: event.target.value as TransferUpstreamApi })}
+                            className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
+                          >
+                            <option value="responses">Responses</option>
+                            <option value="chat_completions">Chat Completions</option>
+                          </select>
+                        </label>
+                        <label className="space-y-1">
+                          <span className="text-sm text-[var(--text)]">路由名称</span>
+                          <input
+                            aria-label={`路由名称${labelSuffix}`}
+                            value={route.name}
+                            onChange={(event) => updateTransferRouteDraft(route.id, { name: event.target.value })}
+                            placeholder={`路由 ${index + 1}`}
+                            className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
+                          />
+                        </label>
+                        <label className="space-y-1">
+                          <span className="text-sm text-[var(--text)]">LiteLLM model</span>
+                          <input
+                            aria-label={`LiteLLM model${labelSuffix}`}
+                            value={route.litellmModel}
+                            onChange={(event) => updateTransferRouteDraft(route.id, { litellmModel: event.target.value })}
+                            placeholder="openai/gpt-5"
+                            className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
+                          />
+                        </label>
+                        <label className="space-y-1">
+                          <span className="text-sm text-[var(--text)]">模型别名</span>
+                          <input
+                            aria-label={`模型别名${labelSuffix}`}
+                            value={route.modelAlias}
+                            onChange={(event) => updateTransferRouteDraft(route.id, { modelAlias: event.target.value })}
+                            placeholder="gpt-5"
+                            className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
+                          />
+                        </label>
+                        <label className="space-y-1">
+                          <span className="text-sm text-[var(--text)]">上游 base URL</span>
+                          <input
+                            aria-label={`上游 base URL${labelSuffix}`}
+                            value={route.providerBaseUrl}
+                            onChange={(event) => updateTransferRouteDraft(route.id, { providerBaseUrl: event.target.value })}
+                            placeholder="https://api.openai.com/v1"
+                            className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
+                          />
+                        </label>
+                        <label className="space-y-1">
+                          <span className="text-sm text-[var(--text)]">上游 API key</span>
+                          <input
+                            aria-label={`上游 API key${labelSuffix}`}
+                            type="password"
+                            value={route.providerApiKey}
+                            onChange={(event) => updateTransferRouteDraft(route.id, { providerApiKey: event.target.value, clearProviderApiKey: false })}
+                            placeholder={route.providerApiKeySet ? "留空表示不修改现有 Key" : "填写上游 API Key"}
+                            className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
+                          />
+                        </label>
+                      </div>
+
+                      <div className="grid gap-2 text-sm sm:grid-cols-2">
+                        <label className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2">
+                          <input
+                            type="checkbox"
+                            checked={route.clearProviderApiKey}
+                            onChange={(event) => updateTransferRouteDraft(route.id, { clearProviderApiKey: event.target.checked, providerApiKey: event.target.checked ? "" : route.providerApiKey })}
+                          />
+                          清除上游 API key
+                        </label>
+                        <p className="rounded-lg border border-[var(--border)] px-3 py-2 text-[var(--muted)]">
+                          Key 状态: {route.providerApiKeySet ? "已设置" : "未设置"}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
+
+              <label className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={transferDraft.dropParams}
+                  onChange={(event) => setTransferDraft((prev) => ({ ...prev, dropParams: event.target.checked }))}
+                />
+                LiteLLM drop params
+              </label>
 
               <div className="flex flex-wrap gap-2">
                 <button
@@ -2031,21 +2219,40 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 <p className="mt-1 break-all font-mono text-[var(--text)]">chat = {transferStatus?.chatCompletionsBaseUrl || "-"}</p>
               </div>
               <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                <p className="text-xs text-[var(--muted)]">LiteLLM model</p>
-                <p className="mt-1 break-all text-[var(--text)]">{transferStatus?.litellmModel || "-"}</p>
+                <p className="text-xs text-[var(--muted)]">路由数</p>
+                <p className="mt-1 text-[var(--text)]">{transferStatus?.configuredRouteCount ?? transferRoutes.filter((route) => route.configured).length} / {transferStatus?.routeCount ?? transferRoutes.length}</p>
               </div>
               <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                <p className="text-xs text-[var(--muted)]">上游 key</p>
+                <p className="text-xs text-[var(--muted)]">第一路 key</p>
                 <p className="mt-1 text-[var(--text)]">{transferStatus?.providerApiKeySet ? "已设置" : "未设置"}</p>
               </div>
               <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                <p className="text-xs text-[var(--muted)]">模型别名</p>
-                <p className="mt-1 break-all text-[var(--text)]">{transferStatus?.modelAlias || "-"}</p>
+                <p className="text-xs text-[var(--muted)]">第一路转换</p>
+                <p className="mt-1 text-[var(--text)]">{transferConversionLabel(transferStatus?.conversionType)}</p>
               </div>
               <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
                 <p className="text-xs text-[var(--muted)]">LiteLLM PID</p>
                 <p className="mt-1 text-[var(--text)]">{transferStatus?.litellmPid ?? "-"}</p>
               </div>
+            </div>
+
+            <div className="space-y-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3 text-sm">
+              <h3 className="text-sm font-semibold text-[var(--text)]">路由映射</h3>
+              {transferRoutes.length ? (
+                <div className="space-y-2">
+                  {transferRoutes.map((route, index) => (
+                    <div key={route.id || index} className="grid gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 sm:grid-cols-[1fr_1fr_auto_auto_auto]">
+                      <span className="break-all text-[var(--text)]">{route.modelAlias || "-"}</span>
+                      <span className="break-all text-[var(--text)]">{route.litellmModel || "-"}</span>
+                      <span className="text-[var(--muted)]">{transferConversionLabel(route.conversionType)}</span>
+                      <span className="text-[var(--muted)]">{transferUpstreamApiLabel(route.upstreamApi)}</span>
+                      <span className={route.configured ? "text-emerald-600" : "text-amber-600"}>{route.configured ? "已配置" : "未完成"}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-[var(--muted)]">暂无路由。</p>
+              )}
             </div>
 
             <div className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
