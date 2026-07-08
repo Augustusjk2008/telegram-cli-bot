@@ -107,6 +107,14 @@ def get_transfer_trace_path() -> Path:
     return get_app_data_root() / "transfer" / "trace.jsonl"
 
 
+def get_transfer_litellm_config_path() -> Path:
+    return get_app_data_root() / "transfer" / "litellm-config.yaml"
+
+
+def get_transfer_litellm_log_path() -> Path:
+    return get_app_data_root() / "transfer" / "litellm.log"
+
+
 def get_inline_completion_config_path() -> Path:
     return get_app_data_root() / "inline-completion" / "config.json"
 

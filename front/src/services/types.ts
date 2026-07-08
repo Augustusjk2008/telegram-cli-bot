@@ -124,9 +124,15 @@ export type TransferBridgeStatus = {
   bridgePageUrl: string;
   responsesBaseUrl: string;
   chatCompletionsBaseUrl: string;
-  remoteBaseUrl?: string;
-  remoteModel?: string;
-  remoteApiKeySet: boolean;
+  litellmRunning?: boolean;
+  litellmPid?: number | null;
+  litellmModel?: string;
+  modelAlias?: string;
+  providerBaseUrl?: string;
+  providerApiKeySet: boolean;
+  dropParams?: boolean;
+  litellmProxyBaseUrl?: string;
+  litellmLogTail?: string[];
   requestCount: number;
   totalInputTokens: number;
   totalOutputTokens: number;
@@ -137,25 +143,17 @@ export type TransferBridgeStatus = {
   startedAt?: string;
   lastRequestAt?: string;
   lastError?: string;
-  requestStreamUsage?: boolean;
-  retryWithoutStreamOptions?: boolean;
-  reasoningMode?: string;
-  downgradeDeveloperToSystem?: boolean;
-  useLegacyMaxTokens?: boolean;
   restartRequired?: boolean;
   restartRequiredReason?: string;
 };
 
 export type TransferBridgeConfigInput = {
-  remoteBaseUrl?: string;
-  remoteModel?: string;
-  remoteApiKey?: string;
-  clearRemoteApiKey?: boolean;
-  requestStreamUsage?: boolean;
-  retryWithoutStreamOptions?: boolean;
-  reasoningMode?: string;
-  downgradeDeveloperToSystem?: boolean;
-  useLegacyMaxTokens?: boolean;
+  litellmModel?: string;
+  modelAlias?: string;
+  providerBaseUrl?: string;
+  providerApiKey?: string;
+  clearProviderApiKey?: boolean;
+  dropParams?: boolean;
 };
 
 export type InlineCompletionConfig = {

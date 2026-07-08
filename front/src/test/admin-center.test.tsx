@@ -15,7 +15,7 @@ function createAdminClient(transferStatus: TransferBridgeStatus): WebBotClient {
   });
 }
 
-test("管理中心桥接 tab 显示状态、链接和 Codex 配置提示", async () => {
+test("管理中心 LiteLLM 网关 tab 显示状态、链接和 Codex 配置提示", async () => {
   const user = userEvent.setup();
   const client = createAdminClient({
     enabled: true,
@@ -25,19 +25,18 @@ test("管理中心桥接 tab 显示状态、链接和 Codex 配置提示", async
     bridgePageUrl: "/api/transfer/page",
     responsesBaseUrl: "http://127.0.0.1:8080/v1",
     chatCompletionsBaseUrl: "http://127.0.0.1:8080/v1",
-    remoteBaseUrl: "https://max.jojocode.com/v1",
-    remoteModel: "gpt-5.5",
-    remoteApiKeySet: true,
+    litellmRunning: true,
+    litellmPid: 4321,
+    litellmModel: "openai/gpt-5",
+    modelAlias: "gpt-5",
+    providerBaseUrl: "https://max.jojocode.com/v1",
+    providerApiKeySet: true,
+    dropParams: true,
     requestCount: 1,
     totalInputTokens: 15381,
     totalOutputTokens: 30,
     totalBytesIn: 75420,
     totalBytesOut: 3400,
-    requestStreamUsage: true,
-    retryWithoutStreamOptions: true,
-    reasoningMode: "chat_reasoning_effort",
-    downgradeDeveloperToSystem: false,
-    useLegacyMaxTokens: false,
     startedAt: "2026-06-29T12:00:00Z",
     lastRequestAt: "2026-06-29T12:01:00Z",
     lastError: "",
@@ -46,21 +45,25 @@ test("管理中心桥接 tab 显示状态、链接和 Codex 配置提示", async
   render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
 
   await screen.findByText("用户权限");
-  await user.click(screen.getByRole("tab", { name: "桥接" }));
+  await user.click(screen.getByRole("tab", { name: "LiteLLM 网关" }));
 
-  expect(await screen.findByText("桥接状态")).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "LiteLLM 网关" })).toBeInTheDocument();
   expect(screen.getByText("运行中")).toBeInTheDocument();
-  expect(screen.getByRole("link", { name: "打开桥接调试页面" })).toHaveAttribute("href", "/api/transfer/page");
+  expect(screen.getByRole("link", { name: "打开网关调试页面" })).toHaveAttribute("href", "/api/transfer/page");
   expect(screen.getByText("http://127.0.0.1:8080/v1")).toBeInTheDocument();
-  expect(screen.getByText("gpt-5.5")).toBeInTheDocument();
+  expect(screen.getByText("openai/gpt-5")).toBeInTheDocument();
+  expect(screen.getByText("gpt-5")).toBeInTheDocument();
   expect(screen.getByText("已设置")).toBeInTheDocument();
-  expect(screen.getByLabelText("remote base URL")).toHaveValue("https://max.jojocode.com/v1");
-  expect(screen.getByLabelText("remote model")).toHaveValue("gpt-5.5");
+  expect(screen.getByLabelText("上游 base URL")).toHaveValue("https://max.jojocode.com/v1");
+  expect(screen.getByLabelText("LiteLLM model")).toHaveValue("openai/gpt-5");
+  expect(screen.getByLabelText("模型别名")).toHaveValue("gpt-5");
   expect(screen.getByText("request_count = 1")).toBeInTheDocument();
   expect(screen.getByText("wire_api = \"responses\"")).toBeInTheDocument();
+  expect(screen.queryByLabelText("reasoning mode")).not.toBeInTheDocument();
+  expect(screen.queryByText("developer 消息降级为 system")).not.toBeInTheDocument();
 });
 
-test("管理中心桥接 tab 显示未配置提示", async () => {
+test("管理中心 LiteLLM 网关 tab 显示未配置提示", async () => {
   const user = userEvent.setup();
   const client = createAdminClient({
     enabled: false,
@@ -70,7 +73,7 @@ test("管理中心桥接 tab 显示未配置提示", async () => {
     bridgePageUrl: "/api/transfer/page",
     responsesBaseUrl: "http://127.0.0.1:8080/v1",
     chatCompletionsBaseUrl: "http://127.0.0.1:8080/v1",
-    remoteApiKeySet: false,
+    providerApiKeySet: false,
     requestCount: 0,
     totalInputTokens: 0,
     totalOutputTokens: 0,
@@ -81,10 +84,10 @@ test("管理中心桥接 tab 显示未配置提示", async () => {
   render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
 
   await screen.findByText("用户权限");
-  await user.click(screen.getByRole("tab", { name: "桥接" }));
+  await user.click(screen.getByRole("tab", { name: "LiteLLM 网关" }));
 
   expect(await screen.findByText("未配置")).toBeInTheDocument();
-  expect(screen.getByText("桥接尚未配置 remote provider。" )).toBeInTheDocument();
+  expect(screen.getByText("LiteLLM 网关尚未配置模型或上游 API key。")).toBeInTheDocument();
   expect(screen.getByText("未设置")).toBeInTheDocument();
 });
 
@@ -193,7 +196,7 @@ test("管理中心 AI 补全 tab 保存全局配置", async () => {
   expect(await screen.findByText("AI inline 补全配置已保存")).toBeInTheDocument();
 });
 
-test("管理中心桥接 tab 保存配置并重置统计", async () => {
+test("管理中心 LiteLLM 网关 tab 保存配置并重置统计", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
   const updateTransferBridgeConfig = vi.spyOn(client, "updateTransferBridgeConfig");
@@ -203,25 +206,28 @@ test("管理中心桥接 tab 保存配置并重置统计", async () => {
   render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
 
   await screen.findByText("用户权限");
-  await user.click(screen.getByRole("tab", { name: "桥接" }));
-  await user.clear(await screen.findByLabelText("remote base URL"));
-  await user.type(screen.getByLabelText("remote base URL"), "https://api.example.test/v1");
-  await user.clear(screen.getByLabelText("remote model"));
-  await user.type(screen.getByLabelText("remote model"), "gpt-next");
-  await user.type(screen.getByLabelText("remote API key"), "sk-new");
-  await user.click(screen.getByLabelText("developer 消息降级为 system"));
-  await user.click(screen.getByRole("button", { name: "保存桥接配置" }));
+  await user.click(screen.getByRole("tab", { name: "LiteLLM 网关" }));
+  await user.clear(await screen.findByLabelText("上游 base URL"));
+  await user.type(screen.getByLabelText("上游 base URL"), "https://api.example.test/v1");
+  await user.clear(screen.getByLabelText("LiteLLM model"));
+  await user.type(screen.getByLabelText("LiteLLM model"), "openai/gpt-next");
+  await user.clear(screen.getByLabelText("模型别名"));
+  await user.type(screen.getByLabelText("模型别名"), "gpt-next");
+  await user.type(screen.getByLabelText("上游 API key"), "sk-new");
+  await user.click(screen.getByLabelText("LiteLLM drop params"));
+  await user.click(screen.getByRole("button", { name: "保存网关配置" }));
 
   expect(updateTransferBridgeConfig).toHaveBeenCalledWith(expect.objectContaining<Partial<TransferBridgeConfigInput>>({
-    remoteBaseUrl: "https://api.example.test/v1",
-    remoteModel: "gpt-next",
-    remoteApiKey: "sk-new",
-    downgradeDeveloperToSystem: true,
+    providerBaseUrl: "https://api.example.test/v1",
+    litellmModel: "openai/gpt-next",
+    modelAlias: "gpt-next",
+    providerApiKey: "sk-new",
+    dropParams: false,
   }));
-  expect(await screen.findByText("桥接配置已保存")).toBeInTheDocument();
+  expect(await screen.findByText("网关配置已保存")).toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "重置统计" }));
   expect(resetTransferBridgeStats).toHaveBeenCalled();
-  expect(await screen.findByText("桥接统计已重置")).toBeInTheDocument();
+  expect(await screen.findByText("网关统计已重置")).toBeInTheDocument();
   expect(screen.getByText("request_count = 0")).toBeInTheDocument();
 });

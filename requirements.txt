@@ -1,6 +1,7 @@
 python-dotenv>=1.0.0
 aiohttp>=3.10.0
 PyYAML>=6.0
+litellm[proxy]>=1.66.3
 qrcode>=8.0
 pygdbmi>=0.11
 pypdf>=5.4.0

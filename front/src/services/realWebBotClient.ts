@@ -310,9 +310,15 @@ type RawTransferBridgeStatus = {
   bridge_page_url?: string;
   responses_base_url?: string;
   chat_completions_base_url?: string;
-  remote_base_url?: string;
-  remote_model?: string;
-  remote_api_key_set?: boolean;
+  litellm_running?: boolean;
+  litellm_pid?: number | null;
+  litellm_model?: string;
+  model_alias?: string;
+  provider_base_url?: string;
+  provider_api_key_set?: boolean;
+  drop_params?: boolean;
+  litellm_proxy_base_url?: string;
+  litellm_log_tail?: string[];
   request_count?: number;
   total_input_tokens?: number;
   total_output_tokens?: number;
@@ -334,11 +340,6 @@ type RawTransferBridgeStatus = {
   started_at?: string;
   last_request_at?: string;
   last_error?: string;
-  request_stream_usage?: boolean;
-  retry_without_stream_options?: boolean;
-  reasoning_mode?: string;
-  downgrade_developer_to_system?: boolean;
-  use_legacy_max_tokens?: boolean;
   restart_required?: boolean;
   restart_required_reason?: string;
 };
@@ -2938,9 +2939,15 @@ function mapTransferBridgeStatus(raw: RawTransferBridgeStatus): TransferBridgeSt
     bridgePageUrl: String(raw.bridge_page_url || ""),
     responsesBaseUrl: String(raw.responses_base_url || ""),
     chatCompletionsBaseUrl: String(raw.chat_completions_base_url || ""),
-    remoteBaseUrl: raw.remote_base_url ? String(raw.remote_base_url) : undefined,
-    remoteModel: raw.remote_model ? String(raw.remote_model) : undefined,
-    remoteApiKeySet: Boolean(raw.remote_api_key_set),
+    litellmRunning: typeof raw.litellm_running === "boolean" ? raw.litellm_running : undefined,
+    litellmPid: typeof raw.litellm_pid === "number" ? raw.litellm_pid : raw.litellm_pid === null ? null : undefined,
+    litellmModel: raw.litellm_model ? String(raw.litellm_model) : undefined,
+    modelAlias: raw.model_alias ? String(raw.model_alias) : undefined,
+    providerBaseUrl: raw.provider_base_url ? String(raw.provider_base_url) : undefined,
+    providerApiKeySet: Boolean(raw.provider_api_key_set),
+    dropParams: typeof raw.drop_params === "boolean" ? raw.drop_params : undefined,
+    litellmProxyBaseUrl: raw.litellm_proxy_base_url ? String(raw.litellm_proxy_base_url) : undefined,
+    litellmLogTail: Array.isArray(raw.litellm_log_tail) ? raw.litellm_log_tail.map((line) => String(line)) : undefined,
     requestCount: Number(raw.request_count || 0),
     totalInputTokens: Number(raw.total_input_tokens || 0),
     totalOutputTokens: Number(raw.total_output_tokens || 0),
@@ -2964,11 +2971,6 @@ function mapTransferBridgeStatus(raw: RawTransferBridgeStatus): TransferBridgeSt
     startedAt: raw.started_at ? String(raw.started_at) : undefined,
     lastRequestAt: raw.last_request_at ? String(raw.last_request_at) : undefined,
     lastError: raw.last_error !== undefined ? String(raw.last_error) : undefined,
-    requestStreamUsage: typeof raw.request_stream_usage === "boolean" ? raw.request_stream_usage : undefined,
-    retryWithoutStreamOptions: typeof raw.retry_without_stream_options === "boolean" ? raw.retry_without_stream_options : undefined,
-    reasoningMode: raw.reasoning_mode ? String(raw.reasoning_mode) : undefined,
-    downgradeDeveloperToSystem: typeof raw.downgrade_developer_to_system === "boolean" ? raw.downgrade_developer_to_system : undefined,
-    useLegacyMaxTokens: typeof raw.use_legacy_max_tokens === "boolean" ? raw.use_legacy_max_tokens : undefined,
     restartRequired: typeof raw.restart_required === "boolean" ? raw.restart_required : undefined,
     restartRequiredReason: raw.restart_required_reason ? String(raw.restart_required_reason) : undefined,
   };
@@ -2976,15 +2978,12 @@ function mapTransferBridgeStatus(raw: RawTransferBridgeStatus): TransferBridgeSt
 
 function mapTransferBridgeConfigInput(input: TransferBridgeConfigInput) {
   return {
-    ...(input.remoteBaseUrl !== undefined ? { remote_base_url: input.remoteBaseUrl } : {}),
-    ...(input.remoteModel !== undefined ? { remote_model: input.remoteModel } : {}),
-    ...(input.remoteApiKey ? { remote_api_key: input.remoteApiKey } : {}),
-    ...(input.clearRemoteApiKey !== undefined ? { clear_remote_api_key: input.clearRemoteApiKey } : {}),
-    ...(input.requestStreamUsage !== undefined ? { request_stream_usage: input.requestStreamUsage } : {}),
-    ...(input.retryWithoutStreamOptions !== undefined ? { retry_without_stream_options: input.retryWithoutStreamOptions } : {}),
-    ...(input.reasoningMode !== undefined ? { reasoning_mode: input.reasoningMode } : {}),
-    ...(input.downgradeDeveloperToSystem !== undefined ? { downgrade_developer_to_system: input.downgradeDeveloperToSystem } : {}),
-    ...(input.useLegacyMaxTokens !== undefined ? { use_legacy_max_tokens: input.useLegacyMaxTokens } : {}),
+    ...(input.litellmModel !== undefined ? { litellm_model: input.litellmModel } : {}),
+    ...(input.modelAlias !== undefined ? { model_alias: input.modelAlias } : {}),
+    ...(input.providerBaseUrl !== undefined ? { provider_base_url: input.providerBaseUrl } : {}),
+    ...(input.providerApiKey ? { provider_api_key: input.providerApiKey } : {}),
+    ...(input.clearProviderApiKey !== undefined ? { clear_provider_api_key: input.clearProviderApiKey } : {}),
+    ...(input.dropParams !== undefined ? { drop_params: input.dropParams } : {}),
   };
 }
 

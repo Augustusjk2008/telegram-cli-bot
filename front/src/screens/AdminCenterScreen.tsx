@@ -60,15 +60,12 @@ type AdminCenterTab =
 
 type TransferDraft = Required<Pick<
   TransferBridgeConfigInput,
-  "remoteBaseUrl"
-  | "remoteModel"
-  | "remoteApiKey"
-  | "clearRemoteApiKey"
-  | "requestStreamUsage"
-  | "retryWithoutStreamOptions"
-  | "reasoningMode"
-  | "downgradeDeveloperToSystem"
-  | "useLegacyMaxTokens"
+  "litellmModel"
+  | "modelAlias"
+  | "providerBaseUrl"
+  | "providerApiKey"
+  | "clearProviderApiKey"
+  | "dropParams"
 >>;
 
 const ENV_CATEGORY_LABELS: Record<string, string> = {
@@ -312,15 +309,12 @@ function pushPlusStatusText(status: NotificationSettingsStatus | null) {
 
 function transferDraftFromStatus(status: TransferBridgeStatus | null): TransferDraft {
   return {
-    remoteBaseUrl: status?.remoteBaseUrl || "",
-    remoteModel: status?.remoteModel || "",
-    remoteApiKey: "",
-    clearRemoteApiKey: false,
-    requestStreamUsage: status?.requestStreamUsage ?? true,
-    retryWithoutStreamOptions: status?.retryWithoutStreamOptions ?? true,
-    reasoningMode: status?.reasoningMode || "chat_reasoning_effort",
-    downgradeDeveloperToSystem: status?.downgradeDeveloperToSystem ?? false,
-    useLegacyMaxTokens: status?.useLegacyMaxTokens ?? false,
+    litellmModel: status?.litellmModel || "",
+    modelAlias: status?.modelAlias || "",
+    providerBaseUrl: status?.providerBaseUrl || "",
+    providerApiKey: "",
+    clearProviderApiKey: false,
+    dropParams: status?.dropParams ?? true,
   };
 }
 
@@ -716,7 +710,7 @@ export function AdminCenterScreen({
         setNotice(nextNotice);
       }
     } catch (nextError) {
-      setError(getErrorMessage(nextError, "加载桥接状态失败"));
+      setError(getErrorMessage(nextError, "加载 LiteLLM 网关状态失败"));
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -1172,21 +1166,18 @@ export function AdminCenterScreen({
     setNotice("");
     try {
       const saved = await client.updateTransferBridgeConfig({
-        remoteBaseUrl: transferDraft.remoteBaseUrl.trim(),
-        remoteModel: transferDraft.remoteModel.trim(),
-        ...(transferDraft.remoteApiKey ? { remoteApiKey: transferDraft.remoteApiKey } : {}),
-        clearRemoteApiKey: transferDraft.clearRemoteApiKey,
-        requestStreamUsage: transferDraft.requestStreamUsage,
-        retryWithoutStreamOptions: transferDraft.retryWithoutStreamOptions,
-        reasoningMode: transferDraft.reasoningMode,
-        downgradeDeveloperToSystem: transferDraft.downgradeDeveloperToSystem,
-        useLegacyMaxTokens: transferDraft.useLegacyMaxTokens,
+        litellmModel: transferDraft.litellmModel.trim(),
+        modelAlias: transferDraft.modelAlias.trim(),
+        providerBaseUrl: transferDraft.providerBaseUrl.trim(),
+        ...(transferDraft.providerApiKey ? { providerApiKey: transferDraft.providerApiKey } : {}),
+        clearProviderApiKey: transferDraft.clearProviderApiKey,
+        dropParams: transferDraft.dropParams,
       });
       setTransferStatus(saved);
       setTransferDraft(transferDraftFromStatus(saved));
-      setNotice(saved.restartRequired ? "桥接配置已保存，重启服务后本地端点变更生效" : "桥接配置已保存");
+      setNotice(saved.restartRequired ? "网关配置已保存，重启服务后本地端点变更生效" : "网关配置已保存");
     } catch (nextError) {
-      setError(getErrorMessage(nextError, "保存桥接配置失败"));
+      setError(getErrorMessage(nextError, "保存 LiteLLM 网关配置失败"));
     } finally {
       setTransferSaving(false);
     }
@@ -1202,11 +1193,11 @@ export function AdminCenterScreen({
       setTransferDraft((prev) => ({
         ...prev,
         ...transferDraftFromStatus(nextStatus),
-        remoteApiKey: "",
+        providerApiKey: "",
       }));
-      setNotice("桥接统计已重置");
+      setNotice("网关统计已重置");
     } catch (nextError) {
-      setError(getErrorMessage(nextError, "重置桥接统计失败"));
+      setError(getErrorMessage(nextError, "重置 LiteLLM 网关统计失败"));
     } finally {
       setTransferResetting(false);
     }
@@ -1417,7 +1408,7 @@ export function AdminCenterScreen({
                     : tab === "inline-completion"
                       ? "AI 补全"
                     : tab === "transfer"
-                      ? "桥接"
+                      ? "LiteLLM 网关"
                     : tab === "native-agent"
                       ? "原生 Agent"
                       : tab === "env"
@@ -1925,8 +1916,8 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
           <section aria-labelledby="transfer-bridge-title" className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h2 id="transfer-bridge-title" className="text-base font-semibold text-[var(--text)]">桥接状态</h2>
-                <p className="text-sm text-[var(--muted)]">OpenAI-compatible Responses / Chat Completions 转接状态。</p>
+                <h2 id="transfer-bridge-title" className="text-base font-semibold text-[var(--text)]">LiteLLM 网关</h2>
+                <p className="text-sm text-[var(--muted)]">Responses / Chat Completions 由本地 LiteLLM sidecar 代理。</p>
               </div>
               <span className={`rounded-full border px-3 py-1 text-sm font-medium ${transferStatusClass(transferStatus)}`}>
                 {transferStatusLabel(transferStatus)}
@@ -1935,7 +1926,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
 
             {transferStatus?.status === "not_configured" ? (
               <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
-                桥接尚未配置 remote provider。
+                LiteLLM 网关尚未配置模型或上游 API key。
               </p>
             ) : null}
             {transferStatus?.lastError ? (
@@ -1945,36 +1936,46 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             ) : null}
 
             <div className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3">
-              <h3 className="text-sm font-semibold text-[var(--text)]">桥接配置</h3>
+              <h3 className="text-sm font-semibold text-[var(--text)]">网关配置</h3>
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="space-y-1">
-                  <span className="text-sm text-[var(--text)]">remote base URL</span>
+                  <span className="text-sm text-[var(--text)]">LiteLLM model</span>
                   <input
-                    aria-label="remote base URL"
-                    value={transferDraft.remoteBaseUrl}
-                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, remoteBaseUrl: event.target.value }))}
+                    aria-label="LiteLLM model"
+                    value={transferDraft.litellmModel}
+                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, litellmModel: event.target.value }))}
+                    placeholder="openai/gpt-5"
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-sm text-[var(--text)]">模型别名</span>
+                  <input
+                    aria-label="模型别名"
+                    value={transferDraft.modelAlias}
+                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, modelAlias: event.target.value }))}
+                    placeholder="gpt-5"
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-sm text-[var(--text)]">上游 base URL</span>
+                  <input
+                    aria-label="上游 base URL"
+                    value={transferDraft.providerBaseUrl}
+                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, providerBaseUrl: event.target.value }))}
                     placeholder="https://api.openai.com/v1"
                     className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
                   />
                 </label>
                 <label className="space-y-1">
-                  <span className="text-sm text-[var(--text)]">remote model</span>
+                  <span className="text-sm text-[var(--text)]">上游 API key</span>
                   <input
-                    aria-label="remote model"
-                    value={transferDraft.remoteModel}
-                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, remoteModel: event.target.value }))}
-                    placeholder="gpt-4o"
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
-                  />
-                </label>
-                <label className="space-y-1 sm:col-span-2">
-                  <span className="text-sm text-[var(--text)]">remote API key</span>
-                  <input
-                    aria-label="remote API key"
+                    aria-label="上游 API key"
                     type="password"
-                    value={transferDraft.remoteApiKey}
-                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, remoteApiKey: event.target.value, clearRemoteApiKey: false }))}
-                    placeholder={transferStatus?.remoteApiKeySet ? "留空表示不修改现有 Key" : "填写远端 API Key"}
+                    value={transferDraft.providerApiKey}
+                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, providerApiKey: event.target.value, clearProviderApiKey: false }))}
+                    placeholder={transferStatus?.providerApiKeySet ? "留空表示不修改现有 Key" : "填写上游 API Key"}
                     className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
                   />
                 </label>
@@ -1984,54 +1985,18 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 <label className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2">
                   <input
                     type="checkbox"
-                    checked={transferDraft.clearRemoteApiKey}
-                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, clearRemoteApiKey: event.target.checked, remoteApiKey: event.target.checked ? "" : prev.remoteApiKey }))}
+                    checked={transferDraft.clearProviderApiKey}
+                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, clearProviderApiKey: event.target.checked, providerApiKey: event.target.checked ? "" : prev.providerApiKey }))}
                   />
-                  清除 remote API key
+                  清除上游 API key
                 </label>
                 <label className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2">
                   <input
                     type="checkbox"
-                    checked={transferDraft.requestStreamUsage}
-                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, requestStreamUsage: event.target.checked }))}
+                    checked={transferDraft.dropParams}
+                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, dropParams: event.target.checked }))}
                   />
-                  请求 stream usage
-                </label>
-                <label className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2">
-                  <input
-                    type="checkbox"
-                    checked={transferDraft.retryWithoutStreamOptions}
-                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, retryWithoutStreamOptions: event.target.checked }))}
-                  />
-                  stream options 失败后重试
-                </label>
-                <label className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2">
-                  <input
-                    type="checkbox"
-                    checked={transferDraft.downgradeDeveloperToSystem}
-                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, downgradeDeveloperToSystem: event.target.checked }))}
-                  />
-                  developer 消息降级为 system
-                </label>
-                <label className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2">
-                  <input
-                    type="checkbox"
-                    checked={transferDraft.useLegacyMaxTokens}
-                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, useLegacyMaxTokens: event.target.checked }))}
-                  />
-                  使用 legacy max_tokens
-                </label>
-                <label className="space-y-1 rounded-lg border border-[var(--border)] px-3 py-2">
-                  <span className="text-sm text-[var(--text)]">reasoning mode</span>
-                  <select
-                    aria-label="reasoning mode"
-                    value={transferDraft.reasoningMode}
-                    onChange={(event) => setTransferDraft((prev) => ({ ...prev, reasoningMode: event.target.value }))}
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
-                  >
-                    <option value="chat_reasoning_effort">chat_reasoning_effort</option>
-                    <option value="drop">drop</option>
-                  </select>
+                  LiteLLM drop params
                 </label>
               </div>
 
@@ -2043,7 +2008,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                   className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm tcb-solid-accent hover:opacity-90 disabled:opacity-60"
                 >
                   <Save className="h-4 w-4" />
-                  {transferSaving ? "保存中..." : "保存桥接配置"}
+                  {transferSaving ? "保存中..." : "保存网关配置"}
                 </button>
                 <button
                   type="button"
@@ -2066,12 +2031,20 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 <p className="mt-1 break-all font-mono text-[var(--text)]">chat = {transferStatus?.chatCompletionsBaseUrl || "-"}</p>
               </div>
               <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                <p className="text-xs text-[var(--muted)]">remote model</p>
-                <p className="mt-1 break-all text-[var(--text)]">{transferStatus?.remoteModel || "-"}</p>
+                <p className="text-xs text-[var(--muted)]">LiteLLM model</p>
+                <p className="mt-1 break-all text-[var(--text)]">{transferStatus?.litellmModel || "-"}</p>
               </div>
               <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                <p className="text-xs text-[var(--muted)]">remote key</p>
-                <p className="mt-1 text-[var(--text)]">{transferStatus?.remoteApiKeySet ? "已设置" : "未设置"}</p>
+                <p className="text-xs text-[var(--muted)]">上游 key</p>
+                <p className="mt-1 text-[var(--text)]">{transferStatus?.providerApiKeySet ? "已设置" : "未设置"}</p>
+              </div>
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                <p className="text-xs text-[var(--muted)]">模型别名</p>
+                <p className="mt-1 break-all text-[var(--text)]">{transferStatus?.modelAlias || "-"}</p>
+              </div>
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                <p className="text-xs text-[var(--muted)]">LiteLLM PID</p>
+                <p className="mt-1 text-[var(--text)]">{transferStatus?.litellmPid ?? "-"}</p>
               </div>
             </div>
 
@@ -2103,7 +2076,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 rel="noreferrer"
                 className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
               >
-                打开桥接调试页面
+                打开网关调试页面
               </a>
               <span className="text-xs text-[var(--muted)]">
                 {transferStatus?.startedAt ? `启动: ${formatShortTime(transferStatus.startedAt)}` : "启动: -"}

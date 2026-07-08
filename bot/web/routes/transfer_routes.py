@@ -18,7 +18,7 @@ HTML_PAGE = r"""
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Response ↔ Chat API 转接器</title>
+  <title>LiteLLM 网关</title>
   <style>
     :root {
       color-scheme: dark;
@@ -140,30 +140,37 @@ HTML_PAGE = r"""
   <div class="container">
     <header>
       <div>
-        <h1>Response ↔ Chat API 转接器</h1>
-        <p class="subhead">配置 remote provider，查看本地桥接状态、统计和最近请求。</p>
+        <h1>LiteLLM 网关</h1>
+        <p class="subhead">配置 LiteLLM model、上游 provider，查看本地网关状态、统计和最近请求。</p>
       </div>
       <a id="status-link" class="button" href="#" target="_blank" rel="noreferrer">状态 JSON</a>
     </header>
 
     <div class="info">
-      将 Codex 或其他 Responses 客户端的 <code>base_url</code> 指向 <code id="local-url">-</code>。桥接端点为 <code>/v1/responses</code> 和 <code>/v1/chat/completions</code>。
+      将 Codex 或其他 Responses 客户端的 <code>base_url</code> 指向 <code id="local-url">-</code>。Responses / Chat Completions 协议兼容由 LiteLLM 处理。
     </div>
 
     <div class="grid">
       <section class="card">
         <h2>配置</h2>
         <div class="form-row">
-          <label for="remote-url">远端 API 地址</label>
+          <label for="remote-url">上游 API 地址</label>
           <input id="remote-url" autocomplete="off" placeholder="https://api.openai.com/v1">
         </div>
         <div class="form-row">
-          <label for="remote-key">远端 API Key</label>
+          <label for="remote-key">上游 API Key</label>
           <input id="remote-key" type="password" autocomplete="new-password" placeholder="留空表示不修改现有 Key">
         </div>
         <div class="form-row">
-          <label for="remote-model">默认模型</label>
-          <input id="remote-model" autocomplete="off" placeholder="gpt-4o">
+          <label for="remote-model">LiteLLM model</label>
+          <input id="remote-model" autocomplete="off" placeholder="openai/gpt-5">
+        </div>
+        <div class="form-row">
+          <label for="model-alias">模型别名</label>
+          <input id="model-alias" autocomplete="off" placeholder="gpt-5">
+        </div>
+        <div class="form-row">
+          <label><input id="drop-params" type="checkbox" checked> drop params</label>
         </div>
         <div class="form-row">
           <label for="local-endpoint">本地端点</label>
@@ -175,8 +182,9 @@ HTML_PAGE = r"""
           <button id="clear-key-btn" type="button">清除 Key</button>
         </div>
         <div class="config-list">
-          <div class="config-row"><span class="muted">远端地址</span><span id="cfg-remote-url">-</span></div>
-          <div class="config-row"><span class="muted">默认模型</span><span id="cfg-remote-model">-</span></div>
+          <div class="config-row"><span class="muted">上游地址</span><span id="cfg-remote-url">-</span></div>
+          <div class="config-row"><span class="muted">LiteLLM model</span><span id="cfg-remote-model">-</span></div>
+          <div class="config-row"><span class="muted">模型别名</span><span id="cfg-model-alias">-</span></div>
           <div class="config-row"><span class="muted">Key 状态</span><span id="cfg-key">-</span></div>
           <div class="config-row"><span class="muted">本地 host / port</span><span id="cfg-local">-</span></div>
         </div>
@@ -299,11 +307,14 @@ HTML_PAGE = r"""
     function updateStatus(data) {
       $("local-url").textContent = data.local_endpoint || data.local_url || "-";
       $("local-endpoint").value = data.local_endpoint || data.local_url || "-";
-      $("remote-url").value = data.remote_base_url || "";
-      $("remote-model").value = data.remote_model || "";
-      $("cfg-remote-url").textContent = data.remote_base_url || "-";
-      $("cfg-remote-model").textContent = data.remote_model || "-";
-      $("cfg-key").textContent = data.remote_api_key_set ? "已设置" : "未设置";
+      $("remote-url").value = data.provider_base_url || "";
+      $("remote-model").value = data.litellm_model || "";
+      $("model-alias").value = data.model_alias || "";
+      $("drop-params").checked = data.drop_params !== false;
+      $("cfg-remote-url").textContent = data.provider_base_url || "-";
+      $("cfg-remote-model").textContent = data.litellm_model || "-";
+      $("cfg-model-alias").textContent = data.model_alias || "-";
+      $("cfg-key").textContent = data.provider_api_key_set ? "已设置" : "未设置";
       $("cfg-local").textContent = `${data.local_host || "-"}:${data.local_port || "-"}`;
 
       const badge = $("status-badge");
@@ -355,14 +366,16 @@ HTML_PAGE = r"""
 
     async function saveConfig(clearKey = false) {
       const body = {
-        remote_base_url: $("remote-url").value.trim(),
-        remote_model: $("remote-model").value.trim(),
+        provider_base_url: $("remote-url").value.trim(),
+        litellm_model: $("remote-model").value.trim(),
+        model_alias: $("model-alias").value.trim(),
+        drop_params: $("drop-params").checked,
       };
       const key = $("remote-key").value;
       if (clearKey) {
-        body.clear_remote_api_key = true;
+        body.clear_provider_api_key = true;
       } else if (key) {
-        body.remote_api_key = key;
+        body.provider_api_key = key;
       }
       $("save-btn").disabled = true;
       try {
@@ -473,6 +486,17 @@ def _transfer_error(exc: TransferServiceError) -> WebApiError:
     return WebApiError(exc.status, exc.code, exc.message)
 
 
+def _json_or_raw_response(result) -> web.Response:
+    if result.raw_body is not None:
+        return web.Response(
+            body=result.raw_body,
+            status=result.status,
+            headers=result.headers,
+            content_type=result.content_type,
+        )
+    return _json(result.data or {}, status=result.status)
+
+
 async def create_response(request: web.Request) -> web.StreamResponse | web.Response:
     _require_transfer_access(request)
     server = _server(request)
@@ -481,13 +505,12 @@ async def create_response(request: web.Request) -> web.StreamResponse | web.Resp
     except TransferServiceError as exc:
         raise _transfer_error(exc) from exc
     if result.stream is None:
-        return _json(result.data or {}, status=result.status)
+        return _json_or_raw_response(result)
     response = web.StreamResponse(status=result.status, headers=result.headers)
-    response.content_type = "text/event-stream"
+    response.content_type = result.content_type or "text/event-stream"
     await response.prepare(request)
-    async for event in result.stream:
-        chunk = json.dumps(event, ensure_ascii=False)
-        await response.write(f"event: {event.get('type', 'message')}\ndata: {chunk}\n\n".encode("utf-8"))
+    async for chunk in result.stream:
+        await response.write(chunk)
     await response.write_eof()
     return response
 
@@ -501,34 +524,50 @@ async def proxy_chat_completions(request: web.Request) -> web.StreamResponse | w
         raise _transfer_error(exc) from exc
     if result.stream is not None:
         response = web.StreamResponse(status=result.status, headers=result.headers)
-        response.content_type = "text/event-stream"
+        response.content_type = result.content_type or "text/event-stream"
         await response.prepare(request)
-        async for event in result.stream:
-            if event.get("type") == "__done__":
-                await response.write(b"data: [DONE]\n\n")
-                continue
-            chunk = json.dumps(event, ensure_ascii=False)
-            await response.write(f"data: {chunk}\n\n".encode("utf-8"))
+        async for chunk in result.stream:
+            await response.write(chunk)
         await response.write_eof()
         return response
-    return _json(result.data or {}, status=result.status)
+    return _json_or_raw_response(result)
 
 
 async def get_response(request: web.Request) -> web.Response:
     _require_transfer_access(request)
     response_id = str(request.match_info.get("response_id") or "")
-    raise WebApiError(404, "response_not_found", f"Response not found: {response_id}")
+    server = _server(request)
+    try:
+        result = await server.transfer_service.get_response(response_id)
+    except TransferServiceError as exc:
+        raise _transfer_error(exc) from exc
+    return _json_or_raw_response(result)
 
 
 async def delete_response(request: web.Request) -> web.Response:
     _require_transfer_access(request)
     response_id = str(request.match_info.get("response_id") or "")
-    return _json({"id": response_id, "object": "response.deleted", "deleted": True})
+    server = _server(request)
+    try:
+        result = await server.transfer_service.delete_response(response_id)
+    except TransferServiceError as exc:
+        raise _transfer_error(exc) from exc
+    return _json_or_raw_response(result)
 
 
 async def health(request: web.Request) -> web.Response:
     service = _server(request).transfer_service
-    return _json({"ok": True, "data": {"status": service.get_status()["status"], "enabled": service.config.enabled}})
+    status_data = service.get_status()
+    return _json(
+        {
+            "ok": True,
+            "data": {
+                "status": status_data["status"],
+                "enabled": service.config.enabled,
+                "litellm_running": status_data["litellm_running"],
+            },
+        }
+    )
 
 
 async def status(request: web.Request) -> web.Response:

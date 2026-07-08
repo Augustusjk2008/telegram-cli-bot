@@ -1342,20 +1342,20 @@ export class MockWebBotClient implements WebBotClient {
     bridgePageUrl: "/api/transfer/page",
     responsesBaseUrl: "http://127.0.0.1:8080/v1",
     chatCompletionsBaseUrl: "http://127.0.0.1:8080/v1",
-    remoteBaseUrl: "https://max.jojocode.com/v1",
-    remoteModel: "gpt-5.5",
-    remoteApiKeySet: true,
+    litellmRunning: true,
+    litellmPid: 4321,
+    litellmModel: "openai/gpt-5",
+    modelAlias: "gpt-5",
+    providerBaseUrl: "https://max.jojocode.com/v1",
+    providerApiKeySet: true,
+    dropParams: true,
+    litellmProxyBaseUrl: "http://127.0.0.1:49152/v1",
     requestCount: 1,
     totalInputTokens: 15381,
     totalOutputTokens: 30,
     totalBytesIn: 75420,
     totalBytesOut: 3400,
     uptimeSeconds: 61,
-    requestStreamUsage: true,
-    retryWithoutStreamOptions: true,
-    reasoningMode: "chat_reasoning_effort",
-    downgradeDeveloperToSystem: false,
-    useLegacyMaxTokens: false,
     recentTraffic: [
       {
         id: "mock",
@@ -2918,25 +2918,26 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async updateTransferBridgeConfig(input: TransferBridgeConfigInput): Promise<TransferBridgeStatus> {
-    const nextRemoteBaseUrl = input.remoteBaseUrl !== undefined ? input.remoteBaseUrl.trim() : this.transferBridgeStatus.remoteBaseUrl || "";
-    const nextRemoteModel = input.remoteModel !== undefined ? input.remoteModel.trim() : this.transferBridgeStatus.remoteModel || "";
-    const nextRemoteApiKeySet = input.clearRemoteApiKey
+    const nextProviderBaseUrl = input.providerBaseUrl !== undefined ? input.providerBaseUrl.trim() : this.transferBridgeStatus.providerBaseUrl || "";
+    const nextLiteLLMModel = input.litellmModel !== undefined ? input.litellmModel.trim() : this.transferBridgeStatus.litellmModel || "";
+    const nextModelAlias = input.modelAlias !== undefined ? input.modelAlias.trim() : this.transferBridgeStatus.modelAlias || "";
+    const nextProviderApiKeySet = input.clearProviderApiKey
       ? false
-      : input.remoteApiKey
+      : input.providerApiKey
         ? true
-        : this.transferBridgeStatus.remoteApiKeySet;
+        : this.transferBridgeStatus.providerApiKeySet;
+    const enabled = Boolean(nextLiteLLMModel && nextModelAlias && nextProviderApiKeySet);
     this.transferBridgeStatus = {
       ...this.transferBridgeStatus,
-      remoteBaseUrl: nextRemoteBaseUrl,
-      remoteModel: nextRemoteModel,
-      remoteApiKeySet: nextRemoteApiKeySet,
-      enabled: Boolean(nextRemoteBaseUrl && nextRemoteModel && nextRemoteApiKeySet),
-      status: nextRemoteBaseUrl && nextRemoteModel && nextRemoteApiKeySet ? "running" : "not_configured",
-      requestStreamUsage: input.requestStreamUsage ?? this.transferBridgeStatus.requestStreamUsage,
-      retryWithoutStreamOptions: input.retryWithoutStreamOptions ?? this.transferBridgeStatus.retryWithoutStreamOptions,
-      reasoningMode: input.reasoningMode ?? this.transferBridgeStatus.reasoningMode,
-      downgradeDeveloperToSystem: input.downgradeDeveloperToSystem ?? this.transferBridgeStatus.downgradeDeveloperToSystem,
-      useLegacyMaxTokens: input.useLegacyMaxTokens ?? this.transferBridgeStatus.useLegacyMaxTokens,
+      providerBaseUrl: nextProviderBaseUrl,
+      litellmModel: nextLiteLLMModel,
+      modelAlias: nextModelAlias,
+      providerApiKeySet: nextProviderApiKeySet,
+      dropParams: input.dropParams ?? this.transferBridgeStatus.dropParams,
+      enabled,
+      running: enabled,
+      litellmRunning: enabled,
+      status: enabled ? "running" : "not_configured",
       restartRequired: false,
       restartRequiredReason: "",
     };

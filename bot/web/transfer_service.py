@@ -1,7 +1,8 @@
-"""OpenAI-compatible transfer bridge service."""
+"""OpenAI-compatible transfer bridge backed by a LiteLLM proxy sidecar."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -11,66 +12,46 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable
-from urllib.parse import urlparse
+from typing import Any, AsyncIterator, Protocol
 
-from aiohttp import ClientResponse, ClientSession, ClientTimeout
+from aiohttp import ClientConnectionError, ClientResponse, ClientSession, ClientTimeout
 
-from bot.runtime_paths import get_transfer_config_path, get_transfer_trace_path
-from bot.web.openai_compatible_client import (
-    OpenAICompatibleClient,
-    OpenAICompatibleClientError,
-    build_openai_compatible_headers,
+from bot.runtime_paths import (
+    get_transfer_config_path,
+    get_transfer_litellm_config_path,
+    get_transfer_litellm_log_path,
+    get_transfer_trace_path,
 )
+from bot.web.transfer_litellm_config import (
+    LiteLLMTransferConfig,
+    load_litellm_transfer_config,
+    update_litellm_transfer_config,
+)
+from bot.web.transfer_litellm_runtime import LiteLLMProxyRuntime
 
-REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh"}
-UNSUPPORTED_RESPONSE_TOOLS = {
-    "web_search",
-    "web_search_preview",
-    "web_search_call",
-    "file_search",
-    "file_search_call",
-    "computer",
-    "computer_use",
-    "computer_use_preview",
-    "local_shell",
-    "local_shell_call",
-    "apply_patch",
-}
-PROVIDER_REASONING_EFFORT_FALLBACKS = {
-    ("max.jojocode.com", "gpt-5.5", "minimal"): "low",
-}
 TRACE_STRING_LIMIT = 500
 TRACE_STRING_HEAD = 240
 
 
-@dataclass
-class TransferConfig:
-    remote_base_url: str = ""
-    remote_api_key: str = ""
-    remote_model: str = ""
-    request_stream_usage: bool = True
-    retry_without_stream_options: bool = True
-    reasoning_mode: str = "chat_reasoning_effort"
-    downgrade_developer_to_system: bool = False
-    use_legacy_max_tokens: bool = False
-    unsupported_stream_options: bool = False
+class TransferRuntime(Protocol):
+    master_key: str
 
     @property
-    def enabled(self) -> bool:
-        return bool(self.remote_base_url and self.remote_api_key and self.remote_model)
+    def is_running(self) -> bool: ...
 
-    def to_file_dict(self) -> dict[str, Any]:
-        return {
-            "remote_base_url": self.remote_base_url,
-            "remote_api_key": self.remote_api_key,
-            "remote_model": self.remote_model,
-            "request_stream_usage": self.request_stream_usage,
-            "retry_without_stream_options": self.retry_without_stream_options,
-            "reasoning_mode": self.reasoning_mode,
-            "downgrade_developer_to_system": self.downgrade_developer_to_system,
-            "use_legacy_max_tokens": self.use_legacy_max_tokens,
-        }
+    @property
+    def pid(self) -> int | None: ...
+
+    @property
+    def api_base_url(self) -> str: ...
+
+    async def ensure_started(self, config: LiteLLMTransferConfig) -> None: ...
+
+    async def close(self) -> None: ...
+
+    def snapshot(self) -> dict[str, Any]: ...
+
+    def log_tail(self, max_lines: int = 80) -> list[str]: ...
 
 
 @dataclass
@@ -103,10 +84,11 @@ class TrafficRecord:
 
 @dataclass
 class TransferResult:
-    data: dict[str, Any] | None = None
+    data: Any | None = None
+    raw_body: bytes | None = None
     status: int = 200
     headers: dict[str, str] = field(default_factory=dict)
-    stream: AsyncIterator[dict[str, Any]] | None = None
+    stream: AsyncIterator[bytes] | None = None
     content_type: str = "application/json"
 
 
@@ -118,430 +100,120 @@ class TransferServiceError(Exception):
         self.code = code
 
 
-class ProtocolConverter:
-    def __init__(self, service: "TransferService") -> None:
-        self.service = service
+class _SSEUsageParser:
+    def __init__(self) -> None:
+        self._buffer = ""
+        self.usage: dict[str, int] = {}
+        self.model = ""
 
-    def response_to_chat_request(self, body: dict[str, Any]) -> dict[str, Any]:
-        config = self.service.config
-        chat_body: dict[str, Any] = {"model": body.get("model", config.remote_model)}
-        messages: list[dict[str, Any]] = []
-        if body.get("instructions"):
-            messages.append({"role": "system", "content": body["instructions"]})
-        input_data = body.get("input", "")
-        if isinstance(input_data, str):
-            messages.append({"role": "user", "content": input_data})
-        elif isinstance(input_data, list):
-            for item in input_data:
-                if isinstance(item, dict):
-                    message = self._convert_input_item(item)
-                    if message:
-                        messages.append(message)
-        chat_body["messages"] = messages
+    def feed(self, chunk: bytes) -> None:
+        self._buffer += chunk.decode("utf-8", errors="ignore")
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            self._process_line(line.rstrip("\r"))
 
-        param_map = {
-            "temperature": "temperature",
-            "top_p": "top_p",
-            "max_output_tokens": "max_completion_tokens",
-            "frequency_penalty": "frequency_penalty",
-            "presence_penalty": "presence_penalty",
-            "stop": "stop",
-            "seed": "seed",
-            "parallel_tool_calls": "parallel_tool_calls",
-            "stream": "stream",
-            "n": "n",
-            "logprobs": "logprobs",
-            "top_logprobs": "top_logprobs",
-        }
-        for resp_key, chat_key in param_map.items():
-            if resp_key in body:
-                chat_body[chat_key] = body[resp_key]
-        if config.use_legacy_max_tokens and "max_completion_tokens" in chat_body:
-            chat_body["max_tokens"] = chat_body.pop("max_completion_tokens")
-
-        text = body.get("text")
-        if isinstance(text, dict) and text.get("format"):
-            chat_body["response_format"] = text["format"]
-        if body.get("tools"):
-            chat_body["tools"] = self._convert_tools_to_chat(body["tools"])
-        if "tool_choice" in body:
-            chat_body["tool_choice"] = body["tool_choice"]
-
-        explicit_effort = body.get("reasoning_effort")
-        if explicit_effort in REASONING_EFFORTS:
-            chat_body["reasoning_effort"] = self.service.apply_reasoning_effort_fallback(explicit_effort, chat_body["model"])
-        elif isinstance(body.get("reasoning"), dict):
-            effort = body["reasoning"].get("effort")
-            if effort in REASONING_EFFORTS:
-                chat_body["reasoning_effort"] = self.service.apply_reasoning_effort_fallback(effort, chat_body["model"])
-        if "metadata" in body:
-            chat_body["metadata"] = body["metadata"]
-        if "user" in body:
-            chat_body["user"] = body["user"]
-        return chat_body
-
-    def _convert_input_item(self, item: dict[str, Any]) -> dict[str, Any] | None:
-        item_type = item.get("type", "message")
-        config = self.service.config
-        if item_type == "message":
-            role = item.get("role", "user")
-            if role == "developer" and config.downgrade_developer_to_system:
-                role = "system"
-            content = item.get("content", "")
-            if isinstance(content, list):
-                converted = [part for part in (self._convert_content_part(p) for p in content if isinstance(p, dict)) if part]
-                return {"role": role, "content": converted}
-            return {"role": role, "content": str(content)}
-        if item_type == "input_text":
-            return {"role": "user", "content": item.get("text", "")}
-        if item_type == "input_image":
-            image_url = item.get("image_url") or item.get("file_id") or ""
-            return {"role": "user", "content": [{"type": "image_url", "image_url": {"url": image_url, "detail": item.get("detail", "auto")}}]}
-        if item_type == "input_file":
-            ref = item.get("file_id") or item.get("filename") or item.get("file_url") or "unknown"
-            return {"role": "user", "content": f"[File: {ref}]"}
-        if item_type == "input_audio":
-            audio_data = item.get("input_audio") or {}
-            if not isinstance(audio_data, dict):
-                audio_data = {}
-            return {
-                "role": "user",
-                "content": [{"type": "input_audio", "input_audio": {"data": audio_data.get("data", ""), "format": audio_data.get("format", "mp3")}}],
-            }
-        if item_type == "function_call":
-            return {
-                "role": "assistant",
-                "tool_calls": [{"id": item.get("call_id", ""), "type": "function", "function": {"name": item.get("name", ""), "arguments": item.get("arguments", "")}}],
-            }
-        if item_type == "function_call_output":
-            return {"role": "tool", "tool_call_id": item.get("call_id", ""), "content": item.get("output", "")}
-        if item_type == "reasoning":
-            return {"role": "system", "content": f"[Previous reasoning context: {item.get('id', '')}]"}
-        if item_type in ("custom_tool_call", "mcp_call", "web_search_call", "file_search_call", "code_interpreter_call", "local_shell_call", "image_generation_call"):
-            return {"role": "assistant", "content": f"[{item_type}: {json.dumps(item, ensure_ascii=False)}]"}
-        if item_type in ("custom_tool_call_output", "mcp_list_tools", "mcp_approval_request", "mcp_approval_response", "local_shell_call_output"):
-            return {"role": "user", "content": f"[{item_type} result: {json.dumps(item, ensure_ascii=False)}]"}
-        if item_type == "item_reference":
-            return None
-        return None
-
-    @staticmethod
-    def _convert_content_part(part: dict[str, Any]) -> dict[str, Any] | None:
-        part_type = part.get("type", "input_text")
-        if part_type == "input_text":
-            return {"type": "text", "text": part.get("text", "")}
-        if part_type == "input_image":
-            image_url = part.get("image_url") or part.get("file_id") or ""
-            return {"type": "image_url", "image_url": {"url": image_url, "detail": part.get("detail", "auto")}}
-        if part_type == "input_file":
-            ref = part.get("file_id") or part.get("filename") or "unknown"
-            return {"type": "text", "text": f"[File: {ref}]"}
-        if part_type == "input_audio":
-            audio_data = part.get("input_audio") or {}
-            if not isinstance(audio_data, dict):
-                audio_data = {}
-            return {"type": "input_audio", "input_audio": {"data": audio_data.get("data", ""), "format": audio_data.get("format", "mp3")}}
-        if part_type == "output_text":
-            return {"type": "text", "text": part.get("text", "")}
-        if part_type == "refusal":
-            return {"type": "text", "text": f"[Refused: {part.get('text', '')}]"}
-        return {"type": "text", "text": str(part)}
-
-    def _convert_tools_to_chat(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        converted: list[dict[str, Any]] = []
-        for tool in tools:
-            tool_type = tool.get("type", "")
-            if tool_type == "function":
-                converted.append(
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": tool.get("name", ""),
-                            "description": tool.get("description", ""),
-                            "parameters": tool.get("parameters", {}),
-                            "strict": tool.get("strict", False),
-                        },
-                    }
-                )
-            elif tool_type in UNSUPPORTED_RESPONSE_TOOLS:
-                self.service.trace_event("warning", {"message": "unsupported_response_tool", "tool": tool})
-            else:
-                converted.append(tool)
-        return converted
-
-    @staticmethod
-    def normalize_chat_usage_to_response_usage(usage: dict[str, Any] | None) -> dict[str, Any]:
-        usage = usage or {}
-        prompt_details = usage.get("prompt_tokens_details") or {}
-        completion_details = usage.get("completion_tokens_details") or {}
-        input_tokens = int(usage.get("prompt_tokens") or 0)
-        output_tokens = int(usage.get("completion_tokens") or 0)
-        return {
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "total_tokens": int(usage.get("total_tokens") or (input_tokens + output_tokens)),
-            "input_tokens_details": {"cached_tokens": int(prompt_details.get("cached_tokens") or 0)},
-            "output_tokens_details": {"reasoning_tokens": int(completion_details.get("reasoning_tokens") or 0)},
-        }
-
-    def chat_response_to_response(self, chat_response: dict[str, Any], original_model: str) -> dict[str, Any]:
-        choice = (chat_response.get("choices") or [{}])[0]
-        message = choice.get("message") or {}
-        output: list[dict[str, Any]] = []
-        content = message.get("content", "")
-        if content:
-            if isinstance(content, str):
-                output.append({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": content}]})
-            elif isinstance(content, list):
-                converted_parts = [part for part in (self._convert_chat_content_part_to_response(p) for p in content if isinstance(p, dict)) if part]
-                if converted_parts:
-                    output.append({"type": "message", "role": "assistant", "content": converted_parts})
-        if message.get("refusal") and not any(item.get("type") == "message" for item in output):
-            output.append({"type": "message", "role": "assistant", "content": [{"type": "refusal", "text": str(message.get("refusal") or "")}]})
-        for tc in message.get("tool_calls") or []:
-            if tc.get("type") == "function":
-                func = tc.get("function") or {}
-                output.append({"type": "function_call", "call_id": tc.get("id", f"call_{uuid.uuid4().hex[:24]}"), "name": func.get("name", ""), "arguments": func.get("arguments", "")})
-            elif tc.get("type") == "computer_use":
-                output.append({"type": "computer_call", "call_id": tc.get("id", ""), "action": tc.get("action", {})})
-        reasoning = {"effort": None, "summary": None}
-        reasoning_content = message.get("reasoning_content", "")
-        if reasoning_content:
-            reasoning = {"effort": "high", "summary": str(reasoning_content)}
-        usage = self.normalize_chat_usage_to_response_usage(chat_response.get("usage"))
-        response = {
-            "id": chat_response.get("id", f"resp_{uuid.uuid4().hex[:24]}"),
-            "object": "response",
-            "created_at": chat_response.get("created", int(time.time())),
-            "status": "completed",
-            "error": None,
-            "incomplete_details": None,
-            "instructions": None,
-            "max_output_tokens": None,
-            "model": original_model,
-            "output": output,
-            "parallel_tool_calls": True,
-            "previous_response_id": None,
-            "reasoning": reasoning,
-            "store": True,
-            "temperature": 1.0,
-            "text": {"format": {"type": "text"}},
-            "tool_choice": "auto",
-            "tools": [],
-            "top_p": 1.0,
-            "truncation": "disabled",
-            "usage": usage,
-            "user": None,
-            "metadata": {},
-        }
-        finish_reason = choice.get("finish_reason")
-        if finish_reason == "length":
-            response["incomplete_details"] = {"reason": "max_output_tokens"}
-            response["status"] = "incomplete"
-        elif finish_reason == "content_filter":
-            response["incomplete_details"] = {"reason": "content_filter"}
-            response["status"] = "incomplete"
-        return response
-
-    @staticmethod
-    def _convert_chat_content_part_to_response(part: dict[str, Any]) -> dict[str, Any] | None:
-        part_type = part.get("type", "text")
-        if part_type == "text":
-            return {"type": "output_text", "text": part.get("text", "")}
-        if part_type == "image_url":
-            image = part.get("image_url") or {}
-            image_url = image.get("url", "") if isinstance(image, dict) else str(image)
-            return {"type": "output_image", "image_url": image_url}
-        if part_type == "refusal":
-            return {"type": "refusal", "text": part.get("text", "")}
-        return {"type": "output_text", "text": str(part)}
-
-
-class ChatStreamAccumulator:
-    def __init__(self, converter: ProtocolConverter, original_model: str, response_id: str | None = None) -> None:
-        self.converter = converter
-        self.original_model = original_model
-        self.response_id = response_id or f"resp_{uuid.uuid4().hex[:24]}"
-        self.created_at = int(time.time())
-        self.message_id = f"msg_{uuid.uuid4().hex[:24]}"
-        self.full_text = ""
-        self.text_started = False
-        self.text_done = False
-        self.usage: dict[str, Any] | None = None
-        self.message_output_index: int | None = None
-        self.next_output_index = 0
-        self.tool_calls: dict[int, dict[str, Any]] = {}
-        self.tool_items_added: set[int] = set()
-
-    def initial_events(self) -> list[dict[str, Any]]:
-        response = self._response_base("in_progress")
-        return [{"type": "response.created", "response": response}, {"type": "response.in_progress", "response": response}]
-
-    def process_chunk(self, chunk: dict[str, Any]) -> list[dict[str, Any]]:
-        events: list[dict[str, Any]] = []
-        if chunk.get("usage"):
-            self.usage = chunk["usage"]
-        for choice in chunk.get("choices") or []:
-            delta = choice.get("delta") or {}
-            content = delta.get("content")
-            if content:
-                events.extend(self._text_delta(str(content)))
-            for tc in delta.get("tool_calls") or []:
-                if isinstance(tc, dict):
-                    events.extend(self._tool_delta(tc))
-            if choice.get("finish_reason"):
-                events.extend(self._finish_outputs())
-        return events
-
-    def finish(self) -> list[dict[str, Any]]:
-        return self._finish_outputs() + [{"type": "response.completed", "response": self._response_base("completed")}]
-
-    def _text_delta(self, content: str) -> list[dict[str, Any]]:
-        events: list[dict[str, Any]] = []
-        if not self.text_started:
-            self.message_output_index = self.next_output_index
-            self.next_output_index += 1
-            events.append({"type": "response.output_item.added", "output_index": self.message_output_index, "item": {"id": self.message_id, "type": "message", "status": "in_progress", "role": "assistant", "content": []}})
-            events.append({"type": "response.content_part.added", "item_id": self.message_id, "output_index": self.message_output_index, "content_index": 0, "part": {"type": "output_text", "text": "", "annotations": []}})
-            self.text_started = True
-        self.full_text += content
-        events.append({"type": "response.output_text.delta", "item_id": self.message_id, "output_index": self.message_output_index, "content_index": 0, "delta": content})
-        return events
-
-    def _tool_delta(self, tc: dict[str, Any]) -> list[dict[str, Any]]:
+    def _process_line(self, line: str) -> None:
+        if not line.startswith("data:"):
+            return
+        data = line[5:].strip()
+        if not data or data == "[DONE]":
+            return
         try:
-            index = int(tc.get("index") or 0)
-        except (TypeError, ValueError):
-            index = 0
-        state = self.tool_calls.setdefault(
-            index,
-            {
-                "id": tc.get("id") or f"call_{uuid.uuid4().hex[:24]}",
-                "name": "",
-                "arguments": "",
-                "output_index": self.next_output_index,
-            },
-        )
-        if tc.get("id"):
-            state["id"] = tc["id"]
-        func = tc.get("function") or {}
-        if isinstance(func, dict) and func.get("name"):
-            state["name"] = str(func["name"])
-        args_delta = str(func.get("arguments") or "") if isinstance(func, dict) else ""
-        events: list[dict[str, Any]] = []
-        if index not in self.tool_items_added:
-            self.tool_items_added.add(index)
-            self.next_output_index = max(self.next_output_index, int(state["output_index"]) + 1)
-            events.append(
-                {
-                    "type": "response.output_item.added",
-                    "output_index": state["output_index"],
-                    "item": {
-                        "id": state["id"],
-                        "type": "function_call",
-                        "status": "in_progress",
-                        "call_id": state["id"],
-                        "name": state["name"],
-                        "arguments": "",
-                    },
-                }
-            )
-        if args_delta:
-            state["arguments"] += args_delta
-            events.append(
-                {
-                    "type": "response.function_call_arguments.delta",
-                    "item_id": state["id"],
-                    "output_index": state["output_index"],
-                    "delta": args_delta,
-                }
-            )
-        return events
+            payload = json.loads(data)
+        except json.JSONDecodeError:
+            return
+        if isinstance(payload, dict):
+            if payload.get("model"):
+                self.model = str(payload.get("model") or "")
+            usage = _extract_usage(payload)
+            if usage:
+                self.usage = usage
 
-    def _finish_outputs(self) -> list[dict[str, Any]]:
-        events: list[dict[str, Any]] = []
-        if self.text_started and not self.text_done:
-            self.text_done = True
-            events.extend(
-                [
-                    {"type": "response.output_text.done", "item_id": self.message_id, "output_index": self.message_output_index, "content_index": 0, "text": self.full_text},
-                    {"type": "response.content_part.done", "item_id": self.message_id, "output_index": self.message_output_index, "content_index": 0, "part": {"type": "output_text", "text": self.full_text, "annotations": []}},
-                    {"type": "response.output_item.done", "item_id": self.message_id, "output_index": self.message_output_index, "item": self._message_item()},
-                ]
-            )
-        for index in sorted(self.tool_calls):
-            state = self.tool_calls[index]
-            if state.get("done"):
-                continue
-            state["done"] = True
-            events.extend(
-                [
-                    {
-                        "type": "response.function_call_arguments.done",
-                        "item_id": state["id"],
-                        "output_index": state["output_index"],
-                        "arguments": state["arguments"],
-                    },
-                    {
-                        "type": "response.output_item.done",
-                        "item_id": state["id"],
-                        "output_index": state["output_index"],
-                        "item": self._function_item(state),
-                    },
-                ]
-            )
-        return events
 
-    def _message_item(self) -> dict[str, Any]:
-        return {"id": self.message_id, "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": self.full_text, "annotations": []}]}
+def _content_type_header(response: ClientResponse) -> str:
+    value = response.headers.get("Content-Type", "application/json")
+    return value.split(";", 1)[0].strip() or "application/json"
 
-    @staticmethod
-    def _function_item(state: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "id": state["id"],
-            "type": "function_call",
-            "status": "completed",
-            "call_id": state["id"],
-            "name": state["name"],
-            "arguments": state["arguments"],
-        }
 
-    def _response_base(self, status: str) -> dict[str, Any]:
-        output = [self._message_item()] if self.text_started and (status == "completed" or self.text_done) else []
-        for index in sorted(self.tool_calls):
-            state = self.tool_calls[index]
-            if status == "completed" or state.get("done"):
-                output.append(self._function_item(state))
-        return {
-            "id": self.response_id,
-            "object": "response",
-            "created_at": self.created_at,
-            "status": status,
-            "model": self.original_model,
-            "output": output,
-            "usage": ProtocolConverter.normalize_chat_usage_to_response_usage(self.usage),
-        }
+def _json_size(value: Any) -> int:
+    return len(json.dumps(value, ensure_ascii=False).encode("utf-8"))
+
+
+def _extract_error_message(status: int, raw_body: bytes) -> str:
+    text = raw_body.decode("utf-8", errors="replace").strip()
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return f"LiteLLM proxy error ({status}): {text[:500]}"
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            message = str(error.get("message") or error.get("code") or "").strip()
+            if message:
+                return f"LiteLLM proxy error ({status}): {message}"
+        if payload.get("message"):
+            return f"LiteLLM proxy error ({status}): {payload.get('message')}"
+    return f"LiteLLM proxy error ({status}): {text[:500]}"
+
+
+def _extract_usage(payload: dict[str, Any]) -> dict[str, int]:
+    usage = payload.get("usage")
+    if not isinstance(usage, dict):
+        response = payload.get("response")
+        if isinstance(response, dict) and isinstance(response.get("usage"), dict):
+            usage = response.get("usage")
+    if not isinstance(usage, dict):
+        return {}
+    input_tokens = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
+    output_tokens = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
+    return {"input_tokens": input_tokens, "output_tokens": output_tokens}
+
+
+def _copy_response_headers(response: ClientResponse) -> dict[str, str]:
+    allowed = {"cache-control", "x-accel-buffering"}
+    headers = {
+        key: value
+        for key, value in response.headers.items()
+        if key.lower() in allowed
+    }
+    if response.content_type == "text/event-stream":
+        headers.setdefault("Cache-Control", "no-cache")
+        headers.setdefault("X-Accel-Buffering", "no")
+    return headers
 
 
 class TransferService:
-    def __init__(self, *, host: str, port: int, config_path: Path | None = None, trace_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 8765,
+        *,
+        config_path: Path | None = None,
+        trace_path: Path | None = None,
+        runtime: TransferRuntime | None = None,
+    ) -> None:
         self.host = host
         self.port = port
         self.config_path = config_path or get_transfer_config_path()
         self.trace_path = trace_path or get_transfer_trace_path()
-        self.config = TransferConfig()
+        self.config = LiteLLMTransferConfig()
+        self.runtime: TransferRuntime = runtime or LiteLLMProxyRuntime(
+            config_path=get_transfer_litellm_config_path(),
+            log_path=get_transfer_litellm_log_path(),
+            command=os.environ.get("TRANSFER_LITELLM_COMMAND", "litellm"),
+        )
         self.request_count = 0
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         self.total_bytes_in = 0
         self.total_bytes_out = 0
-        self.traffic_log: deque[dict[str, Any]] = deque(maxlen=200)
-        self.is_running = False
+        self.traffic_log: deque[dict[str, Any]] = deque(maxlen=50)
         self.started_at: datetime | None = None
         self.last_request_at: datetime | None = None
         self.last_error = ""
+        self.is_running = False
         self._client: ClientSession | None = None
-        self.converter = ProtocolConverter(self)
+        self._runtime_dirty = False
         self.load_config()
         self.apply_env_config()
 
@@ -550,28 +222,54 @@ class TransferService:
             self._client = ClientSession(timeout=ClientTimeout(total=300))
         self.is_running = True
         self.started_at = datetime.now()
+        if self.config.enabled:
+            try:
+                await self.ensure_runtime()
+            except TransferServiceError:
+                pass
 
     async def close(self) -> None:
+        await self.runtime.close()
         if self._client is not None and not self._client.closed:
             await self._client.close()
         self.is_running = False
 
+    async def ensure_runtime(self) -> None:
+        if self._client is None or self._client.closed:
+            self._client = ClientSession(timeout=ClientTimeout(total=300))
+        if not self.config.enabled:
+            await self.runtime.close()
+            raise TransferServiceError(503, "LiteLLM 网关尚未配置", code="transfer_not_configured")
+        try:
+            await self.runtime.ensure_started(self.config)
+            self._runtime_dirty = False
+            self.last_error = ""
+        except Exception as exc:
+            self.last_error = str(exc)[:500]
+            self.trace_event("error", {"detail": str(exc), "stack": traceback.format_exc()})
+            raise TransferServiceError(503, f"LiteLLM 网关启动失败: {exc}", code="litellm_start_failed") from exc
+
     def load_config(self) -> None:
-        if not self.config_path.exists():
-            return
-        data = json.loads(self.config_path.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
-            self.update_config(data, save=False)
+        self.config = load_litellm_transfer_config(self.config_path)
 
     def apply_env_config(self) -> None:
-        env_map: dict[str, tuple[str, Callable[[str], Any]]] = {
-            "TRANSFER_REMOTE_BASE_URL": ("remote_base_url", str),
-            "TRANSFER_REMOTE_API_KEY": ("remote_api_key", str),
-            "TRANSFER_REMOTE_MODEL": ("remote_model", str),
+        data: dict[str, Any] = {}
+        env_map = {
+            "TRANSFER_LITELLM_MODEL": "litellm_model",
+            "TRANSFER_MODEL_ALIAS": "model_alias",
+            "TRANSFER_PROVIDER_BASE_URL": "provider_base_url",
+            "TRANSFER_PROVIDER_API_KEY": "provider_api_key",
+            "TRANSFER_REMOTE_BASE_URL": "remote_base_url",
+            "TRANSFER_REMOTE_API_KEY": "remote_api_key",
+            "TRANSFER_REMOTE_MODEL": "remote_model",
         }
-        for env_key, (attr, caster) in env_map.items():
+        for env_key, data_key in env_map.items():
             if env_key in os.environ:
-                setattr(self.config, attr, caster(os.environ[env_key]))
+                data[data_key] = os.environ[env_key]
+        if "TRANSFER_DROP_PARAMS" in os.environ:
+            data["drop_params"] = os.environ["TRANSFER_DROP_PARAMS"].strip().lower() not in {"0", "false", "no", "off"}
+        if data:
+            update_litellm_transfer_config(self.config, data)
 
     def save_config(self) -> None:
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -581,24 +279,11 @@ class TransferService:
         restart_required = False
         if any(key in data for key in ("local_host", "local_port")):
             restart_required = True
-        if "remote_base_url" in data:
-            remote_base_url = str(data.get("remote_base_url") or "").strip()
-            if remote_base_url:
-                parsed = urlparse(remote_base_url)
-                if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-                    raise TransferServiceError(400, "remote_base_url 仅支持 http/https URL", code="invalid_remote_base_url")
-            self.config.remote_base_url = remote_base_url
-        if data.get("clear_remote_api_key") is True:
-            self.config.remote_api_key = ""
-        elif "remote_api_key" in data:
-            remote_api_key = data.get("remote_api_key")
-            if remote_api_key is not None and str(remote_api_key) != "":
-                self.config.remote_api_key = str(remote_api_key)
-        for key in self.config.to_file_dict():
-            if key in {"remote_base_url", "remote_api_key"}:
-                continue
-            if key in data:
-                setattr(self.config, key, data[key])
+        try:
+            update_litellm_transfer_config(self.config, data)
+        except ValueError as exc:
+            raise TransferServiceError(400, str(exc), code="invalid_provider_base_url") from exc
+        self._runtime_dirty = True
         if save:
             self.save_config()
         status = self.get_status()
@@ -620,16 +305,18 @@ class TransferService:
 
     def get_status(self, *, base_path: str = "") -> dict[str, Any]:
         enabled = self.config.enabled
-        status = "running" if enabled and self.is_running else "not_configured" if not enabled else "stopped"
-        if self.last_error:
+        runtime_running = bool(self.runtime.is_running)
+        status = "running" if enabled and runtime_running else "not_configured" if not enabled else "stopped"
+        if self.last_error and enabled:
             status = "error"
         base = self._local_base_url(base_path)
         uptime_seconds = 0
         if self.started_at:
             uptime_seconds = max(0, int((datetime.now() - self.started_at).total_seconds()))
+        runtime_snapshot = self.runtime.snapshot()
         return {
             "enabled": enabled,
-            "running": bool(self.is_running and enabled),
+            "running": runtime_running,
             "is_running": bool(self.is_running),
             "status": status,
             "local_url": base,
@@ -639,14 +326,17 @@ class TransferService:
             "bridge_page_url": f"{base_path}/api/transfer/page" if base_path else "/api/transfer/page",
             "responses_base_url": f"{base}/v1",
             "chat_completions_base_url": f"{base}/v1",
-            "remote_base_url": self.config.remote_base_url,
-            "remote_model": self.config.remote_model,
-            "remote_api_key_set": bool(self.config.remote_api_key),
-            "request_stream_usage": self.config.request_stream_usage,
-            "retry_without_stream_options": self.config.retry_without_stream_options,
-            "reasoning_mode": self.config.reasoning_mode,
-            "downgrade_developer_to_system": self.config.downgrade_developer_to_system,
-            "use_legacy_max_tokens": self.config.use_legacy_max_tokens,
+            "litellm_running": runtime_running,
+            "litellm_pid": self.runtime.pid,
+            "litellm_model": self.config.litellm_model,
+            "model_alias": self.config.model_alias,
+            "provider_base_url": self.config.provider_base_url,
+            "provider_api_key_set": bool(self.config.provider_api_key),
+            "drop_params": self.config.drop_params,
+            "litellm_proxy_base_url": runtime_snapshot.get("api_base_url", ""),
+            "litellm_config_path": runtime_snapshot.get("config_path", ""),
+            "litellm_log_path": runtime_snapshot.get("log_path", ""),
+            "litellm_log_tail": runtime_snapshot.get("log_tail", []),
             "request_count": self.request_count,
             "total_input_tokens": self.total_input_tokens,
             "total_output_tokens": self.total_output_tokens,
@@ -663,227 +353,164 @@ class TransferService:
         host = "127.0.0.1" if self.host in {"0.0.0.0", "::"} else self.host
         return f"http://{host}:{self.port}{base_path}"
 
-    def _remote_chat_url(self) -> str:
-        if not self.config.enabled:
-            raise TransferServiceError(503, "Transfer bridge is not configured", code="transfer_not_configured")
-        return f"{self.config.remote_base_url.rstrip('/')}/chat/completions"
-
-    def build_remote_headers(self) -> dict[str, str]:
-        return build_openai_compatible_headers(self.config.remote_api_key)
-
-    def apply_reasoning_effort_fallback(self, effort: str, model: str) -> str:
-        host = urlparse(self.config.remote_base_url).netloc.lower()
-        model = (model or self.config.remote_model).lower()
-        fallback = PROVIDER_REASONING_EFFORT_FALLBACKS.get((host, model, effort))
-        if fallback:
-            self.trace_event("warning", {"message": "reasoning_effort_fallback", "provider": host, "model": model, "from": effort, "to": fallback})
-            return fallback
-        return effort
-
     async def create_response(self, body: dict[str, Any]) -> TransferResult:
-        if self._client is None or self._client.closed:
-            await self.start()
-        start_time = time.time()
-        bytes_in = len(json.dumps(body, ensure_ascii=False).encode("utf-8"))
-        chat_body = self.converter.response_to_chat_request(body)
-        original_model = str(body.get("model") or self.config.remote_model)
-        if body.get("stream"):
-            stream = self._stream_response(chat_body, original_model, bytes_in, start_time)
-            return TransferResult(stream=stream, content_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-        try:
-            data = await self._post_json(self._remote_chat_url(), chat_body)
-        except TransferServiceError as exc:
-            self._record_failure("/v1/responses", original_model, bytes_in, 0, start_time, exc.message, status=exc.status)
-            raise
-        except Exception as exc:
-            self.last_error = str(exc)
-            self.trace_event("error", {"detail": str(exc), "stack": traceback.format_exc()})
-            self._record_failure("/v1/responses", original_model, bytes_in, 0, start_time, str(exc), status=502)
-            raise
-        converted = self.converter.chat_response_to_response(data, original_model)
-        bytes_out = len(json.dumps(converted, ensure_ascii=False).encode("utf-8"))
-        self._record_success("/v1/responses", original_model, bytes_in, bytes_out, start_time, converted.get("usage") or {})
-        return TransferResult(data=converted)
+        return await self._proxy_post("responses", "/v1/responses", body)
 
     async def proxy_chat_completions(self, body: dict[str, Any]) -> TransferResult:
-        if self._client is None or self._client.closed:
-            await self.start()
-        start_time = time.time()
-        bytes_in = len(json.dumps(body, ensure_ascii=False).encode("utf-8"))
+        return await self._proxy_post("chat/completions", "/v1/chat/completions", body)
+
+    async def get_response(self, response_id: str) -> TransferResult:
+        return await self._proxy_request("GET", f"responses/{response_id}", f"/v1/responses/{response_id}")
+
+    async def delete_response(self, response_id: str) -> TransferResult:
+        return await self._proxy_request("DELETE", f"responses/{response_id}", f"/v1/responses/{response_id}")
+
+    async def _proxy_post(self, runtime_endpoint: str, traffic_endpoint: str, body: dict[str, Any]) -> TransferResult:
+        method = "POST"
+        model = str(body.get("model") or self.config.model_alias or "")
+        bytes_in = _json_size(body)
         if body.get("stream"):
-            stream = self._stream_chat_completions(body, bytes_in, start_time)
-            return TransferResult(
-                stream=stream,
-                content_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-            )
-        model = str(body.get("model") or "")
+            start_time = time.time()
+            try:
+                return await self._open_stream(method, runtime_endpoint, traffic_endpoint, body, model, bytes_in, start_time)
+            except TransferServiceError as exc:
+                self._record_failure(method, traffic_endpoint, model, bytes_in, 0, start_time, exc.message, status=exc.status)
+                raise
+            except Exception as exc:
+                self.last_error = str(exc)
+                self.trace_event("error", {"detail": str(exc), "stack": traceback.format_exc()})
+                self._record_failure(method, traffic_endpoint, model, bytes_in, 0, start_time, str(exc), status=502)
+                raise TransferServiceError(502, f"LiteLLM proxy request failed: {exc}", code="litellm_proxy_error") from exc
+        return await self._proxy_request(method, runtime_endpoint, traffic_endpoint, body=body, model=model, bytes_in=bytes_in)
+
+    async def _proxy_request(
+        self,
+        method: str,
+        runtime_endpoint: str,
+        traffic_endpoint: str,
+        *,
+        body: dict[str, Any] | None = None,
+        model: str = "",
+        bytes_in: int = 0,
+    ) -> TransferResult:
+        await self.ensure_runtime()
+        assert self._client is not None
+        start_time = time.time()
+        url = self._runtime_url(runtime_endpoint)
         try:
-            data = await self._post_json(self._remote_chat_url(), body)
-        except TransferServiceError as exc:
-            self._record_failure("/v1/chat/completions", model, bytes_in, 0, start_time, exc.message, status=exc.status)
-            raise
-        except Exception as exc:
+            async with self._client.request(method, url, json=body, headers=self._runtime_headers()) as response:
+                raw = await response.read()
+                if response.status >= 400:
+                    message = _extract_error_message(response.status, raw)
+                    self.last_error = message[:500]
+                    self._record_failure(method, traffic_endpoint, model, bytes_in, len(raw), start_time, message, status=response.status)
+                    raise TransferServiceError(response.status, message, code="litellm_proxy_error")
+                content_type = _content_type_header(response)
+                data: Any | None = None
+                raw_body: bytes | None = raw
+                usage: dict[str, int] = {}
+                if content_type == "application/json" or not raw:
+                    try:
+                        data = json.loads(raw.decode("utf-8")) if raw else {}
+                        raw_body = None
+                        if isinstance(data, dict):
+                            model = str(data.get("model") or model)
+                            usage = _extract_usage(data)
+                    except json.JSONDecodeError:
+                        data = None
+                        raw_body = raw
+                self._record_success(method, traffic_endpoint, model, bytes_in, len(raw), start_time, usage, status=response.status)
+                return TransferResult(
+                    data=data,
+                    raw_body=raw_body,
+                    status=response.status,
+                    headers=_copy_response_headers(response),
+                    content_type=content_type,
+                )
+        except asyncio.TimeoutError as exc:
+            self.last_error = "LiteLLM proxy request timed out"
+            self._record_failure(method, traffic_endpoint, model, bytes_in, 0, start_time, self.last_error, status=504)
+            raise TransferServiceError(504, self.last_error, code="litellm_timeout") from exc
+        except ClientConnectionError as exc:
             self.last_error = str(exc)
-            self.trace_event("error", {"detail": str(exc), "stack": traceback.format_exc()})
-            self._record_failure("/v1/chat/completions", model, bytes_in, 0, start_time, str(exc), status=502)
-            raise
-        bytes_out = len(json.dumps(data, ensure_ascii=False).encode("utf-8"))
-        usage = data.get("usage") or {}
-        self._record_success(
-            "/v1/chat/completions",
-            str(data.get("model") or body.get("model") or ""),
-            bytes_in,
-            bytes_out,
-            start_time,
-            {"input_tokens": usage.get("prompt_tokens", 0), "output_tokens": usage.get("completion_tokens", 0)},
+            self._record_failure(method, traffic_endpoint, model, bytes_in, 0, start_time, self.last_error, status=502)
+            raise TransferServiceError(502, f"LiteLLM proxy connection failed: {exc}", code="litellm_proxy_error") from exc
+
+    async def _open_stream(
+        self,
+        method: str,
+        runtime_endpoint: str,
+        traffic_endpoint: str,
+        body: dict[str, Any],
+        model: str,
+        bytes_in: int,
+        start_time: float,
+    ) -> TransferResult:
+        await self.ensure_runtime()
+        assert self._client is not None
+        url = self._runtime_url(runtime_endpoint)
+        response = await self._client.request(method, url, json=body, headers=self._runtime_headers())
+        if response.status >= 400:
+            raw = await response.read()
+            response.release()
+            raise TransferServiceError(response.status, _extract_error_message(response.status, raw), code="litellm_proxy_error")
+
+        parser = _SSEUsageParser()
+        total_out = 0
+        failed = False
+
+        async def stream() -> AsyncIterator[bytes]:
+            nonlocal total_out, failed, model
+            try:
+                async for chunk in response.content.iter_any():
+                    total_out += len(chunk)
+                    parser.feed(chunk)
+                    if parser.model:
+                        model = parser.model
+                    yield chunk
+            except Exception as exc:
+                failed = True
+                self.last_error = str(exc)
+                self.trace_event("error", {"detail": str(exc), "stack": traceback.format_exc()})
+                yield f'event: error\ndata: {json.dumps({"error": {"message": str(exc), "code": "stream_error"}}, ensure_ascii=False)}\n\n'.encode("utf-8")
+            finally:
+                response.release()
+                if failed:
+                    self._record_failure(method, f"{traffic_endpoint} (stream)", model, bytes_in, total_out, start_time, self.last_error)
+                else:
+                    if not parser.usage:
+                        self.trace_event("warning", {"message": "usage_missing", "endpoint": f"{traffic_endpoint} (stream)", "model": model})
+                    self._record_success(method, f"{traffic_endpoint} (stream)", model, bytes_in, total_out, start_time, parser.usage, status=response.status)
+
+        return TransferResult(
+            status=response.status,
+            headers=_copy_response_headers(response),
+            stream=stream(),
+            content_type=_content_type_header(response),
         )
-        return TransferResult(data=data)
 
-    async def _stream_chat_completions(self, body: dict[str, Any], bytes_in: int, start_time: float) -> AsyncIterator[dict[str, Any]]:
-        total_out = 0
-        usage: dict[str, Any] = {}
-        model = str(body.get("model") or "")
-        failed = False
-        try:
-            async for chunk in self._iter_raw_remote_sse_chunks(body):
-                if isinstance(chunk, dict):
-                    model = str(chunk.get("model") or model)
-                    if chunk.get("usage"):
-                        raw_usage = chunk.get("usage") or {}
-                        usage = {"input_tokens": raw_usage.get("prompt_tokens", 0), "output_tokens": raw_usage.get("completion_tokens", 0)}
-                total_out += len(json.dumps(chunk, ensure_ascii=False).encode("utf-8"))
-                yield chunk
-        except Exception as exc:
-            failed = True
-            self.last_error = str(exc)
-            self.trace_event("error", {"detail": str(exc), "stack": traceback.format_exc()})
-            yield {"type": "error", "code": "stream_error", "message": str(exc)}
-        finally:
-            if failed:
-                self._record_failure("/v1/chat/completions (stream)", model, bytes_in, total_out, start_time, self.last_error)
-            else:
-                if not usage:
-                    self.trace_event("warning", {"message": "usage_missing", "endpoint": "/v1/chat/completions (stream)", "model": model})
-                self._record_success("/v1/chat/completions (stream)", model, bytes_in, total_out, start_time, usage)
+    def _runtime_url(self, runtime_endpoint: str) -> str:
+        base = self.runtime.api_base_url.rstrip("/")
+        return f"{base}/{runtime_endpoint.lstrip('/')}"
 
-    async def _post_json(self, url: str, body: dict[str, Any]) -> dict[str, Any]:
-        assert self._client is not None
-        client = OpenAICompatibleClient(self._client)
-        try:
-            return await client.post_json(url=url, api_key=self.config.remote_api_key, body=body)
-        except OpenAICompatibleClientError as exc:
-            self.last_error = exc.message[:500]
-            raise TransferServiceError(exc.status, exc.message, code=exc.code) from exc
+    def _runtime_headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.runtime.master_key}",
+            "Content-Type": "application/json",
+        }
 
-    async def _stream_response(self, chat_body: dict[str, Any], original_model: str, bytes_in: int, start_time: float) -> AsyncIterator[dict[str, Any]]:
-        assert self._client is not None
-        response_id = f"resp_{uuid.uuid4().hex[:24]}"
-        stream_body = json.loads(json.dumps(chat_body))
-        if self.config.request_stream_usage and not self.config.unsupported_stream_options:
-            stream_body.setdefault("stream_options", {})["include_usage"] = True
-        accumulator = ChatStreamAccumulator(self.converter, original_model, response_id=response_id)
-        total_out = 0
-        failed = False
-        try:
-            for event in accumulator.initial_events():
-                total_out += len(json.dumps(event, ensure_ascii=False).encode("utf-8"))
-                yield event
-            async for event in self._iter_remote_sse_events(stream_body, accumulator):
-                total_out += len(json.dumps(event, ensure_ascii=False).encode("utf-8"))
-                yield event
-        except Exception as exc:
-            failed = True
-            self.last_error = str(exc)
-            self.trace_event("error", {"detail": str(exc), "stack": traceback.format_exc()})
-            yield {"type": "error", "code": "stream_error", "message": str(exc)}
-        finally:
-            usage = accumulator._response_base("completed").get("usage") or {}
-            if failed:
-                self._record_failure("/v1/responses (stream)", original_model, bytes_in, total_out, start_time, self.last_error)
-            else:
-                if accumulator.usage is None:
-                    self.trace_event("warning", {"message": "usage_missing", "endpoint": "/v1/responses (stream)", "model": original_model})
-                self._record_success("/v1/responses (stream)", original_model, bytes_in, total_out, start_time, usage)
-
-    async def _iter_remote_sse_events(self, body: dict[str, Any], accumulator: ChatStreamAccumulator) -> AsyncIterator[dict[str, Any]]:
-        assert self._client is not None
-        async with self._client.post(self._remote_chat_url(), json=body, headers=self.build_remote_headers()) as response:
-            if (
-                response.status == 400
-                and self.config.retry_without_stream_options
-                and "stream_options" in body
-                and await self._remote_rejects_stream_options(response)
-            ):
-                fallback_body = json.loads(json.dumps(body))
-                fallback_body.pop("stream_options", None)
-                async for event in self._iter_remote_sse_events(fallback_body, accumulator):
-                    yield event
-                return
-            await self._raise_for_status(response)
-            async for raw_line in response.content:
-                line = raw_line.decode("utf-8", errors="replace").strip()
-                if not line.startswith("data: "):
-                    continue
-                data = line[6:]
-                if data == "[DONE]":
-                    for event in accumulator.finish():
-                        yield event
-                    return
-                try:
-                    chunk = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
-                for event in accumulator.process_chunk(chunk):
-                    yield event
-
-    async def _iter_raw_remote_sse_chunks(self, body: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
-        assert self._client is not None
-        async with self._client.post(self._remote_chat_url(), json=body, headers=self.build_remote_headers()) as response:
-            if (
-                response.status == 400
-                and self.config.retry_without_stream_options
-                and "stream_options" in body
-                and await self._remote_rejects_stream_options(response)
-            ):
-                fallback_body = json.loads(json.dumps(body))
-                fallback_body.pop("stream_options", None)
-                async for chunk in self._iter_raw_remote_sse_chunks(fallback_body):
-                    yield chunk
-                return
-            await self._raise_for_status(response)
-            async for raw_line in response.content:
-                line = raw_line.decode("utf-8", errors="replace").strip()
-                if not line.startswith("data: "):
-                    continue
-                data = line[6:]
-                if data == "[DONE]":
-                    yield {"type": "__done__"}
-                    return
-                try:
-                    chunk = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(chunk, dict):
-                    yield chunk
-
-    async def _remote_rejects_stream_options(self, response: ClientResponse) -> bool:
-        text = await response.text()
-        if "stream_options" not in text and "include_usage" not in text:
-            self.last_error = text[:500]
-            return False
-        self.config.unsupported_stream_options = True
-        self.trace_event("warning", {"message": "retry_without_stream_options", "error": text[:500]})
-        return True
-
-    async def _raise_for_status(self, response: ClientResponse) -> None:
-        if response.status < 400:
-            return
-        text = await response.text()
-        self.last_error = text[:500]
-        raise TransferServiceError(response.status, f"Remote API error: {text[:500]}", code="remote_api_error")
-
-    def _record_success(self, endpoint: str, model: str, bytes_in: int, bytes_out: int, start_time: float, usage: dict[str, Any]) -> None:
+    def _record_success(
+        self,
+        method: str,
+        endpoint: str,
+        model: str,
+        bytes_in: int,
+        bytes_out: int,
+        start_time: float,
+        usage: dict[str, Any],
+        *,
+        status: int = 200,
+    ) -> None:
         duration = (time.time() - start_time) * 1000
         self.request_count += 1
         self.total_bytes_in += bytes_in
@@ -892,13 +519,24 @@ class TransferService:
         self.total_output_tokens += int(usage.get("output_tokens") or 0)
         self.last_request_at = datetime.now()
         self.last_error = ""
-        self.traffic_log.append(TrafficRecord("POST", endpoint, 200, bytes_in, bytes_out, duration, model=model).to_dict())
+        self.traffic_log.append(TrafficRecord(method, endpoint, status, bytes_in, bytes_out, duration, model=model).to_dict())
 
-    def _record_failure(self, endpoint: str, model: str, bytes_in: int, bytes_out: int, start_time: float, error: str, *, status: int = 502) -> None:
+    def _record_failure(
+        self,
+        method: str,
+        endpoint: str,
+        model: str,
+        bytes_in: int,
+        bytes_out: int,
+        start_time: float,
+        error: str,
+        *,
+        status: int = 502,
+    ) -> None:
         duration = (time.time() - start_time) * 1000
         self.last_request_at = datetime.now()
         self.last_error = error[:500]
-        self.traffic_log.append(TrafficRecord("POST", endpoint, status, bytes_in, bytes_out, duration, model=model, error=error[:200]).to_dict())
+        self.traffic_log.append(TrafficRecord(method, endpoint, status, bytes_in, bytes_out, duration, model=model, error=error[:200]).to_dict())
 
     def trace_event(self, kind: str, payload: Any) -> None:
         if os.environ.get("TRANSFER_TRACE") != "1":
