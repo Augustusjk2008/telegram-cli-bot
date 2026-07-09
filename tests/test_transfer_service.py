@@ -621,6 +621,76 @@ async def test_create_response_streaming_proxies_raw_sse_bytes(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
+async def test_create_response_streaming_wraps_codex_compaction_for_litellm(tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    async def responses(request: web.Request) -> web.StreamResponse:
+        captured["body"] = await request.json()
+        response = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
+        await response.prepare(request)
+        await response.write(b'event: response.output_text.delta\ndata: {"delta":"summary ","model":"codex-gpt-5"}\n\n')
+        await response.write(b'event: response.output_text.delta\ndata: {"delta":"text"}\n\n')
+        await response.write(
+            b'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp-compact","usage":{"input_tokens":9,"output_tokens":2,"total_tokens":11}}}\n\n'
+        )
+        await response.write_eof()
+        return response
+
+    app = web.Application()
+    app.router.add_post("/v1/responses", responses)
+    async with TestServer(app) as upstream_server:
+        runtime = FakeLiteLLMRuntime(str(upstream_server.make_url("/v1")))
+        service = _configured_service(runtime, tmp_path)
+        try:
+            result = await service.create_response(
+                {
+                    "model": "codex-gpt-5",
+                    "instructions": "Original coding agent instructions.",
+                    "input": [
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "hello before compact"}],
+                        },
+                        {"type": "compaction_trigger"},
+                    ],
+                    "tools": [{"type": "function", "name": "run_shell"}],
+                    "parallel_tool_calls": True,
+                    "stream": True,
+                }
+            )
+            text = b"".join([chunk async for chunk in result.stream]).decode("utf-8")
+        finally:
+            await service.close()
+
+    upstream_body = captured["body"]
+    assert isinstance(upstream_body, dict)
+    assert upstream_body["stream"] is True
+    assert upstream_body["model"] == "codex-gpt-5"
+    assert "tools" not in upstream_body
+    assert "parallel_tool_calls" not in upstream_body
+    assert "compaction_trigger" not in json.dumps(upstream_body)
+    assert "hello before compact" in json.dumps(upstream_body)
+
+    data_events = [
+        json.loads(line.removeprefix("data: "))
+        for line in text.splitlines()
+        if line.startswith("data: ") and line != "data: [DONE]"
+    ]
+    assert data_events[0] == {
+        "type": "response.output_item.done",
+        "item": {"type": "compaction", "encrypted_content": "summary text"},
+    }
+    assert data_events[1]["type"] == "response.completed"
+    assert "response.output_text.delta" not in text
+
+    status = service.get_status()
+    assert status["recent_traffic"][0]["endpoint"] == "/v1/responses (stream)"
+    assert status["total_input_tokens"] == 9
+    assert status["total_output_tokens"] == 2
+
+
+@pytest.mark.asyncio
 async def test_chat_completions_non_stream_proxies_raw_body(tmp_path: Path) -> None:
     captured: dict[str, object] = {}
 

@@ -31,6 +31,11 @@ from bot.web.transfer_litellm_runtime import LiteLLMProxyRuntime
 
 TRACE_STRING_LIMIT = 500
 TRACE_STRING_HEAD = 240
+CODEX_COMPACTION_INSTRUCTIONS = (
+    "You are compacting a Codex CLI conversation history for a future coding agent turn. "
+    "Do not answer the latest user request. Return only a durable summary that preserves "
+    "user goals, decisions, files touched, commands/tests run, errors, and pending work."
+)
 
 
 class TransferRuntime(Protocol):
@@ -130,6 +135,105 @@ class _SSEUsageParser:
                 self.usage = usage
 
 
+class _SSEEventParser:
+    def __init__(self) -> None:
+        self._buffer = ""
+
+    def feed(self, chunk: bytes) -> list[tuple[str, str]]:
+        self._buffer += chunk.decode("utf-8", errors="ignore")
+        self._buffer = self._buffer.replace("\r\n", "\n").replace("\r", "\n")
+        events: list[tuple[str, str]] = []
+        while "\n\n" in self._buffer:
+            block, self._buffer = self._buffer.split("\n\n", 1)
+            event_name = ""
+            data_lines: list[str] = []
+            for line in block.split("\n"):
+                if line.startswith("event:"):
+                    event_name = line[6:].strip()
+                elif line.startswith("data:"):
+                    data_lines.append(line[5:].lstrip())
+            if data_lines:
+                events.append((event_name, "\n".join(data_lines)))
+        return events
+
+
+class _CodexCompactionStreamAdapter:
+    def __init__(self) -> None:
+        self._parser = _SSEEventParser()
+        self._delta_parts: list[str] = []
+        self._item_texts: list[str] = []
+        self.raw_chunks: list[bytes] = []
+        self.compaction_count = 0
+        self.completed_payload: dict[str, Any] | None = None
+        self.model = ""
+        self.usage: dict[str, int] = {}
+
+    def feed(self, chunk: bytes) -> None:
+        self.raw_chunks.append(chunk)
+        for event_name, data in self._parser.feed(chunk):
+            if not data or data == "[DONE]":
+                continue
+            try:
+                payload = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            event_type = str(payload.get("type") or event_name or "")
+            if payload.get("model"):
+                self.model = str(payload.get("model") or "")
+            response = payload.get("response")
+            if isinstance(response, dict) and response.get("model"):
+                self.model = str(response.get("model") or "")
+            usage = _extract_usage(payload)
+            if usage:
+                self.usage = usage
+            if event_type == "response.output_text.delta":
+                delta = payload.get("delta", payload.get("text"))
+                if delta is not None:
+                    self._delta_parts.append(str(delta))
+            elif event_type == "response.output_item.done":
+                item = payload.get("item")
+                if isinstance(item, dict) and item.get("type") == "compaction":
+                    self.compaction_count += 1
+                elif isinstance(item, dict):
+                    text = _response_item_text(item)
+                    if text:
+                        self._item_texts.append(text)
+            elif event_type == "response.completed":
+                self.completed_payload = payload
+
+    def summary_text(self) -> str:
+        text = "".join(self._delta_parts).strip()
+        if text:
+            return text
+        return "\n\n".join(part for part in self._item_texts if part).strip()
+
+    def passthrough_chunks(self) -> list[bytes]:
+        return list(self.raw_chunks)
+
+    def synthetic_chunks(self) -> list[bytes]:
+        summary = self.summary_text()
+        output_payload = {
+            "type": "response.output_item.done",
+            "item": {
+                "type": "compaction",
+                "encrypted_content": summary,
+            },
+        }
+        completed_payload = self.completed_payload or {
+            "type": "response.completed",
+            "response": {
+                **({"model": self.model} if self.model else {}),
+                **({"usage": dict(self.usage)} if self.usage else {}),
+            },
+        }
+        return [
+            _sse_event("response.output_item.done", output_payload),
+            _sse_event("response.completed", completed_payload),
+        ]
+
+
 def _content_type_header(response: ClientResponse) -> str:
     value = response.headers.get("Content-Type", "application/json")
     return value.split(";", 1)[0].strip() or "application/json"
@@ -167,6 +271,85 @@ def _extract_usage(payload: dict[str, Any]) -> dict[str, int]:
     input_tokens = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
     output_tokens = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
     return {"input_tokens": input_tokens, "output_tokens": output_tokens}
+
+
+def _sse_event(event_name: str, payload: dict[str, Any]) -> bytes:
+    data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return f"event: {event_name}\ndata: {data}\n\n".encode("utf-8")
+
+
+def _response_item_text(item: dict[str, Any]) -> str:
+    direct_text = item.get("text") or item.get("output")
+    if direct_text is not None:
+        return str(direct_text).strip()
+    content = item.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for part in content:
+        if isinstance(part, str):
+            parts.append(part)
+        elif isinstance(part, dict):
+            text = part.get("text")
+            if text is None:
+                text = part.get("output_text")
+            if text is not None:
+                parts.append(str(text))
+    return "".join(parts).strip()
+
+
+def _is_codex_compaction_request(body: dict[str, Any]) -> bool:
+    input_items = body.get("input")
+    if not isinstance(input_items, list):
+        return False
+    return any(isinstance(item, dict) and item.get("type") == "compaction_trigger" for item in input_items)
+
+
+def _codex_compaction_runtime_body(body: dict[str, Any]) -> dict[str, Any]:
+    runtime_body = {
+        key: value
+        for key, value in body.items()
+        if key not in {"input", "instructions", "tools", "tool_choice", "parallel_tool_calls"}
+    }
+    runtime_body["instructions"] = CODEX_COMPACTION_INSTRUCTIONS
+    runtime_body["input"] = _codex_compaction_prompt(body)
+    return runtime_body
+
+
+def _codex_compaction_prompt(body: dict[str, Any]) -> str:
+    parts = [
+        "Compact this Codex conversation history into a summary for the next coding-agent turn.",
+        "Preserve concrete file paths, commands, tests, failures, decisions, and unfinished tasks.",
+    ]
+    instructions = str(body.get("instructions") or "").strip()
+    if instructions:
+        parts.extend(["", "Original instructions:", instructions])
+    parts.extend(["", "Conversation history:"])
+    input_items = body.get("input")
+    if isinstance(input_items, list):
+        for index, item in enumerate(input_items, start=1):
+            if isinstance(item, dict) and item.get("type") == "compaction_trigger":
+                continue
+            parts.append(_format_compaction_history_item(index, item))
+    else:
+        parts.append(str(input_items or ""))
+    parts.extend(["", "Return only the compacted summary text."])
+    return "\n".join(part for part in parts if part is not None)
+
+
+def _format_compaction_history_item(index: int, item: Any) -> str:
+    if not isinstance(item, dict):
+        return f"{index}. {item}"
+    item_type = str(item.get("type") or "item")
+    role = str(item.get("role") or item.get("author") or item_type)
+    text = _response_item_text(item)
+    if not text and item_type in {"compaction", "context_compaction"}:
+        text = str(item.get("encrypted_content") or "")
+    if text:
+        return f"{index}. {role}: {text}"
+    return f"{index}. {role}: {json.dumps(item, ensure_ascii=False, separators=(',', ':'))}"
 
 
 def _copy_response_headers(response: ClientResponse) -> dict[str, str]:
@@ -458,25 +641,45 @@ class TransferService:
         await self.ensure_runtime()
         assert self._client is not None
         url = self._runtime_url(runtime_endpoint)
-        response = await self._client.request(method, url, json=body, headers=self._runtime_headers())
+        is_codex_compaction = runtime_endpoint.strip("/") == "responses" and _is_codex_compaction_request(body)
+        runtime_body = _codex_compaction_runtime_body(body) if is_codex_compaction else body
+        response = await self._client.request(method, url, json=runtime_body, headers=self._runtime_headers())
         if response.status >= 400:
             raw = await response.read()
             response.release()
             raise TransferServiceError(response.status, _extract_error_message(response.status, raw), code="litellm_proxy_error")
 
         parser = _SSEUsageParser()
+        compaction_adapter = _CodexCompactionStreamAdapter() if is_codex_compaction else None
         total_out = 0
         failed = False
 
         async def stream() -> AsyncIterator[bytes]:
             nonlocal total_out, failed, model
             try:
-                async for chunk in response.content.iter_any():
-                    total_out += len(chunk)
-                    parser.feed(chunk)
+                if compaction_adapter is None:
+                    async for chunk in response.content.iter_any():
+                        total_out += len(chunk)
+                        parser.feed(chunk)
+                        if parser.model:
+                            model = parser.model
+                        yield chunk
+                else:
+                    async for chunk in response.content.iter_any():
+                        parser.feed(chunk)
+                        compaction_adapter.feed(chunk)
                     if parser.model:
                         model = parser.model
-                    yield chunk
+                    elif compaction_adapter.model:
+                        model = compaction_adapter.model
+                    output_chunks = (
+                        compaction_adapter.passthrough_chunks()
+                        if compaction_adapter.compaction_count == 1
+                        else compaction_adapter.synthetic_chunks()
+                    )
+                    for chunk in output_chunks:
+                        total_out += len(chunk)
+                        yield chunk
             except Exception as exc:
                 failed = True
                 self.last_error = str(exc)
