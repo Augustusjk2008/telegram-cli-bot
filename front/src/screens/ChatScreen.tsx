@@ -757,6 +757,50 @@ function getMessageTurnRoleKey(item: ChatMessage) {
   return turnId ? `${item.role}|${turnId}` : "";
 }
 
+function getMessageIdKey(item: ChatMessage) {
+  const id = String(item.id || "").trim();
+  return id ? `${item.role}|${id}` : "";
+}
+
+function getMessageContentKey(item: ChatMessage) {
+  if (item.role === "system" || item.state === "streaming") {
+    return "";
+  }
+
+  const createdAt = String(item.createdAt || "").trim();
+  const text = String(item.text || "").trim();
+  return createdAt && text ? `${item.role}|${createdAt}|${text}` : "";
+}
+
+function getMessageDedupeKeys(item: ChatMessage) {
+  return [
+    getMessageTurnRoleKey(item) ? `turn:${getMessageTurnRoleKey(item)}` : "",
+    getMessageIdKey(item) ? `id:${getMessageIdKey(item)}` : "",
+    getMessageClientStateKey(item) ? `client:${getMessageClientStateKey(item)}` : "",
+    getMessageContentKey(item) ? `content:${getMessageContentKey(item)}` : "",
+  ].filter(Boolean);
+}
+
+function addMessageIndexEntry(index: Map<string, ChatMessage>, key: string, item: ChatMessage) {
+  if (key && !index.has(key)) {
+    index.set(key, item);
+  }
+}
+
+function mergeDuplicateMessage(previousItem: ChatMessage, item: ChatMessage) {
+  const mergedMeta = mergeMessageMeta(previousItem.meta, item.meta);
+  const nextElapsedSeconds = typeof item.elapsedSeconds === "number" ? item.elapsedSeconds : previousItem.elapsedSeconds;
+  const nextState = item.state ?? previousItem.state;
+  const mergedItem = {
+    ...previousItem,
+    ...item,
+    ...(typeof nextState !== "undefined" ? { state: nextState } : {}),
+    ...(typeof nextElapsedSeconds === "number" ? { elapsedSeconds: nextElapsedSeconds } : {}),
+    ...(mergedMeta ? { meta: mergedMeta } : {}),
+  };
+  return areMessageValuesEqual(previousItem, mergedItem) ? previousItem : mergedItem;
+}
+
 function favoriteItemsByMessageKey(items: FavoriteAnswerItem[]) {
   const next = new Map<string, FavoriteAnswerItem>();
   for (const item of items) {
@@ -1011,13 +1055,14 @@ export function mergeMessagesPreservingClientState(previousItems: ChatMessage[],
     return nextItems;
   }
 
-  const previousById = new Map(previousItems.map((item) => [item.id, item]));
-  const previousByClientStateKey = new Map(previousItems.map((item) => [getMessageClientStateKey(item), item]));
-  const previousByTurnRoleKey = new Map(
-    previousItems
-      .map((item) => [getMessageTurnRoleKey(item), item] as const)
-      .filter(([key]) => key),
-  );
+  const previousById = new Map<string, ChatMessage>();
+  const previousByClientStateKey = new Map<string, ChatMessage>();
+  const previousByTurnRoleKey = new Map<string, ChatMessage>();
+  for (const item of previousItems) {
+    addMessageIndexEntry(previousById, item.id, item);
+    addMessageIndexEntry(previousByClientStateKey, getMessageClientStateKey(item), item);
+    addMessageIndexEntry(previousByTurnRoleKey, getMessageTurnRoleKey(item), item);
+  }
 
   const mergedItems = nextItems.map((item) => {
     const previousItem = previousById.get(item.id)
@@ -1043,28 +1088,24 @@ export function mergeMessagesPreservingClientState(previousItems: ChatMessage[],
   const seenKeys = new Map<string, number>();
   const dedupedItems: ChatMessage[] = [];
   for (const item of mergedItems) {
-    const turnRoleKey = getMessageTurnRoleKey(item);
-    const existingIndex = turnRoleKey ? seenKeys.get(turnRoleKey) : undefined;
+    const dedupeKeys = getMessageDedupeKeys(item);
+    const existingIndex = dedupeKeys
+      .map((key) => seenKeys.get(key))
+      .find((index): index is number => typeof index === "number");
     if (typeof existingIndex !== "number") {
-      if (turnRoleKey) {
-        seenKeys.set(turnRoleKey, dedupedItems.length);
+      for (const key of dedupeKeys) {
+        seenKeys.set(key, dedupedItems.length);
       }
       dedupedItems.push(item);
       continue;
     }
 
     const previousItem = dedupedItems[existingIndex];
-    const mergedMeta = mergeMessageMeta(previousItem.meta, item.meta);
-    const nextElapsedSeconds = typeof item.elapsedSeconds === "number" ? item.elapsedSeconds : previousItem.elapsedSeconds;
-    const nextState = item.state ?? previousItem.state;
-    const mergedItem = {
-      ...previousItem,
-      ...item,
-      ...(typeof nextState !== "undefined" ? { state: nextState } : {}),
-      ...(typeof nextElapsedSeconds === "number" ? { elapsedSeconds: nextElapsedSeconds } : {}),
-      ...(mergedMeta ? { meta: mergedMeta } : {}),
-    };
-    dedupedItems[existingIndex] = areMessageValuesEqual(previousItem, mergedItem) ? previousItem : mergedItem;
+    const mergedItem = mergeDuplicateMessage(previousItem, item);
+    dedupedItems[existingIndex] = mergedItem;
+    for (const key of [...dedupeKeys, ...getMessageDedupeKeys(mergedItem)]) {
+      seenKeys.set(key, existingIndex);
+    }
   }
 
   if (dedupedItems.length === previousItems.length && dedupedItems.every((item, index) => item === previousItems[index])) {

@@ -31,3 +31,42 @@ test("idle history merge preserves message references when nothing changed", () 
   expect(merged[0]).toBe(previousItems[0]);
   expect(merged[1]).toBe(previousItems[1]);
 });
+
+test("history merge deduplicates reset rows already represented locally", () => {
+  const previousItems: ChatMessage[] = [
+    {
+      id: "user-1",
+      role: "user",
+      text: "修复刷新",
+      createdAt: "2026-07-07T10:00:00Z",
+      state: "done",
+    },
+    {
+      id: "assistant-local-final",
+      role: "assistant",
+      text: "最终回复",
+      createdAt: "2026-07-07T10:00:01Z",
+      state: "done",
+    },
+    {
+      id: "user-1",
+      role: "user",
+      text: "修复刷新",
+      createdAt: "2026-07-07T10:00:00Z",
+      state: "done",
+    },
+    {
+      id: "assistant-history-final",
+      role: "assistant",
+      text: "最终回复",
+      createdAt: "2026-07-07T10:00:01Z",
+      state: "done",
+    },
+  ];
+
+  const merged = mergeMessagesPreservingClientState(previousItems, previousItems);
+
+  expect(merged.map((item) => item.id)).toEqual(["user-1", "assistant-history-final"]);
+  expect(merged[0]).toBe(previousItems[0]);
+  expect(merged[1]).not.toBe(previousItems[1]);
+});
