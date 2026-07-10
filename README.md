@@ -2,6 +2,9 @@
 
 远程控制 AI 智能体的多 Bot Web 控制台。它把 `codex` / `claude`、项目文件、Git、终端、插件视图和管理中心聚合到同一浏览器界面，用于统一调度多个仓库、子 agent 和集群任务。
 
+- 当前版本：`1.4.1`
+- 文档最后更新：`2026-07-10`
+
 ## 核心能力
 
 - 多 Bot 编排：主 Bot + 托管 Bot 共同运行，每个 Bot 绑定 CLI、工作目录、执行模式、CLI 参数和独立会话。
@@ -9,7 +12,8 @@
 - 原生 agent：Chat 支持普通 CLI 和原生 agent 执行模式，保留原生会话复用、上下文用量、工具调用、权限请求和过程详情。
 - 项目工作台：Chat、Files、Git、Terminal、Debug 组成一体化开发界面，覆盖对话执行、文件编辑、版本控制、终端和系统脚本；Chat 过程详情刷新前后保持一致。
 - 插件运行时：基于 `plugin.json` 扩展文件视图、插件配置和进程运行能力，支持 session 型重型视图，内置 Vivado waveform 示例。
-- 管理与交付：Admin Center 覆盖用户权限、邀请码、公告发布、更新检查、Release 下载和离线包管理；Cloudflare quick tunnel 支持移动端远程访问。
+- 可选 LiteLLM 网关：在 Admin Center 独立启停 OpenAI 兼容转接，支持多路由、模型别名和 `auto` / `chat_completions` / `responses` endpoint 模式，并兼容 Codex 上下文压缩流。
+- 管理与交付：Admin Center 覆盖用户权限、邀请码、公告发布、LiteLLM 网关、更新检查、Release 下载和离线包管理；Cloudflare quick tunnel 支持移动端远程访问。
 
 ## 环境要求
 
@@ -278,11 +282,24 @@ WEB_API_TOKEN=<本机随机口令>
 - Bot 支持子 agent 和集群配置
 - 旧配置中的历史 `bot_mode` 字段会在加载后按普通 Bot 处理，并在下次保存时移除
 
+### 可选 LiteLLM 网关
+
+LiteLLM 网关不是普通 CLI 的必经链路；不启用时，`codex` / `claude` 继续使用各自原有 provider 配置。需要统一模型别名、多上游路由或兼容 OpenAI Responses 请求时，可在 Admin Center 的 LiteLLM 网关区域配置并启用。
+
+每条路由可设置：
+
+- LiteLLM model 和对外模型别名
+- 上游 API 地址与密钥
+- endpoint 模式：`auto`、`chat_completions` 或 `responses`
+- 额外 LiteLLM 参数
+
+保存配置后网关会热切换，无需重启主 Web 服务。运行状态、最近请求和错误日志可在管理界面查看；上游密钥不会在状态接口中明文返回。
+
 ## 工作界面
 
 - Bot：把 Web 消息转发到本地 `codex` / `claude`，支持普通 CLI 和原生 agent 执行模式，保留会话、trace、上下文用量、CLI 参数和子 agent 作用域。
 - Desktop Workbench：面向重复开发操作，集中承载文件树、编辑器、Git、终端、聊天和插件视图。
-- Admin Center：面向运维管理，集中承载账号权限、邀请、公告和更新。
+- Admin Center：面向运维管理，集中承载账号权限、邀请、公告、LiteLLM 网关和更新。
 
 ## 更新
 

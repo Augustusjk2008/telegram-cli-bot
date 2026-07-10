@@ -324,6 +324,7 @@ def _message_record_to_events(
                     "id": part_id,
                     "type": "text",
                     "text": text,
+                    "authoritativeTextSnapshot": True,
                     "messageID": message_id,
                     "sessionID": session_id,
                 },

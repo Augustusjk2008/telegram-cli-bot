@@ -347,6 +347,22 @@ class NativeAgentAggregator:
                     if trace is not None:
                         result.trace.append(trace)
                 return result
+            if full_text and bool(part.get("authoritativeTextSnapshot")):
+                previous_text = self.text()
+                for existing_part_id, existing_message_id in list(self.part_message_ids.items()):
+                    if existing_message_id == message_id:
+                        self.text_parts.pop(existing_part_id, None)
+                self.text_parts[part_id] = full_text
+                self.final_text = ""
+                if switched_message:
+                    result.snapshot = self.text()
+                    result.replace_text = True
+                elif full_text.startswith(previous_text):
+                    result.delta = full_text[len(previous_text):]
+                else:
+                    result.snapshot = self.text()
+                    result.replace_text = True
+                return result
             if delta:
                 self.text_parts[part_id] = self.text_parts.get(part_id, "") + delta
                 if switched_message:
