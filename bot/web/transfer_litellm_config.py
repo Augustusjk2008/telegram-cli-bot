@@ -58,6 +58,7 @@ class LiteLLMRouteConfig:
 
 @dataclass
 class LiteLLMTransferConfig:
+    enabled: bool = False
     litellm_model: str = ""
     model_alias: str = ""
     provider_base_url: str = ""
@@ -66,7 +67,7 @@ class LiteLLMTransferConfig:
     routes: list[LiteLLMRouteConfig] = field(default_factory=list)
 
     @property
-    def enabled(self) -> bool:
+    def configured(self) -> bool:
         return bool(self.configured_routes())
 
     def effective_routes(self) -> list[LiteLLMRouteConfig]:
@@ -80,6 +81,7 @@ class LiteLLMTransferConfig:
 
     def to_file_dict(self) -> dict[str, Any]:
         return {
+            "enabled": bool(self.enabled),
             "routes": [route.to_file_dict() for route in self.effective_routes()],
             "drop_params": self.drop_params,
         }
@@ -137,6 +139,19 @@ def _normalize_extra_litellm_params(value: object) -> dict[str, Any]:
         names = ", ".join(reserved)
         raise ValueError(f"extra_litellm_params 不能覆盖核心字段: {names}")
     return dict(value)
+
+
+def _bool_from_data(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value or "").strip().lower()
+    if text in {"1", "true", "yes", "y", "on", "enabled"}:
+        return True
+    if text in {"0", "false", "no", "n", "off", "disabled", ""}:
+        return False
+    return bool(value)
 
 
 def validate_optional_http_url(value: object, *, field_name: str) -> str:
@@ -255,6 +270,8 @@ def _validate_routes(routes: list[LiteLLMRouteConfig]) -> None:
 
 
 def update_litellm_transfer_config(config: LiteLLMTransferConfig, data: dict[str, Any]) -> None:
+    if "enabled" in data:
+        config.enabled = _bool_from_data(data.get("enabled"))
     if "routes" in data:
         raw_routes = data.get("routes")
         if not isinstance(raw_routes, list):

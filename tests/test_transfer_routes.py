@@ -88,6 +88,7 @@ def _configure_transfer(server: WebApiServer, runtime: FakeLiteLLMRuntime) -> No
     server.transfer_service.runtime = runtime
     server.transfer_service.update_config(
         {
+            "enabled": True,
             "litellm_model": "openai/gpt-5",
             "model_alias": "codex-gpt-5",
             "provider_base_url": "https://provider.test/v1",
@@ -275,6 +276,50 @@ async def test_admin_transfer_reset_and_config_require_admin_capability(
 
 
 @pytest.mark.asyncio
+async def test_admin_transfer_config_hot_starts_and_stops_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "project-token")
+    monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "")
+    monkeypatch.setenv("TCB_DATA_DIR", str(tmp_path))
+    server = WebApiServer(object(), host="127.0.0.1", port=8765, tunnel_service=DummyTunnelService())
+    server.transfer_service.runtime = FakeLiteLLMRuntime()
+    app = server._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            enable_response = await client.patch(
+                "/api/admin/transfer/config",
+                json={
+                    "enabled": True,
+                    "litellm_model": "openai/gpt-5",
+                    "model_alias": "codex-gpt-5",
+                    "provider_base_url": "http://remote.test/v1",
+                    "provider_api_key": "sk",
+                },
+                headers={"X-API-Token": "project-token"},
+            )
+            enable_payload = await enable_response.json()
+            disable_response = await client.patch(
+                "/api/admin/transfer/config",
+                json={"enabled": False},
+                headers={"X-API-Token": "project-token"},
+            )
+            disable_payload = await disable_response.json()
+
+    assert enable_response.status == 200
+    assert enable_payload["data"]["enabled"] is True
+    assert enable_payload["data"]["configured"] is True
+    assert enable_payload["data"]["litellm_running"] is True
+    assert enable_payload["data"]["status"] == "running"
+    assert disable_response.status == 200
+    assert disable_payload["data"]["enabled"] is False
+    assert disable_payload["data"]["configured"] is True
+    assert disable_payload["data"]["litellm_running"] is False
+    assert disable_payload["data"]["status"] == "disabled"
+
+
+@pytest.mark.asyncio
 async def test_admin_transfer_config_validation_error_returns_json(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -348,6 +393,8 @@ async def test_transfer_page_is_served_as_html(monkeypatch: pytest.MonkeyPatch, 
     assert "setInterval" in text
     assert "2000" in text
     assert "endpoint-mode" in text
+    assert "启用 LiteLLM 网关" in text
+    assert "enabled" in text
     assert "extra-litellm-params" in text
     assert "extra_litellm_params" in text
     assert "conversion-type" not in text

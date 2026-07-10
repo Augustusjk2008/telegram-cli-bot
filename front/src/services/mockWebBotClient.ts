@@ -1354,9 +1354,10 @@ export class MockWebBotClient implements WebBotClient {
     },
   ];
   private transferBridgeStatus: TransferBridgeStatus = {
-    enabled: true,
-    running: true,
-    status: "running",
+    enabled: false,
+    configured: true,
+    running: false,
+    status: "disabled",
     localUrl: "http://127.0.0.1:8080",
     localEndpoint: "http://127.0.0.1:8080",
     localHost: "127.0.0.1",
@@ -1364,8 +1365,8 @@ export class MockWebBotClient implements WebBotClient {
     bridgePageUrl: "/api/transfer/page",
     responsesBaseUrl: "http://127.0.0.1:8080/v1",
     chatCompletionsBaseUrl: "http://127.0.0.1:8080/v1",
-    litellmRunning: true,
-    litellmPid: 4321,
+    litellmRunning: false,
+    litellmPid: null,
     litellmModel: "openai/gpt-5",
     modelAlias: "gpt-5",
     endpointMode: "auto",
@@ -2972,12 +2973,15 @@ export class MockWebBotClient implements WebBotClient {
           providerApiKeySet: this.transferBridgeStatus.providerApiKeySet,
         }, existingRoutes[0])];
     const firstRoute = nextRoutes[0];
-    const enabled = nextRoutes.some((route) => route.configured);
+    const configured = nextRoutes.some((route) => route.configured);
+    const enabled = input.enabled ?? this.transferBridgeStatus.enabled;
+    const running = Boolean(enabled && configured);
     this.transferBridgeStatus = {
       ...this.transferBridgeStatus,
       routes: nextRoutes,
       routeCount: nextRoutes.length,
       configuredRouteCount: nextRoutes.filter((route) => route.configured).length,
+      configured,
       providerBaseUrl: firstRoute?.providerBaseUrl || "",
       litellmModel: firstRoute?.litellmModel || "",
       modelAlias: firstRoute?.modelAlias || "",
@@ -2986,9 +2990,9 @@ export class MockWebBotClient implements WebBotClient {
       providerApiKeySet: Boolean(firstRoute?.providerApiKeySet),
       dropParams: input.dropParams ?? this.transferBridgeStatus.dropParams,
       enabled,
-      running: enabled,
-      litellmRunning: enabled,
-      status: enabled ? "running" : "not_configured",
+      running,
+      litellmRunning: running,
+      status: configured ? (enabled ? "running" : "disabled") : "not_configured",
       restartRequired: false,
       restartRequiredReason: "",
     };

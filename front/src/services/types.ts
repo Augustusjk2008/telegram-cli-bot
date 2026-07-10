@@ -131,8 +131,9 @@ export type TransferRouteConfig = {
 
 export type TransferBridgeStatus = {
   enabled: boolean;
+  configured: boolean;
   running: boolean;
-  status: "running" | "stopped" | "not_configured" | "error" | "unknown";
+  status: "running" | "stopped" | "disabled" | "not_configured" | "error" | "unknown";
   localUrl: string;
   localEndpoint?: string;
   localHost?: string;
@@ -169,6 +170,7 @@ export type TransferBridgeStatus = {
 };
 
 export type TransferBridgeConfigInput = {
+  enabled?: boolean;
   litellmModel?: string;
   modelAlias?: string;
   endpointMode?: TransferEndpointMode;

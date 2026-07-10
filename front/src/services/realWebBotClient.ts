@@ -302,6 +302,7 @@ type RawHealthResponse = {
 
 type RawTransferBridgeStatus = {
   enabled?: boolean;
+  configured?: boolean;
   running?: boolean;
   is_running?: boolean;
   status?: string;
@@ -2950,6 +2951,7 @@ function mapTransferBridgeStatus(raw: RawTransferBridgeStatus): TransferBridgeSt
   const routes = Array.isArray(raw.routes) ? raw.routes.map(mapTransferRouteConfig) : undefined;
   return {
     enabled: Boolean(raw.enabled),
+    configured: Boolean(raw.configured),
     running: Boolean(raw.running),
     status,
     localUrl: String(raw.local_url || ""),
@@ -3028,6 +3030,7 @@ function mapTransferRouteConfig(raw: RawTransferRouteConfig): TransferRouteConfi
 
 function mapTransferBridgeConfigInput(input: TransferBridgeConfigInput) {
   return {
+    ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
     ...(input.litellmModel !== undefined ? { litellm_model: input.litellmModel } : {}),
     ...(input.modelAlias !== undefined ? { model_alias: input.modelAlias } : {}),
     ...(input.endpointMode !== undefined ? { endpoint_mode: input.endpointMode } : {}),

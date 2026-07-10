@@ -56,10 +56,48 @@ class FakeLiteLLMRuntime:
         return []
 
 
+@pytest.mark.asyncio
+async def test_transfer_config_defaults_disabled_and_hot_toggles_runtime(tmp_path: Path) -> None:
+    runtime = FakeLiteLLMRuntime()
+    service = TransferService(host="127.0.0.1", port=8765, config_path=tmp_path / "transfer.json", runtime=runtime)
+
+    service.update_config(
+        {
+            "litellm_model": "openai/gpt-5",
+            "model_alias": "codex-gpt-5",
+            "provider_base_url": "https://provider.test/v1",
+            "provider_api_key": "sk-provider",
+        }
+    )
+
+    status = service.get_status()
+    assert status["configured"] is True
+    assert status["enabled"] is False
+    assert status["status"] == "disabled"
+    assert status["litellm_running"] is False
+    saved = json.loads((tmp_path / "transfer.json").read_text(encoding="utf-8"))
+    assert saved["enabled"] is False
+
+    enabled_status = await service.update_config_async({"enabled": True})
+
+    assert enabled_status["enabled"] is True
+    assert enabled_status["configured"] is True
+    assert enabled_status["status"] == "running"
+    assert runtime.is_running is True
+
+    disabled_status = await service.update_config_async({"enabled": False})
+
+    assert disabled_status["enabled"] is False
+    assert disabled_status["configured"] is True
+    assert disabled_status["status"] == "disabled"
+    assert runtime.is_running is False
+
+
 def _configured_service(runtime: FakeLiteLLMRuntime, tmp_path: Path) -> TransferService:
     service = TransferService(host="127.0.0.1", port=8765, config_path=tmp_path / "transfer.json", runtime=runtime)
     service.update_config(
         {
+            "enabled": True,
             "litellm_model": "openai/gpt-5",
             "model_alias": "codex-gpt-5",
             "provider_base_url": "https://provider.test/v1",
@@ -95,7 +133,9 @@ async def test_transfer_config_uses_runtime_paths_and_never_echoes_provider_key(
     )
 
     status = service.get_status()
-    assert status["enabled"] is True
+    assert status["enabled"] is False
+    assert status["configured"] is True
+    assert status["status"] == "disabled"
     assert status["litellm_running"] is False
     assert status["local_endpoint"] == "http://127.0.0.1:8765"
     assert status["local_host"] == "127.0.0.1"
@@ -121,6 +161,7 @@ async def test_transfer_config_uses_runtime_paths_and_never_echoes_provider_key(
     assert "sk-secret-value" not in json.dumps(status)
     saved = json.loads(get_transfer_config_path().read_text(encoding="utf-8"))
     assert saved == {
+        "enabled": False,
         "routes": [
             {
                 "id": "route-1",
@@ -201,7 +242,9 @@ def test_transfer_config_accepts_multiple_routes_and_preserves_route_secrets(tmp
     )
 
     status = service.get_status()
-    assert status["enabled"] is True
+    assert status["enabled"] is False
+    assert status["configured"] is True
+    assert status["status"] == "disabled"
     assert status["route_count"] == 2
     assert status["configured_route_count"] == 2
     assert [route["model_alias"] for route in status["routes"]] == ["A", "C"]
@@ -273,6 +316,7 @@ def test_legacy_transfer_config_migrates_to_litellm_schema_and_drops_converter_f
 
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved == {
+        "enabled": False,
         "routes": [
             {
                 "id": "route-1",

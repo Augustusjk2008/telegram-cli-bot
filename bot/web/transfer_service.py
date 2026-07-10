@@ -420,9 +420,12 @@ class TransferService:
     async def ensure_runtime(self) -> None:
         if self._client is None or self._client.closed:
             self._client = ClientSession(timeout=ClientTimeout(total=300))
-        if not self.config.enabled:
+        if not self.config.configured:
             await self.runtime.close()
             raise TransferServiceError(503, "LiteLLM 网关尚未配置", code="transfer_not_configured")
+        if not self.config.enabled:
+            await self.runtime.close()
+            raise TransferServiceError(503, "LiteLLM 网关未启用", code="transfer_disabled")
         try:
             await self.runtime.ensure_started(self.config)
             self._runtime_dirty = False
@@ -449,6 +452,10 @@ class TransferService:
         for env_key, data_key in env_map.items():
             if env_key in os.environ:
                 data[data_key] = os.environ[env_key]
+        for env_key in ("TRANSFER_ENABLED", "TRANSFER_LITELLM_ENABLED"):
+            if env_key in os.environ:
+                data["enabled"] = os.environ[env_key]
+                break
         if "TRANSFER_DROP_PARAMS" in os.environ:
             data["drop_params"] = os.environ["TRANSFER_DROP_PARAMS"].strip().lower() not in {"0", "false", "no", "off"}
         if data:
@@ -477,6 +484,27 @@ class TransferService:
             status["restart_required_reason"] = "local_endpoint_readonly"
         return status
 
+    async def update_config_async(self, data: dict[str, Any], *, save: bool = True) -> dict[str, Any]:
+        status = self.update_config(data, save=save)
+        restart_required = bool(status.get("restart_required"))
+        restart_reason = str(status.get("restart_required_reason") or "")
+        if self.config.enabled and self.config.configured:
+            status = await self._start_runtime_after_config_update()
+        else:
+            await self.runtime.close()
+            self._runtime_dirty = False
+            if not self.config.enabled or not self.config.configured:
+                self.last_error = ""
+            status = self.get_status()
+        if restart_required:
+            status["restart_required"] = True
+            status["restart_required_reason"] = restart_reason
+        return status
+
+    async def _start_runtime_after_config_update(self) -> dict[str, Any]:
+        await self.ensure_runtime()
+        return self.get_status()
+
     def reset_stats(self) -> dict[str, Any]:
         self.request_count = 0
         self.total_input_tokens = 0
@@ -490,9 +518,17 @@ class TransferService:
 
     def get_status(self, *, base_path: str = "") -> dict[str, Any]:
         enabled = self.config.enabled
+        configured = self.config.configured
         runtime_running = bool(self.runtime.is_running)
-        status = "running" if enabled and runtime_running else "not_configured" if not enabled else "stopped"
-        if self.last_error and enabled:
+        if not configured:
+            status = "not_configured"
+        elif not enabled:
+            status = "disabled"
+        elif runtime_running:
+            status = "running"
+        else:
+            status = "stopped"
+        if self.last_error and enabled and configured:
             status = "error"
         base = self._local_base_url(base_path)
         uptime_seconds = 0
@@ -503,6 +539,7 @@ class TransferService:
         first_route = routes[0] if routes else None
         return {
             "enabled": enabled,
+            "configured": configured,
             "running": runtime_running,
             "is_running": bool(self.is_running),
             "status": status,

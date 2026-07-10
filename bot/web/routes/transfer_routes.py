@@ -63,6 +63,8 @@ HTML_PAGE = r"""
     .card { border: 1px solid var(--border); border-radius: 8px; background: var(--surface); padding: 18px; }
     .info { margin-bottom: 16px; border-left: 3px solid var(--info); background: #142333; border-radius: 0 8px 8px 0; padding: 12px 14px; line-height: 1.7; color: #c8d6e3; }
     .form-row { display: grid; gap: 7px; margin-bottom: 12px; }
+    .check-row label { display: flex; align-items: center; gap: 8px; color: var(--text); }
+    .check-row input[type="checkbox"] { width: auto; min-height: auto; }
     label { color: var(--muted); font-size: 0.84rem; }
     input, select, textarea {
       width: 100%;
@@ -95,7 +97,7 @@ HTML_PAGE = r"""
     .status-line { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 14px; }
     .badge { display: inline-flex; align-items: center; gap: 8px; border-radius: 999px; border: 1px solid var(--border); padding: 5px 10px; font-size: 0.86rem; font-weight: 650; }
     .badge.running { color: #b8f5cd; border-color: #2a6840; background: #153322; }
-    .badge.stopped, .badge.not_configured { color: #ffe5a3; border-color: #765c24; background: #352a14; }
+    .badge.stopped, .badge.disabled, .badge.not_configured { color: #ffe5a3; border-color: #765c24; background: #352a14; }
     .badge.error { color: #ffd0d0; border-color: #784044; background: #3a1e22; }
     .pulse { width: 8px; height: 8px; border-radius: 999px; background: currentColor; animation: pulse 1.8s infinite; }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
@@ -154,6 +156,9 @@ HTML_PAGE = r"""
     <div class="grid">
       <section class="card">
         <h2>配置</h2>
+        <div class="form-row check-row">
+          <label><input id="enabled" type="checkbox"> 启用 LiteLLM 网关</label>
+        </div>
         <div class="form-row">
           <label for="remote-url">上游 API 地址</label>
           <input id="remote-url" autocomplete="off" placeholder="https://api.openai.com/v1">
@@ -182,7 +187,7 @@ HTML_PAGE = r"""
           <label for="extra-litellm-params">高级 LiteLLM params JSON</label>
           <textarea id="extra-litellm-params" spellcheck="false" placeholder='{"rpm":120}'></textarea>
         </div>
-        <div class="form-row">
+        <div class="form-row check-row">
           <label><input id="drop-params" type="checkbox" checked> drop params</label>
         </div>
         <div class="form-row">
@@ -199,6 +204,7 @@ HTML_PAGE = r"""
           <button id="clear-key-btn" type="button">清除 Key</button>
         </div>
         <div class="config-list">
+          <div class="config-row"><span class="muted">启用状态</span><span id="cfg-enabled">-</span></div>
           <div class="config-row"><span class="muted">上游地址</span><span id="cfg-remote-url">-</span></div>
           <div class="config-row"><span class="muted">LiteLLM model</span><span id="cfg-remote-model">-</span></div>
           <div class="config-row"><span class="muted">模型别名</span><span id="cfg-model-alias">-</span></div>
@@ -318,6 +324,7 @@ HTML_PAGE = r"""
 
     function statusLabel(status) {
       if (status === "running") return "运行中";
+      if (status === "disabled") return "未启用";
       if (status === "stopped") return "已停止";
       if (status === "error") return "异常";
       if (status === "not_configured") return "未配置";
@@ -386,7 +393,9 @@ HTML_PAGE = r"""
       $("endpoint-mode").value = data.endpoint_mode || "auto";
       $("extra-litellm-params").value = formatJsonObject(data.extra_litellm_params || {});
       $("routes-json").value = routeEditorValue(data);
+      $("enabled").checked = Boolean(data.enabled);
       $("drop-params").checked = data.drop_params !== false;
+      $("cfg-enabled").textContent = data.enabled ? "已启用" : "未启用";
       $("cfg-remote-url").textContent = data.provider_base_url || "-";
       $("cfg-remote-model").textContent = data.litellm_model || "-";
       $("cfg-model-alias").textContent = data.model_alias || "-";
@@ -445,6 +454,7 @@ HTML_PAGE = r"""
 
     async function saveConfig(clearKey = false) {
       const body = {
+        enabled: $("enabled").checked,
         provider_base_url: $("remote-url").value.trim(),
         litellm_model: $("remote-model").value.trim(),
         model_alias: $("model-alias").value.trim(),
@@ -713,7 +723,7 @@ async def config(request: web.Request) -> web.Response:
     server = _server(request)
     await server._with_capability(request, CAP_ADMIN_OPS)
     try:
-        data = server.transfer_service.update_config(await _read_json(request))
+        data = await server.transfer_service.update_config_async(await _read_json(request))
     except TransferServiceError as exc:
         raise _transfer_error(exc) from exc
     status_data = server.transfer_service.get_status(base_path=server._web_base_path())

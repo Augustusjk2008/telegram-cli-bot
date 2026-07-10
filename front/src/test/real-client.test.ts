@@ -164,6 +164,7 @@ describe("RealWebBotClient", () => {
   test("transfer bridge status maps snake case response", async () => {
     fetchMock.mockResolvedValue(jsonOk({
       enabled: true,
+      configured: true,
       running: true,
       status: "running",
       local_url: "http://127.0.0.1:8080",
@@ -233,6 +234,7 @@ describe("RealWebBotClient", () => {
     );
     expect(status).toEqual({
       enabled: true,
+      configured: true,
       running: true,
       status: "running",
       localUrl: "http://127.0.0.1:8080",
@@ -298,6 +300,7 @@ describe("RealWebBotClient", () => {
     fetchMock
       .mockResolvedValueOnce(jsonOk({
         enabled: true,
+        configured: true,
         running: true,
         status: "running",
         local_url: "http://127.0.0.1:8080",
@@ -317,6 +320,7 @@ describe("RealWebBotClient", () => {
       }))
       .mockResolvedValueOnce(jsonOk({
         enabled: true,
+        configured: true,
         running: true,
         status: "running",
         local_url: "http://127.0.0.1:8080",
@@ -336,6 +340,7 @@ describe("RealWebBotClient", () => {
       }))
       .mockResolvedValueOnce(jsonOk({
         enabled: true,
+        configured: true,
         running: true,
         status: "running",
         local_url: "http://127.0.0.1:8080",
@@ -353,6 +358,7 @@ describe("RealWebBotClient", () => {
     const client = new RealWebBotClient();
     const status = await client.getTransferAdminStatus();
     const saved = await client.updateTransferBridgeConfig({
+      enabled: true,
       providerBaseUrl: "https://api.example.test/v1",
       litellmModel: "openai/gpt-next",
       modelAlias: "gpt-next",
@@ -374,6 +380,7 @@ describe("RealWebBotClient", () => {
       expect.objectContaining({
         method: "PATCH",
         body: JSON.stringify({
+          enabled: true,
           litellm_model: "openai/gpt-next",
           model_alias: "gpt-next",
           endpoint_mode: "chat_completions",

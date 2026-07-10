@@ -75,6 +75,7 @@ type TransferRouteDraft = Required<Pick<
 };
 
 type TransferDraft = {
+  enabled: boolean;
   routes: TransferRouteDraft[];
   dropParams: boolean;
 };
@@ -193,6 +194,7 @@ function shortErrorText(value: string) {
 function transferStatusLabel(status: TransferBridgeStatus | null) {
   if (!status) return "未知";
   if (status.status === "running") return "运行中";
+  if (status.status === "disabled") return "未启用";
   if (status.status === "not_configured") return "未配置";
   if (status.status === "error") return "错误";
   if (status.status === "stopped") return "已停止";
@@ -203,6 +205,7 @@ function transferStatusClass(status: TransferBridgeStatus | null) {
   if (status?.status === "running") return "border-emerald-200 bg-emerald-50 text-emerald-700";
   if (status?.status === "error") return "border-red-200 bg-red-50 text-red-700";
   if (status?.status === "not_configured") return "border-amber-200 bg-amber-50 text-amber-700";
+  if (status?.status === "disabled") return "border-[var(--border)] bg-[var(--bg)] text-[var(--muted)]";
   return "border-[var(--border)] bg-[var(--bg)] text-[var(--muted)]";
 }
 
@@ -390,6 +393,7 @@ function transferDraftFromStatus(status: TransferBridgeStatus | null): TransferD
         providerApiKeySet: status.providerApiKeySet,
       } : undefined, 0)];
   return {
+    enabled: Boolean(status?.enabled),
     routes,
     dropParams: status?.dropParams ?? true,
   };
@@ -408,7 +412,7 @@ function transferRoutesFromStatus(status: TransferBridgeStatus | null): Transfer
       providerBaseUrl: status.providerBaseUrl || "",
       extraLitellmParams: status.extraLitellmParams || {},
       providerApiKeySet: status.providerApiKeySet,
-      configured: status.enabled,
+      configured: status.configured,
     },
   ];
 }
@@ -1298,6 +1302,7 @@ export function AdminCenterScreen({
         clearProviderApiKey: route.clearProviderApiKey,
       }));
       const saved = await client.updateTransferBridgeConfig({
+        enabled: transferDraft.enabled,
         routes,
         dropParams: transferDraft.dropParams,
       });
@@ -2063,6 +2068,16 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             ) : null}
 
             <div className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3">
+              <label className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] px-3 py-2 text-sm">
+                <span className="font-medium text-[var(--text)]">启用 LiteLLM 网关</span>
+                <input
+                  aria-label="启用 LiteLLM 网关"
+                  type="checkbox"
+                  checked={transferDraft.enabled}
+                  onChange={(event) => setTransferDraft((prev) => ({ ...prev, enabled: event.target.checked }))}
+                />
+              </label>
+
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h3 className="text-sm font-semibold text-[var(--text)]">路由配置</h3>
                 <button
