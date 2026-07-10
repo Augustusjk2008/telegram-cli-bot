@@ -262,6 +262,23 @@ class ClusterRuntime:
         async with run.message_condition:
             run.message_condition.notify_all()
 
+    async def wait_for_task_change(self, run_id: str, task_ids: list[str] | None, wait_seconds: float) -> None:
+        run = self._runs[str(run_id)]
+        deadline = asyncio.get_running_loop().time() + max(0.0, wait_seconds)
+        while True:
+            if self.build_task_status(run_id, task_ids, include_output=False)["pending_count"] <= 0:
+                return
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                return
+            async with run.message_condition:
+                if self.build_task_status(run_id, task_ids, include_output=False)["pending_count"] <= 0:
+                    return
+                try:
+                    await asyncio.wait_for(run.message_condition.wait(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    return
+
     def complete_agent_task(self, run_id: str, task_id: str, output: str) -> ClusterAgentTask:
         task = self._runs[str(run_id)].tasks[str(task_id)]
         if task.status == "cancelled":

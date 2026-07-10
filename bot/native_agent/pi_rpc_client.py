@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import threading
+from collections import deque
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +21,8 @@ DEFAULT_PI_COMMAND = "pi"
 DEFAULT_TIMEOUT_SECONDS = 5.0
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 30.0
 TAIL_LIMIT = 1600
+PI_RPC_STDOUT_QUEUE_MAX_EVENTS = 256
+PI_RPC_STDOUT_PUT_TIMEOUT_SECONDS = 1.0
 
 
 class PiRpcRunError(RuntimeError):
@@ -93,11 +96,12 @@ class PiRpcClient:
         self._killed = False
         self._events_started = False
         self._request_seq = 0
-        self._pending_events: list[dict[str, Any]] = []
+        self._pending_events: deque[dict[str, Any]] = deque()
         self._stderr_tail = _TailBuffer()
         self._stdout_tail = _TailBuffer()
         self._stdout_queue: asyncio.Queue[dict[str, Any] | None] | None = None
         self._stdout_thread: threading.Thread | None = None
+        self._stdout_stop = threading.Event()
         self._stderr_thread = threading.Thread(
             target=_drain_stream_to_tail,
             args=(process.stderr, self._stderr_tail),
@@ -194,7 +198,7 @@ class PiRpcClient:
     async def events(self) -> AsyncIterator[dict[str, Any]]:
         self._events_started = True
         while self._pending_events:
-            yield self._pending_events.pop(0)
+            yield self._pending_events.popleft()
         while True:
             payload = await self._read_stdout_payload()
             if payload is None:
@@ -222,6 +226,7 @@ class PiRpcClient:
             if self._closed:
                 return
             self._closed = True
+            self._stdout_stop.set()
             _safe_close(self.process.stdin)
         if self.process.poll() is None:
             try:
@@ -229,6 +234,8 @@ class PiRpcClient:
             except subprocess.TimeoutExpired:
                 await self.kill()
         self._close_streams()
+        if self._stdout_thread is not None:
+            await asyncio.to_thread(self._stdout_thread.join, 0.5)
         await asyncio.to_thread(self._stderr_thread.join, 0.5)
 
     async def kill(self) -> None:
@@ -236,10 +243,13 @@ class PiRpcClient:
             if self._killed:
                 return
             self._killed = True
+            self._stdout_stop.set()
             process = self.process
         if process.poll() is None:
             await asyncio.to_thread(terminate_process_tree_sync, process)
         self._close_streams()
+        if self._stdout_thread is not None:
+            await asyncio.to_thread(self._stdout_thread.join, 0.5)
         await asyncio.to_thread(self._stderr_thread.join, 0.5)
 
     async def _read_response(self, request_id: str, command_type: str) -> dict[str, Any]:
@@ -282,11 +292,11 @@ class PiRpcClient:
         if self._stdout_queue is not None:
             return self._stdout_queue
         loop = asyncio.get_running_loop()
-        queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+        queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue(maxsize=PI_RPC_STDOUT_QUEUE_MAX_EVENTS)
         self._stdout_queue = queue
         self._stdout_thread = threading.Thread(
             target=_drain_stdout_to_queue,
-            args=(stdout, self._stdout_tail, loop, queue),
+            args=(stdout, self._stdout_tail, loop, queue, self._stdout_stop),
             daemon=True,
         )
         self._stdout_thread.start()
@@ -401,6 +411,7 @@ def _drain_stdout_to_queue(
     tail: _TailBuffer,
     loop: asyncio.AbstractEventLoop,
     queue: asyncio.Queue[dict[str, Any] | None],
+    stop_event: threading.Event,
 ) -> None:
     try:
         while True:
@@ -433,22 +444,47 @@ def _drain_stdout_to_queue(
                         "message": "Pi RPC 输出不是 JSON 对象",
                         "raw": raw_line,
                     }
-            _threadsafe_queue_put(loop, queue, payload)
+            if not _threadsafe_queue_put(loop, queue, payload, stop_event):
+                return
     finally:
-        _threadsafe_queue_put(loop, queue, None)
+        if not stop_event.is_set():
+            _threadsafe_queue_put(loop, queue, None, stop_event)
 
 
 def _threadsafe_queue_put(
     loop: asyncio.AbstractEventLoop,
     queue: asyncio.Queue[dict[str, Any] | None],
     item: dict[str, Any] | None,
-) -> None:
-    if loop.is_closed():
-        return
+    stop_event: threading.Event,
+) -> bool:
+    if loop.is_closed() or stop_event.is_set():
+        return False
     try:
-        loop.call_soon_threadsafe(queue.put_nowait, item)
+        if item is None:
+            future = asyncio.run_coroutine_threadsafe(queue.put(None), loop)
+            while True:
+                try:
+                    future.result(timeout=PI_RPC_STDOUT_PUT_TIMEOUT_SECONDS)
+                    return True
+                except TimeoutError:
+                    if loop.is_closed() or stop_event.is_set():
+                        future.cancel()
+                        return False
+                except Exception:
+                    return False
+        future = asyncio.run_coroutine_threadsafe(queue.put(item), loop)
+        while True:
+            try:
+                future.result(timeout=PI_RPC_STDOUT_PUT_TIMEOUT_SECONDS)
+                return True
+            except TimeoutError:
+                if loop.is_closed() or stop_event.is_set():
+                    future.cancel()
+                    return False
+            except Exception:
+                return False
     except RuntimeError:
-        return
+        return False
 
 
 def _safe_close(stream: Any) -> None:

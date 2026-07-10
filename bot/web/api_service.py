@@ -980,15 +980,7 @@ async def _wait_for_cluster_tasks_if_requested(
 ) -> None:
     if wait_seconds <= 0:
         return
-    deadline = asyncio.get_running_loop().time() + wait_seconds
-    while True:
-        status = _CLUSTER_RUNTIME.build_task_status(run_id, task_ids, include_output=False)
-        if status["pending_count"] <= 0:
-            return
-        remaining = deadline - asyncio.get_running_loop().time()
-        if remaining <= 0:
-            return
-        await asyncio.sleep(min(0.2, remaining))
+    await _CLUSTER_RUNTIME.wait_for_task_change(run_id, task_ids, wait_seconds)
 
 
 async def handle_cluster_mcp_tool(

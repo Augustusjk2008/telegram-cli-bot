@@ -1,5 +1,6 @@
 import json
 import sys
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +57,17 @@ class FakeLiteLLMRuntime:
         return []
 
 
+class DelayedLiteLLMRuntime(FakeLiteLLMRuntime):
+    def __init__(self) -> None:
+        super().__init__()
+        self.start_calls = 0
+
+    async def ensure_started(self, config: LiteLLMTransferConfig) -> None:
+        self.start_calls += 1
+        await asyncio.sleep(0.02)
+        await super().ensure_started(config)
+
+
 @pytest.mark.asyncio
 async def test_transfer_config_defaults_disabled_and_hot_toggles_runtime(tmp_path: Path) -> None:
     runtime = FakeLiteLLMRuntime()
@@ -106,6 +118,16 @@ def _configured_service(runtime: FakeLiteLLMRuntime, tmp_path: Path) -> Transfer
         }
     )
     return service
+
+
+@pytest.mark.asyncio
+async def test_ensure_runtime_concurrent_requests_share_one_start(tmp_path: Path) -> None:
+    runtime = DelayedLiteLLMRuntime()
+    service = _configured_service(runtime, tmp_path)
+
+    await asyncio.gather(*(service.ensure_runtime() for _ in range(20)))
+
+    assert runtime.start_calls == 1
 
 
 @pytest.mark.asyncio

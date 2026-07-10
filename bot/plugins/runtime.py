@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 PLUGIN_STDIO_STREAM_BUFFER_LIMIT = 1024 * 1024
 PLUGIN_STDOUT_READ_CHUNK_BYTES = 64 * 1024
+PLUGIN_MAX_FRAME_BYTES = 8 * 1024 * 1024
 PLUGIN_CALL_TIMEOUT_SECONDS = 60.0
 PLUGIN_PYTHON_BOOTSTRAP = (
     "import runpy, sys; "
@@ -38,6 +39,9 @@ class _PluginProcess:
     pending: dict[int, asyncio.Future[dict[str, Any]]] = field(default_factory=dict)
     stderr_task: asyncio.Task[None] | None = None
     reader_task: asyncio.Task[None] | None = None
+    host_api_semaphore: asyncio.Semaphore | None = None
+    host_api_tasks: set[asyncio.Task[Any]] = field(default_factory=set)
+    host_api_active: int = 0
     last_used_at: float = field(default_factory=lambda: asyncio.get_running_loop().time())
     active_calls: int = 0
 
@@ -51,12 +55,14 @@ class PluginRuntime:
         audit_hook: Callable[[dict[str, Any]], None] | None = None,
         call_timeout_seconds: float = PLUGIN_CALL_TIMEOUT_SECONDS,
         idle_timeout_seconds: float = 2 * 60,
+        host_api_concurrency: int = 8,
     ) -> None:
         self._workspace_root_for = workspace_root_for or (lambda _alias: Path.cwd())
         self._host_api = host_api or PluginHostApi(ArtifactStore(Path.cwd()))
         self._audit_hook = audit_hook
         self._call_timeout_seconds = call_timeout_seconds
         self._idle_timeout_seconds = idle_timeout_seconds
+        self._host_api_concurrency = max(1, int(host_api_concurrency))
         self._processes: dict[tuple[str, str], _PluginProcess] = {}
         self._manifests: dict[tuple[str, str], PluginManifest] = {}
         self._process_locks: dict[tuple[str, str], asyncio.Lock] = {}
@@ -127,14 +133,24 @@ class PluginRuntime:
                 future.set_exception(RuntimeError(message))
         wrapped.pending.clear()
 
-    def _handle_incoming_message(
+    async def _handle_incoming_message(
         self,
         key: tuple[str, str],
         wrapped: _PluginProcess,
         message: dict[str, Any],
     ) -> None:
         if "method" in message:
-            asyncio.create_task(self._dispatch_plugin_request(key, wrapped, message))
+            request_id = int(message.get("id") or 0)
+            if wrapped.host_api_active >= self._host_api_concurrency:
+                await self._write_message(
+                    wrapped,
+                    encode_error(request_id, "插件 Host API 并发请求超限，请稍后重试"),
+                )
+                return
+            wrapped.host_api_active += 1
+            task = asyncio.create_task(self._dispatch_plugin_request_limited(key, wrapped, message))
+            wrapped.host_api_tasks.add(task)
+            task.add_done_callback(wrapped.host_api_tasks.discard)
             return
         try:
             response_id = int(message.get("id"))
@@ -155,10 +171,18 @@ class PluginRuntime:
                 chunk = await process.stdout.read(PLUGIN_STDOUT_READ_CHUNK_BYTES)
                 if not chunk:
                     if pending.strip():
-                        self._handle_incoming_message(key, wrapped, decode_message(bytes(pending)))
+                        await self._handle_incoming_message(key, wrapped, decode_message(bytes(pending)))
                     self._fail_pending(wrapped, "插件未返回结果")
                     return
                 pending.extend(chunk)
+                if b"\n" not in pending and len(pending) > PLUGIN_MAX_FRAME_BYTES:
+                    tail = bytes(pending[-1024:]).decode("utf-8", errors="replace")
+                    await self._abort_protocol_error(
+                        key,
+                        wrapped,
+                        f"插件协议帧超过 {PLUGIN_MAX_FRAME_BYTES} 字节且未换行；尾部: {tail!r}",
+                    )
+                    return
                 while True:
                     line_end = pending.find(b"\n")
                     if line_end < 0:
@@ -167,12 +191,23 @@ class PluginRuntime:
                     del pending[:line_end + 1]
                     if not line.strip():
                         continue
-                    self._handle_incoming_message(key, wrapped, decode_message(line))
+                    await self._handle_incoming_message(key, wrapped, decode_message(line))
         except asyncio.CancelledError:
             self._fail_pending(wrapped, "插件 reader 已取消")
             raise
         except Exception as exc:
             self._fail_pending(wrapped, str(exc))
+
+    async def _dispatch_plugin_request_limited(
+        self,
+        key: tuple[str, str],
+        wrapped: _PluginProcess,
+        message: dict[str, Any],
+    ) -> None:
+        try:
+            await self._dispatch_plugin_request(key, wrapped, message)
+        finally:
+            wrapped.host_api_active -= 1
 
     async def _dispatch_plugin_request(
         self,
@@ -267,7 +302,10 @@ class PluginRuntime:
             limit=PLUGIN_STDIO_STREAM_BUFFER_LIMIT,
         )
         key = (bot_alias, manifest.plugin_id)
-        wrapped = _PluginProcess(process=process)
+        wrapped = _PluginProcess(
+            process=process,
+            host_api_semaphore=asyncio.Semaphore(self._host_api_concurrency),
+        )
         self._processes[key] = wrapped
         self._manifests[key] = manifest
         wrapped.stderr_task = asyncio.create_task(self._read_stderr(key, process))
@@ -414,11 +452,51 @@ class PluginRuntime:
                 process.kill()
                 await process.wait()
         self._fail_pending(wrapped, "插件进程已停止")
-        tasks = [task for task in (wrapped.reader_task, wrapped.stderr_task) if task is not None]
+        current_task = asyncio.current_task()
+        host_api_tasks = [task for task in wrapped.host_api_tasks if task is not current_task]
+        for task in host_api_tasks:
+            task.cancel()
+        if host_api_tasks:
+            await asyncio.gather(*host_api_tasks, return_exceptions=True)
+        wrapped.host_api_tasks.clear()
+        tasks = [
+            task
+            for task in (wrapped.reader_task, wrapped.stderr_task)
+            if task is not None and task is not current_task
+        ]
         for task in tasks:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _abort_protocol_error(
+        self,
+        key: tuple[str, str],
+        wrapped: _PluginProcess,
+        message: str,
+    ) -> None:
+        logger.warning("plugin[%s:%s] %s", key[0], key[1], message)
+        if self._processes.get(key) is wrapped:
+            self._processes.pop(key, None)
+            self._manifests.pop(key, None)
+        self._fail_pending(wrapped, message)
+        current_task = asyncio.current_task()
+        host_api_tasks = [task for task in wrapped.host_api_tasks if task is not current_task]
+        for task in host_api_tasks:
+            task.cancel()
+        if host_api_tasks:
+            await asyncio.gather(*host_api_tasks, return_exceptions=True)
+        wrapped.host_api_tasks.clear()
+        if wrapped.process.returncode is None:
+            wrapped.process.terminate()
+            try:
+                await asyncio.wait_for(wrapped.process.wait(), timeout=3)
+            except asyncio.TimeoutError:
+                wrapped.process.kill()
+                await wrapped.process.wait()
+        if wrapped.stderr_task is not None:
+            wrapped.stderr_task.cancel()
+            await asyncio.gather(wrapped.stderr_task, return_exceptions=True)
 
     async def stop_plugin(self, bot_alias: str, plugin_id: str) -> None:
         key = (bot_alias, plugin_id)

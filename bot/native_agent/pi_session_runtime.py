@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -8,6 +10,11 @@ from typing import Any
 
 from bot.native_agent.pi_events import build_extension_ui_response
 from bot.native_agent.pi_rpc_client import PiRpcClient, PiRpcStartRequest
+
+
+PI_RUNTIME_STREAM_QUEUE_MAX_EVENTS = max(32, int(os.environ.get("TCB_PI_RUNTIME_STREAM_QUEUE_MAX_EVENTS", "512")))
+PI_RUNTIME_IDLE_TTL_SECONDS = max(60.0, float(os.environ.get("TCB_PI_RUNTIME_IDLE_TTL_SECONDS", "1800")))
+PI_RUNTIME_MAX_COUNT = max(1, int(os.environ.get("TCB_PI_RUNTIME_MAX_COUNT", "32")))
 
 
 @dataclass(frozen=True)
@@ -53,10 +60,11 @@ class PiSessionRuntime:
     def __init__(self, *, client: PiRpcClient, state: PiSessionRuntimeState) -> None:
         self.client = client
         self.state = state
-        self._stream_queue: asyncio.Queue[dict[str, Any] | object] = asyncio.Queue()
+        self._stream_queue: asyncio.Queue[dict[str, Any] | object] = asyncio.Queue(maxsize=PI_RUNTIME_STREAM_QUEUE_MAX_EVENTS)
         self._reader_task: asyncio.Task[None] | None = None
         self._reader_error: BaseException | None = None
         self._stream_closed = False
+        self.last_used_at = time.monotonic()
 
     @property
     def runtime_id(self) -> str:
@@ -95,6 +103,7 @@ class PiSessionRuntime:
         self.state.env = _normalize_env(request.env)
 
     async def prompt(self, text: str, *, conversation_id: str = "") -> None:
+        self.touch()
         self.state.processing = True
         self._ensure_reader()
         await self.client.prompt(
@@ -114,6 +123,7 @@ class PiSessionRuntime:
         return state
 
     async def events(self):
+        self.touch()
         self._ensure_reader()
         while True:
             item = await self._stream_queue.get()
@@ -124,6 +134,18 @@ class PiSessionRuntime:
                     raise self._reader_error
                 return
             yield item
+
+    def touch(self) -> None:
+        self.last_used_at = time.monotonic()
+
+    def diagnostics(self) -> dict[str, int | float | bool]:
+        return {
+            "stream_queue_events": self._stream_queue.qsize(),
+            "stream_queue_max_events": PI_RUNTIME_STREAM_QUEUE_MAX_EVENTS,
+            "processing": self.state.processing,
+            "pending_permissions": len(self.state.pending_permission_ids),
+            "idle_seconds": max(0.0, time.monotonic() - self.last_used_at),
+        }
 
     async def abort(self) -> bool:
         try:
@@ -183,16 +205,25 @@ class PiSessionRuntime:
         finally:
             self._stream_closed = True
             self.state.processing = False
-            await self._stream_queue.put(_STREAM_DONE)
+            current_task = asyncio.current_task()
+            if current_task is not None and current_task.cancelling():
+                try:
+                    self._stream_queue.put_nowait(_STREAM_DONE)
+                except asyncio.QueueFull:
+                    pass
+            else:
+                await self._stream_queue.put(_STREAM_DONE)
 
     async def _drain_reader(self) -> None:
         reader = self._reader_task
         if reader is None:
             self._stream_closed = True
             return
+        if not reader.done():
+            reader.cancel()
         try:
             await reader
-        except Exception:
+        except BaseException:
             return
 
 
@@ -202,11 +233,13 @@ class PiSessionRuntimeRegistry:
         self._by_runtime_id: dict[str, PiSessionRuntime] = {}
 
     async def open_or_create(self, request: PiSessionRuntimeRequest) -> PiSessionRuntime:
+        await self.evict_idle()
         normalized = _normalize_request(request)
         await self._close_owner_runtimes_except(normalized.owner_key, normalized.runtime_key)
         current = self._by_key.get(normalized.runtime_key)
         if current is not None and current.matches(normalized):
             current.refresh_from_request(normalized)
+            current.touch()
             if normalized.native_session_id and not current.state.native_session_id:
                 current.state.native_session_id = normalized.native_session_id
             return current
@@ -244,7 +277,28 @@ class PiSessionRuntimeRegistry:
         )
         self._by_key[normalized.runtime_key] = runtime
         self._by_runtime_id[runtime.runtime_id] = runtime
+        await self.evict_idle()
         return runtime
+
+    async def evict_idle(self) -> int:
+        now = time.monotonic()
+        candidates = [runtime for runtime in self._by_runtime_id.values() if not runtime.state.processing and not runtime.state.pending_permission_ids]
+        candidates.sort(key=lambda runtime: runtime.last_used_at)
+        evict = [runtime for runtime in candidates if now - runtime.last_used_at >= PI_RUNTIME_IDLE_TTL_SECONDS]
+        remaining = len(self._by_runtime_id) - len(evict)
+        if remaining > PI_RUNTIME_MAX_COUNT:
+            evict.extend(candidates[: remaining - PI_RUNTIME_MAX_COUNT])
+        unique = {runtime.runtime_id: runtime for runtime in evict}
+        for runtime in unique.values():
+            await self._remove(runtime, close=True)
+        return len(unique)
+
+    def diagnostics(self) -> dict[str, int]:
+        return {
+            "runtime_count": len(self._by_runtime_id),
+            "processing_count": sum(1 for runtime in self._by_runtime_id.values() if runtime.state.processing),
+            "pending_permission_count": sum(len(runtime.state.pending_permission_ids) for runtime in self._by_runtime_id.values()),
+        }
 
     def get_by_runtime_id(self, runtime_id: str) -> PiSessionRuntime | None:
         return self._by_runtime_id.get(str(runtime_id or "").strip())

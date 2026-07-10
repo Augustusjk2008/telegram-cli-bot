@@ -4,6 +4,7 @@ import asyncio
 import copy
 import json
 import shutil
+from collections import OrderedDict
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,8 @@ from .view_sessions import (
 _payload_bytes = payload_bytes
 _count_tree_nodes = count_tree_nodes
 _EDITABLE_PLUGIN_SOURCE_EXTENSIONS = frozenset({".md", ".mmd", ".mermaid"})
+_DEFAULT_SNAPSHOT_CACHE_MAX_ENTRIES = 64
+_DEFAULT_SNAPSHOT_CACHE_MAX_BYTES = 64 * 1024 * 1024
 
 
 class PluginService:
@@ -62,6 +65,8 @@ class PluginService:
         *,
         workspace_root_for: Callable[[str], Path] | None = None,
         render_concurrency: int = 2,
+        snapshot_cache_max_entries: int = _DEFAULT_SNAPSHOT_CACHE_MAX_ENTRIES,
+        snapshot_cache_max_bytes: int = _DEFAULT_SNAPSHOT_CACHE_MAX_BYTES,
     ):
         self.repo_root = Path(repo_root)
         self.plugins_root = Path(plugins_root) if plugins_root is not None else default_plugins_root()
@@ -80,8 +85,15 @@ class PluginService:
             audit_hook=self._record_runtime_audit,
         )
         self.sessions = PluginViewSessionStore()
-        self._snapshot_cache: dict[str, dict[str, Any]] = {}
+        self._snapshot_cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._snapshot_cache_plugins: dict[str, set[str]] = {}
+        self._snapshot_cache_weights: dict[str, int] = {}
+        self._snapshot_cache_max_entries = max(1, int(snapshot_cache_max_entries))
+        self._snapshot_cache_max_bytes = max(0, int(snapshot_cache_max_bytes))
+        self._snapshot_cache_bytes = 0
+        self._snapshot_cache_hits = 0
+        self._snapshot_cache_misses = 0
+        self._snapshot_cache_evictions = 0
         self._snapshot_inflight: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._session_inflight: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._inflight_lock = asyncio.Lock()
@@ -131,18 +143,53 @@ class PluginService:
         return stable_config_fingerprint(manifest)
 
     def _snapshot_cache_remember(self, plugin_id: str, cache_key: str, payload: dict[str, Any]) -> None:
-        self._snapshot_cache[cache_key] = copy.deepcopy(payload)
+        previous_weight = self._snapshot_cache_weights.pop(cache_key, 0)
+        previous_payload = self._snapshot_cache.pop(cache_key, None)
+        self._snapshot_cache_bytes -= previous_weight
+        if previous_payload is not None:
+            self._snapshot_cache_plugins.get(plugin_id, set()).discard(cache_key)
+        weight = _payload_bytes(payload)
+        if weight > self._snapshot_cache_max_bytes:
+            return
+        self._snapshot_cache[cache_key] = payload
+        self._snapshot_cache_weights[cache_key] = weight
+        self._snapshot_cache_bytes += weight
         self._snapshot_cache_plugins.setdefault(plugin_id, set()).add(cache_key)
+        while (
+            len(self._snapshot_cache) > self._snapshot_cache_max_entries
+            or self._snapshot_cache_bytes > self._snapshot_cache_max_bytes
+        ):
+            evicted_key, _ = self._snapshot_cache.popitem(last=False)
+            evicted_weight = self._snapshot_cache_weights.pop(evicted_key, 0)
+            self._snapshot_cache_bytes -= evicted_weight
+            for keys in self._snapshot_cache_plugins.values():
+                keys.discard(evicted_key)
+            self._snapshot_cache_evictions += 1
 
     def _snapshot_cache_get(self, cache_key: str) -> dict[str, Any] | None:
         cached = self._snapshot_cache.get(cache_key)
-        return copy.deepcopy(cached) if cached is not None else None
+        if cached is None:
+            self._snapshot_cache_misses += 1
+            return None
+        self._snapshot_cache.move_to_end(cache_key)
+        self._snapshot_cache_hits += 1
+        return cached
 
     def _snapshot_cache_clear_plugin(self, plugin_id: str) -> None:
         keys = self._snapshot_cache_plugins.pop(plugin_id, set())
         for key in keys:
             self._snapshot_cache.pop(key, None)
+            self._snapshot_cache_bytes -= self._snapshot_cache_weights.pop(key, 0)
             self._snapshot_inflight.pop(key, None)
+
+    def snapshot_cache_diagnostics(self) -> dict[str, int]:
+        return {
+            "entries": len(self._snapshot_cache),
+            "bytes": self._snapshot_cache_bytes,
+            "hits": self._snapshot_cache_hits,
+            "misses": self._snapshot_cache_misses,
+            "evictions": self._snapshot_cache_evictions,
+        }
 
     def _resolve_input_payload(self, bot_alias: str, input_payload: dict[str, Any]) -> dict[str, Any]:
         return resolve_input_payload(bot_alias, input_payload, self._workspace_root_for)
@@ -691,6 +738,8 @@ class PluginService:
         self.artifacts.clear_all()
         self._snapshot_cache.clear()
         self._snapshot_cache_plugins.clear()
+        self._snapshot_cache_weights.clear()
+        self._snapshot_cache_bytes = 0
         self._snapshot_inflight.clear()
         self._session_inflight.clear()
         await self.runtime.shutdown()

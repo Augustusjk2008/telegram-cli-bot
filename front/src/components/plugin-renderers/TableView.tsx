@@ -44,7 +44,7 @@ export function TableView({ botAlias, client, view, onRunAction }: Props) {
       : {
           columns: view.payload.columns,
           totalRows: view.payload.rows.length,
-          defaultPageSize: view.payload.rows.length || 100,
+          defaultPageSize: Math.min(200, view.payload.rows.length || 100),
           actions: view.payload.actions,
         }),
     [view],
@@ -54,9 +54,9 @@ export function TableView({ botAlias, client, view, onRunAction }: Props) {
       ? view.initialWindow
       : {
           offset: 0,
-          limit: view.payload.rows.length || summary.defaultPageSize,
+          limit: Math.min(200, view.payload.rows.length || summary.defaultPageSize),
           totalRows: view.payload.rows.length,
-          rows: view.payload.rows,
+          rows: view.payload.rows.slice(0, Math.min(200, view.payload.rows.length || summary.defaultPageSize)),
         }),
     [summary.defaultPageSize, view],
   );
@@ -68,7 +68,7 @@ export function TableView({ botAlias, client, view, onRunAction }: Props) {
   const [windowError, setWindowError] = useState("");
   const deferredQuery = useDeferredValue(query);
   const requestIdRef = useRef(0);
-  const pageSize = Math.max(1, Number(initialWindow.limit || summary.defaultPageSize || 100));
+  const pageSize = Math.max(1, Math.min(500, Number(initialWindow.limit || summary.defaultPageSize || 100)));
   const totalRows = Number(windowState.totalRows || summary.totalRows || 0);
   const pageIndex = Math.floor(offset / pageSize) + 1;
   const pageCount = Math.max(1, Math.ceil(totalRows / pageSize));
@@ -146,6 +146,12 @@ export function TableView({ botAlias, client, view, onRunAction }: Props) {
           </label>
         ) : null}
       </div>
+
+      {!session && totalRows > windowState.rows.length ? (
+        <div className="border-b border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          当前快照仅展示前 {windowState.rows.length} 行；大型表格请使用 session/heavy 视图。
+        </div>
+      ) : null}
 
       <div className="min-h-0 flex-1 overflow-auto">
         <table className="w-full border-collapse text-sm">

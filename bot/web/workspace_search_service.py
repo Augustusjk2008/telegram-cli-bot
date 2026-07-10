@@ -188,48 +188,52 @@ def _preview_line(text: str) -> str:
 
 
 def _search_with_rg(root: Path, query: str, limit: int) -> list[dict[str, Any]] | None:
-    result = _run_rg(
-        root,
-        [
-            "--line-number",
-            "--column",
-            "--json",
-            "--hidden",
-            "--fixed-strings",
-            query,
-            *_exclude_args(),
-        ],
-    )
-    if result is None:
+    if not shutil.which("rg"):
         return None
-    if result.returncode not in {0, 1}:
-        return []
-
     items: list[dict[str, Any]] = []
-    for line in result.stdout.splitlines():
-        if len(items) >= limit:
-            break
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if event.get("type") != "match":
-            continue
-        data = event.get("data") if isinstance(event.get("data"), dict) else {}
-        path_data = data.get("path") if isinstance(data.get("path"), dict) else {}
-        lines_data = data.get("lines") if isinstance(data.get("lines"), dict) else {}
-        submatches = data.get("submatches") if isinstance(data.get("submatches"), list) else []
-        first_match = submatches[0] if submatches and isinstance(submatches[0], dict) else {}
-        path = str(path_data.get("text") or "").replace("\\", "/")
-        if not path:
-            continue
-        column = int(first_match.get("start") or 0) + 1
-        items.append({
-            "path": path,
-            "line": int(data.get("line_number") or 0),
-            "column": column,
-            "preview": _preview_line(str(lines_data.get("text") or "")),
-        })
+    process: subprocess.Popen[str] | None = None
+    try:
+        process = subprocess.Popen(
+            ["rg", "--line-number", "--column", "--json", "--hidden", "--fixed-strings", query, *_exclude_args()],
+            cwd=str(root),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        assert process.stdout is not None
+        for line in process.stdout:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") != "match":
+                continue
+            data = event.get("data") if isinstance(event.get("data"), dict) else {}
+            path_data = data.get("path") if isinstance(data.get("path"), dict) else {}
+            lines_data = data.get("lines") if isinstance(data.get("lines"), dict) else {}
+            submatches = data.get("submatches") if isinstance(data.get("submatches"), list) else []
+            first_match = submatches[0] if submatches and isinstance(submatches[0], dict) else {}
+            path = str(path_data.get("text") or "").replace("\\", "/")
+            if path:
+                items.append({
+                    "path": path,
+                    "line": int(data.get("line_number") or 0),
+                    "column": int(first_match.get("start") or 0) + 1,
+                    "preview": _preview_line(str(lines_data.get("text") or "")),
+                })
+            if len(items) >= limit:
+                process.terminate()
+                break
+        process.wait(timeout=1)
+    except OSError:
+        return None
+    except subprocess.TimeoutExpired:
+        process.kill()
+    finally:
+        if process is not None and process.stdout is not None:
+            process.stdout.close()
     return items
 
 

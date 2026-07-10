@@ -113,3 +113,16 @@ async def test_cluster_agent_task_does_not_complete_after_stream_cancel(monkeypa
     assert saved.output == ""
     assert saved.error == "stop"
     api_service._CLUSTER_RUN_CONTROLS.clear()
+
+
+@pytest.mark.asyncio
+async def test_cluster_runtime_wait_for_task_change_is_not_polling() -> None:
+    runtime = ClusterRuntime()
+    run, task = _run_with_task(runtime)
+    runtime.mark_agent_task_running(run.run_id, task.task_id)
+
+    waiter = asyncio.create_task(runtime.wait_for_task_change(run.run_id, [task.task_id], 1))
+    await asyncio.sleep(0)
+    runtime.complete_agent_task(run.run_id, task.task_id, "done")
+    await runtime.notify_agent_task_message(run.run_id)
+    await asyncio.wait_for(waiter, timeout=0.5)

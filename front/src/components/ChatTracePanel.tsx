@@ -91,6 +91,7 @@ function ChatTracePanelInner({
     processCount: typeof processCount === "number" ? processCount : events.filter((item) => item.kind !== "tool_call" && item.kind !== "tool_result").length,
   }), [events, processCount, toolCallCount, traceCount]);
   const groupedEntries = useMemo(() => groupChatTraceEntries(events), [events]);
+  const visibleGroupedEntries = expanded ? groupedEntries : groupedEntries.slice(-8);
 
   useEffect(() => {
     const hasCompleteTrace = events.length > 0 && events.length >= summary.traceCount;
@@ -208,7 +209,8 @@ function ChatTracePanelInner({
                 ) : null}
               </div>
             ) : null}
-            {groupedEntries.map((entry, index) => {
+            {visibleGroupedEntries.map((entry, visibleIndex) => {
+              const index = expanded ? visibleIndex : groupedEntries.length - visibleGroupedEntries.length + visibleIndex;
               const animateIndex = Math.min(index, delightMotionStagger.maxAnimatedItems - 1);
               const traceItemMotion = resolveMotionProps({
                 ...delightMotion.traceItem,
@@ -235,7 +237,7 @@ function ChatTracePanelInner({
               const nativePermissionId = getNativePermissionId(event);
               return (
                 <motion.div
-                  key={`${event.kind}-${event.rawType || "process"}-${event.summary}-${index}`}
+                  key={String(event.id || event.sequence || `${event.kind}-${event.rawType || "process"}-${index}`)}
                   data-trace-seq={index}
                   className={isGenericEvent
                     ? "rounded-lg border border-[var(--accent-outline)] bg-[var(--accent-soft)] px-3 py-2"

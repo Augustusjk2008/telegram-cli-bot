@@ -7,6 +7,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { copyText } from "../utils/clipboard";
 import { isExternalHref, isLikelyLocalFileHref, isSafeMarkdownHref } from "../utils/fileLinks";
+import { WeightedLruCache } from "../utils/lruCache";
 
 type Props = {
   content: string;
@@ -27,7 +28,11 @@ function safeUrlTransform(url: string) {
 }
 
 let mermaidInitialized = false;
-const mermaidRenderCache = new Map<string, { svg: string; error: string }>();
+const mermaidRenderCache = new WeightedLruCache<string, { svg: string; error: string }>({
+  maxEntries: 32,
+  maxWeight: 4 * 1024 * 1024,
+  weigh: (value) => (value.svg.length + value.error.length) * 2,
+});
 
 function stringifyCodeChildren(children: ReactNode) {
   if (Array.isArray(children)) {

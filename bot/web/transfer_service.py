@@ -397,6 +397,9 @@ class TransferService:
         self.is_running = False
         self._client: ClientSession | None = None
         self._runtime_dirty = False
+        self._runtime_lock = asyncio.Lock()
+        self._runtime_start_task: asyncio.Task[None] | None = None
+        self._runtime_generation = 0
         self.load_config()
         self.apply_env_config()
 
@@ -412,6 +415,13 @@ class TransferService:
                 pass
 
     async def close(self) -> None:
+        async with self._runtime_lock:
+            self._runtime_generation += 1
+            start_task = self._runtime_start_task
+            self._runtime_start_task = None
+        if start_task is not None and not start_task.done():
+            start_task.cancel()
+            await asyncio.gather(start_task, return_exceptions=True)
         await self.runtime.close()
         if self._client is not None and not self._client.closed:
             await self._client.close()
@@ -427,13 +437,34 @@ class TransferService:
             await self.runtime.close()
             raise TransferServiceError(503, "LiteLLM 网关未启用", code="transfer_disabled")
         try:
-            await self.runtime.ensure_started(self.config)
-            self._runtime_dirty = False
-            self.last_error = ""
+            await self._ensure_runtime_singleflight()
         except Exception as exc:
             self.last_error = str(exc)[:500]
             self.trace_event("error", {"detail": str(exc), "stack": traceback.format_exc()})
             raise TransferServiceError(503, f"LiteLLM 网关启动失败: {exc}", code="litellm_start_failed") from exc
+
+    async def _ensure_runtime_singleflight(self) -> None:
+        async with self._runtime_lock:
+            if self.runtime.is_running and not self._runtime_dirty:
+                return
+            generation = self._runtime_generation
+            task = self._runtime_start_task
+            if task is None or task.done():
+                task = asyncio.create_task(self._start_runtime_generation(generation))
+                self._runtime_start_task = task
+        await task
+
+    async def _start_runtime_generation(self, generation: int) -> None:
+        try:
+            await self.runtime.ensure_started(self.config)
+            async with self._runtime_lock:
+                if generation == self._runtime_generation:
+                    self._runtime_dirty = False
+                    self.last_error = ""
+        finally:
+            async with self._runtime_lock:
+                if self._runtime_start_task is asyncio.current_task():
+                    self._runtime_start_task = None
 
     def load_config(self) -> None:
         self.config = load_litellm_transfer_config(self.config_path)
@@ -476,6 +507,7 @@ class TransferService:
             code = "invalid_provider_base_url" if "provider_base_url" in error_text or "URL" in error_text else "invalid_transfer_config"
             raise TransferServiceError(400, error_text, code=code) from exc
         self._runtime_dirty = True
+        self._runtime_generation += 1
         if save:
             self.save_config()
         status = self.get_status()

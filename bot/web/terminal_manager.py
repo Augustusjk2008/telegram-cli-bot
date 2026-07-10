@@ -17,6 +17,7 @@ from bot.platform.terminal import PtyWrapper, TerminalLaunchError, create_shell_
 logger = logging.getLogger(__name__)
 
 TERMINAL_REPLAY_MAX_BYTES = 8 * 1024 * 1024
+TERMINAL_CLIENT_QUEUE_MAX_CHUNKS = 256
 TERMINAL_CLIENT_EOF = object()
 _TERMINAL_OUTPUT_EOF = object()
 TERMINAL_PROCESS_CLEANUP_JOIN_SECONDS = 1.0
@@ -265,6 +266,13 @@ class TerminalSessionManager:
         for queue in session.clients:
             try:
                 queue.put_nowait(item)
+            except asyncio.QueueFull:
+                try:
+                    queue.get_nowait()
+                    queue.put_nowait(TERMINAL_CLIENT_EOF)
+                except Exception:
+                    pass
+                stale.append(queue)
             except Exception:
                 stale.append(queue)
         for queue in stale:
@@ -350,13 +358,15 @@ class TerminalSessionManager:
         *,
         from_seq: int = 0,
     ) -> tuple[asyncio.Queue[bytes | object], dict[str, Any]]:
-        queue: asyncio.Queue[bytes | object] = asyncio.Queue()
+        queue: asyncio.Queue[bytes | object] = asyncio.Queue(maxsize=TERMINAL_CLIENT_QUEUE_MAX_CHUNKS)
         async with self._lock:
             session = self._sessions.get(self._key(user_id, owner_id))
             if session is None or session.process is None or session.is_closed:
                 raise TerminalNotRunningError("终端未启动")
             for chunk in session.replay:
                 if chunk.seq > from_seq:
+                    if queue.full():
+                        break
                     queue.put_nowait(chunk.data)
             session.clients.add(queue)
             snapshot = self._build_snapshot_locked(session)
