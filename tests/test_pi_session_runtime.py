@@ -459,6 +459,29 @@ async def test_registry_rejects_new_runtime_when_all_capacity_is_protected(
 
 
 @pytest.mark.asyncio
+async def test_registry_reuses_existing_runtime_at_capacity_without_evicting_it(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("bot.native_agent.pi_session_runtime.PI_RUNTIME_MAX_COUNT", 2)
+    registry = PiSessionRuntimeRegistry()
+    first = _runtime(0, tmp_path)
+    second = _runtime(1, tmp_path)
+    first.state.runtime_key = "runtime-key"
+    first.state.owner_key = "owner-key"
+    first.state.conversation_id = "conversation"
+    registry._by_key = {first.state.runtime_key: first, second.state.runtime_key: second}
+    registry._by_runtime_id = {first.runtime_id: first, second.runtime_id: second}
+
+    reused = await registry.open_or_create(_request(tmp_path))
+
+    assert reused is first
+    assert first.client.close_count == 0
+    assert len(registry._by_runtime_id) == 2
+    await registry.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_native_service_persists_runtime_before_eviction(tmp_path: Path) -> None:
     service = NativeAgentService()
     service._pi_session_store = PiSessionStore(tmp_path / "pi-sessions.json")
@@ -491,3 +514,184 @@ async def test_native_service_persists_runtime_before_eviction(tmp_path: Path) -
     assert record.pi_session_id == "pi-session"
     assert record.workspace_history_head == "workspace-head"
     assert record.linear_index == 7
+
+
+@pytest.mark.asyncio
+async def test_registry_shutdown_persists_and_closes_each_runtime_once(tmp_path: Path) -> None:
+    persisted: list[str] = []
+    release_persistence = asyncio.Event()
+
+    async def persist(runtime: PiSessionRuntime) -> None:
+        persisted.append(runtime.runtime_id)
+        await release_persistence.wait()
+
+    registry = PiSessionRuntimeRegistry(before_runtime_close=persist)
+    runtimes = [_runtime(index, tmp_path) for index in range(3)]
+    registry._by_key = {runtime.state.runtime_key: runtime for runtime in runtimes}
+    registry._by_runtime_id = {runtime.runtime_id: runtime for runtime in runtimes}
+
+    shutdown_task = asyncio.create_task(registry.shutdown())
+    while not persisted:
+        await asyncio.sleep(0)
+
+    assert registry.diagnostics()["runtime_count"] == 0
+    release_persistence.set()
+    report = await shutdown_task
+
+    assert sorted(persisted) == ["runtime-0", "runtime-1", "runtime-2"]
+    assert [runtime.client.close_count for runtime in runtimes] == [1, 1, 1]
+    assert report == {
+        "requested": 3,
+        "persisted": 3,
+        "closed": 3,
+        "failed": 0,
+        "timed_out": 0,
+        "lock_timed_out": False,
+        "start_tasks_cancelled": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_registry_slow_start_does_not_hold_lock_and_shutdown_cancels_it(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    started = asyncio.Event()
+
+    async def slow_start(_request: Any) -> _FakeClient:
+        started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr(PiRpcClient, "start", slow_start)
+    monkeypatch.setattr(
+        "bot.native_agent.pi_session_runtime.PI_RUNTIME_SHUTDOWN_DEADLINE_SECONDS",
+        0.1,
+    )
+    registry = PiSessionRuntimeRegistry()
+    open_task = asyncio.create_task(registry.open_or_create(_request(tmp_path)))
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    try:
+        assert await asyncio.wait_for(registry.evict_idle(), timeout=0.05) == 0
+        report = await asyncio.wait_for(registry.shutdown(), timeout=0.5)
+
+        assert report["lock_timed_out"] is False
+        assert report["start_tasks_cancelled"] == 1
+        assert registry.diagnostics()["runtime_count"] == 0
+        with pytest.raises(asyncio.CancelledError):
+            await open_task
+    finally:
+        if not open_task.done():
+            open_task.cancel()
+        await asyncio.gather(open_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_registry_shutdown_deadline_includes_lock_acquisition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "bot.native_agent.pi_session_runtime.PI_RUNTIME_SHUTDOWN_DEADLINE_SECONDS",
+        0.05,
+    )
+    registry = PiSessionRuntimeRegistry()
+    await registry._lock.acquire()
+    try:
+        started_at = time.monotonic()
+        try:
+            report = await asyncio.wait_for(registry.shutdown(), timeout=0.2)
+        except asyncio.TimeoutError:
+            pytest.fail("shutdown 未将 registry 锁等待计入总 deadline")
+        elapsed = time.monotonic() - started_at
+    finally:
+        registry._lock.release()
+
+    assert elapsed < 0.2
+    assert report["lock_timed_out"] is True
+    assert report["timed_out"] == 1
+
+
+@pytest.mark.asyncio
+async def test_registry_shutdown_reports_slow_close_as_timeout_not_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class SlowCloseClient(_FakeClient):
+        async def close(self) -> None:
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(
+        "bot.native_agent.pi_session_runtime.PI_RUNTIME_SHUTDOWN_DEADLINE_SECONDS",
+        0.05,
+    )
+    runtime = _runtime(0, tmp_path)
+    runtime.client = SlowCloseClient()
+    registry = PiSessionRuntimeRegistry()
+    registry._by_key = {runtime.state.runtime_key: runtime}
+    registry._by_runtime_id = {runtime.runtime_id: runtime}
+
+    report = await asyncio.wait_for(registry.shutdown(), timeout=0.2)
+
+    assert report["requested"] == 1
+    assert report["timed_out"] == 1
+    assert report["failed"] == 0
+    assert report["closed"] == 0
+
+
+@pytest.mark.asyncio
+async def test_same_owner_different_runtime_starts_are_serialized_and_capacity_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("bot.native_agent.pi_session_runtime.PI_RUNTIME_MAX_COUNT", 1)
+    releases = [asyncio.Event(), asyncio.Event()]
+    started_count = 0
+    clients: list[_FakeClient] = []
+
+    async def controlled_start(_request: Any) -> _FakeClient:
+        nonlocal started_count
+        index = started_count
+        started_count += 1
+        client = _FakeClient()
+        clients.append(client)
+        await releases[index].wait()
+        return client
+
+    monkeypatch.setattr(PiRpcClient, "start", controlled_start)
+    registry = PiSessionRuntimeRegistry()
+    first_request = PiSessionRuntimeRequest(
+        runtime_key="runtime-a",
+        owner_key="owner-shared",
+        conversation_id="conversation-a",
+        cwd=str(tmp_path),
+        command="pi",
+    )
+    second_request = PiSessionRuntimeRequest(
+        runtime_key="runtime-b",
+        owner_key="owner-shared",
+        conversation_id="conversation-b",
+        cwd=str(tmp_path),
+        command="pi",
+    )
+
+    first_task = asyncio.create_task(registry.open_or_create(first_request))
+    while started_count < 1:
+        await asyncio.sleep(0)
+    second_task = asyncio.create_task(registry.open_or_create(second_request))
+    await asyncio.sleep(0.05)
+    assert started_count == 1
+    assert registry.diagnostics()["runtime_count"] == 0
+
+    releases[0].set()
+    first_runtime = await first_task
+    while started_count < 2:
+        await asyncio.sleep(0)
+    assert len(registry._by_runtime_id) <= 1
+    releases[1].set()
+    second_runtime = await second_task
+
+    assert len(registry._by_runtime_id) == 1
+    assert registry.get_by_runtime_id(second_runtime.runtime_id) is second_runtime
+    assert first_runtime.client.close_count == 1
+    await registry.shutdown()

@@ -1,14 +1,31 @@
 import {
+  forwardRef,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type CSSProperties,
+  type ForwardedRef,
+  type ReactElement,
   type ReactNode,
+  type Ref,
   type RefObject,
 } from "react";
+
+export type DynamicVirtualListVisibleRange = {
+  startIndex: number;
+  endIndex: number;
+  keys: string[];
+};
+
+export type DynamicVirtualListHandle = {
+  scrollToKey: (key: string, options?: { align?: "auto" | "start" | "center" | "end" }) => boolean;
+  getVisibleRange: () => DynamicVirtualListVisibleRange;
+  invalidateMeasurement: (key?: string) => void;
+};
 
 export type DynamicVirtualListProps<T> = {
   items: readonly T[];
@@ -27,7 +44,7 @@ export type DynamicVirtualListProps<T> = {
 
 const FALLBACK_VIEWPORT_HEIGHT = 520;
 
-export function DynamicVirtualList<T>({
+function DynamicVirtualListInner<T>({
   items,
   getKey,
   renderItem,
@@ -40,7 +57,7 @@ export function DynamicVirtualList<T>({
   preserveScrollOnPrepend = false,
   stickToBottom = false,
   bottomThreshold = 96,
-}: DynamicVirtualListProps<T>) {
+}: DynamicVirtualListProps<T>, forwardedRef: ForwardedRef<DynamicVirtualListHandle>) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const heights = useRef(new Map<string, number>());
@@ -81,6 +98,59 @@ export function DynamicVirtualList<T>({
     setScrollTop(Math.max(0, scrollElement.scrollTop - listOffset));
     setViewportHeight(scrollElement.clientHeight || FALLBACK_VIEWPORT_HEIGHT);
   }, [getScrollElement, scrollElementRef]);
+
+  useImperativeHandle(forwardedRef, () => ({
+    scrollToKey: (key, options = {}) => {
+      const index = keys.indexOf(key);
+      const scrollElement = getScrollElement();
+      const listElement = listRef.current;
+      const entry = offsets[index];
+      if (index < 0 || !scrollElement || !listElement || !entry) {
+        return false;
+      }
+      const listOffset = scrollElementRef ? listElement.offsetTop : 0;
+      const itemTop = listOffset + entry.top;
+      const itemBottom = itemTop + entry.height;
+      const viewportTop = scrollElement.scrollTop;
+      const viewportBottom = viewportTop + scrollElement.clientHeight;
+      const align = options.align || "auto";
+      let nextTop = itemTop;
+      if (align === "auto") {
+        if (itemTop >= viewportTop && itemBottom <= viewportBottom) {
+          return true;
+        }
+        nextTop = itemTop < viewportTop ? itemTop : itemBottom - scrollElement.clientHeight;
+      } else if (align === "center") {
+        nextTop = itemTop - (scrollElement.clientHeight - entry.height) / 2;
+      } else if (align === "end") {
+        nextTop = itemBottom - scrollElement.clientHeight;
+      }
+      scrollElement.scrollTop = Math.max(0, nextTop);
+      updateViewport();
+      return true;
+    },
+    getVisibleRange: () => {
+      if (items.length === 0) {
+        return { startIndex: -1, endIndex: -1, keys: [] };
+      }
+      const visibleStart = firstVisible < 0 ? items.length - 1 : firstVisible;
+      const visibleEndBoundary = offsets.findIndex((entry) => entry.top >= localScrollTop + viewportHeight);
+      const visibleEnd = visibleEndBoundary < 0 ? items.length - 1 : Math.max(visibleStart, visibleEndBoundary - 1);
+      return {
+        startIndex: visibleStart,
+        endIndex: visibleEnd,
+        keys: keys.slice(visibleStart, visibleEnd + 1),
+      };
+    },
+    invalidateMeasurement: (key) => {
+      if (key) {
+        heights.current.delete(key);
+      } else {
+        heights.current.clear();
+      }
+      forceLayout((version) => version + 1);
+    },
+  }), [firstVisible, getScrollElement, items.length, keys, localScrollTop, offsets, scrollElementRef, updateViewport, viewportHeight]);
 
   useLayoutEffect(() => {
     const element = getScrollElement();
@@ -194,3 +264,7 @@ export function DynamicVirtualList<T>({
     </div>
   </div>;
 }
+
+export const DynamicVirtualList = forwardRef(DynamicVirtualListInner) as <T>(
+  props: DynamicVirtualListProps<T> & { ref?: Ref<DynamicVirtualListHandle> },
+) => ReactElement;

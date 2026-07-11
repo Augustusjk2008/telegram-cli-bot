@@ -397,6 +397,30 @@ class ChatHistoryService:
             limit,
         )
 
+    def list_history_delta(
+        self,
+        profile: BotProfile,
+        session: UserSession,
+        *,
+        revision: int,
+        cursor: str | int | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        self.reconcile_idle_streaming_turns(session)
+        return self.store.get_scoped_history_delta(
+            bot_id=session.bot_id,
+            user_id=session.user_id,
+            agent_id=session.agent_id,
+            working_dir=session.working_dir,
+            session_epoch=_session_epoch(session),
+            conversation_id=_active_conversation_id(session) or None,
+            native_provider=self.native_provider_filter,
+            native_provider_exclude=self.native_provider_exclude,
+            revision=revision,
+            cursor=cursor,
+            limit=limit,
+        )
+
     def get_message_trace(
         self,
         profile: BotProfile,

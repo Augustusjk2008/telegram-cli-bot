@@ -79,6 +79,7 @@ from bot.native_agent import (
     normalize_execution_mode,
 )
 from bot.native_agent.configuration import effective_native_agent_config
+from bot.native_agent.pi_turn_stream import pi_turn_reconnect_enabled
 from bot.native_agent.config_store import (
     find_configured_model,
     get_pi_models_path,
@@ -1290,7 +1291,18 @@ def get_history(
     profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
     resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     service = _history_service_for_execution_mode(session, resolved_execution_mode)
-    return {"items": service.list_history(profile, session, limit=max(1, limit))}
+    items = service.list_history(profile, session, limit=max(1, limit))
+    with session._lock:
+        conversation_id = str(session.active_conversation_id or "").strip()
+    try:
+        revision = service.store.get_conversation_revision(conversation_id) if conversation_id else 0
+    except KeyError:
+        revision = 0
+    return {
+        "items": items,
+        "revision": revision,
+        "conversation_id": conversation_id,
+    }
 
 
 def _conversation_execution_mode(conversation: dict[str, Any]) -> str:
@@ -2000,10 +2012,21 @@ def get_history_delta(
     limit: int = 50,
     agent_id: str = "main",
     execution_mode: str = "",
+    revision: int | None = None,
+    cursor: str = "",
 ) -> dict[str, Any]:
     profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
     resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
-    items = _history_service_for_execution_mode(session, resolved_execution_mode).list_history(profile, session, limit=max(1, limit))
+    service = _history_service_for_execution_mode(session, resolved_execution_mode)
+    if revision is not None or str(cursor or "").strip():
+        return service.list_history_delta(
+            profile,
+            session,
+            revision=max(0, int(revision or 0)),
+            cursor=cursor,
+            limit=max(1, limit),
+        )
+    items = service.list_history(profile, session, limit=max(1, limit))
     marker = str(after_id or "")
     if not marker:
         return {"items": items, "reset": False}
@@ -4927,11 +4950,30 @@ async def _stream_native_agent_chat(
     actor: dict[str, Any] | None = None,
     protocol: str = "",
     allow_unsafe_cli: bool = False,
+    resume_stream_id: str = "",
+    resume_turn_id: str = "",
+    after_sequence: int = 0,
+    enable_reconnect: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
     shared_user_id = chat_session_user_id(user_id)
     profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, agent_id)
     if not _supports_cli_runtime(profile):
         _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，Web 对话暂不支持该模式")
+
+    service = get_native_agent_service()
+    normalized_resume_stream_id = str(resume_stream_id or "").strip()
+    if normalized_resume_stream_id:
+        channel = service.resume_turn_channel(
+            normalized_resume_stream_id,
+            turn_id=resume_turn_id,
+        )
+        events = channel.events(after_sequence=max(0, int(after_sequence or 0)))
+        try:
+            async for event in events:
+                yield event
+        finally:
+            await events.aclose()
+        return
 
     effective_task_mode = request.task_mode if request is not None else task_mode
     effective_task_payload = request.task_payload if request is not None else task_payload
@@ -4955,36 +4997,54 @@ async def _stream_native_agent_chat(
         mentions=mentions,
         allow_unsafe_cli=allow_unsafe_cli,
     )
-    run_status = "completed"
+    async def produce() -> AsyncIterator[dict[str, Any]]:
+        run_status = "completed"
+        try:
+            prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run)) if is_plan_mode else text
+            prompt_text = _apply_cluster_prompt(
+                profile,
+                prompt_text,
+                cluster_run_id=cluster_run.run_id if cluster_run else "",
+                cluster_mentions=list(mentions or []),
+            )
+            async for event in service.stream_chat(
+                profile=profile,
+                session=session,
+                user_text=text,
+                prompt_text=prompt_text,
+                history_service=_history_service_for_execution_mode(session, NATIVE_AGENT_PROVIDER),
+                actor=_actor_from_request(request_obj),
+                protocol=protocol,
+                cluster_run_id=cluster_run.run_id if cluster_run else "",
+                solo_mode=solo_mode,
+            ):
+                if event.get("type") == "error":
+                    run_status = "error"
+                yield event
+        except Exception:
+            run_status = "error"
+            raise
+        finally:
+            if cluster_run:
+                _CLUSTER_RUNTIME.finish_run(cluster_run.run_id, run_status)
+                _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
+
+    if enable_reconnect or pi_turn_reconnect_enabled():
+        channel = service.open_turn_channel(produce(), session=session)
+        events = channel.events(after_sequence=0)
+        try:
+            async for event in events:
+                yield event
+        finally:
+            await events.aclose()
+        return
+
+    events = produce()
     try:
-        prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run)) if is_plan_mode else text
-        prompt_text = _apply_cluster_prompt(
-            profile,
-            prompt_text,
-            cluster_run_id=cluster_run.run_id if cluster_run else "",
-            cluster_mentions=list(mentions or []),
-        )
-        async for event in get_native_agent_service().stream_chat(
-            profile=profile,
-            session=session,
-            user_text=text,
-            prompt_text=prompt_text,
-            history_service=_history_service_for_execution_mode(session, NATIVE_AGENT_PROVIDER),
-            actor=_actor_from_request(request_obj),
-            protocol=protocol,
-            cluster_run_id=cluster_run.run_id if cluster_run else "",
-            solo_mode=solo_mode,
-        ):
-            if event.get("type") == "error":
-                run_status = "error"
+        async for event in events:
             yield event
-    except Exception:
-        run_status = "error"
-        raise
     finally:
-        if cluster_run:
-            _CLUSTER_RUNTIME.finish_run(cluster_run.run_id, run_status)
-            _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
+        await events.aclose()
 
 
 async def run_chat(
@@ -5082,6 +5142,10 @@ async def stream_chat(
     actor: dict[str, Any] | None = None,
     protocol: str = "",
     allow_unsafe_cli: bool = False,
+    resume_stream_id: str = "",
+    resume_turn_id: str = "",
+    after_sequence: int = 0,
+    enable_reconnect: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
     try:
         profile = get_profile_or_raise(manager, alias)
@@ -5104,6 +5168,10 @@ async def stream_chat(
                     actor=actor,
                     protocol=protocol,
                     allow_unsafe_cli=allow_unsafe_cli,
+                    resume_stream_id=resume_stream_id,
+                    resume_turn_id=resume_turn_id,
+                    after_sequence=after_sequence,
+                    enable_reconnect=enable_reconnect,
                 ):
                     yield event
                 return

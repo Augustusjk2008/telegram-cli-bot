@@ -170,6 +170,7 @@ import type {
   WorkspaceSearchResult,
   WorkdirChangeConflict,
   HistoryDeltaResult,
+  HistoryDeltaOptions,
   LanChatConfig,
   LanChatConfigInput,
   LanChatConversation,
@@ -4371,19 +4372,41 @@ export class RealWebBotClient implements WebBotClient {
     };
   }
 
-  async listMessageDelta(botAlias: string, afterId: string, limit = 50, options: AgentScopedOptions = {}): Promise<HistoryDeltaResult> {
+  async listMessageDelta(botAlias: string, afterId: string, limit = 50, options: HistoryDeltaOptions = {}): Promise<HistoryDeltaResult> {
     const params = new URLSearchParams({
       after_id: afterId,
       limit: String(limit),
     });
     appendAgentParam(params, options.agentId);
     appendExecutionModeParam(params, options.executionMode);
-    const data = await this.requestJson<{ items: RawHistoryItem[]; reset: boolean }>(
+    if (typeof options.revision === "number") {
+      params.set("revision", String(options.revision));
+    }
+    if (options.cursor) {
+      params.set("cursor", options.cursor);
+    }
+    const data = await this.requestJson<{
+      items: RawHistoryItem[];
+      deleted_ids?: string[];
+      revision?: number;
+      current_revision?: number;
+      next_cursor?: string;
+      has_more?: boolean;
+      reset: boolean;
+      reason?: string;
+    }>(
       `/api/bots/${encodeURIComponent(botAlias)}/history/delta?${params.toString()}`,
     );
     return {
       items: data.items.map((item, index) => mapChatMessage(item, index)),
+      deletedIds: Array.isArray(data.deleted_ids) ? data.deleted_ids.map(String) : [],
+      revision: typeof data.current_revision === "number"
+        ? data.current_revision
+        : typeof data.revision === "number" ? data.revision : undefined,
+      nextCursor: String(data.next_cursor || ""),
+      hasMore: Boolean(data.has_more),
       reset: Boolean(data.reset),
+      reason: String(data.reason || ""),
     };
   }
 

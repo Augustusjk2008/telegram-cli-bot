@@ -40,6 +40,7 @@ from bot.native_agent.legacy_migration import migrate_native_session_meta
 from bot.native_agent.pi_rpc_preflight import PiWindowsPreflightRequest, run_pi_windows_preflight
 from bot.native_agent.pi_rpc_client import PiRpcRunError
 from bot.native_agent.pi_session_store import PiSessionRecord, PiSessionStore, pi_session_key
+from bot.native_agent.pi_turn_stream import PiTurnChannel
 from bot.native_agent.pi_session_runtime import (
     PI_RUNTIME_IDLE_TTL_SECONDS,
     PiSessionRuntime,
@@ -272,13 +273,72 @@ class NativeAgentService:
         )
         self._workspace_history = PiWorkspaceHistory()
         self._runtime_eviction_task: asyncio.Task[None] | None = None
+        self._turn_channels: dict[str, PiTurnChannel] = {}
 
     async def shutdown(self) -> None:
         if self._runtime_eviction_task is not None:
             self._runtime_eviction_task.cancel()
             await asyncio.gather(self._runtime_eviction_task, return_exceptions=True)
             self._runtime_eviction_task = None
+        channels = list(self._turn_channels.values())
+        self._turn_channels.clear()
+        if channels:
+            await asyncio.gather(*(channel.close() for channel in channels), return_exceptions=True)
         await self._runtime_registry.shutdown()
+
+    def diagnostics(self) -> dict[str, Any]:
+        channels = list(self._turn_channels.values())
+        channel_data = [channel.diagnostics() for channel in channels]
+        return {
+            **self._runtime_registry.diagnostics(),
+            "turn_channel_count": len(channels),
+            "turn_replay_events": sum(int(item["replay_events"]) for item in channel_data),
+            "turn_replay_bytes": sum(int(item["replay_bytes"]) for item in channel_data),
+            "turn_dropped_count": sum(int(item["dropped_count"]) for item in channel_data),
+            "turn_active_consumers": sum(int(item["active_consumers"]) for item in channel_data),
+        }
+
+    def open_turn_channel(
+        self,
+        producer: AsyncIterator[dict[str, Any]],
+        *,
+        session: UserSession,
+    ) -> PiTurnChannel:
+        self._prune_turn_channels()
+        if len(self._turn_channels) >= 64:
+            raise RuntimeError("Pi turn 恢复通道数量已达上限")
+
+        async def abort_turn() -> None:
+            await self.abort(session)
+
+        channel = PiTurnChannel(producer, abort_turn=abort_turn)
+        self._turn_channels[channel.stream_id] = channel
+        return channel
+
+    def resume_turn_channel(self, stream_id: str, *, turn_id: str = "") -> PiTurnChannel:
+        self._prune_turn_channels()
+        normalized_stream_id = str(stream_id or "").strip()
+        channel = self._turn_channels.get(normalized_stream_id)
+        if channel is None:
+            raise RuntimeError("Pi turn 恢复流不存在或已过期")
+        normalized_turn_id = str(turn_id or "").strip()
+        if normalized_turn_id and channel.turn_id and normalized_turn_id != channel.turn_id:
+            raise RuntimeError("Pi turn 恢复标识不匹配")
+        return channel
+
+    def _prune_turn_channels(self) -> None:
+        finished = []
+        for stream_id, channel in self._turn_channels.items():
+            diagnostics = channel.diagnostics()
+            if bool(diagnostics["finished"]):
+                finished.append((float(diagnostics["finished_age_seconds"]), stream_id, channel))
+        finished.sort()
+        expired = [item for item in finished if item[0] >= 60.0]
+        retained = [item for item in finished if item[0] < 60.0]
+        remove = [*expired, *retained[32:]]
+        for _age, stream_id, channel in remove:
+            self._turn_channels.pop(stream_id, None)
+            asyncio.create_task(channel.close())
 
     def _ensure_runtime_eviction_task(self) -> None:
         if self._runtime_eviction_task is None or self._runtime_eviction_task.done():

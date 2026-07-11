@@ -202,6 +202,9 @@ class AsyncChatStore:
     async def count_history(self, **kwargs: Any) -> int:
         return await self.run_read(self.store.count_history, **kwargs)
 
+    async def get_scoped_history_delta(self, **kwargs: Any) -> dict[str, Any]:
+        return await self.run_read(self.store.get_scoped_history_delta, **kwargs)
+
     async def get_running_reply(self, **kwargs: Any) -> dict[str, Any] | None:
         return await self.run_read(self.store.get_running_reply, **kwargs)
 

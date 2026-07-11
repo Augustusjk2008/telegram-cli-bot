@@ -258,7 +258,22 @@ export default defineConfig(({mode}) => {
       },
     },
     build: {
+      manifest: true,
+      chunkSizeWarningLimit: 650,
       rollupOptions: {
+        onwarn(warning, defaultHandler) {
+          if (warning.code === 'CIRCULAR_DEPENDENCY') {
+            const cycleIds = Array.isArray(warning.ids) ? warning.ids : [];
+            const thirdPartyOnly = cycleIds.length > 0
+              ? cycleIds.every((id) => id.replace(/\\/g, '/').includes('/node_modules/'))
+              : String(warning.message || '').split(' -> ').every((id) => id.replace(/\\/g, '/').includes('node_modules/'));
+            if (thirdPartyOnly) {
+              return;
+            }
+            throw new Error(`Circular dependency: ${warning.message}`);
+          }
+          defaultHandler(warning);
+        },
         output: {
           manualChunks(id) {
             return resolveVendorChunk(id);

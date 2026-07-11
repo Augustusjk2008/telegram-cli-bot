@@ -7,7 +7,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { copyText } from "../utils/clipboard";
 import { isExternalHref, isLikelyLocalFileHref, isSafeMarkdownHref } from "../utils/fileLinks";
-import { WeightedLruCache } from "../utils/lruCache";
+import { getCachedMermaidRender, renderMermaidSingleFlight } from "../markdown/mermaidRenderer";
 
 type Props = {
   content: string;
@@ -27,12 +27,6 @@ function safeUrlTransform(url: string) {
   return isSafeMarkdownHref(url) ? url : "";
 }
 
-let mermaidInitialized = false;
-const mermaidRenderCache = new WeightedLruCache<string, { svg: string; error: string }>({
-  maxEntries: 32,
-  maxWeight: 4 * 1024 * 1024,
-  weigh: (value) => (value.svg.length + value.error.length) * 2,
-});
 const MARKDOWN_REMARK_PLUGINS = [remarkGfm, remarkMath];
 const MARKDOWN_REHYPE_PLUGINS = [rehypeKatex];
 
@@ -44,15 +38,14 @@ function stringifyCodeChildren(children: ReactNode) {
 }
 
 function MermaidDiagram({ code, isChat }: { code: string; isChat: boolean }) {
-  const [rendered, setRendered] = useState(() => ({
-    code,
-    svg: mermaidRenderCache.get(code)?.svg || "",
-    error: mermaidRenderCache.get(code)?.error || "",
-  }));
   const diagramIdRef = useRef(`mermaid-${Math.random().toString(36).slice(2)}`);
+  const [rendered, setRendered] = useState(() => {
+    const cached = getCachedMermaidRender(code, diagramIdRef.current);
+    return { code, svg: cached?.svg || "", error: cached?.error || "" };
+  });
 
   useEffect(() => {
-    const cached = mermaidRenderCache.get(code);
+    const cached = getCachedMermaidRender(code, diagramIdRef.current);
     if (cached) {
       setRendered({ code, ...cached });
       return;
@@ -65,34 +58,11 @@ function MermaidDiagram({ code, isChat }: { code: string; isChat: boolean }) {
         : { code, svg: "", error: "" }
     ));
 
-    void import("mermaid")
-      .then(({ default: mermaid }) => {
-        if (!mermaidInitialized) {
-          mermaid.initialize({
-            startOnLoad: false,
-            securityLevel: "strict",
-            theme: "neutral",
-            suppressErrorRendering: true,
-          });
-          mermaidInitialized = true;
-        }
-
-        return mermaid.render(diagramIdRef.current, code);
-      })
-      .then((result) => {
+    void renderMermaidSingleFlight(code, diagramIdRef.current)
+      .then((next) => {
         if (!active) {
           return;
         }
-        const next = { svg: result.svg, error: "" };
-        mermaidRenderCache.set(code, next);
-        setRendered({ code, ...next });
-      })
-      .catch(() => {
-        if (!active) {
-          return;
-        }
-        const next = { svg: "", error: "Mermaid 图表渲染失败，已回退为源码。" };
-        mermaidRenderCache.set(code, next);
         setRendered({ code, ...next });
       });
 

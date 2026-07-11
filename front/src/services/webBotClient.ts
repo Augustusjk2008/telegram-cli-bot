@@ -97,6 +97,7 @@ import type {
   PlanExecuteInput,
   PlanExecuteResult,
   ConversationSelectResult,
+  HistoryDeltaOptions,
   HistoryDeltaResult,
   PublicHostInfo,
   PluginViewWindowRequest,
@@ -212,7 +213,7 @@ export interface WebBotClient {
   ): Promise<ConversationBulkDeleteResult>;
   executePlan(botAlias: string, input: PlanExecuteInput): Promise<PlanExecuteResult>;
   listMessages(botAlias: string, options?: AgentScopedOptions): Promise<ChatMessage[]>;
-  listMessageDelta(botAlias: string, afterId: string, limit?: number, options?: AgentScopedOptions): Promise<HistoryDeltaResult>;
+  listMessageDelta(botAlias: string, afterId: string, limit?: number, options?: HistoryDeltaOptions): Promise<HistoryDeltaResult>;
   getMessageTrace(botAlias: string, messageId: string, options?: AgentScopedOptions): Promise<ChatTraceDetails>;
   sendMessage(
     botAlias: string,

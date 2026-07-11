@@ -3858,13 +3858,20 @@ export class MockWebBotClient implements WebBotClient {
   async listMessageDelta(botAlias: string, afterId: string, limit = 50, options: AgentScopedOptions = {}): Promise<HistoryDeltaResult> {
     const messages = this.getAgentMessages(botAlias, options.agentId || "main");
     if (!afterId) {
-      return { items: messages.slice(-limit), reset: false };
+      return { items: messages.slice(-limit), deletedIds: [], nextCursor: "", hasMore: false, reset: false, reason: "" };
     }
     const index = messages.findIndex((message) => message.id === afterId);
     if (index < 0) {
-      return { items: messages.slice(-limit), reset: true };
+      return { items: messages.slice(-limit), deletedIds: [], nextCursor: "", hasMore: false, reset: true, reason: "" };
     }
-    return { items: messages.slice(index + 1, index + 1 + limit), reset: false };
+    return {
+      items: messages.slice(index + 1, index + 1 + limit),
+      deletedIds: [],
+      nextCursor: "",
+      hasMore: false,
+      reset: false,
+      reason: "",
+    };
   }
 
   async getMessageTrace(_botAlias: string, _messageId: string): Promise<ChatTraceDetails> {

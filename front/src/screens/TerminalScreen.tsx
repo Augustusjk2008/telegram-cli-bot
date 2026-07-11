@@ -394,7 +394,6 @@ export function TerminalScreen({
       session = createTerminalSession(containerRef.current, {
         token: authToken,
         ownerId: terminal.ownerId,
-        fromSeq: 0,
         fontSize: terminalFontSize,
         themeName,
         onOpen: () => {

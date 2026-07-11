@@ -429,6 +429,7 @@ class ChatStore:
                 message_count INTEGER NOT NULL DEFAULT 0,
                 pinned INTEGER NOT NULL DEFAULT 0,
                 archived_at TEXT,
+                revision INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -469,6 +470,7 @@ class ChatStore:
                 content TEXT NOT NULL,
                 content_format TEXT NOT NULL,
                 state TEXT NOT NULL,
+                updated_revision INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
@@ -477,6 +479,19 @@ class ChatStore:
 
             CREATE INDEX IF NOT EXISTS idx_messages_conversation
             ON messages(conversation_id);
+
+            CREATE TABLE IF NOT EXISTS history_changes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                message_id TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_history_changes_conversation_revision
+            ON history_changes(conversation_id, revision, id);
 
             CREATE TABLE IF NOT EXISTS trace_events (
                 id TEXT PRIMARY KEY,
@@ -506,6 +521,7 @@ class ChatStore:
         self._ensure_column(conn, "conversations", "pinned", "INTEGER NOT NULL DEFAULT 0")
         self._ensure_column(conn, "conversations", "archived_at", "TEXT")
         self._ensure_column(conn, "conversations", "native_session_meta_json", "TEXT")
+        self._ensure_column(conn, "conversations", "revision", "INTEGER NOT NULL DEFAULT 0")
         self._ensure_column(conn, "turns", "trace_recovery_attempted_at", "TEXT")
         self._ensure_column(conn, "turns", "trace_recovery_status", "TEXT")
         self._ensure_column(conn, "turns", "context_usage_json", "TEXT")
@@ -515,6 +531,7 @@ class ChatStore:
         self._ensure_column(conn, "messages", "author_user_id", "INTEGER")
         self._ensure_column(conn, "messages", "author_account_id", "TEXT")
         self._ensure_column(conn, "messages", "author_username", "TEXT")
+        self._ensure_column(conn, "messages", "updated_revision", "INTEGER NOT NULL DEFAULT 0")
         conn.execute("DROP INDEX IF EXISTS idx_conversations_scope_updated")
         conn.execute(
             """
@@ -522,6 +539,75 @@ class ChatStore:
             ON conversations(bot_id, user_id, agent_id, working_dir, archived_at, pinned, updated_at)
             """
         )
+
+    def _next_conversation_revision(self, conn: sqlite3.Connection, conversation_id: str) -> int:
+        result = conn.execute(
+            "UPDATE conversations SET revision = revision + 1 WHERE id = ?",
+            (conversation_id,),
+        )
+        if result.rowcount == 0:
+            raise KeyError(conversation_id)
+        row = conn.execute(
+            "SELECT revision FROM conversations WHERE id = ?",
+            (conversation_id,),
+        ).fetchone()
+        return int(row["revision"] if row is not None else 0)
+
+    def _record_message_changes(
+        self,
+        conn: sqlite3.Connection,
+        conversation_id: str,
+        message_ids: list[str] | tuple[str, ...],
+        *,
+        operation: str,
+        revision: int | None = None,
+        now: str | None = None,
+    ) -> int:
+        normalized_ids = list(dict.fromkeys(str(message_id or "").strip() for message_id in message_ids))
+        normalized_ids = [message_id for message_id in normalized_ids if message_id]
+        if not normalized_ids:
+            return self.get_conversation_revision(conversation_id, conn=conn)
+        current_revision = revision or self._next_conversation_revision(conn, conversation_id)
+        timestamp = now or _utc_now()
+        if operation == "upsert":
+            placeholders = ", ".join("?" for _ in normalized_ids)
+            conn.execute(
+                f"UPDATE messages SET updated_revision = ? WHERE id IN ({placeholders})",
+                (current_revision, *normalized_ids),
+            )
+        conn.executemany(
+            """
+            INSERT INTO history_changes (
+                conversation_id, revision, message_id, operation, created_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            [
+                (conversation_id, current_revision, message_id, operation, timestamp)
+                for message_id in normalized_ids
+            ],
+        )
+        return current_revision
+
+    def get_conversation_revision(
+        self,
+        conversation_id: str,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> int:
+        normalized = str(conversation_id or "").strip()
+        if conn is not None:
+            row = conn.execute(
+                "SELECT revision FROM conversations WHERE id = ?",
+                (normalized,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(normalized)
+            return int(row["revision"] or 0)
+        read_conn = self._connect(create=False)
+        if read_conn is None:
+            raise KeyError(normalized)
+        with closing(read_conn):
+            return self.get_conversation_revision(normalized, conn=read_conn)
 
     def _next_turn_seq(self, conn: sqlite3.Connection, conversation_id: str) -> int:
         row = conn.execute(
@@ -1239,6 +1325,7 @@ class ChatStore:
                     prompt_surface_version=prompt_surface_version,
                     agent_prompt_hash=agent_prompt_hash,
                 )
+            revision = self._next_conversation_revision(conn, resolved_conversation_id)
             conn.execute(
                 """
                 INSERT INTO turns (
@@ -1281,12 +1368,13 @@ class ChatStore:
                     content,
                     content_format,
                     state,
+                    updated_revision,
                     author_user_id,
                     author_account_id,
                     author_username,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     user_message_id,
@@ -1296,6 +1384,7 @@ class ChatStore:
                     user_text,
                     "markdown",
                     "done",
+                    revision,
                     normalized_author_user_id,
                     author_account_id,
                     author_username,
@@ -1313,9 +1402,10 @@ class ChatStore:
                     content,
                     content_format,
                     state,
+                    updated_revision,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     assistant_message_id,
@@ -1325,9 +1415,18 @@ class ChatStore:
                     "",
                     "markdown",
                     "streaming",
+                    revision,
                     now,
                     now,
                 ),
+            )
+            self._record_message_changes(
+                conn,
+                resolved_conversation_id,
+                [user_message_id, assistant_message_id],
+                operation="upsert",
+                revision=revision,
+                now=now,
             )
         handle = ChatTurnHandle(
             conversation_id=resolved_conversation_id,
@@ -1361,6 +1460,13 @@ class ChatStore:
                 conn.execute(
                     "UPDATE turns SET assistant_state = ?, updated_at = ? WHERE id = ?",
                     (state, now, handle.turn_id),
+                )
+                self._record_message_changes(
+                    conn,
+                    handle.conversation_id,
+                    [handle.assistant_message_id],
+                    operation="upsert",
+                    now=now,
                 )
         finally:
             elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
@@ -1428,6 +1534,13 @@ class ChatStore:
                         str(row["conversation_id"]),
                     ),
                 )
+                self._record_message_changes(
+                    conn,
+                    str(row["conversation_id"]),
+                    [message_id],
+                    operation="upsert",
+                    now=now,
+                )
             return self.get_message(message_id)
         finally:
             elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
@@ -1450,6 +1563,12 @@ class ChatStore:
         context_usage_json = json.dumps(context_usage, ensure_ascii=False)
         try:
             with self._connect_for_write() as conn:
+                turn = conn.execute(
+                    "SELECT conversation_id, assistant_message_id FROM turns WHERE id = ?",
+                    (turn_id,),
+                ).fetchone()
+                if turn is None:
+                    raise KeyError(turn_id)
                 result = conn.execute(
                     """
                     UPDATE turns
@@ -1461,6 +1580,13 @@ class ChatStore:
                 )
                 if result.rowcount == 0:
                     raise KeyError(turn_id)
+                self._record_message_changes(
+                    conn,
+                    str(turn["conversation_id"]),
+                    [str(turn["assistant_message_id"])],
+                    operation="upsert",
+                    now=now,
+                )
             return True
         finally:
             elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
@@ -1481,6 +1607,12 @@ class ChatStore:
             normalized_index = 0
         now = _utc_now()
         with self._connect_for_write() as conn:
+            turn = conn.execute(
+                "SELECT conversation_id, assistant_message_id FROM turns WHERE id = ?",
+                (normalized_turn_id,),
+            ).fetchone()
+            if turn is None:
+                raise KeyError(normalized_turn_id)
             result = conn.execute(
                 """
                 UPDATE turns
@@ -1493,6 +1625,13 @@ class ChatStore:
             )
             if result.rowcount == 0:
                 raise KeyError(normalized_turn_id)
+            self._record_message_changes(
+                conn,
+                str(turn["conversation_id"]),
+                [str(turn["assistant_message_id"])],
+                operation="upsert",
+                now=now,
+            )
         return True
 
     def get_turn_workspace_history(self, turn_id: str) -> dict[str, Any] | None:
@@ -1543,6 +1682,18 @@ class ChatStore:
             ).fetchone()
             if target is None:
                 raise KeyError(normalized_turn_id)
+            discarded_message_rows = conn.execute(
+                """
+                SELECT m.id
+                FROM messages AS m
+                JOIN turns AS t ON t.id = m.turn_id
+                WHERE t.conversation_id = ?
+                  AND t.seq > ?
+                  AND t.workspace_history_discarded_at IS NULL
+                ORDER BY t.seq ASC, m.created_at ASC, m.id ASC
+                """,
+                (normalized_conversation_id, int(target["seq"] or 0)),
+            ).fetchall()
             result = conn.execute(
                 """
                 UPDATE turns
@@ -1594,6 +1745,13 @@ class ChatStore:
                     now,
                     normalized_conversation_id,
                 ),
+            )
+            self._record_message_changes(
+                conn,
+                normalized_conversation_id,
+                [str(row["id"]) for row in discarded_message_rows],
+                operation="delete",
+                now=now,
             )
             return int(result.rowcount or 0)
 
@@ -1961,6 +2119,13 @@ class ChatStore:
                     handle.turn_id,
                 ),
             )
+            self._record_message_changes(
+                conn,
+                handle.conversation_id,
+                [handle.assistant_message_id],
+                operation="upsert",
+                now=now,
+            )
             title = self._derive_title(conn, handle.conversation_id)
             conn.execute(
                 """
@@ -2185,6 +2350,10 @@ class ChatStore:
             author["account_id"] = str(author_account_id)
         if str(author_username or "").strip():
             author["username"] = str(author_username)
+        try:
+            updated_revision = int(row["updated_revision"] or 0)
+        except (KeyError, IndexError, TypeError, ValueError):
+            updated_revision = 0
         return {
             "id": row["id"],
             "turn_id": turn_id,
@@ -2194,6 +2363,7 @@ class ChatStore:
             "state": row["state"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
+            "revision": updated_revision,
             "meta": meta,
             **({"author": author} if author else {}),
         }
@@ -2220,6 +2390,7 @@ class ChatStore:
                     m.author_username,
                     m.created_at,
                     m.updated_at,
+                    m.updated_revision,
                     t.seq,
                     t.completion_state,
                     t.native_provider,
@@ -2255,6 +2426,7 @@ class ChatStore:
                 recent.author_username,
                 recent.created_at,
                 recent.updated_at,
+                recent.updated_revision,
                 recent.seq,
                 recent.completion_state,
                 recent.native_provider,
@@ -2276,6 +2448,7 @@ class ChatStore:
                     m.author_username,
                     m.created_at,
                     m.updated_at,
+                    m.updated_revision,
                     t.seq,
                     t.completion_state,
                     t.native_provider,
@@ -2330,6 +2503,7 @@ class ChatStore:
                         m.author_username,
                         m.created_at,
                         m.updated_at,
+                        m.updated_revision,
                         t.completion_state,
                         t.native_provider,
                         t.native_session_id,
@@ -2355,6 +2529,201 @@ class ChatStore:
             with conn:
                 rows = self._list_message_rows(conn, conversation_id, limit=limit)
                 return self._messages_from_rows(conn, rows)
+
+    def _message_rows_for_ids(
+        self,
+        conn: sqlite3.Connection,
+        conversation_id: str,
+        message_ids: list[str],
+    ) -> list[sqlite3.Row]:
+        if not message_ids:
+            return []
+        placeholders = ", ".join("?" for _ in message_ids)
+        return conn.execute(
+            f"""
+            SELECT
+                m.id,
+                m.turn_id,
+                m.conversation_id,
+                m.role,
+                m.content,
+                m.state,
+                m.author_user_id,
+                m.author_account_id,
+                m.author_username,
+                m.created_at,
+                m.updated_at,
+                m.updated_revision,
+                t.seq,
+                t.completion_state,
+                t.native_provider,
+                t.native_session_id,
+                t.context_usage_json,
+                t.workspace_history_head,
+                t.workspace_history_index
+            FROM messages AS m
+            JOIN turns AS t ON t.id = m.turn_id
+            WHERE m.conversation_id = ?
+              AND m.id IN ({placeholders})
+              AND t.workspace_history_discarded_at IS NULL
+            """,
+            (conversation_id, *message_ids),
+        ).fetchall()
+
+    def get_history_delta(
+        self,
+        conversation_id: str,
+        *,
+        revision: int,
+        cursor: str | int | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        normalized_conversation_id = str(conversation_id or "").strip()
+        safe_limit = max(1, min(int(limit or 100), 500))
+        requested_revision = max(0, int(revision or 0))
+        try:
+            requested_cursor = max(0, int(cursor or 0))
+        except (TypeError, ValueError):
+            requested_cursor = 0
+        conn = self._connect(create=False)
+        if conn is None:
+            raise KeyError(normalized_conversation_id)
+        with closing(conn):
+            with conn:
+                current_revision = self.get_conversation_revision(normalized_conversation_id, conn=conn)
+                latest_change_row = conn.execute(
+                    "SELECT COALESCE(MAX(id), 0) AS id FROM history_changes WHERE conversation_id = ?",
+                    (normalized_conversation_id,),
+                ).fetchone()
+                latest_cursor = int(latest_change_row["id"] or 0) if latest_change_row is not None else 0
+                if requested_revision == 0 or requested_revision > current_revision:
+                    rows = self._list_message_rows(
+                        conn,
+                        normalized_conversation_id,
+                        limit=safe_limit,
+                    )
+                    return {
+                        "items": self._messages_from_rows(conn, rows),
+                        "deleted_ids": [],
+                        "revision": current_revision,
+                        "next_cursor": str(latest_cursor) if latest_cursor else "",
+                        "has_more": False,
+                        "reset": True,
+                        "reason": "initial_snapshot" if requested_revision == 0 else "revision_ahead",
+                    }
+
+                if requested_cursor:
+                    change_rows = conn.execute(
+                        """
+                        SELECT id, revision, message_id, operation
+                        FROM history_changes
+                        WHERE conversation_id = ? AND id > ?
+                        ORDER BY id ASC
+                        LIMIT ?
+                        """,
+                        (normalized_conversation_id, requested_cursor, safe_limit + 1),
+                    ).fetchall()
+                else:
+                    change_rows = conn.execute(
+                        """
+                        SELECT id, revision, message_id, operation
+                        FROM history_changes
+                        WHERE conversation_id = ? AND revision > ?
+                        ORDER BY id ASC
+                        LIMIT ?
+                        """,
+                        (normalized_conversation_id, requested_revision, safe_limit + 1),
+                    ).fetchall()
+                has_more = len(change_rows) > safe_limit
+                page_rows = change_rows[:safe_limit]
+                latest_by_message: dict[str, sqlite3.Row] = {}
+                for row in page_rows:
+                    latest_by_message[str(row["message_id"])] = row
+                upsert_ids = [
+                    message_id
+                    for message_id, row in latest_by_message.items()
+                    if str(row["operation"]) == "upsert"
+                ]
+                message_rows = self._message_rows_for_ids(conn, normalized_conversation_id, upsert_ids)
+                messages_by_id = {
+                    str(item["id"]): message
+                    for item, message in zip(message_rows, self._messages_from_rows(conn, message_rows))
+                }
+                items = [messages_by_id[message_id] for message_id in upsert_ids if message_id in messages_by_id]
+                missing_upserts = [message_id for message_id in upsert_ids if message_id not in messages_by_id]
+                deleted_ids = [
+                    message_id
+                    for message_id, row in latest_by_message.items()
+                    if str(row["operation"]) == "delete"
+                ]
+                deleted_ids.extend(missing_upserts)
+                next_cursor = int(page_rows[-1]["id"]) if page_rows else requested_cursor
+                return {
+                    "items": items,
+                    "deleted_ids": list(dict.fromkeys(deleted_ids)),
+                    "revision": current_revision,
+                    "next_cursor": str(next_cursor) if next_cursor else "",
+                    "has_more": has_more,
+                    "reset": False,
+                    "reason": "",
+                }
+
+    def get_scoped_history_delta(
+        self,
+        *,
+        bot_id: int,
+        user_id: int,
+        working_dir: str,
+        session_epoch: int,
+        revision: int,
+        cursor: str | int | None = None,
+        limit: int = 100,
+        agent_id: str = "main",
+        conversation_id: str | None = None,
+        native_provider: str | None = None,
+        native_provider_exclude: str | None = None,
+    ) -> dict[str, Any]:
+        conn = self._connect(create=False)
+        if conn is None:
+            return {
+                "items": [],
+                "deleted_ids": [],
+                "revision": 0,
+                "next_cursor": "",
+                "has_more": False,
+                "reset": False,
+                "reason": "",
+            }
+        with closing(conn):
+            resolved_conversation_id = self._get_scoped_conversation_id(
+                conn,
+                conversation_id=conversation_id,
+                bot_id=bot_id,
+                user_id=user_id,
+                agent_id=agent_id,
+                working_dir=working_dir,
+                session_epoch=session_epoch,
+                native_provider=native_provider,
+                native_provider_exclude=native_provider_exclude,
+            )
+        if resolved_conversation_id is None:
+            return {
+                "items": [],
+                "deleted_ids": [],
+                "revision": 0,
+                "next_cursor": "",
+                "has_more": False,
+                "reset": False,
+                "reason": "",
+            }
+        result = self.get_history_delta(
+            resolved_conversation_id,
+            revision=revision,
+            cursor=cursor,
+            limit=limit,
+        )
+        result["conversation_id"] = resolved_conversation_id
+        return result
 
     def list_active_history(
         self,
@@ -2523,6 +2892,13 @@ class ChatStore:
                         """,
                         ("error", error_code, now, now, error_code, content, row["turn_id"]),
                     )
+                self._record_message_changes(
+                    conn,
+                    resolved_conversation_id,
+                    [str(row["assistant_message_id"]) for row in rows],
+                    operation="upsert",
+                    now=now,
+                )
                 row_count = len(rows)
         elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
         diag_log_slow(

@@ -8,6 +8,14 @@ import {
   type UiThemeName,
 } from "../theme";
 import { buildApiUrl, buildWsUrl, publicApiBaseDiagnostics, type PublicBaseDiagnostics } from "../utils/publicBase";
+import {
+  decodeTerminalV2Frame,
+  TerminalConnectionGeneration,
+  TERMINAL_PROTOCOL_VERSION,
+  TerminalRecoveryTracker,
+  type TerminalRecoverySnapshot,
+} from "../terminal/terminalRecovery";
+import { TerminalSseParser } from "./terminalSseParser";
 
 export type TerminalSessionOptions = {
   token: string;
@@ -19,6 +27,7 @@ export type TerminalSessionOptions = {
   onClose?: () => void;
   onError?: (message: string) => void;
   onPtyMode?: (enabled: boolean) => void;
+  onRecoveryState?: (state: TerminalRecoverySnapshot) => void;
 };
 
 export type TerminalGeometry = {
@@ -32,6 +41,7 @@ export type TerminalSession = {
   dispose: () => void;
   fit: () => TerminalGeometry | null;
   focus: () => void;
+  getRecoveryState: () => TerminalRecoverySnapshot;
   sendControl: (sequence: string) => void;
   sendText: (text: string) => void;
   setTheme: (themeName: UiThemeName) => void;
@@ -155,6 +165,7 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
   let currentSocketUrl = "";
   let attachAddon: AttachAddon | null = null;
   let initialMessageListener: ((event: MessageEvent) => void) | null = null;
+  let v2MessageListener: ((event: MessageEvent) => void) | null = null;
   let fallbackAbortController: AbortController | null = null;
   let fallbackActive = false;
   let fallbackStarted = false;
@@ -163,6 +174,13 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
   let receivedInitialMessage = false;
   let reportedSocketError = false;
   let probeStarted = false;
+  let protocolVersion = 1;
+  let disposed = false;
+  let reconnectTimer: number | null = null;
+  let reconnectAttempt = 0;
+  let v2MessageChain = Promise.resolve();
+  const connectionGenerations = new TerminalConnectionGeneration();
+  const recovery = new TerminalRecoveryTracker(options.fromSeq ?? 0);
   const fallbackInputDisposable = term.onData((data) => {
     if (fallbackActive) {
       void postFallbackInput(data);
@@ -213,7 +231,89 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
     if (socket && initialMessageListener) {
       socket.removeEventListener("message", initialMessageListener);
     }
+    if (socket && v2MessageListener) {
+      socket.removeEventListener("message", v2MessageListener);
+    }
     initialMessageListener = null;
+    v2MessageListener = null;
+  }
+
+  function notifyRecoveryState() {
+    options.onRecoveryState?.(recovery.getSnapshot());
+  }
+
+  function resetTerminalOutput(message?: string) {
+    term.reset();
+    term.clear();
+    if (message) {
+      options.onError?.(message);
+    }
+  }
+
+  function applyV2Output(sequence: number, payload: Uint8Array) {
+    const accepted = recovery.accept(sequence);
+    if (accepted.duplicate) {
+      return;
+    }
+    if (accepted.gap) {
+      resetTerminalOutput(`终端输出序列不连续（${accepted.previous + 1}-${sequence - 1}），正在请求重放`);
+      notifyRecoveryState();
+      if (fallbackActive) {
+        cleanupFallback();
+        fallbackStarted = false;
+        window.setTimeout(() => startHttpFallback("终端输出缺口"), 0);
+      } else {
+        socket?.close(1012, "sequence gap");
+      }
+      return;
+    }
+    term.write(payload);
+    notifyRecoveryState();
+  }
+
+  function handleV2Control(payload: Record<string, unknown>) {
+    const streamId = String(payload.stream_id || payload.streamId || "");
+    const stream = recovery.beginStream(streamId);
+    if (stream.changed) {
+      resetTerminalOutput("终端进程已重建，已切换到新的输出流");
+    }
+    const type = String(payload.type || payload.kind || "");
+    if (type === "gap" || type === "reset" || payload.snapshot_required === true) {
+      const gapTo = Number(payload.gap_to || payload.sequence || 0);
+      recovery.applyGap(streamId, Number.isFinite(gapTo) ? gapTo : 0);
+      resetTerminalOutput("终端输出存在缺口，已清屏并恢复可用尾部");
+    }
+    notifyRecoveryState();
+  }
+
+  async function handleV2Message(event: MessageEvent, generation: number) {
+    if (!connectionGenerations.isCurrent(generation)) return;
+    if (typeof event.data === "string") {
+      try {
+        handleV2Control(JSON.parse(event.data) as Record<string, unknown>);
+      } catch {
+        // v2 text frames are control envelopes; malformed frames are ignored.
+      }
+      return;
+    }
+    const buffer = event.data instanceof ArrayBuffer
+      ? event.data
+      : event.data instanceof Blob ? await event.data.arrayBuffer() : null;
+    if (!buffer || !connectionGenerations.isCurrent(generation)) {
+      return;
+    }
+    const frame = decodeTerminalV2Frame(buffer);
+    if (!frame) {
+      handleTerminalError("终端 v2 输出帧格式无效");
+      return;
+    }
+    if ((frame.flags & 1) !== 0) {
+      recovery.applyGap(recovery.getSnapshot().streamId, frame.sequence);
+      resetTerminalOutput("终端输出存在缺口，已清屏并恢复可用尾部");
+      notifyRecoveryState();
+      return;
+    }
+    applyV2Output(frame.sequence, frame.payload);
   }
 
   function cleanupFallback() {
@@ -237,6 +337,18 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
     isAttached = true;
     attachAddon = new AttachAddon(socket);
     term.loadAddon(attachAddon);
+    options.onOpen?.();
+  }
+
+  function attachV2Socket(generation: number) {
+    if (!socket || isAttached) {
+      return;
+    }
+    isAttached = true;
+    v2MessageListener = (event) => {
+      v2MessageChain = v2MessageChain.then(() => handleV2Message(event, generation));
+    };
+    socket.addEventListener("message", v2MessageListener);
     options.onOpen?.();
   }
 
@@ -282,14 +394,28 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
 
   function handleFallbackEvent(eventType: string, payload: Record<string, unknown>) {
     if (eventType === "ready") {
+      if (Number(payload.protocol_version || 1) >= TERMINAL_PROTOCOL_VERSION) {
+        protocolVersion = TERMINAL_PROTOCOL_VERSION;
+        handleV2Control(payload);
+      }
       if (typeof payload.pty_mode === "boolean") {
         options.onPtyMode?.(payload.pty_mode);
       }
       attachFallback();
       return;
     }
+    if (eventType === "gap" || eventType === "reset") {
+      handleV2Control({ ...payload, type: eventType });
+      return;
+    }
     if (eventType === "output" && typeof payload.data === "string") {
-      term.write(decodeBase64Bytes(payload.data));
+      const bytes = decodeBase64Bytes(payload.data);
+      const sequence = Number(payload.sequence || 0);
+      if (protocolVersion >= TERMINAL_PROTOCOL_VERSION && sequence > 0) {
+        applyV2Output(sequence, bytes);
+      } else {
+        term.write(bytes);
+      }
       attachFallback();
     }
   }
@@ -299,32 +425,23 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
     if (!reader) {
       throw new Error("浏览器不支持终端 HTTP 流");
     }
-    const decoder = new TextDecoder();
-    let buffer = "";
+    const parser = new TerminalSseParser(({ event, id, data }) => {
+      try {
+        const payload = JSON.parse(data) as Record<string, unknown>;
+        if (id && payload.sequence === undefined) payload.sequence = Number(id) || 0;
+        handleFallbackEvent(event, payload);
+      } catch {
+        // Ignore malformed SSE frames without losing the following frame.
+      }
+    });
     while (true) {
       const { value, done } = await reader.read();
       if (done) {
         break;
       }
-      buffer += decoder.decode(value, { stream: true });
-      const events = buffer.split(/\n\n/);
-      buffer = events.pop() ?? "";
-      for (const rawEvent of events) {
-        const lines = rawEvent.split(/\n/);
-        const typeLine = lines.find((line) => line.startsWith("event:"));
-        const dataLine = lines.find((line) => line.startsWith("data:"));
-        if (!dataLine) {
-          continue;
-        }
-        const eventType = typeLine ? typeLine.slice("event:".length).trim() : "message";
-        try {
-          const payload = JSON.parse(dataLine.slice("data:".length).trim()) as Record<string, unknown>;
-          handleFallbackEvent(eventType, payload);
-        } catch {
-          // Ignore malformed SSE frames.
-        }
-      }
+      parser.push(value);
     }
+    parser.finish();
   }
 
   function startHttpFallback(reason: string) {
@@ -332,6 +449,7 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
       return;
     }
     fallbackStarted = true;
+    connectionGenerations.next();
     ignoreSocketEvents = true;
     cleanupSocket();
     socket?.close();
@@ -341,7 +459,10 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
     fallbackAbortController = new AbortController();
     const streamUrl = buildApiUrl("/api/terminal/session/stream", {
       owner_id: options.ownerId,
-      from_seq: options.fromSeq ?? 0,
+      protocol: TERMINAL_PROTOCOL_VERSION,
+      version: TERMINAL_PROTOCOL_VERSION,
+      from_seq: recovery.getSnapshot().lastAppliedSequence,
+      after_sequence: recovery.getSnapshot().lastAppliedSequence,
     });
     const controller = fallbackAbortController;
     fallbackActive = true;
@@ -370,8 +491,12 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
           return;
         }
         fallbackActive = false;
+        fallbackStarted = false;
         fallbackAbortController = null;
         options.onClose?.();
+        if (!disposed) {
+          window.setTimeout(() => startHttpFallback("终端 HTTP 流已结束，正在恢复"), 250);
+        }
       });
     if (!probeStarted) {
       probeStarted = true;
@@ -389,7 +514,22 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
     }
   }
 
+  function scheduleReconnect() {
+    if (disposed || fallbackActive || reconnectTimer !== null) {
+      return;
+    }
+    const delay = Math.min(5_000, 250 * (2 ** reconnectAttempt));
+    reconnectAttempt += 1;
+    reconnectTimer = window.setTimeout(() => {
+      reconnectTimer = null;
+      connect();
+    }, delay);
+  }
+
   function connect() {
+    if (disposed) {
+      return;
+    }
     if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
       return;
     }
@@ -401,6 +541,8 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
     const socketUrl = buildWsUrl("/terminal/ws", params);
     currentSocketUrl = socketUrl;
     socket = new WebSocket(socketUrl);
+    const connectionSocket = socket;
+    const connectionGeneration = connectionGenerations.next();
     socket.binaryType = "arraybuffer";
     isAttached = false;
     receivedInitialMessage = false;
@@ -408,23 +550,44 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
     ignoreSocketEvents = false;
 
     socket.addEventListener("open", () => {
+      if (!connectionGenerations.isCurrent(connectionGeneration)) return;
+      reconnectAttempt = 0;
       const geometry = getGeometry();
+      const afterSequence = recovery.getSnapshot().lastAppliedSequence;
       sendJson({
         owner_id: options.ownerId,
-        from_seq: options.fromSeq ?? 0,
+        protocol_version: TERMINAL_PROTOCOL_VERSION,
+        version: TERMINAL_PROTOCOL_VERSION,
+        from_seq: afterSequence,
+        after_sequence: afterSequence,
         ...(geometry ? { cols: geometry.cols, rows: geometry.rows } : {}),
       });
     });
 
     initialMessageListener = (event: MessageEvent) => {
+      if (!connectionGenerations.isCurrent(connectionGeneration)) return;
       receivedInitialMessage = true;
       cleanupSocket();
 
       if (typeof event.data === "string") {
         try {
-          const payload = JSON.parse(event.data) as { error?: string; pty_mode?: boolean | null };
+          const payload = JSON.parse(event.data) as {
+            error?: string;
+            pty_mode?: boolean | null;
+            protocol_version?: number;
+            stream_id?: string;
+          };
           if (payload.error) {
             handleTerminalError(`终端 WebSocket 连接被后端拒绝：${payload.error}`);
+            return;
+          }
+          if (Number(payload.protocol_version || 1) >= TERMINAL_PROTOCOL_VERSION) {
+            protocolVersion = TERMINAL_PROTOCOL_VERSION;
+            handleV2Control(payload as Record<string, unknown>);
+            if (typeof payload.pty_mode === "boolean") {
+              options.onPtyMode?.(payload.pty_mode);
+            }
+            attachV2Socket(connectionGeneration);
             return;
           }
           if (typeof payload.pty_mode === "boolean") {
@@ -442,17 +605,23 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
       if (event.data instanceof ArrayBuffer) {
         term.write(new Uint8Array(event.data));
       } else if (event.data instanceof Blob) {
-        void event.data.arrayBuffer().then((buffer) => term.write(new Uint8Array(buffer)));
+        void event.data.arrayBuffer().then((buffer) => {
+          if (connectionGenerations.isCurrent(connectionGeneration) && socket === connectionSocket) {
+            term.write(new Uint8Array(buffer));
+          }
+        });
       }
       attachToSocket();
     };
 
     socket.addEventListener("message", initialMessageListener);
     socket.addEventListener("close", (event) => {
+      if (!connectionGenerations.isCurrent(connectionGeneration)) return;
       if (ignoreSocketEvents) {
         return;
       }
       cleanupSocket();
+      socket = null;
       const message = formatWsCloseMessage(
         event,
         currentSocketUrl || socketUrl,
@@ -467,8 +636,12 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
         handleTerminalError(message);
       }
       options.onClose?.();
+      if (protocolVersion >= TERMINAL_PROTOCOL_VERSION && event.code !== 1000) {
+        scheduleReconnect();
+      }
     });
     socket.addEventListener("error", () => {
+      if (!connectionGenerations.isCurrent(connectionGeneration)) return;
       if (ignoreSocketEvents) {
         return;
       }
@@ -484,7 +657,13 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
     term,
     connect,
     dispose: () => {
+      disposed = true;
+      connectionGenerations.next();
       ignoreSocketEvents = true;
+      if (reconnectTimer !== null) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
       cleanupSocket();
       cleanupFallback();
       fallbackInputDisposable.dispose();
@@ -507,6 +686,7 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
       term.focus();
       term.textarea?.focus();
     },
+    getRecoveryState: () => recovery.getSnapshot(),
     sendControl: (sequence: string) => {
       if (fallbackActive) {
         void postFallbackInput(sequence);

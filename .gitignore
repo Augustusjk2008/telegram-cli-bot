@@ -38,3 +38,4 @@ tmp/
 .web_tunnel_state.json
 .host.pid
 .codegraph/
+.artifacts/

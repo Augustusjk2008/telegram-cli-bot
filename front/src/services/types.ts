@@ -868,7 +868,17 @@ export type ChatMessage = {
 
 export type HistoryDeltaResult = {
   items: ChatMessage[];
+  deletedIds?: string[];
+  revision?: number;
+  nextCursor?: string;
+  hasMore?: boolean;
   reset: boolean;
+  reason?: string;
+};
+
+export type HistoryDeltaOptions = AgentScopedOptions & {
+  revision?: number;
+  cursor?: string;
 };
 
 export type NativeAgentHistoryFileStatus = "added" | "modified" | "deleted" | "renamed" | "copied" | "unknown";

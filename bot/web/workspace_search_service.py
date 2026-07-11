@@ -9,12 +9,50 @@ import os
 import re
 import shutil
 import subprocess
+import queue
+import threading
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
 from . import workspace_index_service
+from bot.platform.processes import terminate_process_tree_sync
 
 DEFAULT_EXCLUDES = [".git", "node_modules", "venv", ".venv", "dist", "build", "__pycache__"]
+SEARCH_TIMEOUT_SECONDS = max(0.1, float(os.environ.get("TCB_SEARCH_TIMEOUT_SECONDS", "10")))
+SEARCH_STDOUT_MAX_BYTES = max(1024, int(os.environ.get("TCB_SEARCH_STDOUT_MAX_BYTES", str(8 * 1024 * 1024))))
+SEARCH_STDERR_MAX_BYTES = max(1024, int(os.environ.get("TCB_SEARCH_STDERR_MAX_BYTES", str(64 * 1024))))
+SEARCH_MAX_LINE_BYTES = max(1024, int(os.environ.get("TCB_SEARCH_MAX_LINE_BYTES", str(1024 * 1024))))
+SEARCH_PYTHON_MAX_SCAN_BYTES = max(1024, int(os.environ.get("TCB_SEARCH_PYTHON_MAX_SCAN_BYTES", str(64 * 1024 * 1024))))
+_SEARCH_DIAGNOSTICS_LOCK = threading.Lock()
+_SEARCH_DIAGNOSTICS = {
+    "active_processes": 0,
+    "search_count": 0,
+    "timeout_count": 0,
+    "truncated_count": 0,
+    "stdout_bytes": 0,
+    "stderr_bytes": 0,
+}
+
+
+@dataclass(slots=True)
+class _SearchOutcome:
+    items: list[dict[str, Any]]
+    truncated: bool
+    reason: str
+    backend: str
+
+
+def workspace_search_diagnostics() -> dict[str, int]:
+    with _SEARCH_DIAGNOSTICS_LOCK:
+        return dict(_SEARCH_DIAGNOSTICS)
+
+
+def _diag_add(**values: int) -> None:
+    with _SEARCH_DIAGNOSTICS_LOCK:
+        for key, value in values.items():
+            _SEARCH_DIAGNOSTICS[key] = int(_SEARCH_DIAGNOSTICS.get(key, 0)) + int(value)
 
 _SOURCE_ROOTS = {"src", "bot", "front", "tests", "scripts"}
 _SOURCE_SUFFIXES = {
@@ -187,26 +225,107 @@ def _preview_line(text: str) -> str:
     return text.rstrip("\r\n")
 
 
-def _search_with_rg(root: Path, query: str, limit: int) -> list[dict[str, Any]] | None:
+def _search_with_rg(root: Path, query: str, limit: int) -> _SearchOutcome | None:
     if not shutil.which("rg"):
         return None
     items: list[dict[str, Any]] = []
-    process: subprocess.Popen[str] | None = None
+    process: subprocess.Popen[bytes] | None = None
+    stdout_queue: queue.Queue[bytes | object] = queue.Queue(maxsize=64)
+    reader_done = object()
+    stop_reader = threading.Event()
+    state_lock = threading.Lock()
+    state = {"stdout_bytes": 0, "stderr_bytes": 0, "reason": ""}
+
+    def set_reason(reason: str) -> None:
+        with state_lock:
+            if not state["reason"]:
+                state["reason"] = reason
+
+    def read_stdout(stream) -> None:
+        try:
+            while not stop_reader.is_set():
+                line = stream.readline(SEARCH_MAX_LINE_BYTES + 1)
+                if not line:
+                    break
+                with state_lock:
+                    state["stdout_bytes"] += len(line)
+                    total = state["stdout_bytes"]
+                if len(line) > SEARCH_MAX_LINE_BYTES:
+                    set_reason("line_bytes")
+                    break
+                if total > SEARCH_STDOUT_MAX_BYTES:
+                    set_reason("stdout_bytes")
+                    break
+                while not stop_reader.is_set():
+                    try:
+                        stdout_queue.put(line, timeout=0.05)
+                        break
+                    except queue.Full:
+                        continue
+        finally:
+            try:
+                stdout_queue.put(reader_done, timeout=0.1)
+            except queue.Full:
+                pass
+
+    def read_stderr(stream) -> None:
+        while not stop_reader.is_set():
+            chunk = stream.read(min(8192, SEARCH_STDERR_MAX_BYTES + 1))
+            if not chunk:
+                return
+            with state_lock:
+                state["stderr_bytes"] += len(chunk)
+                total = state["stderr_bytes"]
+            if total > SEARCH_STDERR_MAX_BYTES:
+                set_reason("stderr_bytes")
+                return
+
+    truncated = False
+    reason = ""
+    stdout_thread: threading.Thread | None = None
+    stderr_thread: threading.Thread | None = None
     try:
         process = subprocess.Popen(
             ["rg", "--line-number", "--column", "--json", "--hidden", "--fixed-strings", query, *_exclude_args()],
             cwd=str(root),
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
+            stderr=subprocess.PIPE,
         )
-        assert process.stdout is not None
-        for line in process.stdout:
+        _diag_add(active_processes=1, search_count=1)
+        assert process.stdout is not None and process.stderr is not None
+        stdout_thread = threading.Thread(target=read_stdout, args=(process.stdout,), daemon=True)
+        stderr_thread = threading.Thread(target=read_stderr, args=(process.stderr,), daemon=True)
+        stdout_thread.start()
+        stderr_thread.start()
+        deadline = time.monotonic() + SEARCH_TIMEOUT_SECONDS
+        while True:
+            if time.monotonic() >= deadline:
+                truncated = True
+                reason = "timeout"
+                break
+            with state_lock:
+                reader_reason = str(state["reason"])
+            if reader_reason:
+                truncated = True
+                reason = reader_reason
+                break
             try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
+                queued = stdout_queue.get(timeout=min(0.05, max(0.001, deadline - time.monotonic())))
+            except queue.Empty:
+                if process.poll() is not None and stdout_thread is not None and not stdout_thread.is_alive():
+                    break
+                continue
+            if queued is reader_done:
+                with state_lock:
+                    reader_reason = str(state["reason"])
+                if reader_reason:
+                    truncated = True
+                    reason = reader_reason
+                break
+            assert isinstance(queued, bytes)
+            try:
+                event = json.loads(queued.decode("utf-8", errors="replace"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
                 continue
             if event.get("type") != "match":
                 continue
@@ -224,45 +343,111 @@ def _search_with_rg(root: Path, query: str, limit: int) -> list[dict[str, Any]] 
                     "preview": _preview_line(str(lines_data.get("text") or "")),
                 })
             if len(items) >= limit:
-                process.terminate()
+                truncated = True
+                reason = "limit"
                 break
-        process.wait(timeout=1)
     except OSError:
         return None
-    except subprocess.TimeoutExpired:
-        process.kill()
     finally:
-        if process is not None and process.stdout is not None:
-            process.stdout.close()
-    return items
+        stop_reader.set()
+        if process is not None:
+            if process.poll() is None and (truncated or reason):
+                terminate_process_tree_sync(process)
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                terminate_process_tree_sync(process)
+            for stream in (process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
+            _diag_add(active_processes=-1)
+        for thread in (stdout_thread, stderr_thread):
+            if thread is not None:
+                thread.join(timeout=0.2)
+        with state_lock:
+            stdout_bytes = int(state["stdout_bytes"])
+            stderr_bytes = int(state["stderr_bytes"])
+        _diag_add(
+            stdout_bytes=stdout_bytes,
+            stderr_bytes=stderr_bytes,
+            timeout_count=int(reason == "timeout"),
+            truncated_count=int(truncated),
+        )
+    if process is not None and process.returncode not in {0, 1} and not reason:
+        items = []
+        truncated = True
+        reason = "rg_error"
+        _diag_add(truncated_count=1)
+    return _SearchOutcome(items=items, truncated=truncated, reason=reason, backend="rg")
 
 
-def _search_with_python(root: Path, query: str, limit: int) -> list[dict[str, Any]]:
+def _search_with_python(root: Path, query: str, limit: int) -> _SearchOutcome:
     items: list[dict[str, Any]] = []
     needle = query.lower()
+    deadline = time.monotonic() + SEARCH_TIMEOUT_SECONDS
+    scanned_bytes = 0
+    truncated = False
+    reason = ""
     for rel_path in _iter_files_with_os_walk(root):
         if len(items) >= limit:
+            truncated = True
+            reason = "limit"
+            break
+        if time.monotonic() >= deadline:
+            truncated = True
+            reason = "timeout"
             break
         path = root / rel_path
         try:
-            if path.stat().st_size > 2 * 1024 * 1024:
+            file_size = int(path.stat().st_size)
+            if scanned_bytes + file_size > SEARCH_PYTHON_MAX_SCAN_BYTES:
+                truncated = True
+                reason = "scan_bytes"
+                break
+            scanned_bytes += file_size
+            if file_size > 2 * 1024 * 1024:
                 continue
-            lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+            stream = path.open("rb")
         except OSError:
             continue
-        for line_number, text in enumerate(lines, start=1):
-            column = text.lower().find(needle)
-            if column < 0:
-                continue
-            items.append({
-                "path": rel_path,
-                "line": line_number,
-                "column": column + 1,
-                "preview": text,
-            })
-            if len(items) >= limit:
-                break
-    return items
+        with stream:
+            line_number = 0
+            while True:
+                raw_line = stream.readline(SEARCH_MAX_LINE_BYTES + 1)
+                if not raw_line:
+                    break
+                line_number += 1
+                if len(raw_line) > SEARCH_MAX_LINE_BYTES:
+                    truncated = True
+                    reason = "line_bytes"
+                    break
+                if time.monotonic() >= deadline:
+                    truncated = True
+                    reason = "timeout"
+                    break
+                text = raw_line.decode("utf-8", errors="ignore")
+                column = text.lower().find(needle)
+                if column < 0:
+                    continue
+                items.append({
+                    "path": rel_path,
+                    "line": line_number,
+                    "column": column + 1,
+                    "preview": _preview_line(text),
+                })
+                if len(items) >= limit:
+                    truncated = True
+                    reason = "limit"
+                    break
+        if truncated:
+            break
+    _diag_add(
+        search_count=1,
+        timeout_count=int(reason == "timeout"),
+        truncated_count=int(truncated),
+        stdout_bytes=scanned_bytes,
+    )
+    return _SearchOutcome(items=items, truncated=truncated, reason=reason, backend="python")
 
 
 def search_workspace_text(workspace: Path | str, query: str, *, limit: int = 100) -> dict[str, object]:
@@ -270,12 +455,17 @@ def search_workspace_text(workspace: Path | str, query: str, *, limit: int = 100
     q = (query or "").strip()
     safe_limit = max(1, min(int(limit or 100), 500))
     if not q:
-        return {"items": []}
+        return {"items": [], "truncated": False, "reason": "", "backend": "none"}
 
-    items = _search_with_rg(root, q, safe_limit)
-    if items is None:
-        items = _search_with_python(root, q, safe_limit)
-    return {"items": items[:safe_limit]}
+    outcome = _search_with_rg(root, q, safe_limit)
+    if outcome is None:
+        outcome = _search_with_python(root, q, safe_limit)
+    return {
+        "items": outcome.items[:safe_limit],
+        "truncated": outcome.truncated,
+        "reason": outcome.reason,
+        "backend": outcome.backend,
+    }
 
 
 def _outline_item(name: str, kind: str, line: int, *, level: int) -> dict[str, object]:

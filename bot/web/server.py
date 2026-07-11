@@ -65,6 +65,8 @@ from bot.config import (
 )
 from bot.debug.service import DebugService
 from bot.manager import MultiBotManager
+from bot.models import session_persistence_diagnostics
+from bot.native_agent import get_native_agent_service
 from bot.native_agent.legacy_migration import (
     LEGACY_EXECUTION_MODE_REMOVED_MESSAGE,
     is_legacy_execution_mode,
@@ -81,7 +83,7 @@ from bot.runtime_paths import (
     get_permissions_root,
     get_tunnel_state_path,
 )
-from bot.session_store import close_session_store
+from bot.session_store import close_session_store, session_store_diagnostics
 from bot.updater import (
     check_for_updates,
     download_latest_update,
@@ -91,9 +93,10 @@ from bot.updater import (
     set_update_enabled,
 )
 from .announcement_store import AnnouncementStore
-from .async_chat_store import ChatStoreOverloadedError, run_chat_store_io
+from .async_chat_store import ChatStoreOverloadedError, chat_store_executor_diagnostics, run_chat_store_io
 from .cli_error_stats import collect_cli_error_stats
 from .diagnostics import diag_enabled, diag_log_event, diag_log_slow, diag_loop_lag_ms
+from .runtime_diagnostics import LoopLagTracker, RuntimeDiagnosticsRegistry
 from .env_service import EnvConfigService, EnvValidationError
 from .exposure_service import WebExposureService
 from .fixed_forward_service import FixedForwardService
@@ -135,9 +138,11 @@ from .auth_store import (
 from .permission_store import BotPermissionStore
 from .terminal_manager import (
     TERMINAL_CLIENT_EOF,
+    TerminalDelivery,
     TerminalLaunchError,
     TerminalNotRunningError,
     TerminalSessionManager,
+    encode_terminal_ws_v2,
 )
 from .transfer_service import TransferService
 from .tunnel_service import TunnelService
@@ -274,6 +279,7 @@ from .git_service import (
     get_git_overview,
     get_git_smart_commit_repo_hint,
     get_git_tree_status,
+    git_service_diagnostics,
     init_git_repository,
     list_git_branches,
     list_git_stashes,
@@ -296,6 +302,7 @@ from .workspace_search_service import (
     build_file_outline,
     quick_open_files,
     search_workspace_text,
+    workspace_search_diagnostics,
 )
 from .workspace_definition_service import resolve_workspace_definition
 
@@ -945,6 +952,22 @@ class WebApiServer:
         self.transfer_service = TransferService(host=self._host, port=self._port)
         self.inline_completion_config_store = InlineCompletionConfigStore()
         self.inline_completion_service = InlineCompletionService(config_store=self.inline_completion_config_store)
+        self._loop_lag_tracker = LoopLagTracker(threshold_ms=diag_loop_lag_ms())
+        self._runtime_diagnostics = RuntimeDiagnosticsRegistry()
+        self._runtime_diagnostics.register("loop_lag", self._loop_lag_tracker.diagnostics)
+        self._runtime_diagnostics.register("terminal", self._terminal_manager.diagnostics)
+        self._runtime_diagnostics.register("native_agent", get_native_agent_service().diagnostics)
+        self._runtime_diagnostics.register("workspace_search", workspace_search_diagnostics)
+        self._runtime_diagnostics.register("git", git_service_diagnostics)
+        self._runtime_diagnostics.register("chat_store", chat_store_executor_diagnostics)
+        self._runtime_diagnostics.register(
+            "session_store",
+            lambda: {**session_store_diagnostics(), **session_persistence_diagnostics()},
+        )
+        self._runtime_diagnostics.register("litellm", self.transfer_service.diagnostics)
+        plugin_service = getattr(self.manager, "plugin_service", None)
+        if plugin_service is not None:
+            self._runtime_diagnostics.register("plugins", plugin_service.snapshot_cache_diagnostics)
 
     def _auth_context(self, request: web.Request) -> AuthContext:
         token_info = _extract_auth_token_info(request)
@@ -1997,6 +2020,34 @@ class WebApiServer:
         wants_ag_ui = protocol.lower() == "ag-ui"
         ag_ui_encoder = EventEncoder() if wants_ag_ui else None
         allow_unsafe_cli = CAP_RUN_UNSAFE_CLI in auth.capabilities
+        raw_stream_id = body.get("stream_id", body.get("streamId", ""))
+        raw_turn_id = body.get("turn_id", body.get("turnId", ""))
+        if not isinstance(raw_stream_id, str) or not isinstance(raw_turn_id, str):
+            raise WebApiError(400, "invalid_resume_identity", "恢复 stream_id/turn_id 必须是字符串")
+        resume_stream_id = raw_stream_id.strip()
+        resume_turn_id = raw_turn_id.strip()
+        if len(resume_stream_id) > 128 or len(resume_turn_id) > 128:
+            raise WebApiError(400, "invalid_resume_identity", "恢复 stream_id/turn_id 不合法")
+        raw_after_sequence = body.get("after_sequence", body.get("afterSequence", 0))
+        try:
+            if isinstance(raw_after_sequence, bool):
+                raise ValueError
+            after_sequence = int(raw_after_sequence or 0)
+        except (TypeError, ValueError):
+            raise WebApiError(400, "invalid_resume_sequence", "恢复 after_sequence 必须是非负整数")
+        if after_sequence < 0:
+            raise WebApiError(400, "invalid_resume_sequence", "恢复 after_sequence 必须是非负整数")
+        if not resume_stream_id and (resume_turn_id or after_sequence):
+            raise WebApiError(400, "invalid_resume_identity", "恢复请求缺少 stream_id")
+        if resume_stream_id:
+            try:
+                get_native_agent_service().resume_turn_channel(resume_stream_id, turn_id=resume_turn_id)
+            except RuntimeError as exc:
+                message = str(exc).strip() or "Pi turn 恢复流不存在或已过期"
+                code = "native_turn_stream_mismatch" if "不匹配" in message else "native_turn_stream_expired"
+                status = 409 if code.endswith("mismatch") else 410
+                raise WebApiError(status, code, message) from exc
+        enable_reconnect = bool(body.get("stream_reconnect") or body.get("streamReconnect"))
 
         response = web.StreamResponse(
             status=200,
@@ -2009,6 +2060,10 @@ class WebApiServer:
         stream_kwargs: dict[str, Any] = {
             "protocol": protocol,
             "allow_unsafe_cli": allow_unsafe_cli,
+            "resume_stream_id": resume_stream_id,
+            "resume_turn_id": resume_turn_id,
+            "after_sequence": after_sequence,
+            "enable_reconnect": enable_reconnect,
         }
         if execution_mode:
             stream_kwargs["execution_mode"] = execution_mode
@@ -2033,12 +2088,53 @@ class WebApiServer:
             **stream_kwargs,
             actor=actor,
         )
-        async for event in event_stream:
-            if wants_ag_ui and str(event.get("type") or "") == "ag_ui":
+        resumable_stream = False
+        try:
+            async for event in event_stream:
+                resumable_stream = resumable_stream or bool(event.get("stream_id"))
+                if wants_ag_ui and str(event.get("type") or "") == "ag_ui":
+                    if client_disconnected:
+                        continue
+                    try:
+                        encoded = ag_ui_encoder.encode(event["event"]).encode("utf-8")
+                        if event.get("sequence") is not None:
+                            encoded = f"id: {int(event['sequence'])}\n".encode("ascii") + encoded
+                        await response.write(encoded)
+                    except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
+                        client_disconnected = True
+                        logger.info(
+                            "Web SSE 客户端已断开，继续在后台完成任务: alias=%s user_id=%s",
+                            alias,
+                            auth.user_id,
+                        )
+                        if resumable_stream:
+                            break
+                    continue
+                event = self._decorate_chat_authors(event, auth)
+                event_type = str(event.get("type") or "")
+                if event_type == "done":
+                    self._schedule_chat_terminal_event(
+                        auth=auth,
+                        alias=alias,
+                        agent_id=agent_id,
+                        data=event,
+                    )
+                elif event_type == "error":
+                    self._schedule_chat_terminal_event(
+                        auth=auth,
+                        alias=alias,
+                        agent_id=agent_id,
+                        data=event,
+                        fallback_status="error",
+                    )
                 if client_disconnected:
                     continue
                 try:
-                    await response.write(ag_ui_encoder.encode(event["event"]).encode("utf-8"))
+                    if not wants_ag_ui:
+                        encoded_event = _format_sse(event["type"], event)
+                        if event.get("sequence") is not None:
+                            encoded_event = f"id: {int(event['sequence'])}\n".encode("ascii") + encoded_event
+                        await response.write(encoded_event)
                 except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
                     client_disconnected = True
                     logger.info(
@@ -2046,37 +2142,12 @@ class WebApiServer:
                         alias,
                         auth.user_id,
                     )
-                continue
-            event = self._decorate_chat_authors(event, auth)
-            event_type = str(event.get("type") or "")
-            if event_type == "done":
-                self._schedule_chat_terminal_event(
-                    auth=auth,
-                    alias=alias,
-                    agent_id=agent_id,
-                    data=event,
-                )
-            elif event_type == "error":
-                self._schedule_chat_terminal_event(
-                    auth=auth,
-                    alias=alias,
-                    agent_id=agent_id,
-                    data=event,
-                    fallback_status="error",
-                )
-            if client_disconnected:
-                continue
-            try:
-                if not wants_ag_ui:
-                    await response.write(_format_sse(event["type"], event))
-            except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
-                client_disconnected = True
-                logger.info(
-                    "Web SSE 客户端已断开，继续在后台完成任务: alias=%s user_id=%s",
-                    alias,
-                    auth.user_id,
-                )
-
+                    if resumable_stream:
+                        break
+        finally:
+            close_event_stream = getattr(event_stream, "aclose", None)
+            if callable(close_event_stream):
+                await close_event_stream()
         if not client_disconnected:
             try:
                 await response.write_eof()
@@ -2203,6 +2274,7 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_TERMINAL_EXEC)
         owner_id = self._resolve_terminal_owner_id(request.query.get("owner_id"))
         from_seq = int(request.query.get("from_seq") or 0)
+        protocol_version = 2 if str(request.query.get("protocol") or request.query.get("version") or "1") == "2" else 1
         request_path = self._request_log_path(request)
         logger.info(
             "终端 HTTP stream attach 开始 path=%s user_id=%s owner=%s from_seq=%s",
@@ -2211,9 +2283,14 @@ class WebApiServer:
             owner_id,
             from_seq,
         )
-        queue: asyncio.Queue[bytes | object] | None = None
+        queue = None
         try:
-            queue, snapshot = await self._terminal_manager.attach(auth.user_id, owner_id, from_seq=from_seq)
+            queue, snapshot = await self._terminal_manager.attach(
+                auth.user_id,
+                owner_id,
+                from_seq=from_seq,
+                protocol_version=protocol_version,
+            )
         except TerminalNotRunningError as exc:
             logger.warning(
                 "终端 HTTP stream attach 失败，终端未启动 user_id=%s owner=%s path=%s: %s",
@@ -2243,6 +2320,8 @@ class WebApiServer:
                         "pty_mode": snapshot.get("pty_mode"),
                         "connection_text": snapshot.get("connection_text"),
                         "last_seq": snapshot.get("last_seq"),
+                        "stream_id": snapshot.get("stream_id"),
+                        "protocol_version": protocol_version,
                     },
                 )
             )
@@ -2262,6 +2341,24 @@ class WebApiServer:
                 if data is TERMINAL_CLIENT_EOF:
                     await response.write(_format_sse("closed", {"reason": "terminal_closed"}))
                     break
+                if isinstance(data, TerminalDelivery):
+                    event_name = "closed" if data.kind == "eof" else "gap" if data.kind == "gap" else "output"
+                    envelope = {
+                        "stream_id": data.stream_id,
+                        "kind": data.kind,
+                        "sequence": data.sequence,
+                        "data": base64.b64encode(data.payload).decode("ascii"),
+                        "encoding": "base64",
+                        "gap_from": data.gap_from,
+                        "gap_to": data.gap_to,
+                        "snapshot_required": data.snapshot_required,
+                        "reason": data.reason,
+                    }
+                    await response.write(
+                        f"id: {data.sequence}\n".encode("ascii")
+                        + _format_sse(event_name, envelope)
+                    )
+                    continue
                 if not isinstance(data, bytes):
                     continue
                 await response.write(
@@ -2276,6 +2373,18 @@ class WebApiServer:
         except _CLIENT_DISCONNECT_ERRORS:
             client_disconnected = True
             logger.info("终端 HTTP stream 客户端已断开，停止转发输出: owner=%s", owner_id)
+        except Exception as exc:
+            logger.exception("终端 HTTP stream 转发失败: owner=%s", owner_id)
+            try:
+                await response.write(
+                    _format_sse(
+                        "error",
+                        {"code": "terminal_stream_error", "message": str(exc).strip() or "终端流异常"},
+                    )
+                )
+                await response.write(_format_sse("closed", {"reason": "terminal_stream_error"}))
+            except _CLIENT_DISCONNECT_ERRORS:
+                client_disconnected = True
         finally:
             if queue is not None:
                 await self._terminal_manager.detach(auth.user_id, owner_id, queue)
@@ -2397,7 +2506,7 @@ class WebApiServer:
             self._terminal_tasks.add(current_task)
 
         owner_id = ""
-        queue: asyncio.Queue[bytes | object] | None = None
+        queue = None
         tasks: list[asyncio.Task[Any]] = []
         try:
             try:
@@ -2428,6 +2537,7 @@ class WebApiServer:
                     init_data = {}
             owner_id = self._resolve_terminal_owner_id(init_data.get("owner_id") or request.query.get("owner_id"))
             from_seq = int(init_data.get("from_seq") or request.query.get("from_seq") or 0)
+            protocol_version = 2 if int(init_data.get("protocol_version") or init_data.get("version") or 1) >= 2 else 1
             logger.info(
                 "终端 WebSocket attach 开始 path=%s user_id=%s owner=%s from_seq=%s",
                 request_path,
@@ -2435,11 +2545,19 @@ class WebApiServer:
                 owner_id,
                 from_seq,
             )
-            queue, snapshot = await self._terminal_manager.attach(auth.user_id, owner_id, from_seq=from_seq)
+            queue, snapshot = await self._terminal_manager.attach(
+                auth.user_id,
+                owner_id,
+                from_seq=from_seq,
+                protocol_version=protocol_version,
+            )
             try:
                 await ws.send_json({
                     "pty_mode": snapshot.get("pty_mode"),
                     "connection_text": snapshot.get("connection_text"),
+                    "stream_id": snapshot.get("stream_id"),
+                    "last_seq": snapshot.get("last_seq"),
+                    "protocol_version": protocol_version,
                 })
             except _CLIENT_DISCONNECT_ERRORS:
                 logger.info("终端 WebSocket 客户端在初始化完成前断开: owner=%s", owner_id)
@@ -2458,7 +2576,23 @@ class WebApiServer:
                     if data is TERMINAL_CLIENT_EOF:
                         break
                     try:
-                        await ws.send_bytes(data)
+                        if isinstance(data, TerminalDelivery):
+                            if data.kind in {"gap", "eof"}:
+                                await ws.send_json(
+                                    {
+                                        "type": "closed" if data.kind == "eof" else "gap",
+                                        "stream_id": data.stream_id,
+                                        "sequence": data.sequence,
+                                        "gap_from": data.gap_from,
+                                        "gap_to": data.gap_to,
+                                        "snapshot_required": data.snapshot_required,
+                                        "reason": data.reason,
+                                    }
+                                )
+                            else:
+                                await ws.send_bytes(encode_terminal_ws_v2(data))
+                        elif isinstance(data, bytes):
+                            await ws.send_bytes(data)
                     except _CLIENT_DISCONNECT_ERRORS:
                         logger.info("终端 WebSocket 客户端已断开，停止转发输出: owner=%s", owner_id)
                         break
@@ -2848,6 +2982,8 @@ class WebApiServer:
         alias = self._manager_alias(request)
         limit = int(request.query.get("limit", "50"))
         after_id = request.query.get("after_id", "")
+        revision = int(request.query.get("revision", "0")) if "revision" in request.query else None
+        cursor = request.query.get("cursor", "")
         agent_id = self._request_agent_id(request)
         execution_mode = self._request_execution_mode(request, include_body=False)
         chat_user_id = self._chat_user_id(auth)
@@ -2860,6 +2996,8 @@ class WebApiServer:
             limit=limit,
             agent_id=agent_id,
             execution_mode=execution_mode,
+            revision=revision,
+            cursor=cursor,
             write_key=f"{alias}:{chat_user_id}:{agent_id}",
         )
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
@@ -3865,7 +4003,15 @@ class WebApiServer:
 
     async def admin_runtime_diagnostics(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
-        return _json({"ok": True, "data": migration_diagnostics(_REPO_ROOT)})
+        return _json(
+            {
+                "ok": True,
+                "data": {
+                    **migration_diagnostics(_REPO_ROOT),
+                    "runtime": self._runtime_diagnostics.snapshot(),
+                },
+            }
+        )
 
     async def admin_patch_update(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
@@ -4234,8 +4380,7 @@ class WebApiServer:
         await self._runner.setup()
         self._site = web.TCPSite(self._runner, host=self._host, port=self._port)
         await self._site.start()
-        if diag_enabled():
-            self._loop_lag_task = asyncio.create_task(self._watch_loop_lag(), name="web-loop-lag-watch")
+        self._loop_lag_task = asyncio.create_task(self._watch_loop_lag(), name="web-loop-lag-watch")
         if get_update_status().get("update_enabled"):
             self._update_task = asyncio.create_task(self._auto_refresh_update_status())
         if self._fixed_forward_service.should_autostart():
@@ -4266,8 +4411,9 @@ class WebApiServer:
             now = loop.time()
             lag_ms = max(0, int(round((now - expected_at) * 1000)))
             expected_at = now + interval_seconds
+            self._loop_lag_tracker.observe(lag_ms)
             threshold_ms = diag_loop_lag_ms()
-            if lag_ms < threshold_ms:
+            if lag_ms < threshold_ms or not diag_enabled():
                 continue
             pending = [
                 task

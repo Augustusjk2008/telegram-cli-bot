@@ -578,6 +578,22 @@ class TransferService:
             except TransferServiceError:
                 pass
 
+    def diagnostics(self) -> dict[str, int | bool]:
+        return {
+            "enabled": bool(self.config.enabled),
+            "configured": bool(self.config.configured),
+            "running": bool(self.is_running),
+            "runtime_running": bool(self.runtime.is_running),
+            "runtime_generation": self._runtime_generation,
+            "runtime_start_pending": bool(
+                self._runtime_start_task is not None and not self._runtime_start_task.done()
+            ),
+            "request_count": self.request_count,
+            "bytes_in": self.total_bytes_in,
+            "bytes_out": self.total_bytes_out,
+            "traffic_log_entries": len(self.traffic_log),
+        }
+
     async def close(self) -> None:
         async with self._runtime_lock:
             self._runtime_generation += 1

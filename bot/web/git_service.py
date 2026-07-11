@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -45,12 +46,29 @@ GIT_OVERVIEW_UNTRACKED_STATS_MAX_BYTES = 512 * 1024
 GIT_OVERVIEW_CHANGED_FILES_LIMIT = 2000
 GIT_COMMIT_GRAPH_DEFAULT_LIMIT = 100
 GIT_COMMIT_GRAPH_MAX_LIMIT = 300
+GIT_LOCAL_TIMEOUT_SECONDS = max(0.1, float(os.environ.get("TCB_GIT_LOCAL_TIMEOUT_SECONDS", "10")))
+GIT_REMOTE_TIMEOUT_SECONDS = max(1.0, float(os.environ.get("TCB_GIT_REMOTE_TIMEOUT_SECONDS", "300")))
+GIT_STDOUT_MAX_BYTES = max(1024, int(os.environ.get("TCB_GIT_STDOUT_MAX_BYTES", str(2 * 1024 * 1024))))
+GIT_STDERR_MAX_BYTES = max(1024, int(os.environ.get("TCB_GIT_STDERR_MAX_BYTES", str(64 * 1024))))
+GIT_UNTRACKED_TIMEOUT_SECONDS = max(0.1, float(os.environ.get("TCB_GIT_UNTRACKED_TIMEOUT_SECONDS", "5")))
+GIT_UNTRACKED_MAX_BYTES = max(1024, int(os.environ.get("TCB_GIT_UNTRACKED_MAX_BYTES", str(2 * 1024 * 1024))))
 _GIT_STATUS_CACHE_TTL_SECONDS = 0.75
 _GIT_STATUS_RETRY_DELAY_SECONDS = 0.15
 _GIT_STATUS_CACHE_LOCK = threading.Lock()
 _GIT_STATUS_CACHE: dict[str, dict[str, Any]] = {}
 _GIT_STATUS_REPO_LOCKS: dict[str, threading.Lock] = {}
 _GIT_RECENT_COMMITS_CACHE: dict[tuple[str, int], dict[str, Any]] = {}
+_GIT_DIAGNOSTICS_LOCK = threading.Lock()
+_GIT_DIAGNOSTICS = {
+    "active_processes": 0,
+    "command_count": 0,
+    "timeout_count": 0,
+    "output_budget_count": 0,
+    "stdout_bytes": 0,
+    "stderr_bytes": 0,
+    "cache_hits": 0,
+    "cache_misses": 0,
+}
 _GIT_TRANSIENT_INDEX_ERROR_RE = re.compile(
     r"(index file open failed|Permission denied|unable to create .*index\.lock|File exists)",
     re.IGNORECASE,
@@ -63,6 +81,130 @@ _SSH_STRICT_HOST_KEY_OPTION_RE = re.compile(
 
 class GitCommandError(RuntimeError):
     """Git 命令执行失败。"""
+
+
+@dataclass(frozen=True)
+class _GitCommandProfile:
+    timeout_seconds: float
+    stdout_max_bytes: int = GIT_STDOUT_MAX_BYTES
+    stderr_max_bytes: int = GIT_STDERR_MAX_BYTES
+
+
+_GIT_LOCAL_PROFILE = _GitCommandProfile(GIT_LOCAL_TIMEOUT_SECONDS)
+_GIT_REMOTE_PROFILE = _GitCommandProfile(GIT_REMOTE_TIMEOUT_SECONDS)
+_GIT_UNTRACKED_PROFILE = _GitCommandProfile(
+    GIT_UNTRACKED_TIMEOUT_SECONDS,
+    stdout_max_bytes=GIT_UNTRACKED_MAX_BYTES,
+)
+
+
+def git_service_diagnostics() -> dict[str, int]:
+    with _GIT_DIAGNOSTICS_LOCK:
+        return dict(_GIT_DIAGNOSTICS)
+
+
+def _git_diag_add(**values: int) -> None:
+    with _GIT_DIAGNOSTICS_LOCK:
+        for key, value in values.items():
+            _GIT_DIAGNOSTICS[key] = int(_GIT_DIAGNOSTICS.get(key, 0)) + int(value)
+
+
+def _run_bounded_process(
+    command: list[str],
+    *,
+    cwd: str,
+    env: dict[str, str] | None,
+    profile: _GitCommandProfile,
+    input_text: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        **build_hidden_process_kwargs(),
+    )
+    _git_diag_add(active_processes=1, command_count=1)
+    buffers = {"stdout": bytearray(), "stderr": bytearray()}
+    limits = {"stdout": profile.stdout_max_bytes, "stderr": profile.stderr_max_bytes}
+    exceeded = threading.Event()
+    exceeded_name = [""]
+    deadline = time.monotonic() + profile.timeout_seconds
+    termination_thread: threading.Thread | None = None
+
+    def request_termination() -> None:
+        nonlocal termination_thread
+        if termination_thread is not None:
+            return
+        termination_thread = threading.Thread(target=terminate_process_tree_sync, args=(process,), daemon=True)
+        termination_thread.start()
+
+    def reader(name: str, stream) -> None:
+        while True:
+            chunk = stream.read(65536)
+            if not chunk:
+                return
+            remaining = max(0, limits[name] - len(buffers[name]))
+            if remaining:
+                buffers[name].extend(chunk[:remaining])
+            if len(chunk) > remaining:
+                exceeded_name[0] = name
+                exceeded.set()
+                return
+
+    stdout_thread = threading.Thread(target=reader, args=("stdout", process.stdout), daemon=True)
+    stderr_thread = threading.Thread(target=reader, args=("stderr", process.stderr), daemon=True)
+    stdin_thread: threading.Thread | None = None
+    stdout_thread.start()
+    stderr_thread.start()
+    if process.stdin is not None:
+        def writer() -> None:
+            try:
+                process.stdin.write(str(input_text or "").encode("utf-8"))
+                process.stdin.close()
+            except (BrokenPipeError, OSError, ValueError):
+                pass
+
+        stdin_thread = threading.Thread(target=writer, daemon=True)
+        stdin_thread.start()
+
+    budget_reason = ""
+    while process.poll() is None:
+        if exceeded.is_set():
+            budget_reason = f"{exceeded_name[0]}_bytes"
+            request_termination()
+            break
+        if time.monotonic() >= deadline:
+            budget_reason = "timeout"
+            request_termination()
+            break
+        time.sleep(0.01)
+    cleanup_deadline = time.monotonic() + 0.15
+    try:
+        process.wait(timeout=max(0.0, cleanup_deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        try:
+            process.kill()
+        except OSError:
+            pass
+    close_process_streams(process)
+    for thread in (stdout_thread, stderr_thread, stdin_thread):
+        if thread is not None:
+            thread.join(timeout=max(0.0, cleanup_deadline - time.monotonic()))
+    stdout = bytes(buffers["stdout"]).decode("utf-8", errors="replace")
+    stderr = bytes(buffers["stderr"]).decode("utf-8", errors="replace")
+    _git_diag_add(
+        active_processes=-1,
+        timeout_count=int(budget_reason == "timeout"),
+        output_budget_count=int(bool(budget_reason and budget_reason != "timeout")),
+        stdout_bytes=len(buffers["stdout"]),
+        stderr_bytes=len(buffers["stderr"]),
+    )
+    result = subprocess.CompletedProcess(command, process.returncode or 0, stdout, stderr)
+    result.budget_reason = budget_reason  # type: ignore[attr-defined]
+    return result
 
 
 def _raise(status: int, code: str, message: str):
@@ -155,22 +297,29 @@ def _run_git(
     *,
     check: bool = True,
     env: dict[str, str] | None = None,
+    remote: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     try:
-        result = subprocess.run(
+        result = _run_bounded_process(
             _build_git_command(args),
             cwd=repo_root,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             env=env,
+            profile=(
+                _GIT_REMOTE_PROFILE
+                if remote
+                else _GIT_UNTRACKED_PROFILE
+                if args and args[0] == "ls-files"
+                else _GIT_LOCAL_PROFILE
+            ),
         )
     except FileNotFoundError as exc:
         _raise(500, "git_not_found", "未找到 git 可执行文件")
         raise exc  # pragma: no cover
 
-    if check and result.returncode != 0:
+    budget_reason = str(getattr(result, "budget_reason", "") or "")
+    if budget_reason and args and args[0] != "ls-files":
+        raise GitCommandError(f"Git 命令超过资源预算: {budget_reason}")
+    if check and result.returncode != 0 and not budget_reason:
         output = (result.stderr or result.stdout or "").strip() or "Git 命令执行失败"
         raise GitCommandError(output)
     return result
@@ -178,15 +327,8 @@ def _run_git(
 
 def _get_configured_git_ssh_command(repo_root: str) -> str:
     try:
-        result = subprocess.run(
-            _build_git_command(["config", "--get", "core.sshCommand"]),
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-    except FileNotFoundError:
+        result = _run_git(repo_root, ["config", "--get", "core.sshCommand"], check=False)
+    except (FileNotFoundError, GitCommandError):
         return ""
 
     if result.returncode != 0:
@@ -223,19 +365,20 @@ def _run_git_with_input(
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     try:
-        result = subprocess.run(
+        result = _run_bounded_process(
             _build_git_command(args),
             cwd=repo_root,
-            input=input_text,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
+            input_text=input_text,
+            env=None,
+            profile=_GIT_LOCAL_PROFILE,
         )
     except FileNotFoundError as exc:
         _raise(500, "git_not_found", "未找到 git 可执行文件")
         raise exc  # pragma: no cover
 
+    budget_reason = str(getattr(result, "budget_reason", "") or "")
+    if budget_reason:
+        raise GitCommandError(f"Git 命令超过资源预算: {budget_reason}")
     if check and result.returncode != 0:
         output = (result.stderr or result.stdout or "").strip() or "Git 命令执行失败"
         raise GitCommandError(output)
@@ -297,16 +440,11 @@ def _start_cli_process(
 
 def _resolve_repo_root(working_dir: str) -> Optional[str]:
     try:
-        result = subprocess.run(
-            _build_git_command(["rev-parse", "--show-toplevel"]),
-            cwd=working_dir,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
+        result = _run_git(working_dir, ["rev-parse", "--show-toplevel"], check=False)
     except FileNotFoundError:
         _raise(500, "git_not_found", "未找到 git 可执行文件")
+    except GitCommandError:
+        return None
 
     if result.returncode != 0:
         return None
@@ -622,9 +760,12 @@ def _read_git_status_cache(repo_root: str) -> dict[str, Any] | None:
     with _GIT_STATUS_CACHE_LOCK:
         entry = dict(_GIT_STATUS_CACHE.get(cache_key) or {})
     if not entry:
+        _git_diag_add(cache_misses=1)
         return None
     if now - float(entry.get("created_at") or 0.0) > _GIT_STATUS_CACHE_TTL_SECONDS:
+        _git_diag_add(cache_misses=1)
         return None
+    _git_diag_add(cache_hits=1)
     return entry
 
 
@@ -699,6 +840,61 @@ def _read_fresh_git_status_cache(repo_root: str) -> tuple[dict[str, Any] | None,
     return None, head_token, index_token
 
 
+def _parse_porcelain_v2_z(status_text: str) -> tuple[str, list[str]]:
+    branch_head = ""
+    upstream = ""
+    ahead = 0
+    behind = 0
+    tree_lines: list[str] = []
+    records = (status_text or "").split("\x00")
+    index = 0
+    while index < len(records):
+        record = records[index]
+        index += 1
+        if not record:
+            continue
+        if record.startswith("# branch.head "):
+            branch_head = record.removeprefix("# branch.head ").strip()
+            continue
+        if record.startswith("# branch.upstream "):
+            upstream = record.removeprefix("# branch.upstream ").strip()
+            continue
+        if record.startswith("# branch.ab "):
+            match = re.search(r"\+(\d+)\s+-(\d+)", record)
+            if match:
+                ahead, behind = int(match.group(1)), int(match.group(2))
+            continue
+        if record.startswith("1 "):
+            parts = record.split(" ", 8)
+            if len(parts) >= 9:
+                tree_lines.append(f"{parts[1].replace('.', ' ')} {parts[8]}")
+            continue
+        if record.startswith("2 "):
+            parts = record.split(" ", 9)
+            if len(parts) >= 10:
+                tree_lines.append(f"{parts[1].replace('.', ' ')} {parts[9]}")
+                if index < len(records):
+                    index += 1
+            continue
+        if record.startswith("u "):
+            parts = record.split(" ", 10)
+            if len(parts) >= 11:
+                tree_lines.append(f"{parts[1].replace('.', ' ')} {parts[10]}")
+
+    display_branch = branch_head if branch_head and branch_head != "(detached)" else "HEAD (no branch)"
+    header = f"## {display_branch}"
+    if upstream:
+        header += f"...{upstream}"
+    tracking: list[str] = []
+    if ahead:
+        tracking.append(f"ahead {ahead}")
+    if behind:
+        tracking.append(f"behind {behind}")
+    if tracking:
+        header += f" [{', '.join(tracking)}]"
+    return header, tree_lines
+
+
 def _build_repo_status_snapshot(repo_root: str) -> dict[str, Any]:
     cached, head_token, index_token = _read_fresh_git_status_cache(repo_root)
     if cached:
@@ -713,13 +909,30 @@ def _build_repo_status_snapshot(repo_root: str) -> dict[str, Any]:
             repo_root,
             [
                 "status",
-                "--porcelain=1",
+                "--porcelain=v2",
                 "--branch",
-                "--untracked-files=all",
+                "-z",
+                "--untracked-files=no",
             ],
         )
-        status_lines = (status_result.stdout or "").splitlines()
-        tree_lines = status_lines[1:] if status_lines and status_lines[0].startswith("## ") else status_lines
+        branch_header, tracked_lines = _parse_porcelain_v2_z(status_result.stdout or "")
+        untracked_result = _run_git_status_command_with_retry(
+            repo_root,
+            ["ls-files", "--others", "--exclude-standard", "-z"],
+        )
+        untracked_paths = [path for path in (untracked_result.stdout or "").split("\x00") if path]
+        untracked_budget_reason = str(getattr(untracked_result, "budget_reason", "") or "")
+        untracked_files_truncated = (
+            len(untracked_paths) > GIT_OVERVIEW_CHANGED_FILES_LIMIT
+            or bool(untracked_budget_reason)
+        )
+        retained_untracked = untracked_paths[:GIT_OVERVIEW_CHANGED_FILES_LIMIT]
+        tree_lines = [*tracked_lines, *(f"?? {path}" for path in retained_untracked)]
+        status_lines = [branch_header, *tree_lines]
+        truncation_reason = (
+            untracked_budget_reason
+            or ("untracked_limit" if len(untracked_paths) > GIT_OVERVIEW_CHANGED_FILES_LIMIT else "")
+        )
         entry = {
             "created_at": time.monotonic(),
             "head_token": head_token,
@@ -727,8 +940,14 @@ def _build_repo_status_snapshot(repo_root: str) -> dict[str, Any]:
             "branch_lines": status_lines,
             "tree_lines": tree_lines,
             "status_path_token": _status_path_token(repo_root, tree_lines),
+            "status_truncated": untracked_files_truncated,
+            "untracked_files_truncated": untracked_files_truncated,
+            "count_lower_bound": len(tree_lines),
+            "count_exact": not untracked_files_truncated,
+            "truncation_reason": truncation_reason,
         }
-        _write_git_status_cache(repo_root, entry)
+        if not untracked_files_truncated:
+            _write_git_status_cache(repo_root, entry)
         return entry
 
 
@@ -1106,10 +1325,16 @@ def _build_git_overview(working_dir: str, repo_root: Optional[str]) -> dict[str,
             "changed_files": [],
             "changed_files_truncated": False,
             "changed_files_total_estimate": 0,
+            "status_truncated": False,
+            "untracked_files_truncated": False,
+            "count_lower_bound": 0,
+            "count_exact": True,
+            "truncation_reason": "",
             "recent_commits": [],
         }
 
-    status_lines = _build_repo_status_snapshot(repo_root)["branch_lines"]
+    status_snapshot = _build_repo_status_snapshot(repo_root)
+    status_lines = status_snapshot["branch_lines"]
     header = status_lines[0] if status_lines else ""
     current_branch, ahead_count, behind_count = _parse_status_header(header)
     changed_files = _parse_changed_files(status_lines[1:] if status_lines else [])
@@ -1126,12 +1351,17 @@ def _build_git_overview(working_dir: str, repo_root: Optional[str]) -> dict[str,
         "repo_path": repo_root,
         "repo_name": Path(repo_root).name,
         "current_branch": current_branch,
-        "is_clean": len(changed_files) == 0,
+        "is_clean": len(changed_files) == 0 and not bool(status_snapshot.get("status_truncated")),
         "ahead_count": ahead_count,
         "behind_count": behind_count,
         "changed_files": changed_files,
         "changed_files_truncated": changed_files_truncated,
         "changed_files_total_estimate": changed_files_total,
+        "status_truncated": bool(status_snapshot.get("status_truncated")),
+        "untracked_files_truncated": bool(status_snapshot.get("untracked_files_truncated")),
+        "count_lower_bound": int(status_snapshot.get("count_lower_bound") or changed_files_total),
+        "count_exact": bool(status_snapshot.get("count_exact", True)),
+        "truncation_reason": str(status_snapshot.get("truncation_reason") or ""),
         "recent_commits": _list_recent_commits(repo_root),
     }
 
@@ -1911,7 +2141,12 @@ def _run_git_action(
 ) -> dict[str, Any]:
     working_dir, repo_root = _require_repo_root(manager, alias, user_id)
     try:
-        _run_git(repo_root, args, env=_build_git_remote_env(repo_root) if remote else None)
+        _run_git(
+            repo_root,
+            args,
+            env=_build_git_remote_env(repo_root) if remote else None,
+            remote=remote,
+        )
     except GitCommandError as exc:
         _raise(400, error_code, str(exc))
     _invalidate_git_status_cache(repo_root)

@@ -175,3 +175,69 @@ async def test_attach_from_expired_sequence_reports_reset_and_replays_tail():
     await manager.detach(1, "main", client)
     assert client.queued_bytes == 0
     assert await client.get() is TERMINAL_CLIENT_EOF
+
+
+@pytest.mark.asyncio
+async def test_terminal_replay_preserves_stream_and_chunk_sequences():
+    from bot.web.terminal_manager import (
+        ManagedTerminalSession,
+        TerminalChunk,
+        TerminalDelivery,
+        TerminalSessionManager,
+    )
+
+    class AliveProcess:
+        is_pty = True
+
+        def isalive(self):
+            return True
+
+    manager = TerminalSessionManager()
+    session = ManagedTerminalSession(owner_key="1:main", process=AliveProcess(), stream_id="term-stream")
+    session.next_seq = 4
+    session.replay.extend(
+        [
+            TerminalChunk(seq=1, data=b"one"),
+            TerminalChunk(seq=2, data=b"two"),
+            TerminalChunk(seq=3, data=b"three"),
+        ]
+    )
+    session.replay_bytes = 11
+    manager._sessions["1:main"] = session
+
+    client, snapshot = await manager.attach(1, "main", from_seq=1, protocol_version=2)
+    first = await client.get()
+    second = await client.get()
+
+    assert snapshot["stream_id"] == "term-stream"
+    assert isinstance(first, TerminalDelivery)
+    assert isinstance(second, TerminalDelivery)
+    assert [(first.sequence, first.payload), (second.sequence, second.payload)] == [
+        (2, b"two"),
+        (3, b"three"),
+    ]
+
+
+def test_terminal_v2_binary_header_carries_version_flags_and_sequence():
+    from bot.web.terminal_manager import (
+        TERMINAL_WS_V2_HEADER,
+        TERMINAL_WS_V2_MAGIC,
+        TerminalDelivery,
+        encode_terminal_ws_v2,
+    )
+
+    encoded = encode_terminal_ws_v2(
+        TerminalDelivery(
+            stream_id="stream",
+            kind="output",
+            sequence=42,
+            payload=b"payload",
+        )
+    )
+    magic, version, flags, sequence = TERMINAL_WS_V2_HEADER.unpack(
+        encoded[: TERMINAL_WS_V2_HEADER.size]
+    )
+
+    assert magic == TERMINAL_WS_V2_MAGIC
+    assert (version, flags, sequence) == (2, 0, 42)
+    assert encoded[TERMINAL_WS_V2_HEADER.size :] == b"payload"

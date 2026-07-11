@@ -1,6 +1,7 @@
+import { createRef } from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DynamicVirtualList } from "../components/virtual/DynamicVirtualList";
+import { DynamicVirtualList, type DynamicVirtualListHandle } from "../components/virtual/DynamicVirtualList";
 
 type ResizeObserverCallbackLike = ConstructorParameters<typeof ResizeObserver>[0];
 
@@ -126,5 +127,53 @@ describe("DynamicVirtualList", () => {
     act(() => rowObserver("row-new").trigger(40));
 
     expect(list.scrollTop).toBe(80);
+  });
+
+  it("scrolls by stable key and exposes the visible range", () => {
+    const ref = createRef<DynamicVirtualListHandle>();
+    const items = Array.from({ length: 100 }, (_, index) => `row-${index}`);
+    render(
+      <DynamicVirtualList
+        ref={ref}
+        items={items}
+        getKey={(item) => item}
+        renderItem={(item) => <div>{item}</div>}
+        estimateHeight={20}
+        dataTestId="list"
+      />,
+    );
+
+    let scrolled = false;
+    act(() => {
+      scrolled = ref.current?.scrollToKey("row-50", { align: "center" }) || false;
+    });
+    expect(scrolled).toBe(true);
+    expect(screen.getByTestId("list").scrollTop).toBe(950);
+    expect(ref.current?.getVisibleRange()).toEqual({
+      startIndex: 47,
+      endIndex: 53,
+      keys: ["row-47", "row-48", "row-49", "row-50", "row-51", "row-52", "row-53"],
+    });
+    expect(ref.current?.scrollToKey("missing")).toBe(false);
+  });
+
+  it("invalidates cached measurements", () => {
+    const ref = createRef<DynamicVirtualListHandle>();
+    render(
+      <DynamicVirtualList
+        ref={ref}
+        items={["row-0", "row-1"]}
+        getKey={(item) => item}
+        renderItem={(item) => <div>{item}</div>}
+        estimateHeight={20}
+        dataTestId="list"
+      />,
+    );
+    const spacer = screen.getByTestId("list").firstElementChild as HTMLElement;
+    act(() => rowObserver("row-0").trigger(50));
+    expect(spacer.style.height).toBe("70px");
+
+    act(() => ref.current?.invalidateMeasurement("row-0"));
+    expect(spacer.style.height).toBe("40px");
   });
 });

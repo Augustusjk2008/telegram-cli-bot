@@ -493,7 +493,7 @@ test("merges history refresh assistant message by turn id while local send is se
   expect(screen.getAllByTestId("chat-message-row")).toHaveLength(2);
 });
 
-test("recovers stalled SSE by refreshing full history while processing continues", async () => {
+test("recovers stalled SSE with revision delta and never reloads full history", async () => {
   let overviewCalls = 0;
   let historyCalls = 0;
   let requestSignal: AbortSignal | undefined;
@@ -510,8 +510,28 @@ test("recovers stalled SSE by refreshing full history while processing continues
   });
   const listMessageDelta = vi.fn<WebBotClient["listMessageDelta"]>(async () => ({
     reset: false,
-    items: [],
+    revision: 4,
+    items: [
+      {
+        id: "user-history-stalled",
+        role: "user",
+        text: "公网缓冲",
+        createdAt: "2026-07-07T10:00:00Z",
+        state: "done",
+      },
+      {
+        id: "assistant-history-stalled",
+        role: "assistant",
+        text: "历史恢复的最终回复",
+        createdAt: "2026-07-07T10:00:05Z",
+        state: "done",
+      },
+    ],
   }));
+  const listMessages = vi.fn(async (): Promise<ChatMessage[]> => {
+    historyCalls += 1;
+    return [];
+  });
   const client = createClient({
     getBotOverview: vi.fn(async (): Promise<BotOverview> => {
       overviewCalls += 1;
@@ -523,28 +543,7 @@ test("recovers stalled SSE by refreshing full history while processing continues
         isProcessing: overviewCalls > 1,
       };
     }),
-    listMessages: vi.fn(async (): Promise<ChatMessage[]> => {
-      historyCalls += 1;
-      if (historyCalls === 1) {
-        return [];
-      }
-      return [
-        {
-          id: "user-history-stalled",
-          role: "user",
-          text: "公网缓冲",
-          createdAt: "2026-07-07T10:00:00Z",
-          state: "done",
-        },
-        {
-          id: "assistant-history-stalled",
-          role: "assistant",
-          text: "历史恢复的最终回复",
-          createdAt: "2026-07-07T10:00:05Z",
-          state: "done",
-        },
-      ];
-    }),
+    listMessages,
     listMessageDelta,
     sendMessage,
   });
@@ -568,7 +567,9 @@ test("recovers stalled SSE by refreshing full history while processing continues
   expect(screen.getByText("历史恢复的最终回复")).toBeInTheDocument();
   expect(requestSignal?.aborted).toBe(true);
   expect(screen.getByRole("button", { name: "终止任务" })).toBeEnabled();
-  expect(listMessageDelta).not.toHaveBeenCalled();
+  expect(listMessageDelta).toHaveBeenCalledTimes(1);
+  expect(listMessages).toHaveBeenCalledTimes(1);
+  expect(historyCalls).toBe(1);
 });
 
 test("stops active polling when recovered streaming history is no longer processing", async () => {
@@ -3759,7 +3760,6 @@ test("native user bubble rollback confirms and refreshes history outside solo mo
   expect(listMessages.mock.calls.filter(([, options]) => options?.executionMode === "native_agent").length).toBeGreaterThan(1);
   expect(listConversations).toHaveBeenCalled();
 });
-
 
 
 

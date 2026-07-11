@@ -6,8 +6,10 @@ import asyncio
 import logging
 import os
 import subprocess
+import struct
 import threading
 import time
+import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
@@ -51,6 +53,32 @@ class TerminalChunk:
     is_gap: bool = False
 
 
+@dataclass(slots=True, frozen=True)
+class TerminalDelivery:
+    stream_id: str
+    kind: str
+    sequence: int
+    payload: bytes = b""
+    gap_from: int = 0
+    gap_to: int = 0
+    snapshot_required: bool = False
+    reason: str = ""
+
+
+TERMINAL_WS_V2_MAGIC = b"TCB2"
+TERMINAL_WS_V2_HEADER = struct.Struct("!4sBBQ")
+
+
+def encode_terminal_ws_v2(delivery: TerminalDelivery) -> bytes:
+    flags = 1 if delivery.kind == "gap" else 0
+    return TERMINAL_WS_V2_HEADER.pack(
+        TERMINAL_WS_V2_MAGIC,
+        2,
+        flags,
+        max(0, int(delivery.sequence)),
+    ) + bytes(delivery.payload)
+
+
 @dataclass(slots=True)
 class TerminalQueueState:
     queued_bytes: int = 0
@@ -60,7 +88,7 @@ class TerminalQueueState:
 
 @dataclass(slots=True)
 class _TerminalClientItem:
-    payload: bytes | object
+    payload: bytes | TerminalDelivery | object
     counted_bytes: int = 0
 
 
@@ -70,15 +98,17 @@ class TerminalClientQueue:
         *,
         soft_max_bytes: int = TERMINAL_CLIENT_SOFT_MAX_BYTES,
         hard_max_bytes: int = TERMINAL_CLIENT_HARD_MAX_BYTES,
+        protocol_version: int = 1,
     ) -> None:
         self.soft_max_bytes = max(1, int(soft_max_bytes))
         self.hard_max_bytes = max(self.soft_max_bytes, int(hard_max_bytes))
         self.queued_bytes = 0
+        self.protocol_version = 2 if int(protocol_version or 1) >= 2 else 1
         self._queue: deque[_TerminalClientItem] = deque()
         self._available = asyncio.Event()
         self._closed = False
 
-    async def get(self) -> bytes | object:
+    async def get(self) -> bytes | TerminalDelivery | object:
         while True:
             if self._queue:
                 item = self._queue.popleft()
@@ -93,7 +123,7 @@ class TerminalClientQueue:
         self._queue.clear()
         self.queued_bytes = 0
 
-    def put_control(self, payload: bytes | object) -> None:
+    def put_control(self, payload: bytes | TerminalDelivery | object) -> None:
         if self._closed and payload is not TERMINAL_CLIENT_EOF:
             return
         self._queue.append(_TerminalClientItem(payload=payload))
@@ -134,6 +164,45 @@ class TerminalClientQueue:
         self._available.set()
         return True
 
+    def put_delivery(self, delivery: TerminalDelivery) -> bool:
+        if self.protocol_version < 2:
+            return self.put_output(delivery.payload or (TERMINAL_GAP_NOTICE if delivery.kind == "gap" else b""))
+        if self._closed:
+            return False
+        payload_bytes = len(delivery.payload)
+        if self.queued_bytes + payload_bytes > self.hard_max_bytes:
+            queued_sequences = [
+                item.payload.sequence
+                for item in self._queue
+                if isinstance(item.payload, TerminalDelivery)
+            ]
+            self._clear()
+            self.put_control(
+                TerminalDelivery(
+                    stream_id=delivery.stream_id,
+                    kind="gap",
+                    sequence=delivery.sequence,
+                    gap_from=min(queued_sequences, default=delivery.sequence),
+                    gap_to=delivery.sequence,
+                    snapshot_required=True,
+                    reason="slow_client",
+                )
+            )
+            self.put_control(
+                TerminalDelivery(
+                    stream_id=delivery.stream_id,
+                    kind="eof",
+                    sequence=delivery.sequence + 1,
+                    reason="slow_client",
+                )
+            )
+            self.put_eof()
+            return False
+        self._queue.append(_TerminalClientItem(payload=delivery, counted_bytes=payload_bytes))
+        self.queued_bytes += payload_bytes
+        self._available.set()
+        return True
+
     def clear(self) -> None:
         self._closed = True
         self._clear()
@@ -157,6 +226,8 @@ class ManagedTerminalSession:
     pump_task: asyncio.Task[None] | None = None
     dropped_bytes: int = 0
     last_gap_seq: int = 0
+    stream_id: str = field(default_factory=lambda: f"term_{uuid.uuid4().hex[:16]}")
+    eof_seq: int = 0
 
 
 class TerminalNotRunningError(RuntimeError):
@@ -400,6 +471,7 @@ class TerminalSessionManager:
                 "gap_seq": 0,
                 "dropped_bytes": 0,
                 "reset_required": False,
+                "stream_id": "",
             }
 
         started = session.process is not None and not session.is_closed
@@ -422,15 +494,28 @@ class TerminalSessionManager:
             "gap_seq": session.last_gap_seq,
             "dropped_bytes": session.dropped_bytes,
             "reset_required": False,
+            "stream_id": session.stream_id,
         }
 
-    def _notify_clients_locked(self, session: ManagedTerminalSession, item: bytes | object) -> None:
+    def _notify_clients_locked(self, session: ManagedTerminalSession, item: TerminalDelivery | object) -> None:
         stale: list[TerminalClientQueue] = []
         for client in session.clients:
             try:
                 if item is TERMINAL_CLIENT_EOF:
+                    if client.protocol_version >= 2:
+                        if session.eof_seq <= 0:
+                            session.eof_seq = session.next_seq
+                            session.next_seq += 1
+                        client.put_control(
+                            TerminalDelivery(
+                                stream_id=session.stream_id,
+                                kind="eof",
+                                sequence=session.eof_seq,
+                                reason="terminal_closed",
+                            )
+                        )
                     client.put_eof()
-                elif isinstance(item, bytes) and not client.put_output(item):
+                elif isinstance(item, TerminalDelivery) and not client.put_delivery(item):
                     stale.append(client)
             except Exception:
                 stale.append(client)
@@ -445,6 +530,23 @@ class TerminalSessionManager:
     async def get_snapshot(self, user_id: int, owner_id: str) -> dict[str, Any]:
         async with self._lock:
             return self._build_snapshot_locked(self._sessions.get(self._key(user_id, owner_id)))
+
+    def diagnostics(self) -> dict[str, int]:
+        sessions = list(self._sessions.values())
+        clients = [client for session in sessions for client in session.clients]
+        replay_bytes = sum(session.replay_bytes for session in sessions)
+        replay_events = sum(len(session.replay) for session in sessions)
+        queued_bytes = sum(client.queued_bytes for client in clients)
+        return {
+            "sessions": len(sessions),
+            "active_processes": sum(1 for session in sessions if session.process is not None and not session.is_closed),
+            "clients": len(clients),
+            "replay_events": replay_events,
+            "replay_bytes": replay_bytes,
+            "replay_max_bytes_per_session": TERMINAL_REPLAY_MAX_BYTES,
+            "client_queued_bytes": queued_bytes,
+            "dropped_bytes": sum(session.dropped_bytes for session in sessions),
+        }
 
     async def rebuild(
         self,
@@ -495,6 +597,8 @@ class TerminalSessionManager:
             session.process = process
             session.output_pump = output_pump
             session.next_seq = 1
+            session.stream_id = f"term_{uuid.uuid4().hex[:16]}"
+            session.eof_seq = 0
             session.replay.clear()
             session.replay_bytes = 0
             session.dropped_bytes = 0
@@ -518,8 +622,9 @@ class TerminalSessionManager:
         owner_id: str,
         *,
         from_seq: int = 0,
+        protocol_version: int = 1,
     ) -> tuple[TerminalClientQueue, dict[str, Any]]:
-        client = TerminalClientQueue()
+        client = TerminalClientQueue(protocol_version=protocol_version)
         async with self._lock:
             session = self._sessions.get(self._key(user_id, owner_id))
             if session is None or session.process is None or session.is_closed:
@@ -537,10 +642,38 @@ class TerminalSessionManager:
                 replay_bytes += len(chunk.data)
             selected = list(reversed(selected_reversed))
             if reset_required:
-                client.put_control(TERMINAL_GAP_NOTICE)
-            replay_payload = b"".join(chunk.data for chunk in selected)
-            if replay_payload:
-                client.put_output(replay_payload)
+                if client.protocol_version >= 2:
+                    client.put_control(
+                        TerminalDelivery(
+                            stream_id=session.stream_id,
+                            kind="gap",
+                            sequence=max(0, (selected[0].seq if selected else earliest_seq) - 1),
+                            gap_from=from_seq + 1,
+                            gap_to=max((selected[0].seq if selected else earliest_seq) - 1, 0),
+                            snapshot_required=True,
+                            reason="replay_evicted",
+                        )
+                    )
+                else:
+                    client.put_control(TERMINAL_GAP_NOTICE)
+            if client.protocol_version >= 2:
+                for chunk in selected:
+                    client.put_delivery(
+                        TerminalDelivery(
+                            stream_id=session.stream_id,
+                            kind="gap" if chunk.is_gap else "output",
+                            sequence=chunk.seq,
+                            payload=chunk.data,
+                            gap_from=chunk.seq if chunk.is_gap else 0,
+                            gap_to=chunk.seq if chunk.is_gap else 0,
+                            snapshot_required=chunk.is_gap,
+                            reason="pump_overflow" if chunk.is_gap else "",
+                        )
+                    )
+            else:
+                replay_payload = b"".join(chunk.data for chunk in selected)
+                if replay_payload:
+                    client.put_output(replay_payload)
             session.clients.add(client)
             snapshot = self._build_snapshot_locked(session)
             snapshot.update(
@@ -637,7 +770,19 @@ class TerminalSessionManager:
                         session.replay.append(chunk)
                         session.replay_bytes += len(chunk.data)
                         self._trim_replay_locked(session)
-                        self._notify_clients_locked(session, chunk.data)
+                        self._notify_clients_locked(
+                            session,
+                            TerminalDelivery(
+                                stream_id=session.stream_id,
+                                kind="gap",
+                                sequence=chunk.seq,
+                                payload=chunk.data,
+                                gap_from=chunk.seq,
+                                gap_to=chunk.seq,
+                                snapshot_required=True,
+                                reason="pump_overflow",
+                            ),
+                        )
                     continue
                 if isinstance(data, str):
                     data = data.encode("utf-8", errors="replace")
@@ -655,7 +800,15 @@ class TerminalSessionManager:
                         session.replay.append(chunk)
                         session.replay_bytes += len(data)
                         self._trim_replay_locked(session)
-                        self._notify_clients_locked(session, data)
+                        self._notify_clients_locked(
+                            session,
+                            TerminalDelivery(
+                                stream_id=session.stream_id,
+                                kind="output",
+                                sequence=chunk.seq,
+                                payload=data,
+                            ),
+                        )
                     continue
 
                 try:

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import subprocess
+import sys
+import time
+from pathlib import Path
 
 import pytest
 
@@ -11,6 +14,82 @@ from bot.web.api_common import WebApiError
 def test_build_git_command_disables_fsmonitor() -> None:
     cmd = git_service._build_git_command(["status"])
     assert cmd[:3] == ["git", "-c", "core.fsmonitor=false"]
+
+
+def test_bounded_git_process_stops_at_stdout_budget(tmp_path) -> None:
+    result = git_service._run_bounded_process(
+        [sys.executable, "-c", "import sys; sys.stdout.write('x' * 100000)"],
+        cwd=str(tmp_path),
+        env=None,
+        profile=git_service._GitCommandProfile(
+            timeout_seconds=2,
+            stdout_max_bytes=128,
+            stderr_max_bytes=128,
+        ),
+    )
+
+    assert result.budget_reason == "stdout_bytes"
+    assert len(result.stdout.encode("utf-8")) <= 128
+
+
+def test_bounded_git_process_stops_at_timeout(tmp_path) -> None:
+    result = git_service._run_bounded_process(
+        [sys.executable, "-c", "import time; time.sleep(2)"],
+        cwd=str(tmp_path),
+        env=None,
+        profile=git_service._GitCommandProfile(
+            timeout_seconds=0.05,
+            stdout_max_bytes=128,
+            stderr_max_bytes=128,
+        ),
+    )
+
+    assert result.budget_reason == "timeout"
+
+
+def test_bounded_git_process_deadline_includes_blocked_stdin_write(tmp_path) -> None:
+    started_at = time.monotonic()
+    result = git_service._run_bounded_process(
+        [sys.executable, "-c", "import time; time.sleep(0.4)"],
+        cwd=str(tmp_path),
+        env=None,
+        input_text="x" * (5 * 1024 * 1024),
+        profile=git_service._GitCommandProfile(
+            timeout_seconds=0.05,
+            stdout_max_bytes=128,
+            stderr_max_bytes=128,
+        ),
+    )
+
+    assert time.monotonic() - started_at < 0.3
+    assert result.budget_reason == "timeout"
+
+
+def test_real_porcelain_v2_z_parses_rename_and_space_paths(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    old_path = repo / "old name.txt"
+    old_path.write_text("same content\n", encoding="utf-8")
+    subprocess.run(["git", "add", "--", old_path.name], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, check=True, capture_output=True)
+    old_path.rename(repo / "new name.txt")
+    (repo / "untracked file.txt").write_text("new\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A", "--", "old name.txt", "new name.txt"], cwd=repo, check=True)
+
+    raw = git_service._run_git_status_command_with_retry(
+        str(repo),
+        ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=no"],
+    ).stdout
+    header, tree_lines = git_service._parse_porcelain_v2_z(raw)
+    snapshot = git_service._build_repo_status_snapshot(str(repo))
+
+    assert "\x00" in raw
+    assert header.startswith("## ")
+    assert tree_lines == ["R  new name.txt"]
+    assert "?? untracked file.txt" in snapshot["tree_lines"]
 
 
 def test_git_status_command_retries_transient_index_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -101,7 +180,14 @@ def test_build_repo_status_snapshot_caches_clean_repo_and_uses_one_status_comman
     def fake_status(repo_root: str, args: list[str]) -> subprocess.CompletedProcess[str]:
         assert repo_root == "repo"
         calls.append(args)
-        return subprocess.CompletedProcess(args=args, returncode=0, stdout="## main\n", stderr="")
+        if args[0] == "status":
+            return subprocess.CompletedProcess(
+                args=args,
+                returncode=0,
+                stdout="# branch.oid abc\x00# branch.head main\x00",
+                stderr="",
+            )
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(git_service, "_run_git_status_command_with_retry", fake_status)
 
@@ -111,9 +197,42 @@ def test_build_repo_status_snapshot_caches_clean_repo_and_uses_one_status_comman
     assert first["branch_lines"] == ["## main"]
     assert first["tree_lines"] == []
     assert second["branch_lines"] == ["## main"]
-    assert len(calls) == 1
+    assert len(calls) == 2
     assert "--branch" in calls[0]
-    assert "--untracked-files=all" in calls[0]
+    assert "--untracked-files=no" in calls[0]
+    assert calls[1][:2] == ["ls-files", "--others"]
+
+
+def test_build_repo_status_snapshot_bounds_untracked_and_marks_uncertain_clean(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(git_service, "GIT_OVERVIEW_CHANGED_FILES_LIMIT", 2)
+    monkeypatch.setattr(git_service, "_read_fresh_git_status_cache", lambda _root: (None, "head", (1, 1)))
+    monkeypatch.setattr(git_service, "_write_git_status_cache", lambda _root, _entry: None)
+
+    def fake_status(_repo_root: str, args: list[str]):
+        if args[0] == "status":
+            return subprocess.CompletedProcess(
+                args=args,
+                returncode=0,
+                stdout="# branch.oid abc\x00# branch.head main\x001 .M N... 100644 100644 100644 a b tracked.py\x00",
+                stderr="",
+            )
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout="u1.txt\x00u2.txt\x00u3.txt\x00",
+            stderr="",
+        )
+
+    monkeypatch.setattr(git_service, "_run_git_status_command_with_retry", fake_status)
+    snapshot = git_service._build_repo_status_snapshot("repo")
+
+    assert snapshot["branch_lines"][1] == " M tracked.py"
+    assert snapshot["untracked_files_truncated"] is True
+    assert snapshot["count_exact"] is False
+    assert snapshot["count_lower_bound"] == 3
+    assert snapshot["truncation_reason"] == "untracked_limit"
 
 
 def test_list_recent_commits_reuses_head_scoped_cache(monkeypatch: pytest.MonkeyPatch) -> None:
