@@ -181,9 +181,11 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
   let v2MessageChain = Promise.resolve();
   const connectionGenerations = new TerminalConnectionGeneration();
   const recovery = new TerminalRecoveryTracker(options.fromSeq ?? 0);
-  const fallbackInputDisposable = term.onData((data) => {
+  const inputDisposable = term.onData((data) => {
     if (fallbackActive) {
       void postFallbackInput(data);
+    } else if (protocolVersion >= TERMINAL_PROTOCOL_VERSION && socket?.readyState === WebSocket.OPEN) {
+      socket.send(data);
     }
   });
 
@@ -666,7 +668,7 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
       }
       cleanupSocket();
       cleanupFallback();
-      fallbackInputDisposable.dispose();
+      inputDisposable.dispose();
       attachAddon?.dispose();
       attachAddon = null;
       socket?.close(1000);
