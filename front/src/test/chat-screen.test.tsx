@@ -592,6 +592,60 @@ test("hides duplicate CLI error text when final message already includes exit-co
   expect(transcript.textContent?.match(/错误信息/g) || []).toHaveLength(1);
 });
 
+test("keeps the scroll position after dragging the scrollbar away from the bottom", async () => {
+  class TestResizeObserver {
+    static instances: TestResizeObserver[] = [];
+    target: Element | null = null;
+
+    constructor(readonly callback: ResizeObserverCallback) {
+      TestResizeObserver.instances.push(this);
+    }
+
+    observe(target: Element) {
+      this.target = target;
+    }
+
+    disconnect() {
+      this.target = null;
+    }
+
+    unobserve() {}
+  }
+
+  vi.stubGlobal("ResizeObserver", TestResizeObserver);
+  vi.stubGlobal("requestAnimationFrame", vi.fn(() => 1));
+  render(<ChatScreen botAlias="main" client={createClient()} />);
+  await screen.findByText("暂无消息，开始聊天吧");
+
+  const container = screen.getByTestId("chat-scroll-container");
+  const content = screen.getByTestId("chat-scroll-content");
+  let scrollTop = 900;
+  Object.defineProperties(container, {
+    clientHeight: { configurable: true, get: () => 100 },
+    scrollHeight: { configurable: true, get: () => 1_000 },
+    scrollTop: {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => { scrollTop = value; },
+    },
+  });
+
+  fireEvent.scroll(container);
+  scrollTop = 500;
+  fireEvent.scroll(container);
+
+  const contentObserver = TestResizeObserver.instances.find((observer) => observer.target === content);
+  expect(contentObserver).toBeDefined();
+  act(() => {
+    contentObserver?.callback(
+      [{ target: content, contentRect: { height: 600 } } as unknown as ResizeObserverEntry],
+      contentObserver as unknown as ResizeObserver,
+    );
+  });
+
+  expect(scrollTop).toBe(500);
+});
+
 test("shows final answer actions for failed assistant messages", async () => {
   const user = userEvent.setup();
   const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async () => ({
@@ -763,6 +817,7 @@ test("uses cli status preview while waiting for first output chunk", async () =>
 
 test("renders live cli trace without temporary answer while streaming", async () => {
   const user = userEvent.setup();
+  let resolveFinal!: (message: ChatMessage) => void;
   const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
     _botAlias,
     _text,
@@ -777,14 +832,9 @@ test("renders live cli trace without temporary answer while streaming", async ()
       toolName: "shell_command",
       callId: "call-1",
     });
-    await new Promise((resolve) => window.setTimeout(resolve, 200));
-    return {
-      id: "assistant-stream-mid-trace",
-      role: "assistant",
-      text: "最终答复",
-      createdAt: new Date().toISOString(),
-      state: "done",
-    };
+    return new Promise<ChatMessage>((resolve) => {
+      resolveFinal = resolve;
+    });
   });
   const client = createClient({
     sendMessage,
@@ -810,6 +860,16 @@ test("renders live cli trace without temporary answer while streaming", async ()
   expect(screen.queryByRole("button", { name: "复制最终回答" })).not.toBeInTheDocument();
   expect(screen.getByTestId("native-agent-streaming-status")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "展开过程详情" })).not.toBeInTheDocument();
+
+  await act(async () => {
+    resolveFinal({
+      id: "assistant-stream-mid-trace",
+      role: "assistant",
+      text: "最终答复",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    });
+  });
 });
 
 test("plain cli streaming text waits for done before rendering answer", async () => {
@@ -3607,15 +3667,6 @@ test("native user bubble rollback confirms and refreshes history outside solo mo
   expect(listMessages.mock.calls.filter(([, options]) => options?.executionMode === "native_agent").length).toBeGreaterThan(1);
   expect(listConversations).toHaveBeenCalled();
 });
-
-
-
-
-
-
-
-
-
 
 
 

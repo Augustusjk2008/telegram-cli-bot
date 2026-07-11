@@ -1968,6 +1968,7 @@ export function ChatScreen({
   const chatRootRef = useRef<HTMLElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const forceAutoScrollRef = useRef(true);
+  const lastObservedScrollTopRef = useRef(0);
   const isVisibleRef = useRef(isVisible);
   const loadingRef = useRef(loading);
   const isStreamingRef = useRef(isStreaming);
@@ -2748,6 +2749,7 @@ export function ChatScreen({
     if (scrollContainerRef.current) {
       try {
         scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+        lastObservedScrollTopRef.current = scrollContainerRef.current.scrollTop;
       } catch {
         // Tests may replace scrollTop with a getter-only descriptor; browsers keep this writable.
       }
@@ -2848,12 +2850,14 @@ export function ChatScreen({
       return;
     }
     const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    const movedUp = container.scrollTop + 1 < lastObservedScrollTopRef.current;
+    lastObservedScrollTopRef.current = container.scrollTop;
     shouldStickToBottomRef.current = distanceFromBottom <= 96;
     if (shouldStickToBottomRef.current) {
       userScrollIntentRef.current = false;
       return;
     }
-    if (userScrollIntentRef.current) {
+    if (userScrollIntentRef.current || movedUp) {
       forceAutoScrollRef.current = false;
       revealScrollAttemptsRef.current = 0;
       cancelRevealScroll();
@@ -3838,16 +3842,11 @@ export function ChatScreen({
             }
           : {}),
       });
-      const finalMetaHasTrace = Boolean(
-        finalizedMessage.meta?.trace?.length
-        || typeof finalizedMessage.meta?.traceCount === "number"
-        || typeof finalizedMessage.meta?.toolCallCount === "number"
-        || typeof finalizedMessage.meta?.processCount === "number"
-      );
+      const finalMetaHasTracePayload = Array.isArray(finalizedMessage.meta?.trace);
 
       setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => ({
         ...finalizedMessage,
-        meta: finalMetaHasTrace ? finalizedMessage.meta : mergeMessageMeta(item.meta, finalizedMessage.meta),
+        meta: finalMetaHasTracePayload ? finalizedMessage.meta : mergeMessageMeta(item.meta, finalizedMessage.meta),
       })));
       options.onSuccess?.(finalizedMessage);
       if (!isVisibleRef.current) {
