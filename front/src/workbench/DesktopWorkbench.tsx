@@ -1,5 +1,5 @@
 import { clsx } from "clsx";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import type { ViewMode } from "../app/layoutMode";
@@ -7,9 +7,6 @@ import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { FileReadResult, GitTreeStatus, HostEffect, PluginOpenTarget, WorkspaceDefinitionItem } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { premiumMotion, resolveMotionProps } from "../motion/premiumMotion";
-import { GitScreen } from "../screens/GitScreen";
-import { PluginsScreen } from "../screens/PluginsScreen";
-import { SettingsScreen } from "../screens/SettingsScreen";
 import "../styles/workbench.css";
 import type {
   ChatBodyFontFamilyName,
@@ -27,17 +24,22 @@ import {
 import { WORKSPACE_DELETED_EVENT, isWorkspaceDeletedEvent } from "../utils/workspaceEvents";
 import { ChatPane } from "./ChatPane";
 import { CommandPalette } from "./CommandPalette";
-import { DebugPane } from "./DebugPane";
-import { EditorPane } from "./EditorPane";
 import { FileTreePane } from "./FileTreePane";
 import { LanChatDock } from "./LanChatDock";
 import { OutlinePane } from "./OutlinePane";
 import { PaneResizer } from "./PaneResizer";
 import { SearchPane } from "./SearchPane";
-import { TerminalPane } from "./TerminalPane";
 import { WorkbenchActivityRail } from "./WorkbenchActivityRail";
 import { WorkbenchHeader } from "./WorkbenchHeader";
 import { WorkbenchStatusBar } from "./WorkbenchStatusBar";
+import {
+  LazyDebugPane as DebugPane,
+  LazyEditorPane as EditorPane,
+  LazyGitScreen as GitScreen,
+  LazyPluginsScreen as PluginsScreen,
+  LazySettingsScreen as SettingsScreen,
+  LazyTerminalPane as TerminalPane,
+} from "./lazyPanes";
 import { useDebugSession } from "./useDebugSession";
 import { useEditorTabs } from "./useEditorTabs";
 import { useFileTree } from "./useFileTree";
@@ -58,6 +60,11 @@ import {
 } from "./workbenchTypes";
 
 const RASTER_IMAGE_PREVIEW_RE = /\.(?:png|jpe?g|gif|webp)$/i;
+const paneFallback = (
+  <div className="flex h-full min-h-[120px] items-center justify-center text-xs text-[var(--muted)]">
+    正在加载...
+  </div>
+);
 
 function normalizeWorkbenchPath(value: string) {
   return String(value || "").replace(/\\/g, "/").replace(/\/+$/, "");
@@ -841,6 +848,7 @@ export function DesktopWorkbench({
 
     if (activeSidebarView === "debug") {
       return (
+        <Suspense fallback={paneFallback}>
         <DebugPane
           profile={debug.profile}
           profileLoading={debug.profileLoading}
@@ -876,11 +884,13 @@ export function DesktopWorkbench({
             void debug.requestVariables(variablesReference);
           }}
         />
+        </Suspense>
       );
     }
 
     if (activeSidebarView === "git") {
       return (
+        <Suspense fallback={paneFallback}>
         <GitScreen
           botAlias={botAlias}
           client={client}
@@ -892,11 +902,13 @@ export function DesktopWorkbench({
             void refreshGitDecorations();
           }}
         />
+        </Suspense>
       );
     }
 
     if (activeSidebarView === "plugins") {
       return (
+        <Suspense fallback={paneFallback}>
         <PluginsScreen
           client={client}
           botAlias={botAlias}
@@ -905,11 +917,13 @@ export function DesktopWorkbench({
           onApplyHostEffects={runPluginHostEffects}
           onOpenPluginView={openPluginViewTab}
         />
+        </Suspense>
       );
     }
 
     if (activeSidebarView === "settings") {
       return (
+        <Suspense fallback={paneFallback}>
         <SettingsScreen
           botAlias={botAlias}
           client={client}
@@ -934,6 +948,7 @@ export function DesktopWorkbench({
           showBotRuntimeSettings={false}
           onOpenBotManager={onOpenBotManager}
         />
+        </Suspense>
       );
     }
   }
@@ -1058,6 +1073,7 @@ export function DesktopWorkbench({
                 data-focused={focusedPane === "editor" ? "true" : "false"}
                 className="desktop-workbench-pane min-h-0 overflow-hidden"
               >
+                <Suspense fallback={paneFallback}>
                 <EditorPane
                   botAlias={botAlias}
                   client={client}
@@ -1101,6 +1117,7 @@ export function DesktopWorkbench({
                   focused={focusedPane === "editor"}
                   onToggleFocus={() => toggleFocusedPane("editor")}
                 />
+                </Suspense>
               </section>
             ) : null}
 
@@ -1130,6 +1147,7 @@ export function DesktopWorkbench({
                   !showTerminalPane && "hidden",
                 )}
               >
+                <Suspense fallback={paneFallback}>
                 <TerminalPane
                   authToken={authToken}
                   botAlias={botAlias}
@@ -1152,6 +1170,7 @@ export function DesktopWorkbench({
                     setPendingTerminalOverride(null);
                   }}
                 />
+                </Suspense>
               </section>
             ) : null}
           </div>

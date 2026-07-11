@@ -1,4 +1,6 @@
 import { type ComponentType, useEffect, useMemo, useState } from "react";
+import * as codemirrorState from "@codemirror/state";
+import * as codemirrorView from "@codemirror/view";
 import { isLightUiTheme } from "../theme";
 import { createFileEditorInlineCompletion, type FileEditorInlineCompletionOptions } from "../utils/fileEditorInlineCompletion";
 import { loadFileEditorExtensions } from "../utils/fileEditorLanguage";
@@ -276,18 +278,16 @@ export function FileEditorSurface({
     void Promise.all([
       import("@uiw/react-codemirror"),
       loadFileEditorExtensions(path),
-      import("@codemirror/state"),
-      import("@codemirror/view"),
     ])
-      .then(([module, languageExtensions, stateModule, viewModule]) => {
+      .then(([module, languageExtensions]) => {
         if (!active) {
           return;
         }
         setEditorRuntime({
           CodeMirrorEditor: module.default as CodeMirrorComponent,
           languageExtensions,
-          stateModule,
-          viewModule,
+          stateModule: codemirrorState,
+          viewModule: codemirrorView,
         });
       })
       .catch(() => {

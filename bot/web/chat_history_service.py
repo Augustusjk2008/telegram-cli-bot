@@ -7,6 +7,7 @@ from typing import Any
 
 from bot.cli import normalize_cli_type
 from bot.models import BotProfile, UserSession
+from bot.web.async_chat_store import AsyncChatStore
 from bot.web.chat_store import ChatStore, ChatTurnHandle
 from bot.web.native_history_builder import resolve_native_trace_for_turn
 
@@ -155,6 +156,7 @@ class ChatHistoryService:
         native_provider_exclude: str | None = None,
     ) -> None:
         self.store = store
+        self.async_store = AsyncChatStore(store)
         self.native_provider_filter = str(native_provider_filter or "").strip() or None
         self.native_provider_exclude = str(native_provider_exclude or "").strip() or None
 
@@ -382,6 +384,19 @@ class ChatHistoryService:
             limit=limit,
         )
 
+    async def list_history_async(
+        self,
+        profile: BotProfile,
+        session: UserSession,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        return await self.async_store.run_write(
+            self.list_history,
+            profile,
+            session,
+            limit,
+        )
+
     def get_message_trace(
         self,
         profile: BotProfile,
@@ -399,6 +414,19 @@ class ChatHistoryService:
             return self.store.get_message_trace(message_id)
         except KeyError:
             return None
+
+    async def get_message_trace_async(
+        self,
+        profile: BotProfile,
+        session: UserSession,
+        message_id: str,
+    ) -> dict[str, Any] | None:
+        return await self.async_store.run_write(
+            self.get_message_trace,
+            profile,
+            session,
+            message_id,
+        )
 
     def reconcile_turn_trace(
         self,
@@ -473,6 +501,17 @@ class ChatHistoryService:
             "active_conversation_id": _active_conversation_id(session),
         }
 
+    async def build_session_snapshot_async(
+        self,
+        profile: BotProfile,
+        session: UserSession,
+    ) -> dict[str, Any]:
+        return await self.async_store.run_write(
+            self.build_session_snapshot,
+            profile,
+            session,
+        )
+
     def summarize_active_conversation(self, profile: BotProfile, session: UserSession) -> dict[str, Any]:
         return {
             "current_working_dir": session.working_dir,
@@ -489,6 +528,17 @@ class ChatHistoryService:
             "message_count": session.message_count,
             "bot_mode": profile.bot_mode,
         }
+
+    async def summarize_active_conversation_async(
+        self,
+        profile: BotProfile,
+        session: UserSession,
+    ) -> dict[str, Any]:
+        return await self.async_store.run_read(
+            self.summarize_active_conversation,
+            profile,
+            session,
+        )
 
     def has_active_conversation(self, profile: BotProfile, session: UserSession) -> bool:
         return self.summarize_active_conversation(profile, session)["history_count"] > 0
@@ -507,4 +557,15 @@ class ChatHistoryService:
             agent_id=session.agent_id,
             working_dir=session.working_dir,
             session_epoch=_session_epoch(session),
+        )
+
+    async def reset_active_conversation_async(
+        self,
+        profile: BotProfile,
+        session: UserSession,
+    ) -> None:
+        await self.async_store.run_write(
+            self.reset_active_conversation,
+            profile,
+            session,
         )

@@ -22,12 +22,13 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
 from bot import app_settings
-from bot.claude_done import ClaudeDoneCollector, build_claude_done_session
+from bot.claude_done import ClaudeDoneDetector, build_claude_done_session, strip_claude_done_sentinel
 from bot.agents import build_agent_prompt_input
 from bot.chat_identity import chat_session_user_id
 from bot.cli_params import (
     CliParamsConfig,
     clamp_unsafe_cli_params,
+    get_cli_output_limits,
     get_default_params,
     get_params_schema,
     normalize_cli_model_options,
@@ -58,11 +59,10 @@ from bot.prompts import render_prompt
 from bot import config
 from bot.config import CLI_MODEL_OPTIONS, WEB_PORT
 from bot.cli import (
+    ClaudeJsonStreamParser,
+    CodexJsonStreamParser,
     build_cli_command,
-    extract_codex_error_output,
     normalize_cli_type,
-    parse_claude_stream_json_line,
-    parse_claude_stream_json_output,
     parse_codex_json_output,
     resolve_cli_executable,
     should_mark_claude_session_initialized,
@@ -119,7 +119,11 @@ from bot.web.chat_store import ChatStore
 from bot.web.cli_context_usage import resolve_cli_context_usage
 from bot.web.diagnostics import diag_log_event, diag_log_slow
 from bot.web.git_commit_message import truncate_diff_text
-from bot.web.native_history_adapter import create_stream_trace_state, consume_stream_trace_chunk
+from bot.web.native_history_adapter import (
+    consume_stream_trace_chunk,
+    create_stream_trace_state,
+    decorate_native_conversations,
+)
 from bot.web.plan_mode import (
     PLAN_MODE_TASK_MODE,
     build_plan_execution_prompt,
@@ -225,6 +229,7 @@ WORKDIR_CHANGE_BLOCKED_PROCESSING = "workdir_change_blocked_processing"
 CODEX_DONE_QUIET_SECONDS = 0.5
 CODEX_TERMINATE_GRACE_SECONDS = 1.0
 CLI_CONTEXT_USAGE_RESOLVE_TIMEOUT_SECONDS = 0.25
+CLI_LIVE_TRACE_MAX_EVENTS = 2000
 _CLI_CONTEXT_USAGE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cli-context-usage")
 @dataclass
 class CliAttemptState:
@@ -1334,6 +1339,7 @@ def list_conversations(
     profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
     resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     store = _get_chat_store(session)
+    bounded_limit = min(200, max(1, int(limit)))
     active_id = str(getattr(session, "active_conversation_id", "") or "")
     visible_active_id = active_id if _active_conversation_matches_execution_mode(store, active_id, resolved_execution_mode) else ""
     items = store.list_conversations(
@@ -1341,31 +1347,36 @@ def list_conversations(
         user_id=session.user_id,
         agent_id=session.agent_id,
         working_dir=session.working_dir,
-        limit=max(1, limit),
+        limit=bounded_limit,
         query=query,
         native_provider=NATIVE_AGENT_PROVIDER if resolved_execution_mode == NATIVE_AGENT_PROVIDER else None,
         native_provider_exclude=NATIVE_AGENT_PROVIDER if resolved_execution_mode != NATIVE_AGENT_PROVIDER else None,
     )
-    pi_store = _pi_store() if resolved_execution_mode == NATIVE_AGENT_PROVIDER else None
-
-    def decorate(item: dict[str, Any]) -> dict[str, Any]:
-        workspace_meta: dict[str, Any] = {}
-        if pi_store is not None:
-            conversation_id = str(item.get("id") or "")
-            workspace_meta = _safe_pi_workspace_meta(
-                pi_store.get(_pi_key_for_session(session, conversation_id)),
-                store.latest_active_workspace_history(conversation_id),
-            )
-        return {
-            **item,
-            **workspace_meta,
-            "active": str(item.get("id") or "") == visible_active_id,
-            "bot_mode": str(item.get("bot_mode") or profile.bot_mode),
-            "execution_mode": _conversation_execution_mode(item),
-        }
+    if resolved_execution_mode == NATIVE_AGENT_PROVIDER:
+        decorated_items = decorate_native_conversations(
+            items,
+            chat_store=store,
+            pi_store=_pi_store(),
+            pi_key_for_conversation=lambda conversation_id: _pi_key_for_session(
+                session,
+                conversation_id,
+            ),
+            active_conversation_id=visible_active_id,
+            bot_mode=profile.bot_mode,
+        )
+    else:
+        decorated_items = [
+            {
+                **item,
+                "active": str(item.get("id") or "") == visible_active_id,
+                "bot_mode": str(item.get("bot_mode") or profile.bot_mode),
+                "execution_mode": _conversation_execution_mode(item),
+            }
+            for item in items
+        ]
 
     return {
-        "items": [decorate(item) for item in items],
+        "items": decorated_items,
         "active_conversation_id": visible_active_id,
         "execution_mode": resolved_execution_mode,
     }
@@ -2923,37 +2934,6 @@ def _clear_invalid_cli_session(session: UserSession, cli_type: str) -> bool:
     return False
 
 
-def _extract_plain_error_output(raw_output: str) -> Optional[str]:
-    parts: list[str] = []
-    for line in str(raw_output or "").splitlines():
-        stripped = strip_ansi_escape(line).strip()
-        if not stripped:
-            continue
-        try:
-            json.loads(stripped)
-        except json.JSONDecodeError:
-            parts.append(stripped)
-    text = "\n".join(part for part in parts if part).strip()
-    return text or None
-
-
-def _extract_codex_error_detail(raw_output: str) -> Optional[str]:
-    return extract_codex_error_output(raw_output) or _extract_plain_error_output(raw_output)
-
-
-def _extract_claude_error_detail(raw_output: str) -> Optional[str]:
-    error_parts: list[str] = []
-    for line in str(raw_output or "").splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        parsed = parse_claude_stream_json_line(stripped)
-        if parsed["error_text"]:
-            error_parts.append(parsed["error_text"])
-    text = "\n".join(part for part in error_parts if part).strip()
-    return text or _extract_plain_error_output(raw_output)
-
-
 def _parse_codex_event(line: str) -> tuple[dict[str, Optional[str]], dict[str, Any]]:
     try:
         event: Any = json.loads(line)
@@ -3081,225 +3061,27 @@ def _parse_codex_event_dict(event: dict[str, Any]) -> dict[str, Optional[str]]:
     return result
 
 
-def _extract_codex_stream_preview(raw_output: str) -> Optional[str]:
-    preview_text = ""
-    current_delta = ""
-    fallback_parts: list[str] = []
-    for line in raw_output.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        parsed, event = _parse_codex_event(stripped)
-        if parsed["error_text"]:
-            fallback_parts.append(parsed["error_text"])
-            continue
-
-        if not event:
-            if not stripped.startswith("{"):
-                fallback_parts.append(stripped)
-            continue
-
-        event_type = str(event.get("type") or "").strip()
-        item = event.get("item")
-        if not isinstance(item, dict):
-            if parsed["delta_text"]:
-                preview_text = parsed["delta_text"]
-            continue
-
-        item_type = str(item.get("type") or "").strip()
-        if item_type not in {"assistant_message", "agent_message"}:
-            continue
-
-        if event_type == "item.delta":
-            delta_value = item.get("delta")
-            text_value = item.get("text")
-            chunk = ""
-            if isinstance(delta_value, str) and delta_value:
-                chunk = delta_value
-            elif isinstance(text_value, str) and text_value:
-                chunk = text_value
-            if chunk:
-                current_delta += chunk
-                preview_text = current_delta
-            continue
-
-        if event_type == "item.completed":
-            text_value = item.get("text")
-            if isinstance(text_value, str) and text_value.strip():
-                current_delta = ""
-                preview_text = text_value.strip()
-            continue
-
-        if parsed["delta_text"]:
-            preview_text = parsed["delta_text"]
-
-    if preview_text.strip():
-        return preview_text.strip()
-
-    fallback_text = "\n".join(part for part in fallback_parts if part).strip()
-    return fallback_text or None
-
-
-def _extract_claude_stream_preview(raw_output: str) -> Optional[str]:
-    preview_parts: list[str] = []
-    fallback_parts: list[str] = []
-    for line in raw_output.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        parsed = parse_claude_stream_json_line(stripped)
-        if parsed["delta_text"]:
-            preview_parts.append(parsed["delta_text"])
-            continue
-        if parsed["completed_text"]:
-            fallback_parts.append(parsed["completed_text"])
-            continue
-        if parsed["error_text"]:
-            fallback_parts.append(parsed["error_text"])
-            continue
-        if not stripped.startswith("{"):
-            fallback_parts.append(stripped)
-
-    preview_text = "".join(preview_parts).strip()
-    if preview_text:
-        return preview_text
-
-    fallback_text = "\n".join(part for part in fallback_parts if part).strip()
-    return fallback_text or None
-
-
-def _build_stream_status_event(cli_type: str, elapsed_seconds: int, raw_output: str) -> dict[str, Any]:
-    event: dict[str, Any] = {
-        "type": "status",
-        "elapsed_seconds": elapsed_seconds,
-    }
-    if cli_type == "codex":
-        preview_text = _extract_codex_stream_preview(raw_output)
-        if preview_text:
-            event["preview_text"] = preview_text[-800:]
-    elif cli_type == "claude":
-        preview_text = _extract_claude_stream_preview(raw_output)
-        if preview_text:
-            event["preview_text"] = preview_text[-800:]
-    return event
-
-
 class _StreamPreviewState:
-    def __init__(self, cli_type: str, *, max_raw_chars: int = 256_000):
+    def __init__(self, cli_type: str):
         self.cli_type = cli_type
-        self.max_raw_chars = max(1, int(max_raw_chars))
-        self._raw_parts: list[str] = []
-        self._raw_size = 0
-        self._preview_text = ""
-        self._codex_delta = ""
+        parser_type = CodexJsonStreamParser if cli_type == "codex" else ClaudeJsonStreamParser
+        self._parser = parser_type(
+            raw_tail_max_bytes=_CLI_OUTPUT_LIMITS.raw_tail_max_bytes,
+            final_text_max_bytes=_CLI_OUTPUT_LIMITS.final_text_max_bytes,
+        )
 
-    def consume(self, chunk: str) -> None:
-        text = str(chunk or "")
-        if not text:
-            return
-        self._append_raw(text)
-        if self.cli_type == "codex":
-            self._consume_codex(text)
-        elif self.cli_type == "claude":
-            self._consume_claude(text)
-
-    def _append_raw(self, text: str) -> None:
-        self._raw_parts.append(text)
-        self._raw_size += len(text)
-        while self._raw_size > self.max_raw_chars and self._raw_parts:
-            extra = self._raw_size - self.max_raw_chars
-            first = self._raw_parts[0]
-            if len(first) <= extra:
-                self._raw_size -= len(first)
-                self._raw_parts.pop(0)
-                continue
-            self._raw_parts[0] = first[extra:]
-            self._raw_size -= extra
-            break
-
-    def _consume_codex(self, text: str) -> None:
-        fallback_parts: list[str] = []
-        for line in text.splitlines():
-            stripped = line.strip()
-            if not stripped:
-                continue
-            parsed, event = _parse_codex_event(stripped)
-            if parsed["error_text"]:
-                fallback_parts.append(parsed["error_text"])
-                continue
-
-            if not event:
-                if not stripped.startswith("{"):
-                    fallback_parts.append(stripped)
-                continue
-
-            event_type = str(event.get("type") or "").strip()
-            item = event.get("item")
-            if isinstance(item, dict) and str(item.get("type") or "").strip() in {"assistant_message", "agent_message"}:
-                delta_value = item.get("delta")
-                text_value = item.get("text")
-                if event_type == "item.delta":
-                    chunk = delta_value if isinstance(delta_value, str) and delta_value else text_value
-                    if isinstance(chunk, str) and chunk:
-                        self._codex_delta += chunk
-                        self._preview_text = self._codex_delta
-                    continue
-                if event_type == "item.completed" and isinstance(text_value, str) and text_value.strip():
-                    self._codex_delta = ""
-                    self._preview_text = text_value.strip()
-                    continue
-
-            if parsed["delta_text"]:
-                self._preview_text = parsed["delta_text"]
-
-        if not self._preview_text and fallback_parts:
-            self._preview_text = "\n".join(part for part in fallback_parts if part).strip()
-
-    def _consume_claude(self, text: str) -> None:
-        preview_parts: list[str] = []
-        fallback_parts: list[str] = []
-        for line in text.splitlines():
-            stripped = line.strip()
-            if not stripped:
-                continue
-            parsed = parse_claude_stream_json_line(stripped)
-            if parsed["delta_text"]:
-                preview_parts.append(parsed["delta_text"])
-                continue
-            if parsed["completed_text"]:
-                fallback_parts.append(parsed["completed_text"])
-                continue
-            if parsed["error_text"]:
-                fallback_parts.append(parsed["error_text"])
-                continue
-            if not stripped.startswith("{"):
-                fallback_parts.append(stripped)
-        if preview_parts:
-            self._preview_text += "".join(preview_parts)
-        elif not self._preview_text and fallback_parts:
-            self._preview_text = "\n".join(part for part in fallback_parts if part).strip()
+    def consume(self, chunk: str) -> dict[str, Optional[str]]:
+        return self._parser.consume_line(str(chunk or ""))
 
     def status_event(self, *, elapsed_seconds: int) -> dict[str, Any]:
         event: dict[str, Any] = {"type": "status", "elapsed_seconds": elapsed_seconds}
-        if self._preview_text.strip():
-            event["preview_text"] = self._preview_text.strip()[-800:]
+        preview_text = self._parser.preview_text
+        if preview_text:
+            event["preview_text"] = preview_text[-800:]
         return event
 
-    def raw_output_for_parse(self) -> str:
-        return "".join(self._raw_parts)
-
-
-def _extract_final_codex_completed_message(raw_output: str) -> Optional[str]:
-    last_completed: Optional[str] = None
-    for line in raw_output.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        parsed, _event = _parse_codex_event(stripped)
-        completed_text = str(parsed.get("completed_text") or "").strip()
-        if completed_text:
-            last_completed = completed_text
-    return last_completed
+    def result(self):
+        return self._parser.result()
 
 
 def _load_codex_json_event(line: str) -> dict[str, Any]:
@@ -3570,6 +3352,107 @@ def _terminate_process_sync(process: subprocess.Popen, kill_timeout: float = 2.0
 
 
 PROCESS_STDOUT_EXIT_DRAIN_SECONDS = 0.2
+_PROCESS_STDOUT_EOF = object()
+_CLI_OUTPUT_LIMITS = get_cli_output_limits()
+
+
+class CliOutputLimitError(RuntimeError):
+    pass
+
+
+class _BoundedOutputBuffer:
+    def __init__(self, max_bytes: int) -> None:
+        self.max_bytes = max(1, int(max_bytes))
+        self._data = bytearray()
+        self.truncated = False
+
+    def append(self, text: str) -> None:
+        self._data.extend(str(text or "").encode("utf-8", errors="replace"))
+        if len(self._data) > self.max_bytes:
+            del self._data[: len(self._data) - self.max_bytes]
+            self.truncated = True
+
+    def text(self) -> str:
+        value = bytes(self._data).decode("utf-8", errors="ignore")
+        if self.truncated:
+            return f"[前序输出已截断]\n{value}"
+        return value
+
+
+class _ProcessStdoutReader:
+    def __init__(
+        self,
+        process: subprocess.Popen,
+        output_queue: queue.Queue[Any],
+        *,
+        max_line_bytes: int,
+        max_total_bytes: int,
+    ) -> None:
+        self.process = process
+        self.output_queue = output_queue
+        self.max_line_bytes = max(1, int(max_line_bytes))
+        self.max_total_bytes = max(self.max_line_bytes, int(max_total_bytes))
+        self.done = threading.Event()
+        self._stop = threading.Event()
+        self._closing = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="cli-stdout-reader", daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self.close_stdout()
+
+    def close_stdout(self) -> None:
+        self._closing.set()
+        _close_process_stdout(self.process)
+
+    def join(self, timeout: float | None = None) -> None:
+        self._thread.join(timeout)
+
+    def _put(self, item: Any) -> bool:
+        while not self._stop.is_set():
+            try:
+                self.output_queue.put(item, timeout=0.1)
+                return True
+            except queue.Full:
+                continue
+        return False
+
+    def _put_critical(self, item: Any) -> None:
+        while True:
+            try:
+                self.output_queue.put(item, timeout=0.1)
+                return
+            except queue.Full:
+                if self._stop.is_set():
+                    return
+
+    def _run(self) -> None:
+        total_bytes = 0
+        try:
+            stdout = self.process.stdout
+            if stdout is None or not hasattr(stdout, "readline"):
+                return
+            while not self._stop.is_set():
+                line = stdout.readline(self.max_line_bytes + 1)
+                if not line:
+                    break
+                line_bytes = len(str(line).encode("utf-8", errors="replace"))
+                if line_bytes > self.max_line_bytes:
+                    raise CliOutputLimitError(f"CLI 单行输出超过 {self.max_line_bytes} 字节")
+                total_bytes += line_bytes
+                if total_bytes > self.max_total_bytes:
+                    raise CliOutputLimitError(f"CLI 累计输出超过 {self.max_total_bytes} 字节")
+                if not self._put(line):
+                    return
+        except Exception as exc:
+            if not self._closing.is_set() and not self._stop.is_set():
+                self._put_critical(exc)
+        finally:
+            self._put_critical(_PROCESS_STDOUT_EOF)
+            self.done.set()
 
 
 def _close_process_stdout(process: Any) -> None:
@@ -3586,41 +3469,28 @@ def _start_process_stdout_reader(
     process: subprocess.Popen,
     output_queue: queue.Queue[Any],
     *,
-    drain_seconds: float = PROCESS_STDOUT_EXIT_DRAIN_SECONDS,
-) -> threading.Event:
-    reader_done = threading.Event()
-
-    def read_stdout() -> None:
-        try:
-            stdout = process.stdout
-            if stdout is None or not hasattr(stdout, "readline"):
-                return
-            while True:
-                line = stdout.readline()
-                if line:
-                    output_queue.put(line)
-                    continue
-                if process.poll() is not None:
-                    break
-                time.sleep(0.01)
-        except Exception as exc:  # pragma: no cover - defensive
-            output_queue.put(exc)
-        finally:
-            reader_done.set()
-
-    threading.Thread(target=read_stdout, daemon=True).start()
-    return reader_done
+    max_line_bytes: int = _CLI_OUTPUT_LIMITS.max_line_bytes,
+    max_total_bytes: int = _CLI_OUTPUT_LIMITS.max_total_bytes,
+) -> _ProcessStdoutReader:
+    reader = _ProcessStdoutReader(
+        process,
+        output_queue,
+        max_line_bytes=max_line_bytes,
+        max_total_bytes=max_total_bytes,
+    )
+    reader.start()
+    return reader
 
 
 def _maybe_stop_waiting_for_stdout_after_exit(
     process: subprocess.Popen,
-    reader_done: threading.Event,
+    reader: _ProcessStdoutReader,
     output_queue: queue.Queue[Any],
     exit_seen_at: float | None,
     *,
     drain_seconds: float = PROCESS_STDOUT_EXIT_DRAIN_SECONDS,
 ) -> tuple[bool, float | None]:
-    if reader_done.is_set():
+    if reader.done.is_set():
         return False, None
     if process.poll() is None:
         return False, None
@@ -3631,7 +3501,7 @@ def _maybe_stop_waiting_for_stdout_after_exit(
         return False, exit_seen_at
     if now - exit_seen_at < drain_seconds:
         return False, exit_seen_at
-    _close_process_stdout(process)
+    reader.close_stdout()
     return True, exit_seen_at
 
 
@@ -3647,19 +3517,45 @@ def _reset_session_runtime_flags(session: UserSession) -> None:
 
 
 async def _communicate_process(process: subprocess.Popen) -> tuple[str, int]:
+    reader: _ProcessStdoutReader | None = None
     try:
         stdout = getattr(process, "stdout", None)
         if stdout is None or not hasattr(stdout, "readline"):
-            output, _ = process.communicate()
-            return str(output or ""), getattr(process, "returncode", None) or process.wait() or 0
+            output_buffer = _BoundedOutputBuffer(_CLI_OUTPUT_LIMITS.final_text_max_bytes)
+            total_bytes = 0
+            read = getattr(stdout, "read", None)
+            try:
+                if callable(read):
+                    while True:
+                        chunk = await asyncio.get_running_loop().run_in_executor(None, read, 64 * 1024)
+                        if not chunk:
+                            break
+                        total_bytes += len(str(chunk).encode("utf-8", errors="replace"))
+                        if total_bytes > _CLI_OUTPUT_LIMITS.max_total_bytes:
+                            raise CliOutputLimitError(
+                                f"CLI 累计输出超过 {_CLI_OUTPUT_LIMITS.max_total_bytes} 字节"
+                            )
+                        output_buffer.append(str(chunk))
+                waited_returncode = await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    _wait_for_process_exit_sync,
+                    process,
+                    1.0,
+                )
+                return output_buffer.text(), _resolve_process_returncode(process, waited_returncode)
+            except asyncio.CancelledError:
+                _close_process_stdout(process)
+                _terminate_process_sync(process)
+                raise
 
-        output_queue: queue.Queue[Any] = queue.Queue()
-        reader_done = _start_process_stdout_reader(process, output_queue)
-        chunks: list[str] = []
+        output_queue: queue.Queue[Any] = queue.Queue(maxsize=_CLI_OUTPUT_LIMITS.queue_max_chunks)
+        reader = _start_process_stdout_reader(process, output_queue)
+        output_buffer = _BoundedOutputBuffer(_CLI_OUTPUT_LIMITS.final_text_max_bytes)
+        eof_seen = False
         stdout_exit_seen_at: float | None = None
 
         try:
-            while not reader_done.is_set() or not output_queue.empty():
+            while not eof_seen and (not reader.done.is_set() or not output_queue.empty()):
                 drained = False
                 while True:
                     try:
@@ -3667,33 +3563,46 @@ async def _communicate_process(process: subprocess.Popen) -> tuple[str, int]:
                     except queue.Empty:
                         break
                     drained = True
+                    if item is _PROCESS_STDOUT_EOF:
+                        eof_seen = True
+                        break
                     if isinstance(item, Exception):
                         raise item
-                    chunks.append(str(item))
+                    output_buffer.append(str(item))
 
-                should_stop, stdout_exit_seen_at = _maybe_stop_waiting_for_stdout_after_exit(
+                _, stdout_exit_seen_at = _maybe_stop_waiting_for_stdout_after_exit(
                     process,
-                    reader_done,
+                    reader,
                     output_queue,
                     stdout_exit_seen_at,
                 )
-                if should_stop:
-                    break
                 if not drained:
                     await asyncio.sleep(0.05)
         except Exception:
+            reader.stop()
             _terminate_process_sync(process)
             raise
         except asyncio.CancelledError:
+            reader.stop()
             _terminate_process_sync(process)
             raise
 
-        return "".join(chunks), process.poll() or 0
+        waited_returncode = await asyncio.get_running_loop().run_in_executor(
+            None,
+            _wait_for_process_exit_sync,
+            process,
+            1.0,
+        )
+        return output_buffer.text(), _resolve_process_returncode(process, waited_returncode)
     finally:
+        if reader is not None:
+            reader.stop()
+            reader.join(1.0)
         close_process_streams(process)
 
 
 async def _communicate_codex_process(process: subprocess.Popen) -> tuple[str, Optional[str], int]:
+    reader: _ProcessStdoutReader | None = None
     try:
         stdout = getattr(process, "stdout", None)
         if stdout is None or not hasattr(stdout, "readline"):
@@ -3704,19 +3613,23 @@ async def _communicate_codex_process(process: subprocess.Popen) -> tuple[str, Op
             return final_text, thread_id, returncode
 
         loop = asyncio.get_running_loop()
-        output_queue: queue.Queue[Any] = queue.Queue()
-        reader_done = _start_process_stdout_reader(process, output_queue)
-        chunks: list[str] = []
+        output_queue: queue.Queue[Any] = queue.Queue(maxsize=_CLI_OUTPUT_LIMITS.queue_max_chunks)
+        reader = _start_process_stdout_reader(process, output_queue)
+        parser = CodexJsonStreamParser(
+            raw_tail_max_bytes=_CLI_OUTPUT_LIMITS.raw_tail_max_bytes,
+            final_text_max_bytes=_CLI_OUTPUT_LIMITS.final_text_max_bytes,
+        )
         thread_id: Optional[str] = None
         candidate_text: Optional[str] = None
         candidate_seen_at: Optional[float] = None
         done_terminate_started_at: Optional[float] = None
         done_force_killed = False
         done_stdout_closed = False
+        eof_seen = False
         stdout_exit_seen_at: float | None = None
 
         try:
-            while not reader_done.is_set() or not output_queue.empty():
+            while not eof_seen and (not reader.done.is_set() or not output_queue.empty()):
                 drained = False
                 while True:
                     try:
@@ -3724,27 +3637,28 @@ async def _communicate_codex_process(process: subprocess.Popen) -> tuple[str, Op
                     except queue.Empty:
                         break
                     drained = True
+                    if item is _PROCESS_STDOUT_EOF:
+                        eof_seen = True
+                        break
                     if isinstance(item, Exception):
                         raise item
                     chunk = str(item)
-                    chunks.append(chunk)
+                    parser.consume_line(chunk)
                     now = loop.time()
-                    for line in chunk.splitlines():
-                        thread_id, candidate_text, candidate_seen_at = _advance_codex_done_candidate(
-                            line,
-                            thread_id=thread_id,
-                            candidate_text=candidate_text,
-                            candidate_seen_at=candidate_seen_at,
-                            now=now,
-                        )
+                    thread_id, candidate_text, candidate_seen_at = _advance_codex_done_candidate(
+                        chunk,
+                        thread_id=thread_id,
+                        candidate_text=candidate_text,
+                        candidate_seen_at=candidate_seen_at,
+                        now=now,
+                    )
 
                 now = loop.time()
                 if candidate_seen_at is not None and (now - candidate_seen_at) >= CODEX_DONE_QUIET_SECONDS:
                     if process.poll() is not None and output_queue.empty():
                         if not done_stdout_closed:
-                            _close_process_stdout(process)
+                            reader.close_stdout()
                             done_stdout_closed = True
-                        break
                     if done_terminate_started_at is None and process.poll() is None:
                         done_terminate_started_at = now
                         await loop.run_in_executor(None, _terminate_process_sync, process)
@@ -3757,14 +3671,12 @@ async def _communicate_codex_process(process: subprocess.Popen) -> tuple[str, Op
                         done_force_killed = True
                         await loop.run_in_executor(None, _terminate_process_sync, process)
 
-                should_stop, stdout_exit_seen_at = _maybe_stop_waiting_for_stdout_after_exit(
+                _, stdout_exit_seen_at = _maybe_stop_waiting_for_stdout_after_exit(
                     process,
-                    reader_done,
+                    reader,
                     output_queue,
                     stdout_exit_seen_at,
                 )
-                if should_stop:
-                    break
                 if not drained:
                     await asyncio.sleep(0.05)
             waited_returncode = await loop.run_in_executor(None, _wait_for_process_exit_sync, process, 1.0)
@@ -3772,20 +3684,24 @@ async def _communicate_codex_process(process: subprocess.Popen) -> tuple[str, Op
             if done_terminate_started_at is not None:
                 returncode = 0
 
-            raw_output = "".join(chunks)
-            final_text, parsed_thread_id = parse_codex_json_output(raw_output)
-            error_text = _extract_codex_error_detail(raw_output) if returncode != 0 else None
-            final_text = error_text or candidate_text or _extract_final_codex_completed_message(raw_output) or final_text
+            parsed_result = parser.result()
+            error_text = parsed_result.error_text if returncode != 0 else None
+            final_text = error_text or candidate_text or parsed_result.final_text
             if not final_text:
                 final_text = msg("chat", "no_output")
-            return final_text, thread_id or parsed_thread_id, returncode
+            return final_text, thread_id or parsed_result.session_id, returncode
         except Exception:
+            reader.stop()
             _terminate_process_sync(process)
             raise
         except asyncio.CancelledError:
+            reader.stop()
             _terminate_process_sync(process)
             raise
     finally:
+        if reader is not None:
+            reader.stop()
+            reader.join(1.0)
         close_process_streams(process)
 
 
@@ -3794,24 +3710,41 @@ async def _communicate_claude_process(
     *,
     done_session=None,
 ) -> tuple[str, Optional[str], int]:
+    reader: _ProcessStdoutReader | None = None
     try:
-        if done_session is None or not getattr(done_session, "enabled", False):
+        stdout = getattr(process, "stdout", None)
+        if stdout is None or not hasattr(stdout, "readline"):
             raw_output, returncode = await _communicate_process(process)
-            final_text, session_id = parse_claude_stream_json_output(raw_output)
-            if not final_text:
-                final_text = msg("chat", "no_output")
-            return final_text, session_id, returncode
+            parser = ClaudeJsonStreamParser(
+                raw_tail_max_bytes=_CLI_OUTPUT_LIMITS.raw_tail_max_bytes,
+                final_text_max_bytes=_CLI_OUTPUT_LIMITS.final_text_max_bytes,
+            )
+            for line in raw_output.splitlines(keepends=True):
+                parser.consume_line(line)
+            parsed_result = parser.result()
+            final_text = strip_claude_done_sentinel(
+                parsed_result.final_text,
+                getattr(done_session, "sentinel", None),
+            ).strip()
+            return final_text or msg("chat", "no_output"), parsed_result.session_id, returncode
 
         loop = asyncio.get_running_loop()
-        output_queue: queue.Queue[Any] = queue.Queue()
-        reader_done = _start_process_stdout_reader(process, output_queue)
-        collector = ClaudeDoneCollector(done_session)
+        output_queue: queue.Queue[Any] = queue.Queue(maxsize=_CLI_OUTPUT_LIMITS.queue_max_chunks)
+        reader = _start_process_stdout_reader(process, output_queue)
+        parser = ClaudeJsonStreamParser(
+            raw_tail_max_bytes=_CLI_OUTPUT_LIMITS.raw_tail_max_bytes,
+            final_text_max_bytes=_CLI_OUTPUT_LIMITS.final_text_max_bytes,
+        )
+        detector = None
+        if done_session is not None and getattr(done_session, "enabled", False) and done_session.sentinel:
+            detector = ClaudeDoneDetector(done_session.sentinel, done_session.quiet_seconds)
         done_terminate_started_at: Optional[float] = None
         done_force_killed = False
+        eof_seen = False
         stdout_exit_seen_at: float | None = None
 
         try:
-            while not reader_done.is_set() or not output_queue.empty():
+            while not eof_seen and (not reader.done.is_set() or not output_queue.empty()):
                 now = loop.time()
                 drained = False
                 while True:
@@ -3820,14 +3753,19 @@ async def _communicate_claude_process(
                     except queue.Empty:
                         break
                     drained = True
+                    if item is _PROCESS_STDOUT_EOF:
+                        eof_seen = True
+                        break
                     if isinstance(item, Exception):
                         raise item
-                    collector.consume_chunk(str(item), now=now)
+                    parser.consume_line(str(item))
+                    if detector is not None:
+                        detector.observe_text(parser.preview_text or "", now=now)
 
                 if (
-                    collector.detector is not None
+                    detector is not None
                     and done_terminate_started_at is None
-                    and collector.detector.poll(now=now)
+                    and detector.poll(now=now)
                     and process.poll() is None
                 ):
                     done_terminate_started_at = now
@@ -3841,14 +3779,12 @@ async def _communicate_claude_process(
                     done_force_killed = True
                     await loop.run_in_executor(None, _terminate_process_sync, process)
 
-                should_stop, stdout_exit_seen_at = _maybe_stop_waiting_for_stdout_after_exit(
+                _, stdout_exit_seen_at = _maybe_stop_waiting_for_stdout_after_exit(
                     process,
-                    reader_done,
+                    reader,
                     output_queue,
                     stdout_exit_seen_at,
                 )
-                if should_stop:
-                    break
                 if not drained:
                     await asyncio.sleep(0.1)
 
@@ -3857,17 +3793,26 @@ async def _communicate_claude_process(
             if done_terminate_started_at is not None:
                 returncode = 0
 
-            final_text = collector.final_text
+            parsed_result = parser.result()
+            final_text = strip_claude_done_sentinel(
+                parsed_result.final_text,
+                getattr(done_session, "sentinel", None),
+            ).strip()
             if not final_text:
                 final_text = msg("chat", "no_output")
-            return final_text, collector.session_id, returncode
+            return final_text, parsed_result.session_id, returncode
         except Exception:
+            reader.stop()
             _terminate_process_sync(process)
             raise
         except asyncio.CancelledError:
+            reader.stop()
             _terminate_process_sync(process)
             raise
     finally:
+        if reader is not None:
+            reader.stop()
+            reader.join(1.0)
         close_process_streams(process)
 
 
@@ -4060,8 +4005,8 @@ async def _stream_cli_chat(
                 }
                 meta_sent = True
 
-            output_queue: queue.Queue[Any] = queue.Queue()
-            reader_done = _start_process_stdout_reader(process, output_queue)
+            output_queue: queue.Queue[Any] = queue.Queue(maxsize=_CLI_OUTPUT_LIMITS.queue_max_chunks)
+            stdout_reader = _start_process_stdout_reader(process, output_queue)
             preview_state = _StreamPreviewState(cli_type)
             persistence_buffer = StreamingPersistenceBuffer(
                 service,
@@ -4073,22 +4018,44 @@ async def _stream_cli_chat(
             last_context_usage: dict[str, Any] | None = None
             last_context_usage_signature: tuple[tuple[str, str], ...] | None = None
             last_context_usage_persisted_at = 0.0
-            claude_collector = ClaudeDoneCollector(done_session) if done_session and done_session.enabled else None
+            claude_detector = None
+            if done_session and done_session.enabled and done_session.sentinel:
+                claude_detector = ClaudeDoneDetector(done_session.sentinel, done_session.quiet_seconds)
             done_terminate_started_at: Optional[float] = None
             done_force_killed = False
             done_stdout_closed = False
+            stdout_eof_seen = False
             stdout_exit_seen_at: float | None = None
             codex_done_candidate: Optional[str] = None
             codex_done_seen_at: Optional[float] = None
             trace_state = create_stream_trace_state(cli_type)
             live_trace_events: list[dict[str, Any]] = []
             live_trace_event_keys: set[tuple[str, str, str, str]] = set()
+            live_trace_truncated = False
             latest_preview_text = ""
             last_context_usage_resolved_at = 0.0
             def append_live_trace_event(trace_event: dict[str, Any]) -> dict[str, Any] | None:
+                nonlocal live_trace_truncated
                 event_key = _trace_event_key(trace_event)
                 if event_key in live_trace_event_keys:
                     return None
+                if len(live_trace_events) >= CLI_LIVE_TRACE_MAX_EVENTS:
+                    remove_index = 1 if live_trace_truncated else 0
+                    removed = live_trace_events.pop(remove_index)
+                    live_trace_event_keys.discard(_trace_event_key(removed))
+                    if not live_trace_truncated:
+                        marker = {
+                            "kind": "truncated",
+                            "source": "runtime",
+                            "summary": "高频 CLI trace 已截断，仅保留最近事件",
+                        }
+                        live_trace_events.insert(0, marker)
+                        live_trace_event_keys.add(_trace_event_key(marker))
+                        persistence_buffer.queue_trace(marker)
+                        live_trace_truncated = True
+                        if len(live_trace_events) >= CLI_LIVE_TRACE_MAX_EVENTS:
+                            removed = live_trace_events.pop(1)
+                            live_trace_event_keys.discard(_trace_event_key(removed))
                 live_trace_event_keys.add(event_key)
                 live_trace_events.append(trace_event)
                 persistence_buffer.queue_trace(trace_event)
@@ -4098,7 +4065,7 @@ async def _stream_cli_chat(
             cli_started_at = time.perf_counter()
 
             try:
-                while not reader_done.is_set() or not output_queue.empty():
+                while not stdout_eof_seen and (not stdout_reader.done.is_set() or not output_queue.empty()):
                     drained = False
                     while True:
                         try:
@@ -4106,6 +4073,9 @@ async def _stream_cli_chat(
                         except queue.Empty:
                             break
                         drained = True
+                        if item is _PROCESS_STDOUT_EOF:
+                            stdout_eof_seen = True
+                            break
                         if isinstance(item, Exception):
                             raise item
 
@@ -4119,16 +4089,18 @@ async def _stream_cli_chat(
 
                         if cli_type == "codex":
                             now = loop.time()
-                            for line in text_chunk.splitlines():
-                                thread_id, codex_done_candidate, codex_done_seen_at = _advance_codex_done_candidate(
-                                    line,
-                                    thread_id=thread_id,
-                                    candidate_text=codex_done_candidate,
-                                    candidate_seen_at=codex_done_seen_at,
-                                    now=now,
-                                )
-                        elif claude_collector is not None:
-                            claude_collector.consume_chunk(text_chunk, now=loop.time())
+                            thread_id, codex_done_candidate, codex_done_seen_at = _advance_codex_done_candidate(
+                                text_chunk,
+                                thread_id=thread_id,
+                                candidate_text=codex_done_candidate,
+                                candidate_seen_at=codex_done_seen_at,
+                                now=now,
+                            )
+                        elif claude_detector is not None:
+                            claude_detector.observe_text(
+                                preview_state.result().final_text,
+                                now=loop.time(),
+                            )
 
                     with session._lock:
                         stop_requested = bool(session.stop_requested)
@@ -4141,10 +4113,9 @@ async def _stream_cli_chat(
                         done_terminate_started_at = loop.time()
                         await loop.run_in_executor(None, _terminate_process_sync, process)
                     elif (
-                        claude_collector is not None
-                        and claude_collector.detector is not None
+                        claude_detector is not None
                         and done_terminate_started_at is None
-                        and claude_collector.detector.poll(now=loop.time())
+                        and claude_detector.poll(now=loop.time())
                         and process.poll() is None
                     ):
                         done_terminate_started_at = loop.time()
@@ -4175,29 +4146,17 @@ async def _stream_cli_chat(
                         and output_queue.empty()
                     ):
                         if not done_stdout_closed:
-                            _close_process_stdout(process)
+                            stdout_reader.close_stdout()
                             done_stdout_closed = True
-                        break
 
-                    should_stop, stdout_exit_seen_at = _maybe_stop_waiting_for_stdout_after_exit(
+                    _, stdout_exit_seen_at = _maybe_stop_waiting_for_stdout_after_exit(
                         process,
-                        reader_done,
+                        stdout_reader,
                         output_queue,
                         stdout_exit_seen_at,
                     )
-                    if should_stop:
-                        break
 
-                    if claude_collector is not None:
-                        status_event = {
-                            "type": "status",
-                            "elapsed_seconds": int(loop.time() - started_at),
-                        }
-                        preview_text = claude_collector.preview_text
-                        if preview_text:
-                            status_event["preview_text"] = preview_text[-800:]
-                    else:
-                        status_event = preview_state.status_event(elapsed_seconds=int(loop.time() - started_at))
+                    status_event = preview_state.status_event(elapsed_seconds=int(loop.time() - started_at))
                     status_event.update(turn_event_ids)
                     status_context_usage = None
                     status_session_id = _status_context_session_id(
@@ -4267,42 +4226,44 @@ async def _stream_cli_chat(
                 if done_terminate_started_at is not None:
                     returncode = 0
             except asyncio.CancelledError:
+                stdout_reader.stop()
                 await persistence_buffer.close()
                 if process.poll() is None:
                     await loop.run_in_executor(None, _terminate_process_sync, process)
                 raise
             except Exception:
+                stdout_reader.stop()
                 await persistence_buffer.close()
                 if process.poll() is None:
                     await loop.run_in_executor(None, _terminate_process_sync, process)
                 raise
             finally:
+                stdout_reader.stop()
+                stdout_reader.join(1.0)
                 with session._lock:
                     session.process = None
                 close_process_streams(process)
             stage_durations["cli_ms"] += max(0, int(round((time.perf_counter() - cli_started_at) * 1000)))
             sqlite_flush_count = persistence_buffer.flush_count
 
-            raw_output = preview_state.raw_output_for_parse()
+            parsed_result = preview_state.result()
             error_detail = ""
             if cli_type == "codex":
-                response, parsed_thread_id = parse_codex_json_output(raw_output)
-                thread_id = thread_id or parsed_thread_id
-                response = codex_done_candidate or _extract_final_codex_completed_message(raw_output) or response
+                thread_id = thread_id or parsed_result.session_id
+                response = codex_done_candidate or parsed_result.final_text
                 if returncode != 0:
-                    error_detail = _extract_codex_error_detail(raw_output) or ""
+                    error_detail = parsed_result.error_text or ""
                     response = error_detail or response
             elif cli_type == "claude":
-                if claude_collector is not None:
-                    response = claude_collector.final_text or ""
-                    raw_output = claude_collector.raw_output
-                else:
-                    response, _ = parse_claude_stream_json_output(raw_output)
+                response = strip_claude_done_sentinel(
+                    parsed_result.final_text,
+                    getattr(done_session, "sentinel", None),
+                ).strip()
                 if returncode != 0:
-                    error_detail = _extract_claude_error_detail(raw_output) or ""
+                    error_detail = parsed_result.error_text or ""
                     response = error_detail or response
             else:
-                response = raw_output.strip()
+                response = parsed_result.final_text.strip()
                 if returncode != 0:
                     error_detail = response
 
@@ -5329,16 +5290,32 @@ def resolve_terminal_action_for_bot(
 
 async def _stream_update_download(repo_root: Path | None = None) -> AsyncIterator[dict[str, Any]]:
     target_repo_root = (repo_root or Path(__file__).resolve().parents[2]).resolve()
-    event_queue: queue.Queue[Any] = queue.Queue()
+    event_queue: queue.Queue[Any] = queue.Queue(maxsize=64)
     worker_done = threading.Event()
+    consumer_closed = threading.Event()
 
     def on_progress(progress: dict[str, Any]) -> None:
-        event_queue.put(
-            {
-                "type": "progress",
-                **progress,
-            }
-        )
+        item = {
+            "type": "progress",
+            **progress,
+        }
+        while not consumer_closed.is_set():
+            try:
+                event_queue.put_nowait(item)
+                return
+            except queue.Full:
+                try:
+                    event_queue.get_nowait()
+                except queue.Empty:
+                    return
+
+    def put_critical(item: Any) -> None:
+        while not consumer_closed.is_set():
+            try:
+                event_queue.put(item, timeout=0.1)
+                return
+            except queue.Full:
+                continue
 
     def run_download() -> None:
         try:
@@ -5346,29 +5323,32 @@ async def _stream_update_download(repo_root: Path | None = None) -> AsyncIterato
                 repo_root=target_repo_root,
                 progress_callback=on_progress,
             )
-            event_queue.put(
+            put_critical(
                 {
                     "type": "done",
                     "status": status,
                 }
             )
         except Exception as exc:  # pragma: no cover - defensive
-            event_queue.put(exc)
+            put_critical(exc)
         finally:
             worker_done.set()
 
     threading.Thread(target=run_download, daemon=True).start()
 
-    while not worker_done.is_set() or not event_queue.empty():
-        try:
-            item = event_queue.get_nowait()
-        except queue.Empty:
-            await asyncio.sleep(0.05)
-            continue
+    try:
+        while not worker_done.is_set() or not event_queue.empty():
+            try:
+                item = event_queue.get_nowait()
+            except queue.Empty:
+                await asyncio.sleep(0.05)
+                continue
 
-        if isinstance(item, Exception):
-            raise item
-        yield item
+            if isinstance(item, Exception):
+                raise item
+            yield item
+    finally:
+        consumer_closed.set()
 
 
 async def stream_update_download(repo_root: Path | None = None) -> AsyncIterator[dict[str, Any]]:

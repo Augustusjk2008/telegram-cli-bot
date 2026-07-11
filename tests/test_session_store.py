@@ -3,6 +3,9 @@
 """
 
 import json
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
@@ -10,6 +13,8 @@ import pytest
 
 from bot.session_store import (
     _make_key,
+    close_session_store,
+    flush_session_store,
     load_session,
     load_session_ids,
     migrate_sessions_to_shared,
@@ -18,7 +23,16 @@ from bot.session_store import (
     remove_session,
     save_session,
     save_session_ids,
+    session_store_diagnostics,
 )
+
+
+def test_session_store_defaults_to_sqlite(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SESSION_STORE_BACKEND", raising=False)
+    monkeypatch.delenv("TCB_SESSION_STORE_BACKEND", raising=False)
+
+    assert session_store_diagnostics()["requested_backend"] == "sqlite"
+    close_session_store()
 
 
 class TestSaveAndLoadSession:
@@ -140,3 +154,217 @@ class TestRenameBotSessions:
             assert moved_snapshot is not None
             assert moved_snapshot["claude_session_id"] == "claude-old"
             assert moved_snapshot["session_epoch"] == 2
+
+
+def test_sqlite_backend_migrates_json_and_keeps_backup(
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+) -> None:
+    store_file = temp_dir / "session_store.json"
+    legacy = {
+        "1:100": {
+            "codex_session_id": "thread-1",
+            "working_dir": str(temp_dir / "repo"),
+            "active_conversation_id": "conv-1",
+            "local_history_backend": "local_v1",
+        }
+    }
+    store_file.write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setenv("SESSION_STORE_BACKEND", "sqlite")
+
+    with patch("bot.session_store.STORE_FILE", store_file):
+        loaded = load_session_ids()
+        diagnostics = session_store_diagnostics()
+        close_session_store()
+
+    assert loaded == legacy
+    assert diagnostics["active_backend"] == "sqlite"
+    assert store_file.is_file()
+    assert store_file.with_suffix(".sqlite3").is_file()
+    assert store_file.with_suffix(".sqlite3.migration.json").is_file()
+    assert list(temp_dir.glob("session_store.pre-sqlite-*.json"))
+
+
+def test_sqlite_backend_coalesces_repeated_session_updates(
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+) -> None:
+    store_file = temp_dir / "session_store.json"
+    monkeypatch.setenv("SESSION_STORE_BACKEND", "sqlite")
+    monkeypatch.setenv("SESSION_STORE_FLUSH_INTERVAL_SECONDS", "10")
+
+    with patch("bot.session_store.STORE_FILE", store_file):
+        for index in range(1000):
+            save_session(
+                1,
+                100,
+                codex_session_id=f"thread-{index}",
+                working_dir=str(temp_dir),
+            )
+        before_flush = session_store_diagnostics()
+        flushed = flush_session_store()
+        after_flush = session_store_diagnostics()
+        loaded = load_session(1, 100)
+        close_session_store()
+
+    assert before_flush["pending_count"] == 1
+    assert before_flush["queued_write_count"] == 1000
+    assert flushed == 1
+    assert after_flush["write_batch_count"] == 1
+    assert loaded is not None
+    assert loaded["codex_session_id"] == "thread-999"
+
+
+def test_sqlite_reads_wait_for_inflight_pending_batch(
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+) -> None:
+    from bot.session_store_sqlite import SessionStoreSQLite
+
+    store = SessionStoreSQLite(
+        temp_dir / "session_store.sqlite3",
+        flush_interval_seconds=0.01,
+    )
+    key = "1:100"
+    store.queue_upsert(
+        key,
+        bot_id=1,
+        user_id=100,
+        agent_id="main",
+        payload={"codex_session_id": "old"},
+    )
+    store.flush()
+
+    write_started = threading.Event()
+    allow_write = threading.Event()
+    original_write_batch = store._write_batch
+
+    def blocked_write_batch(batch):
+        write_started.set()
+        assert allow_write.wait(timeout=1)
+        original_write_batch(batch)
+
+    monkeypatch.setattr(store, "_write_batch", blocked_write_batch)
+    store.queue_upsert(
+        key,
+        bot_id=1,
+        user_id=100,
+        agent_id="main",
+        payload={"codex_session_id": "new"},
+    )
+    assert write_started.wait(timeout=1)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        result_future = executor.submit(store.get, key)
+        time.sleep(0.03)
+        allow_write.set()
+        loaded = result_future.result(timeout=1)
+
+    store.close()
+    assert loaded == {"codex_session_id": "new"}
+
+
+@pytest.mark.parametrize(
+    ("queued_payload", "expected_payload"),
+    [
+        ({"codex_session_id": "new"}, {"codex_session_id": "new"}),
+        (None, None),
+    ],
+)
+def test_sqlite_replace_all_preserves_concurrent_queued_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+    queued_payload: dict[str, str] | None,
+    expected_payload: dict[str, str] | None,
+) -> None:
+    from bot.session_store_sqlite import SessionStoreSQLite
+
+    store = SessionStoreSQLite(
+        temp_dir / "session_store.sqlite3",
+        flush_interval_seconds=60,
+    )
+    key = "1:100"
+    store.queue_upsert(
+        key,
+        bot_id=1,
+        user_id=100,
+        agent_id="main",
+        payload={"codex_session_id": "old"},
+    )
+    store.flush()
+    stale_snapshot = store.load_all()
+
+    replace_flushed = threading.Event()
+    allow_replace = threading.Event()
+    original_flush = store.flush
+
+    def pause_replace_after_flush() -> int:
+        flushed = original_flush()
+        replace_flushed.set()
+        assert allow_replace.wait(timeout=2)
+        return flushed
+
+    monkeypatch.setattr(store, "flush", pause_replace_after_flush)
+
+    try:
+        mutation_started = threading.Event()
+        mutation_flushed = threading.Event()
+
+        def queue_and_flush() -> None:
+            mutation_started.set()
+            store.queue_upsert(
+                key,
+                bot_id=1,
+                user_id=100,
+                agent_id="main",
+                payload=queued_payload,
+            )
+            original_flush()
+            mutation_flushed.set()
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            replace_future = executor.submit(store.replace_all, stale_snapshot)
+            assert replace_flushed.wait(timeout=2)
+
+            mutation_future = executor.submit(queue_and_flush)
+            assert mutation_started.wait(timeout=2)
+            mutation_flushed.wait(timeout=0.2)
+            allow_replace.set()
+            replace_future.result(timeout=2)
+            mutation_future.result(timeout=2)
+
+        assert store.get(key) == expected_payload
+    finally:
+        allow_replace.set()
+        store.close()
+
+
+def test_sqlite_migration_failure_falls_back_to_legacy_json(
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+) -> None:
+    from bot.session_store_sqlite import SessionStoreSQLite
+
+    store_file = temp_dir / "session_store.json"
+    legacy = {"1:100": {"codex_session_id": "thread-legacy"}}
+    store_file.write_text(json.dumps(legacy), encoding="utf-8")
+    monkeypatch.setenv("SESSION_STORE_BACKEND", "sqlite")
+
+    def fail_migration(*_args, **_kwargs):
+        raise RuntimeError("migration failed")
+
+    monkeypatch.setattr(
+        SessionStoreSQLite,
+        "_migrate_legacy_json",
+        fail_migration,
+    )
+
+    with patch("bot.session_store.STORE_FILE", store_file):
+        loaded = load_session_ids()
+        diagnostics = session_store_diagnostics()
+        close_session_store()
+
+    assert loaded == legacy
+    assert diagnostics["active_backend"] == "json"
+    assert store_file.is_file()
+    assert not store_file.with_suffix(".sqlite3").exists()

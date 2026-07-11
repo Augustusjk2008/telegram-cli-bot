@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { clsx } from "clsx";
 import { MobileShell, type AppTab } from "./MobileShell";
 import { NotificationCenter } from "./NotificationCenter";
@@ -28,19 +28,9 @@ import { MockWebBotClient } from "../services/mockWebBotClient";
 import { RealWebBotClient } from "../services/realWebBotClient";
 import type { AnnouncementListResult, BotStatus, BotSummary, PublicHostInfo, SessionState } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
-import { BotListScreen } from "../screens/BotListScreen";
 import { ChatScreen } from "../screens/ChatScreen";
-import { DesktopBotManagerScreen } from "../screens/DesktopBotManagerScreen";
-import { FilesScreen } from "../screens/FilesScreen";
-import { GitScreen } from "../screens/GitScreen";
-import { AdminCenterScreen } from "../screens/AdminCenterScreen";
 import { LoginScreen } from "../screens/LoginScreen";
-import { MobileDebugScreen } from "../screens/MobileDebugScreen";
-import { PluginsScreen } from "../screens/PluginsScreen";
-import { SettingsScreen } from "../screens/SettingsScreen";
 import { PersistentTerminalProvider } from "../terminal/PersistentTerminalProvider";
-import { DesktopWorkbench } from "../workbench/DesktopWorkbench";
-import { SoloWorkbench } from "../workbench/SoloWorkbench";
 import type { ChatWorkbenchStatus, WorkbenchProductMode } from "../workbench/workbenchTypes";
 import { soloModeStorageKey, type SoloSessionSnapshot } from "../workbench/soloTypes";
 import {
@@ -64,6 +54,19 @@ import {
   type UiThemeName,
 } from "../theme";
 import { hasCapability, isGuest } from "../utils/capabilities";
+import {
+  LazyAdminCenterScreen as AdminCenterScreen,
+  LazyBotListScreen as BotListScreen,
+  LazyDesktopBotManagerScreen as DesktopBotManagerScreen,
+  LazyDesktopWorkbench as DesktopWorkbench,
+  LazyFilesScreen as FilesScreen,
+  LazyGitScreen as GitScreen,
+  LazyMobileDebugScreen as MobileDebugScreen,
+  LazyPluginsScreen as PluginsScreen,
+  LazySettingsScreen as SettingsScreen,
+  LazySoloWorkbench as SoloWorkbench,
+  LazyTerminalScreen as TerminalScreen,
+} from "./lazyScreens";
 import "../styles/tokens.css";
 import "../styles/global.css";
 
@@ -83,8 +86,10 @@ function readStoredProductMode(accountKey: string, botAlias: string): WorkbenchP
   const raw = window.localStorage.getItem(soloModeStorageKey(accountKey, botAlias));
   return raw === "solo" || raw === "build" ? raw : null;
 }
-const TerminalScreen = lazy(() =>
-  import("../screens/TerminalScreen").then((module) => ({ default: module.TerminalScreen })),
+const lazyFallback = (
+  <div className="flex h-full min-h-[160px] items-center justify-center text-sm text-[var(--muted)]">
+    正在加载...
+  </div>
 );
 
 function readStoredToken() {
@@ -808,14 +813,16 @@ export function App() {
   if (showAdminCenter && canOpenAdminCenter) {
     return (
       <>
-        <AdminCenterScreen
-          client={client}
-          onClose={() => setShowAdminCenter(false)}
-          initialBots={bots}
-          onBotsChange={setBots}
-          canManageRegisterCodes={canManageRegisterCodes}
-          canManageEnvConfig={canManageEnvConfig}
-        />
+        <Suspense fallback={lazyFallback}>
+          <AdminCenterScreen
+            client={client}
+            onClose={() => setShowAdminCenter(false)}
+            initialBots={bots}
+            onBotsChange={setBots}
+            canManageRegisterCodes={canManageRegisterCodes}
+            canManageEnvConfig={canManageEnvConfig}
+          />
+        </Suspense>
         {notificationCenter}
         {announcementDialog}
       </>
@@ -826,15 +833,17 @@ export function App() {
     if (effectiveLayoutMode === "desktop") {
       return (
         <>
-          <DesktopBotManagerScreen
-            client={client}
-            currentAlias={currentBot}
-            onSelect={handleSelectBot}
-            onBotsChange={setBots}
-            canManage={canManageBots}
-            canCreateWorkdirDirectory={canCreateWorkdirDirectory}
-            canRunUnsafeCli={canRunUnsafeCli}
-          />
+          <Suspense fallback={lazyFallback}>
+            <DesktopBotManagerScreen
+              client={client}
+              currentAlias={currentBot}
+              onSelect={handleSelectBot}
+              onBotsChange={setBots}
+              canManage={canManageBots}
+              canCreateWorkdirDirectory={canCreateWorkdirDirectory}
+              canRunUnsafeCli={canRunUnsafeCli}
+            />
+          </Suspense>
           {notificationCenter}
           {announcementDialog}
         </>
@@ -842,14 +851,16 @@ export function App() {
     }
     return (
       <>
-        <BotListScreen
-          client={client}
-          onSelect={handleSelectBot}
-          onBotsChange={setBots}
-          canManage={canManageBots}
-          canCreateWorkdirDirectory={canCreateWorkdirDirectory}
-          canRunUnsafeCli={canRunUnsafeCli}
-        />
+        <Suspense fallback={lazyFallback}>
+          <BotListScreen
+            client={client}
+            onSelect={handleSelectBot}
+            onBotsChange={setBots}
+            canManage={canManageBots}
+            canCreateWorkdirDirectory={canCreateWorkdirDirectory}
+            canRunUnsafeCli={canRunUnsafeCli}
+          />
+        </Suspense>
         {notificationCenter}
         {announcementDialog}
       </>
@@ -972,7 +983,7 @@ export function App() {
   } else if (currentTab === "terminal" && canUseTerminal) {
     activeScreen = (
       <div className="absolute inset-0">
-        <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">加载终端...</div>}>
+        <Suspense fallback={lazyFallback}>
           <TerminalScreen
             authToken={session?.token || ""}
             botAlias={currentBot}
@@ -1085,6 +1096,7 @@ export function App() {
     return (
       <>
         <PersistentTerminalProvider client={client}>
+          <Suspense fallback={lazyFallback}>
           {productMode === "solo" ? (
             <SoloWorkbench
               botAlias={currentBot}
@@ -1177,6 +1189,7 @@ export function App() {
               onChatPaneVisibilityChange={setDesktopChatPaneVisible}
             />
           )}
+          </Suspense>
         </PersistentTerminalProvider>
         {switcher}
         {notificationCenter}
@@ -1194,7 +1207,7 @@ export function App() {
           currentTab={currentTab}
           allowedTabs={allowedTabs}
           hideOuterChrome={hideOuterChrome}
-          activeScreen={activeScreen}
+          activeScreen={<Suspense fallback={lazyFallback}>{activeScreen}</Suspense>}
           viewMode={viewMode}
           hasUnreadOtherBots={hasUnreadOtherBots}
           announcementAction={announcementButton}

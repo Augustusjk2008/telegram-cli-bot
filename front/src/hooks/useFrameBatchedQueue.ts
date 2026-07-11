@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 
 export type FrameBatchedQueue<T> = {
   enqueue: (item: T) => void;
@@ -9,66 +9,66 @@ export type FrameBatchedQueue<T> = {
 
 export function useFrameBatchedQueue<T>(
   consume: (items: readonly T[]) => void,
+  enabled = true,
 ): FrameBatchedQueue<T> {
   const consumeRef = useRef(consume);
   const pendingRef = useRef<T[]>([]);
   const frameRef = useRef<number | null>(null);
+  const fallbackTimerRef = useRef<number | null>(null);
   consumeRef.current = consume;
 
-  const flush = useCallback(() => {
+  const cancelScheduledFlush = useCallback(() => {
     if (frameRef.current !== null) {
-      if (typeof window.cancelAnimationFrame === "function") {
-        window.cancelAnimationFrame(frameRef.current);
-      } else {
-        window.clearTimeout(frameRef.current);
-      }
+      window.cancelAnimationFrame(frameRef.current);
       frameRef.current = null;
     }
+    if (fallbackTimerRef.current !== null) {
+      window.clearTimeout(fallbackTimerRef.current);
+      fallbackTimerRef.current = null;
+    }
+  }, []);
+
+  const flush = useCallback(() => {
+    cancelScheduledFlush();
     const pending = pendingRef.current;
     pendingRef.current = [];
     if (pending.length > 0) {
       consumeRef.current(pending);
     }
-  }, []);
+  }, [cancelScheduledFlush]);
 
   const enqueue = useCallback((item: T) => {
+    if (!enabled) {
+      consumeRef.current([item]);
+      return;
+    }
     pendingRef.current.push(item);
-    if (frameRef.current !== null) {
+    if (frameRef.current !== null || fallbackTimerRef.current !== null) {
       return;
     }
     const consumePending = () => {
-      frameRef.current = null;
+      cancelScheduledFlush();
       const pending = pendingRef.current;
       pendingRef.current = [];
       if (pending.length > 0) {
         consumeRef.current(pending);
       }
     };
-    if (typeof window.requestAnimationFrame === "function") {
-      frameRef.current = window.requestAnimationFrame(consumePending);
-      return;
-    }
-    frameRef.current = window.setTimeout(consumePending, 0);
-  }, []);
+    frameRef.current = window.requestAnimationFrame(consumePending);
+    fallbackTimerRef.current = window.setTimeout(consumePending, 50);
+  }, [cancelScheduledFlush, enabled]);
 
   const cancel = useCallback(() => {
-    if (frameRef.current !== null) {
-      if (typeof window.cancelAnimationFrame === "function") {
-        window.cancelAnimationFrame(frameRef.current);
-      } else {
-        window.clearTimeout(frameRef.current);
-      }
-      frameRef.current = null;
-    }
+    cancelScheduledFlush();
     pendingRef.current = [];
-  }, []);
+  }, [cancelScheduledFlush]);
 
   useEffect(() => cancel, [cancel]);
 
-  return {
+  return useMemo(() => ({
     enqueue,
     flush,
     cancel,
     pendingCount: () => pendingRef.current.length,
-  };
+  }), [cancel, enqueue, flush]);
 }

@@ -1623,6 +1623,55 @@ class ChatStore:
             "linear_index": int(row["workspace_history_index"] or 0),
         }
 
+    def latest_active_workspace_histories(
+        self,
+        conversation_ids: list[str] | tuple[str, ...] | set[str],
+    ) -> dict[str, dict[str, Any]]:
+        normalized_ids = list(
+            dict.fromkeys(
+                str(conversation_id or "").strip()
+                for conversation_id in conversation_ids
+                if str(conversation_id or "").strip()
+            )
+        )
+        if not normalized_ids:
+            return {}
+        conn = self._connect(create=False)
+        if conn is None:
+            return {}
+        placeholders = ",".join("?" for _ in normalized_ids)
+        with closing(conn):
+            rows = conn.execute(
+                f"""
+                SELECT conversation_id, id, workspace_history_head, workspace_history_index
+                FROM (
+                    SELECT
+                        conversation_id,
+                        id,
+                        workspace_history_head,
+                        workspace_history_index,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY conversation_id
+                            ORDER BY seq DESC, started_at DESC, id DESC
+                        ) AS row_number
+                    FROM turns
+                    WHERE conversation_id IN ({placeholders})
+                      AND workspace_history_discarded_at IS NULL
+                      AND COALESCE(workspace_history_head, '') != ''
+                )
+                WHERE row_number = 1
+                """,
+                normalized_ids,
+            ).fetchall()
+        return {
+            str(row["conversation_id"]): {
+                "turn_id": str(row["id"]),
+                "workspace_history_head": str(row["workspace_history_head"] or ""),
+                "linear_index": int(row["workspace_history_index"] or 0),
+            }
+            for row in rows
+        }
+
     def invalidate_conversation_workspace_history(self, conversation_id: str) -> int:
         normalized_conversation_id = str(conversation_id or "").strip()
         now = _utc_now()

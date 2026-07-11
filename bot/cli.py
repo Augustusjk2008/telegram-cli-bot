@@ -7,10 +7,16 @@ import queue
 import re
 import threading
 import time
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from bot.config import SUPPORTED_CLI_TYPES
-from bot.cli_params import build_cli_args_from_config, build_codex_project_trust_config_arg, CliParamsConfig
+from bot.cli_params import (
+    CliParamsConfig,
+    build_cli_args_from_config,
+    build_codex_project_trust_config_arg,
+    get_cli_output_limits,
+)
 from bot.platform.executables import resolve_cli_executable as _resolve_cli_executable
 
 logger = logging.getLogger(__name__)
@@ -19,6 +25,191 @@ ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b
 CONTEXT_LEFT_RE = re.compile(r"\d+%\s+context\s+left", re.IGNORECASE)
 GENERIC_LEFT_RE = re.compile(r"\d+%\s+left", re.IGNORECASE)
 CODEX_STATUS_FALLBACK_WAIT_SECONDS = 8.0
+
+
+class _BoundedText:
+    def __init__(self, max_bytes: int) -> None:
+        self.max_bytes = max(1, int(max_bytes))
+        self._data = bytearray()
+        self.truncated = False
+
+    def append(self, text: str, *, separator: str = "") -> None:
+        value = str(text or "")
+        if not value:
+            return
+        if self._data and separator:
+            self._data.extend(separator.encode("utf-8", errors="replace"))
+        self._data.extend(value.encode("utf-8", errors="replace"))
+        if len(self._data) > self.max_bytes:
+            del self._data[: len(self._data) - self.max_bytes]
+            self.truncated = True
+
+    def replace(self, text: str) -> None:
+        encoded = str(text or "").encode("utf-8", errors="replace")
+        self.truncated = len(encoded) > self.max_bytes
+        if len(encoded) > self.max_bytes:
+            encoded = encoded[-self.max_bytes :]
+        self._data = bytearray(encoded)
+
+    @property
+    def text(self) -> str:
+        return bytes(self._data).decode("utf-8", errors="ignore")
+
+
+@dataclass(frozen=True)
+class CliStreamParseResult:
+    final_text: str
+    session_id: Optional[str]
+    error_text: Optional[str]
+    raw_tail: str
+    total_bytes: int
+    truncated: bool
+
+
+class CodexJsonStreamParser:
+    def __init__(
+        self,
+        *,
+        raw_tail_max_bytes: int,
+        final_text_max_bytes: int,
+    ) -> None:
+        self._raw_tail = _BoundedText(raw_tail_max_bytes)
+        self._completed = _BoundedText(final_text_max_bytes)
+        self._delta = _BoundedText(final_text_max_bytes)
+        self._errors = _BoundedText(raw_tail_max_bytes)
+        self._plain = _BoundedText(raw_tail_max_bytes)
+        self.session_id: Optional[str] = None
+        self.total_bytes = 0
+
+    def consume_line(self, line: str) -> Dict[str, Optional[str]]:
+        value = str(line or "")
+        self.total_bytes += len(value.encode("utf-8", errors="replace"))
+        self._raw_tail.append(value)
+        stripped = value.strip()
+        if not stripped:
+            return {
+                "thread_id": None,
+                "completed_text": None,
+                "delta_text": None,
+                "error_text": None,
+            }
+        parsed = parse_codex_json_line(stripped)
+        if parsed["thread_id"]:
+            self.session_id = parsed["thread_id"]
+        if parsed["completed_text"]:
+            self._completed.append(parsed["completed_text"], separator="\n\n")
+        if parsed["delta_text"]:
+            self._delta.append(parsed["delta_text"])
+        if parsed["error_text"]:
+            self._errors.append(parsed["error_text"], separator="\n")
+        if not stripped.startswith("{"):
+            self._plain.append(stripped, separator="\n")
+        return parsed
+
+    @property
+    def preview_text(self) -> Optional[str]:
+        value = self._completed.text or self._delta.text or self._errors.text or self._plain.text
+        return value.strip() or None
+
+    def result(self) -> CliStreamParseResult:
+        selected = next(
+            (
+                item
+                for item in (self._completed, self._delta, self._errors, self._plain)
+                if item.text.strip()
+            ),
+            None,
+        )
+        final_text = selected.text.strip() if selected is not None else "(无输出)"
+        if selected is not None and selected.truncated:
+            final_text = f"[回复前部已截断]\n{final_text}"
+        error_text = self._errors.text.strip() or self._plain.text.strip() or None
+        if error_text and (self._errors.truncated or self._plain.truncated):
+            error_text = f"[错误输出前部已截断]\n{error_text}"
+        return CliStreamParseResult(
+            final_text=final_text,
+            session_id=self.session_id,
+            error_text=error_text,
+            raw_tail=self._raw_tail.text,
+            total_bytes=self.total_bytes,
+            truncated=any(
+                item.truncated
+                for item in (self._raw_tail, self._completed, self._delta, self._errors, self._plain)
+            ),
+        )
+
+
+class ClaudeJsonStreamParser:
+    def __init__(
+        self,
+        *,
+        raw_tail_max_bytes: int,
+        final_text_max_bytes: int,
+    ) -> None:
+        self._raw_tail = _BoundedText(raw_tail_max_bytes)
+        self._completed = _BoundedText(final_text_max_bytes)
+        self._delta = _BoundedText(final_text_max_bytes)
+        self._errors = _BoundedText(raw_tail_max_bytes)
+        self._plain = _BoundedText(raw_tail_max_bytes)
+        self.session_id: Optional[str] = None
+        self.total_bytes = 0
+
+    def consume_line(self, line: str) -> Dict[str, Optional[str]]:
+        value = str(line or "")
+        self.total_bytes += len(value.encode("utf-8", errors="replace"))
+        self._raw_tail.append(value)
+        stripped = value.strip()
+        if not stripped:
+            return {
+                "session_id": None,
+                "completed_text": None,
+                "delta_text": None,
+                "error_text": None,
+            }
+        parsed = parse_claude_stream_json_line(stripped)
+        if parsed["session_id"]:
+            self.session_id = parsed["session_id"]
+        if parsed["completed_text"]:
+            self._completed.replace(parsed["completed_text"])
+        if parsed["delta_text"]:
+            self._delta.append(parsed["delta_text"])
+        if parsed["error_text"]:
+            self._errors.append(parsed["error_text"], separator="\n")
+        if not stripped.startswith("{"):
+            self._plain.append(stripped, separator="\n")
+        return parsed
+
+    @property
+    def preview_text(self) -> Optional[str]:
+        value = self._delta.text or self._completed.text or self._errors.text or self._plain.text
+        return value.strip() or None
+
+    def result(self) -> CliStreamParseResult:
+        selected = next(
+            (
+                item
+                for item in (self._completed, self._delta, self._errors, self._plain)
+                if item.text.strip()
+            ),
+            None,
+        )
+        final_text = selected.text.strip() if selected is not None else "(无输出)"
+        if selected is not None and selected.truncated:
+            final_text = f"[回复前部已截断]\n{final_text}"
+        error_text = self._errors.text.strip() or self._plain.text.strip() or None
+        if error_text and (self._errors.truncated or self._plain.truncated):
+            error_text = f"[错误输出前部已截断]\n{error_text}"
+        return CliStreamParseResult(
+            final_text=final_text,
+            session_id=self.session_id,
+            error_text=error_text,
+            raw_tail=self._raw_tail.text,
+            total_bytes=self.total_bytes,
+            truncated=any(
+                item.truncated
+                for item in (self._raw_tail, self._completed, self._delta, self._errors, self._plain)
+            ),
+        )
 
 
 def resolve_cli_executable(cli_path: str, working_dir: Optional[str] = None) -> Optional[str]:
@@ -575,21 +766,30 @@ def _run_codex_status_terminal(resolved_cli: str, working_dir: str, timeout: flo
         raise RuntimeError("pty_unavailable") from exc
 
     process = PtyProcess.spawn(_build_codex_status_terminal_argv(resolved_cli, working_dir), cwd=working_dir)
-    output_queue: "queue.Queue[str]" = queue.Queue()
+    output_limits = get_cli_output_limits()
+    output_queue: "queue.Queue[str]" = queue.Queue(
+        maxsize=output_limits.queue_max_chunks,
+    )
+    reader_stop = threading.Event()
 
     def _reader() -> None:
         try:
-            while True:
+            while not reader_stop.is_set():
                 chunk = process.read(4096)
                 if not chunk:
                     break
-                output_queue.put(chunk)
+                while not reader_stop.is_set():
+                    try:
+                        output_queue.put(chunk, timeout=0.1)
+                        break
+                    except queue.Full:
+                        continue
         except Exception:
             return
 
     threading.Thread(target=_reader, daemon=True).start()
 
-    chunks: List[str] = []
+    output = _BoundedText(output_limits.final_text_max_bytes)
     sent_status = False
     sent_at: Optional[float] = None
     initial_status_line: Optional[str] = None
@@ -603,9 +803,10 @@ def _run_codex_status_terminal(resolved_cli: str, working_dir: str, timeout: flo
                 chunk = ""
 
             if chunk:
-                chunks.append(chunk)
+                output.append(chunk)
 
-            parsed = extract_codex_status("".join(chunks))
+            output_text = output.text
+            parsed = extract_codex_status(output_text)
             if not sent_status and parsed["status_line"]:
                 initial_status_line = parsed["status_line"]
                 process.write("/status\r")
@@ -619,10 +820,11 @@ def _run_codex_status_terminal(resolved_cli: str, working_dir: str, timeout: flo
                 sent_at=sent_at,
                 now=time.time(),
             ):
-                return "".join(chunks)
+                return output_text
 
         raise TimeoutError("timeout")
     finally:
+        reader_stop.set()
         try:
             process.terminate(force=True)
         except Exception:

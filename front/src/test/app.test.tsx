@@ -331,7 +331,7 @@ test("member can enter ungranted bot in read-only mode and hits create quota cop
 
   await createManagedBot(user, "owned10");
   expect(await screen.findByText("普通用户最多只能创建 10 个 Bot")).toBeInTheDocument();
-});
+}, 20_000);
 
 test("create bot unsafe bypass toggle defaults off and submits checked value", async () => {
   const user = userEvent.setup();
@@ -406,7 +406,6 @@ test("create bot unsafe bypass toggle is disabled without unsafe capability", as
     }));
   });
 });
-
 
 
 

@@ -155,23 +155,28 @@ function resolveVendorChunk(id: string) {
     return 'terminal-vendor';
   }
 
-  if (isMermaidVendor(packageName)) {
-    return resolveMermaidVendorChunk(id, packageName);
-  }
-
   if (isMarkdownVendor(packageName)) {
     return 'markdown-vendor';
   }
 
-  if (isEditorLanguageVendor(packageName)) {
-    return 'editor-language-vendor';
+  if (
+    packageName === 'motion'
+    || packageName === 'motion-dom'
+    || packageName === 'motion-utils'
+    || packageName === 'framer-motion'
+  ) {
+    return 'motion-vendor';
   }
 
-  if (isEditorVendor(packageName)) {
-    return 'editor-vendor';
+  if (packageName === '@ag-ui/core' || packageName === 'zod') {
+    return 'ag-ui-vendor';
   }
 
-  return 'vendor';
+  if (packageName === 'clsx' || packageName === 'tailwind-merge') {
+    return 'ui-vendor';
+  }
+
+  return undefined;
 }
 
 function normalizeBasePath(value?: string) {

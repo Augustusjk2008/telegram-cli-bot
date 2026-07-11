@@ -89,6 +89,57 @@ def test_build_repo_status_snapshot_rechecks_cache_after_repo_lock(monkeypatch: 
     assert reads == ["repo", "repo"]
 
 
+def test_build_repo_status_snapshot_caches_clean_repo_and_uses_one_status_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+    cache: dict[str, object] = {}
+
+    monkeypatch.setattr(git_service, "_read_fresh_git_status_cache", lambda _repo_root: (cache or None, "head", (1, 1)))
+    monkeypatch.setattr(git_service, "_write_git_status_cache", lambda _repo_root, entry: cache.update(entry))
+
+    def fake_status(repo_root: str, args: list[str]) -> subprocess.CompletedProcess[str]:
+        assert repo_root == "repo"
+        calls.append(args)
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="## main\n", stderr="")
+
+    monkeypatch.setattr(git_service, "_run_git_status_command_with_retry", fake_status)
+
+    first = git_service._build_repo_status_snapshot("repo")
+    second = git_service._build_repo_status_snapshot("repo")
+
+    assert first["branch_lines"] == ["## main"]
+    assert first["tree_lines"] == []
+    assert second["branch_lines"] == ["## main"]
+    assert len(calls) == 1
+    assert "--branch" in calls[0]
+    assert "--untracked-files=all" in calls[0]
+
+
+def test_list_recent_commits_reuses_head_scoped_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(git_service, "_GIT_RECENT_COMMITS_CACHE", {})
+    monkeypatch.setattr(git_service, "_read_git_head_token", lambda _repo_root: "head-1")
+
+    def fake_run_git(repo_root: str, args: list[str], *, check: bool = True):
+        assert repo_root == "repo"
+        calls.append(args)
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout="abc\x1fabc\x1fAlice\x1f2026-07-10\x1fsubject\x1fbody\x1e",
+            stderr="",
+        )
+
+    monkeypatch.setattr(git_service, "_run_git", fake_run_git)
+
+    first = git_service._list_recent_commits("repo")
+    second = git_service._list_recent_commits("repo")
+
+    assert first == second
+    assert len(calls) == 1
+
+
 def test_parse_git_numstat_counts_text_and_binary_fallback() -> None:
     stats = git_service._parse_git_numstat(
         "\n".join(
@@ -192,3 +243,49 @@ def test_build_git_overview_merges_staged_unstaged_and_untracked_stats(
         "unstaged_additions": 2,
         "unstaged_deletions": 0,
     }
+
+
+def test_merge_changed_file_stats_skips_irrelevant_numstat_commands(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_numstat(_repo_root: str, args: list[str]) -> dict[str, dict[str, int]]:
+        calls.append(args)
+        return {"staged.py": {"additions": 1, "deletions": 0}}
+
+    monkeypatch.setattr(git_service, "_read_git_numstat", fake_numstat)
+
+    merged = git_service._merge_changed_file_stats(
+        "repo",
+        [
+            {
+                "path": "staged.py",
+                "status": "M ",
+                "staged": True,
+                "unstaged": False,
+                "untracked": False,
+            }
+        ],
+    )
+
+    assert merged[0]["staged_additions"] == 1
+    assert calls == [["diff", "--cached", "--numstat", "--"]]
+
+
+def test_build_git_overview_marks_changed_files_truncated(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(git_service, "GIT_OVERVIEW_CHANGED_FILES_LIMIT", 2)
+    monkeypatch.setattr(
+        git_service,
+        "_build_repo_status_snapshot",
+        lambda _repo_root: {
+            "branch_lines": ["## main", " M a.py", " M b.py", " M c.py"],
+            "tree_lines": [],
+        },
+    )
+    monkeypatch.setattr(git_service, "_merge_changed_file_stats", lambda _repo_root, files: files)
+    monkeypatch.setattr(git_service, "_list_recent_commits", lambda _repo_root: [])
+
+    overview = git_service._build_git_overview("repo", "repo")
+
+    assert [item["path"] for item in overview["changed_files"]] == ["a.py", "b.py"]
+    assert overview["changed_files_truncated"] is True
+    assert overview["changed_files_total_estimate"] == 3

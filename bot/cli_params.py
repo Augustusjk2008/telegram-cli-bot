@@ -19,6 +19,65 @@ MODEL_OPTION_NONE = "none"
 REMOVED_CLI_MODEL_OPTIONS = {"gpt-5.2", "gpt-5.3"}
 REQUIRED_CLI_MODEL_OPTIONS = [MODEL_OPTION_NONE]
 
+
+@dataclass(frozen=True)
+class CliOutputLimits:
+    queue_max_chunks: int = 16
+    max_line_bytes: int = 4 * 1024 * 1024
+    max_total_bytes: int = 256 * 1024 * 1024
+    raw_tail_max_bytes: int = 64 * 1024
+    final_text_max_bytes: int = 4 * 1024 * 1024
+
+
+def _bounded_env_int(
+    env: Mapping[str, str],
+    name: str,
+    default: int,
+    *,
+    minimum: int = 1,
+) -> int:
+    try:
+        value = int(str(env.get(name, default)).strip())
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, value)
+
+
+def get_cli_output_limits(env: Mapping[str, str] | None = None) -> CliOutputLimits:
+    source = os.environ if env is None else env
+    max_line_bytes = _bounded_env_int(
+        source,
+        "TCB_CLI_MAX_LINE_BYTES",
+        CliOutputLimits.max_line_bytes,
+    )
+    return CliOutputLimits(
+        queue_max_chunks=_bounded_env_int(
+            source,
+            "TCB_CLI_STDOUT_QUEUE_MAX_CHUNKS",
+            CliOutputLimits.queue_max_chunks,
+        ),
+        max_line_bytes=max_line_bytes,
+        max_total_bytes=max(
+            max_line_bytes,
+            _bounded_env_int(
+                source,
+                "TCB_CLI_MAX_TOTAL_BYTES",
+                CliOutputLimits.max_total_bytes,
+            ),
+        ),
+        raw_tail_max_bytes=_bounded_env_int(
+            source,
+            "TCB_CLI_RAW_TAIL_MAX_BYTES",
+            CliOutputLimits.raw_tail_max_bytes,
+        ),
+        final_text_max_bytes=_bounded_env_int(
+            source,
+            "TCB_CLI_FINAL_TEXT_MAX_BYTES",
+            CliOutputLimits.final_text_max_bytes,
+        ),
+    )
+
+
 # ============ 各 CLI 的默认参数配置 ============
 
 DEFAULT_CLAUDE_PARAMS = {

@@ -42,6 +42,7 @@ GIT_COMMIT_MESSAGE_TIMEOUT_SECONDS = 30 * 60
 GIT_SMART_COMMIT_UNTRACKED_PREVIEW_LIMIT = 4096
 GIT_DIFF_OUTPUT_CHAR_LIMIT = 128 * 1024
 GIT_OVERVIEW_UNTRACKED_STATS_MAX_BYTES = 512 * 1024
+GIT_OVERVIEW_CHANGED_FILES_LIMIT = 2000
 GIT_COMMIT_GRAPH_DEFAULT_LIMIT = 100
 GIT_COMMIT_GRAPH_MAX_LIMIT = 300
 _GIT_STATUS_CACHE_TTL_SECONDS = 0.75
@@ -49,6 +50,7 @@ _GIT_STATUS_RETRY_DELAY_SECONDS = 0.15
 _GIT_STATUS_CACHE_LOCK = threading.Lock()
 _GIT_STATUS_CACHE: dict[str, dict[str, Any]] = {}
 _GIT_STATUS_REPO_LOCKS: dict[str, threading.Lock] = {}
+_GIT_RECENT_COMMITS_CACHE: dict[tuple[str, int], dict[str, Any]] = {}
 _GIT_TRANSIENT_INDEX_ERROR_RE = re.compile(
     r"(index file open failed|Permission denied|unable to create .*index\.lock|File exists)",
     re.IGNORECASE,
@@ -449,8 +451,10 @@ def _count_untracked_file_additions(repo_root: str, relative_path: str) -> int:
 
 
 def _merge_changed_file_stats(repo_root: str, changed_files: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    unstaged_stats = _read_git_numstat(repo_root, ["diff", "--numstat", "--"])
-    staged_stats = _read_git_numstat(repo_root, ["diff", "--cached", "--numstat", "--"])
+    has_unstaged = any(bool(item.get("unstaged")) for item in changed_files)
+    has_staged = any(bool(item.get("staged")) for item in changed_files)
+    unstaged_stats = _read_git_numstat(repo_root, ["diff", "--numstat", "--"]) if has_unstaged else {}
+    staged_stats = _read_git_numstat(repo_root, ["diff", "--cached", "--numstat", "--"]) if has_staged else {}
 
     merged: list[dict[str, Any]] = []
     for item in changed_files:
@@ -634,6 +638,8 @@ def _invalidate_git_status_cache(repo_root: str) -> None:
     cache_key = _git_status_cache_key(repo_root)
     with _GIT_STATUS_CACHE_LOCK:
         _GIT_STATUS_CACHE.pop(cache_key, None)
+        for recent_key in [key for key in _GIT_RECENT_COMMITS_CACHE if key[0] == cache_key]:
+            _GIT_RECENT_COMMITS_CACHE.pop(recent_key, None)
 
 
 def _is_git_transient_index_error(error: BaseException | str) -> bool:
@@ -703,36 +709,43 @@ def _build_repo_status_snapshot(repo_root: str) -> dict[str, Any]:
         if cached:
             return cached
 
-        branch_result = _run_git_status_command_with_retry(repo_root, ["status", "--porcelain=1", "--branch"])
-        tree_result = _run_git_status_command_with_retry(
+        status_result = _run_git_status_command_with_retry(
             repo_root,
             [
                 "status",
                 "--porcelain=1",
-                "--ignored=matching",
+                "--branch",
                 "--untracked-files=all",
             ],
         )
-        tree_lines = (tree_result.stdout or "").splitlines()
+        status_lines = (status_result.stdout or "").splitlines()
+        tree_lines = status_lines[1:] if status_lines and status_lines[0].startswith("## ") else status_lines
         entry = {
             "created_at": time.monotonic(),
             "head_token": head_token,
             "index_token": index_token,
-            "branch_lines": (branch_result.stdout or "").splitlines(),
+            "branch_lines": status_lines,
             "tree_lines": tree_lines,
             "status_path_token": _status_path_token(repo_root, tree_lines),
         }
-        if tree_lines:
-            _write_git_status_cache(repo_root, entry)
+        _write_git_status_cache(repo_root, entry)
         return entry
 
 
 def _list_recent_commits(repo_root: str, limit: int = 8) -> list[dict[str, str]]:
+    normalized_limit = max(1, int(limit or 8))
+    cache_key = (_git_status_cache_key(repo_root), normalized_limit)
+    head_token = _read_git_head_token(repo_root)
+    with _GIT_STATUS_CACHE_LOCK:
+        cached = dict(_GIT_RECENT_COMMITS_CACHE.get(cache_key) or {})
+    if cached.get("head_token") == head_token:
+        return [dict(item) for item in cached.get("items") or [] if isinstance(item, dict)]
+
     result = _run_git(
         repo_root,
         [
             "log",
-            f"-n{max(1, limit)}",
+            f"-n{normalized_limit}",
             "--date=iso",
             "--pretty=format:%H%x1f%h%x1f%an%x1f%ad%x1f%s%x1f%B%x1e",
         ],
@@ -764,6 +777,11 @@ def _list_recent_commits(repo_root: str, limit: int = 8) -> list[dict[str, str]]
                 "message": message,
             }
         )
+    with _GIT_STATUS_CACHE_LOCK:
+        _GIT_RECENT_COMMITS_CACHE[cache_key] = {
+            "head_token": head_token,
+            "items": [dict(item) for item in items],
+        }
     return items
 
 
@@ -1086,6 +1104,8 @@ def _build_git_overview(working_dir: str, repo_root: Optional[str]) -> dict[str,
             "ahead_count": 0,
             "behind_count": 0,
             "changed_files": [],
+            "changed_files_truncated": False,
+            "changed_files_total_estimate": 0,
             "recent_commits": [],
         }
 
@@ -1093,6 +1113,10 @@ def _build_git_overview(working_dir: str, repo_root: Optional[str]) -> dict[str,
     header = status_lines[0] if status_lines else ""
     current_branch, ahead_count, behind_count = _parse_status_header(header)
     changed_files = _parse_changed_files(status_lines[1:] if status_lines else [])
+    changed_files_total = len(changed_files)
+    changed_files_truncated = changed_files_total > GIT_OVERVIEW_CHANGED_FILES_LIMIT
+    if changed_files_truncated:
+        changed_files = changed_files[:GIT_OVERVIEW_CHANGED_FILES_LIMIT]
     changed_files = _merge_changed_file_stats(repo_root, changed_files)
 
     return {
@@ -1106,6 +1130,8 @@ def _build_git_overview(working_dir: str, repo_root: Optional[str]) -> dict[str,
         "ahead_count": ahead_count,
         "behind_count": behind_count,
         "changed_files": changed_files,
+        "changed_files_truncated": changed_files_truncated,
+        "changed_files_total_estimate": changed_files_total,
         "recent_commits": _list_recent_commits(repo_root),
     }
 
@@ -1212,12 +1238,17 @@ def get_git_tree_status(manager: MultiBotManager, alias: str, user_id: int) -> d
             "items": {},
         }
 
+    snapshot = _build_repo_status_snapshot(repo_root)
+    ignored_lines = _read_git_status_text_with_retry(
+        repo_root,
+        ["status", "--porcelain=1", "--ignored=matching", "--untracked-files=no"],
+    ).splitlines()
     return {
         "repo_found": True,
         "working_dir": working_dir,
         "repo_path": repo_root,
         "items": _parse_tree_status_items(
-            _build_repo_status_snapshot(repo_root)["tree_lines"],
+            [*snapshot["tree_lines"], *ignored_lines],
             working_dir=working_dir,
             repo_root=repo_root,
         ),

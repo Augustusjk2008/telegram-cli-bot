@@ -5,6 +5,8 @@ import json
 import os
 import re
 import subprocess
+import time
+from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -15,6 +17,9 @@ from bot.runtime_paths import get_native_agent_data_dir
 SHADOW_HISTORY_VERSION = 1
 GIT_COMMAND_TIMEOUT_SECONDS = 30.0
 MAX_TRACKED_FILES = 20000
+MAX_TRACKED_TOTAL_BYTES = 512 * 1024 * 1024
+MAX_TRACKED_FILE_BYTES = 64 * 1024 * 1024
+MAX_BUDGET_SCAN_SECONDS = 5.0
 SHADOW_GIT_AUTHOR_NAME = "Orbit Workspace History"
 SHADOW_GIT_AUTHOR_EMAIL = "orbit@local"
 EXCLUDE_DIR_NAMES = frozenset({
@@ -101,10 +106,25 @@ class ShadowGitHistory:
         root_dir: Path | str | None = None,
         timeout_seconds: float = GIT_COMMAND_TIMEOUT_SECONDS,
         max_tracked_files: int = MAX_TRACKED_FILES,
+        max_total_bytes: int = MAX_TRACKED_TOTAL_BYTES,
+        max_file_bytes: int = MAX_TRACKED_FILE_BYTES,
+        max_budget_scan_seconds: float = MAX_BUDGET_SCAN_SECONDS,
     ) -> None:
         self.root_dir = Path(root_dir) if root_dir is not None else get_native_agent_data_dir() / "workspace-history"
         self.timeout_seconds = max(0.1, float(timeout_seconds or GIT_COMMAND_TIMEOUT_SECONDS))
         self.max_tracked_files = max(1, int(max_tracked_files or MAX_TRACKED_FILES))
+        self.max_total_bytes = max(1, int(max_total_bytes or MAX_TRACKED_TOTAL_BYTES))
+        self.max_file_bytes = max(1, int(max_file_bytes or MAX_TRACKED_FILE_BYTES))
+        self.max_budget_scan_seconds = max(0.1, float(max_budget_scan_seconds or MAX_BUDGET_SCAN_SECONDS))
+        self._command_durations_ms: deque[float] = deque(maxlen=100)
+
+    def diagnostics(self) -> dict[str, float | int]:
+        durations = list(self._command_durations_ms)
+        return {
+            "command_count": len(durations),
+            "latest_command_ms": durations[-1] if durations else 0.0,
+            "max_command_ms": max(durations, default=0.0),
+        }
 
     def status(self, *, cwd: Path | str, conversation_id: str) -> ShadowHistoryStatus:
         context = self._context(cwd, conversation_id)
@@ -116,14 +136,14 @@ class ShadowGitHistory:
     def snapshot(self, *, cwd: Path | str, conversation_id: str, label: str) -> ShadowHistoryStatus:
         context = self._context(cwd, conversation_id)
         self._ensure_repo(context)
-        tracked_count = self._tracked_file_budget(context)
-        if tracked_count > self.max_tracked_files:
+        budget = self._workspace_budget(context)
+        if budget.message:
             return ShadowHistoryStatus(
                 head=self._head(context),
                 clean=False,
-                manual_change_count=tracked_count,
+                manual_change_count=budget.file_count,
                 degraded=True,
-                message="workspace history 文件数量超过预算",
+                message=budget.message,
             )
         self._git(context, "add", "-A", "--", ".")
         has_head = bool(self._head(context))
@@ -147,7 +167,14 @@ class ShadowGitHistory:
         pi_session_id: str = "",
     ) -> ShadowHistoryStatus:
         context = self._context(cwd, conversation_id)
-        after = self.snapshot(cwd=context.cwd, conversation_id=context.conversation_id, label=f"turn {turn_id} after")
+        if self._manual_change_count(context) == 0:
+            after = ShadowHistoryStatus(
+                head=str(before_head or "").strip(),
+                clean=True,
+                manual_change_count=0,
+            )
+        else:
+            after = self.snapshot(cwd=context.cwd, conversation_id=context.conversation_id, label=f"turn {turn_id} after")
         if after.degraded:
             return after
         state = self._read_state(context)
@@ -338,16 +365,20 @@ class ShadowGitHistory:
         cwd: Path,
         check: bool = True,
     ) -> subprocess.CompletedProcess[str]:
-        result = subprocess.run(
-            list(command),
-            cwd=str(cwd),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=self.timeout_seconds,
-            check=False,
-        )
+        started_at = time.perf_counter()
+        try:
+            result = subprocess.run(
+                list(command),
+                cwd=str(cwd),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=self.timeout_seconds,
+                check=False,
+            )
+        finally:
+            self._command_durations_ms.append((time.perf_counter() - started_at) * 1000)
         if check and result.returncode != 0:
             message = (result.stderr or result.stdout or "git command failed").strip()
             raise RuntimeError(_safe_message(message, default="workspace history git 执行失败"))
@@ -370,10 +401,12 @@ class ShadowGitHistory:
         return sum(1 for line in str(result.stdout or "").splitlines() if line.strip())
 
     def _tracked_file_budget(self, context: "_ShadowContext") -> int:
-        result = self._git(context, "ls-files", "-co", "--exclude-standard", "--", ".", check=False)
-        if result.returncode == 0:
-            return sum(1 for line in str(result.stdout or "").splitlines() if line.strip())
+        return self._workspace_budget(context).file_count
+
+    def _workspace_budget(self, context: "_ShadowContext") -> "_WorkspaceBudget":
+        started_at = time.monotonic()
         count = 0
+        total_bytes = 0
         shadow_root = self.root_dir.expanduser().resolve()
         for root, dirs, files in os.walk(context.cwd):
             root_path = Path(root)
@@ -383,10 +416,26 @@ class ShadowGitHistory:
                 if name not in EXCLUDE_DIR_NAMES
                 and (root_path / name).resolve() != shadow_root
             ]
-            count += len(files)
-            if count > self.max_tracked_files:
-                return count
-        return count
+            for name in files:
+                path = root_path / name
+                relative = _to_posix(str(path.relative_to(context.cwd)))
+                if _is_excluded_file(relative):
+                    continue
+                count += 1
+                if count > self.max_tracked_files:
+                    return _WorkspaceBudget(count, total_bytes, "workspace history 文件数量超过预算")
+                try:
+                    file_size = int(path.stat().st_size)
+                except OSError:
+                    continue
+                if file_size > self.max_file_bytes:
+                    return _WorkspaceBudget(count, total_bytes, "workspace history 单文件大小超过预算")
+                total_bytes += file_size
+                if total_bytes > self.max_total_bytes:
+                    return _WorkspaceBudget(count, total_bytes, "workspace history 总字节数超过预算")
+                if time.monotonic() - started_at > self.max_budget_scan_seconds:
+                    return _WorkspaceBudget(count, total_bytes, "workspace history 扫描时间超过预算")
+        return _WorkspaceBudget(count, total_bytes)
 
     def _shadow_root_exclude_pattern(self, context: "_ShadowContext") -> str:
         try:
@@ -553,6 +602,13 @@ class _ShadowContext:
     state_path: Path
 
 
+@dataclass(frozen=True)
+class _WorkspaceBudget:
+    file_count: int
+    total_bytes: int
+    message: str = ""
+
+
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -569,6 +625,22 @@ def _safe_int(value: Any) -> int:
         return max(0, int(value))
     except (TypeError, ValueError):
         return 0
+
+
+def _is_excluded_file(relative_path: str) -> bool:
+    normalized = _to_posix(relative_path).strip("/")
+    path = PurePosixPath(normalized)
+    for pattern in EXCLUDE_PATTERNS:
+        candidate = pattern.strip("/")
+        if not candidate:
+            continue
+        if pattern.endswith("/") and (normalized == candidate or normalized.startswith(f"{candidate}/")):
+            return True
+        if any(marker in candidate for marker in ("*", "?", "[")) and path.match(candidate):
+            return True
+        if normalized == candidate:
+            return True
+    return False
 
 
 def _safe_message(message: str, *, default: str) -> str:

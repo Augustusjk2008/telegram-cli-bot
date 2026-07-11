@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 import { Check, ChevronRight, LoaderCircle, X } from "lucide-react";
 import { ChatMarkdownMessage } from "./ChatMarkdownMessage";
 import { ChatPlainTextMessage } from "./ChatPlainTextMessage";
 import type { ChatMessage, ChatMessageContextUsage } from "../services/types";
 import type { AgUiPermissionRequest, NativeAgentPermissionReply, NativeAgentTranscriptEntry } from "../utils/agUiRunReducer";
 import { ChatFinalAnswerActions } from "./ChatFinalAnswerActions";
+import { DynamicVirtualList } from "./virtual/DynamicVirtualList";
 
 type Props = {
   entries: NativeAgentTranscriptEntry[];
@@ -195,6 +196,8 @@ type TranscriptRenderItem =
   | { kind: "entry"; entry: NativeAgentTranscriptEntry }
   | { kind: "group"; groupIndex: number; entries: NativeAgentTranscriptEntry[] };
 
+const LARGE_TRANSCRIPT_GROUP_THRESHOLD = 100;
+
 function cutsTranscriptGroup(entry: NativeAgentTranscriptEntry) {
   return (
     entry.trace?.kind === "commentary"
@@ -376,6 +379,116 @@ function filterDuplicateFinalErrorItems(renderItems: TranscriptRenderItem[], res
   return filtered;
 }
 
+const TranscriptEntryRow = memo(function TranscriptEntryRow({
+  entry,
+  nested = false,
+  replyingPermissionId,
+  onReplyPermission,
+  onFileLinkClick,
+}: {
+  entry: NativeAgentTranscriptEntry;
+  nested?: boolean;
+  replyingPermissionId: string;
+  onReplyPermission?: (reply: NativeAgentPermissionReply) => Promise<void>;
+  onFileLinkClick?: (href: string) => void;
+}) {
+  const rowClassName = nested ? "py-1" : "border-t border-[var(--workbench-hairline)] py-1";
+  if (entry.kind === "process" || entry.kind === "error" || entry.kind === "cancelled") {
+    const summary = stripThinkingBlocks(compact(entry.summary, entry.label));
+    if (!summary) {
+      return null;
+    }
+    return (
+      <div data-transcript-entry-id={entry.id} className={rowClassName}>
+        {shouldRenderEntrySummaryAsMarkdown(entry) ? (
+          <ChatMarkdownMessage content={summary} onFileLinkClick={onFileLinkClick} />
+        ) : (
+          <div className={entry.kind === "error" ? "whitespace-pre-wrap break-words text-red-700" : "whitespace-pre-wrap break-words text-[var(--text)]"}>
+            {summary}
+          </div>
+        )}
+      </div>
+    );
+  }
+  if (entry.kind === "permission") {
+    return (
+      <PermissionEntry
+        entry={entry}
+        rowClassName={rowClassName}
+        replyingPermissionId={replyingPermissionId}
+        onReply={onReplyPermission}
+      />
+    );
+  }
+  return (
+    <details className={rowClassName} open={!entry.collapsedByDefault}>
+      <summary className="cursor-pointer truncate text-[var(--muted)] marker:text-[var(--muted)]">
+        <span className="font-medium text-[var(--text)]">{entry.label}</span>
+        {entry.summary ? <span className="ml-2">{entry.summary}</span> : null}
+      </summary>
+      <EntryBody entry={entry} />
+    </details>
+  );
+});
+
+const TranscriptGroupRow = memo(function TranscriptGroupRow({
+  item,
+  replyingPermissionId,
+  onReplyPermission,
+  onFileLinkClick,
+}: {
+  item: Extract<TranscriptRenderItem, { kind: "group" }>;
+  replyingPermissionId: string;
+  onReplyPermission?: (reply: NativeAgentPermissionReply) => Promise<void>;
+  onFileLinkClick?: (href: string) => void;
+}) {
+  const deferContents = item.entries.length > LARGE_TRANSCRIPT_GROUP_THRESHOLD;
+  const [expanded, setExpanded] = useState(false);
+  const renderGroupEntry = useCallback((entry: NativeAgentTranscriptEntry) => (
+    <TranscriptEntryRow
+      entry={entry}
+      nested
+      replyingPermissionId={replyingPermissionId}
+      onReplyPermission={onReplyPermission}
+      onFileLinkClick={onFileLinkClick}
+    />
+  ), [onFileLinkClick, onReplyPermission, replyingPermissionId]);
+  return (
+    <details
+      data-testid="native-agent-event-group"
+      className="group border-t border-[var(--workbench-hairline)] py-1"
+      onToggle={deferContents ? (event) => setExpanded(event.currentTarget.open) : undefined}
+    >
+      <summary className="flex cursor-pointer list-none items-center gap-2 py-1 text-[var(--muted)] marker:hidden [&::-webkit-details-marker]:hidden">
+        <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--muted)] transition-transform group-open:rotate-90" aria-hidden="true" />
+        <span className="shrink-0 text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--accent)]">过程 {item.groupIndex}</span>
+        <span className="min-w-0 truncate text-[11px] text-[var(--muted)]">{describeTranscriptGroup(item.entries)}</span>
+      </summary>
+      {!deferContents || expanded ? (
+        <div className="border-l-2 border-[var(--accent-outline)] pl-3">
+          {deferContents ? (
+            <DynamicVirtualList
+              items={item.entries}
+              getKey={(entry) => entry.id}
+              renderItem={renderGroupEntry}
+              estimateHeight={56}
+              overscan={3}
+              dataTestId="virtualized-native-agent-group"
+              className="max-h-[50vh] min-h-[240px] overflow-auto"
+            />
+          ) : (
+            <div className="divide-y divide-[var(--workbench-hairline)]">
+              {item.entries.map((entry) => (
+                <div key={entry.id}>{renderGroupEntry(entry)}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : null}
+    </details>
+  );
+});
+
 export function NativeAgentTranscript({
   entries,
   resultText,
@@ -391,15 +504,20 @@ export function NativeAgentTranscript({
   contextUsage,
 }: Props) {
   const [replyingPermissionId, setReplyingPermissionId] = useState("");
-  const renderItems = groupTranscriptEntries(entries);
+  const renderItems = useMemo(() => groupTranscriptEntries(entries), [entries]);
   const shouldFilterDuplicateFinal = state !== "streaming" && Boolean(normalizedDisplayText(resultText));
-  const displayRenderItems = shouldFilterDuplicateFinal
-    ? filterDuplicateFinalErrorItems(filterDuplicateFinalProcessItems(renderItems, resultText), resultText)
-    : renderItems;
+  const displayRenderItems = useMemo(() => (
+    shouldFilterDuplicateFinal
+      ? filterDuplicateFinalErrorItems(filterDuplicateFinalProcessItems(renderItems, resultText), resultText)
+      : renderItems
+  ), [renderItems, resultText, shouldFilterDuplicateFinal]);
   const allowPermissionReply = mode === "native";
-  const fullAnswerText = formatTranscriptFullAnswer(renderItems, resultText);
+  const fullAnswerText = useMemo(
+    () => formatTranscriptFullAnswer(renderItems, resultText),
+    [renderItems, resultText],
+  );
 
-  const replyPermission = async (reply: NativeAgentPermissionReply) => {
+  const replyPermission = useCallback(async (reply: NativeAgentPermissionReply) => {
     if (!onReplyPermission || !reply.requestId || replyingPermissionId) {
       return;
     }
@@ -409,54 +527,25 @@ export function NativeAgentTranscript({
     } finally {
       setReplyingPermissionId("");
     }
-  };
+  }, [onReplyPermission, replyingPermissionId]);
 
-  const renderEntry = (entry: NativeAgentTranscriptEntry, nested = false) => {
-    const rowClassName = nested
-      ? "py-1"
-      : "border-t border-[var(--workbench-hairline)] py-1";
-
-    if (entry.kind === "process" || entry.kind === "error" || entry.kind === "cancelled") {
-      const rawSummary = compact(entry.summary, entry.label);
-      const summary = stripThinkingBlocks(rawSummary);
-      if (!summary) {
-        return null;
-      }
-      return (
-        <div key={entry.id} className={rowClassName}>
-          {shouldRenderEntrySummaryAsMarkdown(entry) ? (
-            <ChatMarkdownMessage content={summary} onFileLinkClick={onFileLinkClick} />
-          ) : (
-            <div className={entry.kind === "error" ? "whitespace-pre-wrap break-words text-red-700" : "whitespace-pre-wrap break-words text-[var(--text)]"}>
-              {summary}
-            </div>
-          )}
-        </div>
-      );
-    }
-
-    if (entry.kind === "permission") {
-      return (
-        <PermissionEntry
-          key={entry.id}
-          entry={entry}
-          rowClassName={rowClassName}
-          replyingPermissionId={replyingPermissionId}
-          onReply={allowPermissionReply ? replyPermission : undefined}
-        />
-      );
-    }
-
-    return (
-      <details key={entry.id} className={rowClassName} open={!entry.collapsedByDefault}>
-        <summary className="cursor-pointer truncate text-[var(--muted)] marker:text-[var(--muted)]">
-          <span className="font-medium text-[var(--text)]">{entry.label}</span>
-          {entry.summary ? <span className="ml-2">{entry.summary}</span> : null}
-        </summary>
-        <EntryBody entry={entry} />
-      </details>
-    );
-  };
+  const renderTranscriptItem = useCallback((item: TranscriptRenderItem) => (
+    item.kind === "entry" ? (
+      <TranscriptEntryRow
+        entry={item.entry}
+        replyingPermissionId={replyingPermissionId}
+        onReplyPermission={allowPermissionReply ? replyPermission : undefined}
+        onFileLinkClick={onFileLinkClick}
+      />
+    ) : (
+      <TranscriptGroupRow
+        item={item}
+        replyingPermissionId={replyingPermissionId}
+        onReplyPermission={allowPermissionReply ? replyPermission : undefined}
+        onFileLinkClick={onFileLinkClick}
+      />
+    )
+  ), [allowPermissionReply, onFileLinkClick, replyPermission, replyingPermissionId]);
 
   const visibleResultText = stripThinkingBlocks(resultText);
   const showFinalResult = Boolean(visibleResultText) && !(mode === "cli" && state === "streaming");
@@ -464,36 +553,23 @@ export function NativeAgentTranscript({
 
   return (
     <div data-testid="native-agent-transcript" className="min-w-0 text-sm text-[var(--text)]">
-      {displayRenderItems.map((item) => {
-        if (item.kind === "entry") {
-          return renderEntry(item.entry);
-        }
-        return (
-          <details
-            key={`native-agent-event-group-${item.groupIndex}-${item.entries[0]?.id || "empty"}`}
-            data-testid="native-agent-event-group"
-            className="group border-t border-[var(--workbench-hairline)] py-1"
-          >
-            <summary className="flex cursor-pointer list-none items-center gap-2 py-1 text-[var(--muted)] marker:hidden [&::-webkit-details-marker]:hidden">
-              <ChevronRight
-                className="h-3.5 w-3.5 shrink-0 text-[var(--muted)] transition-transform group-open:rotate-90"
-                aria-hidden="true"
-              />
-              <span className="shrink-0 text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--accent)]">
-                过程 {item.groupIndex}
-              </span>
-              <span className="min-w-0 truncate text-[11px] text-[var(--muted)]">
-                {describeTranscriptGroup(item.entries)}
-              </span>
-            </summary>
-            <div className="border-l-2 border-[var(--accent-outline)] pl-3">
-              <div className="divide-y divide-[var(--workbench-hairline)]">
-                {item.entries.map((entry) => renderEntry(entry, true))}
-              </div>
-            </div>
-          </details>
-        );
-      })}
+      {displayRenderItems.length > 100 ? (
+        <DynamicVirtualList
+          items={displayRenderItems}
+          getKey={(item) => item.kind === "entry"
+            ? item.entry.id
+            : `group-${item.groupIndex}-${item.entries[0]?.id || "empty"}`}
+          renderItem={renderTranscriptItem}
+          estimateHeight={72}
+          overscan={1}
+          dataTestId="virtualized-native-agent-transcript"
+          className="max-h-[60vh] min-h-[240px] overflow-auto"
+        />
+      ) : displayRenderItems.map((item) => (
+        <div key={item.kind === "entry" ? item.entry.id : `group-${item.groupIndex}-${item.entries[0]?.id || "empty"}`}>
+          {renderTranscriptItem(item)}
+        </div>
+      ))}
 
       {showFinalResult ? (
         <div data-testid="native-agent-final-result" className="border-t border-[var(--workbench-hairline)] pt-2">

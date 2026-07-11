@@ -17,7 +17,12 @@ from bot.runtime_paths import (
 )
 from bot.web.transfer_litellm_config import LiteLLMRouteConfig, LiteLLMTransferConfig, write_litellm_proxy_config
 from bot.web.transfer_litellm_runtime import _PYTHON_LITELLM_ENTRYPOINT, _resolve_command
-from bot.web.transfer_service import TransferService, TransferServiceError
+from bot.web.transfer_service import (
+    TransferService,
+    TransferServiceError,
+    _CodexCompactionStreamAdapter,
+    _SSEUsageParser,
+)
 
 
 class FakeLiteLLMRuntime:
@@ -68,6 +73,51 @@ class DelayedLiteLLMRuntime(FakeLiteLLMRuntime):
         await super().ensure_started(config)
 
 
+class ControlledLiteLLMRuntime(FakeLiteLLMRuntime):
+    def __init__(self) -> None:
+        super().__init__()
+        self.start_entered = asyncio.Event()
+        self.release_start = asyncio.Event()
+        self.started_aliases: list[str] = []
+
+    async def ensure_started(self, config: LiteLLMTransferConfig) -> None:
+        self.config = config
+        self.started_aliases.append(config.model_alias)
+        self.start_entered.set()
+        await self.release_start.wait()
+        self._running = True
+
+
+class FailingControlledLiteLLMRuntime(FakeLiteLLMRuntime):
+    def __init__(self) -> None:
+        super().__init__()
+        self.start_entered = asyncio.Event()
+        self.release_start = asyncio.Event()
+        self.started_aliases: list[str] = []
+
+    async def ensure_started(self, config: LiteLLMTransferConfig) -> None:
+        self.config = config
+        self.started_aliases.append(config.model_alias)
+        if len(self.started_aliases) == 1:
+            self.start_entered.set()
+            await self.release_start.wait()
+            raise RuntimeError("stale generation failed")
+        self._running = True
+
+
+def test_sse_usage_parser_drops_oversized_line_and_recovers() -> None:
+    parser = _SSEUsageParser(max_line_characters=128)
+
+    parser.feed(b"x" * 256)
+    assert len(parser._buffer) <= 128
+
+    parser.feed(b"\n")
+    parser.feed(b'data: {"model":"gpt-test","usage":{"input_tokens":3,"output_tokens":4}}\n')
+
+    assert parser.model == "gpt-test"
+    assert parser.usage == {"input_tokens": 3, "output_tokens": 4}
+
+
 @pytest.mark.asyncio
 async def test_transfer_config_defaults_disabled_and_hot_toggles_runtime(tmp_path: Path) -> None:
     runtime = FakeLiteLLMRuntime()
@@ -103,6 +153,44 @@ async def test_transfer_config_defaults_disabled_and_hot_toggles_runtime(tmp_pat
     assert disabled_status["configured"] is True
     assert disabled_status["status"] == "disabled"
     assert runtime.is_running is False
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_config_update_restarts_with_latest_generation(tmp_path: Path) -> None:
+    runtime = ControlledLiteLLMRuntime()
+    service = _configured_service(runtime, tmp_path)
+    start_task = asyncio.create_task(service.ensure_runtime())
+    await runtime.start_entered.wait()
+
+    update_task = asyncio.create_task(service.update_config_async({"model_alias": "latest-model"}))
+    runtime.release_start.set()
+    await asyncio.gather(start_task, update_task)
+
+    assert runtime.started_aliases == ["codex-gpt-5", "latest-model"]
+    assert runtime.config is not None
+    assert runtime.config.model_alias == "latest-model"
+    assert runtime.is_running is True
+    await service.close()
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_stale_generation_failure_retries_latest_config(tmp_path: Path) -> None:
+    runtime = FailingControlledLiteLLMRuntime()
+    service = _configured_service(runtime, tmp_path)
+    start_task = asyncio.create_task(service.ensure_runtime())
+    await runtime.start_entered.wait()
+
+    update_task = asyncio.create_task(service.update_config_async({"model_alias": "latest-model"}))
+    runtime.release_start.set()
+    await asyncio.gather(start_task, update_task)
+
+    assert runtime.started_aliases == ["codex-gpt-5", "latest-model"]
+    assert runtime.config is not None
+    assert runtime.config.model_alias == "latest-model"
+    assert runtime.is_running is True
+    await service.close()
 
 
 def _configured_service(runtime: FakeLiteLLMRuntime, tmp_path: Path) -> TransferService:
@@ -128,6 +216,21 @@ async def test_ensure_runtime_concurrent_requests_share_one_start(tmp_path: Path
     await asyncio.gather(*(service.ensure_runtime() for _ in range(20)))
 
     assert runtime.start_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_disabling_runtime_prevents_stale_start_from_becoming_running(tmp_path: Path) -> None:
+    runtime = ControlledLiteLLMRuntime()
+    service = _configured_service(runtime, tmp_path)
+    start_task = asyncio.create_task(service.ensure_runtime())
+    await runtime.start_entered.wait()
+
+    disabled_status = await service.update_config_async({"enabled": False})
+    runtime.release_start.set()
+    await start_task
+
+    assert disabled_status["status"] == "disabled"
+    assert runtime.is_running is False
 
 
 @pytest.mark.asyncio
@@ -754,6 +857,44 @@ async def test_create_response_streaming_wraps_codex_compaction_for_litellm(tmp_
     assert status["recent_traffic"][0]["endpoint"] == "/v1/responses (stream)"
     assert status["total_input_tokens"] == 9
     assert status["total_output_tokens"] == 2
+
+
+def test_codex_compaction_adapter_spools_raw_and_summary_without_changing_bytes() -> None:
+    adapter = _CodexCompactionStreamAdapter(
+        memory_limit_bytes=32,
+        max_response_bytes=4096,
+        max_summary_bytes=1024,
+    )
+    chunks = [
+        b'event: response.output_text.delta\ndata: {"delta":"summary "}\n\n',
+        b'event: response.output_text.delta\ndata: {"delta":"text"}\n\n',
+        b'event: response.output_item.done\ndata: {"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":"summary text"}}\n\n',
+    ]
+
+    for chunk in chunks:
+        adapter.feed(chunk)
+
+    diagnostics = adapter.diagnostics()
+    assert diagnostics["raw_spooled"] is True
+    assert diagnostics["summary_spooled"] is False
+    assert b"".join(adapter.passthrough_chunks()) == b"".join(chunks)
+    assert adapter.summary_text() == "summary text"
+    adapter.close()
+
+
+def test_codex_compaction_adapter_rejects_oversized_summary() -> None:
+    adapter = _CodexCompactionStreamAdapter(
+        memory_limit_bytes=16,
+        max_response_bytes=4096,
+        max_summary_bytes=8,
+    )
+
+    with pytest.raises(TransferServiceError, match="compact summary exceeds"):
+        adapter.feed(
+            b'event: response.output_text.delta\ndata: {"delta":"summary text"}\n\n'
+        )
+
+    adapter.close()
 
 
 @pytest.mark.asyncio

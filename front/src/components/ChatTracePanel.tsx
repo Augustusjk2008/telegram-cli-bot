@@ -1,10 +1,11 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCheck, ChevronDown, ChevronRight, Copy, ListTree, LoaderCircle } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { delightMotion, delightMotionStagger, premiumMotion, resolveMotionProps } from "../motion/premiumMotion";
 import type { ChatTraceEvent } from "../services/types";
-import { groupChatTraceEntries } from "../utils/chatTraceGrouping";
+import { groupChatTraceEntries, type ChatTraceEntry } from "../utils/chatTraceGrouping";
 import { ChatToolTraceCard } from "./ChatToolTraceCard";
+import { DynamicVirtualList } from "./virtual/DynamicVirtualList";
 
 type Props = {
   messageId: string;
@@ -65,6 +66,79 @@ function describeProcessEvent(event: ChatTraceEvent) {
 function isGenericProcessEvent(event: ChatTraceEvent) {
   return event.kind !== "commentary" && event.kind !== "cancelled" && event.kind !== "error";
 }
+
+const TraceEventRow = memo(function TraceEventRow({
+  entry,
+  index,
+  reduceMotion,
+  replyingPermissionId,
+  onReplyNativePermission,
+}: {
+  entry: ChatTraceEntry;
+  index: number;
+  reduceMotion: boolean | null;
+  replyingPermissionId: string;
+  onReplyNativePermission?: (permissionId: string, approved: boolean) => void | Promise<void>;
+}) {
+  const animateIndex = Math.min(index, delightMotionStagger.maxAnimatedItems - 1);
+  const traceItemMotion = resolveMotionProps({
+    ...delightMotion.traceItem,
+    transition: {
+      ...delightMotion.traceItem.transition,
+      delay: index < delightMotionStagger.maxAnimatedItems ? animateIndex * delightMotionStagger.itemDelaySeconds : 0,
+    },
+  }, reduceMotion);
+  if (entry.kind === "tool_group") {
+    return (
+      <motion.div data-trace-seq={index} {...traceItemMotion}>
+        <ChatToolTraceCard entry={entry} />
+      </motion.div>
+    );
+  }
+  const event = entry.event;
+  const isGenericEvent = isGenericProcessEvent(event);
+  const nativePermissionId = getNativePermissionId(event);
+  return (
+    <motion.div
+      data-trace-seq={index}
+      className={isGenericEvent
+        ? "rounded-lg border border-[var(--accent-outline)] bg-[var(--accent-soft)] px-3 py-2"
+        : "rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-3 py-2"}
+      {...traceItemMotion}
+    >
+      <div className={isGenericEvent
+        ? "text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--accent)]"
+        : "text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--muted)]"}
+      >
+        {describeProcessEvent(event)}
+      </div>
+      <div className="mt-1 whitespace-pre-wrap break-all text-sm text-[var(--text)]">
+        {event.summary || "无摘要"}
+      </div>
+      {nativePermissionId && onReplyNativePermission ? (
+        <div className="mt-2 flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={Boolean(replyingPermissionId)}
+            onClick={() => void onReplyNativePermission(nativePermissionId, true)}
+            className="inline-flex h-7 items-center gap-1.5 rounded-md border border-[var(--accent-outline)] bg-[var(--accent-soft)] px-2.5 text-xs font-medium text-[var(--accent)] hover:bg-[var(--workbench-hover-bg)] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {replyingPermissionId === nativePermissionId ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : null}
+            允许一次
+          </button>
+          <button
+            type="button"
+            disabled={Boolean(replyingPermissionId)}
+            onClick={() => void onReplyNativePermission(nativePermissionId, false)}
+            className="inline-flex h-7 items-center rounded-md border border-red-200 bg-red-50 px-2.5 text-xs font-medium text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            拒绝
+          </button>
+        </div>
+      ) : null}
+    </motion.div>
+  );
+});
 
 function ChatTracePanelInner({
   messageId,
@@ -130,7 +204,7 @@ function ChatTracePanelInner({
       copyFeedbackTimerRef.current = null;
     }, 2000);
   };
-  const handleReplyNativePermission = async (permissionId: string, approved: boolean) => {
+  const handleReplyNativePermission = useCallback(async (permissionId: string, approved: boolean) => {
     if (!onReplyNativePermission || replyingPermissionId) {
       return;
     }
@@ -140,7 +214,16 @@ function ChatTracePanelInner({
     } finally {
       setReplyingPermissionId("");
     }
-  };
+  }, [onReplyNativePermission, replyingPermissionId]);
+  const renderTraceEntry = useCallback((entry: ChatTraceEntry, index: number) => (
+    <TraceEventRow
+      entry={entry}
+      index={index}
+      reduceMotion={reduceMotion}
+      replyingPermissionId={replyingPermissionId}
+      onReplyNativePermission={onReplyNativePermission ? handleReplyNativePermission : undefined}
+    />
+  ), [handleReplyNativePermission, onReplyNativePermission, reduceMotion, replyingPermissionId]);
 
   return (
     <section
@@ -209,79 +292,27 @@ function ChatTracePanelInner({
                 ) : null}
               </div>
             ) : null}
-            {visibleGroupedEntries.map((entry, visibleIndex) => {
-              const index = expanded ? visibleIndex : groupedEntries.length - visibleGroupedEntries.length + visibleIndex;
-              const animateIndex = Math.min(index, delightMotionStagger.maxAnimatedItems - 1);
-              const traceItemMotion = resolveMotionProps({
-                ...delightMotion.traceItem,
-                transition: {
-                  ...delightMotion.traceItem.transition,
-                  delay: index < delightMotionStagger.maxAnimatedItems ? animateIndex * delightMotionStagger.itemDelaySeconds : 0,
-                },
-              }, reduceMotion);
-
-              if (entry.kind === "tool_group") {
-                return (
-                  <motion.div
-                    key={`tool-group-${entry.call?.callId || entry.results[0]?.callId || `orphan-${index}`}`}
-                    data-trace-seq={index}
-                    {...traceItemMotion}
-                  >
-                    <ChatToolTraceCard entry={entry} />
-                  </motion.div>
-                );
-              }
-
-              const event = entry.event;
-              const isGenericEvent = isGenericProcessEvent(event);
-              const nativePermissionId = getNativePermissionId(event);
-              return (
-                <motion.div
-                  key={String(event.id || event.sequence || `${event.kind}-${event.rawType || "process"}-${index}`)}
-                  data-trace-seq={index}
-                  className={isGenericEvent
-                    ? "rounded-lg border border-[var(--accent-outline)] bg-[var(--accent-soft)] px-3 py-2"
-                    : "rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-3 py-2"}
-                  {...traceItemMotion}
-                >
-                  <div
-                    className={isGenericEvent
-                      ? "text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--accent)]"
-                      : "text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--muted)]"}
-                  >
-                    {describeProcessEvent(event)}
-                  </div>
-                  <div
-                    className={isGenericEvent
-                      ? "mt-1 whitespace-pre-wrap break-all text-sm text-[var(--text)]"
-                      : "mt-1 whitespace-pre-wrap break-all text-sm text-[var(--text)]"}
-                  >
-                    {event.summary || "无摘要"}
-                  </div>
-                  {nativePermissionId && onReplyNativePermission ? (
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        disabled={Boolean(replyingPermissionId)}
-                        onClick={() => void handleReplyNativePermission(nativePermissionId, true)}
-                        className="inline-flex h-7 items-center gap-1.5 rounded-md border border-[var(--accent-outline)] bg-[var(--accent-soft)] px-2.5 text-xs font-medium text-[var(--accent)] hover:bg-[var(--workbench-hover-bg)] disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {replyingPermissionId === nativePermissionId ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : null}
-                        允许一次
-                      </button>
-                      <button
-                        type="button"
-                        disabled={Boolean(replyingPermissionId)}
-                        onClick={() => void handleReplyNativePermission(nativePermissionId, false)}
-                        className="inline-flex h-7 items-center rounded-md border border-red-200 bg-red-50 px-2.5 text-xs font-medium text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        拒绝
-                      </button>
-                    </div>
-                  ) : null}
-                </motion.div>
-              );
-            })}
+            {visibleGroupedEntries.length > 100 ? (
+              <DynamicVirtualList
+                items={visibleGroupedEntries}
+                getKey={(entry, index) => entry.kind === "tool_group"
+                  ? `tool-${entry.call?.callId || entry.results[0]?.callId || index}`
+                  : String(entry.event.id || entry.event.sequence || `${entry.event.kind}-${entry.event.rawType || "process"}-${index}`)}
+                renderItem={renderTraceEntry}
+                estimateHeight={88}
+                overscan={2}
+                dataTestId="virtualized-chat-trace"
+                className="max-h-[60vh] min-h-[240px] overflow-auto"
+              />
+            ) : visibleGroupedEntries.map((entry, index) => (
+              <div
+                key={entry.kind === "tool_group"
+                  ? `tool-${entry.call?.callId || entry.results[0]?.callId || index}`
+                  : String(entry.event.id || entry.event.sequence || `${entry.event.kind}-${entry.event.rawType || "process"}-${index}`)}
+              >
+                {renderTraceEntry(entry, index)}
+              </div>
+            ))}
           </motion.div>
         ) : null}
       </AnimatePresence>

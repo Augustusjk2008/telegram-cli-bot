@@ -6,6 +6,7 @@
 
 import json
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -24,6 +25,11 @@ from bot.sessions import (
     update_bot_working_dir,
 )
 from bot.chat_identity import chat_session_user_id
+from bot.models import (
+    UserSession,
+    _SESSION_PERSISTENCE_SCHEDULER,
+    flush_pending_session_persistence,
+)
 
 
 class TestGetSession:
@@ -50,6 +56,27 @@ class TestGetSession:
 
 class TestClearBotSessions:
     """测试 clear_bot_sessions"""
+
+    def test_clear_bot_sessions_cancels_stale_persistence(self, monkeypatch: pytest.MonkeyPatch, temp_dir: Path):
+        calls: list[int] = []
+        flush_pending_session_persistence()
+        monkeypatch.setattr(_SESSION_PERSISTENCE_SCHEDULER, "delay_seconds", 60.0)
+        session = UserSession(
+            bot_id=1,
+            bot_alias="main",
+            user_id=chat_session_user_id(100),
+            working_dir=str(temp_dir),
+            persist_hook=lambda _session: calls.append(1),
+        )
+        with sessions_lock:
+            sessions[(session.bot_id, session.user_id, session.agent_id)] = session
+        session.persist_debounced()
+
+        clear_bot_sessions(1)
+        flush_pending_session_persistence()
+        session.persist()
+
+        assert calls == []
 
     def test_update_workdir_resets_all_agent_native_sessions(self, temp_dir: Path):
         old_dir = temp_dir / "old"
@@ -128,6 +155,124 @@ class TestClearBotSessions:
 
 class TestSessionPersistence:
     """测试会话持久化功能"""
+
+    def test_debounced_persistence_uses_single_process_worker(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        temp_dir: Path,
+    ):
+        flush_pending_session_persistence()
+        calls: list[int] = []
+        completed = threading.Event()
+        session = UserSession(
+            bot_id=99,
+            bot_alias="worker-test",
+            user_id=101,
+            working_dir=str(temp_dir),
+            persist_hook=lambda _session: (calls.append(1), completed.set()),
+        )
+        monkeypatch.setattr(
+            _SESSION_PERSISTENCE_SCHEDULER,
+            "delay_seconds",
+            0.03,
+        )
+
+        for _ in range(100):
+            session.persist_debounced()
+
+        assert completed.wait(timeout=1)
+        time.sleep(0.05)
+        assert calls == [1]
+
+    def test_disable_persistence_cancels_process_worker_entry(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        temp_dir: Path,
+    ):
+        flush_pending_session_persistence()
+        calls: list[int] = []
+        session = UserSession(
+            bot_id=100,
+            bot_alias="worker-cancel-test",
+            user_id=102,
+            working_dir=str(temp_dir),
+            persist_hook=lambda _session: calls.append(1),
+        )
+        monkeypatch.setattr(
+            _SESSION_PERSISTENCE_SCHEDULER,
+            "delay_seconds",
+            1.0,
+        )
+
+        session.persist_debounced()
+        session.disable_persistence()
+        flush_pending_session_persistence()
+
+        assert calls == []
+
+    def test_flush_pending_waits_for_inflight_worker(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        temp_dir: Path,
+    ):
+        flush_pending_session_persistence()
+        started = threading.Event()
+        release = threading.Event()
+        flushed = threading.Event()
+        session = UserSession(
+            bot_id=101,
+            bot_alias="worker-inflight-test",
+            user_id=103,
+            working_dir=str(temp_dir),
+            persist_hook=lambda _session: (started.set(), release.wait(timeout=2)),
+        )
+        monkeypatch.setattr(_SESSION_PERSISTENCE_SCHEDULER, "delay_seconds", 0.01)
+
+        session.persist_debounced()
+        assert started.wait(timeout=1)
+
+        flush_thread = threading.Thread(
+            target=lambda: (flush_pending_session_persistence(), flushed.set()),
+            daemon=True,
+        )
+        flush_thread.start()
+        assert not flushed.wait(timeout=0.05)
+
+        release.set()
+        flush_thread.join(timeout=1)
+        assert flushed.is_set()
+
+    def test_disable_persistence_waits_for_inflight_write(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        temp_dir: Path,
+    ):
+        flush_pending_session_persistence()
+        started = threading.Event()
+        release = threading.Event()
+        disabled = threading.Event()
+        session = UserSession(
+            bot_id=102,
+            bot_alias="worker-disable-inflight-test",
+            user_id=104,
+            working_dir=str(temp_dir),
+            persist_hook=lambda _session: (started.set(), release.wait(timeout=2)),
+        )
+        monkeypatch.setattr(_SESSION_PERSISTENCE_SCHEDULER, "delay_seconds", 0.01)
+
+        session.persist_debounced()
+        assert started.wait(timeout=1)
+
+        disable_thread = threading.Thread(
+            target=lambda: (session.disable_persistence(), disabled.set()),
+            daemon=True,
+        )
+        disable_thread.start()
+        assert not disabled.wait(timeout=0.05)
+
+        release.set()
+        disable_thread.join(timeout=1)
+        assert disabled.is_set()
 
     def test_reset_session_clears_persisted_native_agent_session_id(self, temp_dir: Path):
         from unittest.mock import patch

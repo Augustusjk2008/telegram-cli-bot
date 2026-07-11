@@ -13,6 +13,7 @@ import type {
   GitStashList,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import { createGitChangesFixture } from "./fixtures/performance";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -120,6 +121,7 @@ function createActionResult(): GitActionResult {
 }
 
 function createGitScreenClient() {
+  const getGitOverview = vi.fn(async () => cloneOverview());
   const getGitDiff = vi.fn(async (_botAlias: string, path: string, staged = false): Promise<GitDiffPayload> => ({
     path,
     staged,
@@ -136,7 +138,7 @@ function createGitScreenClient() {
     truncated: false,
   }));
   const client = {
-    getGitOverview: vi.fn(async () => cloneOverview()),
+    getGitOverview,
     getGitCommitGraph: vi.fn(async () => graphPayload),
     getGitIdentityConfig: vi.fn(async () => identityConfig),
     getActiveGitSmartCommit: vi.fn(async () => null),
@@ -153,6 +155,7 @@ function createGitScreenClient() {
   return {
     client: client as unknown as WebBotClient,
     getGitDiff,
+    getGitOverview,
   };
 }
 
@@ -199,6 +202,18 @@ test("renders compact change rows with basename, stats, and retained actions", a
 
   await userEvent.click(within(stagedRow).getByRole("button", { name: "打开 diff docs/same.ts" }));
   expect(openDiff).toHaveBeenCalledWith("docs/same.ts", true);
+});
+
+test("virtualizes 5000 changed files", async () => {
+  const { client, getGitOverview } = createGitScreenClient();
+  getGitOverview.mockResolvedValue(createGitChangesFixture(5_000));
+
+  render(<GitScreen botAlias="main" client={client} />);
+
+  const list = await screen.findByTestId("git-virtual-change-list-unstaged");
+  const mountedRows = list.querySelectorAll("[data-testid^='git-change-row-']");
+  expect(mountedRows.length).toBeGreaterThan(0);
+  expect(mountedRows.length).toBeLessThanOrEqual(50);
 });
 
 test("loads readonly diff panel when no external diff opener is provided", async () => {

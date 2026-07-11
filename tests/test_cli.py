@@ -11,6 +11,8 @@ from unittest.mock import patch
 import pytest
 
 from bot.cli import (
+    ClaudeJsonStreamParser,
+    CodexJsonStreamParser,
     _build_codex_status_terminal_argv,
     _should_finish_codex_status_poll,
     build_cli_command,
@@ -27,7 +29,13 @@ from bot.cli import (
     should_reset_codex_session,
     validate_cli_type,
 )
-from bot.cli_params import CliParamsConfig, clamp_unsafe_cli_params, normalize_cli_model_options, with_global_extra_args
+from bot.cli_params import (
+    CliParamsConfig,
+    clamp_unsafe_cli_params,
+    get_cli_output_limits,
+    normalize_cli_model_options,
+    with_global_extra_args,
+)
 
 class TestValidateCliType:
     """测试 validate_cli_type"""
@@ -188,3 +196,60 @@ class TestParseClaudeStreamJsonOutput:
 
         assert text == "Hi there"
         assert session_id == "sess-1"
+
+
+class TestIncrementalCliParsers:
+    def test_codex_parser_keeps_final_text_and_bounded_raw_tail(self):
+        parser = CodexJsonStreamParser(raw_tail_max_bytes=96, final_text_max_bytes=1024)
+
+        for index in range(50):
+            parser.consume_line(
+                f'{{"type":"item.delta","item":{{"type":"assistant_message","delta":"step-{index}"}}}}\n'
+            )
+        parser.consume_line('{"type":"thread.started","thread_id":"thread-9"}\n')
+        parser.consume_line(
+            '{"type":"event_msg","payload":{"type":"agent_message","message":"最终答复"}}\n'
+        )
+
+        result = parser.result()
+
+        assert result.final_text == "最终答复"
+        assert result.session_id == "thread-9"
+        assert len(result.raw_tail.encode("utf-8")) <= 96
+        assert result.total_bytes > len(result.raw_tail.encode("utf-8"))
+
+    def test_claude_parser_prefers_result_and_keeps_error_tail_bounded(self):
+        parser = ClaudeJsonStreamParser(raw_tail_max_bytes=80, final_text_max_bytes=1024)
+
+        parser.consume_line(
+            '{"type":"stream_event","session_id":"sess-9","event":{"type":"content_block_delta",'
+            '"delta":{"type":"text_delta","text":"partial"}}}\n'
+        )
+        for index in range(20):
+            parser.consume_line(f'plain stderr {index}\n')
+        parser.consume_line(
+            '{"type":"result","subtype":"success","session_id":"sess-9","result":"complete"}\n'
+        )
+
+        result = parser.result()
+
+        assert result.final_text == "complete"
+        assert result.session_id == "sess-9"
+        assert len(result.raw_tail.encode("utf-8")) <= 80
+
+    def test_cli_output_limits_are_configurable_and_clamped(self):
+        limits = get_cli_output_limits(
+            {
+                "TCB_CLI_STDOUT_QUEUE_MAX_CHUNKS": "2",
+                "TCB_CLI_MAX_LINE_BYTES": "16",
+                "TCB_CLI_MAX_TOTAL_BYTES": "8",
+                "TCB_CLI_RAW_TAIL_MAX_BYTES": "0",
+                "TCB_CLI_FINAL_TEXT_MAX_BYTES": "32",
+            }
+        )
+
+        assert limits.queue_max_chunks == 2
+        assert limits.max_line_bytes == 16
+        assert limits.max_total_bytes == 16
+        assert limits.raw_tail_max_bytes == 1
+        assert limits.final_text_max_bytes == 32

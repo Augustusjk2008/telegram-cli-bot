@@ -7,6 +7,7 @@ import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { BotOverview, ChatMessage, ChatTraceDetails, CliParamsPayload, ClusterTaskStatus, ConversationBulkDeleteResult, ConversationDeleteResult, ConversationListResult, ConversationSelectResult, FavoriteAnswerItem, GitActionResult, GitDiffPayload, GitOverview, PromptPreset } from "../services/types";
 import { WebApiClientError } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import { createChatHistoryFixture } from "./fixtures/performance";
 
 const MODEL_OPTIONS = ["gpt-5.5", "gpt-5.4", "claude-opus-4-7", "claude-sonnet-4-6", "none"];
 
@@ -390,6 +391,24 @@ test("refreshes visible idle chat when history count changes", async () => {
 
   expect(screen.getByText("自动出现的新回复")).toBeInTheDocument();
   expect(listMessageDelta).toHaveBeenCalledWith("main", "user-1", 50);
+});
+
+test("virtualizes expanded 500-message history", async () => {
+  const user = userEvent.setup();
+  const client = createClient({
+    listMessages: async () => createChatHistoryFixture({ messageCount: 500 }),
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: "展开较早消息（420）" }));
+  const list = await screen.findByTestId("virtualized-chat-message-list");
+
+  await waitFor(() => {
+    const mountedRows = within(list).queryAllByTestId("chat-message-row");
+    expect(mountedRows.length).toBeGreaterThan(0);
+    expect(mountedRows.length).toBeLessThanOrEqual(35);
+  });
 });
 
 test("merges history refresh assistant message by turn id while local send is settling", async () => {
@@ -3740,7 +3759,6 @@ test("native user bubble rollback confirms and refreshes history outside solo mo
   expect(listMessages.mock.calls.filter(([, options]) => options?.executionMode === "native_agent").length).toBeGreaterThan(1);
   expect(listConversations).toHaveBeenCalled();
 });
-
 
 
 

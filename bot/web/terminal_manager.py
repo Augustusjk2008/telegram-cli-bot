@@ -17,9 +17,14 @@ from bot.platform.terminal import PtyWrapper, TerminalLaunchError, create_shell_
 logger = logging.getLogger(__name__)
 
 TERMINAL_REPLAY_MAX_BYTES = 8 * 1024 * 1024
-TERMINAL_CLIENT_QUEUE_MAX_CHUNKS = 256
+TERMINAL_OUTPUT_QUEUE_MAX_BYTES = 1024 * 1024
+TERMINAL_CLIENT_SOFT_MAX_BYTES = 512 * 1024
+TERMINAL_CLIENT_HARD_MAX_BYTES = 2 * 1024 * 1024
+TERMINAL_CLIENT_MERGE_MAX_BYTES = 64 * 1024
 TERMINAL_CLIENT_EOF = object()
 _TERMINAL_OUTPUT_EOF = object()
+TERMINAL_OUTPUT_GAP = object()
+TERMINAL_GAP_NOTICE = "\r\n[终端输出已截断，请重新连接以同步最新状态]\r\n".encode("utf-8")
 TERMINAL_PROCESS_CLEANUP_JOIN_SECONDS = 1.0
 TERMINAL_PROCESS_CLEANUP_WARNING_SECONDS = 5.0
 
@@ -43,6 +48,97 @@ def _normalize_pipe_line_endings(data: bytes, *, previous_ended_with_cr: bool = 
 class TerminalChunk:
     seq: int
     data: bytes
+    is_gap: bool = False
+
+
+@dataclass(slots=True)
+class TerminalQueueState:
+    queued_bytes: int = 0
+    dropped_bytes: int = 0
+    gap_pending: bool = False
+
+
+@dataclass(slots=True)
+class _TerminalClientItem:
+    payload: bytes | object
+    counted_bytes: int = 0
+
+
+class TerminalClientQueue:
+    def __init__(
+        self,
+        *,
+        soft_max_bytes: int = TERMINAL_CLIENT_SOFT_MAX_BYTES,
+        hard_max_bytes: int = TERMINAL_CLIENT_HARD_MAX_BYTES,
+    ) -> None:
+        self.soft_max_bytes = max(1, int(soft_max_bytes))
+        self.hard_max_bytes = max(self.soft_max_bytes, int(hard_max_bytes))
+        self.queued_bytes = 0
+        self._queue: deque[_TerminalClientItem] = deque()
+        self._available = asyncio.Event()
+        self._closed = False
+
+    async def get(self) -> bytes | object:
+        while True:
+            if self._queue:
+                item = self._queue.popleft()
+                self.queued_bytes = max(0, self.queued_bytes - item.counted_bytes)
+                return item.payload
+            self._available.clear()
+            if self._queue:
+                continue
+            await self._available.wait()
+
+    def _clear(self) -> None:
+        self._queue.clear()
+        self.queued_bytes = 0
+
+    def put_control(self, payload: bytes | object) -> None:
+        if self._closed and payload is not TERMINAL_CLIENT_EOF:
+            return
+        self._queue.append(_TerminalClientItem(payload=payload))
+        self._available.set()
+
+    def put_eof(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self.put_control(TERMINAL_CLIENT_EOF)
+
+    def put_output(self, data: bytes) -> bool:
+        if self._closed:
+            return False
+        payload = bytes(data)
+        next_bytes = self.queued_bytes + len(payload)
+        if next_bytes > self.hard_max_bytes:
+            self._clear()
+            self.put_control(TERMINAL_GAP_NOTICE)
+            self.put_eof()
+            return False
+
+        if self._queue:
+            last = self._queue[-1]
+            should_merge = (
+                last.counted_bytes + len(payload) <= TERMINAL_CLIENT_MERGE_MAX_BYTES
+                or next_bytes > self.soft_max_bytes
+            )
+            if isinstance(last.payload, bytes) and last.counted_bytes > 0 and should_merge:
+                last.payload += payload
+                last.counted_bytes += len(payload)
+                self.queued_bytes = next_bytes
+                self._available.set()
+                return True
+
+        self._queue.append(_TerminalClientItem(payload=payload, counted_bytes=len(payload)))
+        self.queued_bytes = next_bytes
+        self._available.set()
+        return True
+
+    def clear(self) -> None:
+        self._closed = True
+        self._clear()
+        self._queue.append(_TerminalClientItem(payload=TERMINAL_CLIENT_EOF))
+        self._available.set()
 
 
 @dataclass(slots=True)
@@ -57,8 +153,10 @@ class ManagedTerminalSession:
     next_seq: int = 1
     replay: deque[TerminalChunk] = field(default_factory=deque)
     replay_bytes: int = 0
-    clients: set[asyncio.Queue[bytes | object]] = field(default_factory=set)
+    clients: set[TerminalClientQueue] = field(default_factory=set)
     pump_task: asyncio.Task[None] | None = None
+    dropped_bytes: int = 0
+    last_gap_seq: int = 0
 
 
 class TerminalNotRunningError(RuntimeError):
@@ -66,14 +164,25 @@ class TerminalNotRunningError(RuntimeError):
 
 
 class _TerminalOutputPump:
-    def __init__(self, process: PtyWrapper, *, flush_interval_ms: int = 40, max_chunk_bytes: int = 65536) -> None:
+    def __init__(
+        self,
+        process: PtyWrapper,
+        *,
+        flush_interval_ms: int = 40,
+        max_chunk_bytes: int = 65536,
+        max_queue_bytes: int = TERMINAL_OUTPUT_QUEUE_MAX_BYTES,
+    ) -> None:
         self._process = process
-        self._queue: asyncio.Queue[bytes | object] = asyncio.Queue()
+        self._queue: deque[bytes | object] = deque()
+        self._queue_lock = threading.Lock()
+        self._available = asyncio.Event()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._flush_interval = max(flush_interval_ms, 0) / 1000
         self._max_chunk_bytes = max(max_chunk_bytes, 1)
+        self._max_queue_bytes = max(1, int(max_queue_bytes))
+        self.queue_state = TerminalQueueState()
 
     def start(self, loop: asyncio.AbstractEventLoop) -> None:
         if self._thread is not None:
@@ -90,14 +199,50 @@ class _TerminalOutputPump:
         self._stop_event.set()
 
     async def read(self) -> bytes | object:
-        return await self._queue.get()
+        while True:
+            with self._queue_lock:
+                if self.queue_state.gap_pending:
+                    self.queue_state.gap_pending = False
+                    return TERMINAL_OUTPUT_GAP
+                if self._queue:
+                    item = self._queue.popleft()
+                    if isinstance(item, bytes):
+                        self.queue_state.queued_bytes = max(
+                            0,
+                            self.queue_state.queued_bytes - len(item),
+                        )
+                    return item
+                self._available.clear()
+            await self._available.wait()
 
     def _put(self, item: bytes | object) -> None:
+        with self._queue_lock:
+            if isinstance(item, bytes) and len(item) > self._max_queue_bytes:
+                dropped_prefix = len(item) - self._max_queue_bytes
+                self.queue_state.dropped_bytes += dropped_prefix
+                self.queue_state.gap_pending = True
+                item = item[-self._max_queue_bytes :]
+            self._queue.append(item)
+            if isinstance(item, bytes):
+                self.queue_state.queued_bytes += len(item)
+                while self.queue_state.queued_bytes > self._max_queue_bytes:
+                    removed_index = next(
+                        (index for index, queued in enumerate(self._queue) if isinstance(queued, bytes)),
+                        None,
+                    )
+                    if removed_index is None:
+                        break
+                    removed = self._queue[removed_index]
+                    del self._queue[removed_index]
+                    assert isinstance(removed, bytes)
+                    self.queue_state.queued_bytes -= len(removed)
+                    self.queue_state.dropped_bytes += len(removed)
+                    self.queue_state.gap_pending = True
         loop = self._loop
         if loop is None or loop.is_closed():
             return
         try:
-            loop.call_soon_threadsafe(self._queue.put_nowait, item)
+            loop.call_soon_threadsafe(self._available.set)
         except RuntimeError:
             return
 
@@ -115,9 +260,19 @@ class _TerminalOutputPump:
                 if data:
                     if isinstance(data, str):
                         data = data.encode("utf-8", errors="replace")
-                    pending.extend(data)
+                    remaining = memoryview(data)
+                    while remaining:
+                        available = self._max_chunk_bytes - len(pending)
+                        pending.extend(remaining[:available])
+                        remaining = remaining[available:]
+                        if len(pending) >= self._max_chunk_bytes:
+                            self._put(bytes(pending))
+                            pending.clear()
                     now = time.monotonic()
-                    if len(pending) >= self._max_chunk_bytes or now - last_flush_at >= self._flush_interval:
+                    if pending and (
+                        len(pending) >= self._max_chunk_bytes
+                        or now - last_flush_at >= self._flush_interval
+                    ):
                         self._put(bytes(pending))
                         pending.clear()
                         last_flush_at = now
@@ -241,6 +396,10 @@ class TerminalSessionManager:
                 "pty_mode": None,
                 "connection_text": "未启动",
                 "last_seq": 0,
+                "earliest_seq": 0,
+                "gap_seq": 0,
+                "dropped_bytes": 0,
+                "reset_required": False,
             }
 
         started = session.process is not None and not session.is_closed
@@ -259,24 +418,24 @@ class TerminalSessionManager:
             "pty_mode": session.is_pty,
             "connection_text": connection_text,
             "last_seq": max(session.next_seq - 1, 0),
+            "earliest_seq": session.replay[0].seq if session.replay else max(session.next_seq, 1),
+            "gap_seq": session.last_gap_seq,
+            "dropped_bytes": session.dropped_bytes,
+            "reset_required": False,
         }
 
     def _notify_clients_locked(self, session: ManagedTerminalSession, item: bytes | object) -> None:
-        stale: list[asyncio.Queue[bytes | object]] = []
-        for queue in session.clients:
+        stale: list[TerminalClientQueue] = []
+        for client in session.clients:
             try:
-                queue.put_nowait(item)
-            except asyncio.QueueFull:
-                try:
-                    queue.get_nowait()
-                    queue.put_nowait(TERMINAL_CLIENT_EOF)
-                except Exception:
-                    pass
-                stale.append(queue)
+                if item is TERMINAL_CLIENT_EOF:
+                    client.put_eof()
+                elif isinstance(item, bytes) and not client.put_output(item):
+                    stale.append(client)
             except Exception:
-                stale.append(queue)
-        for queue in stale:
-            session.clients.discard(queue)
+                stale.append(client)
+        for client in stale:
+            session.clients.discard(client)
 
     def _trim_replay_locked(self, session: ManagedTerminalSession) -> None:
         while session.replay and session.replay_bytes > TERMINAL_REPLAY_MAX_BYTES:
@@ -338,6 +497,8 @@ class TerminalSessionManager:
             session.next_seq = 1
             session.replay.clear()
             session.replay_bytes = 0
+            session.dropped_bytes = 0
+            session.last_gap_seq = 0
             session.pump_task = asyncio.create_task(self._pump_output(session, process, output_pump))
             return self._build_snapshot_locked(session)
 
@@ -357,27 +518,51 @@ class TerminalSessionManager:
         owner_id: str,
         *,
         from_seq: int = 0,
-    ) -> tuple[asyncio.Queue[bytes | object], dict[str, Any]]:
-        queue: asyncio.Queue[bytes | object] = asyncio.Queue(maxsize=TERMINAL_CLIENT_QUEUE_MAX_CHUNKS)
+    ) -> tuple[TerminalClientQueue, dict[str, Any]]:
+        client = TerminalClientQueue()
         async with self._lock:
             session = self._sessions.get(self._key(user_id, owner_id))
             if session is None or session.process is None or session.is_closed:
                 raise TerminalNotRunningError("终端未启动")
-            for chunk in session.replay:
-                if chunk.seq > from_seq:
-                    if queue.full():
-                        break
-                    queue.put_nowait(chunk.data)
-            session.clients.add(queue)
+            replay_chunks = [chunk for chunk in session.replay if chunk.seq > from_seq]
+            earliest_seq = session.replay[0].seq if session.replay else session.next_seq
+            reset_required = from_seq < max(earliest_seq - 1, 0)
+            replay_bytes = 0
+            selected_reversed: list[TerminalChunk] = []
+            for chunk in reversed(replay_chunks):
+                if replay_bytes + len(chunk.data) > client.hard_max_bytes:
+                    reset_required = True
+                    break
+                selected_reversed.append(chunk)
+                replay_bytes += len(chunk.data)
+            selected = list(reversed(selected_reversed))
+            if reset_required:
+                client.put_control(TERMINAL_GAP_NOTICE)
+            replay_payload = b"".join(chunk.data for chunk in selected)
+            if replay_payload:
+                client.put_output(replay_payload)
+            session.clients.add(client)
             snapshot = self._build_snapshot_locked(session)
-        return queue, snapshot
+            snapshot.update(
+                {
+                    "reset_required": reset_required,
+                    "requested_seq": from_seq,
+                    "gap_from": from_seq + 1 if reset_required else 0,
+                    "gap_to": max((selected[0].seq if selected else earliest_seq) - 1, 0)
+                    if reset_required
+                    else 0,
+                }
+            )
+        return client, snapshot
 
-    async def detach(self, user_id: int, owner_id: str, queue: asyncio.Queue[bytes | object]) -> None:
+    async def detach(self, user_id: int, owner_id: str, queue: TerminalClientQueue) -> None:
         async with self._lock:
             session = self._sessions.get(self._key(user_id, owner_id))
             if session is None:
+                queue.clear()
                 return
             session.clients.discard(queue)
+            queue.clear()
 
     async def write_input(self, user_id: int, owner_id: str, data: bytes) -> None:
         async with self._lock:
@@ -437,6 +622,23 @@ class TerminalSessionManager:
                 data = await output_pump.read()
                 if data is _TERMINAL_OUTPUT_EOF:
                     break
+                if data is TERMINAL_OUTPUT_GAP:
+                    async with self._lock:
+                        if session.process is not process:
+                            return
+                        chunk = TerminalChunk(
+                            seq=session.next_seq,
+                            data=TERMINAL_GAP_NOTICE,
+                            is_gap=True,
+                        )
+                        session.next_seq += 1
+                        session.last_gap_seq = chunk.seq
+                        session.dropped_bytes = output_pump.queue_state.dropped_bytes
+                        session.replay.append(chunk)
+                        session.replay_bytes += len(chunk.data)
+                        self._trim_replay_locked(session)
+                        self._notify_clients_locked(session, chunk.data)
+                    continue
                 if isinstance(data, str):
                     data = data.encode("utf-8", errors="replace")
                 if data:

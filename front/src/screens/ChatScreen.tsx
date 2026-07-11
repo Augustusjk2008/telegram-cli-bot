@@ -64,7 +64,7 @@ import type { BotActivityChange } from "../app/botActivity";
 import type { ChatWorkbenchStatus } from "../workbench/workbenchTypes";
 import type { SoloSessionSnapshot } from "../workbench/soloTypes";
 import { extractPlanDraft, stripPlanDraftTags } from "../utils/planDraft";
-import type { AgUiEvent } from "../services/agUiProtocol";
+import { EventType, type AgUiEvent } from "../services/agUiProtocol";
 import {
   buildAgUiMessageMeta,
   createAgUiRunState,
@@ -78,6 +78,10 @@ import {
 } from "../utils/nativeAgentTranscript";
 import { fallbackAgents } from "../utils/defaultAgents";
 import { mergeMessageMeta } from "../utils/chatMessageMeta";
+import { useChatHistorySync } from "../hooks/useChatHistorySync";
+import { useChatStreamBatcher } from "../hooks/useChatStreamBatcher";
+import { FRONTEND_FEATURE_FLAGS } from "../app/featureFlags";
+import { DynamicVirtualList } from "../components/virtual/DynamicVirtualList";
 
 type Props = {
   botAlias: string;
@@ -130,6 +134,27 @@ type ChatMessageRowModel = {
   soloRollbackTarget?: SoloRollbackTarget;
 };
 
+type ChatStreamEventBase = {
+  sendVersion: number;
+  assistantId: string;
+  streamStartedAtMs: number;
+};
+
+type ChatStreamEvent =
+  | (ChatStreamEventBase & { kind: "chunk"; chunk: string })
+  | (ChatStreamEventBase & { kind: "status"; status: ChatStatusUpdate; userMessageId: string })
+  | (ChatStreamEventBase & {
+      kind: "trace";
+      trace: ChatTraceEvent;
+      nativeTrace: boolean;
+      usingPreviewReplace: boolean;
+    })
+  | (ChatStreamEventBase & {
+      kind: "ag_ui";
+      state: AgUiRunState;
+      nativeAgent: boolean;
+    });
+
 type SoloRollbackTarget = {
   conversationId: string;
   targetTurnId: string;
@@ -155,7 +180,8 @@ function formatDownloadProgress(progress: FileDownloadProgress) {
 }
 
 const ACTIVE_CHAT_POLL_INTERVAL_MS = 1000;
-const IDLE_CHAT_POLL_INTERVAL_MS = 5000;
+const INITIAL_IDLE_CHAT_POLL_DELAY_MS = 5000;
+const IDLE_CHAT_POLL_INTERVAL_MS = 10_000;
 const CLUSTER_TASK_POLL_INTERVAL_MS = 1200;
 const SSE_STALL_RECOVERY_DELAY_MS = 2500;
 const CHAT_ATTACHMENT_LINE_RE = /^附件路径为[:：]\s*(.+?)\s*$/;
@@ -163,6 +189,7 @@ const MODEL_OPTION_NONE = "none";
 const REVEAL_SCROLL_MAX_FRAMES = 6;
 const REVEAL_SCROLL_BOTTOM_THRESHOLD_PX = 8;
 const CHAT_RENDER_WINDOW_SIZE = 80;
+const CHAT_VIRTUALIZATION_THRESHOLD = 40;
 const USER_SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " ", "Spacebar"]);
 const IMMERSIVE_BUTTON_SIZE_PX = 48;
 const IMMERSIVE_BUTTON_EDGE_GUTTER_PX = 8;
@@ -993,6 +1020,142 @@ function updateLatestAssistantMessage(
   return nextItems;
 }
 
+function applyChatStreamEvents(
+  items: ChatMessage[],
+  events: readonly ChatStreamEvent[],
+  activeSendVersion: number,
+) {
+  let nextItems = items;
+  let copied = false;
+  const assistantIndexes = new Map<string, number>();
+
+  const updateAtIndex = (index: number, updater: (item: ChatMessage) => ChatMessage) => {
+    if (index < 0) {
+      return;
+    }
+    const current = nextItems[index];
+    const next = updater(current);
+    if (next === current) {
+      return;
+    }
+    if (!copied) {
+      nextItems = nextItems.slice();
+      copied = true;
+    }
+    nextItems[index] = next;
+  };
+
+  const updateAssistant = (
+    event: ChatStreamEventBase,
+    updater: (item: ChatMessage) => ChatMessage,
+  ) => {
+    const cacheKey = `${event.assistantId}:${event.streamStartedAtMs}`;
+    let index = assistantIndexes.get(cacheKey);
+    if (typeof index !== "number") {
+      index = findLatestAssistantMessageIndex(nextItems, event.assistantId, event.streamStartedAtMs);
+      assistantIndexes.set(cacheKey, index);
+    }
+    updateAtIndex(index, updater);
+  };
+
+  for (const event of events) {
+    if (event.sendVersion !== activeSendVersion) {
+      continue;
+    }
+    if (event.kind === "chunk") {
+      updateAssistant(event, (item) => ({
+        ...item,
+        text: item.text + event.chunk,
+        state: "streaming",
+      }));
+      continue;
+    }
+    if (event.kind === "status") {
+      const { status } = event;
+      if (status.turnId) {
+        updateAtIndex(
+          nextItems.findIndex((item) => item.id === event.userMessageId),
+          (item) => ({ ...item, turnId: status.turnId }),
+        );
+      }
+      if (status.turnId || status.assistantMessageId) {
+        updateAssistant(event, (item) => ({
+          ...item,
+          ...(status.assistantMessageId ? { id: status.assistantMessageId } : {}),
+          ...(status.turnId ? { turnId: status.turnId } : {}),
+        }));
+      }
+      if (status.contextUsage) {
+        updateAssistant(event, (item) => ({
+          ...item,
+          state: "streaming",
+          meta: mergeMessageMeta(item.meta, { contextUsage: status.contextUsage }),
+        }));
+      }
+      if (typeof status.replaceText === "string") {
+        updateAssistant(event, (item) => ({
+          ...item,
+          text: status.replaceText || "",
+          state: "streaming",
+        }));
+      } else if (typeof status.previewText === "string" && status.previewText.trim()) {
+        updateAssistant(event, (item) => (
+          item.text.trim()
+            ? item
+            : { ...item, text: status.previewText || "", state: "streaming" }
+        ));
+      }
+      continue;
+    }
+    if (event.kind === "trace") {
+      updateAssistant(event, (item) => {
+        const nextItem = appendTraceToMessage(
+          item,
+          event.trace,
+          event.nativeTrace ? "native_agent_flat" : undefined,
+        );
+        const canUseTracePreview = !event.nativeTrace
+          && event.trace.kind === "commentary"
+          && Boolean(event.trace.summary.trim())
+          && !event.usingPreviewReplace
+          && !item.text.trim();
+        return canUseTracePreview
+          ? { ...nextItem, text: event.trace.summary, state: "streaming" }
+          : nextItem;
+      });
+      continue;
+    }
+    updateAssistant(event, (item) => {
+      const nextMeta = mergeMessageMeta(
+        item.meta,
+        buildLiveAgUiMessageMeta(event.state, event.nativeAgent),
+      );
+      const completionState = nextMeta?.completionState || "";
+      return {
+        ...item,
+        text: event.state.assistantText,
+        state: event.state.error || (completionState && completionState !== "completed" && completionState !== "streaming")
+          ? "error"
+          : (event.state.completed ? "done" : "streaming"),
+        meta: event.state.contextUsage
+          ? mergeMessageMeta(nextMeta, { contextUsage: event.state.contextUsage })
+          : nextMeta,
+      };
+    });
+  }
+
+  return nextItems;
+}
+
+function shouldBatchAgUiEvent(event: AgUiEvent) {
+  return (
+    event.type === EventType.TEXT_MESSAGE_CONTENT
+    || event.type === EventType.REASONING_MESSAGE_CONTENT
+    || event.type === EventType.TOOL_CALL_ARGS
+    || event.type === EventType.ACTIVITY_DELTA
+  );
+}
+
 function findLatestAssistantMessageIndex(
   items: ChatMessage[],
   preferredMessageId: string,
@@ -1398,6 +1561,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
 
 const ChatMessageList = memo(function ChatMessageList({
   rows,
+  scrollContainerRef,
   assistantName,
   allowTrace,
   handleDeleteAttachment,
@@ -1413,6 +1577,7 @@ const ChatMessageList = memo(function ChatMessageList({
   wideMessages,
 }: {
   rows: ChatMessageRowModel[];
+  scrollContainerRef: RefObject<HTMLElement | null>;
   assistantName: string;
   allowTrace: boolean;
   handleDeleteAttachment: (messageId: string, savedPath: string) => void;
@@ -1427,8 +1592,8 @@ const ChatMessageList = memo(function ChatMessageList({
   handleExecutePlan: (messageId: string, content: string) => void;
   wideMessages: boolean;
 }) {
-  return rows.map((row) => (
-    <div key={row.item.id} data-testid="chat-message-row" className="space-y-1">
+  const renderRow = useCallback((row: ChatMessageRowModel) => (
+    <div key={row.messageClientStateKey} data-testid="chat-message-row" className="space-y-1">
       <ChatMessageRow
         item={row.item}
         assistantName={assistantName}
@@ -1461,7 +1626,43 @@ const ChatMessageList = memo(function ChatMessageList({
         </div>
       ) : null}
     </div>
-  ));
+  ), [
+    allowTrace,
+    assistantName,
+    executingPlanMessageId,
+    handleContinueFinalAnswer,
+    handleCopyFinalAnswer,
+    handleDeleteAttachment,
+    handleExecutePlan,
+    handleFileLinkClick,
+    handleReplyNativePermission,
+    handleRequestSoloRollback,
+    handleToggleFavoriteAnswer,
+    planExecuteError,
+    wideMessages,
+  ]);
+
+  if (
+    !FRONTEND_FEATURE_FLAGS.dynamicChatVirtualization
+    || rows.length <= CHAT_VIRTUALIZATION_THRESHOLD
+  ) {
+    return <>{rows.map(renderRow)}</>;
+  }
+
+  return (
+    <DynamicVirtualList
+      items={rows}
+      getKey={(row) => row.messageClientStateKey}
+      renderItem={renderRow}
+      estimateHeight={160}
+      overscan={6}
+      scrollElementRef={scrollContainerRef}
+      preserveScrollOnPrepend
+      stickToBottom
+      dataTestId="virtualized-chat-message-list"
+      className="relative"
+    />
+  );
 });
 
 function clampFloatingButtonPosition(position: FloatingButtonPosition, container: HTMLElement | null): FloatingButtonPosition {
@@ -1769,7 +1970,7 @@ export function ChatScreen({
   const sseRecoveryTimerRef = useRef<number | null>(null);
   const sseLastActivityAtRef = useRef<number | null>(null);
   const sseAbortControllerRef = useRef<AbortController | null>(null);
-  const pollAssistantStateRef = useRef<(() => Promise<void>) | null>(null);
+  const pollAssistantStateRef = useRef<(() => Promise<boolean>) | null>(null);
   const drainQueuedMessageIfIdleRef = useRef<((context?: { botAlias: string; agentId: string }) => Promise<void>) | null>(null);
   const clusterTaskPollTimerRef = useRef<number | null>(null);
   const revealScrollFrameRef = useRef<number | null>(null);
@@ -1783,6 +1984,13 @@ export function ChatScreen({
   const hasActivatedRef = useRef(false);
   const activationTargetRef = useRef<{ botAlias: string; client: WebBotClient; storageScope: string } | null>(null);
   const isSseStreaming = () => streamModeRef.current === "sse";
+  const streamBatcher = useChatStreamBatcher<ChatStreamEvent>(useCallback((events) => {
+    setItems((current) => applyChatStreamEvents(
+      current,
+      events,
+      assistantSendVersionRef.current,
+    ));
+  }, []));
 
   const setPlanMode = useCallback((value: boolean | ((current: boolean) => boolean)) => {
     setPlanModeState((current) => {
@@ -1834,12 +2042,13 @@ export function ChatScreen({
     setHistoryExpanded(false);
     previousBotAliasRef.current = botAlias;
     previousStorageScopeRef.current = storageScope;
+    streamBatcher.flush();
     assistantSendVersionRef.current += 1;
     setPlanModeState(readStoredPlanMode(botAlias, storageScope));
     const storedExecutionMode = forcedExecutionMode ?? readStoredExecutionMode(botAlias, storageScope) ?? "cli";
     executionModeRef.current = storedExecutionMode;
     setExecutionModeState(storedExecutionMode);
-  }, [botAlias, forcedExecutionMode, storageScope]);
+  }, [botAlias, forcedExecutionMode, storageScope, streamBatcher]);
 
   useEffect(() => {
     isVisibleRef.current = isVisible;
@@ -2145,6 +2354,7 @@ export function ChatScreen({
             return;
           }
 
+          streamBatcher.flush();
           assistantSendVersionRef.current += 1;
           abortActiveSseRequest();
           const recoveredMessages = messages.length > 0 ? messages : itemsRef.current;
@@ -2161,7 +2371,7 @@ export function ChatScreen({
         }
       })();
     }, delayMs);
-  }, [abortActiveSseRequest, applyHistoryView, botAlias, client, restoreClusterRunFromOverview, scheduleAssistantPoll, stopSseRecoveryWatch]);
+  }, [abortActiveSseRequest, applyHistoryView, botAlias, client, restoreClusterRunFromOverview, scheduleAssistantPoll, stopSseRecoveryWatch, streamBatcher]);
 
   const markSseActivity = useCallback(() => {
     sseLastActivityAtRef.current = Date.now();
@@ -2173,9 +2383,10 @@ export function ChatScreen({
   pollAssistantStateRef.current = async () => {
     const sendVersion = assistantSendVersionRef.current;
     if (isSseStreaming()) {
-      return;
+      return true;
     }
 
+    let succeeded = true;
     try {
       const agentId = activeAgentIdRef.current;
       const currentExecutionMode = executionModeRef.current;
@@ -2222,21 +2433,21 @@ export function ChatScreen({
         void drainQueuedMessageIfIdleRef.current?.({ botAlias, agentId });
       }
     } catch (err) {
+      succeeded = false;
       setError(err instanceof Error ? err.message : "恢复任务状态失败");
       setIsStreaming(false);
       setStreamMode("");
       setStreamStartedAtMs(null);
     } finally {
       const shouldContinue = isVisibleRef.current && !loadingRef.current;
-      if (shouldContinue) {
-        const nextDelay = streamModeRef.current === "poll" || botOverviewRef.current?.isProcessing
-          ? ACTIVE_CHAT_POLL_INTERVAL_MS
-          : IDLE_CHAT_POLL_INTERVAL_MS;
-        scheduleAssistantPoll(nextDelay);
+      const runtimeActive = streamModeRef.current === "poll" || botOverviewRef.current?.isProcessing;
+      if (shouldContinue && runtimeActive) {
+        scheduleAssistantPoll(ACTIVE_CHAT_POLL_INTERVAL_MS);
       } else {
         stopAssistantPoll();
       }
     }
+    return succeeded;
   };
 
   function appendSystemMessage(text: string) {
@@ -2436,13 +2647,27 @@ export function ChatScreen({
   }, [isVisible, scheduleSseRecoveryWatch, stopSseRecoveryWatch, streamMode]);
 
   useLayoutEffect(() => {
-    const shouldPoll = isVisible && !loading;
-    if (!shouldPoll) {
-      stopAssistantPoll();
+    const shouldPollActively = isVisible && !loading && streamMode === "poll";
+    if (!shouldPollActively) {
+      if (streamMode !== "poll") {
+        stopAssistantPoll();
+      }
       return;
     }
-    scheduleAssistantPoll(streamMode === "poll" ? ACTIVE_CHAT_POLL_INTERVAL_MS : IDLE_CHAT_POLL_INTERVAL_MS);
+    scheduleAssistantPoll(ACTIVE_CHAT_POLL_INTERVAL_MS);
   }, [isVisible, loading, scheduleAssistantPoll, stopAssistantPoll, streamMode]);
+
+  useChatHistorySync({
+    enabled: isVisible && !loading,
+    isStreaming,
+    isSseHealthy: () => (
+      streamModeRef.current === "sse"
+      && Date.now() - (sseLastActivityAtRef.current || 0) < SSE_STALL_RECOVERY_DELAY_MS
+    ),
+    sync: () => pollAssistantStateRef.current?.() ?? true,
+    initialDelayMs: INITIAL_IDLE_CHAT_POLL_DELAY_MS,
+    idleIntervalMs: IDLE_CHAT_POLL_INTERVAL_MS,
+  });
 
   const lastItem = items[items.length - 1];
 
@@ -3211,6 +3436,7 @@ export function ChatScreen({
     activeAgentIdRef.current = normalized;
     setActiveAgentId(normalized);
     window.localStorage.setItem(activeAgentStorageKey(botAlias, storageScope), normalized);
+    streamBatcher.flush();
     assistantSendVersionRef.current += 1;
     stopAssistantPoll();
     stopSseRecoveryWatch();
@@ -3396,6 +3622,7 @@ export function ChatScreen({
     clusterRunIdRef.current = "";
     forceAutoScrollRef.current = true;
     shouldStickToBottomRef.current = true;
+    streamBatcher.cancel();
     setItems((prev) => [...prev, userMessage, assistantMessage]);
     isStreamingRef.current = true;
     streamModeRef.current = "sse";
@@ -3433,11 +3660,13 @@ export function ChatScreen({
         if (sawAgUiEvent) {
           return;
         }
-        setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => ({
-          ...item,
-          text: item.text + chunk,
-          state: "streaming",
-        })));
+        streamBatcher.enqueue({
+          kind: "chunk",
+          sendVersion,
+          assistantId,
+          streamStartedAtMs: localStartedAtMs,
+          chunk,
+        });
       };
       const onStatus = (status: ChatStatusUpdate) => {
         if (sendVersion !== assistantSendVersionRef.current) {
@@ -3450,21 +3679,6 @@ export function ChatScreen({
         if (typeof status.elapsedSeconds === "number") {
           setStreamStartedAtMs(resolveStreamStartMs(itemsRef.current, status.elapsedSeconds));
         }
-        if (status.turnId || status.assistantMessageId) {
-          setItems((prev) => {
-            const nextWithUserTurn = status.turnId
-              ? updateMessageById(prev, userMessage.id, (item) => ({
-                  ...item,
-                  turnId: status.turnId,
-                }))
-              : prev;
-            return updateLatestAssistantMessage(nextWithUserTurn, assistantId, localStartedAtMs, (item) => ({
-              ...item,
-              ...(status.assistantMessageId ? { id: status.assistantMessageId } : {}),
-              ...(status.turnId ? { turnId: status.turnId } : {}),
-            }));
-          });
-        }
         if (status.clusterRunId && status.clusterRunId !== clusterRunIdRef.current) {
           clusterRunIdRef.current = status.clusterRunId;
           setClusterRunId(status.clusterRunId);
@@ -3472,31 +3686,17 @@ export function ChatScreen({
           setClusterTaskError("");
           void pollClusterTasks();
         }
-        if (status.contextUsage) {
-          setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => ({
-            ...item,
-            state: "streaming",
-            meta: mergeMessageMeta(item.meta, { contextUsage: status.contextUsage }),
-          })));
-        }
         if (typeof status.replaceText === "string") {
           usingPreviewReplace = true;
-          setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => ({
-            ...item,
-            text: status.replaceText || "",
-            state: "streaming",
-          })));
-        } else if (typeof status.previewText === "string" && status.previewText.trim()) {
-          setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => (
-            item.text.trim()
-              ? item
-              : {
-                  ...item,
-                  text: status.previewText || "",
-                  state: "streaming",
-                }
-          )));
         }
+        streamBatcher.enqueue({
+          kind: "status",
+          sendVersion,
+          assistantId,
+          streamStartedAtMs: localStartedAtMs,
+          userMessageId: userMessage.id,
+          status,
+        });
       };
       const onTrace = (traceEvent: ChatTraceEvent) => {
         if (sendVersion !== assistantSendVersionRef.current) {
@@ -3509,35 +3709,16 @@ export function ChatScreen({
         if (hideProcessPreview) {
           return;
         }
-        setItems((prev) => updateLatestAssistantMessage(
-          prev,
+        streamBatcher.enqueue({
+          kind: "trace",
+          sendVersion,
           assistantId,
-          localStartedAtMs,
-          (item) => {
-            const isNativeTrace = executionModeRef.current === "native_agent"
-              || String(traceEvent.source || "").trim().toLowerCase() === "native_agent";
-            const nextItem = appendTraceToMessage(
-              item,
-              traceEvent,
-              isNativeTrace ? "native_agent_flat" : undefined,
-            );
-            if (isNativeTrace) {
-              return nextItem;
-            }
-            const canUseTracePreview = traceEvent.kind === "commentary"
-              && Boolean(traceEvent.summary.trim())
-              && !usingPreviewReplace
-              && !item.text.trim();
-            if (!canUseTracePreview) {
-              return nextItem;
-            }
-            return {
-              ...nextItem,
-              text: traceEvent.summary,
-              state: "streaming",
-            };
-          },
-        ));
+          streamStartedAtMs: localStartedAtMs,
+          trace: traceEvent,
+          nativeTrace: executionModeRef.current === "native_agent"
+            || String(traceEvent.source || "").trim().toLowerCase() === "native_agent",
+          usingPreviewReplace,
+        });
       };
       const onAgUiEvent = (event: AgUiEvent) => {
         if (sendVersion !== assistantSendVersionRef.current) {
@@ -3557,28 +3738,17 @@ export function ChatScreen({
           setClusterTaskError("");
           void pollClusterTasks();
         }
-        setItems((prev) => updateLatestAssistantMessage(
-          prev,
+        streamBatcher.enqueue({
+          kind: "ag_ui",
+          sendVersion,
           assistantId,
-          localStartedAtMs,
-          (item) => {
-            const nextMeta = mergeMessageMeta(
-              item.meta,
-              buildLiveAgUiMessageMeta(nextAgUiState, executionModeRef.current === "native_agent"),
-            );
-            const completionState = nextMeta?.completionState || "";
-            return {
-              ...item,
-              text: nextAgUiState.assistantText,
-              state: nextAgUiState.error || (completionState && completionState !== "completed" && completionState !== "streaming")
-                ? "error"
-                : (nextAgUiState.completed ? "done" : "streaming"),
-              meta: nextAgUiState.contextUsage
-                ? mergeMessageMeta(nextMeta, { contextUsage: nextAgUiState.contextUsage })
-                : nextMeta,
-            };
-          },
-        ));
+          streamStartedAtMs: localStartedAtMs,
+          state: nextAgUiState,
+          nativeAgent: executionModeRef.current === "native_agent",
+        });
+        if (!shouldBatchAgUiEvent(event)) {
+          streamBatcher.flush();
+        }
         setNativePermissionPending(hasPendingAgUiPermission(nextAgUiState));
       };
       const finalMessage = await client.sendMessage(
@@ -3591,6 +3761,7 @@ export function ChatScreen({
         onAgUiEvent,
       );
 
+      streamBatcher.flush();
       if (sendVersion !== assistantSendVersionRef.current) {
         return;
       }
@@ -3629,6 +3800,7 @@ export function ChatScreen({
         void pollClusterTasks();
       }
     } catch (err) {
+      streamBatcher.flush();
       if (sendVersion !== assistantSendVersionRef.current) {
         return;
       }
@@ -3661,7 +3833,7 @@ export function ChatScreen({
       emitBotActivityForActiveAgent("idle");
       void drainQueuedMessageIfIdleRef.current?.({ botAlias: sendBotAlias, agentId: sendAgentId });
     }
-  }, [botAlias, client, markSseActivity, onUnreadResult, pollClusterTasks, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch]);
+  }, [botAlias, client, markSseActivity, onUnreadResult, pollClusterTasks, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch, streamBatcher]);
 
   drainQueuedMessageIfIdleRef.current = async (context) => {
     const targetBotAlias = context?.botAlias || botAlias;
@@ -3944,6 +4116,7 @@ export function ChatScreen({
     activeAgentIdRef.current = nextAgentId;
     setActiveAgentId(nextAgentId);
     window.localStorage.setItem(activeAgentStorageKey(botAlias, storageScope), nextAgentId);
+    streamBatcher.flush();
     assistantSendVersionRef.current += 1;
     stopAssistantPoll();
     stopSseRecoveryWatch();
@@ -4362,6 +4535,7 @@ export function ChatScreen({
           ) : null}
           <ChatMessageList
             rows={messageRowModels}
+            scrollContainerRef={scrollContainerRef}
             assistantName={assistantName}
             allowTrace={allowTrace}
             handleDeleteAttachment={handleDeleteAttachment}

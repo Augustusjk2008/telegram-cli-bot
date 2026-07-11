@@ -302,6 +302,7 @@ def clear_bot_sessions(bot_id: int):
             targets.append(sessions.pop(key))
 
     for session in targets:
+        session.disable_persistence()
         try:
             session.terminate_process()
         except Exception as exc:

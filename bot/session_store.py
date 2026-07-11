@@ -8,6 +8,7 @@
 - 运行中回复的最近快照
 """
 
+import atexit
 import json
 import logging
 import os
@@ -16,6 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from bot.runtime_paths import get_session_store_path
+from bot.session_store_sqlite import SessionStoreSQLite
 
 logger = logging.getLogger(__name__)
 LOCAL_HISTORY_BACKEND = "local_v1"
@@ -23,7 +25,102 @@ LOCAL_HISTORY_BACKEND = "local_v1"
 # 存储文件路径
 STORE_FILE = get_session_store_path()
 
-_store_lock = threading.Lock()
+_store_lock = threading.RLock()
+_sqlite_stores: dict[Path, SessionStoreSQLite] = {}
+_sqlite_stores_lock = threading.Lock()
+_sqlite_disabled_paths: set[Path] = set()
+
+
+def _session_store_backend() -> str:
+    value = os.environ.get(
+        "SESSION_STORE_BACKEND",
+        os.environ.get("TCB_SESSION_STORE_BACKEND", "sqlite"),
+    )
+    normalized = str(value or "sqlite").strip().lower()
+    if normalized not in {"json", "sqlite"}:
+        logger.warning("未知 SESSION_STORE_BACKEND=%s，回退到 json", normalized)
+        return "json"
+    return normalized
+
+
+def _session_store_sqlite_path() -> Path:
+    return STORE_FILE.with_suffix(".sqlite3")
+
+
+def _get_sqlite_store() -> SessionStoreSQLite:
+    path = _session_store_sqlite_path().resolve()
+    with _sqlite_stores_lock:
+        store = _sqlite_stores.get(path)
+        if store is None:
+            store = SessionStoreSQLite(
+                path,
+                legacy_json_path=STORE_FILE,
+                flush_interval_seconds=float(
+                    os.environ.get("SESSION_STORE_FLUSH_INTERVAL_SECONDS", "0.1")
+                ),
+            )
+            _sqlite_stores[path] = store
+        return store
+
+
+def _using_sqlite() -> bool:
+    if _session_store_backend() != "sqlite":
+        return False
+    path = _session_store_sqlite_path().resolve()
+    if path in _sqlite_disabled_paths:
+        return False
+    try:
+        _get_sqlite_store().ensure_ready()
+        return True
+    except Exception as exc:
+        _sqlite_disabled_paths.add(path)
+        logger.error("SQLite 会话存储初始化失败，继续使用 JSON: %s", exc)
+        return False
+
+
+def flush_session_store() -> int:
+    try:
+        from bot.models import flush_pending_session_persistence
+
+        flush_pending_session_persistence()
+    except ImportError:
+        pass
+    if not _using_sqlite():
+        return 0
+    return _get_sqlite_store().flush()
+
+
+def close_session_store() -> None:
+    try:
+        from bot.models import flush_pending_session_persistence
+
+        flush_pending_session_persistence()
+    except ImportError:
+        pass
+    with _sqlite_stores_lock:
+        stores = list(_sqlite_stores.values())
+        _sqlite_stores.clear()
+    for store in stores:
+        try:
+            store.close()
+        except Exception as exc:
+            logger.error("关闭 SQLite 会话存储失败: %s", exc)
+
+
+def session_store_diagnostics() -> dict[str, Any]:
+    backend = "sqlite" if _using_sqlite() else "json"
+    diagnostics: dict[str, Any] = {
+        "requested_backend": _session_store_backend(),
+        "active_backend": backend,
+        "json_path": str(STORE_FILE),
+        "sqlite_path": str(_session_store_sqlite_path()),
+    }
+    if backend == "sqlite":
+        diagnostics.update(_get_sqlite_store().diagnostics())
+    return diagnostics
+
+
+atexit.register(close_session_store)
 
 
 def load_session_ids() -> Dict[str, dict]:
@@ -32,6 +129,8 @@ def load_session_ids() -> Dict[str, dict]:
     Returns:
         Dict[str, dict]: 键为 "bot_id:user_id"，值为 session 信息字典
     """
+    if _using_sqlite():
+        return _get_sqlite_store().load_all()
     if not STORE_FILE.exists():
         return {}
 
@@ -49,8 +148,12 @@ def load_session_ids() -> Dict[str, dict]:
 
 def save_session_ids(data: Dict[str, dict]):
     """保存所有会话ID到文件"""
+    if _using_sqlite():
+        _get_sqlite_store().replace_all(data)
+        return
     try:
         with _store_lock:
+            STORE_FILE.parent.mkdir(parents=True, exist_ok=True)
             with open(STORE_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
     except IOError as e:
@@ -185,8 +288,10 @@ def load_session(bot_id: int, user_id: int, agent_id: str = "main") -> Optional[
         None: 如果没有找到
     """
     _flush_live_session_if_available(bot_id, user_id, agent_id)
-    data = load_session_ids()
     key = _make_key(bot_id, user_id, agent_id)
+    if _using_sqlite():
+        return _get_sqlite_store().get(key)
+    data = load_session_ids()
     return data.get(key)
 
 
@@ -194,15 +299,7 @@ def migrate_sessions_to_shared(bot_id: int, shared_user_id: int) -> int:
     """将同一 bot 下旧用户会话快照合并到共享用户键。"""
     moved = 0
     with _store_lock:
-        if not STORE_FILE.exists():
-            return 0
-        try:
-            with open(STORE_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if not isinstance(data, dict):
-                return 0
-        except (json.JSONDecodeError, IOError):
-            return 0
+        data = load_session_ids()
 
         next_data = dict(data)
         for key, value in list(data.items()):
@@ -222,12 +319,7 @@ def migrate_sessions_to_shared(bot_id: int, shared_user_id: int) -> int:
         if moved == 0:
             return 0
 
-        try:
-            with open(STORE_FILE, "w", encoding="utf-8") as f:
-                json.dump(next_data, f, indent=2, ensure_ascii=False)
-        except IOError as e:
-            logger.error(f"保存会话存储文件失败: {e}")
-            return 0
+        save_session_ids(next_data)
 
     logger.debug("已合并 bot 会话快照到共享用户: bot=%s shared_user=%s moved=%s", bot_id, shared_user_id, moved)
     return moved
@@ -317,6 +409,17 @@ def save_session(
     # legacy history is intentionally no longer persisted
     # legacy running_* and web_turn_overlays are intentionally dropped on local_v1
 
+    if _using_sqlite():
+        _get_sqlite_store().queue_upsert(
+            key,
+            bot_id=bot_id,
+            user_id=user_id,
+            agent_id=agent_id,
+            payload=session_data or None,
+        )
+        logger.debug("已排队保存会话: bot=%s, user=%s", bot_id, user_id)
+        return
+
     with _store_lock:
         try:
             if STORE_FILE.exists():
@@ -335,6 +438,7 @@ def save_session(
             data[key] = session_data
 
         try:
+            STORE_FILE.parent.mkdir(parents=True, exist_ok=True)
             with open(STORE_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
         except IOError as e:
@@ -347,6 +451,19 @@ def save_session(
 def remove_session(bot_id: int, user_id: int, agent_id: str = "main") -> bool:
     """删除指定会话的持久化存储（原子读-改-写）"""
     key = _make_key(bot_id, user_id, agent_id)
+
+    if _using_sqlite():
+        store = _get_sqlite_store()
+        if store.get(key) is None:
+            return False
+        store.queue_upsert(
+            key,
+            bot_id=bot_id,
+            user_id=user_id,
+            agent_id=agent_id,
+            payload=None,
+        )
+        return True
 
     with _store_lock:
         if not STORE_FILE.exists():
@@ -394,15 +511,7 @@ def remove_sessions_for_workspace(
     removed = 0
 
     with _store_lock:
-        if not STORE_FILE.exists():
-            return 0
-        try:
-            with open(STORE_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if not isinstance(data, dict):
-                return 0
-        except (json.JSONDecodeError, IOError):
-            return 0
+        data = load_session_ids()
 
         keys_to_remove: list[str] = []
         for key, value in data.items():
@@ -423,12 +532,7 @@ def remove_sessions_for_workspace(
         for key in keys_to_remove:
             del data[key]
             removed += 1
-        try:
-            with open(STORE_FILE, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-        except IOError as e:
-            logger.error(f"保存会话存储文件失败: {e}")
-            return 0
+        save_session_ids(data)
 
     logger.debug("已删除工作区会话快照: bot=%s user=%s count=%s", bot_id, user_id, removed)
     return removed
@@ -439,27 +543,14 @@ def remove_all_sessions_for_bot(bot_id: int):
     prefix = f"{bot_id}:"
 
     with _store_lock:
-        if not STORE_FILE.exists():
-            return
-        try:
-            with open(STORE_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if not isinstance(data, dict):
-                return
-        except (json.JSONDecodeError, IOError):
-            return
+        data = load_session_ids()
 
         keys_to_remove = [k for k in data if k.startswith(prefix)]
         if not keys_to_remove:
             return
         for key in keys_to_remove:
             del data[key]
-        try:
-            with open(STORE_FILE, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-        except IOError as e:
-            logger.error(f"保存会话存储文件失败: {e}")
-            return
+        save_session_ids(data)
 
     logger.debug(f"已删除bot={bot_id}的所有会话，共{len(keys_to_remove)}个")
 
@@ -471,15 +562,7 @@ def rename_bot_sessions(old_bot_id: int, new_bot_id: int) -> int:
 
     moved = 0
     with _store_lock:
-        if not STORE_FILE.exists():
-            return 0
-        try:
-            with open(STORE_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if not isinstance(data, dict):
-                return 0
-        except (json.JSONDecodeError, IOError):
-            return 0
+        data = load_session_ids()
 
         next_data = dict(data)
         for key, value in list(data.items()):
@@ -497,12 +580,7 @@ def rename_bot_sessions(old_bot_id: int, new_bot_id: int) -> int:
         if moved == 0:
             return 0
 
-        try:
-            with open(STORE_FILE, "w", encoding="utf-8") as f:
-                json.dump(next_data, f, indent=2, ensure_ascii=False)
-        except IOError as e:
-            logger.error(f"保存会话存储文件失败: {e}")
-            return 0
+        save_session_ids(next_data)
 
     logger.debug("已迁移 bot 会话快照: old_bot=%s new_bot=%s moved=%s", old_bot_id, new_bot_id, moved)
     return moved

@@ -81,6 +81,7 @@ from bot.runtime_paths import (
     get_permissions_root,
     get_tunnel_state_path,
 )
+from bot.session_store import close_session_store
 from bot.updater import (
     check_for_updates,
     download_latest_update,
@@ -90,6 +91,7 @@ from bot.updater import (
     set_update_enabled,
 )
 from .announcement_store import AnnouncementStore
+from .async_chat_store import ChatStoreOverloadedError, run_chat_store_io
 from .cli_error_stats import collect_cli_error_stats
 from .diagnostics import diag_enabled, diag_log_event, diag_log_slow, diag_loop_lag_ms
 from .env_service import EnvConfigService, EnvValidationError
@@ -756,6 +758,11 @@ async def error_middleware(request: web.Request, handler):
         return await handler(request)
     except WebApiError as exc:
         return _error_response(exc)
+    except ChatStoreOverloadedError as exc:
+        return _json(
+            {"ok": False, "error": {"code": "chat_store_busy", "message": str(exc)}},
+            status=503,
+        )
     except web.HTTPException:
         raise
     except Exception as exc:
@@ -2823,7 +2830,17 @@ class WebApiServer:
         limit = int(request.query.get("limit", "50"))
         agent_id = self._request_agent_id(request)
         execution_mode = self._request_execution_mode(request, include_body=False)
-        data = get_history(self.manager, alias, self._chat_user_id(auth), limit=limit, agent_id=agent_id, execution_mode=execution_mode)
+        chat_user_id = self._chat_user_id(auth)
+        data = await run_chat_store_io(
+            get_history,
+            self.manager,
+            alias,
+            chat_user_id,
+            limit=limit,
+            agent_id=agent_id,
+            execution_mode=execution_mode,
+            write_key=f"{alias}:{chat_user_id}:{agent_id}",
+        )
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
     async def get_history_delta_view(self, request: web.Request) -> web.Response:
@@ -2833,7 +2850,18 @@ class WebApiServer:
         after_id = request.query.get("after_id", "")
         agent_id = self._request_agent_id(request)
         execution_mode = self._request_execution_mode(request, include_body=False)
-        data = get_history_delta(self.manager, alias, self._chat_user_id(auth), after_id, limit=limit, agent_id=agent_id, execution_mode=execution_mode)
+        chat_user_id = self._chat_user_id(auth)
+        data = await run_chat_store_io(
+            get_history_delta,
+            self.manager,
+            alias,
+            chat_user_id,
+            after_id,
+            limit=limit,
+            agent_id=agent_id,
+            execution_mode=execution_mode,
+            write_key=f"{alias}:{chat_user_id}:{agent_id}",
+        )
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
     async def get_conversations_view(self, request: web.Request) -> web.Response:
@@ -2843,7 +2871,17 @@ class WebApiServer:
         query = request.query.get("q", "")
         agent_id = self._request_agent_id(request)
         execution_mode = self._request_execution_mode(request, include_body=False)
-        return _json({"ok": True, "data": list_conversations(self.manager, alias, self._chat_user_id(auth), limit=limit, query=query, agent_id=agent_id, execution_mode=execution_mode)})
+        data = await run_chat_store_io(
+            list_conversations,
+            self.manager,
+            alias,
+            self._chat_user_id(auth),
+            limit=limit,
+            query=query,
+            agent_id=agent_id,
+            execution_mode=execution_mode,
+        )
+        return _json({"ok": True, "data": data})
 
     async def get_favorites_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_VIEW_CHAT_HISTORY)
@@ -2899,7 +2937,17 @@ class WebApiServer:
         body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
         agent_id = self._request_agent_id(request, body)
         execution_mode = self._request_execution_mode(request, body, include_query=False)
-        data = create_conversation(self.manager, alias, self._chat_user_id(auth), str(body.get("title") or ""), agent_id=agent_id, execution_mode=execution_mode)
+        chat_user_id = self._chat_user_id(auth)
+        data = await run_chat_store_io(
+            create_conversation,
+            self.manager,
+            alias,
+            chat_user_id,
+            str(body.get("title") or ""),
+            agent_id=agent_id,
+            execution_mode=execution_mode,
+            write_key=f"{alias}:{chat_user_id}:{agent_id}",
+        )
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
     async def delete_conversations_view(self, request: web.Request) -> web.Response:
@@ -2909,13 +2957,16 @@ class WebApiServer:
         agent_id = self._request_agent_id(request, body)
         delete_native = str(request.query.get("delete_native_session", "")).lower() in {"1", "true", "yes", "on"}
         execution_mode = self._request_execution_mode(request, body)
-        data = delete_all_conversations(
+        chat_user_id = self._chat_user_id(auth)
+        data = await run_chat_store_io(
+            delete_all_conversations,
             self.manager,
             alias,
-            self._chat_user_id(auth),
+            chat_user_id,
             agent_id=agent_id,
             execution_mode=execution_mode,
             delete_native_session=delete_native,
+            write_key=f"{alias}:{chat_user_id}:{agent_id}",
         )
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
@@ -2942,7 +2993,17 @@ class WebApiServer:
         body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
         agent_id = self._request_agent_id(request, body)
         execution_mode = self._request_execution_mode(request, body, include_query=False)
-        data = select_conversation(self.manager, alias, self._chat_user_id(auth), conversation_id, agent_id=agent_id, execution_mode=execution_mode)
+        chat_user_id = self._chat_user_id(auth)
+        data = await run_chat_store_io(
+            select_conversation,
+            self.manager,
+            alias,
+            chat_user_id,
+            conversation_id,
+            agent_id=agent_id,
+            execution_mode=execution_mode,
+            write_key=f"{alias}:{chat_user_id}:{agent_id}",
+        )
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
     async def delete_conversation_view(self, request: web.Request) -> web.Response:
@@ -2952,14 +3013,17 @@ class WebApiServer:
         agent_id = self._request_agent_id(request)
         delete_native = str(request.query.get("delete_native_session", "")).lower() in {"1", "true", "yes", "on"}
         execution_mode = self._request_execution_mode(request, include_body=False)
-        data = delete_conversation(
+        chat_user_id = self._chat_user_id(auth)
+        data = await run_chat_store_io(
+            delete_conversation,
             self.manager,
             alias,
-            self._chat_user_id(auth),
+            chat_user_id,
             conversation_id,
             agent_id=agent_id,
             delete_native_session=delete_native,
             execution_mode=execution_mode,
+            write_key=f"{alias}:{chat_user_id}:{agent_id}",
         )
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
@@ -3085,7 +3149,18 @@ class WebApiServer:
         message_id = request.match_info.get("message_id", "")
         agent_id = self._request_agent_id(request)
         execution_mode = self._request_execution_mode(request, include_body=False)
-        return _json({"ok": True, "data": get_history_trace(self.manager, alias, self._chat_user_id(auth), message_id, agent_id=agent_id, execution_mode=execution_mode)})
+        chat_user_id = self._chat_user_id(auth)
+        data = await run_chat_store_io(
+            get_history_trace,
+            self.manager,
+            alias,
+            chat_user_id,
+            message_id,
+            agent_id=agent_id,
+            execution_mode=execution_mode,
+            write_key=f"{alias}:{chat_user_id}:{agent_id}",
+        )
+        return _json({"ok": True, "data": data})
 
     async def get_native_agent_history_changes_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_VIEW_CHAT_HISTORY)
@@ -4288,6 +4363,7 @@ class WebApiServer:
         await self._fixed_forward_service.stop()
         await self.transfer_service.close()
         await self._runner.cleanup()
+        await asyncio.to_thread(close_session_store)
         self._runner = None
         self._site = None
         logger.info("Web API 已停止")

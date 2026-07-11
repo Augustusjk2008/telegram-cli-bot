@@ -3,6 +3,7 @@
 import logging
 import subprocess
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -32,6 +33,139 @@ PROMPT_PRESET_ID_MAX_LENGTH = 128
 EXECUTION_MODE_CLI = "cli"
 EXECUTION_MODE_NATIVE_AGENT = "native_agent"
 SUPPORTED_EXECUTION_MODES = {EXECUTION_MODE_CLI, EXECUTION_MODE_NATIVE_AGENT}
+
+
+class _SessionPersistenceScheduler:
+    def __init__(self, delay_seconds: float) -> None:
+        self.delay_seconds = max(0.01, float(delay_seconds))
+        self._condition = threading.Condition()
+        self._pending: dict[tuple[int, int, str], tuple[float, "UserSession"]] = {}
+        self._worker: threading.Thread | None = None
+        self._flush_count = 0
+        self._inflight_count = 0
+
+    @staticmethod
+    def _key(session: "UserSession") -> tuple[int, int, str]:
+        return (
+            int(session.bot_id),
+            int(session.user_id),
+            str(session.agent_id or "main").strip().lower() or "main",
+        )
+
+    def schedule(self, session: "UserSession") -> None:
+        key = self._key(session)
+        deadline = time.monotonic() + self.delay_seconds
+        with self._condition:
+            self._pending[key] = (deadline, session)
+            if self._worker is None or not self._worker.is_alive():
+                self._worker = threading.Thread(
+                    target=self._run,
+                    name="session-persistence",
+                    daemon=True,
+                )
+                self._worker.start()
+            self._condition.notify_all()
+
+    def flush(self, session: "UserSession") -> None:
+        key = self._key(session)
+        with self._condition:
+            pending = self._pending.get(key)
+            if pending is not None and pending[1] is session:
+                self._pending.pop(key, None)
+                self._condition.notify_all()
+        session._persist_now()
+
+    def cancel(self, session: "UserSession") -> None:
+        key = self._key(session)
+        with self._condition:
+            pending = self._pending.get(key)
+            if pending is not None and pending[1] is session:
+                self._pending.pop(key, None)
+                self._condition.notify_all()
+
+    def flush_all(self) -> int:
+        flushed = 0
+        while True:
+            with self._condition:
+                sessions = [item[1] for item in self._pending.values()]
+                self._pending.clear()
+                self._condition.notify_all()
+                if not sessions:
+                    if self._inflight_count == 0:
+                        return flushed
+                    self._condition.wait()
+                    continue
+            for session in sessions:
+                try:
+                    session._persist_now()
+                    self._flush_count += 1
+                except Exception:
+                    logger.exception(
+                        "刷新待持久化会话失败: bot=%s user=%s agent=%s",
+                        session.bot_id,
+                        session.user_id,
+                        session.agent_id,
+                    )
+                finally:
+                    flushed += 1
+
+    def diagnostics(self) -> dict[str, int | bool]:
+        with self._condition:
+            return {
+                "pending_count": len(self._pending),
+                "inflight_count": self._inflight_count,
+                "worker_alive": bool(self._worker and self._worker.is_alive()),
+                "flush_count": self._flush_count,
+            }
+
+    def _run(self) -> None:
+        while True:
+            due: list["UserSession"] = []
+            with self._condition:
+                while not self._pending:
+                    self._condition.wait()
+                now = time.monotonic()
+                next_deadline = min(item[0] for item in self._pending.values())
+                if next_deadline > now:
+                    self._condition.wait(timeout=next_deadline - now)
+                    continue
+                due_keys = [
+                    key
+                    for key, (deadline, _session) in self._pending.items()
+                    if deadline <= now
+                ]
+                for key in due_keys:
+                    _deadline, session = self._pending.pop(key)
+                    due.append(session)
+                self._inflight_count += len(due)
+            for session in due:
+                try:
+                    session._persist_now()
+                    self._flush_count += 1
+                except Exception:
+                    logger.exception(
+                        "后台持久化会话失败: bot=%s user=%s agent=%s",
+                        session.bot_id,
+                        session.user_id,
+                        session.agent_id,
+                    )
+                finally:
+                    with self._condition:
+                        self._inflight_count -= 1
+                        self._condition.notify_all()
+
+
+_SESSION_PERSISTENCE_SCHEDULER = _SessionPersistenceScheduler(
+    SESSION_PERSIST_DEBOUNCE_SECONDS
+)
+
+
+def flush_pending_session_persistence() -> int:
+    return _SESSION_PERSISTENCE_SCHEDULER.flush_all()
+
+
+def session_persistence_diagnostics() -> dict[str, int | bool]:
+    return _SESSION_PERSISTENCE_SCHEDULER.diagnostics()
 
 
 def normalize_cli_type_config(value: Any, *, default: str = CLI_TYPE) -> str:
@@ -481,7 +615,6 @@ class UserSession:
     _lock: threading.RLock = field(default_factory=threading.RLock)
     _persist_enabled: bool = field(default=True, repr=False, compare=False)
     persist_hook: Optional[PersistHook] = field(default=None, repr=False, compare=False)
-    _persist_timer: Optional[threading.Timer] = field(default=None, repr=False, compare=False)
 
     def __getattr__(self, name: str) -> Any:
         if name == "kimi_session_id":
@@ -589,52 +722,35 @@ class UserSession:
         with self._lock:
             if not self._persist_enabled:
                 return
-            timer = self._persist_timer
-            if timer is not None:
-                timer.cancel()
-            next_timer = threading.Timer(SESSION_PERSIST_DEBOUNCE_SECONDS, self._persist_now)
-            next_timer.daemon = True
-            self._persist_timer = next_timer
-            next_timer.start()
+        _SESSION_PERSISTENCE_SCHEDULER.schedule(self)
 
     def flush_persistence(self):
-        timer = None
         with self._lock:
             if not self._persist_enabled:
                 return
-            timer = self._persist_timer
-            self._persist_timer = None
-        if timer is not None:
-            timer.cancel()
-        self._persist_now()
+        _SESSION_PERSISTENCE_SCHEDULER.flush(self)
 
     def _persist_now(self):
-        if not self._persist_enabled:
-            return
         with self._lock:
             if not self._persist_enabled:
                 return
-            self._persist_timer = None
-        hook = self.persist_hook
-        if hook is not None:
-            hook(self)
-            return
-        # 延迟导入避免循环依赖
-        try:
-            from bot.sessions import _save_session_to_store
-            _save_session_to_store(self)
-        except ImportError:
-            logger.warning("无法导入 session_store，会话将不会被持久化")
+            hook = self.persist_hook
+            if hook is not None:
+                hook(self)
+                return
+            # 延迟导入避免循环依赖
+            try:
+                from bot.sessions import _save_session_to_store
+                _save_session_to_store(self)
+            except ImportError:
+                logger.warning("无法导入 session_store，会话将不会被持久化")
 
     def disable_persistence(self):
         """禁用后续持久化，用于 reset 后阻止陈旧会话对象回写状态。"""
         with self._lock:
-            timer = self._persist_timer
-            self._persist_timer = None
             self._persist_enabled = False
             self.persist_hook = None
-        if timer is not None:
-            timer.cancel()
+        _SESSION_PERSISTENCE_SCHEDULER.cancel(self)
 
     def clear_session_ids(self):
         """清除所有 session_id 并持久化"""

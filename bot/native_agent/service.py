@@ -41,6 +41,7 @@ from bot.native_agent.pi_rpc_preflight import PiWindowsPreflightRequest, run_pi_
 from bot.native_agent.pi_rpc_client import PiRpcRunError
 from bot.native_agent.pi_session_store import PiSessionRecord, PiSessionStore, pi_session_key
 from bot.native_agent.pi_session_runtime import (
+    PI_RUNTIME_IDLE_TTL_SECONDS,
     PiSessionRuntime,
     PiSessionRuntimeRegistry,
     PiSessionRuntimeRequest,
@@ -265,12 +266,61 @@ def _escape_markdown_fence(text: str) -> str:
 
 class NativeAgentService:
     def __init__(self) -> None:
-        self._runtime_registry = PiSessionRuntimeRegistry()
         self._pi_session_store = PiSessionStore()
+        self._runtime_registry = PiSessionRuntimeRegistry(
+            before_runtime_close=self._persist_runtime_before_close,
+        )
         self._workspace_history = PiWorkspaceHistory()
+        self._runtime_eviction_task: asyncio.Task[None] | None = None
 
     async def shutdown(self) -> None:
+        if self._runtime_eviction_task is not None:
+            self._runtime_eviction_task.cancel()
+            await asyncio.gather(self._runtime_eviction_task, return_exceptions=True)
+            self._runtime_eviction_task = None
         await self._runtime_registry.shutdown()
+
+    def _ensure_runtime_eviction_task(self) -> None:
+        if self._runtime_eviction_task is None or self._runtime_eviction_task.done():
+            self._runtime_eviction_task = asyncio.create_task(self._runtime_eviction_loop())
+
+    async def _runtime_eviction_loop(self) -> None:
+        interval = max(30.0, min(300.0, PI_RUNTIME_IDLE_TTL_SECONDS / 4))
+        while True:
+            await asyncio.sleep(interval)
+            await self._runtime_registry.evict_idle()
+
+    async def _persist_runtime_before_close(self, runtime: PiSessionRuntime) -> None:
+        owner_parts = str(runtime.state.owner_key or "").split(":")
+        if len(owner_parts) < 2:
+            return
+        try:
+            bot_id = int(owner_parts[0])
+            user_id = int(owner_parts[1])
+        except (TypeError, ValueError):
+            return
+        key = pi_session_key(
+            cwd=runtime.state.cwd,
+            bot_id=bot_id,
+            user_id=user_id,
+            conversation_id=runtime.state.conversation_id,
+        )
+
+        def persist() -> None:
+            record = self._pi_session_store.get(key) or PiSessionRecord(
+                key=key,
+                cwd=runtime.state.cwd,
+                conversation_id=runtime.state.conversation_id,
+            )
+            record.pi_session_id = str(runtime.state.native_session_id or record.pi_session_id or "").strip()
+            record.workspace_history_head = str(
+                runtime.state.workspace_history_head or record.workspace_history_head or ""
+            ).strip()
+            record.linear_index = max(int(record.linear_index or 0), int(runtime.state.linear_index or 0))
+            record.session_binding_status = "bound" if record.pi_session_id else "missing"
+            self._pi_session_store.upsert(record)
+
+        await asyncio.to_thread(persist)
 
     def _pi_runtime_env(self, cluster_run_id: str = "") -> dict[str, str] | None:
         env: dict[str, str] = {}
@@ -412,6 +462,7 @@ class NativeAgentService:
         target_head: str,
         native_session_id: str = "",
     ) -> WorkspaceHistoryStatus:
+        self._ensure_runtime_eviction_task()
         model_id, agent_id, reasoning_effort, system_prompt = self._prompt_options(profile)
         append_system_prompt, _child_prompt_hash = self._append_system_prompt(profile, session, solo_mode=False)
         native_agent_config = effective_native_agent_config(getattr(profile, "native_agent", {}))
@@ -500,6 +551,7 @@ class NativeAgentService:
         cluster_run_id: str = "",
         solo_mode: bool = False,
     ) -> AsyncIterator[dict[str, Any]]:
+        self._ensure_runtime_eviction_task()
         loop = asyncio.get_running_loop()
         started_at = loop.time()
         total_started = time.perf_counter()

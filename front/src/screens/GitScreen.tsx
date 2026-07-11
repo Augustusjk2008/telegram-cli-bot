@@ -1,5 +1,5 @@
 import { clsx } from "clsx";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Archive,
   ArchiveRestore,
@@ -27,6 +27,7 @@ import { GitCommitCliConfigPanel } from "../components/GitCommitCliConfigPanel";
 import { GitDiffViewer } from "../components/GitDiffViewer";
 import { StateBadge } from "../components/StateBadge";
 import { toolbarButtonClass } from "../components/ToolbarButton";
+import { DynamicVirtualList } from "../components/virtual/DynamicVirtualList";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
   GitBranchList,
@@ -940,6 +941,87 @@ export function GitScreen({
     }
   }
 
+  const renderChangeRow = useCallback((item: GitChangedFile, key: GitFileGroupKey) => {
+    const stats = changeStatsForGroup(item, key);
+    const stagedDiff = key === "staged";
+    const diffLoadingKey = `${stagedDiff ? "staged" : "worktree"}:${item.path}`;
+    const diffLoading = diffLoadingPath === diffLoadingKey;
+    return (
+      <div
+        data-testid={`git-change-row-${item.path}`}
+        data-full-path={item.path}
+        className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 border-b border-[var(--workbench-hairline)] px-2 py-1.5 text-xs transition-colors last:border-b-0 hover:bg-[var(--workbench-hover-bg)]"
+      >
+        <button
+          type="button"
+          aria-label={`打开 diff ${item.path}`}
+          title={item.path}
+          data-full-path={item.path}
+          onClick={() => void openChangedDiff(item.path, stagedDiff)}
+          disabled={diffLoading}
+          className="min-w-0 truncate text-left font-medium text-[var(--text)] hover:text-[var(--accent)] disabled:opacity-60"
+        >
+          {diffLoading ? (
+            <span className="inline-flex min-w-0 items-center gap-1">
+              <LoaderCircle className="h-3 w-3 shrink-0 animate-spin" />
+              <span className="min-w-0 truncate">{displayGitPath(item.path)}</span>
+            </span>
+          ) : (
+            displayGitPath(item.path)
+          )}
+        </button>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <span className="rounded border border-[var(--border)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--muted)]">
+            {item.status.trim() || item.status}
+          </span>
+          <span className="font-mono text-[10px] text-emerald-600">+{stats.additions}</span>
+          <span className="font-mono text-[10px] text-red-600">-{stats.deletions}</span>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          {(item.untracked || item.unstaged || !item.staged) ? (
+            <button
+              type="button"
+              aria-label={`暂存 ${item.path}`}
+              title={`暂存 ${item.path}`}
+              onClick={() => void runAction(`stage:${item.path}`, () => client.stageGitPaths(botAlias, [item.path]))}
+              disabled={mutationBusy}
+              className={iconButtonClass()}
+            >
+              <Plus className="h-3 w-3" />
+            </button>
+          ) : null}
+          {item.staged ? (
+            <button
+              type="button"
+              aria-label={`取消暂存 ${item.path}`}
+              title={`取消暂存 ${item.path}`}
+              onClick={() => void runAction(`unstage:${item.path}`, () => client.unstageGitPaths(botAlias, [item.path]))}
+              disabled={mutationBusy}
+              className={iconButtonClass()}
+            >
+              <Minus className="h-3 w-3" />
+            </button>
+          ) : null}
+          <button
+            type="button"
+            aria-label={`丢弃 ${item.path}`}
+            title={`丢弃 ${item.path}`}
+            onClick={() => {
+              if (!confirmDiscardPath(item.path)) {
+                return;
+              }
+              void runAction(`discard:${item.path}`, () => client.discardGitPaths(botAlias, [item.path]));
+            }}
+            disabled={mutationBusy}
+            className={iconButtonClass()}
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
+        </div>
+      </div>
+    );
+  }, [botAlias, client, diffLoadingPath, mutationBusy]);
+
   return (
     <main className={clsx("flex h-full min-h-0 flex-col", embedded ? "bg-[var(--workbench-titlebar-bg)]" : "bg-[var(--workbench-panel-bg)]")}>
       {embedded ? null : (
@@ -1065,88 +1147,22 @@ export function GitScreen({
                             当前分组暂无文件
                           </div>
                         ) : (
-                          <div className="divide-y divide-[var(--workbench-hairline)] rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)]">
-                            {items.map((item) => {
-                              const stats = changeStatsForGroup(item, key);
-                              const stagedDiff = key === "staged";
-                              const diffLoadingKey = `${stagedDiff ? "staged" : "worktree"}:${item.path}`;
-                              const diffLoading = diffLoadingPath === diffLoadingKey;
-                              return (
-                                <div
-                                  key={`${key}-${item.path}`}
-                                  data-testid={`git-change-row-${item.path}`}
-                                  data-full-path={item.path}
-                                  className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 px-2 py-1.5 text-xs transition-colors hover:bg-[var(--workbench-hover-bg)]"
-                                >
-                                  <button
-                                    type="button"
-                                    aria-label={`打开 diff ${item.path}`}
-                                    title={item.path}
-                                    data-full-path={item.path}
-                                    onClick={() => void openChangedDiff(item.path, stagedDiff)}
-                                    disabled={diffLoading}
-                                    className="min-w-0 truncate text-left font-medium text-[var(--text)] hover:text-[var(--accent)] disabled:opacity-60"
-                                  >
-                                    {diffLoading ? (
-                                      <span className="inline-flex min-w-0 items-center gap-1">
-                                        <LoaderCircle className="h-3 w-3 shrink-0 animate-spin" />
-                                        <span className="min-w-0 truncate">{displayGitPath(item.path)}</span>
-                                      </span>
-                                    ) : (
-                                      displayGitPath(item.path)
-                                    )}
-                                  </button>
-                                  <div className="flex shrink-0 items-center gap-1.5">
-                                    <span className="rounded border border-[var(--border)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--muted)]">
-                                      {item.status.trim() || item.status}
-                                    </span>
-                                    <span className="font-mono text-[10px] text-emerald-600">+{stats.additions}</span>
-                                    <span className="font-mono text-[10px] text-red-600">-{stats.deletions}</span>
-                                  </div>
-                                  <div className="flex shrink-0 items-center gap-1">
-                                    {(item.untracked || item.unstaged || !item.staged) ? (
-                                      <button
-                                        type="button"
-                                        aria-label={`暂存 ${item.path}`}
-                                        title={`暂存 ${item.path}`}
-                                        onClick={() => void runAction(`stage:${item.path}`, () => client.stageGitPaths(botAlias, [item.path]))}
-                                        disabled={mutationBusy}
-                                        className={iconButtonClass()}
-                                      >
-                                        <Plus className="h-3 w-3" />
-                                      </button>
-                                    ) : null}
-                                    {item.staged ? (
-                                      <button
-                                        type="button"
-                                        aria-label={`取消暂存 ${item.path}`}
-                                        title={`取消暂存 ${item.path}`}
-                                        onClick={() => void runAction(`unstage:${item.path}`, () => client.unstageGitPaths(botAlias, [item.path]))}
-                                        disabled={mutationBusy}
-                                        className={iconButtonClass()}
-                                      >
-                                        <Minus className="h-3 w-3" />
-                                      </button>
-                                    ) : null}
-                                    <button
-                                      type="button"
-                                      aria-label={`丢弃 ${item.path}`}
-                                      title={`丢弃 ${item.path}`}
-                                      onClick={() => {
-                                        if (!confirmDiscardPath(item.path)) {
-                                          return;
-                                        }
-                                        void runAction(`discard:${item.path}`, () => client.discardGitPaths(botAlias, [item.path]));
-                                      }}
-                                      disabled={mutationBusy}
-                                      className={iconButtonClass()}
-                                    >
-                                      <Trash2 className="h-3 w-3" />
-                                    </button>
-                                  </div>
-                                </div>
-                              );
-                            })}
+                          <div className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)]">
+                            {items.length > 100 ? (
+                              <DynamicVirtualList
+                                items={items}
+                                getKey={(item) => `${key}-${item.path}`}
+                                renderItem={(item) => renderChangeRow(item, key)}
+                                estimateHeight={36}
+                                overscan={8}
+                                dataTestId={`git-virtual-change-list-${key}`}
+                                className="max-h-[420px] min-h-[240px] overflow-auto"
+                              />
+                            ) : items.map((item) => (
+                              <div key={`${key}-${item.path}`}>
+                                {renderChangeRow(item, key)}
+                              </div>
+                            ))}
                           </div>
                         )}
                       </div>

@@ -33,6 +33,8 @@ const mermaidRenderCache = new WeightedLruCache<string, { svg: string; error: st
   maxWeight: 4 * 1024 * 1024,
   weigh: (value) => (value.svg.length + value.error.length) * 2,
 });
+const MARKDOWN_REMARK_PLUGINS = [remarkGfm, remarkMath];
+const MARKDOWN_REHYPE_PLUGINS = [rehypeKatex];
 
 function stringifyCodeChildren(children: ReactNode) {
   if (Array.isArray(children)) {
@@ -303,8 +305,8 @@ export function MarkdownContent({ content, variant = "preview", onFileLinkClick,
   return (
     <div className={containerClassName}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeKatex]}
+        remarkPlugins={MARKDOWN_REMARK_PLUGINS}
+        rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
         urlTransform={safeUrlTransform}
         components={{
           h1: ({ children }) => <h1 className={isChat ? "break-words text-3xl font-semibold tracking-tight [overflow-wrap:anywhere]" : "mb-4 break-words text-3xl font-semibold tracking-tight [overflow-wrap:anywhere]"}>{children}</h1>,

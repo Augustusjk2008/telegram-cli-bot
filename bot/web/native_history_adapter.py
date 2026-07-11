@@ -2,7 +2,94 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
+
+from bot.native_agent.pi_session_store import PiSessionRecord, PiSessionStore
+from bot.web.chat_store import ChatStore
+
+
+def _load_pi_session_records(
+    store: PiSessionStore,
+    keys: Iterable[str],
+) -> dict[str, PiSessionRecord]:
+    normalized_keys = list(
+        dict.fromkeys(str(key or "").strip() for key in keys if str(key or "").strip())
+    )
+    if not normalized_keys:
+        return {}
+    with store._lock:
+        payload = store._read_payload()
+    sessions = payload.get("sessions")
+    if not isinstance(sessions, dict):
+        return {}
+    records: dict[str, PiSessionRecord] = {}
+    for key in normalized_keys:
+        item = sessions.get(key)
+        if isinstance(item, dict):
+            records[key] = PiSessionRecord.from_dict(item, key=key)
+    return records
+
+
+def _native_workspace_metadata(
+    record: PiSessionRecord | None,
+    latest: dict[str, Any] | None,
+) -> dict[str, Any]:
+    latest = latest if isinstance(latest, dict) else {}
+    head = str(
+        getattr(record, "workspace_history_head", "")
+        or latest.get("workspace_history_head")
+        or ""
+    ).strip()
+    linear_index = int(
+        getattr(record, "linear_index", 0)
+        or latest.get("linear_index")
+        or 0
+    )
+    degraded = bool(getattr(record, "degraded", False)) if record is not None else False
+    degraded_reason = str(getattr(record, "degraded_reason", "") or "")
+    return {
+        "workspace_history_head": head,
+        "linear_index": linear_index,
+        "rollback_supported": bool(head and not degraded),
+        "degraded": degraded,
+        "degraded_reason": degraded_reason,
+    }
+
+
+def decorate_native_conversations(
+    items: list[dict[str, Any]],
+    *,
+    chat_store: ChatStore,
+    pi_store: PiSessionStore,
+    pi_key_for_conversation: Callable[[str], str],
+    active_conversation_id: str = "",
+    bot_mode: str = "",
+) -> list[dict[str, Any]]:
+    conversation_ids = [
+        str(item.get("id") or "").strip()
+        for item in items
+        if str(item.get("id") or "").strip()
+    ]
+    pi_keys = {
+        conversation_id: pi_key_for_conversation(conversation_id)
+        for conversation_id in conversation_ids
+    }
+    pi_records = _load_pi_session_records(pi_store, pi_keys.values())
+    workspace_history = chat_store.latest_active_workspace_histories(conversation_ids)
+    active_id = str(active_conversation_id or "").strip()
+    return [
+        {
+            **item,
+            **_native_workspace_metadata(
+                pi_records.get(pi_keys.get(str(item.get("id") or "").strip(), "")),
+                workspace_history.get(str(item.get("id") or "").strip()),
+            ),
+            "active": str(item.get("id") or "").strip() == active_id,
+            "bot_mode": str(item.get("bot_mode") or bot_mode),
+            "execution_mode": "native_agent",
+        }
+        for item in items
+    ]
 
 
 def _trace_event(kind: str, **extra: Any) -> dict[str, Any]:

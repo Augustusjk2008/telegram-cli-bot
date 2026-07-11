@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import os
+import tempfile
 import time
 import traceback
 import uuid
@@ -12,7 +14,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, AsyncIterator, Protocol
+from typing import Any, AsyncIterator, Iterator, Protocol
 
 from aiohttp import ClientConnectionError, ClientResponse, ClientSession, ClientTimeout
 
@@ -31,6 +33,32 @@ from bot.web.transfer_litellm_runtime import LiteLLMProxyRuntime
 
 TRACE_STRING_LIMIT = 500
 TRACE_STRING_HEAD = 240
+COMPACT_STREAM_MEMORY_LIMIT_BYTES = max(
+    64 * 1024,
+    int(os.environ.get("TRANSFER_COMPACT_MEMORY_LIMIT_BYTES", str(2 * 1024 * 1024))),
+)
+COMPACT_STREAM_MAX_RESPONSE_BYTES = max(
+    COMPACT_STREAM_MEMORY_LIMIT_BYTES,
+    int(os.environ.get("TRANSFER_COMPACT_MAX_RESPONSE_BYTES", str(256 * 1024 * 1024))),
+)
+COMPACT_STREAM_MAX_SUMMARY_BYTES = max(
+    64 * 1024,
+    int(os.environ.get("TRANSFER_COMPACT_MAX_SUMMARY_BYTES", str(16 * 1024 * 1024))),
+)
+COMPACT_STREAM_MAX_EVENT_BUFFER_CHARACTERS = max(
+    64 * 1024,
+    int(
+        os.environ.get(
+            "TRANSFER_COMPACT_MAX_EVENT_BUFFER_CHARACTERS",
+            str(8 * 1024 * 1024),
+        )
+    ),
+)
+COMPACT_STREAM_REPLAY_CHUNK_BYTES = 64 * 1024
+SSE_USAGE_MAX_LINE_CHARACTERS = max(
+    1024,
+    int(os.environ.get("TRANSFER_SSE_USAGE_MAX_LINE_CHARACTERS", str(1024 * 1024))),
+)
 CODEX_COMPACTION_INSTRUCTIONS = (
     "You are compacting a Codex CLI conversation history for a future coding agent turn. "
     "Do not answer the latest user request. Return only a durable summary that preserves "
@@ -106,16 +134,38 @@ class TransferServiceError(Exception):
 
 
 class _SSEUsageParser:
-    def __init__(self) -> None:
+    def __init__(self, *, max_line_characters: int = SSE_USAGE_MAX_LINE_CHARACTERS) -> None:
         self._buffer = ""
+        self._max_line_characters = max(128, int(max_line_characters))
+        self._discarding_oversized_line = False
         self.usage: dict[str, int] = {}
         self.model = ""
 
     def feed(self, chunk: bytes) -> None:
-        self._buffer += chunk.decode("utf-8", errors="ignore")
-        while "\n" in self._buffer:
-            line, self._buffer = self._buffer.split("\n", 1)
-            self._process_line(line.rstrip("\r"))
+        text = chunk.decode("utf-8", errors="ignore")
+        while text:
+            if self._discarding_oversized_line:
+                newline_index = text.find("\n")
+                if newline_index < 0:
+                    return
+                text = text[newline_index + 1 :]
+                self._discarding_oversized_line = False
+                continue
+
+            newline_index = text.find("\n")
+            if newline_index < 0:
+                if len(self._buffer) + len(text) > self._max_line_characters:
+                    self._buffer = ""
+                    self._discarding_oversized_line = True
+                else:
+                    self._buffer += text
+                return
+
+            if len(self._buffer) + newline_index <= self._max_line_characters:
+                line = f"{self._buffer}{text[:newline_index]}"
+                self._process_line(line.rstrip("\r"))
+            self._buffer = ""
+            text = text[newline_index + 1 :]
 
     def _process_line(self, line: str) -> None:
         if not line.startswith("data:"):
@@ -136,12 +186,22 @@ class _SSEUsageParser:
 
 
 class _SSEEventParser:
-    def __init__(self) -> None:
+    def __init__(self, *, max_buffer_characters: int = 0) -> None:
         self._buffer = ""
+        self._max_buffer_characters = max(0, int(max_buffer_characters))
 
     def feed(self, chunk: bytes) -> list[tuple[str, str]]:
         self._buffer += chunk.decode("utf-8", errors="ignore")
         self._buffer = self._buffer.replace("\r\n", "\n").replace("\r", "\n")
+        if (
+            self._max_buffer_characters
+            and len(self._buffer) > self._max_buffer_characters
+        ):
+            raise TransferServiceError(
+                502,
+                "compact SSE event buffer exceeds configured limit",
+                code="compact_event_too_large",
+            )
         events: list[tuple[str, str]] = []
         while "\n\n" in self._buffer:
             block, self._buffer = self._buffer.split("\n\n", 1)
@@ -158,18 +218,58 @@ class _SSEEventParser:
 
 
 class _CodexCompactionStreamAdapter:
-    def __init__(self) -> None:
-        self._parser = _SSEEventParser()
-        self._delta_parts: list[str] = []
-        self._item_texts: list[str] = []
-        self.raw_chunks: list[bytes] = []
+    def __init__(
+        self,
+        *,
+        memory_limit_bytes: int = COMPACT_STREAM_MEMORY_LIMIT_BYTES,
+        max_response_bytes: int = COMPACT_STREAM_MAX_RESPONSE_BYTES,
+        max_summary_bytes: int = COMPACT_STREAM_MAX_SUMMARY_BYTES,
+    ) -> None:
+        self._memory_limit_bytes = max(1, int(memory_limit_bytes))
+        self._max_response_bytes = max(
+            self._memory_limit_bytes,
+            int(max_response_bytes),
+        )
+        self._max_summary_bytes = max(1, int(max_summary_bytes))
+        self._parser = _SSEEventParser(
+            max_buffer_characters=min(
+                self._max_response_bytes,
+                COMPACT_STREAM_MAX_EVENT_BUFFER_CHARACTERS,
+            )
+        )
+        self._raw_stream = tempfile.SpooledTemporaryFile(
+            max_size=self._memory_limit_bytes,
+            mode="w+b",
+        )
+        self._delta_stream = tempfile.SpooledTemporaryFile(
+            max_size=self._memory_limit_bytes,
+            mode="w+b",
+        )
+        self._item_stream = tempfile.SpooledTemporaryFile(
+            max_size=self._memory_limit_bytes,
+            mode="w+b",
+        )
+        self._raw_bytes = 0
+        self._delta_bytes = 0
+        self._item_bytes = 0
+        self._item_count = 0
+        self._closed = False
         self.compaction_count = 0
         self.completed_payload: dict[str, Any] | None = None
         self.model = ""
         self.usage: dict[str, int] = {}
 
     def feed(self, chunk: bytes) -> None:
-        self.raw_chunks.append(chunk)
+        if self._closed:
+            raise RuntimeError("compact stream adapter is closed")
+        self._raw_bytes += len(chunk)
+        if self._raw_bytes > self._max_response_bytes:
+            raise TransferServiceError(
+                502,
+                f"compact response exceeds {self._max_response_bytes} bytes",
+                code="compact_response_too_large",
+            )
+        self._raw_stream.write(chunk)
         for event_name, data in self._parser.feed(chunk):
             if not data or data == "[DONE]":
                 continue
@@ -191,7 +291,13 @@ class _CodexCompactionStreamAdapter:
             if event_type == "response.output_text.delta":
                 delta = payload.get("delta", payload.get("text"))
                 if delta is not None:
-                    self._delta_parts.append(str(delta))
+                    self._append_summary_text(
+                        self._delta_stream,
+                        str(delta),
+                        current_bytes=self._delta_bytes,
+                        item_separator=False,
+                    )
+                    self._delta_bytes += len(str(delta).encode("utf-8"))
             elif event_type == "response.output_item.done":
                 item = payload.get("item")
                 if isinstance(item, dict) and item.get("type") == "compaction":
@@ -199,18 +305,32 @@ class _CodexCompactionStreamAdapter:
                 elif isinstance(item, dict):
                     text = _response_item_text(item)
                     if text:
-                        self._item_texts.append(text)
+                        encoded_bytes = len(text.encode("utf-8"))
+                        separator_bytes = 2 if self._item_count else 0
+                        self._append_summary_text(
+                            self._item_stream,
+                            text,
+                            current_bytes=self._item_bytes,
+                            item_separator=bool(self._item_count),
+                        )
+                        self._item_bytes += separator_bytes + encoded_bytes
+                        self._item_count += 1
             elif event_type == "response.completed":
                 self.completed_payload = payload
 
     def summary_text(self) -> str:
-        text = "".join(self._delta_parts).strip()
+        text = self._read_text(self._delta_stream).strip()
         if text:
             return text
-        return "\n\n".join(part for part in self._item_texts if part).strip()
+        return self._read_text(self._item_stream).strip()
 
-    def passthrough_chunks(self) -> list[bytes]:
-        return list(self.raw_chunks)
+    def passthrough_chunks(self) -> Iterator[bytes]:
+        self._raw_stream.seek(0)
+        while True:
+            chunk = self._raw_stream.read(COMPACT_STREAM_REPLAY_CHUNK_BYTES)
+            if not chunk:
+                return
+            yield chunk
 
     def synthetic_chunks(self) -> list[bytes]:
         summary = self.summary_text()
@@ -232,6 +352,49 @@ class _CodexCompactionStreamAdapter:
             _sse_event("response.output_item.done", output_payload),
             _sse_event("response.completed", completed_payload),
         ]
+
+    def diagnostics(self) -> dict[str, int | bool]:
+        return {
+            "raw_bytes": self._raw_bytes,
+            "summary_bytes": max(self._delta_bytes, self._item_bytes),
+            "raw_spooled": self._raw_bytes > self._memory_limit_bytes,
+            "summary_spooled": max(self._delta_bytes, self._item_bytes)
+            > self._memory_limit_bytes,
+        }
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._raw_stream.close()
+        self._delta_stream.close()
+        self._item_stream.close()
+
+    def _append_summary_text(
+        self,
+        stream,
+        text: str,
+        *,
+        current_bytes: int,
+        item_separator: bool,
+    ) -> None:
+        payload = (("\n\n" if item_separator else "") + text).encode("utf-8")
+        if current_bytes + len(payload) > self._max_summary_bytes:
+            raise TransferServiceError(
+                502,
+                f"compact summary exceeds {self._max_summary_bytes} bytes",
+                code="compact_summary_too_large",
+            )
+        stream.write(payload)
+
+    @staticmethod
+    def _read_text(stream) -> str:
+        position = stream.tell()
+        stream.seek(0)
+        try:
+            return stream.read().decode("utf-8", errors="replace")
+        finally:
+            stream.seek(position)
 
 
 def _content_type_header(response: ClientResponse) -> str:
@@ -399,6 +562,7 @@ class TransferService:
         self._runtime_dirty = False
         self._runtime_lock = asyncio.Lock()
         self._runtime_start_task: asyncio.Task[None] | None = None
+        self._runtime_start_generation: int | None = None
         self._runtime_generation = 0
         self.load_config()
         self.apply_env_config()
@@ -419,6 +583,7 @@ class TransferService:
             self._runtime_generation += 1
             start_task = self._runtime_start_task
             self._runtime_start_task = None
+            self._runtime_start_generation = None
         if start_task is not None and not start_task.done():
             start_task.cancel()
             await asyncio.gather(start_task, return_exceptions=True)
@@ -444,27 +609,47 @@ class TransferService:
             raise TransferServiceError(503, f"LiteLLM 网关启动失败: {exc}", code="litellm_start_failed") from exc
 
     async def _ensure_runtime_singleflight(self) -> None:
-        async with self._runtime_lock:
-            if self.runtime.is_running and not self._runtime_dirty:
-                return
-            generation = self._runtime_generation
-            task = self._runtime_start_task
-            if task is None or task.done():
-                task = asyncio.create_task(self._start_runtime_generation(generation))
-                self._runtime_start_task = task
-        await task
+        while True:
+            async with self._runtime_lock:
+                if not self.config.enabled or not self.config.configured:
+                    return
+                if self.runtime.is_running and not self._runtime_dirty:
+                    return
+                generation = self._runtime_generation
+                task = self._runtime_start_task
+                task_generation = self._runtime_start_generation
+                if task is None or task.done():
+                    config_snapshot = copy.deepcopy(self.config)
+                    task = asyncio.create_task(self._start_runtime_generation(generation, config_snapshot))
+                    self._runtime_start_task = task
+                    self._runtime_start_generation = generation
+                    task_generation = generation
+            try:
+                await task
+            except Exception:
+                async with self._runtime_lock:
+                    stale_generation = task_generation != self._runtime_generation
+                if stale_generation:
+                    continue
+                raise
 
-    async def _start_runtime_generation(self, generation: int) -> None:
+    async def _start_runtime_generation(self, generation: int, config: LiteLLMTransferConfig) -> None:
+        stale_generation = False
         try:
-            await self.runtime.ensure_started(self.config)
+            await self.runtime.ensure_started(config)
             async with self._runtime_lock:
                 if generation == self._runtime_generation:
                     self._runtime_dirty = False
                     self.last_error = ""
+                else:
+                    stale_generation = True
+            if stale_generation:
+                await self.runtime.close()
         finally:
             async with self._runtime_lock:
                 if self._runtime_start_task is asyncio.current_task():
                     self._runtime_start_task = None
+                    self._runtime_start_generation = None
 
     def load_config(self) -> None:
         self.config = load_litellm_transfer_config(self.config_path)
@@ -756,6 +941,8 @@ class TransferService:
                 yield f'event: error\ndata: {json.dumps({"error": {"message": str(exc), "code": "stream_error"}}, ensure_ascii=False)}\n\n'.encode("utf-8")
             finally:
                 response.release()
+                if compaction_adapter is not None:
+                    compaction_adapter.close()
                 if failed:
                     self._record_failure(method, f"{traffic_endpoint} (stream)", model, bytes_in, total_out, start_time, self.last_error)
                 else:

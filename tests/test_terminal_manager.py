@@ -2,6 +2,8 @@ import logging
 import threading
 import time
 
+import pytest
+
 
 def test_terminal_cleanup_does_not_warn_for_short_background_cleanup(monkeypatch, caplog):
     import bot.web.terminal_manager as terminal_manager
@@ -73,3 +75,103 @@ def test_pipe_line_ending_normalizer_preserves_carriage_return_updates():
 
     assert output == b"\r\x1b[K| scanning\r\x1b[K* done\r\n"
     assert previous_cr is False
+
+
+@pytest.mark.asyncio
+async def test_terminal_output_pump_drops_old_output_and_emits_gap_without_blocking():
+    from bot.web.terminal_manager import (
+        TERMINAL_OUTPUT_GAP,
+        _TerminalOutputPump,
+    )
+
+    class BurstProcess:
+        pid = 9
+
+        def read(self, timeout=20):
+            return b""
+
+    pump = _TerminalOutputPump(BurstProcess(), max_queue_bytes=10)
+
+    pump._put(b"12345678")
+    pump._put(b"abcdefgh")
+
+    assert pump.queue_state.queued_bytes <= 10
+    assert pump.queue_state.dropped_bytes == 8
+    assert await pump.read() is TERMINAL_OUTPUT_GAP
+    assert await pump.read() == b"abcdefgh"
+
+
+@pytest.mark.asyncio
+async def test_slow_terminal_client_gets_gap_then_eof_without_affecting_peer():
+    from bot.web.terminal_manager import (
+        TERMINAL_CLIENT_EOF,
+        TERMINAL_GAP_NOTICE,
+        TerminalClientQueue,
+    )
+
+    slow = TerminalClientQueue(soft_max_bytes=8, hard_max_bytes=12)
+    healthy = TerminalClientQueue(soft_max_bytes=8, hard_max_bytes=64)
+
+    assert slow.put_output(b"12345678") is True
+    assert healthy.put_output(b"12345678") is True
+    assert slow.put_output(b"abcdefgh") is False
+    assert healthy.put_output(b"abcdefgh") is True
+
+    assert await slow.get() == TERMINAL_GAP_NOTICE
+    assert await slow.get() is TERMINAL_CLIENT_EOF
+    assert await healthy.get() == b"12345678abcdefgh"
+
+
+@pytest.mark.asyncio
+async def test_terminal_client_preserves_normal_output_before_close_eof():
+    from bot.web.terminal_manager import TERMINAL_CLIENT_EOF, TerminalClientQueue
+
+    client = TerminalClientQueue(soft_max_bytes=8, hard_max_bytes=64)
+    client.put_output(b"pending")
+    client.put_eof()
+
+    assert await client.get() == b"pending"
+    assert await client.get() is TERMINAL_CLIENT_EOF
+
+
+@pytest.mark.asyncio
+async def test_attach_from_expired_sequence_reports_reset_and_replays_tail():
+    from bot.web.terminal_manager import (
+        TERMINAL_CLIENT_EOF,
+        TERMINAL_GAP_NOTICE,
+        ManagedTerminalSession,
+        TerminalChunk,
+        TerminalSessionManager,
+    )
+
+    class AliveProcess:
+        is_pty = True
+
+        def isalive(self):
+            return True
+
+    manager = TerminalSessionManager()
+    session = ManagedTerminalSession(owner_key="1:main", process=AliveProcess())
+    session.next_seq = 5
+    session.replay.extend(
+        [
+            TerminalChunk(seq=3, data=b"three"),
+            TerminalChunk(seq=4, data=b"four"),
+        ]
+    )
+    session.replay_bytes = 9
+    manager._sessions["1:main"] = session
+
+    client, snapshot = await manager.attach(1, "main", from_seq=1)
+
+    assert snapshot["reset_required"] is True
+    assert snapshot["earliest_seq"] == 3
+    assert snapshot["gap_from"] == 2
+    assert snapshot["gap_to"] == 2
+    assert await client.get() == TERMINAL_GAP_NOTICE
+    assert await client.get() == b"threefour"
+
+    client.put_output(b"pending")
+    await manager.detach(1, "main", client)
+    assert client.queued_bytes == 0
+    assert await client.get() is TERMINAL_CLIENT_EOF
