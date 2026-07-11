@@ -55,7 +55,7 @@ function rewriteSvgIds(result: MermaidRenderResult, diagramId: string): MermaidR
   if (ids.length === 0) return result;
   const replacements = new Map(ids.map((id, index) => [id, index === 0 ? diagramId : `${diagramId}-${index}`]));
   let svg = result.svg;
-  for (const [source, target] of replacements) {
+  for (const [source, target] of [...replacements].sort(([left], [right]) => right.length - left.length)) {
     svg = svg.split(`#${source}`).join(`#${target}`);
   }
   svg = svg.replace(/\bid=(['"])([^'"]+)\1/g, (match, quote: string, id: string) => {

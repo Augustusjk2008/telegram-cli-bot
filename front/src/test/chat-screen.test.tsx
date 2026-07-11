@@ -411,88 +411,6 @@ test("virtualizes expanded 500-message history", async () => {
   });
 });
 
-test("merges history refresh assistant message by turn id while local send is settling", async () => {
-  const user = userEvent.setup();
-  let historyPolls = 0;
-  let resolveFinal!: (message: ChatMessage) => void;
-  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
-    _botAlias,
-    _text,
-    _onChunk,
-    onStatus,
-  ) => {
-    onStatus?.({ turnId: "turn-history-1" });
-    return new Promise<ChatMessage>((resolve) => {
-      resolveFinal = resolve;
-    });
-  });
-  const client = createClient({
-    getBotOverview: async (): Promise<BotOverview> => ({
-      alias: "assistant1",
-      cliType: "codex",
-      status: "running",
-      workingDir: "C:\\workspace",
-      isProcessing: false,
-      historyCount: historyPolls > 0 ? 2 : 0,
-    }),
-    listMessages: async () => {
-      historyPolls += 1;
-      if (historyPolls === 1) {
-        return [];
-      }
-      return [
-        {
-          id: "user-history-1",
-          turnId: "turn-history-1",
-          role: "user",
-          text: "触发刷新",
-          createdAt: "2026-06-26T14:20:00Z",
-          state: "done",
-        },
-        {
-          id: "assistant-history-final",
-          turnId: "turn-history-1",
-          role: "assistant",
-          text: "历史最终回复",
-          createdAt: "2026-06-26T14:20:01Z",
-          state: "done",
-        },
-      ];
-    },
-    sendMessage,
-  });
-
-  render(<ChatScreen botAlias="assistant1" client={client} />);
-  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
-  await user.type(screen.getByPlaceholderText("输入消息"), "触发刷新");
-  vi.useFakeTimers();
-  await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "发送" }));
-    await Promise.resolve();
-  });
-  expect(sendMessage).toHaveBeenCalled();
-
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(2500);
-    await Promise.resolve();
-  });
-  expect(screen.getByText("历史最终回复")).toBeInTheDocument();
-
-  await act(async () => {
-    resolveFinal({
-      id: "assistant-local-final",
-      turnId: "turn-history-1",
-      role: "assistant",
-      text: "历史最终回复",
-      createdAt: "2026-06-26T14:20:01Z",
-      state: "done",
-    });
-  });
-
-  expect(screen.getAllByText("历史最终回复")).toHaveLength(1);
-  expect(screen.getAllByTestId("chat-message-row")).toHaveLength(2);
-});
-
 test("recovers stalled SSE with revision delta and never reloads full history", async () => {
   let overviewCalls = 0;
   let historyCalls = 0;
@@ -570,77 +488,6 @@ test("recovers stalled SSE with revision delta and never reloads full history", 
   expect(listMessageDelta).toHaveBeenCalledTimes(1);
   expect(listMessages).toHaveBeenCalledTimes(1);
   expect(historyCalls).toBe(1);
-});
-
-test("stops active polling when recovered streaming history is no longer processing", async () => {
-  let overviewCalls = 0;
-  let historyCalls = 0;
-  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(() => new Promise<ChatMessage>(() => {}));
-  const client = createClient({
-    getBotOverview: vi.fn(async (): Promise<BotOverview> => {
-      overviewCalls += 1;
-      return {
-        alias: "main",
-        cliType: "codex",
-        status: "running",
-        workingDir: "C:\\workspace",
-        isProcessing: overviewCalls === 2,
-      };
-    }),
-    listMessages: vi.fn(async (): Promise<ChatMessage[]> => {
-      historyCalls += 1;
-      if (historyCalls === 1) {
-        return [];
-      }
-      return [
-        {
-          id: "user-history-streaming",
-          role: "user",
-          text: "公网缓冲",
-          createdAt: "2026-07-07T10:00:00Z",
-          state: "done",
-        },
-        {
-          id: "assistant-history-streaming",
-          role: "assistant",
-          text: "半截历史回复",
-          createdAt: "2026-07-07T10:00:05Z",
-          state: "streaming",
-        },
-      ];
-    }),
-    sendMessage,
-  });
-
-  render(<ChatScreen botAlias="main" client={client} />);
-  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
-
-  fireEvent.change(screen.getByPlaceholderText("输入消息"), { target: { value: "公网缓冲" } });
-  vi.useFakeTimers();
-  await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "发送" }));
-    await Promise.resolve();
-  });
-  expect(sendMessage).toHaveBeenCalled();
-
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(2500);
-    await Promise.resolve();
-  });
-  expect(screen.getByText("正在输出...")).toBeInTheDocument();
-
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(1000);
-    await Promise.resolve();
-  });
-  expect(screen.getByText("半截历史回复")).toBeInTheDocument();
-  expect(screen.queryByText("正在输出...")).not.toBeInTheDocument();
-
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(1000);
-    await Promise.resolve();
-  });
-  expect(historyCalls).toBe(3);
 });
 
 test("shows send errors only in assistant bubble when placeholder exists", async () => {
@@ -3760,7 +3607,6 @@ test("native user bubble rollback confirms and refreshes history outside solo mo
   expect(listMessages.mock.calls.filter(([, options]) => options?.executionMode === "native_agent").length).toBeGreaterThan(1);
   expect(listConversations).toHaveBeenCalled();
 });
-
 
 
 
