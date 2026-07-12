@@ -1452,6 +1452,63 @@ test("renders prompt preset editor in a high level document portal", async () =>
   expect(backdrop).toHaveClass("z-[1000]");
 });
 
+test("places CLI model and reasoning controls beside attachments in the composer", async () => {
+  const user = userEvent.setup();
+  let payload: CliParamsPayload = {
+    cliType: "codex",
+    params: { model: "gpt-5.4", reasoning_effort: "xhigh" },
+    defaults: { model: "gpt-5.4", reasoning_effort: "xhigh" },
+    schema: {
+      model: {
+        type: "string",
+        description: "模型选择",
+        enum: ["gpt-5.4", "gpt-5.5"],
+      },
+      reasoning_effort: {
+        type: "string",
+        description: "思考深度",
+        enum: ["medium", "xhigh", "max", "ultra"],
+      },
+    },
+  };
+  const updateCliParam = vi.fn<WebBotClient["updateCliParam"]>(async (_alias, key, value) => {
+    payload = { ...payload, params: { ...payload.params, [key]: value } };
+    return payload;
+  });
+  const client = createClient({
+    getCliParams: async () => payload,
+    updateCliParam,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  const composer = await screen.findByTestId("chat-composer-root");
+  const attachment = within(composer).getByLabelText("上传附件");
+  const model = await within(composer).findByLabelText("模型");
+  const reasoning = within(composer).getByLabelText("思考深度");
+  const presets = within(composer).getByRole("button", { name: "打开提示词预设" });
+  const send = within(composer).getByRole("button", { name: "发送" });
+  const appearsBefore = (left: Element, right: Element) => (
+    Boolean(left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING)
+  );
+
+  expect(within(screen.getByTestId("chat-action-bar")).queryByLabelText("模型")).not.toBeInTheDocument();
+  expect(appearsBefore(attachment, model)).toBe(true);
+  expect(appearsBefore(model, reasoning)).toBe(true);
+  expect(appearsBefore(reasoning, presets)).toBe(true);
+  expect(appearsBefore(presets, send)).toBe(true);
+  expect(presets.parentElement).toBe(send.parentElement);
+  expect(presets.parentElement).toHaveClass("ml-auto");
+  expect(model).toHaveClass("border-0", "bg-transparent");
+  expect(reasoning).toHaveClass("border-0", "bg-transparent");
+
+  await user.selectOptions(model, "gpt-5.5");
+  await waitFor(() => expect(updateCliParam).toHaveBeenCalledWith("main", "model", "gpt-5.5", "codex"));
+  await waitFor(() => expect(reasoning).toBeEnabled());
+  await user.selectOptions(reasoning, "ultra");
+  await waitFor(() => expect(updateCliParam).toHaveBeenCalledWith("main", "reasoning_effort", "ultra", "codex"));
+});
+
 
 
 
@@ -3289,7 +3346,7 @@ test("native agent model select is enabled and saves bot model", async () => {
   await waitFor(() => {
     expect(within(modelSelect).getByRole("option", { name: "jojocode_max / gpt-5.4" })).toBeInTheDocument();
   });
-  const reasoningSelect = screen.getByLabelText("推理强度");
+  const reasoningSelect = within(screen.getByTestId("chat-composer-root")).getByLabelText("思考深度");
   expect(reasoningSelect).toBeEnabled();
 
   await user.selectOptions(modelSelect, "jojocode_max/gpt-5.5");
@@ -3673,9 +3730,6 @@ test("native user bubble rollback confirms and refreshes history outside solo mo
   expect(listMessages.mock.calls.filter(([, options]) => options?.executionMode === "native_agent").length).toBeGreaterThan(1);
   expect(listConversations).toHaveBeenCalled();
 });
-
-
-
 
 
 

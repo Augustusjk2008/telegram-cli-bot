@@ -3,6 +3,12 @@ import { createPortal } from "react-dom";
 import { ChevronDown, LoaderCircle, Paperclip, Plus, Send, Settings, Trash2, X } from "lucide-react";
 import type { AgentMention, AgentSummary, PromptPreset } from "../services/types";
 
+export type ChatComposerModelOption = {
+  value: string;
+  label: string;
+  title?: string;
+};
+
 type ComposerAttachment = {
   id: string;
   filename: string;
@@ -21,6 +27,14 @@ type Props = {
   pulse?: boolean;
   uploadingAttachments?: boolean;
   placeholder?: string;
+  modelOptions?: ChatComposerModelOption[];
+  selectedModel?: string;
+  modelDisabled?: boolean;
+  onModelChange?: (model: string) => void;
+  reasoningEffortOptions?: string[];
+  selectedReasoningEffort?: string;
+  reasoningEffortDisabled?: boolean;
+  onReasoningEffortChange?: (effort: string) => void;
   globalPromptPresets?: PromptPreset[];
   botPromptPresets?: PromptPreset[];
   promptPresets?: PromptPreset[];
@@ -77,6 +91,14 @@ export function ChatComposer({
   pulse = false,
   uploadingAttachments = false,
   placeholder = "输入消息",
+  modelOptions = [],
+  selectedModel = "",
+  modelDisabled = false,
+  onModelChange,
+  reasoningEffortOptions = [],
+  selectedReasoningEffort = "",
+  reasoningEffortDisabled = false,
+  onReasoningEffortChange,
   globalPromptPresets,
   botPromptPresets,
   promptPresets = [],
@@ -90,11 +112,10 @@ export function ChatComposer({
     : "chat-composer-delight border-t border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-3 py-3";
   const formClassName = "relative";
   const inputBarClassName = compact
-    ? "relative flex min-h-10 items-center rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] shadow-[var(--shadow-soft)] focus-within:border-[var(--workbench-hover-border)]"
-    : "relative flex min-h-11 items-center rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] shadow-[var(--shadow-soft)] focus-within:border-[var(--workbench-hover-border)]";
+    ? "relative flex min-w-0 flex-col rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-1 shadow-[var(--shadow-soft)] focus-within:border-[var(--workbench-hover-border)]"
+    : "relative flex min-w-0 flex-col rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-1.5 shadow-[var(--shadow-soft)] focus-within:border-[var(--workbench-hover-border)]";
   const inputDisabled = disabled || uploadingAttachments;
   const [message, setMessage] = useState("");
-  const [isMultilineComposer, setIsMultilineComposer] = useState(false);
   const [presetMenuOpen, setPresetMenuOpen] = useState(false);
   const [presetEditorOpen, setPresetEditorOpen] = useState(false);
   const [editingPresetScope, setEditingPresetScope] = useState<PresetScope>("bot");
@@ -128,19 +149,16 @@ export function ChatComposer({
     }).slice(0, 8);
   }, [clusterAgents, clusterMode, mentionQuery]);
   const showPromptPresetControls = showAnyPromptPresets || canManagePromptPresets;
-  const collapsedTextareaPaddingClassName = `pb-2.5 pl-12 pt-1.5 ${showPromptPresetControls ? "pr-20" : "pr-12"}`;
-  const composerTextareaBaseClassName = "max-h-72 w-full resize-none border border-transparent bg-transparent leading-5 text-[var(--text)] outline-none placeholder:text-[var(--muted)] disabled:opacity-60";
-  const inputTextareaClassName = `${composerTextareaBaseClassName} ${isMultilineComposer ? "px-3 pb-10 pt-2.5" : collapsedTextareaPaddingClassName}`;
-  const measureTextareaClassName = `${composerTextareaBaseClassName} pointer-events-none absolute inset-x-0 top-0 h-auto overflow-hidden opacity-0 ${collapsedTextareaPaddingClassName}`;
-  const attachmentButtonClassName = isMultilineComposer
-    ? "absolute bottom-1.5 left-2 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--accent)]"
-    : "absolute left-2 top-1/2 inline-flex h-8 w-8 shrink-0 -translate-y-1/2 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--accent)]";
-  const actionGroupClassName = isMultilineComposer
-    ? "absolute bottom-1.5 right-2 flex items-center gap-1"
-    : "absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-1";
+  const selectedModelOption = modelOptions.find((model) => model.value === selectedModel);
+  const composerTextareaBaseClassName = "max-h-72 min-h-8 w-full resize-none border border-transparent bg-transparent px-1.5 py-1.5 leading-5 text-[var(--text)] outline-none placeholder:text-[var(--muted)] disabled:opacity-60";
+  const inputTextareaClassName = composerTextareaBaseClassName;
+  const measureTextareaClassName = `${composerTextareaBaseClassName} pointer-events-none absolute inset-0 h-auto overflow-hidden opacity-0`;
+  const attachmentButtonClassName = "relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--accent)]";
+  const actionGroupClassName = "ml-auto flex shrink-0 items-center gap-1";
   const actionButtonClassName = "inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50";
-  const presetMenuClassName = `absolute bottom-full z-40 mb-2 w-64 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-1 shadow-[var(--shadow-card)] ${isMultilineComposer ? "right-2" : "right-10"}`;
-  const mentionMenuClassName = `absolute bottom-full z-30 mb-2 max-h-56 overflow-y-auto rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-1 shadow-[var(--shadow-card)] ${isMultilineComposer ? "left-3 right-3" : "left-10 right-10"}`;
+  const compactSelectClassName = "h-8 w-full appearance-none rounded-md border-0 bg-transparent py-0 pl-1.5 pr-4 text-xs font-medium text-[var(--text)] hover:bg-[var(--workbench-hover-bg)] focus:outline-none focus:ring-2 focus:ring-[var(--workbench-focus-ring)] disabled:cursor-not-allowed disabled:opacity-50";
+  const presetMenuClassName = "absolute bottom-full right-10 z-40 mb-2 w-64 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-1 shadow-[var(--shadow-card)]";
+  const mentionMenuClassName = "absolute bottom-full left-2 right-2 z-30 mb-2 max-h-56 overflow-y-auto rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-1 shadow-[var(--shadow-card)]";
 
   function updateMessage(next: string, cursor: number) {
     setMessage(next);
@@ -161,19 +179,13 @@ export function ChatComposer({
     const measureTextarea = measureTextareaRef.current;
     if (measureTextarea) {
       measureTextarea.style.height = "auto";
-      const computedStyle = window.getComputedStyle(measureTextarea);
-      const lineHeight = Number.parseFloat(computedStyle.lineHeight) || 20;
-      const paddingTop = Number.parseFloat(computedStyle.paddingTop) || 0;
-      const paddingBottom = Number.parseFloat(computedStyle.paddingBottom) || 0;
-      const singleLineHeight = Math.ceil(lineHeight + paddingTop + paddingBottom);
-      const shouldUseMultilineLayout = measureTextarea.scrollHeight > singleLineHeight + 2;
-      setIsMultilineComposer((current) => (current === shouldUseMultilineLayout ? current : shouldUseMultilineLayout));
     }
     textarea.style.height = "auto";
-    const nextHeight = Math.min(textarea.scrollHeight, 288);
+    const measuredHeight = measureTextarea?.scrollHeight || textarea.scrollHeight;
+    const nextHeight = Math.max(32, Math.min(measuredHeight, 288));
     textarea.style.height = `${nextHeight}px`;
-    textarea.style.overflowY = textarea.scrollHeight > 288 ? "auto" : "hidden";
-  }, [inputDisabled, isMultilineComposer, message, showPromptPresetControls]);
+    textarea.style.overflowY = measuredHeight > 288 ? "auto" : "hidden";
+  }, [inputDisabled, message]);
 
   function focusTextarea(cursor: number) {
     requestAnimationFrame(() => {
@@ -493,98 +505,138 @@ export function ChatComposer({
         }}
       >
         <div className={inputBarClassName}>
-          <textarea
-            ref={measureTextareaRef}
-            aria-hidden="true"
-            tabIndex={-1}
-            readOnly
-            value={message || " "}
-            rows={1}
-            className={measureTextareaClassName}
-          />
-          <label
-            className={attachmentButtonClassName}
-            title="上传附件"
-          >
-            <Plus className="h-4 w-4" />
-            <span className="sr-only">上传附件</span>
-            <input
-              aria-label="上传附件"
-              data-testid="chat-attachment-input"
-              type="file"
-              multiple
-              disabled={inputDisabled}
-              className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
-              onChange={(event) => {
-                const nextFiles = Array.from(event.currentTarget.files || []);
-                if (nextFiles.length > 0) {
-                  onAttachFiles(nextFiles);
-                }
-                event.currentTarget.value = "";
-              }}
+          <div className="relative min-h-8 w-full min-w-0">
+            <textarea
+              ref={measureTextareaRef}
+              aria-hidden="true"
+              tabIndex={-1}
+              readOnly
+              value={message || " "}
+              rows={1}
+              className={measureTextareaClassName}
             />
-          </label>
-          <textarea
-            ref={textareaRef}
-            name="message"
-            value={message}
-            placeholder={placeholder}
-            rows={1}
-            disabled={inputDisabled}
-            onChange={(event) => updateMessage(event.currentTarget.value, event.currentTarget.selectionStart)}
-            onSelect={(event) => {
-              const target = event.currentTarget;
-              setMentionQuery(clusterMode ? getMentionQuery(target.value, target.selectionStart) : null);
-            }}
-            onKeyDown={(event) => {
-              if (mentionOptions.length > 0 && (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey))) {
+            <textarea
+              ref={textareaRef}
+              name="message"
+              value={message}
+              placeholder={placeholder}
+              rows={1}
+              disabled={inputDisabled}
+              onChange={(event) => updateMessage(event.currentTarget.value, event.currentTarget.selectionStart)}
+              onSelect={(event) => {
+                const target = event.currentTarget;
+                setMentionQuery(clusterMode ? getMentionQuery(target.value, target.selectionStart) : null);
+              }}
+              onKeyDown={(event) => {
+                if (mentionOptions.length > 0 && (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey))) {
+                  event.preventDefault();
+                  insertMention(mentionOptions[0]);
+                  return;
+                }
+                if (event.key !== "Enter" || !event.shiftKey || event.nativeEvent.isComposing) {
+                  return;
+                }
                 event.preventDefault();
-                insertMention(mentionOptions[0]);
-                return;
-              }
-              if (event.key !== "Enter" || !event.shiftKey || event.nativeEvent.isComposing) {
-                return;
-              }
-              event.preventDefault();
-              const form = event.currentTarget.form;
-              if (!form) {
-                return;
-              }
-              if (typeof form.requestSubmit === "function") {
-                form.requestSubmit();
-                return;
-              }
-              form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-            }}
-            className={inputTextareaClassName}
-          />
-          <div className={actionGroupClassName}>
-            {showPromptPresetControls ? (
-              <button
-                type="button"
-                aria-label="打开提示词预设"
-                aria-expanded={presetMenuOpen}
-                title="提示词预设"
+                const form = event.currentTarget.form;
+                if (!form) {
+                  return;
+                }
+                if (typeof form.requestSubmit === "function") {
+                  form.requestSubmit();
+                  return;
+                }
+                form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+              }}
+              className={inputTextareaClassName}
+            />
+          </div>
+          <div data-testid="chat-composer-toolbar" className="flex min-w-0 items-center gap-0.5">
+            <label
+              className={attachmentButtonClassName}
+              title="上传附件"
+            >
+              <Plus className="h-4 w-4" />
+              <span className="sr-only">上传附件</span>
+              <input
+                aria-label="上传附件"
+                data-testid="chat-attachment-input"
+                type="file"
+                multiple
                 disabled={inputDisabled}
-                onClick={() => setPresetMenuOpen((value) => !value)}
+                className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
+                onChange={(event) => {
+                  const nextFiles = Array.from(event.currentTarget.files || []);
+                  if (nextFiles.length > 0) {
+                    onAttachFiles(nextFiles);
+                  }
+                  event.currentTarget.value = "";
+                }}
+              />
+            </label>
+            {modelOptions.length > 0 ? (
+              <div className="relative min-w-[4.25rem] max-w-[8.5rem] flex-[0_1_8.5rem]">
+                <select
+                  aria-label="模型"
+                  title={selectedModelOption?.title || selectedModelOption?.label || "模型"}
+                  value={selectedModel}
+                  disabled={inputDisabled || modelDisabled || !onModelChange}
+                  onChange={(event) => onModelChange?.(event.target.value)}
+                  className={compactSelectClassName}
+                >
+                  {modelOptions.map((model) => (
+                    <option key={model.value} value={model.value} title={model.title}>
+                      {model.label}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-0.5 top-1/2 h-3 w-3 -translate-y-1/2 text-[var(--muted)]" />
+              </div>
+            ) : null}
+            {reasoningEffortOptions.length > 0 ? (
+              <div className="relative min-w-[3.75rem] max-w-[6.5rem] flex-[0_1_6.5rem]">
+                <select
+                  aria-label="思考深度"
+                  title={selectedReasoningEffort || "思考深度"}
+                  value={selectedReasoningEffort}
+                  disabled={inputDisabled || reasoningEffortDisabled || !onReasoningEffortChange}
+                  onChange={(event) => onReasoningEffortChange?.(event.target.value)}
+                  className={compactSelectClassName}
+                >
+                  {reasoningEffortOptions.map((effort) => (
+                    <option key={effort} value={effort}>{effort}</option>
+                  ))}
+                </select>
+                <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-0.5 top-1/2 h-3 w-3 -translate-y-1/2 text-[var(--muted)]" />
+              </div>
+            ) : null}
+            <div className={actionGroupClassName}>
+              {showPromptPresetControls ? (
+                <button
+                  type="button"
+                  aria-label="打开提示词预设"
+                  aria-expanded={presetMenuOpen}
+                  title="提示词预设"
+                  disabled={inputDisabled}
+                  onClick={() => setPresetMenuOpen((value) => !value)}
+                  className={actionButtonClassName}
+                >
+                  <ChevronDown className="h-4 w-4" />
+                </button>
+              ) : null}
+              <button
+                type="submit"
+                aria-label="发送"
+                title={uploadingAttachments ? "上传中..." : "发送"}
+                disabled={inputDisabled}
                 className={actionButtonClassName}
               >
-                <ChevronDown className="h-4 w-4" />
+                {uploadingAttachments ? (
+                  <LoaderCircle className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Send className="h-4 w-4" />
+                )}
               </button>
-            ) : null}
-            <button
-              type="submit"
-              aria-label="发送"
-              title={uploadingAttachments ? "上传中..." : "发送"}
-              disabled={inputDisabled}
-              className={actionButtonClassName}
-            >
-              {uploadingAttachments ? (
-                <LoaderCircle className="h-4 w-4 animate-spin" />
-              ) : (
-                <Send className="h-4 w-4" />
-              )}
-            </button>
+            </div>
           </div>
           {presetMenuOpen ? (
             <div

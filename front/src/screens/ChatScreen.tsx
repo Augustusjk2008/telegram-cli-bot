@@ -16,8 +16,8 @@ import {
 import { createPortal } from "react-dom";
 import { LoaderCircle, Maximize2, Minimize2, Paperclip, RotateCcw, Trash2 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
-import { ChatActionBar, type ChatModelOption } from "../components/ChatActionBar";
-import { ChatComposer } from "../components/ChatComposer";
+import { ChatActionBar } from "../components/ChatActionBar";
+import { ChatComposer, type ChatComposerModelOption } from "../components/ChatComposer";
 import { ChatFinalAnswerActions } from "../components/ChatFinalAnswerActions";
 import { ChatMessageMeta } from "../components/ChatMessageMeta";
 import { ChatMarkdownMessage } from "../components/ChatMarkdownMessage";
@@ -180,7 +180,7 @@ const USER_SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", 
 const IMMERSIVE_BUTTON_SIZE_PX = 48;
 const IMMERSIVE_BUTTON_EDGE_GUTTER_PX = 8;
 const IMMERSIVE_BUTTON_DEFAULT_RIGHT_PX = 16;
-const IMMERSIVE_BUTTON_DEFAULT_BOTTOM_PX = 80;
+const IMMERSIVE_BUTTON_DEFAULT_BOTTOM_PX = 320;
 const IMMERSIVE_BUTTON_DRAG_CLICK_THRESHOLD_PX = 4;
 
 type FloatingButtonPosition = {
@@ -1710,9 +1710,16 @@ function defaultImmersiveButtonPosition(container: HTMLElement | null): Floating
 
 function readInitialImmersiveButtonPosition(storageKey: string, container: HTMLElement | null) {
   const storedPosition = readStoredImmersiveButtonPosition(storageKey);
-  return storedPosition
-    ? clampFloatingButtonPosition(storedPosition, container)
-    : defaultImmersiveButtonPosition(container);
+  const defaultPosition = defaultImmersiveButtonPosition(container);
+  if (!storedPosition) {
+    return defaultPosition;
+  }
+  const clampedPosition = clampFloatingButtonPosition(storedPosition, container);
+  const storedAtObstructiveBottomRight = (
+    clampedPosition.x >= defaultPosition.x - IMMERSIVE_BUTTON_EDGE_GUTTER_PX
+    && clampedPosition.y > defaultPosition.y + IMMERSIVE_BUTTON_SIZE_PX
+  );
+  return storedAtObstructiveBottomRight ? defaultPosition : clampedPosition;
 }
 
 type ImmersiveToggleButtonProps = {
@@ -4135,24 +4142,29 @@ export function ChatScreen({
   }
 
   async function handleReasoningEffortChange(nextReasoningEffort: string) {
-    if (!nativeExecutionMode || !nativeSelectedModel || nextReasoningEffort === nativeSelectedReasoningEffort) {
+    if (!nextReasoningEffort || nextReasoningEffort === selectedReasoningEffort) {
       return;
     }
 
     setModelSaving(true);
     setError("");
     try {
-      const next = await client.updateNativeAgentModel(botAlias, nativeSelectedModel, { reasoningEffort: nextReasoningEffort });
-      setNativeAgentModels({
-        items: next.items,
-        selectedModel: next.selectedModel,
-        selectedReasoningEffort: next.selectedReasoningEffort,
-      });
-      if (next.bot) {
-        const current = botOverviewRef.current;
-        const overview = (current ? { ...current, ...next.bot } : { ...next.bot }) as BotOverview;
-        botOverviewRef.current = overview;
-        setBotOverview(overview);
+      if (nativeExecutionMode && nativeSelectedModel) {
+        const next = await client.updateNativeAgentModel(botAlias, nativeSelectedModel, { reasoningEffort: nextReasoningEffort });
+        setNativeAgentModels({
+          items: next.items,
+          selectedModel: next.selectedModel,
+          selectedReasoningEffort: next.selectedReasoningEffort,
+        });
+        if (next.bot) {
+          const current = botOverviewRef.current;
+          const overview = (current ? { ...current, ...next.bot } : { ...next.bot }) as BotOverview;
+          botOverviewRef.current = overview;
+          setBotOverview(overview);
+        }
+      } else if (cliParams) {
+        const next = await client.updateCliParam(botAlias, cliReasoningParamKey, nextReasoningEffort, cliParams.cliType);
+        setCliParams(next);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "推理强度切换失败");
@@ -4322,7 +4334,21 @@ export function ChatScreen({
   const selectedModel = nativeExecutionMode
     ? nativeSelectedModel
     : toModelOptionValue(cliParams?.params.model, cliModelOptions);
-  const visibleModelOptions = useMemo<ChatModelOption[]>(() => {
+  const cliReasoningParamKey = cliParams?.cliType === "claude" ? "effort" : "reasoning_effort";
+  const cliReasoningEffortOptions = cliParams?.schema[cliReasoningParamKey]?.enum ?? [];
+  const cliSelectedReasoningEffort = String(
+    cliParams?.params[cliReasoningParamKey]
+      ?? cliParams?.defaults[cliReasoningParamKey]
+      ?? cliReasoningEffortOptions[0]
+      ?? "",
+  );
+  const visibleReasoningEffortOptions = nativeExecutionMode
+    ? nativeReasoningEffortOptions
+    : cliReasoningEffortOptions;
+  const selectedReasoningEffort = nativeExecutionMode
+    ? nativeSelectedReasoningEffort
+    : cliSelectedReasoningEffort;
+  const visibleModelOptions = useMemo<ChatComposerModelOption[]>(() => {
     if (nativeExecutionMode) {
       const options = nativeModelOptions.map((model) => ({
         value: model.id,
@@ -4519,14 +4545,6 @@ export function ChatScreen({
     <main ref={chatRootRef} className="relative flex h-full flex-col bg-[var(--workbench-panel-bg)]">
       {showActionBar ? (
         <ChatActionBar
-          visibleModelOptions={visibleModelOptions}
-          selectedModel={selectedModel}
-          modelDisabled={modelSaving || readOnly || visibleModelOptions.length === 0 || (!nativeExecutionMode && !cliParams)}
-          onModelChange={(model) => void handleModelChange(model)}
-          reasoningEffortOptions={nativeReasoningEffortOptions}
-          selectedReasoningEffort={nativeSelectedReasoningEffort}
-          reasoningEffortDisabled={modelSaving || readOnly || !nativeExecutionMode}
-          onReasoningEffortChange={(effort) => void handleReasoningEffortChange(effort)}
           executionMode={effectiveExecutionMode}
           supportedExecutionModes={supportedExecutionModes}
           executionModeDisabled={loading || isStreaming || readOnly}
@@ -4692,6 +4710,14 @@ export function ChatScreen({
           compact={isImmersive || embedded}
           uploadingAttachments={uploadingAttachments}
           placeholder={composerPlaceholder}
+          modelOptions={visibleModelOptions}
+          selectedModel={selectedModel}
+          modelDisabled={modelSaving || readOnly || visibleModelOptions.length === 0 || (!nativeExecutionMode && !cliParams)}
+          onModelChange={(model) => void handleModelChange(model)}
+          reasoningEffortOptions={visibleReasoningEffortOptions}
+          selectedReasoningEffort={selectedReasoningEffort}
+          reasoningEffortDisabled={modelSaving || readOnly || visibleReasoningEffortOptions.length === 0 || (!nativeExecutionMode && !cliParams)}
+          onReasoningEffortChange={(effort) => void handleReasoningEffortChange(effort)}
           globalPromptPresets={botOverview?.globalPromptPresets || []}
           botPromptPresets={botOverview?.promptPresets || []}
           canManagePromptPresets={canManagePromptPresets}
