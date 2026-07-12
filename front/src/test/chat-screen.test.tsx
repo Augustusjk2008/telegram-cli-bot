@@ -1516,6 +1516,7 @@ test("shows cluster task summary after main reply finishes", async () => {
         maxParallelAgents: 2,
         defaultTimeoutSeconds: 600,
         modelTiers: { low: "gpt-low", medium: "gpt-mid", high: "gpt-high" },
+        reasoningEfforts: { low: "", medium: "", high: "" },
       },
       agents: [
         { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true },
@@ -1591,6 +1592,7 @@ test("native agent mode shows cluster entry and sends cluster options", async ()
         maxParallelAgents: 2,
         defaultTimeoutSeconds: 600,
         modelTiers: { low: "gpt-low", medium: "gpt-mid", high: "gpt-high" },
+        reasoningEfforts: { low: "", medium: "", high: "" },
       },
       agents: [
         { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true },
@@ -1648,6 +1650,7 @@ test("native agent @mention sends cluster options", async () => {
         maxParallelAgents: 2,
         defaultTimeoutSeconds: 600,
         modelTiers: { low: "gpt-low", medium: "gpt-mid", high: "gpt-high" },
+        reasoningEfforts: { low: "", medium: "", high: "" },
       },
       agents: [
         { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true },
@@ -3015,6 +3018,7 @@ test("sends native agent message to selected child agent", async () => {
         maxParallelAgents: 2,
         defaultTimeoutSeconds: 600,
         modelTiers: { low: "gpt-low", medium: "gpt-mid", high: "gpt-high" },
+        reasoningEfforts: { low: "", medium: "", high: "" },
       },
       activeAgentId: options?.agentId || "main",
       agents: [
@@ -3078,6 +3082,7 @@ test("native agent plan mode keeps cluster options", async () => {
         maxParallelAgents: 2,
         defaultTimeoutSeconds: 600,
         modelTiers: { low: "gpt-low", medium: "gpt-mid", high: "gpt-high" },
+        reasoningEfforts: { low: "", medium: "", high: "" },
       },
       agents: [
         { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true },
@@ -3155,6 +3160,7 @@ test("execute plan in native cluster keeps cluster options for create and auto-s
         maxParallelAgents: 2,
         defaultTimeoutSeconds: 600,
         modelTiers: { low: "gpt-low", medium: "gpt-mid", high: "gpt-high" },
+        reasoningEfforts: { low: "", medium: "", high: "" },
       },
       agents: [
         { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true },
@@ -3667,7 +3673,6 @@ test("native user bubble rollback confirms and refreshes history outside solo mo
   expect(listMessages.mock.calls.filter(([, options]) => options?.executionMode === "native_agent").length).toBeGreaterThan(1);
   expect(listConversations).toHaveBeenCalled();
 });
-
 
 
 

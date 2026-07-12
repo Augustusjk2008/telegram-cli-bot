@@ -493,11 +493,14 @@ export type AgentInput = {
 
 export type ClusterModelTier = "low" | "medium" | "high";
 
-export type ClusterModelTiers = {
+export type ClusterTierValues = {
   low: string;
   medium: string;
   high: string;
 };
+
+export type ClusterModelTiers = ClusterTierValues;
+export type ClusterReasoningEfforts = ClusterTierValues;
 
 export type BotClusterConfig = {
   enabled: boolean;
@@ -506,6 +509,7 @@ export type BotClusterConfig = {
   maxParallelAgents: number;
   defaultTimeoutSeconds: number;
   modelTiers: ClusterModelTiers;
+  reasoningEfforts: ClusterReasoningEfforts;
 };
 
 export type AgentClusterConfig = {
@@ -544,6 +548,7 @@ export type ClusterAgentStatus = {
 export type ClusterStatus = {
   enabled: boolean;
   modelTiers: ClusterModelTiers;
+  reasoningEfforts: ClusterReasoningEfforts;
   mcp: {
     serverName: string;
     activeCliType: CliType | string;
@@ -620,6 +625,7 @@ export type ClusterConfigUpdateInput = {
   maxParallelAgents?: number;
   defaultTimeoutSeconds?: number;
   modelTiers?: ClusterModelTiers;
+  reasoningEfforts?: ClusterReasoningEfforts;
 };
 
 export type ClusterConfigUpdateResult = {

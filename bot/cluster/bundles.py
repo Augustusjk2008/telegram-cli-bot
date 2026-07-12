@@ -133,6 +133,14 @@ def build_cluster_bundle_schema() -> dict[str, Any]:
                                 "medium": {"type": "string"},
                                 "high": {"type": "string"}
                             }
+                        },
+                        "reasoning_efforts": {
+                            "type": "object",
+                            "properties": {
+                                "low": {"type": "string"},
+                                "medium": {"type": "string"},
+                                "high": {"type": "string"}
+                            }
                         }
                     }
                 },
@@ -150,6 +158,7 @@ def build_cluster_bundle_schema() -> dict[str, Any]:
         "instructions": (
             "只输出 JSON bundle。默认所有 agent 只读。只有用户明确要求并行写代码时，才设置某个 agent 的 cluster.allow_write=true。"
             "不要创建 main agent。agent id 必须小写英文开头。system_prompt 必须说明职责、边界和输出格式。"
+            "cluster.reasoning_efforts 可按 low/medium/high 设置思考深度；留空表示继承主 agent。"
         ),
     }
 

@@ -789,6 +789,7 @@ def get_cluster_status(manager: MultiBotManager, alias: str) -> dict[str, Any]:
     return {
         "enabled": bool(profile.cluster.enabled),
         "model_tiers": dict(profile.cluster.model_tiers),
+        "reasoning_efforts": dict(profile.cluster.reasoning_efforts),
         "mcp": {
             "server_name": CLUSTER_MCP_SERVER_NAME,
             "active_cli_type": active_cli_type,
@@ -2464,9 +2465,14 @@ def build_cluster_cli_params_override(profile: BotProfile, model_tier: str) -> C
     cli_type = normalize_cli_type(profile.cli_type)
     tier = model_tier if model_tier in {"low", "medium", "high"} else "medium"
     model = str(profile.cluster.model_tiers.get(tier) or "").strip()
-    if model:
+    reasoning_effort = str(profile.cluster.reasoning_efforts.get(tier) or "").strip()
+    if model or reasoning_effort:
         params.setdefault(cli_type, {})
+    if model:
         params[cli_type]["model"] = model
+    if reasoning_effort:
+        parameter_name = "reasoning_effort" if cli_type == "codex" else "effort"
+        params[cli_type][parameter_name] = reasoning_effort
     return CliParamsConfig.from_dict(params)
 
 

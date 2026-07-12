@@ -4065,6 +4065,7 @@ export function ChatScreen({
         maxParallelAgents: current.maxParallelAgents,
         defaultTimeoutSeconds: current.defaultTimeoutSeconds,
         modelTiers: { ...current.modelTiers },
+        reasoningEfforts: { ...current.reasoningEfforts },
       });
       setBotOverview((prev) => prev ? { ...prev, cluster: result.cluster } : prev);
       if (!nextEnabled) {

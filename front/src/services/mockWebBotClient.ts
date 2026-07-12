@@ -261,6 +261,7 @@ const DEFAULT_CLUSTER = {
   maxParallelAgents: 2,
   defaultTimeoutSeconds: 600,
   modelTiers: { low: "", medium: "", high: "" },
+  reasoningEfforts: { low: "", medium: "", high: "" },
 };
 const DEFAULT_AGENT_CLUSTER = {
   allowCluster: true,
@@ -1326,6 +1327,7 @@ export class MockWebBotClient implements WebBotClient {
         cluster: {
           ...DEFAULT_CLUSTER,
           modelTiers: { ...DEFAULT_CLUSTER.modelTiers },
+          reasoningEfforts: { ...DEFAULT_CLUSTER.reasoningEfforts },
         },
       },
     ]),
@@ -2418,7 +2420,11 @@ export class MockWebBotClient implements WebBotClient {
         enabled: true,
         isMain: false,
         promptPresets: [],
-        cluster: { ...DEFAULT_CLUSTER, modelTiers: { ...DEFAULT_CLUSTER.modelTiers } },
+        cluster: {
+          ...DEFAULT_CLUSTER,
+          modelTiers: { ...DEFAULT_CLUSTER.modelTiers },
+          reasoningEfforts: { ...DEFAULT_CLUSTER.reasoningEfforts },
+        },
       };
     }
     const workingDir = this.workdirOverrides.get(base.alias) || base.workingDir;
@@ -2445,8 +2451,16 @@ export class MockWebBotClient implements WebBotClient {
       globalPromptPresets: clonePromptPresets(this.globalPromptPresets),
       nativeAgent: this.normalizeNativeAgentConfig(base.nativeAgent, base.nativeAgent),
       cluster: base.cluster
-        ? { ...base.cluster, modelTiers: { ...base.cluster.modelTiers } }
-        : { ...DEFAULT_CLUSTER, modelTiers: { ...DEFAULT_CLUSTER.modelTiers } },
+        ? {
+            ...base.cluster,
+            modelTiers: { ...base.cluster.modelTiers },
+            reasoningEfforts: { ...base.cluster.reasoningEfforts },
+          }
+        : {
+            ...DEFAULT_CLUSTER,
+            modelTiers: { ...DEFAULT_CLUSTER.modelTiers },
+            reasoningEfforts: { ...DEFAULT_CLUSTER.reasoningEfforts },
+          },
     };
   }
 
@@ -3349,6 +3363,9 @@ export class MockWebBotClient implements WebBotClient {
         modelTiers: input.modelTiers
           ? { ...input.modelTiers }
           : { ...(current.cluster?.modelTiers || DEFAULT_CLUSTER.modelTiers) },
+        reasoningEfforts: input.reasoningEfforts
+          ? { ...input.reasoningEfforts }
+          : { ...(current.cluster?.reasoningEfforts || DEFAULT_CLUSTER.reasoningEfforts) },
       },
     });
   }
@@ -3364,6 +3381,7 @@ export class MockWebBotClient implements WebBotClient {
     return {
       enabled: Boolean(cluster.enabled),
       modelTiers: { ...cluster.modelTiers },
+      reasoningEfforts: { ...cluster.reasoningEfforts },
       mcp: {
         serverName: "tcb-cluster",
         activeCliType,
@@ -3445,6 +3463,9 @@ export class MockWebBotClient implements WebBotClient {
       modelTiers: input.modelTiers
         ? { ...input.modelTiers }
         : { ...(current.cluster?.modelTiers || DEFAULT_CLUSTER.modelTiers) },
+      reasoningEfforts: input.reasoningEfforts
+        ? { ...input.reasoningEfforts }
+        : { ...(current.cluster?.reasoningEfforts || DEFAULT_CLUSTER.reasoningEfforts) },
     };
     this.bots.set(botAlias, { ...current, cluster });
     return { cluster, status: await this.getClusterStatus(botAlias) };
@@ -6151,7 +6172,11 @@ export class MockWebBotClient implements WebBotClient {
       supportedExecutionModes: input.supportedExecutionModes || ["cli"],
       defaultExecutionMode: input.defaultExecutionMode || "cli",
       nativeAgent: this.normalizeNativeAgentConfig(input.nativeAgent),
-      cluster: { ...DEFAULT_CLUSTER, modelTiers: { ...DEFAULT_CLUSTER.modelTiers } },
+      cluster: {
+        ...DEFAULT_CLUSTER,
+        modelTiers: { ...DEFAULT_CLUSTER.modelTiers },
+        reasoningEfforts: { ...DEFAULT_CLUSTER.reasoningEfforts },
+      },
     };
     this.bots.set(alias, bot);
     const cliParams = buildMockCliParams(bot.cliType);

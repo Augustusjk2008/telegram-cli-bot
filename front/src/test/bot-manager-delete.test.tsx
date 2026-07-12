@@ -1,6 +1,8 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ComponentProps } from "react";
 import { expect, test, vi } from "vitest";
+import { ClusterModelTiersPanel } from "../components/ClusterModelTiersPanel";
 import { BotListScreen } from "../screens/BotListScreen";
 import { DesktopBotManagerScreen } from "../screens/DesktopBotManagerScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
@@ -97,4 +99,24 @@ test("mock client exposes max and ultra Codex reasoning efforts", async () => {
     "medium",
     "low",
   ]);
+});
+
+test("cluster model tiers configure model and reasoning independently", async () => {
+  const user = userEvent.setup();
+  const onReasoningChange = vi.fn();
+  const props = {
+    value: { low: "fast-model", medium: "", high: "" },
+    reasoningEfforts: { low: "medium", medium: "", high: "" },
+    modelOptions: ["fast-model", "strong-model"],
+    reasoningOptions: ["ultra", "max", "xhigh", "high", "medium", "low"],
+    onChange: vi.fn(),
+    onReasoningChange,
+  } as ComponentProps<typeof ClusterModelTiersPanel>;
+
+  render(<ClusterModelTiersPanel {...props} />);
+
+  expect(screen.getByLabelText("低档模型")).toHaveValue("fast-model");
+  expect(screen.getByLabelText("低档思考深度")).toHaveValue("medium");
+  await user.selectOptions(screen.getByLabelText("低档思考深度"), "ultra");
+  expect(onReasoningChange).toHaveBeenCalledWith({ low: "ultra", medium: "", high: "" });
 });

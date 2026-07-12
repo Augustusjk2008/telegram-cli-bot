@@ -33,6 +33,11 @@ def _model_tiers(value: Any) -> dict[str, str]:
     return {key: str(source.get(key) or "").strip() for key in MODEL_TIER_KEYS}
 
 
+def _reasoning_efforts(value: Any) -> dict[str, str]:
+    source = value if isinstance(value, dict) else {}
+    return {key: str(source.get(key) or "").strip() for key in MODEL_TIER_KEYS}
+
+
 @dataclass(frozen=True)
 class BotClusterConfig:
     enabled: bool = False
@@ -41,6 +46,7 @@ class BotClusterConfig:
     max_parallel_agents: int = 2
     default_timeout_seconds: int = 600
     model_tiers: dict[str, str] = field(default_factory=lambda: _model_tiers({}))
+    reasoning_efforts: dict[str, str] = field(default_factory=lambda: _reasoning_efforts({}))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -50,6 +56,7 @@ class BotClusterConfig:
             "max_parallel_agents": self.max_parallel_agents,
             "default_timeout_seconds": self.default_timeout_seconds,
             "model_tiers": dict(self.model_tiers),
+            "reasoning_efforts": dict(self.reasoning_efforts),
         }
 
 
@@ -79,6 +86,7 @@ def normalize_bot_cluster_config(value: Any) -> BotClusterConfig:
         max_parallel_agents=_as_int(value.get("max_parallel_agents"), 2, minimum=1, maximum=8),
         default_timeout_seconds=_as_int(value.get("default_timeout_seconds"), 600, minimum=60, maximum=3600),
         model_tiers=_model_tiers(value.get("model_tiers")),
+        reasoning_efforts=_reasoning_efforts(value.get("reasoning_efforts", value.get("reasoningEfforts"))),
     )
 
 

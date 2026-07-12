@@ -86,6 +86,7 @@ import type {
   ClusterMcpState,
   ClusterMcpTargetStatus,
   ClusterModelTiers,
+  ClusterReasoningEfforts,
   ClusterSetupPrepareResult,
   ClusterStatus,
   ClusterAgentTask,
@@ -1496,6 +1497,10 @@ function mapClusterModelTiers(raw: unknown): ClusterModelTiers {
   };
 }
 
+function mapClusterReasoningEfforts(raw: unknown): ClusterReasoningEfforts {
+  return mapClusterModelTiers(raw);
+}
+
 function mapBotClusterConfig(raw: unknown): BotClusterConfig {
   const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
   return {
@@ -1505,6 +1510,7 @@ function mapBotClusterConfig(raw: unknown): BotClusterConfig {
     maxParallelAgents: Number(value.max_parallel_agents ?? value.maxParallelAgents ?? 2),
     defaultTimeoutSeconds: Number(value.default_timeout_seconds ?? value.defaultTimeoutSeconds ?? 600),
     modelTiers: mapClusterModelTiers(value.model_tiers ?? value.modelTiers),
+    reasoningEfforts: mapClusterReasoningEfforts(value.reasoning_efforts ?? value.reasoningEfforts),
   };
 }
 
@@ -1564,6 +1570,7 @@ function mapClusterStatus(raw: unknown): ClusterStatus {
   return {
     enabled: Boolean(value.enabled),
     modelTiers: mapClusterModelTiers(value.model_tiers ?? value.modelTiers),
+    reasoningEfforts: mapClusterReasoningEfforts(value.reasoning_efforts ?? value.reasoningEfforts),
     mcp: {
       serverName: String(mcp.server_name || mcp.serverName || "tcb-cluster"),
       activeCliType: String(mcp.active_cli_type || mcp.activeCliType || "codex"),
@@ -1694,6 +1701,7 @@ function mapClusterConfigInput(input: ClusterConfigUpdateInput): Record<string, 
     ...(typeof input.maxParallelAgents !== "undefined" ? { max_parallel_agents: input.maxParallelAgents } : {}),
     ...(typeof input.defaultTimeoutSeconds !== "undefined" ? { default_timeout_seconds: input.defaultTimeoutSeconds } : {}),
     ...(input.modelTiers ? { model_tiers: input.modelTiers } : {}),
+    ...(input.reasoningEfforts ? { reasoning_efforts: input.reasoningEfforts } : {}),
   };
 }
 

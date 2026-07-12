@@ -87,6 +87,7 @@ const DEFAULT_CLUSTER_CONFIG: BotClusterConfig = {
   maxParallelAgents: 2,
   defaultTimeoutSeconds: 600,
   modelTiers: { low: "", medium: "", high: "" },
+  reasoningEfforts: { low: "", medium: "", high: "" },
 };
 
 const STATUS_FILTERS: Array<{ id: ManagerViewFilter; label: string }> = [
@@ -165,6 +166,10 @@ function clusterConfigFromBot(bot: BotSummary): BotClusterConfig {
     modelTiers: {
       ...DEFAULT_CLUSTER_CONFIG.modelTiers,
       ...(bot.cluster?.modelTiers || {}),
+    },
+    reasoningEfforts: {
+      ...DEFAULT_CLUSTER_CONFIG.reasoningEfforts,
+      ...(bot.cluster?.reasoningEfforts || {}),
     },
   };
 }
@@ -570,6 +575,10 @@ function EditPanel({
         ...clusterConfig.modelTiers,
         ...(patch.modelTiers || {}),
       },
+      reasoningEfforts: {
+        ...clusterConfig.reasoningEfforts,
+        ...(patch.reasoningEfforts || {}),
+      },
     };
     setClusterSaving(true);
     setClusterError("");
@@ -581,6 +590,7 @@ function EditPanel({
         maxParallelAgents: next.maxParallelAgents,
         defaultTimeoutSeconds: next.defaultTimeoutSeconds,
         modelTiers: next.modelTiers,
+        reasoningEfforts: next.reasoningEfforts,
       });
       setClusterConfig(result.cluster);
       setClusterStatus(result.status);
@@ -777,9 +787,12 @@ function EditPanel({
           {clusterStatus ? (
             <ClusterModelTiersPanel
               value={clusterConfig.modelTiers}
+              reasoningEfforts={clusterConfig.reasoningEfforts}
               modelOptions={cliParams?.schema.model?.enum ?? []}
+              reasoningOptions={cliParams?.schema.reasoning_effort?.enum ?? cliParams?.schema.effort?.enum ?? []}
               disabled={!canConfigureBot || clusterSaving}
               onChange={(modelTiers) => void saveCluster({ modelTiers })}
+              onReasoningChange={(reasoningEfforts) => void saveCluster({ reasoningEfforts })}
             />
           ) : null}
           <ClusterTemplatePanel

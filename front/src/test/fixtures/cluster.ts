@@ -13,6 +13,7 @@ import type {
 import { createMainAgent, createTesterAgent } from "./agents";
 
 const DEFAULT_MODEL_TIERS = { low: "", medium: "", high: "" };
+const DEFAULT_REASONING_EFFORTS = { low: "", medium: "", high: "" };
 
 export function createClusterConfig(overrides: Partial<BotClusterConfig> = {}): BotClusterConfig {
   const base: BotClusterConfig = {
@@ -22,6 +23,7 @@ export function createClusterConfig(overrides: Partial<BotClusterConfig> = {}): 
     maxParallelAgents: 2,
     defaultTimeoutSeconds: 120,
     modelTiers: { ...DEFAULT_MODEL_TIERS },
+    reasoningEfforts: { ...DEFAULT_REASONING_EFFORTS },
   };
   return {
     ...base,
@@ -29,6 +31,10 @@ export function createClusterConfig(overrides: Partial<BotClusterConfig> = {}): 
     modelTiers: {
       ...base.modelTiers,
       ...(overrides.modelTiers || {}),
+    },
+    reasoningEfforts: {
+      ...base.reasoningEfforts,
+      ...(overrides.reasoningEfforts || {}),
     },
   };
 }
@@ -127,6 +133,7 @@ export function createClusterStatus(overrides: Partial<ClusterStatus> = {}): Clu
   const base: ClusterStatus = {
     enabled: true,
     modelTiers: { ...DEFAULT_MODEL_TIERS },
+    reasoningEfforts: { ...DEFAULT_REASONING_EFFORTS },
     mcp: {
       serverName: "tcb-cluster",
       activeCliType: "codex",
@@ -151,6 +158,10 @@ export function createClusterStatus(overrides: Partial<ClusterStatus> = {}): Clu
     modelTiers: {
       ...base.modelTiers,
       ...(overrides.modelTiers || {}),
+    },
+    reasoningEfforts: {
+      ...base.reasoningEfforts,
+      ...(overrides.reasoningEfforts || {}),
     },
     mcp: {
       ...base.mcp,

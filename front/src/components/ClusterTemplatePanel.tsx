@@ -26,6 +26,7 @@ function defaultJsonText() {
         maxParallelAgents: 1,
         defaultTimeoutSeconds: 600,
         modelTiers: { low: "", medium: "", high: "" },
+        reasoningEfforts: { low: "", medium: "", high: "" },
       },
       agents: [
         {

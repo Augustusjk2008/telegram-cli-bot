@@ -587,6 +587,7 @@ describe("RealWebBotClient", () => {
 
 
   test("cluster setup endpoints map snake case responses", async () => {
+    const reasoningEfforts = { low: "medium", medium: "xhigh", high: "ultra" };
     const statusData = createClusterStatus({
       mcp: {
         serverName: "tcb-cluster",
@@ -614,6 +615,7 @@ describe("RealWebBotClient", () => {
         data: {
           enabled: statusData.enabled,
           model_tiers: statusData.modelTiers,
+          reasoning_efforts: reasoningEfforts,
           mcp: {
             server_name: statusData.mcp.serverName,
             active_cli_type: statusData.mcp.activeCliType,
@@ -646,9 +648,27 @@ describe("RealWebBotClient", () => {
     expect(status.mcp.claude.state).toBe("installed");
     expect(status.mcp.pi?.state).toBe("not_checked");
     expect(status.modelTiers.low).toBe("fast-model");
+    expect(status.reasoningEfforts).toEqual(reasoningEfforts);
     expect(status.agents[0].allowWrite).toBe(false);
     expect(status.agents[0].sessionPolicy).toBe("ephemeral");
     expect(status.agents[0].timeoutSeconds).toBe(180);
+  });
+
+  test("cluster config update sends reasoning tiers as snake case", async () => {
+    const reasoningEfforts = { low: "medium", medium: "xhigh", high: "ultra" };
+    const cluster = createClusterStatus();
+    fetchMock.mockResolvedValue(jsonOk({ cluster, status: cluster }));
+
+    const client = new RealWebBotClient();
+    await client.updateClusterConfig("main", { reasoningEfforts });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/admin/bots/main/cluster/config",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ cluster: { reasoning_efforts: reasoningEfforts } }),
+      }),
+    );
   });
 
   test("cluster setup prepare maps pi extension fields", async () => {

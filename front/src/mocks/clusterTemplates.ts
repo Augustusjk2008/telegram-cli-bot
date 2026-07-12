@@ -12,6 +12,7 @@ export const MOCK_CLUSTER_TEMPLATES: ClusterConfigBundle[] = [
       maxParallelAgents: 3,
       defaultTimeoutSeconds: 900,
       modelTiers: { low: "", medium: "", high: "" },
+      reasoningEfforts: { low: "", medium: "", high: "" },
     },
     agents: [
       {
@@ -48,6 +49,7 @@ export const MOCK_CLUSTER_TEMPLATES: ClusterConfigBundle[] = [
       maxParallelAgents: 3,
       defaultTimeoutSeconds: 900,
       modelTiers: { low: "", medium: "", high: "" },
+      reasoningEfforts: { low: "", medium: "", high: "" },
     },
     agents: [
       {
@@ -84,6 +86,7 @@ export const MOCK_CLUSTER_TEMPLATES: ClusterConfigBundle[] = [
       maxParallelAgents: 3,
       defaultTimeoutSeconds: 1200,
       modelTiers: { low: "", medium: "", high: "" },
+      reasoningEfforts: { low: "", medium: "", high: "" },
     },
     agents: [
       {
@@ -120,6 +123,7 @@ export const MOCK_CLUSTER_TEMPLATES: ClusterConfigBundle[] = [
       maxParallelAgents: 3,
       defaultTimeoutSeconds: 1200,
       modelTiers: { low: "", medium: "", high: "" },
+      reasoningEfforts: { low: "", medium: "", high: "" },
     },
     agents: [
       {
@@ -156,6 +160,7 @@ export const MOCK_CLUSTER_TEMPLATES: ClusterConfigBundle[] = [
       maxParallelAgents: 3,
       defaultTimeoutSeconds: 900,
       modelTiers: { low: "", medium: "", high: "" },
+      reasoningEfforts: { low: "", medium: "", high: "" },
     },
     agents: [
       {
