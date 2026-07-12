@@ -134,7 +134,7 @@ PARAM_SCHEMA_MAP = {
         "reasoning_effort": {
             "type": "string",
             "description": "推理努力程度",
-            "enum": ["xhigh", "high", "medium", "low"],
+            "enum": ["ultra", "max", "xhigh", "high", "medium", "low"],
         },
         "json_output": {"type": "boolean", "description": "JSON 格式输出"},
         "model": {"type": "string", "description": "模型选择", "nullable": True},
@@ -632,7 +632,7 @@ def get_params_help(cli_type: str) -> str:
 <code>reasoning_effort</code> - 推理努力程度 (字符串)
   默认: "xhigh"
   对应参数: -c model_reasoning_effort="..."
-  可选值: "xhigh", "high", "medium", "low"
+  可选值: "ultra", "max", "xhigh", "high", "medium", "low"
 
 <code>json_output</code> - JSON 格式输出 (布尔值)
   默认: True

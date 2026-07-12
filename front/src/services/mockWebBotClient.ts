@@ -295,7 +295,7 @@ function buildMockCliParams(cliType: string): CliParamsPayload {
     schema: {
       reasoning_effort: {
         type: "string",
-        enum: ["xhigh", "high", "medium", "low"],
+        enum: ["ultra", "max", "xhigh", "high", "medium", "low"],
         description: "推理努力程度",
       },
       model: {

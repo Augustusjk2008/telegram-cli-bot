@@ -32,7 +32,9 @@ from bot.cli import (
 from bot.cli_params import (
     CliParamsConfig,
     clamp_unsafe_cli_params,
+    coerce_param_value,
     get_cli_output_limits,
+    get_params_schema,
     normalize_cli_model_options,
     with_global_extra_args,
 )
@@ -95,6 +97,23 @@ class TestBuildCliCommand:
         assert '-c' in cmd
         config_index = cmd.index("-c")
         assert cmd[config_index + 1] == 'model_reasoning_effort="xhigh"'
+
+    @pytest.mark.parametrize("reasoning_effort", ["max", "ultra"])
+    def test_codex_new_reasoning_efforts_are_valid_and_forwarded(self, reasoning_effort: str):
+        assert reasoning_effort in get_params_schema("codex")["reasoning_effort"]["enum"]
+        assert coerce_param_value("codex", "reasoning_effort", reasoning_effort) == reasoning_effort
+        params_config = CliParamsConfig()
+        params_config.codex["reasoning_effort"] = reasoning_effort
+
+        cmd, _ = build_cli_command(
+            cli_type="codex",
+            resolved_cli="codex",
+            user_text="hello",
+            env={},
+            params_config=params_config,
+        )
+
+        assert f'model_reasoning_effort="{reasoning_effort}"' in cmd
 
     def test_cli_yolo_flags_require_explicit_config(self):
         env = {}

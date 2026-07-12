@@ -83,3 +83,18 @@ test("mock client stores unsafe bypass in new bot cli params", async () => {
 
   expect((await client.getCliParams("unsafeparams")).params.yolo).toBe(true);
 });
+
+test("mock client exposes max and ultra Codex reasoning efforts", async () => {
+  const client = new MockWebBotClient();
+
+  const payload = await client.getCliParams("main");
+
+  expect(payload.schema.reasoning_effort?.enum).toEqual([
+    "ultra",
+    "max",
+    "xhigh",
+    "high",
+    "medium",
+    "low",
+  ]);
+});
