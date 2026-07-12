@@ -92,6 +92,27 @@ def test_real_porcelain_v2_z_parses_rename_and_space_paths(tmp_path: Path) -> No
     assert "?? untracked file.txt" in snapshot["tree_lines"]
 
 
+def test_get_git_tree_status_includes_ignored_files_and_directories(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    (repo / ".gitignore").write_text("ignored-dir/\n*.log\n", encoding="utf-8")
+    (repo / "ignored-dir").mkdir()
+    (repo / "ignored-dir" / "nested.txt").write_text("ignored\n", encoding="utf-8")
+    (repo / "ignored.log").write_text("ignored\n", encoding="utf-8")
+    (repo / "visible.txt").write_text("visible\n", encoding="utf-8")
+    monkeypatch.setattr(git_service, "_get_git_working_dir", lambda _manager, _alias: str(repo))
+
+    status = git_service.get_git_tree_status(object(), "main", 1)
+
+    assert status["items"]["ignored-dir"] == "ignored"
+    assert status["items"]["ignored.log"] == "ignored"
+    assert status["items"]["visible.txt"] == "added"
+
+
 def test_git_status_command_retries_transient_index_error(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[list[str]] = []
     sleeps: list[float] = []

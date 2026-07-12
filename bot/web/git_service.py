@@ -1471,7 +1471,7 @@ def get_git_tree_status(manager: MultiBotManager, alias: str, user_id: int) -> d
     snapshot = _build_repo_status_snapshot(repo_root)
     ignored_lines = _read_git_status_text_with_retry(
         repo_root,
-        ["status", "--porcelain=1", "--ignored=matching", "--untracked-files=no"],
+        ["status", "--porcelain=1", "--ignored=matching", "--untracked-files=normal"],
     ).splitlines()
     return {
         "repo_found": True,
