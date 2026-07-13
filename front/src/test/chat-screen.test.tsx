@@ -490,6 +490,85 @@ test("recovers stalled SSE with revision delta and never reloads full history", 
   expect(historyCalls).toBe(1);
 });
 
+test("shows the final reply when stalled SSE finishes during recovery polling", async () => {
+  let overviewCalls = 0;
+  let deltaCalls = 0;
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(() => new Promise<ChatMessage>(() => {}));
+  const listMessageDelta = vi.fn<WebBotClient["listMessageDelta"]>(async () => {
+    deltaCalls += 1;
+    if (deltaCalls === 1) {
+      return {
+        reset: true,
+        revision: 4,
+        nextCursor: "4",
+        items: [
+          {
+            id: "user-recovery-poll",
+            conversationId: "conversation-recovery-poll",
+            role: "user",
+            text: "继续运行",
+            createdAt: "2026-07-13T00:00:00Z",
+            state: "done",
+          },
+          {
+            id: "assistant-recovery-poll",
+            conversationId: "conversation-recovery-poll",
+            role: "assistant",
+            text: "",
+            createdAt: "2026-07-13T00:00:01Z",
+            state: "streaming",
+          },
+        ],
+      };
+    }
+    return {
+      reset: false,
+      revision: 5,
+      nextCursor: "5",
+      items: [
+        {
+          id: "assistant-recovery-poll",
+          conversationId: "conversation-recovery-poll",
+          role: "assistant",
+          text: "轮询拿到的最终答复",
+          createdAt: "2026-07-13T00:00:01Z",
+          state: "done",
+        },
+      ],
+    };
+  });
+  const client = createClient({
+    getBotOverview: vi.fn(async (): Promise<BotOverview> => {
+      overviewCalls += 1;
+      return {
+        alias: "main",
+        cliType: "codex",
+        status: "running",
+        workingDir: "C:\\workspace",
+        isProcessing: overviewCalls === 2,
+      };
+    }),
+    listMessages: vi.fn(async () => []),
+    listMessageDelta,
+    sendMessage,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+
+  fireEvent.change(screen.getByPlaceholderText("输入消息"), { target: { value: "继续运行" } });
+  vi.useFakeTimers();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(3500);
+  });
+
+  expect(screen.getByText("轮询拿到的最终答复")).toBeInTheDocument();
+  expect(screen.queryByText("正在输出...")).not.toBeInTheDocument();
+  expect(listMessageDelta).toHaveBeenCalledTimes(2);
+});
+
 test("shows send errors only in assistant bubble when placeholder exists", async () => {
   const user = userEvent.setup();
   const client = createClient({
@@ -812,7 +891,9 @@ test("uses cli status preview while waiting for first output chunk", async () =>
       state: "done",
     });
   });
-  expect(await screen.findByText("最终答复")).toBeInTheDocument();
+  expect(screen.getByText("最终答复")).toBeInTheDocument();
+  expect(screen.getAllByText("最终答复")).toHaveLength(1);
+  expect(screen.queryByText("正在输出...")).not.toBeInTheDocument();
 });
 
 test("renders live cli trace without temporary answer while streaming", async () => {
@@ -3730,8 +3811,6 @@ test("native user bubble rollback confirms and refreshes history outside solo mo
   expect(listMessages.mock.calls.filter(([, options]) => options?.executionMode === "native_agent").length).toBeGreaterThan(1);
   expect(listConversations).toHaveBeenCalled();
 });
-
-
 
 
 
