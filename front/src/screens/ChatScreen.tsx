@@ -1975,7 +1975,6 @@ export function ChatScreen({
   const chatRootRef = useRef<HTMLElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const forceAutoScrollRef = useRef(true);
-  const lastObservedScrollTopRef = useRef(0);
   const isVisibleRef = useRef(isVisible);
   const loadingRef = useRef(loading);
   const isStreamingRef = useRef(isStreaming);
@@ -2563,6 +2562,7 @@ export function ChatScreen({
     hasActivatedRef.current = true;
 
     let cancelled = false;
+    let initialLoadSettled = false;
     loadingRef.current = true;
     setLoading(true);
     setError("");
@@ -2647,6 +2647,7 @@ export function ChatScreen({
         const storedQueuedMessage = readStoredQueuedMessage(botAlias, nextAgentId, storageScope);
         setQueuedMessageState(storedQueuedMessage, { botAlias, agentId: nextAgentId });
         const { shouldPoll } = applyHistoryView(messages, overview);
+        initialLoadSettled = true;
         loadingRef.current = false;
         setLoading(false);
         if (isVisibleRef.current && overview.isProcessing) {
@@ -2660,6 +2661,7 @@ export function ChatScreen({
       })
       .catch((err: Error) => {
         if (cancelled) return;
+        initialLoadSettled = true;
         setError(err.message || "加载历史失败");
         loadingRef.current = false;
         setLoading(false);
@@ -2667,6 +2669,9 @@ export function ChatScreen({
 
     return () => {
       cancelled = true;
+      if (!initialLoadSettled) {
+        hasActivatedRef.current = false;
+      }
       stopAssistantPoll();
       stopSseRecoveryWatch();
     };
@@ -2756,7 +2761,6 @@ export function ChatScreen({
     if (scrollContainerRef.current) {
       try {
         scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
-        lastObservedScrollTopRef.current = scrollContainerRef.current.scrollTop;
       } catch {
         // Tests may replace scrollTop with a getter-only descriptor; browsers keep this writable.
       }
@@ -2857,14 +2861,12 @@ export function ChatScreen({
       return;
     }
     const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-    const movedUp = container.scrollTop + 1 < lastObservedScrollTopRef.current;
-    lastObservedScrollTopRef.current = container.scrollTop;
     shouldStickToBottomRef.current = distanceFromBottom <= 96;
     if (shouldStickToBottomRef.current) {
       userScrollIntentRef.current = false;
       return;
     }
-    if (userScrollIntentRef.current || movedUp) {
+    if (userScrollIntentRef.current) {
       forceAutoScrollRef.current = false;
       revealScrollAttemptsRef.current = 0;
       cancelRevealScroll();
@@ -2874,6 +2876,10 @@ export function ChatScreen({
 
   function markUserScrollIntent() {
     userScrollIntentRef.current = true;
+  }
+
+  function clearUserScrollIntent() {
+    userScrollIntentRef.current = false;
   }
 
   function handleScrollKeyDown(event: KeyboardEvent<HTMLElement>) {
@@ -4579,6 +4585,9 @@ export function ChatScreen({
         ref={scrollContainerRef}
         data-testid="chat-scroll-container"
         onScroll={updateAutoScrollStickiness}
+        onPointerDown={markUserScrollIntent}
+        onPointerUp={clearUserScrollIntent}
+        onPointerCancel={clearUserScrollIntent}
         onWheel={markUserScrollIntent}
         onTouchMove={markUserScrollIntent}
         onKeyDown={handleScrollKeyDown}

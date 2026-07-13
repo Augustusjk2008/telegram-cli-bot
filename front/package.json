@@ -11,7 +11,7 @@
     "preview": "vite preview",
     "clean": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
     "lint": "tsc --noEmit",
-    "test:gate": "vitest run --maxWorkers=1 --fileParallelism=false src/test/app.test.tsx src/test/ag-ui-stream-adapter.test.ts src/test/bot-manager-delete.test.tsx src/test/chat-screen.test.tsx src/test/git-diff-viewer.test.tsx src/test/git-screen.test.tsx src/test/real-client.test.ts src/test/settings-screen.test.tsx src/test/frame-batched-queue.test.tsx src/test/chat-stream-batch.test.ts src/test/chat-history-sync.test.tsx src/test/history-delta-state.test.ts src/test/dynamic-virtual-list.test.tsx src/test/mermaid-renderer.test.tsx src/test/performance-invariants.test.tsx src/test/terminal-recovery.test.ts src/test/terminal-session.test.ts",
+    "test:gate": "vitest run --maxWorkers=1 --fileParallelism=false src/test/app.test.tsx src/test/ag-ui-stream-adapter.test.ts src/test/bot-manager-delete.test.tsx src/test/chat-screen.test.tsx src/test/chat-screen-bot-switch-regressions.test.tsx src/test/git-diff-viewer.test.tsx src/test/git-screen.test.tsx src/test/real-client.test.ts src/test/settings-screen.test.tsx src/test/frame-batched-queue.test.tsx src/test/chat-stream-batch.test.ts src/test/chat-history-sync.test.tsx src/test/history-delta-state.test.ts src/test/dynamic-virtual-list.test.tsx src/test/mermaid-renderer.test.tsx src/test/performance-invariants.test.tsx src/test/terminal-recovery.test.ts src/test/terminal-session.test.ts",
     "test": "vitest run",
     "e2e": "playwright test"
   },

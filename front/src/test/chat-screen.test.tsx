@@ -285,6 +285,7 @@ function mockClipboardWrite() {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   window.localStorage.clear();
 });
 
@@ -710,6 +711,7 @@ test("keeps the scroll position after dragging the scrollbar away from the botto
   });
 
   fireEvent.scroll(container);
+  fireEvent.pointerDown(container);
   scrollTop = 500;
   fireEvent.scroll(container);
 
@@ -3811,6 +3813,4 @@ test("native user bubble rollback confirms and refreshes history outside solo mo
   expect(listMessages.mock.calls.filter(([, options]) => options?.executionMode === "native_agent").length).toBeGreaterThan(1);
   expect(listConversations).toHaveBeenCalled();
 });
-
-
 
