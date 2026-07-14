@@ -52,20 +52,24 @@ except ImportError:
 class PtyWrapper:
     """Unify winpty.PtyProcess and subprocess-backed terminal processes."""
 
-    def __init__(self, process: Union[subprocess.Popen, "PtyProcess", "PosixPtyProcess"], is_pty: bool = False):
+    def __init__(
+        self,
+        process: Union[subprocess.Popen, "PtyProcess", "PosixPtyProcess"],
+        is_pty: bool = False,
+        *,
+        read_timeout_supported: bool = False,
+    ):
         self.process = process
         self.is_pty = is_pty
+        self.read_timeout_supported = read_timeout_supported
         self._lock = threading.Lock()
 
     def read(self, timeout: int = 1000) -> bytes:
         if self.is_pty:
             try:
-                return self.process.read(timeout=timeout)
-            except TypeError:
-                try:
-                    return self.process.read(4096)
-                except Exception:
-                    return b""
+                if self.read_timeout_supported:
+                    return self.process.read(timeout=timeout)
+                return self.process.read(4096)
             except Exception:
                 return b""
 
@@ -302,7 +306,7 @@ def create_shell_process(
         os.close(slave_fd)
         pty_process = PosixPtyProcess(process, master_fd)
         pty_process.resize(cols, rows)
-        return PtyWrapper(pty_process, is_pty=True)
+        return PtyWrapper(pty_process, is_pty=True, read_timeout_supported=True)
 
     argv = _build_posix_shell_argv(cmdline)
     _validate_posix_shell_argv(argv)

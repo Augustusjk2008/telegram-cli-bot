@@ -341,7 +341,8 @@ class _TerminalOutputPump:
                             pending.clear()
                     now = time.monotonic()
                     if pending and (
-                        len(pending) >= self._max_chunk_bytes
+                        not self._process.read_timeout_supported
+                        or len(pending) >= self._max_chunk_bytes
                         or now - last_flush_at >= self._flush_interval
                     ):
                         self._put(bytes(pending))

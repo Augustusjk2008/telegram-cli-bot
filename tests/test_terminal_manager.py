@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import queue
 import threading
 import time
 
@@ -99,6 +101,38 @@ async def test_terminal_output_pump_drops_old_output_and_emits_gap_without_block
     assert pump.queue_state.dropped_bytes == 8
     assert await pump.read() is TERMINAL_OUTPUT_GAP
     assert await pump.read() == b"abcdefgh"
+
+
+@pytest.mark.asyncio
+async def test_terminal_output_pump_flushes_blocking_reader_without_waiting_for_next_chunk():
+    from bot.platform.terminal import PtyWrapper
+    from bot.web.terminal_manager import _TerminalOutputPump
+
+    class BlockingReadProcess:
+        pid = 10
+
+        def __init__(self):
+            self.items = queue.Queue()
+
+        def read(self, size=1024):
+            return self.items.get()
+
+        def isalive(self):
+            return True
+
+    raw_process = BlockingReadProcess()
+    pump = _TerminalOutputPump(PtyWrapper(raw_process, is_pty=True), flush_interval_ms=40)
+    pump.start(asyncio.get_running_loop())
+
+    try:
+        raw_process.items.put(b"first")
+
+        assert await asyncio.wait_for(pump.read(), timeout=0.5) == b"first"
+    finally:
+        pump.stop()
+        raw_process.items.put(b"")
+        if pump._thread is not None:
+            pump._thread.join(timeout=1.0)
 
 
 @pytest.mark.asyncio
