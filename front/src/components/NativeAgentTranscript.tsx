@@ -548,7 +548,7 @@ export function NativeAgentTranscript({
   ), [allowPermissionReply, onFileLinkClick, replyPermission, replyingPermissionId]);
 
   const visibleResultText = stripThinkingBlocks(resultText);
-  const showFinalResult = Boolean(visibleResultText) && !(mode === "cli" && state === "streaming");
+  const showFinalResult = state !== "streaming" && Boolean(visibleResultText);
   const showCopyFinalAnswer = state !== "streaming" && Boolean(visibleResultText.trim()) && Boolean(onCopyFinalAnswer);
 
   return (

@@ -830,6 +830,7 @@ export type ChatMessageMetaInfo = {
   summaryKind?: string;
   traceVersion?: number;
   traceCount?: number;
+  traceLoadedCount?: number;
   toolCallCount?: number;
   processCount?: number;
   trace?: ChatTraceEvent[];

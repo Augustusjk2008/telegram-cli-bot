@@ -89,6 +89,11 @@ import {
 } from "../stream/chatStreamBatch";
 import { HistoryRevisionState } from "../chat/historyDeltaState";
 import { resolveMessageVirtualKey } from "../chat/messageVirtualKey";
+import {
+  findActiveAssistantIndex,
+  updateActiveAssistantMessage,
+  type ActiveAssistantTarget,
+} from "../chat/activeChatTurn";
 
 type Props = {
   botAlias: string;
@@ -992,26 +997,6 @@ function updateMessageByIdOrClientStateKey(
   return updateMessageByClientStateKey(items, messageClientStateKey, updater);
 }
 
-function updateLatestAssistantMessage(
-  items: ChatMessage[],
-  preferredMessageId: string,
-  streamStartedAtMs: number,
-  updater: (item: ChatMessage) => ChatMessage,
-) {
-  const index = findLatestAssistantMessageIndex(items, preferredMessageId, streamStartedAtMs);
-  if (index < 0) {
-    return items;
-  }
-  const current = items[index];
-  const next = updater(current);
-  if (next === current) {
-    return items;
-  }
-  const nextItems = items.slice();
-  nextItems[index] = next;
-  return nextItems;
-}
-
 function applyChatStreamEvents(
   items: ChatMessage[],
   events: readonly ChatStreamRenderEvent[],
@@ -1041,10 +1026,15 @@ function applyChatStreamEvents(
     event: ChatStreamRenderEvent,
     updater: (item: ChatMessage) => ChatMessage,
   ) => {
-    const cacheKey = `${event.assistantId}:${event.streamStartedAtMs}`;
+    const cacheKey = `${event.turnId || ""}:${event.assistantMessageId || ""}:${event.assistantId}:${event.streamStartedAtMs}`;
     let index = assistantIndexes.get(cacheKey);
     if (typeof index !== "number") {
-      index = findLatestAssistantMessageIndex(nextItems, event.assistantId, event.streamStartedAtMs);
+      index = findActiveAssistantIndex(nextItems, {
+        localAssistantId: event.assistantId,
+        assistantMessageId: event.assistantMessageId,
+        turnId: event.turnId,
+        streamStartedAtMs: event.streamStartedAtMs,
+      });
       assistantIndexes.set(cacheKey, index);
     }
     updateAtIndex(index, updater);
@@ -1146,33 +1136,6 @@ function shouldBatchAgUiEvent(event: AgUiEvent) {
     || event.type === EventType.TOOL_CALL_ARGS
     || event.type === EventType.ACTIVITY_DELTA
   );
-}
-
-function findLatestAssistantMessageIndex(
-  items: ChatMessage[],
-  preferredMessageId: string,
-  streamStartedAtMs: number,
-) {
-  const preferredIndex = items.findIndex((item) => item.id === preferredMessageId);
-  if (preferredIndex >= 0) {
-    return preferredIndex;
-  }
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index];
-    if (item.role !== "assistant") {
-      continue;
-    }
-
-    const createdAtMs = Date.parse(item.createdAt || "");
-    const isRecentAssistant = !Number.isNaN(createdAtMs) && createdAtMs >= streamStartedAtMs - 1000;
-    if (item.state !== "streaming" && !isRecentAssistant) {
-      continue;
-    }
-
-    return index;
-  }
-
-  return -1;
 }
 
 function comparableObjectKeys(value: Record<string, unknown>) {
@@ -1975,7 +1938,6 @@ export function ChatScreen({
   const chatRootRef = useRef<HTMLElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const forceAutoScrollRef = useRef(true);
-  const lastObservedScrollTopRef = useRef(0);
   const isVisibleRef = useRef(isVisible);
   const loadingRef = useRef(loading);
   const isStreamingRef = useRef(isStreaming);
@@ -2422,9 +2384,22 @@ export function ChatScreen({
           }
 
           streamBatcher.flush();
+          const recoveredMessages = messages.length > 0 ? messages : itemsRef.current;
+          if (overview.isProcessing) {
+            const activeMessages = normalizeInactiveStreamingRows(recoveredMessages, true);
+            setItems((prev) => mergeMessagesPreservingClientState(prev, activeMessages));
+            isStreamingRef.current = true;
+            streamModeRef.current = "sse";
+            setIsStreaming(true);
+            setStreamMode("sse");
+            setStreamStartedAtMs((prev) => prev ?? resolveStreamStartMs(activeMessages));
+            sseLastActivityAtRef.current = Date.now();
+            scheduleSseRecoveryWatch();
+            return;
+          }
+
           assistantSendVersionRef.current += 1;
           abortActiveSseRequest();
-          const recoveredMessages = messages.length > 0 ? messages : itemsRef.current;
           const keepStreamingRowsActive = overview.isProcessing || hasPersistedStreamingAssistant(messages);
           const { shouldPoll } = applyHistoryView(recoveredMessages, overview, { keepStreamingRowsActive });
           if (shouldPoll) {
@@ -2563,6 +2538,7 @@ export function ChatScreen({
     hasActivatedRef.current = true;
 
     let cancelled = false;
+    let initialLoadSettled = false;
     loadingRef.current = true;
     setLoading(true);
     setError("");
@@ -2647,6 +2623,7 @@ export function ChatScreen({
         const storedQueuedMessage = readStoredQueuedMessage(botAlias, nextAgentId, storageScope);
         setQueuedMessageState(storedQueuedMessage, { botAlias, agentId: nextAgentId });
         const { shouldPoll } = applyHistoryView(messages, overview);
+        initialLoadSettled = true;
         loadingRef.current = false;
         setLoading(false);
         if (isVisibleRef.current && overview.isProcessing) {
@@ -2660,6 +2637,7 @@ export function ChatScreen({
       })
       .catch((err: Error) => {
         if (cancelled) return;
+        initialLoadSettled = true;
         setError(err.message || "加载历史失败");
         loadingRef.current = false;
         setLoading(false);
@@ -2667,6 +2645,9 @@ export function ChatScreen({
 
     return () => {
       cancelled = true;
+      if (!initialLoadSettled) {
+        hasActivatedRef.current = false;
+      }
       stopAssistantPoll();
       stopSseRecoveryWatch();
     };
@@ -2756,7 +2737,6 @@ export function ChatScreen({
     if (scrollContainerRef.current) {
       try {
         scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
-        lastObservedScrollTopRef.current = scrollContainerRef.current.scrollTop;
       } catch {
         // Tests may replace scrollTop with a getter-only descriptor; browsers keep this writable.
       }
@@ -2857,14 +2837,12 @@ export function ChatScreen({
       return;
     }
     const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-    const movedUp = container.scrollTop + 1 < lastObservedScrollTopRef.current;
-    lastObservedScrollTopRef.current = container.scrollTop;
     shouldStickToBottomRef.current = distanceFromBottom <= 96;
     if (shouldStickToBottomRef.current) {
       userScrollIntentRef.current = false;
       return;
     }
-    if (userScrollIntentRef.current || movedUp) {
+    if (userScrollIntentRef.current) {
       forceAutoScrollRef.current = false;
       revealScrollAttemptsRef.current = 0;
       cancelRevealScroll();
@@ -2874,6 +2852,10 @@ export function ChatScreen({
 
   function markUserScrollIntent() {
     userScrollIntentRef.current = true;
+  }
+
+  function clearUserScrollIntent() {
+    userScrollIntentRef.current = false;
   }
 
   function handleScrollKeyDown(event: KeyboardEvent<HTMLElement>) {
@@ -3039,8 +3021,11 @@ export function ChatScreen({
       return;
     }
     const messageClientStateKey = getMessageClientStateKey(currentMessage);
-    const loadedTraceCount = (currentMessage.meta?.trace || []).length;
     const expectedTraceCount = currentMessage.meta?.traceCount || 0;
+    const embeddedTraceCount = (currentMessage.meta?.trace || []).length;
+    const loadedTraceCount = typeof currentMessage.meta?.traceLoadedCount === "number"
+      ? currentMessage.meta.traceLoadedCount
+      : Math.min(embeddedTraceCount, expectedTraceCount);
     if (expectedTraceCount > 0 && loadedTraceCount >= expectedTraceCount) {
       return;
     }
@@ -3065,11 +3050,12 @@ export function ChatScreen({
         meta: mergeMessageMeta(item.meta, {
           trace: traceDetails.trace,
           traceCount: traceDetails.traceCount,
+          traceLoadedCount: traceDetails.traceCount,
           toolCallCount: traceDetails.toolCallCount,
           processCount: traceDetails.processCount,
           traceVersion: 1,
           ...(isNativeAgentMessage(item.meta) ? { tracePresentation: "native_agent_flat" as const } : {}),
-        }),
+        }, undefined, { reconcileTraceSnapshots: true }),
       })));
       setTraceLoadState((prev) => ({
         ...prev,
@@ -3097,7 +3083,10 @@ export function ChatScreen({
         continue;
       }
       const expectedTraceCount = item.meta?.traceCount || 0;
-      const loadedTraceCount = (item.meta?.trace || []).length;
+      const embeddedTraceCount = (item.meta?.trace || []).length;
+      const loadedTraceCount = typeof item.meta?.traceLoadedCount === "number"
+        ? item.meta.traceLoadedCount
+        : Math.min(embeddedTraceCount, expectedTraceCount);
       if (expectedTraceCount <= 0 || loadedTraceCount >= expectedTraceCount) {
         continue;
       }
@@ -3714,6 +3703,18 @@ export function ChatScreen({
     setStreamStartedAtMs(localStartedAtMs);
     sseLastActivityAtRef.current = localStartedAtMs;
     emitBotActivityForActiveAgent("busy");
+    let streamTurnId = "";
+    let streamAssistantMessageId = "";
+    const streamEventBinding = () => ({
+      ...(streamTurnId ? { turnId: streamTurnId } : {}),
+      ...(streamAssistantMessageId ? { assistantMessageId: streamAssistantMessageId } : {}),
+    });
+    const activeAssistantTarget = (message?: ChatMessage): ActiveAssistantTarget => ({
+      localAssistantId: assistantId,
+      assistantMessageId: message?.id || streamAssistantMessageId || undefined,
+      turnId: message?.turnId || streamTurnId || undefined,
+      streamStartedAtMs: localStartedAtMs,
+    });
 
     try {
       let usingPreviewReplace = false;
@@ -3745,6 +3746,7 @@ export function ChatScreen({
           kind: "chunk",
           sendVersion,
           assistantId,
+          ...streamEventBinding(),
           streamStartedAtMs: localStartedAtMs,
           chunk,
         });
@@ -3754,6 +3756,12 @@ export function ChatScreen({
           return;
         }
         markSseActivity();
+        if (status.turnId) {
+          streamTurnId = status.turnId;
+        }
+        if (status.assistantMessageId) {
+          streamAssistantMessageId = status.assistantMessageId;
+        }
         if (sawAgUiEventRef.current) {
           return;
         }
@@ -3774,6 +3782,7 @@ export function ChatScreen({
           kind: "status",
           sendVersion,
           assistantId,
+          ...streamEventBinding(),
           streamStartedAtMs: localStartedAtMs,
           userMessageId: userMessage.id,
           status,
@@ -3794,6 +3803,7 @@ export function ChatScreen({
           kind: "trace",
           sendVersion,
           assistantId,
+          ...streamEventBinding(),
           streamStartedAtMs: localStartedAtMs,
           trace: traceEvent,
           nativeTrace: executionModeRef.current === "native_agent"
@@ -3811,6 +3821,7 @@ export function ChatScreen({
           kind: "ag_ui",
           sendVersion,
           assistantId,
+          ...streamEventBinding(),
           streamStartedAtMs: localStartedAtMs,
           event,
           nativeAgent: executionModeRef.current === "native_agent",
@@ -3851,9 +3862,14 @@ export function ChatScreen({
       });
       const finalMetaHasTracePayload = Array.isArray(finalizedMessage.meta?.trace);
 
-      setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => ({
+      setItems((prev) => updateActiveAssistantMessage(prev, activeAssistantTarget(finalizedMessage), (item) => ({
         ...finalizedMessage,
-        meta: finalMetaHasTracePayload ? finalizedMessage.meta : mergeMessageMeta(item.meta, finalizedMessage.meta),
+        meta: mergeMessageMeta(
+          item.meta,
+          finalizedMessage.meta,
+          undefined,
+          { reconcileTraceSnapshots: finalMetaHasTracePayload },
+        ),
       })));
       options.onSuccess?.(finalizedMessage);
       if (!isVisibleRef.current) {
@@ -3868,8 +3884,8 @@ export function ChatScreen({
         return;
       }
       const message = err instanceof Error ? err.message : "发送失败";
-      if (findLatestAssistantMessageIndex(itemsRef.current, assistantId, localStartedAtMs) >= 0) {
-        setItems((prev) => updateLatestAssistantMessage(prev, assistantId, localStartedAtMs, (item) => ({
+      if (findActiveAssistantIndex(itemsRef.current, activeAssistantTarget()) >= 0) {
+        setItems((prev) => updateActiveAssistantMessage(prev, activeAssistantTarget(), (item) => ({
           ...item,
           text: message,
           state: "error",
@@ -4579,6 +4595,9 @@ export function ChatScreen({
         ref={scrollContainerRef}
         data-testid="chat-scroll-container"
         onScroll={updateAutoScrollStickiness}
+        onPointerDown={markUserScrollIntent}
+        onPointerUp={clearUserScrollIntent}
+        onPointerCancel={clearUserScrollIntent}
         onWheel={markUserScrollIntent}
         onTouchMove={markUserScrollIntent}
         onKeyDown={handleScrollKeyDown}

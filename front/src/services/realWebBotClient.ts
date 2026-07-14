@@ -4626,10 +4626,12 @@ export class RealWebBotClient implements WebBotClient {
         } else if (event.type === "done") {
           if (event.message) {
             finalMessage = mapChatMessage(event.message, 0);
+            finalMessage.text = finalMessage.text || event.output || streamedText;
             finalMessage.meta = mergeMessageMeta(
               streamedContextUsage ? { contextUsage: streamedContextUsage } : undefined,
               finalMessage.meta,
               streamedTrace,
+              { reconcileTraceSnapshots: true },
             );
             finalText = finalMessage.text;
           } else {
