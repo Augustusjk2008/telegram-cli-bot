@@ -4631,6 +4631,7 @@ export class RealWebBotClient implements WebBotClient {
               streamedContextUsage ? { contextUsage: streamedContextUsage } : undefined,
               finalMessage.meta,
               streamedTrace,
+              { reconcileTraceSnapshots: true },
             );
             finalText = finalMessage.text;
           } else {

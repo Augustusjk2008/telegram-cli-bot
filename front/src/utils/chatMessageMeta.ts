@@ -11,6 +11,16 @@ function pickTraceCount(incomingValue?: number, baseValue?: number, summaryValue
   return typeof baseValue === "number" && Number.isFinite(baseValue) ? baseValue : undefined;
 }
 
+function pickLoadedTraceCount(incomingValue?: number, baseValue?: number) {
+  const values = [incomingValue, baseValue]
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  return values.length > 0 ? Math.max(...values) : undefined;
+}
+
+export type MergeMessageMetaOptions = {
+  reconcileTraceSnapshots?: boolean;
+};
+
 export function summarizeTrace(trace?: ChatTraceEvent[]) {
   return {
     traceCount: trace?.length || 0,
@@ -23,13 +33,18 @@ export function mergeMessageMeta(
   base?: ChatMessageMetaInfo,
   incoming?: ChatMessageMetaInfo,
   streamedTrace?: ChatTraceEvent[],
+  options: MergeMessageMetaOptions = {},
 ): ChatMessageMetaInfo | undefined {
   const isNativeSource = isNativeAgentMessage(incoming) || isNativeAgentMessage(base);
   const tracePresentation = incoming?.tracePresentation || base?.tracePresentation || (isNativeSource ? "native_agent_flat" : undefined);
   const nativeFlatTrace = tracePresentation === "native_agent_flat";
   const trace = mergeChatTraceEvents(
     [base?.trace, incoming?.trace, streamedTrace],
-    { nativeFlat: nativeFlatTrace, autoNativeFlat: nativeFlatTrace },
+    {
+      nativeFlat: nativeFlatTrace,
+      autoNativeFlat: nativeFlatTrace,
+      reconcileTraceSnapshots: options.reconcileTraceSnapshots,
+    },
   );
   const traceSummary = trace ? summarizeTrace(trace) : undefined;
   const meta: ChatMessageMetaInfo = {
@@ -37,6 +52,7 @@ export function mergeMessageMeta(
     summaryKind: incoming?.summaryKind || base?.summaryKind,
     traceVersion: incoming?.traceVersion ?? base?.traceVersion ?? (trace ? 1 : undefined),
     traceCount: pickTraceCount(incoming?.traceCount, base?.traceCount, traceSummary?.traceCount),
+    traceLoadedCount: pickLoadedTraceCount(incoming?.traceLoadedCount, base?.traceLoadedCount),
     toolCallCount: pickTraceCount(incoming?.toolCallCount, base?.toolCallCount, traceSummary?.toolCallCount),
     processCount: pickTraceCount(incoming?.processCount, base?.processCount, traceSummary?.processCount),
     nativeSource: incoming?.nativeSource || base?.nativeSource,

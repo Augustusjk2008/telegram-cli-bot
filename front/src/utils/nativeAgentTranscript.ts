@@ -78,6 +78,17 @@ function traceFallbackKey(trace: ChatTraceEvent, nativeFlat: boolean) {
   return `${trace.kind}:${rawType}:${callId}:${summary}`;
 }
 
+function traceReconciliationKey(trace: ChatTraceEvent) {
+  const kind = asString(trace.kind).trim();
+  const rawType = asString(trace.rawType).trim();
+  const callId = asString(trace.callId).trim();
+  const summary = asString(trace.summary).trim().replace(/\s+/g, " ");
+  if (!kind || (!rawType && !callId && !summary)) {
+    return "";
+  }
+  return `${kind}:${rawType}:${callId}:${summary}`;
+}
+
 function traceRichness(trace: ChatTraceEvent) {
   return (
     payloadText(trace).length * 10
@@ -234,7 +245,11 @@ function shouldNormalizeAsNativeFlat(trace: ChatTraceEvent[]) {
 
 export function mergeChatTraceEvents(
   sources: Array<ChatTraceEvent[] | undefined>,
-  options: { nativeFlat?: boolean; autoNativeFlat?: boolean } = {},
+  options: {
+    nativeFlat?: boolean;
+    autoNativeFlat?: boolean;
+    reconcileTraceSnapshots?: boolean;
+  } = {},
 ): ChatTraceEvent[] | undefined {
   const merged: ChatTraceEvent[] = [];
   const stableIndexMap = new Map<string, number>();
@@ -242,16 +257,35 @@ export function mergeChatTraceEvents(
   const fallbackIndexMap = new Map<string, number>();
 
   for (const source of sources) {
+    const reconciliationCandidates = new Map<string, number[]>();
+    const semanticallyMatchedIndexes = new Set<number>();
+    if (options.reconcileTraceSnapshots) {
+      merged.forEach((event, index) => {
+        const key = traceReconciliationKey(event);
+        if (!key) {
+          return;
+        }
+        const candidates = reconciliationCandidates.get(key) || [];
+        candidates.push(index);
+        reconciliationCandidates.set(key, candidates);
+      });
+    }
     for (const event of source || []) {
       const stableKey = traceStableKey(event);
       const callKey = traceCallKey(event);
       const fallbackKey = traceFallbackKey(event, Boolean(options.nativeFlat));
-      const existingIndex = (
+      let existingIndex = (
         (callKey ? callIndexMap.get(callKey) : undefined)
         ?? (stableKey ? stableIndexMap.get(stableKey) : undefined)
         ?? (fallbackKey ? fallbackIndexMap.get(fallbackKey) : undefined)
       );
+      if (typeof existingIndex !== "number" && options.reconcileTraceSnapshots) {
+        const reconciliationKey = traceReconciliationKey(event);
+        const candidates = reconciliationKey ? reconciliationCandidates.get(reconciliationKey) || [] : [];
+        existingIndex = candidates.find((index) => !semanticallyMatchedIndexes.has(index));
+      }
       if (typeof existingIndex === "number") {
+        semanticallyMatchedIndexes.add(existingIndex);
         merged[existingIndex] = mergeTraceEvent(merged[existingIndex], event);
         const nextStableKey = traceStableKey(merged[existingIndex]);
         const nextCallKey = traceCallKey(merged[existingIndex]);

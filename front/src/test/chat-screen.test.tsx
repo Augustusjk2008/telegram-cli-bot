@@ -412,10 +412,10 @@ test("virtualizes expanded 500-message history", async () => {
   });
 });
 
-test("recovers stalled SSE with revision delta and never reloads full history", async () => {
+test("keeps a stalled SSE authoritative while the backend is still processing", async () => {
   let overviewCalls = 0;
-  let historyCalls = 0;
   let requestSignal: AbortSignal | undefined;
+  let resolveFinal!: (message: ChatMessage) => void;
   const sendMessage = vi.fn<WebBotClient["sendMessage"]>((
     _botAlias,
     _text,
@@ -425,32 +425,33 @@ test("recovers stalled SSE with revision delta and never reloads full history", 
     options,
   ) => {
     requestSignal = options?.signal;
-    return new Promise<ChatMessage>(() => {});
+    return new Promise<ChatMessage>((resolve) => {
+      resolveFinal = resolve;
+    });
   });
   const listMessageDelta = vi.fn<WebBotClient["listMessageDelta"]>(async () => ({
-    reset: false,
+    reset: true,
     revision: 4,
     items: [
       {
         id: "user-history-stalled",
+        turnId: "turn-history-stalled",
         role: "user",
         text: "公网缓冲",
-        createdAt: "2026-07-07T10:00:00Z",
+        createdAt: "2026-01-01T10:00:00Z",
         state: "done",
       },
       {
         id: "assistant-history-stalled",
+        turnId: "turn-history-stalled",
         role: "assistant",
-        text: "历史恢复的最终回复",
-        createdAt: "2026-07-07T10:00:05Z",
-        state: "done",
+        text: "持久化过程快照",
+        createdAt: "2026-01-01T10:00:05Z",
+        state: "streaming",
       },
     ],
   }));
-  const listMessages = vi.fn(async (): Promise<ChatMessage[]> => {
-    historyCalls += 1;
-    return [];
-  });
+  const listMessages = vi.fn(async (): Promise<ChatMessage[]> => []);
   const client = createClient({
     getBotOverview: vi.fn(async (): Promise<BotOverview> => {
       overviewCalls += 1;
@@ -483,12 +484,25 @@ test("recovers stalled SSE with revision delta and never reloads full history", 
     await Promise.resolve();
   });
 
-  expect(screen.getByText("历史恢复的最终回复")).toBeInTheDocument();
-  expect(requestSignal?.aborted).toBe(true);
+  expect(requestSignal?.aborted).toBe(false);
   expect(screen.getByRole("button", { name: "终止任务" })).toBeEnabled();
   expect(listMessageDelta).toHaveBeenCalledTimes(1);
   expect(listMessages).toHaveBeenCalledTimes(1);
-  expect(historyCalls).toBe(1);
+
+  await act(async () => {
+    resolveFinal({
+      id: "assistant-history-stalled",
+      turnId: "turn-history-stalled",
+      role: "assistant",
+      text: "无需 F5 的最终答复",
+      createdAt: "2026-01-01T10:00:05Z",
+      state: "done",
+    });
+  });
+
+  expect(screen.getByText("无需 F5 的最终答复")).toBeInTheDocument();
+  expect(screen.getAllByText("无需 F5 的最终答复")).toHaveLength(1);
+  expect(screen.queryByText("正在输出...")).not.toBeInTheDocument();
 });
 
 test("shows the final reply when stalled SSE finishes during recovery polling", async () => {
@@ -562,7 +576,14 @@ test("shows the final reply when stalled SSE finishes during recovery polling", 
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
     await Promise.resolve();
-    await vi.advanceTimersByTimeAsync(3500);
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2600);
+    await Promise.resolve();
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2600);
+    await Promise.resolve();
   });
 
   expect(screen.getByText("轮询拿到的最终答复")).toBeInTheDocument();
@@ -2445,6 +2466,81 @@ test("native send renders streaming transcript immediately without cli bubble ch
   expect(await screen.findByText("final answer")).toBeInTheDocument();
 });
 
+test("native streaming keeps partial answer out of the final result section", async () => {
+  const user = userEvent.setup();
+  let resolveFinal!: (message: ChatMessage) => void;
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias,
+    _text,
+    _onChunk,
+    _onStatus,
+    _onTrace,
+    _options,
+    onAgUiEvent,
+  ) => {
+    onAgUiEvent?.({ type: EventType.RUN_STARTED, threadId: "thread-partial", runId: "run-partial" });
+    onAgUiEvent?.({ type: EventType.TEXT_MESSAGE_START, messageId: "assistant-partial", role: "assistant" });
+    onAgUiEvent?.({
+      type: EventType.TEXT_MESSAGE_CONTENT,
+      messageId: "assistant-partial",
+      delta: "只应在完成后显示的正文",
+    });
+    onAgUiEvent?.({
+      type: EventType.ACTIVITY_SNAPSHOT,
+      messageId: "activity-partial",
+      activityType: "TCB_NATIVE_AGENT_TRACE",
+      replace: true,
+      content: {
+        id: "activity-partial",
+        summary: "仍在处理",
+        source: "native_agent",
+        rawKind: "commentary",
+        rawType: "message.text.reclassified",
+      },
+    });
+    return new Promise<ChatMessage>((resolve) => {
+      resolveFinal = resolve;
+    });
+  });
+  const client = createClient({
+    getBotOverview: async (): Promise<BotOverview> => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+      supportedExecutionModes: ["native_agent"],
+      defaultExecutionMode: "native_agent",
+    }),
+    sendMessage,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  await screen.findByText("暂无消息，开始聊天吧");
+  await user.type(screen.getByPlaceholderText("输入消息"), "hi");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(within(transcript).getByText("仍在处理")).toBeInTheDocument();
+  expect(within(transcript).queryByText("只应在完成后显示的正文")).not.toBeInTheDocument();
+  expect(within(transcript).queryByTestId("native-agent-final-result")).not.toBeInTheDocument();
+
+  await act(async () => {
+    resolveFinal({
+      id: "assistant-partial",
+      role: "assistant",
+      text: "只应在完成后显示的正文",
+      createdAt: new Date().toISOString(),
+      state: "done",
+      meta: { tracePresentation: "native_agent_flat" },
+    });
+  });
+
+  const finalizedTranscript = await screen.findByTestId("native-agent-transcript");
+  expect(within(finalizedTranscript).getByTestId("native-agent-final-result")).toHaveTextContent("只应在完成后显示的正文");
+  expect(within(finalizedTranscript).getAllByText("只应在完成后显示的正文")).toHaveLength(1);
+});
+
 test("native ag-ui commentary is visible while stream is still running", async () => {
   const user = userEvent.setup();
   let resolveFinal!: (message: ChatMessage) => void;
@@ -3813,4 +3909,3 @@ test("native user bubble rollback confirms and refreshes history outside solo mo
   expect(listMessages.mock.calls.filter(([, options]) => options?.executionMode === "native_agent").length).toBeGreaterThan(1);
   expect(listConversations).toHaveBeenCalled();
 });
-

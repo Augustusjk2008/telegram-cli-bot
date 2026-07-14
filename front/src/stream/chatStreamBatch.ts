@@ -9,6 +9,8 @@ import {
 export type ChatStreamEventBase = {
   sendVersion: number;
   assistantId: string;
+  assistantMessageId?: string;
+  turnId?: string;
   streamStartedAtMs: number;
 };
 
