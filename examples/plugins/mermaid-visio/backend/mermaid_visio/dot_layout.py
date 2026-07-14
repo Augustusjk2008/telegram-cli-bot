@@ -32,7 +32,8 @@ def build_dot(ir: FlowchartIR) -> str:
     for edge in ir.edges:
         attrs = []
         if edge.label:
-            attrs.append(f'label="{edge.label.replace("\\", "\\\\").replace(chr(34), "\\\"")}"')
+            edge_label = edge.label.replace("\\", "\\\\").replace('"', '\\"')
+            attrs.append(f'label="{edge_label}"')
         if edge.kind == "dotted":
             attrs.append("style=dotted")
         if edge.kind == "thick":
