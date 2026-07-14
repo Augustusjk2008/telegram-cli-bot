@@ -962,6 +962,38 @@ describe("RealWebBotClient", () => {
     expect(message.state).toBe("done");
   });
 
+  test("sendMessage keeps embedded done content when stream output disagrees", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(`event: done\ndata: ${JSON.stringify({
+          type: "done",
+          output: "最终答复最终答复最终答复",
+          elapsed_seconds: 3,
+          message: {
+            id: "msg-final-authoritative-content",
+            role: "assistant",
+            content: "最终答复",
+            state: "done",
+            created_at: "2026-07-14T00:00:00Z",
+          },
+        })}\n\n`));
+        controller.close();
+      },
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: stream,
+      json: async () => ({ ok: true, data: {} }),
+    });
+
+    const client = new RealWebBotClient();
+    const message = await client.sendMessage("main", "hi", vi.fn());
+
+    expect(message.text).toBe("最终答复");
+    expect(message.state).toBe("done");
+  });
+
   test("sendMessage treats CLI error completion as done event with error assistant message", async () => {
     const encoder = new TextEncoder();
     const chunks: string[] = [];
