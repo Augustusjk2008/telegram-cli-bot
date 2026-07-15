@@ -74,7 +74,6 @@ def _completed_turn(
         bot_alias=alias,
         user_id=shared_user_id,
         agent_id=agent_id,
-        bot_mode="cli",
         cli_type="codex",
         working_dir=working_dir or str(tmp_path),
         session_epoch=0,

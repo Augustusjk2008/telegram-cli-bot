@@ -133,7 +133,7 @@ async def test_native_stream_resume_does_not_start_cluster_or_send_prompt(monkey
             raise AssertionError("恢复请求不得重新执行 prompt")
             yield {}
 
-    profile = SimpleNamespace(bot_mode="cli", cli_type="codex")
+    profile = SimpleNamespace(cli_type="codex")
     session = SimpleNamespace()
     monkeypatch.setattr(api_service, "get_chat_session_for_alias", lambda *_args: (profile, None, session))
     monkeypatch.setattr(api_service, "get_native_agent_service", lambda: FakeService())

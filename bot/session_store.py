@@ -250,8 +250,7 @@ def _merge_session_snapshots(source: dict[str, Any] | None, target: dict[str, An
     merged.pop("native_agent_server_key", None)
     if not merged.get("active_conversation_id"):
         merged.pop("active_conversation_id", None)
-    if not merged.get("managed_prompt_hash_seen"):
-        merged.pop("managed_prompt_hash_seen", None)
+    merged.pop("managed_prompt_hash_seen", None)
     if not merged.get("agent_prompt_hash_seen"):
         merged.pop("agent_prompt_hash_seen", None)
     return merged
@@ -328,6 +327,7 @@ def migrate_sessions_to_shared(bot_id: int, shared_user_id: int) -> int:
 def migrate_local_history_snapshot(data: dict[str, Any] | None, *, default_working_dir: str) -> dict[str, Any]:
     next_data = dict(data or {})
     next_data.pop("kimi_session_id", None)
+    next_data.pop("managed_prompt_hash_seen", None)
     if next_data.get("local_history_backend") == LOCAL_HISTORY_BACKEND:
         next_data["session_epoch"] = max(0, int(next_data.get("session_epoch", 0) or 0))
         if default_working_dir:
@@ -368,7 +368,6 @@ def save_session(
     local_history_backend: Optional[str] = None,
     session_epoch: Optional[int] = None,
     active_conversation_id: Optional[str] = None,
-    managed_prompt_hash_seen: Optional[str] = None,
     agent_prompt_hash_seen: Optional[str] = None,
     running_user_text: Optional[str] = None,
     running_preview_text: Optional[str] = None,
@@ -400,8 +399,6 @@ def save_session(
         session_data["session_epoch"] = max(0, session_epoch)
     if active_conversation_id:
         session_data["active_conversation_id"] = str(active_conversation_id)
-    if managed_prompt_hash_seen:
-        session_data["managed_prompt_hash_seen"] = managed_prompt_hash_seen
     if agent_prompt_hash_seen:
         session_data["agent_prompt_hash_seen"] = agent_prompt_hash_seen
     if session_data and "local_history_backend" not in session_data:

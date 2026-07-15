@@ -13,7 +13,6 @@ def _begin(store: ChatStore, *, conversation_id: str | None = None, text: str = 
         bot_alias="main",
         user_id=2,
         agent_id="main",
-        bot_mode="cli",
         cli_type="codex",
         working_dir=str(store.workspace_dir),
         session_epoch=0,

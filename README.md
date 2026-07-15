@@ -280,7 +280,6 @@ WEB_API_TOKEN=<本机随机口令>
 
 - Bot 支持普通 CLI 和原生 agent 执行模式
 - Bot 支持子 agent 和集群配置
-- 旧配置中的历史 `bot_mode` 字段会在加载后按普通 Bot 处理，并在下次保存时移除
 
 ### 可选 LiteLLM 网关
 

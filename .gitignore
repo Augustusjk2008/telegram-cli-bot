@@ -39,3 +39,4 @@ tmp/
 .host.pid
 .codegraph/
 .artifacts/
+/tools/

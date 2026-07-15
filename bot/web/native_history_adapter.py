@@ -63,7 +63,6 @@ def decorate_native_conversations(
     pi_store: PiSessionStore,
     pi_key_for_conversation: Callable[[str], str],
     active_conversation_id: str = "",
-    bot_mode: str = "",
 ) -> list[dict[str, Any]]:
     conversation_ids = [
         str(item.get("id") or "").strip()
@@ -85,7 +84,6 @@ def decorate_native_conversations(
                 workspace_history.get(str(item.get("id") or "").strip()),
             ),
             "active": str(item.get("id") or "").strip() == active_id,
-            "bot_mode": str(item.get("bot_mode") or bot_mode),
             "execution_mode": "native_agent",
         }
         for item in items

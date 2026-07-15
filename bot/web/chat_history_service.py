@@ -245,9 +245,6 @@ class ChatHistoryService:
         session: UserSession,
         user_text: str,
         native_provider: str,
-        assistant_home: str | None = None,
-        managed_prompt_hash: str | None = None,
-        prompt_surface_version: str | None = None,
         actor: dict[str, Any] | None = None,
     ) -> ChatTurnHandle:
         active_conversation_id = _active_conversation_id(session)
@@ -267,16 +264,12 @@ class ChatHistoryService:
             bot_alias=session.bot_alias,
             user_id=session.user_id,
             agent_id=session.agent_id,
-            bot_mode=profile.bot_mode,
             cli_type=profile.cli_type,
             working_dir=session.working_dir,
             session_epoch=_session_epoch(session),
             user_text=user_text,
             native_provider=native_provider,
             conversation_id=active_conversation_id or None,
-            assistant_home=assistant_home,
-            managed_prompt_hash=managed_prompt_hash,
-            prompt_surface_version=prompt_surface_version,
             agent_prompt_hash=getattr(session, "agent_prompt_hash_seen", None),
             actor=actor,
         )
@@ -490,7 +483,6 @@ class ChatHistoryService:
             is_processing = bool(session.is_processing)
         return {
             "bot_alias": profile.alias,
-            "bot_mode": profile.bot_mode,
             "cli_type": profile.cli_type,
             "cli_path": profile.cli_path,
             "working_dir": session.working_dir,
@@ -536,7 +528,7 @@ class ChatHistoryService:
             session,
         )
 
-    def summarize_active_conversation(self, profile: BotProfile, session: UserSession) -> dict[str, Any]:
+    def summarize_active_conversation(self, session: UserSession) -> dict[str, Any]:
         return {
             "current_working_dir": session.working_dir,
             "history_count": self.store.count_history(
@@ -550,24 +542,21 @@ class ChatHistoryService:
                 native_provider_exclude=self.native_provider_exclude,
             ),
             "message_count": session.message_count,
-            "bot_mode": profile.bot_mode,
         }
 
     async def summarize_active_conversation_async(
         self,
-        profile: BotProfile,
         session: UserSession,
     ) -> dict[str, Any]:
         return await self.async_store.run_read(
             self.summarize_active_conversation,
-            profile,
             session,
         )
 
-    def has_active_conversation(self, profile: BotProfile, session: UserSession) -> bool:
-        return self.summarize_active_conversation(profile, session)["history_count"] > 0
+    def has_active_conversation(self, session: UserSession) -> bool:
+        return self.summarize_active_conversation(session)["history_count"] > 0
 
-    def reset_active_conversation(self, profile: BotProfile, session: UserSession) -> None:
+    def reset_active_conversation(self, session: UserSession) -> None:
         conversation_id = _active_conversation_id(session)
         if conversation_id:
             self.store.delete_conversation_by_id(conversation_id)
@@ -585,11 +574,9 @@ class ChatHistoryService:
 
     async def reset_active_conversation_async(
         self,
-        profile: BotProfile,
         session: UserSession,
     ) -> None:
         await self.async_store.run_write(
             self.reset_active_conversation,
-            profile,
             session,
         )

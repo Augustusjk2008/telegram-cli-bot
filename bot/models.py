@@ -200,10 +200,7 @@ def normalize_execution_modes(value: Any) -> list[str]:
 def normalize_execution_mode_config(
     supported_value: Any,
     default_value: Any,
-    *,
-    bot_mode: str = "cli",
 ) -> tuple[list[str], str]:
-    _ = bot_mode
     supported = normalize_execution_modes(supported_value)
     default = normalize_execution_mode(default_value, default=supported[0])
     if supported == [EXECUTION_MODE_NATIVE_AGENT] or default == EXECUTION_MODE_NATIVE_AGENT:
@@ -485,7 +482,6 @@ class BotProfile:
     cli_path: str = CLI_PATH
     working_dir: str = WORKING_DIR
     enabled: bool = True
-    bot_mode: str = "cli"
     cli_params: CliParamsConfig = field(default_factory=CliParamsConfig)
     git_commit_cli_config: Optional[GitCommitMessageCliConfig] = None
     agents: List[AgentProfile] = field(default_factory=list)
@@ -499,7 +495,6 @@ class BotProfile:
         supported_execution_modes, default_execution_mode = normalize_execution_mode_config(
             self.supported_execution_modes,
             self.default_execution_mode,
-            bot_mode=self.bot_mode,
         )
         result = {
             "alias": self.alias,
@@ -556,7 +551,6 @@ class BotProfile:
             for item in data.get("agents", [])
             if isinstance(item, dict)
         ]
-        bot_mode = "cli"
         supported_execution_modes, default_execution_mode = normalize_execution_mode_config(
             data.get("supported_execution_modes", data.get("supportedExecutionModes")),
             data.get("default_execution_mode", data.get("defaultExecutionMode", "cli")),
@@ -569,7 +563,6 @@ class BotProfile:
             cli_path=data.get("cli_path", CLI_PATH),
             working_dir=data.get("working_dir", WORKING_DIR),
             enabled=data.get("enabled", True),
-            bot_mode=bot_mode,
             cli_params=cli_params,
             agents=agents,
             cluster=normalize_bot_cluster_config(data.get("cluster")),
@@ -607,7 +600,6 @@ class UserSession:
     web_turn_overlays: List[dict] = field(default_factory=list)
     last_activity: datetime = field(default_factory=datetime.now)
     message_count: int = 0
-    managed_prompt_hash_seen: Optional[str] = None
     agent_prompt_hash_seen: Optional[str] = None
     local_history_backend: str = "local_v1"
     session_epoch: int = 0
