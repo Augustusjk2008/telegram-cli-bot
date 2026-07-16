@@ -7,6 +7,7 @@ export type ChatComposerModelOption = {
   value: string;
   label: string;
   title?: string;
+  disabled?: boolean;
 };
 
 type ComposerAttachment = {
@@ -584,7 +585,7 @@ export function ChatComposer({
                   className={compactSelectClassName}
                 >
                   {modelOptions.map((model) => (
-                    <option key={model.value} value={model.value} title={model.title}>
+                    <option key={model.value} value={model.value} title={model.title} disabled={model.disabled}>
                       {model.label}
                     </option>
                   ))}

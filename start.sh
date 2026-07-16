@@ -293,7 +293,7 @@ sync_frontend_assets() {
   if [[ -f "$build_script" ]]; then
     bash "$build_script"
   else
-    (cd "$SCRIPT_DIR/front" && npm install && npm run build)
+    (cd "$SCRIPT_DIR/front" && npm ci && npm run build)
   fi
   frontend_hash="$(
     hash_startup_paths \

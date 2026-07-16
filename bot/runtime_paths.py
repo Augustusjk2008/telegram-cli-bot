@@ -26,13 +26,31 @@ def get_tcb_home_root() -> Path:
     return Path.home() / ".tcb"
 
 
-def get_app_data_root() -> Path:
+def _get_app_data_override() -> str:
     override = os.environ.get(TCB_DATA_DIR_ENV, "").strip()
     if not override and dotenv_values is not None:
         override = str(dotenv_values(Path.cwd() / ".env").get(TCB_DATA_DIR_ENV) or "").strip()
+    return override
+
+
+def get_app_data_root() -> Path:
+    override = _get_app_data_override()
     if override:
         return Path(override).expanduser().resolve()
     return get_tcb_home_root() / APP_DATA_DIR_NAME
+
+
+def _get_legacy_runtime_root(name: str) -> Path:
+    """Resolve legacy top-level runtime data while honoring TCB_DATA_DIR.
+
+    Existing installations keep their historical ~/.tcb layout. Explicit
+    data-root overrides, including test fixtures and portable deployments,
+    keep all runtime writes below the requested root.
+    """
+    override = _get_app_data_override()
+    if override:
+        return Path(override).expanduser().resolve() / name
+    return get_tcb_home_root() / name
 
 
 def get_app_settings_path() -> Path:
@@ -158,7 +176,7 @@ def _normalize_chat_attachment_alias(alias: str) -> str:
 
 
 def get_chat_attachments_dir(alias: str, user_id: int) -> Path:
-    return get_tcb_home_root() / "chat-attachments" / _normalize_chat_attachment_alias(alias) / str(user_id)
+    return _get_legacy_runtime_root("chat-attachments") / _normalize_chat_attachment_alias(alias) / str(user_id)
 
 
 def get_legacy_project_chat_db_path(working_dir: str | Path) -> Path:
@@ -180,7 +198,7 @@ def get_chat_workspace_key(working_dir: str | Path) -> str:
 
 
 def get_chat_workspace_dir(working_dir: str | Path) -> Path:
-    return get_tcb_home_root() / "chat-history" / "workspaces" / get_chat_workspace_key(working_dir)
+    return _get_legacy_runtime_root("chat-history") / "workspaces" / get_chat_workspace_key(working_dir)
 
 
 def get_chat_history_db_path(working_dir: str | Path) -> Path:

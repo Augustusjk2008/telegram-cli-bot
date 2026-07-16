@@ -13,6 +13,8 @@ def test_chat_history_paths_resolve_under_home_tcb_root(monkeypatch, tmp_path: P
     home.mkdir()
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    monkeypatch.delenv("TCB_DATA_DIR", raising=False)
+    monkeypatch.setattr(runtime_paths, "dotenv_values", lambda _path: {})
     monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
 
     workspace_key = runtime_paths.get_chat_workspace_key(workspace)
@@ -25,6 +27,17 @@ def test_chat_history_paths_resolve_under_home_tcb_root(monkeypatch, tmp_path: P
     assert db_path == workspace_dir / "chat.sqlite"
     assert metadata_path == workspace_dir / "workspace.json"
     assert favorites_path == workspace_dir / "favorites.json"
+
+
+def test_chat_history_and_attachments_honor_data_root_override(monkeypatch, tmp_path: Path):
+    data_root = tmp_path / "runtime-data"
+    workspace = tmp_path / "workspace"
+    monkeypatch.setenv("TCB_DATA_DIR", str(data_root))
+
+    workspace_key = runtime_paths.get_chat_workspace_key(workspace)
+
+    assert runtime_paths.get_chat_workspace_dir(workspace) == data_root / "chat-history" / "workspaces" / workspace_key
+    assert runtime_paths.get_chat_attachments_dir("main", 7) == data_root / "chat-attachments" / "main" / "7"
 
 
 def test_legacy_project_chat_db_path_matches_chat_store_workspace_path(tmp_path: Path):

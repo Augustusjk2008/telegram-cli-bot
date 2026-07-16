@@ -2,8 +2,8 @@
 
 远程控制 AI 智能体的多 Bot Web 控制台。它把 `codex` / `claude`、项目文件、Git、终端、插件视图和管理中心聚合到同一浏览器界面，用于统一调度多个仓库、子 agent 和集群任务。
 
-- 当前版本：`1.4.1`
-- 文档最后更新：`2026-07-10`
+- 当前版本：`1.4.4`
+- 文档最后更新：`2026-07-17`
 
 ## 核心能力
 
@@ -20,8 +20,8 @@
 - Windows 10 / 11
 - Ubuntu / Debian Linux
 - macOS 12+（首版为源码包，非 `.app` / DMG）
-- Python 3.10+
-- Node.js 18+（Pi 原生 agent 需 Node.js 22+）
+- Python 3.10-3.13（推荐 3.12；暂不支持 3.14）
+- Node.js 22+
 - Git
 
 ## 项目目录
@@ -81,7 +81,7 @@ bash install.sh
 bash start.sh
 ```
 
-macOS 需要 Python 3.10+、Node.js 18+、Git，推荐先装 Homebrew；Pi 原生 agent 需 Node.js 22+。AI CLI 不内置，需自行安装 `codex` / `claude`。
+macOS 需要 Python 3.10-3.13、Node.js 22+、Git，推荐先装 Homebrew。AI CLI 不内置，需自行安装 `codex` / `claude`。
 
 源码快照安装：
 

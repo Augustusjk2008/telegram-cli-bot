@@ -189,6 +189,19 @@ def test_build_repo_status_snapshot_rechecks_cache_after_repo_lock(monkeypatch: 
     assert reads == ["repo", "repo"]
 
 
+def test_git_status_cache_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(git_service, "GIT_CACHE_MAX_REPOSITORIES", 2)
+    monkeypatch.setattr(git_service, "_GIT_STATUS_CACHE", {})
+    monkeypatch.setattr(git_service, "_GIT_RECENT_COMMITS_CACHE", {})
+
+    git_service._write_git_status_cache("repo-1", {"created_at": 1.0})
+    git_service._write_git_status_cache("repo-2", {"created_at": 2.0})
+    git_service._write_git_status_cache("repo-3", {"created_at": 3.0})
+
+    assert [Path(key).name for key in git_service._GIT_STATUS_CACHE] == ["repo-2", "repo-3"]
+    assert git_service.git_service_diagnostics()["status_cache_entries"] == 2
+
+
 def test_build_repo_status_snapshot_caches_clean_repo_and_uses_one_status_command(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

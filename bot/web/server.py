@@ -54,9 +54,14 @@ from bot.config import (
     WEB_FIXED_PUBLIC_FORWARD_ENABLED,
     WEB_FIXED_PUBLIC_FORWARD_URL,
     WEB_HOST,
+    WEB_LOGIN_BASE_LOCK_SECONDS,
+    WEB_LOGIN_MAX_ATTEMPTS,
+    WEB_LOGIN_MAX_LOCK_SECONDS,
+    WEB_LOGIN_WINDOW_SECONDS,
     WEB_PORT,
     WEB_PUBLIC_URL,
     WEB_TERMINAL_SHELL_PATH,
+    WEB_TRUST_PROXY_HEADERS,
     WEB_TUNNEL_AUTOSTART,
     WEB_TUNNEL_CLOUDFLARED_PATH,
     WEB_TUNNEL_MODE,
@@ -97,6 +102,8 @@ from .async_chat_store import ChatStoreOverloadedError, chat_store_executor_diag
 from .cli_error_stats import collect_cli_error_stats
 from .diagnostics import diag_enabled, diag_log_event, diag_log_slow, diag_loop_lag_ms
 from .runtime_diagnostics import LoopLagTracker, RuntimeDiagnosticsRegistry
+from .login_throttle import LoginThrottle
+from .aiohttp_keys import AUTH_REQUEST_KEY
 from .env_service import EnvConfigService, EnvValidationError
 from .exposure_service import WebExposureService
 from .fixed_forward_service import FixedForwardService
@@ -472,6 +479,18 @@ def _is_loopback_request(request: web.Request) -> bool:
     if isinstance(peername, tuple) and peername:
         return _is_loopback_value(peername[0])
     return _is_loopback_value(peername)
+
+
+def _login_throttle_client(request: web.Request) -> str:
+    direct = str(request.remote or "unknown").strip() or "unknown"
+    if not WEB_TRUST_PROXY_HEADERS or not _is_loopback_value(direct):
+        return direct
+    forwarded = str(request.headers.get("X-Forwarded-For") or request.headers.get("X-Real-IP") or "")
+    candidate = forwarded.split(",", 1)[0].strip()
+    try:
+        return str(ipaddress.ip_address(candidate)) if candidate else direct
+    except ValueError:
+        return direct
 
 
 def _serialize_auth_context(auth: AuthContext, *, token: str = "") -> dict[str, Any]:
@@ -953,12 +972,19 @@ class WebApiServer:
         self.inline_completion_config_store = InlineCompletionConfigStore()
         self.inline_completion_service = InlineCompletionService(config_store=self.inline_completion_config_store)
         self._loop_lag_tracker = LoopLagTracker(threshold_ms=diag_loop_lag_ms())
+        self._login_throttle = LoginThrottle(
+            max_attempts=WEB_LOGIN_MAX_ATTEMPTS,
+            window_seconds=WEB_LOGIN_WINDOW_SECONDS,
+            base_lock_seconds=WEB_LOGIN_BASE_LOCK_SECONDS,
+            max_lock_seconds=WEB_LOGIN_MAX_LOCK_SECONDS,
+        )
         self._runtime_diagnostics = RuntimeDiagnosticsRegistry()
         self._runtime_diagnostics.register("loop_lag", self._loop_lag_tracker.diagnostics)
         self._runtime_diagnostics.register("terminal", self._terminal_manager.diagnostics)
         self._runtime_diagnostics.register("native_agent", get_native_agent_service().diagnostics)
         self._runtime_diagnostics.register("workspace_search", workspace_search_diagnostics)
         self._runtime_diagnostics.register("git", git_service_diagnostics)
+        self._runtime_diagnostics.register("login_throttle", self._login_throttle.diagnostics)
         self._runtime_diagnostics.register("chat_store", chat_store_executor_diagnostics)
         self._runtime_diagnostics.register(
             "session_store",
@@ -1068,7 +1094,7 @@ class WebApiServer:
 
     async def _with_auth(self, request: web.Request) -> AuthContext:
         auth = self._auth_context(request)
-        request["auth"] = auth
+        request[AUTH_REQUEST_KEY] = auth
         return auth
 
     async def _with_capability(self, request: web.Request, capability: str) -> AuthContext:
@@ -1077,10 +1103,10 @@ class WebApiServer:
         alias = str(raw_alias or "").strip().lower() if isinstance(raw_alias, str) else ""
         if alias:
             auth = self._bot_auth(auth, alias)
-            request["auth"] = auth
+            request[AUTH_REQUEST_KEY] = auth
         if self._allows_readonly_bot_capability(request, capability, auth):
             elevated = auth.with_capabilities({*auth.capabilities, capability})
-            request["auth"] = elevated
+            request[AUTH_REQUEST_KEY] = elevated
             return elevated
         _require_capability(auth, capability)
         return auth
@@ -1099,7 +1125,7 @@ class WebApiServer:
         alias = str(raw_alias or "").strip().lower() if isinstance(raw_alias, str) else ""
         if alias:
             auth = self._bot_auth(auth, alias)
-            request["auth"] = auth
+            request[AUTH_REQUEST_KEY] = auth
         return auth
 
     async def _with_cluster_bot_config_access(self, request: web.Request) -> AuthContext:
@@ -1492,13 +1518,39 @@ class WebApiServer:
         if _is_loopback_auto_auth_allowed(request):
             return _json({"ok": True, "data": _serialize_auth_context(self._local_admin_auth_context())})
         body = await self._parse_json(request)
+        username = str(body.get("username", ""))
+        throttle_client = _login_throttle_client(request)
+        retry_after = self._login_throttle.check(throttle_client, username)
+        if retry_after > 0:
+            raise WebApiError(
+                429,
+                "login_throttled",
+                "登录尝试过于频繁，请稍后再试",
+                data={"retry_after": retry_after},
+            )
         try:
             session = _WEB_AUTH_STORE.login_member(
-                str(body.get("username", "")),
+                username,
                 str(body.get("password", "")),
             )
         except AuthStoreError as exc:
+            retry_after = self._login_throttle.record_failure(throttle_client, username)
+            logger.warning(
+                "Web 登录失败 client=%s throttled=%s",
+                throttle_client,
+                bool(retry_after),
+            )
+            if retry_after > 0:
+                raise WebApiError(
+                    429,
+                    "login_throttled",
+                    "登录尝试过于频繁，请稍后再试",
+                    data={"retry_after": retry_after},
+                ) from exc
+            if exc.status < 500:
+                raise WebApiError(401, "invalid_credentials", "用户名或密码错误") from exc
             raise _auth_error(exc) from exc
+        self._login_throttle.record_success(throttle_client, username)
         response = _json({"ok": True, "data": _serialize_auth_session(session)})
         _set_auth_cookie(request, response, session.token, remember=bool(body.get("remember")))
         return response
@@ -2919,7 +2971,8 @@ class WebApiServer:
         await self._with_bot_config_access(request)
         alias = self._manager_alias(request)
         cli_type = request.query.get("cli_type") or None
-        return _json({"ok": True, "data": get_cli_params_payload(self.manager, alias, cli_type)})
+        data = await asyncio.to_thread(get_cli_params_payload, self.manager, alias, cli_type)
+        return _json({"ok": True, "data": data})
 
     async def get_native_agent_models(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_VIEW_BOTS)
@@ -3223,7 +3276,7 @@ class WebApiServer:
         if not alias:
             raise WebApiError(400, "missing_alias", "缺少 Bot 别名")
         auth = self._bot_auth(auth, alias)
-        request["auth"] = auth
+        request[AUTH_REQUEST_KEY] = auth
         ws = web.WebSocketResponse(heartbeat=30.0)
         await ws.prepare(request)
 
@@ -3651,7 +3704,7 @@ class WebApiServer:
         auth = await self._with_auth(request)
         alias = self._manager_alias(request)
         auth = self._bot_auth(auth, alias)
-        request["auth"] = auth
+        request[AUTH_REQUEST_KEY] = auth
         if CAP_CREATE_WORKDIR_DIRECTORY not in auth.capabilities and CAP_MANAGE_BOTS not in auth.capabilities:
             _require_capability(auth, CAP_CREATE_WORKDIR_DIRECTORY)
         body = await self._parse_json(request)

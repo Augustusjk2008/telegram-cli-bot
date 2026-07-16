@@ -962,6 +962,16 @@ type RawCliParamsPayload = {
     nullable?: boolean;
     integer?: boolean;
   }>;
+  model_catalog?: {
+    source?: string;
+    error?: string;
+    items?: Array<{
+      id?: string;
+      label?: string;
+      reasoning_efforts?: string[];
+      default_reasoning_effort?: string;
+    }>;
+  };
 };
 
 const RESTART_SERVICE_REQUEST_TIMEOUT_MS = 4000;
@@ -2308,11 +2318,28 @@ function mapFavoriteAnswerItem(raw: RawFavoriteAnswerItem): FavoriteAnswerItem {
 }
 
 function mapCliParamsPayload(raw: RawCliParamsPayload): CliParamsPayload {
+  const catalogItems = (raw.model_catalog?.items || [])
+    .map((item) => ({
+      id: String(item.id || "").trim(),
+      label: String(item.label || item.id || "").trim(),
+      reasoningEfforts: toStringArray(item.reasoning_efforts),
+      defaultReasoningEffort: String(item.default_reasoning_effort || "").trim() || undefined,
+    }))
+    .filter((item) => Boolean(item.id));
   return {
     cliType: raw.cli_type,
     params: raw.params || {},
     defaults: raw.defaults || {},
     schema: raw.schema || {},
+    ...(raw.model_catalog
+      ? {
+          modelCatalog: {
+            source: String(raw.model_catalog.source || "config"),
+            items: catalogItems,
+            error: String(raw.model_catalog.error || "") || undefined,
+          },
+        }
+      : {}),
   };
 }
 

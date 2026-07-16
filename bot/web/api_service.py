@@ -25,6 +25,7 @@ from bot import app_settings
 from bot.claude_done import ClaudeDoneDetector, build_claude_done_session, strip_claude_done_sentinel
 from bot.agents import build_agent_prompt_input
 from bot.chat_identity import chat_session_user_id
+from bot.codex_model_catalog import find_catalog_model, get_codex_model_catalog
 from bot.cli_params import (
     CliParamsConfig,
     clamp_unsafe_cli_params,
@@ -1085,10 +1086,29 @@ async def delete_agent(manager: MultiBotManager, alias: str, agent_id: str) -> d
 
 
 
-def _apply_cli_model_options(schema: dict[str, Any]) -> dict[str, Any]:
+def _codex_catalog_for_profile(profile: BotProfile) -> dict[str, Any]:
+    cli_path = profile.cli_path if normalize_cli_type(profile.cli_type) == "codex" else "codex"
+    return get_codex_model_catalog(
+        cli_path or "codex",
+        profile.working_dir,
+        configured_options=CLI_MODEL_OPTIONS,
+    )
+
+
+def _apply_cli_model_options(
+    schema: dict[str, Any],
+    *,
+    catalog: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     next_schema = copy.deepcopy(schema)
     model_field = next_schema.get("model")
-    model_options = normalize_cli_model_options(CLI_MODEL_OPTIONS)
+    model_options = [
+        str(item.get("id") or "").strip()
+        for item in (catalog or {}).get("items", [])
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    ]
+    if not model_options:
+        model_options = normalize_cli_model_options(CLI_MODEL_OPTIONS)
     if isinstance(model_field, dict) and model_options:
         model_field["enum"] = model_options
     return next_schema
@@ -1102,7 +1122,8 @@ def get_cli_params_payload(manager: MultiBotManager, alias: str, cli_type: Optio
 
     try:
         params = profile.cli_params.get_params(resolved_cli_type)
-        schema = _apply_cli_model_options(get_params_schema(resolved_cli_type))
+        model_catalog = _codex_catalog_for_profile(profile) if resolved_cli_type == "codex" else None
+        schema = _apply_cli_model_options(get_params_schema(resolved_cli_type), catalog=model_catalog)
         defaults = get_default_params(resolved_cli_type)
     except ValueError as exc:
         _raise(400, "invalid_cli_type", str(exc))
@@ -1112,6 +1133,7 @@ def get_cli_params_payload(manager: MultiBotManager, alias: str, cli_type: Optio
         "params": copy.deepcopy(params),
         "schema": schema,
         "defaults": defaults,
+        **({"model_catalog": model_catalog} if model_catalog is not None else {}),
     }
 
 
@@ -1255,12 +1277,41 @@ async def update_cli_params(
     if not key or not key.strip():
         _raise(400, "missing_param_key", "缺少参数名")
 
+    normalized_key = key.strip()
+    model_catalog = _codex_catalog_for_profile(profile) if resolved_cli_type == "codex" else None
+    authoritative_catalog = model_catalog if model_catalog and model_catalog.get("source") == "codex_cli" else None
+    if authoritative_catalog and normalized_key == "model":
+        selected_model = str(value or "").strip()
+        if selected_model and selected_model.lower() != "none" and find_catalog_model(authoritative_catalog, selected_model) is None:
+            _raise(400, "unsupported_codex_model", f"当前 Codex 账号不支持模型: {selected_model}")
+    if authoritative_catalog and normalized_key == "reasoning_effort":
+        current_model = str(profile.cli_params.get_param("codex", "model") or "").strip()
+        model_item = find_catalog_model(authoritative_catalog, current_model)
+        efforts = list(model_item.get("reasoning_efforts") or []) if model_item else []
+        selected_effort = str(value or "").strip()
+        if efforts and selected_effort not in efforts:
+            _raise(400, "unsupported_codex_reasoning_effort", f"模型 {current_model} 不支持推理强度: {selected_effort}")
+
     try:
-        await manager.set_bot_cli_param(alias, resolved_cli_type, key.strip(), value)
+        await manager.set_bot_cli_param(alias, resolved_cli_type, normalized_key, value)
+        if authoritative_catalog and normalized_key == "model":
+            normalized_model = str(profile.cli_params.get_param("codex", "model") or "").strip()
+            model_item = find_catalog_model(authoritative_catalog, normalized_model)
+            if model_item:
+                efforts = [str(item or "").strip() for item in model_item.get("reasoning_efforts") or [] if str(item or "").strip()]
+                current_effort = str(profile.cli_params.get_param("codex", "reasoning_effort") or "").strip()
+                if efforts and current_effort not in efforts:
+                    default_effort = str(model_item.get("default_reasoning_effort") or "").strip()
+                    await manager.set_bot_cli_param(
+                        alias,
+                        "codex",
+                        "reasoning_effort",
+                        default_effort if default_effort in efforts else efforts[0],
+                    )
     except ValueError as exc:
         _raise(400, "invalid_param_value", str(exc))
 
-    return get_cli_params_payload(manager, alias, resolved_cli_type)
+    return await asyncio.to_thread(get_cli_params_payload, manager, alias, resolved_cli_type)
 
 
 async def reset_cli_params(manager: MultiBotManager, alias: str, cli_type: Optional[str] = None) -> dict[str, Any]:
@@ -1270,7 +1321,7 @@ async def reset_cli_params(manager: MultiBotManager, alias: str, cli_type: Optio
         await manager.reset_bot_cli_params(alias, resolved_cli_type)
     except ValueError as exc:
         _raise(400, "invalid_cli_type", str(exc))
-    return get_cli_params_payload(manager, alias, resolved_cli_type)
+    return await asyncio.to_thread(get_cli_params_payload, manager, alias, resolved_cli_type)
 
 
 def get_history(
@@ -5653,5 +5704,3 @@ def get_processing_sessions(alias: str) -> list[dict[str, Any]]:
                 }
             )
     return items
-
-
