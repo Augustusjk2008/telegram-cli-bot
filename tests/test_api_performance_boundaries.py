@@ -130,7 +130,6 @@ def test_native_conversation_decoration_uses_batch_reads(
             bot_id=1,
             bot_alias="main",
             user_id=2,
-            bot_mode="cli",
             cli_type="codex",
             working_dir=str(tmp_path / "workspace"),
             session_epoch=index,
@@ -142,7 +141,7 @@ def test_native_conversation_decoration_uses_batch_reads(
             f"head-{index}",
             index + 1,
         )
-        items.append({"id": handle.conversation_id, "bot_mode": "cli"})
+        items.append({"id": handle.conversation_id})
         key = f"pi:{handle.conversation_id}"
         keys[handle.conversation_id] = key
         pi_store.upsert(
@@ -182,7 +181,6 @@ def test_native_conversation_decoration_uses_batch_reads(
         pi_store=pi_store,
         pi_key_for_conversation=keys.__getitem__,
         active_conversation_id=str(items[1]["id"]),
-        bot_mode="cli",
     )
 
     assert pi_reads == 1
@@ -205,7 +203,7 @@ def test_list_conversations_uses_native_batch_decorator(
         working_dir=str(workspace),
         active_conversation_id="conversation-1",
     )
-    profile = SimpleNamespace(bot_mode="cli")
+    profile = SimpleNamespace()
     items = [
         {"id": f"conversation-{index}", "native_provider": "native_agent"}
         for index in range(3)

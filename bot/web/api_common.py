@@ -93,7 +93,7 @@ def get_session_for_alias(manager: MultiBotManager, alias: str, user_id: int) ->
         default_working_dir=profile.working_dir,
     )
 
-    return align_session_paths(session, profile.working_dir, profile.bot_mode)
+    return align_session_paths(session, profile.working_dir)
 
 
 def get_chat_session_for_alias(
@@ -111,8 +111,6 @@ def get_chat_session_for_alias(
         _raise(404, "agent_not_found", "未找到 agent")
     if normalized_agent_id == "main":
         return profile, agent, get_session_for_alias(manager, alias, shared_user_id)
-    if normalized_agent_id != "main" and profile.bot_mode != "cli":
-        _raise(400, "agent_not_supported", "仅 CLI Bot 支持子 agent")
     session = get_or_create_session(
         bot_id=resolve_session_bot_id(manager, alias),
         bot_alias=alias,
@@ -120,4 +118,4 @@ def get_chat_session_for_alias(
         default_working_dir=profile.working_dir,
         agent_id=agent.id,
     )
-    return profile, agent, align_session_paths(session, profile.working_dir, profile.bot_mode)
+    return profile, agent, align_session_paths(session, profile.working_dir)

@@ -403,6 +403,11 @@ class ChatStore:
             return
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column_name} {column_type}")
 
+    def _drop_column(self, conn: sqlite3.Connection, table: str, column_name: str) -> None:
+        if column_name not in self._table_columns(conn, table):
+            return
+        conn.execute(f'ALTER TABLE "{table}" DROP COLUMN "{column_name}"')
+
     def _ensure_schema(self, conn: sqlite3.Connection) -> None:
         conn.executescript(
             """
@@ -412,7 +417,6 @@ class ChatStore:
                 bot_alias TEXT NOT NULL,
                 user_id INTEGER NOT NULL,
                 agent_id TEXT NOT NULL DEFAULT 'main',
-                bot_mode TEXT NOT NULL,
                 cli_type TEXT NOT NULL,
                 working_dir TEXT NOT NULL,
                 session_epoch INTEGER NOT NULL,
@@ -420,9 +424,6 @@ class ChatStore:
                 native_provider TEXT,
                 native_session_id TEXT,
                 native_session_meta_json TEXT,
-                assistant_home TEXT,
-                managed_prompt_hash TEXT,
-                prompt_surface_version TEXT,
                 agent_prompt_hash TEXT,
                 title TEXT,
                 last_message_preview TEXT,
@@ -444,7 +445,6 @@ class ChatStore:
                 completion_state TEXT NOT NULL,
                 native_provider TEXT,
                 native_session_id TEXT,
-                managed_prompt_hash TEXT,
                 started_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 completed_at TEXT,
@@ -532,6 +532,9 @@ class ChatStore:
         self._ensure_column(conn, "messages", "author_account_id", "TEXT")
         self._ensure_column(conn, "messages", "author_username", "TEXT")
         self._ensure_column(conn, "messages", "updated_revision", "INTEGER NOT NULL DEFAULT 0")
+        for column_name in ("bot_mode", "assistant_home", "managed_prompt_hash", "prompt_surface_version"):
+            self._drop_column(conn, "conversations", column_name)
+        self._drop_column(conn, "turns", "managed_prompt_hash")
         conn.execute("DROP INDEX IF EXISTS idx_conversations_scope_updated")
         conn.execute(
             """
@@ -719,14 +722,10 @@ class ChatStore:
         bot_alias: str,
         user_id: int,
         agent_id: str = "main",
-        bot_mode: str,
         cli_type: str,
         working_dir: str,
         session_epoch: int,
         native_provider: str,
-        assistant_home: str | None,
-        managed_prompt_hash: str | None,
-        prompt_surface_version: str | None,
         agent_prompt_hash: str | None = None,
     ) -> tuple[str, int]:
         now = _utc_now()
@@ -747,26 +746,18 @@ class ChatStore:
                 """
                 UPDATE conversations
                 SET bot_alias = ?,
-                    bot_mode = ?,
                     cli_type = ?,
                     status = ?,
                     native_provider = ?,
-                    assistant_home = ?,
-                    managed_prompt_hash = ?,
-                    prompt_surface_version = ?,
                     agent_prompt_hash = ?,
                     updated_at = ?
                 WHERE id = ?
                 """,
                 (
                     bot_alias,
-                    bot_mode,
                     cli_type,
                     "active",
                     native_provider,
-                    assistant_home,
-                    managed_prompt_hash,
-                    prompt_surface_version,
                     agent_prompt_hash,
                     now,
                     conversation_id,
@@ -783,7 +774,6 @@ class ChatStore:
                 bot_alias,
                 user_id,
                 agent_id,
-                bot_mode,
                 cli_type,
                 working_dir,
                 session_epoch,
@@ -791,9 +781,6 @@ class ChatStore:
                 native_provider,
                 native_session_id,
                 native_session_meta_json,
-                assistant_home,
-                managed_prompt_hash,
-                prompt_surface_version,
                 agent_prompt_hash,
                 title,
                 last_message_preview,
@@ -802,7 +789,7 @@ class ChatStore:
                 archived_at,
                 created_at,
                 updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 conversation_id,
@@ -810,7 +797,6 @@ class ChatStore:
                 bot_alias,
                 user_id,
                 str(agent_id or "main"),
-                bot_mode,
                 cli_type,
                 working_dir,
                 session_epoch,
@@ -818,9 +804,6 @@ class ChatStore:
                 native_provider,
                 None,
                 None,
-                assistant_home,
-                managed_prompt_hash,
-                prompt_surface_version,
                 agent_prompt_hash,
                 "",
                 "",
@@ -841,7 +824,6 @@ class ChatStore:
             "bot_alias": str(row["bot_alias"] or ""),
             "user_id": int(row["user_id"]),
             "agent_id": str(row["agent_id"] or "main"),
-            "bot_mode": str(row["bot_mode"] or ""),
             "cli_type": str(row["cli_type"] or ""),
             "working_dir": str(row["working_dir"] or ""),
             "session_epoch": int(row["session_epoch"] or 0),
@@ -866,15 +848,11 @@ class ChatStore:
         bot_alias: str,
         user_id: int,
         agent_id: str = "main",
-        bot_mode: str,
         cli_type: str,
         working_dir: str,
         session_epoch: int,
         native_provider: str,
         title: str = "",
-        assistant_home: str | None = None,
-        managed_prompt_hash: str | None = None,
-        prompt_surface_version: str | None = None,
         agent_prompt_hash: str | None = None,
     ) -> str:
         now = _utc_now()
@@ -889,7 +867,6 @@ class ChatStore:
                     bot_alias,
                     user_id,
                     agent_id,
-                    bot_mode,
                     cli_type,
                     working_dir,
                     session_epoch,
@@ -897,9 +874,6 @@ class ChatStore:
                     native_provider,
                     native_session_id,
                     native_session_meta_json,
-                    assistant_home,
-                    managed_prompt_hash,
-                    prompt_surface_version,
                     agent_prompt_hash,
                     title,
                     last_message_preview,
@@ -908,7 +882,7 @@ class ChatStore:
                     archived_at,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     conversation_id,
@@ -916,7 +890,6 @@ class ChatStore:
                     bot_alias,
                     user_id,
                     str(agent_id or "main"),
-                    bot_mode,
                     cli_type,
                     working_dir,
                     session_epoch,
@@ -924,9 +897,6 @@ class ChatStore:
                     native_provider,
                     None,
                     None,
-                    assistant_home,
-                    managed_prompt_hash,
-                    prompt_surface_version,
                     agent_prompt_hash,
                     normalized_title,
                     "",
@@ -1267,16 +1237,12 @@ class ChatStore:
         bot_alias: str,
         user_id: int,
         agent_id: str = "main",
-        bot_mode: str,
         cli_type: str,
         working_dir: str,
         session_epoch: int,
         user_text: str,
         native_provider: str,
         conversation_id: str | None = None,
-        assistant_home: str | None = None,
-        managed_prompt_hash: str | None = None,
-        prompt_surface_version: str | None = None,
         agent_prompt_hash: str | None = None,
         actor: dict[str, Any] | None = None,
     ) -> ChatTurnHandle:
@@ -1315,14 +1281,10 @@ class ChatStore:
                     bot_alias=bot_alias,
                     user_id=user_id,
                     agent_id=agent_id,
-                    bot_mode=bot_mode,
                     cli_type=cli_type,
                     working_dir=working_dir,
                     session_epoch=session_epoch,
                     native_provider=native_provider,
-                    assistant_home=assistant_home,
-                    managed_prompt_hash=managed_prompt_hash,
-                    prompt_surface_version=prompt_surface_version,
                     agent_prompt_hash=agent_prompt_hash,
                 )
             revision = self._next_conversation_revision(conn, resolved_conversation_id)
@@ -1338,10 +1300,9 @@ class ChatStore:
                     completion_state,
                     native_provider,
                     native_session_id,
-                    managed_prompt_hash,
                     started_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     turn_id,
@@ -1353,7 +1314,6 @@ class ChatStore:
                     "streaming",
                     native_provider,
                     None,
-                    managed_prompt_hash,
                     now,
                     now,
                 ),
@@ -3000,22 +2960,17 @@ class ChatStore:
             """
             UPDATE conversations
             SET bot_alias = ?,
-                bot_mode = ?,
                 cli_type = ?,
                 status = ?,
                 native_provider = ?,
                 native_session_id = ?,
                 native_session_meta_json = ?,
-                assistant_home = ?,
-                managed_prompt_hash = ?,
-                prompt_surface_version = ?,
                 created_at = ?,
                 updated_at = ?
             WHERE id = ?
             """,
             (
                 new_alias,
-                _row_text(target, "bot_mode") or _row_text(source, "bot_mode"),
                 _row_text(target, "cli_type") or _row_text(source, "cli_type"),
                 "active"
                 if _row_text(target, "status") == "active" or _row_text(source, "status") == "active"
@@ -3023,9 +2978,6 @@ class ChatStore:
                 _row_text(target, "native_provider") or _row_text(source, "native_provider") or None,
                 _row_text(target, "native_session_id") or _row_text(source, "native_session_id") or None,
                 _row_text(target, "native_session_meta_json") or _row_text(source, "native_session_meta_json") or None,
-                _row_text(target, "assistant_home") or _row_text(source, "assistant_home") or None,
-                _row_text(target, "managed_prompt_hash") or _row_text(source, "managed_prompt_hash") or None,
-                _row_text(target, "prompt_surface_version") or _row_text(source, "prompt_surface_version") or None,
                 min(_row_text(source, "created_at"), _row_text(target, "created_at")),
                 max(_row_text(source, "updated_at"), _row_text(target, "updated_at")),
                 str(target["id"]),

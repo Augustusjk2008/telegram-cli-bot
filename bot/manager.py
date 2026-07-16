@@ -214,12 +214,6 @@ class MultiBotManager:
         profile = self.get_profile(alias)
         return [self._agent_to_summary(profile, agent) for agent in profile.normalized_agents()]
 
-    def _ensure_cli_agent_profile(self, alias: str) -> BotProfile:
-        profile = self._get_profile_for_update(alias)
-        if profile.bot_mode != "cli":
-            raise ValueError("仅 CLI Bot 支持 agent")
-        return profile
-
     def get_git_commit_cli_config(self, alias: str) -> GitCommitMessageCliConfig:
         self.get_profile(alias)
         if self._git_commit_cli_config is not None:
@@ -239,7 +233,7 @@ class MultiBotManager:
 
     async def create_bot_agent(self, alias: str, data: dict[str, Any]) -> dict[str, Any]:
         async with self._lock:
-            profile = self._ensure_cli_agent_profile(alias)
+            profile = self._get_profile_for_update(alias)
             agent_id = normalize_agent_id(data.get("id"), allow_main=False)
             if any(agent.id == agent_id for agent in profile.normalized_agents()):
                 raise ValueError("agent id 已存在")
@@ -259,7 +253,7 @@ class MultiBotManager:
 
     async def update_bot_agent(self, alias: str, agent_id: str, data: dict[str, Any]) -> dict[str, Any]:
         async with self._lock:
-            profile = self._ensure_cli_agent_profile(alias)
+            profile = self._get_profile_for_update(alias)
             normalized_agent_id = normalize_agent_id(agent_id, allow_main=True)
             if normalized_agent_id == "main":
                 raise ValueError("主 agent 不支持编辑")
@@ -281,8 +275,6 @@ class MultiBotManager:
     async def update_bot_cluster(self, alias: str, data: dict[str, Any]) -> dict[str, Any]:
         async with self._lock:
             profile = self._get_profile_for_update(alias)
-            if profile.bot_mode != "cli":
-                raise ValueError("仅 CLI Bot 支持集群模式")
             profile.cluster = normalize_bot_cluster_config(data)
             if profile.alias == self.main_profile.alias:
                 self._persist_main_profile()
@@ -292,7 +284,7 @@ class MultiBotManager:
 
     async def delete_bot_agent(self, alias: str, agent_id: str) -> None:
         async with self._lock:
-            profile = self._ensure_cli_agent_profile(alias)
+            profile = self._get_profile_for_update(alias)
             normalized_agent_id = normalize_agent_id(agent_id, allow_main=True)
             if normalized_agent_id == "main":
                 raise ValueError("主 agent 不能删除")
@@ -383,7 +375,6 @@ class MultiBotManager:
         cli_type: Optional[str] = None,
         cli_path: Optional[str] = None,
         working_dir: Optional[str] = None,
-        bot_mode: Optional[str] = None,
         supported_execution_modes: Any = None,
         default_execution_mode: Any = None,
         native_agent: Any = None,
@@ -395,12 +386,6 @@ class MultiBotManager:
 
         resolved_cli_type = validate_cli_type(cli_type or CLI_TYPE)
         resolved_cli_path = str(cli_path or "").strip() or self._default_cli_path_for_type(resolved_cli_type)
-        resolved_mode = str(bot_mode or "cli").strip().lower()
-
-        if resolved_mode == "assistant":
-            raise ValueError("assistant Bot 模式已移除，请创建普通 CLI Bot")
-        if resolved_mode != "cli":
-            raise ValueError(f"bot_mode 必须是 'cli'，当前值: {resolved_mode}")
         requested_supported_execution_modes = normalize_execution_modes(supported_execution_modes)
         requested_default_execution_mode = normalize_execution_mode(
             default_execution_mode,
@@ -408,8 +393,7 @@ class MultiBotManager:
         )
         resolved_supported_execution_modes, resolved_default_execution_mode = normalize_execution_mode_config(
             requested_supported_execution_modes,
-            default_execution_mode,
-            bot_mode=resolved_mode,
+            requested_default_execution_mode,
         )
         resolved_native_agent = _normalize_bot_native_agent_config(native_agent)
 
@@ -436,7 +420,6 @@ class MultiBotManager:
                 cli_path=resolved_cli_path,
                 working_dir=resolved_working_dir,
                 enabled=True,
-                bot_mode=resolved_mode,
                 supported_execution_modes=resolved_supported_execution_modes,
                 default_execution_mode=resolved_default_execution_mode,
                 native_agent=resolved_native_agent,
@@ -546,7 +529,6 @@ class MultiBotManager:
             supported, default_mode = normalize_execution_mode_config(
                 requested_supported_execution_modes,
                 requested_default_execution_mode,
-                bot_mode=profile.bot_mode,
             )
             native_agent = (
                 _normalize_bot_native_agent_config(raw_native_agent, existing=profile.native_agent)

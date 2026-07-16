@@ -1180,7 +1180,6 @@ class NativeAgentService:
                 "context_usage": context_usage,
                 "session": {
                     "bot_alias": profile.alias,
-                    "bot_mode": profile.bot_mode,
                     "cli_type": profile.cli_type,
                     "working_dir": session.working_dir,
                     "is_processing": False,

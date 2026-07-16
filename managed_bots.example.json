@@ -5,8 +5,7 @@
       "cli_type": "codex",
       "cli_path": "codex",
       "working_dir": "/path/to/project",
-      "enabled": false,
-      "bot_mode": "cli"
+      "enabled": false
     },
     {
       "alias": "test-expert",
@@ -14,7 +13,6 @@
       "cli_path": "codex",
       "working_dir": "/path/to/test-expert",
       "enabled": true,
-      "bot_mode": "cli",
       "agents": [
         {
           "id": "implementer",

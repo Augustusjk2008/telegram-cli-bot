@@ -65,9 +65,6 @@ def _merge_session_state(preferred: UserSession, fallback: UserSession, *, bot_i
         preferred.message_count = max(preferred.message_count, fallback.message_count)
         preferred.session_epoch = max(preferred.session_epoch, fallback.session_epoch)
         preferred.active_conversation_id = preferred.active_conversation_id or fallback.active_conversation_id
-        preferred.managed_prompt_hash_seen = (
-            preferred.managed_prompt_hash_seen or fallback.managed_prompt_hash_seen
-        )
         preferred.agent_prompt_hash_seen = (
             preferred.agent_prompt_hash_seen or fallback.agent_prompt_hash_seen
         )
@@ -168,7 +165,6 @@ def _save_session_to_store(session: UserSession):
             local_history_backend=session.local_history_backend,
             session_epoch=session.session_epoch,
             active_conversation_id=session.active_conversation_id,
-            managed_prompt_hash_seen=session.managed_prompt_hash_seen,
             agent_prompt_hash_seen=session.agent_prompt_hash_seen,
         )
 
@@ -199,7 +195,6 @@ def _build_session_from_store(
     local_history_backend = LOCAL_HISTORY_BACKEND
     session_epoch = 0
     active_conversation_id = None
-    managed_prompt_hash_seen = None
     agent_prompt_hash_seen = None
 
     if stored_data:
@@ -227,7 +222,6 @@ def _build_session_from_store(
         except (TypeError, ValueError):
             session_epoch = 0
         active_conversation_id = stored_data.get("active_conversation_id") or None
-        managed_prompt_hash_seen = stored_data.get("managed_prompt_hash_seen") or None
         agent_prompt_hash_seen = stored_data.get("agent_prompt_hash_seen") or None
         claude_session_initialized = bool(claude_session_id)
         if (
@@ -267,7 +261,6 @@ def _build_session_from_store(
             local_history_backend=local_history_backend,
             session_epoch=session_epoch,
             active_conversation_id=active_conversation_id,
-            managed_prompt_hash_seen=managed_prompt_hash_seen,
             agent_prompt_hash_seen=agent_prompt_hash_seen,
         ),
         should_persist_migration,
@@ -368,7 +361,6 @@ def update_bot_working_dir(bot_alias: str, working_dir: str) -> int:
             session.claude_session_initialized = False
             session.active_conversation_id = None
             session.agent_prompt_hash_seen = None
-            session.managed_prompt_hash_seen = None
             session.history = []
             session.web_turn_overlays = []
             session.running_user_text = None
@@ -385,9 +377,8 @@ def update_bot_working_dir(bot_alias: str, working_dir: str) -> int:
     return len(targets)
 
 
-def align_session_paths(session: UserSession, default_working_dir: str, bot_mode: str) -> UserSession:
+def align_session_paths(session: UserSession, default_working_dir: str) -> UserSession:
     """统一修正真实工作目录与文件浏览目录。"""
-    _ = bot_mode
     changed = False
     with session._lock:
         current_browse_dir = (

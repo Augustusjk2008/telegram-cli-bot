@@ -327,8 +327,6 @@ def get_chat_session_for_alias(
         _raise(404, "agent_not_found", "未找到 agent")
     if normalized_agent_id == "main":
         return profile, agent, get_session_for_alias(manager, alias, shared_user_id)
-    if normalized_agent_id != "main" and profile.bot_mode != "cli":
-        _raise(400, "agent_not_supported", "仅 CLI Bot 支持子 agent")
     session = get_or_create_session(
         bot_id=resolve_session_bot_id(manager, alias),
         bot_alias=alias,
@@ -336,11 +334,7 @@ def get_chat_session_for_alias(
         default_working_dir=profile.working_dir,
         agent_id=agent.id,
     )
-    return profile, agent, align_session_paths(session, profile.working_dir, profile.bot_mode)
-
-
-def _supports_cli_runtime(profile: BotProfile) -> bool:
-    return profile.bot_mode == "cli"
+    return profile, agent, align_session_paths(session, profile.working_dir)
 
 
 def _supports_native_agent_runtime(profile: BotProfile) -> bool:
@@ -467,10 +461,8 @@ def build_session_snapshot(profile: BotProfile, session: UserSession) -> dict[st
     return _get_chat_history_service(session).build_session_snapshot(profile, session)
 
 
-def _build_capabilities(profile: BotProfile, is_main: bool) -> list[str]:
-    capabilities = ["session", "history"]
-    if _supports_cli_runtime(profile):
-        capabilities.extend(["chat", "exec", "files"])
+def _build_capabilities(is_main: bool) -> list[str]:
+    capabilities = ["session", "history", "chat", "exec", "files"]
     if is_main:
         capabilities.append("admin")
     return capabilities
@@ -583,7 +575,7 @@ def build_bot_summary(
         "cluster": profile.cluster.to_dict(),
         **activity,
         "bot_username": (app.bot_data.get("bot_username") if app else "") or "",
-        "capabilities": _build_capabilities(profile, alias == manager.main_profile.alias),
+        "capabilities": _build_capabilities(alias == manager.main_profile.alias),
     }
 
 
@@ -1375,14 +1367,12 @@ def list_conversations(
                 conversation_id,
             ),
             active_conversation_id=visible_active_id,
-            bot_mode=profile.bot_mode,
         )
     else:
         decorated_items = [
             {
                 **item,
                 "active": str(item.get("id") or "") == visible_active_id,
-                "bot_mode": str(item.get("bot_mode") or profile.bot_mode),
                 "execution_mode": _conversation_execution_mode(item),
             }
             for item in items
@@ -1559,7 +1549,6 @@ def _create_agent_conversation(
         bot_alias=session.bot_alias,
         user_id=session.user_id,
         agent_id=session.agent_id,
-        bot_mode=profile.bot_mode,
         cli_type=profile.cli_type,
         working_dir=session.working_dir,
         session_epoch=max(0, int(getattr(session, "session_epoch", 0) or 0)),
@@ -1629,7 +1618,6 @@ def create_conversation(
         "conversation": {
             **store.get_conversation(conversation_id),
             "active": True,
-            "bot_mode": profile.bot_mode,
             "agent_id": session.agent_id,
             "execution_mode": resolved_execution_mode,
         },
@@ -1701,7 +1689,6 @@ def select_conversation(
             **conversation,
             **workspace_meta,
             "active": True,
-            "bot_mode": str(conversation.get("bot_mode") or profile.bot_mode),
             "agent_id": session.agent_id,
             "execution_mode": conversation_execution_mode,
         },
@@ -2295,13 +2282,13 @@ def reset_user_session(manager: MultiBotManager, alias: str, user_id: int, agent
         else:
             _profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, normalized_agent_id)
     else:
-        session = align_session_paths(session, profile.working_dir, profile.bot_mode)
+        session = align_session_paths(session, profile.working_dir)
 
     with session._lock:
         if bool(session.is_processing):
             _raise(409, "conversation_switch_blocked", "当前任务运行中，先终止或等待完成")
 
-    _get_chat_history_service(session).reset_active_conversation(profile, session)
+    _get_chat_history_service(session).reset_active_conversation(session)
     removed = reset_session(bot_id, user_id, agent_id=normalized_agent_id)
     return {"reset": removed}
 
@@ -3861,8 +3848,6 @@ async def _stream_cli_chat(
     total_started_at = time.perf_counter()
     user_id = chat_session_user_id(user_id)
     profile, agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
-    if not _supports_cli_runtime(profile):
-        _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，不支持 CLI 对话")
 
     visible_input = request.visible_text if request is not None and request.visible_text is not None else user_text
     text = (visible_input or "").strip()
@@ -3927,7 +3912,6 @@ async def _stream_cli_chat(
             session=session,
             user_text=text,
             native_provider=cli_type,
-            managed_prompt_hash=session.managed_prompt_hash_seen,
             actor=_actor_from_request(request),
         )
         stage_durations["db_ms"] += max(
@@ -4508,8 +4492,6 @@ async def run_cli_chat(
     total_started_at = time.perf_counter()
     user_id = chat_session_user_id(user_id)
     profile, agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
-    if not _supports_cli_runtime(profile):
-        _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，不支持 CLI 对话")
 
     visible_input = request.visible_text if request is not None and request.visible_text is not None else user_text
     text = (visible_input or "").strip()
@@ -4571,7 +4553,6 @@ async def run_cli_chat(
             session=session,
             user_text=text,
             native_provider=cli_type,
-            managed_prompt_hash=session.managed_prompt_hash_seen,
             actor=_actor_from_request(request),
         )
         stage_durations["db_ms"] += max(
@@ -4885,8 +4866,6 @@ async def _run_native_agent_chat(
 ) -> dict[str, Any]:
     shared_user_id = chat_session_user_id(user_id)
     profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, agent_id)
-    if not _supports_cli_runtime(profile):
-        _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，Web 对话暂不支持该模式")
 
     effective_task_mode = request.task_mode if request is not None else task_mode
     effective_task_payload = request.task_payload if request is not None else task_payload
@@ -4963,8 +4942,6 @@ async def _stream_native_agent_chat(
 ) -> AsyncIterator[dict[str, Any]]:
     shared_user_id = chat_session_user_id(user_id)
     profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, agent_id)
-    if not _supports_cli_runtime(profile):
-        _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，Web 对话暂不支持该模式")
 
     service = get_native_agent_service()
     normalized_resume_stream_id = str(resume_stream_id or "").strip()
@@ -5073,62 +5050,60 @@ async def run_chat(
     profile = get_profile_or_raise(manager, alias)
     shared_user_id = chat_session_user_id(user_id)
     resolved_execution_mode = _resolve_chat_execution_mode(profile, execution_mode)
-    if _supports_cli_runtime(profile):
-        if resolved_execution_mode == NATIVE_AGENT_PROVIDER:
-            return await _run_native_agent_chat(
-                manager,
-                alias,
-                shared_user_id,
-                user_text,
-                task_mode=task_mode,
-                task_payload=task_payload,
-                visible_text=visible_text,
-                agent_id=agent_id,
-                cluster=cluster,
-                mentions=mentions,
-                solo_mode=solo_mode,
-                actor=actor,
-                allow_unsafe_cli=allow_unsafe_cli,
-            )
-        cluster_run = _start_cluster_run_if_requested(
-            profile=profile,
-            alias=alias,
-            shared_user_id=shared_user_id,
-            cluster=cluster,
-            execution_mode=EXECUTION_MODE_CLI,
-            mentions=mentions,
-            allow_unsafe_cli=allow_unsafe_cli,
-        )
-        run_status = "completed"
-        request = _build_chat_run_request(
+    if resolved_execution_mode == NATIVE_AGENT_PROVIDER:
+        return await _run_native_agent_chat(
+            manager,
             alias,
             shared_user_id,
             user_text,
             task_mode=task_mode,
             task_payload=task_payload,
             visible_text=visible_text,
+            agent_id=agent_id,
+            cluster=cluster,
+            mentions=mentions,
+            solo_mode=solo_mode,
             actor=actor,
+            allow_unsafe_cli=allow_unsafe_cli,
         )
-        try:
-            return await run_cli_chat(
-                manager,
-                alias,
-                shared_user_id,
-                user_text,
-                request=request,
-                agent_id=agent_id,
-                cluster_run_id=cluster_run.run_id if cluster_run else "",
-                cluster_mentions=list(mentions or []),
-                allow_unsafe_cli=allow_unsafe_cli,
-            )
-        except Exception:
-            run_status = "error"
-            raise
-        finally:
-            if cluster_run:
-                _CLUSTER_RUNTIME.finish_run(cluster_run.run_id, run_status)
-                _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
-    _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，Web 对话暂不支持该模式")
+    cluster_run = _start_cluster_run_if_requested(
+        profile=profile,
+        alias=alias,
+        shared_user_id=shared_user_id,
+        cluster=cluster,
+        execution_mode=EXECUTION_MODE_CLI,
+        mentions=mentions,
+        allow_unsafe_cli=allow_unsafe_cli,
+    )
+    run_status = "completed"
+    request = _build_chat_run_request(
+        alias,
+        shared_user_id,
+        user_text,
+        task_mode=task_mode,
+        task_payload=task_payload,
+        visible_text=visible_text,
+        actor=actor,
+    )
+    try:
+        return await run_cli_chat(
+            manager,
+            alias,
+            shared_user_id,
+            user_text,
+            request=request,
+            agent_id=agent_id,
+            cluster_run_id=cluster_run.run_id if cluster_run else "",
+            cluster_mentions=list(mentions or []),
+            allow_unsafe_cli=allow_unsafe_cli,
+        )
+    except Exception:
+        run_status = "error"
+        raise
+    finally:
+        if cluster_run:
+            _CLUSTER_RUNTIME.finish_run(cluster_run.run_id, run_status)
+            _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
 
 
 async def stream_chat(
@@ -5157,73 +5132,70 @@ async def stream_chat(
         profile = get_profile_or_raise(manager, alias)
         shared_user_id = chat_session_user_id(user_id)
         resolved_execution_mode = _resolve_chat_execution_mode(profile, execution_mode)
-        if _supports_cli_runtime(profile):
-            if resolved_execution_mode == NATIVE_AGENT_PROVIDER:
-                async for event in _stream_native_agent_chat(
-                    manager,
-                    alias,
-                    shared_user_id,
-                    user_text,
-                    task_mode=task_mode,
-                    task_payload=task_payload,
-                    visible_text=visible_text,
-                    agent_id=agent_id,
-                    cluster=cluster,
-                    mentions=mentions,
-                    solo_mode=solo_mode,
-                    actor=actor,
-                    protocol=protocol,
-                    allow_unsafe_cli=allow_unsafe_cli,
-                    resume_stream_id=resume_stream_id,
-                    resume_turn_id=resume_turn_id,
-                    after_sequence=after_sequence,
-                    enable_reconnect=enable_reconnect,
-                ):
-                    yield event
-                return
-            cluster_run = _start_cluster_run_if_requested(
-                profile=profile,
+        if resolved_execution_mode == NATIVE_AGENT_PROVIDER:
+            async for event in _stream_native_agent_chat(
+                manager,
                 alias=alias,
-                shared_user_id=shared_user_id,
-                cluster=cluster,
-                execution_mode=EXECUTION_MODE_CLI,
-                mentions=mentions,
-                allow_unsafe_cli=allow_unsafe_cli,
-            )
-            run_status = "completed"
-            request = _build_chat_run_request(
-                alias,
-                shared_user_id,
-                user_text,
+                user_id=shared_user_id,
+                user_text=user_text,
                 task_mode=task_mode,
                 task_payload=task_payload,
                 visible_text=visible_text,
+                agent_id=agent_id,
+                cluster=cluster,
+                mentions=mentions,
+                solo_mode=solo_mode,
                 actor=actor,
-            )
-            try:
-                async for event in _stream_cli_chat(
-                    manager,
-                    alias,
-                    shared_user_id,
-                    user_text,
-                    request=request,
-                    agent_id=agent_id,
-                    cluster_run_id=cluster_run.run_id if cluster_run else "",
-                    cluster_mentions=list(mentions or []),
-                    allow_unsafe_cli=allow_unsafe_cli,
-                ):
-                    if event.get("type") == "error":
-                        run_status = "error"
-                    yield event
-            except Exception:
-                run_status = "error"
-                raise
-            finally:
-                if cluster_run:
-                    _CLUSTER_RUNTIME.finish_run(cluster_run.run_id, run_status)
-                    _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
+                protocol=protocol,
+                allow_unsafe_cli=allow_unsafe_cli,
+                resume_stream_id=resume_stream_id,
+                resume_turn_id=resume_turn_id,
+                after_sequence=after_sequence,
+                enable_reconnect=enable_reconnect,
+            ):
+                yield event
             return
-        _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，Web 对话暂不支持该模式")
+        cluster_run = _start_cluster_run_if_requested(
+            profile=profile,
+            alias=alias,
+            shared_user_id=shared_user_id,
+            cluster=cluster,
+            execution_mode=EXECUTION_MODE_CLI,
+            mentions=mentions,
+            allow_unsafe_cli=allow_unsafe_cli,
+        )
+        run_status = "completed"
+        request = _build_chat_run_request(
+            alias,
+            shared_user_id,
+            user_text,
+            task_mode=task_mode,
+            task_payload=task_payload,
+            visible_text=visible_text,
+            actor=actor,
+        )
+        try:
+            async for event in _stream_cli_chat(
+                manager,
+                alias,
+                shared_user_id,
+                user_text,
+                request=request,
+                agent_id=agent_id,
+                cluster_run_id=cluster_run.run_id if cluster_run else "",
+                cluster_mentions=list(mentions or []),
+                allow_unsafe_cli=allow_unsafe_cli,
+            ):
+                if event.get("type") == "error":
+                    run_status = "error"
+                yield event
+        except Exception:
+            run_status = "error"
+            raise
+        finally:
+            if cluster_run:
+                _CLUSTER_RUNTIME.finish_run(cluster_run.run_id, run_status)
+                _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
     except WebApiError as exc:
         yield {"type": "error", "code": exc.code, "message": exc.message}
     except Exception as exc:  # pragma: no cover - defensive
@@ -5231,10 +5203,7 @@ async def stream_chat(
 
 
 async def execute_shell_command(manager: MultiBotManager, alias: str, user_id: int, command: str) -> dict[str, Any]:
-    profile = get_profile_or_raise(manager, alias)
-    if not _supports_cli_runtime(profile):
-        _raise(409, "unsupported_bot_mode", f"Bot `{alias}` 当前模式为 `{profile.bot_mode}`，不支持执行 Shell 命令")
-
+    get_profile_or_raise(manager, alias)
     cmd = (command or "").strip()
     if not cmd:
         _raise(400, "empty_command", msg("shell", "usage"))
@@ -5293,7 +5262,7 @@ def execute_plan(
     plan_text = str(content or "").strip()
     if not plan_text:
         _raise(400, "empty_plan", "方案不能为空")
-    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    _profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
     saved = save_execution_plan(session.working_dir, plan_text, title=title)
     conversation_data = create_conversation(
         manager,
@@ -5309,7 +5278,6 @@ def execute_plan(
         "conversation": conversation_data["conversation"],
         "messages": conversation_data["messages"],
         "execution_message": execution_message,
-        "bot_mode": profile.bot_mode,
     }
 
 
@@ -5436,7 +5404,6 @@ async def stream_update_download(repo_root: Path | None = None) -> AsyncIterator
 async def add_managed_bot(
     manager: MultiBotManager,
     alias: str,
-    bot_mode: str,
     cli_type: Optional[str],
     cli_path: Optional[str],
     working_dir: Optional[str],
@@ -5453,7 +5420,6 @@ async def add_managed_bot(
             cli_type=cli_type,
             cli_path=cli_path,
             working_dir=working_dir,
-            bot_mode=bot_mode,
             supported_execution_modes=supported_execution_modes,
             default_execution_mode=default_execution_mode,
             native_agent=native_agent,
@@ -5619,10 +5585,10 @@ async def update_bot_workdir(
                     409,
                     WORKDIR_CHANGE_BLOCKED_PROCESSING,
                     "当前仍有任务运行，请先停止任务再切换工作目录",
-                    data=service.summarize_active_conversation(profile, target_session),
+                    data=service.summarize_active_conversation(target_session),
                 )
-            if service.has_active_conversation(profile, target_session) and not force_reset:
-                summary = service.summarize_active_conversation(profile, target_session)
+            if service.has_active_conversation(target_session) and not force_reset:
+                summary = service.summarize_active_conversation(target_session)
                 summary["requested_working_dir"] = resolved_working_dir
                 _raise(
                     409,
@@ -5634,8 +5600,8 @@ async def update_bot_workdir(
     if force_reset:
         for target_session in target_sessions:
             service = _get_chat_history_service(target_session)
-            if service.has_active_conversation(profile, target_session):
-                service.reset_active_conversation(profile, target_session)
+            if service.has_active_conversation(target_session):
+                service.reset_active_conversation(target_session)
     if target_changed:
         for target_session in target_sessions:
             _reset_session_for_workdir_change(target_session, resolved_working_dir)

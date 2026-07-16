@@ -23,6 +23,12 @@ from bot.sessions import get_or_create_session
 class TestManagerLoadSave:
     """测试配置加载和保存"""
 
+    def test_legacy_bot_mode_is_ignored_without_runtime_surface(self):
+        profile = BotProfile.from_dict({"alias": "legacy", "bot_mode": "assistant"})
+
+        assert not hasattr(profile, "bot_mode")
+        assert "bot_mode" not in profile.to_dict()
+
     def test_load_bots_format(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({
@@ -91,7 +97,6 @@ class TestManagerLoadSave:
                 "codex",
                 "missing-cli",
                 str(temp_dir),
-                "cli",
                 supported_execution_modes=["native_agent"],
                 default_execution_mode="native_agent",
                 native_agent={
@@ -124,7 +129,6 @@ class TestManagerLoadSave:
                 "codex",
                 "codex",
                 str(temp_dir),
-                "cli",
             )
 
         data = json.loads(storage.read_text(encoding="utf-8"))
@@ -146,7 +150,6 @@ class TestManagerLoadSave:
                 cli_type,
                 cli_type,
                 str(temp_dir),
-                "cli",
                 bypass_approval_and_sandbox=True,
             )
 
