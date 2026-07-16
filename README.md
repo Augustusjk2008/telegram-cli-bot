@@ -316,6 +316,9 @@ APP_UPDATE_REPOSITORY=Augustusjk2008/telegram-cli-bot
 
 ## 开发命令
 
+原始仓库与 feature 分支的固定同步流程见
+[BRANCH_SYNC_WORKFLOW.md](BRANCH_SYNC_WORKFLOW.md)。
+
 ```bash
 python -m bot
 python -m pytest tests -q
