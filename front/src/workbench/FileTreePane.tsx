@@ -1,5 +1,5 @@
 import { clsx } from "clsx";
-import { FilePlus, FolderOpen, FolderPlus, House, Maximize2, Minimize2, RefreshCw, Upload } from "lucide-react";
+import { FilePlus, FolderOpen, FolderPlus, House, ListTree, Maximize2, Minimize2, RefreshCw, Upload } from "lucide-react";
 import { type DragEvent, type KeyboardEvent, type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { FileNameDialog } from "../components/FileNameDialog";
@@ -48,6 +48,31 @@ const TREE_AUTO_SCROLL_MAX_STEP_PX = 18;
 function branchLabel(path: string) {
   const parts = path.split("/");
   return parts[parts.length - 1] || path;
+}
+
+function formatFileSize(value: number) {
+  if (!Number.isFinite(value) || value < 0) {
+    return "--";
+  }
+  if (value < 1024) {
+    return `${Math.floor(value)} B`;
+  }
+
+  const units = ["KB", "MB", "GB", "TB", "PB"];
+  let scaled = value / 1024;
+  let unitIndex = 0;
+  while (scaled >= 1024 && unitIndex < units.length - 1) {
+    scaled /= 1024;
+    unitIndex += 1;
+  }
+  return `${Number(scaled.toFixed(1))} ${units[unitIndex]}`;
+}
+
+function fileTreeEntryMetadata(entry: FileTreeNode) {
+  if (entry.isDir) {
+    return typeof entry.childCount === "number" ? `${entry.childCount} 项` : "--";
+  }
+  return typeof entry.size === "number" ? formatFileSize(entry.size) : "--";
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -903,6 +928,7 @@ export function FileTreePane({
   const [draggedEntryPath, setDraggedEntryPath] = useState("");
   const [dropTargetPath, setDropTargetPath] = useState("");
   const [actionError, setActionError] = useState("");
+  const [showEntryMetadata, setShowEntryMetadata] = useState(false);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const treeScrollRef = useRef<HTMLDivElement | null>(null);
   const autoScrollFrameRef = useRef<number | null>(null);
@@ -1362,6 +1388,7 @@ export function FileTreePane({
     const isIgnored = gitDecoration === "ignored";
     const itemToneClass = treeItemToneClass(gitDecoration);
     const selected = tree.selectedPath === entry.path;
+    const metadata = fileTreeEntryMetadata(entry);
     const itemButtonClassName = clsx(
       "flex h-full min-w-0 flex-1 items-center rounded border px-2 text-left transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)]",
       selected
@@ -1408,7 +1435,12 @@ export function FileTreePane({
           >
             <span className="flex w-full min-w-0 items-center gap-2">
               <TreeNodeIcon kind={iconKind} />
-              <span className={clsx("truncate", itemToneClass)}>{dirLabel}</span>
+              <span className={clsx("min-w-0 flex-1 truncate", itemToneClass)}>{dirLabel}</span>
+              {showEntryMetadata ? (
+                <span className="ml-1 shrink-0 text-[10px] font-medium tabular-nums text-[var(--muted)]">
+                  {metadata}
+                </span>
+              ) : null}
             </span>
           </button>
         ) : (
@@ -1431,7 +1463,12 @@ export function FileTreePane({
           >
             <span className="flex w-full min-w-0 items-center gap-2">
               <TreeNodeIcon kind={iconKind} />
-              <span className={clsx("truncate", itemToneClass)}>{entry.name}</span>
+              <span className={clsx("min-w-0 flex-1 truncate", itemToneClass)}>{entry.name}</span>
+              {showEntryMetadata ? (
+                <span className="ml-1 shrink-0 text-[10px] font-medium tabular-nums text-[var(--muted)]">
+                  {metadata}
+                </span>
+              ) : null}
             </span>
           </button>
         )}
@@ -1500,15 +1537,32 @@ export function FileTreePane({
       <div className="border-b border-[var(--border)] px-3 py-2.5">
         <div className="flex items-center justify-between gap-2">
           <div className="truncate text-[11px] text-[var(--muted)]">{tree.rootPath}</div>
-          <button
-            type="button"
-            aria-label={focused ? "退出聚焦文件区" : "聚焦文件区"}
-            title={focused ? "退出聚焦文件区" : "聚焦文件区"}
-            onClick={onToggleFocus}
-            className="inline-flex h-7 w-7 items-center justify-center rounded border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]"
-          >
-            {focused ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
-          </button>
+          <div className="flex shrink-0 items-center gap-1">
+            <button
+              type="button"
+              aria-label={showEntryMetadata ? "隐藏条目信息" : "显示条目信息"}
+              aria-pressed={showEntryMetadata}
+              title={showEntryMetadata ? "隐藏文件夹子项数和文件大小" : "显示文件夹子项数和文件大小"}
+              onClick={() => setShowEntryMetadata((current) => !current)}
+              className={clsx(
+                "inline-flex h-7 w-7 items-center justify-center rounded border transition-colors active:scale-[0.96] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--workbench-focus-ring)]",
+                showEntryMetadata
+                  ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]"
+                  : "border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]",
+              )}
+            >
+              <ListTree className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              aria-label={focused ? "退出聚焦文件区" : "聚焦文件区"}
+              title={focused ? "退出聚焦文件区" : "聚焦文件区"}
+              onClick={onToggleFocus}
+              className="inline-flex h-7 w-7 items-center justify-center rounded border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]"
+            >
+              {focused ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+            </button>
+          </div>
         </div>
         <div className="mt-2 flex items-center gap-2">
           {canMutateFiles ? (

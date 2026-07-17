@@ -5,7 +5,9 @@ import { App } from "../app/App";
 import { DEMO_MAIN_WORKDIR, DEMO_TEAM_WORKDIR } from "../mocks/demoEnvironment";
 import type { BotSummary, ChatMessage, SessionState } from "../services/types";
 import { MockWebBotClient } from "../services/mockWebBotClient";
+import { FileTreePane } from "../workbench/FileTreePane";
 import { soloModeStorageKey } from "../workbench/soloTypes";
+import type { UseFileTreeResult } from "../workbench/useFileTree";
 import { buildWorkbenchSessionStorageKey } from "../workbench/workbenchSession";
 
 const terminalSessionMock = vi.hoisted(() => ({
@@ -237,6 +239,77 @@ test("forced desktop mode mounts the desktop shell instead of the mobile bottom 
   expect(await screen.findByTestId("desktop-workbench-root")).toBeInTheDocument();
 });
 
+test("desktop file tree toggles direct child counts and adaptive file sizes", async () => {
+  const user = userEvent.setup();
+  const tree: UseFileTreeResult = {
+    rootPath: "C:\\workspace\\demo",
+    loading: false,
+    error: "",
+    rootEntries: [
+      { path: "src", name: "src", isDir: true, childCount: 2 },
+      { path: "notes.txt", name: "notes.txt", isDir: false, size: 900 },
+      { path: "bundle.bin", name: "bundle.bin", isDir: false, size: 1536 },
+      { path: "archive.zip", name: "archive.zip", isDir: false, size: 2 * 1024 * 1024 },
+      { path: "disk.img", name: "disk.img", isDir: false, size: 3 * 1024 * 1024 * 1024 },
+    ],
+    branches: {},
+    expandedPaths: [],
+    highlightedPath: "",
+    selectedPath: "",
+    downloadProgress: null,
+    selectPath: vi.fn(),
+    clearSelection: vi.fn(),
+    isExpanded: () => false,
+    toggleDirectory: vi.fn(),
+    refreshRoot: vi.fn(),
+    refreshTreeAndRoot: vi.fn(),
+    restoreExpandedPaths: vi.fn(),
+    revealPath: vi.fn(),
+    highlightPath: vi.fn(),
+    createDirectory: vi.fn(),
+    createFile: vi.fn(),
+    renameFile: vi.fn(),
+    copyFile: vi.fn(),
+    moveFile: vi.fn(),
+    deletePath: vi.fn(),
+    downloadFile: vi.fn(),
+  };
+
+  render(
+    <FileTreePane
+      tree={tree}
+      onOpenFile={vi.fn()}
+      onCreatedFile={vi.fn()}
+      onRenamedFile={vi.fn()}
+      onDeletedFile={vi.fn()}
+      onRequestPreview={vi.fn()}
+      onRequestUpload={vi.fn()}
+      onRequestHome={vi.fn()}
+      gitDecorations={{}}
+      onRefreshGitDecorations={vi.fn()}
+      onRequestSetWorkdir={vi.fn()}
+      focused={false}
+      onToggleFocus={vi.fn()}
+    />,
+  );
+
+  const toggle = screen.getByRole("button", { name: "显示条目信息" });
+  expect(toggle).toHaveAttribute("aria-pressed", "false");
+  expect(screen.queryByText("2 项")).not.toBeInTheDocument();
+
+  await user.click(toggle);
+
+  expect(screen.getByRole("button", { name: "隐藏条目信息" })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByText("2 项")).toBeInTheDocument();
+  expect(screen.getByText("900 B")).toBeInTheDocument();
+  expect(screen.getByText("1.5 KB")).toBeInTheDocument();
+  expect(screen.getByText("2 MB")).toBeInTheDocument();
+  expect(screen.getByText("3 GB")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "隐藏条目信息" }));
+  expect(screen.queryByText("2 项")).not.toBeInTheDocument();
+});
+
 test("native desktop bot auto enters solo workbench", async () => {
   localStorage.setItem("web-view-mode", "desktop");
   const user = userEvent.setup();
@@ -425,7 +498,6 @@ test("create bot unsafe bypass toggle is disabled without unsafe capability", as
     }));
   });
 });
-
 
 
 

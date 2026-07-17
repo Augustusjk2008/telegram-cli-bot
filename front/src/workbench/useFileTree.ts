@@ -8,6 +8,7 @@ export type FileTreeNode = {
   path: string;
   name: string;
   isDir: boolean;
+  childCount?: number;
   size?: number;
   updatedAt?: string;
 };
@@ -103,11 +104,15 @@ function branchMapConfirmsMissingPath(
   return !parentBranch.entries.some((entry) => entry.path === path);
 }
 
-function mapBranchEntries(parentPath: string, entries: Array<{ name: string; isDir: boolean; size?: number; updatedAt?: string }>) {
+function mapBranchEntries(
+  parentPath: string,
+  entries: Array<{ name: string; isDir: boolean; childCount?: number; size?: number; updatedAt?: string }>,
+) {
   return entries.map((entry) => ({
     path: joinTreePath(parentPath, entry.name),
     name: entry.name,
     isDir: entry.isDir,
+    childCount: entry.childCount,
     size: entry.size,
     updatedAt: entry.updatedAt,
   }));
@@ -234,7 +239,11 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
 
     const promise = (async () => {
       try {
-        const listing = await client.listFiles(botAlias, joinAbsoluteTreePath(currentRootPath, branchPath));
+        const listing = await client.listFiles(
+          botAlias,
+          joinAbsoluteTreePath(currentRootPath, branchPath),
+          { includeChildCounts: true },
+        );
         const branchState = {
           entries: mapBranchEntries(branchPath, listing.entries),
           loading: false,
@@ -348,7 +357,7 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
     setLoading(true);
     setError("");
     try {
-      const listing = await client.listFiles(botAlias, options?.rootPath);
+      const listing = await client.listFiles(botAlias, options?.rootPath, { includeChildCounts: true });
       if (loadGenerationRef.current !== generation) {
         return;
       }
@@ -396,7 +405,7 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
     setLoading(true);
     setError("");
     try {
-      const listing = await client.listFiles(botAlias, options?.rootPath);
+      const listing = await client.listFiles(botAlias, options?.rootPath, { includeChildCounts: true });
       if (loadGenerationRef.current !== generation) {
         return listing.workingDir;
       }

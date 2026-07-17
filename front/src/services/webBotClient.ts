@@ -23,6 +23,7 @@ import type {
   DebugProfile,
   DebugState,
   DirectoryListing,
+  DirectoryListingOptions,
   EnvConfigPatchInput,
   EnvConfigPatchResult,
   EnvConfigSnapshot,
@@ -252,7 +253,7 @@ export interface WebBotClient {
   saveTerminalActionsConfig(botAlias: string, config: TerminalActionsEditableConfig, expectedMtimeNs: string): Promise<TerminalActionsConfig>;
   runTerminalAction(botAlias: string, actionId: string, input: TerminalActionRunInput): Promise<TerminalActionRunResult>;
   getCurrentPath(botAlias: string): Promise<string>;
-  listFiles(botAlias: string, path?: string): Promise<DirectoryListing>;
+  listFiles(botAlias: string, path?: string, options?: DirectoryListingOptions): Promise<DirectoryListing>;
   openBotWorkdir(botAlias: string): Promise<BotWorkdirOpenResult>;
   revealFileTreePath(botAlias: string, path: string): Promise<FileTreeRevealResult>;
   changeDirectory(botAlias: string, path: string): Promise<string>;

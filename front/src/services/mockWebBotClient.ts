@@ -66,6 +66,7 @@ import type {
   DebugProfile,
   DebugState,
   DirectoryListing,
+  DirectoryListingOptions,
   EnvConfigItem,
   EnvConfigPatchInput,
   EnvConfigPatchResult,
@@ -4330,12 +4331,22 @@ export class MockWebBotClient implements WebBotClient {
     return { kind: "file" };
   }
 
-  async listFiles(botAlias: string, path?: string): Promise<DirectoryListing> {
-    const currentPath = path?.trim() || this.getBrowserPath(botAlias);
+  async listFiles(botAlias: string, path?: string, options?: DirectoryListingOptions): Promise<DirectoryListing> {
+    const currentPath = this.normalizeMockPath(path?.trim() || this.getBrowserPath(botAlias));
     const botFiles = mockFiles[botAlias] || {};
     return {
       workingDir: currentPath,
-      entries: botFiles[currentPath] || [],
+      entries: (botFiles[currentPath] || []).map((entry) => {
+        if (!entry.isDir || !options?.includeChildCounts) {
+          return entry;
+        }
+        const childPath = currentPath === "/" ? `/${entry.name}` : `${currentPath}/${entry.name}`;
+        const children = botFiles[childPath];
+        return {
+          ...entry,
+          ...(children ? { childCount: children.length } : {}),
+        };
+      }),
     };
   }
 

@@ -117,6 +117,7 @@ import type {
   DebugState,
   DebugVariable,
   DirectoryListing,
+  DirectoryListingOptions,
   EnvConfigFieldType,
   EnvConfigItem,
   EnvConfigPatchInput,
@@ -728,6 +729,7 @@ type RawClusterTemplateSummary = {
 type RawFileEntry = {
   name: string;
   is_dir: boolean;
+  child_count?: number;
   size?: number;
   updated_at?: string;
 };
@@ -1816,6 +1818,7 @@ function mapFileEntry(raw: RawFileEntry): FileEntry {
   return {
     name: raw.name,
     isDir: raw.is_dir,
+    ...(typeof raw.child_count === "number" ? { childCount: raw.child_count } : {}),
     ...(typeof raw.size === "number" ? { size: raw.size } : {}),
     ...(raw.updated_at ? { updatedAt: raw.updated_at } : {}),
   };
@@ -4875,10 +4878,13 @@ export class RealWebBotClient implements WebBotClient {
     return data.working_dir;
   }
 
-  async listFiles(botAlias: string, path?: string): Promise<DirectoryListing> {
+  async listFiles(botAlias: string, path?: string, options?: DirectoryListingOptions): Promise<DirectoryListing> {
     const params = new URLSearchParams();
     if (path && path.trim()) {
       params.set("path", path.trim());
+    }
+    if (options?.includeChildCounts) {
+      params.set("include_child_counts", "1");
     }
     const suffix = params.size > 0 ? `?${params.toString()}` : "";
     const data = await this.requestJson<{ working_dir: string; entries: RawFileEntry[]; is_virtual_root?: boolean }>(

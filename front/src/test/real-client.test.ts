@@ -2174,6 +2174,7 @@ describe("RealWebBotClient", () => {
               {
                 name: "src",
                 is_dir: true,
+                child_count: 3,
               },
               {
                 name: "package.json",
@@ -2187,14 +2188,16 @@ describe("RealWebBotClient", () => {
 
     const client = new RealWebBotClient();
     await client.login("secret-token");
-    const listing = await client.listFiles("main");
+    const listing = await client.listFiles("main", undefined, { includeChildCounts: true });
 
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/bots/main/ls?include_child_counts=1");
     expect(listing).toEqual({
       workingDir: "C:\\workspace\\demo",
       entries: [
         {
           name: "src",
           isDir: true,
+          childCount: 3,
         },
         {
           name: "package.json",

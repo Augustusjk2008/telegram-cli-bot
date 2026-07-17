@@ -2772,6 +2772,7 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_VIEW_FILE_TREE)
         alias = self._manager_alias(request)
         target_path = request.query.get("path") or None
+        include_child_counts = str(request.query.get("include_child_counts", "")).strip().lower() in {"1", "true", "yes", "on"}
         if auth.role == ROLE_GUEST:
             base_dir = get_working_directory(self.manager, alias, self._chat_user_id(auth))["working_dir"]
             data = await asyncio.to_thread(
@@ -2782,9 +2783,17 @@ class WebApiServer:
                 path=target_path,
                 base_dir=base_dir,
                 restrict_to_base_dir=True,
+                include_child_counts=include_child_counts,
             )
             return _json({"ok": True, "data": data})
-        data = await asyncio.to_thread(get_directory_listing, self.manager, alias, self._chat_user_id(auth), path=target_path)
+        data = await asyncio.to_thread(
+            get_directory_listing,
+            self.manager,
+            alias,
+            self._chat_user_id(auth),
+            path=target_path,
+            include_child_counts=include_child_counts,
+        )
         return _json({"ok": True, "data": data})
 
     def _workspace_file_root(self, alias: str, auth: WebAuthSession) -> str:

@@ -1160,6 +1160,7 @@ export type TerminalActionRunResult = {
 export type FileEntry = {
   name: string;
   isDir: boolean;
+  childCount?: number;
   size?: number;
   updatedAt?: string;
 };
@@ -1975,6 +1976,10 @@ export type DirectoryListing = {
   workingDir: string;
   entries: FileEntry[];
   isVirtualRoot?: boolean;
+};
+
+export type DirectoryListingOptions = {
+  includeChildCounts?: boolean;
 };
 
 export type BotWorkdirOpenResult = {
