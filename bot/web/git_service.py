@@ -130,6 +130,7 @@ def _run_bounded_process(
     buffers = {"stdout": bytearray(), "stderr": bytearray()}
     limits = {"stdout": profile.stdout_max_bytes, "stderr": profile.stderr_max_bytes}
     exceeded = threading.Event()
+    closing = threading.Event()
     exceeded_name = [""]
     deadline = time.monotonic() + profile.timeout_seconds
     termination_thread: threading.Thread | None = None
@@ -142,17 +143,21 @@ def _run_bounded_process(
         termination_thread.start()
 
     def reader(name: str, stream) -> None:
-        while True:
-            chunk = stream.read(65536)
-            if not chunk:
-                return
-            remaining = max(0, limits[name] - len(buffers[name]))
-            if remaining:
-                buffers[name].extend(chunk[:remaining])
-            if len(chunk) > remaining:
-                exceeded_name[0] = name
-                exceeded.set()
-                return
+        try:
+            while True:
+                chunk = stream.read(65536)
+                if not chunk:
+                    return
+                remaining = max(0, limits[name] - len(buffers[name]))
+                if remaining:
+                    buffers[name].extend(chunk[:remaining])
+                if len(chunk) > remaining:
+                    exceeded_name[0] = name
+                    exceeded.set()
+                    return
+        except (OSError, ValueError):
+            if not closing.is_set():
+                raise
 
     stdout_thread = threading.Thread(target=reader, args=("stdout", process.stdout), daemon=True)
     stderr_thread = threading.Thread(target=reader, args=("stderr", process.stderr), daemon=True)
@@ -189,10 +194,15 @@ def _run_bounded_process(
             process.kill()
         except OSError:
             pass
+    # Let exited processes deliver EOF before closing pipes from another thread.
+    for thread in (stdout_thread, stderr_thread):
+        thread.join(timeout=max(0.0, cleanup_deadline - time.monotonic()))
+    closing.set()
     close_process_streams(process)
+    close_join_deadline = time.monotonic() + 0.05
     for thread in (stdout_thread, stderr_thread, stdin_thread):
         if thread is not None:
-            thread.join(timeout=max(0.0, cleanup_deadline - time.monotonic()))
+            thread.join(timeout=max(0.0, close_join_deadline - time.monotonic()))
     stdout = bytes(buffers["stdout"]).decode("utf-8", errors="replace")
     stderr = bytes(buffers["stderr"]).decode("utf-8", errors="replace")
     _git_diag_add(

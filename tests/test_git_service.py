@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -63,6 +64,123 @@ def test_bounded_git_process_deadline_includes_blocked_stdin_write(tmp_path) -> 
 
     assert time.monotonic() - started_at < 0.3
     assert result.budget_reason == "timeout"
+
+
+def test_bounded_git_process_drains_readers_before_closing_streams(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    process_finished = threading.Event()
+
+    class DelayedEofStream:
+        def __init__(self) -> None:
+            self.read_started = threading.Event()
+            self.reading = threading.Event()
+            self.closed = False
+            self.closed_while_reading = False
+
+        def read(self, _size: int) -> bytes:
+            self.read_started.set()
+            self.reading.set()
+            try:
+                assert process_finished.wait(timeout=1)
+                time.sleep(0.04)
+                return b""
+            finally:
+                self.reading.clear()
+
+        def close(self) -> None:
+            self.closed_while_reading = self.reading.is_set()
+            self.closed = True
+
+    class DelayedEofProcess:
+        def __init__(self) -> None:
+            self.stdin = None
+            self.stdout = DelayedEofStream()
+            self.stderr = DelayedEofStream()
+            self.returncode = 0
+
+        def poll(self) -> int:
+            assert self.stdout.read_started.wait(timeout=1)
+            assert self.stderr.read_started.wait(timeout=1)
+            return 0
+
+        def wait(self, timeout: float | None = None) -> int:
+            del timeout
+            process_finished.set()
+            return self.returncode
+
+        def kill(self) -> None:
+            self.returncode = 1
+            process_finished.set()
+
+    process = DelayedEofProcess()
+    monkeypatch.setattr(git_service.subprocess, "Popen", lambda *_args, **_kwargs: process)
+
+    result = git_service._run_bounded_process(
+        ["git", "status"],
+        cwd=str(tmp_path),
+        env=None,
+        profile=git_service._GitCommandProfile(timeout_seconds=1),
+    )
+
+    assert result.returncode == 0
+    assert process.stdout.closed is True
+    assert process.stderr.closed is True
+    assert process.stdout.closed_while_reading is False
+    assert process.stderr.closed_while_reading is False
+
+
+def test_bounded_git_process_suppresses_reader_errors_during_forced_stream_close(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    thread_errors: list[BaseException] = []
+
+    class CloseInterruptedStream:
+        def __init__(self) -> None:
+            self.read_started = threading.Event()
+            self.closed = threading.Event()
+
+        def read(self, _size: int) -> bytes:
+            self.read_started.set()
+            assert self.closed.wait(timeout=1)
+            raise ValueError("I/O operation on closed file")
+
+        def close(self) -> None:
+            self.closed.set()
+
+    class CompletedProcessWithBlockedReaders:
+        def __init__(self) -> None:
+            self.stdin = None
+            self.stdout = CloseInterruptedStream()
+            self.stderr = CloseInterruptedStream()
+            self.returncode = 0
+
+        def poll(self) -> int:
+            assert self.stdout.read_started.wait(timeout=1)
+            assert self.stderr.read_started.wait(timeout=1)
+            return 0
+
+        def wait(self, timeout: float | None = None) -> int:
+            del timeout
+            return self.returncode
+
+        def kill(self) -> None:
+            self.returncode = 1
+
+    process = CompletedProcessWithBlockedReaders()
+    monkeypatch.setattr(git_service.subprocess, "Popen", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(threading, "excepthook", lambda args: thread_errors.append(args.exc_value))
+
+    git_service._run_bounded_process(
+        ["git", "status"],
+        cwd=str(tmp_path),
+        env=None,
+        profile=git_service._GitCommandProfile(timeout_seconds=1),
+    )
+
+    assert thread_errors == []
 
 
 def test_real_porcelain_v2_z_parses_rename_and_space_paths(tmp_path: Path) -> None:
