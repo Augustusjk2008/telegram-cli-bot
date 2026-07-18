@@ -171,6 +171,27 @@ def test_format_cli_error_display_leaves_non_error_response_unchanged():
     ) == " 正常输出\n"
 
 
+def test_directory_listing_includes_direct_child_counts_and_file_sizes(tmp_path):
+    from bot.web.files_service import list_directory_entries
+
+    source_dir = tmp_path / "src"
+    source_dir.mkdir()
+    (source_dir / "nested").mkdir()
+    (source_dir / "main.py").write_text("print('ok')", encoding="utf-8")
+    (tmp_path / "empty").mkdir()
+    payload = b"x" * 1536
+    (tmp_path / "bundle.bin").write_bytes(payload)
+
+    listing_without_counts = list_directory_entries(str(tmp_path))
+    listing = list_directory_entries(str(tmp_path), include_child_counts=True)
+    entries = {entry["name"]: entry for entry in listing["entries"]}
+
+    assert all("child_count" not in entry for entry in listing_without_counts["entries"])
+    assert entries["src"]["child_count"] == 2
+    assert entries["empty"]["child_count"] == 0
+    assert entries["bundle.bin"]["size"] == len(payload)
+
+
 def test_terminal_trace_and_cli_error_display_keep_single_exit_code_prefix():
     from bot.web.api_service import _build_terminal_trace, _format_cli_error_display
 

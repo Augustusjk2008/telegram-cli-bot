@@ -156,21 +156,33 @@ def resolve_browser_target_path(current_dir: str, new_path: str) -> str:
     return os.path.abspath(os.path.expanduser(candidate))
 
 
-def list_directory_entries(working_dir: str) -> dict[str, Any]:
+def _count_directory_children(path: str) -> int | None:
+    try:
+        with os.scandir(path) as children:
+            return sum(1 for _ in children)
+    except OSError:
+        return None
+
+
+def list_directory_entries(working_dir: str, *, include_child_counts: bool = False) -> dict[str, Any]:
     entries = []
     for entry in sorted(os.scandir(working_dir), key=lambda item: (not item.is_dir(), item.name.lower())):
         item = {
             "name": entry.name,
             "is_dir": entry.is_dir(),
         }
-        if entry.is_file():
+        if item["is_dir"] and include_child_counts:
+            child_count = _count_directory_children(entry.path)
+            if child_count is not None:
+                item["child_count"] = child_count
+        elif entry.is_file():
             item["size"] = entry.stat().st_size
         entries.append(item)
     return build_directory_listing_response(working_dir, entries)
 
 
-def list_directory_entry_items(working_dir: str) -> list[dict[str, Any]]:
-    return list_directory_entries(working_dir)["entries"]
+def list_directory_entry_items(working_dir: str, *, include_child_counts: bool = False) -> list[dict[str, Any]]:
+    return list_directory_entries(working_dir, include_child_counts=include_child_counts)["entries"]
 
 
 def ensure_path_within_base_dir(base_dir: str, target_dir: str) -> None:
@@ -190,6 +202,7 @@ def get_directory_listing(
     *,
     base_dir: str | None = None,
     restrict_to_base_dir: bool = False,
+    include_child_counts: bool = False,
 ) -> dict[str, Any]:
     session = get_session_for_alias(manager, alias, user_id)
     browser_dir = str(base_dir or get_browser_directory(session))
@@ -203,7 +216,7 @@ def get_directory_listing(
     if is_windows_drives_virtual_root(target_dir):
         return list_windows_drive_entries()
     try:
-        return list_directory_entries(target_dir)
+        return list_directory_entries(target_dir, include_child_counts=include_child_counts)
     except FileNotFoundError:
         _raise(404, "working_dir_not_found", f"目录不存在: {target_dir}")
     except Exception as exc:
@@ -242,7 +255,7 @@ def reveal_directory_tree(
     branches: dict[str, list[dict[str, Any]]] = {}
     for branch_path in branch_paths:
         branch_dir = root / Path(*branch_path.split("/")) if branch_path else root
-        branches[branch_path] = list_directory_entry_items(str(branch_dir))
+        branches[branch_path] = list_directory_entry_items(str(branch_dir), include_child_counts=True)
 
     return {
         "root_path": str(root),
