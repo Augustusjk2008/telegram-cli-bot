@@ -513,15 +513,30 @@ class ChatStore:
             """
         )
         conn.execute("DROP INDEX IF EXISTS idx_conversations_identity")
-        self._ensure_column(conn, "conversations", "title", "TEXT")
-        self._ensure_column(conn, "conversations", "agent_id", "TEXT NOT NULL DEFAULT 'main'")
-        self._ensure_column(conn, "conversations", "agent_prompt_hash", "TEXT")
-        self._ensure_column(conn, "conversations", "last_message_preview", "TEXT")
-        self._ensure_column(conn, "conversations", "message_count", "INTEGER NOT NULL DEFAULT 0")
-        self._ensure_column(conn, "conversations", "pinned", "INTEGER NOT NULL DEFAULT 0")
-        self._ensure_column(conn, "conversations", "archived_at", "TEXT")
-        self._ensure_column(conn, "conversations", "native_session_meta_json", "TEXT")
-        self._ensure_column(conn, "conversations", "revision", "INTEGER NOT NULL DEFAULT 0")
+        conversation_columns = {
+            "bot_id": "INTEGER NOT NULL DEFAULT 0",
+            "bot_alias": "TEXT NOT NULL DEFAULT ''",
+            "user_id": "INTEGER NOT NULL DEFAULT 0",
+            "agent_id": "TEXT NOT NULL DEFAULT 'main'",
+            "cli_type": "TEXT NOT NULL DEFAULT ''",
+            "working_dir": "TEXT NOT NULL DEFAULT ''",
+            "session_epoch": "INTEGER NOT NULL DEFAULT 0",
+            "status": "TEXT NOT NULL DEFAULT 'active'",
+            "native_provider": "TEXT",
+            "native_session_id": "TEXT",
+            "native_session_meta_json": "TEXT",
+            "agent_prompt_hash": "TEXT",
+            "title": "TEXT",
+            "last_message_preview": "TEXT",
+            "message_count": "INTEGER NOT NULL DEFAULT 0",
+            "pinned": "INTEGER NOT NULL DEFAULT 0",
+            "archived_at": "TEXT",
+            "revision": "INTEGER NOT NULL DEFAULT 0",
+            "created_at": "TEXT NOT NULL DEFAULT ''",
+            "updated_at": "TEXT NOT NULL DEFAULT ''",
+        }
+        for column_name, column_type in conversation_columns.items():
+            self._ensure_column(conn, "conversations", column_name, column_type)
         self._ensure_column(conn, "turns", "trace_recovery_attempted_at", "TEXT")
         self._ensure_column(conn, "turns", "trace_recovery_status", "TEXT")
         self._ensure_column(conn, "turns", "context_usage_json", "TEXT")

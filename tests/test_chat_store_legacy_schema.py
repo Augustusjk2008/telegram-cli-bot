@@ -90,6 +90,30 @@ def _create_legacy_chat_db(path: Path) -> None:
         )
 
 
+def _create_incomplete_chat_db(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE conversations (
+                id TEXT PRIMARY KEY,
+                bot_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                working_dir TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            INSERT INTO conversations (
+                id, bot_id, user_id, working_dir, created_at, updated_at
+            ) VALUES (
+                'conv-incomplete', 3, 4, 'C:/incomplete',
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'
+            );
+            """
+        )
+
+
 def test_chat_store_migrates_removed_assistant_columns(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -104,6 +128,12 @@ def test_chat_store_migrates_removed_assistant_columns(
 
     store = ChatStore(tmp_path / "workspace")
     migrated = store.get_conversation("conv-legacy")
+    listed = store.list_conversations(
+        bot_id=1,
+        user_id=2,
+        agent_id="main",
+        working_dir="C:/legacy",
+    )
 
     with sqlite3.connect(db_path) as conn:
         conversation_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(conversations)")}
@@ -120,4 +150,37 @@ def test_chat_store_migrates_removed_assistant_columns(
     assert migrated["id"] == "conv-legacy"
     assert migrated["title"] == "旧会话"
     assert "bot_mode" not in migrated
+    assert [conversation["id"] for conversation in listed] == ["conv-legacy"]
+    assert "bot_mode" not in listed[0]
     assert stored_turn == ("turn-legacy",)
+
+
+def test_chat_store_migrates_missing_conversation_columns(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "chat.sqlite"
+    metadata_path = tmp_path / "workspace.json"
+    _create_incomplete_chat_db(db_path)
+    clear_chat_store_prepare_cache()
+    monkeypatch.setattr(chat_store_module, "get_chat_history_db_path", lambda _workspace: db_path)
+    monkeypatch.setattr(chat_store_module, "get_chat_workspace_metadata_path", lambda _workspace: metadata_path)
+    monkeypatch.setattr(chat_store_module, "get_legacy_project_chat_db_path", lambda _workspace: tmp_path / "missing.sqlite")
+
+    store = ChatStore(tmp_path / "workspace")
+    conversation = store.get_conversation("conv-incomplete")
+    listed = store.list_conversations(
+        bot_id=3,
+        user_id=4,
+        agent_id="main",
+        working_dir="C:/incomplete",
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(conversations)")}
+
+    assert {"bot_alias", "agent_id", "cli_type", "status", "revision"}.issubset(columns)
+    assert conversation["agent_id"] == "main"
+    assert conversation["message_count"] == 0
+    assert conversation["pinned"] is False
+    assert [item["id"] for item in listed] == ["conv-incomplete"]
