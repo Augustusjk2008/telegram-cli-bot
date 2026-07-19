@@ -288,6 +288,18 @@ class ChatHistoryService:
     async def update_context_usage_async(self, handle: ChatTurnHandle, context_usage: dict[str, Any] | None) -> bool:
         return await asyncio.to_thread(self.update_context_usage, handle, context_usage)
 
+    async def get_latest_native_session_context_usage_async(
+        self,
+        *,
+        native_provider: str,
+        native_session_id: str,
+    ) -> dict[str, Any] | None:
+        return await self.async_store.run_read(
+            self.store.get_latest_native_session_context_usage,
+            native_provider=native_provider,
+            native_session_id=native_session_id,
+        )
+
     def append_trace_event(self, handle: ChatTurnHandle, event: dict[str, Any]) -> None:
         self.store.append_trace_event(
             handle.turn_id,

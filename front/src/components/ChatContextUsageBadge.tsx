@@ -1,8 +1,14 @@
+import { ChevronsDownUp } from "lucide-react";
 import type { ChatMessageContextUsage } from "../services/types";
 
-export function formatCompactionCount(count?: number) {
+function normalizedCompactionCount(count?: number) {
   const value = Math.floor(Number(count || 0));
-  if (!Number.isFinite(value) || value <= 0) {
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+export function formatCompactionCount(count?: number) {
+  const value = normalizedCompactionCount(count);
+  if (value <= 0) {
     return "";
   }
   if (value === 1) {
@@ -145,16 +151,29 @@ export function ChatContextUsageBadge({ contextUsage, className = "", compact = 
   if (!textContext) {
     return null;
   }
+  const compactionCount = compact ? normalizedCompactionCount(contextUsage?.compactionCount) : 0;
   const baseClassName = textContext.isLow
-    ? "rounded-md border border-red-200 bg-red-50 px-1.5 py-0.5 font-medium text-red-600"
-    : "rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-1.5 py-0.5 text-[var(--muted)]";
+    ? "inline-flex min-w-0 items-center rounded-md border border-red-200 bg-red-50 px-1.5 py-0.5 font-medium text-red-600"
+    : "inline-flex min-w-0 items-center rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-1.5 py-0.5 text-[var(--muted)]";
   return (
     <span
       className={[baseClassName, className].filter(Boolean).join(" ")}
       data-testid={testId}
       title={textContext.title}
     >
-      {textContext.text}
+      {compactionCount > 0 ? (
+        <>
+          <span className="min-w-0 truncate pr-1">{textContext.text}</span>
+          <span
+            aria-label={`已 compact ${compactionCount} 次`}
+            className="inline-flex shrink-0 items-center gap-0.5 border-l border-current/20 pl-1"
+            data-testid={testId ? `${testId}-compaction` : undefined}
+          >
+            <ChevronsDownUp aria-hidden="true" className="h-3 w-3" />
+            <span aria-hidden="true">×{compactionCount}</span>
+          </span>
+        </>
+      ) : textContext.text}
     </span>
   );
 }

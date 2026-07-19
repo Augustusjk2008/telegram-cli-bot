@@ -462,6 +462,9 @@ class ChatStore:
             CREATE UNIQUE INDEX IF NOT EXISTS idx_turns_conversation_seq
             ON turns(conversation_id, seq);
 
+            CREATE INDEX IF NOT EXISTS idx_turns_native_session
+            ON turns(native_provider, native_session_id, completed_at DESC);
+
             CREATE TABLE IF NOT EXISTS messages (
                 id TEXT PRIMARY KEY,
                 conversation_id TEXT NOT NULL,
@@ -1572,6 +1575,39 @@ class ChatStore:
                 op="update_context_usage",
                 turn_id=turn_id,
             )
+
+    def get_latest_native_session_context_usage(
+        self,
+        *,
+        native_provider: str,
+        native_session_id: str,
+    ) -> dict[str, Any] | None:
+        normalized_provider = str(native_provider or "").strip().lower()
+        normalized_session_id = str(native_session_id or "").strip()
+        if not normalized_provider or not normalized_session_id:
+            return None
+
+        conn = self._connect(create=False)
+        if conn is None:
+            return None
+        with closing(conn):
+            row = conn.execute(
+                """
+                SELECT context_usage_json
+                FROM turns
+                WHERE native_provider = ?
+                  AND native_session_id = ?
+                  AND context_usage_json IS NOT NULL
+                  AND context_usage_json <> ''
+                ORDER BY completed_at DESC, started_at DESC, rowid DESC
+                LIMIT 1
+                """,
+                (normalized_provider, normalized_session_id),
+            ).fetchone()
+        if row is None:
+            return None
+        context_usage = _parse_json_dict(row["context_usage_json"])
+        return context_usage or None
 
     def update_turn_workspace_history(self, turn_id: str, head: str, index: int) -> bool:
         normalized_turn_id = str(turn_id or "").strip()

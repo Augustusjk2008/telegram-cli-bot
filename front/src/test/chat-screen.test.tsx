@@ -3574,7 +3574,10 @@ test("shows CLI context usage as text badge without ring", async () => {
   const contextCopyButton = await screen.findByRole("button", { name: "复制上下文详情" });
   const fullCopyButton = await screen.findByRole("button", { name: "复制完整回答" });
   const copyButton = await screen.findByRole("button", { name: "复制最终回答" });
-  expect(bottomBadge).toHaveTextContent("ctx 74%");
+  expect(bottomBadge).toHaveTextContent("ctx 74%×1");
+  const compactionIndicator = screen.getByTestId("chat-message-context-usage-bottom-compaction");
+  expect(compactionIndicator).toHaveAttribute("aria-label", "已 compact 1 次");
+  expect(compactionIndicator.querySelector("svg")).toBeInTheDocument();
   expect(contextCopyButton.compareDocumentPosition(fullCopyButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(fullCopyButton.compareDocumentPosition(copyButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(bottomBadge.compareDocumentPosition(copyButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -3619,6 +3622,7 @@ test("shows context usage ring with native token details", async () => {
   const bottomBadge = await screen.findByTestId("chat-message-context-usage-bottom");
   const copyButton = await screen.findByRole("button", { name: "复制最终回答" });
   expect(bottomBadge).toHaveTextContent("ctx 96%");
+  expect(screen.queryByTestId("chat-message-context-usage-bottom-compaction")).not.toBeInTheDocument();
   expect(bottomBadge.compareDocumentPosition(copyButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
 
