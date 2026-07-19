@@ -1,6 +1,6 @@
 import { BotSummary } from "../services/types";
 import { clsx } from "clsx";
-import { X } from "lucide-react";
+import { Settings2, ShieldCheck, X } from "lucide-react";
 import { BotActivitySummary } from "./BotActivitySummary";
 import { StatusPill } from "./StatusPill";
 import { getBotRuntimeLabel } from "./botRuntimeLabel";
@@ -36,28 +36,64 @@ export function BotSwitcherSheet({
         role="dialog"
         aria-modal="true"
         aria-label="智能体切换"
-        className="relative bg-[var(--surface)] rounded-t-2xl shadow-lg max-h-[80vh] flex flex-col animate-in slide-in-from-bottom-full duration-200"
+        data-testid="mobile-bot-switcher-sheet"
+        className="relative flex max-h-[82dvh] flex-col rounded-t-xl bg-[var(--bg)] shadow-lg animate-in slide-in-from-bottom-full duration-200"
       >
-        <div className="flex items-center justify-between p-4 border-b border-[var(--border)]">
-          <h2 className="text-lg font-bold">智能体切换</h2>
-          <button onClick={onClose} className="p-2 -mr-2 rounded-full hover:bg-[var(--border)]">
-            <X className="w-5 h-5" />
+        <div className="flex min-h-12 items-center justify-between border-b border-[var(--border)] px-3 py-1.5">
+          <div className="flex min-w-0 items-baseline gap-2">
+            <h2 className="text-base font-semibold">智能体切换</h2>
+            <span className="text-xs text-[var(--muted)]">{bots.length} 个</span>
+          </div>
+          <button
+            type="button"
+            aria-label="关闭智能体切换"
+            onClick={onClose}
+            className="-mr-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg hover:bg-[var(--surface-strong)]"
+          >
+            <X className="h-5 w-5" />
           </button>
         </div>
-        {showManageButton ? (
-          <div className="p-4 pb-0">
-            <button
-              type="button"
-              onClick={() => {
-                onManage();
-              }}
-              className="w-full rounded-xl border border-[var(--border)] px-4 py-3 text-left font-medium hover:bg-[var(--surface-strong)]"
-            >
-              智能体管理
-            </button>
+        {showManageButton || showInviteManager ? (
+          <div
+            className={clsx(
+              "grid gap-2 border-b border-[var(--border)] px-3 py-2",
+              showManageButton && showInviteManager ? "grid-cols-2" : "grid-cols-1",
+            )}
+          >
+            {showManageButton ? (
+              <button
+                type="button"
+                onClick={onManage}
+                className="flex min-h-10 min-w-0 items-center justify-center gap-2 rounded-lg border border-[var(--border)] px-3 text-sm font-medium hover:bg-[var(--surface-strong)]"
+              >
+                <Settings2 className="h-4 w-4 shrink-0" />
+                <span className="truncate">智能体管理</span>
+              </button>
+            ) : null}
+            {showInviteManager ? (
+              <button
+                type="button"
+                onClick={() => {
+                  onOpenInviteManager?.();
+                  onClose();
+                }}
+                className={clsx(
+                  "flex min-h-10 min-w-0 items-center justify-center gap-2 rounded-lg border px-3 text-sm font-medium",
+                  inviteManagerActive
+                    ? "border-transparent tcb-selected-accent"
+                    : "border-[var(--border)] hover:bg-[var(--surface-strong)]",
+                )}
+              >
+                <ShieldCheck className="h-4 w-4 shrink-0" />
+                <span className="truncate">管理中心</span>
+              </button>
+            ) : null}
           </div>
         ) : null}
-        <div className="overflow-y-auto p-4 space-y-2">
+        <div className="space-y-1.5 overflow-y-auto overscroll-contain px-3 py-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)]">
+          {bots.length === 0 ? (
+            <div className="py-8 text-center text-sm text-[var(--muted)]">暂无可用智能体</div>
+          ) : null}
           {bots.map((bot) => {
             const isOffline = bot.serviceStatus === "offline" || bot.status === "offline";
             const noAccess = bot.canOperate === false;
@@ -75,7 +111,7 @@ export function BotSwitcherSheet({
                   }
                 }}
                 className={clsx(
-                  "relative w-full overflow-hidden rounded-xl border p-4 pl-5 text-left transition",
+                  "relative min-h-16 w-full overflow-hidden rounded-lg border py-2.5 pl-4 pr-3 text-left transition active:scale-[0.99]",
                   isOffline
                     ? "cursor-not-allowed border-red-200 bg-red-50/80 opacity-95"
                     : currentAlias === bot.alias
@@ -91,73 +127,52 @@ export function BotSwitcherSheet({
                   className="absolute left-0 top-0 h-full w-[3px]"
                   style={getBotAccentStyle(bot.alias)}
                 />
-                <div className="flex min-w-0 items-start justify-between gap-3">
-                  <div className="flex min-w-0 flex-1 flex-col items-start">
-                    <span className="flex max-w-full flex-wrap items-center gap-1.5">
-                      <span className="min-w-0 max-w-full truncate text-base font-semibold text-[var(--text)]">{bot.alias}</span>
-                      {bot.isMain || bot.alias === "main" ? (
-                        <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">
-                          主
-                        </span>
-                      ) : null}
-                      {currentAlias === bot.alias ? (
-                        <span className="rounded border border-transparent px-1.5 py-0.5 text-[10px] leading-none tcb-selected-accent">
-                          当前
-                        </span>
-                      ) : null}
-                      {noAccess ? (
-                        <span className="rounded border border-zinc-500 bg-white px-1.5 py-0.5 text-[10px] font-semibold leading-none text-zinc-900">
-                          无权限 · 只读
-                        </span>
-                      ) : null}
-                    </span>
-                    <span
-                      className={clsx(
-                        "mt-1 max-w-full truncate text-xs font-medium",
-                        currentAlias === bot.alias ? "text-[var(--text)]" : "text-[var(--muted)]",
-                      )}
-                      title={getBotRuntimeLabel(bot)}
-                    >
-                      {getBotRuntimeLabel(bot)}
-                    </span>
-                    <span
-                      className="mt-0.5 max-w-full truncate text-xs text-[var(--muted)]"
-                      title={bot.workingDir}
-                    >
-                      {bot.workingDir || "未设置"}
-                    </span>
-                    {isOffline ? (
-                      <span className="mt-1 text-xs font-medium text-red-700">离线中，暂不可切换</span>
+                <div className="flex min-w-0 items-center justify-between gap-2">
+                  <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
+                    <span className="min-w-0 truncate text-sm font-semibold text-[var(--text)]">{bot.alias}</span>
+                    {bot.isMain || bot.alias === "main" ? (
+                      <span className="shrink-0 rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">
+                        主
+                      </span>
                     ) : null}
-                    {!isOffline ? <BotActivitySummary bot={bot} className="mt-1" /> : null}
-                  </div>
-                  <div className="flex shrink-0 flex-col items-end gap-1">
-                    {bot.status === "unread" ? <StatusPill status="unread" /> : null}
-                    <StatusPill status={isOffline ? "offline" : "online"} />
-                  </div>
+                    {currentAlias === bot.alias ? (
+                      <span className="shrink-0 rounded border border-transparent px-1.5 py-0.5 text-[10px] leading-none tcb-selected-accent">
+                        当前
+                      </span>
+                    ) : null}
+                    {noAccess ? (
+                      <span className="shrink-0 rounded border border-zinc-500 bg-white px-1.5 py-0.5 text-[10px] font-semibold leading-none text-zinc-900">
+                        无权限 · 只读
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="flex shrink-0 items-center gap-1">
+                    {bot.status === "unread" ? <StatusPill status="unread" className="px-1.5 text-[10px] leading-4" /> : null}
+                    <StatusPill status={isOffline ? "offline" : "online"} className="px-1.5 text-[10px] leading-4" />
+                  </span>
+                </div>
+                <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-[var(--muted)]">
+                  <span
+                    className={clsx(
+                      "shrink-0 font-medium",
+                      currentAlias === bot.alias ? "text-[var(--text)]" : "text-[var(--muted)]",
+                    )}
+                    title={getBotRuntimeLabel(bot)}
+                  >
+                    {getBotRuntimeLabel(bot)}
+                  </span>
+                  <span aria-hidden="true" className="shrink-0 text-[var(--border)]">·</span>
+                  <span
+                    className="min-w-0 flex-1 truncate"
+                    title={bot.workingDir}
+                  >
+                    {bot.workingDir || "未设置"}
+                  </span>
+                  {!isOffline ? <BotActivitySummary bot={bot} className="min-h-0 shrink-0" /> : null}
                 </div>
               </button>
             );
           })}
-          {showInviteManager ? (
-            <div className="pt-3">
-              <button
-                type="button"
-                onClick={() => {
-                  onOpenInviteManager?.();
-                  onClose();
-                }}
-                className={clsx(
-                  "w-full rounded-xl border px-4 py-3 text-left font-medium",
-                  inviteManagerActive
-                    ? "border-transparent tcb-selected-accent"
-                    : "border-[var(--border)] hover:bg-[var(--surface-strong)]",
-                )}
-              >
-                管理中心
-              </button>
-            </div>
-          ) : null}
         </div>
       </div>
     </div>
