@@ -398,7 +398,7 @@ function listScopedMessageDelta(
 ) {
   const options = {
     ...(agentOptions(agentId, executionMode) || {}),
-    ...(typeof revision === "number" && revision > 0 ? { revision } : {}),
+    ...(typeof revision === "number" && Number.isFinite(revision) && revision >= 0 ? { revision } : {}),
     ...(cursor ? { cursor } : {}),
   };
   return Object.keys(options).length > 0
@@ -2377,6 +2377,9 @@ export function ChatScreen({
               query.revision,
               query.cursor,
             ),
+            {
+              isCurrent: () => sendVersion === assistantSendVersionRef.current && isSseStreaming(),
+            },
           );
           const messages = recovered.items;
           if (sendVersion !== assistantSendVersionRef.current || !isSseStreaming()) {
@@ -2473,6 +2476,9 @@ export function ChatScreen({
             query.revision,
             query.cursor,
           ),
+          {
+            isCurrent: () => sendVersion === assistantSendVersionRef.current && !isSseStreaming(),
+          },
         );
         messages = applied.items;
       }

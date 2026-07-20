@@ -391,7 +391,7 @@ test("refreshes visible idle chat when history count changes", async () => {
   });
 
   expect(screen.getByText("自动出现的新回复")).toBeInTheDocument();
-  expect(listMessageDelta).toHaveBeenCalledWith("main", "user-1", 50);
+  expect(listMessageDelta).toHaveBeenCalledWith("main", "user-1", 50, { revision: 0 });
 });
 
 test("virtualizes expanded 500-message history", async () => {
