@@ -3052,14 +3052,18 @@ def _parse_codex_event_dict(event: dict[str, Any]) -> dict[str, Optional[str]]:
             phase = str(payload.get("phase") or "").strip().lower()
             if phase in {"final", "final_answer"}:
                 result["completed_text"] = text_value
-            result["delta_text"] = text_value
+            else:
+                result["delta_text"] = text_value
             return result
         if payload_type == "agent_message":
             message = payload.get("message")
             if isinstance(message, str) and message.strip():
                 text_value = message.strip()
-                result["completed_text"] = text_value
-                result["delta_text"] = text_value
+                phase = str(payload.get("phase") or "").strip().lower()
+                if phase in {"commentary", "progress", "partial"}:
+                    result["delta_text"] = text_value
+                else:
+                    result["completed_text"] = text_value
             return result
         return result
 
@@ -3076,8 +3080,11 @@ def _parse_codex_event_dict(event: dict[str, Any]) -> dict[str, Optional[str]]:
 
     if event_type == "item.completed":
         if isinstance(text_value, str) and text_value:
-            result["completed_text"] = text_value
-            result["delta_text"] = text_value
+            phase = str(item.get("phase") or "").strip().lower()
+            if phase in {"commentary", "progress", "partial"}:
+                result["delta_text"] = text_value
+            else:
+                result["completed_text"] = text_value
         return result
 
     if event_type == "item.delta":
@@ -5685,4 +5692,3 @@ def get_processing_sessions(alias: str) -> list[dict[str, Any]]:
                 }
             )
     return items
-
