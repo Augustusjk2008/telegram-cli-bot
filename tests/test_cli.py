@@ -98,6 +98,23 @@ class TestBuildCliCommand:
         config_index = cmd.index("-c")
         assert cmd[config_index + 1] == 'model_reasoning_effort="xhigh"'
 
+    def test_codex_resume_places_exec_extra_args_before_resume(self):
+        params_config = CliParamsConfig()
+        params_config.codex["extra_args"] = ["--profile", "work"]
+
+        cmd, _ = build_cli_command(
+            cli_type="codex",
+            resolved_cli="codex",
+            user_text="hello",
+            env={},
+            params_config=params_config,
+            session_id="session-1",
+        )
+
+        profile_index = cmd.index("--profile")
+        assert cmd[profile_index + 1] == "work"
+        assert profile_index < cmd.index("resume")
+
     @pytest.mark.parametrize("reasoning_effort", ["max", "ultra"])
     def test_codex_new_reasoning_efforts_are_valid_and_forwarded(self, reasoning_effort: str):
         assert reasoning_effort in get_params_schema("codex")["reasoning_effort"]["enum"]
