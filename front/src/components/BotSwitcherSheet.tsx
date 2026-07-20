@@ -168,7 +168,7 @@ export function BotSwitcherSheet({
                   >
                     {bot.workingDir || "未设置"}
                   </span>
-                  {!isOffline ? <BotActivitySummary bot={bot} className="min-h-0 shrink-0" /> : null}
+                  {!isOffline ? <BotActivitySummary bot={bot} className="min-h-0 shrink-0" showLatestAnswerTime /> : null}
                 </div>
               </button>
             );

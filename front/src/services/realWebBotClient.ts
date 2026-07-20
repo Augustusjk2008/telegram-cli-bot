@@ -234,6 +234,8 @@ type RawBotSummary = {
   busyAgentCount?: number;
   agents?: RawAgentSummary[];
   working_dir: string;
+  last_answer_completed_at?: string;
+  lastAnswerCompletedAt?: string;
   enabled?: boolean;
   is_main?: boolean;
   can_operate?: boolean;
@@ -1434,6 +1436,10 @@ function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
     workingDir: raw.working_dir,
     lastActiveText: mapStatusText(status),
   };
+  const latestAnswerCompletedAt = raw.last_answer_completed_at ?? raw.lastAnswerCompletedAt;
+  if (typeof latestAnswerCompletedAt === "string" && latestAnswerCompletedAt.trim()) {
+    summary.lastAnswerCompletedAt = latestAnswerCompletedAt;
+  }
   if (Array.isArray(raw.agents)) {
     summary.agents = raw.agents.map(mapAgentSummary);
   }

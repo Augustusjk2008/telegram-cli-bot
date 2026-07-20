@@ -1129,6 +1129,32 @@ class ChatStore:
             if str(row["id"] or "").strip()
         ]
 
+    def get_latest_completed_turn_at(self, *, bot_id: int, user_id: int | None = None) -> str:
+        """Return the latest completed answer time for a bot in this workspace."""
+        conn = self._connect(create=False)
+        if conn is None:
+            return ""
+
+        clauses = ["conversations.bot_id = ?", "turns.completion_state = 'completed'", "turns.completed_at IS NOT NULL"]
+        params: list[Any] = [bot_id]
+        if user_id is not None:
+            clauses.append("conversations.user_id = ?")
+            params.append(user_id)
+
+        with closing(conn):
+            row = conn.execute(
+                f"""
+                SELECT turns.completed_at
+                FROM turns
+                JOIN conversations ON conversations.id = turns.conversation_id
+                WHERE {' AND '.join(clauses)}
+                ORDER BY turns.completed_at DESC, turns.updated_at DESC, turns.rowid DESC
+                LIMIT 1
+                """,
+                params,
+            ).fetchone()
+        return str(row["completed_at"] or "") if row is not None else ""
+
     def delete_conversations_by_ids(self, conversation_ids: list[str] | set[str] | tuple[str, ...]) -> int:
         normalized_ids = [str(conversation_id or "").strip() for conversation_id in conversation_ids]
         normalized_ids = [conversation_id for conversation_id in normalized_ids if conversation_id]

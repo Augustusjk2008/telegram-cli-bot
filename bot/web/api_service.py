@@ -557,6 +557,15 @@ def build_bot_summary(
             pass
     agent_items = _build_agent_status_items(profile, _build_agent_runtime_map(bot_id, user_id))
     activity = _build_activity_summary(agent_items)
+    latest_answer_completed_at = ""
+    latest_answer_store = ChatStore(Path(working_dir))
+    latest_answer_user_id = chat_session_user_id(user_id) if user_id is not None else None
+    if latest_answer_user_id is not None:
+        latest_answer_store.migrate_conversations_to_shared(bot_id, latest_answer_user_id)
+    latest_answer_completed_at = latest_answer_store.get_latest_completed_turn_at(
+        bot_id=bot_id,
+        user_id=latest_answer_user_id,
+    )
 
     return {
         "alias": profile.alias,
@@ -573,6 +582,7 @@ def build_bot_summary(
         "status": run_status,
         "service_status": service_status,
         "cluster": profile.cluster.to_dict(),
+        "last_answer_completed_at": latest_answer_completed_at,
         **activity,
         "bot_username": (app.bot_data.get("bot_username") if app else "") or "",
         "capabilities": _build_capabilities(alias == manager.main_profile.alias),

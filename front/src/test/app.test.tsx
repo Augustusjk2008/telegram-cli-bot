@@ -1,7 +1,8 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { App } from "../app/App";
+import { App, sortBotsForSwitcher } from "../app/App";
+import { getBotActivityText } from "../components/BotActivitySummary";
 import { DEMO_MAIN_WORKDIR, DEMO_TEAM_WORKDIR } from "../mocks/demoEnvironment";
 import type { BotSummary, ChatMessage, SessionState } from "../services/types";
 import { MockWebBotClient } from "../services/mockWebBotClient";
@@ -9,6 +10,46 @@ import { FileTreePane } from "../workbench/FileTreePane";
 import { soloModeStorageKey } from "../workbench/soloTypes";
 import type { UseFileTreeResult } from "../workbench/useFileTree";
 import { buildWorkbenchSessionStorageKey } from "../workbench/workbenchSession";
+
+test("bot switcher keeps main first and sorts idle running bots by latest answer", () => {
+  const makeBot = (alias: string, lastAnswerCompletedAt: string): BotSummary => ({
+    alias,
+    cliType: "codex",
+    status: "running",
+    activityStatus: "idle",
+    workingDir: `C:\\workspace\\${alias}`,
+    lastActiveText: "运行中",
+    lastAnswerCompletedAt,
+  });
+
+  const sorted = sortBotsForSwitcher([
+    makeBot("zeta", "2026-07-20T08:00:00Z"),
+    makeBot("main", "2026-07-19T08:00:00Z"),
+    makeBot("alpha", "2026-07-20T09:00:00Z"),
+  ]);
+
+  expect(sorted.map((bot) => bot.alias)).toEqual(["main", "alpha", "zeta"]);
+});
+
+test("idle bot activity shows latest answer time instead of all idle", () => {
+  expect(getBotActivityText({
+    alias: "main",
+    cliType: "codex",
+    status: "running",
+    activityStatus: "idle",
+    workingDir: "C:\\workspace\\main",
+    lastActiveText: "运行中",
+    lastAnswerCompletedAt: "2026-07-20T09:00:00+08:00",
+  }, true)).toMatch(/^上次回答/);
+  expect(getBotActivityText({
+    alias: "empty",
+    cliType: "codex",
+    status: "running",
+    activityStatus: "idle",
+    workingDir: "C:\\workspace\\empty",
+    lastActiveText: "运行中",
+  }, true)).toBe("暂无回答");
+});
 
 const terminalSessionMock = vi.hoisted(() => ({
   sendControl: vi.fn(),
@@ -498,8 +539,5 @@ test("create bot unsafe bypass toggle is disabled without unsafe capability", as
     }));
   });
 });
-
-
-
 
 

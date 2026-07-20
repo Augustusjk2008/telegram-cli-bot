@@ -149,7 +149,7 @@ function isMainBot(bot: BotSummary) {
   return Boolean(bot.isMain || bot.alias === "main");
 }
 
-function sortBotsForSwitcher(bots: BotSummary[]) {
+export function sortBotsForSwitcher(bots: BotSummary[]) {
   return [...bots].sort((left, right) => {
     const leftIsMain = isMainBot(left);
     const rightIsMain = isMainBot(right);
@@ -160,6 +160,16 @@ function sortBotsForSwitcher(bots: BotSummary[]) {
     const statusDelta = BOT_SWITCHER_STATUS_PRIORITY[left.status] - BOT_SWITCHER_STATUS_PRIORITY[right.status];
     if (statusDelta !== 0) {
       return statusDelta;
+    }
+
+    if (left.status === "running" && right.status === "running") {
+      const leftTime = Date.parse(left.lastAnswerCompletedAt || "");
+      const rightTime = Date.parse(right.lastAnswerCompletedAt || "");
+      const leftSortTime = Number.isNaN(leftTime) ? Number.NEGATIVE_INFINITY : leftTime;
+      const rightSortTime = Number.isNaN(rightTime) ? Number.NEGATIVE_INFINITY : rightTime;
+      if (leftSortTime !== rightSortTime) {
+        return rightSortTime - leftSortTime;
+      }
     }
 
     return left.alias.localeCompare(right.alias, "zh-CN", {
