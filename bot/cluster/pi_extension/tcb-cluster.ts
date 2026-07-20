@@ -23,6 +23,13 @@ function clusterRunId(inputRunId?: string): string {
 	return runId;
 }
 
+function clusterRuntimeEnabled(): boolean {
+	return Boolean(
+		String(process.env.TCB_CLUSTER_MCP_CONFIG || "").trim()
+		&& String(process.env.TCB_CLUSTER_RUN_ID || "").trim(),
+	);
+}
+
 function loadBridgeConfig(): { bridgeUrl: string; token: string } {
 	const config = JSON.parse(readFileSync(clusterConfigPath(), "utf8")) as BridgeConfig;
 	const bridgeUrl = String(config.bridge_url || "").trim().replace(/\/+$/, "");
@@ -101,6 +108,10 @@ function clusterTool(
 const runIdParam = Type.Optional(Type.String({ description: "TCB cluster run id; defaults to TCB_CLUSTER_RUN_ID." }));
 
 export default function (pi: ExtensionAPI) {
+	if (!clusterRuntimeEnabled()) {
+		return;
+	}
+
 	pi.registerTool(clusterTool(
 		"cluster_status",
 		"Cluster Status",
@@ -121,13 +132,13 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool(clusterTool(
 		"ask_agent",
 		"Ask Agent",
-		"异步启动个 TCB 子 agent 任务并立即返回 task_id。",
+		"异步启动 TCB 子 agent 任务并立即返回 task_id；非后台任务随后应等待结果并汇总。",
 		Type.Object({
 			run_id: runIdParam,
 			agent_id: Type.String(),
 			message: Type.String(),
 			model_tier: Type.Optional(Type.String()),
-			timeout_seconds: Type.Optional(Type.Integer()),
+			timeout_seconds: Type.Optional(Type.Integer({ description: "Soft deadline; timeout reports status but does not kill the agent." })),
 			allow_write: Type.Optional(Type.Boolean()),
 		}),
 		(params) => withoutRunId(params),
@@ -142,7 +153,7 @@ export default function (pi: ExtensionAPI) {
 			include_output: Type.Optional(Type.Boolean()),
 			include_messages: Type.Optional(Type.Boolean()),
 			message_limit: Type.Optional(Type.Integer()),
-			wait_seconds: Type.Optional(Type.Number()),
+			wait_seconds: Type.Optional(Type.Number({ description: "Maximum time to wait for updated task state." })),
 		}),
 		(params) => withoutRunId(params),
 	));
@@ -153,7 +164,7 @@ export default function (pi: ExtensionAPI) {
 		Type.Object({
 			run_id: runIdParam,
 			after_sequence: Type.Optional(Type.Integer()),
-			wait_seconds: Type.Optional(Type.Number()),
+			wait_seconds: Type.Optional(Type.Number({ description: "Maximum blocking wait for the next unread message." })),
 			include_progress: Type.Optional(Type.Boolean()),
 			include_final: Type.Optional(Type.Boolean()),
 			message_limit: Type.Optional(Type.Integer()),

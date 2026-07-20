@@ -101,6 +101,7 @@ class PiSessionRuntime:
             and self.state.runtime_key == request.runtime_key
             and self.state.owner_key == request.owner_key
             and str(Path(self.state.cwd or ".").expanduser().resolve()) == str(Path(request.cwd or ".").expanduser().resolve())
+            and _normalize_env(self.state.env) == _normalize_env(request.env)
         )
 
     def refresh_from_request(self, request: PiSessionRuntimeRequest) -> None:

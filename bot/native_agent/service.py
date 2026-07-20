@@ -58,12 +58,9 @@ NATIVE_AGENT_PROVIDER = EXECUTION_MODE_NATIVE_AGENT
 NATIVE_AGENT_NO_PROGRESS_MESSAGE = "原生 agent 长时间无输出或进展"
 TOOL_RESULT_FALLBACK_LIMIT = 12000
 SOLO_NATIVE_AGENT_SYSTEM_PROMPT = """Solo native agent mode:
-- Work autonomously until the user request is fully handled, including implementation and focused verification when feasible.
-- If the user prompt says this program is in Plan Mode, that Plan Mode takes precedence: do not edit files, create files, or run state-changing commands; provide the requested plan only.
-- Read the relevant project files before editing. Prefer existing project patterns and keep changes scoped.
-- Do not fabricate tool results. If blocked, report the exact blocker and what user action is needed.
-- For code changes, run appropriate checks before claiming completion. If checks cannot run, state why.
-- Keep final replies concise and include changed files plus verification status."""
+- Handle the request autonomously through implementation and focused verification when feasible.
+- If the user prompt declares Plan Mode, do not edit files or change project state; provide the requested plan only.
+- Before finishing, verify affected behavior; if blocked or verification cannot run, report the exact blocker and required user action."""
 
 logger = logging.getLogger(__name__)
 
