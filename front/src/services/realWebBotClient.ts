@@ -1,5 +1,6 @@
 import { WebApiClientError } from "./types";
 import { buildWsUrl, withApiBase } from "../utils/publicBase";
+import { ChatStreamIncompleteError } from "./chatStreamError";
 import type {
   AdminUser,
   AdminUserUpdateInput,
@@ -4494,6 +4495,7 @@ export class RealWebBotClient implements WebBotClient {
     const streamedTrace: ChatTraceEvent[] = [];
     let streamedContextUsage: ChatMessageContextUsage | undefined;
     let streamFinished = false;
+    let terminalSeen = false;
     const agUiAdapter = createAgUiStreamAdapter();
     let agUiState = createAgUiRunState();
     let sawAgUiEvent = false;
@@ -4501,9 +4503,14 @@ export class RealWebBotClient implements WebBotClient {
     while (!streamFinished) {
       const { value, done } = await reader.read();
       if (done) {
-        break;
+        buffer += decoder.decode();
+        if (!buffer.trim()) {
+          break;
+        }
+        buffer += "\n\n";
+      } else {
+        buffer += decoder.decode(value, { stream: true });
       }
-      buffer += decoder.decode(value, { stream: true });
 
       let separator = findSseSeparator(buffer);
       while (separator) {
@@ -4547,14 +4554,38 @@ export class RealWebBotClient implements WebBotClient {
             }
             if (agUiEvent.type === EventType.RUN_ERROR) {
               finalText = agUiState.assistantText || finalText || streamedText || agUiEvent.message;
+              terminalSeen = true;
+              streamFinished = true;
+              await reader.cancel().catch(() => undefined);
+              break;
             }
             if (agUiEvent.type === EventType.RUN_FINISHED) {
               const result = agUiEvent.result && typeof agUiEvent.result === "object" && !Array.isArray(agUiEvent.result)
                 ? agUiEvent.result as Record<string, unknown>
                 : {};
               const resultContent = typeof result.content === "string" ? result.content.trim() : "";
-              finalText = resultContent || finalText || agUiState.assistantText || streamedText;
+              const resultTurnId = typeof (result.turn_id ?? result.turnId) === "string"
+                ? String(result.turn_id ?? result.turnId)
+                : "";
+              const resultAssistantMessageId = typeof (result.assistant_message_id ?? result.assistantMessageId) === "string"
+                ? String(result.assistant_message_id ?? result.assistantMessageId)
+                : "";
+              if (resultTurnId) {
+                streamTurnId = resultTurnId;
+              }
+              if (resultAssistantMessageId) {
+                streamAssistantMessageId = resultAssistantMessageId;
+              }
+              const resultMessage = result.message;
+              if (resultMessage && typeof resultMessage === "object" && !Array.isArray(resultMessage)) {
+                finalMessage = mapChatMessage(resultMessage as RawHistoryItem, 0);
+                finalMessage.text = finalMessage.text || resultContent || finalText || agUiState.assistantText || streamedText;
+                finalText = finalMessage.text;
+              } else {
+                finalText = resultContent || finalText || agUiState.assistantText || streamedText;
+              }
               finalElapsedSeconds = agUiState.elapsedSeconds ?? finalElapsedSeconds;
+              terminalSeen = true;
               streamFinished = true;
               await reader.cancel().catch(() => undefined);
               break;
@@ -4643,6 +4674,7 @@ export class RealWebBotClient implements WebBotClient {
           if (typeof event.elapsed_seconds === "number") {
             finalElapsedSeconds = event.elapsed_seconds;
           }
+          terminalSeen = true;
           streamFinished = true;
           await reader.cancel().catch(() => undefined);
           break;
@@ -4652,6 +4684,40 @@ export class RealWebBotClient implements WebBotClient {
 
         separator = findSseSeparator(buffer);
       }
+
+      if (done) {
+        break;
+      }
+    }
+
+    if (!terminalSeen) {
+      const meta = sawAgUiEvent
+        ? mergeMessageMeta(
+            agUiState.contextUsage ? { contextUsage: agUiState.contextUsage } : undefined,
+            buildAgUiMessageMeta(agUiState, { nativeAgent: options?.executionMode === "native_agent" }),
+          )
+        : mergeMessageMeta(
+            streamedContextUsage ? { contextUsage: streamedContextUsage } : undefined,
+            undefined,
+            streamedTrace,
+          );
+      const partialMessage: ChatMessage = {
+        id: agUiState.messageId || streamAssistantMessageId || `assistant-${Date.now()}`,
+        ...(streamTurnId ? { turnId: streamTurnId } : {}),
+        role: "assistant",
+        text: agUiState.assistantText || streamedText || finalText,
+        createdAt: new Date().toISOString(),
+        state: "streaming",
+        ...(typeof (agUiState.elapsedSeconds ?? finalElapsedSeconds) === "number"
+          ? { elapsedSeconds: agUiState.elapsedSeconds ?? finalElapsedSeconds }
+          : {}),
+        ...(meta ? { meta } : {}),
+      };
+      throw new ChatStreamIncompleteError({
+        partialMessage,
+        turnId: streamTurnId,
+        assistantMessageId: streamAssistantMessageId,
+      });
     }
 
     if (finalMessage) {

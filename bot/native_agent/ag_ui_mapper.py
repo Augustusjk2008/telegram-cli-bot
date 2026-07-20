@@ -71,6 +71,9 @@ def build_run_finished_event(
     completion_state: str,
     content: str,
     context_usage: dict[str, Any] | None = None,
+    message: dict[str, Any] | None = None,
+    turn_id: str = "",
+    assistant_message_id: str = "",
 ) -> core.RunFinishedEvent:
     if completion_state != "completed":
         outcome: Any = core.RunFinishedInterruptOutcome(
@@ -79,7 +82,14 @@ def build_run_finished_event(
         )
     else:
         outcome = core.RunFinishedSuccessOutcome(type="success")
-    result: dict[str, Any] = {"content": content, "completion_state": completion_state}
+    result: dict[str, Any] = {
+        "content": content,
+        "completion_state": completion_state,
+        "turn_id": str(turn_id or state.run_id),
+        "assistant_message_id": str(assistant_message_id or state.assistant_message_id),
+    }
+    if message:
+        result["message"] = dict(message)
     if context_usage:
         result["context_usage"] = context_usage
         result["contextUsage"] = context_usage

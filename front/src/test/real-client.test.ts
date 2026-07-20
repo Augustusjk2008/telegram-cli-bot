@@ -930,6 +930,57 @@ describe("RealWebBotClient", () => {
     expect(message.elapsedSeconds).toBe(2);
   });
 
+  test("sendMessage drains an unterminated done frame at EOF", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('event: done\ndata: {"type":"done","output":"尾帧最终答复"}'));
+        controller.close();
+      },
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: stream,
+      json: async () => ({ ok: true, data: {} }),
+    });
+
+    const client = new RealWebBotClient();
+    const message = await client.sendMessage("main", "hi", vi.fn());
+
+    expect(message).toMatchObject({ text: "尾帧最终答复", state: "done" });
+  });
+
+  test("sendMessage rejects EOF before a terminal event with the stream binding", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(
+          'event: meta\ndata: {"type":"meta","turn_id":"turn-incomplete","assistant_message_id":"assistant-incomplete"}\n\n'
+          + 'event: status\ndata: {"type":"status","preview_text":"仍在处理中"}\n\n',
+        ));
+        controller.close();
+      },
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: stream,
+      json: async () => ({ ok: true, data: {} }),
+    });
+
+    const client = new RealWebBotClient();
+
+    await expect(client.sendMessage("main", "hi", vi.fn())).rejects.toMatchObject({
+      name: "ChatStreamIncompleteError",
+      turnId: "turn-incomplete",
+      assistantMessageId: "assistant-incomplete",
+      partialMessage: expect.objectContaining({
+        id: "assistant-incomplete",
+        turnId: "turn-incomplete",
+        state: "streaming",
+      }),
+    });
+  });
+
   test("sendMessage keeps done output when the embedded message content is empty", async () => {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
@@ -1088,6 +1139,52 @@ describe("RealWebBotClient", () => {
     ]);
     expect(message.text).toBe("hello");
     expect(message.meta?.traceCount).toBe(3);
+  });
+
+  test("sendMessage prefers the authoritative message embedded in RUN_FINISHED", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(`event: message\ndata: ${JSON.stringify({
+          type: "RUN_FINISHED",
+          threadId: "thread-authoritative",
+          runId: "run-authoritative",
+          result: {
+            content: "被过程内容污染的答复被过程内容污染的答复",
+            completion_state: "completed",
+            turn_id: "turn-authoritative",
+            assistant_message_id: "assistant-authoritative",
+            message: {
+              id: "assistant-authoritative",
+              turn_id: "turn-authoritative",
+              role: "assistant",
+              content: "权威最终答复",
+              state: "done",
+              created_at: "2026-07-20T00:00:00Z",
+            },
+          },
+          outcome: { type: "success" },
+        })}\n\n`));
+        controller.close();
+      },
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: stream,
+      json: async () => ({ ok: true, data: {} }),
+    });
+
+    const client = new RealWebBotClient();
+    const message = await client.sendMessage("main", "hi", vi.fn(), undefined, undefined, {
+      executionMode: "native_agent",
+    });
+
+    expect(message).toMatchObject({
+      id: "assistant-authoritative",
+      turnId: "turn-authoritative",
+      text: "权威最终答复",
+      state: "done",
+    });
   });
 
   test("sendMessage keeps duplicate native process events in flat trace", async () => {

@@ -1164,6 +1164,9 @@ class NativeAgentService:
                         completion_state=completion_state,
                         content=final_text,
                         context_usage=context_usage,
+                        message=done_message,
+                        turn_id=turn_handle.turn_id,
+                        assistant_message_id=turn_handle.assistant_message_id,
                     ),
                 }
             elapsed_seconds = int(loop.time() - started_at)
