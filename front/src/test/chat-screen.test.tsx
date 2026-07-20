@@ -395,15 +395,143 @@ test("refreshes visible idle chat when history count changes", async () => {
   expect(listMessageDelta).toHaveBeenCalledWith("main", "user-1", 50, { revision: 0 });
 });
 
-test("virtualizes expanded 500-message history", async () => {
-  const user = userEvent.setup();
+test("shows the latest two turns and reveals one older turn per upward scroll", async () => {
+  const messages: ChatMessage[] = Array.from({ length: 4 }, (_, turnIndex) => {
+    const turnNumber = turnIndex + 1;
+    const turnId = `turn-${turnNumber}`;
+    return [
+      {
+        id: `user-${turnNumber}`,
+        turnId,
+        role: "user" as const,
+        text: `问题 ${turnNumber}`,
+        createdAt: `2026-07-20T00:00:0${turnIndex * 2}Z`,
+        state: "done" as const,
+      },
+      {
+        id: `assistant-${turnNumber}`,
+        turnId,
+        role: "assistant" as const,
+        text: `回答 ${turnNumber}`,
+        createdAt: `2026-07-20T00:00:0${turnIndex * 2 + 1}Z`,
+        state: "done" as const,
+      },
+    ];
+  }).flat();
+  const client = createClient({
+    listMessages: vi.fn(async () => messages),
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("问题 4")).toBeInTheDocument();
+
+  expect(screen.queryByText("问题 1")).not.toBeInTheDocument();
+  expect(screen.queryByText("问题 2")).not.toBeInTheDocument();
+  expect(screen.getByText("问题 3")).toBeInTheDocument();
+  expect(screen.getAllByTestId("chat-message-row")).toHaveLength(4);
+
+  const container = screen.getByTestId("chat-scroll-container");
+  let scrollTop = 0;
+  Object.defineProperties(container, {
+    clientHeight: { configurable: true, get: () => 200 },
+    scrollHeight: {
+      configurable: true,
+      get: () => screen.queryAllByTestId("chat-message-row").length * 100,
+    },
+    scrollTop: {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => { scrollTop = value; },
+    },
+  });
+  fireEvent.wheel(container, { deltaY: 120 });
+  fireEvent.scroll(container);
+  expect(screen.queryByText("问题 2")).not.toBeInTheDocument();
+
+  fireEvent.wheel(container, { deltaY: -120 });
+  expect(screen.getByText("问题 2")).toBeInTheDocument();
+  expect(screen.queryByText("问题 1")).not.toBeInTheDocument();
+  expect(screen.getAllByTestId("chat-message-row")).toHaveLength(6);
+  expect(scrollTop).toBe(200);
+
+  scrollTop = 0;
+  fireEvent.scroll(container);
+  fireEvent.wheel(container, { deltaY: -120 });
+  expect(screen.getByText("问题 1")).toBeInTheDocument();
+  expect(screen.getAllByTestId("chat-message-row")).toHaveLength(8);
+});
+
+test("keeps a pending user message with its server-bound assistant turn", async () => {
+  const messages: ChatMessage[] = [
+    {
+      id: "user-1",
+      turnId: "turn-1",
+      role: "user",
+      text: "问题 1",
+      createdAt: "2026-07-20T00:00:00Z",
+      state: "done",
+    },
+    {
+      id: "assistant-1",
+      turnId: "turn-1",
+      role: "assistant",
+      text: "回答 1",
+      createdAt: "2026-07-20T00:00:01Z",
+      state: "done",
+    },
+    {
+      id: "user-2",
+      turnId: "turn-2",
+      role: "user",
+      text: "问题 2",
+      createdAt: "2026-07-20T00:00:02Z",
+      state: "done",
+    },
+    {
+      id: "assistant-2",
+      turnId: "turn-2",
+      role: "assistant",
+      text: "回答 2",
+      createdAt: "2026-07-20T00:00:03Z",
+      state: "done",
+    },
+    {
+      id: "pending-user",
+      role: "user",
+      text: "问题 3",
+      createdAt: "2026-07-20T00:00:04Z",
+      state: "done",
+    },
+    {
+      id: "bound-assistant",
+      turnId: "turn-3",
+      role: "assistant",
+      text: "回答 3",
+      createdAt: "2026-07-20T00:00:05Z",
+      state: "streaming",
+    },
+  ];
+  const client = createClient({ listMessages: vi.fn(async () => messages) });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByText("问题 3")).toBeInTheDocument();
+  expect(screen.getByText("问题 2")).toBeInTheDocument();
+  expect(screen.queryByText("问题 1")).not.toBeInTheDocument();
+  expect(screen.getAllByTestId("chat-message-row")).toHaveLength(4);
+});
+
+test("virtualizes progressively revealed 500-message history", async () => {
   const client = createClient({
     listMessages: async () => createChatHistoryFixture({ messageCount: 500 }),
   });
 
   render(<ChatScreen botAlias="main" client={client} />);
 
-  await user.click(await screen.findByRole("button", { name: "展开较早消息（420）" }));
+  const container = await screen.findByTestId("chat-scroll-container");
+  for (let index = 0; index < 20; index += 1) {
+    fireEvent.wheel(container, { deltaY: -120 });
+  }
   const list = await screen.findByTestId("virtualized-chat-message-list");
 
   await waitFor(() => {
