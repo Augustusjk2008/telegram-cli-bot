@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
 import { EventType } from "../services/agUiProtocol";
+import { ChatStreamIncompleteError } from "../services/chatStreamError";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { BotOverview, ChatMessage, ChatTraceDetails, CliParamsPayload, ClusterTaskStatus, ConversationBulkDeleteResult, ConversationDeleteResult, ConversationListResult, ConversationSelectResult, FavoriteAnswerItem, GitActionResult, GitDiffPayload, GitOverview, PromptPreset } from "../services/types";
 import { WebApiClientError } from "../services/types";
@@ -589,6 +590,95 @@ test("shows the final reply when stalled SSE finishes during recovery polling", 
   expect(screen.getByText("轮询拿到的最终答复")).toBeInTheDocument();
   expect(screen.queryByText("正在输出...")).not.toBeInTheDocument();
   expect(listMessageDelta).toHaveBeenCalledTimes(2);
+});
+
+test("recovers an authoritative final reply after EOF arrives before the terminal event", async () => {
+  let overviewCalls = 0;
+  const listMessageDelta = vi.fn<WebBotClient["listMessageDelta"]>(async () => ({
+    reset: true,
+    revision: 1,
+    nextCursor: "1",
+    items: [
+      {
+        id: "user-incomplete-stream",
+        turnId: "turn-incomplete-stream",
+        role: "user",
+        text: "断流恢复",
+        createdAt: "2026-07-20T00:00:00Z",
+        state: "done",
+      },
+      {
+        id: "assistant-incomplete-stream",
+        turnId: "turn-incomplete-stream",
+        role: "assistant",
+        text: "无需 F5 的权威终答",
+        createdAt: "2026-07-20T00:00:01Z",
+        state: "done",
+      },
+    ],
+  }));
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias,
+    _text,
+    _onChunk,
+    onStatus,
+  ) => {
+    onStatus?.({
+      turnId: "turn-incomplete-stream",
+      assistantMessageId: "assistant-incomplete-stream",
+      previewText: "过程快照",
+    });
+    throw new ChatStreamIncompleteError({
+      turnId: "turn-incomplete-stream",
+      assistantMessageId: "assistant-incomplete-stream",
+      partialMessage: {
+        id: "assistant-incomplete-stream",
+        turnId: "turn-incomplete-stream",
+        role: "assistant",
+        text: "过程快照",
+        createdAt: "2026-07-20T00:00:01Z",
+        state: "streaming",
+      },
+    });
+  });
+  const client = createClient({
+    getBotOverview: vi.fn(async (): Promise<BotOverview> => {
+      overviewCalls += 1;
+      return {
+        alias: "main",
+        cliType: "codex",
+        status: "running",
+        workingDir: "C:\\workspace",
+        isProcessing: false,
+        historyCount: overviewCalls === 1 ? 0 : 2,
+      };
+    }),
+    listMessages: vi.fn(async () => []),
+    listMessageDelta,
+    sendMessage,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+
+  fireEvent.change(screen.getByPlaceholderText("输入消息"), { target: { value: "断流恢复" } });
+  vi.useFakeTimers();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await Promise.resolve();
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1);
+    await Promise.resolve();
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1);
+    await Promise.resolve();
+  });
+
+  expect(listMessageDelta).toHaveBeenCalledTimes(1);
+  expect(screen.getAllByText("无需 F5 的权威终答")).toHaveLength(1);
+  expect(screen.queryByText("聊天响应在收到结束事件前中断，正在从历史记录恢复")).not.toBeInTheDocument();
 });
 
 test("shows send errors only in assistant bubble when placeholder exists", async () => {

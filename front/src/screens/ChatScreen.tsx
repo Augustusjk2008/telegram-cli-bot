@@ -27,6 +27,7 @@ import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import { NativeAgentTranscript } from "../components/NativeAgentTranscript";
 import { PlanDraftCard } from "../components/PlanDraftCard";
 import { MockWebBotClient } from "../services/mockWebBotClient";
+import { isChatStreamIncompleteError } from "../services/chatStreamError";
 import { WebApiClientError } from "../services/types";
 import type {
   AgentMention,
@@ -91,6 +92,7 @@ import { HistoryRevisionState } from "../chat/historyDeltaState";
 import { resolveMessageVirtualKey } from "../chat/messageVirtualKey";
 import {
   findActiveAssistantIndex,
+  upsertActiveAssistantMessage,
   updateActiveAssistantMessage,
   type ActiveAssistantTarget,
 } from "../chat/activeChatTurn";
@@ -2491,6 +2493,7 @@ export function ChatScreen({
         onUnreadResult?.(botAlias);
       }
       if (!shouldPoll) {
+        emitBotActivityForActiveAgent("idle");
         void drainQueuedMessageIfIdleRef.current?.({ botAlias, agentId });
       }
     } catch (err) {
@@ -2721,7 +2724,9 @@ export function ChatScreen({
       }
       return;
     }
-    scheduleAssistantPoll(ACTIVE_CHAT_POLL_INTERVAL_MS);
+    if (assistantPollTimerRef.current === null) {
+      scheduleAssistantPoll(ACTIVE_CHAT_POLL_INTERVAL_MS);
+    }
   }, [isVisible, loading, scheduleAssistantPoll, stopAssistantPoll, streamMode]);
 
   useChatHistorySync({
@@ -3722,6 +3727,7 @@ export function ChatScreen({
       streamStartedAtMs: localStartedAtMs,
     });
 
+    let recoverIncompleteStream = false;
     try {
       let usingPreviewReplace = false;
       const requestSendOptions: ChatSendOptions | undefined = (() => {
@@ -3868,15 +3874,20 @@ export function ChatScreen({
       });
       const finalMetaHasTracePayload = Array.isArray(finalizedMessage.meta?.trace);
 
-      setItems((prev) => updateActiveAssistantMessage(prev, activeAssistantTarget(finalizedMessage), (item) => ({
-        ...finalizedMessage,
-        meta: mergeMessageMeta(
-          item.meta,
-          finalizedMessage.meta,
-          undefined,
-          { reconcileTraceSnapshots: finalMetaHasTracePayload },
-        ),
-      })));
+      setItems((prev) => upsertActiveAssistantMessage(
+        prev,
+        activeAssistantTarget(finalizedMessage),
+        finalizedMessage,
+        (item, final) => ({
+          ...final,
+          meta: mergeMessageMeta(
+            item.meta,
+            final.meta,
+            undefined,
+            { reconcileTraceSnapshots: finalMetaHasTracePayload },
+          ),
+        }),
+      ));
       options.onSuccess?.(finalizedMessage);
       if (!isVisibleRef.current) {
         onUnreadResult?.(botAlias);
@@ -3889,17 +3900,40 @@ export function ChatScreen({
       if (sendVersion !== assistantSendVersionRef.current) {
         return;
       }
-      const message = err instanceof Error ? err.message : "发送失败";
-      if (findActiveAssistantIndex(itemsRef.current, activeAssistantTarget()) >= 0) {
-        setItems((prev) => updateActiveAssistantMessage(prev, activeAssistantTarget(), (item) => ({
-          ...item,
-          text: message,
-          state: "error",
-        })));
+      if (isChatStreamIncompleteError(err)) {
+        recoverIncompleteStream = true;
+        streamTurnId = err.turnId || err.partialMessage.turnId || streamTurnId;
+        streamAssistantMessageId = err.assistantMessageId || err.partialMessage.id || streamAssistantMessageId;
+        const partialMessage: ChatMessage = {
+          ...err.partialMessage,
+          state: "streaming",
+        };
+        setItems((prev) => upsertActiveAssistantMessage(
+          prev,
+          activeAssistantTarget(partialMessage),
+          partialMessage,
+          (item, partial) => {
+            const meta = mergeMessageMeta(item.meta, partial.meta);
+            return {
+              ...partial,
+              text: partial.text || item.text,
+              ...(meta ? { meta } : {}),
+            };
+          },
+        ));
       } else {
-        setError(message);
+        const message = err instanceof Error ? err.message : "发送失败";
+        if (findActiveAssistantIndex(itemsRef.current, activeAssistantTarget()) >= 0) {
+          setItems((prev) => updateActiveAssistantMessage(prev, activeAssistantTarget(), (item) => ({
+            ...item,
+            text: message,
+            state: "error",
+          })));
+        } else {
+          setError(message);
+        }
+        options.onError?.(message);
       }
-      options.onError?.(message);
     } finally {
       if (sseAbortControllerRef.current === sseAbortController) {
         sseAbortControllerRef.current = null;
@@ -3909,16 +3943,24 @@ export function ChatScreen({
       }
       stopSseRecoveryWatch();
       sseLastActivityAtRef.current = null;
-      isStreamingRef.current = false;
-      streamModeRef.current = "";
-      setIsStreaming(false);
-      setStreamMode("");
-      setStreamStartedAtMs(null);
       setNativePermissionPending(false);
-      emitBotActivityForActiveAgent("idle");
-      void drainQueuedMessageIfIdleRef.current?.({ botAlias: sendBotAlias, agentId: sendAgentId });
+      if (recoverIncompleteStream) {
+        isStreamingRef.current = true;
+        streamModeRef.current = "poll";
+        setIsStreaming(true);
+        setStreamMode("poll");
+        scheduleAssistantPoll(0);
+      } else {
+        isStreamingRef.current = false;
+        streamModeRef.current = "";
+        setIsStreaming(false);
+        setStreamMode("");
+        setStreamStartedAtMs(null);
+        emitBotActivityForActiveAgent("idle");
+        void drainQueuedMessageIfIdleRef.current?.({ botAlias: sendBotAlias, agentId: sendAgentId });
+      }
     }
-  }, [botAlias, client, markSseActivity, onUnreadResult, pollClusterTasks, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch, streamBatcher]);
+  }, [botAlias, client, markSseActivity, onUnreadResult, pollClusterTasks, scheduleAssistantPoll, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch, streamBatcher]);
 
   drainQueuedMessageIfIdleRef.current = async (context) => {
     const targetBotAlias = context?.botAlias || botAlias;
