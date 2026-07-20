@@ -172,6 +172,7 @@ Pi 模型配置写 Web 设置页，或直接写 `~/.pi/agent/settings.json` 和 
 - 已完成 assistant 回复用 Markdown 渲染，失败时 fallback 到 raw text
 - plugin file view 支持 session-backed heavy views 和 VCD waveform rendering
 - Git UI 支持 overview、diff、stage/unstage、commit、fetch/pull/push、stash/pop
+- 固定公网转发：公网服务器运行 `frps`，内网机器启用内置 `frpc`；配置 `TCB_NODE_ID`、`WEB_BASE_PATH`、`WEB_FIXED_PUBLIC_FORWARD_*` 和 `TCB_HUB_FRPS_*`，反代必须保留 `/node/<节点ID>/` 前缀并支持 WebSocket。完整最小示例见 `README.md` 的“固定公网地址和反向代理”。
 
 ### LiteLLM 转接网关
 
