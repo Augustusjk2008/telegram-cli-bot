@@ -190,7 +190,11 @@ import type {
   WebNotificationEvent,
 } from "./types";
 import type { WebBotClient } from "./webBotClient";
-import { createAgUiStreamAdapter, isAgUiEventType } from "./agUiStreamAdapter";
+import {
+  createAgUiStreamAdapter,
+  isAgUiEventType,
+  isSyntheticLegacyMessageId,
+} from "./agUiStreamAdapter";
 import {
   EventType,
   type AgUiEvent,
@@ -204,7 +208,10 @@ import {
 } from "../utils/agUiRunReducer";
 import { mergeMessageMeta, summarizeTrace } from "../utils/chatMessageMeta";
 import { mapChatMessageContextUsage } from "../utils/contextUsage";
-import { mergeChatTraceEvents } from "../utils/nativeAgentTranscript";
+import {
+  mergeChatTraceEvents,
+  traceEventsEquivalent,
+} from "../utils/nativeAgentTranscript";
 
 type JsonEnvelope<T> = {
   ok: boolean;
@@ -1229,7 +1236,7 @@ type RawCliErrorStatsResult = {
   items?: RawCliErrorStatsItem[];
 };
 
-type StreamEvent =
+type StreamEventPayload =
   | { type: "meta"; [key: string]: unknown }
   | { type: "delta"; text?: string }
   | { type: "snapshot"; text?: string; elapsed_seconds?: number }
@@ -1255,6 +1262,10 @@ type StreamEvent =
       status?: RawAppUpdateStatus;
     }
   | { type: "error"; message?: string; code?: string };
+
+type StreamEvent = StreamEventPayload & {
+  sequence?: number;
+};
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -1308,8 +1319,11 @@ function mapAgUiTraceEvent(event: AgUiEvent, activityContent?: Record<string, un
     if (event.activityType === "TCB_META") {
       return null;
     }
+    const activityMessageId = String(event.messageId || "").trim();
+    const activityId = String(content.id || "").trim()
+      || (isSyntheticLegacyMessageId(activityMessageId) ? "" : activityMessageId);
     return {
-      ...(String(content.id || "").trim() ? { id: String(content.id || "").trim() } : {}),
+      ...(activityId ? { id: activityId } : {}),
       ...(typeof content.ordinal === "number" ? { ordinal: content.ordinal } : {}),
       ...(typeof content.sequence === "number" ? { sequence: content.sequence } : {}),
       ...(String(content.createdAt || content.created_at || "").trim()
@@ -1895,8 +1909,11 @@ function mapTraceEvent(raw?: RawChatTraceEvent | null): ChatTraceEvent | null {
     kind: kind || "unknown",
     summary,
   };
-  if (raw.id) {
-    event.id = raw.id;
+  if (typeof raw.id === "string" || typeof raw.id === "number") {
+    const id = String(raw.id).trim();
+    if (id) {
+      event.id = id;
+    }
   }
   if (typeof raw.ordinal === "number") {
     event.ordinal = raw.ordinal;
@@ -3334,11 +3351,14 @@ function mapDebugLaunchSchema(raw: unknown): DebugLaunchSchema {
 function parseSseBlock(block: string): StreamEvent | null {
   const lines = block.split("\n");
   let eventType = "message";
+  let eventId = "";
   const dataLines: string[] = [];
 
   for (const line of lines) {
     if (line.startsWith("event:")) {
       eventType = line.slice(6).trim();
+    } else if (line.startsWith("id:")) {
+      eventId = line.slice(3).trim();
     } else if (line.startsWith("data:")) {
       dataLines.push(line.slice(5).trim());
     }
@@ -3349,9 +3369,17 @@ function parseSseBlock(block: string): StreamEvent | null {
   }
 
   try {
+    const parsed = JSON.parse(dataLines.join("\n")) as Record<string, unknown>;
+    const payloadSequence = typeof parsed.sequence === "number" && Number.isFinite(parsed.sequence)
+      ? parsed.sequence
+      : undefined;
+    const sseSequence = payloadSequence ?? (
+      eventId && /^\d+$/.test(eventId) ? Number(eventId) : undefined
+    );
     return {
       type: eventType,
-      ...JSON.parse(dataLines.join("\n")),
+      ...parsed,
+      ...(typeof sseSequence === "number" ? { sequence: sseSequence } : {}),
     } as StreamEvent;
   } catch {
     return {
@@ -4505,6 +4533,26 @@ export class RealWebBotClient implements WebBotClient {
     const agUiAdapter = createAgUiStreamAdapter();
     let agUiState = createAgUiRunState();
     let sawAgUiEvent = false;
+    const seenStreamSequences = new Set<number>();
+
+    const appendStreamTrace = (traceEvent: ChatTraceEvent, nativeFlat: boolean) => {
+      const previousTrace = streamedTrace.slice();
+      const mergedTrace = mergeChatTraceEvents([streamedTrace, [traceEvent]], {
+        nativeFlat,
+        autoNativeFlat: nativeFlat,
+        dedupeAnonymous: true,
+      }) || [];
+      streamedTrace.splice(0, streamedTrace.length, ...mergedTrace);
+      const maxLength = Math.max(previousTrace.length, mergedTrace.length);
+      for (let index = 0; index < maxLength; index += 1) {
+        const previous = previousTrace[index];
+        const next = mergedTrace[index];
+        if (!previous || !next || !traceEventsEquivalent(previous, next)) {
+          return next || traceEvent;
+        }
+      }
+      return null;
+    };
 
     while (!streamFinished) {
       const { value, done } = await reader.read();
@@ -4529,6 +4577,14 @@ export class RealWebBotClient implements WebBotClient {
           continue;
         }
 
+        if (typeof event.sequence === "number" && event.sequence > 0) {
+          if (seenStreamSequences.has(event.sequence)) {
+            separator = findSseSeparator(buffer);
+            continue;
+          }
+          seenStreamSequences.add(event.sequence);
+        }
+
         const shouldAdaptAgUiEvent = useAgUiProtocol || isAgUiEventType(event.type);
         const agUiEvents = shouldAdaptAgUiEvent ? agUiAdapter.adapt(event) : [];
         if (agUiEvents.length > 0) {
@@ -4540,11 +4596,7 @@ export class RealWebBotClient implements WebBotClient {
             const traceEvent = mapAgUiTraceEvent(agUiEvent, activityContent);
             if (traceEvent) {
               const nativeFlatTrace = options?.executionMode === "native_agent";
-              const mergedTrace = mergeChatTraceEvents([streamedTrace, [traceEvent]], {
-                nativeFlat: nativeFlatTrace,
-                autoNativeFlat: nativeFlatTrace,
-              });
-              streamedTrace.splice(0, streamedTrace.length, ...(mergedTrace || []));
+              appendStreamTrace(traceEvent, nativeFlatTrace);
             }
             if (agUiEvent.type === EventType.ACTIVITY_SNAPSHOT || agUiEvent.type === EventType.ACTIVITY_DELTA) {
               const content = activityContent;
@@ -4656,12 +4708,10 @@ export class RealWebBotClient implements WebBotClient {
           const traceEvent = mapTraceEvent(event.event);
           if (traceEvent) {
             const nativeFlatTrace = options?.executionMode === "native_agent";
-            const mergedTrace = mergeChatTraceEvents([streamedTrace, [traceEvent]], {
-              nativeFlat: nativeFlatTrace,
-              autoNativeFlat: nativeFlatTrace,
-            });
-            streamedTrace.splice(0, streamedTrace.length, ...(mergedTrace || []));
-            onTrace?.(traceEvent);
+            const acceptedTrace = appendStreamTrace(traceEvent, nativeFlatTrace);
+            if (acceptedTrace) {
+              onTrace?.(acceptedTrace);
+            }
           }
         } else if (event.type === "done") {
           if (event.message) {
@@ -4671,7 +4721,7 @@ export class RealWebBotClient implements WebBotClient {
               streamedContextUsage ? { contextUsage: streamedContextUsage } : undefined,
               finalMessage.meta,
               streamedTrace,
-              { reconcileTraceSnapshots: true },
+              { reconcileTraceSnapshots: true, dedupeAnonymous: true },
             );
             finalText = finalMessage.text;
           } else {
@@ -4706,6 +4756,7 @@ export class RealWebBotClient implements WebBotClient {
             streamedContextUsage ? { contextUsage: streamedContextUsage } : undefined,
             undefined,
             streamedTrace,
+            { dedupeAnonymous: true },
           );
       const partialMessage: ChatMessage = {
         id: agUiState.messageId || streamAssistantMessageId || `assistant-${Date.now()}`,
@@ -4774,6 +4825,7 @@ export class RealWebBotClient implements WebBotClient {
       streamedContextUsage ? { contextUsage: streamedContextUsage } : undefined,
       undefined,
       streamedTrace,
+      { dedupeAnonymous: true },
     );
     return {
       id: streamAssistantMessageId || `assistant-${Date.now()}`,

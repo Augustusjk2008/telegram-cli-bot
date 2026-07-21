@@ -1009,13 +1009,16 @@ function shouldShowContextRing(meta?: ChatMessageMetaInfo) {
 }
 
 function appendTraceToMessage(item: ChatMessage, traceEvent: ChatTraceEvent, tracePresentation?: ChatMessageMetaInfo["tracePresentation"]): ChatMessage {
+  const nativeTrace = tracePresentation === "native_agent_flat"
+    || isNativeAgentMessage(item.meta)
+    || ["native", "native_agent"].includes(String(traceEvent.source || "").trim().toLowerCase());
   return {
     ...item,
     meta: mergeMessageMeta(item.meta, {
       trace: [traceEvent],
       traceVersion: 1,
       tracePresentation,
-    }),
+    }, undefined, { dedupeAnonymous: nativeTrace }),
   };
 }
 
@@ -3975,7 +3978,7 @@ export function ChatScreen({
           streamStartedAtMs: localStartedAtMs,
           trace: traceEvent,
           nativeTrace: executionModeRef.current === "native_agent"
-            || String(traceEvent.source || "").trim().toLowerCase() === "native_agent",
+            || ["native", "native_agent"].includes(String(traceEvent.source || "").trim().toLowerCase()),
           usingPreviewReplace,
         });
       };

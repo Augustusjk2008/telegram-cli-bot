@@ -19,6 +19,7 @@ function pickLoadedTraceCount(incomingValue?: number, baseValue?: number) {
 
 export type MergeMessageMetaOptions = {
   reconcileTraceSnapshots?: boolean;
+  dedupeAnonymous?: boolean;
 };
 
 export function summarizeTrace(trace?: ChatTraceEvent[]) {
@@ -44,6 +45,7 @@ export function mergeMessageMeta(
       nativeFlat: nativeFlatTrace,
       autoNativeFlat: nativeFlatTrace,
       reconcileTraceSnapshots: options.reconcileTraceSnapshots,
+      dedupeAnonymous: options.dedupeAnonymous,
     },
   );
   const traceSummary = trace ? summarizeTrace(trace) : undefined;

@@ -1,7 +1,8 @@
 import { expect, test } from "vitest";
 import { mergeMessagesPreservingClientState } from "../screens/ChatScreen";
-import type { ChatMessage, ChatMessageMetaInfo } from "../services/types";
+import type { ChatMessage, ChatMessageMetaInfo, ChatTraceEvent } from "../services/types";
 import { mergeMessageMeta } from "../utils/chatMessageMeta";
+import { mergeChatTraceEvents } from "../utils/nativeAgentTranscript";
 
 test("idle history merge preserves message references when nothing changed", () => {
   const previousItems: ChatMessage[] = [
@@ -113,4 +114,34 @@ test("trace snapshot load progress is independent from merged trace length", () 
   expect(merged?.trace).toHaveLength(12);
   expect(merged?.traceCount).toBe(9);
   expect(merged?.traceLoadedCount).toBe(9);
+});
+
+test("anonymous native trace replay dedupe is opt-in and preserves stable events", () => {
+  const anonymous = [
+    { kind: "commentary", summary: "同一过程", source: "native" },
+    { kind: "commentary", summary: "同一过程", source: "native" },
+  ];
+
+  expect(mergeChatTraceEvents([anonymous], { nativeFlat: true }) || []).toHaveLength(2);
+  expect(mergeChatTraceEvents([anonymous], { nativeFlat: true, dedupeAnonymous: true }) || []).toHaveLength(1);
+  expect(mergeChatTraceEvents([[{
+    id: "trace-1",
+    kind: "commentary",
+    summary: "同一过程",
+    source: "native",
+  }, {
+    id: "trace-2",
+    kind: "commentary",
+    summary: "同一过程",
+    source: "native",
+  }]], { nativeFlat: true, dedupeAnonymous: true }) || []).toHaveLength(2);
+});
+
+test("preserves distinct numeric native trace ids", () => {
+  const trace = [
+    { id: 1, kind: "commentary", summary: "同一过程", source: "native" },
+    { id: 2, kind: "commentary", summary: "同一过程", source: "native" },
+  ] as unknown as ChatTraceEvent[];
+
+  expect(mergeChatTraceEvents([trace], { nativeFlat: true, dedupeAnonymous: true }) || []).toHaveLength(2);
 });

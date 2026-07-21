@@ -1194,6 +1194,84 @@ test("renders live cli trace without temporary answer while streaming", async ()
   });
 });
 
+test("deduplicates replayed anonymous native trace events in the live transcript", async () => {
+  const user = userEvent.setup();
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias,
+    _text,
+    _onChunk,
+    _onStatus,
+    onTrace,
+  ) => {
+    for (let index = 0; index < 10; index += 1) {
+      onTrace?.({
+        kind: "commentary",
+        summary: "重复过程",
+        source: "native",
+        rawType: "message.text.reclassified",
+      });
+    }
+    return {
+      id: "assistant-native-replay",
+      role: "assistant",
+      text: "最终答复",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    };
+  });
+  const client = createClient({ sendMessage });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+  await user.type(screen.getByPlaceholderText("输入消息"), "继续");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(within(transcript).getAllByText("重复过程")).toHaveLength(1);
+  expect(within(transcript).getByText("最终答复")).toBeInTheDocument();
+});
+
+test("updates one live native trace entry when commentary is cumulative", async () => {
+  const user = userEvent.setup();
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias,
+    _text,
+    _onChunk,
+    _onStatus,
+    onTrace,
+  ) => {
+    onTrace?.({
+      kind: "commentary",
+      summary: "我先",
+      source: "native",
+      rawType: "message.text.reclassified",
+    });
+    onTrace?.({
+      kind: "commentary",
+      summary: "我先检查目录。",
+      source: "native",
+      rawType: "assistant_message",
+    });
+    return {
+      id: "assistant-native-cumulative",
+      role: "assistant",
+      text: "最终答复",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    };
+  });
+  const client = createClient({ sendMessage });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+  await user.type(screen.getByPlaceholderText("输入消息"), "继续");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(within(transcript).getAllByText("我先检查目录。")).toHaveLength(1);
+  expect(within(transcript).queryByText("我先")).not.toBeInTheDocument();
+});
+
 test("plain cli streaming text waits for done before rendering answer", async () => {
   const user = userEvent.setup();
   let resolveFinal!: (message: ChatMessage) => void;
