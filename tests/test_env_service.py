@@ -10,6 +10,16 @@ def _write_env(root: Path, text: str) -> None:
     (root / ".env.example").write_text("", encoding="utf-8")
 
 
+def test_env_service_patch_updates_env_without_creating_backup(tmp_path: Path) -> None:
+    _write_env(tmp_path, "WEB_PORT=8765\n")
+
+    result = EnvConfigService(tmp_path).patch({"values": {"WEB_PORT": 9000}})
+
+    assert (tmp_path / ".env").read_text(encoding="utf-8") == "WEB_PORT=9000\n"
+    assert list(tmp_path.glob(".env.bak.*")) == []
+    assert result["backupPath"] == ""
+
+
 def test_env_service_accepts_fixed_public_forward_config(tmp_path: Path) -> None:
     _write_env(
         tmp_path,

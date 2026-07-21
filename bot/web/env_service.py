@@ -5,11 +5,9 @@ from __future__ import annotations
 import os
 import re
 import secrets
-import shutil
 import tempfile
 from math import isfinite
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -402,7 +400,6 @@ class EnvConfigService:
                 "rebuildRequiredKeys": [],
                 "backupPath": "",
             }
-        backup_path = self._backup_env()
         lines = _read_lines(self.env_path)
         updated_text = self._render_updated_env(lines, changes)
         self._atomic_write(updated_text)
@@ -410,7 +407,7 @@ class EnvConfigService:
             "changedKeys": changed_keys,
             "restartRequiredKeys": self._impact_keys(changed_keys, restart=True),
             "rebuildRequiredKeys": self._impact_keys(changed_keys, rebuild=True),
-            "backupPath": str(backup_path),
+            "backupPath": "",
         }
 
     def _serialize_schema(self, field: EnvField, *, example_values: dict[str, str]) -> dict[str, Any]:
@@ -593,18 +590,6 @@ class EnvConfigService:
         for key in self._ordered_keys(pending):
             rendered.append(f"{key}={_encode_value(pending[key])}\n")
         return "".join(rendered)
-
-    def _backup_env(self) -> Path:
-        timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
-        backup_path = self.repo_root / f".env.bak.{timestamp}"
-        while backup_path.exists():
-            timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
-            backup_path = self.repo_root / f".env.bak.{timestamp}"
-        if self.env_path.exists():
-            shutil.copy2(self.env_path, backup_path)
-        else:
-            backup_path.write_text("", encoding="utf-8")
-        return backup_path
 
     def _atomic_write(self, text: str) -> None:
         self.repo_root.mkdir(parents=True, exist_ok=True)
