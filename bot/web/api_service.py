@@ -558,6 +558,15 @@ def build_bot_summary(
             pass
     agent_items = _build_agent_status_items(profile, _build_agent_runtime_map(bot_id, user_id))
     activity = _build_activity_summary(agent_items)
+    latest_answer_completed_at = ""
+    latest_answer_store = ChatStore(Path(working_dir))
+    latest_answer_user_id = chat_session_user_id(user_id) if user_id is not None else None
+    if latest_answer_user_id is not None:
+        latest_answer_store.migrate_conversations_to_shared(bot_id, latest_answer_user_id)
+    latest_answer_completed_at = latest_answer_store.get_latest_completed_turn_at(
+        bot_id=bot_id,
+        user_id=latest_answer_user_id,
+    )
 
     return {
         "alias": profile.alias,
@@ -574,6 +583,7 @@ def build_bot_summary(
         "status": run_status,
         "service_status": service_status,
         "cluster": profile.cluster.to_dict(),
+        "last_answer_completed_at": latest_answer_completed_at,
         **activity,
         "bot_username": (app.bot_data.get("bot_username") if app else "") or "",
         "capabilities": _build_capabilities(alias == manager.main_profile.alias),
@@ -2872,6 +2882,17 @@ def _context_left_percent(context_usage: dict[str, Any] | None) -> int | None:
     return None
 
 
+def _context_compaction_count(context_usage: dict[str, Any] | None) -> int:
+    if not isinstance(context_usage, dict):
+        return 0
+    value = context_usage.get("compaction_count")
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)):
+        return max(0, int(value))
+    return 0
+
+
 def _with_compaction_count(
     context_usage: dict[str, Any] | None,
     *,
@@ -3092,14 +3113,18 @@ def _parse_codex_event_dict(event: dict[str, Any]) -> dict[str, Optional[str]]:
             phase = str(payload.get("phase") or "").strip().lower()
             if phase in {"final", "final_answer"}:
                 result["completed_text"] = text_value
-            result["delta_text"] = text_value
+            else:
+                result["delta_text"] = text_value
             return result
         if payload_type == "agent_message":
             message = payload.get("message")
             if isinstance(message, str) and message.strip():
                 text_value = message.strip()
-                result["completed_text"] = text_value
-                result["delta_text"] = text_value
+                phase = str(payload.get("phase") or "").strip().lower()
+                if phase in {"commentary", "progress", "partial"}:
+                    result["delta_text"] = text_value
+                else:
+                    result["completed_text"] = text_value
             return result
         return result
 
@@ -3116,8 +3141,11 @@ def _parse_codex_event_dict(event: dict[str, Any]) -> dict[str, Optional[str]]:
 
     if event_type == "item.completed":
         if isinstance(text_value, str) and text_value:
-            result["completed_text"] = text_value
-            result["delta_text"] = text_value
+            phase = str(item.get("phase") or "").strip().lower()
+            if phase in {"commentary", "progress", "partial"}:
+                result["delta_text"] = text_value
+            else:
+                result["completed_text"] = text_value
         return result
 
     if event_type == "item.delta":
@@ -3969,8 +3997,22 @@ async def _stream_cli_chat(
             0,
             int(round((time.perf_counter() - persist_started_at) * 1000)),
         )
-        turn_context_left_percent: int | None = None
-        turn_compaction_count = 0
+        compaction_session_id: str | None = None
+        session_context_left_percent: int | None = None
+        session_compaction_count = 0
+
+        async def load_compaction_session(session_id: str | None) -> None:
+            nonlocal compaction_session_id, session_context_left_percent, session_compaction_count
+            normalized_session_id = str(session_id or "").strip()
+            if normalized_session_id == compaction_session_id:
+                return
+            previous_usage = await service.get_latest_native_session_context_usage_async(
+                native_provider=cli_type,
+                native_session_id=normalized_session_id,
+            )
+            compaction_session_id = normalized_session_id
+            session_context_left_percent = _context_left_percent(previous_usage)
+            session_compaction_count = _context_compaction_count(previous_usage)
 
         for attempt_index in range(max_attempts):
             attempt = _prepare_cli_attempt_state(session, cli_type)
@@ -4080,8 +4122,10 @@ async def _stream_cli_chat(
             thread_id: Optional[str] = None
             last_status_signature: tuple[int, Optional[str], tuple[tuple[str, str], ...] | None] | None = None
             last_context_usage: dict[str, Any] | None = None
+            last_context_usage_session_id = ""
             last_context_usage_signature: tuple[tuple[str, str], ...] | None = None
             last_context_usage_persisted_at = 0.0
+            last_context_usage_resolved_session_id = ""
             claude_detector = None
             if done_session and done_session.enabled and done_session.sentinel:
                 claude_detector = ClaudeDoneDetector(done_session.sentinel, done_session.quiet_seconds)
@@ -4234,6 +4278,7 @@ async def _stream_cli_chat(
                         bool(status_session_id)
                         and (
                             last_context_usage is None
+                            or status_session_id != last_context_usage_resolved_session_id
                             or (now - last_context_usage_resolved_at) >= 1.0
                         )
                     )
@@ -4244,21 +4289,24 @@ async def _stream_cli_chat(
                             cwd_hint=session.working_dir,
                         )
                         last_context_usage_resolved_at = now
-                    elif status_session_id:
+                        last_context_usage_resolved_session_id = status_session_id
+                    elif status_session_id and status_session_id == last_context_usage_session_id:
                         status_context_usage = last_context_usage
                     if status_context_usage:
+                        await load_compaction_session(status_session_id)
                         (
                             status_context_usage,
-                            turn_context_left_percent,
-                            turn_compaction_count,
+                            session_context_left_percent,
+                            session_compaction_count,
                         ) = _with_compaction_count(
                             status_context_usage,
-                            previous_left_percent=turn_context_left_percent,
-                            compaction_count=turn_compaction_count,
+                            previous_left_percent=session_context_left_percent,
+                            compaction_count=session_compaction_count,
                         )
                         status_event["context_usage"] = status_context_usage
                         context_usage_signature = _context_usage_signature(status_context_usage)
                         last_context_usage = status_context_usage
+                        last_context_usage_session_id = status_session_id
                         if (
                             context_usage_signature != last_context_usage_signature
                             or loop.time() - last_context_usage_persisted_at >= 1.0
@@ -4423,16 +4471,17 @@ async def _stream_cli_chat(
                 native_session_id,
                 cwd_hint=session.working_dir,
             )
-            if context_usage is None:
+            if context_usage is None and native_session_id == last_context_usage_session_id:
                 context_usage = last_context_usage
+            await load_compaction_session(native_session_id)
             (
                 context_usage,
-                turn_context_left_percent,
-                turn_compaction_count,
+                session_context_left_percent,
+                session_compaction_count,
             ) = _with_compaction_count(
                 context_usage,
-                previous_left_percent=turn_context_left_percent,
-                compaction_count=turn_compaction_count,
+                previous_left_percent=session_context_left_percent,
+                compaction_count=session_compaction_count,
             )
             complete_started_at = time.perf_counter()
             done_message = await asyncio.to_thread(

@@ -88,6 +88,20 @@ def test_portable_build_does_not_embed_fixed_web_token() -> None:
     assert portable.index('$env:TCB_PORTABLE_SMOKE_IMPORT_ONLY -eq "1"') < ensure_token_index
 
 
+def test_portable_build_removes_successful_stage_unless_kept() -> None:
+    portable = Path(".release-local/portable-win/build-portable.ps1").read_text(encoding="utf-8")
+
+    assert "[switch]$KeepStage" in portable
+    assert "function Remove-PortableStageDirectory" in portable
+    assert "Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop" in portable
+    assert 'Write-Warning ("清理绿色包临时目录失败，已保留 {0}: {1}"' in portable
+
+    archive_index = portable.index("New-ZipArchive -SourceDir $packageRoot -DestinationFile $artifactPath")
+    cleanup_guard_index = portable.index("if (-not $KeepStage)", archive_index)
+    cleanup_index = portable.index("Remove-PortableStageDirectory -Path $packageRoot", cleanup_guard_index)
+    assert archive_index < cleanup_guard_index < cleanup_index
+
+
 def test_release_checks_run_complete_backend_tests_and_frontend_lint() -> None:
     ps1 = Path(".release-local/publish-release.ps1").read_text(encoding="utf-8")
     sh = Path(".release-local/publish-release.sh").read_text(encoding="utf-8")

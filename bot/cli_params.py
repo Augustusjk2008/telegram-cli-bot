@@ -560,16 +560,15 @@ def _build_codex_args(
     if params.get("json_output"):
         exec_options.append("--json")
     
-    # 添加额外参数
-    extra_args = params.get("extra_args", [])
-    if extra_args:
-        exec_options.extend([str(arg) for arg in extra_args])
+    # 额外参数属于 codex exec，恢复会话时必须位于嵌套的 resume 子命令之前。
+    extra_args = [str(arg) for arg in (params.get("extra_args") or [])]
     
     # 构建完整命令
     if session_id:
         cmd = [
             *cli_invocation,
             "exec",
+            *extra_args,
             "resume",
             *exec_options,
             session_id,
@@ -580,6 +579,7 @@ def _build_codex_args(
             *cli_invocation,
             "exec",
             *exec_options,
+            *extra_args,
             "-",
         ]
     

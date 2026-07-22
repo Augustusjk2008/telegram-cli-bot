@@ -10,6 +10,7 @@ import pytest
 from bot.web.api_service import (
     CliOutputLimitError,
     _PROCESS_STDOUT_EOF,
+    _StreamPreviewState,
     _communicate_claude_process,
     _communicate_codex_process,
     _communicate_process,
@@ -89,6 +90,17 @@ def test_stdout_reader_delivers_limit_error_before_eof():
 
     assert isinstance(error, CliOutputLimitError)
     assert eof is _PROCESS_STDOUT_EOF
+
+
+def test_codex_terminal_snapshot_is_not_published_as_stream_preview():
+    preview = _StreamPreviewState("codex")
+
+    preview.consume(
+        '{"type":"event_msg","payload":{"type":"agent_message","message":"最终答复"}}\n'
+    )
+
+    assert "preview_text" not in preview.status_event(elapsed_seconds=1)
+    assert preview.result().final_text == "最终答复"
 
 
 @pytest.mark.asyncio

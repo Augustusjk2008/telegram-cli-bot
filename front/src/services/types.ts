@@ -436,6 +436,7 @@ export type BotSummary = {
   status: BotStatus;
   workingDir: string;
   lastActiveText: string;
+  lastAnswerCompletedAt?: string;
   serviceStatus?: BotServiceStatus;
   activityStatus?: BotActivityStatus;
   busyAgentIds?: string[];

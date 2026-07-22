@@ -97,7 +97,7 @@ class CodexJsonStreamParser:
         if parsed["thread_id"]:
             self.session_id = parsed["thread_id"]
         if parsed["completed_text"]:
-            self._completed.append(parsed["completed_text"], separator="\n\n")
+            self._completed.replace(parsed["completed_text"])
         if parsed["delta_text"]:
             self._delta.append(parsed["delta_text"])
         if parsed["error_text"]:
@@ -108,7 +108,7 @@ class CodexJsonStreamParser:
 
     @property
     def preview_text(self) -> Optional[str]:
-        value = self._completed.text or self._delta.text or self._errors.text or self._plain.text
+        value = self._delta.text or self._errors.text or self._plain.text
         return value.strip() or None
 
     def result(self) -> CliStreamParseResult:
@@ -385,15 +385,19 @@ def parse_codex_json_line(line: str) -> Dict[str, Optional[str]]:
             phase = str(payload.get("phase", "")).strip().lower()
             if phase in {"final", "final_answer"}:
                 result["completed_text"] = text_value
-            result["delta_text"] = text_value
+            else:
+                result["delta_text"] = text_value
             return result
 
         if payload_type == "agent_message":
             message = payload.get("message")
             if isinstance(message, str) and message.strip():
                 text_value = message.strip()
-                result["completed_text"] = text_value
-                result["delta_text"] = text_value
+                phase = str(payload.get("phase", "")).strip().lower()
+                if phase in {"commentary", "progress", "partial"}:
+                    result["delta_text"] = text_value
+                else:
+                    result["completed_text"] = text_value
             return result
 
         return result
@@ -414,8 +418,11 @@ def parse_codex_json_line(line: str) -> Dict[str, Optional[str]]:
 
     if event_type == "item.completed":
         if isinstance(text_value, str) and text_value:
-            result["completed_text"] = text_value
-            result["delta_text"] = text_value
+            phase = str(item.get("phase", "")).strip().lower()
+            if phase in {"commentary", "progress", "partial"}:
+                result["delta_text"] = text_value
+            else:
+                result["completed_text"] = text_value
         return result
 
     if event_type == "item.delta":
@@ -452,7 +459,7 @@ def parse_codex_json_output(raw_output: str) -> Tuple[str, Optional[str]]:
             error_parts.append(parsed["error_text"])
 
     if completed_parts:
-        final_text = "\n\n".join(part for part in completed_parts if part.strip()).strip()
+        final_text = next((part.strip() for part in reversed(completed_parts) if part.strip()), "")
     else:
         final_text = "".join(delta_parts).strip()
 

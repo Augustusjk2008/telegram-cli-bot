@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { RealWebBotClient } from "../services/realWebBotClient";
 import { EventType } from "../services/agUiProtocol";
+import type { ChatTraceEvent } from "../services/types";
 import { buildFileDownloadUrl } from "../utils/fileLinks";
 import {
   createClusterBundleDiff,
@@ -930,6 +931,57 @@ describe("RealWebBotClient", () => {
     expect(message.elapsedSeconds).toBe(2);
   });
 
+  test("sendMessage drains an unterminated done frame at EOF", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('event: done\ndata: {"type":"done","output":"尾帧最终答复"}'));
+        controller.close();
+      },
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: stream,
+      json: async () => ({ ok: true, data: {} }),
+    });
+
+    const client = new RealWebBotClient();
+    const message = await client.sendMessage("main", "hi", vi.fn());
+
+    expect(message).toMatchObject({ text: "尾帧最终答复", state: "done" });
+  });
+
+  test("sendMessage rejects EOF before a terminal event with the stream binding", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(
+          'event: meta\ndata: {"type":"meta","turn_id":"turn-incomplete","assistant_message_id":"assistant-incomplete"}\n\n'
+          + 'event: status\ndata: {"type":"status","preview_text":"仍在处理中"}\n\n',
+        ));
+        controller.close();
+      },
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: stream,
+      json: async () => ({ ok: true, data: {} }),
+    });
+
+    const client = new RealWebBotClient();
+
+    await expect(client.sendMessage("main", "hi", vi.fn())).rejects.toMatchObject({
+      name: "ChatStreamIncompleteError",
+      turnId: "turn-incomplete",
+      assistantMessageId: "assistant-incomplete",
+      partialMessage: expect.objectContaining({
+        id: "assistant-incomplete",
+        turnId: "turn-incomplete",
+        state: "streaming",
+      }),
+    });
+  });
+
   test("sendMessage keeps done output when the embedded message content is empty", async () => {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
@@ -1090,6 +1142,52 @@ describe("RealWebBotClient", () => {
     expect(message.meta?.traceCount).toBe(3);
   });
 
+  test("sendMessage prefers the authoritative message embedded in RUN_FINISHED", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(`event: message\ndata: ${JSON.stringify({
+          type: "RUN_FINISHED",
+          threadId: "thread-authoritative",
+          runId: "run-authoritative",
+          result: {
+            content: "被过程内容污染的答复被过程内容污染的答复",
+            completion_state: "completed",
+            turn_id: "turn-authoritative",
+            assistant_message_id: "assistant-authoritative",
+            message: {
+              id: "assistant-authoritative",
+              turn_id: "turn-authoritative",
+              role: "assistant",
+              content: "权威最终答复",
+              state: "done",
+              created_at: "2026-07-20T00:00:00Z",
+            },
+          },
+          outcome: { type: "success" },
+        })}\n\n`));
+        controller.close();
+      },
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: stream,
+      json: async () => ({ ok: true, data: {} }),
+    });
+
+    const client = new RealWebBotClient();
+    const message = await client.sendMessage("main", "hi", vi.fn(), undefined, undefined, {
+      executionMode: "native_agent",
+    });
+
+    expect(message).toMatchObject({
+      id: "assistant-authoritative",
+      turnId: "turn-authoritative",
+      text: "权威最终答复",
+      state: "done",
+    });
+  });
+
   test("sendMessage keeps duplicate native process events in flat trace", async () => {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
@@ -1116,6 +1214,139 @@ describe("RealWebBotClient", () => {
       expect.objectContaining({ kind: "commentary", summary: "重复过程", sequence: 1 }),
       expect.objectContaining({ kind: "commentary", summary: "重复过程", sequence: 2 }),
     ]);
+  });
+
+  test("sendMessage ignores replayed anonymous native trace frames", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        for (let index = 0; index < 10; index += 1) {
+          controller.enqueue(encoder.encode(
+            "event: trace\ndata: {\"event\":{\"kind\":\"commentary\",\"summary\":\"重复过程\",\"source\":\"native\",\"raw_type\":\"message.text.reclassified\"}}\n\n",
+          ));
+        }
+        controller.enqueue(encoder.encode("event: done\ndata: {\"output\":\"ok\"}\n\n"));
+        controller.close();
+      },
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: stream,
+      json: async () => ({ ok: true, data: {} }),
+    });
+
+    const traces: string[] = [];
+    const client = new RealWebBotClient();
+    const message = await client.sendMessage("main", "hi", vi.fn(), undefined, (trace) => {
+      traces.push(`${trace.kind}:${trace.summary}`);
+    });
+
+    expect(traces).toEqual(["commentary:重复过程"]);
+    expect(message.meta?.trace).toHaveLength(1);
+    expect(message.meta?.trace?.[0]).toEqual(expect.objectContaining({
+      kind: "commentary",
+      summary: "重复过程",
+      source: "native",
+    }));
+  });
+
+  test("sendMessage keeps distinct legacy native activities in ag-ui compatibility mode", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        for (const summary of ["过程一", "过程一", "过程二"]) {
+          controller.enqueue(encoder.encode(`event: trace\ndata: ${JSON.stringify({
+            event: {
+              kind: "commentary",
+              summary,
+              source: "native",
+              raw_type: "message.text.reclassified",
+            },
+          })}\n\n`));
+        }
+        controller.enqueue(encoder.encode("event: done\ndata: {\"output\":\"ok\"}\n\n"));
+        controller.close();
+      },
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: stream,
+      json: async () => ({ ok: true, data: {} }),
+    });
+
+    const client = new RealWebBotClient();
+    const message = await client.sendMessage("main", "hi", vi.fn(), undefined, undefined, {
+      executionMode: "native_agent",
+    });
+
+    expect(message.meta?.trace?.map((trace) => trace.summary)).toEqual(["过程一", "过程二"]);
+  });
+
+  test("sendMessage folds cumulative anonymous native commentary into one trace", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        for (const [summary, rawType] of [
+          ["我先", "message.text.reclassified"],
+          ["我先检查目录。", "assistant_message"],
+          ["我先检查目录。", "assistant_message"],
+          ["我先检查目录。", "message.text.reclassified"],
+        ]) {
+          controller.enqueue(encoder.encode(`event: trace\ndata: ${JSON.stringify({
+            event: {
+              kind: "commentary",
+              summary,
+              source: "native",
+              raw_type: rawType,
+            },
+          })}\n\n`));
+        }
+        controller.enqueue(encoder.encode("event: done\ndata: {\"output\":\"ok\"}\n\n"));
+        controller.close();
+      },
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: stream,
+      json: async () => ({ ok: true, data: {} }),
+    });
+
+    const traces: ChatTraceEvent[] = [];
+    const client = new RealWebBotClient();
+    const message = await client.sendMessage("main", "hi", vi.fn(), undefined, (trace) => {
+      traces.push(trace);
+    });
+
+    expect(traces.map((trace) => trace.summary)).toEqual(["我先", "我先检查目录。"]);
+    expect(message.meta?.trace).toHaveLength(1);
+    expect(message.meta?.trace?.[0]?.summary).toBe("我先检查目录。");
+  });
+
+  test("sendMessage ignores replayed SSE frames by stream sequence", async () => {
+    const encoder = new TextEncoder();
+    const frame = "event: trace\nid: 17\ndata: {\"event\":{\"kind\":\"commentary\",\"summary\":\"一次过程\",\"source\":\"codex\"}}\n\n";
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(frame));
+        controller.enqueue(encoder.encode(frame));
+        controller.enqueue(encoder.encode("event: done\ndata: {\"output\":\"ok\"}\n\n"));
+        controller.close();
+      },
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: stream,
+      json: async () => ({ ok: true, data: {} }),
+    });
+
+    const traces: ChatTraceEvent[] = [];
+    const client = new RealWebBotClient();
+    const message = await client.sendMessage("main", "hi", vi.fn(), undefined, (trace) => {
+      traces.push(trace);
+    });
+
+    expect(traces).toHaveLength(1);
+    expect(message.meta?.trace).toHaveLength(1);
   });
 
   test("sendMessage applies ag-ui activity delta patches to native trace", async () => {

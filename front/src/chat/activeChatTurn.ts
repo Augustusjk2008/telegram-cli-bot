@@ -75,3 +75,28 @@ export function updateActiveAssistantMessage(
   nextItems[index] = next;
   return nextItems;
 }
+
+export function upsertActiveAssistantMessage(
+  items: ChatMessage[],
+  target: ActiveAssistantTarget,
+  finalMessage: ChatMessage,
+  merge: (current: ChatMessage, final: ChatMessage) => ChatMessage = (_current, final) => final,
+) {
+  const resolvedTarget: ActiveAssistantTarget = {
+    ...target,
+    assistantMessageId: target.assistantMessageId || finalMessage.id,
+    turnId: target.turnId || finalMessage.turnId,
+  };
+  const index = findActiveAssistantIndex(items, resolvedTarget);
+  if (index < 0) {
+    return [...items, finalMessage];
+  }
+  const current = items[index];
+  const next = merge(current, finalMessage);
+  if (next === current) {
+    return items;
+  }
+  const nextItems = items.slice();
+  nextItems[index] = next;
+  return nextItems;
+}

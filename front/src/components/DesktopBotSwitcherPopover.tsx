@@ -310,7 +310,7 @@ export function DesktopBotSwitcherPopover({
                       <span className="shrink-0 font-medium">{getBotRuntimeLabel(bot)}</span>
                       <span className="min-w-0 truncate" title={bot.workingDir}>{bot.workingDir}</span>
                     </span>
-                    <BotActivitySummary bot={bot} className="mt-1" />
+                    <BotActivitySummary bot={bot} className="mt-1" showLatestAnswerTime />
                   </span>
                   <span className="flex shrink-0 flex-col items-end gap-1">
                     {status === "unread" ? <StatusPill status="unread" /> : null}
@@ -360,7 +360,7 @@ export function DesktopBotSwitcherPopover({
 
                     <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-2">
                       <div className="text-xs font-medium text-[var(--muted)]">状态</div>
-                      <div className="mt-1 text-sm text-[var(--text)]">{getBotActivityText(focusedBot)}</div>
+                      <div className="mt-1 text-sm text-[var(--text)]">{getBotActivityText(focusedBot, true)}</div>
                       {busyNames(focusedBot).length > 0 ? (
                         <div className="mt-2 flex flex-wrap gap-1">
                           {busyNames(focusedBot).slice(0, 3).map((name) => (

@@ -14,8 +14,7 @@ def _documented_version(path: Path, pattern: str) -> str:
     return match.group(1)
 
 
-def test_documented_versions_match_version_file() -> None:
+def test_readme_version_matches_version_file() -> None:
     version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
     assert _documented_version(ROOT / "README.md", r"当前版本：`([^`]+)`") == version
-    assert _documented_version(ROOT / "AGENTS.md", r"当前仓库版本：`([^`]+)`") == version

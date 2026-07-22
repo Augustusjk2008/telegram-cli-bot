@@ -2,7 +2,8 @@ param(
     [string]$GitRoot = "C:\Program Files\Git",
     [string]$PackageName = "",
     [string]$ArtifactPath = "",
-    [switch]$SkipFrontBuild
+    [switch]$SkipFrontBuild,
+    [switch]$KeepStage
 )
 
 $ErrorActionPreference = "Stop"
@@ -99,6 +100,19 @@ function Reset-Directory {
         Remove-Item -LiteralPath $Path -Recurse -Force
     }
     [void](New-Item -ItemType Directory -Path $Path -Force)
+}
+
+function Remove-PortableStageDirectory {
+    param([string]$Path)
+
+    try {
+        if (Test-Path -LiteralPath $Path) {
+            Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+            Write-Info ("已清理绿色包临时目录: {0}" -f $Path)
+        }
+    } catch {
+        Write-Warning ("清理绿色包临时目录失败，已保留 {0}: {1}" -f $Path, $_.Exception.Message)
+    }
 }
 
 function Get-PythonEmbedUrl {
@@ -969,8 +983,14 @@ try {
     Write-Step "压缩绿色包"
     New-ZipArchive -SourceDir $packageRoot -DestinationFile $artifactPath
 
+    if (-not $KeepStage) {
+        Remove-PortableStageDirectory -Path $packageRoot
+    }
+
     Write-Host ""
-    Write-Host ("[完成] 绿色包目录: {0}" -f $packageRoot) -ForegroundColor Green
+    if (Test-Path -LiteralPath $packageRoot) {
+        Write-Host ("[完成] 绿色包目录: {0}" -f $packageRoot) -ForegroundColor Green
+    }
     Write-Host ("[完成] ZIP: {0}" -f $artifactPath) -ForegroundColor Green
 } catch {
     Write-Host ("[错误] {0}" -f $_.Exception.Message) -ForegroundColor Red

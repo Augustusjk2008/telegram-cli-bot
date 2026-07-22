@@ -98,6 +98,23 @@ class TestBuildCliCommand:
         config_index = cmd.index("-c")
         assert cmd[config_index + 1] == 'model_reasoning_effort="xhigh"'
 
+    def test_codex_resume_places_exec_extra_args_before_resume(self):
+        params_config = CliParamsConfig()
+        params_config.codex["extra_args"] = ["--profile", "work"]
+
+        cmd, _ = build_cli_command(
+            cli_type="codex",
+            resolved_cli="codex",
+            user_text="hello",
+            env={},
+            params_config=params_config,
+            session_id="session-1",
+        )
+
+        profile_index = cmd.index("--profile")
+        assert cmd[profile_index + 1] == "work"
+        assert profile_index < cmd.index("resume")
+
     @pytest.mark.parametrize("reasoning_effort", ["max", "ultra"])
     def test_codex_new_reasoning_efforts_are_valid_and_forwarded(self, reasoning_effort: str):
         assert reasoning_effort in get_params_schema("codex")["reasoning_effort"]["enum"]
@@ -183,6 +200,35 @@ class TestBuildCliCommand:
         assert allowed.codex["extra_args"] == params_config.codex["extra_args"]
 
 
+class TestParseCodexJsonLine:
+    @pytest.mark.parametrize(
+        "line",
+        [
+            '{"type":"item.completed","item":{"type":"assistant_message","text":"最终答复"}}',
+            '{"type":"event_msg","payload":{"type":"agent_message","message":"最终答复"}}',
+            '{"type":"response_item","item":{"type":"message","role":"assistant","phase":"final","content":[{"type":"output_text","text":"最终答复"}]}}',
+        ],
+    )
+    def test_terminal_events_are_not_replayed_as_delta(self, line: str):
+        parsed = parse_codex_json_line(line)
+
+        assert parsed["completed_text"] == "最终答复"
+        assert parsed["delta_text"] is None
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            '{"type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"过程说明"}}',
+            '{"type":"item.completed","item":{"type":"assistant_message","phase":"commentary","text":"过程说明"}}',
+        ],
+    )
+    def test_commentary_agent_message_remains_a_delta(self, line: str):
+        parsed = parse_codex_json_line(line)
+
+        assert parsed["completed_text"] is None
+        assert parsed["delta_text"] == "过程说明"
+
+
 class TestParseCodexJsonOutput:
     """测试 parse_codex_json_output"""
 
@@ -199,6 +245,18 @@ class TestParseCodexJsonOutput:
 
         assert text == "目录已读取完成。"
         assert thread_id == "thread-1"
+
+    def test_repeated_terminal_snapshots_keep_only_the_latest_answer(self):
+        text, _thread_id = parse_codex_json_output(
+            "\n".join(
+                [
+                    '{"type":"event_msg","payload":{"type":"agent_message","message":"最终答复"}}',
+                    '{"type":"item.completed","item":{"type":"assistant_message","text":"最终答复"}}',
+                ]
+            )
+        )
+
+        assert text == "最终答复"
 
 class TestParseClaudeStreamJsonOutput:
     """测试 Claude stream-json 完整输出解析"""
@@ -236,6 +294,19 @@ class TestIncrementalCliParsers:
         assert result.session_id == "thread-9"
         assert len(result.raw_tail.encode("utf-8")) <= 96
         assert result.total_bytes > len(result.raw_tail.encode("utf-8"))
+
+    def test_codex_parser_never_exposes_terminal_snapshots_as_live_preview(self):
+        parser = CodexJsonStreamParser(raw_tail_max_bytes=1024, final_text_max_bytes=1024)
+
+        parser.consume_line(
+            '{"type":"event_msg","payload":{"type":"agent_message","message":"最终答复"}}\n'
+        )
+        parser.consume_line(
+            '{"type":"item.completed","item":{"type":"assistant_message","text":"最终答复"}}\n'
+        )
+
+        assert parser.preview_text is None
+        assert parser.result().final_text == "最终答复"
 
     def test_claude_parser_prefers_result_and_keeps_error_tail_bounded(self):
         parser = ClaudeJsonStreamParser(raw_tail_max_bytes=80, final_text_max_bytes=1024)

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
 import { EventType } from "../services/agUiProtocol";
+import { ChatStreamIncompleteError } from "../services/chatStreamError";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { BotOverview, ChatMessage, ChatTraceDetails, CliParamsPayload, ClusterTaskStatus, ConversationBulkDeleteResult, ConversationDeleteResult, ConversationListResult, ConversationSelectResult, FavoriteAnswerItem, GitActionResult, GitDiffPayload, GitOverview, PromptPreset } from "../services/types";
 import { WebApiClientError } from "../services/types";
@@ -391,18 +392,146 @@ test("refreshes visible idle chat when history count changes", async () => {
   });
 
   expect(screen.getByText("自动出现的新回复")).toBeInTheDocument();
-  expect(listMessageDelta).toHaveBeenCalledWith("main", "user-1", 50);
+  expect(listMessageDelta).toHaveBeenCalledWith("main", "user-1", 50, { revision: 0 });
 });
 
-test("virtualizes expanded 500-message history", async () => {
-  const user = userEvent.setup();
+test("shows the latest two turns and reveals one older turn per upward scroll", async () => {
+  const messages: ChatMessage[] = Array.from({ length: 4 }, (_, turnIndex) => {
+    const turnNumber = turnIndex + 1;
+    const turnId = `turn-${turnNumber}`;
+    return [
+      {
+        id: `user-${turnNumber}`,
+        turnId,
+        role: "user" as const,
+        text: `问题 ${turnNumber}`,
+        createdAt: `2026-07-20T00:00:0${turnIndex * 2}Z`,
+        state: "done" as const,
+      },
+      {
+        id: `assistant-${turnNumber}`,
+        turnId,
+        role: "assistant" as const,
+        text: `回答 ${turnNumber}`,
+        createdAt: `2026-07-20T00:00:0${turnIndex * 2 + 1}Z`,
+        state: "done" as const,
+      },
+    ];
+  }).flat();
+  const client = createClient({
+    listMessages: vi.fn(async () => messages),
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("问题 4")).toBeInTheDocument();
+
+  expect(screen.queryByText("问题 1")).not.toBeInTheDocument();
+  expect(screen.queryByText("问题 2")).not.toBeInTheDocument();
+  expect(screen.getByText("问题 3")).toBeInTheDocument();
+  expect(screen.getAllByTestId("chat-message-row")).toHaveLength(4);
+
+  const container = screen.getByTestId("chat-scroll-container");
+  let scrollTop = 0;
+  Object.defineProperties(container, {
+    clientHeight: { configurable: true, get: () => 200 },
+    scrollHeight: {
+      configurable: true,
+      get: () => screen.queryAllByTestId("chat-message-row").length * 100,
+    },
+    scrollTop: {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => { scrollTop = value; },
+    },
+  });
+  fireEvent.wheel(container, { deltaY: 120 });
+  fireEvent.scroll(container);
+  expect(screen.queryByText("问题 2")).not.toBeInTheDocument();
+
+  fireEvent.wheel(container, { deltaY: -120 });
+  expect(screen.getByText("问题 2")).toBeInTheDocument();
+  expect(screen.queryByText("问题 1")).not.toBeInTheDocument();
+  expect(screen.getAllByTestId("chat-message-row")).toHaveLength(6);
+  expect(scrollTop).toBe(200);
+
+  scrollTop = 0;
+  fireEvent.scroll(container);
+  fireEvent.wheel(container, { deltaY: -120 });
+  expect(screen.getByText("问题 1")).toBeInTheDocument();
+  expect(screen.getAllByTestId("chat-message-row")).toHaveLength(8);
+});
+
+test("keeps a pending user message with its server-bound assistant turn", async () => {
+  const messages: ChatMessage[] = [
+    {
+      id: "user-1",
+      turnId: "turn-1",
+      role: "user",
+      text: "问题 1",
+      createdAt: "2026-07-20T00:00:00Z",
+      state: "done",
+    },
+    {
+      id: "assistant-1",
+      turnId: "turn-1",
+      role: "assistant",
+      text: "回答 1",
+      createdAt: "2026-07-20T00:00:01Z",
+      state: "done",
+    },
+    {
+      id: "user-2",
+      turnId: "turn-2",
+      role: "user",
+      text: "问题 2",
+      createdAt: "2026-07-20T00:00:02Z",
+      state: "done",
+    },
+    {
+      id: "assistant-2",
+      turnId: "turn-2",
+      role: "assistant",
+      text: "回答 2",
+      createdAt: "2026-07-20T00:00:03Z",
+      state: "done",
+    },
+    {
+      id: "pending-user",
+      role: "user",
+      text: "问题 3",
+      createdAt: "2026-07-20T00:00:04Z",
+      state: "done",
+    },
+    {
+      id: "bound-assistant",
+      turnId: "turn-3",
+      role: "assistant",
+      text: "回答 3",
+      createdAt: "2026-07-20T00:00:05Z",
+      state: "streaming",
+    },
+  ];
+  const client = createClient({ listMessages: vi.fn(async () => messages) });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByText("问题 3")).toBeInTheDocument();
+  expect(screen.getByText("问题 2")).toBeInTheDocument();
+  expect(screen.queryByText("问题 1")).not.toBeInTheDocument();
+  expect(screen.getAllByTestId("chat-message-row")).toHaveLength(4);
+});
+
+test("virtualizes progressively revealed 500-message history", async () => {
   const client = createClient({
     listMessages: async () => createChatHistoryFixture({ messageCount: 500 }),
   });
 
   render(<ChatScreen botAlias="main" client={client} />);
 
-  await user.click(await screen.findByRole("button", { name: "展开较早消息（420）" }));
+  const container = await screen.findByTestId("chat-scroll-container");
+  for (let index = 0; index < 20; index += 1) {
+    fireEvent.wheel(container, { deltaY: -120 });
+  }
   const list = await screen.findByTestId("virtualized-chat-message-list");
 
   await waitFor(() => {
@@ -589,6 +718,95 @@ test("shows the final reply when stalled SSE finishes during recovery polling", 
   expect(screen.getByText("轮询拿到的最终答复")).toBeInTheDocument();
   expect(screen.queryByText("正在输出...")).not.toBeInTheDocument();
   expect(listMessageDelta).toHaveBeenCalledTimes(2);
+});
+
+test("recovers an authoritative final reply after EOF arrives before the terminal event", async () => {
+  let overviewCalls = 0;
+  const listMessageDelta = vi.fn<WebBotClient["listMessageDelta"]>(async () => ({
+    reset: true,
+    revision: 1,
+    nextCursor: "1",
+    items: [
+      {
+        id: "user-incomplete-stream",
+        turnId: "turn-incomplete-stream",
+        role: "user",
+        text: "断流恢复",
+        createdAt: "2026-07-20T00:00:00Z",
+        state: "done",
+      },
+      {
+        id: "assistant-incomplete-stream",
+        turnId: "turn-incomplete-stream",
+        role: "assistant",
+        text: "无需 F5 的权威终答",
+        createdAt: "2026-07-20T00:00:01Z",
+        state: "done",
+      },
+    ],
+  }));
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias,
+    _text,
+    _onChunk,
+    onStatus,
+  ) => {
+    onStatus?.({
+      turnId: "turn-incomplete-stream",
+      assistantMessageId: "assistant-incomplete-stream",
+      previewText: "过程快照",
+    });
+    throw new ChatStreamIncompleteError({
+      turnId: "turn-incomplete-stream",
+      assistantMessageId: "assistant-incomplete-stream",
+      partialMessage: {
+        id: "assistant-incomplete-stream",
+        turnId: "turn-incomplete-stream",
+        role: "assistant",
+        text: "过程快照",
+        createdAt: "2026-07-20T00:00:01Z",
+        state: "streaming",
+      },
+    });
+  });
+  const client = createClient({
+    getBotOverview: vi.fn(async (): Promise<BotOverview> => {
+      overviewCalls += 1;
+      return {
+        alias: "main",
+        cliType: "codex",
+        status: "running",
+        workingDir: "C:\\workspace",
+        isProcessing: false,
+        historyCount: overviewCalls === 1 ? 0 : 2,
+      };
+    }),
+    listMessages: vi.fn(async () => []),
+    listMessageDelta,
+    sendMessage,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+
+  fireEvent.change(screen.getByPlaceholderText("输入消息"), { target: { value: "断流恢复" } });
+  vi.useFakeTimers();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await Promise.resolve();
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1);
+    await Promise.resolve();
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1);
+    await Promise.resolve();
+  });
+
+  expect(listMessageDelta).toHaveBeenCalledTimes(1);
+  expect(screen.getAllByText("无需 F5 的权威终答")).toHaveLength(1);
+  expect(screen.queryByText("聊天响应在收到结束事件前中断，正在从历史记录恢复")).not.toBeInTheDocument();
 });
 
 test("shows send errors only in assistant bubble when placeholder exists", async () => {
@@ -974,6 +1192,84 @@ test("renders live cli trace without temporary answer while streaming", async ()
       state: "done",
     });
   });
+});
+
+test("deduplicates replayed anonymous native trace events in the live transcript", async () => {
+  const user = userEvent.setup();
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias,
+    _text,
+    _onChunk,
+    _onStatus,
+    onTrace,
+  ) => {
+    for (let index = 0; index < 10; index += 1) {
+      onTrace?.({
+        kind: "commentary",
+        summary: "重复过程",
+        source: "native",
+        rawType: "message.text.reclassified",
+      });
+    }
+    return {
+      id: "assistant-native-replay",
+      role: "assistant",
+      text: "最终答复",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    };
+  });
+  const client = createClient({ sendMessage });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+  await user.type(screen.getByPlaceholderText("输入消息"), "继续");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(within(transcript).getAllByText("重复过程")).toHaveLength(1);
+  expect(within(transcript).getByText("最终答复")).toBeInTheDocument();
+});
+
+test("updates one live native trace entry when commentary is cumulative", async () => {
+  const user = userEvent.setup();
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias,
+    _text,
+    _onChunk,
+    _onStatus,
+    onTrace,
+  ) => {
+    onTrace?.({
+      kind: "commentary",
+      summary: "我先",
+      source: "native",
+      rawType: "message.text.reclassified",
+    });
+    onTrace?.({
+      kind: "commentary",
+      summary: "我先检查目录。",
+      source: "native",
+      rawType: "assistant_message",
+    });
+    return {
+      id: "assistant-native-cumulative",
+      role: "assistant",
+      text: "最终答复",
+      createdAt: new Date().toISOString(),
+      state: "done",
+    };
+  });
+  const client = createClient({ sendMessage });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+  await user.type(screen.getByPlaceholderText("输入消息"), "继续");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(within(transcript).getAllByText("我先检查目录。")).toHaveLength(1);
+  expect(within(transcript).queryByText("我先")).not.toBeInTheDocument();
 });
 
 test("plain cli streaming text waits for done before rendering answer", async () => {
@@ -3619,7 +3915,10 @@ test("shows CLI context usage as text badge without ring", async () => {
   const contextCopyButton = await screen.findByRole("button", { name: "复制上下文详情" });
   const fullCopyButton = await screen.findByRole("button", { name: "复制完整回答" });
   const copyButton = await screen.findByRole("button", { name: "复制最终回答" });
-  expect(bottomBadge).toHaveTextContent("ctx 74%");
+  expect(bottomBadge).toHaveTextContent("ctx 74%×1");
+  const compactionIndicator = screen.getByTestId("chat-message-context-usage-bottom-compaction");
+  expect(compactionIndicator).toHaveAttribute("aria-label", "已 compact 1 次");
+  expect(compactionIndicator.querySelector("svg")).toBeInTheDocument();
   expect(contextCopyButton.compareDocumentPosition(fullCopyButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(fullCopyButton.compareDocumentPosition(copyButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(bottomBadge.compareDocumentPosition(copyButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -3664,6 +3963,7 @@ test("shows context usage ring with native token details", async () => {
   const bottomBadge = await screen.findByTestId("chat-message-context-usage-bottom");
   const copyButton = await screen.findByRole("button", { name: "复制最终回答" });
   expect(bottomBadge).toHaveTextContent("ctx 96%");
+  expect(screen.queryByTestId("chat-message-context-usage-bottom-compaction")).not.toBeInTheDocument();
   expect(bottomBadge.compareDocumentPosition(copyButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
 

@@ -50,6 +50,10 @@ function asString(value: unknown) {
   return typeof value === "string" ? value : "";
 }
 
+export function isSyntheticLegacyMessageId(value: unknown) {
+  return asString(value).trim().startsWith("legacy-message-");
+}
+
 function stringifyValue(value: unknown) {
   if (typeof value === "string") {
     return value;

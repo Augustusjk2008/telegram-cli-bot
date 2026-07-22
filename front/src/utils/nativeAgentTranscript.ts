@@ -11,6 +11,13 @@ function asString(value: unknown) {
   return typeof value === "string" ? value : "";
 }
 
+function identifierText(value: unknown) {
+  if (typeof value === "string" || typeof value === "number" || typeof value === "bigint") {
+    return String(value).trim();
+  }
+  return "";
+}
+
 function stringifyValue(value: unknown) {
   if (typeof value === "string") return value;
   if (typeof value === "undefined" || value === null) return "";
@@ -42,8 +49,9 @@ function pickString(...values: Array<unknown>) {
 }
 
 function traceStableKey(trace: ChatTraceEvent) {
-  if (trace.id) {
-    return `id:${trace.id}`;
+  const id = identifierText(trace.id);
+  if (id) {
+    return `id:${id}`;
   }
   if (typeof trace.ordinal === "number") {
     return `ordinal:${trace.ordinal}`;
@@ -52,6 +60,111 @@ function traceStableKey(trace: ChatTraceEvent) {
     return `sequence:${trace.sequence}`;
   }
   return "";
+}
+
+function normalizeTraceSummary(value: unknown) {
+  return asString(value).trim().replace(/\s+/g, " ");
+}
+
+function normalizeTraceSource(value: unknown) {
+  const source = asString(value).trim().toLowerCase();
+  return source === "native_agent" ? "native" : source;
+}
+
+function traceAnonymousBaseKey(trace: ChatTraceEvent) {
+  const kind = asString(trace.kind).trim();
+  const source = normalizeTraceSource(trace.source);
+  const callId = asString(trace.callId).trim();
+  const title = asString(trace.title).trim();
+  const toolName = asString(trace.toolName).trim();
+  if (!kind) {
+    return "";
+  }
+  return [kind, source, callId, title, toolName].join("\u001f");
+}
+
+function traceAnonymousKey(trace: ChatTraceEvent) {
+  const base = traceAnonymousBaseKey(trace);
+  const rawType = asString(trace.rawType).trim();
+  const summary = normalizeTraceSummary(trace.summary);
+  if (!base || !summary) {
+    return "";
+  }
+  return `${base}\u001f${rawType}\u001f${summary}`;
+}
+
+function shouldDedupeAnonymousTrace(trace: ChatTraceEvent, nativeFlat: boolean) {
+  return nativeFlat || isNativeFlatTraceEvent(trace);
+}
+
+function canReconcileAnonymousTrace(current: ChatTraceEvent, incoming: ChatTraceEvent, nativeFlat: boolean) {
+  if (!shouldDedupeAnonymousTrace(current, nativeFlat) || !shouldDedupeAnonymousTrace(incoming, nativeFlat)) {
+    return false;
+  }
+  if (traceStableKey(current) || traceStableKey(incoming)) {
+    return false;
+  }
+  const currentBase = traceAnonymousBaseKey(current);
+  const incomingBase = traceAnonymousBaseKey(incoming);
+  if (!currentBase || currentBase !== incomingBase) {
+    return false;
+  }
+  const currentSummary = normalizeTraceSummary(current.summary);
+  const incomingSummary = normalizeTraceSummary(incoming.summary);
+  if (!currentSummary || !incomingSummary) {
+    return false;
+  }
+  if (currentSummary === incomingSummary) {
+    return true;
+  }
+  const isCumulativeCommentary = (
+    current.kind === "commentary"
+    && incoming.kind === "commentary"
+    && (
+      current.rawType === "message.text.reclassified"
+      || incoming.rawType === "message.text.reclassified"
+    )
+  );
+  if (!isCumulativeCommentary) {
+    return false;
+  }
+  return currentSummary.startsWith(incomingSummary) || incomingSummary.startsWith(currentSummary);
+}
+
+function stableSerialize(value: unknown, seen = new WeakSet<object>()): string {
+  if (typeof value === "undefined") return "undefined";
+  if (value === null) return "null";
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+  if (typeof value === "function" || typeof value === "symbol") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableSerialize(item, seen)).join(",")}]`;
+  }
+  if (typeof value === "object") {
+    if (seen.has(value)) return "[Circular]";
+    seen.add(value);
+    const record = value as Record<string, unknown>;
+    const serialized = `{${Object.keys(record)
+      .filter((key) => typeof record[key] !== "undefined")
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableSerialize(record[key], seen)}`)
+      .join(",")}}`;
+    seen.delete(value);
+    return serialized;
+  }
+  return String(value);
+}
+
+export function traceEventFingerprint(trace: ChatTraceEvent) {
+  return stableSerialize(trace);
+}
+
+export function traceEventsEquivalent(left: ChatTraceEvent, right: ChatTraceEvent) {
+  return traceEventFingerprint(left) === traceEventFingerprint(right);
 }
 
 function traceCallKey(trace: ChatTraceEvent) {
@@ -98,7 +211,7 @@ function traceRichness(trace: ChatTraceEvent) {
   );
 }
 
-function shouldReplaceTraceEvent(current: ChatTraceEvent, incoming: ChatTraceEvent) {
+function shouldReplaceTraceEvent(current: ChatTraceEvent, incoming: ChatTraceEvent, preferCurrentOnEqualAnonymous = false) {
   if (current.kind === incoming.kind && current.kind === "tool_result" && current.callId && current.callId === incoming.callId) {
     return true;
   }
@@ -107,17 +220,26 @@ function shouldReplaceTraceEvent(current: ChatTraceEvent, incoming: ChatTraceEve
   if (incomingScore !== currentScore) {
     return incomingScore > currentScore;
   }
+  if (
+    preferCurrentOnEqualAnonymous
+    &&
+    !traceStableKey(current)
+    && !traceStableKey(incoming)
+    && normalizeTraceSummary(current.summary) === normalizeTraceSummary(incoming.summary)
+  ) {
+    return false;
+  }
   return true;
 }
 
-function mergeTraceEvent(current: ChatTraceEvent, incoming: ChatTraceEvent): ChatTraceEvent {
-  const primary = shouldReplaceTraceEvent(current, incoming) ? incoming : current;
+function mergeTraceEvent(current: ChatTraceEvent, incoming: ChatTraceEvent, preferCurrentOnEqualAnonymous = false): ChatTraceEvent {
+  const primary = shouldReplaceTraceEvent(current, incoming, preferCurrentOnEqualAnonymous) ? incoming : current;
   const secondary = primary === incoming ? current : incoming;
   const merged: ChatTraceEvent = {
     kind: primary.kind || secondary.kind || "event",
     summary: primary.summary || secondary.summary || "",
   };
-  const id = pickString(current.id, incoming.id);
+  const id = identifierText(current.id) || identifierText(incoming.id);
   const source = pickString(primary.source, secondary.source);
   const rawType = pickString(primary.rawType, secondary.rawType);
   const title = pickString(primary.title, secondary.title);
@@ -249,12 +371,59 @@ export function mergeChatTraceEvents(
     nativeFlat?: boolean;
     autoNativeFlat?: boolean;
     reconcileTraceSnapshots?: boolean;
+    dedupeAnonymous?: boolean;
   } = {},
 ): ChatTraceEvent[] | undefined {
   const merged: ChatTraceEvent[] = [];
   const stableIndexMap = new Map<string, number>();
   const callIndexMap = new Map<string, number>();
   const fallbackIndexMap = new Map<string, number>();
+  // Live native frames can lack durable IDs; persisted snapshots keep this opt-in.
+  const anonymousIndexMap = new Map<string, number[]>();
+  const anonymousBaseIndexMap = new Map<string, number[]>();
+
+  const rememberAnonymousIndex = (event: ChatTraceEvent, index: number) => {
+    if (!options.dedupeAnonymous || !shouldDedupeAnonymousTrace(event, Boolean(options.nativeFlat)) || traceStableKey(event)) {
+      return;
+    }
+    const exactKey = traceAnonymousKey(event);
+    if (exactKey) {
+      const exactIndexes = anonymousIndexMap.get(exactKey) || [];
+      if (!exactIndexes.includes(index)) {
+        exactIndexes.push(index);
+      }
+      anonymousIndexMap.set(exactKey, exactIndexes);
+    }
+    const baseKey = traceAnonymousBaseKey(event);
+    if (baseKey) {
+      const baseIndexes = anonymousBaseIndexMap.get(baseKey) || [];
+      if (!baseIndexes.includes(index)) {
+        baseIndexes.push(index);
+      }
+      anonymousBaseIndexMap.set(baseKey, baseIndexes);
+    }
+  };
+
+  const findAnonymousIndex = (event: ChatTraceEvent) => {
+    if (!options.dedupeAnonymous || !shouldDedupeAnonymousTrace(event, Boolean(options.nativeFlat)) || traceStableKey(event)) {
+      return undefined;
+    }
+    const exactKey = traceAnonymousKey(event);
+    const exactIndexes = exactKey ? anonymousIndexMap.get(exactKey) || [] : [];
+    if (exactIndexes.length > 0) {
+      return exactIndexes[exactIndexes.length - 1];
+    }
+    const baseKey = traceAnonymousBaseKey(event);
+    const baseIndexes = baseKey ? anonymousBaseIndexMap.get(baseKey) || [] : [];
+    for (let index = baseIndexes.length - 1; index >= 0; index -= 1) {
+      const candidateIndex = baseIndexes[index];
+      const candidate = merged[candidateIndex];
+      if (candidate && canReconcileAnonymousTrace(candidate, event, Boolean(options.nativeFlat))) {
+        return candidateIndex;
+      }
+    }
+    return undefined;
+  };
 
   for (const source of sources) {
     const reconciliationCandidates = new Map<string, number[]>();
@@ -279,6 +448,9 @@ export function mergeChatTraceEvents(
         ?? (stableKey ? stableIndexMap.get(stableKey) : undefined)
         ?? (fallbackKey ? fallbackIndexMap.get(fallbackKey) : undefined)
       );
+      if (typeof existingIndex !== "number") {
+        existingIndex = findAnonymousIndex(event);
+      }
       if (typeof existingIndex !== "number" && options.reconcileTraceSnapshots) {
         const reconciliationKey = traceReconciliationKey(event);
         const candidates = reconciliationKey ? reconciliationCandidates.get(reconciliationKey) || [] : [];
@@ -286,7 +458,11 @@ export function mergeChatTraceEvents(
       }
       if (typeof existingIndex === "number") {
         semanticallyMatchedIndexes.add(existingIndex);
-        merged[existingIndex] = mergeTraceEvent(merged[existingIndex], event);
+        merged[existingIndex] = mergeTraceEvent(
+          merged[existingIndex],
+          event,
+          Boolean(options.dedupeAnonymous),
+        );
         const nextStableKey = traceStableKey(merged[existingIndex]);
         const nextCallKey = traceCallKey(merged[existingIndex]);
         const nextFallbackKey = traceFallbackKey(merged[existingIndex], Boolean(options.nativeFlat));
@@ -299,6 +475,7 @@ export function mergeChatTraceEvents(
         if (nextFallbackKey) {
           fallbackIndexMap.set(nextFallbackKey, existingIndex);
         }
+        rememberAnonymousIndex(merged[existingIndex], existingIndex);
         continue;
       }
       const nextIndex = merged.length;
@@ -312,6 +489,7 @@ export function mergeChatTraceEvents(
       if (fallbackKey) {
         fallbackIndexMap.set(fallbackKey, nextIndex);
       }
+      rememberAnonymousIndex(event, nextIndex);
     }
   }
 

@@ -4,6 +4,7 @@ import type {
   ChatMessageMetaInfo,
   ChatTraceEvent,
 } from "../services/types";
+import { isSyntheticLegacyMessageId } from "../services/agUiStreamAdapter";
 import { mapChatMessageContextUsage } from "./contextUsage";
 import { mergeChatTraceEvents } from "./nativeAgentTranscript";
 
@@ -326,7 +327,10 @@ function traceEventKey(event: ChatTraceEvent) {
 
 function upsertTraceEvent(traceEvents: ChatTraceEvent[], nextEvent: ChatTraceEvent, match?: (event: ChatTraceEvent) => boolean) {
   if (!match) {
-    const merged = mergeChatTraceEvents([traceEvents, [nextEvent]], { nativeFlat: true });
+    const merged = mergeChatTraceEvents([traceEvents, [nextEvent]], {
+      nativeFlat: true,
+      dedupeAnonymous: true,
+    });
     return merged || [];
   }
   const index = match
@@ -491,6 +495,28 @@ function appendTraceEntry(
     pending: options.pending,
     permission: options.permission,
   };
+  const matchingEntryIndex = kind === "permission" && options.permissionId
+    ? -1
+    : state.entries.findIndex((item) => {
+      if (!item.trace) {
+        return false;
+      }
+      const merged = mergeChatTraceEvents([[item.trace], [trace]], {
+        nativeFlat: true,
+        dedupeAnonymous: true,
+      });
+      return merged?.length === 1;
+    });
+  if (matchingEntryIndex >= 0) {
+    return {
+      ...state,
+      entries: state.entries.map((item, index) => (
+        index === matchingEntryIndex
+          ? { ...item, ...entry, id: item.id, seq: item.seq }
+          : item
+      )),
+    };
+  }
   if (kind === "permission" && options.permissionId) {
     const entryIndex = state.entries.findIndex((item) => item.kind === "permission" && item.permissionId === options.permissionId);
     if (entryIndex >= 0) {
@@ -642,9 +668,12 @@ export function reduceAgUiRunEvent(state: AgUiRunState, event: AgUiEvent): AgUiR
       ? buildPermissionRequest(permissionId, summary, content)
       : undefined;
     const traceKind = resolveActivityTraceKind(event.activityType, content);
+    const activityMessageId = asString(event.messageId).trim();
+    const activityTraceId = asString(content.id).trim()
+      || (isSyntheticLegacyMessageId(activityMessageId) ? "" : activityMessageId);
     const activityTraceEvent: ChatTraceEvent | null = traceKind
       ? {
-          ...(asString(content.id).trim() ? { id: asString(content.id).trim() } : {}),
+          ...(activityTraceId ? { id: activityTraceId } : {}),
           ...(typeof content.ordinal === "number" ? { ordinal: content.ordinal } : {}),
           ...(typeof content.sequence === "number" ? { sequence: content.sequence } : {}),
           ...(asString(content.createdAt || content.created_at).trim()
@@ -681,7 +710,7 @@ export function reduceAgUiRunEvent(state: AgUiRunState, event: AgUiEvent): AgUiR
       traceEvents,
       nativeAgent: state.nativeAgent
         || event.activityType === "TCB_NATIVE_AGENT_TRACE"
-        || asString(content.source).trim().toLowerCase() === "native_agent",
+        || ["native", "native_agent"].includes(asString(content.source).trim().toLowerCase()),
       ...(event.activityType === "TCB_STATUS"
         ? {
             previewText: asString(content.previewText).trim() || asString(content.message).trim() || state.previewText,

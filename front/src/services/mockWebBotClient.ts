@@ -2056,7 +2056,7 @@ export class MockWebBotClient implements WebBotClient {
       changedKeys,
       restartRequiredKeys,
       rebuildRequiredKeys,
-      backupPath: apply && changedKeys.length ? ".env.bak.20260524102000" : "",
+      backupPath: "",
     };
   }
 

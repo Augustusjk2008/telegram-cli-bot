@@ -462,6 +462,9 @@ class ChatStore:
             CREATE UNIQUE INDEX IF NOT EXISTS idx_turns_conversation_seq
             ON turns(conversation_id, seq);
 
+            CREATE INDEX IF NOT EXISTS idx_turns_native_session
+            ON turns(native_provider, native_session_id, completed_at DESC);
+
             CREATE TABLE IF NOT EXISTS messages (
                 id TEXT PRIMARY KEY,
                 conversation_id TEXT NOT NULL,
@@ -513,15 +516,30 @@ class ChatStore:
             """
         )
         conn.execute("DROP INDEX IF EXISTS idx_conversations_identity")
-        self._ensure_column(conn, "conversations", "title", "TEXT")
-        self._ensure_column(conn, "conversations", "agent_id", "TEXT NOT NULL DEFAULT 'main'")
-        self._ensure_column(conn, "conversations", "agent_prompt_hash", "TEXT")
-        self._ensure_column(conn, "conversations", "last_message_preview", "TEXT")
-        self._ensure_column(conn, "conversations", "message_count", "INTEGER NOT NULL DEFAULT 0")
-        self._ensure_column(conn, "conversations", "pinned", "INTEGER NOT NULL DEFAULT 0")
-        self._ensure_column(conn, "conversations", "archived_at", "TEXT")
-        self._ensure_column(conn, "conversations", "native_session_meta_json", "TEXT")
-        self._ensure_column(conn, "conversations", "revision", "INTEGER NOT NULL DEFAULT 0")
+        conversation_columns = {
+            "bot_id": "INTEGER NOT NULL DEFAULT 0",
+            "bot_alias": "TEXT NOT NULL DEFAULT ''",
+            "user_id": "INTEGER NOT NULL DEFAULT 0",
+            "agent_id": "TEXT NOT NULL DEFAULT 'main'",
+            "cli_type": "TEXT NOT NULL DEFAULT ''",
+            "working_dir": "TEXT NOT NULL DEFAULT ''",
+            "session_epoch": "INTEGER NOT NULL DEFAULT 0",
+            "status": "TEXT NOT NULL DEFAULT 'active'",
+            "native_provider": "TEXT",
+            "native_session_id": "TEXT",
+            "native_session_meta_json": "TEXT",
+            "agent_prompt_hash": "TEXT",
+            "title": "TEXT",
+            "last_message_preview": "TEXT",
+            "message_count": "INTEGER NOT NULL DEFAULT 0",
+            "pinned": "INTEGER NOT NULL DEFAULT 0",
+            "archived_at": "TEXT",
+            "revision": "INTEGER NOT NULL DEFAULT 0",
+            "created_at": "TEXT NOT NULL DEFAULT ''",
+            "updated_at": "TEXT NOT NULL DEFAULT ''",
+        }
+        for column_name, column_type in conversation_columns.items():
+            self._ensure_column(conn, "conversations", column_name, column_type)
         self._ensure_column(conn, "turns", "trace_recovery_attempted_at", "TEXT")
         self._ensure_column(conn, "turns", "trace_recovery_status", "TEXT")
         self._ensure_column(conn, "turns", "context_usage_json", "TEXT")
@@ -1111,6 +1129,32 @@ class ChatStore:
             if str(row["id"] or "").strip()
         ]
 
+    def get_latest_completed_turn_at(self, *, bot_id: int, user_id: int | None = None) -> str:
+        """Return the latest completed answer time for a bot in this workspace."""
+        conn = self._connect(create=False)
+        if conn is None:
+            return ""
+
+        clauses = ["conversations.bot_id = ?", "turns.completion_state = 'completed'", "turns.completed_at IS NOT NULL"]
+        params: list[Any] = [bot_id]
+        if user_id is not None:
+            clauses.append("conversations.user_id = ?")
+            params.append(user_id)
+
+        with closing(conn):
+            row = conn.execute(
+                f"""
+                SELECT turns.completed_at
+                FROM turns
+                JOIN conversations ON conversations.id = turns.conversation_id
+                WHERE {' AND '.join(clauses)}
+                ORDER BY turns.completed_at DESC, turns.updated_at DESC, turns.rowid DESC
+                LIMIT 1
+                """,
+                params,
+            ).fetchone()
+        return str(row["completed_at"] or "") if row is not None else ""
+
     def delete_conversations_by_ids(self, conversation_ids: list[str] | set[str] | tuple[str, ...]) -> int:
         normalized_ids = [str(conversation_id or "").strip() for conversation_id in conversation_ids]
         normalized_ids = [conversation_id for conversation_id in normalized_ids if conversation_id]
@@ -1557,6 +1601,39 @@ class ChatStore:
                 op="update_context_usage",
                 turn_id=turn_id,
             )
+
+    def get_latest_native_session_context_usage(
+        self,
+        *,
+        native_provider: str,
+        native_session_id: str,
+    ) -> dict[str, Any] | None:
+        normalized_provider = str(native_provider or "").strip().lower()
+        normalized_session_id = str(native_session_id or "").strip()
+        if not normalized_provider or not normalized_session_id:
+            return None
+
+        conn = self._connect(create=False)
+        if conn is None:
+            return None
+        with closing(conn):
+            row = conn.execute(
+                """
+                SELECT context_usage_json
+                FROM turns
+                WHERE native_provider = ?
+                  AND native_session_id = ?
+                  AND context_usage_json IS NOT NULL
+                  AND context_usage_json <> ''
+                ORDER BY completed_at DESC, started_at DESC, rowid DESC
+                LIMIT 1
+                """,
+                (normalized_provider, normalized_session_id),
+            ).fetchone()
+        if row is None:
+            return None
+        context_usage = _parse_json_dict(row["context_usage_json"])
+        return context_usage or None
 
     def update_turn_workspace_history(self, turn_id: str, head: str, index: int) -> bool:
         normalized_turn_id = str(turn_id or "").strip()

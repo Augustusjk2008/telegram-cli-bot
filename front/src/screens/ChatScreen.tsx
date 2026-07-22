@@ -12,6 +12,8 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type RefObject,
+  type TouchEvent as ReactTouchEvent,
+  type WheelEvent as ReactWheelEvent,
 } from "react";
 import { createPortal } from "react-dom";
 import { LoaderCircle, Maximize2, Minimize2, Paperclip, RotateCcw, Trash2 } from "lucide-react";
@@ -27,6 +29,7 @@ import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import { NativeAgentTranscript } from "../components/NativeAgentTranscript";
 import { PlanDraftCard } from "../components/PlanDraftCard";
 import { MockWebBotClient } from "../services/mockWebBotClient";
+import { isChatStreamIncompleteError } from "../services/chatStreamError";
 import { WebApiClientError } from "../services/types";
 import type {
   AgentMention,
@@ -91,6 +94,7 @@ import { HistoryRevisionState } from "../chat/historyDeltaState";
 import { resolveMessageVirtualKey } from "../chat/messageVirtualKey";
 import {
   findActiveAssistantIndex,
+  upsertActiveAssistantMessage,
   updateActiveAssistantMessage,
   type ActiveAssistantTarget,
 } from "../chat/activeChatTurn";
@@ -179,7 +183,8 @@ const CHAT_ATTACHMENT_LINE_RE = /^附件路径为[:：]\s*(.+?)\s*$/;
 const MODEL_OPTION_NONE = "none";
 const REVEAL_SCROLL_MAX_FRAMES = 6;
 const REVEAL_SCROLL_BOTTOM_THRESHOLD_PX = 8;
-const CHAT_RENDER_WINDOW_SIZE = 80;
+const CHAT_INITIAL_VISIBLE_TURNS = 2;
+const CHAT_HISTORY_TOP_THRESHOLD_PX = 24;
 const CHAT_VIRTUALIZATION_THRESHOLD = 40;
 const USER_SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " ", "Spacebar"]);
 const IMMERSIVE_BUTTON_SIZE_PX = 48;
@@ -398,7 +403,7 @@ function listScopedMessageDelta(
 ) {
   const options = {
     ...(agentOptions(agentId, executionMode) || {}),
-    ...(typeof revision === "number" && revision > 0 ? { revision } : {}),
+    ...(typeof revision === "number" && Number.isFinite(revision) && revision >= 0 ? { revision } : {}),
     ...(cursor ? { cursor } : {}),
   };
   return Object.keys(options).length > 0
@@ -925,6 +930,78 @@ function resolveActiveConversationId(conversations: ConversationSummary[], items
   );
 }
 
+function chatTurnStartIndexes(items: readonly ChatMessage[]) {
+  if (items.length === 0) {
+    return [];
+  }
+  const starts = [0];
+  let currentKey = "";
+  let fallbackTurn = 0;
+
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    const turnId = String(item.turnId || "").trim();
+    let nextKey = currentKey;
+    if (turnId) {
+      nextKey = `turn:${turnId}`;
+    } else if (item.role === "user") {
+      fallbackTurn += 1;
+      nextKey = `fallback:${fallbackTurn}`;
+    } else if (!nextKey) {
+      nextKey = "leading";
+    }
+
+    if (!currentKey) {
+      currentKey = nextKey;
+      continue;
+    }
+    if (currentKey === "leading" && nextKey !== "leading") {
+      currentKey = nextKey;
+      continue;
+    }
+    if (item.role !== "user" && turnId && currentKey.startsWith("fallback:")) {
+      currentKey = nextKey;
+      continue;
+    }
+    if (nextKey !== currentKey) {
+      starts.push(index);
+      currentKey = nextKey;
+    }
+  }
+  return starts;
+}
+
+function resolveChatTurnWindow(items: readonly ChatMessage[], requestedVisibleTurns: number) {
+  const starts = chatTurnStartIndexes(items);
+  const totalTurns = starts.length;
+  if (totalTurns === 0) {
+    return { startIndex: 0, totalTurns: 0, visibleTurns: 0, hiddenTurns: 0 };
+  }
+  const visibleTurns = Math.min(totalTurns, Math.max(1, Math.floor(requestedVisibleTurns)));
+  const hiddenTurns = totalTurns - visibleTurns;
+  return {
+    startIndex: starts[hiddenTurns] ?? 0,
+    totalTurns,
+    visibleTurns,
+    hiddenTurns,
+  };
+}
+
+function visibleTurnCountForMessage(items: readonly ChatMessage[], messageIndex: number) {
+  const starts = chatTurnStartIndexes(items);
+  if (starts.length === 0 || messageIndex < 0) {
+    return CHAT_INITIAL_VISIBLE_TURNS;
+  }
+  let targetTurnIndex = 0;
+  for (let index = 1; index < starts.length; index += 1) {
+    if (starts[index] > messageIndex) {
+      break;
+    }
+    targetTurnIndex = index;
+  }
+  return Math.max(CHAT_INITIAL_VISIBLE_TURNS, starts.length - targetTurnIndex);
+}
+
 function shouldShowContextRing(meta?: ChatMessageMetaInfo) {
   const provider = String(meta?.contextUsage?.provider || "").trim().toLowerCase();
   return (
@@ -935,13 +1012,16 @@ function shouldShowContextRing(meta?: ChatMessageMetaInfo) {
 }
 
 function appendTraceToMessage(item: ChatMessage, traceEvent: ChatTraceEvent, tracePresentation?: ChatMessageMetaInfo["tracePresentation"]): ChatMessage {
+  const nativeTrace = tracePresentation === "native_agent_flat"
+    || isNativeAgentMessage(item.meta)
+    || ["native", "native_agent"].includes(String(traceEvent.source || "").trim().toLowerCase());
   return {
     ...item,
     meta: mergeMessageMeta(item.meta, {
       trace: [traceEvent],
       traceVersion: 1,
       tracePresentation,
-    }),
+    }, undefined, { dedupeAnonymous: nativeTrace }),
   };
 }
 
@@ -1883,7 +1963,7 @@ export function ChatScreen({
 }: Props) {
   const storageScope = accountId?.trim() || "";
   const [items, setItems] = useState<ChatMessage[]>([]);
-  const [historyExpanded, setHistoryExpanded] = useState(false);
+  const [visibleTurnCount, setVisibleTurnCount] = useState(CHAT_INITIAL_VISIBLE_TURNS);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamMode, setStreamMode] = useState<"" | "sse" | "poll">("");
   const [streamStartedAtMs, setStreamStartedAtMs] = useState<number | null>(null);
@@ -1963,6 +2043,10 @@ export function ChatScreen({
   const revealScrollFrameRef = useRef<number | null>(null);
   const revealScrollAttemptsRef = useRef(0);
   const userScrollIntentRef = useRef(false);
+  const historyUpwardIntentRef = useRef(false);
+  const historyRevealPendingRef = useRef(false);
+  const historyPrependAnchorRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
+  const touchStartYRef = useRef<number | null>(null);
   const clusterRunIdRef = useRef("");
   const assistantSendVersionRef = useRef(0);
   const soloHistoryRevisionRef = useRef(soloHistoryRevision);
@@ -2047,7 +2131,7 @@ export function ChatScreen({
     clearStoredQueuedMessage(previousBotAlias, activeAgentIdRef.current || "main", previousScope);
     setQueuedMessage(null);
     queuedMessageRef.current = null;
-    setHistoryExpanded(false);
+    setVisibleTurnCount(CHAT_INITIAL_VISIBLE_TURNS);
     previousBotAliasRef.current = botAlias;
     previousStorageScopeRef.current = storageScope;
     streamBatcher.flush();
@@ -2380,6 +2464,9 @@ export function ChatScreen({
               query.revision,
               query.cursor,
             ),
+            {
+              isCurrent: () => sendVersion === assistantSendVersionRef.current && isSseStreaming(),
+            },
           );
           const messages = recovered.items;
           if (sendVersion !== assistantSendVersionRef.current || !isSseStreaming()) {
@@ -2476,6 +2563,9 @@ export function ChatScreen({
             query.revision,
             query.cursor,
           ),
+          {
+            isCurrent: () => sendVersion === assistantSendVersionRef.current && !isSseStreaming(),
+          },
         );
         messages = applied.items;
       }
@@ -2488,6 +2578,7 @@ export function ChatScreen({
         onUnreadResult?.(botAlias);
       }
       if (!shouldPoll) {
+        emitBotActivityForActiveAgent("idle");
         void drainQueuedMessageIfIdleRef.current?.({ botAlias, agentId });
       }
     } catch (err) {
@@ -2546,6 +2637,7 @@ export function ChatScreen({
     setLoading(true);
     setError("");
     setItems([]);
+    setVisibleTurnCount(CHAT_INITIAL_VISIBLE_TURNS);
     setWorkingDir("");
     isStreamingRef.current = false;
     streamModeRef.current = "";
@@ -2718,7 +2810,9 @@ export function ChatScreen({
       }
       return;
     }
-    scheduleAssistantPoll(ACTIVE_CHAT_POLL_INTERVAL_MS);
+    if (assistantPollTimerRef.current === null) {
+      scheduleAssistantPoll(ACTIVE_CHAT_POLL_INTERVAL_MS);
+    }
   }, [isVisible, loading, scheduleAssistantPoll, stopAssistantPoll, streamMode]);
 
   useChatHistorySync({
@@ -2853,17 +2947,91 @@ export function ChatScreen({
     }
   }
 
+  function isAtHistoryTop() {
+    return (scrollContainerRef.current?.scrollTop || 0) <= CHAT_HISTORY_TOP_THRESHOLD_PX;
+  }
+
+  function revealOneOlderTurn() {
+    if (historyRevealPendingRef.current || chatTurnWindow.hiddenTurns <= 0) {
+      return;
+    }
+    const container = scrollContainerRef.current;
+    const virtualListOwnsPrepend = Boolean(
+      FRONTEND_FEATURE_FLAGS.dynamicChatVirtualization
+      && visibleItems.length > CHAT_VIRTUALIZATION_THRESHOLD
+    );
+    historyRevealPendingRef.current = true;
+    historyPrependAnchorRef.current = container && !virtualListOwnsPrepend
+      ? { scrollHeight: container.scrollHeight, scrollTop: container.scrollTop }
+      : null;
+    shouldStickToBottomRef.current = false;
+    forceAutoScrollRef.current = false;
+    userScrollIntentRef.current = false;
+    historyUpwardIntentRef.current = false;
+    revealScrollAttemptsRef.current = 0;
+    cancelRevealScroll();
+    setVisibleTurnCount((current) => Math.min(chatTurnWindow.totalTurns, current + 1));
+  }
+
+  function handleChatScroll() {
+    const revealHistory = userScrollIntentRef.current && historyUpwardIntentRef.current;
+    historyUpwardIntentRef.current = false;
+    updateAutoScrollStickiness();
+    if (revealHistory && isAtHistoryTop()) {
+      revealOneOlderTurn();
+    }
+  }
+
   function markUserScrollIntent() {
     userScrollIntentRef.current = true;
   }
 
   function clearUserScrollIntent() {
     userScrollIntentRef.current = false;
+    historyUpwardIntentRef.current = false;
+    touchStartYRef.current = null;
+  }
+
+  function handleChatWheel(event: ReactWheelEvent<HTMLElement>) {
+    const movesUp = event.deltaY < 0;
+    markUserScrollIntent();
+    historyUpwardIntentRef.current = movesUp;
+    if (movesUp && isAtHistoryTop()) {
+      revealOneOlderTurn();
+    }
+  }
+
+  function handleChatTouchStart(event: ReactTouchEvent<HTMLElement>) {
+    markUserScrollIntent();
+    historyUpwardIntentRef.current = false;
+    touchStartYRef.current = event.touches[0]?.clientY ?? null;
+  }
+
+  function handleChatTouchMove(event: ReactTouchEvent<HTMLElement>) {
+    markUserScrollIntent();
+    const previousY = touchStartYRef.current;
+    const currentY = event.touches[0]?.clientY;
+    const movesUp = typeof previousY === "number" && typeof currentY === "number" && currentY > previousY;
+    historyUpwardIntentRef.current = movesUp;
+    if (movesUp && isAtHistoryTop()) {
+      revealOneOlderTurn();
+    }
+    if (typeof currentY === "number") {
+      touchStartYRef.current = currentY;
+    }
   }
 
   function handleScrollKeyDown(event: KeyboardEvent<HTMLElement>) {
+    const movesUp = event.key === "ArrowUp"
+      || event.key === "PageUp"
+      || event.key === "Home"
+      || ((event.key === " " || event.key === "Spacebar") && event.shiftKey);
     if (USER_SCROLL_KEYS.has(event.key)) {
       markUserScrollIntent();
+      historyUpwardIntentRef.current = movesUp;
+    }
+    if (movesUp && isAtHistoryTop()) {
+      revealOneOlderTurn();
     }
   }
 
@@ -3314,6 +3482,7 @@ export function ChatScreen({
       setTraceLoadState({});
       setQueuedMessageState(null, { botAlias, agentId: activeAgentIdRef.current || "main" });
       setItems(data.messages);
+      setVisibleTurnCount(CHAT_INITIAL_VISIBLE_TURNS);
       setConversations((prev) => prev.map((item) => ({ ...item, active: item.id === conversationId })));
       setHistoryPanelOpen(false);
     } catch (err) {
@@ -3332,14 +3501,10 @@ export function ChatScreen({
         return;
       }
       const virtualKey = resolveMessageVirtualKey(messages, messageId, messageKey, getMessageClientStateKey);
-      if (!historyExpanded && index < hiddenHistoryCount) {
-        setHistoryExpanded(true);
-        window.requestAnimationFrame(() => {
-          messageListRef.current?.scrollToKey(virtualKey);
-        });
-        return;
-      }
-      messageListRef.current?.scrollToKey(virtualKey);
+      setVisibleTurnCount(visibleTurnCountForMessage(messages, index));
+      window.requestAnimationFrame(() => {
+        messageListRef.current?.scrollToKey(virtualKey);
+      });
     }, 0);
   }
 
@@ -3362,6 +3527,7 @@ export function ChatScreen({
       setTraceLoadState({});
       setQueuedMessageState(null, { botAlias, agentId: activeAgentIdRef.current || "main" });
       setItems(data.messages);
+      setVisibleTurnCount(CHAT_INITIAL_VISIBLE_TURNS);
       itemsRef.current = data.messages;
       setConversations((prev) => prev.map((item) => ({ ...item, active: item.id === favorite.conversationId })));
       setHistoryPanelOpen(false);
@@ -3414,6 +3580,7 @@ export function ChatScreen({
       setTraceLoadState({});
       setQueuedMessageState(null, { botAlias, agentId: activeAgentIdRef.current || "main" });
       setItems(data.messages);
+      setVisibleTurnCount(CHAT_INITIAL_VISIBLE_TURNS);
       setConversations((prev) => [data.conversation, ...prev.map((item) => ({ ...item, active: false }))]);
       setHistoryPanelOpen(false);
     } catch (err) {
@@ -3454,6 +3621,7 @@ export function ChatScreen({
         setTraceLoadState({});
         setQueuedMessageState(null, { botAlias, agentId: activeAgentIdRef.current || "main" });
         setItems(nextMessages);
+        setVisibleTurnCount(CHAT_INITIAL_VISIBLE_TURNS);
         itemsRef.current = nextMessages;
       }
     } catch (err) {
@@ -3492,6 +3660,7 @@ export function ChatScreen({
       setConversations(data.items);
       setFavoriteItems([]);
       setItems(data.messages);
+      setVisibleTurnCount(CHAT_INITIAL_VISIBLE_TURNS);
       itemsRef.current = data.messages;
       setHistoryPanelOpen(false);
     } catch (err) {
@@ -3518,6 +3687,7 @@ export function ChatScreen({
     setLoading(true);
     setError("");
     setItems([]);
+    setVisibleTurnCount(CHAT_INITIAL_VISIBLE_TURNS);
     setClusterRunId("");
     setClusterTaskStatus(null);
     setClusterTaskError("");
@@ -3719,6 +3889,7 @@ export function ChatScreen({
       streamStartedAtMs: localStartedAtMs,
     });
 
+    let recoverIncompleteStream = false;
     try {
       let usingPreviewReplace = false;
       const requestSendOptions: ChatSendOptions | undefined = (() => {
@@ -3810,7 +3981,7 @@ export function ChatScreen({
           streamStartedAtMs: localStartedAtMs,
           trace: traceEvent,
           nativeTrace: executionModeRef.current === "native_agent"
-            || String(traceEvent.source || "").trim().toLowerCase() === "native_agent",
+            || ["native", "native_agent"].includes(String(traceEvent.source || "").trim().toLowerCase()),
           usingPreviewReplace,
         });
       };
@@ -3865,15 +4036,20 @@ export function ChatScreen({
       });
       const finalMetaHasTracePayload = Array.isArray(finalizedMessage.meta?.trace);
 
-      setItems((prev) => updateActiveAssistantMessage(prev, activeAssistantTarget(finalizedMessage), (item) => ({
-        ...finalizedMessage,
-        meta: mergeMessageMeta(
-          item.meta,
-          finalizedMessage.meta,
-          undefined,
-          { reconcileTraceSnapshots: finalMetaHasTracePayload },
-        ),
-      })));
+      setItems((prev) => upsertActiveAssistantMessage(
+        prev,
+        activeAssistantTarget(finalizedMessage),
+        finalizedMessage,
+        (item, final) => ({
+          ...final,
+          meta: mergeMessageMeta(
+            item.meta,
+            final.meta,
+            undefined,
+            { reconcileTraceSnapshots: finalMetaHasTracePayload },
+          ),
+        }),
+      ));
       options.onSuccess?.(finalizedMessage);
       if (!isVisibleRef.current) {
         onUnreadResult?.(botAlias);
@@ -3886,17 +4062,40 @@ export function ChatScreen({
       if (sendVersion !== assistantSendVersionRef.current) {
         return;
       }
-      const message = err instanceof Error ? err.message : "发送失败";
-      if (findActiveAssistantIndex(itemsRef.current, activeAssistantTarget()) >= 0) {
-        setItems((prev) => updateActiveAssistantMessage(prev, activeAssistantTarget(), (item) => ({
-          ...item,
-          text: message,
-          state: "error",
-        })));
+      if (isChatStreamIncompleteError(err)) {
+        recoverIncompleteStream = true;
+        streamTurnId = err.turnId || err.partialMessage.turnId || streamTurnId;
+        streamAssistantMessageId = err.assistantMessageId || err.partialMessage.id || streamAssistantMessageId;
+        const partialMessage: ChatMessage = {
+          ...err.partialMessage,
+          state: "streaming",
+        };
+        setItems((prev) => upsertActiveAssistantMessage(
+          prev,
+          activeAssistantTarget(partialMessage),
+          partialMessage,
+          (item, partial) => {
+            const meta = mergeMessageMeta(item.meta, partial.meta);
+            return {
+              ...partial,
+              text: partial.text || item.text,
+              ...(meta ? { meta } : {}),
+            };
+          },
+        ));
       } else {
-        setError(message);
+        const message = err instanceof Error ? err.message : "发送失败";
+        if (findActiveAssistantIndex(itemsRef.current, activeAssistantTarget()) >= 0) {
+          setItems((prev) => updateActiveAssistantMessage(prev, activeAssistantTarget(), (item) => ({
+            ...item,
+            text: message,
+            state: "error",
+          })));
+        } else {
+          setError(message);
+        }
+        options.onError?.(message);
       }
-      options.onError?.(message);
     } finally {
       if (sseAbortControllerRef.current === sseAbortController) {
         sseAbortControllerRef.current = null;
@@ -3906,16 +4105,24 @@ export function ChatScreen({
       }
       stopSseRecoveryWatch();
       sseLastActivityAtRef.current = null;
-      isStreamingRef.current = false;
-      streamModeRef.current = "";
-      setIsStreaming(false);
-      setStreamMode("");
-      setStreamStartedAtMs(null);
       setNativePermissionPending(false);
-      emitBotActivityForActiveAgent("idle");
-      void drainQueuedMessageIfIdleRef.current?.({ botAlias: sendBotAlias, agentId: sendAgentId });
+      if (recoverIncompleteStream) {
+        isStreamingRef.current = true;
+        streamModeRef.current = "poll";
+        setIsStreaming(true);
+        setStreamMode("poll");
+        scheduleAssistantPoll(0);
+      } else {
+        isStreamingRef.current = false;
+        streamModeRef.current = "";
+        setIsStreaming(false);
+        setStreamMode("");
+        setStreamStartedAtMs(null);
+        emitBotActivityForActiveAgent("idle");
+        void drainQueuedMessageIfIdleRef.current?.({ botAlias: sendBotAlias, agentId: sendAgentId });
+      }
     }
-  }, [botAlias, client, markSseActivity, onUnreadResult, pollClusterTasks, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch, streamBatcher]);
+  }, [botAlias, client, markSseActivity, onUnreadResult, pollClusterTasks, scheduleAssistantPoll, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch, streamBatcher]);
 
   drainQueuedMessageIfIdleRef.current = async (context) => {
     const targetBotAlias = context?.botAlias || botAlias;
@@ -3969,6 +4176,7 @@ export function ChatScreen({
       setTraceLoadState({});
       setQueuedMessageState(null, { botAlias, agentId: activeAgentIdRef.current || "main" });
       setItems(result.messages);
+      setVisibleTurnCount(CHAT_INITIAL_VISIBLE_TURNS);
       setConversations((prev) => [result.conversation, ...prev.map((item) => ({ ...item, active: false }))]);
       setHistoryPanelOpen(false);
       setPlanMode(false);
@@ -4214,6 +4422,7 @@ export function ChatScreen({
     setLoading(true);
     setError("");
     setItems([]);
+    setVisibleTurnCount(CHAT_INITIAL_VISIBLE_TURNS);
     setConversations([]);
     setTraceLoadState({});
     setPendingAttachments([]);
@@ -4432,11 +4641,28 @@ export function ChatScreen({
     }
     return next;
   }, [deletingAttachmentKeys]);
-  const hiddenHistoryCount = historyExpanded ? 0 : Math.max(0, items.length - CHAT_RENDER_WINDOW_SIZE);
-  const visibleItems = useMemo(
-    () => (hiddenHistoryCount > 0 ? items.slice(hiddenHistoryCount) : items),
-    [hiddenHistoryCount, items],
+  const chatTurnWindow = useMemo(
+    () => resolveChatTurnWindow(items, visibleTurnCount),
+    [items, visibleTurnCount],
   );
+  const visibleItems = useMemo(
+    () => (chatTurnWindow.startIndex > 0 ? items.slice(chatTurnWindow.startIndex) : items),
+    [chatTurnWindow.startIndex, items],
+  );
+  useLayoutEffect(() => {
+    if (!historyRevealPendingRef.current) {
+      return;
+    }
+    historyRevealPendingRef.current = false;
+    const anchor = historyPrependAnchorRef.current;
+    historyPrependAnchorRef.current = null;
+    const container = scrollContainerRef.current;
+    if (!anchor || !container) {
+      return;
+    }
+    const insertedHeight = Math.max(0, container.scrollHeight - anchor.scrollHeight);
+    container.scrollTop = anchor.scrollTop + insertedHeight;
+  }, [visibleItems.length, visibleTurnCount]);
   const latestContinuableAssistantKey = useMemo(() => {
     if (loading || isStreaming || chatMutationsDisabled || nativePermissionPending) {
       return "";
@@ -4615,12 +4841,15 @@ export function ChatScreen({
       <section
         ref={scrollContainerRef}
         data-testid="chat-scroll-container"
-        onScroll={updateAutoScrollStickiness}
+        onScroll={handleChatScroll}
         onPointerDown={markUserScrollIntent}
         onPointerUp={clearUserScrollIntent}
         onPointerCancel={clearUserScrollIntent}
-        onWheel={markUserScrollIntent}
-        onTouchMove={markUserScrollIntent}
+        onWheel={handleChatWheel}
+        onTouchStart={handleChatTouchStart}
+        onTouchMove={handleChatTouchMove}
+        onTouchEnd={clearUserScrollIntent}
+        onTouchCancel={clearUserScrollIntent}
         onKeyDown={handleScrollKeyDown}
         className={isImmersive ? "flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] px-4 pb-24 pt-4" : "flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] p-4"}
       >
@@ -4636,17 +4865,6 @@ export function ChatScreen({
           {items.length === 0 && !isStreaming && !loading ? (
             <div className="mt-10 rounded-lg border border-dashed border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-10 text-center text-sm text-[var(--muted)]">
               暂无消息，开始聊天吧
-            </div>
-          ) : null}
-          {hiddenHistoryCount > 0 ? (
-            <div className="flex justify-center">
-              <button
-                type="button"
-                onClick={() => setHistoryExpanded(true)}
-                className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-3 py-1.5 text-xs text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)]"
-              >
-                展开较早消息（{hiddenHistoryCount}）
-              </button>
             </div>
           ) : null}
           <ChatMessageList

@@ -126,4 +126,43 @@ describe("HistoryRevisionState", () => {
     expect(fetchPage).toHaveBeenCalledTimes(HISTORY_DELTA_MAX_PAGES);
     expect(result).toMatchObject({ capped: true, hasMore: true });
   });
+
+  it("does not commit any fetched revision when a paged sync becomes obsolete", async () => {
+    const state = new HistoryRevisionState();
+    let current = true;
+    let fetchCount = 0;
+
+    const result = await state.sync(
+      mainScope,
+      [message("assistant-1", "streaming")],
+      async (query) => {
+        fetchCount += 1;
+        if (fetchCount === 1) {
+          expect(query).toMatchObject({ revision: 0, cursor: "" });
+          return {
+            items: [message("assistant-1", "persisted preview")],
+            revision: 4,
+            nextCursor: "page-2",
+            hasMore: true,
+            reset: false,
+          };
+        }
+        current = false;
+        return {
+          items: [message("assistant-1", "final answer")],
+          revision: 5,
+          nextCursor: "",
+          hasMore: false,
+          reset: false,
+        };
+      },
+      { isCurrent: () => current },
+    );
+
+    expect(result.stale).toBe(true);
+    expect(state.query(mainScope, [message("assistant-1")])).toMatchObject({
+      revision: 0,
+      cursor: "",
+    });
+  });
 });

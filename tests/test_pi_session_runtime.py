@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -478,6 +479,35 @@ async def test_registry_reuses_existing_runtime_at_capacity_without_evicting_it(
     assert reused is first
     assert first.client.close_count == 0
     assert len(registry._by_runtime_id) == 2
+    await registry.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_registry_restarts_runtime_when_process_environment_changes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    starts: list[dict[str, str] | None] = []
+
+    async def fake_start(request: Any) -> _FakeClient:
+        starts.append(dict(request.env) if request.env else None)
+        return _FakeClient()
+
+    monkeypatch.setattr(PiRpcClient, "start", fake_start)
+    registry = PiSessionRuntimeRegistry()
+    first_request = _request(tmp_path)
+    first = await registry.open_or_create(first_request)
+    cluster_env = {
+        "TCB_CLUSTER_RUN_ID": "run-123",
+        "TCB_CLUSTER_MCP_CONFIG": str(tmp_path / "cluster.json"),
+    }
+    cluster_request = replace(_request(tmp_path), env=cluster_env)
+
+    second = await registry.open_or_create(cluster_request)
+
+    assert second is not first
+    assert first.client.close_count == 1
+    assert starts == [None, cluster_env]
     await registry.shutdown()
 
 
