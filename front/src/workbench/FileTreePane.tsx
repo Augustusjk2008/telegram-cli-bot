@@ -1,5 +1,18 @@
 import { clsx } from "clsx";
-import { FilePlus, FolderOpen, FolderPlus, House, ListTree, Maximize2, Minimize2, RefreshCw, Upload } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  FilePlus,
+  FolderOpen,
+  FolderPlus,
+  House,
+  ListTree,
+  Maximize2,
+  Minimize2,
+  MoreHorizontal,
+  RefreshCw,
+  Upload,
+} from "lucide-react";
 import { type DragEvent, type KeyboardEvent, type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { FileNameDialog } from "../components/FileNameDialog";
@@ -47,6 +60,12 @@ const TREE_AUTO_SCROLL_MAX_STEP_PX = 18;
 
 function branchLabel(path: string) {
   const parts = path.split("/");
+  return parts[parts.length - 1] || path;
+}
+
+function workspaceBaseName(path: string) {
+  const trimmedPath = path.replace(/[\\/]+$/, "");
+  const parts = trimmedPath.split(/[\\/]/);
   return parts[parts.length - 1] || path;
 }
 
@@ -164,15 +183,15 @@ function resolveGitDecoration(
 
 function treeItemToneClass(gitDecoration?: GitTreeDecorationKind) {
   if (gitDecoration === "ignored") {
-    return "text-[var(--muted)] font-semibold";
+    return "text-[var(--muted)]";
   }
   if (gitDecoration === "added") {
-    return "text-emerald-500 font-semibold";
+    return "text-emerald-500";
   }
   if (gitDecoration === "modified") {
-    return "text-yellow-400 font-semibold";
+    return "text-yellow-400";
   }
-  return "text-[var(--text)] font-semibold";
+  return "text-[var(--text)]";
 }
 
 type TreeIconKind =
@@ -929,7 +948,10 @@ export function FileTreePane({
   const [dropTargetPath, setDropTargetPath] = useState("");
   const [actionError, setActionError] = useState("");
   const [showEntryMetadata, setShowEntryMetadata] = useState(false);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const moreMenuButtonRef = useRef<HTMLButtonElement | null>(null);
+  const moreMenuRef = useRef<HTMLDivElement | null>(null);
   const treeScrollRef = useRef<HTMLDivElement | null>(null);
   const autoScrollFrameRef = useRef<number | null>(null);
   const autoScrollStepRef = useRef(0);
@@ -1011,6 +1033,39 @@ export function FileTreePane({
   }
 
   useEffect(() => () => stopTreeAutoScroll(), []);
+
+  useEffect(() => {
+    if (!moreMenuOpen) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+      if (moreMenuButtonRef.current?.contains(target) || moreMenuRef.current?.contains(target)) {
+        return;
+      }
+      setMoreMenuOpen(false);
+    }
+
+    function handleKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key !== "Escape") {
+        return;
+      }
+      event.preventDefault();
+      setMoreMenuOpen(false);
+      moreMenuButtonRef.current?.focus();
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [moreMenuOpen]);
 
   function closeContextMenu() {
     setContextMenu(null);
@@ -1369,8 +1424,8 @@ export function FileTreePane({
     if (row.type === "status") {
       return (
         <div
-          className={clsx("flex h-full items-center px-2 text-[11px]", row.tone === "error" ? "text-red-700" : "text-[var(--muted)]")}
-          style={{ paddingLeft: `${row.depth * 12 + 24}px` }}
+          className={clsx("flex h-full items-center px-1 text-[11px]", row.tone === "error" ? "text-red-700" : "text-[var(--muted)]")}
+          style={{ paddingLeft: `${row.depth * 12 + 36}px` }}
         >
           {row.text}
         </div>
@@ -1390,29 +1445,34 @@ export function FileTreePane({
     const selected = tree.selectedPath === entry.path;
     const metadata = fileTreeEntryMetadata(entry);
     const itemButtonClassName = clsx(
-      "flex h-full min-w-0 flex-1 items-center rounded border px-2 text-left transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)]",
-      selected
-        ? "border-[var(--workbench-focus-ring)] bg-[var(--workbench-active-bg)]"
-        : "border-transparent",
+      "file-tree-row-button relative flex h-full min-w-0 flex-1 items-center pr-1 text-left",
     );
 
     return (
       <div
-        className="group flex h-full min-w-0 items-center rounded-md text-[12px]"
+        className="file-tree-row group relative flex h-full min-w-0 items-center text-[13px]"
         data-tree-path={entry.path}
         data-git-state={gitDecoration || "clean"}
         data-git-ignored={isIgnored ? "true" : "false"}
         data-highlighted={tree.highlightedPath === entry.path ? "true" : "false"}
         data-selected={selected ? "true" : "false"}
         data-drop-target={dropTargetPath === entry.path ? "true" : "false"}
-        style={{ paddingLeft: `${depth * 12}px` }}
       >
+        {depth > 0 ? (
+          <span
+            aria-hidden="true"
+            className="file-tree-indent-guides pointer-events-none absolute inset-y-0 left-0"
+            style={{ width: `${depth * 12}px` }}
+          />
+        ) : null}
         {entry.isDir ? (
           <button
             type="button"
             draggable={canMutateFiles}
             aria-label={`${expanded ? "收起" : "展开"} ${entry.path}`}
+            aria-expanded={expanded}
             aria-current={selected ? "true" : undefined}
+            title={absolutePath}
             onContextMenu={(event) => handleEntryContextMenu(event, entry, absolutePath)}
             onKeyDown={(event) => handleEntryContextMenuKey(event, entry, absolutePath)}
             onDragStart={(event) => handleEntryDragStart(event, entry)}
@@ -1433,11 +1493,17 @@ export function FileTreePane({
               dropTargetPath === entry.path && "bg-[var(--accent-soft)] outline outline-1 outline-[var(--accent)]",
             )}
           >
-            <span className="flex w-full min-w-0 items-center gap-2">
+            <span
+              className="flex w-full min-w-0 items-center gap-1"
+              style={{ paddingLeft: `${depth * 12 + 2}px` }}
+            >
+              {expanded
+                ? <ChevronDown aria-hidden="true" className="h-3 w-3 shrink-0 text-[var(--muted)]" />
+                : <ChevronRight aria-hidden="true" className="h-3 w-3 shrink-0 text-[var(--muted)]" />}
               <TreeNodeIcon kind={iconKind} />
-              <span className={clsx("min-w-0 flex-1 truncate", itemToneClass)}>{dirLabel}</span>
+              <span className={clsx("min-w-0 flex-1 truncate font-medium", itemToneClass)}>{dirLabel}</span>
               {showEntryMetadata ? (
-                <span className="ml-1 shrink-0 text-[10px] font-medium tabular-nums text-[var(--muted)]">
+                <span className="ml-1 shrink-0 text-[11px] font-normal tabular-nums text-[var(--muted)]">
                   {metadata}
                 </span>
               ) : null}
@@ -1449,6 +1515,7 @@ export function FileTreePane({
             draggable={canMutateFiles}
             aria-label={`打开 ${entry.path}`}
             aria-current={selected ? "true" : undefined}
+            title={absolutePath}
             onContextMenu={(event) => handleEntryContextMenu(event, entry, absolutePath)}
             onKeyDown={(event) => handleEntryContextMenuKey(event, entry, absolutePath)}
             onDragStart={(event) => handleEntryDragStart(event, entry)}
@@ -1461,11 +1528,15 @@ export function FileTreePane({
             }}
             className={itemButtonClassName}
           >
-            <span className="flex w-full min-w-0 items-center gap-2">
+            <span
+              className="flex w-full min-w-0 items-center gap-1"
+              style={{ paddingLeft: `${depth * 12 + 2}px` }}
+            >
+              <span aria-hidden="true" className="h-3 w-3 shrink-0" />
               <TreeNodeIcon kind={iconKind} />
-              <span className={clsx("min-w-0 flex-1 truncate", itemToneClass)}>{entry.name}</span>
+              <span className={clsx("min-w-0 flex-1 truncate font-normal", itemToneClass)}>{entry.name}</span>
               {showEntryMetadata ? (
-                <span className="ml-1 shrink-0 text-[10px] font-medium tabular-nums text-[var(--muted)]">
+                <span className="ml-1 shrink-0 text-[11px] font-normal tabular-nums text-[var(--muted)]">
                   {metadata}
                 </span>
               ) : null}
@@ -1534,37 +1605,15 @@ export function FileTreePane({
       }}
       className="relative flex h-full min-h-0 flex-col"
     >
-      <div className="border-b border-[var(--border)] px-3 py-2.5">
-        <div className="flex items-center justify-between gap-2">
-          <div className="truncate text-[11px] text-[var(--muted)]">{tree.rootPath}</div>
-          <div className="flex shrink-0 items-center gap-1">
-            <button
-              type="button"
-              aria-label={showEntryMetadata ? "隐藏条目信息" : "显示条目信息"}
-              aria-pressed={showEntryMetadata}
-              title={showEntryMetadata ? "隐藏文件夹子项数和文件大小" : "显示文件夹子项数和文件大小"}
-              onClick={() => setShowEntryMetadata((current) => !current)}
-              className={clsx(
-                "inline-flex h-7 w-7 items-center justify-center rounded border transition-colors active:scale-[0.96] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--workbench-focus-ring)]",
-                showEntryMetadata
-                  ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]"
-                  : "border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]",
-              )}
-            >
-              <ListTree className="h-3.5 w-3.5" />
-            </button>
-            <button
-              type="button"
-              aria-label={focused ? "退出聚焦文件区" : "聚焦文件区"}
-              title={focused ? "退出聚焦文件区" : "聚焦文件区"}
-              onClick={onToggleFocus}
-              className="inline-flex h-7 w-7 items-center justify-center rounded border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]"
-            >
-              {focused ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
-            </button>
-          </div>
+      <div className="relative flex h-9 shrink-0 items-center gap-1 border-b border-[var(--border)] px-1.5">
+        <div
+          aria-label={`工作区 ${tree.rootPath}`}
+          title={tree.rootPath}
+          className="min-w-0 flex-1 truncate px-1 text-[12px] font-medium text-[var(--text)]"
+        >
+          {workspaceBaseName(tree.rootPath)}
         </div>
-        <div className="mt-2 flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-0.5">
           {canMutateFiles ? (
             <>
               <input
@@ -1582,48 +1631,6 @@ export function FileTreePane({
               />
               <button
                 type="button"
-                aria-label="上传文件"
-                title="上传文件"
-                onClick={() => uploadInputRef.current?.click()}
-                className="inline-flex h-8 w-8 items-center justify-center rounded border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-strong)]"
-              >
-                <Upload className="h-3.5 w-3.5" />
-              </button>
-            </>
-          ) : null}
-          <button
-            type="button"
-            aria-label="Home"
-            title="回到工作目录"
-            onClick={() => void handleHome()}
-            className="inline-flex h-8 w-8 items-center justify-center rounded border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-strong)]"
-          >
-            <House className="h-3.5 w-3.5" />
-          </button>
-          {canMutateFiles && onRequestOpenSystemFolder ? (
-            <button
-              type="button"
-              aria-label="在系统文件夹中打开"
-              title="在系统文件夹中打开"
-              onClick={() => void handleOpenSystemFolder()}
-              className="inline-flex h-8 w-8 items-center justify-center rounded border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-strong)]"
-            >
-              <FolderOpen className="h-3.5 w-3.5" />
-            </button>
-          ) : null}
-          <button
-            type="button"
-            aria-label="刷新文件树"
-            title="刷新文件树"
-            onClick={() => void handleRefresh()}
-            className="inline-flex h-8 w-8 items-center justify-center rounded border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-strong)]"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-          </button>
-          {canMutateFiles ? (
-            <>
-              <button
-                type="button"
                 aria-label="新建文件"
                 title="新建文件"
                 onClick={() => {
@@ -1631,7 +1638,7 @@ export function FileTreePane({
                   setCreateFileError("");
                   setShowCreateFileDialog(true);
                 }}
-                className="inline-flex h-8 w-8 items-center justify-center rounded border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-strong)]"
+                className="inline-flex h-7 w-7 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--workbench-focus-ring)]"
               >
                 <FilePlus className="h-3.5 w-3.5" />
               </button>
@@ -1640,13 +1647,109 @@ export function FileTreePane({
                 aria-label="新建文件夹"
                 title="新建文件夹"
                 onClick={() => void handleCreateDirectory()}
-                className="inline-flex h-8 w-8 items-center justify-center rounded border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-strong)]"
+                className="inline-flex h-7 w-7 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--workbench-focus-ring)]"
               >
                 <FolderPlus className="h-3.5 w-3.5" />
               </button>
             </>
           ) : null}
+          <button
+            type="button"
+            aria-label="刷新文件树"
+            title="刷新文件树"
+            onClick={() => void handleRefresh()}
+            className="inline-flex h-7 w-7 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--workbench-focus-ring)]"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            aria-label={focused ? "退出聚焦文件区" : "聚焦文件区"}
+            title={focused ? "退出聚焦文件区" : "聚焦文件区"}
+            onClick={onToggleFocus}
+            className="inline-flex h-7 w-7 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--workbench-focus-ring)]"
+          >
+            {focused ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+          </button>
+          <button
+            ref={moreMenuButtonRef}
+            type="button"
+            aria-label="更多文件操作"
+            aria-haspopup="menu"
+            aria-expanded={moreMenuOpen}
+            title="更多文件操作"
+            onClick={() => setMoreMenuOpen((current) => !current)}
+            className={clsx(
+              "inline-flex h-7 w-7 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--workbench-focus-ring)]",
+              moreMenuOpen && "bg-[var(--workbench-active-bg)] text-[var(--text)]",
+            )}
+          >
+            <MoreHorizontal className="h-3.5 w-3.5" />
+          </button>
         </div>
+
+        {moreMenuOpen ? (
+          <div
+            ref={moreMenuRef}
+            role="menu"
+            aria-label="更多文件操作"
+            className="absolute right-1 top-full z-40 min-w-48 rounded-md border border-[var(--border)] bg-[var(--surface)] p-1 shadow-[var(--shadow-card)]"
+          >
+            {canMutateFiles ? (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  uploadInputRef.current?.click();
+                }}
+                className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[12px] hover:bg-[var(--workbench-hover-bg)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--workbench-focus-ring)]"
+              >
+                <Upload className="h-3.5 w-3.5 text-[var(--muted)]" />
+                上传文件
+              </button>
+            ) : null}
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setMoreMenuOpen(false);
+                void handleHome();
+              }}
+              className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[12px] hover:bg-[var(--workbench-hover-bg)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--workbench-focus-ring)]"
+            >
+              <House className="h-3.5 w-3.5 text-[var(--muted)]" />
+              返回工作目录
+            </button>
+            {canMutateFiles && onRequestOpenSystemFolder ? (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  void handleOpenSystemFolder();
+                }}
+                className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[12px] hover:bg-[var(--workbench-hover-bg)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--workbench-focus-ring)]"
+              >
+                <FolderOpen className="h-3.5 w-3.5 text-[var(--muted)]" />
+                在系统文件夹中打开
+              </button>
+            ) : null}
+            <button
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={showEntryMetadata}
+              onClick={() => {
+                setShowEntryMetadata((current) => !current);
+                setMoreMenuOpen(false);
+              }}
+              className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[12px] hover:bg-[var(--workbench-hover-bg)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--workbench-focus-ring)]"
+            >
+              <ListTree className="h-3.5 w-3.5 text-[var(--muted)]" />
+              {showEntryMetadata ? "隐藏条目信息" : "显示条目信息"}
+            </button>
+          </div>
+        ) : null}
       </div>
 
       <div
@@ -1659,7 +1762,7 @@ export function FileTreePane({
           }
         }}
         className={clsx(
-          "flex min-h-0 flex-1 flex-col px-2 py-2",
+          "flex min-h-0 flex-1 flex-col px-1 py-1",
           dropTargetPath === ROOT_DROP_TARGET && "bg-[var(--accent-soft)] outline outline-1 outline-[var(--accent)]",
         )}
       >
@@ -1678,7 +1781,7 @@ export function FileTreePane({
           <VirtualList
             viewportRef={treeScrollRef}
             items={visibleTreeRows}
-            rowHeight={28}
+            rowHeight={24}
             className="flex-1"
             dataTestId="desktop-file-tree-virtual-list"
             onDragOver={(event) => {

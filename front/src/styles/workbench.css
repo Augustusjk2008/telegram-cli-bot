@@ -143,6 +143,47 @@
   animation: workbenchOverlayFadeIn 120ms ease-out;
 }
 
+.desktop-workbench-root .file-tree-row {
+  transition: background-color 120ms ease;
+}
+
+.desktop-workbench-root .file-tree-row:hover {
+  background: var(--workbench-hover-bg);
+}
+
+.desktop-workbench-root .file-tree-row[data-selected="true"] {
+  background: var(--workbench-active-bg);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.desktop-workbench-root .file-tree-row[data-drop-target="true"] {
+  background: var(--accent-soft);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.desktop-workbench-root .file-tree-row-button:focus-visible {
+  z-index: 1;
+  outline: 2px solid var(--workbench-focus-ring);
+  outline-offset: -2px;
+}
+
+.desktop-workbench-root .file-tree-indent-guides {
+  opacity: 0.38;
+  background-image: linear-gradient(
+    to right,
+    transparent 11px,
+    color-mix(in srgb, var(--muted) 32%, transparent) 11px,
+    color-mix(in srgb, var(--muted) 32%, transparent) 12px
+  );
+  background-size: 12px 100%;
+}
+
+:root[data-theme="high-contrast"] .desktop-workbench-root .file-tree-row[data-selected="true"] {
+  outline: 1px solid var(--text);
+  outline-offset: -1px;
+}
+
 .desktop-workbench-root [data-selected="true"] > button {
   background: var(--workbench-active-bg);
   border-color: var(--workbench-focus-ring);
@@ -319,20 +360,46 @@
   animation: workbenchRuntimeSettle 160ms cubic-bezier(0.2, 0, 0, 1);
 }
 
-[data-editor-tab-active="true"] {
+.editor-tab-strip {
+  scrollbar-width: thin;
+}
+
+.editor-tab {
+  transition: background-color 120ms ease;
+}
+
+.editor-tab[data-editor-tab-active="true"] {
   position: relative;
 }
 
-[data-editor-tab-active="true"]::after {
+.editor-tab[data-editor-tab-active="true"]::after {
   content: "";
   position: absolute;
-  left: 8px;
-  right: 8px;
+  left: 0;
+  right: 0;
   bottom: 0;
   height: 2px;
-  border-radius: 999px;
   background: var(--accent);
   animation: workbenchTabUnderlineIn 160ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.editor-tab-close {
+  opacity: 0;
+  transition: opacity 120ms ease, background-color 120ms ease;
+}
+
+.editor-tab[data-editor-tab-active="true"] .editor-tab-close,
+.editor-tab:hover .editor-tab-close,
+.editor-tab:focus-within .editor-tab-close {
+  opacity: 1;
+}
+
+.editor-breadcrumb {
+  scrollbar-width: none;
+}
+
+.editor-breadcrumb::-webkit-scrollbar {
+  display: none;
 }
 
 .editor-empty-state {
@@ -561,6 +628,9 @@
   .workbench-dialog-panel,
   .workbench-sheet-panel,
   [data-panechrome-content="true"][data-collapsed="false"],
+  .desktop-workbench-root .file-tree-row,
+  .editor-tab,
+  .editor-tab-close,
   [data-editor-tab-active="true"]::after,
   .desktop-workbench-root [data-testid="desktop-file-drop-overlay"],
   .desktop-workbench-root [data-highlighted="true"] > button {

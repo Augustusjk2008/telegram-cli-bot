@@ -280,8 +280,11 @@ test("forced desktop mode mounts the desktop shell instead of the mobile bottom 
   expect(await screen.findByTestId("desktop-workbench-root")).toBeInTheDocument();
 });
 
-test("desktop file tree toggles direct child counts and adaptive file sizes", async () => {
+test("desktop file tree keeps compact workspace actions and moves secondary actions into a menu", async () => {
   const user = userEvent.setup();
+  const onRequestUpload = vi.fn(async () => undefined);
+  const onRequestHome = vi.fn(async () => undefined);
+  const onRequestOpenSystemFolder = vi.fn(async () => undefined);
   const tree: UseFileTreeResult = {
     rootPath: "C:\\workspace\\demo",
     loading: false,
@@ -324,8 +327,9 @@ test("desktop file tree toggles direct child counts and adaptive file sizes", as
       onRenamedFile={vi.fn()}
       onDeletedFile={vi.fn()}
       onRequestPreview={vi.fn()}
-      onRequestUpload={vi.fn()}
-      onRequestHome={vi.fn()}
+      onRequestUpload={onRequestUpload}
+      onRequestHome={onRequestHome}
+      onRequestOpenSystemFolder={onRequestOpenSystemFolder}
       gitDecorations={{}}
       onRefreshGitDecorations={vi.fn()}
       onRequestSetWorkdir={vi.fn()}
@@ -334,21 +338,156 @@ test("desktop file tree toggles direct child counts and adaptive file sizes", as
     />,
   );
 
-  const toggle = screen.getByRole("button", { name: "显示条目信息" });
-  expect(toggle).toHaveAttribute("aria-pressed", "false");
+  expect(screen.getByText("demo")).toHaveAttribute("title", "C:\\workspace\\demo");
+  expect(screen.getByRole("button", { name: "新建文件" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "新建文件夹" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "刷新文件树" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "聚焦文件区" })).toBeInTheDocument();
+
+  const moreButton = screen.getByRole("button", { name: "更多文件操作" });
+  expect(moreButton).toHaveAttribute("aria-haspopup", "menu");
+  expect(moreButton).toHaveAttribute("aria-expanded", "false");
+  await user.click(moreButton);
+
+  const menu = screen.getByRole("menu", { name: "更多文件操作" });
+  expect(moreButton).toHaveAttribute("aria-expanded", "true");
+  expect(within(menu).getByRole("menuitem", { name: "上传文件" })).toBeInTheDocument();
+  expect(within(menu).getByRole("menuitem", { name: "返回工作目录" })).toBeInTheDocument();
+  expect(within(menu).getByRole("menuitem", { name: "在系统文件夹中打开" })).toBeInTheDocument();
+
+  const toggle = within(menu).getByRole("menuitemcheckbox", { name: "显示条目信息" });
+  expect(toggle).toHaveAttribute("aria-checked", "false");
   expect(screen.queryByText("2 项")).not.toBeInTheDocument();
 
   await user.click(toggle);
 
-  expect(screen.getByRole("button", { name: "隐藏条目信息" })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.queryByRole("menu", { name: "更多文件操作" })).not.toBeInTheDocument();
   expect(screen.getByText("2 项")).toBeInTheDocument();
   expect(screen.getByText("900 B")).toBeInTheDocument();
   expect(screen.getByText("1.5 KB")).toBeInTheDocument();
   expect(screen.getByText("2 MB")).toBeInTheDocument();
   expect(screen.getByText("3 GB")).toBeInTheDocument();
 
-  await user.click(screen.getByRole("button", { name: "隐藏条目信息" }));
+  await user.click(moreButton);
+  await user.click(within(screen.getByRole("menu", { name: "更多文件操作" })).getByRole("menuitem", { name: "返回工作目录" }));
+  await waitFor(() => expect(onRequestHome).toHaveBeenCalledTimes(1));
+  expect(screen.queryByRole("menu", { name: "更多文件操作" })).not.toBeInTheDocument();
+
+  await user.click(moreButton);
+  await user.click(within(screen.getByRole("menu", { name: "更多文件操作" })).getByRole("menuitem", { name: "在系统文件夹中打开" }));
+  await waitFor(() => expect(onRequestOpenSystemFolder).toHaveBeenCalledTimes(1));
+
+  await user.click(moreButton);
+  const uploadInput = screen.getByLabelText("上传文件", { selector: "input" });
+  await user.upload(uploadInput, new File(["hello"], "hello.txt", { type: "text/plain" }));
+  await waitFor(() => expect(onRequestUpload).toHaveBeenCalledWith([expect.objectContaining({ name: "hello.txt" })]));
+
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("menu", { name: "更多文件操作" })).not.toBeInTheDocument();
+
+  await user.click(moreButton);
+  await user.click(within(screen.getByRole("menu", { name: "更多文件操作" })).getByRole("menuitemcheckbox", { name: "隐藏条目信息" }));
   expect(screen.queryByText("2 项")).not.toBeInTheDocument();
+});
+
+test("desktop file tree preserves read-only permissions and directory expansion semantics", async () => {
+  const user = userEvent.setup();
+  const selectPath = vi.fn();
+  const clearSelection = vi.fn();
+  const toggleDirectory = vi.fn(async () => undefined);
+  const tree: UseFileTreeResult = {
+    rootPath: "C:\\workspace\\demo",
+    loading: false,
+    error: "",
+    rootEntries: [{ path: "src", name: "src", isDir: true, childCount: 2 }],
+    branches: {},
+    expandedPaths: [],
+    highlightedPath: "",
+    selectedPath: "",
+    downloadProgress: null,
+    selectPath,
+    clearSelection,
+    isExpanded: () => false,
+    toggleDirectory,
+    refreshRoot: vi.fn(),
+    refreshTreeAndRoot: vi.fn(),
+    restoreExpandedPaths: vi.fn(),
+    revealPath: vi.fn(),
+    highlightPath: vi.fn(),
+    createDirectory: vi.fn(),
+    createFile: vi.fn(),
+    renameFile: vi.fn(),
+    copyFile: vi.fn(),
+    moveFile: vi.fn(),
+    deletePath: vi.fn(),
+    downloadFile: vi.fn(),
+  };
+
+  const { rerender } = render(
+    <FileTreePane
+      tree={tree}
+      onOpenFile={vi.fn()}
+      onCreatedFile={vi.fn()}
+      onRenamedFile={vi.fn()}
+      onDeletedFile={vi.fn()}
+      onRequestPreview={vi.fn()}
+      onRequestUpload={vi.fn()}
+      onRequestHome={vi.fn()}
+      onRequestOpenSystemFolder={vi.fn()}
+      gitDecorations={{}}
+      onRefreshGitDecorations={vi.fn()}
+      onRequestSetWorkdir={vi.fn()}
+      canWriteFiles={false}
+      focused={false}
+      onToggleFocus={vi.fn()}
+    />,
+  );
+
+  expect(screen.queryByRole("button", { name: "新建文件" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "新建文件夹" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "刷新文件树" })).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "更多文件操作" }));
+  const menu = screen.getByRole("menu", { name: "更多文件操作" });
+  expect(within(menu).queryByRole("menuitem", { name: "上传文件" })).not.toBeInTheDocument();
+  expect(within(menu).queryByRole("menuitem", { name: "在系统文件夹中打开" })).not.toBeInTheDocument();
+  expect(within(menu).getByRole("menuitem", { name: "返回工作目录" })).toBeInTheDocument();
+  expect(within(menu).getByRole("menuitemcheckbox", { name: "显示条目信息" })).toBeInTheDocument();
+
+  await user.keyboard("{Escape}");
+  const directory = screen.getByRole("button", { name: "展开 src" });
+  expect(directory).toHaveAttribute("aria-expanded", "false");
+  await user.click(directory);
+  expect(selectPath).toHaveBeenCalledWith("src");
+  expect(toggleDirectory).toHaveBeenCalledWith("src");
+
+  selectPath.mockClear();
+  toggleDirectory.mockClear();
+  tree.selectedPath = "src";
+  rerender(
+    <FileTreePane
+      tree={tree}
+      onOpenFile={vi.fn()}
+      onCreatedFile={vi.fn()}
+      onRenamedFile={vi.fn()}
+      onDeletedFile={vi.fn()}
+      onRequestPreview={vi.fn()}
+      onRequestUpload={vi.fn()}
+      onRequestHome={vi.fn()}
+      onRequestOpenSystemFolder={vi.fn()}
+      gitDecorations={{}}
+      onRefreshGitDecorations={vi.fn()}
+      onRequestSetWorkdir={vi.fn()}
+      canWriteFiles={false}
+      focused={false}
+      onToggleFocus={vi.fn()}
+    />,
+  );
+
+  await user.click(screen.getByRole("button", { name: "展开 src" }));
+  expect(clearSelection).toHaveBeenCalledTimes(1);
+  expect(selectPath).not.toHaveBeenCalled();
+  expect(toggleDirectory).toHaveBeenCalledWith("src");
 });
 
 test("native desktop bot auto enters solo workbench", async () => {
@@ -539,5 +678,3 @@ test("create bot unsafe bypass toggle is disabled without unsafe capability", as
     }));
   });
 });
-
-

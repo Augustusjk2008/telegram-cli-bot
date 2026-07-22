@@ -1,5 +1,5 @@
 import { clsx } from "clsx";
-import { ChevronDown, Maximize2, Minimize2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Maximize2, Minimize2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { FileEditorSurface } from "../components/FileEditorSurface";
 import { GitDiffViewer } from "../components/GitDiffViewer";
@@ -54,6 +54,22 @@ function inferLanguageId(path: string) {
   if (/\.(v|vh|sv|svh)$/.test(normalized)) return "verilog";
   if (/\.(c|cc|cp|cpp|cxx|h|hh|hpp|hxx)$/.test(normalized)) return "cpp";
   return "";
+}
+
+function splitBreadcrumbPath(path: string) {
+  return path.split(/[\\/]+/).filter(Boolean);
+}
+
+export function buildEditorBreadcrumb(tab: EditorTab) {
+  if (tab.kind === "plugin-view") {
+    return tab.sourcePath
+      ? [...splitBreadcrumbPath(tab.sourcePath), tab.basename]
+      : ["插件", tab.basename];
+  }
+  if (tab.kind === "git-diff") {
+    return splitBreadcrumbPath(tab.sourcePath || tab.path);
+  }
+  return splitBreadcrumbPath(tab.path);
 }
 
 function PluginViewLoading() {
@@ -171,11 +187,12 @@ export function EditorPane({
   const activePluginTargets = activeTab.kind === "file" ? activeTab.pluginTargets || [] : [];
   const hasPluginMenu = activePluginTargets.length > 1;
   const singlePluginTarget = activePluginTargets.length === 1 ? activePluginTargets[0] : null;
+  const breadcrumbParts = buildEditorBreadcrumb(activeTab);
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] bg-[var(--surface-strong)] px-2 py-1.5">
-        <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto">
+      <div className="editor-tab-strip flex h-[34px] shrink-0 items-stretch justify-between border-b border-[var(--border)] bg-[var(--workbench-panel-elevated-bg)]">
+        <div role="tablist" aria-label="打开的编辑器" className="flex min-w-0 flex-1 items-stretch overflow-x-auto">
           {tabs.map((tab) => {
             const isActive = activeTabPath === tab.path;
             return (
@@ -187,10 +204,10 @@ export function EditorPane({
                   setMenuPath((current) => current === tab.path ? "" : tab.path);
                 }}
                 className={clsx(
-                  "relative flex shrink-0 items-center gap-1 border px-2.5 py-1.5",
+                  "editor-tab group relative flex h-full shrink-0 items-center gap-1 border-r border-[var(--border)] px-2",
                   isActive
-                    ? "border-[var(--accent-outline)] bg-[var(--accent-soft)]"
-                    : "border-[var(--border)] bg-[var(--surface)]",
+                    ? "bg-[var(--editor-bg)]"
+                    : "bg-transparent hover:bg-[var(--workbench-hover-bg)]",
                 )}
               >
                 <button
@@ -208,7 +225,7 @@ export function EditorPane({
                       setMenuPath(tab.path);
                     }
                   }}
-                  className="max-w-52 truncate text-sm text-[var(--text)]"
+                  className="max-w-52 truncate text-[13px] text-[var(--text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--workbench-focus-ring)]"
                 >
                   {tab.basename}
                 </button>
@@ -226,12 +243,12 @@ export function EditorPane({
                       setMenuPath((current) => current === tab.path ? "" : current);
                     }
                   }}
-                  className="rounded px-1 text-xs text-[var(--muted)] hover:bg-[var(--surface-strong)]"
+                  className="editor-tab-close inline-flex h-5 w-5 items-center justify-center rounded text-xs text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--workbench-focus-ring)]"
                 >
                   ×
                 </button>
                 {menuPath === tab.path ? (
-                  <div className="absolute right-0 top-full z-20 mt-2 w-44 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1 shadow-[var(--shadow-card)]">
+                  <div className="absolute right-0 top-full z-20 w-44 rounded-md border border-[var(--border)] bg-[var(--surface)] p-1 shadow-[var(--shadow-card)]">
                     <button
                       type="button"
                       onClick={() => {
@@ -288,7 +305,7 @@ export function EditorPane({
             );
           })}
         </div>
-        <div className="relative flex items-center gap-2">
+        <div className="relative flex shrink-0 items-center gap-1 px-1">
           {singlePluginTarget ? (
             <button
               type="button"
@@ -296,7 +313,7 @@ export function EditorPane({
                 void onReopenPluginView?.(singlePluginTarget);
               }}
               disabled={!onReopenPluginView}
-              className="inline-flex h-8 items-center rounded-lg border border-[var(--accent-outline)] bg-[var(--surface)] px-3 text-sm text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex h-7 items-center rounded border border-[var(--accent-outline)] bg-[var(--surface)] px-2 text-[12px] text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:cursor-not-allowed disabled:opacity-60"
             >
               {pluginTargetLabel(singlePluginTarget)}
             </button>
@@ -311,7 +328,7 @@ export function EditorPane({
                 onClick={() => {
                   setPluginMenuOpen((current) => !current);
                 }}
-                className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--accent-outline)] bg-[var(--surface)] px-3 text-sm text-[var(--text)] hover:bg-[var(--surface-strong)]"
+                className="inline-flex h-7 items-center gap-1 rounded border border-[var(--accent-outline)] bg-[var(--surface)] px-2 text-[12px] text-[var(--text)] hover:bg-[var(--surface-strong)]"
               >
                 插件入口
                 <ChevronDown className="h-4 w-4" />
@@ -345,12 +362,33 @@ export function EditorPane({
             aria-label={focused ? "退出聚焦编辑器" : "聚焦编辑器"}
             title={focused ? "退出聚焦编辑器" : "聚焦编辑器"}
             onClick={onToggleFocus}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--text)]"
+            className="inline-flex h-7 w-7 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--workbench-focus-ring)]"
           >
             {focused ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
           </button>
         </div>
       </div>
+
+      <nav aria-label="文件路径" className="editor-breadcrumb flex h-[22px] shrink-0 items-center overflow-x-auto border-b border-[var(--border)] bg-[var(--editor-bg)] px-2 text-[11px]">
+        <ol className="flex min-w-max items-center whitespace-nowrap">
+          {breadcrumbParts.map((part, index) => {
+            const isCurrent = index === breadcrumbParts.length - 1;
+            return (
+              <li key={`${part}-${index}`} className="flex items-center">
+                {index > 0 ? (
+                  <ChevronRight aria-hidden="true" className="mx-0.5 h-3 w-3 shrink-0 text-[var(--muted)]" />
+                ) : null}
+                <span
+                  aria-current={isCurrent ? "page" : undefined}
+                  className={isCurrent ? "text-[var(--editor-text)]" : "text-[var(--muted)]"}
+                >
+                  {part}
+                </span>
+              </li>
+            );
+          })}
+        </ol>
+      </nav>
 
       {activeTab.statusText ? (
         <div className="border-b border-[var(--border)] px-4 py-2 text-sm text-[var(--muted)]">

@@ -1,6 +1,9 @@
 import { type ComponentType, useEffect, useMemo, useState } from "react";
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import * as codemirrorState from "@codemirror/state";
+import type { Extension } from "@codemirror/state";
 import * as codemirrorView from "@codemirror/view";
+import { tags } from "@lezer/highlight";
 import { isLightUiTheme } from "../theme";
 import { createFileEditorInlineCompletion, type FileEditorInlineCompletionOptions } from "../utils/fileEditorInlineCompletion";
 import { loadFileEditorExtensions } from "../utils/fileEditorLanguage";
@@ -31,8 +34,8 @@ type CodeMirrorComponent = ComponentType<{
   className?: string;
   height?: string;
   width?: string;
-  theme?: "light" | "dark";
-  extensions?: unknown[];
+  theme?: "light" | "dark" | "none";
+  extensions?: Extension[];
   autoFocus?: boolean;
   editable?: boolean;
   basicSetup?: unknown;
@@ -48,10 +51,47 @@ const FILE_EDITOR_BASIC_SETUP = {
   foldGutter: true,
   highlightActiveLineGutter: true,
 };
+const FILE_EDITOR_HIGHLIGHT_STYLE = HighlightStyle.define([
+  { tag: tags.comment, color: "var(--editor-syntax-comment)", fontStyle: "italic" },
+  {
+    tag: [tags.keyword, tags.modifier, tags.operatorKeyword],
+    color: "var(--editor-syntax-keyword)",
+  },
+  {
+    tag: [tags.string, tags.special(tags.string)],
+    color: "var(--editor-syntax-string)",
+  },
+  {
+    tag: [tags.number, tags.bool, tags.atom],
+    color: "var(--editor-syntax-number)",
+  },
+  {
+    tag: [tags.typeName, tags.className, tags.namespace],
+    color: "var(--editor-syntax-type)",
+  },
+  {
+    tag: [
+      tags.function(tags.variableName),
+      tags.function(tags.propertyName),
+      tags.function(tags.definition(tags.variableName)),
+    ],
+    color: "var(--editor-syntax-function)",
+  },
+  {
+    tag: [tags.meta, tags.macroName],
+    color: "var(--editor-syntax-meta)",
+  },
+  {
+    tag: tags.invalid,
+    color: "var(--editor-syntax-invalid)",
+    textDecoration: "underline wavy",
+  },
+]);
+const FILE_EDITOR_SYNTAX_HIGHLIGHTING = syntaxHighlighting(FILE_EDITOR_HIGHLIGHT_STYLE);
 
 type EditorRuntime = {
   CodeMirrorEditor: CodeMirrorComponent;
-  languageExtensions: unknown[];
+  languageExtensions: Extension[];
   stateModule: typeof import("@codemirror/state");
   viewModule: typeof import("@codemirror/view");
 };
@@ -84,14 +124,17 @@ function createEditorTheme(
       color: "var(--editor-gutter-text)",
       borderRight: "1px solid var(--border)",
       fontFamily: "var(--editor-font-family)",
-      fontSize: "var(--editor-font-size)",
+      fontSize: "var(--editor-gutter-font-size)",
       lineHeight: "var(--editor-line-height)",
     },
-    ".cm-activeLine, .cm-activeLineGutter": {
-      backgroundColor: "var(--accent-soft)",
+    ".cm-activeLine": {
+      backgroundColor: "var(--editor-active-line-bg)",
+    },
+    ".cm-activeLineGutter": {
+      backgroundColor: "var(--editor-active-line-gutter-bg)",
     },
     ".cm-selectionBackground, &.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground": {
-      backgroundColor: "var(--accent-soft-strong)",
+      backgroundColor: "var(--editor-selection-bg)",
     },
     ".cm-cursor, .cm-dropCursor": {
       borderLeftColor: "var(--editor-text)",
@@ -117,7 +160,7 @@ function createDebugExtensions(
     }
   };
   const marker = new BreakpointMarker();
-  const extensions: unknown[] = [
+  const extensions: Extension[] = [
     gutter({
       class: "cm-debug-breakpoint-gutter",
       markers(view) {
@@ -285,7 +328,7 @@ export function FileEditorSurface({
         }
         setEditorRuntime({
           CodeMirrorEditor: module.default as CodeMirrorComponent,
-          languageExtensions,
+          languageExtensions: languageExtensions as Extension[],
           stateModule: codemirrorState,
           viewModule: codemirrorView,
         });
@@ -309,6 +352,7 @@ export function FileEditorSurface({
     }
     const extensions = [
       ...editorRuntime.languageExtensions,
+      FILE_EDITOR_SYNTAX_HIGHLIGHTING,
       ...createDebugExtensions(
         editorRuntime.viewModule,
         editorRuntime.stateModule,
@@ -419,7 +463,7 @@ export function FileEditorSurface({
               className="h-full min-h-0 w-full min-w-0"
               height="100%"
               width="100%"
-              theme={codeMirrorTheme}
+              theme="none"
               extensions={editorExtensions}
               autoFocus
               editable={!loading && !saving && !readOnly}
