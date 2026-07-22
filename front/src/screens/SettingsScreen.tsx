@@ -5,6 +5,7 @@ import { AgentSettingsPanel } from "../components/AgentSettingsPanel";
 import { BotCliParamsPanel } from "../components/BotCliParamsPanel";
 import { ClusterSetupPanel } from "../components/ClusterSetupPanel";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
+import { LanguageServicesPanel } from "../components/LanguageServicesPanel";
 import { NativeAgentConfigFields } from "../components/NativeAgentConfigFields";
 import { ThemeDropdown } from "../components/ThemeDropdown";
 import { toolbarButtonClass } from "../components/ToolbarButton";
@@ -72,6 +73,7 @@ type Props = {
   sessionCapabilities?: string[];
   showBotRuntimeSettings?: boolean;
   onOpenBotManager?: () => void;
+  onLanguageServerCatalogChanged?: () => void;
 };
 
 function settingsPanelClass(extra = "") {
@@ -159,6 +161,7 @@ export function SettingsScreen({
   sessionCapabilities = [],
   showBotRuntimeSettings = true,
   onOpenBotManager,
+  onLanguageServerCatalogChanged,
 }: Props) {
   const [overview, setOverview] = useState<BotOverview | null>(null);
   const [nativeAgentModels, setNativeAgentModels] = useState<NativeAgentModelsPayload | null>(null);
@@ -181,6 +184,7 @@ export function SettingsScreen({
   const [requestingNotificationPermission, setRequestingNotificationPermission] = useState(false);
   const isMainBot = botAlias === "main";
   const canManageBotRuntime = sessionCapabilities.length === 0 || sessionCapabilities.includes("manage_bots") || sessionCapabilities.includes("admin_ops");
+  const canManageLanguageServices = sessionCapabilities.length === 0 || sessionCapabilities.includes("admin_ops");
   const canCreateWorkdirDirectory =
     sessionCapabilities.length === 0
     || sessionCapabilities.includes("create_workdir_directory")
@@ -585,6 +589,13 @@ export function SettingsScreen({
             </button>
           </div>
         </div>
+
+        <LanguageServicesPanel
+          botAlias={botAlias}
+          client={client}
+          canManage={canManageLanguageServices}
+          onCatalogChanged={onLanguageServerCatalogChanged}
+        />
 
         {overview ? (
           showBotRuntimeSettings ? (

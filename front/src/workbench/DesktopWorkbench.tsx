@@ -48,6 +48,7 @@ import {
 } from "./useCodeNavigationHistory";
 import { useEditorTabs } from "./useEditorTabs";
 import { useFileTree } from "./useFileTree";
+import { useLanguageServerStatus } from "./useLanguageServerStatus";
 import { useWorkbenchSession } from "./useWorkbenchSession";
 import { useWorkbenchState } from "./useWorkbenchState";
 import { toWorkspaceRelativeSourcePath } from "./debugSourcePath";
@@ -253,12 +254,18 @@ export function DesktopWorkbench({
   const [definitionCandidates, setDefinitionCandidates] = useState<CodeLocation[]>([]);
   const [definitionMessage, setDefinitionMessage] = useState("");
   const [definitionSource, setDefinitionSource] = useState("");
+  const [languageServerCatalogRevision, setLanguageServerCatalogRevision] = useState(0);
   const gitDecorationRequestRef = useRef(0);
   const codeNavigationRequestRef = useRef(0);
   const editorRevealRequestRef = useRef(0);
   const editorNavigationCommandRef = useRef(0);
   const definitionSourceLocationRef = useRef<CodeNavigationHistoryLocation | null>(null);
   const reduceMotion = useReducedMotion();
+  const activeLanguageServicePath = tabs.activeTab?.kind === "file" ? tabs.activeTab.path : "";
+  const languageService = useLanguageServerStatus(client, botAlias, activeLanguageServicePath, languageServerCatalogRevision);
+  const refreshLanguageServerCatalogStatus = useCallback(() => {
+    setLanguageServerCatalogRevision((current) => current + 1);
+  }, []);
 
   const codeNavigationHistory = useCodeNavigationHistory({
     scopeKey: `${botAlias}\n${fileTree.rootPath}`,
@@ -1054,6 +1061,7 @@ export function DesktopWorkbench({
           sessionCapabilities={sessionCapabilities}
           showBotRuntimeSettings={false}
           onOpenBotManager={onOpenBotManager}
+          onLanguageServerCatalogChanged={refreshLanguageServerCatalogStatus}
         />
         </Suspense>
       );
@@ -1348,6 +1356,9 @@ export function DesktopWorkbench({
         restoreState={session.restoreState}
         branchName={gitBranchName}
         viewMode={viewMode}
+        languageServiceProvider={languageService.provider}
+        languageServiceStatus={languageService.status}
+        languageServiceLoading={languageService.loading}
         rightAction={(
           <div className="flex items-center gap-2">
             {fileTree.downloadProgress ? (

@@ -126,6 +126,9 @@ import type {
   InlineCompletionConfigInput,
   InlineCompletionRequest,
   InlineCompletionResult,
+  LanguageServerCatalog,
+  LanguageServerInstallOptions,
+  LanguageServerProviderId,
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
   UserBotPermissions,
@@ -163,6 +166,9 @@ export interface WebBotClient {
   updateInlineCompletionConfig(input: InlineCompletionConfigInput): Promise<InlineCompletionConfig>;
   getInlineCompletionRuntimeConfig(botAlias: string): Promise<InlineCompletionConfig>;
   requestInlineCompletion(botAlias: string, input: InlineCompletionRequest, signal?: AbortSignal): Promise<InlineCompletionResult>;
+  getLanguageServerCatalog(botAlias: string): Promise<LanguageServerCatalog>;
+  refreshLanguageServerCatalog(): Promise<LanguageServerCatalog>;
+  installLanguageServer(provider: LanguageServerProviderId, options?: LanguageServerInstallOptions): Promise<LanguageServerCatalog>;
   getEnvConfig(): Promise<EnvConfigSnapshot>;
   previewEnvConfig(input: EnvConfigPatchInput): Promise<EnvConfigPatchResult>;
   updateEnvConfig(input: EnvConfigPatchInput): Promise<EnvConfigPatchResult>;

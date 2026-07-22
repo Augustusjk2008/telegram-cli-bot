@@ -4,11 +4,14 @@ from aiohttp import web
 
 
 def register(app: web.Application, server) -> None:
+    app.router.add_get("/api/language-servers/status", server.get_language_server_catalog)
+    app.router.add_post("/api/language-servers/refresh", server.refresh_language_server_catalog)
     app.router.add_get("/api/bots/{alias}/pwd", server.get_pwd)
     app.router.add_get("/api/bots/{alias}/ls", server.get_ls)
     app.router.add_get("/api/bots/{alias}/workspace/quick-open", server.get_workspace_quick_open)
     app.router.add_get("/api/bots/{alias}/workspace/search", server.get_workspace_search)
     app.router.add_get("/api/bots/{alias}/workspace/outline", server.get_workspace_outline)
+    app.router.add_get("/api/bots/{alias}/workspace/language-servers", server.get_workspace_language_servers)
     app.router.add_get("/api/bots/{alias}/workspace/inline-completion/config", server.get_workspace_inline_completion_config)
     app.router.add_post(
         "/api/bots/{alias}/workspace/resolve-definition",

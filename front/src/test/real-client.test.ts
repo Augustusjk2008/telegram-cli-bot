@@ -4171,5 +4171,135 @@ describe("RealWebBotClient", () => {
     });
   });
 
+  test("language server catalog maps discovery status and uses separated public/admin routes", async () => {
+    const payload = {
+      enabled: true,
+      platform: "windows-x64",
+      can_refresh: true,
+      providers: [
+        {
+          provider: "pyright",
+          status: "missing",
+          source: null,
+          version: "",
+          command_summary: "pyright-langserver",
+          can_install: true,
+          can_update: false,
+          message: "未发现可用命令；可由管理员安装受支持的托管版本",
+          error: "",
+        },
+        {
+          provider: "typescript",
+          status: "available",
+          source: "path",
+          version: "5.8.3",
+          command_summary: "typescript-language-server",
+          can_install: false,
+          can_update: false,
+          message: "使用 PATH 中的命令",
+          error: "",
+        },
+        {
+          provider: "clangd",
+          status: "installing",
+          source: "managed",
+          version: "17.0.6",
+          command_summary: "clangd",
+          can_install: false,
+          can_update: true,
+          message: "正在安装或更新托管版本",
+          error: "",
+        },
+      ],
+    };
+    fetchMock
+      .mockResolvedValueOnce(jsonOk(payload))
+      .mockResolvedValueOnce(jsonOk(payload))
+      .mockResolvedValueOnce(jsonOk({
+        installation: { provider: "pyright", status: "installed", update: true },
+        ...payload,
+      }));
+
+    const client = new RealWebBotClient();
+    const catalog = await client.getLanguageServerCatalog("main");
+    await client.refreshLanguageServerCatalog();
+    const installedCatalog = await client.installLanguageServer("pyright", { update: true });
+
+    expect(catalog).toEqual({
+      canRefresh: true,
+      providers: [
+        {
+          provider: "pyright",
+          status: "missing",
+          source: null,
+          version: "",
+          commandSummary: "pyright-langserver",
+          canInstall: true,
+          canUpdate: false,
+          message: "未发现可用命令；可由管理员安装受支持的托管版本",
+          error: "",
+        },
+        {
+          provider: "typescript",
+          status: "available",
+          source: "path",
+          version: "5.8.3",
+          commandSummary: "typescript-language-server",
+          canInstall: false,
+          canUpdate: false,
+          message: "使用 PATH 中的命令",
+          error: "",
+        },
+        {
+          provider: "clangd",
+          status: "installing",
+          source: "managed",
+          version: "17.0.6",
+          commandSummary: "clangd",
+          canInstall: false,
+          canUpdate: true,
+          message: "正在安装或更新托管版本",
+          error: "",
+        },
+      ],
+    });
+    expect(installedCatalog).toEqual(catalog);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/bots/main/workspace/language-servers",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/admin/language-servers/redetect",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/admin/language-servers/pyright/update",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+  });
+
+  test("language server catalog supplies a recoverable message for an error status without details", async () => {
+    fetchMock.mockResolvedValue(jsonOk({
+      providers: [{
+        id: "pyright",
+        status: "error",
+        source: "path",
+        version: "1.0.0",
+        commandSummary: "pyright-langserver",
+        canInstall: true,
+      }],
+    }));
+
+    const client = new RealWebBotClient();
+    const catalog = await client.getLanguageServerCatalog("main");
+
+    expect(catalog.providers[0]?.error).toBe("语言服务检测失败，请重新检测");
+  });
+
   
   });

@@ -119,6 +119,30 @@ def get_inline_completion_config_path() -> Path:
     return get_app_data_root() / "inline-completion" / "config.json"
 
 
+def get_language_servers_root() -> Path:
+    """托管语言服务器的运行态根目录，始终位于用户数据目录。"""
+
+    return get_app_data_root() / "language-servers"
+
+
+def get_language_server_managed_root() -> Path:
+    """兼容性别名：返回语言服务器托管根目录。"""
+
+    return get_language_servers_root()
+
+
+def get_language_server_node_tools_dir() -> Path:
+    """Pyright 与 TypeScript 服务共享的 Node 包目录。"""
+
+    return get_language_servers_root() / "node"
+
+
+def get_language_server_native_tools_dir() -> Path:
+    """clangd 等平台原生归档的托管目录。"""
+
+    return get_language_servers_root() / "native"
+
+
 def get_tunnel_state_path() -> Path:
     return get_app_data_root() / "tunnel" / "state.json"
 

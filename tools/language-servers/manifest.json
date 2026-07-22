@@ -1,0 +1,133 @@
+{
+  "schemaVersion": 1,
+  "providers": {
+    "pyright": {
+      "displayName": "Pyright",
+      "version": "1.1.410",
+      "runtime": "node",
+      "environmentVariable": "TCB_LSP_PYRIGHT_COMMAND",
+      "pathCommands": ["pyright-langserver"],
+      "managedCommand": {
+        "entrypoint": "node_modules/pyright/langserver.index.js",
+        "args": ["--stdio"]
+      },
+      "extensions": [".py", ".pyi"],
+      "license": {
+        "spdx": "MIT",
+        "url": "https://github.com/microsoft/pyright/blob/1.1.410/LICENSE.txt"
+      },
+      "assets": [
+        {
+          "id": "pyright",
+          "version": "1.1.410",
+          "platform": "any",
+          "url": "https://registry.npmjs.org/pyright/-/pyright-1.1.410.tgz",
+          "sha256": "4d6b7a25f9617ea8ff7b2e98cd87c146d132a95cbfb29bf58bd638018a76ac48",
+          "archive": "tar.gz",
+          "archiveRoot": "package",
+          "target": "node_modules/pyright"
+        }
+      ]
+    },
+    "typescript": {
+      "displayName": "TypeScript Language Server",
+      "version": "4.4.1",
+      "runtime": "node",
+      "environmentVariable": "TCB_LSP_TYPESCRIPT_COMMAND",
+      "pathCommands": ["typescript-language-server"],
+      "managedCommand": {
+        "entrypoint": "node_modules/typescript-language-server/lib/cli.mjs",
+        "args": ["--stdio"]
+      },
+      "extensions": [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"],
+      "license": {
+        "spdx": "Apache-2.0",
+        "url": "https://github.com/typescript-language-server/typescript-language-server/blob/v4.4.1/LICENSE"
+      },
+      "assets": [
+        {
+          "id": "typescript-language-server",
+          "version": "4.4.1",
+          "platform": "any",
+          "url": "https://registry.npmjs.org/typescript-language-server/-/typescript-language-server-4.4.1.tgz",
+          "sha256": "133fdad406e2cba2fb763b0950914a17bc2aa19d2f4e689ba8a6c706427ed3cf",
+          "archive": "tar.gz",
+          "archiveRoot": "package",
+          "target": "node_modules/typescript-language-server"
+        },
+        {
+          "id": "typescript",
+          "version": "5.9.2",
+          "platform": "any",
+          "url": "https://registry.npmjs.org/typescript/-/typescript-5.9.2.tgz",
+          "sha256": "67a3bc82e822b8f45f653a80fc3a9730d23214d36c83ba85dd7f5abebee82062",
+          "archive": "tar.gz",
+          "archiveRoot": "package",
+          "target": "node_modules/typescript"
+        }
+      ]
+    },
+    "clangd": {
+      "displayName": "clangd",
+      "version": "22.1.0",
+      "runtime": "native",
+      "environmentVariable": "TCB_LSP_CLANGD_COMMAND",
+      "pathCommands": ["clangd"],
+      "managedCommand": {
+        "entrypoint": "",
+        "args": ["--stdio"]
+      },
+      "extensions": [".c", ".h", ".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx"],
+      "license": {
+        "spdx": "Apache-2.0 WITH LLVM-exception",
+        "url": "https://github.com/clangd/clangd/blob/22.1.0/LICENSE"
+      },
+      "assets": [
+        {
+          "id": "clangd",
+          "version": "22.1.0",
+          "platform": "windows-x64",
+          "url": "https://github.com/clangd/clangd/releases/download/22.1.0/clangd-windows-22.1.0.zip",
+          "sha256": "e31e271fe11f6dcd7cf87ca74be4a12788ff8ce5a0b07762583e335c058e939a",
+          "archive": "zip",
+          "archiveRoot": "clangd_22.1.0",
+          "target": "current",
+          "entrypoint": "bin/clangd.exe"
+        },
+        {
+          "id": "clangd",
+          "version": "22.1.0",
+          "platform": "linux-x64",
+          "url": "https://github.com/clangd/clangd/releases/download/22.1.0/clangd-linux-22.1.0.zip",
+          "sha256": "c54e57dbff3ccc9e8352367ddb7030ad3f624073ec58c7477424e7919f578572",
+          "archive": "zip",
+          "archiveRoot": "clangd_22.1.0",
+          "target": "current",
+          "entrypoint": "bin/clangd"
+        },
+        {
+          "id": "clangd",
+          "version": "22.1.0",
+          "platform": "darwin-x64",
+          "url": "https://github.com/clangd/clangd/releases/download/22.1.0/clangd-mac-22.1.0.zip",
+          "sha256": "71eddc5303da9a5bc5e8b509488b5b2c5acf45f20e33b8394e71a12a56d67198",
+          "archive": "zip",
+          "archiveRoot": "clangd_22.1.0",
+          "target": "current",
+          "entrypoint": "bin/clangd"
+        },
+        {
+          "id": "clangd",
+          "version": "22.1.0",
+          "platform": "darwin-arm64",
+          "url": "https://github.com/clangd/clangd/releases/download/22.1.0/clangd-mac-22.1.0.zip",
+          "sha256": "71eddc5303da9a5bc5e8b509488b5b2c5acf45f20e33b8394e71a12a56d67198",
+          "archive": "zip",
+          "archiveRoot": "clangd_22.1.0",
+          "target": "current",
+          "entrypoint": "bin/clangd"
+        }
+      ]
+    }
+  }
+}

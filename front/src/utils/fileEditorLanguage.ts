@@ -1,3 +1,5 @@
+import type { LanguageServerProviderId } from "../services/types";
+
 type EditorExtension = unknown;
 
 export function inferFileEditorLanguageId(path: string) {
@@ -14,6 +16,16 @@ export function inferFileEditorLanguageId(path: string) {
   if (/\.(v|vh|sv|svh)$/.test(normalized)) return "verilog";
   if (/\.(c|cc|cp|cpp|cxx|h|hh|hpp|hxx)$/.test(normalized)) return "cpp";
   return "";
+}
+
+export function inferLanguageServerProviderId(path: string): LanguageServerProviderId | null {
+  const languageId = inferFileEditorLanguageId(path);
+  if (languageId === "python") return "pyright";
+  if (languageId === "typescript" || languageId === "typescriptreact" || languageId === "javascript" || languageId === "javascriptreact") {
+    return "typescript";
+  }
+  if (languageId === "cpp") return "clangd";
+  return null;
 }
 
 export async function loadFileEditorExtensions(path: string): Promise<EditorExtension[]> {

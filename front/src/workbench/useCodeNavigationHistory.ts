@@ -69,6 +69,7 @@ function appendUnique(
 export function useCodeNavigationHistory({ scopeKey, onNavigate }: Options) {
   const [state, setState] = useState<HistoryState>(emptyHistoryState);
   const stateRef = useRef(state);
+  const generationRef = useRef(0);
   const onNavigateRef = useRef(onNavigate);
   onNavigateRef.current = onNavigate;
 
@@ -78,6 +79,7 @@ export function useCodeNavigationHistory({ scopeKey, onNavigate }: Options) {
   }, []);
 
   const reset = useCallback(() => {
+    generationRef.current += 1;
     commitState(emptyHistoryState());
   }, [commitState]);
 
@@ -115,12 +117,16 @@ export function useCodeNavigationHistory({ scopeKey, onNavigate }: Options) {
     if (snapshot.navigating || !destination) {
       return false;
     }
+    const generation = generationRef.current;
     commitState({ ...snapshot, navigating: true });
     let opened = false;
     try {
       opened = await onNavigateRef.current(destination);
     } catch {
       opened = false;
+    }
+    if (generationRef.current !== generation) {
+      return false;
     }
     if (!opened) {
       commitState({ ...snapshot, navigating: false });
@@ -143,12 +149,16 @@ export function useCodeNavigationHistory({ scopeKey, onNavigate }: Options) {
     if (snapshot.navigating || !destination) {
       return false;
     }
+    const generation = generationRef.current;
     commitState({ ...snapshot, navigating: true });
     let opened = false;
     try {
       opened = await onNavigateRef.current(destination);
     } catch {
       opened = false;
+    }
+    if (generationRef.current !== generation) {
+      return false;
     }
     if (!opened) {
       commitState({ ...snapshot, navigating: false });

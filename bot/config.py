@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 import sys
@@ -74,10 +75,14 @@ def _get_project_bool(name: str, default: bool = False) -> bool:
 def _get_project_float(name: str, default: float) -> float:
     raw_value = _get_project_config(name, str(default)).strip()
     try:
-        return float(raw_value)
+        value = float(raw_value)
     except ValueError:
         logging.warning("忽略无效的浮点配置 %s=%s，使用默认值 %s", name, raw_value, default)
         return default
+    if not math.isfinite(value):
+        logging.warning("忽略非有限浮点配置 %s=%s，使用默认值 %s", name, raw_value, default)
+        return default
+    return value
 
 
 def _get_project_int(name: str, default: int) -> int:
@@ -214,6 +219,17 @@ APP_UPDATE_REPOSITORY = _get_project_config(
     "APP_UPDATE_REPOSITORY",
     DEFAULT_APP_UPDATE_REPOSITORY,
 ).strip()
+
+# Language servers stay opt-in. Discovery never downloads tools; installation is
+# deliberately exposed only through the Web administrator API.
+TCB_LSP_ENABLED = _get_project_bool("TCB_LSP_ENABLED", False)
+TCB_LSP_PYRIGHT_COMMAND = _get_project_config("TCB_LSP_PYRIGHT_COMMAND", "").strip()
+TCB_LSP_TYPESCRIPT_COMMAND = _get_project_config("TCB_LSP_TYPESCRIPT_COMMAND", "").strip()
+TCB_LSP_CLANGD_COMMAND = _get_project_config("TCB_LSP_CLANGD_COMMAND", "").strip()
+TCB_LSP_REQUEST_TIMEOUT_SECONDS = max(1.0, _get_project_float("TCB_LSP_REQUEST_TIMEOUT_SECONDS", 10.0))
+TCB_LSP_IDLE_TIMEOUT_SECONDS = max(30.0, _get_project_float("TCB_LSP_IDLE_TIMEOUT_SECONDS", 300.0))
+TCB_LSP_MAX_RUNTIMES = min(128, max(1, _get_project_int("TCB_LSP_MAX_RUNTIMES", 8)))
+TCB_LSP_EXTERNAL_SOURCES_ENABLED = _get_project_bool("TCB_LSP_EXTERNAL_SOURCES_ENABLED", False)
 
 # Chat completion notifications.
 CHAT_COMPLETION_NOTIFY_ENABLED = _get_project_bool("CHAT_COMPLETION_NOTIFY_ENABLED", True)

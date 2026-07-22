@@ -140,6 +140,10 @@ import type {
   InlineCompletionConfigInput,
   InlineCompletionRequest,
   InlineCompletionResult,
+  LanguageServerCatalog,
+  LanguageServerInstallOptions,
+  LanguageServerProviderId,
+  LanguageServerProviderStatus,
   PluginActionInvokeInput,
   PluginActionResult,
   InstallablePluginSummary,
@@ -396,6 +400,34 @@ type RawInlineCompletionConfig = {
   max_related_files?: number;
   max_related_file_bytes?: number;
   deny_globs?: string[];
+};
+
+type RawLanguageServerProviderStatus = {
+  id?: string;
+  provider?: string;
+  status?: string;
+  source?: string | null;
+  version?: string;
+  managedVersion?: string;
+  managed_version?: string;
+  commandSummary?: string;
+  command_summary?: string;
+  canInstall?: boolean;
+  can_install?: boolean;
+  canUpdate?: boolean;
+  can_update?: boolean;
+  message?: string;
+  error?: string;
+};
+
+type RawLanguageServerCatalog = {
+  providers?: RawLanguageServerProviderStatus[];
+  canRefresh?: boolean;
+  can_refresh?: boolean;
+};
+
+type RawLanguageServerInstallResult = RawLanguageServerCatalog & {
+  catalog?: RawLanguageServerCatalog;
 };
 
 type RawNotificationSettings = {
@@ -3138,6 +3170,60 @@ function mapInlineCompletionConfigInput(input: InlineCompletionConfigInput) {
   };
 }
 
+function mapLanguageServerProviderId(raw: unknown): LanguageServerProviderId | null {
+  switch (String(raw || "").trim()) {
+    case "pyright":
+    case "typescript":
+    case "clangd":
+      return String(raw).trim() as LanguageServerProviderId;
+    default:
+      return null;
+  }
+}
+
+function mapLanguageServerProviderStatus(raw: RawLanguageServerProviderStatus): LanguageServerProviderStatus | null {
+  const provider = mapLanguageServerProviderId(raw.id ?? raw.provider);
+  if (!provider) {
+    return null;
+  }
+  const rawStatus = String(raw.status || "").trim();
+  const status = rawStatus === "available" || rawStatus === "missing" || rawStatus === "installing" || rawStatus === "error"
+    ? rawStatus
+    : "error";
+  const rawSource = String(raw.source || "").trim();
+  const source = rawSource === "custom" || rawSource === "path" || rawSource === "managed"
+    ? rawSource
+    : null;
+  const canInstall = Boolean(raw.canInstall ?? raw.can_install);
+  const managedVersion = String(raw.managedVersion ?? raw.managed_version ?? "").trim();
+  const canUpdate = raw.canUpdate ?? raw.can_update ?? (canInstall && Boolean(managedVersion));
+  const backendMessage = String(raw.message ?? raw.error ?? "").trim();
+  const message = backendMessage || (status === "error" ? "语言服务检测失败，请重新检测" : "");
+  return {
+    provider,
+    status,
+    source,
+    version: String(raw.version || ""),
+    commandSummary: String(raw.commandSummary ?? raw.command_summary ?? ""),
+    canInstall,
+    canUpdate: Boolean(canUpdate),
+    message,
+    error: status === "error" ? message : "",
+  } as LanguageServerProviderStatus;
+}
+
+function mapLanguageServerCatalog(raw: RawLanguageServerCatalog): LanguageServerCatalog {
+  const providers = Array.isArray(raw.providers)
+    ? raw.providers
+      .map(mapLanguageServerProviderStatus)
+      .filter((item): item is LanguageServerProviderStatus => item !== null)
+    : [];
+  return {
+    providers,
+    canRefresh: raw.canRefresh !== false && raw.can_refresh !== false,
+  };
+}
+
 function mapCliErrorStatsSummary(raw: RawCliErrorStatsSummary | undefined): CliErrorStatsSummary {
   return {
     total: Number(raw?.total || 0),
@@ -3954,6 +4040,32 @@ export class RealWebBotClient implements WebBotClient {
         signal,
       },
     );
+  }
+
+  async getLanguageServerCatalog(botAlias: string): Promise<LanguageServerCatalog> {
+    return mapLanguageServerCatalog(await this.requestJson<RawLanguageServerCatalog>(
+      `/api/bots/${encodeURIComponent(botAlias)}/workspace/language-servers`,
+    ));
+  }
+
+  async refreshLanguageServerCatalog(): Promise<LanguageServerCatalog> {
+    return mapLanguageServerCatalog(await this.requestJson<RawLanguageServerCatalog>("/api/admin/language-servers/redetect", {
+      method: "POST",
+    }));
+  }
+
+  async installLanguageServer(
+    provider: LanguageServerProviderId,
+    options: LanguageServerInstallOptions = {},
+  ): Promise<LanguageServerCatalog> {
+    const action = options.update ? "update" : "install";
+    const result = await this.requestJson<RawLanguageServerInstallResult>(
+      `/api/admin/language-servers/${encodeURIComponent(provider)}/${action}`,
+      {
+        method: "POST",
+      },
+    );
+    return mapLanguageServerCatalog(result.catalog || result);
   }
 
   async getEnvConfig(): Promise<EnvConfigSnapshot> {

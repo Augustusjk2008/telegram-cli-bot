@@ -103,6 +103,9 @@ import type {
   InlineCompletionConfigInput,
   InlineCompletionRequest,
   InlineCompletionResult,
+  LanguageServerCatalog,
+  LanguageServerInstallOptions,
+  LanguageServerProviderId,
   LanChatConfig,
   LanChatConfigInput,
   LanChatConversation,
@@ -1485,6 +1488,44 @@ export class MockWebBotClient implements WebBotClient {
     maxRelatedFiles: 4,
     maxRelatedFileBytes: 4096,
     denyGlobs: [".env*", "managed_bots.json", "*.pem", "*.key", ".git/**", "node_modules/**", "dist/**", "build/**"],
+  };
+  private languageServerCatalog: LanguageServerCatalog = {
+    canRefresh: true,
+    providers: [
+      {
+        provider: "pyright",
+        status: "missing",
+        source: null,
+        version: "",
+        commandSummary: "pyright-langserver --stdio",
+        canInstall: true,
+        canUpdate: false,
+        message: "未检测到 Pyright",
+        error: "未检测到 Pyright",
+      },
+      {
+        provider: "typescript",
+        status: "available",
+        source: "path",
+        version: "5.8.3",
+        commandSummary: "typescript-language-server --stdio",
+        canInstall: false,
+        canUpdate: false,
+        message: "使用 PATH 中的命令",
+        error: "",
+      },
+      {
+        provider: "clangd",
+        status: "error",
+        source: "path",
+        version: "17.0.6",
+        commandSummary: "clangd --stdio",
+        canInstall: true,
+        canUpdate: false,
+        message: "clangd 检测失败，可重新检测或改用托管安装",
+        error: "clangd 检测失败，可重新检测或改用托管安装",
+      },
+    ],
   };
   private gitOverviews = new Map<string, GitOverview>([
     [
@@ -3098,6 +3139,43 @@ export class MockWebBotClient implements WebBotClient {
       latencyMs: 12,
       context: { relatedFiles: [], truncated: false },
     };
+  }
+
+  async getLanguageServerCatalog(_botAlias: string): Promise<LanguageServerCatalog> {
+    return {
+      canRefresh: this.languageServerCatalog.canRefresh,
+      providers: this.languageServerCatalog.providers.map((item) => ({ ...item })),
+    };
+  }
+
+  async refreshLanguageServerCatalog(): Promise<LanguageServerCatalog> {
+    return this.getLanguageServerCatalog("");
+  }
+
+  async installLanguageServer(
+    provider: LanguageServerProviderId,
+    options: LanguageServerInstallOptions = {},
+  ): Promise<LanguageServerCatalog> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权安装或更新语言服务", { status: 403, code: "forbidden" });
+    }
+    this.languageServerCatalog = {
+      ...this.languageServerCatalog,
+      providers: this.languageServerCatalog.providers.map((item) => item.provider === provider
+        ? {
+            ...item,
+            status: "available",
+            source: "managed",
+            version: options.update ? "mock-1.0.1" : "mock-1.0.0",
+            commandSummary: item.commandSummary || `${provider} --stdio`,
+            canInstall: false,
+            canUpdate: true,
+            message: "使用托管版本",
+            error: "",
+          }
+        : item),
+    };
+    return this.getLanguageServerCatalog("");
   }
 
   async getNotificationSettings(): Promise<NotificationSettingsStatus> {

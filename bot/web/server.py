@@ -64,6 +64,7 @@ from bot.config import (
     request_restart,
 )
 from bot.debug.service import DebugService
+from bot.language_server import LanguageServerCatalog, LanguageServerInstallError, LanguageServerInstaller
 from bot.manager import MultiBotManager
 from bot.models import session_persistence_diagnostics
 from bot.native_agent import get_native_agent_service
@@ -872,6 +873,8 @@ class WebApiServer:
         port: int | None = None,
         tunnel_service: TunnelService | None = None,
         fixed_forward_service: FixedForwardService | None = None,
+        language_server_catalog: LanguageServerCatalog | None = None,
+        language_server_installer: LanguageServerInstaller | None = None,
         instance_id: str | None = None,
     ):
         self.manager = manager
@@ -911,6 +914,12 @@ class WebApiServer:
             messages_path=get_lan_chat_messages_path(),
         )
         self.env_config_service = EnvConfigService(_REPO_ROOT)
+        if language_server_catalog is not None:
+            self.language_server_catalog = language_server_catalog
+            self.language_server_installer = language_server_installer or language_server_catalog.installer
+        else:
+            self.language_server_installer = language_server_installer or LanguageServerInstaller()
+            self.language_server_catalog = LanguageServerCatalog(installer=self.language_server_installer)
         self._git_smart_commit_jobs: dict[str, dict[str, Any]] = {}
         self._git_smart_commit_latest_by_alias: dict[str, str] = {}
         self._git_smart_commit_repo_locks: dict[str, str] = {}
@@ -2835,6 +2844,24 @@ class WebApiServer:
         data = await asyncio.to_thread(build_file_outline, workspace, path)
         return _json({"ok": True, "data": data})
 
+    async def get_workspace_language_servers(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_READ_FILE_CONTENT)
+        self._manager_alias(request)
+        # 仅做发现；LanguageServerCatalog 不会调用安装器的 install，打开文件
+        # 或轮询状态均不会触发下载。
+        data = await asyncio.to_thread(self.language_server_catalog.api_snapshot)
+        return _json({"ok": True, "data": data})
+
+    async def get_language_server_catalog(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_READ_FILE_CONTENT)
+        data = await asyncio.to_thread(self.language_server_catalog.api_snapshot)
+        return _json({"ok": True, "data": data})
+
+    async def refresh_language_server_catalog(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_READ_FILE_CONTENT)
+        data = await asyncio.to_thread(self.language_server_catalog.api_snapshot)
+        return _json({"ok": True, "data": data})
+
     async def post_workspace_resolve_definition(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
         alias = self._manager_alias(request)
@@ -4181,6 +4208,51 @@ class WebApiServer:
         await self._with_capability(request, CAP_ADMIN_OPS)
         body = await self._parse_json(request)
         return _json({"ok": True, "data": update_native_agent_config_payload(body)})
+
+    async def admin_language_server_install(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        body: dict[str, Any] = {}
+        if request.content_length not in {None, 0}:
+            body = await self._parse_json(request)
+        return await self._admin_install_language_server(request, update=bool(body.get("update", False)))
+
+    async def admin_language_server_update(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        return await self._admin_install_language_server(request, update=True)
+
+    async def admin_language_servers_redetect(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        data = await asyncio.to_thread(self.language_server_catalog.redetect)
+        return _json({"ok": True, "data": data})
+
+    async def _admin_install_language_server(self, request: web.Request, *, update: bool) -> web.Response:
+        provider_id = str(request.match_info.get("provider_id", "")).strip().lower()
+        try:
+            installation = await asyncio.to_thread(
+                self.language_server_installer.install,
+                provider_id,
+                update=update,
+            )
+        except LanguageServerInstallError as exc:
+            if exc.code == "language_server_install_locked":
+                status = 409
+            elif exc.code in {"invalid_language_server_provider", "language_server_platform_unsupported"}:
+                status = 400
+            elif exc.code == "language_server_manifest_unavailable":
+                status = 503
+            else:
+                status = 502
+            raise WebApiError(status, exc.code, exc.message, exc.data) from exc
+        catalog = await asyncio.to_thread(self.language_server_catalog.api_snapshot)
+        return _json(
+            {
+                "ok": True,
+                "data": {
+                    "installation": installation,
+                    **catalog,
+                },
+            }
+        )
 
     async def admin_env_patch(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)

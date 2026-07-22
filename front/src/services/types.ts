@@ -237,6 +237,33 @@ export type InlineCompletionResult = {
   };
 };
 
+export type LanguageServerProviderId = "pyright" | "typescript" | "clangd";
+
+export type LanguageServerAvailability = "available" | "missing" | "installing" | "error";
+
+export type LanguageServerSource = "custom" | "path" | "managed";
+
+export type LanguageServerProviderStatus = {
+  provider: LanguageServerProviderId;
+  status: LanguageServerAvailability;
+  source: LanguageServerSource | null;
+  version: string;
+  commandSummary: string;
+  canInstall: boolean;
+  canUpdate: boolean;
+  message: string;
+  error: string;
+};
+
+export type LanguageServerCatalog = {
+  providers: LanguageServerProviderStatus[];
+  canRefresh: boolean;
+};
+
+export type LanguageServerInstallOptions = {
+  update?: boolean;
+};
+
 export type EnvConfigFieldType = "string" | "number" | "boolean" | "select" | "csv" | "path" | "password";
 
 export type EnvConfigValue = string | number | boolean | string[];

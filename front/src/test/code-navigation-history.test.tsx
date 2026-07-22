@@ -115,6 +115,76 @@ test("changing the bot or workspace scope clears navigation history", async () =
 });
 
 
+test("changing scope discards an in-flight back navigation result", async () => {
+  let resolveNavigation: (opened: boolean) => void = () => undefined;
+  const pendingNavigation = new Promise<boolean>((resolve) => {
+    resolveNavigation = resolve;
+  });
+  const onNavigate = vi.fn(() => pendingNavigation);
+  const { result, rerender } = renderHook(
+    ({ scopeKey }) => useCodeNavigationHistory({ scopeKey, onNavigate }),
+    { initialProps: { scopeKey: "main:root-a" } },
+  );
+
+  act(() => result.current.recordNavigation(location("a.py"), location("b.py")));
+  let goBackResult: Promise<boolean> | undefined;
+  act(() => {
+    goBackResult = result.current.goBack();
+  });
+  expect(result.current.navigating).toBe(true);
+
+  rerender({ scopeKey: "team:root-b" });
+  await waitFor(() => expect(result.current.currentLocation).toBeNull());
+
+  await act(async () => {
+    resolveNavigation(true);
+    expect(await goBackResult).toBe(false);
+  });
+  expect(result.current.backStack).toEqual([]);
+  expect(result.current.forwardStack).toEqual([]);
+  expect(result.current.currentLocation).toBeNull();
+});
+
+
+test("changing scope discards an in-flight forward navigation result", async () => {
+  let resolveNavigation: (opened: boolean) => void = () => undefined;
+  const pendingNavigation = new Promise<boolean>((resolve) => {
+    resolveNavigation = resolve;
+  });
+  const onNavigate = vi
+    .fn<(_location: CodeNavigationHistoryLocation) => Promise<boolean>>()
+    .mockResolvedValueOnce(true)
+    .mockImplementationOnce(() => pendingNavigation);
+  const { result, rerender } = renderHook(
+    ({ scopeKey }) => useCodeNavigationHistory({ scopeKey, onNavigate }),
+    { initialProps: { scopeKey: "main:root-a" } },
+  );
+
+  act(() => result.current.recordNavigation(location("a.py"), location("b.py")));
+  await act(async () => {
+    expect(await result.current.goBack()).toBe(true);
+  });
+  expect(result.current.canGoForward).toBe(true);
+
+  let goForwardResult: Promise<boolean> | undefined;
+  act(() => {
+    goForwardResult = result.current.goForward();
+  });
+  expect(result.current.navigating).toBe(true);
+
+  rerender({ scopeKey: "team:root-b" });
+  await waitFor(() => expect(result.current.currentLocation).toBeNull());
+
+  await act(async () => {
+    resolveNavigation(true);
+    expect(await goForwardResult).toBe(false);
+  });
+  expect(result.current.backStack).toEqual([]);
+  expect(result.current.forwardStack).toEqual([]);
+  expect(result.current.currentLocation).toBeNull();
+});
+
+
 test("Alt+Left and Alt+Right are handled only when navigation can execute", async () => {
   const onNavigate = vi.fn(async () => true);
   const { result } = renderHook(() => useCodeNavigationHistory({ scopeKey: "main:root-a", onNavigate }));

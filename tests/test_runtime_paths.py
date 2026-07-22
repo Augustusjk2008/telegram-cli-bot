@@ -60,6 +60,16 @@ def test_native_agent_paths_use_app_data_root(monkeypatch, tmp_path: Path):
     assert not runtime_paths.get_pi_session_store_path().exists()
 
 
+def test_language_server_paths_use_app_data_root(monkeypatch, tmp_path: Path):
+    data = tmp_path / "data"
+    monkeypatch.setenv("TCB_DATA_DIR", str(data))
+
+    assert runtime_paths.get_language_servers_root() == data / "language-servers"
+    assert runtime_paths.get_language_server_managed_root() == data / "language-servers"
+    assert runtime_paths.get_language_server_node_tools_dir() == data / "language-servers" / "node"
+    assert runtime_paths.get_language_server_native_tools_dir() == data / "language-servers" / "native"
+
+
 def test_native_agent_paths_default_under_home(monkeypatch, tmp_path: Path):
     home = tmp_path / "home"
     repo = tmp_path / "repo"

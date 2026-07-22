@@ -40,3 +40,8 @@ tmp/
 .codegraph/
 .artifacts/
 /tools/
+!/tools/
+/tools/*
+!/tools/language-servers/
+/tools/language-servers/*
+!/tools/language-servers/manifest.json

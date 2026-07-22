@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { ViewMode } from "../app/layoutMode";
+import type { LanguageServerProviderId, LanguageServerProviderStatus } from "../services/types";
 import type {
   ChatWorkbenchStatus,
   DebugWorkbenchStatus,
@@ -16,6 +17,9 @@ type Props = {
   restoreState: WorkbenchRestoreState;
   branchName?: string;
   viewMode: ViewMode;
+  languageServiceProvider?: LanguageServerProviderId | null;
+  languageServiceStatus?: LanguageServerProviderStatus | null;
+  languageServiceLoading?: boolean;
   rightAction?: ReactNode;
 };
 
@@ -60,6 +64,27 @@ function debugLocationLabel(status: DebugWorkbenchStatus) {
   return `${basename}:${status.currentLine}`;
 }
 
+function languageServiceProviderLabel(provider: LanguageServerProviderId) {
+  if (provider === "pyright") return "Python";
+  if (provider === "typescript") return "TS/JS";
+  return "C/C++";
+}
+
+function languageServiceLabel(
+  provider: LanguageServerProviderId | null | undefined,
+  status: LanguageServerProviderStatus | null | undefined,
+  loading: boolean,
+) {
+  if (!provider) return "";
+  const label = languageServiceProviderLabel(provider);
+  if (loading) return `${label} · 检测中`;
+  if (!status) return `${label} · 状态未知`;
+  if (status.status === "available") return `${label} · 就绪`;
+  if (status.status === "installing") return `${label} · 安装中`;
+  if (status.status === "missing") return `${label} · 缺失${status.canInstall ? "（可由管理员在设置安装）" : ""}`;
+  return `${label} · 错误`;
+}
+
 export function WorkbenchStatusBar({
   activeFilePath,
   fileDirty,
@@ -69,9 +94,13 @@ export function WorkbenchStatusBar({
   restoreState,
   branchName = "",
   viewMode,
+  languageServiceProvider = null,
+  languageServiceStatus = null,
+  languageServiceLoading = false,
   rightAction,
 }: Props) {
   const debugLocation = debugLocationLabel(debugStatus);
+  const languageService = languageServiceLabel(languageServiceProvider, languageServiceStatus, languageServiceLoading);
 
   return (
     <footer
@@ -92,6 +121,15 @@ export function WorkbenchStatusBar({
           <span className="max-w-[24rem] truncate font-mono">下次重建: {terminalStatus.nextRebuildCwd}</span>
         ) : null}
         {branchName ? <span className="font-mono">{branchName}</span> : null}
+        {languageService ? (
+          <span
+            data-testid="workbench-language-service"
+            data-language-service-status={languageServiceLoading ? "loading" : languageServiceStatus?.status || "unknown"}
+            title={languageServiceStatus?.error || languageServiceStatus?.message || languageServiceStatus?.commandSummary || undefined}
+          >
+            {languageService}
+          </span>
+        ) : null}
         <span
           data-workbench-status={chatStatus.processing ? "active" : chatStatus.state}
           data-status-comet={chatStatus.processing ? "true" : "false"}

@@ -2,12 +2,20 @@ from pathlib import Path
 
 import pytest
 
+from bot import config
 from bot.web.env_service import EnvConfigService, EnvValidationError
 
 
 def _write_env(root: Path, text: str) -> None:
     (root / ".env").write_text(text, encoding="utf-8")
     (root / ".env.example").write_text("", encoding="utf-8")
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+def test_project_float_config_rejects_non_finite_values(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    monkeypatch.setenv("TEST_FINITE_FLOAT", value)
+
+    assert config._get_project_float("TEST_FINITE_FLOAT", 7.5) == 7.5
 
 
 def test_env_service_patch_updates_env_without_creating_backup(tmp_path: Path) -> None:
@@ -102,6 +110,25 @@ def test_env_service_exposes_native_agent_global_fields(tmp_path: Path) -> None:
     ]
     assert items["NATIVE_AGENT_REASONING_EFFORT"]["type"] == "select"
     assert items["NATIVE_AGENT_THINKING_DEPTH"]["type"] == "number"
+
+
+def test_env_service_exposes_safe_language_server_configuration(tmp_path: Path) -> None:
+    _write_env(tmp_path, "")
+
+    snapshot = EnvConfigService(tmp_path).snapshot()
+    items = {item["key"]: item for item in snapshot["items"]}
+
+    assert items["TCB_LSP_ENABLED"]["category"] == "language-server"
+    assert items["TCB_LSP_ENABLED"]["default"] == "false"
+    assert items["TCB_LSP_PYRIGHT_COMMAND"]["type"] == "path"
+    assert items["TCB_LSP_TYPESCRIPT_COMMAND"]["type"] == "path"
+    assert items["TCB_LSP_CLANGD_COMMAND"]["type"] == "path"
+    assert items["TCB_LSP_REQUEST_TIMEOUT_SECONDS"]["validation"]["min"] == 1
+    assert items["TCB_LSP_IDLE_TIMEOUT_SECONDS"]["validation"]["min"] == 30
+    assert items["TCB_LSP_MAX_RUNTIMES"]["validation"]["min"] == 1
+    assert items["TCB_LSP_MAX_RUNTIMES"]["validation"]["max"] == 128
+    assert items["TCB_LSP_MAX_RUNTIMES"]["validation"]["integer"] is True
+    assert items["TCB_LSP_EXTERNAL_SOURCES_ENABLED"]["default"] == "false"
 
 
 def test_env_service_rejects_fixed_forward_and_quick_tunnel(tmp_path: Path) -> None:
