@@ -144,7 +144,8 @@ import type {
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
   UserBotPermissions,
-  WorkspaceDefinitionResult,
+  CodeNavigationRequest,
+  CodeNavigationResult,
   WorkspaceOutlineResult,
   WorkspaceQuickOpenResult,
   WorkspaceSearchResult,
@@ -5112,25 +5113,41 @@ export class MockWebBotClient implements WebBotClient {
     return { items };
   }
 
-  async resolveWorkspaceDefinition(
+  async resolveCodeNavigation(
     botAlias: string,
-    input: { path: string; line: number; column: number; symbol?: string },
-  ): Promise<WorkspaceDefinitionResult> {
-    const symbol = input.symbol?.trim();
+    input: CodeNavigationRequest,
+  ): Promise<CodeNavigationResult> {
+    const lineText = input.document.content.split(/\r?\n/)[Math.max(0, input.position.line - 1)] || "";
+    const cursorIndex = Math.min(Math.max(input.position.column - 1, 0), Math.max(0, lineText.length - 1));
+    const symbol = Array.from(lineText.matchAll(/[A-Za-z_$][\w$]*/g)).find((match) => {
+      const start = match.index;
+      return typeof start === "number" && cursorIndex >= start && cursorIndex < start + match[0].length;
+    })?.[0] || "";
     if (symbol === "run") {
       return {
+        requestId: input.requestId,
+        message: "",
         items: [
           {
+            targetType: "workspace",
             path: "src/service.py",
-            line: 12,
-            matchKind: "workspace_search",
-            confidence: 0.78,
+            provider: "mock-semantic",
+            range: {
+              start: { line: 12, column: 1 },
+              end: { line: 13, column: 16 },
+            },
+            selectionRange: {
+              start: { line: 12, column: 5 },
+              end: { line: 12, column: 8 },
+            },
           },
         ],
       };
     }
     return {
+      requestId: input.requestId,
       items: [],
+      message: input.kind === "implementation" ? "未找到语义实现" : "未找到语义定义",
     };
   }
 

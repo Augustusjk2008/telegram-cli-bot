@@ -304,7 +304,7 @@ from .workspace_search_service import (
     search_workspace_text,
     workspace_search_diagnostics,
 )
-from .workspace_definition_service import resolve_workspace_definition
+from .workspace_definition_service import resolve_code_navigation, resolve_workspace_definition
 
 logger = logging.getLogger(__name__)
 DEFAULT_TERMINAL_OWNER_ID = "default"
@@ -2848,6 +2848,17 @@ class WebApiServer:
             column=int(body.get("column") or 1),
             symbol=str(body.get("symbol", "")),
         )
+        return _json({"ok": True, "data": data})
+
+    async def post_workspace_code_navigation_resolve(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        workspace = self._workspace_file_root(alias, auth)
+        try:
+            data = await asyncio.to_thread(resolve_code_navigation, workspace, body)
+        except ValueError as exc:
+            raise web.HTTPBadRequest(reason=str(exc)) from exc
         return _json({"ok": True, "data": data})
 
     async def get_workspace_inline_completion_config(self, request: web.Request) -> web.Response:

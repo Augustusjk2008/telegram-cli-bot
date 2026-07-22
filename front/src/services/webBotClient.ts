@@ -129,7 +129,8 @@ import type {
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
   UserBotPermissions,
-  WorkspaceDefinitionResult,
+  CodeNavigationRequest,
+  CodeNavigationResult,
   WorkspaceOutlineResult,
   WorkspaceQuickOpenResult,
   WorkspaceSearchResult,
@@ -288,10 +289,7 @@ export interface WebBotClient {
   quickOpenWorkspace(botAlias: string, query: string, limit?: number): Promise<WorkspaceQuickOpenResult>;
   searchWorkspace(botAlias: string, query: string, limit?: number, signal?: AbortSignal): Promise<WorkspaceSearchResult>;
   getWorkspaceOutline(botAlias: string, path: string): Promise<WorkspaceOutlineResult>;
-  resolveWorkspaceDefinition(
-    botAlias: string,
-    input: { path: string; line: number; column: number; symbol?: string },
-  ): Promise<WorkspaceDefinitionResult>;
+  resolveCodeNavigation(botAlias: string, input: CodeNavigationRequest): Promise<CodeNavigationResult>;
   uploadChatAttachment(botAlias: string, file: File): Promise<ChatAttachmentUploadResult>;
   deleteChatAttachment(botAlias: string, savedPath: string): Promise<ChatAttachmentDeleteResult>;
   uploadFile(botAlias: string, file: File): Promise<void>;

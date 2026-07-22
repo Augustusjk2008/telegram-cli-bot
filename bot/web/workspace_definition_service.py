@@ -1,25 +1,75 @@
-"""Workspace definition resolver helpers."""
+"""Semantic workspace code-navigation helpers and legacy adapters."""
 
 from __future__ import annotations
 
 import ast
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
-from .workspace_search_service import (
-    _relative_path,
-    _resolve_workspace_file,
-    _workspace_root,
-    search_workspace_text,
-)
+from .workspace_search_service import _relative_path, _resolve_workspace_file, _workspace_root
 
-_DEFINITION_PATTERNS = [
-    re.compile(r"^\s*(?:async\s+)?def\s+([A-Za-z_][\w]*)\b"),
-    re.compile(r"^\s*class\s+([A-Za-z_][\w]*)\b"),
-    re.compile(r"^\s*(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\b"),
-    re.compile(r"^\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*="),
-]
+_PYTHON_LANGUAGE_IDS = {"python", "py"}
+_NAVIGATION_KINDS = {"definition", "implementation"}
+
+
+def resolve_code_navigation(
+    workspace: Path | str,
+    request: Mapping[str, Any],
+    *,
+    cursor_symbol: str = "",
+) -> dict[str, object]:
+    """Resolve one semantic navigation request using the temporary Python AST provider."""
+
+    root = _workspace_root(workspace)
+    kind = str(request.get("kind") or "").strip().lower()
+    if kind not in _NAVIGATION_KINDS:
+        raise ValueError("代码导航类型无效")
+
+    request_id = str(request.get("requestId") or request.get("request_id") or "").strip()
+    if not request_id:
+        raise ValueError("缺少代码导航请求 ID")
+
+    document = request.get("document")
+    position = request.get("position")
+    if not isinstance(document, Mapping) or not isinstance(position, Mapping):
+        raise ValueError("代码导航请求格式无效")
+
+    path = str(document.get("path") or "").strip()
+    language_id = str(document.get("languageId") or document.get("language_id") or "").strip().lower()
+    content = str(document.get("content") or "")
+    line = _positive_int(position.get("line"), default=1)
+    column = _positive_int(position.get("column"), default=1)
+
+    empty_message = "未找到语义实现" if kind == "implementation" else "未找到语义定义"
+    if kind == "implementation" or not path:
+        return {"request_id": request_id, "items": [], "message": empty_message}
+
+    target = _resolve_workspace_file(root, path)
+    if language_id not in _PYTHON_LANGUAGE_IDS and target.suffix.lower() not in {".py", ".pyi"}:
+        return {"request_id": request_id, "items": [], "message": empty_message}
+
+    resolved_symbol = str(cursor_symbol or "").strip() or _symbol_at_position(content, line, column)
+    if not resolved_symbol:
+        return {"request_id": request_id, "items": [], "message": empty_message}
+
+    locations = _resolve_python_import_target(
+        root,
+        target,
+        content,
+        line=line,
+        symbol=resolved_symbol,
+    )
+    if not locations:
+        location = _find_python_symbol_location(content, resolved_symbol)
+        if location is not None:
+            locations = [_build_code_location(root, target, location)]
+
+    return {
+        "request_id": request_id,
+        "items": locations,
+        "message": "" if locations else empty_message,
+    }
 
 
 def resolve_workspace_definition(
@@ -30,36 +80,63 @@ def resolve_workspace_definition(
     column: int,
     symbol: str = "",
 ) -> dict[str, object]:
+    """Adapt the deprecated definition contract to semantic code navigation."""
+
     root = _workspace_root(workspace)
-    for strategy in (
-        _resolve_import_or_include_target,
-        _resolve_same_file_symbol,
-        _resolve_workspace_symbol_search,
-    ):
-        items = strategy(root, path, line=line, column=column, symbol=symbol)
-        if items:
-            return {"items": items}
-    return {"items": []}
+    target = _resolve_workspace_file(root, path)
+    content = target.read_text(encoding="utf-8", errors="ignore")
+    result = resolve_code_navigation(
+        root,
+        {
+            "kind": "definition",
+            "requestId": "legacy-definition",
+            "document": {
+                "path": _relative_path(root, target),
+                "languageId": "python" if target.suffix.lower() in {".py", ".pyi"} else "",
+                "version": 0,
+                "content": content,
+            },
+            "position": {"line": line, "column": column},
+        },
+        cursor_symbol=symbol,
+    )
+
+    source_path = _relative_path(root, target)
+    legacy_items: list[dict[str, object]] = []
+    for item in result.get("items", []):
+        if not isinstance(item, Mapping):
+            continue
+        selection = item.get("selection_range")
+        start = selection.get("start") if isinstance(selection, Mapping) else None
+        if not isinstance(start, Mapping):
+            continue
+        item_path = str(item.get("path") or "")
+        legacy_items.append(
+            {
+                "path": item_path,
+                "line": _positive_int(start.get("line"), default=1),
+                "column": _positive_int(start.get("column"), default=1),
+                "match_kind": "same_file" if item_path == source_path else "import",
+                "confidence": 1.0,
+            }
+        )
+    return {"items": legacy_items}
 
 
-def _resolve_import_or_include_target(
+def _resolve_python_import_target(
     root: Path,
-    path: str,
+    source_path: Path,
+    content: str,
     *,
     line: int,
-    column: int,
     symbol: str,
 ) -> list[dict[str, object]]:
-    target = _resolve_workspace_file(root, path)
-    if target.suffix.lower() != ".py":
-        return []
     try:
-        tree = ast.parse(target.read_text(encoding="utf-8", errors="ignore"))
+        tree = ast.parse(content)
     except SyntaxError:
         return []
-    relative_path = _relative_path(root, target)
-    cursor_symbol = str(symbol or "").strip()
 
+    relative_path = _relative_path(root, source_path)
     for node in ast.walk(tree):
         if not isinstance(node, (ast.Import, ast.ImportFrom)):
             continue
@@ -69,204 +146,173 @@ def _resolve_import_or_include_target(
             continue
 
         if isinstance(node, ast.ImportFrom):
-            resolved_module = _resolve_relative_module_name(relative_path, node.module or "", int(node.level or 0))
-            if not resolved_module:
+            module_name = _resolve_relative_module_name(relative_path, node.module or "", int(node.level or 0))
+            if not module_name:
                 continue
             for alias in node.names:
                 imported_name = alias.asname or alias.name.split(".")[-1]
-                if cursor_symbol and cursor_symbol not in {imported_name, alias.name.split(".")[-1]}:
+                if symbol not in {imported_name, alias.name.split(".")[-1]}:
                     continue
-                resolved = _resolve_python_module_target(root, resolved_module)
-                if resolved is None:
+                target = _resolve_python_module_target(root, module_name)
+                if target is None:
                     continue
-                resolved_line, resolved_column = _find_symbol_definition_in_file(resolved, alias.name.split(".")[-1] or cursor_symbol)
-                return [
-                    _build_result_item(
-                        root,
-                        resolved,
-                        line=resolved_line or 1,
-                        column=resolved_column,
-                        match_kind="import",
-                        confidence=0.97 if resolved_line else 0.9,
-                    )
-                ]
+                target_content = target.read_text(encoding="utf-8", errors="ignore")
+                location = _find_python_symbol_location(target_content, alias.name.split(".")[-1])
+                if location is None:
+                    location = _module_start_location(target_content)
+                return [_build_code_location(root, target, location)]
 
         if isinstance(node, ast.Import):
             for alias in node.names:
                 imported_name = alias.asname or alias.name.split(".")[-1]
-                if cursor_symbol and cursor_symbol not in {imported_name, alias.name.split(".")[-1]}:
+                if symbol not in {imported_name, alias.name.split(".")[-1]}:
                     continue
-                resolved = _resolve_python_module_target(root, alias.name)
-                if resolved is None:
+                target = _resolve_python_module_target(root, alias.name)
+                if target is None:
                     continue
-                return [
-                    _build_result_item(
-                        root,
-                        resolved,
-                        line=1,
-                        column=1,
-                        match_kind="import",
-                        confidence=0.92,
-                    )
-                ]
+                target_content = target.read_text(encoding="utf-8", errors="ignore")
+                return [_build_code_location(root, target, _module_start_location(target_content))]
     return []
 
 
-def _resolve_same_file_symbol(
-    root: Path,
-    path: str,
-    *,
-    line: int,
-    column: int,
+def _find_python_symbol_location(content: str, symbol: str) -> dict[str, object] | None:
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return None
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == symbol:
+            selection = _definition_name_range(content, node, symbol)
+            if selection is None:
+                continue
+            return {
+                "range": _ast_node_range(node),
+                "selection_range": selection,
+            }
+
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = list(getattr(node, "targets", []))
+            if isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id == symbol:
+                    selection = _ast_node_range(target)
+                    return {
+                        "range": _ast_node_range(node),
+                        "selection_range": selection,
+                    }
+    return None
+
+
+def _definition_name_range(
+    content: str,
+    node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef,
     symbol: str,
-) -> list[dict[str, object]]:
-    del line, column
-    target = _resolve_workspace_file(root, path)
-    resolved_symbol = str(symbol or "").strip()
-    if not resolved_symbol:
-        return []
-    resolved_line, resolved_column = _find_symbol_definition_in_file(target, resolved_symbol)
-    if not resolved_line:
-        return []
-    return [
-        _build_result_item(
-            root,
-            target,
-            line=resolved_line,
-            column=resolved_column,
-            match_kind="same_file",
-            confidence=0.95,
-        )
-    ]
+) -> dict[str, dict[str, int]] | None:
+    lines = content.splitlines()
+    line_number = int(getattr(node, "lineno", 0) or 0)
+    if line_number <= 0 or line_number > len(lines):
+        return None
+    line_text = lines[line_number - 1]
+    keyword = "class" if isinstance(node, ast.ClassDef) else "def"
+    match = re.search(rf"\b{keyword}\s+({re.escape(symbol)})\b", line_text)
+    if match is None:
+        return None
+    return {
+        "start": {"line": line_number, "column": match.start(1) + 1},
+        "end": {"line": line_number, "column": match.end(1) + 1},
+    }
 
 
-def _resolve_workspace_symbol_search(
+def _ast_node_range(node: ast.AST) -> dict[str, dict[str, int]]:
+    start_line = _positive_int(getattr(node, "lineno", 1), default=1)
+    start_column = max(1, int(getattr(node, "col_offset", 0) or 0) + 1)
+    end_line = _positive_int(getattr(node, "end_lineno", start_line), default=start_line)
+    end_column = max(1, int(getattr(node, "end_col_offset", start_column - 1) or 0) + 1)
+    return {
+        "start": {"line": start_line, "column": start_column},
+        "end": {"line": end_line, "column": end_column},
+    }
+
+
+def _module_start_location(content: str) -> dict[str, object]:
+    first_line = content.splitlines()[0] if content.splitlines() else ""
+    position = {"line": 1, "column": 1}
+    return {
+        "range": {
+            "start": position,
+            "end": {"line": 1, "column": max(1, len(first_line) + 1)},
+        },
+        "selection_range": {"start": position, "end": position},
+    }
+
+
+def _build_code_location(
     root: Path,
-    path: str,
-    *,
-    line: int,
-    column: int,
-    symbol: str,
-) -> list[dict[str, object]]:
-    del path, line, column
-    resolved_symbol = str(symbol or "").strip()
-    if not resolved_symbol:
-        return []
-    result = search_workspace_text(root, resolved_symbol, limit=50)
-    items = result.get("items")
-    if not isinstance(items, list):
-        return []
+    target: Path,
+    location: Mapping[str, object],
+) -> dict[str, object]:
+    return {
+        "target_type": "workspace",
+        "path": _relative_path(root, target),
+        "provider": "python-ast",
+        "range": location["range"],
+        "selection_range": location["selection_range"],
+    }
 
-    ranked: list[tuple[float, dict[str, object]]] = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        item_path = str(item.get("path") or "").strip()
-        if not item_path:
-            continue
-        preview = str(item.get("preview") or "")
-        match = _is_definition_preview(preview, resolved_symbol)
-        confidence = 0.78 if match else 0.42
-        ranked.append(
-            (
-                confidence,
-                {
-                    "path": item_path.replace("\\", "/"),
-                    "line": int(item.get("line") or 1),
-                    "column": int(item.get("column") or 1),
-                    "match_kind": "workspace_search",
-                    "confidence": confidence,
-                },
-            )
-        )
 
-    ranked.sort(key=lambda item: (-item[0], str(item[1]["path"]), int(item[1]["line"])))
-    return [item for _score, item in ranked[:8]]
+def _symbol_at_position(content: str, line: int, column: int) -> str:
+    lines = content.splitlines()
+    if line <= 0 or line > len(lines):
+        return ""
+    text = lines[line - 1]
+    if not text:
+        return ""
+    index = min(max(column - 1, 0), len(text) - 1)
+    if not _is_symbol_character(text[index]):
+        return ""
+    start = index
+    end = index + 1
+    while start > 0 and _is_symbol_character(text[start - 1]):
+        start -= 1
+    while end < len(text) and _is_symbol_character(text[end]):
+        end += 1
+    return text[start:end]
+
+
+def _is_symbol_character(value: str) -> bool:
+    return value == "_" or value == "$" or value.isalnum()
 
 
 def _resolve_relative_module_name(current_relative_path: str, module: str, level: int) -> str:
     package_parts = Path(current_relative_path).with_suffix("").parts[:-1]
     if level > 0:
-        parent_parts = package_parts[: max(0, len(package_parts) - level + 1)]
+        prefix = package_parts[: max(0, len(package_parts) - level + 1)]
     else:
-        parent_parts = package_parts
+        prefix = ()
     module_parts = [part for part in module.split(".") if part]
-    return ".".join([*parent_parts, *module_parts]).strip(".")
+    return ".".join([*prefix, *module_parts]).strip(".")
 
 
 def _resolve_python_module_target(root: Path, module_name: str) -> Path | None:
     if not module_name:
         return None
     module_path = Path(*module_name.split("."))
-    candidates = [
-        root / module_path.with_suffix(".py"),
-        root / module_path / "__init__.py",
-    ]
-    for candidate in candidates:
+    for candidate in (root / module_path.with_suffix(".py"), root / module_path / "__init__.py"):
         resolved = candidate.resolve()
-        if resolved.exists() and resolved.is_file():
-            try:
-                resolved.relative_to(root)
-            except ValueError:
-                continue
-            return resolved
+        if not resolved.exists() or not resolved.is_file():
+            continue
+        try:
+            resolved.relative_to(root)
+        except ValueError:
+            continue
+        return resolved
     return None
 
 
-def _find_symbol_definition_in_file(path: Path, symbol: str) -> tuple[int, int | None]:
-    resolved_symbol = str(symbol or "").strip()
-    if not resolved_symbol:
-        return 0, None
-    content = path.read_text(encoding="utf-8", errors="ignore")
-    if path.suffix.lower() == ".py":
-        try:
-            tree = ast.parse(content)
-        except SyntaxError:
-            tree = None
-        if tree is not None:
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == resolved_symbol:
-                    return int(node.lineno), int(getattr(node, "col_offset", 0)) + 1
-                if isinstance(node, (ast.Assign, ast.AnnAssign)):
-                    targets = list(getattr(node, "targets", []))
-                    if isinstance(node, ast.AnnAssign):
-                        targets = [node.target]
-                    for target in targets:
-                        if isinstance(target, ast.Name) and target.id == resolved_symbol:
-                            return int(target.lineno), int(getattr(target, "col_offset", 0)) + 1
-
-    needle = re.compile(rf"\b{re.escape(resolved_symbol)}\b")
-    for index, text in enumerate(content.splitlines(), start=1):
-        if not _is_definition_preview(text, resolved_symbol):
-            continue
-        matched = needle.search(text)
-        return index, (matched.start() + 1) if matched else 1
-    return 0, None
-
-
-def _is_definition_preview(preview: str, symbol: str) -> bool:
-    for pattern in _DEFINITION_PATTERNS:
-        match = pattern.match(preview)
-        if match and match.group(1) == symbol:
-            return True
-    return False
-
-
-def _build_result_item(
-    root: Path,
-    target: Path,
-    *,
-    line: int,
-    column: int | None,
-    match_kind: str,
-    confidence: float,
-) -> dict[str, object]:
-    item = {
-        "path": _relative_path(root, target),
-        "line": max(1, int(line or 1)),
-        "match_kind": match_kind,
-        "confidence": float(confidence),
-    }
-    if column and int(column) > 0:
-        item["column"] = int(column)
-    return item
+def _positive_int(value: object, *, default: int) -> int:
+    try:
+        return max(1, int(value or default))
+    except (TypeError, ValueError):
+        return default

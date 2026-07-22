@@ -11,6 +11,14 @@ type Props = {
   client: WebBotClient;
   onClose: () => void;
   onOpenFile: (path: string) => void | Promise<void>;
+  canNavigateDefinition?: boolean;
+  canNavigateImplementation?: boolean;
+  canNavigateBack?: boolean;
+  canNavigateForward?: boolean;
+  onNavigateDefinition?: () => void | Promise<void>;
+  onNavigateImplementation?: () => void | Promise<void>;
+  onNavigateBack?: () => boolean | void | Promise<boolean | void>;
+  onNavigateForward?: () => boolean | void | Promise<boolean | void>;
   disabled?: boolean;
 };
 
@@ -19,13 +27,60 @@ function basename(path: string) {
   return parts[parts.length - 1] || path;
 }
 
-export function CommandPalette({ open, botAlias, client, onClose, onOpenFile, disabled = false }: Props) {
+export function CommandPalette({
+  open,
+  botAlias,
+  client,
+  onClose,
+  onOpenFile,
+  canNavigateDefinition = false,
+  canNavigateImplementation = false,
+  canNavigateBack = false,
+  canNavigateForward = false,
+  onNavigateDefinition,
+  onNavigateImplementation,
+  onNavigateBack,
+  onNavigateForward,
+  disabled = false,
+}: Props) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<WorkspaceQuickOpenItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const reduceMotion = useReducedMotion();
+  const normalizedQuery = query.trim().toLowerCase();
+  const commands = [
+    {
+      id: "definition",
+      label: "转到定义",
+      shortcut: "F12",
+      enabled: canNavigateDefinition && Boolean(onNavigateDefinition) && !disabled,
+      run: onNavigateDefinition,
+    },
+    {
+      id: "implementation",
+      label: "转到实现",
+      shortcut: "Ctrl+F12",
+      enabled: canNavigateImplementation && Boolean(onNavigateImplementation) && !disabled,
+      run: onNavigateImplementation,
+    },
+    {
+      id: "back",
+      label: "导航后退",
+      shortcut: "Alt+Left",
+      enabled: canNavigateBack && Boolean(onNavigateBack) && !disabled,
+      run: onNavigateBack,
+    },
+    {
+      id: "forward",
+      label: "导航前进",
+      shortcut: "Alt+Right",
+      enabled: canNavigateForward && Boolean(onNavigateForward) && !disabled,
+      run: onNavigateForward,
+    },
+  ];
+  const visibleCommands = commands.filter((command) => !normalizedQuery || command.label.includes(normalizedQuery));
 
   useEffect(() => {
     if (!open || disabled) {
@@ -86,7 +141,16 @@ export function CommandPalette({ open, botAlias, client, onClose, onOpenFile, di
     onClose();
   }
 
+  async function runCommand(command: (typeof commands)[number]) {
+    if (!command.enabled || !command.run) {
+      return;
+    }
+    await command.run();
+    onClose();
+  }
+
   const firstPath = items[0]?.path || "";
+  const firstCommand = visibleCommands.find((command) => command.enabled);
 
   return (
     <AnimatePresence>
@@ -99,7 +163,7 @@ export function CommandPalette({ open, botAlias, client, onClose, onOpenFile, di
           <motion.section
             role="dialog"
             aria-modal="true"
-            aria-label="快速打开"
+            aria-label="命令面板"
             className="mx-auto flex max-h-[70vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-card)]"
             onMouseDown={(event) => event.stopPropagation()}
             {...resolveMotionProps(premiumMotion.palettePanel, reduceMotion)}
@@ -112,7 +176,7 @@ export function CommandPalette({ open, botAlias, client, onClose, onOpenFile, di
                 <Search className="h-4 w-4 shrink-0 text-[var(--muted)]" />
                 <input
                   ref={inputRef}
-                  aria-label="快速打开文件"
+                  aria-label="搜索命令或文件"
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   onKeyDown={(event) => {
@@ -120,18 +184,23 @@ export function CommandPalette({ open, botAlias, client, onClose, onOpenFile, di
                       event.preventDefault();
                       onClose();
                     }
+                    if (event.key === "Enter" && firstCommand) {
+                      event.preventDefault();
+                      void runCommand(firstCommand);
+                      return;
+                    }
                     if (event.key === "Enter" && firstPath) {
                       event.preventDefault();
                       void openPath(firstPath);
                     }
                   }}
                   className="min-w-0 flex-1 bg-transparent py-2 text-sm text-[var(--text)] outline-none placeholder:text-[var(--muted)]"
-                  placeholder="输入文件名"
+                  placeholder="输入命令或文件名"
                 />
               </div>
               <button
                 type="button"
-                aria-label="关闭快速打开"
+                aria-label="关闭命令面板"
                 onClick={onClose}
                 className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]"
               >
@@ -139,6 +208,23 @@ export function CommandPalette({ open, botAlias, client, onClose, onOpenFile, di
               </button>
             </div>
             <div className="min-h-0 overflow-y-auto py-1">
+              {visibleCommands.length > 0 ? (
+                <div role="group" aria-label="代码导航命令" className="border-b border-[var(--border)] py-1">
+                  {visibleCommands.map((command) => (
+                    <button
+                      key={command.id}
+                      type="button"
+                      disabled={!command.enabled}
+                      aria-label={`${command.label} ${command.shortcut}`}
+                      onClick={() => void runCommand(command)}
+                      className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)] disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      <span className="text-[var(--text)]">{command.label}</span>
+                      <kbd className="font-mono text-[11px] text-[var(--muted)]">{command.shortcut}</kbd>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
               {loading ? <div className="px-3 py-3 text-sm text-[var(--muted)]">搜索中...</div> : null}
               {error ? <div className="px-3 py-3 text-sm text-red-600">{error}</div> : null}
               {!loading && !error && query.trim() && items.length === 0 ? (

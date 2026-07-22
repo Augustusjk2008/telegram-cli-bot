@@ -4,7 +4,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import type { ViewMode } from "../app/layoutMode";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { FileReadResult, GitTreeStatus, HostEffect, PluginOpenTarget, WorkspaceDefinitionItem } from "../services/types";
+import type { CodeLocation, CodeNavigationIntent, CodeNavigationKind, FileReadResult, GitTreeStatus, HostEffect, PluginOpenTarget } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { premiumMotion, resolveMotionProps } from "../motion/premiumMotion";
 import "../styles/workbench.css";
@@ -22,6 +22,7 @@ import {
   withDetectedPreviewKind,
 } from "../utils/filePreview";
 import { WORKSPACE_DELETED_EVENT, isWorkspaceDeletedEvent } from "../utils/workspaceEvents";
+import { inferFileEditorLanguageId } from "../utils/fileEditorLanguage";
 import { ChatPane } from "./ChatPane";
 import { CommandPalette } from "./CommandPalette";
 import { FileTreePane } from "./FileTreePane";
@@ -41,6 +42,10 @@ import {
   LazyTerminalPane as TerminalPane,
 } from "./lazyPanes";
 import { useDebugSession } from "./useDebugSession";
+import {
+  useCodeNavigationHistory,
+  type CodeNavigationHistoryLocation,
+} from "./useCodeNavigationHistory";
 import { useEditorTabs } from "./useEditorTabs";
 import { useFileTree } from "./useFileTree";
 import { useWorkbenchSession } from "./useWorkbenchSession";
@@ -52,6 +57,7 @@ import {
   MIN_TERMINAL_HEIGHT_PX,
   PANE_RESIZER_SIZE_PX,
   type ChatWorkbenchStatus,
+  type EditorRevealLocation,
   type FocusedWorkbenchPane,
   type TerminalOverrideState,
   type TerminalWorkbenchStatus,
@@ -239,12 +245,29 @@ export function DesktopWorkbench({
   const [gitDecorations, setGitDecorations] = useState<GitTreeStatus["items"]>({});
   const [gitRepoPath, setGitRepoPath] = useState("");
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
-  const [editorReveal, setEditorReveal] = useState<{ path: string; line: number } | null>(null);
-  const [definitionCandidates, setDefinitionCandidates] = useState<WorkspaceDefinitionItem[]>([]);
+  const [editorReveal, setEditorReveal] = useState<EditorRevealLocation | null>(null);
+  const [editorNavigationCommand, setEditorNavigationCommand] = useState<{
+    kind: "definition" | "implementation";
+    requestId: string;
+  } | null>(null);
+  const [definitionCandidates, setDefinitionCandidates] = useState<CodeLocation[]>([]);
   const [definitionMessage, setDefinitionMessage] = useState("");
   const [definitionSource, setDefinitionSource] = useState("");
   const gitDecorationRequestRef = useRef(0);
+  const codeNavigationRequestRef = useRef(0);
+  const editorRevealRequestRef = useRef(0);
+  const editorNavigationCommandRef = useRef(0);
+  const definitionSourceLocationRef = useRef<CodeNavigationHistoryLocation | null>(null);
   const reduceMotion = useReducedMotion();
+
+  const codeNavigationHistory = useCodeNavigationHistory({
+    scopeKey: `${botAlias}\n${fileTree.rootPath}`,
+    onNavigate: (location) => openWorkspaceFile(
+      location.path,
+      location.line,
+      location.column,
+    ),
+  });
 
   const layoutState = clampPaneState(paneState, {
     containerWidthPx: layoutBounds.columnsWidthPx,
@@ -331,11 +354,9 @@ export function DesktopWorkbench({
         ...(canViewPlugins ? ["plugins" as const] : []),
         "settings",
       ];
-  const activeEditorLine = tabs.activeTab && editorReveal?.path === tabs.activeTab.path
-    ? editorReveal.line
-    : tabs.activeTab
-      ? debug.currentLineForPath(tabs.activeTab.path)
-      : null;
+  const activeEditorLine = tabs.activeTab
+    ? debug.currentLineForPath(tabs.activeTab.path)
+    : null;
 
   const refreshGitDecorations = useCallback(async () => {
     const requestId = gitDecorationRequestRef.current + 1;
@@ -552,6 +573,10 @@ export function DesktopWorkbench({
       if (structureOnly) {
         return;
       }
+      if (codeNavigationHistory.handleShortcut(event)) {
+        event.preventDefault();
+        return;
+      }
       const key = event.key.toLowerCase();
       const primary = event.ctrlKey || event.metaKey;
       if (!primary) {
@@ -572,7 +597,7 @@ export function DesktopWorkbench({
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [setSidebarView, structureOnly]);
+  }, [codeNavigationHistory.handleShortcut, setSidebarView, structureOnly]);
 
   function toggleFocusedPane(nextPane: Exclude<FocusedWorkbenchPane, null>) {
     setFocusedPane((current) => current === nextPane ? null : nextPane);
@@ -631,20 +656,20 @@ export function DesktopWorkbench({
       })
     : chatPaneContent;
 
-  async function openWorkspaceFile(path: string, line?: number) {
+  async function openWorkspaceFile(path: string, line?: number, column = 1, requestId = "") {
     const target = await client.resolveFileOpenTarget(botAlias, path);
     if (!canPreviewFiles) {
       await fileTree.revealPath(path);
       setEditorReveal(null);
-      return;
+      return false;
     }
     if (target.kind === "plugin_view") {
       await Promise.allSettled([
         tabs.openPluginView(target),
         fileTree.revealPath(path),
       ]);
-      setEditorReveal(typeof line === "number" && line > 0 ? { path, line } : null);
-      return;
+      setEditorReveal(null);
+      return false;
     }
     if (isRasterImagePath(path) || isHtmlPreviewPath(path)) {
       await Promise.allSettled([
@@ -652,7 +677,7 @@ export function DesktopWorkbench({
         fileTree.revealPath(path),
       ]);
       setEditorReveal(null);
-      return;
+      return false;
     }
 
     if (!canWriteFiles) {
@@ -661,7 +686,7 @@ export function DesktopWorkbench({
         fileTree.revealPath(path),
       ]);
       setEditorReveal(null);
-      return;
+      return false;
     }
 
     await Promise.allSettled([
@@ -669,10 +694,12 @@ export function DesktopWorkbench({
       fileTree.revealPath(path),
     ]);
     if (line && line > 0) {
-      setEditorReveal({ path, line });
-      return;
+      const revealRequestId = requestId || `editor-reveal-${++editorRevealRequestRef.current}`;
+      setEditorReveal({ path, line, column: Math.max(1, column), requestId: revealRequestId });
+      return true;
     }
     setEditorReveal(null);
+    return true;
   }
 
   async function openGitDiffInEditor(path: string, staged: boolean, gitPath = path) {
@@ -730,32 +757,108 @@ export function DesktopWorkbench({
     setDefinitionCandidates([]);
     setDefinitionMessage("");
     setDefinitionSource("");
+    definitionSourceLocationRef.current = null;
   }
 
-  async function handleResolveDefinition(input: { path: string; line: number; column: number; symbol?: string }) {
+  function requestEditorCodeNavigation(kind: CodeNavigationKind) {
+    if (!allowCodeJump || structureOnly || tabs.activeTab?.kind !== "file") {
+      return false;
+    }
+    setEditorNavigationCommand({
+      kind,
+      requestId: `editor-code-navigation-${++editorNavigationCommandRef.current}`,
+    });
+    return true;
+  }
+
+  async function openDefinitionCandidate(item: CodeLocation) {
+    const source = definitionSourceLocationRef.current;
+    const path = item.path || "";
+    const target = {
+      path,
+      line: item.selectionRange.start.line,
+      column: item.selectionRange.start.column,
+    };
+    clearDefinitionOverlay();
+    if (!path) {
+      return;
+    }
+    const opened = await openWorkspaceFile(path, target.line, target.column);
+    if (opened && source) {
+      codeNavigationHistory.recordNavigation(source, target);
+    }
+  }
+
+  async function handleResolveCodeNavigation(input: CodeNavigationIntent) {
     if (!allowCodeJump || structureOnly) {
       return;
     }
+    const activeTab = tabs.activeTab;
+    if (!activeTab || activeTab.kind !== "file" || activeTab.path !== input.path) {
+      return;
+    }
+    const source = {
+      path: input.path,
+      line: input.line,
+      column: input.column,
+    };
+    const sequence = codeNavigationRequestRef.current + 1;
+    codeNavigationRequestRef.current = sequence;
+    const requestId = `code-navigation-${Date.now()}-${sequence}`;
     try {
-      const result = await client.resolveWorkspaceDefinition(botAlias, input);
-      if (result.items.length === 1) {
-        clearDefinitionOverlay();
-        await openWorkspaceFile(result.items[0].path, result.items[0].line);
+      const result = await client.resolveCodeNavigation(botAlias, {
+        kind: input.kind,
+        requestId,
+        document: {
+          path: activeTab.path,
+          languageId: inferFileEditorLanguageId(activeTab.path),
+          version: sequence,
+          content: activeTab.content,
+        },
+        position: { line: input.line, column: input.column },
+      });
+      if (codeNavigationRequestRef.current !== sequence) {
         return;
       }
-      if (result.items.length > 1) {
-        setDefinitionCandidates(result.items);
+      const semanticItems = result.items.filter((item) => item.targetType === "workspace" && item.path);
+      if (semanticItems.length === 1) {
+        clearDefinitionOverlay();
+        const item = semanticItems[0];
+        const target = {
+          path: item.path || "",
+          line: item.selectionRange.start.line,
+          column: item.selectionRange.start.column,
+        };
+        const opened = await openWorkspaceFile(
+          target.path,
+          target.line,
+          target.column,
+          result.requestId || requestId,
+        );
+        if (opened) {
+          codeNavigationHistory.recordNavigation(source, target);
+        }
+        return;
+      }
+      if (semanticItems.length > 1) {
+        setDefinitionCandidates(semanticItems);
         setDefinitionMessage("");
         setDefinitionSource(input.symbol || `${input.path}:${input.line}:${input.column}`);
+        definitionSourceLocationRef.current = source;
         return;
       }
       setDefinitionCandidates([]);
-      setDefinitionMessage("未找到定义");
+      setDefinitionMessage(result.message || (input.kind === "implementation" ? "未找到语义实现" : "未找到语义定义"));
       setDefinitionSource(input.symbol || `${input.path}:${input.line}:${input.column}`);
+      definitionSourceLocationRef.current = null;
     } catch (error) {
+      if (codeNavigationRequestRef.current !== sequence) {
+        return;
+      }
       setDefinitionCandidates([]);
-      setDefinitionMessage(error instanceof Error ? error.message : "解析定义失败");
+      setDefinitionMessage(error instanceof Error ? error.message : "代码导航失败");
       setDefinitionSource(input.symbol || `${input.path}:${input.line}:${input.column}`);
+      definitionSourceLocationRef.current = null;
     }
   }
 
@@ -830,7 +933,9 @@ export function DesktopWorkbench({
         <SearchPane
           botAlias={botAlias}
           client={client}
-          onOpenFile={openWorkspaceFile}
+          onOpenFile={async (path, line) => {
+            await openWorkspaceFile(path, line);
+          }}
         />
       );
     }
@@ -841,7 +946,9 @@ export function DesktopWorkbench({
           botAlias={botAlias}
           client={client}
           activeFilePath={tabs.activeTab?.path || ""}
-          onOpenFile={openWorkspaceFile}
+          onOpenFile={async (path, line) => {
+            await openWorkspaceFile(path, line);
+          }}
         />
       );
     }
@@ -1082,10 +1189,21 @@ export function DesktopWorkbench({
                   activeTabPath={tabs.activeTabPath}
                   breakpointLines={tabs.activeTab ? debug.breakpointLinesForPath(tabs.activeTab.path) : []}
                   currentLine={activeEditorLine}
+                  editorReveal={editorReveal}
+                  navigationCommand={editorNavigationCommand}
+                  canNavigateBack={codeNavigationHistory.canGoBack}
+                  canNavigateForward={codeNavigationHistory.canGoForward}
                   allowCodeJump={allowCodeJump}
                   canUseInlineCompletion={canUseInlineCompletion}
-                  onResolveDefinition={(input) => {
-                    void handleResolveDefinition(input);
+                  onResolveCodeNavigation={(input) => {
+                    setEditorNavigationCommand(null);
+                    void handleResolveCodeNavigation(input);
+                  }}
+                  onNavigateBack={() => {
+                    void codeNavigationHistory.goBack();
+                  }}
+                  onNavigateForward={() => {
+                    void codeNavigationHistory.goForward();
                   }}
                   onToggleBreakpoint={tabs.activeTab
                     ? (line) => {
@@ -1093,6 +1211,7 @@ export function DesktopWorkbench({
                       }
                     : undefined}
                   onActivateTab={(path) => {
+                    setEditorReveal(null);
                     void tabs.activateTab(path);
                   }}
                   onCloseTab={tabs.closeTab}
@@ -1250,8 +1369,22 @@ export function DesktopWorkbench({
           botAlias={botAlias}
           client={client}
           disabled={structureOnly}
+          canNavigateDefinition={allowCodeJump && tabs.activeTab?.kind === "file"}
+          canNavigateImplementation={allowCodeJump && tabs.activeTab?.kind === "file"}
+          canNavigateBack={codeNavigationHistory.canGoBack}
+          canNavigateForward={codeNavigationHistory.canGoForward}
+          onNavigateDefinition={() => {
+            requestEditorCodeNavigation("definition");
+          }}
+          onNavigateImplementation={() => {
+            requestEditorCodeNavigation("implementation");
+          }}
+          onNavigateBack={() => codeNavigationHistory.goBack()}
+          onNavigateForward={() => codeNavigationHistory.goForward()}
           onClose={() => setCommandPaletteOpen(false)}
-          onOpenFile={openWorkspaceFile}
+          onOpenFile={async (path) => {
+            await openWorkspaceFile(path);
+          }}
         />
       ) : null}
 
@@ -1309,24 +1442,22 @@ export function DesktopWorkbench({
               <div className="max-h-[min(60vh,28rem)] overflow-y-auto">
                 {definitionCandidates.map((item) => (
                   <button
-                    key={`${item.path}:${item.line}:${item.column || 0}:${item.matchKind}`}
+                    key={`${item.targetType}:${item.path || item.sourceId || "unknown"}:${item.selectionRange.start.line}:${item.selectionRange.start.column}:${item.provider}`}
                     type="button"
                     onClick={() => {
-                      clearDefinitionOverlay();
-                      void openWorkspaceFile(item.path, item.line);
+                      void openDefinitionCandidate(item);
                     }}
                     className="flex w-full items-start justify-between gap-4 border-b border-[var(--border)] px-4 py-3 text-left hover:bg-[var(--surface-strong)]"
                   >
                     <div className="min-w-0">
-                      <div className="truncate text-sm font-medium text-[var(--text)]">{item.path}</div>
+                      <div className="truncate text-sm font-medium text-[var(--text)]">{item.path || "外部源码"}</div>
                       <div className="mt-1 text-xs text-[var(--muted)]">
-                        第 {item.line} 行
-                        {item.column ? `，列 ${item.column}` : ""}
+                        第 {item.selectionRange.start.line} 行，列 {item.selectionRange.start.column}
                       </div>
                     </div>
                     <div className="shrink-0 text-right text-[11px] text-[var(--muted)]">
-                      <div>{item.matchKind}</div>
-                      <div>{Math.round(item.confidence * 100)}%</div>
+                      <div>{item.provider}</div>
+                      <div>{item.targetType === "workspace" ? "工作区" : "外部源码"}</div>
                     </div>
                   </button>
                 ))}

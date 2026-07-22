@@ -1807,16 +1807,54 @@ export type WorkspaceOutlineResult = {
   items: WorkspaceOutlineItem[];
 };
 
-export type WorkspaceDefinitionItem = {
-  path: string;
+export type CodeNavigationKind = "definition" | "implementation";
+
+export type CodePosition = {
   line: number;
-  column?: number;
-  matchKind: "import" | "same_file" | "workspace_search";
-  confidence: number;
+  column: number;
 };
 
-export type WorkspaceDefinitionResult = {
-  items: WorkspaceDefinitionItem[];
+export type CodeRange = {
+  start: CodePosition;
+  end: CodePosition;
+};
+
+export type CodeNavigationDocument = {
+  path?: string;
+  sourceId?: string;
+  languageId: string;
+  version: number;
+  content: string;
+};
+
+export type CodeNavigationRequest = {
+  kind: CodeNavigationKind;
+  requestId: string;
+  document: CodeNavigationDocument;
+  position: CodePosition;
+};
+
+export type CodeLocation = {
+  targetType: "workspace" | "external";
+  path?: string;
+  sourceId?: string;
+  provider: string;
+  range: CodeRange;
+  selectionRange: CodeRange;
+};
+
+export type CodeNavigationResult = {
+  requestId: string;
+  items: CodeLocation[];
+  message: string;
+};
+
+export type CodeNavigationIntent = {
+  kind: CodeNavigationKind;
+  path: string;
+  line: number;
+  column: number;
+  symbol?: string;
 };
 
 export type ChatAttachmentUploadResult = {

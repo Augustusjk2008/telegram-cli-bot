@@ -170,3 +170,10 @@ export type EditorTab = {
   missing: boolean;
   contentPersistence: PersistedTabContentPersistence;
 };
+
+export type EditorRevealLocation = {
+  path: string;
+  line: number;
+  column: number;
+  requestId: string;
+};

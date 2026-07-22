@@ -1,5 +1,6 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ComponentProps } from "react";
 import { expect, test, vi } from "vitest";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { EditorPane } from "../workbench/EditorPane";
@@ -24,7 +25,11 @@ function createTab(overrides: Partial<EditorTab> = {}): EditorTab {
   };
 }
 
-function renderEditor(activeTab: EditorTab, tabs: EditorTab[] = [activeTab]) {
+function renderEditor(
+  activeTab: EditorTab,
+  tabs: EditorTab[] = [activeTab],
+  overrides: Partial<ComponentProps<typeof EditorPane>> = {},
+) {
   const callbacks = {
     onActivateTab: vi.fn(),
     onCloseTab: vi.fn(() => true),
@@ -45,6 +50,7 @@ function renderEditor(activeTab: EditorTab, tabs: EditorTab[] = [activeTab]) {
       activeTabPath={activeTab.path}
       focused={false}
       {...callbacks}
+      {...overrides}
     />,
   );
   return { ...view, callbacks };
@@ -158,4 +164,117 @@ test("editor pane derives git and plugin breadcrumbs without exposing internal t
   );
   expect(breadcrumbParts()).toEqual(["插件", "资源报告"]);
   expect(screen.getByRole("navigation", { name: "文件路径" })).not.toHaveTextContent("plugin://");
+});
+
+test("editor pane sends definition and implementation intents from F12 shortcuts", () => {
+  const content = "def greet():\n    return None\n\ngreet()\n";
+  const activeTab = createTab({
+    path: "main.py",
+    basename: "main.py",
+    content,
+    savedContent: content,
+  });
+  const onResolveCodeNavigation = vi.fn();
+  renderEditor(activeTab, [activeTab], { onResolveCodeNavigation });
+  const editor = screen.getByRole("textbox", { name: "文件内容" }) as HTMLTextAreaElement;
+  const callOffset = content.lastIndexOf("greet") + 2;
+  editor.focus();
+  editor.setSelectionRange(callOffset, callOffset);
+
+  fireEvent.keyDown(editor, { key: "F12" });
+  fireEvent.keyDown(editor, { key: "F12", ctrlKey: true });
+
+  expect(onResolveCodeNavigation).toHaveBeenNthCalledWith(1, {
+    kind: "definition",
+    path: "main.py",
+    line: 4,
+    column: 3,
+    symbol: "greet",
+  });
+  expect(onResolveCodeNavigation).toHaveBeenNthCalledWith(2, {
+    kind: "implementation",
+    path: "main.py",
+    line: 4,
+    column: 3,
+    symbol: "greet",
+  });
+});
+
+test("editor pane keeps Ctrl-click bound to semantic definition navigation", () => {
+  const content = "def greet():\n    return None\n\ngreet()\n";
+  const activeTab = createTab({
+    path: "main.py",
+    basename: "main.py",
+    content,
+    savedContent: content,
+  });
+  const onResolveCodeNavigation = vi.fn();
+  renderEditor(activeTab, [activeTab], { onResolveCodeNavigation });
+  const editor = screen.getByRole("textbox", { name: "文件内容" }) as HTMLTextAreaElement;
+  const callOffset = content.lastIndexOf("greet") + 3;
+  editor.setSelectionRange(callOffset, callOffset);
+
+  fireEvent.click(editor, { button: 0, ctrlKey: true });
+
+  expect(onResolveCodeNavigation).toHaveBeenCalledWith({
+    kind: "definition",
+    path: "main.py",
+    line: 4,
+    column: 4,
+    symbol: "greet",
+  });
+});
+
+test("editor pane exposes code navigation through the touch action menu", async () => {
+  const user = userEvent.setup();
+  const content = "def greet():\n    return None\n\ngreet()\n";
+  const activeTab = createTab({
+    path: "main.py",
+    basename: "main.py",
+    content,
+    savedContent: content,
+  });
+  const onResolveCodeNavigation = vi.fn();
+  renderEditor(activeTab, [activeTab], { onResolveCodeNavigation });
+  const editor = screen.getByRole("textbox", { name: "文件内容" }) as HTMLTextAreaElement;
+  const callOffset = content.lastIndexOf("greet") + 1;
+  editor.focus();
+  editor.setSelectionRange(callOffset, callOffset);
+
+  await user.click(screen.getByRole("button", { name: "编辑器操作" }));
+  await user.click(screen.getByRole("menuitem", { name: "转到定义" }));
+
+  expect(onResolveCodeNavigation).toHaveBeenCalledWith(expect.objectContaining({
+    kind: "definition",
+    path: "main.py",
+    line: 4,
+    column: 2,
+    symbol: "greet",
+  }));
+});
+
+test("editor reveal moves the real cursor to the requested line and column", async () => {
+  const content = "first\n  greet()\nlast\n";
+  const activeTab = createTab({
+    path: "main.py",
+    basename: "main.py",
+    content,
+    savedContent: content,
+  });
+  renderEditor(activeTab, [activeTab], {
+    currentLine: 3,
+    editorReveal: {
+      path: "main.py",
+      line: 2,
+      column: 3,
+      requestId: "reveal-1",
+    },
+  });
+  const editor = screen.getByRole("textbox", { name: "文件内容" }) as HTMLTextAreaElement;
+
+  await waitFor(() => {
+    expect(editor.selectionStart).toBe(8);
+    expect(editor.selectionEnd).toBe(8);
+    expect(editor).toHaveFocus();
+  });
 });

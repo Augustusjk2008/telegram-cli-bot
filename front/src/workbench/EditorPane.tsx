@@ -1,12 +1,13 @@
 import { clsx } from "clsx";
-import { ChevronDown, ChevronRight, Maximize2, Minimize2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Maximize2, Minimize2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { FileEditorSurface } from "../components/FileEditorSurface";
 import { GitDiffViewer } from "../components/GitDiffViewer";
 import { PluginViewSurface } from "../components/plugin-renderers/PluginViewSurface";
-import type { HostEffect, InlineCompletionConfig, PluginOpenTarget } from "../services/types";
+import type { CodeNavigationIntent, HostEffect, InlineCompletionConfig, PluginOpenTarget } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
-import type { EditorTab } from "./workbenchTypes";
+import { inferFileEditorLanguageId } from "../utils/fileEditorLanguage";
+import type { EditorRevealLocation, EditorTab } from "./workbenchTypes";
 
 type Props = {
   botAlias: string;
@@ -16,10 +17,16 @@ type Props = {
   activeTabPath: string;
   breakpointLines?: number[];
   currentLine?: number | null;
+  editorReveal?: EditorRevealLocation | null;
+  navigationCommand?: { kind: "definition" | "implementation"; requestId: string } | null;
+  canNavigateBack?: boolean;
+  canNavigateForward?: boolean;
   allowCodeJump?: boolean;
   canUseInlineCompletion?: boolean;
   onToggleBreakpoint?: (line: number) => void;
-  onResolveDefinition?: (input: { path: string; line: number; column: number; symbol?: string }) => void;
+  onResolveCodeNavigation?: (input: CodeNavigationIntent) => void;
+  onNavigateBack?: () => void | Promise<void>;
+  onNavigateForward?: () => void | Promise<void>;
   onActivateTab: (path: string) => void | Promise<void>;
   onCloseTab: (path: string) => boolean;
   onChangeActiveContent: (content: string) => void;
@@ -38,22 +45,6 @@ type Props = {
 
 function pluginTargetLabel(target: PluginOpenTarget) {
   return target.title.trim() || "Mermaid 转 Visio";
-}
-
-function inferLanguageId(path: string) {
-  const normalized = path.toLowerCase();
-  if (/\.py$/.test(normalized)) return "python";
-  if (/\.tsx$/.test(normalized)) return "typescriptreact";
-  if (/\.ts$/.test(normalized)) return "typescript";
-  if (/\.jsx$/.test(normalized)) return "javascriptreact";
-  if (/\.(js|mjs|cjs)$/.test(normalized)) return "javascript";
-  if (/\.json$/.test(normalized)) return "json";
-  if (/\.(md|markdown)$/.test(normalized)) return "markdown";
-  if (/\.(html|htm)$/.test(normalized)) return "html";
-  if (/\.css$/.test(normalized)) return "css";
-  if (/\.(v|vh|sv|svh)$/.test(normalized)) return "verilog";
-  if (/\.(c|cc|cp|cpp|cxx|h|hh|hpp|hxx)$/.test(normalized)) return "cpp";
-  return "";
 }
 
 function splitBreadcrumbPath(path: string) {
@@ -100,10 +91,16 @@ export function EditorPane({
   activeTabPath,
   breakpointLines = [],
   currentLine = null,
+  editorReveal = null,
+  navigationCommand = null,
+  canNavigateBack = false,
+  canNavigateForward = false,
   allowCodeJump = true,
   canUseInlineCompletion = false,
   onToggleBreakpoint,
-  onResolveDefinition,
+  onResolveCodeNavigation,
+  onNavigateBack,
+  onNavigateForward,
   onActivateTab,
   onCloseTab,
   onChangeActiveContent,
@@ -152,7 +149,7 @@ export function EditorPane({
     return {
       editorId: `workbench:${botAlias}:${activeTab.path}`,
       path: activeTab.path,
-      languageId: inferLanguageId(activeTab.path),
+      languageId: inferFileEditorLanguageId(activeTab.path),
       lastModifiedNs: activeTab.lastModifiedNs,
       disabled: activeTab.loading || activeTab.saving || Boolean(activeTab.readOnly),
       autoTriggerEnabled: inlineCompletionConfig.autoTriggerEnabled,
@@ -306,6 +303,26 @@ export function EditorPane({
           })}
         </div>
         <div className="relative flex shrink-0 items-center gap-1 px-1">
+          <button
+            type="button"
+            aria-label="导航后退"
+            title="导航后退 (Alt+Left)"
+            disabled={!canNavigateBack || !onNavigateBack}
+            onClick={() => void onNavigateBack?.()}
+            className="inline-flex h-7 w-7 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-35"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            aria-label="导航前进"
+            title="导航前进 (Alt+Right)"
+            disabled={!canNavigateForward || !onNavigateForward}
+            onClick={() => void onNavigateForward?.()}
+            className="inline-flex h-7 w-7 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-35"
+          >
+            <ArrowRight className="h-4 w-4" />
+          </button>
           {singlePluginTarget ? (
             <button
               type="button"
@@ -446,12 +463,14 @@ export function EditorPane({
             readOnly={Boolean(activeTab.readOnly)}
             breakpointLines={breakpointLines}
             currentLine={currentLine}
+            reveal={editorReveal?.path === activeTab.path ? editorReveal : null}
+            navigationCommand={navigationCommand}
             statusText=""
             error=""
             hideHeader
             inlineCompletion={inlineCompletion}
             onToggleBreakpoint={onToggleBreakpoint}
-            onResolveDefinition={allowCodeJump ? onResolveDefinition : undefined}
+            onResolveCodeNavigation={allowCodeJump ? onResolveCodeNavigation : undefined}
             onChange={onChangeActiveContent}
             onSave={onSaveActiveTab}
             onClose={() => {

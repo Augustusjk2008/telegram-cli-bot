@@ -1,9 +1,11 @@
-import { type ComponentType, useEffect, useMemo, useState } from "react";
+import { MoreHorizontal } from "lucide-react";
+import { type ComponentType, type KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import * as codemirrorState from "@codemirror/state";
 import type { Extension } from "@codemirror/state";
 import * as codemirrorView from "@codemirror/view";
 import { tags } from "@lezer/highlight";
+import type { CodeNavigationIntent, CodeNavigationKind } from "../services/types";
 import { isLightUiTheme } from "../theme";
 import { createFileEditorInlineCompletion, type FileEditorInlineCompletionOptions } from "../utils/fileEditorInlineCompletion";
 import { loadFileEditorExtensions } from "../utils/fileEditorLanguage";
@@ -18,12 +20,14 @@ type Props = {
   readOnly?: boolean;
   breakpointLines?: number[];
   currentLine?: number | null;
+  reveal?: { line: number; column: number; requestId: string } | null;
+  navigationCommand?: { kind: CodeNavigationKind; requestId: string } | null;
   statusText?: string;
   error?: string;
   hideHeader?: boolean;
   inlineCompletion?: FileEditorInlineCompletionOptions;
   onToggleBreakpoint?: (line: number) => void;
-  onResolveDefinition?: (input: { path: string; line: number; column: number; symbol?: string }) => void;
+  onResolveCodeNavigation?: (input: CodeNavigationIntent) => void;
   onChange: (value: string) => void;
   onSave: () => void;
   onClose: () => void;
@@ -238,10 +242,11 @@ function extractSymbolAt(text: string, index: number) {
   return text.slice(start, end + 1);
 }
 
-function resolveTextareaDefinitionTarget(
+function resolveTextareaNavigationTarget(
   path: string,
   value: string,
   offset: number,
+  kind: CodeNavigationKind,
 ) {
   const boundedOffset = Math.min(Math.max(offset, 0), value.length);
   const before = value.slice(0, boundedOffset);
@@ -252,6 +257,7 @@ function resolveTextareaDefinitionTarget(
   const currentLineText = value.slice(lineStart, lineEnd === -1 ? value.length : lineEnd);
   const symbol = extractSymbolAt(currentLineText, Math.max(0, column - 1));
   return {
+    kind,
     path,
     line,
     column,
@@ -259,25 +265,58 @@ function resolveTextareaDefinitionTarget(
   };
 }
 
-function resolveEditorDefinitionTarget(
+function resolveEditorNavigationTargetAtPosition(
   view: CodeMirrorEditorView,
   path: string,
-  clientX: number,
-  clientY: number,
+  position: number,
+  kind: CodeNavigationKind,
 ) {
-  const position = view.posAtCoords({ x: clientX, y: clientY });
-  if (position === null) {
-    return null;
-  }
   const lineInfo = view.state.doc.lineAt(position);
   const column = position - lineInfo.from + 1;
   const symbol = extractSymbolAt(lineInfo.text, Math.max(0, column - 1));
   return {
+    kind,
     path,
     line: lineInfo.number,
     column,
     ...(symbol ? { symbol } : {}),
   };
+}
+
+function resolveEditorNavigationTargetAtCoordinates(
+  view: CodeMirrorEditorView,
+  path: string,
+  clientX: number,
+  clientY: number,
+  kind: CodeNavigationKind,
+) {
+  const position = view.posAtCoords({ x: clientX, y: clientY });
+  if (position === null) {
+    return null;
+  }
+  return resolveEditorNavigationTargetAtPosition(view, path, position, kind);
+}
+
+function textOffsetAtPosition(value: string, line: number, column: number) {
+  if (line <= 0 || column <= 0) {
+    return null;
+  }
+  const lineStarts = [0];
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] === "\n") {
+      lineStarts.push(index + 1);
+    }
+  }
+  if (line > lineStarts.length) {
+    return null;
+  }
+  const start = lineStarts[line - 1];
+  const nextStart = lineStarts[line];
+  let end = typeof nextStart === "number" ? nextStart - 1 : value.length;
+  if (end > start && value[end - 1] === "\r") {
+    end -= 1;
+  }
+  return Math.min(start + column - 1, end);
 }
 
 export function FileEditorSurface({
@@ -290,18 +329,22 @@ export function FileEditorSurface({
   readOnly = false,
   breakpointLines,
   currentLine = null,
+  reveal = null,
+  navigationCommand = null,
   statusText = "",
   error = "",
   hideHeader = false,
   inlineCompletion,
   onToggleBreakpoint,
-  onResolveDefinition,
+  onResolveCodeNavigation,
   onChange,
   onSave,
   onClose,
 }: Props) {
   const [editorRuntime, setEditorRuntime] = useState<EditorRuntime | null>(null);
   const [editorView, setEditorView] = useState<CodeMirrorEditorView | null>(null);
+  const [navigationMenuOpen, setNavigationMenuOpen] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const canUseCodeMirror = typeof window !== "undefined" && typeof window.ResizeObserver !== "undefined";
   const codeMirrorTheme = typeof document !== "undefined" && isLightUiTheme(document.documentElement.dataset.theme)
     ? "light"
@@ -371,6 +414,10 @@ export function FileEditorSurface({
   const CodeMirrorEditor = editorRuntime?.CodeMirrorEditor ?? null;
 
   useEffect(() => {
+    setNavigationMenuOpen(false);
+  }, [path]);
+
+  useEffect(() => {
     if (!editorView || !currentLine || currentLine <= 0) {
       return;
     }
@@ -386,6 +433,67 @@ export function FileEditorSurface({
     }
     editorView.scrollDOM.scrollTop = targetTop;
   }, [currentLine, editorView]);
+
+  useEffect(() => {
+    if (!reveal) {
+      return;
+    }
+    if (editorView) {
+      if (reveal.line <= 0 || reveal.line > editorView.state.doc.lines) {
+        return;
+      }
+      const lineInfo = editorView.state.doc.line(reveal.line);
+      const position = Math.min(lineInfo.to, lineInfo.from + Math.max(0, reveal.column - 1));
+      editorView.dispatch({
+        selection: { anchor: position },
+        effects: codemirrorView.EditorView.scrollIntoView(position, { y: "center" }),
+      });
+      editorView.focus();
+      return;
+    }
+
+    const textarea = textareaRef.current;
+    const position = textOffsetAtPosition(value, reveal.line, reveal.column);
+    if (!textarea || position === null) {
+      return;
+    }
+    textarea.setSelectionRange(position, position);
+    textarea.focus();
+    const lineHeight = Number.parseFloat(window.getComputedStyle(textarea).lineHeight) || 20;
+    textarea.scrollTop = Math.max(0, (reveal.line - 1) * lineHeight - textarea.clientHeight / 2);
+  }, [editorView, reveal?.requestId]);
+
+  function requestCodeNavigation(kind: CodeNavigationKind) {
+    if (!onResolveCodeNavigation) {
+      return false;
+    }
+    const target = editorView
+      ? resolveEditorNavigationTargetAtPosition(editorView, path, editorView.state.selection.main.head, kind)
+      : textareaRef.current
+        ? resolveTextareaNavigationTarget(path, value, textareaRef.current.selectionStart ?? 0, kind)
+        : null;
+    if (!target) {
+      return false;
+    }
+    onResolveCodeNavigation(target);
+    return true;
+  }
+
+  function handleCodeNavigationKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
+    if (event.key !== "F12" || event.altKey || event.shiftKey) {
+      return;
+    }
+    const kind = event.ctrlKey || event.metaKey ? "implementation" : "definition";
+    if (requestCodeNavigation(kind)) {
+      event.preventDefault();
+    }
+  }
+
+  useEffect(() => {
+    if (navigationCommand) {
+      requestCodeNavigation(navigationCommand.kind);
+    }
+  }, [navigationCommand?.requestId]);
 
   useEffect(() => {
     if (!canSave || loading || saving || typeof window === "undefined") {
@@ -435,26 +543,33 @@ export function FileEditorSurface({
           {error ? <p className="mt-2 text-sm text-red-600">{error}</p> : null}
         </div>
       ) : null}
-      <div className="min-h-0 flex-1 overflow-hidden">
+      <div className="relative min-h-0 flex-1 overflow-hidden">
         {CodeMirrorEditor ? (
           <div
             key={path}
             data-testid="file-editor-host"
             className="file-editor-surface flex h-full min-h-0 min-w-0 overflow-hidden bg-[var(--editor-bg)] text-[var(--editor-text)]"
+            onKeyDown={handleCodeNavigationKeyDown}
             onMouseDown={(event) => {
-              if (!onResolveDefinition || !editorView || event.button !== 0 || (!event.ctrlKey && !event.metaKey)) {
+              if (!onResolveCodeNavigation || !editorView || event.button !== 0 || (!event.ctrlKey && !event.metaKey)) {
                 return;
               }
               const target = event.target;
               if (target instanceof HTMLElement && target.closest(".cm-gutters")) {
                 return;
               }
-              const definitionTarget = resolveEditorDefinitionTarget(editorView, path, event.clientX, event.clientY);
+              const definitionTarget = resolveEditorNavigationTargetAtCoordinates(
+                editorView,
+                path,
+                event.clientX,
+                event.clientY,
+                "definition",
+              );
               if (!definitionTarget) {
                 return;
               }
               event.preventDefault();
-              onResolveDefinition(definitionTarget);
+              onResolveCodeNavigation(definitionTarget);
             }}
           >
             <CodeMirrorEditor
@@ -477,16 +592,18 @@ export function FileEditorSurface({
         ) : (
           <textarea
             key={path}
+            ref={textareaRef}
             aria-label="文件内容"
             value={value}
             readOnly={readOnly}
             onChange={(event) => onChange(event.target.value)}
+            onKeyDown={handleCodeNavigationKeyDown}
             onClick={(event) => {
-              if (!onResolveDefinition || event.button !== 0 || (!event.ctrlKey && !event.metaKey)) {
+              if (!onResolveCodeNavigation || event.button !== 0 || (!event.ctrlKey && !event.metaKey)) {
                 return;
               }
               const selectionStart = event.currentTarget.selectionStart ?? 0;
-              onResolveDefinition(resolveTextareaDefinitionTarget(path, value, selectionStart));
+              onResolveCodeNavigation(resolveTextareaNavigationTarget(path, value, selectionStart, "definition"));
             }}
             spellCheck={false}
             style={{
@@ -501,6 +618,50 @@ export function FileEditorSurface({
             className="block h-full min-h-0 w-full resize-none overflow-auto border-0 bg-[var(--editor-bg)] p-4 text-[var(--editor-text)] outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
           />
         )}
+        {onResolveCodeNavigation ? (
+          <div className="absolute right-3 top-3 z-10 md:hidden [@media(pointer:coarse)]:block">
+            <button
+              type="button"
+              aria-label="编辑器操作"
+              aria-haspopup="menu"
+              aria-expanded={navigationMenuOpen}
+              onClick={() => setNavigationMenuOpen((current) => !current)}
+              className="inline-flex h-9 w-9 touch-manipulation items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--muted)] shadow-[var(--shadow-soft)]"
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </button>
+            {navigationMenuOpen ? (
+              <div
+                role="menu"
+                aria-label="编辑器操作"
+                className="absolute right-0 top-full mt-1 min-w-36 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1 shadow-[var(--shadow-card)]"
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setNavigationMenuOpen(false);
+                    requestCodeNavigation("definition");
+                  }}
+                  className="flex w-full touch-manipulation rounded-md px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                >
+                  转到定义
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setNavigationMenuOpen(false);
+                    requestCodeNavigation("implementation");
+                  }}
+                  className="flex w-full touch-manipulation rounded-md px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                >
+                  转到实现
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </section>
   );

@@ -1,5 +1,21 @@
 type EditorExtension = unknown;
 
+export function inferFileEditorLanguageId(path: string) {
+  const normalized = path.toLowerCase();
+  if (/\.(py|pyi)$/.test(normalized)) return "python";
+  if (/\.tsx$/.test(normalized)) return "typescriptreact";
+  if (/\.(ts|mts|cts)$/.test(normalized)) return "typescript";
+  if (/\.jsx$/.test(normalized)) return "javascriptreact";
+  if (/\.(js|mjs|cjs)$/.test(normalized)) return "javascript";
+  if (/\.json$/.test(normalized)) return "json";
+  if (/\.(md|markdown)$/.test(normalized)) return "markdown";
+  if (/\.(html|htm)$/.test(normalized)) return "html";
+  if (/\.css$/.test(normalized)) return "css";
+  if (/\.(v|vh|sv|svh)$/.test(normalized)) return "verilog";
+  if (/\.(c|cc|cp|cpp|cxx|h|hh|hpp|hxx)$/.test(normalized)) return "cpp";
+  return "";
+}
+
 export async function loadFileEditorExtensions(path: string): Promise<EditorExtension[]> {
   const normalizedPath = path.toLowerCase();
 

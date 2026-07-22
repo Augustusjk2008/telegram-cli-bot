@@ -167,7 +167,8 @@ import type {
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
   UserBotPermissions,
-  WorkspaceDefinitionResult,
+  CodeNavigationRequest,
+  CodeNavigationResult,
   WorkspaceOutlineResult,
   WorkspaceQuickOpenResult,
   WorkspaceSearchResult,
@@ -5383,32 +5384,54 @@ export class RealWebBotClient implements WebBotClient {
     );
   }
 
-  async resolveWorkspaceDefinition(
+  async resolveCodeNavigation(
     botAlias: string,
-    input: { path: string; line: number; column: number; symbol?: string },
-  ): Promise<WorkspaceDefinitionResult> {
+    input: CodeNavigationRequest,
+  ): Promise<CodeNavigationResult> {
     const data = await this.requestJson<{
+      request_id?: string;
+      message?: string;
       items?: Array<{
-        path: string;
-        line: number;
-        column?: number;
-        match_kind?: "import" | "same_file" | "workspace_search";
-        confidence?: number;
+        target_type?: "workspace" | "external";
+        path?: string;
+        source_id?: string;
+        provider?: string;
+        range?: {
+          start?: { line?: number; column?: number };
+          end?: { line?: number; column?: number };
+        };
+        selection_range?: {
+          start?: { line?: number; column?: number };
+          end?: { line?: number; column?: number };
+        };
       }>;
-    }>(`/api/bots/${encodeURIComponent(botAlias)}/workspace/resolve-definition`, {
+    }>(`/api/bots/${encodeURIComponent(botAlias)}/workspace/code-navigation/resolve`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(input),
     });
+    const mapPosition = (position?: { line?: number; column?: number }) => ({
+      line: Math.max(1, Number(position?.line) || 1),
+      column: Math.max(1, Number(position?.column) || 1),
+    });
     return {
+      requestId: data.request_id || input.requestId,
+      message: data.message || "",
       items: (data.items || []).map((item) => ({
-        path: item.path,
-        line: item.line,
-        ...(typeof item.column === "number" ? { column: item.column } : {}),
-        matchKind: item.match_kind || "workspace_search",
-        confidence: typeof item.confidence === "number" ? item.confidence : 0,
+        targetType: item.target_type === "external" ? "external" : "workspace",
+        ...(item.path ? { path: item.path } : {}),
+        ...(item.source_id ? { sourceId: item.source_id } : {}),
+        provider: item.provider || "unknown",
+        range: {
+          start: mapPosition(item.range?.start),
+          end: mapPosition(item.range?.end),
+        },
+        selectionRange: {
+          start: mapPosition(item.selection_range?.start),
+          end: mapPosition(item.selection_range?.end),
+        },
       })),
     };
   }

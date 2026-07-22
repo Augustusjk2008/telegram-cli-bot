@@ -4112,5 +4112,64 @@ describe("RealWebBotClient", () => {
     expect(status.pendingUpdatePath).toBe("C:\\pkg\\offline.zip");
   });
 
+  test("code navigation serializes the unified request and maps semantic locations", async () => {
+    fetchMock.mockResolvedValueOnce(jsonOk({
+      request_id: "nav-1",
+      message: "",
+      items: [{
+        target_type: "workspace",
+        path: "pkg/service.py",
+        provider: "python-ast",
+        range: {
+          start: { line: 3, column: 1 },
+          end: { line: 4, column: 16 },
+        },
+        selection_range: {
+          start: { line: 3, column: 5 },
+          end: { line: 3, column: 10 },
+        },
+      }],
+    }));
+    const client = new RealWebBotClient();
+    const request = {
+      kind: "definition" as const,
+      requestId: "nav-1",
+      document: {
+        path: "main.py",
+        languageId: "python",
+        version: 4,
+        content: "greet()\n",
+      },
+      position: { line: 1, column: 2 },
+    };
+
+    const result = await client.resolveCodeNavigation("main", request);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/bots/main/workspace/code-navigation/resolve",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify(request),
+      }),
+    );
+    expect(result).toEqual({
+      requestId: "nav-1",
+      message: "",
+      items: [{
+        targetType: "workspace",
+        path: "pkg/service.py",
+        provider: "python-ast",
+        range: {
+          start: { line: 3, column: 1 },
+          end: { line: 4, column: 16 },
+        },
+        selectionRange: {
+          start: { line: 3, column: 5 },
+          end: { line: 3, column: 10 },
+        },
+      }],
+    });
+  });
+
   
   });
