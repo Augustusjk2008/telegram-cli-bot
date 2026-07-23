@@ -173,6 +173,10 @@ import type {
   UserBotPermissions,
   CodeNavigationRequest,
   CodeNavigationResult,
+  WorkspaceDocumentSyncInput,
+  WorkspaceDocumentSyncResult,
+  WorkspaceDocumentCloseInput,
+  WorkspaceDocumentCloseResult,
   WorkspaceOutlineResult,
   WorkspaceQuickOpenResult,
   WorkspaceSearchResult,
@@ -248,6 +252,66 @@ type RawCodeNavigationResult = {
   message?: string;
   items?: RawCodeNavigationLocation | RawCodeNavigationLocation[] | null;
 };
+
+type RawWorkspaceDocumentSyncResult = {
+  accepted?: number;
+  unchanged?: number;
+  rejected?: number;
+  closed?: number;
+  documents?: Array<Record<string, unknown>>;
+  rejections?: Array<Record<string, unknown>>;
+  missing?: string[];
+  sync_kind?: string;
+  syncKind?: string;
+  supports_incremental_changes?: boolean;
+  supportsIncrementalChanges?: boolean;
+  max_document_bytes?: number;
+  maxDocumentBytes?: number;
+  max_batch_documents?: number;
+  maxBatchDocuments?: number;
+  max_batch_bytes?: number;
+  maxBatchBytes?: number;
+};
+
+function mapWorkspaceDocumentSyncResult(raw: RawWorkspaceDocumentSyncResult | null | undefined): WorkspaceDocumentSyncResult {
+  if (!raw) {
+    return {};
+  }
+  const result: WorkspaceDocumentSyncResult = {};
+  if (typeof raw.accepted === "number") result.accepted = raw.accepted;
+  if (typeof raw.unchanged === "number") result.unchanged = raw.unchanged;
+  if (typeof raw.rejected === "number") result.rejected = raw.rejected;
+  if (Array.isArray(raw.documents)) result.documents = raw.documents;
+  if (Array.isArray(raw.rejections)) result.rejections = raw.rejections;
+  const syncKind = raw.syncKind || raw.sync_kind;
+  if (typeof syncKind === "string" && syncKind) result.syncKind = syncKind;
+  const supportsIncrementalChanges = typeof raw.supportsIncrementalChanges === "boolean"
+    ? raw.supportsIncrementalChanges
+    : raw.supports_incremental_changes;
+  if (typeof supportsIncrementalChanges === "boolean") {
+    result.supportsIncrementalChanges = supportsIncrementalChanges;
+  }
+  const maxDocumentBytes = typeof raw.maxDocumentBytes === "number"
+    ? raw.maxDocumentBytes
+    : raw.max_document_bytes;
+  if (typeof maxDocumentBytes === "number") result.maxDocumentBytes = maxDocumentBytes;
+  const maxBatchDocuments = typeof raw.maxBatchDocuments === "number"
+    ? raw.maxBatchDocuments
+    : raw.max_batch_documents;
+  if (typeof maxBatchDocuments === "number") result.maxBatchDocuments = maxBatchDocuments;
+  const maxBatchBytes = typeof raw.maxBatchBytes === "number" ? raw.maxBatchBytes : raw.max_batch_bytes;
+  if (typeof maxBatchBytes === "number") result.maxBatchBytes = maxBatchBytes;
+  return result;
+}
+
+function mapWorkspaceDocumentCloseResult(raw: RawWorkspaceDocumentSyncResult | null | undefined): WorkspaceDocumentCloseResult {
+  if (!raw) return {};
+  return {
+    ...(typeof raw.closed === "number" ? { closed: raw.closed } : {}),
+    ...(Array.isArray(raw.documents) ? { documents: raw.documents } : {}),
+    ...(Array.isArray(raw.missing) ? { missing: raw.missing } : {}),
+  };
+}
 
 type RawBotSummary = {
   alias: string;
@@ -5598,6 +5662,40 @@ export class RealWebBotClient implements WebBotClient {
         },
       })),
     };
+  }
+
+  async syncWorkspaceDocuments(
+    botAlias: string,
+    input: WorkspaceDocumentSyncInput,
+    signal?: AbortSignal,
+  ): Promise<WorkspaceDocumentSyncResult> {
+    const basePath = `/api/bots/${encodeURIComponent(botAlias)}/workspace/code-navigation/documents`;
+    const data = await this.requestJson<RawWorkspaceDocumentSyncResult | null>(`${basePath}/sync`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+      signal,
+    });
+    return mapWorkspaceDocumentSyncResult(data);
+  }
+
+  async closeWorkspaceDocuments(
+    botAlias: string,
+    input: WorkspaceDocumentCloseInput,
+    signal?: AbortSignal,
+  ): Promise<WorkspaceDocumentCloseResult> {
+    const basePath = `/api/bots/${encodeURIComponent(botAlias)}/workspace/code-navigation/documents`;
+    const data = await this.requestJson<RawWorkspaceDocumentSyncResult | null>(`${basePath}/close`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+      signal,
+    });
+    return mapWorkspaceDocumentCloseResult(data);
   }
 
   async uploadChatAttachment(botAlias: string, file: File): Promise<ChatAttachmentUploadResult> {

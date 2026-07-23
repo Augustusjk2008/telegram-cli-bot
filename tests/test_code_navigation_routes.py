@@ -39,6 +39,8 @@ class FakeLanguageServerRuntimeManager:
         self.calls: list[dict[str, object]] = []
         self.prewarm_calls: list[dict[str, object]] = []
         self.cancel_calls: list[dict[str, object]] = []
+        self.sync_calls: list[dict[str, object]] = []
+        self.close_calls: list[dict[str, object]] = []
         self.shutdown_calls = 0
 
     async def resolve_code_navigation(self, **kwargs) -> dict[str, object]:
@@ -55,6 +57,14 @@ class FakeLanguageServerRuntimeManager:
     async def cancel_code_navigation(self, **kwargs) -> bool:
         self.cancel_calls.append(kwargs)
         return True
+
+    async def sync_documents(self, **kwargs) -> dict[str, object]:
+        self.sync_calls.append(kwargs)
+        return {"accepted": len(kwargs.get("documents") or []), "rejected": 0}
+
+    async def close_documents(self, **kwargs) -> dict[str, object]:
+        self.close_calls.append(kwargs)
+        return {"closed": len(kwargs.get("documents") or []), "missing": []}
 
     def runtime_status(self, **_kwargs) -> dict[str, object]:
         return {
@@ -266,6 +276,57 @@ async def test_code_navigation_cancel_route_requires_read_capability_and_preserv
             "request_id": "route-nav-1",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_language_document_routes_preserve_auth_and_runtime_isolation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    manager = FakeLanguageServerRuntimeManager(
+        {"request_id": "unused", "items": [], "message": ""}
+    )
+    server = _build_server(tmp_path, monkeypatch)
+    server.language_server_manager = manager
+    documents = [{
+        "path": "main.py",
+        "languageId": "python",
+        "version": 3,
+        "content": "name = 1\n",
+    }]
+    app = server._build_app()
+
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            monkeypatch.setattr(server, "_auth_context", lambda _request: _auth_context())
+            forbidden = await client.post(
+                "/api/bots/main/workspace/code-navigation/documents/sync",
+                json={"documents": documents},
+            )
+            auth = _auth_context(CAP_READ_FILE_CONTENT)
+            monkeypatch.setattr(server, "_auth_context", lambda _request: auth)
+            synced = await client.post(
+                "/api/bots/main/workspace/code-navigation/documents/sync",
+                json={"documents": documents},
+            )
+            closed = await client.post(
+                "/api/bots/main/workspace/code-navigation/documents/close",
+                json={"documents": [{"path": "main.py", "version": 3}]},
+            )
+
+    assert forbidden.status == 403
+    assert synced.status == 200
+    assert closed.status == 200
+    expected_scope = {
+        "bot_alias": "main",
+        "user_id": server._chat_user_id(auth),
+        "workspace_root": str(tmp_path),
+    }
+    assert manager.sync_calls == [{**expected_scope, "documents": documents}]
+    assert manager.close_calls == [{
+        **expected_scope,
+        "documents": [{"path": "main.py", "version": 3}],
+    }]
 
 
 @pytest.mark.asyncio

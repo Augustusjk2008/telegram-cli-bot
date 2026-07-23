@@ -9,6 +9,8 @@ export type PersistedTabContentPersistence = "none" | "clean_snapshot" | "dirty_
 export type PersistedWorkbenchTab = {
   path: string;
   dirty: boolean;
+  /** Monotonic version replayed to the language-service document store. */
+  documentVersion?: number;
   lastModifiedNs?: string;
   encoding?: string;
   savedContent?: string;
@@ -152,6 +154,7 @@ export type EditorTab = {
   path: string;
   basename: string;
   content: string;
+  documentVersion: number;
   savedContent: string;
   kind?: "file" | "git-diff" | "plugin-view";
   pluginTargets?: PluginOpenTarget[];

@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from bot.language_server.document_store import LanguageDocument
 from bot.language_server.pyright import PyrightProvider, discover_python_interpreter
 
 
@@ -224,6 +225,48 @@ async def test_pyright_normalizes_location_and_location_link_with_utf16_emoji_pr
     assert result[0]["range"]["end"] == {"line": 1, "column": 8}
     assert result[1]["selection_range"] == result[0]["selection_range"]
     assert result[1]["range"]["start"] == {"line": 1, "column": 1}
+
+
+@pytest.mark.asyncio
+async def test_pyright_uses_unsaved_cross_file_snapshot_for_location_ranges(tmp_path: Path) -> None:
+    source = tmp_path / "main.py"
+    target = tmp_path / "target.py"
+    source.write_text("renamed\n", encoding="utf-8")
+    target.write_text("old_name = 1\n", encoding="utf-8")
+    client = FakeLspClient(
+        {
+            "textDocument/definition": {
+                "uri": target.resolve().as_uri(),
+                "range": {
+                    "start": {"line": 1, "character": 0},
+                    "end": {"line": 1, "character": 7},
+                },
+            }
+        }
+    )
+    provider = PyrightProvider(tmp_path)
+    await provider.sync_documents(
+        client,
+        [LanguageDocument("target.py", "python", 3, "prefix = 0\nrenamed = 1\n")],
+    )
+
+    result = await provider.navigate(
+        client,
+        kind="definition",
+        path=source,
+        language_id="python",
+        version=2,
+        content="renamed\n",
+        line=1,
+        column=2,
+    )
+
+    assert result[0]["path"] == "target.py"
+    assert result[0]["selection_range"]["start"] == {"line": 2, "column": 1}
+    assert [method for method, _params in client.notifications] == [
+        "textDocument/didOpen",
+        "textDocument/didOpen",
+    ]
 
 
 @pytest.mark.asyncio

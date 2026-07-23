@@ -3,6 +3,13 @@
 from .clangd import ClangdProvider, discover_clangd_project_config, discover_compile_commands
 from .catalog import LanguageServerCatalog
 from .installer import LanguageServerInstallError, LanguageServerInstaller
+from .document_store import (
+    LanguageDocument,
+    LanguageDocumentError,
+    LanguageDocumentLimitError,
+    LanguageDocumentRuntimeKey,
+    LanguageDocumentStore,
+)
 from .manager import (
     LanguageServerRuntimeKey,
     LanguageServerRuntimeManager,
@@ -23,6 +30,11 @@ __all__ = [
     "LanguageServerRuntimeKey",
     "LanguageServerRuntimeManager",
     "LanguageServerUnavailableError",
+    "LanguageDocument",
+    "LanguageDocumentError",
+    "LanguageDocumentLimitError",
+    "LanguageDocumentRuntimeKey",
+    "LanguageDocumentStore",
     "LanguageServerManifest",
     "LanguageServerManifestError",
     "current_platform_key",

@@ -1866,6 +1866,56 @@ export type CodeNavigationRequest = {
   position: CodePosition;
 };
 
+export type CodeNavigationDocumentSyncEvent = "didOpen" | "didChange";
+
+export type CodeNavigationDocumentChange = {
+  range: CodeRange;
+  text: string;
+};
+
+export type CodeNavigationDocumentSyncItem = {
+  path: string;
+  languageId: string;
+  version: number;
+  /** Full text is sent for full-sync servers and document opens. */
+  content?: string;
+  /** A single contiguous edit for incremental-sync servers. */
+  change?: CodeNavigationDocumentChange;
+};
+
+export type WorkspaceDocumentSyncInput = {
+  documents: CodeNavigationDocumentSyncItem[];
+  event?: CodeNavigationDocumentSyncEvent;
+};
+
+export type WorkspaceDocumentCloseItem = {
+  path: string;
+  version?: number;
+};
+
+export type WorkspaceDocumentCloseInput = {
+  documents: WorkspaceDocumentCloseItem[];
+};
+
+export type WorkspaceDocumentSyncResult = {
+  accepted?: number;
+  unchanged?: number;
+  rejected?: number;
+  documents?: Array<Record<string, unknown>>;
+  rejections?: Array<Record<string, unknown>>;
+  syncKind?: "full" | "incremental" | string;
+  supportsIncrementalChanges?: boolean;
+  maxDocumentBytes?: number;
+  maxBatchDocuments?: number;
+  maxBatchBytes?: number;
+};
+
+export type WorkspaceDocumentCloseResult = {
+  closed?: number;
+  documents?: Array<Record<string, unknown>>;
+  missing?: string[];
+};
+
 export type CodeLocation = {
   targetType: "workspace" | "external";
   path?: string;

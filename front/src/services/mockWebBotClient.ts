@@ -149,6 +149,10 @@ import type {
   UserBotPermissions,
   CodeNavigationRequest,
   CodeNavigationResult,
+  WorkspaceDocumentSyncInput,
+  WorkspaceDocumentSyncResult,
+  WorkspaceDocumentCloseInput,
+  WorkspaceDocumentCloseResult,
   WorkspaceOutlineResult,
   WorkspaceQuickOpenResult,
   WorkspaceSearchResult,
@@ -5233,6 +5237,30 @@ export class MockWebBotClient implements WebBotClient {
       items: [],
       message: input.kind === "implementation" ? "未找到语义实现" : "未找到语义定义",
     };
+  }
+
+  async syncWorkspaceDocuments(
+    _botAlias: string,
+    input: WorkspaceDocumentSyncInput,
+    signal?: AbortSignal,
+  ): Promise<WorkspaceDocumentSyncResult> {
+    signal?.throwIfAborted?.();
+    return {
+      accepted: input.documents.length,
+      syncKind: "full",
+      supportsIncrementalChanges: false,
+      maxDocumentBytes: 512 * 1024,
+      maxBatchBytes: 2 * 1024 * 1024,
+    };
+  }
+
+  async closeWorkspaceDocuments(
+    _botAlias: string,
+    input: WorkspaceDocumentCloseInput,
+    signal?: AbortSignal,
+  ): Promise<WorkspaceDocumentCloseResult> {
+    signal?.throwIfAborted?.();
+    return { closed: input.documents.length };
   }
 
   async uploadChatAttachment(botAlias: string, file: File): Promise<ChatAttachmentUploadResult> {

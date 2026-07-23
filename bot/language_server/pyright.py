@@ -5,11 +5,17 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import unquote, urlparse
 from urllib.request import url2pathname
+
+from .document_store import (
+    LanguageDocument,
+    build_content_change,
+    parse_text_document_sync_capability,
+)
 
 
 _PYTHON_EXTENSIONS = {".py", ".pyi"}
@@ -67,6 +73,8 @@ class PyrightProvider:
         self.python_interpreter = trusted_interpreter.resolve() if trusted_interpreter.is_file() else None
         self.position_encoding = "utf-16"
         self.supports_implementation = False
+        self.sync_open_close = True
+        self.sync_change_kind = 1
         self._documents: dict[str, tuple[int, str]] = {}
         self._navigation_lock = asyncio.Lock()
 
@@ -111,12 +119,102 @@ class PyrightProvider:
         encoding = str(capabilities.get("positionEncoding") or "utf-16").strip().lower()
         self.position_encoding = encoding if encoding in _POSITION_ENCODINGS else "utf-16"
         self.supports_implementation = bool(capabilities.get("implementationProvider"))
-
+        self.sync_open_close, self.sync_change_kind = parse_text_document_sync_capability(
+            capabilities.get("textDocumentSync")
+        )
         await client.notify("initialized", {})
         await client.notify(
             "workspace/didChangeConfiguration",
             {"settings": {"python": self._python_settings()}},
         )
+
+    async def sync_documents(
+        self,
+        client: LspClientProtocol,
+        documents: Sequence[LanguageDocument | Mapping[str, Any]],
+    ) -> list[LanguageDocument]:
+        synced: list[LanguageDocument] = []
+        async with self._navigation_lock:
+            for raw in documents:
+                document = LanguageDocument.from_value(raw)
+                target = (self.workspace_root / document.path).resolve()
+                if not self._is_workspace_python_file(target, document.language_id):
+                    continue
+                if await self._sync_snapshot(client, document):
+                    synced.append(document)
+        return synced
+
+    async def replay_documents(
+        self,
+        client: LspClientProtocol,
+        documents: Sequence[LanguageDocument | Mapping[str, Any]],
+    ) -> list[LanguageDocument]:
+        return await self.sync_documents(client, documents)
+
+    async def close_documents(
+        self,
+        client: LspClientProtocol,
+        documents: Iterable[LanguageDocument | Mapping[str, Any] | str],
+    ) -> list[str]:
+        closed: list[str] = []
+        async with self._navigation_lock:
+            for raw in documents:
+                if isinstance(raw, str):
+                    path = raw.strip().replace("\\", "/")
+                elif isinstance(raw, LanguageDocument):
+                    path = raw.path
+                elif isinstance(raw, Mapping):
+                    path = str(raw.get("path") or "").strip().replace("\\", "/")
+                else:
+                    continue
+                if not path:
+                    continue
+                target = (self.workspace_root / path).resolve()
+                try:
+                    target.relative_to(self.workspace_root)
+                except ValueError:
+                    continue
+                uri = target.as_uri()
+                if self._documents.pop(uri, None) is None:
+                    continue
+                if self.sync_open_close:
+                    await client.notify("textDocument/didClose", {"textDocument": {"uri": uri}})
+                closed.append(path)
+        return closed
+
+    async def _sync_snapshot(self, client: LspClientProtocol, document: LanguageDocument) -> bool:
+        target = (self.workspace_root / document.path).resolve()
+        uri = target.as_uri()
+        previous = self._documents.get(uri)
+        if previous is not None:
+            if document.version < previous[0] or (
+                document.version == previous[0] and document.content != previous[1]
+            ):
+                return False
+            if document.version == previous[0]:
+                return False
+            change = build_content_change(
+                previous[1],
+                document.content,
+                change_kind=self.sync_change_kind,
+                encoding=self.position_encoding,
+            )
+            await client.notify(
+                "textDocument/didChange",
+                {"textDocument": {"uri": uri, "version": document.version}, "contentChanges": [change]},
+            )
+        elif self.sync_open_close:
+            await client.notify(
+                "textDocument/didOpen",
+                {"textDocument": {
+                    "uri": uri,
+                    "languageId": document.language_id,
+                    "version": document.version,
+                    "text": document.content,
+                }},
+            )
+        self._documents[uri] = (document.version, document.content)
+        return True
 
     def handle_server_request(self, method: str, params: Any) -> Any:
         """Answer the small set of workspace/client requests Pyright may issue."""
@@ -237,11 +335,14 @@ class PyrightProvider:
             )
         elif previous[1] != content:
             effective_version = max(version, previous[0] + 1)
+            change = build_content_change(
+                previous[1], content, change_kind=self.sync_change_kind, encoding=self.position_encoding,
+            )
             await client.notify(
                 "textDocument/didChange",
                 {
                     "textDocument": {"uri": uri, "version": effective_version},
-                    "contentChanges": [{"text": content}],
+                    "contentChanges": [change],
                 },
             )
         else:
@@ -291,13 +392,19 @@ class PyrightProvider:
                 # 即使虚拟环境位于工作区目录内，它仍是阶段 9 才能开放的
                 # 外部依赖源码，不能伪装成可编辑的 workspace 目标。
                 continue
-            if not target.is_file():
-                continue
             target_range = raw.get("targetRange") or raw.get("range")
             selection_range = raw.get("targetSelectionRange") or raw.get("range")
             if not isinstance(target_range, Mapping) or not isinstance(selection_range, Mapping):
                 continue
-            target_content = active_content if target == active_path else target.read_text(encoding="utf-8", errors="replace")
+            snapshot = self._documents.get(target.as_uri())
+            if target == active_path:
+                target_content = active_content
+            elif snapshot is not None:
+                target_content = snapshot[1]
+            elif target.is_file():
+                target_content = target.read_text(encoding="utf-8", errors="replace")
+            else:
+                continue
             normalized_range = _lsp_range_to_api(target_content, target_range, self.position_encoding)
             normalized_selection = _lsp_range_to_api(target_content, selection_range, self.position_encoding)
             if normalized_range is None or normalized_selection is None:

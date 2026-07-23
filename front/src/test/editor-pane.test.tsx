@@ -11,6 +11,7 @@ function createTab(overrides: Partial<EditorTab> = {}): EditorTab {
     path: "src/No8Demo/demo_basic.h",
     basename: "demo_basic.h",
     content: "#pragma once\n",
+    documentVersion: 1,
     savedContent: "#pragma once\n",
     kind: "file",
     dirty: false,

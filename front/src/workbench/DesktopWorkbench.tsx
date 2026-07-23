@@ -205,8 +205,9 @@ export function DesktopWorkbench({
 }: Props) {
   const { paneState, toggleSidebar, toggleTerminal, toggleChat, setSidebarView, restoreSidebarView, resizePane } = useWorkbenchState();
   const fileTree = useFileTree(botAlias, client, { structureOnly });
-  const codeNavigationScope = `${botAlias}\n${fileTree.rootPath}`;
-  const tabs = useEditorTabs({ botAlias, client, scopeKey: fileTree.rootPath, structureOnly, canWriteFiles });
+  const workspaceUserScope = `${accountId || ""}\n${fileTree.rootPath}`;
+  const codeNavigationScope = `${accountId || ""}\n${botAlias}\n${fileTree.rootPath}`;
+  const tabs = useEditorTabs({ botAlias, client, scopeKey: workspaceUserScope, structureOnly, canWriteFiles });
   const columnsRef = useRef<HTMLDivElement | null>(null);
   const centerRowsRef = useRef<HTMLDivElement | null>(null);
   const editorPaneRef = useRef<HTMLElement | null>(null);
@@ -287,7 +288,7 @@ export function DesktopWorkbench({
   }, [client, codeNavigationScope]);
 
   const codeNavigationHistory = useCodeNavigationHistory({
-    scopeKey: `${botAlias}\n${fileTree.rootPath}`,
+    scopeKey: codeNavigationScope,
     onNavigate: (location) => {
       const scope = codeNavigationScopeRef.current;
       return openWorkspaceFile(

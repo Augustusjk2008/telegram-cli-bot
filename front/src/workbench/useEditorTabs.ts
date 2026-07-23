@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import type { PluginOpenTarget } from "../services/types";
+import { inferFileEditorLanguageId } from "../utils/fileEditorLanguage";
+import type {
+  PluginOpenTarget,
+  WorkspaceDocumentCloseInput,
+  CodeNavigationDocumentSyncEvent,
+  WorkspaceDocumentSyncInput,
+  CodeNavigationDocumentSyncItem,
+} from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { selectTabsForPersistence } from "./workbenchSession";
 import {
@@ -16,6 +23,28 @@ type Props = {
   structureOnly?: boolean;
   canWriteFiles?: boolean;
 };
+
+export const EDITOR_DOCUMENT_SYNC_DEBOUNCE_MS = 250;
+export const EDITOR_DOCUMENT_MAX_BYTES = 512 * 1024;
+export const EDITOR_DOCUMENT_BATCH_MAX_BYTES = 2 * 1024 * 1024;
+const EDITOR_DOCUMENT_BATCH_MAX_COUNT = 64;
+
+function documentByteSize(content: string) {
+  return new Blob([content]).size;
+}
+
+function isSyncableTab(tab: EditorTab | null | undefined): tab is EditorTab {
+  return Boolean(tab && tab.kind === "file" && tab.path && !tab.cold && !tab.missing);
+}
+
+function toSyncItem(tab: EditorTab): CodeNavigationDocumentSyncItem {
+  return {
+    path: tab.path,
+    languageId: inferFileEditorLanguageId(tab.path),
+    version: Math.max(1, Math.trunc(tab.documentVersion || 1)),
+    content: tab.content,
+  };
+}
 
 function basename(path: string) {
   const parts = path.split(/[\\/]/);
@@ -39,6 +68,7 @@ function createTab(
     path,
     basename: basename(path),
     content,
+    documentVersion: Math.max(1, Math.trunc(Number(overrides?.documentVersion) || 1)),
     savedContent: content,
     dirty: false,
     loading: false,
@@ -61,6 +91,7 @@ function createTabFromSnapshot(tab: PersistedWorkbenchTab): EditorTab {
     return createTab(tab.path, draftContent, tab.lastModifiedNs, {
       savedContent: tab.savedContent ?? "",
       dirty: true,
+      documentVersion: tab.documentVersion,
       contentPersistence: "dirty_snapshot",
       encoding: tab.encoding,
     });
@@ -69,12 +100,14 @@ function createTabFromSnapshot(tab: PersistedWorkbenchTab): EditorTab {
   if (tab.contentPersistence === "clean_snapshot") {
     const savedContent = tab.savedContent ?? "";
     return createTab(tab.path, savedContent, tab.lastModifiedNs, {
+      documentVersion: tab.documentVersion,
       contentPersistence: "clean_snapshot",
       encoding: tab.encoding,
     });
   }
 
   return createTab(tab.path, "", tab.lastModifiedNs, {
+    documentVersion: tab.documentVersion,
     cold: true,
     contentPersistence: "none",
     encoding: tab.encoding,
@@ -89,6 +122,11 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
   const activeTabPathRef = useRef("");
   const closedTabsRef = useRef<PersistedWorkbenchTab[]>([]);
   const scopeIdentity = `${botAlias}\n${scopeKey}`;
+  const documentSyncTimersRef = useRef<Map<string, number>>(new Map());
+  const pendingDocumentSyncRef = useRef<Map<string, { item: CodeNavigationDocumentSyncItem; event: CodeNavigationDocumentSyncEvent }>>(new Map());
+  const documentSyncAbortRef = useRef<AbortController | null>(null);
+  const lastReplayClientRef = useRef<WebBotClient | null>(null);
+  const lastReplayScopeRef = useRef(scopeIdentity);
   const scopeIdentityRef = useRef(scopeIdentity);
   const scopeClientRef = useRef(client);
   const scopeGenerationRef = useRef(0);
@@ -100,6 +138,119 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
 
   function isCurrentScope(generation: number) {
     return scopeGenerationRef.current === generation;
+  }
+
+  function setDocumentSyncError(paths: string[], message: string) {
+    if (paths.length === 0) {
+      return;
+    }
+    const pathSet = new Set(paths);
+    setTabs((current) => current.map((tab) => pathSet.has(tab.path)
+      ? { ...tab, error: message, statusText: "语言服务同步失败" }
+      : tab));
+  }
+
+  function clearDocumentSyncTimer(path: string) {
+    const timer = documentSyncTimersRef.current.get(path);
+    if (timer !== undefined) {
+      window.clearTimeout(timer);
+      documentSyncTimersRef.current.delete(path);
+    }
+  }
+
+  function queueDocumentSync(tab: EditorTab, event: CodeNavigationDocumentSyncEvent = "didChange") {
+    if (!isSyncableTab(tab)) {
+      return;
+    }
+    if (documentByteSize(tab.content) > EDITOR_DOCUMENT_MAX_BYTES) {
+      setDocumentSyncError([tab.path], "文件内容超过语言服务同步限制（512 KB）");
+      return;
+    }
+    pendingDocumentSyncRef.current.set(tab.path, { item: toSyncItem(tab), event });
+    clearDocumentSyncTimer(tab.path);
+    const timer = window.setTimeout(() => {
+      documentSyncTimersRef.current.delete(tab.path);
+      void flushDocumentSync();
+    }, EDITOR_DOCUMENT_SYNC_DEBOUNCE_MS);
+    documentSyncTimersRef.current.set(tab.path, timer);
+  }
+
+  function abortDocumentSync() {
+    documentSyncAbortRef.current?.abort();
+    documentSyncAbortRef.current = null;
+  }
+
+  async function sendDocumentSync(items: CodeNavigationDocumentSyncItem[], event: CodeNavigationDocumentSyncEvent) {
+    if (items.length === 0) {
+      return;
+    }
+    const controller = typeof AbortController === "undefined" ? null : new AbortController();
+    abortDocumentSync();
+    documentSyncAbortRef.current = controller;
+    const input: WorkspaceDocumentSyncInput = { documents: items, event };
+    try {
+      await client.syncWorkspaceDocuments(botAlias, input, controller?.signal);
+    } catch (error) {
+      if (!controller?.signal.aborted) {
+        setDocumentSyncError(items.map((item) => item.path), error instanceof Error ? error.message : "语言服务同步失败");
+      }
+    } finally {
+      if (documentSyncAbortRef.current === controller) {
+        documentSyncAbortRef.current = null;
+      }
+    }
+  }
+
+  async function flushDocumentSync() {
+    const pending = Array.from(pendingDocumentSyncRef.current.values());
+    pendingDocumentSyncRef.current.clear();
+    if (pending.length === 0) {
+      return;
+    }
+    const chunks: Array<{ items: CodeNavigationDocumentSyncItem[]; event: CodeNavigationDocumentSyncEvent }> = [];
+    let current: CodeNavigationDocumentSyncItem[] = [];
+    let currentBytes = 0;
+    let currentEvent: CodeNavigationDocumentSyncEvent = pending[0]?.event || "didChange";
+    for (const entry of pending) {
+      const size = documentByteSize(entry.item.content || "");
+      if (current.length > 0 && (currentBytes + size > EDITOR_DOCUMENT_BATCH_MAX_BYTES || current.length >= EDITOR_DOCUMENT_BATCH_MAX_COUNT)) {
+        chunks.push({ items: current, event: currentEvent });
+        current = [];
+        currentBytes = 0;
+        currentEvent = entry.event;
+      }
+      current.push(entry.item);
+      currentBytes += size;
+      if (entry.event === "didOpen") {
+        currentEvent = "didOpen";
+      }
+    }
+    if (current.length > 0) {
+      chunks.push({ items: current, event: currentEvent });
+    }
+    for (const chunk of chunks) {
+      await sendDocumentSync(chunk.items, chunk.event);
+    }
+  }
+
+  async function closeDocuments(tabsToClose: EditorTab[]) {
+    const documents = tabsToClose.filter(isSyncableTab).map<WorkspaceDocumentCloseInput["documents"][number]>((tab) => ({
+      path: tab.path,
+      version: Math.max(1, Math.trunc(tab.documentVersion || 1)),
+    }));
+    if (documents.length === 0) {
+      return;
+    }
+    abortDocumentSync();
+    documents.forEach((document) => {
+      clearDocumentSyncTimer(document.path);
+      pendingDocumentSyncRef.current.delete(document.path);
+    });
+    try {
+      await client.closeWorkspaceDocuments(botAlias, { documents });
+    } catch {
+      // Closing is best effort; scope changes must not block the editor.
+    }
   }
 
   useEffect(() => {
@@ -123,13 +274,32 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
   }
 
   useEffect(() => () => {
+    abortDocumentSync();
+    void closeDocuments(tabsRef.current);
     tabsRef.current.forEach((tab) => disposePluginSession(tab));
-  }, [client, scopeIdentity]);
+  }, [scopeIdentity]);
 
   useEffect(() => {
     setTabs([]);
     setActiveTabPath("");
     setClosedTabs([]);
+  }, [scopeIdentity]);
+
+  useEffect(() => {
+    if (lastReplayScopeRef.current !== scopeIdentity) {
+      lastReplayScopeRef.current = scopeIdentity;
+      lastReplayClientRef.current = client;
+      return;
+    }
+    if (lastReplayClientRef.current === client) {
+      return;
+    }
+    lastReplayClientRef.current = client;
+    const replay = tabsRef.current.filter(isSyncableTab);
+    replay.forEach((tab) => queueDocumentSync(tab, "didOpen"));
+    if (replay.length > 0) {
+      void flushDocumentSync();
+    }
   }, [client, scopeIdentity]);
 
   const activeTab = tabs.find((tab) => tab.path === activeTabPath) || null;
@@ -147,6 +317,7 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
     const nextClosedTab: PersistedWorkbenchTab = {
       path: target.path,
       dirty: target.dirty,
+      documentVersion: target.documentVersion,
       lastModifiedNs: target.lastModifiedNs,
       encoding: target.encoding,
       savedContent: target.savedContent,
@@ -192,6 +363,7 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
               basename: basename(path),
               content: result.content || "",
               savedContent: result.content || "",
+              documentVersion: Math.max(1, Math.trunc(target?.documentVersion || 1)),
               dirty: false,
               loading: false,
               saving: false,
@@ -206,6 +378,16 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
             }
           : item)
         : current);
+      const synced = tabsRef.current.find((item) => item.path === path);
+      if (synced) {
+        queueDocumentSync({
+          ...synced,
+          content: result.content || "",
+          savedContent: result.content || "",
+          cold: false,
+          missing: false,
+        }, "didOpen");
+      }
     } catch (error) {
       if (!isCurrentScope(generation)) {
         return;
@@ -230,19 +412,18 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
     if (structureOnly || !canWriteFiles) {
       return;
     }
-    setTabs((current) => {
-      const nextTab = createTab(path, content, lastModifiedNs, {
-        contentPersistence: "none",
-      });
-      const existingIndex = current.findIndex((item) => item.path === path);
-      if (existingIndex >= 0) {
-        const nextTabs = current.slice();
-        nextTabs[existingIndex] = nextTab;
-        return nextTabs;
-      }
-      return [...current, nextTab];
-    });
+    const nextTab = createTab(path, content, lastModifiedNs, { contentPersistence: "none" });
+    const currentTabs = tabsRef.current;
+    const existingIndex = currentTabs.findIndex((item) => item.path === path);
+    const nextTabs = existingIndex >= 0 ? currentTabs.slice() : [...currentTabs, nextTab];
+    if (existingIndex >= 0) {
+      nextTabs[existingIndex] = nextTab;
+    }
+    tabsRef.current = nextTabs;
+    setTabs(nextTabs);
+    activeTabPathRef.current = path;
     setActiveTabPath(path);
+    queueDocumentSync(nextTab, "didOpen");
   }
 
   async function openFile(path: string, pluginTargets?: PluginOpenTarget[]) {
@@ -385,25 +566,24 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
   }
 
   function updateActiveContent(content: string) {
-    setTabs((current) => current.map((item) => {
-      if (item.path !== activeTabPathRef.current) {
-        return item;
-      }
-      if (item.readOnly) {
-        return item;
-      }
-      if (!canWriteFiles) {
-        return item;
-      }
-      return {
-        ...item,
-        content,
-        dirty: content !== item.savedContent,
-        statusText: "",
-        error: "",
-        missing: false,
-      };
-    }));
+    const activePath = activeTabPathRef.current;
+    const target = tabsRef.current.find((item) => item.path === activePath);
+    if (!target || target.readOnly || !canWriteFiles || target.content === content) {
+      return;
+    }
+    const next = {
+      ...target,
+      content,
+      documentVersion: Math.max(1, Math.trunc(target.documentVersion || 1)) + 1,
+      dirty: content !== target.savedContent,
+      statusText: "",
+      error: "",
+      missing: false,
+    };
+    const nextTabs = tabsRef.current.map((item) => item.path === activePath ? next : item);
+    tabsRef.current = nextTabs;
+    setTabs(nextTabs);
+    queueDocumentSync(next, "didChange");
   }
 
   async function saveActiveTab() {
@@ -452,7 +632,11 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
   }
 
   function closePath(path: string) {
-    disposePluginSession(tabsRef.current.find((item) => item.path === path));
+    const target = tabsRef.current.find((item) => item.path === path);
+    if (target) {
+      void closeDocuments([target]);
+      disposePluginSession(target);
+    }
     setTabs((current) => {
       const index = current.findIndex((item) => item.path === path);
       if (index < 0) {
@@ -485,6 +669,7 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
     const nextClosed = tabsRef.current.filter((item) => item.path !== path);
     nextClosed.forEach((item) => pushClosedTab(item.path));
     nextClosed.forEach((item) => disposePluginSession(item));
+    void closeDocuments(nextClosed);
     setTabs((current) => current.filter((item) => item.path === path));
     setActiveTabPath(path);
   }
@@ -498,6 +683,7 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
       pushClosedTab(item.path);
       disposePluginSession(item);
     });
+    void closeDocuments(tabsRef.current.slice(index + 1));
     setTabs((current) => current.slice(0, index + 1));
   }
 
@@ -567,6 +753,7 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
       setTabs(snapshotTabs);
     }
     setActiveTabPath(nextActiveTabPath);
+    snapshotTabs.filter(isSyncableTab).forEach((tab) => queueDocumentSync(tab, "didOpen"));
 
     const activeRestoredTab = snapshotTabs.find((item) => item.path === nextActiveTabPath);
     if (activeRestoredTab?.cold) {
@@ -582,6 +769,7 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
         dirty: tab.dirty,
         savedContent: tab.savedContent,
         draftContent: tab.content,
+        documentVersion: tab.documentVersion,
         lastModifiedNs: tab.lastModifiedNs,
         encoding: tab.encoding,
       })).filter((tab) => tab.kind !== "git-diff" && tab.kind !== "plugin-view"),

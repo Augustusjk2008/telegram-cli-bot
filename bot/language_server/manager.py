@@ -7,7 +7,7 @@ import contextlib
 import hashlib
 import time
 from collections import Counter, deque
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -18,6 +18,12 @@ from bot.runtime_paths import get_language_servers_root
 
 from .clangd import ClangdProvider
 from .catalog import LanguageServerCatalog
+from .document_store import (
+    LanguageDocument,
+    LanguageDocumentLimitError,
+    LanguageDocumentStore,
+    normalize_document_path,
+)
 from .pyright import PyrightProvider
 from .typescript import TypeScriptProvider
 
@@ -46,6 +52,10 @@ class RuntimeProtocol(Protocol):
     async def start(self) -> None: ...
 
     async def resolve_code_navigation(self, request: dict[str, Any]) -> dict[str, object]: ...
+
+    async def sync_documents(self, documents: Sequence[LanguageDocument]) -> list[LanguageDocument]: ...
+
+    async def close_documents(self, documents: Sequence[LanguageDocument | Mapping[str, Any] | str]) -> list[str]: ...
 
     async def close(self) -> None: ...
 
@@ -213,6 +223,35 @@ class LanguageServerRuntime:
             self._active_operation_count = max(0, self._active_operation_count - 1)
             self.last_used_at = time.monotonic()
 
+    async def sync_documents(self, documents: Sequence[LanguageDocument]) -> list[LanguageDocument]:
+        if self.state not in {"ready", "indexing"} or self.client is None:
+            raise RuntimeError("语言服务器尚未就绪")
+        sync = getattr(self.provider, "sync_documents", None)
+        if not callable(sync):
+            return []
+        self._active_operation_count += 1
+        try:
+            return list(await sync(self.client, documents))
+        finally:
+            self._active_operation_count = max(0, self._active_operation_count - 1)
+            self.last_used_at = time.monotonic()
+
+    async def close_documents(
+        self,
+        documents: Sequence[LanguageDocument | Mapping[str, Any] | str],
+    ) -> list[str]:
+        if self.state not in {"ready", "indexing"} or self.client is None:
+            return []
+        close = getattr(self.provider, "close_documents", None)
+        if not callable(close):
+            return []
+        self._active_operation_count += 1
+        try:
+            return list(await close(self.client, documents))
+        finally:
+            self._active_operation_count = max(0, self._active_operation_count - 1)
+            self.last_used_at = time.monotonic()
+
     async def close(self) -> None:
         async with self._close_lock:
             if self.state == "stopped" and self.process is None:
@@ -350,6 +389,7 @@ class LanguageServerRuntimeManager:
             set[asyncio.Task[Any]],
         ] = {}
         self._cancelled_requests: dict[tuple[str, int, Path, str], float] = {}
+        self.document_store = LanguageDocumentStore()
         self._lock = asyncio.Lock()
         self._shutdown_started = False
 
@@ -402,6 +442,13 @@ class LanguageServerRuntimeManager:
             workspace_root=root,
             provider_id=provider_id,
         )
+        document = LanguageDocument.from_value(request.get("document"))
+        sync_result = self.document_store.sync_documents(key, [document])
+        current_document = self.document_store.get(key, document.path)
+        runtime_request = dict(request)
+        if current_document is not None and not sync_result.accepted:
+            runtime_request["document"] = current_document.to_dict()
+
         cancellation_key = (normalized_alias, normalized_user_id, root, request_id)
         current_task = asyncio.current_task()
         if current_task is None:
@@ -419,7 +466,7 @@ class LanguageServerRuntimeManager:
             if not command:
                 raise LanguageServerUnavailableError("语言服务器未安装或命令不可用")
             runtime = await self._get_or_start(key, tuple(command))
-            return await runtime.resolve_code_navigation(request)
+            return await runtime.resolve_code_navigation(runtime_request)
         finally:
             async with self._lock:
                 active_tasks = self._active_requests.get(active_key)
@@ -427,6 +474,132 @@ class LanguageServerRuntimeManager:
                     active_tasks.discard(current_task)
                     if not active_tasks:
                         self._active_requests.pop(active_key, None)
+
+    async def sync_documents(
+        self,
+        *,
+        bot_alias: str,
+        user_id: int,
+        workspace_root: Path | str,
+        documents: Sequence[LanguageDocument | Mapping[str, Any]],
+    ) -> dict[str, object]:
+        root = Path(workspace_root).expanduser().resolve()
+        if not root.is_dir():
+            raise ValueError("工作区目录不存在")
+        if isinstance(documents, (str, bytes)) or not isinstance(documents, Sequence):
+            raise ValueError("文档同步批次格式无效")
+        parsed_documents = self.document_store.validate_documents(documents)
+
+        normalized_alias = str(bot_alias or "").strip().lower()
+        normalized_user_id = int(user_id)
+        grouped: dict[str, list[LanguageDocument]] = {}
+        for document in parsed_documents:
+            provider_id = _provider_for_document(document.path, document.language_id)
+            if provider_id is None:
+                continue
+            target = (root / document.path).resolve()
+            try:
+                target.relative_to(root)
+            except ValueError as exc:
+                raise ValueError("文档同步路径超出工作区") from exc
+            grouped.setdefault(provider_id, []).append(document)
+
+        accepted: list[LanguageDocument] = []
+        unchanged: list[LanguageDocument] = []
+        rejected: list[dict[str, object]] = []
+        sync_kinds: set[str] = set()
+        for provider_id, provider_documents in grouped.items():
+            key = LanguageServerRuntimeKey(normalized_alias, normalized_user_id, root, provider_id)
+            result = self.document_store.sync_documents(key, provider_documents)
+            accepted.extend(result.accepted)
+            unchanged.extend(result.unchanged)
+            rejected.extend(item.to_dict() for item in result.rejected)
+
+            if not result.accepted and not result.unchanged:
+                continue
+            command = await asyncio.to_thread(self.catalog.command_for, provider_id)
+            if not command:
+                continue
+            runtime = await self._get_or_start(key, tuple(command))
+            if result.accepted:
+                sync = getattr(runtime, "sync_documents", None)
+                if callable(sync):
+                    await sync(result.accepted)
+            sync_kinds.add(_runtime_sync_kind(runtime))
+
+        sync_kind = "incremental" if sync_kinds == {"incremental"} else "full"
+        return {
+            "accepted": len(accepted),
+            "unchanged": len(unchanged),
+            "rejected": len(rejected),
+            "documents": [item.to_dict(include_content=False) for item in (*accepted, *unchanged)],
+            "rejections": rejected,
+            "sync_kind": sync_kind,
+            "supports_incremental_changes": sync_kind == "incremental",
+            "max_document_bytes": self.document_store.max_document_bytes,
+            "max_batch_documents": self.document_store.max_batch_documents,
+            "max_batch_bytes": self.document_store.max_batch_bytes,
+        }
+
+    async def close_documents(
+        self,
+        *,
+        bot_alias: str,
+        user_id: int,
+        workspace_root: Path | str,
+        documents: Sequence[LanguageDocument | Mapping[str, Any] | str],
+    ) -> dict[str, object]:
+        root = Path(workspace_root).expanduser().resolve()
+        if not root.is_dir():
+            raise ValueError("工作区目录不存在")
+        if isinstance(documents, (str, bytes)) or not isinstance(documents, Sequence):
+            raise ValueError("文档关闭批次格式无效")
+        if len(documents) > self.document_store.max_batch_documents:
+            raise LanguageDocumentLimitError("文档关闭批次过大")
+        normalized_alias = str(bot_alias or "").strip().lower()
+        normalized_user_id = int(user_id)
+        grouped: dict[str, list[LanguageDocument | Mapping[str, Any] | str]] = {}
+        for value in documents:
+            if isinstance(value, str):
+                path = normalize_document_path(value)
+                language_id = ""
+            elif isinstance(value, LanguageDocument):
+                path = normalize_document_path(value.path)
+                language_id = value.language_id
+            elif isinstance(value, Mapping):
+                path = normalize_document_path(value.get("path"))
+                language_id = str(value.get("languageId") or value.get("language_id") or "")
+            else:
+                raise ValueError("文档关闭项格式无效")
+            if not path:
+                raise ValueError("文档关闭项缺少路径")
+            target = (root / path).resolve()
+            try:
+                target.relative_to(root)
+            except ValueError as exc:
+                raise ValueError("文档关闭路径超出工作区") from exc
+            provider_id = _provider_for_document(path, language_id)
+            if provider_id is not None:
+                grouped.setdefault(provider_id, []).append(value)
+
+        closed: list[LanguageDocument] = []
+        missing: list[str] = []
+        for provider_id, provider_documents in grouped.items():
+            key = LanguageServerRuntimeKey(normalized_alias, normalized_user_id, root, provider_id)
+            result = self.document_store.close_documents(key, provider_documents)
+            closed.extend(result.closed)
+            missing.extend(result.missing)
+            async with self._lock:
+                runtime = self._runtimes.get(key)
+            if runtime is not None:
+                close = getattr(runtime, "close_documents", None)
+                if callable(close):
+                    await close(provider_documents)
+        return {
+            "closed": len(closed),
+            "documents": [item.to_dict(include_content=False) for item in closed],
+            "missing": missing,
+        }
 
     async def cancel_code_navigation(
         self,
@@ -525,6 +698,10 @@ class LanguageServerRuntimeManager:
         runtime = self._runtime_factory(key, command)
         try:
             await runtime.start()
+            snapshots = self.document_store.snapshot(key)
+            sync = getattr(runtime, "sync_documents", None)
+            if snapshots and callable(sync):
+                await sync(snapshots)
             async with self._lock:
                 if self._shutdown_started:
                     rejected = True
@@ -589,6 +766,7 @@ class LanguageServerRuntimeManager:
             "open_document_count": sum(int(runtime.diagnostics().get("open_document_count") or 0) for runtime in runtimes),
             "provider_counts": dict(Counter(runtime.key.provider_id for runtime in runtimes)),
             "state_counts": dict(states),
+            "document_store": self.document_store.diagnostics(),
         }
 
     def runtime_status(
@@ -653,6 +831,7 @@ class LanguageServerRuntimeManager:
                 report["closed"] += 1
             except BaseException:
                 report["failed"] += 1
+        self.document_store.clear()
         return report
 
 
@@ -662,6 +841,11 @@ def _provider_for_request(request: Mapping[str, Any]) -> str | None:
         raise ValueError("代码导航请求格式无效")
     path = str(document.get("path") or "").strip()
     language_id = str(document.get("languageId") or document.get("language_id") or "").strip().lower()
+    return _provider_for_document(path, language_id)
+
+
+def _provider_for_document(path: str, language_id: str = "") -> str | None:
+    language_id = str(language_id or "").strip().lower()
     suffix = Path(path).suffix.lower()
     if suffix in {".py", ".pyi"} and language_id in {"", "python", "py"}:
         return "pyright"
@@ -689,6 +873,11 @@ def _provider_for_request(request: Mapping[str, Any]) -> str | None:
     }:
         return "clangd"
     return None
+
+
+def _runtime_sync_kind(runtime: RuntimeProtocol) -> str:
+    provider = getattr(runtime, "provider", None)
+    return "incremental" if int(getattr(provider, "sync_change_kind", 1) or 0) == 2 else "full"
 
 
 def _runtime_is_idle(runtime: RuntimeProtocol) -> bool:

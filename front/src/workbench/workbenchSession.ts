@@ -23,6 +23,10 @@ function normalizeTab(raw: unknown): PersistedWorkbenchTab | null {
   }
 
   const dirty = candidate.dirty === true;
+  const rawDocumentVersion = Number(candidate.documentVersion);
+  const documentVersion = Number.isFinite(rawDocumentVersion) && rawDocumentVersion >= 1
+    ? Math.max(1, Math.trunc(rawDocumentVersion))
+    : undefined;
   const savedContent = typeof candidate.savedContent === "string" ? candidate.savedContent : undefined;
   const draftContent = typeof candidate.draftContent === "string" ? candidate.draftContent : undefined;
   const encoding = typeof candidate.encoding === "string" ? candidate.encoding : undefined;
@@ -43,6 +47,7 @@ function normalizeTab(raw: unknown): PersistedWorkbenchTab | null {
   return {
     path,
     dirty,
+    documentVersion,
     lastModifiedNs: typeof candidate.lastModifiedNs === "string" ? candidate.lastModifiedNs : undefined,
     encoding,
     savedContent: normalizedPersistence === "clean_snapshot" ? savedContent : undefined,
@@ -61,6 +66,7 @@ export function selectTabsForPersistence(
   tabs: Array<{
     path: string;
     dirty: boolean;
+    documentVersion?: number;
     savedContent: string;
     draftContent?: string;
     lastModifiedNs?: string;
@@ -80,6 +86,7 @@ export function selectTabsForPersistence(
     const persisted: PersistedWorkbenchTab = {
       path: tab.path,
       dirty: tab.dirty,
+      documentVersion: tab.documentVersion,
       lastModifiedNs: tab.lastModifiedNs,
       encoding: tab.encoding,
       savedContent: undefined,

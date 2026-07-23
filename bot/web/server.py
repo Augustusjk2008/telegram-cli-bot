@@ -65,6 +65,7 @@ from bot.config import (
 )
 from bot.debug.service import DebugService
 from bot.language_server import (
+    LanguageDocumentLimitError,
     LanguageServerCatalog,
     LanguageServerInstallError,
     LanguageServerInstaller,
@@ -3037,6 +3038,54 @@ class WebApiServer:
                 "语言服务请求失败，请稍后重试",
             ) from exc
         return _json({"ok": True, "data": {"cancelled": cancelled}})
+
+    async def post_workspace_code_navigation_documents_sync(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        documents = body.get("documents")
+        if not isinstance(documents, list):
+            raise WebApiError(400, "invalid_language_documents", "文档同步批次必须是数组")
+        workspace = self._workspace_file_root(alias, auth)
+        try:
+            data = await self.language_server_manager.sync_documents(
+                bot_alias=alias,
+                user_id=self._chat_user_id(auth),
+                workspace_root=workspace,
+                documents=documents,
+            )
+        except LanguageDocumentLimitError as exc:
+            raise WebApiError(413, "language_document_too_large", str(exc)) from exc
+        except ValueError as exc:
+            raise WebApiError(400, "invalid_language_documents", str(exc)) from exc
+        except Exception as exc:
+            logger.exception("语言服务文档同步失败: bot=%s", alias)
+            raise WebApiError(503, "language_document_sync_failed", "语言服务文档同步失败，请稍后重试") from exc
+        return _json({"ok": True, "data": data})
+
+    async def post_workspace_code_navigation_documents_close(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        documents = body.get("documents")
+        if not isinstance(documents, list):
+            raise WebApiError(400, "invalid_language_documents", "文档关闭批次必须是数组")
+        workspace = self._workspace_file_root(alias, auth)
+        try:
+            data = await self.language_server_manager.close_documents(
+                bot_alias=alias,
+                user_id=self._chat_user_id(auth),
+                workspace_root=workspace,
+                documents=documents,
+            )
+        except LanguageDocumentLimitError as exc:
+            raise WebApiError(413, "language_document_batch_too_large", str(exc)) from exc
+        except ValueError as exc:
+            raise WebApiError(400, "invalid_language_documents", str(exc)) from exc
+        except Exception as exc:
+            logger.exception("关闭语言服务文档失败: bot=%s", alias)
+            raise WebApiError(503, "language_document_close_failed", "关闭语言服务文档失败，请稍后重试") from exc
+        return _json({"ok": True, "data": data})
 
     async def get_workspace_inline_completion_config(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_INLINE_COMPLETION)

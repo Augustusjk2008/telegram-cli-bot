@@ -13,6 +13,7 @@ from bot.language_server.clangd import (
     discover_clangd_project_config,
     discover_compile_commands,
 )
+from bot.language_server.document_store import LanguageDocument
 from bot.language_server.manager import (
     LanguageServerRuntime,
     LanguageServerRuntimeKey,
@@ -144,6 +145,48 @@ async def test_clangd_navigates_workspace_locations_and_syncs_active_document(tm
     assert client.notifications[0][0] == "textDocument/didOpen"
     assert client.requests[-1][0] == "textDocument/definition"
     assert client.requests[-1][1]["position"] == {"line": 1, "character": 0}
+
+
+@pytest.mark.asyncio
+async def test_clangd_uses_unsaved_cross_file_snapshot_for_location_ranges(tmp_path: Path) -> None:
+    source = tmp_path / "main.cpp"
+    target = tmp_path / "target.hpp"
+    source.write_text("renamed();\n", encoding="utf-8")
+    target.write_text("void old_name();\n", encoding="utf-8")
+    client = FakeLspClient(
+        {
+            "textDocument/definition": {
+                "uri": target.resolve().as_uri(),
+                "range": {
+                    "start": {"line": 1, "character": 5},
+                    "end": {"line": 1, "character": 12},
+                },
+            }
+        }
+    )
+    provider = ClangdProvider(tmp_path)
+    await provider.sync_documents(
+        client,
+        [LanguageDocument("target.hpp", "cpp", 5, "constexpr int prefix = 0;\nvoid renamed();\n")],
+    )
+
+    result = await provider.navigate(
+        client,
+        kind="definition",
+        path=source,
+        language_id="cpp",
+        version=2,
+        content="renamed();\n",
+        line=1,
+        column=2,
+    )
+
+    assert result[0]["path"] == "target.hpp"
+    assert result[0]["selection_range"]["start"] == {"line": 2, "column": 6}
+    assert [method for method, _params in client.notifications] == [
+        "textDocument/didOpen",
+        "textDocument/didOpen",
+    ]
 
 
 @pytest.mark.asyncio
