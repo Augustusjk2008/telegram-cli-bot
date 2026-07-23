@@ -381,6 +381,65 @@ async def test_workspace_language_server_status_prewarms_selected_python_provide
 
 
 @pytest.mark.asyncio
+async def test_workspace_language_server_status_prewarms_selected_typescript_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    manager = FakeLanguageServerRuntimeManager({"request_id": "unused", "items": [], "message": ""})
+    manager.runtime_status = lambda **_kwargs: {
+        "state": "ready",
+        "pending_count": 0,
+        "open_document_count": 0,
+        "implementation_supported": True,
+    }
+    server = _build_server(tmp_path, monkeypatch)
+    server.language_server_manager = manager
+    monkeypatch.setattr(
+        server,
+        "_auth_context",
+        lambda _request: _auth_context(CAP_READ_FILE_CONTENT),
+    )
+    monkeypatch.setattr(
+        server.language_server_catalog,
+        "api_snapshot",
+        lambda: {
+            "providers": [
+                {
+                    "id": "typescript",
+                    "status": "available",
+                    "available": True,
+                    "source": "managed",
+                    "message": "使用托管版本",
+                }
+            ],
+            "canRefresh": True,
+        },
+    )
+
+    app = server._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            response = await client.get(
+                "/api/bots/main/workspace/language-servers?provider=typescript&prewarm=1"
+            )
+            payload = await response.json()
+
+    assert response.status == 200, payload
+    assert manager.prewarm_calls == [
+        {
+            "bot_alias": "main",
+            "user_id": server._chat_user_id(_auth_context(CAP_READ_FILE_CONTENT)),
+            "workspace_root": str(tmp_path),
+            "provider_id": "typescript",
+        }
+    ]
+    provider = payload["data"]["providers"][0]
+    assert provider["runtimeState"] == "ready"
+    assert provider["runtimeMessage"] == "TypeScript / JavaScript 语言服务已就绪"
+    assert provider["implementationSupported"] is True
+
+
+@pytest.mark.asyncio
 async def test_code_navigation_ast_fallback_validation_error_is_a_structured_400(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

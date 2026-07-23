@@ -16,6 +16,7 @@ from bot.platform.processes import build_chat_cli_process_kwargs, terminate_asyn
 
 from .catalog import LanguageServerCatalog
 from .pyright import PyrightProvider
+from .typescript import TypeScriptProvider
 
 
 _CANCEL_MARKER_TTL_SECONDS = 30.0
@@ -60,11 +61,16 @@ class LanguageServerRuntime:
         command: tuple[str, ...],
         *,
         request_timeout: float,
+        managed_typescript_sdk_path: Path | str | None = None,
     ) -> None:
         self.key = key
         self.command = tuple(command)
         self.request_timeout = max(0.1, float(request_timeout))
-        self.provider = PyrightProvider(key.workspace_root)
+        self.provider = (
+            TypeScriptProvider(key.workspace_root, managed_sdk_path=managed_typescript_sdk_path)
+            if key.provider_id == "typescript"
+            else PyrightProvider(key.workspace_root)
+        )
         self.process: asyncio.subprocess.Process | None = None
         self.client: Any = None
         self.state = "stopped"
@@ -312,6 +318,13 @@ class LanguageServerRuntimeManager:
         self.request_timeout = float(request_timeout or config.TCB_LSP_REQUEST_TIMEOUT_SECONDS)
         self.idle_timeout = float(idle_timeout or config.TCB_LSP_IDLE_TIMEOUT_SECONDS)
         self.max_runtimes = max(1, int(max_runtimes or config.TCB_LSP_MAX_RUNTIMES))
+        installer = getattr(catalog, "installer", None)
+        node_tools_dir = getattr(installer, "node_tools_dir", None)
+        self._managed_typescript_sdk_path = (
+            Path(node_tools_dir) / "node_modules" / "typescript" / "lib" / "tsserver.js"
+            if node_tools_dir is not None
+            else None
+        )
         self._runtime_factory = runtime_factory or self._create_runtime
         self._runtimes: dict[LanguageServerRuntimeKey, RuntimeProtocol] = {}
         self._start_tasks: dict[LanguageServerRuntimeKey, asyncio.Task[RuntimeProtocol]] = {}
@@ -324,7 +337,12 @@ class LanguageServerRuntimeManager:
         self._shutdown_started = False
 
     def _create_runtime(self, key: LanguageServerRuntimeKey, command: tuple[str, ...]) -> LanguageServerRuntime:
-        return LanguageServerRuntime(key, command, request_timeout=self.request_timeout)
+        return LanguageServerRuntime(
+            key,
+            command,
+            request_timeout=self.request_timeout,
+            managed_typescript_sdk_path=self._managed_typescript_sdk_path,
+        )
 
     async def resolve_code_navigation(
         self,
@@ -373,7 +391,7 @@ class LanguageServerRuntimeManager:
         try:
             command = await asyncio.to_thread(self.catalog.command_for, provider_id)
             if not command:
-                raise LanguageServerUnavailableError("Pyright 未安装或命令不可用")
+                raise LanguageServerUnavailableError("语言服务器未安装或命令不可用")
             runtime = await self._get_or_start(key, tuple(command))
             return await runtime.resolve_code_navigation(request)
         finally:
@@ -435,7 +453,7 @@ class LanguageServerRuntimeManager:
         """Start an already-discovered provider without issuing navigation or installing tools."""
 
         normalized_provider = str(provider_id or "").strip().lower()
-        if normalized_provider != "pyright" or not bool(getattr(self.catalog, "enabled", True)):
+        if normalized_provider not in {"pyright", "typescript"} or not bool(getattr(self.catalog, "enabled", True)):
             return False
         root = Path(workspace_root).expanduser().resolve()
         if not root.is_dir():
@@ -621,6 +639,22 @@ def _provider_for_request(request: Mapping[str, Any]) -> str | None:
     suffix = Path(path).suffix.lower()
     if suffix in {".py", ".pyi"} and language_id in {"", "python", "py"}:
         return "pyright"
+    if suffix in {".ts", ".tsx", ".mts", ".cts"} and language_id in {
+        "",
+        "typescript",
+        "typescriptreact",
+        "ts",
+        "tsx",
+    }:
+        return "typescript"
+    if suffix in {".js", ".jsx", ".mjs", ".cjs"} and language_id in {
+        "",
+        "javascript",
+        "javascriptreact",
+        "js",
+        "jsx",
+    }:
+        return "typescript"
     return None
 
 

@@ -276,10 +276,10 @@ async def test_manager_does_not_evict_a_runtime_with_an_active_navigation_operat
 
 
 @pytest.mark.asyncio
-async def test_manager_ignores_non_python_requests_during_python_phase(tmp_path: Path) -> None:
+async def test_manager_ignores_unsupported_language_requests(tmp_path: Path) -> None:
     manager = LanguageServerRuntimeManager(FakeCatalog())
-    request = _request("main.ts")
-    request["document"]["languageId"] = "typescript"
+    request = _request("main.rs")
+    request["document"]["languageId"] = "rust"
 
     result = await manager.resolve_code_navigation(
         bot_alias="main",
@@ -430,6 +430,37 @@ async def test_manager_prewarms_only_discovered_pyright_without_navigation(tmp_p
         workspace_root=tmp_path,
         provider_id="pyright",
     )["state"] == "ready"
+    await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_manager_prewarms_discovered_typescript_without_navigation(tmp_path: Path) -> None:
+    runtimes: list[FakeRuntime] = []
+
+    class TypeScriptCatalog:
+        enabled = True
+
+        @staticmethod
+        def command_for(provider_id: str) -> tuple[str, ...] | None:
+            assert provider_id == "typescript"
+            return ("typescript-language-server", "--stdio")
+
+    def factory(key: LanguageServerRuntimeKey, command: tuple[str, ...]) -> FakeRuntime:
+        runtime = FakeRuntime(key, command)
+        runtimes.append(runtime)
+        return runtime
+
+    manager = LanguageServerRuntimeManager(TypeScriptCatalog(), runtime_factory=factory)
+
+    assert await manager.prewarm(
+        bot_alias="main",
+        user_id=1,
+        workspace_root=tmp_path,
+        provider_id="typescript",
+    ) is True
+    assert len(runtimes) == 1
+    assert runtimes[0].key.provider_id == "typescript"
+    assert runtimes[0].requests == []
     await manager.shutdown()
 
 

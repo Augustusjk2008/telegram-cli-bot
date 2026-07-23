@@ -36,9 +36,12 @@ export async function loadFileEditorExtensions(path: string): Promise<EditorExte
     return [markdown()];
   }
 
-  if (/\.(js|jsx|mjs|cjs|ts|tsx)$/.test(normalizedPath)) {
+  if (/\.(js|jsx|mjs|cjs|ts|tsx|mts|cts)$/.test(normalizedPath)) {
     const { javascript } = await import("@codemirror/lang-javascript");
-    return [javascript({ jsx: /(\.jsx|\.tsx)$/.test(normalizedPath), typescript: /(\.ts|\.tsx)$/.test(normalizedPath) })];
+    return [javascript({
+      jsx: /\.(jsx|tsx)$/.test(normalizedPath),
+      typescript: /\.(ts|tsx|mts|cts)$/.test(normalizedPath),
+    })];
   }
 
   if (/\.json$/.test(normalizedPath)) {

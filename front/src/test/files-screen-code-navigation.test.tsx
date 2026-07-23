@@ -35,6 +35,13 @@ async function requestDefinition(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("menuitem", { name: "转到定义" }));
 }
 
+async function requestImplementation(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "编辑器操作" }));
+  const implementation = screen.getByRole("menuitem", { name: "转到实现" });
+  await waitFor(() => expect(implementation).toBeEnabled());
+  await user.click(implementation);
+}
+
 test("mobile files editor exposes semantic navigation and applies the exact reveal position", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
@@ -65,6 +72,31 @@ test("mobile files editor exposes semantic navigation and applies the exact reve
     expect(editor.selectionEnd).toBe(5);
     expect(editor).toHaveFocus();
   });
+});
+
+test("mobile files editor enables implementation navigation when TypeScript reports the capability", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const resolveCodeNavigation = vi.spyOn(client, "resolveCodeNavigation").mockImplementation(async (_alias, request) => ({
+    requestId: request.requestId,
+    message: "",
+    items: [],
+  }));
+
+  await openMobileEditor(user, client);
+  await requestImplementation(user);
+
+  await waitFor(() => expect(resolveCodeNavigation).toHaveBeenCalledWith(
+    "main",
+    expect.objectContaining({
+      kind: "implementation",
+      document: expect.objectContaining({
+        path: "server.ts",
+        languageId: "typescript",
+      }),
+    }),
+    expect.anything(),
+  ));
 });
 
 test("mobile files editor shows multiple semantic destinations and an empty-result message", async () => {

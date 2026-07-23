@@ -1513,6 +1513,7 @@ export class MockWebBotClient implements WebBotClient {
         canUpdate: false,
         message: "使用 PATH 中的命令",
         error: "",
+        implementationSupported: true,
       },
       {
         provider: "clangd",

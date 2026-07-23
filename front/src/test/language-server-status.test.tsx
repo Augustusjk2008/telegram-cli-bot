@@ -1,10 +1,46 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { MockWebBotClient } from "../services/mockWebBotClient";
+import {
+  inferFileEditorLanguageId,
+  inferLanguageServerProviderId,
+  loadFileEditorExtensions,
+} from "../utils/fileEditorLanguage";
 import { useLanguageServerStatus } from "../workbench/useLanguageServerStatus";
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+test.each([
+  ["src/module.ts", "typescript"],
+  ["src/component.tsx", "typescriptreact"],
+  ["src/module.js", "javascript"],
+  ["src/component.jsx", "javascriptreact"],
+  ["src/module.mts", "typescript"],
+  ["src/module.cts", "typescript"],
+  ["src/module.mjs", "javascript"],
+  ["src/module.cjs", "javascript"],
+])("TS/JS 扩展名 %s 映射到 TypeScript provider", (path, languageId) => {
+  expect(inferFileEditorLanguageId(path)).toBe(languageId);
+  expect(inferLanguageServerProviderId(path)).toBe("typescript");
+});
+
+test.each(["src/module.mts", "src/module.cts"])("TS 模块扩展名 %s 加载 CodeMirror 语法扩展", async (path) => {
+  expect(await loadFileEditorExtensions(path)).toHaveLength(1);
+});
+
+test("TS 模块文件查询 TypeScript 状态并保留实现 capability", async () => {
+  const client = new MockWebBotClient();
+  const getCatalog = vi.spyOn(client, "getLanguageServerCatalog");
+  const { result } = renderHook(() => useLanguageServerStatus(client, "main", "src/module.mts"));
+
+  await waitFor(() => expect(result.current.status).toEqual(expect.objectContaining({
+    provider: "typescript",
+    status: "available",
+    implementationSupported: true,
+  })));
+  expect(getCatalog).toHaveBeenCalledWith("main", "typescript");
 });
 
 test("language service status does not reload when switching between files of the same provider", async () => {

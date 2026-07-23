@@ -2864,8 +2864,12 @@ class WebApiServer:
         workspace = self._workspace_file_root(alias, auth)
         provider_id = str(request.query.get("provider") or "").strip().lower()
         should_prewarm = str(request.query.get("prewarm") or "").strip().lower() in {"1", "true", "yes", "on"}
+        provider_label = {
+            "pyright": "Python",
+            "typescript": "TypeScript / JavaScript",
+        }.get(provider_id, "")
         prewarm_error = ""
-        if should_prewarm and provider_id == "pyright":
+        if should_prewarm and provider_label:
             try:
                 await self.language_server_manager.prewarm(
                     bot_alias=alias,
@@ -2875,15 +2879,16 @@ class WebApiServer:
                 )
             except Exception as exc:
                 logger.exception(
-                    "Python 语言服务预热失败: bot=%s user_id=%s",
+                    "%s 语言服务预热失败: bot=%s user_id=%s",
+                    provider_label,
                     alias,
                     self._chat_user_id(auth),
                 )
-                prewarm_error = "Python 语言服务启动失败"
+                prewarm_error = f"{provider_label} 语言服务启动失败"
         # 仅做发现；LanguageServerCatalog 不会调用安装器的 install，打开文件
         # 或轮询状态均不会触发下载。
         data = await asyncio.to_thread(self.language_server_catalog.api_snapshot)
-        if provider_id == "pyright" and isinstance(data, dict):
+        if provider_label and isinstance(data, dict):
             runtime_status = self.language_server_manager.runtime_status(
                 bot_alias=alias,
                 user_id=self._chat_user_id(auth),
@@ -2899,11 +2904,11 @@ class WebApiServer:
                         continue
                     runtime_state = "error" if prewarm_error else str((runtime_status or {}).get("state") or "")
                     runtime_message = prewarm_error or {
-                        "starting": "正在启动 Python 语言服务",
-                        "indexing": "Python 语言服务正在索引工作区",
-                        "ready": "Python 语言服务已就绪",
-                        "error": "Python 语言服务启动失败",
-                        "stopped": "Python 语言服务已停止",
+                        "starting": f"正在启动 {provider_label} 语言服务",
+                        "indexing": f"{provider_label} 语言服务正在索引工作区",
+                        "ready": f"{provider_label} 语言服务已就绪",
+                        "error": f"{provider_label} 语言服务启动失败",
+                        "stopped": f"{provider_label} 语言服务已停止",
                     }.get(runtime_state, "")
                     implementation_supported = (runtime_status or {}).get("implementation_supported")
                     decorated.append(

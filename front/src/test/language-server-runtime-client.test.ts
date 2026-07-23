@@ -41,3 +41,32 @@ test("workspace language status requests Pyright prewarm and maps runtime state"
     implementationSupported: false,
   }));
 });
+
+test("workspace language status preserves the TypeScript implementation capability", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({
+      ok: true,
+      data: {
+        providers: [{
+          id: "typescript",
+          status: "available",
+          source: "managed",
+          version: "4.4.1",
+          runtimeState: "ready",
+          implementationSupported: true,
+        }],
+      },
+    }),
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  const client = new RealWebBotClient();
+
+  const catalog = await client.getLanguageServerCatalog("main", "typescript");
+
+  expect(catalog.providers[0]).toEqual(expect.objectContaining({
+    provider: "typescript",
+    runtimeState: "ready",
+    implementationSupported: true,
+  }));
+});
