@@ -22,6 +22,7 @@ type Props = {
   canNavigateBack?: boolean;
   canNavigateForward?: boolean;
   allowCodeJump?: boolean;
+  canNavigateImplementation?: boolean;
   canUseInlineCompletion?: boolean;
   onToggleBreakpoint?: (line: number) => void;
   onResolveCodeNavigation?: (input: CodeNavigationIntent) => void;
@@ -96,6 +97,7 @@ export function EditorPane({
   canNavigateBack = false,
   canNavigateForward = false,
   allowCodeJump = true,
+  canNavigateImplementation = true,
   canUseInlineCompletion = false,
   onToggleBreakpoint,
   onResolveCodeNavigation,
@@ -465,6 +467,7 @@ export function EditorPane({
             currentLine={currentLine}
             reveal={editorReveal?.path === activeTab.path ? editorReveal : null}
             navigationCommand={navigationCommand}
+            canNavigateImplementation={canNavigateImplementation}
             statusText=""
             error=""
             hideHeader

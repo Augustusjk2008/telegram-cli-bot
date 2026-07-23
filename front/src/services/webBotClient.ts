@@ -166,7 +166,7 @@ export interface WebBotClient {
   updateInlineCompletionConfig(input: InlineCompletionConfigInput): Promise<InlineCompletionConfig>;
   getInlineCompletionRuntimeConfig(botAlias: string): Promise<InlineCompletionConfig>;
   requestInlineCompletion(botAlias: string, input: InlineCompletionRequest, signal?: AbortSignal): Promise<InlineCompletionResult>;
-  getLanguageServerCatalog(botAlias: string): Promise<LanguageServerCatalog>;
+  getLanguageServerCatalog(botAlias: string, provider?: LanguageServerProviderId): Promise<LanguageServerCatalog>;
   refreshLanguageServerCatalog(): Promise<LanguageServerCatalog>;
   installLanguageServer(provider: LanguageServerProviderId, options?: LanguageServerInstallOptions): Promise<LanguageServerCatalog>;
   getEnvConfig(): Promise<EnvConfigSnapshot>;
@@ -295,7 +295,11 @@ export interface WebBotClient {
   quickOpenWorkspace(botAlias: string, query: string, limit?: number): Promise<WorkspaceQuickOpenResult>;
   searchWorkspace(botAlias: string, query: string, limit?: number, signal?: AbortSignal): Promise<WorkspaceSearchResult>;
   getWorkspaceOutline(botAlias: string, path: string): Promise<WorkspaceOutlineResult>;
-  resolveCodeNavigation(botAlias: string, input: CodeNavigationRequest): Promise<CodeNavigationResult>;
+  resolveCodeNavigation(
+    botAlias: string,
+    input: CodeNavigationRequest,
+    signal?: AbortSignal,
+  ): Promise<CodeNavigationResult>;
   uploadChatAttachment(botAlias: string, file: File): Promise<ChatAttachmentUploadResult>;
   deleteChatAttachment(botAlias: string, savedPath: string): Promise<ChatAttachmentDeleteResult>;
   uploadFile(botAlias: string, file: File): Promise<void>;

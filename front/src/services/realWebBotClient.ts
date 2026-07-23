@@ -228,6 +228,27 @@ type JsonEnvelope<T> = {
   };
 };
 
+type RawCodeNavigationLocation = {
+  target_type?: "workspace" | "external";
+  path?: string;
+  source_id?: string;
+  provider?: string;
+  range?: {
+    start?: { line?: number; column?: number };
+    end?: { line?: number; column?: number };
+  };
+  selection_range?: {
+    start?: { line?: number; column?: number };
+    end?: { line?: number; column?: number };
+  };
+};
+
+type RawCodeNavigationResult = {
+  request_id?: string;
+  message?: string;
+  items?: RawCodeNavigationLocation | RawCodeNavigationLocation[] | null;
+};
+
 type RawBotSummary = {
   alias: string;
   cli_type: CliType;
@@ -418,6 +439,12 @@ type RawLanguageServerProviderStatus = {
   can_update?: boolean;
   message?: string;
   error?: string;
+  runtimeState?: string;
+  runtime_state?: string;
+  runtimeMessage?: string;
+  runtime_message?: string;
+  implementationSupported?: boolean;
+  implementation_supported?: boolean;
 };
 
 type RawLanguageServerCatalog = {
@@ -3199,6 +3226,15 @@ function mapLanguageServerProviderStatus(raw: RawLanguageServerProviderStatus): 
   const canUpdate = raw.canUpdate ?? raw.can_update ?? (canInstall && Boolean(managedVersion));
   const backendMessage = String(raw.message ?? raw.error ?? "").trim();
   const message = backendMessage || (status === "error" ? "语言服务检测失败，请重新检测" : "");
+  const rawRuntimeState = String(raw.runtimeState ?? raw.runtime_state ?? "").trim();
+  const runtimeState = rawRuntimeState === "starting"
+    || rawRuntimeState === "indexing"
+    || rawRuntimeState === "ready"
+    || rawRuntimeState === "error"
+    || rawRuntimeState === "stopped"
+    ? rawRuntimeState
+    : undefined;
+  const implementationSupported = raw.implementationSupported ?? raw.implementation_supported;
   return {
     provider,
     status,
@@ -3209,6 +3245,11 @@ function mapLanguageServerProviderStatus(raw: RawLanguageServerProviderStatus): 
     canUpdate: Boolean(canUpdate),
     message,
     error: status === "error" ? message : "",
+    ...(runtimeState ? { runtimeState } : {}),
+    ...(raw.runtimeMessage ?? raw.runtime_message
+      ? { runtimeMessage: String(raw.runtimeMessage ?? raw.runtime_message) }
+      : {}),
+    ...(typeof implementationSupported === "boolean" ? { implementationSupported } : {}),
   } as LanguageServerProviderStatus;
 }
 
@@ -4042,9 +4083,15 @@ export class RealWebBotClient implements WebBotClient {
     );
   }
 
-  async getLanguageServerCatalog(botAlias: string): Promise<LanguageServerCatalog> {
+  async getLanguageServerCatalog(
+    botAlias: string,
+    provider?: LanguageServerProviderId,
+  ): Promise<LanguageServerCatalog> {
+    const query = provider
+      ? `?provider=${encodeURIComponent(provider)}&prewarm=1`
+      : "";
     return mapLanguageServerCatalog(await this.requestJson<RawLanguageServerCatalog>(
-      `/api/bots/${encodeURIComponent(botAlias)}/workspace/language-servers`,
+      `/api/bots/${encodeURIComponent(botAlias)}/workspace/language-servers${query}`,
     ));
   }
 
@@ -5499,39 +5546,44 @@ export class RealWebBotClient implements WebBotClient {
   async resolveCodeNavigation(
     botAlias: string,
     input: CodeNavigationRequest,
+    signal?: AbortSignal,
   ): Promise<CodeNavigationResult> {
-    const data = await this.requestJson<{
-      request_id?: string;
-      message?: string;
-      items?: Array<{
-        target_type?: "workspace" | "external";
-        path?: string;
-        source_id?: string;
-        provider?: string;
-        range?: {
-          start?: { line?: number; column?: number };
-          end?: { line?: number; column?: number };
-        };
-        selection_range?: {
-          start?: { line?: number; column?: number };
-          end?: { line?: number; column?: number };
-        };
-      }>;
-    }>(`/api/bots/${encodeURIComponent(botAlias)}/workspace/code-navigation/resolve`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(input),
-    });
+    const basePath = `/api/bots/${encodeURIComponent(botAlias)}/workspace/code-navigation`;
+    const cancelRequest = () => {
+      void this.requestJson<{ cancelled?: boolean }>(`${basePath}/cancel`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ requestId: input.requestId }),
+      }).catch(() => undefined);
+    };
+    if (signal && !signal.aborted) {
+      signal.addEventListener("abort", cancelRequest, { once: true });
+    }
+    let data: RawCodeNavigationResult | null;
+    try {
+      data = await this.requestJson<RawCodeNavigationResult | null>(`${basePath}/resolve`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(input),
+        signal,
+      });
+    } finally {
+      signal?.removeEventListener("abort", cancelRequest);
+    }
     const mapPosition = (position?: { line?: number; column?: number }) => ({
       line: Math.max(1, Number(position?.line) || 1),
       column: Math.max(1, Number(position?.column) || 1),
     });
+    const rawItems = data?.items;
+    const items = Array.isArray(rawItems) ? rawItems : rawItems ? [rawItems] : [];
     return {
-      requestId: data.request_id || input.requestId,
-      message: data.message || "",
-      items: (data.items || []).map((item) => ({
+      requestId: data?.request_id || input.requestId,
+      message: data?.message || "",
+      items: items.map((item) => ({
         targetType: item.target_type === "external" ? "external" : "workspace",
         ...(item.path ? { path: item.path } : {}),
         ...(item.source_id ? { sourceId: item.source_id } : {}),

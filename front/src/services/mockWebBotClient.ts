@@ -3141,7 +3141,10 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
-  async getLanguageServerCatalog(_botAlias: string): Promise<LanguageServerCatalog> {
+  async getLanguageServerCatalog(
+    _botAlias: string,
+    _provider?: LanguageServerProviderId,
+  ): Promise<LanguageServerCatalog> {
     return {
       canRefresh: this.languageServerCatalog.canRefresh,
       providers: this.languageServerCatalog.providers.map((item) => ({ ...item })),
@@ -5194,7 +5197,9 @@ export class MockWebBotClient implements WebBotClient {
   async resolveCodeNavigation(
     botAlias: string,
     input: CodeNavigationRequest,
+    signal?: AbortSignal,
   ): Promise<CodeNavigationResult> {
+    signal?.throwIfAborted?.();
     const lineText = input.document.content.split(/\r?\n/)[Math.max(0, input.position.line - 1)] || "";
     const cursorIndex = Math.min(Math.max(input.position.column - 1, 0), Math.max(0, lineText.length - 1));
     const symbol = Array.from(lineText.matchAll(/[A-Za-z_$][\w$]*/g)).find((match) => {

@@ -13,6 +13,8 @@ type State = ActiveLanguageServerStatus & {
   error: string;
 };
 
+const RUNTIME_STATUS_POLL_INTERVAL_MS = 1000;
+
 function unavailableStatus(provider: LanguageServerProviderId, error: string): LanguageServerProviderStatus {
   return {
     provider,
@@ -56,24 +58,32 @@ export function useLanguageServerStatus(
       return undefined;
     }
     let cancelled = false;
+    let pollTimer: number | null = null;
     setState({ provider, status: null, loading: true, error: "" });
-    void client.getLanguageServerCatalog(botAlias)
-      .then((catalog) => {
+    const loadStatus = async () => {
+      try {
+        const catalog = await client.getLanguageServerCatalog(botAlias, provider);
         if (cancelled) return;
-        setState({
-          provider,
-          status: catalog.providers.find((item) => item.provider === provider) || missingStatus(provider),
-          loading: false,
-          error: "",
-        });
-      })
-      .catch(() => {
+        const status = catalog.providers.find((item) => item.provider === provider) || missingStatus(provider);
+        setState({ provider, status, loading: false, error: "" });
+        if (status.runtimeState === "starting" || status.runtimeState === "indexing") {
+          pollTimer = window.setTimeout(() => {
+            pollTimer = null;
+            void loadStatus();
+          }, RUNTIME_STATUS_POLL_INTERVAL_MS);
+        }
+      } catch {
         if (cancelled) return;
         const error = "无法读取语言服务状态";
         setState({ provider, status: unavailableStatus(provider, error), loading: false, error });
-      });
+      }
+    };
+    void loadStatus();
     return () => {
       cancelled = true;
+      if (pollTimer !== null) {
+        window.clearTimeout(pollTimer);
+      }
     };
   }, [botAlias, client, provider, refreshKey]);
 

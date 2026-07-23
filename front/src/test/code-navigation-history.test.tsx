@@ -352,3 +352,78 @@ test("desktop history reopens a closed workspace file and command navigation use
   expect(await screen.findByRole("tab", { name: "third.ts" })).toHaveAttribute("aria-selected", "true");
   expect(readFileFull.mock.calls.filter((call) => call[1] === "src/third.ts")).toHaveLength(2);
 });
+
+test("desktop code navigation cancels a superseded request and shows multiple destinations", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  window.localStorage.clear();
+  const signals: AbortSignal[] = [];
+  let invocation = 0;
+  vi.spyOn(client, "resolveCodeNavigation").mockImplementation((_alias, request, signal) => {
+    invocation += 1;
+    if (signal) {
+      signals.push(signal);
+    }
+    if (invocation === 1) {
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener("abort", () => {
+          reject(new DOMException("请求已取消", "AbortError"));
+        }, { once: true });
+      });
+    }
+    return Promise.resolve({
+      requestId: request.requestId,
+      message: "",
+      items: [
+        {
+          targetType: "workspace" as const,
+          path: "src/one.ts",
+          provider: "test-semantic",
+          range: {
+            start: { line: 1, column: 1 },
+            end: { line: 1, column: 12 },
+          },
+          selectionRange: {
+            start: { line: 1, column: 5 },
+            end: { line: 1, column: 8 },
+          },
+        },
+        {
+          targetType: "workspace" as const,
+          path: "src/two.ts",
+          provider: "test-semantic",
+          range: {
+            start: { line: 4, column: 1 },
+            end: { line: 4, column: 12 },
+          },
+          selectionRange: {
+            start: { line: 4, column: 3 },
+            end: { line: 4, column: 6 },
+          },
+        },
+      ],
+    });
+  });
+
+  render(
+    <PersistentTerminalProvider client={client}>
+      <DesktopWorkbench botAlias="main" client={client} />
+    </PersistentTerminalProvider>,
+  );
+  await user.click(await screen.findByRole("button", { name: "展开 src" }));
+  await user.click(await screen.findByRole("button", { name: "打开 src/index.ts" }));
+  const editor = await screen.findByRole("textbox", { name: "文件内容" }) as HTMLTextAreaElement;
+  editor.focus();
+  editor.setSelectionRange(2, 2);
+
+  fireEvent.keyDown(editor, { key: "F12" });
+  fireEvent.keyDown(editor, { key: "F12" });
+
+  await waitFor(() => expect(invocation).toBe(2));
+  expect(signals).toHaveLength(2);
+  await waitFor(() => expect(signals[0]?.aborted).toBe(true));
+  expect(signals[1]?.aborted).toBe(false);
+  expect(await screen.findByText("src/one.ts")).toBeVisible();
+  expect(screen.getByText("src/two.ts")).toBeVisible();
+  expect(screen.queryByText("代码导航失败")).not.toBeInTheDocument();
+});

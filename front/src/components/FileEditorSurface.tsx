@@ -22,6 +22,7 @@ type Props = {
   currentLine?: number | null;
   reveal?: { line: number; column: number; requestId: string } | null;
   navigationCommand?: { kind: CodeNavigationKind; requestId: string } | null;
+  canNavigateImplementation?: boolean;
   statusText?: string;
   error?: string;
   hideHeader?: boolean;
@@ -252,10 +253,11 @@ function resolveTextareaNavigationTarget(
   const before = value.slice(0, boundedOffset);
   const line = before.split(/\r?\n/).length;
   const lineStart = before.lastIndexOf("\n") + 1;
-  const column = boundedOffset - lineStart + 1;
+  const utf16ColumnOffset = boundedOffset - lineStart;
+  const column = Array.from(value.slice(lineStart, boundedOffset)).length + 1;
   const lineEnd = value.indexOf("\n", boundedOffset);
   const currentLineText = value.slice(lineStart, lineEnd === -1 ? value.length : lineEnd);
-  const symbol = extractSymbolAt(currentLineText, Math.max(0, column - 1));
+  const symbol = extractSymbolAt(currentLineText, Math.max(0, utf16ColumnOffset));
   return {
     kind,
     path,
@@ -272,8 +274,9 @@ function resolveEditorNavigationTargetAtPosition(
   kind: CodeNavigationKind,
 ) {
   const lineInfo = view.state.doc.lineAt(position);
-  const column = position - lineInfo.from + 1;
-  const symbol = extractSymbolAt(lineInfo.text, Math.max(0, column - 1));
+  const utf16ColumnOffset = position - lineInfo.from;
+  const column = Array.from(lineInfo.text.slice(0, utf16ColumnOffset)).length + 1;
+  const symbol = extractSymbolAt(lineInfo.text, Math.max(0, utf16ColumnOffset));
   return {
     kind,
     path,
@@ -316,7 +319,9 @@ function textOffsetAtPosition(value: string, line: number, column: number) {
   if (end > start && value[end - 1] === "\r") {
     end -= 1;
   }
-  return Math.min(start + column - 1, end);
+  const lineText = value.slice(start, end);
+  const prefix = Array.from(lineText).slice(0, Math.max(0, column - 1)).join("");
+  return Math.min(start + prefix.length, end);
 }
 
 export function FileEditorSurface({
@@ -331,6 +336,7 @@ export function FileEditorSurface({
   currentLine = null,
   reveal = null,
   navigationCommand = null,
+  canNavigateImplementation = true,
   statusText = "",
   error = "",
   hideHeader = false,
@@ -464,7 +470,7 @@ export function FileEditorSurface({
   }, [editorView, reveal?.requestId]);
 
   function requestCodeNavigation(kind: CodeNavigationKind) {
-    if (!onResolveCodeNavigation) {
+    if (!onResolveCodeNavigation || (kind === "implementation" && !canNavigateImplementation)) {
       return false;
     }
     const target = editorView
@@ -654,7 +660,8 @@ export function FileEditorSurface({
                     setNavigationMenuOpen(false);
                     requestCodeNavigation("implementation");
                   }}
-                  className="flex w-full touch-manipulation rounded-md px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                  disabled={!canNavigateImplementation}
+                  className="flex w-full touch-manipulation rounded-md px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   转到实现
                 </button>

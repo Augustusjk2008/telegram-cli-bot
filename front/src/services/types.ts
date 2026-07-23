@@ -243,6 +243,8 @@ export type LanguageServerAvailability = "available" | "missing" | "installing" 
 
 export type LanguageServerSource = "custom" | "path" | "managed";
 
+export type LanguageServerRuntimeState = "starting" | "indexing" | "ready" | "error" | "stopped";
+
 export type LanguageServerProviderStatus = {
   provider: LanguageServerProviderId;
   status: LanguageServerAvailability;
@@ -253,6 +255,9 @@ export type LanguageServerProviderStatus = {
   canUpdate: boolean;
   message: string;
   error: string;
+  runtimeState?: LanguageServerRuntimeState;
+  runtimeMessage?: string;
+  implementationSupported?: boolean;
 };
 
 export type LanguageServerCatalog = {

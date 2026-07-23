@@ -75,3 +75,53 @@ test("workbench status bar reports loading and ready states without an install a
   expect(screen.getByTestId("workbench-language-service")).toHaveTextContent("TS/JS · 就绪");
   expect(screen.queryByRole("button", { name: /安装|更新/ })).not.toBeInTheDocument();
 });
+
+test("workbench status bar distinguishes language runtime startup and indexing", () => {
+  const { rerender } = renderStatusBar({
+    languageServiceProvider: "pyright",
+    languageServiceStatus: {
+      provider: "pyright",
+      status: "available",
+      source: "path",
+      version: "1.1.410",
+      commandSummary: "pyright-langserver --stdio",
+      canInstall: false,
+      canUpdate: false,
+      message: "使用 PATH 中的命令",
+      error: "",
+      runtimeState: "starting",
+      runtimeMessage: "正在初始化工作区",
+    },
+  });
+
+  expect(screen.getByTestId("workbench-language-service")).toHaveTextContent("Python · 启动中");
+  expect(screen.getByTestId("workbench-language-service")).toHaveAttribute("title", "正在初始化工作区");
+
+  rerender(
+    <WorkbenchStatusBar
+      activeFilePath="src/main.py"
+      fileDirty={false}
+      terminalStatus={{ connected: false, connectionText: "终端未启动", currentCwd: "" }}
+      chatStatus={{ state: "idle", processing: false }}
+      debugStatus={{ phase: "idle", connectionText: "调试未启动" }}
+      restoreState="clean"
+      viewMode="desktop"
+      languageServiceProvider="pyright"
+      languageServiceStatus={{
+        provider: "pyright",
+        status: "available",
+        source: "path",
+        version: "1.1.410",
+        commandSummary: "pyright-langserver --stdio",
+        canInstall: false,
+        canUpdate: false,
+        message: "使用 PATH 中的命令",
+        error: "",
+        runtimeState: "indexing",
+        runtimeMessage: "正在索引工作区",
+      }}
+    />,
+  );
+
+  expect(screen.getByTestId("workbench-language-service")).toHaveTextContent("Python · 索引中");
+});

@@ -21,6 +21,10 @@ def register(app: web.Application, server) -> None:
         "/api/bots/{alias}/workspace/code-navigation/resolve",
         server.post_workspace_code_navigation_resolve,
     )
+    app.router.add_post(
+        "/api/bots/{alias}/workspace/code-navigation/cancel",
+        server.post_workspace_code_navigation_cancel,
+    )
     app.router.add_post("/api/bots/{alias}/workspace/inline-completion", server.post_workspace_inline_completion)
     app.router.add_post("/api/bots/{alias}/cd", server.post_cd)
     app.router.add_post("/api/bots/{alias}/files/upload", server.upload_file)

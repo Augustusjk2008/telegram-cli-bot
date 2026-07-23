@@ -82,26 +82,54 @@ def resolve_workspace_definition(
 ) -> dict[str, object]:
     """Adapt the deprecated definition contract to semantic code navigation."""
 
+    navigation_request = build_legacy_code_navigation_request(
+        workspace,
+        path,
+        line=line,
+        column=column,
+    )
+    result = resolve_code_navigation(
+        workspace,
+        navigation_request,
+        cursor_symbol=symbol,
+    )
+    document = navigation_request["document"]
+    source_path = str(document["path"]) if isinstance(document, Mapping) else path
+    return adapt_code_navigation_to_legacy(result, source_path=source_path)
+
+
+def build_legacy_code_navigation_request(
+    workspace: Path | str,
+    path: str,
+    *,
+    line: int,
+    column: int,
+) -> dict[str, object]:
+    """Read the legacy target safely and produce the unified navigation request."""
+
     root = _workspace_root(workspace)
     target = _resolve_workspace_file(root, path)
     content = target.read_text(encoding="utf-8", errors="ignore")
-    result = resolve_code_navigation(
-        root,
-        {
-            "kind": "definition",
-            "requestId": "legacy-definition",
-            "document": {
-                "path": _relative_path(root, target),
-                "languageId": "python" if target.suffix.lower() in {".py", ".pyi"} else "",
-                "version": 0,
-                "content": content,
-            },
-            "position": {"line": line, "column": column},
+    return {
+        "kind": "definition",
+        "requestId": "legacy-definition",
+        "document": {
+            "path": _relative_path(root, target),
+            "languageId": "python" if target.suffix.lower() in {".py", ".pyi"} else "",
+            "version": 0,
+            "content": content,
         },
-        cursor_symbol=symbol,
-    )
+        "position": {"line": line, "column": column},
+    }
 
-    source_path = _relative_path(root, target)
+
+def adapt_code_navigation_to_legacy(
+    result: Mapping[str, object],
+    *,
+    source_path: str,
+) -> dict[str, object]:
+    """Convert normalized CodeLocation items to the deprecated response shape."""
+
     legacy_items: list[dict[str, object]] = []
     for item in result.get("items", []):
         if not isinstance(item, Mapping):

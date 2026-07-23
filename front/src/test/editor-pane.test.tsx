@@ -200,6 +200,29 @@ test("editor pane sends definition and implementation intents from F12 shortcuts
   });
 });
 
+test("editor pane suppresses implementation navigation when the server capability is absent", () => {
+  const content = "def greet():\n    return None\n\ngreet()\n";
+  const activeTab = createTab({
+    path: "main.py",
+    basename: "main.py",
+    content,
+    savedContent: content,
+  });
+  const onResolveCodeNavigation = vi.fn();
+  renderEditor(activeTab, [activeTab], {
+    canNavigateImplementation: false,
+    onResolveCodeNavigation,
+  });
+  const editor = screen.getByRole("textbox", { name: "文件内容" }) as HTMLTextAreaElement;
+  const callOffset = content.lastIndexOf("greet") + 2;
+  editor.focus();
+  editor.setSelectionRange(callOffset, callOffset);
+
+  fireEvent.keyDown(editor, { key: "F12", ctrlKey: true });
+
+  expect(onResolveCodeNavigation).not.toHaveBeenCalled();
+});
+
 test("editor pane keeps Ctrl-click bound to semantic definition navigation", () => {
   const content = "def greet():\n    return None\n\ngreet()\n";
   const activeTab = createTab({
@@ -276,5 +299,53 @@ test("editor reveal moves the real cursor to the requested line and column", asy
     expect(editor.selectionStart).toBe(8);
     expect(editor.selectionEnd).toBe(8);
     expect(editor).toHaveFocus();
+  });
+});
+
+test("editor navigation reports Unicode code-point columns after an emoji", () => {
+  const content = "😀greet()\n";
+  const activeTab = createTab({
+    path: "main.py",
+    basename: "main.py",
+    content,
+    savedContent: content,
+  });
+  const onResolveCodeNavigation = vi.fn();
+  renderEditor(activeTab, [activeTab], { onResolveCodeNavigation });
+  const editor = screen.getByRole("textbox", { name: "文件内容" }) as HTMLTextAreaElement;
+  const greetOffset = content.indexOf("greet");
+  editor.focus();
+  editor.setSelectionRange(greetOffset, greetOffset);
+
+  fireEvent.keyDown(editor, { key: "F12" });
+
+  expect(onResolveCodeNavigation).toHaveBeenCalledWith(expect.objectContaining({
+    line: 1,
+    column: 2,
+    symbol: "greet",
+  }));
+});
+
+test("editor reveal converts a Unicode code-point column back to the UTF-16 cursor offset", async () => {
+  const content = "😀greet()\n";
+  const activeTab = createTab({
+    path: "main.py",
+    basename: "main.py",
+    content,
+    savedContent: content,
+  });
+  renderEditor(activeTab, [activeTab], {
+    editorReveal: {
+      path: "main.py",
+      line: 1,
+      column: 2,
+      requestId: "emoji-reveal",
+    },
+  });
+  const editor = screen.getByRole("textbox", { name: "文件内容" }) as HTMLTextAreaElement;
+
+  await waitFor(() => {
+    expect(editor.selectionStart).toBe(content.indexOf("greet"));
+    expect(editor.selectionEnd).toBe(content.indexOf("greet"));
   });
 });

@@ -79,7 +79,12 @@ function languageServiceLabel(
   const label = languageServiceProviderLabel(provider);
   if (loading) return `${label} · 检测中`;
   if (!status) return `${label} · 状态未知`;
-  if (status.status === "available") return `${label} · 就绪`;
+  if (status.status === "available") {
+    if (status.runtimeState === "starting") return `${label} · 启动中`;
+    if (status.runtimeState === "indexing") return `${label} · 索引中`;
+    if (status.runtimeState === "error") return `${label} · 错误`;
+    return `${label} · 就绪`;
+  }
   if (status.status === "installing") return `${label} · 安装中`;
   if (status.status === "missing") return `${label} · 缺失${status.canInstall ? "（可由管理员在设置安装）" : ""}`;
   return `${label} · 错误`;
@@ -124,8 +129,14 @@ export function WorkbenchStatusBar({
         {languageService ? (
           <span
             data-testid="workbench-language-service"
-            data-language-service-status={languageServiceLoading ? "loading" : languageServiceStatus?.status || "unknown"}
-            title={languageServiceStatus?.error || languageServiceStatus?.message || languageServiceStatus?.commandSummary || undefined}
+            data-language-service-status={languageServiceLoading
+              ? "loading"
+              : languageServiceStatus?.runtimeState || languageServiceStatus?.status || "unknown"}
+            title={languageServiceStatus?.runtimeMessage
+              || languageServiceStatus?.error
+              || languageServiceStatus?.message
+              || languageServiceStatus?.commandSummary
+              || undefined}
           >
             {languageService}
           </span>

@@ -205,7 +205,8 @@ export function DesktopWorkbench({
 }: Props) {
   const { paneState, toggleSidebar, toggleTerminal, toggleChat, setSidebarView, restoreSidebarView, resizePane } = useWorkbenchState();
   const fileTree = useFileTree(botAlias, client, { structureOnly });
-  const tabs = useEditorTabs({ botAlias, client, structureOnly, canWriteFiles });
+  const codeNavigationScope = `${botAlias}\n${fileTree.rootPath}`;
+  const tabs = useEditorTabs({ botAlias, client, scopeKey: fileTree.rootPath, structureOnly, canWriteFiles });
   const columnsRef = useRef<HTMLDivElement | null>(null);
   const centerRowsRef = useRef<HTMLDivElement | null>(null);
   const editorPaneRef = useRef<HTMLElement | null>(null);
@@ -257,23 +258,46 @@ export function DesktopWorkbench({
   const [languageServerCatalogRevision, setLanguageServerCatalogRevision] = useState(0);
   const gitDecorationRequestRef = useRef(0);
   const codeNavigationRequestRef = useRef(0);
+  const codeNavigationAbortControllerRef = useRef<AbortController | null>(null);
+  const codeNavigationScopeRef = useRef(codeNavigationScope);
   const editorRevealRequestRef = useRef(0);
   const editorNavigationCommandRef = useRef(0);
   const definitionSourceLocationRef = useRef<CodeNavigationHistoryLocation | null>(null);
+  const definitionSourceScopeRef = useRef("");
+  codeNavigationScopeRef.current = codeNavigationScope;
   const reduceMotion = useReducedMotion();
   const activeLanguageServicePath = tabs.activeTab?.kind === "file" ? tabs.activeTab.path : "";
   const languageService = useLanguageServerStatus(client, botAlias, activeLanguageServicePath, languageServerCatalogRevision);
+  const canNavigateImplementation = Boolean(
+    allowCodeJump
+    && tabs.activeTab?.kind === "file"
+    && languageService.status?.implementationSupported === true,
+  );
   const refreshLanguageServerCatalogStatus = useCallback(() => {
     setLanguageServerCatalogRevision((current) => current + 1);
   }, []);
 
+  useEffect(() => {
+    clearDefinitionOverlay();
+    return () => {
+      codeNavigationRequestRef.current += 1;
+      codeNavigationAbortControllerRef.current?.abort();
+      codeNavigationAbortControllerRef.current = null;
+    };
+  }, [client, codeNavigationScope]);
+
   const codeNavigationHistory = useCodeNavigationHistory({
     scopeKey: `${botAlias}\n${fileTree.rootPath}`,
-    onNavigate: (location) => openWorkspaceFile(
-      location.path,
-      location.line,
-      location.column,
-    ),
+    onNavigate: (location) => {
+      const scope = codeNavigationScopeRef.current;
+      return openWorkspaceFile(
+        location.path,
+        location.line,
+        location.column,
+        "",
+        () => codeNavigationScopeRef.current === scope,
+      );
+    },
   });
 
   const layoutState = clampPaneState(paneState, {
@@ -663,10 +687,23 @@ export function DesktopWorkbench({
       })
     : chatPaneContent;
 
-  async function openWorkspaceFile(path: string, line?: number, column = 1, requestId = "") {
+  async function openWorkspaceFile(
+    path: string,
+    line?: number,
+    column = 1,
+    requestId = "",
+    isCurrent: () => boolean = () => true,
+  ) {
+    if (!isCurrent()) {
+      return false;
+    }
     const target = await client.resolveFileOpenTarget(botAlias, path);
+    if (!isCurrent()) {
+      return false;
+    }
     if (!canPreviewFiles) {
       await fileTree.revealPath(path);
+      if (!isCurrent()) return false;
       setEditorReveal(null);
       return false;
     }
@@ -675,6 +712,7 @@ export function DesktopWorkbench({
         tabs.openPluginView(target),
         fileTree.revealPath(path),
       ]);
+      if (!isCurrent()) return false;
       setEditorReveal(null);
       return false;
     }
@@ -683,6 +721,7 @@ export function DesktopWorkbench({
         loadPreview(path, "preview"),
         fileTree.revealPath(path),
       ]);
+      if (!isCurrent()) return false;
       setEditorReveal(null);
       return false;
     }
@@ -692,6 +731,7 @@ export function DesktopWorkbench({
         loadPreview(path, "preview"),
         fileTree.revealPath(path),
       ]);
+      if (!isCurrent()) return false;
       setEditorReveal(null);
       return false;
     }
@@ -700,6 +740,9 @@ export function DesktopWorkbench({
       tabs.openFile(path, target.pluginTargets),
       fileTree.revealPath(path),
     ]);
+    if (!isCurrent()) {
+      return false;
+    }
     if (line && line > 0) {
       const revealRequestId = requestId || `editor-reveal-${++editorRevealRequestRef.current}`;
       setEditorReveal({ path, line, column: Math.max(1, column), requestId: revealRequestId });
@@ -765,10 +808,16 @@ export function DesktopWorkbench({
     setDefinitionMessage("");
     setDefinitionSource("");
     definitionSourceLocationRef.current = null;
+    definitionSourceScopeRef.current = "";
   }
 
   function requestEditorCodeNavigation(kind: CodeNavigationKind) {
-    if (!allowCodeJump || structureOnly || tabs.activeTab?.kind !== "file") {
+    if (
+      !allowCodeJump
+      || structureOnly
+      || tabs.activeTab?.kind !== "file"
+      || (kind === "implementation" && !canNavigateImplementation)
+    ) {
       return false;
     }
     setEditorNavigationCommand({
@@ -780,6 +829,7 @@ export function DesktopWorkbench({
 
   async function openDefinitionCandidate(item: CodeLocation) {
     const source = definitionSourceLocationRef.current;
+    const scope = definitionSourceScopeRef.current;
     const path = item.path || "";
     const target = {
       path,
@@ -787,17 +837,23 @@ export function DesktopWorkbench({
       column: item.selectionRange.start.column,
     };
     clearDefinitionOverlay();
-    if (!path) {
+    if (!path || !scope || codeNavigationScopeRef.current !== scope) {
       return;
     }
-    const opened = await openWorkspaceFile(path, target.line, target.column);
-    if (opened && source) {
+    const opened = await openWorkspaceFile(
+      path,
+      target.line,
+      target.column,
+      "",
+      () => codeNavigationScopeRef.current === scope,
+    );
+    if (opened && source && codeNavigationScopeRef.current === scope) {
       codeNavigationHistory.recordNavigation(source, target);
     }
   }
 
   async function handleResolveCodeNavigation(input: CodeNavigationIntent) {
-    if (!allowCodeJump || structureOnly) {
+    if (!allowCodeJump || structureOnly || (input.kind === "implementation" && !canNavigateImplementation)) {
       return;
     }
     const activeTab = tabs.activeTab;
@@ -811,6 +867,15 @@ export function DesktopWorkbench({
     };
     const sequence = codeNavigationRequestRef.current + 1;
     codeNavigationRequestRef.current = sequence;
+    codeNavigationAbortControllerRef.current?.abort();
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    codeNavigationAbortControllerRef.current = controller;
+    const scope = codeNavigationScopeRef.current;
+    const isCurrent = () => (
+      codeNavigationScopeRef.current === scope
+      && codeNavigationRequestRef.current === sequence
+      && !controller?.signal.aborted
+    );
     const requestId = `code-navigation-${Date.now()}-${sequence}`;
     try {
       const result = await client.resolveCodeNavigation(botAlias, {
@@ -823,8 +888,8 @@ export function DesktopWorkbench({
           content: activeTab.content,
         },
         position: { line: input.line, column: input.column },
-      });
-      if (codeNavigationRequestRef.current !== sequence) {
+      }, controller?.signal);
+      if (!isCurrent()) {
         return;
       }
       const semanticItems = result.items.filter((item) => item.targetType === "workspace" && item.path);
@@ -841,8 +906,9 @@ export function DesktopWorkbench({
           target.line,
           target.column,
           result.requestId || requestId,
+          isCurrent,
         );
-        if (opened) {
+        if (opened && isCurrent()) {
           codeNavigationHistory.recordNavigation(source, target);
         }
         return;
@@ -852,6 +918,7 @@ export function DesktopWorkbench({
         setDefinitionMessage("");
         setDefinitionSource(input.symbol || `${input.path}:${input.line}:${input.column}`);
         definitionSourceLocationRef.current = source;
+        definitionSourceScopeRef.current = scope;
         return;
       }
       setDefinitionCandidates([]);
@@ -859,13 +926,21 @@ export function DesktopWorkbench({
       setDefinitionSource(input.symbol || `${input.path}:${input.line}:${input.column}`);
       definitionSourceLocationRef.current = null;
     } catch (error) {
-      if (codeNavigationRequestRef.current !== sequence) {
+      if (
+        controller?.signal.aborted
+        || codeNavigationRequestRef.current !== sequence
+        || (error as { name?: string })?.name === "AbortError"
+      ) {
         return;
       }
       setDefinitionCandidates([]);
       setDefinitionMessage(error instanceof Error ? error.message : "代码导航失败");
       setDefinitionSource(input.symbol || `${input.path}:${input.line}:${input.column}`);
       definitionSourceLocationRef.current = null;
+    } finally {
+      if (codeNavigationAbortControllerRef.current === controller) {
+        codeNavigationAbortControllerRef.current = null;
+      }
     }
   }
 
@@ -1202,6 +1277,7 @@ export function DesktopWorkbench({
                   canNavigateBack={codeNavigationHistory.canGoBack}
                   canNavigateForward={codeNavigationHistory.canGoForward}
                   allowCodeJump={allowCodeJump}
+                  canNavigateImplementation={canNavigateImplementation}
                   canUseInlineCompletion={canUseInlineCompletion}
                   onResolveCodeNavigation={(input) => {
                     setEditorNavigationCommand(null);
@@ -1381,7 +1457,7 @@ export function DesktopWorkbench({
           client={client}
           disabled={structureOnly}
           canNavigateDefinition={allowCodeJump && tabs.activeTab?.kind === "file"}
-          canNavigateImplementation={allowCodeJump && tabs.activeTab?.kind === "file"}
+          canNavigateImplementation={canNavigateImplementation}
           canNavigateBack={codeNavigationHistory.canGoBack}
           canNavigateForward={codeNavigationHistory.canGoForward}
           onNavigateDefinition={() => {

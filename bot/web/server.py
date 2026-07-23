@@ -64,7 +64,13 @@ from bot.config import (
     request_restart,
 )
 from bot.debug.service import DebugService
-from bot.language_server import LanguageServerCatalog, LanguageServerInstallError, LanguageServerInstaller
+from bot.language_server import (
+    LanguageServerCatalog,
+    LanguageServerInstallError,
+    LanguageServerInstaller,
+    LanguageServerRuntimeManager,
+    LanguageServerUnavailableError,
+)
 from bot.manager import MultiBotManager
 from bot.models import session_persistence_diagnostics
 from bot.native_agent import get_native_agent_service
@@ -305,7 +311,12 @@ from .workspace_search_service import (
     search_workspace_text,
     workspace_search_diagnostics,
 )
-from .workspace_definition_service import resolve_code_navigation, resolve_workspace_definition
+from .workspace_definition_service import (
+    adapt_code_navigation_to_legacy,
+    build_legacy_code_navigation_request,
+    resolve_code_navigation,
+    resolve_workspace_definition,
+)
 
 logger = logging.getLogger(__name__)
 DEFAULT_TERMINAL_OWNER_ID = "default"
@@ -875,6 +886,7 @@ class WebApiServer:
         fixed_forward_service: FixedForwardService | None = None,
         language_server_catalog: LanguageServerCatalog | None = None,
         language_server_installer: LanguageServerInstaller | None = None,
+        language_server_manager: LanguageServerRuntimeManager | None = None,
         instance_id: str | None = None,
     ):
         self.manager = manager
@@ -920,6 +932,7 @@ class WebApiServer:
         else:
             self.language_server_installer = language_server_installer or LanguageServerInstaller()
             self.language_server_catalog = LanguageServerCatalog(installer=self.language_server_installer)
+        self.language_server_manager = language_server_manager or LanguageServerRuntimeManager(self.language_server_catalog)
         self._git_smart_commit_jobs: dict[str, dict[str, Any]] = {}
         self._git_smart_commit_latest_by_alias: dict[str, str] = {}
         self._git_smart_commit_repo_locks: dict[str, str] = {}
@@ -974,6 +987,7 @@ class WebApiServer:
             lambda: {**session_store_diagnostics(), **session_persistence_diagnostics()},
         )
         self._runtime_diagnostics.register("litellm", self.transfer_service.diagnostics)
+        self._runtime_diagnostics.register("language_servers", self.language_server_manager.diagnostics)
         plugin_service = getattr(self.manager, "plugin_service", None)
         if plugin_service is not None:
             self._runtime_diagnostics.register("plugins", plugin_service.snapshot_cache_diagnostics)
@@ -2845,11 +2859,66 @@ class WebApiServer:
         return _json({"ok": True, "data": data})
 
     async def get_workspace_language_servers(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_READ_FILE_CONTENT)
-        self._manager_alias(request)
+        auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
+        alias = self._manager_alias(request)
+        workspace = self._workspace_file_root(alias, auth)
+        provider_id = str(request.query.get("provider") or "").strip().lower()
+        should_prewarm = str(request.query.get("prewarm") or "").strip().lower() in {"1", "true", "yes", "on"}
+        prewarm_error = ""
+        if should_prewarm and provider_id == "pyright":
+            try:
+                await self.language_server_manager.prewarm(
+                    bot_alias=alias,
+                    user_id=self._chat_user_id(auth),
+                    workspace_root=workspace,
+                    provider_id=provider_id,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "Python 语言服务预热失败: bot=%s user_id=%s",
+                    alias,
+                    self._chat_user_id(auth),
+                )
+                prewarm_error = "Python 语言服务启动失败"
         # 仅做发现；LanguageServerCatalog 不会调用安装器的 install，打开文件
         # 或轮询状态均不会触发下载。
         data = await asyncio.to_thread(self.language_server_catalog.api_snapshot)
+        if provider_id == "pyright" and isinstance(data, dict):
+            runtime_status = self.language_server_manager.runtime_status(
+                bot_alias=alias,
+                user_id=self._chat_user_id(auth),
+                workspace_root=workspace,
+                provider_id=provider_id,
+            )
+            providers = data.get("providers")
+            if isinstance(providers, list):
+                decorated: list[object] = []
+                for item in providers:
+                    if not isinstance(item, dict) or str(item.get("id") or item.get("provider") or "") != provider_id:
+                        decorated.append(item)
+                        continue
+                    runtime_state = "error" if prewarm_error else str((runtime_status or {}).get("state") or "")
+                    runtime_message = prewarm_error or {
+                        "starting": "正在启动 Python 语言服务",
+                        "indexing": "Python 语言服务正在索引工作区",
+                        "ready": "Python 语言服务已就绪",
+                        "error": "Python 语言服务启动失败",
+                        "stopped": "Python 语言服务已停止",
+                    }.get(runtime_state, "")
+                    implementation_supported = (runtime_status or {}).get("implementation_supported")
+                    decorated.append(
+                        {
+                            **item,
+                            **({"runtimeState": runtime_state} if runtime_state else {}),
+                            **({"runtimeMessage": runtime_message} if runtime_message else {}),
+                            **(
+                                {"implementationSupported": implementation_supported}
+                                if isinstance(implementation_supported, bool)
+                                else {}
+                            ),
+                        }
+                    )
+                data = {**data, "providers": decorated}
         return _json({"ok": True, "data": data})
 
     async def get_language_server_catalog(self, request: web.Request) -> web.Response:
@@ -2867,14 +2936,46 @@ class WebApiServer:
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         workspace = self._workspace_file_root(alias, auth)
-        data = await asyncio.to_thread(
-            resolve_workspace_definition,
-            workspace,
-            str(body.get("path", "")),
-            line=int(body.get("line") or 1),
-            column=int(body.get("column") or 1),
-            symbol=str(body.get("symbol", "")),
-        )
+        try:
+            path = str(body.get("path", ""))
+            line = int(body.get("line") or 1)
+            column = int(body.get("column") or 1)
+            navigation_request = await asyncio.to_thread(
+                build_legacy_code_navigation_request,
+                workspace,
+                path,
+                line=line,
+                column=column,
+            )
+            try:
+                navigation_result = await self.language_server_manager.resolve_code_navigation(
+                    bot_alias=alias,
+                    user_id=self._chat_user_id(auth),
+                    workspace_root=workspace,
+                    request=navigation_request,
+                )
+            except LanguageServerUnavailableError:
+                data = await asyncio.to_thread(
+                    resolve_workspace_definition,
+                    workspace,
+                    path,
+                    line=line,
+                    column=column,
+                    symbol=str(body.get("symbol", "")),
+                )
+            else:
+                document = navigation_request.get("document")
+                source_path = str(document.get("path") or path) if isinstance(document, dict) else path
+                data = adapt_code_navigation_to_legacy(navigation_result, source_path=source_path)
+        except ValueError as exc:
+            raise WebApiError(400, "invalid_code_navigation_request", str(exc)) from exc
+        except Exception as exc:
+            logger.exception("旧版语言服务定义跳转失败: bot=%s", alias)
+            raise WebApiError(
+                503,
+                "language_server_failed",
+                "语言服务请求失败，请稍后重试",
+            ) from exc
         return _json({"ok": True, "data": data})
 
     async def post_workspace_code_navigation_resolve(self, request: web.Request) -> web.Response:
@@ -2883,10 +2984,53 @@ class WebApiServer:
         body = await self._parse_json(request)
         workspace = self._workspace_file_root(alias, auth)
         try:
-            data = await asyncio.to_thread(resolve_code_navigation, workspace, body)
+            try:
+                data = await self.language_server_manager.resolve_code_navigation(
+                    bot_alias=alias,
+                    user_id=self._chat_user_id(auth),
+                    workspace_root=workspace,
+                    request=body,
+                )
+            except LanguageServerUnavailableError:
+                # 未启用或尚未安装时继续保留阶段 1 的 Python AST 语义能力；
+                # 一旦 Pyright 可用，空结果不会退回文本/AST 搜索。
+                data = await asyncio.to_thread(resolve_code_navigation, workspace, body)
         except ValueError as exc:
-            raise web.HTTPBadRequest(reason=str(exc)) from exc
+            raise WebApiError(400, "invalid_code_navigation_request", str(exc)) from exc
+        except Exception as exc:
+            logger.exception("语言服务代码导航失败: bot=%s", alias)
+            raise WebApiError(
+                503,
+                "language_server_failed",
+                "语言服务请求失败，请稍后重试",
+            ) from exc
         return _json({"ok": True, "data": data})
+
+    async def post_workspace_code_navigation_cancel(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        request_id = str(body.get("requestId") or body.get("request_id") or "").strip()
+        if not request_id:
+            raise web.HTTPBadRequest(reason="缺少代码导航请求 ID")
+        workspace = self._workspace_file_root(alias, auth)
+        try:
+            cancelled = await self.language_server_manager.cancel_code_navigation(
+                bot_alias=alias,
+                user_id=self._chat_user_id(auth),
+                workspace_root=workspace,
+                request_id=request_id,
+            )
+        except ValueError as exc:
+            raise WebApiError(400, "invalid_code_navigation_request", str(exc)) from exc
+        except Exception as exc:
+            logger.exception("取消语言服务代码导航失败: bot=%s", alias)
+            raise WebApiError(
+                503,
+                "language_server_failed",
+                "语言服务请求失败，请稍后重试",
+            ) from exc
+        return _json({"ok": True, "data": {"cancelled": cancelled}})
 
     async def get_workspace_inline_completion_config(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_INLINE_COMPLETION)
@@ -4593,6 +4737,7 @@ class WebApiServer:
             await plugin_service.shutdown()
         await self.lan_chat_service.close()
         await self.inline_completion_service.close()
+        await self.language_server_manager.shutdown()
         if preserve_tunnel:
             self._tunnel_service.preserve_for_restart()
         else:

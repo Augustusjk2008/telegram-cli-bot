@@ -12,6 +12,7 @@ import {
 type Props = {
   botAlias: string;
   client: WebBotClient;
+  scopeKey?: string;
   structureOnly?: boolean;
   canWriteFiles?: boolean;
 };
@@ -80,13 +81,26 @@ function createTabFromSnapshot(tab: PersistedWorkbenchTab): EditorTab {
   });
 }
 
-export function useEditorTabs({ botAlias, client, structureOnly = false, canWriteFiles = true }: Props) {
+export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly = false, canWriteFiles = true }: Props) {
   const [tabs, setTabs] = useState<EditorTab[]>([]);
   const [activeTabPath, setActiveTabPath] = useState("");
   const [closedTabs, setClosedTabs] = useState<PersistedWorkbenchTab[]>([]);
   const tabsRef = useRef<EditorTab[]>([]);
   const activeTabPathRef = useRef("");
   const closedTabsRef = useRef<PersistedWorkbenchTab[]>([]);
+  const scopeIdentity = `${botAlias}\n${scopeKey}`;
+  const scopeIdentityRef = useRef(scopeIdentity);
+  const scopeClientRef = useRef(client);
+  const scopeGenerationRef = useRef(0);
+  if (scopeIdentityRef.current !== scopeIdentity || scopeClientRef.current !== client) {
+    scopeIdentityRef.current = scopeIdentity;
+    scopeClientRef.current = client;
+    scopeGenerationRef.current += 1;
+  }
+
+  function isCurrentScope(generation: number) {
+    return scopeGenerationRef.current === generation;
+  }
 
   useEffect(() => {
     tabsRef.current = tabs;
@@ -110,13 +124,13 @@ export function useEditorTabs({ botAlias, client, structureOnly = false, canWrit
 
   useEffect(() => () => {
     tabsRef.current.forEach((tab) => disposePluginSession(tab));
-  }, [botAlias, client]);
+  }, [client, scopeIdentity]);
 
   useEffect(() => {
     setTabs([]);
     setActiveTabPath("");
     setClosedTabs([]);
-  }, [botAlias, client]);
+  }, [client, scopeIdentity]);
 
   const activeTab = tabs.find((tab) => tab.path === activeTabPath) || null;
   const hasDirtyTabs = tabs.some((tab) => tab.dirty);
@@ -146,8 +160,8 @@ export function useEditorTabs({ botAlias, client, structureOnly = false, canWrit
     ].slice(0, CLOSED_TAB_HISTORY_LIMIT));
   }
 
-  async function hydrateTabContent(path: string) {
-    if (structureOnly) {
+  async function hydrateTabContent(path: string, generation = scopeGenerationRef.current) {
+    if (structureOnly || !isCurrentScope(generation)) {
       return;
     }
     const target = tabsRef.current.find((item) => item.path === path);
@@ -155,7 +169,7 @@ export function useEditorTabs({ botAlias, client, structureOnly = false, canWrit
       return;
     }
 
-    setTabs((current) => current.some((item) => item.path === path)
+    setTabs((current) => isCurrentScope(generation) && current.some((item) => item.path === path)
       ? current.map((item) => item.path === path
         ? {
             ...item,
@@ -168,7 +182,10 @@ export function useEditorTabs({ botAlias, client, structureOnly = false, canWrit
 
     try {
       const result = await client.readFileFull(botAlias, path);
-      setTabs((current) => current.some((item) => item.path === path)
+      if (!isCurrentScope(generation)) {
+        return;
+      }
+      setTabs((current) => isCurrentScope(generation) && current.some((item) => item.path === path)
         ? current.map((item) => item.path === path
           ? {
               ...item,
@@ -190,8 +207,11 @@ export function useEditorTabs({ botAlias, client, structureOnly = false, canWrit
           : item)
         : current);
     } catch (error) {
+      if (!isCurrentScope(generation)) {
+        return;
+      }
       const message = error instanceof Error ? error.message : "读取文件失败";
-      setTabs((current) => current.some((item) => item.path === path)
+      setTabs((current) => isCurrentScope(generation) && current.some((item) => item.path === path)
         ? current.map((item) => item.path === path
           ? {
               ...item,
@@ -229,6 +249,7 @@ export function useEditorTabs({ botAlias, client, structureOnly = false, canWrit
     if (structureOnly) {
       return;
     }
+    const generation = scopeGenerationRef.current;
     const nextPluginTargets = clonePluginTargets(pluginTargets);
     const existing = tabsRef.current.find((item) => item.path === path);
     if (existing) {
@@ -240,7 +261,7 @@ export function useEditorTabs({ botAlias, client, structureOnly = false, canWrit
         : item));
       setActiveTabPath(path);
       if (existing.cold || existing.missing) {
-        await hydrateTabContent(path);
+        await hydrateTabContent(path, generation);
       }
       return;
     }
@@ -255,7 +276,7 @@ export function useEditorTabs({ botAlias, client, structureOnly = false, canWrit
       }),
     ]);
     setActiveTabPath(path);
-    await hydrateTabContent(path);
+    await hydrateTabContent(path, generation);
   }
 
   async function openPluginView(target: PluginOpenTarget) {

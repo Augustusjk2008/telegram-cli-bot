@@ -24,6 +24,7 @@ import {
   withDetectedPreviewKind,
 } from "../utils/filePreview";
 import { inferFileEditorLanguageId } from "../utils/fileEditorLanguage";
+import { useLanguageServerStatus } from "../workbench/useLanguageServerStatus";
 
 type Props = {
   botAlias: string;
@@ -130,8 +131,17 @@ export function FilesScreen({
   const listingRequestSeqRef = useRef(0);
   const previewRequestSeqRef = useRef(0);
   const codeNavigationRequestSeqRef = useRef(0);
+  const codeNavigationAbortControllerRef = useRef<AbortController | null>(null);
   const canPreviewFiles = !structureOnly;
   const canMutateFiles = canPreviewFiles && canWriteFiles;
+  const languageService = useLanguageServerStatus(client, botAlias, editorPath);
+  const canNavigateImplementation = languageService.status?.implementationSupported === true;
+
+  useEffect(() => () => {
+    codeNavigationRequestSeqRef.current += 1;
+    codeNavigationAbortControllerRef.current?.abort();
+    codeNavigationAbortControllerRef.current = null;
+  }, [botAlias, client]);
 
   useEffect(() => {
     let cancelled = false;
@@ -472,11 +482,18 @@ export function FilesScreen({
   };
 
   const handleResolveCodeNavigation = async (input: CodeNavigationIntent) => {
-    if (!editorPath || input.path !== editorPath) {
+    if (
+      !editorPath
+      || input.path !== editorPath
+      || (input.kind === "implementation" && !canNavigateImplementation)
+    ) {
       return;
     }
     const sequence = codeNavigationRequestSeqRef.current + 1;
     codeNavigationRequestSeqRef.current = sequence;
+    codeNavigationAbortControllerRef.current?.abort();
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    codeNavigationAbortControllerRef.current = controller;
     const requestId = `mobile-code-navigation-${Date.now()}-${sequence}`;
     try {
       const result = await client.resolveCodeNavigation(botAlias, {
@@ -489,8 +506,8 @@ export function FilesScreen({
           content: editorContent,
         },
         position: { line: input.line, column: input.column },
-      });
-      if (codeNavigationRequestSeqRef.current !== sequence) {
+      }, controller?.signal);
+      if (controller?.signal.aborted || codeNavigationRequestSeqRef.current !== sequence) {
         return;
       }
       const semanticItems = result.items.filter((item) => item.targetType === "workspace" && item.path);
@@ -512,12 +529,20 @@ export function FilesScreen({
       );
       setCodeNavigationSource(input.symbol || `${input.path}:${input.line}:${input.column}`);
     } catch (err) {
-      if (codeNavigationRequestSeqRef.current !== sequence) {
+      if (
+        controller?.signal.aborted
+        || codeNavigationRequestSeqRef.current !== sequence
+        || (err as { name?: string })?.name === "AbortError"
+      ) {
         return;
       }
       setCodeNavigationCandidates([]);
       setCodeNavigationMessage(err instanceof Error ? err.message : "代码导航失败");
       setCodeNavigationSource(input.symbol || `${input.path}:${input.line}:${input.column}`);
+    } finally {
+      if (codeNavigationAbortControllerRef.current === controller) {
+        codeNavigationAbortControllerRef.current = null;
+      }
     }
   };
 
@@ -763,6 +788,7 @@ export function FilesScreen({
           error={editorError}
           inlineCompletion={inlineCompletion}
           reveal={editorReveal}
+          canNavigateImplementation={canNavigateImplementation}
           onResolveCodeNavigation={(input) => void handleResolveCodeNavigation(input)}
           onChange={handleEditorChange}
           onSave={() => void handleSaveEditor()}

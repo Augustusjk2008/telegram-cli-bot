@@ -57,3 +57,4 @@ async def test_admin_runtime_diagnostics_keeps_migration_fields_and_adds_runtime
     assert payload["data"]["migration"] == "kept"
     assert payload["data"]["runtime"]["schema_version"] == 1
     assert "terminal" in payload["data"]["runtime"]["components"]
+    assert "language_servers" in payload["data"]["runtime"]["components"]
