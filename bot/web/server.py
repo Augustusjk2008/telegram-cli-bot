@@ -2867,6 +2867,7 @@ class WebApiServer:
         provider_label = {
             "pyright": "Python",
             "typescript": "TypeScript / JavaScript",
+            "clangd": "C / C++",
         }.get(provider_id, "")
         prewarm_error = ""
         if should_prewarm and provider_label:

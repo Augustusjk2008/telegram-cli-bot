@@ -75,7 +75,7 @@
       "pathCommands": ["clangd"],
       "managedCommand": {
         "entrypoint": "",
-        "args": ["--stdio"]
+        "args": []
       },
       "extensions": [".c", ".h", ".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx"],
       "license": {

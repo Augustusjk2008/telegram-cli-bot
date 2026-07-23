@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import time
 from collections import Counter, deque
 from collections.abc import Callable, Mapping
@@ -13,7 +14,9 @@ from typing import Any, Protocol
 
 from bot import config
 from bot.platform.processes import build_chat_cli_process_kwargs, terminate_async_process_tree
+from bot.runtime_paths import get_language_servers_root
 
+from .clangd import ClangdProvider
 from .catalog import LanguageServerCatalog
 from .pyright import PyrightProvider
 from .typescript import TypeScriptProvider
@@ -62,15 +65,18 @@ class LanguageServerRuntime:
         *,
         request_timeout: float,
         managed_typescript_sdk_path: Path | str | None = None,
+        runtime_cache_dir: Path | str | None = None,
     ) -> None:
         self.key = key
-        self.command = tuple(command)
         self.request_timeout = max(0.1, float(request_timeout))
-        self.provider = (
-            TypeScriptProvider(key.workspace_root, managed_sdk_path=managed_typescript_sdk_path)
-            if key.provider_id == "typescript"
-            else PyrightProvider(key.workspace_root)
-        )
+        if key.provider_id == "typescript":
+            self.provider = TypeScriptProvider(key.workspace_root, managed_sdk_path=managed_typescript_sdk_path)
+        elif key.provider_id == "clangd":
+            self.provider = ClangdProvider(key.workspace_root, runtime_cache_dir=runtime_cache_dir)
+        else:
+            self.provider = PyrightProvider(key.workspace_root)
+        prepare_command = getattr(self.provider, "prepare_command", None)
+        self.command = tuple(prepare_command(tuple(command))) if callable(prepare_command) else tuple(command)
         self.process: asyncio.subprocess.Process | None = None
         self.client: Any = None
         self.state = "stopped"
@@ -101,13 +107,19 @@ class LanguageServerRuntime:
             raise LanguageServerUnavailableError("语言服务器命令为空")
         self.state = "starting"
         try:
+            process_kwargs = build_chat_cli_process_kwargs()
+            process_environment = getattr(self.provider, "process_environment", None)
+            if callable(process_environment):
+                environment = process_environment()
+                if environment is not None:
+                    process_kwargs["env"] = environment
             self.process = await asyncio.create_subprocess_exec(
                 *self.command,
                 cwd=str(self.key.workspace_root),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                **build_chat_cli_process_kwargs(),
+                **process_kwargs,
             )
             if self.process.stdin is None or self.process.stdout is None:
                 raise RuntimeError("语言服务器标准输入输出不可用")
@@ -176,17 +188,22 @@ class LanguageServerRuntime:
                 raise ValueError("代码导航路径超出工作区") from exc
             kind = str(request.get("kind") or "").strip().lower()
             request_id = str(request.get("requestId") or request.get("request_id") or "").strip()
-            items = await self.provider.navigate(
-                self.client,
-                kind=kind,
-                path=target,
-                language_id=str(document.get("languageId") or document.get("language_id") or ""),
-                version=_int_value(document.get("version"), 0),
-                content=str(document.get("content") or ""),
-                line=max(1, _int_value(position.get("line"), 1)),
-                column=max(1, _int_value(position.get("column"), 1)),
+            try:
+                items = await self.provider.navigate(
+                    self.client,
+                    kind=kind,
+                    path=target,
+                    language_id=str(document.get("languageId") or document.get("language_id") or ""),
+                    version=_int_value(document.get("version"), 0),
+                    content=str(document.get("content") or ""),
+                    line=max(1, _int_value(position.get("line"), 1)),
+                    column=max(1, _int_value(position.get("column"), 1)),
+                )
+            except asyncio.TimeoutError:
+                return {"request_id": request_id, "items": [], "message": "仍在索引"}
+            empty_message = "仍在索引" if self.state == "indexing" else (
+                "未找到语义实现" if kind == "implementation" else "未找到语义定义"
             )
-            empty_message = "未找到语义实现" if kind == "implementation" else "未找到语义定义"
             return {
                 "request_id": request_id,
                 "items": items,
@@ -342,7 +359,16 @@ class LanguageServerRuntimeManager:
             command,
             request_timeout=self.request_timeout,
             managed_typescript_sdk_path=self._managed_typescript_sdk_path,
+            runtime_cache_dir=self._runtime_cache_dir(key),
         )
+
+    @staticmethod
+    def _runtime_cache_dir(key: LanguageServerRuntimeKey) -> Path:
+        identity = "\x1f".join(
+            (key.bot_alias, str(key.user_id), str(key.workspace_root), key.provider_id),
+        ).encode("utf-8", errors="replace")
+        digest = hashlib.sha256(identity).hexdigest()[:32]
+        return get_language_servers_root() / "runtime-cache" / digest
 
     async def resolve_code_navigation(
         self,
@@ -453,7 +479,7 @@ class LanguageServerRuntimeManager:
         """Start an already-discovered provider without issuing navigation or installing tools."""
 
         normalized_provider = str(provider_id or "").strip().lower()
-        if normalized_provider not in {"pyright", "typescript"} or not bool(getattr(self.catalog, "enabled", True)):
+        if normalized_provider not in {"pyright", "typescript", "clangd"} or not bool(getattr(self.catalog, "enabled", True)):
             return False
         root = Path(workspace_root).expanduser().resolve()
         if not root.is_dir():
@@ -655,6 +681,13 @@ def _provider_for_request(request: Mapping[str, Any]) -> str | None:
         "jsx",
     }:
         return "typescript"
+    if suffix in {".c", ".h", ".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx"} and language_id in {
+        "",
+        "c",
+        "cpp",
+        "c++",
+    }:
+        return "clangd"
     return None
 
 

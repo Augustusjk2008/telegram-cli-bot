@@ -183,7 +183,13 @@ def _parse_provider(provider_id: str, raw: Any) -> LanguageServerProvider:
         f"providers.{provider_id}.managedCommand.entrypoint",
         allow_empty=runtime == "native",
     )
-    managed_args = tuple(_expect_text_list(managed_raw.get("args"), f"providers.{provider_id}.managedCommand.args"))
+    managed_args = tuple(
+        _expect_text_list(
+            managed_raw.get("args"),
+            f"providers.{provider_id}.managedCommand.args",
+            allow_empty=provider_id == "clangd",
+        )
+    )
     if runtime == "node" and not managed_entrypoint:
         raise LanguageServerManifestError(f"providers.{provider_id} 缺少 Node 入口")
 
@@ -271,9 +277,10 @@ def _expect_pinned_version(value: Any, label: str) -> str:
     return text
 
 
-def _expect_text_list(value: Any, label: str) -> list[str]:
-    if not isinstance(value, list) or not value:
-        raise LanguageServerManifestError(f"{label} 必须是非空字符串数组")
+def _expect_text_list(value: Any, label: str, *, allow_empty: bool = False) -> list[str]:
+    if not isinstance(value, list) or (not allow_empty and not value):
+        message = "字符串数组" if allow_empty else "非空字符串数组"
+        raise LanguageServerManifestError(f"{label} 必须是{message}")
     return [_expect_text(item, label) for item in value]
 
 
