@@ -16,6 +16,12 @@ from .pyright import (
     _lsp_range_to_api,
 )
 from .document_store import LanguageDocument, build_content_change, parse_text_document_sync_capability
+from .external_source_registry import (
+    ApprovedRoot,
+    ExternalSourceError,
+    ExternalSourceRegistry,
+    canonicalize_approved_roots,
+)
 
 
 _TYPESCRIPT_EXTENSIONS = {".ts", ".tsx", ".mts", ".cts"}
@@ -60,6 +66,42 @@ def _normalize_typescript_sdk_path(value: Path | str | None) -> Path | None:
     return None
 
 
+def discover_typescript_external_roots(
+    workspace_root: Path | str,
+    *,
+    project_sdk_path: Path | str | None = None,
+    managed_sdk_path: Path | str | None = None,
+) -> tuple[ApprovedRoot, ...]:
+    """Build approved roots for project dependencies and trusted TypeScript SDKs."""
+
+    root = Path(workspace_root).expanduser().resolve()
+    candidates: list[tuple[Path, str]] = []
+    for name, label in (
+        ("node_modules", "node_modules"),
+        (".yarn", "yarn-dependencies"),
+        (".pnpm", "pnpm-dependencies"),
+        (".pnp", "pnp-dependencies"),
+    ):
+        candidate = root / name
+        try:
+            canonical = candidate.resolve(strict=False)
+            canonical.relative_to(root)
+        except (OSError, ValueError, RuntimeError):
+            continue
+        candidates.append((canonical, label))
+    for value, label in (
+        (project_sdk_path, "typescript-sdk"),
+        (managed_sdk_path, "managed-typescript-sdk"),
+    ):
+        sdk = _normalize_typescript_sdk_path(value)
+        if sdk is None:
+            continue
+        # Include the package root as well as lib/ so lib.*.d.ts and tsserver
+        # sibling declarations are covered without approving the whole drive.
+        candidates.extend(((sdk.parent, label), (sdk.parent.parent, label)))
+    return canonicalize_approved_roots(candidates)
+
+
 class TypeScriptProvider:
     provider_id = "typescript"
 
@@ -68,10 +110,29 @@ class TypeScriptProvider:
         workspace_root: Path | str,
         *,
         managed_sdk_path: Path | str | None = None,
+        external_source_registry: ExternalSourceRegistry | None = None,
+        source_registry: ExternalSourceRegistry | None = None,
+        bot_alias: str = "",
+        user_id: int = 0,
+        source_context: Mapping[str, Any] | None = None,
     ) -> None:
         self.workspace_root = Path(workspace_root).expanduser().resolve()
         self.project_sdk_path = discover_project_typescript_sdk(self.workspace_root)
         self.managed_sdk_path = _normalize_typescript_sdk_path(managed_sdk_path)
+        self.external_source_registry = (
+            external_source_registry if external_source_registry is not None else source_registry
+        )
+        context = source_context if isinstance(source_context, Mapping) else {}
+        self.external_source_alias = str(bot_alias or context.get("bot_alias") or context.get("alias") or "").strip().lower()
+        try:
+            self.external_source_user_id = int(user_id if user_id is not None else context.get("user_id") or 0)
+        except (TypeError, ValueError):
+            self.external_source_user_id = 0
+        self.external_source_roots = discover_typescript_external_roots(
+            self.workspace_root,
+            project_sdk_path=self.project_sdk_path,
+            managed_sdk_path=self.managed_sdk_path,
+        )
         self.position_encoding = "utf-16"
         self.supports_implementation = False
         self.supports_source_definition = False
@@ -84,6 +145,13 @@ class TypeScriptProvider:
     @property
     def open_document_count(self) -> int:
         return len(self._documents)
+
+    def set_external_source_context(self, *, alias: str, user_id: int) -> None:
+        self.external_source_alias = str(alias or "").strip().lower()
+        self.external_source_user_id = int(user_id)
+
+    def approved_external_roots(self) -> tuple[ApprovedRoot, ...]:
+        return self.external_source_roots
 
     async def initialize(self, client: LspClientProtocol) -> None:
         root_uri = self.workspace_root.as_uri()
@@ -190,6 +258,26 @@ class TypeScriptProvider:
                 closed.append(path)
         return closed
 
+    async def close_external_sources(
+        self,
+        client: LspClientProtocol,
+        source_ids: Iterable[str],
+    ) -> list[str]:
+        closed: list[str] = []
+        async with self._navigation_lock:
+            for raw_source_id in source_ids:
+                source_id = str(raw_source_id or "").strip()
+                record = self._resolve_external_source_id(source_id)
+                if record is None:
+                    continue
+                uri = record.path.as_uri()
+                if self._documents.pop(uri, None) is None:
+                    continue
+                if self.sync_open_close:
+                    await client.notify("textDocument/didClose", {"textDocument": {"uri": uri}})
+                closed.append(source_id)
+        return closed
+
     async def _sync_snapshot(self, client: LspClientProtocol, document: LanguageDocument) -> bool:
         target = (self.workspace_root / document.path).resolve()
         uri = target.as_uri()
@@ -271,6 +359,7 @@ class TypeScriptProvider:
         content: str,
         line: int,
         column: int,
+        source_id: str = "",
     ) -> list[dict[str, object]]:
         normalized_kind = str(kind or "").strip().lower()
         if normalized_kind not in {"definition", "implementation"}:
@@ -279,7 +368,12 @@ class TypeScriptProvider:
             return []
 
         target = Path(path).expanduser().resolve()
-        if not self._is_workspace_typescript_file(target, language_id):
+        active_source_id = str(source_id or "").strip()
+        if not self._is_workspace_typescript_file(target, language_id) and not self._is_registered_external_source(
+            active_source_id,
+            target,
+            language_id,
+        ):
             return []
         text = str(content)
         async with self._navigation_lock:
@@ -315,7 +409,12 @@ class TypeScriptProvider:
                         "position": position,
                     },
                 )
-            return self._normalize_locations(response, active_path=target, active_content=text)
+            return self._normalize_locations(
+                response,
+                active_path=target,
+                active_content=text,
+                active_source_id=active_source_id,
+            )
 
     async def _prime_project(self, client: LspClientProtocol, uri: str) -> None:
         """让 tsserver 完成 configured/inferred project 装载后再查询实现。"""
@@ -378,8 +477,10 @@ class TypeScriptProvider:
 
     def _is_workspace_typescript_file(self, path: Path, language_id: str) -> bool:
         try:
-            path.relative_to(self.workspace_root)
+            relative = path.relative_to(self.workspace_root)
         except ValueError:
+            return False
+        if any(part.lower() in _EXTERNAL_DEPENDENCY_PARTS for part in relative.parts):
             return False
         normalized_language = str(language_id or "").strip().lower()
         suffix = path.suffix.lower()
@@ -388,6 +489,17 @@ class TypeScriptProvider:
         if suffix in _JAVASCRIPT_EXTENSIONS:
             return normalized_language in _JAVASCRIPT_LANGUAGE_IDS
         return False
+
+    def _is_registered_external_source(self, source_id: str, target: Path, language_id: str) -> bool:
+        normalized_language = str(language_id or "").strip().lower()
+        suffix = target.suffix.lower()
+        if suffix in _TYPESCRIPT_EXTENSIONS:
+            language_ok = not normalized_language or normalized_language in _TYPESCRIPT_LANGUAGE_IDS
+        elif suffix in _JAVASCRIPT_EXTENSIONS:
+            language_ok = not normalized_language or normalized_language in _JAVASCRIPT_LANGUAGE_IDS
+        else:
+            return False
+        return language_ok and self._resolve_registered_external_source(source_id, target) is not None
 
     @staticmethod
     def _lsp_language_id(path: Path) -> str:
@@ -404,6 +516,7 @@ class TypeScriptProvider:
         *,
         active_path: Path,
         active_content: str,
+        active_source_id: str = "",
     ) -> list[dict[str, object]]:
         if response is None:
             return []
@@ -420,37 +533,106 @@ class TypeScriptProvider:
                 target = target.resolve()
                 relative = target.relative_to(self.workspace_root)
             except (OSError, ValueError):
-                # 外部源码令牌注册表在阶段 9 接入；在此之前不暴露绝对路径。
-                continue
-            if any(part.lower() in _EXTERNAL_DEPENDENCY_PARTS for part in relative.parts):
-                continue
+                relative = None
+            is_workspace_dependency = relative is not None and any(
+                part.lower() in _EXTERNAL_DEPENDENCY_PARTS for part in relative.parts
+            )
             target_range = raw.get("targetRange") or raw.get("range")
             selection_range = raw.get("targetSelectionRange") or raw.get("range")
             if not isinstance(target_range, Mapping) or not isinstance(selection_range, Mapping):
                 continue
-            snapshot = self._documents.get(target.as_uri())
-            if target == active_path:
-                target_content = active_content
-            elif snapshot is not None:
-                target_content = snapshot[1]
-            elif target.is_file():
-                try:
-                    target_content = target.read_text(encoding="utf-8", errors="replace")
-                except OSError:
+            source_record = None
+            if relative is None or is_workspace_dependency:
+                source_record = (
+                    self._resolve_registered_external_source(active_source_id, target)
+                    if active_source_id and target == active_path
+                    else self._register_external_source(uri)
+                )
+                if source_record is None:
+                    continue
+                if target == active_path and source_record.source_id == active_source_id:
+                    target_content = active_content
+                else:
+                    target_content = self.external_source_registry.read(
+                        source_record.source_id,
+                        alias=self.external_source_alias,
+                        user_id=self.external_source_user_id,
+                        workspace_root=self.workspace_root,
+                        provider_id=self.provider_id,
+                        mode="cat",
+                    )["content"]
+                if not isinstance(target_content, str):
                     continue
             else:
-                continue
+                snapshot = self._documents.get(target.as_uri())
+                if target == active_path:
+                    target_content = active_content
+                elif snapshot is not None:
+                    target_content = snapshot[1]
+                elif target.is_file():
+                    try:
+                        target_content = target.read_text(encoding="utf-8", errors="replace")
+                    except OSError:
+                        continue
+                else:
+                    continue
             normalized_range = _lsp_range_to_api(target_content, target_range, self.position_encoding)
             normalized_selection = _lsp_range_to_api(target_content, selection_range, self.position_encoding)
             if normalized_range is None or normalized_selection is None:
                 continue
-            items.append(
-                {
-                    "target_type": "workspace",
-                    "path": relative.as_posix(),
-                    "provider": self.provider_id,
-                    "range": normalized_range,
-                    "selection_range": normalized_selection,
-                }
-            )
+            if source_record is not None:
+                items.append(
+                    {
+                        "target_type": "external",
+                        "path": source_record.display_path,
+                        "display_path": source_record.display_path,
+                        "source_id": source_record.source_id,
+                        "provider": self.provider_id,
+                        "range": normalized_range,
+                        "selection_range": normalized_selection,
+                    }
+                )
+            else:
+                items.append(
+                    {
+                        "target_type": "workspace",
+                        "path": relative.as_posix(),
+                        "provider": self.provider_id,
+                        "range": normalized_range,
+                        "selection_range": normalized_selection,
+                    }
+                )
         return items
+
+    def _register_external_source(self, uri: str):
+        registry = self.external_source_registry
+        if registry is None or not self.external_source_alias:
+            return None
+        return registry.register(
+            uri=uri,
+            alias=self.external_source_alias,
+            user_id=self.external_source_user_id,
+            workspace_root=self.workspace_root,
+            provider_id=self.provider_id,
+            approved_roots=self.external_source_roots,
+        )
+
+    def _resolve_registered_external_source(self, source_id: str, target: Path):
+        record = self._resolve_external_source_id(source_id)
+        return record if record is not None and record.path == target else None
+
+    def _resolve_external_source_id(self, source_id: str):
+        registry = self.external_source_registry
+        if registry is None or not self.external_source_alias or not source_id:
+            return None
+        try:
+            record = registry.resolve(
+                source_id,
+                alias=self.external_source_alias,
+                user_id=self.external_source_user_id,
+                workspace_root=self.workspace_root,
+                provider_id=self.provider_id,
+            )
+        except ExternalSourceError:
+            return None
+        return record

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { inferFileEditorLanguageId } from "../utils/fileEditorLanguage";
+import { getExternalSourceErrorMessage } from "../services/types";
 import type {
+  ExternalSourceReadResult,
   PluginOpenTarget,
   WorkspaceDocumentCloseInput,
   CodeNavigationDocumentSyncEvent,
@@ -48,7 +50,16 @@ function toSyncItem(tab: EditorTab): CodeNavigationDocumentSyncItem {
 
 function basename(path: string) {
   const parts = path.split(/[\\/]/);
-  return parts[parts.length - 1] || path;
+  return parts[parts.length - 1]?.trim() || path.trim();
+}
+
+function externalTabPath(sourceId: string) {
+  return `external-source:${sourceId}`;
+}
+
+function externalDisplayName(displayPath: string, sourceId: string) {
+  const normalized = String(displayPath || "").trim();
+  return basename(normalized) || (sourceId ? "外部源码" : "外部依赖");
 }
 
 function clonePluginTargets(pluginTargets?: PluginOpenTarget[]) {
@@ -460,6 +471,106 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
     await hydrateTabContent(path, generation);
   }
 
+  async function openExternalSource(input: {
+    sourceId: string;
+    displayPath?: string;
+  } | string): Promise<boolean> {
+    if (structureOnly) {
+      return false;
+    }
+    const generation = scopeGenerationRef.current;
+    const sourceId = typeof input === "string" ? input.trim() : String(input.sourceId || "").trim();
+    if (!sourceId) {
+      return false;
+    }
+    const requestedDisplayPath = typeof input === "string" ? "" : String(input.displayPath || "").trim();
+    const path = externalTabPath(sourceId);
+    const existing = tabsRef.current.find((item) => item.kind === "external-source" && item.sourceId === sourceId);
+    const initialTab = existing || createTab(path, "", undefined, {
+      basename: externalDisplayName(requestedDisplayPath, sourceId),
+      kind: "external-source",
+      sourceId,
+      displayPath: requestedDisplayPath,
+      readOnly: true,
+      statusText: "外部依赖 · 只读",
+      loading: true,
+      contentPersistence: "none",
+    });
+    const currentTabs = tabsRef.current;
+    if (!existing) {
+      tabsRef.current = [...currentTabs, initialTab];
+      setTabs(tabsRef.current);
+    } else {
+      tabsRef.current = currentTabs.map((item) => item.path === existing.path
+        ? { ...item, loading: true, error: "", statusText: "外部依赖 · 只读" }
+        : item);
+      setTabs(tabsRef.current);
+    }
+    activeTabPathRef.current = path;
+    setActiveTabPath(path);
+
+    try {
+      const result: ExternalSourceReadResult = await client.readExternalSource(botAlias, sourceId);
+      if (!isCurrentScope(generation)) {
+        return false;
+      }
+      const displayPath = result.displayPath || requestedDisplayPath || "外部源码";
+      const nextTab: EditorTab = {
+        ...(initialTab || createTab(path, "")),
+        path,
+        basename: externalDisplayName(displayPath, sourceId),
+        content: result.content || "",
+        documentVersion: Math.max(1, Math.trunc(Number(initialTab.documentVersion) || 1)),
+        savedContent: result.content || "",
+        kind: "external-source",
+        sourceId: result.sourceId || sourceId,
+        displayPath,
+        readOnly: true,
+        dirty: false,
+        loading: false,
+        saving: false,
+        statusText: "外部依赖 · 只读",
+        error: "",
+        lastModifiedNs: result.lastModifiedNs,
+        encoding: result.encoding,
+        cold: false,
+        missing: false,
+        contentPersistence: "none",
+      };
+      const nextTabs = tabsRef.current.some((item) => item.path === path)
+        ? tabsRef.current.map((item) => item.path === path ? nextTab : item)
+        : [...tabsRef.current, nextTab];
+      tabsRef.current = nextTabs;
+      setTabs(nextTabs);
+      activeTabPathRef.current = path;
+      setActiveTabPath(path);
+      return true;
+    } catch (error) {
+      if (!isCurrentScope(generation)) {
+        return false;
+      }
+      const message = getExternalSourceErrorMessage(error);
+      const nextTabs = tabsRef.current.map((item) => item.path === path
+        ? {
+            ...item,
+            basename: externalDisplayName(requestedDisplayPath || item.basename, sourceId),
+            kind: "external-source" as const,
+            sourceId,
+            displayPath: requestedDisplayPath || item.displayPath,
+            readOnly: true,
+            loading: false,
+            saving: false,
+            statusText: "外部依赖 · 只读",
+            error: message,
+            contentPersistence: "none" as const,
+          }
+        : item);
+      tabsRef.current = nextTabs;
+      setTabs(nextTabs);
+      return false;
+    }
+  }
+
   async function openPluginView(target: PluginOpenTarget) {
     const sourcePath = typeof target.input.path === "string" ? target.input.path : undefined;
     const tabPath = `plugin://${target.pluginId}/${target.viewId}/${sourcePath || target.title}`;
@@ -772,7 +883,7 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
         documentVersion: tab.documentVersion,
         lastModifiedNs: tab.lastModifiedNs,
         encoding: tab.encoding,
-      })).filter((tab) => tab.kind !== "git-diff" && tab.kind !== "plugin-view"),
+      })).filter((tab) => tab.kind !== "git-diff" && tab.kind !== "plugin-view" && tab.kind !== "external-source"),
     );
   }
 
@@ -783,6 +894,7 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
     hasDirtyTabs,
     closedTabs,
     openFile,
+    openExternalSource,
     openPluginView,
     openReadOnlyTab,
     openCreatedFile,

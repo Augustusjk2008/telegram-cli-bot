@@ -8,7 +8,12 @@ from typing import Any
 import pytest
 
 from bot.language_server.document_store import LanguageDocument
-from bot.language_server.pyright import PyrightProvider, discover_python_interpreter
+from bot.language_server.external_source_registry import (
+    ExternalSourcePolicyError,
+    ExternalSourceRegistry,
+    ExternalSourceUriError,
+)
+from bot.language_server.pyright import PyrightProvider, discover_python_external_roots, discover_python_interpreter
 
 
 class FakeLspClient:
@@ -40,6 +45,39 @@ def test_discover_python_interpreter_prefers_workspace_dot_venv(tmp_path: Path) 
     fallback.write_bytes(b"")
 
     assert discover_python_interpreter(tmp_path, current_executable=fallback) == dot_venv_python.resolve()
+
+
+def test_python_external_roots_include_selected_interpreter_prefix(tmp_path: Path) -> None:
+    interpreter = _touch_interpreter(tmp_path / ".venv")
+
+    roots = {item.path for item in discover_python_external_roots(interpreter)}
+
+    assert (tmp_path / ".venv").resolve() in roots
+
+
+def test_python_external_roots_exclude_host_sysconfig_for_an_isolated_interpreter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    interpreter = _touch_interpreter(tmp_path / "isolated")
+    host_stdlib = tmp_path / "host-python" / "Lib"
+    host_packages = host_stdlib / "site-packages"
+    host_packages.mkdir(parents=True)
+    host_paths = {
+        "stdlib": host_stdlib,
+        "platstdlib": host_stdlib,
+        "purelib": host_packages,
+        "platlib": host_packages,
+    }
+    monkeypatch.setattr(
+        "bot.language_server.pyright.sysconfig.get_path",
+        lambda name: str(host_paths[name]),
+    )
+
+    roots = {item.path for item in discover_python_external_roots(interpreter)}
+
+    assert host_stdlib.resolve() not in roots
+    assert host_packages.resolve() not in roots
 
 
 def test_pyright_answers_workspace_folder_and_configuration_server_requests(tmp_path: Path) -> None:
@@ -324,6 +362,146 @@ async def test_pyright_rejects_workspace_external_file_locations_until_external_
     )
 
     assert result == []
+
+
+@pytest.mark.asyncio
+async def test_pyright_registers_approved_external_location_without_exposing_absolute_path(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    dependency_root = tmp_path / "typeshed"
+    workspace.mkdir()
+    dependency_root.mkdir()
+    source = workspace / "main.py"
+    target = dependency_root / "stdlib.pyi"
+    source.write_text("value\n", encoding="utf-8")
+    target.write_text("value: int\n", encoding="utf-8")
+    client = FakeLspClient(
+        {
+            "textDocument/definition": {
+                "uri": target.as_uri(),
+                "range": {
+                    "start": {"line": 0, "character": 0},
+                    "end": {"line": 0, "character": 5},
+                },
+            }
+        }
+    )
+    provider = PyrightProvider(
+        workspace,
+        external_source_registry=ExternalSourceRegistry(enabled=True),
+        bot_alias="main",
+        user_id=7,
+        typeshed_roots=[dependency_root],
+    )
+
+    result = await provider.navigate(
+        client,
+        kind="definition",
+        path=source,
+        language_id="python",
+        version=1,
+        content="value\n",
+        line=1,
+        column=1,
+    )
+
+    assert result[0]["target_type"] == "external"
+    assert result[0]["source_id"].startswith("src_")
+    assert str(target) not in result[0]["path"]
+
+    continued = await provider.navigate(
+        client,
+        kind="definition",
+        path=target,
+        language_id="python",
+        version=2,
+        content=target.read_bytes().decode("utf-8"),
+        line=1,
+        column=1,
+        source_id=result[0]["source_id"],
+    )
+
+    assert continued[0]["target_type"] == "external"
+    assert continued[0]["source_id"] == result[0]["source_id"]
+    assert await provider.close_external_sources(client, [result[0]["source_id"]]) == [result[0]["source_id"]]
+    assert client.notifications[-1] == ("textDocument/didClose", {"textDocument": {"uri": target.as_uri()}})
+
+
+@pytest.mark.asyncio
+async def test_pyright_reports_unsupported_external_uri_scheme(tmp_path: Path) -> None:
+    source = tmp_path / "main.py"
+    source.write_text("value\n", encoding="utf-8")
+    client = FakeLspClient(
+        {
+            "textDocument/definition": {
+                "uri": "https://example.invalid/stdlib.pyi",
+                "range": {
+                    "start": {"line": 0, "character": 0},
+                    "end": {"line": 0, "character": 5},
+                },
+            }
+        }
+    )
+    provider = PyrightProvider(
+        tmp_path,
+        external_source_registry=ExternalSourceRegistry(enabled=True),
+        bot_alias="main",
+        user_id=7,
+    )
+
+    with pytest.raises(ExternalSourceUriError, match="仅支持 file"):
+        await provider.navigate(
+            client,
+            kind="definition",
+            path=source,
+            language_id="python",
+            version=1,
+            content="value\n",
+            line=1,
+            column=1,
+        )
+
+
+@pytest.mark.asyncio
+async def test_pyright_reports_external_location_outside_approved_roots(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    approved = tmp_path / "typeshed"
+    outside = tmp_path / "private" / "secret.py"
+    workspace.mkdir()
+    approved.mkdir()
+    outside.parent.mkdir()
+    source = workspace / "main.py"
+    source.write_text("secret\n", encoding="utf-8")
+    outside.write_text("secret = 1\n", encoding="utf-8")
+    client = FakeLspClient(
+        {
+            "textDocument/definition": {
+                "uri": outside.as_uri(),
+                "range": {
+                    "start": {"line": 0, "character": 0},
+                    "end": {"line": 0, "character": 6},
+                },
+            }
+        }
+    )
+    provider = PyrightProvider(
+        workspace,
+        external_source_registry=ExternalSourceRegistry(enabled=True),
+        bot_alias="main",
+        user_id=7,
+        typeshed_roots=[approved],
+    )
+
+    with pytest.raises(ExternalSourcePolicyError, match="批准"):
+        await provider.navigate(
+            client,
+            kind="definition",
+            path=source,
+            language_id="python",
+            version=1,
+            content="secret\n",
+            line=1,
+            column=1,
+        )
 
 
 @pytest.mark.asyncio

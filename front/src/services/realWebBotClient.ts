@@ -143,6 +143,7 @@ import type {
   LanguageServerCatalog,
   LanguageServerInstallOptions,
   LanguageServerProviderId,
+  LanguageServerRestartResult,
   LanguageServerProviderStatus,
   PluginActionInvokeInput,
   PluginActionResult,
@@ -173,6 +174,7 @@ import type {
   UserBotPermissions,
   CodeNavigationRequest,
   CodeNavigationResult,
+  ExternalSourceReadResult,
   WorkspaceDocumentSyncInput,
   WorkspaceDocumentSyncResult,
   WorkspaceDocumentCloseInput,
@@ -234,8 +236,12 @@ type JsonEnvelope<T> = {
 
 type RawCodeNavigationLocation = {
   target_type?: "workspace" | "external";
+  targetType?: "workspace" | "external";
   path?: string;
+  display_path?: string;
+  displayPath?: string;
   source_id?: string;
+  sourceId?: string;
   provider?: string;
   range?: {
     start?: { line?: number; column?: number };
@@ -245,10 +251,15 @@ type RawCodeNavigationLocation = {
     start?: { line?: number; column?: number };
     end?: { line?: number; column?: number };
   };
+  selectionRange?: {
+    start?: { line?: number; column?: number };
+    end?: { line?: number; column?: number };
+  };
 };
 
 type RawCodeNavigationResult = {
   request_id?: string;
+  requestId?: string;
   message?: string;
   items?: RawCodeNavigationLocation | RawCodeNavigationLocation[] | null;
 };
@@ -519,6 +530,16 @@ type RawLanguageServerCatalog = {
 
 type RawLanguageServerInstallResult = RawLanguageServerCatalog & {
   catalog?: RawLanguageServerCatalog;
+};
+
+type RawLanguageServerRestartResult = {
+  provider?: string;
+  provider_id?: string;
+  restarted?: boolean;
+  runtimeState?: string;
+  runtime_state?: string;
+  runtimeMessage?: string;
+  runtime_message?: string;
 };
 
 type RawNotificationSettings = {
@@ -879,6 +900,24 @@ type RawFileReadResult = {
   preview_kind?: "text" | "image";
   content_type?: string;
   content_base64?: string;
+};
+
+type RawExternalSourceReadResult = {
+  source_id?: string;
+  sourceId?: string;
+  display_path?: string;
+  displayPath?: string;
+  path?: string;
+  content?: string;
+  encoding?: string;
+  language_id?: string;
+  languageId?: string;
+  last_modified_ns?: string | number;
+  lastModifiedNs?: string | number;
+  file_size_bytes?: number;
+  fileSizeBytes?: number;
+  uri?: string;
+  scheme?: string;
 };
 
 type RawFileWriteResult = {
@@ -3293,6 +3332,8 @@ function mapLanguageServerProviderStatus(raw: RawLanguageServerProviderStatus): 
   const rawRuntimeState = String(raw.runtimeState ?? raw.runtime_state ?? "").trim();
   const runtimeState = rawRuntimeState === "starting"
     || rawRuntimeState === "indexing"
+    || rawRuntimeState === "restarting"
+    || rawRuntimeState === "degraded"
     || rawRuntimeState === "ready"
     || rawRuntimeState === "error"
     || rawRuntimeState === "stopped"
@@ -3326,6 +3367,29 @@ function mapLanguageServerCatalog(raw: RawLanguageServerCatalog): LanguageServer
   return {
     providers,
     canRefresh: raw.canRefresh !== false && raw.can_refresh !== false,
+  };
+}
+
+function mapLanguageServerRestartResult(
+  raw: RawLanguageServerRestartResult,
+  fallbackProvider: LanguageServerProviderId,
+): LanguageServerRestartResult {
+  const provider = mapLanguageServerProviderId(raw.provider ?? raw.provider_id) || fallbackProvider;
+  const rawRuntimeState = String(raw.runtimeState ?? raw.runtime_state ?? "").trim();
+  const runtimeState = rawRuntimeState === "starting"
+    || rawRuntimeState === "indexing"
+    || rawRuntimeState === "restarting"
+    || rawRuntimeState === "degraded"
+    || rawRuntimeState === "ready"
+    || rawRuntimeState === "error"
+    || rawRuntimeState === "stopped"
+    ? rawRuntimeState as LanguageServerRestartResult["runtimeState"]
+    : "starting";
+  return {
+    provider,
+    restarted: raw.restarted !== false,
+    runtimeState,
+    runtimeMessage: String(raw.runtimeMessage ?? raw.runtime_message ?? "正在重启语言服务").trim() || "正在重启语言服务",
   };
 }
 
@@ -4157,6 +4221,19 @@ export class RealWebBotClient implements WebBotClient {
     return mapLanguageServerCatalog(await this.requestJson<RawLanguageServerCatalog>(
       `/api/bots/${encodeURIComponent(botAlias)}/workspace/language-servers${query}`,
     ));
+  }
+
+  async restartLanguageServer(
+    botAlias: string,
+    provider: LanguageServerProviderId,
+  ): Promise<LanguageServerRestartResult> {
+    const result = await this.requestJson<RawLanguageServerRestartResult>(
+      `/api/bots/${encodeURIComponent(botAlias)}/workspace/language-servers/${encodeURIComponent(provider)}/restart`,
+      {
+        method: "POST",
+      },
+    );
+    return mapLanguageServerRestartResult(result, provider);
   }
 
   async refreshLanguageServerCatalog(): Promise<LanguageServerCatalog> {
@@ -5390,6 +5467,33 @@ export class RealWebBotClient implements WebBotClient {
     return result;
   }
 
+  async readExternalSource(botAlias: string, sourceId: string): Promise<ExternalSourceReadResult> {
+    const normalizedSourceId = String(sourceId || "").trim();
+    if (!normalizedSourceId) {
+      throw new Error("外部源码令牌为空");
+    }
+    const data = await this.requestJson<RawExternalSourceReadResult>(
+      `/api/bots/${encodeURIComponent(botAlias)}/workspace/external-sources/${encodeURIComponent(normalizedSourceId)}`,
+    );
+    const sourceIdValue = String(data.source_id || data.sourceId || normalizedSourceId).trim();
+    const displayPath = String(data.display_path || data.displayPath || data.path || "外部源码").trim() || "外部源码";
+    return {
+      sourceId: sourceIdValue,
+      displayPath,
+      content: typeof data.content === "string" ? data.content : "",
+      ...(data.encoding ? { encoding: data.encoding } : {}),
+      ...(data.language_id || data.languageId ? { languageId: data.language_id || data.languageId } : {}),
+      ...(typeof data.last_modified_ns !== "undefined" || typeof data.lastModifiedNs !== "undefined"
+        ? { lastModifiedNs: String(data.last_modified_ns ?? data.lastModifiedNs) }
+        : {}),
+      ...(typeof data.file_size_bytes === "number" || typeof data.fileSizeBytes === "number"
+        ? { fileSizeBytes: Number(data.file_size_bytes ?? data.fileSizeBytes) }
+        : {}),
+      ...(data.uri ? { uri: data.uri } : {}),
+      ...(data.scheme ? { scheme: data.scheme } : {}),
+    };
+  }
+
   async openPluginView(
     botAlias: string,
     pluginId: string,
@@ -5645,22 +5749,31 @@ export class RealWebBotClient implements WebBotClient {
     const rawItems = data?.items;
     const items = Array.isArray(rawItems) ? rawItems : rawItems ? [rawItems] : [];
     return {
-      requestId: data?.request_id || input.requestId,
+      requestId: data?.request_id || data?.requestId || input.requestId,
       message: data?.message || "",
-      items: items.map((item) => ({
-        targetType: item.target_type === "external" ? "external" : "workspace",
-        ...(item.path ? { path: item.path } : {}),
-        ...(item.source_id ? { sourceId: item.source_id } : {}),
-        provider: item.provider || "unknown",
-        range: {
-          start: mapPosition(item.range?.start),
-          end: mapPosition(item.range?.end),
-        },
-        selectionRange: {
-          start: mapPosition(item.selection_range?.start),
-          end: mapPosition(item.selection_range?.end),
-        },
-      })),
+      items: items.map((item) => {
+        const targetType = item.target_type || item.targetType;
+        const path = item.path || item.display_path || item.displayPath;
+        const displayPath = item.display_path || item.displayPath || path;
+        const sourceId = item.source_id || item.sourceId;
+        const range = item.range;
+        const selectionRange = item.selection_range || item.selectionRange;
+        return {
+          targetType: targetType === "external" ? "external" : "workspace",
+          ...(path ? { path } : {}),
+          ...(targetType === "external" && displayPath ? { displayPath } : {}),
+          ...(sourceId ? { sourceId } : {}),
+          provider: item.provider || "unknown",
+          range: {
+            start: mapPosition(range?.start),
+            end: mapPosition(range?.end),
+          },
+          selectionRange: {
+            start: mapPosition(selectionRange?.start),
+            end: mapPosition(selectionRange?.end),
+          },
+        };
+      }),
     };
   }
 

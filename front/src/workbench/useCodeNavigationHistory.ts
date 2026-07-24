@@ -6,6 +6,8 @@ export type CodeNavigationHistoryLocation = {
   path: string;
   line: number;
   column: number;
+  sourceId?: string;
+  displayPath?: string;
 };
 
 type HistoryState = {
@@ -32,14 +34,17 @@ function emptyHistoryState(): HistoryState {
 }
 
 function normalizeLocation(location: CodeNavigationHistoryLocation) {
-  const path = String(location.path || "").trim();
-  if (!path) {
+  const sourceId = String(location.sourceId || "").trim();
+  const path = String(location.path || "").trim() || (sourceId ? `external-source:${sourceId}` : "");
+  if (!path && !sourceId) {
     return null;
   }
   return {
     path,
     line: Math.max(1, Math.trunc(Number(location.line) || 1)),
     column: Math.max(1, Math.trunc(Number(location.column) || 1)),
+    ...(sourceId ? { sourceId } : {}),
+    ...(location.displayPath ? { displayPath: String(location.displayPath).trim() } : {}),
   };
 }
 
@@ -50,7 +55,7 @@ function locationsEqual(
   return Boolean(
     left
     && right
-    && left.path === right.path
+    && (left.sourceId || left.path) === (right.sourceId || right.path)
     && left.line === right.line
     && left.column === right.column,
   );

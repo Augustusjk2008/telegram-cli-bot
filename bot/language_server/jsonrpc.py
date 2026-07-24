@@ -31,6 +31,7 @@ _MISSING = object()
 
 NotificationHandler = Callable[[str, Any], Awaitable[None] | None]
 ServerRequestHandler = Callable[[str, Any], Awaitable[Any] | Any]
+TransportFailureHandler = Callable[[BaseException], Awaitable[None] | None]
 
 
 class LspJsonRpcError(RuntimeError):
@@ -106,6 +107,7 @@ class LspJsonRpcClient:
         max_header_bytes: int = DEFAULT_MAX_HEADER_BYTES,
         notification_handler: NotificationHandler | None = None,
         server_request_handler: ServerRequestHandler | None = None,
+        transport_failure_handler: TransportFailureHandler | None = None,
         max_notification_handler_tasks: int = DEFAULT_MAX_NOTIFICATION_HANDLER_TASKS,
     ) -> None:
         if request_timeout_seconds <= 0:
@@ -125,6 +127,7 @@ class LspJsonRpcClient:
         self.max_header_bytes = int(max_header_bytes)
         self._notification_handler = notification_handler
         self._server_request_handler = server_request_handler
+        self._transport_failure_handler = transport_failure_handler
         self._max_notification_handler_tasks = int(max_notification_handler_tasks)
 
         self._next_request_id = 0
@@ -133,6 +136,7 @@ class LspJsonRpcClient:
         self._close_lock = asyncio.Lock()
         self._shutdown_lock = asyncio.Lock()
         self._reader_task: asyncio.Task[None] | None = None
+        self._process_wait_task: asyncio.Task[None] | None = None
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._notification_handler_tasks: set[asyncio.Task[None]] = set()
         self._notification_drop_reported = False
@@ -140,6 +144,7 @@ class LspJsonRpcClient:
             maxsize=MAX_PENDING_NOTIFICATIONS
         )
         self._reader_error: BaseException | None = None
+        self._transport_failure_notified = False
         self._closed = False
         self._closed_event = asyncio.Event()
         self._shutdown_started = False
@@ -153,6 +158,22 @@ class LspJsonRpcClient:
     def pending_count(self) -> int:
         return len(self._pending)
 
+    @property
+    def reader_error(self) -> BaseException | None:
+        """Return the first transport failure observed by the reader."""
+
+        return self._reader_error
+
+    def fail_transport(self, error: BaseException | None = None) -> None:
+        """Fail this transport from an external process watcher.
+
+        The stdio reader normally detects EOF/protocol failures itself.  A
+        process can, however, exit before its stdout pipe is drained; runtimes
+        use this hook to make pending requests fail immediately in that case.
+        """
+
+        self._mark_transport_failed(error or LspJsonRpcClosedError("语言服务器传输已失效"))
+
     async def start(self, *, _allow_shutdown: bool = False) -> None:
         """Start the sole stdout reader task if it has not started yet."""
 
@@ -161,6 +182,25 @@ class LspJsonRpcClient:
             if self._reader is None:
                 raise LspJsonRpcClosedError("语言服务器 stdout 不可用")
             self._reader_task = asyncio.create_task(self._reader_loop())
+            wait = getattr(self.process, "wait", None)
+            if callable(wait):
+                self._process_wait_task = asyncio.create_task(self._process_wait_loop())
+
+    async def _process_wait_loop(self) -> None:
+        wait = getattr(self.process, "wait", None)
+        if not callable(wait):
+            return
+        try:
+            result = wait()
+            returncode = await result if inspect.isawaitable(result) else result
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            error: BaseException = LspJsonRpcClosedError(f"语言服务器进程监视失败: {exc}")
+        else:
+            error = LspJsonRpcClosedError(f"语言服务器进程已退出 (code={returncode})")
+        if not self._closed and not self._shutdown_sent:
+            self._mark_transport_failed(error)
 
     async def request(
         self,
@@ -350,6 +390,10 @@ class LspJsonRpcClient:
             if self._reader_task is not None and self._reader_task is not current_task:
                 self._reader_task.cancel()
                 tasks.append(self._reader_task)
+            if self._process_wait_task is not None and self._process_wait_task is not current_task:
+                self._process_wait_task.cancel()
+                tasks.append(self._process_wait_task)
+            self._process_wait_task = None
             for task in list(self._background_tasks):
                 if task is current_task:
                     continue
@@ -690,10 +734,30 @@ class LspJsonRpcClient:
                 item.future.set_exception(error)
 
     def _mark_transport_failed(self, error: BaseException) -> None:
-        if self._reader_error is None:
+        first_failure = self._reader_error is None
+        if first_failure:
             self._reader_error = error
         self._closed_event.set()
         self._fail_pending(error)
+        if first_failure and not self._transport_failure_notified:
+            self._transport_failure_notified = True
+            handler = self._transport_failure_handler
+            if handler is not None:
+                try:
+                    result = handler(error)
+                except Exception:
+                    logger.exception("语言服务器 transport 失效回调失败")
+                else:
+                    if inspect.isawaitable(result):
+                        self._track_background_task(self._await_transport_failure_handler(result))
+
+    async def _await_transport_failure_handler(self, result: Awaitable[Any]) -> None:
+        try:
+            await result
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("语言服务器 transport 失效异步回调失败")
 
     def _ensure_usable(self, *, allow_shutdown: bool = False) -> None:
         if self._closed:
@@ -764,4 +828,5 @@ __all__ = [
     "LspJsonRpcResponseError",
     "LspJsonRpcServerRequestError",
     "LspJsonRpcTimeoutError",
+    "TransportFailureHandler",
 ]

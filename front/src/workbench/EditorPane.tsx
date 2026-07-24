@@ -49,7 +49,7 @@ function pluginTargetLabel(target: PluginOpenTarget) {
 }
 
 function splitBreadcrumbPath(path: string) {
-  return path.split(/[\\/]+/).filter(Boolean);
+  return path.split(/[\\/]+/).map((part) => part.trim()).filter(Boolean);
 }
 
 export function buildEditorBreadcrumb(tab: EditorTab) {
@@ -60,6 +60,9 @@ export function buildEditorBreadcrumb(tab: EditorTab) {
   }
   if (tab.kind === "git-diff") {
     return splitBreadcrumbPath(tab.sourcePath || tab.path);
+  }
+  if (tab.kind === "external-source") {
+    return ["外部依赖 · 只读", ...splitBreadcrumbPath(tab.displayPath || tab.basename)];
   }
   return splitBreadcrumbPath(tab.path);
 }
@@ -213,7 +216,7 @@ export function EditorPane({
                   type="button"
                   role="tab"
                   aria-selected={isActive}
-                  title={tab.path}
+                  title={tab.displayPath || tab.path}
                   onClick={() => {
                     setMenuPath("");
                     void onActivateTab(tab.path);
@@ -228,6 +231,11 @@ export function EditorPane({
                 >
                   {tab.basename}
                 </button>
+                {tab.kind === "external-source" ? (
+                  <span className="max-w-44 truncate text-[10px] text-[var(--muted)]" aria-label="外部依赖 · 只读">
+                    外部依赖 · 只读
+                  </span>
+                ) : null}
                 {tab.dirty ? (
                   <span
                     data-testid={`editor-tab-dirty-dot-${tab.path}`}
@@ -236,7 +244,7 @@ export function EditorPane({
                 ) : null}
                 <button
                   type="button"
-                  aria-label={`关闭 ${tab.path}`}
+                  aria-label={`关闭 ${tab.displayPath || tab.path}`}
                   onClick={() => {
                     if (onCloseTab(tab.path)) {
                       setMenuPath((current) => current === tab.path ? "" : current);
@@ -288,16 +296,18 @@ export function EditorPane({
                     >
                       重新打开刚关闭的标签页
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        void onRevealInTree(tab.sourcePath || tab.path);
-                        setMenuPath("");
-                      }}
-                      className="flex w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
-                    >
-                      在文件树中定位
-                    </button>
+                    {tab.kind !== "external-source" ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void onRevealInTree(tab.sourcePath || tab.path);
+                          setMenuPath("");
+                        }}
+                        className="flex w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                      >
+                        在文件树中定位
+                      </button>
+                    ) : null}
                   </div>
                 ) : null}
               </div>

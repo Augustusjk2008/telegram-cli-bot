@@ -106,3 +106,41 @@ test("language service status polls while indexing and stops after ready", async
   });
   expect(getCatalog).toHaveBeenCalledTimes(2);
 });
+
+test("language service status keeps polling while the scoped service restarts", async () => {
+  vi.useFakeTimers();
+  const client = new MockWebBotClient();
+  const baseStatus = {
+    provider: "pyright" as const,
+    status: "available" as const,
+    source: "path" as const,
+    version: "1.1.410",
+    commandSummary: "pyright-langserver --stdio",
+    canInstall: false,
+    canUpdate: false,
+    message: "使用 PATH 中的命令",
+    error: "",
+  };
+  const getCatalog = vi.spyOn(client, "getLanguageServerCatalog")
+    .mockResolvedValueOnce({
+      canRefresh: true,
+      providers: [{ ...baseStatus, runtimeState: "restarting" }],
+    })
+    .mockResolvedValueOnce({
+      canRefresh: true,
+      providers: [{ ...baseStatus, runtimeState: "ready" }],
+    });
+
+  const { result } = renderHook(() => useLanguageServerStatus(client, "main", "src/main.py"));
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  expect(result.current.status?.runtimeState).toBe("restarting");
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1000);
+  });
+  expect(result.current.status?.runtimeState).toBe("ready");
+  expect(getCatalog).toHaveBeenCalledTimes(2);
+});

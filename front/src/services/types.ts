@@ -243,7 +243,7 @@ export type LanguageServerAvailability = "available" | "missing" | "installing" 
 
 export type LanguageServerSource = "custom" | "path" | "managed";
 
-export type LanguageServerRuntimeState = "starting" | "indexing" | "ready" | "error" | "stopped";
+export type LanguageServerRuntimeState = "starting" | "indexing" | "restarting" | "degraded" | "ready" | "error" | "stopped";
 
 export type LanguageServerProviderStatus = {
   provider: LanguageServerProviderId;
@@ -263,6 +263,13 @@ export type LanguageServerProviderStatus = {
 export type LanguageServerCatalog = {
   providers: LanguageServerProviderStatus[];
   canRefresh: boolean;
+};
+
+export type LanguageServerRestartResult = {
+  provider: LanguageServerProviderId;
+  restarted: boolean;
+  runtimeState: LanguageServerRuntimeState;
+  runtimeMessage: string;
 };
 
 export type LanguageServerInstallOptions = {
@@ -781,6 +788,60 @@ export class WebApiClientError extends Error {
   }
 }
 
+/**
+ * Maps external-source API failures to stable Chinese copy for the editor.
+ * Backend messages remain the fallback so newly introduced diagnostics are
+ * still visible without leaking an opaque token or absolute path.
+ */
+export function getExternalSourceErrorMessage(error: unknown): string {
+  const candidate = error as { code?: unknown; message?: unknown } | null;
+  const code = String(candidate?.code || "").trim().toLowerCase();
+  const rawMessage = String(candidate?.message || (error instanceof Error ? error.message : "") || "").trim();
+  const signal = `${code} ${rawMessage}`.toLowerCase();
+  if (
+    signal.includes("unauthorized")
+    || signal.includes("scope_mismatch")
+    || signal.includes("scope_invalid")
+    || signal.includes("cross_user")
+    || signal.includes("不属于当前范围")
+    || signal.includes("越权")
+  ) {
+    return "外部源码令牌无权访问或已失效，请重新执行代码跳转后再试";
+  }
+  if (
+    signal.includes("expired")
+    || signal.includes("过期")
+    || signal.includes("stale")
+    || signal.includes("token_invalid")
+    || signal.includes("source_not_found")
+    || signal.includes("source_missing")
+  ) {
+    return "外部源码令牌已过期或失效，请重新执行代码跳转后再试";
+  }
+  if (
+    (signal.includes("unsupported") && (signal.includes("uri") || signal.includes("scheme") || signal.includes("source")))
+    || signal.includes("不支持的外部源码")
+    || signal.includes("unsupported_uri")
+    || signal.includes("unsupported_scheme")
+  ) {
+    return "不支持的外部源码类型，仅支持 file:// 源码";
+  }
+  if (
+    signal.includes("policy")
+    || signal.includes("forbidden")
+    || signal.includes("denied")
+    || signal.includes("not_allowed")
+    || signal.includes("not_approved")
+    || signal.includes("external_source_not_file")
+    || signal.includes("策略拒绝")
+    || signal.includes("批准目录")
+    || signal.includes("拒绝")
+  ) {
+    return "外部源码被安全策略拒绝，无法打开";
+  }
+  return rawMessage || "读取外部源码失败";
+}
+
 export type RunningReply = {
   userText?: string;
   previewText?: string;
@@ -1218,6 +1279,19 @@ export type FileReadResult = {
   previewKind?: FilePreviewKind;
   contentType?: string;
   contentBase64?: string;
+};
+
+/** A short-lived, read-only source snapshot issued by a language server. */
+export type ExternalSourceReadResult = {
+  sourceId: string;
+  displayPath: string;
+  content: string;
+  encoding?: string;
+  languageId?: string;
+  lastModifiedNs?: string;
+  fileSizeBytes?: number;
+  uri?: string;
+  scheme?: string;
 };
 
 export type FileWriteResult = {
@@ -1919,6 +1993,7 @@ export type WorkspaceDocumentCloseResult = {
 export type CodeLocation = {
   targetType: "workspace" | "external";
   path?: string;
+  displayPath?: string;
   sourceId?: string;
   provider: string;
   range: CodeRange;
@@ -1934,6 +2009,7 @@ export type CodeNavigationResult = {
 export type CodeNavigationIntent = {
   kind: CodeNavigationKind;
   path: string;
+  sourceId?: string;
   line: number;
   column: number;
   symbol?: string;

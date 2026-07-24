@@ -11,6 +11,10 @@ function byteSize(value: string) {
   return new Blob([value]).size;
 }
 
+function isExternalSourceTabPath(path: string) {
+  return path.startsWith("external-source:");
+}
+
 function normalizeTab(raw: unknown): PersistedWorkbenchTab | null {
   if (!raw || typeof raw !== "object") {
     return null;
@@ -18,7 +22,7 @@ function normalizeTab(raw: unknown): PersistedWorkbenchTab | null {
 
   const candidate = raw as Record<string, unknown>;
   const path = typeof candidate.path === "string" ? candidate.path.trim() : "";
-  if (!path) {
+  if (!path || isExternalSourceTabPath(path)) {
     return null;
   }
 
@@ -64,6 +68,7 @@ export function buildWorkbenchSessionStorageKey(botAlias: string, workspaceRoot:
 
 export function selectTabsForPersistence(
   tabs: Array<{
+    kind?: string;
     path: string;
     dirty: boolean;
     documentVersion?: number;
@@ -77,6 +82,9 @@ export function selectTabsForPersistence(
   let totalBytes = 0;
 
   for (const tab of tabs) {
+    if (tab.kind === "external-source") {
+      continue;
+    }
     const draftContent = tab.dirty ? tab.draftContent ?? tab.savedContent : undefined;
     const savedContent = !tab.dirty ? tab.savedContent : undefined;
     const nextSize = byteSize(draftContent ?? savedContent ?? "");
@@ -123,6 +131,7 @@ export function normalizePersistedWorkbenchSession(raw: unknown): PersistedWorkb
   const botAlias = typeof candidate.botAlias === "string" ? candidate.botAlias.trim() : "";
   const workspaceRoot = typeof candidate.workspaceRoot === "string" ? candidate.workspaceRoot.trim() : "";
   const sidebarView = isDesktopSidebarView(candidate.sidebarView) ? candidate.sidebarView : "files";
+  const activeTabPath = typeof candidate.activeTabPath === "string" ? candidate.activeTabPath.trim() : "";
   if (!botAlias || !workspaceRoot) {
     return null;
   }
@@ -138,7 +147,7 @@ export function normalizePersistedWorkbenchSession(raw: unknown): PersistedWorkb
     selectedTreePath: typeof candidate.selectedTreePath === "string"
       ? candidate.selectedTreePath.trim()
       : undefined,
-    activeTabPath: typeof candidate.activeTabPath === "string" ? candidate.activeTabPath : "",
+    activeTabPath: isExternalSourceTabPath(activeTabPath) ? "" : activeTabPath,
     terminalOverrideCwd: typeof candidate.terminalOverrideCwd === "string" ? candidate.terminalOverrideCwd : undefined,
     focusedPane:
       candidate.focusedPane === "sidebar"

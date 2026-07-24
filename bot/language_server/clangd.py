@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import shlex
+import shutil
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -16,6 +19,12 @@ from .pyright import (
     _lsp_range_to_api,
 )
 from .document_store import LanguageDocument, build_content_change, parse_text_document_sync_capability
+from .external_source_registry import (
+    ApprovedRoot,
+    ExternalSourceError,
+    ExternalSourceRegistry,
+    canonicalize_approved_roots,
+)
 
 
 _CLANGD_EXTENSIONS = {
@@ -77,6 +86,139 @@ def discover_clangd_project_config(workspace_root: Path | str) -> Path | None:
     return None
 
 
+def _compile_command_arguments(value: Mapping[str, Any]) -> list[str]:
+    arguments = value.get("arguments")
+    if isinstance(arguments, list):
+        return [str(item) for item in arguments if str(item or "").strip()]
+    command = str(value.get("command") or "").strip()
+    if not command:
+        return []
+    try:
+        return shlex.split(command, posix=os.name != "nt")
+    except ValueError:
+        return []
+
+
+def _compile_command_include_args(arguments: Sequence[str]) -> list[str]:
+    roots: list[str] = []
+    index = 0
+    while index < len(arguments):
+        argument = str(arguments[index] or "").strip()
+        index += 1
+        normalized = argument.lower()
+        matched = False
+        for prefix in ("/external:i", "-isystem", "-iquote"):
+            if normalized == prefix:
+                if index < len(arguments):
+                    roots.append(str(arguments[index]).strip().strip('"'))
+                    index += 1
+                matched = True
+                break
+            if normalized.startswith(prefix + "="):
+                roots.append(argument[len(prefix) + 1 :].strip().strip('"'))
+                matched = True
+                break
+            if normalized.startswith(prefix):
+                roots.append(argument[len(prefix) :].strip().strip('"'))
+                matched = True
+                break
+        if matched:
+            continue
+        if argument == "-I":
+            if index < len(arguments):
+                roots.append(str(arguments[index]).strip().strip('"'))
+                index += 1
+            continue
+        if argument.startswith("-I") and len(argument) > 2:
+            roots.append(argument[2:].strip().strip('"'))
+            continue
+        if normalized == "/i":
+            if index < len(arguments):
+                roots.append(str(arguments[index]).strip().strip('"'))
+                index += 1
+            continue
+        if normalized.startswith("/i") and len(argument) > 2:
+            roots.append(argument[2:].strip().strip('"'))
+    return [item for item in roots if item]
+
+
+def discover_clangd_external_roots(
+    workspace_root: Path | str,
+    *,
+    compilation_database: Path | str | None = None,
+    compiler_include_roots: Iterable[Path | str] = (),
+    clang_resource_dirs: Iterable[Path | str] = (),
+    trusted_compiler_commands: Iterable[Path | str] = (),
+) -> tuple[ApprovedRoot, ...]:
+    """Discover include roots without executing workspace-controlled commands."""
+
+    root = Path(workspace_root).expanduser().resolve()
+    candidates: list[tuple[Path, str]] = []
+    database = Path(compilation_database).expanduser().resolve() if compilation_database else discover_compile_commands(root)
+    if database is not None and database.is_file():
+        try:
+            raw = json.loads(database.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            raw = []
+        if isinstance(raw, list):
+            for entry in raw:
+                if not isinstance(entry, Mapping):
+                    continue
+                base = Path(str(entry.get("directory") or database.parent)).expanduser()
+                if not base.is_absolute():
+                    base = database.parent / base
+                base = base.resolve(strict=False)
+                for include in _compile_command_include_args(_compile_command_arguments(entry)):
+                    candidate = Path(include).expanduser()
+                    if not candidate.is_absolute():
+                        candidate = base / candidate
+                    candidates.append((candidate, "compile-command-include"))
+
+    for value in compiler_include_roots:
+        candidates.append((Path(value), "compiler-system-include"))
+    include_env = str(os.environ.get("INCLUDE") or "").strip()
+    if include_env:
+        candidates.extend((Path(item), "windows-include") for item in include_env.split(os.pathsep) if item.strip())
+
+    for value in clang_resource_dirs:
+        candidates.append((Path(value), "clang-resource"))
+
+    # These are fixed system locations; no compiler from a project command is executed.
+    if os.name != "nt":
+        for value in ("/usr/include", "/usr/local/include", "/opt/local/include"):
+            candidates.append((Path(value), "compiler-system-include"))
+    executables: list[str] = [str(value) for value in trusted_compiler_commands if str(value or "").strip()]
+    executables.extend(
+        executable
+        for executable_name in ("clang", "clang++", "gcc", "g++")
+        if (executable := shutil.which(executable_name))
+    )
+    seen_executables: set[str] = set()
+    for executable in executables:
+        compiler = Path(executable).expanduser()
+        if not compiler.is_absolute():
+            resolved_executable = shutil.which(str(compiler))
+            if not resolved_executable:
+                continue
+            compiler = Path(resolved_executable)
+        try:
+            compiler = compiler.resolve(strict=False)
+        except OSError:
+            continue
+        executable_key = os.path.normcase(str(compiler))
+        if executable_key in seen_executables:
+            continue
+        seen_executables.add(executable_key)
+        candidates.append((compiler.parent.parent / "include", "compiler-system-include"))
+        clang_lib = compiler.parent.parent / "lib" / "clang"
+        if clang_lib.is_dir():
+            try:
+                candidates.extend((item / "include", "clang-resource") for item in clang_lib.iterdir() if item.is_dir())
+            except OSError:
+                pass
+    return canonicalize_approved_roots(candidates)
+
+
 class ClangdProvider:
     provider_id = "clangd"
 
@@ -85,6 +227,14 @@ class ClangdProvider:
         workspace_root: Path | str,
         *,
         runtime_cache_dir: Path | str | None = None,
+        external_source_registry: ExternalSourceRegistry | None = None,
+        source_registry: ExternalSourceRegistry | None = None,
+        bot_alias: str = "",
+        user_id: int = 0,
+        source_context: Mapping[str, Any] | None = None,
+        compiler_include_roots: Iterable[Path | str] = (),
+        clang_resource_dirs: Iterable[Path | str] = (),
+        trusted_compiler_commands: Iterable[Path | str] = (),
     ) -> None:
         self.workspace_root = Path(workspace_root).expanduser().resolve()
         self.compilation_database = discover_compile_commands(self.workspace_root)
@@ -92,6 +242,22 @@ class ClangdProvider:
             self.compilation_database.parent if self.compilation_database is not None else None
         )
         self.project_config = discover_clangd_project_config(self.workspace_root)
+        self.external_source_registry = (
+            external_source_registry if external_source_registry is not None else source_registry
+        )
+        context = source_context if isinstance(source_context, Mapping) else {}
+        self.external_source_alias = str(bot_alias or context.get("bot_alias") or context.get("alias") or "").strip().lower()
+        try:
+            self.external_source_user_id = int(user_id if user_id is not None else context.get("user_id") or 0)
+        except (TypeError, ValueError):
+            self.external_source_user_id = 0
+        self.external_source_roots = discover_clangd_external_roots(
+            self.workspace_root,
+            compilation_database=self.compilation_database,
+            compiler_include_roots=compiler_include_roots,
+            clang_resource_dirs=clang_resource_dirs,
+            trusted_compiler_commands=trusted_compiler_commands,
+        )
         self.using_fallback_flags = (
             self.compilation_database is None and self.project_config is None
         )
@@ -116,6 +282,13 @@ class ClangdProvider:
     @property
     def open_document_count(self) -> int:
         return len(self._documents)
+
+    def set_external_source_context(self, *, alias: str, user_id: int) -> None:
+        self.external_source_alias = str(alias or "").strip().lower()
+        self.external_source_user_id = int(user_id)
+
+    def approved_external_roots(self) -> tuple[ApprovedRoot, ...]:
+        return self.external_source_roots
 
     @property
     def configuration_summary(self) -> str:
@@ -257,6 +430,26 @@ class ClangdProvider:
                 closed.append(path)
         return closed
 
+    async def close_external_sources(
+        self,
+        client: LspClientProtocol,
+        source_ids: Iterable[str],
+    ) -> list[str]:
+        closed: list[str] = []
+        async with self._navigation_lock:
+            for raw_source_id in source_ids:
+                source_id = str(raw_source_id or "").strip()
+                record = self._resolve_external_source_id(source_id)
+                if record is None:
+                    continue
+                uri = record.path.as_uri()
+                if self._documents.pop(uri, None) is None:
+                    continue
+                if self.sync_open_close:
+                    await client.notify("textDocument/didClose", {"textDocument": {"uri": uri}})
+                closed.append(source_id)
+        return closed
+
     async def _sync_snapshot(self, client: LspClientProtocol, document: LanguageDocument) -> bool:
         target = (self.workspace_root / document.path).resolve()
         uri = target.as_uri()
@@ -322,6 +515,7 @@ class ClangdProvider:
         content: str,
         line: int,
         column: int,
+        source_id: str = "",
     ) -> list[dict[str, object]]:
         normalized_kind = str(kind or "").strip().lower()
         if normalized_kind not in {"definition", "implementation"}:
@@ -329,7 +523,12 @@ class ClangdProvider:
         if normalized_kind == "implementation" and not self.supports_implementation:
             return []
         target = Path(path).expanduser().resolve()
-        if not self._is_workspace_clang_file(target, language_id):
+        active_source_id = str(source_id or "").strip()
+        if not self._is_workspace_clang_file(target, language_id) and not self._is_registered_external_source(
+            active_source_id,
+            target,
+            language_id,
+        ):
             return []
         text = str(content)
         async with self._navigation_lock:
@@ -353,7 +552,12 @@ class ClangdProvider:
                     ),
                 },
             )
-            return self._normalize_locations(response, active_path=target, active_content=text)
+            return self._normalize_locations(
+                response,
+                active_path=target,
+                active_content=text,
+                active_source_id=active_source_id,
+            )
 
     async def _sync_active_document(
         self,
@@ -404,6 +608,11 @@ class ClangdProvider:
             and str(language_id or "").strip().lower() in _CLANGD_LANGUAGE_IDS
         )
 
+    def _is_registered_external_source(self, source_id: str, target: Path, language_id: str) -> bool:
+        if str(language_id or "").strip().lower() not in _CLANGD_LANGUAGE_IDS:
+            return False
+        return self._resolve_registered_external_source(source_id, target) is not None
+
     @staticmethod
     def _lsp_language_id(path: Path) -> str:
         return "c" if path.suffix.lower() == ".c" else "cpp"
@@ -414,6 +623,7 @@ class ClangdProvider:
         *,
         active_path: Path,
         active_content: str,
+        active_source_id: str = "",
     ) -> list[dict[str, object]]:
         if response is None:
             return []
@@ -430,35 +640,103 @@ class ClangdProvider:
                 target = target.resolve()
                 relative = target.relative_to(self.workspace_root)
             except (OSError, ValueError):
-                # External dependency source tokens are introduced in stage 9.
-                continue
+                relative = None
             target_range = raw.get("targetRange") or raw.get("range")
             selection_range = raw.get("targetSelectionRange") or raw.get("range")
             if not isinstance(target_range, Mapping) or not isinstance(selection_range, Mapping):
                 continue
-            snapshot = self._documents.get(target.as_uri())
-            if target == active_path:
-                target_content = active_content
-            elif snapshot is not None:
-                target_content = snapshot[1]
-            elif target.is_file():
-                try:
-                    target_content = target.read_text(encoding="utf-8", errors="replace")
-                except OSError:
+            source_record = None
+            if relative is None:
+                source_record = (
+                    self._resolve_registered_external_source(active_source_id, target)
+                    if active_source_id and target == active_path
+                    else self._register_external_source(uri)
+                )
+                if source_record is None:
+                    continue
+                if target == active_path and source_record.source_id == active_source_id:
+                    target_content = active_content
+                else:
+                    target_content = self.external_source_registry.read(
+                        source_record.source_id,
+                        alias=self.external_source_alias,
+                        user_id=self.external_source_user_id,
+                        workspace_root=self.workspace_root,
+                        provider_id=self.provider_id,
+                        mode="cat",
+                    )["content"]
+                if not isinstance(target_content, str):
                     continue
             else:
-                continue
+                snapshot = self._documents.get(target.as_uri())
+                if target == active_path:
+                    target_content = active_content
+                elif snapshot is not None:
+                    target_content = snapshot[1]
+                elif target.is_file():
+                    try:
+                        target_content = target.read_text(encoding="utf-8", errors="replace")
+                    except OSError:
+                        continue
+                else:
+                    continue
             normalized_range = _lsp_range_to_api(target_content, target_range, self.position_encoding)
             normalized_selection = _lsp_range_to_api(target_content, selection_range, self.position_encoding)
             if normalized_range is None or normalized_selection is None:
                 continue
-            items.append(
-                {
-                    "target_type": "workspace",
-                    "path": relative.as_posix(),
-                    "provider": self.provider_id,
-                    "range": normalized_range,
-                    "selection_range": normalized_selection,
-                }
-            )
+            if source_record is not None:
+                items.append(
+                    {
+                        "target_type": "external",
+                        "path": source_record.display_path,
+                        "display_path": source_record.display_path,
+                        "source_id": source_record.source_id,
+                        "provider": self.provider_id,
+                        "range": normalized_range,
+                        "selection_range": normalized_selection,
+                    }
+                )
+            else:
+                items.append(
+                    {
+                        "target_type": "workspace",
+                        "path": relative.as_posix(),
+                        "provider": self.provider_id,
+                        "range": normalized_range,
+                        "selection_range": normalized_selection,
+                    }
+                )
         return items
+
+    def _register_external_source(self, uri: str):
+        registry = self.external_source_registry
+        if registry is None or not self.external_source_alias:
+            return None
+        return registry.register(
+            uri=uri,
+            alias=self.external_source_alias,
+            user_id=self.external_source_user_id,
+            workspace_root=self.workspace_root,
+            provider_id=self.provider_id,
+            approved_roots=self.external_source_roots,
+        )
+
+    def _resolve_registered_external_source(self, source_id: str, target: Path):
+        record = self._resolve_external_source_id(source_id)
+        return record if record is not None and record.path == target else None
+
+    def _resolve_external_source_id(self, source_id: str):
+        registry = self.external_source_registry
+        if registry is None or not self.external_source_alias or not source_id:
+            return None
+        try:
+            record = registry.resolve(
+                source_id,
+                alias=self.external_source_alias,
+                user_id=self.external_source_user_id,
+                workspace_root=self.workspace_root,
+                provider_id=self.provider_id,
+            )
+        except ExternalSourceError:
+            return None
+        return record

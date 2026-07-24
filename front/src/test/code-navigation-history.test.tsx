@@ -1,7 +1,8 @@
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { MockWebBotClient } from "../services/mockWebBotClient";
+import { WebApiClientError } from "../services/types";
 import { PersistentTerminalProvider } from "../terminal/PersistentTerminalProvider";
 import { CommandPalette } from "../workbench/CommandPalette";
 import { DesktopWorkbench } from "../workbench/DesktopWorkbench";
@@ -9,6 +10,10 @@ import {
   useCodeNavigationHistory,
   type CodeNavigationHistoryLocation,
 } from "../workbench/useCodeNavigationHistory";
+
+afterEach(() => {
+  window.localStorage.clear();
+});
 
 
 function location(path: string, line = 1, column = 1): CodeNavigationHistoryLocation {
@@ -232,6 +237,36 @@ test("failed history navigation preserves both stacks", async () => {
 });
 
 
+test("navigation history can return to an external source and keeps stacks when its token has expired", async () => {
+  const workspace = location("src/main.py", 4, 3);
+  const external: CodeNavigationHistoryLocation = {
+    path: "external-source:source-token-1",
+    sourceId: "source-token-1",
+    displayPath: "依赖 / stdlib / sample.py",
+    line: 12,
+    column: 5,
+  };
+  const onNavigate = vi.fn<(_location: CodeNavigationHistoryLocation) => Promise<boolean>>()
+    .mockResolvedValueOnce(true)
+    .mockResolvedValueOnce(false);
+  const { result } = renderHook(() => useCodeNavigationHistory({ scopeKey: "main:root-a", onNavigate }));
+
+  act(() => result.current.recordNavigation(workspace, external));
+  await act(async () => {
+    expect(await result.current.goBack()).toBe(true);
+  });
+  expect(result.current.currentLocation).toEqual(workspace);
+  expect(result.current.canGoForward).toBe(true);
+
+  await act(async () => {
+    expect(await result.current.goForward()).toBe(false);
+  });
+  expect(onNavigate).toHaveBeenLastCalledWith(external);
+  expect(result.current.currentLocation).toEqual(workspace);
+  expect(result.current.forwardStack).toEqual([external]);
+});
+
+
 test("command palette exposes definition, implementation, back, and forward commands", async () => {
   const user = userEvent.setup();
   const onClose = vi.fn();
@@ -267,6 +302,95 @@ test("command palette exposes definition, implementation, back, and forward comm
   await user.click(within(palette).getByRole("button", { name: /转到定义/ }));
   expect(onNavigateDefinition).toHaveBeenCalledTimes(1);
   expect(onClose).toHaveBeenCalledTimes(1);
+});
+
+
+test("desktop opens external source without file-tree reveal and preserves history on an expired forward token", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  window.localStorage.clear();
+  const revealFileTreePath = vi.spyOn(client, "revealFileTreePath");
+  vi.spyOn(client, "resolveCodeNavigation").mockResolvedValue({
+    requestId: "external-navigation",
+    message: "",
+    items: [{
+      targetType: "external",
+      path: "依赖 / stdlib / pathlib.py",
+      displayPath: "依赖 / stdlib / pathlib.py",
+      sourceId: "source-token-1",
+      provider: "pyright",
+      range: {
+        start: { line: 8, column: 1 },
+        end: { line: 12, column: 1 },
+      },
+      selectionRange: {
+        start: { line: 10, column: 7 },
+        end: { line: 10, column: 11 },
+      },
+    }],
+  });
+  const readExternalSource = vi.spyOn(client, "readExternalSource")
+    .mockResolvedValueOnce({
+      sourceId: "source-token-1",
+      displayPath: "依赖 / stdlib / pathlib.py",
+      content: "class Path:\n    pass\n",
+      encoding: "utf-8",
+      languageId: "python",
+    })
+    .mockResolvedValueOnce({
+      sourceId: "source-token-1",
+      displayPath: "依赖 / stdlib / pathlib.py",
+      content: "class Path:\n    pass\n",
+      encoding: "utf-8",
+      languageId: "python",
+    })
+    .mockRejectedValueOnce(new WebApiClientError("source expired", {
+      status: 410,
+      code: "external_source_expired",
+    }));
+
+  render(
+    <PersistentTerminalProvider client={client}>
+      <DesktopWorkbench botAlias="main" client={client} />
+    </PersistentTerminalProvider>,
+  );
+  await user.click(await screen.findByRole("button", { name: "展开 src" }));
+  await user.click(await screen.findByRole("button", { name: "打开 src/index.ts" }));
+  const editor = await screen.findByRole("textbox", { name: "文件内容" }) as HTMLTextAreaElement;
+  revealFileTreePath.mockClear();
+  editor.focus();
+  editor.setSelectionRange(2, 2);
+
+  fireEvent.keyDown(editor, { key: "F12" });
+  expect(await screen.findByRole("tab", { name: "pathlib.py" })).toHaveAttribute("aria-selected", "true");
+  expect(readExternalSource).toHaveBeenCalledWith("main", "source-token-1");
+  expect(revealFileTreePath).not.toHaveBeenCalled();
+  await waitFor(() => {
+    const persisted = Object.keys(window.localStorage)
+      .filter((key) => key.startsWith("web-workbench-session:"))
+      .map((key) => window.localStorage.getItem(key) || "");
+    expect(persisted.length).toBeGreaterThan(0);
+    expect(persisted.join("\n")).not.toContain("source-token-1");
+  });
+
+  await user.click(screen.getByRole("button", { name: "关闭 依赖 / stdlib / pathlib.py" }));
+  expect(screen.queryByRole("tab", { name: "pathlib.py" })).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "导航后退" }));
+  expect(await screen.findByRole("tab", { name: "index.ts" })).toHaveAttribute("aria-selected", "true");
+
+  await user.click(screen.getByRole("button", { name: "导航前进" }));
+  expect(await screen.findByRole("tab", { name: "pathlib.py" })).toHaveAttribute("aria-selected", "true");
+  expect(readExternalSource).toHaveBeenCalledTimes(2);
+
+  await user.click(screen.getByRole("button", { name: "关闭 依赖 / stdlib / pathlib.py" }));
+  await user.click(screen.getByRole("button", { name: "导航后退" }));
+  expect(await screen.findByRole("tab", { name: "index.ts" })).toHaveAttribute("aria-selected", "true");
+  await user.click(screen.getByRole("button", { name: "导航前进" }));
+  expect(await screen.findByText("外部源码令牌已过期或失效，请重新执行代码跳转后再试")).toBeVisible();
+  expect(readExternalSource).toHaveBeenCalledTimes(3);
+  expect(screen.getByRole("button", { name: "导航前进" })).toBeEnabled();
+  expect(revealFileTreePath).toHaveBeenCalledTimes(2);
 });
 
 
@@ -423,7 +547,8 @@ test("desktop code navigation cancels a superseded request and shows multiple de
   expect(signals).toHaveLength(2);
   await waitFor(() => expect(signals[0]?.aborted).toBe(true));
   expect(signals[1]?.aborted).toBe(false);
-  expect(await screen.findByText("src/one.ts")).toBeVisible();
-  expect(screen.getByText("src/two.ts")).toBeVisible();
+  const definitionPicker = await screen.findByTestId("desktop-definition-picker");
+  expect(within(definitionPicker).getByText("src/one.ts")).toBeInTheDocument();
+  expect(within(definitionPicker).getByText("src/two.ts")).toBeInTheDocument();
   expect(screen.queryByText("代码导航失败")).not.toBeInTheDocument();
 });

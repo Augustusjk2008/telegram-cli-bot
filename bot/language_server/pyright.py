@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import sysconfig
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
@@ -15,6 +16,13 @@ from .document_store import (
     LanguageDocument,
     build_content_change,
     parse_text_document_sync_capability,
+)
+from .external_source_registry import (
+    ApprovedRoot,
+    ExternalSourceError,
+    ExternalSourceRegistry,
+    ExternalSourceUriError,
+    canonicalize_approved_roots,
 )
 
 
@@ -50,6 +58,94 @@ def discover_python_interpreter(
     return fallback.resolve() if fallback.is_file() else None
 
 
+def discover_python_external_roots(
+    interpreter: Path | str | None,
+    *,
+    typeshed_roots: Iterable[Path | str] = (),
+) -> tuple[ApprovedRoot, ...]:
+    """Return only canonical Python dependency roots suitable for read-only source."""
+
+    candidates: list[tuple[Path, str]] = []
+    selected: Path | None = None
+    selected_prefix: Path | None = None
+    if interpreter is not None:
+        try:
+            candidate = Path(interpreter).expanduser().resolve()
+            if candidate.is_file():
+                selected = candidate
+        except OSError:
+            selected = None
+    if selected is not None:
+        prefix = selected.parent.parent if selected.parent.name.lower() in {"scripts", "bin"} else selected.parent
+        selected_prefix = prefix.resolve(strict=False)
+        candidates.append((prefix, "python-prefix"))
+        candidates.extend(
+            (
+                (prefix / "Lib", "python-stdlib"),
+                (prefix / "Lib" / "site-packages", "python-site-packages"),
+                (prefix / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}", "python-stdlib"),
+                (prefix / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages", "python-site-packages"),
+            )
+        )
+    host_prefixes = {
+        Path(sys.prefix).expanduser().resolve(strict=False),
+        Path(sys.base_prefix).expanduser().resolve(strict=False),
+    }
+    if selected_prefix is None or selected_prefix in host_prefixes:
+        for name, label in (
+            ("stdlib", "python-stdlib"),
+            ("platstdlib", "python-stdlib"),
+            ("purelib", "python-site-packages"),
+            ("platlib", "python-site-packages"),
+        ):
+            value = sysconfig.get_path(name)
+            if value:
+                candidates.append((Path(value), label))
+    for value in typeshed_roots:
+        candidates.append((Path(value), "pyright-typeshed"))
+    # Pyright packages typeshed differently across managed and PATH installs.
+    # Probe only fixed, trusted installation layouts; never recursively search a workspace.
+    prefixes = {selected_prefix} if selected_prefix is not None else host_prefixes
+    for prefix in prefixes:
+        candidates.extend(
+            (
+                (prefix / "typeshed", "pyright-typeshed"),
+                (prefix / "typeshed-fallback", "pyright-typeshed"),
+                (prefix / "lib" / "node_modules" / "pyright" / "dist" / "typeshed-fallback", "pyright-typeshed"),
+                (prefix / "lib" / "node_modules" / "pyright-internal" / "typeshed-fallback", "pyright-typeshed"),
+            )
+        )
+    return canonicalize_approved_roots(candidates)
+
+
+def discover_pyright_typeshed_roots(command: Sequence[str] = ()) -> tuple[Path, ...]:
+    """Find typeshed beside a trusted Pyright command without scanning a workspace."""
+
+    candidates: list[Path] = []
+    for value in command:
+        try:
+            entry = Path(str(value or "")).expanduser()
+        except (TypeError, ValueError):
+            continue
+        if not entry.is_file():
+            continue
+        try:
+            entry = entry.resolve()
+        except OSError:
+            continue
+        parents = (entry.parent, entry.parent.parent, entry.parent.parent.parent)
+        for parent in parents:
+            candidates.extend(
+                (
+                    parent / "typeshed-fallback",
+                    parent / "dist" / "typeshed-fallback",
+                    parent / "pyright" / "dist" / "typeshed-fallback",
+                )
+            )
+    roots = canonicalize_approved_roots((item, "pyright-typeshed") for item in candidates)
+    return tuple(item.path for item in roots)
+
+
 class PyrightProvider:
     provider_id = "pyright"
 
@@ -58,6 +154,13 @@ class PyrightProvider:
         workspace_root: Path | str,
         *,
         current_executable: Path | str | None = None,
+        external_source_registry: ExternalSourceRegistry | None = None,
+        source_registry: ExternalSourceRegistry | None = None,
+        bot_alias: str = "",
+        user_id: int = 0,
+        source_context: Mapping[str, Any] | None = None,
+        typeshed_roots: Iterable[Path | str] = (),
+        pyright_command: Sequence[str] = (),
     ) -> None:
         self.workspace_root = Path(workspace_root).expanduser().resolve()
         self.discovered_python_interpreter = discover_python_interpreter(
@@ -71,6 +174,19 @@ class PyrightProvider:
         # injected equivalent in tests), which is inside the existing trust boundary.
         trusted_interpreter = Path(current_executable or sys.executable).expanduser()
         self.python_interpreter = trusted_interpreter.resolve() if trusted_interpreter.is_file() else None
+        self.external_source_registry = (
+            external_source_registry if external_source_registry is not None else source_registry
+        )
+        context = source_context if isinstance(source_context, Mapping) else {}
+        self.external_source_alias = str(bot_alias or context.get("bot_alias") or context.get("alias") or "").strip().lower()
+        try:
+            self.external_source_user_id = int(user_id if user_id is not None else context.get("user_id") or 0)
+        except (TypeError, ValueError):
+            self.external_source_user_id = 0
+        self.external_source_roots = discover_python_external_roots(
+            self.discovered_python_interpreter or self.python_interpreter,
+            typeshed_roots=(*typeshed_roots, *discover_pyright_typeshed_roots(pyright_command)),
+        )
         self.position_encoding = "utf-16"
         self.supports_implementation = False
         self.sync_open_close = True
@@ -81,6 +197,13 @@ class PyrightProvider:
     @property
     def open_document_count(self) -> int:
         return len(self._documents)
+
+    def set_external_source_context(self, *, alias: str, user_id: int) -> None:
+        self.external_source_alias = str(alias or "").strip().lower()
+        self.external_source_user_id = int(user_id)
+
+    def approved_external_roots(self) -> tuple[ApprovedRoot, ...]:
+        return self.external_source_roots
 
     async def initialize(self, client: LspClientProtocol) -> None:
         root_uri = self.workspace_root.as_uri()
@@ -182,6 +305,26 @@ class PyrightProvider:
                 closed.append(path)
         return closed
 
+    async def close_external_sources(
+        self,
+        client: LspClientProtocol,
+        source_ids: Iterable[str],
+    ) -> list[str]:
+        closed: list[str] = []
+        async with self._navigation_lock:
+            for raw_source_id in source_ids:
+                source_id = str(raw_source_id or "").strip()
+                record = self._resolve_external_source_id(source_id)
+                if record is None:
+                    continue
+                uri = record.path.as_uri()
+                if self._documents.pop(uri, None) is None:
+                    continue
+                if self.sync_open_close:
+                    await client.notify("textDocument/didClose", {"textDocument": {"uri": uri}})
+                closed.append(source_id)
+        return closed
+
     async def _sync_snapshot(self, client: LspClientProtocol, document: LanguageDocument) -> bool:
         target = (self.workspace_root / document.path).resolve()
         uri = target.as_uri()
@@ -276,6 +419,7 @@ class PyrightProvider:
         content: str,
         line: int,
         column: int,
+        source_id: str = "",
     ) -> list[dict[str, object]]:
         normalized_kind = str(kind or "").strip().lower()
         if normalized_kind not in {"definition", "implementation"}:
@@ -284,7 +428,12 @@ class PyrightProvider:
             return []
 
         target = Path(path).expanduser().resolve()
-        if not self._is_workspace_python_file(target, language_id):
+        active_source_id = str(source_id or "").strip()
+        if not self._is_workspace_python_file(target, language_id) and not self._is_registered_external_source(
+            active_source_id,
+            target,
+            language_id,
+        ):
             return []
         async with self._navigation_lock:
             uri = target.as_uri()
@@ -308,7 +457,12 @@ class PyrightProvider:
                     ),
                 },
             )
-            return self._normalize_locations(response, active_path=target, active_content=str(content))
+            return self._normalize_locations(
+                response,
+                active_path=target,
+                active_content=str(content),
+                active_source_id=active_source_id,
+            )
 
     async def _sync_active_document(
         self,
@@ -351,13 +505,28 @@ class PyrightProvider:
 
     def _is_workspace_python_file(self, path: Path, language_id: str) -> bool:
         try:
-            path.relative_to(self.workspace_root)
+            relative = path.relative_to(self.workspace_root)
         except ValueError:
             return False
         normalized_language = str(language_id or "").strip().lower()
+        relative_parts = {part.lower() for part in relative.parts}
+        if (
+            (relative.parts and relative.parts[0].lower() in {".venv", "venv"})
+            or "site-packages" in relative_parts
+            or "dist-packages" in relative_parts
+        ):
+            return False
         return path.suffix.lower() in _PYTHON_EXTENSIONS and (
             not normalized_language or normalized_language in _PYTHON_LANGUAGE_IDS
         )
+
+    def _is_registered_external_source(self, source_id: str, target: Path, language_id: str) -> bool:
+        if target.suffix.lower() not in _PYTHON_EXTENSIONS:
+            return False
+        normalized_language = str(language_id or "").strip().lower()
+        if normalized_language and normalized_language not in _PYTHON_LANGUAGE_IDS:
+            return False
+        return self._resolve_registered_external_source(source_id, target) is not None
 
     def _normalize_locations(
         self,
@@ -365,6 +534,7 @@ class PyrightProvider:
         *,
         active_path: Path,
         active_content: str,
+        active_source_id: str = "",
     ) -> list[dict[str, object]]:
         if response is None:
             return []
@@ -377,48 +547,116 @@ class PyrightProvider:
             target = _file_uri_to_path(uri)
             if target is None:
                 continue
-            target = target.resolve()
+            try:
+                target = target.resolve()
+            except (OSError, RuntimeError):
+                continue
             try:
                 relative = target.relative_to(self.workspace_root)
             except ValueError:
-                # 外部源码令牌注册表在阶段 9 接入；在此之前不暴露绝对路径。
-                continue
-            relative_parts = {part.lower() for part in relative.parts}
-            if (
+                relative = None
+            relative_parts = {part.lower() for part in relative.parts} if relative is not None else set()
+            is_workspace_dependency = relative is not None and (
                 (relative.parts and relative.parts[0].lower() in {".venv", "venv"})
                 or "site-packages" in relative_parts
                 or "dist-packages" in relative_parts
-            ):
-                # 即使虚拟环境位于工作区目录内，它仍是阶段 9 才能开放的
-                # 外部依赖源码，不能伪装成可编辑的 workspace 目标。
-                continue
+            )
             target_range = raw.get("targetRange") or raw.get("range")
             selection_range = raw.get("targetSelectionRange") or raw.get("range")
             if not isinstance(target_range, Mapping) or not isinstance(selection_range, Mapping):
                 continue
-            snapshot = self._documents.get(target.as_uri())
-            if target == active_path:
-                target_content = active_content
-            elif snapshot is not None:
-                target_content = snapshot[1]
-            elif target.is_file():
-                target_content = target.read_text(encoding="utf-8", errors="replace")
+            source_record = None
+            if relative is None or is_workspace_dependency:
+                source_record = (
+                    self._resolve_registered_external_source(active_source_id, target)
+                    if active_source_id and target == active_path
+                    else self._register_external_source(uri)
+                )
+                if source_record is None:
+                    continue
+                if target == active_path and source_record.source_id == active_source_id:
+                    target_content = active_content
+                else:
+                    target_content = self.external_source_registry.read(
+                        source_record.source_id,
+                        alias=self.external_source_alias,
+                        user_id=self.external_source_user_id,
+                        workspace_root=self.workspace_root,
+                        provider_id=self.provider_id,
+                        mode="cat",
+                    )["content"]
+                if not isinstance(target_content, str):
+                    continue
             else:
-                continue
+                snapshot = self._documents.get(target.as_uri())
+                if target == active_path:
+                    target_content = active_content
+                elif snapshot is not None:
+                    target_content = snapshot[1]
+                elif target.is_file():
+                    target_content = target.read_text(encoding="utf-8", errors="replace")
+                else:
+                    continue
             normalized_range = _lsp_range_to_api(target_content, target_range, self.position_encoding)
             normalized_selection = _lsp_range_to_api(target_content, selection_range, self.position_encoding)
             if normalized_range is None or normalized_selection is None:
                 continue
-            items.append(
-                {
-                    "target_type": "workspace",
-                    "path": relative.as_posix(),
-                    "provider": self.provider_id,
-                    "range": normalized_range,
-                    "selection_range": normalized_selection,
-                }
-            )
+            if source_record is not None:
+                items.append(
+                    {
+                        "target_type": "external",
+                        "path": source_record.display_path,
+                        "display_path": source_record.display_path,
+                        "source_id": source_record.source_id,
+                        "provider": self.provider_id,
+                        "range": normalized_range,
+                        "selection_range": normalized_selection,
+                    }
+                )
+            else:
+                items.append(
+                    {
+                        "target_type": "workspace",
+                        "path": relative.as_posix(),
+                        "provider": self.provider_id,
+                        "range": normalized_range,
+                        "selection_range": normalized_selection,
+                    }
+                )
         return items
+
+    def _register_external_source(self, uri: str):
+        registry = self.external_source_registry
+        if registry is None or not self.external_source_alias:
+            return None
+        return registry.register(
+            uri=uri,
+            alias=self.external_source_alias,
+            user_id=self.external_source_user_id,
+            workspace_root=self.workspace_root,
+            provider_id=self.provider_id,
+            approved_roots=self.external_source_roots,
+        )
+
+    def _resolve_registered_external_source(self, source_id: str, target: Path):
+        record = self._resolve_external_source_id(source_id)
+        return record if record is not None and record.path == target else None
+
+    def _resolve_external_source_id(self, source_id: str):
+        registry = self.external_source_registry
+        if registry is None or not self.external_source_alias or not source_id:
+            return None
+        try:
+            record = registry.resolve(
+                source_id,
+                alias=self.external_source_alias,
+                user_id=self.external_source_user_id,
+                workspace_root=self.workspace_root,
+                provider_id=self.provider_id,
+            )
+        except ExternalSourceError:
+            return None
+        return record
 
 
 def _api_position_to_lsp(content: str, *, line: int, column: int, encoding: str) -> dict[str, int]:
@@ -478,9 +716,12 @@ def _units_to_codepoint_index(value: str, units: int, encoding: str) -> int:
 
 
 def _file_uri_to_path(uri: str) -> Path | None:
-    parsed = urlparse(str(uri or ""))
-    if parsed.scheme.lower() != "file":
+    value = str(uri or "").strip()
+    if not value:
         return None
+    parsed = urlparse(value)
+    if parsed.scheme.lower() != "file":
+        raise ExternalSourceUriError("外部源码 URI 不受支持，仅支持 file://")
     path = url2pathname(unquote(parsed.path))
     if parsed.netloc and parsed.netloc.lower() != "localhost":
         path = f"//{parsed.netloc}{path}"

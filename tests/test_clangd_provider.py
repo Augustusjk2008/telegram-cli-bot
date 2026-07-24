@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from pathlib import Path
@@ -12,8 +13,14 @@ from bot.language_server.clangd import (
     ClangdProvider,
     discover_clangd_project_config,
     discover_compile_commands,
+    discover_clangd_external_roots,
 )
 from bot.language_server.document_store import LanguageDocument
+from bot.language_server.external_source_registry import (
+    ExternalSourcePolicyError,
+    ExternalSourceRegistry,
+    ExternalSourceUriError,
+)
 from bot.language_server.manager import (
     LanguageServerRuntime,
     LanguageServerRuntimeKey,
@@ -64,6 +71,88 @@ def test_clangd_project_config_is_detected_without_parsing_workspace_content(
     provider = ClangdProvider(tmp_path)
     assert provider.using_fallback_flags is False
     assert provider.fallback_flags == []
+
+
+def test_clangd_external_roots_include_compile_command_include_flags(tmp_path: Path) -> None:
+    include_root = tmp_path / "include"
+    system_root = tmp_path / "system"
+    include_root.mkdir()
+    system_root.mkdir()
+    (tmp_path / "compile_commands.json").write_text(
+        json.dumps(
+            [
+                {
+                    "directory": str(tmp_path),
+                    "file": "main.cpp",
+                    "arguments": ["clang++", "-I", "include", f"-isystem={system_root}"],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    provider = ClangdProvider(tmp_path)
+
+    roots = {item.path for item in provider.approved_external_roots()}
+    assert include_root.resolve() in roots
+    assert system_root.resolve() in roots
+
+
+def test_clangd_external_roots_parse_joined_system_and_quote_flags_without_treating_include_as_a_root(
+    tmp_path: Path,
+) -> None:
+    system_root = tmp_path / "joined-system"
+    quote_root = tmp_path / "joined-quote"
+    false_root = tmp_path / "nclude"
+    system_root.mkdir()
+    quote_root.mkdir()
+    false_root.mkdir()
+    (tmp_path / "compile_commands.json").write_text(
+        json.dumps(
+            [
+                {
+                    "directory": str(tmp_path),
+                    "file": "main.cpp",
+                    "arguments": [
+                        "clang++",
+                        f"-isystem{system_root}",
+                        f"-iquote{quote_root}",
+                        "-include",
+                        "forced.hpp",
+                    ],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    roots = {item.path for item in discover_clangd_external_roots(tmp_path)}
+
+    assert system_root.resolve() in roots
+    assert quote_root.resolve() in roots
+    assert false_root.resolve() not in roots
+
+
+def test_clangd_external_roots_include_windows_include_and_resource_dirs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    include_root = tmp_path / "windows-include"
+    resource_root = tmp_path / "clang-resource"
+    include_root.mkdir()
+    resource_root.mkdir()
+    monkeypatch.setenv("INCLUDE", str(include_root))
+
+    roots = {
+        item.path
+        for item in discover_clangd_external_roots(
+            tmp_path,
+            clang_resource_dirs=[resource_root],
+        )
+    }
+
+    assert include_root.resolve() in roots
+    assert resource_root.resolve() in roots
 
 
 class FakeLspClient:
@@ -145,6 +234,146 @@ async def test_clangd_navigates_workspace_locations_and_syncs_active_document(tm
     assert client.notifications[0][0] == "textDocument/didOpen"
     assert client.requests[-1][0] == "textDocument/definition"
     assert client.requests[-1][1]["position"] == {"line": 1, "character": 0}
+
+
+@pytest.mark.asyncio
+async def test_clangd_registers_compiler_include_as_external_source(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    include_root = tmp_path / "include"
+    workspace.mkdir()
+    include_root.mkdir()
+    source = workspace / "main.cpp"
+    target = include_root / "vector"
+    source.write_text("value\n", encoding="utf-8")
+    target.write_text("class vector {};\n", encoding="utf-8")
+    client = FakeLspClient(
+        {
+            "textDocument/definition": {
+                "uri": target.as_uri(),
+                "range": {
+                    "start": {"line": 0, "character": 6},
+                    "end": {"line": 0, "character": 12},
+                },
+            }
+        }
+    )
+    provider = ClangdProvider(
+        workspace,
+        external_source_registry=ExternalSourceRegistry(enabled=True),
+        bot_alias="main",
+        user_id=7,
+        compiler_include_roots=[include_root],
+    )
+
+    result = await provider.navigate(
+        client,
+        kind="definition",
+        path=source,
+        language_id="cpp",
+        version=1,
+        content="value\n",
+        line=1,
+        column=1,
+    )
+
+    assert result[0]["target_type"] == "external"
+    assert result[0]["source_id"].startswith("src_")
+    assert str(target) not in result[0]["path"]
+
+    continued = await provider.navigate(
+        client,
+        kind="definition",
+        path=target,
+        language_id="cpp",
+        version=2,
+        content=target.read_bytes().decode("utf-8"),
+        line=1,
+        column=1,
+        source_id=result[0]["source_id"],
+    )
+
+    assert continued[0]["target_type"] == "external"
+    assert continued[0]["source_id"] == result[0]["source_id"]
+    assert await provider.close_external_sources(client, [result[0]["source_id"]]) == [result[0]["source_id"]]
+    assert client.notifications[-1] == ("textDocument/didClose", {"textDocument": {"uri": target.as_uri()}})
+
+
+@pytest.mark.asyncio
+async def test_clangd_reports_unsupported_external_uri_scheme(tmp_path: Path) -> None:
+    source = tmp_path / "main.cpp"
+    source.write_text("value\n", encoding="utf-8")
+    client = FakeLspClient(
+        {
+            "textDocument/definition": {
+                "uri": "zip:file:///sdk/include/vector",
+                "range": {
+                    "start": {"line": 0, "character": 0},
+                    "end": {"line": 0, "character": 5},
+                },
+            }
+        }
+    )
+    provider = ClangdProvider(
+        tmp_path,
+        external_source_registry=ExternalSourceRegistry(enabled=True),
+        bot_alias="main",
+        user_id=7,
+    )
+
+    with pytest.raises(ExternalSourceUriError, match="仅支持 file"):
+        await provider.navigate(
+            client,
+            kind="definition",
+            path=source,
+            language_id="cpp",
+            version=1,
+            content="value\n",
+            line=1,
+            column=1,
+        )
+
+
+@pytest.mark.asyncio
+async def test_clangd_reports_external_location_outside_approved_roots(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    approved = tmp_path / "include"
+    outside = tmp_path / "private" / "secret.hpp"
+    workspace.mkdir()
+    approved.mkdir()
+    outside.parent.mkdir()
+    source = workspace / "main.cpp"
+    source.write_text("secret\n", encoding="utf-8")
+    outside.write_text("int secret;\n", encoding="utf-8")
+    client = FakeLspClient(
+        {
+            "textDocument/definition": {
+                "uri": outside.as_uri(),
+                "range": {
+                    "start": {"line": 0, "character": 4},
+                    "end": {"line": 0, "character": 10},
+                },
+            }
+        }
+    )
+    provider = ClangdProvider(
+        workspace,
+        external_source_registry=ExternalSourceRegistry(enabled=True),
+        bot_alias="main",
+        user_id=7,
+        compiler_include_roots=[approved],
+    )
+
+    with pytest.raises(ExternalSourcePolicyError, match="批准"):
+        await provider.navigate(
+            client,
+            kind="definition",
+            path=source,
+            language_id="cpp",
+            version=1,
+            content="secret\n",
+            line=1,
+            column=1,
+        )
 
 
 @pytest.mark.asyncio

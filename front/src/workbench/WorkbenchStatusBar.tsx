@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { RefreshCw } from "lucide-react";
 import type { ViewMode } from "../app/layoutMode";
 import type { LanguageServerProviderId, LanguageServerProviderStatus } from "../services/types";
 import type {
@@ -20,6 +21,9 @@ type Props = {
   languageServiceProvider?: LanguageServerProviderId | null;
   languageServiceStatus?: LanguageServerProviderStatus | null;
   languageServiceLoading?: boolean;
+  languageServiceRestarting?: boolean;
+  languageServiceRestartError?: string;
+  onRestartLanguageService?: () => void | Promise<void>;
   rightAction?: ReactNode;
 };
 
@@ -74,15 +78,20 @@ function languageServiceLabel(
   provider: LanguageServerProviderId | null | undefined,
   status: LanguageServerProviderStatus | null | undefined,
   loading: boolean,
+  restarting: boolean,
 ) {
   if (!provider) return "";
   const label = languageServiceProviderLabel(provider);
+  if (restarting) return `${label} · 重启中`;
   if (loading) return `${label} · 检测中`;
   if (!status) return `${label} · 状态未知`;
+  if (status.runtimeState === "starting") return `${label} · 启动中`;
+  if (status.runtimeState === "indexing") return `${label} · 索引中`;
+  if (status.runtimeState === "restarting") return `${label} · 重启中`;
+  if (status.runtimeState === "degraded") return `${label} · 降级`;
+  if (status.runtimeState === "error") return `${label} · 错误`;
+  if (status.runtimeState === "stopped") return `${label} · 已停止`;
   if (status.status === "available") {
-    if (status.runtimeState === "starting") return `${label} · 启动中`;
-    if (status.runtimeState === "indexing") return `${label} · 索引中`;
-    if (status.runtimeState === "error") return `${label} · 错误`;
     return `${label} · 就绪`;
   }
   if (status.status === "installing") return `${label} · 安装中`;
@@ -102,10 +111,23 @@ export function WorkbenchStatusBar({
   languageServiceProvider = null,
   languageServiceStatus = null,
   languageServiceLoading = false,
+  languageServiceRestarting = false,
+  languageServiceRestartError = "",
+  onRestartLanguageService,
   rightAction,
 }: Props) {
   const debugLocation = debugLocationLabel(debugStatus);
-  const languageService = languageServiceLabel(languageServiceProvider, languageServiceStatus, languageServiceLoading);
+  const languageService = languageServiceLabel(
+    languageServiceProvider,
+    languageServiceStatus,
+    languageServiceLoading,
+    languageServiceRestarting,
+  );
+  const languageServiceRestartInProgress = languageServiceRestarting
+    || languageServiceStatus?.runtimeState === "restarting";
+  const restartLanguageServiceTitle = languageServiceProvider
+    ? `重启当前 ${languageServiceProviderLabel(languageServiceProvider)} 语言服务`
+    : "重启当前语言服务";
 
   return (
     <footer
@@ -129,16 +151,44 @@ export function WorkbenchStatusBar({
         {languageService ? (
           <span
             data-testid="workbench-language-service"
-            data-language-service-status={languageServiceLoading
+            data-language-service-status={languageServiceRestartInProgress
+              ? "restarting"
+              : languageServiceLoading
               ? "loading"
               : languageServiceStatus?.runtimeState || languageServiceStatus?.status || "unknown"}
-            title={languageServiceStatus?.runtimeMessage
+            title={languageServiceRestartInProgress
+              ? "正在请求重启当前语言服务"
+              : languageServiceStatus?.runtimeMessage
               || languageServiceStatus?.error
               || languageServiceStatus?.message
               || languageServiceStatus?.commandSummary
               || undefined}
           >
             {languageService}
+          </span>
+        ) : null}
+        {onRestartLanguageService && languageServiceProvider ? (
+          <button
+            type="button"
+            aria-label="重启当前语言服务"
+            title={restartLanguageServiceTitle}
+            disabled={languageServiceRestartInProgress}
+            onClick={() => {
+              void onRestartLanguageService();
+            }}
+            className="inline-flex h-5 w-5 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] disabled:cursor-wait disabled:opacity-60"
+          >
+            <RefreshCw className={`h-3.5 w-3.5${languageServiceRestartInProgress ? " animate-spin" : ""}`} aria-hidden="true" />
+          </button>
+        ) : null}
+        {languageServiceRestartError ? (
+          <span
+            role="alert"
+            data-testid="workbench-language-service-restart-error"
+            className="max-w-[20rem] truncate text-red-600"
+            title={languageServiceRestartError}
+          >
+            重启失败：{languageServiceRestartError}
           </span>
         ) : null}
         <span

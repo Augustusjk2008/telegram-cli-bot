@@ -29,6 +29,7 @@ import type {
   EnvConfigSnapshot,
   FileOpenTarget,
   FileTreeRevealResult,
+  ExternalSourceReadResult,
   FileCopyResult,
   FileCreateResult,
   FileDownloadProgress,
@@ -129,6 +130,7 @@ import type {
   LanguageServerCatalog,
   LanguageServerInstallOptions,
   LanguageServerProviderId,
+  LanguageServerRestartResult,
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
   UserBotPermissions,
@@ -171,6 +173,7 @@ export interface WebBotClient {
   getInlineCompletionRuntimeConfig(botAlias: string): Promise<InlineCompletionConfig>;
   requestInlineCompletion(botAlias: string, input: InlineCompletionRequest, signal?: AbortSignal): Promise<InlineCompletionResult>;
   getLanguageServerCatalog(botAlias: string, provider?: LanguageServerProviderId): Promise<LanguageServerCatalog>;
+  restartLanguageServer(botAlias: string, provider: LanguageServerProviderId): Promise<LanguageServerRestartResult>;
   refreshLanguageServerCatalog(): Promise<LanguageServerCatalog>;
   installLanguageServer(provider: LanguageServerProviderId, options?: LanguageServerInstallOptions): Promise<LanguageServerCatalog>;
   getEnvConfig(): Promise<EnvConfigSnapshot>;
@@ -274,6 +277,7 @@ export interface WebBotClient {
   resolveFileOpenTarget(botAlias: string, path: string): Promise<FileOpenTarget>;
   readFile(botAlias: string, filename: string): Promise<FileReadResult>;
   readFileFull(botAlias: string, filename: string): Promise<FileReadResult>;
+  readExternalSource(botAlias: string, sourceId: string): Promise<ExternalSourceReadResult>;
   openPluginView(
     botAlias: string,
     pluginId: string,

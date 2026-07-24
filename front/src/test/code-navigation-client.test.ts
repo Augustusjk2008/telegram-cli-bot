@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { MockWebBotClient } from "../services/mockWebBotClient";
 import { RealWebBotClient } from "../services/realWebBotClient";
 
 const request = {
@@ -119,6 +120,77 @@ describe("代码导航客户端", () => {
     });
   });
 
+  test("映射外部源码位置的 targetType/sourceId，并读取只读源码快照", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonOk({
+        request_id: "external-nav",
+        message: "",
+        items: {
+          target_type: "external",
+          display_path: "依赖 / stdlib / pathlib.py",
+          source_id: "src_external_1",
+          provider: "pyright",
+          range: {
+            start: { line: 10, column: 1 },
+            end: { line: 12, column: 8 },
+          },
+          selection_range: {
+            start: { line: 11, column: 5 },
+            end: { line: 11, column: 12 },
+          },
+        },
+      }))
+      .mockResolvedValueOnce(jsonOk({
+        source_id: "src_external_1",
+        display_path: "依赖 / stdlib / pathlib.py",
+        content: "class Path:\n    pass\n",
+        encoding: "utf-8",
+        language_id: "python",
+        file_size_bytes: 22,
+        last_modified_ns: 123,
+        target_type: "external",
+        read_only: true,
+      }));
+
+    const client = new RealWebBotClient();
+    const navigation = await client.resolveCodeNavigation("main", request);
+    const source = await client.readExternalSource("main", "src_external_1");
+
+    expect(navigation).toEqual({
+      requestId: "external-nav",
+      message: "",
+      items: [{
+        targetType: "external",
+        path: "依赖 / stdlib / pathlib.py",
+        displayPath: "依赖 / stdlib / pathlib.py",
+        sourceId: "src_external_1",
+        provider: "pyright",
+        range: {
+          start: { line: 10, column: 1 },
+          end: { line: 12, column: 8 },
+        },
+        selectionRange: {
+          start: { line: 11, column: 5 },
+          end: { line: 11, column: 12 },
+        },
+      }],
+    });
+    expect(source).toEqual({
+      sourceId: "src_external_1",
+      displayPath: "依赖 / stdlib / pathlib.py",
+      content: "class Path:\n    pass\n",
+      encoding: "utf-8",
+      languageId: "python",
+      fileSizeBytes: 22,
+      lastModifiedNs: "123",
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/bots/main/workspace/external-sources/src_external_1",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+  });
+
   test("调用方取消请求时保留 AbortError", async () => {
     const controller = new AbortController();
     let receivedSignal: AbortSignal | undefined;
@@ -148,5 +220,18 @@ describe("代码导航客户端", () => {
     );
     const cancelCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/cancel"));
     expect(cancelCall?.[1]?.signal).toBeUndefined();
+  });
+
+  test("mock 客户端提供外部源码快照和可识别的失效错误", async () => {
+    const client = new MockWebBotClient();
+    await expect(client.readExternalSource("main", "mock-external-source")).resolves.toMatchObject({
+      sourceId: "mock-external-source",
+      displayPath: "依赖 / stdlib / example.py",
+      content: expect.stringContaining("external_example"),
+    });
+    await expect(client.readExternalSource("main", "expired")).rejects.toMatchObject({
+      code: "external_source_expired",
+      status: 410,
+    });
   });
 });

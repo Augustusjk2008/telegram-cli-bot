@@ -156,11 +156,15 @@ export type EditorTab = {
   content: string;
   documentVersion: number;
   savedContent: string;
-  kind?: "file" | "git-diff" | "plugin-view";
+  kind?: "file" | "git-diff" | "plugin-view" | "external-source";
   pluginTargets?: PluginOpenTarget[];
   pluginView?: PluginRenderResult;
   pluginInput?: Record<string, unknown>;
   sourcePath?: string;
+  /** Opaque server-issued identifier for an external dependency source. */
+  sourceId?: string;
+  /** Sanitized path shown to users; never sent back as a file path. */
+  displayPath?: string;
   readOnly?: boolean;
   dirty: boolean;
   loading: boolean;

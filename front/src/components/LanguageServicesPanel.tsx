@@ -6,6 +6,7 @@ import type {
   LanguageServerCatalog,
   LanguageServerProviderId,
   LanguageServerProviderStatus,
+  LanguageServerRuntimeState,
   LanguageServerSource,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
@@ -44,6 +45,33 @@ function statusClassName(status: LanguageServerAvailability) {
   if (status === "installing") return "border-sky-200 bg-sky-50 text-sky-700";
   if (status === "missing") return "border-amber-200 bg-amber-50 text-amber-700";
   return "border-red-200 bg-red-50 text-red-700";
+}
+
+function runtimeStatusLabel(state: LanguageServerRuntimeState | undefined) {
+  if (state === "starting") return "启动中";
+  if (state === "indexing") return "索引中";
+  if (state === "restarting") return "重启中";
+  if (state === "degraded") return "降级";
+  if (state === "ready") return "就绪";
+  if (state === "error") return "运行错误";
+  if (state === "stopped") return "已停止";
+  return "";
+}
+
+function runtimeStatusClassName(state: LanguageServerRuntimeState | undefined) {
+  if (state === "ready") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (state === "starting" || state === "indexing" || state === "restarting") {
+    return "border-sky-200 bg-sky-50 text-sky-700";
+  }
+  if (state === "degraded") return "border-amber-200 bg-amber-50 text-amber-700";
+  return "border-red-200 bg-red-50 text-red-700";
+}
+
+function needsRuntimePolling(status: LanguageServerProviderStatus) {
+  return status.status === "installing"
+    || status.runtimeState === "starting"
+    || status.runtimeState === "indexing"
+    || status.runtimeState === "restarting";
 }
 
 function missingProviderStatus(provider: LanguageServerProviderId): LanguageServerProviderStatus {
@@ -85,7 +113,9 @@ function catalogChanged(previous: LanguageServerCatalog | null, next: LanguageSe
       || current.status !== item.status
       || current.source !== item.source
       || current.version !== item.version
-      || current.error !== item.error;
+      || current.error !== item.error
+      || current.runtimeState !== item.runtimeState
+      || current.runtimeMessage !== item.runtimeMessage;
   });
 }
 
@@ -125,7 +155,7 @@ export function LanguageServicesPanel({ botAlias, client, canManage, onCatalogCh
   }, [botAlias, client]);
 
   useEffect(() => {
-    if (!catalog?.providers.some((item) => item.status === "installing")) {
+    if (!catalog?.providers.some(needsRuntimePolling)) {
       return undefined;
     }
     let cancelled = false;
@@ -238,6 +268,7 @@ export function LanguageServicesPanel({ botAlias, client, canManage, onCatalogCh
           const updating = status.canUpdate && (status.status === "available" || !status.canInstall);
           const canManageItem = canManage && (status.canInstall || status.canUpdate);
           const operating = actionProvider === id;
+          const runtimeLabel = runtimeStatusLabel(status.runtimeState);
           return (
             <article key={id} data-testid={`language-service-${id}`} className="rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3">
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -247,9 +278,18 @@ export function LanguageServicesPanel({ botAlias, client, canManage, onCatalogCh
                     <span
                       data-testid={`language-service-status-${id}`}
                       className={`rounded-full border px-2 py-0.5 text-xs font-medium ${statusClassName(status.status)}`}
-                    >
-                      {statusLabel(status.status)}
-                    </span>
+                      >
+                        {statusLabel(status.status)}
+                      </span>
+                      {runtimeLabel ? (
+                        <span
+                          data-testid={`language-service-runtime-${id}`}
+                          title={status.runtimeMessage || undefined}
+                          className={`rounded-full border px-2 py-0.5 text-xs font-medium ${runtimeStatusClassName(status.runtimeState)}`}
+                        >
+                          {runtimeLabel}
+                        </span>
+                      ) : null}
                   </div>
                   <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm">
                     <dt className="text-[var(--muted)]">来源</dt>

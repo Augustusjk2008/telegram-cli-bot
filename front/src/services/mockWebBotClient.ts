@@ -74,6 +74,7 @@ import type {
   EnvConfigSnapshot,
   FileOpenTarget,
   FileTreeRevealResult,
+  ExternalSourceReadResult,
   FileCopyResult,
   FileCreateResult,
   FileDownloadProgress,
@@ -106,6 +107,7 @@ import type {
   LanguageServerCatalog,
   LanguageServerInstallOptions,
   LanguageServerProviderId,
+  LanguageServerRestartResult,
   LanChatConfig,
   LanChatConfigInput,
   LanChatConversation,
@@ -1532,6 +1534,7 @@ export class MockWebBotClient implements WebBotClient {
       },
     ],
   };
+  private restartingLanguageServers = new Set<LanguageServerProviderId>();
   private gitOverviews = new Map<string, GitOverview>([
     [
       "main",
@@ -3150,9 +3153,54 @@ export class MockWebBotClient implements WebBotClient {
     _botAlias: string,
     _provider?: LanguageServerProviderId,
   ): Promise<LanguageServerCatalog> {
-    return {
+    const catalog = {
       canRefresh: this.languageServerCatalog.canRefresh,
       providers: this.languageServerCatalog.providers.map((item) => ({ ...item })),
+    };
+    if (this.restartingLanguageServers.size > 0) {
+      const restartedProviders = new Set(this.restartingLanguageServers);
+      this.restartingLanguageServers.clear();
+      this.languageServerCatalog = {
+        ...this.languageServerCatalog,
+        providers: this.languageServerCatalog.providers.map((item) => restartedProviders.has(item.provider)
+          ? {
+              ...item,
+              runtimeState: "ready",
+              runtimeMessage: "语言服务已就绪",
+              message: item.status === "available" ? "语言服务已就绪" : item.message,
+            }
+          : item),
+      };
+    }
+    return catalog;
+  }
+
+  async restartLanguageServer(
+    _botAlias: string,
+    provider: LanguageServerProviderId,
+  ): Promise<LanguageServerRestartResult> {
+    const current = this.languageServerCatalog.providers.find((item) => item.provider === provider);
+    if (!current || current.status !== "available") {
+      throw new WebApiClientError("当前语言服务不可重启", { status: 409, code: "language_server_unavailable" });
+    }
+    this.languageServerCatalog = {
+      ...this.languageServerCatalog,
+      providers: this.languageServerCatalog.providers.map((item) => item.provider === provider
+        ? {
+            ...item,
+            runtimeState: "restarting",
+            runtimeMessage: "正在重启语言服务",
+            message: "正在重启语言服务",
+            error: "",
+          }
+        : item),
+    };
+    this.restartingLanguageServers.add(provider);
+    return {
+      provider,
+      restarted: true,
+      runtimeState: "restarting",
+      runtimeMessage: "正在重启语言服务",
     };
   }
 
@@ -4577,6 +4625,34 @@ export class MockWebBotClient implements WebBotClient {
       fileSizeBytes: new TextEncoder().encode(content).length,
       isFullContent: true,
       lastModifiedNs: String(this.getFileVersion(botAlias, browserPath, filename)),
+    };
+  }
+
+  async readExternalSource(_botAlias: string, sourceId: string): Promise<ExternalSourceReadResult> {
+    const normalizedSourceId = String(sourceId || "").trim();
+    if (!normalizedSourceId) {
+      throw new WebApiClientError("外部源码令牌为空", { status: 400, code: "external_source_invalid" });
+    }
+    if (normalizedSourceId === "expired" || normalizedSourceId.includes("expired")) {
+      throw new WebApiClientError("外部源码令牌已过期", { status: 410, code: "external_source_expired" });
+    }
+    if (normalizedSourceId === "unsupported-uri") {
+      throw new WebApiClientError("不支持的外部源码 URI", { status: 400, code: "external_source_unsupported_uri" });
+    }
+    if (normalizedSourceId === "policy-denied") {
+      throw new WebApiClientError("外部源码被策略拒绝", { status: 403, code: "external_source_policy_denied" });
+    }
+    const displayPath = normalizedSourceId === "mock-external-source"
+      ? "依赖 / stdlib / example.py"
+      : `依赖 / ${normalizedSourceId}`;
+    return {
+      sourceId: normalizedSourceId,
+      displayPath,
+      content: "def external_example():\n    return True\n",
+      encoding: "utf-8",
+      languageId: "python",
+      lastModifiedNs: "1",
+      scheme: "file",
     };
   }
 

@@ -66,7 +66,11 @@ export function useLanguageServerStatus(
         if (cancelled) return;
         const status = catalog.providers.find((item) => item.provider === provider) || missingStatus(provider);
         setState({ provider, status, loading: false, error: "" });
-        if (status.runtimeState === "starting" || status.runtimeState === "indexing") {
+        if (
+          status.runtimeState === "starting"
+          || status.runtimeState === "indexing"
+          || status.runtimeState === "restarting"
+        ) {
           pollTimer = window.setTimeout(() => {
             pollTimer = null;
             void loadStatus();

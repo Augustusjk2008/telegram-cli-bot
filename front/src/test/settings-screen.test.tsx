@@ -299,6 +299,61 @@ test("settings screen shows language service discovery details and keeps install
   expect(screen.getByRole("button", { name: "更新 Pyright" })).toBeEnabled();
 });
 
+test("language service panel exposes scoped runtime progress beside discovery status", async () => {
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getLanguageServerCatalog").mockResolvedValue({
+    canRefresh: true,
+    providers: [
+      {
+        provider: "pyright",
+        status: "available",
+        source: "path",
+        version: "1.1.410",
+        commandSummary: "pyright-langserver --stdio",
+        canInstall: false,
+        canUpdate: false,
+        message: "正在启动 Python 语言服务",
+        error: "",
+        runtimeState: "starting",
+        runtimeMessage: "正在启动 Python 语言服务",
+      },
+      {
+        provider: "typescript",
+        status: "available",
+        source: "path",
+        version: "5.8.3",
+        commandSummary: "typescript-language-server --stdio",
+        canInstall: false,
+        canUpdate: false,
+        message: "正在重启 TypeScript 语言服务",
+        error: "",
+        runtimeState: "restarting",
+        runtimeMessage: "正在重启 TypeScript 语言服务",
+      },
+      {
+        provider: "clangd",
+        status: "available",
+        source: "path",
+        version: "17.0.6",
+        commandSummary: "clangd --stdio",
+        canInstall: false,
+        canUpdate: false,
+        message: "连续故障，等待手动重启",
+        error: "",
+        runtimeState: "degraded",
+        runtimeMessage: "连续故障，等待手动重启",
+      },
+    ],
+  });
+
+  render(<LanguageServicesPanel botAlias="main" client={client} canManage={false} />);
+
+  expect(await screen.findByTestId("language-service-runtime-pyright")).toHaveTextContent("启动中");
+  expect(screen.getByTestId("language-service-runtime-typescript")).toHaveTextContent("重启中");
+  expect(screen.getByTestId("language-service-runtime-clangd")).toHaveTextContent("降级");
+  expect(screen.getByTestId("language-service-runtime-typescript")).toHaveAttribute("title", "正在重启 TypeScript 语言服务");
+});
+
 test("settings screen recovers after an admin language service re-detect failure", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();

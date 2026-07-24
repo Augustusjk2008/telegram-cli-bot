@@ -9,13 +9,18 @@ from typing import Any
 import pytest
 
 from bot.language_server.document_store import LanguageDocument
+from bot.language_server.external_source_registry import (
+    ExternalSourcePolicyError,
+    ExternalSourceRegistry,
+    ExternalSourceUriError,
+)
 from bot.language_server.manager import (
     LanguageServerRuntime,
     LanguageServerRuntimeKey,
     LanguageServerRuntimeManager,
     _provider_for_request,
 )
-from bot.language_server.typescript import TypeScriptProvider
+from bot.language_server.typescript import TypeScriptProvider, discover_typescript_external_roots
 from bot.runtime_paths import get_language_server_node_tools_dir
 
 
@@ -68,6 +73,24 @@ def _write_tsserver(package_root: Path) -> Path:
     tsserver.parent.mkdir(parents=True)
     tsserver.write_text("// test TypeScript SDK\n", encoding="utf-8")
     return tsserver.resolve()
+
+
+def test_typescript_external_roots_include_project_dependencies_and_managed_sdk(tmp_path: Path) -> None:
+    project_sdk = _write_tsserver(tmp_path / "node_modules" / "typescript")
+    managed_sdk = _write_tsserver(tmp_path.parent / "managed-typescript")
+
+    roots = {
+        item.path
+        for item in discover_typescript_external_roots(
+            tmp_path,
+            project_sdk_path=project_sdk,
+            managed_sdk_path=managed_sdk,
+        )
+    }
+
+    assert (tmp_path / "node_modules").resolve() in roots
+    assert project_sdk.parent.parent in roots
+    assert managed_sdk.parent.parent in roots
 
 
 @pytest.mark.asyncio
@@ -455,6 +478,137 @@ async def test_typescript_rejects_node_modules_location_until_external_source_su
     )
 
     assert result == []
+
+
+@pytest.mark.asyncio
+async def test_typescript_registers_project_dependency_as_external_source(tmp_path: Path) -> None:
+    source = tmp_path / "main.ts"
+    dependency = tmp_path / "node_modules" / "package" / "index.d.ts"
+    source.write_text("run()\n", encoding="utf-8")
+    dependency.parent.mkdir(parents=True)
+    dependency.write_text("export declare function run(): void;\n", encoding="utf-8")
+    client = FakeLspClient(
+        {
+            "textDocument/definition": {
+                "uri": dependency.as_uri(),
+                "range": {
+                    "start": {"line": 0, "character": 24},
+                    "end": {"line": 0, "character": 27},
+                },
+            }
+        }
+    )
+    provider = TypeScriptProvider(
+        tmp_path,
+        external_source_registry=ExternalSourceRegistry(enabled=True),
+        bot_alias="main",
+        user_id=7,
+    )
+
+    result = await provider.navigate(
+        client,
+        kind="definition",
+        path=source,
+        language_id="typescript",
+        version=1,
+        content="run()\n",
+        line=1,
+        column=1,
+    )
+
+    assert result[0]["target_type"] == "external"
+    assert result[0]["source_id"].startswith("src_")
+    assert str(dependency) not in result[0]["path"]
+
+    continued = await provider.navigate(
+        client,
+        kind="definition",
+        path=dependency,
+        language_id="typescript",
+        version=2,
+        content=dependency.read_bytes().decode("utf-8"),
+        line=1,
+        column=1,
+        source_id=result[0]["source_id"],
+    )
+
+    assert continued[0]["target_type"] == "external"
+    assert continued[0]["source_id"] == result[0]["source_id"]
+    assert await provider.close_external_sources(client, [result[0]["source_id"]]) == [result[0]["source_id"]]
+    assert client.notifications[-1] == ("textDocument/didClose", {"textDocument": {"uri": dependency.as_uri()}})
+
+
+@pytest.mark.asyncio
+async def test_typescript_reports_unsupported_external_uri_scheme(tmp_path: Path) -> None:
+    source = tmp_path / "main.ts"
+    source.write_text("value\n", encoding="utf-8")
+    client = FakeLspClient(
+        {
+            "textDocument/definition": {
+                "uri": "untitled:lib.d.ts",
+                "range": {
+                    "start": {"line": 0, "character": 0},
+                    "end": {"line": 0, "character": 5},
+                },
+            }
+        }
+    )
+    provider = TypeScriptProvider(
+        tmp_path,
+        external_source_registry=ExternalSourceRegistry(enabled=True),
+        bot_alias="main",
+        user_id=7,
+    )
+
+    with pytest.raises(ExternalSourceUriError, match="仅支持 file"):
+        await provider.navigate(
+            client,
+            kind="definition",
+            path=source,
+            language_id="typescript",
+            version=1,
+            content="value\n",
+            line=1,
+            column=1,
+        )
+
+
+@pytest.mark.asyncio
+async def test_typescript_reports_external_location_outside_approved_roots(tmp_path: Path) -> None:
+    source = tmp_path / "main.ts"
+    outside = tmp_path.parent / f"{tmp_path.name}-private" / "secret.d.ts"
+    source.write_text("secret\n", encoding="utf-8")
+    outside.parent.mkdir()
+    outside.write_text("declare const secret: number;\n", encoding="utf-8")
+    client = FakeLspClient(
+        {
+            "textDocument/definition": {
+                "uri": outside.as_uri(),
+                "range": {
+                    "start": {"line": 0, "character": 14},
+                    "end": {"line": 0, "character": 20},
+                },
+            }
+        }
+    )
+    provider = TypeScriptProvider(
+        tmp_path,
+        external_source_registry=ExternalSourceRegistry(enabled=True),
+        bot_alias="main",
+        user_id=7,
+    )
+
+    with pytest.raises(ExternalSourcePolicyError, match="批准"):
+        await provider.navigate(
+            client,
+            kind="definition",
+            path=source,
+            language_id="typescript",
+            version=1,
+            content="secret\n",
+            line=1,
+            column=1,
+        )
 
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "code_navigation" / "typescript"
