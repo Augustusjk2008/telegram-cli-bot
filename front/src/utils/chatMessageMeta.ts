@@ -17,6 +17,11 @@ function pickLoadedTraceCount(incomingValue?: number, baseValue?: number) {
   return values.length > 0 ? Math.max(...values) : undefined;
 }
 
+function isTerminalCompletionState(value?: string) {
+  const state = String(value || "").trim().toLowerCase();
+  return Boolean(state && !["streaming", "running", "in_progress", "in-progress"].includes(state));
+}
+
 export type MergeMessageMetaOptions = {
   reconcileTraceSnapshots?: boolean;
   dedupeAnonymous?: boolean;
@@ -49,6 +54,19 @@ export function mergeMessageMeta(
     },
   );
   const traceSummary = trace ? summarizeTrace(trace) : undefined;
+  const incomingRunState = incoming?.agUiRunState && typeof incoming.agUiRunState === "object"
+    ? incoming.agUiRunState as { completed?: boolean }
+    : undefined;
+  const baseRunState = base?.agUiRunState && typeof base.agUiRunState === "object"
+    ? base.agUiRunState as { completed?: boolean }
+    : undefined;
+  const transientRunState = incoming?.agUiRunState || base?.agUiRunState;
+  const agUiRunState = isNativeSource
+    && !isTerminalCompletionState(incoming?.completionState)
+    && !incomingRunState?.completed
+    && !baseRunState?.completed
+    ? transientRunState
+    : undefined;
   const meta: ChatMessageMetaInfo = {
     completionState: incoming?.completionState || base?.completionState,
     summaryKind: incoming?.summaryKind || base?.summaryKind,
@@ -59,7 +77,7 @@ export function mergeMessageMeta(
     processCount: pickTraceCount(incoming?.processCount, base?.processCount, traceSummary?.processCount),
     nativeSource: incoming?.nativeSource || base?.nativeSource,
     contextUsage: incoming?.contextUsage || base?.contextUsage,
-    agUiRunState: isNativeSource ? incoming?.agUiRunState || base?.agUiRunState : undefined,
+    agUiRunState,
     tracePresentation,
     trace,
     workspaceHistoryHead: incoming?.workspaceHistoryHead ?? base?.workspaceHistoryHead,

@@ -2,6 +2,7 @@ import { expect, test } from "vitest";
 import { mergeMessagesPreservingClientState } from "../screens/ChatScreen";
 import type { ChatMessage, ChatMessageMetaInfo, ChatTraceEvent } from "../services/types";
 import { mergeMessageMeta } from "../utils/chatMessageMeta";
+import { createAgUiRunState } from "../utils/agUiRunReducer";
 import { mergeChatTraceEvents } from "../utils/nativeAgentTranscript";
 
 test("idle history merge preserves message references when nothing changed", () => {
@@ -114,6 +115,28 @@ test("trace snapshot load progress is independent from merged trace length", () 
   expect(merged?.trace).toHaveLength(12);
   expect(merged?.traceCount).toBe(9);
   expect(merged?.traceLoadedCount).toBe(9);
+});
+
+test("completed trace metadata drops the transient AG-UI run state", () => {
+  const runningState = createAgUiRunState();
+  runningState.running = true;
+  runningState.messageId = "assistant-1";
+
+  const merged = mergeMessageMeta(
+    {
+      tracePresentation: "native_agent_flat",
+      agUiRunState: runningState,
+      traceCount: 1,
+      trace: [{ kind: "commentary", summary: "过程" }],
+    },
+    {
+      completionState: "completed",
+      traceCount: 1,
+      trace: [{ kind: "commentary", summary: "过程" }],
+    },
+  );
+
+  expect(merged?.agUiRunState).toBeUndefined();
 });
 
 test("anonymous native trace replay dedupe is opt-in and preserves stable events", () => {

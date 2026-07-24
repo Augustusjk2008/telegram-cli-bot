@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { Check, ChevronRight, LoaderCircle, X } from "lucide-react";
 import { ChatMarkdownMessage } from "./ChatMarkdownMessage";
 import { ChatPlainTextMessage } from "./ChatPlainTextMessage";
@@ -12,6 +12,13 @@ type Props = {
   resultText: string;
   state?: ChatMessage["state"];
   mode?: "native" | "cli";
+  traceCount?: number;
+  toolCallCount?: number;
+  processCount?: number;
+  traceLoaded?: boolean;
+  isTraceLoading?: boolean;
+  traceLoadError?: string;
+  onLoadTrace?: () => void;
   onReplyPermission?: (reply: NativeAgentPermissionReply) => Promise<void>;
   onFileLinkClick?: (href: string) => void;
   onCopyFinalAnswer?: () => boolean | void | Promise<boolean | void>;
@@ -196,8 +203,6 @@ type TranscriptRenderItem =
   | { kind: "entry"; entry: NativeAgentTranscriptEntry }
   | { kind: "group"; groupIndex: number; entries: NativeAgentTranscriptEntry[] };
 
-const LARGE_TRANSCRIPT_GROUP_THRESHOLD = 100;
-
 function cutsTranscriptGroup(entry: NativeAgentTranscriptEntry) {
   return (
     entry.trace?.kind === "commentary"
@@ -215,6 +220,8 @@ function shouldWrapTranscriptGroup(entries: NativeAgentTranscriptEntry[]) {
   }
   return entries.some((entry) => entry.kind === "tool" || isToolResultEntry(entry));
 }
+
+const LARGE_TRANSCRIPT_GROUP_THRESHOLD = 100;
 
 function groupTranscriptEntries(entries: NativeAgentTranscriptEntry[]): TranscriptRenderItem[] {
   const grouped: TranscriptRenderItem[] = [];
@@ -420,13 +427,28 @@ const TranscriptEntryRow = memo(function TranscriptEntryRow({
       />
     );
   }
+  return <ToolTranscriptEntryRow entry={entry} rowClassName={rowClassName} />;
+});
+
+const ToolTranscriptEntryRow = memo(function ToolTranscriptEntryRow({
+  entry,
+  rowClassName,
+}: {
+  entry: NativeAgentTranscriptEntry;
+  rowClassName: string;
+}) {
+  const [expanded, setExpanded] = useState(!entry.collapsedByDefault);
   return (
-    <details className={rowClassName} open={!entry.collapsedByDefault}>
+    <details
+      className={rowClassName}
+      open={expanded}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
+    >
       <summary className="cursor-pointer truncate text-[var(--muted)] marker:text-[var(--muted)]">
         <span className="font-medium text-[var(--text)]">{entry.label}</span>
         {entry.summary ? <span className="ml-2">{entry.summary}</span> : null}
       </summary>
-      <EntryBody entry={entry} />
+      {expanded ? <EntryBody entry={entry} /> : null}
     </details>
   );
 });
@@ -442,7 +464,7 @@ const TranscriptGroupRow = memo(function TranscriptGroupRow({
   onReplyPermission?: (reply: NativeAgentPermissionReply) => Promise<void>;
   onFileLinkClick?: (href: string) => void;
 }) {
-  const deferContents = item.entries.length > LARGE_TRANSCRIPT_GROUP_THRESHOLD;
+  const virtualizeContents = item.entries.length > LARGE_TRANSCRIPT_GROUP_THRESHOLD;
   const [expanded, setExpanded] = useState(false);
   const renderGroupEntry = useCallback((entry: NativeAgentTranscriptEntry) => (
     <TranscriptEntryRow
@@ -457,16 +479,16 @@ const TranscriptGroupRow = memo(function TranscriptGroupRow({
     <details
       data-testid="native-agent-event-group"
       className="group border-t border-[var(--workbench-hairline)] py-1"
-      onToggle={deferContents ? (event) => setExpanded(event.currentTarget.open) : undefined}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
     >
       <summary className="flex cursor-pointer list-none items-center gap-2 py-1 text-[var(--muted)] marker:hidden [&::-webkit-details-marker]:hidden">
         <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--muted)] transition-transform group-open:rotate-90" aria-hidden="true" />
         <span className="shrink-0 text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--accent)]">过程 {item.groupIndex}</span>
         <span className="min-w-0 truncate text-[11px] text-[var(--muted)]">{describeTranscriptGroup(item.entries)}</span>
       </summary>
-      {!deferContents || expanded ? (
+      {expanded ? (
         <div className="border-l-2 border-[var(--accent-outline)] pl-3">
-          {deferContents ? (
+          {virtualizeContents ? (
             <DynamicVirtualList
               items={item.entries}
               getKey={(entry) => entry.id}
@@ -494,6 +516,13 @@ export function NativeAgentTranscript({
   resultText,
   state,
   mode = "native",
+  traceCount,
+  toolCallCount,
+  processCount,
+  traceLoaded,
+  isTraceLoading = false,
+  traceLoadError = "",
+  onLoadTrace,
   onReplyPermission,
   onFileLinkClick,
   onCopyFinalAnswer,
@@ -504,6 +533,22 @@ export function NativeAgentTranscript({
   contextUsage,
 }: Props) {
   const [replyingPermissionId, setReplyingPermissionId] = useState("");
+  const [traceExpanded, setTraceExpanded] = useState(false);
+  const totalTraceCount = typeof traceCount === "number" ? traceCount : entries.length;
+  const hasCompleteTrace = totalTraceCount <= 0
+    || traceLoaded === true
+    || (typeof traceLoaded === "undefined" && entries.length >= totalTraceCount);
+  const shouldLazyLoadTrace = totalTraceCount > 0 && !hasCompleteTrace;
+  const traceSummaryProcessCount = typeof processCount === "number" ? processCount : totalTraceCount;
+  const traceSummaryLabel = `${traceSummaryProcessCount} 条过程${toolCallCount && toolCallCount > 0 ? ` · ${toolCallCount} 次工具` : ""}`;
+
+  useEffect(() => {
+    if (!shouldLazyLoadTrace || !traceExpanded || isTraceLoading || traceLoadError || !onLoadTrace) {
+      return;
+    }
+    onLoadTrace();
+  }, [isTraceLoading, onLoadTrace, shouldLazyLoadTrace, traceExpanded, traceLoadError]);
+
   const renderItems = useMemo(() => groupTranscriptEntries(entries), [entries]);
   const shouldFilterDuplicateFinal = state !== "streaming" && Boolean(normalizedDisplayText(resultText));
   const displayRenderItems = useMemo(() => (
@@ -512,10 +557,6 @@ export function NativeAgentTranscript({
       : renderItems
   ), [renderItems, resultText, shouldFilterDuplicateFinal]);
   const allowPermissionReply = mode === "native";
-  const fullAnswerText = useMemo(
-    () => formatTranscriptFullAnswer(renderItems, resultText),
-    [renderItems, resultText],
-  );
 
   const replyPermission = useCallback(async (reply: NativeAgentPermissionReply) => {
     if (!onReplyPermission || !reply.requestId || replyingPermissionId) {
@@ -553,7 +594,41 @@ export function NativeAgentTranscript({
 
   return (
     <div data-testid="native-agent-transcript" className="min-w-0 text-sm text-[var(--text)]">
-      {displayRenderItems.length > 100 ? (
+      {shouldLazyLoadTrace ? (
+        <section data-testid="native-agent-trace-summary" className="border-b border-[var(--workbench-hairline)] pb-2">
+          <button
+            type="button"
+            aria-label={`${traceExpanded ? "收起" : "展开"}过程详情`}
+            aria-expanded={traceExpanded}
+            onClick={() => setTraceExpanded((value) => !value)}
+            className="flex w-full min-w-0 items-center gap-2 py-1 text-left text-[var(--muted)]"
+          >
+            <ChevronRight className={`h-3.5 w-3.5 shrink-0 transition-transform ${traceExpanded ? "rotate-90" : ""}`} />
+            <span className="min-w-0 truncate text-xs font-medium text-[var(--text)]">过程详情</span>
+            <span className="min-w-0 truncate text-[11px] text-[var(--muted)]">{traceSummaryLabel}</span>
+          </button>
+          {traceExpanded && isTraceLoading ? (
+            <div className="flex items-center gap-2 py-2 text-xs text-[var(--muted)]">
+              <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+              <span>正在加载过程详情...</span>
+            </div>
+          ) : null}
+          {traceExpanded && !isTraceLoading && traceLoadError ? (
+            <div className="py-2 text-xs text-red-700">
+              <div>{traceLoadError}</div>
+              {onLoadTrace ? (
+                <button
+                  type="button"
+                  onClick={onLoadTrace}
+                  className="mt-2 inline-flex rounded-md border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50"
+                >
+                  重试
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </section>
+      ) : displayRenderItems.length > 100 ? (
         <DynamicVirtualList
           items={displayRenderItems}
           getKey={(item) => item.kind === "entry"
@@ -583,7 +658,7 @@ export function NativeAgentTranscript({
               canContinue={canContinue}
               contextUsage={contextUsage}
               favorite={favorite}
-              fullAnswerText={fullAnswerText}
+              buildFullAnswerText={() => formatTranscriptFullAnswer(renderItems, resultText)}
               onContinue={onContinue}
               onCopyFinalAnswer={onCopyFinalAnswer}
               onToggleFavorite={onToggleFavorite}

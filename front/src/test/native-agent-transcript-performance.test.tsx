@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { ChatTracePanel } from "../components/ChatTracePanel";
 import { NativeAgentTranscript } from "../components/NativeAgentTranscript";
@@ -71,6 +71,23 @@ describe("transcript and trace virtualization", () => {
 
     const list = await screen.findByTestId("virtualized-native-agent-group");
     expect(list.querySelectorAll("details").length).toBeLessThanOrEqual(20);
+  });
+
+  it("does not mount a small collapsed tool group until it is expanded", async () => {
+    render(
+      <NativeAgentTranscript
+        entries={groupedToolEntries(2)}
+        resultText=""
+        state="done"
+      />,
+    );
+
+    const group = screen.getByTestId("native-agent-event-group");
+    expect(group.querySelectorAll("details").length).toBe(0);
+
+    fireEvent.click(group.querySelector("summary") as HTMLElement);
+
+    await waitFor(() => expect(group.querySelectorAll("details").length).toBe(2));
   });
 
   it("bounds mounted trace rows when expanded", () => {

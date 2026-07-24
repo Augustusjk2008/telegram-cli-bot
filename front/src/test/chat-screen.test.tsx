@@ -1372,7 +1372,11 @@ test("renders live cli trace as transcript after final message", async () => {
 
   const transcript = await screen.findByTestId("native-agent-transcript");
   expect(within(transcript).getByText("最终答复")).toBeInTheDocument();
+  expect(getMessageTrace).not.toHaveBeenCalled();
+  await user.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
   await waitFor(() => expect(getMessageTrace).toHaveBeenCalledWith("main", "assistant-cli-final"));
+  const liveEventGroup = within(transcript).getByTestId("native-agent-event-group");
+  await user.click(liveEventGroup.querySelector("summary") as HTMLElement);
   expect(await within(transcript).findByText("shell_command")).toBeInTheDocument();
   expect(within(transcript).getAllByText("Exit code: 0").length).toBeGreaterThan(0);
   expect(within(transcript).getAllByText("我先检查目录。").length).toBeGreaterThan(0);
@@ -2139,7 +2143,7 @@ test("native agent @mention sends cluster options", async () => {
 
 
 
-test("auto-loads trace details and groups tool call/result into transcript", async () => {
+test("loads history trace details only after the transcript is expanded", async () => {
   const getMessageTrace = vi.fn(async () => ({
     trace: [
       {
@@ -2208,10 +2212,18 @@ test("auto-loads trace details and groups tool call/result into transcript", asy
   render(<ChatScreen botAlias="main" client={client} />);
 
   expect(await screen.findByText("目录已读取完成。")).toBeInTheDocument();
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(getMessageTrace).not.toHaveBeenCalled();
+  expect(within(transcript).getByRole("button", { name: "展开过程详情" })).toBeInTheDocument();
+  expect(transcript.textContent).toContain("3 条过程 · 1 次工具");
+  expect(transcript.textContent).not.toContain("Get-Content -Path todo.txt");
+
+  await userEvent.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
   await waitFor(() => expect(getMessageTrace).toHaveBeenCalledWith("main", "assistant-1"));
 
-  const transcript = await screen.findByTestId("native-agent-transcript");
   expect(await within(transcript).findByText("我先检查目录结构。")).toBeInTheDocument();
+  const historyEventGroup = within(transcript).getByTestId("native-agent-event-group");
+  await userEvent.click(historyEventGroup.querySelector("summary") as HTMLElement);
   expect(within(transcript).getByText("Get-Content -Path todo.txt")).toBeInTheDocument();
   expect(transcript.textContent).toContain("Exit code: 1");
   expect(transcript.textContent).toContain("Wall time: 1.3 seconds");
@@ -2276,7 +2288,7 @@ test("native permission trace can be approved from flat transcript", async () =>
   expect(await screen.findByText("原生 agent 权限已允许")).toBeInTheDocument();
 });
 
-test("native history auto-loads flat trace details", async () => {
+test("native history loads flat trace details after expansion", async () => {
   const getMessageTrace = vi.fn(async () => ({
     trace: [
       {
@@ -2331,12 +2343,16 @@ test("native history auto-loads flat trace details", async () => {
   render(<ChatScreen botAlias="main" client={client} />);
 
   const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(getMessageTrace).not.toHaveBeenCalled();
+  expect(within(transcript).getByRole("button", { name: "展开过程详情" })).toBeInTheDocument();
+  await userEvent.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
   await waitFor(() => expect(getMessageTrace).toHaveBeenCalledWith("main", "assistant-native-history"));
   expect(await within(transcript).findByText("我先检查目录结构。")).toBeInTheDocument();
   const eventGroup = within(transcript).getByTestId("native-agent-event-group");
   expect(eventGroup.textContent).toContain("过程 1");
   expect(eventGroup.textContent).toContain("2 条事件 · 1 次工具");
   expect(eventGroup.textContent).not.toContain("我先检查目录结构。");
+  await userEvent.click(eventGroup.querySelector("summary") as HTMLElement);
   expect(eventGroup.textContent).toContain("shell_command");
   expect(eventGroup.textContent).toContain("Exit code: 0");
   expect(within(transcript).getAllByText("shell_command").length).toBeGreaterThan(0);
@@ -2345,7 +2361,7 @@ test("native history auto-loads flat trace details", async () => {
   expect(screen.queryByRole("button", { name: "展开过程详情" })).not.toBeInTheDocument();
 });
 
-test("native history folds duplicate tool results and keeps commentary in trace order", async () => {
+test("native history loads duplicate-folded trace after expansion", async () => {
   const getMessageTrace = vi.fn(async () => ({
     trace: [
       {
@@ -2408,7 +2424,11 @@ test("native history folds duplicate tool results and keeps commentary in trace 
   render(<ChatScreen botAlias="main" client={client} />);
 
   const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(getMessageTrace).not.toHaveBeenCalled();
+  await userEvent.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
   await waitFor(() => expect(getMessageTrace).toHaveBeenCalledWith("main", "assistant-native-history"));
+  const eventGroup = within(transcript).getByTestId("native-agent-event-group");
+  await userEvent.click(eventGroup.querySelector("summary") as HTMLElement);
   const firstVisibleRow = transcript.firstElementChild as HTMLElement | null;
   expect(firstVisibleRow?.textContent).toContain("Get-ChildItem");
   expect(within(transcript).queryByText("partial")).not.toBeInTheDocument();
@@ -2416,7 +2436,7 @@ test("native history folds duplicate tool results and keeps commentary in trace 
   expect(within(transcript).getAllByText("final").length).toBeGreaterThan(0);
 });
 
-test("native history trace auto-load does not retry immediately after failure", async () => {
+test("native history trace does not load until expanded and does not retry immediately after failure", async () => {
   const getMessageTrace = vi.fn(async () => {
     throw new Error("trace unavailable");
   });
@@ -2440,7 +2460,9 @@ test("native history trace auto-load does not retry immediately after failure", 
 
   render(<ChatScreen botAlias="main" client={client} />);
 
-  await screen.findByTestId("native-agent-transcript");
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(getMessageTrace).not.toHaveBeenCalled();
+  await userEvent.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
   await waitFor(() => expect(getMessageTrace).toHaveBeenCalledTimes(1));
   await act(async () => {
     await new Promise((resolve) => window.setTimeout(resolve, 20));
@@ -2448,7 +2470,7 @@ test("native history trace auto-load does not retry immediately after failure", 
   expect(getMessageTrace).toHaveBeenCalledTimes(1);
 });
 
-test("non-native history trace auto-load does not retry immediately after failure", async () => {
+test("non-native history trace does not load until expanded and does not retry immediately after failure", async () => {
   const getMessageTrace = vi.fn(async () => {
     throw new Error("trace unavailable");
   });
@@ -2473,7 +2495,9 @@ test("non-native history trace auto-load does not retry immediately after failur
   render(<ChatScreen botAlias="main" client={client} />);
 
   expect(await screen.findByText("最终答复")).toBeInTheDocument();
-  expect(await screen.findByTestId("native-agent-transcript")).toBeInTheDocument();
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(getMessageTrace).not.toHaveBeenCalled();
+  await userEvent.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
   await waitFor(() => expect(getMessageTrace).toHaveBeenCalledTimes(1));
   await act(async () => {
     await new Promise((resolve) => window.setTimeout(resolve, 20));
@@ -2691,11 +2715,12 @@ test("live ag-ui stream renders flat transcript and final result last", async ()
 
   await waitFor(() => expect(sendMessage).toHaveBeenCalled());
   const transcript = await screen.findByTestId("native-agent-transcript");
-  expect(within(transcript).getByText("运行中")).toBeInTheDocument();
-  expect(within(transcript).getByText("检查上下文")).toBeInTheDocument();
   const eventGroup = within(transcript).getByTestId("native-agent-event-group");
   expect(eventGroup.textContent).toContain("过程 1");
   expect(eventGroup.textContent).toContain("4 条事件 · 1 次工具");
+  await user.click(eventGroup.querySelector("summary") as HTMLElement);
+  expect(within(transcript).getByText("运行中")).toBeInTheDocument();
+  expect(within(transcript).getByText("检查上下文")).toBeInTheDocument();
   expect(eventGroup.textContent).toContain("检查上下文");
   expect(eventGroup.textContent).toContain("shell_command");
   expect(eventGroup.textContent).toContain("Exit code: 0");

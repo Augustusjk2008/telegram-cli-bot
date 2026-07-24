@@ -1377,6 +1377,8 @@ type ChatMessageRowProps = {
   item: ChatMessage;
   assistantName: string;
   allowTrace: boolean;
+  traceLoadState: Record<string, { loading: boolean; error?: string }>;
+  onLoadMessageTrace: (messageId: string) => void;
   deletedAttachmentKeys: Record<string, boolean>;
   deletingAttachmentKeys: Record<string, boolean>;
   onDeleteAttachment: (messageId: string, savedPath: string) => void;
@@ -1397,6 +1399,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
   item,
   assistantName,
   allowTrace,
+  traceLoadState,
+  onLoadMessageTrace,
   deletedAttachmentKeys,
   deletingAttachmentKeys,
   onDeleteAttachment,
@@ -1437,6 +1441,11 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const isAssistant = item.role === "assistant";
   const isNativeAgentAssistant = isAssistant && isNativeAgentMessage(item.meta);
   const traceCount = typeof item.meta?.traceCount === "number" ? item.meta.traceCount : trace?.length ?? 0;
+  const messageTraceLoadState = traceLoadState[messageClientStateKey];
+  const traceLoadedCount = typeof item.meta?.traceLoadedCount === "number"
+    ? item.meta.traceLoadedCount
+    : trace?.length ?? 0;
+  const traceLoaded = traceCount <= 0 || traceLoadedCount >= traceCount;
   const hasTrace = allowTrace && isAssistant && traceCount > 0;
   const hasCliTraceTranscript = hasTrace && !isNativeAgentAssistant && !agUiRunState && item.meta?.tracePresentation !== "generic";
   const hasTranscript = isAssistant && (isNativeAgentAssistant || hasCliTraceTranscript);
@@ -1500,6 +1509,13 @@ const ChatMessageRow = memo(function ChatMessageRow({
                 resultText={item.text}
                 state={item.state}
                 mode={transcriptMode}
+                traceCount={traceCount}
+                toolCallCount={item.meta?.toolCallCount}
+                processCount={item.meta?.processCount}
+                traceLoaded={traceLoaded}
+                isTraceLoading={Boolean(messageTraceLoadState?.loading)}
+                traceLoadError={messageTraceLoadState?.error}
+                onLoadTrace={() => onLoadMessageTrace(item.id)}
                 onReplyPermission={isNativeAgentAssistant ? onReplyNativePermission : undefined}
                 onFileLinkClick={onFileLinkClick}
                 onCopyFinalAnswer={canCopyFinalAnswer ? () => onCopyFinalAnswer(item.text) : undefined}
@@ -1603,6 +1619,8 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
   scrollContainerRef: RefObject<HTMLElement | null>;
   assistantName: string;
   allowTrace: boolean;
+  traceLoadState: Record<string, { loading: boolean; error?: string }>;
+  handleLoadMessageTrace: (messageId: string) => void;
   handleDeleteAttachment: (messageId: string, savedPath: string) => void;
   handleFileLinkClick: (href: string) => void;
   handleCopyFinalAnswer: (text: string) => boolean | void | Promise<boolean | void>;
@@ -1619,6 +1637,8 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
   scrollContainerRef,
   assistantName,
   allowTrace,
+  traceLoadState,
+  handleLoadMessageTrace,
   handleDeleteAttachment,
   handleFileLinkClick,
   handleCopyFinalAnswer,
@@ -1638,6 +1658,8 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
         item={row.item}
         assistantName={assistantName}
         allowTrace={allowTrace}
+        traceLoadState={traceLoadState}
+        onLoadMessageTrace={handleLoadMessageTrace}
         deletedAttachmentKeys={row.deletedAttachmentKeys}
         deletingAttachmentKeys={row.deletingAttachmentKeys}
         onDeleteAttachment={handleDeleteAttachment}
@@ -1675,10 +1697,12 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
     handleDeleteAttachment,
     handleExecutePlan,
     handleFileLinkClick,
+    handleLoadMessageTrace,
     handleReplyNativePermission,
     handleRequestSoloRollback,
     handleToggleFavoriteAnswer,
     planExecuteError,
+    traceLoadState,
     wideMessages,
   ]);
 
@@ -3241,31 +3265,6 @@ export function ChatScreen({
       }));
     }
   }, [botAlias, client]);
-
-  useEffect(() => {
-    if (loading) {
-      return;
-    }
-    for (const item of items) {
-      if (item.role !== "assistant") {
-        continue;
-      }
-      const expectedTraceCount = item.meta?.traceCount || 0;
-      const embeddedTraceCount = (item.meta?.trace || []).length;
-      const loadedTraceCount = typeof item.meta?.traceLoadedCount === "number"
-        ? item.meta.traceLoadedCount
-        : Math.min(embeddedTraceCount, expectedTraceCount);
-      if (expectedTraceCount <= 0 || loadedTraceCount >= expectedTraceCount) {
-        continue;
-      }
-      const messageClientStateKey = getMessageClientStateKey(item);
-      if (traceLoadState[messageClientStateKey]?.loading || traceLoadState[messageClientStateKey]?.error) {
-        continue;
-      }
-      void loadMessageTrace(item.id);
-      break;
-    }
-  }, [items, loadMessageTrace, loading, traceLoadState]);
 
   const loadConversations = useCallback(async (query = "") => {
     setConversationLoading(true);
@@ -4852,6 +4851,8 @@ export function ChatScreen({
             scrollContainerRef={scrollContainerRef}
             assistantName={assistantName}
             allowTrace={allowTrace}
+            traceLoadState={traceLoadState}
+            handleLoadMessageTrace={(messageId) => void loadMessageTrace(messageId)}
             handleDeleteAttachment={handleDeleteAttachment}
             handleFileLinkClick={handleFileLinkClick}
             handleCopyFinalAnswer={handleCopyFinalAnswer}
