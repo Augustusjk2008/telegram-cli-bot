@@ -183,6 +183,35 @@ async def test_language_server_status_endpoints_are_read_only_and_require_read_c
 
 
 @pytest.mark.asyncio
+async def test_workspace_language_server_catalog_includes_runtime_state_without_provider_query(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    catalog = FakeLanguageServerCatalog()
+    installer = FakeLanguageServerInstaller()
+    runtime_manager = FakeLanguageServerRuntimeManager(state="indexing")
+    server = _build_server(
+        tmp_path,
+        monkeypatch,
+        catalog=catalog,
+        installer=installer,
+        language_server_manager=runtime_manager,
+    )
+    monkeypatch.setattr(server, "_auth_context", lambda _request: _auth_context(CAP_READ_FILE_CONTENT))
+    app = server._build_app()
+
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            response = await client.get("/api/bots/main/workspace/language-servers")
+            payload = await response.json()
+
+    assert response.status == 200, payload
+    provider = payload["data"]["providers"][0]
+    assert provider["runtimeState"] == "indexing"
+    assert provider["runtimeMessage"] == "Python 语言服务正在索引工作区"
+
+
+@pytest.mark.asyncio
 async def test_language_server_install_update_and_redetect_are_admin_only(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

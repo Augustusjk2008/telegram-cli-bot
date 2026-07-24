@@ -951,27 +951,34 @@ class LanguageServerRuntimeManager:
                     attempt += 1
                     continue
                 replacement_failure: BaseException | None = None
-                async with self._lock:
-                    if self._shutdown_started or self._runtimes.get(key) is not failed_runtime:
-                        self._discard_replacement_initialization_locked(key, generation, replacement)
-                        stale = True
-                    else:
-                        replacement_failure = self._discard_replacement_initialization_locked(
-                            key,
-                            generation,
-                            replacement,
-                        )
-                        if replacement_failure is not None:
-                            stale = False
+                try:
+                    async with self._lock:
+                        if self._shutdown_started or self._runtimes.get(key) is not failed_runtime:
+                            self._discard_replacement_initialization_locked(key, generation, replacement)
+                            stale = True
                         else:
-                            self._runtimes[key] = replacement
-                            self._restart_count += 1
-                            stale = False
-                            try:
-                                setattr(replacement, "restart_count", self._restart_count)
-                                setattr(replacement, "last_restart_at", time.time())
-                            except Exception:
-                                pass
+                            replacement_failure = self._discard_replacement_initialization_locked(
+                                key,
+                                generation,
+                                replacement,
+                            )
+                            if replacement_failure is not None:
+                                stale = False
+                            else:
+                                self._runtimes[key] = replacement
+                                self._restart_count += 1
+                                stale = False
+                                try:
+                                    setattr(replacement, "restart_count", self._restart_count)
+                                    setattr(replacement, "last_restart_at", time.time())
+                                except Exception:
+                                    pass
+                except asyncio.CancelledError:
+                    async with self._lock:
+                        self._discard_replacement_initialization_locked(key, generation, replacement)
+                    with contextlib.suppress(BaseException):
+                        await replacement.close()
+                    raise
                 if stale:
                     with contextlib.suppress(BaseException):
                         await replacement.close()

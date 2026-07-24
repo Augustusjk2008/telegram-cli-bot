@@ -3006,27 +3006,33 @@ class WebApiServer:
         # 仅做发现；LanguageServerCatalog 不会调用安装器的 install，打开文件
         # 或轮询状态均不会触发下载。
         data = await asyncio.to_thread(self.language_server_catalog.api_snapshot)
-        if provider_label and isinstance(data, dict):
-            runtime_status = self.language_server_manager.runtime_status(
-                bot_alias=alias,
-                user_id=self._chat_user_id(auth),
-                workspace_root=workspace,
-                provider_id=provider_id,
-            )
+        if isinstance(data, dict):
             providers = data.get("providers")
             if isinstance(providers, list):
                 decorated: list[object] = []
                 for item in providers:
-                    if not isinstance(item, dict) or str(item.get("id") or item.get("provider") or "") != provider_id:
+                    if not isinstance(item, dict):
                         decorated.append(item)
                         continue
+                    item_provider_id = str(item.get("id") or item.get("provider") or "").strip().lower()
+                    item_provider_label = _LANGUAGE_SERVER_PROVIDER_LABELS.get(item_provider_id, "")
+                    if not item_provider_label:
+                        decorated.append(item)
+                        continue
+                    runtime_status = self.language_server_manager.runtime_status(
+                        bot_alias=alias,
+                        user_id=self._chat_user_id(auth),
+                        workspace_root=workspace,
+                        provider_id=item_provider_id,
+                    )
+                    item_prewarm_error = prewarm_error if item_provider_id == provider_id else ""
                     runtime_state = (
                         "error"
-                        if prewarm_error
+                        if item_prewarm_error
                         else _safe_language_server_runtime_state((runtime_status or {}).get("state"))
                     )
-                    runtime_message = prewarm_error or _language_server_runtime_message(
-                        provider_label,
+                    runtime_message = item_prewarm_error or _language_server_runtime_message(
+                        item_provider_label,
                         runtime_state,
                     )
                     implementation_supported = (runtime_status or {}).get("implementation_supported")
