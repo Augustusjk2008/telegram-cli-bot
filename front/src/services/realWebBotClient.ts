@@ -204,7 +204,6 @@ import type { WebBotClient } from "./webBotClient";
 import {
   createAgUiStreamAdapter,
   isAgUiEventType,
-  isSyntheticLegacyMessageId,
 } from "./agUiStreamAdapter";
 import {
   EventType,
@@ -212,9 +211,9 @@ import {
 } from "./agUiProtocol";
 import {
   buildAgUiMessageMeta,
+  createAgUiRunAccumulator,
   createAgUiRunState,
   findAgUiActivityForDelta,
-  reduceAgUiRunEvent,
   type AgUiActivityItem,
 } from "../utils/agUiRunReducer";
 import { mergeMessageMeta, summarizeTrace } from "../utils/chatMessageMeta";
@@ -1434,92 +1433,6 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
-}
-
-function mapAgUiTraceEvent(event: AgUiEvent, activityContent?: Record<string, unknown>): ChatTraceEvent | null {
-  if (event.type === EventType.TOOL_CALL_START) {
-    return {
-      kind: "tool_call",
-      summary: "",
-      title: event.toolCallName,
-      toolName: event.toolCallName,
-      callId: event.toolCallId,
-      payload: {
-        arguments: "",
-      },
-    };
-  }
-  if (event.type === EventType.TOOL_CALL_ARGS) {
-    return {
-      kind: "tool_call",
-      summary: event.delta,
-      callId: event.toolCallId,
-      payload: {
-        arguments: event.delta,
-      },
-    };
-  }
-  if (event.type === EventType.TOOL_CALL_RESULT) {
-    return {
-      kind: "tool_result",
-      summary: event.content,
-      callId: event.toolCallId,
-      payload: {
-        output: event.content,
-      },
-    };
-  }
-  if (event.type === EventType.ACTIVITY_SNAPSHOT || event.type === EventType.ACTIVITY_DELTA) {
-    const content = (
-      activityContent
-      || (event.type === EventType.ACTIVITY_SNAPSHOT ? asRecord(event.content) : {})
-    );
-    const summary = String(content.summary || content.previewText || content.message || content.reason || "").trim();
-    if (!summary && event.activityType === "TCB_NATIVE_AGENT_TRACE") {
-      return null;
-    }
-    const rawKind = String(content.rawKind || "").trim();
-    if (event.activityType === "TCB_META") {
-      return null;
-    }
-    const activityMessageId = String(event.messageId || "").trim();
-    const activityId = String(content.id || "").trim()
-      || (isSyntheticLegacyMessageId(activityMessageId) ? "" : activityMessageId);
-    return {
-      ...(activityId ? { id: activityId } : {}),
-      ...(typeof content.ordinal === "number" ? { ordinal: content.ordinal } : {}),
-      ...(typeof content.sequence === "number" ? { sequence: content.sequence } : {}),
-      ...(String(content.createdAt || content.created_at || "").trim()
-        ? { createdAt: String(content.createdAt || content.created_at || "").trim() }
-        : {}),
-      kind: event.activityType === "TCB_PERMISSION_REQUEST"
-        ? "permission"
-        : rawKind || (event.activityType === "TCB_STATUS" ? "status" : "event"),
-      summary,
-      source: String(content.source || "").trim() || undefined,
-      rawType: String(content.rawType || event.activityType).trim() || undefined,
-      title: String(content.title || "").trim() || undefined,
-      toolName: String(content.toolName || content.tool_name || "").trim() || undefined,
-      callId: String(content.callId || content.call_id || "").trim() || undefined,
-      payload: content,
-    };
-  }
-  if (event.type === EventType.REASONING_MESSAGE_CONTENT) {
-    return {
-      kind: "reasoning",
-      summary: event.delta,
-      source: "reasoning",
-      rawType: EventType.REASONING_MESSAGE_CONTENT,
-    };
-  }
-  if (event.type === EventType.RUN_ERROR) {
-    return {
-      kind: "error",
-      summary: event.message,
-      rawType: event.code,
-    };
-  }
-  return null;
 }
 
 function contentForAgUiActivityEvent(
@@ -4832,6 +4745,7 @@ export class RealWebBotClient implements WebBotClient {
     let streamFinished = false;
     let terminalSeen = false;
     const agUiAdapter = createAgUiStreamAdapter();
+    const agUiAccumulator = createAgUiRunAccumulator();
     let agUiState = createAgUiRunState();
     let sawAgUiEvent = false;
     const seenStreamSequences = new Set<number>();
@@ -4891,14 +4805,9 @@ export class RealWebBotClient implements WebBotClient {
         if (agUiEvents.length > 0) {
           sawAgUiEvent = true;
           for (const agUiEvent of agUiEvents) {
-            agUiState = reduceAgUiRunEvent(agUiState, agUiEvent);
+            agUiState = agUiAccumulator.reduce(agUiEvent);
             onAgUiEvent?.(agUiEvent);
             const activityContent = contentForAgUiActivityEvent(agUiState.activities, agUiEvent);
-            const traceEvent = mapAgUiTraceEvent(agUiEvent, activityContent);
-            if (traceEvent) {
-              const nativeFlatTrace = options?.executionMode === "native_agent";
-              appendStreamTrace(traceEvent, nativeFlatTrace);
-            }
             if (agUiEvent.type === EventType.ACTIVITY_SNAPSHOT || agUiEvent.type === EventType.ACTIVITY_DELTA) {
               const content = activityContent;
               if (agUiEvent.activityType === "TCB_STATUS") {
@@ -5045,6 +4954,11 @@ export class RealWebBotClient implements WebBotClient {
       if (done) {
         break;
       }
+    }
+
+    if (sawAgUiEvent) {
+      agUiState = agUiAccumulator.snapshot();
+      agUiAccumulator.dispose();
     }
 
     if (!terminalSeen) {

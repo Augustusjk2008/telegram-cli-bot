@@ -72,6 +72,7 @@ import { extractPlanDraft, stripPlanDraftTags } from "../utils/planDraft";
 import { EventType, type AgUiEvent } from "../services/agUiProtocol";
 import {
   buildAgUiMessageMeta,
+  createAgUiRunAccumulator,
   type AgUiRunState,
   type NativeAgentPermissionReply,
 } from "../utils/agUiRunReducer";
@@ -1191,6 +1192,8 @@ function applyChatStreamEvents(
       const nextMeta = mergeMessageMeta(
         item.meta,
         buildLiveAgUiMessageMeta(event.state, event.nativeAgent),
+        undefined,
+        { traceMode: "replace" },
       );
       const completionState = nextMeta?.completionState || "";
       return {
@@ -1200,7 +1203,7 @@ function applyChatStreamEvents(
           ? "error"
           : (event.state.completed ? "done" : "streaming"),
         meta: event.state.contextUsage
-          ? mergeMessageMeta(nextMeta, { contextUsage: event.state.contextUsage })
+          ? { ...nextMeta, contextUsage: event.state.contextUsage }
           : nextMeta,
       };
     });
@@ -2077,11 +2080,18 @@ export function ChatScreen({
   const activationTargetRef = useRef<{ botAlias: string; client: WebBotClient; storageScope: string } | null>(null);
   const historyRevisionStateRef = useRef(new HistoryRevisionState());
   const agUiBatchStateRef = useRef<AgUiRunState | null>(null);
+  const agUiBatchReducerRef = useRef<ReturnType<typeof createAgUiRunAccumulator> | null>(null);
   const sawAgUiEventRef = useRef(false);
   const pollClusterTasksRef = useRef<() => void>(() => undefined);
   const isSseStreaming = () => streamModeRef.current === "sse";
   const streamBatcher = useChatStreamBatcher(useCallback((events: readonly ChatStreamInputEvent[]) => {
-    const batch = reduceChatStreamBatch(events, agUiBatchStateRef.current);
+    const reducer = agUiBatchReducerRef.current || createAgUiRunAccumulator();
+    agUiBatchReducerRef.current = reducer;
+    const batch = reduceChatStreamBatch(
+      events,
+      agUiBatchStateRef.current,
+      (_state, agUiEvents) => reducer.reduce(agUiEvents),
+    );
     if (batch.sawAgUiEvent) {
       sawAgUiEventRef.current = true;
       agUiBatchStateRef.current = batch.agUiState;
@@ -2104,6 +2114,13 @@ export function ChatScreen({
       assistantSendVersionRef.current,
     ));
   }, []));
+  const releaseAgUiBatchState = useCallback(() => {
+    agUiBatchReducerRef.current?.dispose();
+    agUiBatchReducerRef.current = null;
+    agUiBatchStateRef.current = null;
+    sawAgUiEventRef.current = false;
+  }, []);
+  useEffect(() => releaseAgUiBatchState, [releaseAgUiBatchState]);
 
   const setPlanMode = useCallback((value: boolean | ((current: boolean) => boolean)) => {
     setPlanModeState((current) => {
@@ -3862,8 +3879,7 @@ export function ChatScreen({
     forceAutoScrollRef.current = true;
     shouldStickToBottomRef.current = true;
     streamBatcher.cancel();
-    agUiBatchStateRef.current = null;
-    sawAgUiEventRef.current = false;
+    releaseAgUiBatchState();
     setItems((prev) => [...prev, userMessage, assistantMessage]);
     isStreamingRef.current = true;
     streamModeRef.current = "sse";
@@ -4015,17 +4031,20 @@ export function ChatScreen({
         return;
       }
 
+      const completedAgUiState = sawAgUiEventRef.current
+        ? (agUiBatchReducerRef.current?.snapshot() || agUiBatchStateRef.current)
+        : null;
       const elapsedSeconds = typeof finalMessage.elapsedSeconds === "number"
         ? finalMessage.elapsedSeconds
         : Math.max(0, Math.floor((Date.now() - localStartedAtMs) / 1000));
       const finalizedMessage: ChatMessage = normalizeResolvedFinalMessage({
         ...finalMessage,
         elapsedSeconds,
-        ...(sawAgUiEventRef.current && agUiBatchStateRef.current
+        ...(completedAgUiState
           ? {
               meta: mergeMessageMeta(
                 finalMessage.meta,
-                buildLiveAgUiMessageMeta(agUiBatchStateRef.current, executionModeRef.current === "native_agent"),
+                buildLiveAgUiMessageMeta(completedAgUiState, executionModeRef.current === "native_agent"),
               ),
             }
           : {}),
@@ -4099,6 +4118,7 @@ export function ChatScreen({
       if (sendVersion !== assistantSendVersionRef.current) {
         return;
       }
+      releaseAgUiBatchState();
       stopSseRecoveryWatch();
       sseLastActivityAtRef.current = null;
       setNativePermissionPending(false);
@@ -4118,7 +4138,7 @@ export function ChatScreen({
         void drainQueuedMessageIfIdleRef.current?.({ botAlias: sendBotAlias, agentId: sendAgentId });
       }
     }
-  }, [botAlias, client, markSseActivity, onUnreadResult, pollClusterTasks, scheduleAssistantPoll, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch, streamBatcher]);
+  }, [botAlias, client, markSseActivity, onUnreadResult, pollClusterTasks, releaseAgUiBatchState, scheduleAssistantPoll, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch, streamBatcher]);
 
   drainQueuedMessageIfIdleRef.current = async (context) => {
     const targetBotAlias = context?.botAlias || botAlias;

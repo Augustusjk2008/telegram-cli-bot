@@ -25,6 +25,7 @@ function isTerminalCompletionState(value?: string) {
 export type MergeMessageMetaOptions = {
   reconcileTraceSnapshots?: boolean;
   dedupeAnonymous?: boolean;
+  traceMode?: "merge" | "replace";
 };
 
 export function summarizeTrace(trace?: ChatTraceEvent[]) {
@@ -44,16 +45,22 @@ export function mergeMessageMeta(
   const isNativeSource = isNativeAgentMessage(incoming) || isNativeAgentMessage(base);
   const tracePresentation = incoming?.tracePresentation || base?.tracePresentation || (isNativeSource ? "native_agent_flat" : undefined);
   const nativeFlatTrace = tracePresentation === "native_agent_flat";
-  const trace = mergeChatTraceEvents(
-    [base?.trace, incoming?.trace, streamedTrace],
-    {
-      nativeFlat: nativeFlatTrace,
-      autoNativeFlat: nativeFlatTrace,
-      reconcileTraceSnapshots: options.reconcileTraceSnapshots,
-      dedupeAnonymous: options.dedupeAnonymous,
-    },
-  );
-  const traceSummary = trace ? summarizeTrace(trace) : undefined;
+  const trace = options.traceMode === "replace"
+    ? incoming?.trace || base?.trace || streamedTrace
+    : mergeChatTraceEvents(
+        [base?.trace, incoming?.trace, streamedTrace],
+        {
+          nativeFlat: nativeFlatTrace,
+          autoNativeFlat: nativeFlatTrace,
+          reconcileTraceSnapshots: options.reconcileTraceSnapshots,
+          dedupeAnonymous: options.dedupeAnonymous,
+        },
+      );
+  const hasIncomingTraceSummary = options.traceMode === "replace"
+    && Boolean(incoming?.trace)
+    && [incoming?.traceCount, incoming?.toolCallCount, incoming?.processCount]
+      .every((value) => typeof value === "number" && Number.isFinite(value));
+  const traceSummary = trace && !hasIncomingTraceSummary ? summarizeTrace(trace) : undefined;
   const incomingRunState = incoming?.agUiRunState && typeof incoming.agUiRunState === "object"
     ? incoming.agUiRunState as { completed?: boolean }
     : undefined;
