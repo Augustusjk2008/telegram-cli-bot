@@ -267,6 +267,7 @@ export interface WebBotClient {
   getDebugProfile(botAlias: string): Promise<DebugProfile | null>;
   getDebugState(botAlias: string): Promise<DebugState>;
   getTerminalSession(ownerId: string): Promise<PersistentTerminalSnapshot>;
+  createTerminalSession(ownerId: string, cwd: string, shell?: string): Promise<PersistentTerminalSnapshot>;
   rebuildTerminalSession(ownerId: string, cwd: string, shell?: string): Promise<PersistentTerminalSnapshot>;
   closeTerminalSession(ownerId: string): Promise<PersistentTerminalSnapshot>;
   getTerminalActionsConfig(botAlias: string): Promise<TerminalActionsConfig>;

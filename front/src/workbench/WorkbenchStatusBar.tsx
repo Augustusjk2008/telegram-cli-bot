@@ -144,8 +144,8 @@ export function WorkbenchStatusBar({
         {debugLocation ? <span className="max-w-[16rem] truncate font-mono">{debugLocation}</span> : null}
         <span>{terminalStatus.connectionText}</span>
         <span className="max-w-[24rem] truncate font-mono">{terminalStatus.currentCwd || "未启动"}</span>
-        {terminalStatus.nextRebuildCwd ? (
-          <span className="max-w-[24rem] truncate font-mono">下次重建: {terminalStatus.nextRebuildCwd}</span>
+        {terminalStatus.nextTerminalCwd ? (
+          <span className="max-w-[24rem] truncate font-mono">新终端目录: {terminalStatus.nextTerminalCwd}</span>
         ) : null}
         {branchName ? <span className="font-mono">{branchName}</span> : null}
         {languageService ? (

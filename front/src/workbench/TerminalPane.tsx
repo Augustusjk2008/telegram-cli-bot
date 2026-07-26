@@ -3,8 +3,8 @@ import type { WebBotClient } from "../services/webBotClient";
 import { DEFAULT_UI_THEME, type UiThemeName } from "../theme";
 import type { TerminalWorkbenchStatus } from "./workbenchTypes";
 
-const TerminalScreen = lazy(() =>
-  import("../screens/TerminalScreen").then((module) => ({ default: module.TerminalScreen })),
+const TerminalTabsScreen = lazy(() =>
+  import("../screens/TerminalTabsScreen").then((module) => ({ default: module.TerminalTabsScreen })),
 );
 
 type Props = {
@@ -40,7 +40,7 @@ export function TerminalPane({
 }: Props) {
   return (
     <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">加载终端...</div>}>
-      <TerminalScreen
+      <TerminalTabsScreen
         authToken={authToken}
         botAlias={botAlias}
         client={client}

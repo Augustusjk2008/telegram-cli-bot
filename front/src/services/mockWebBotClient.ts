@@ -751,7 +751,11 @@ function cloneEnvItem(item: EnvConfigItem): EnvConfigItem {
   };
 }
 
-function readMockPersistentTerminalSnapshot(): PersistentTerminalSnapshot {
+function mockTerminalStorageKey(ownerId: string) {
+  return `${MOCK_PERSISTENT_TERMINAL_STORAGE_KEY}:${ownerId || "default"}`;
+}
+
+function readMockPersistentTerminalSnapshot(ownerId = ""): PersistentTerminalSnapshot {
   if (typeof localStorage === "undefined") {
     return {
       started: false,
@@ -763,7 +767,8 @@ function readMockPersistentTerminalSnapshot(): PersistentTerminalSnapshot {
     };
   }
   try {
-    const raw = localStorage.getItem(MOCK_PERSISTENT_TERMINAL_STORAGE_KEY);
+    const raw = localStorage.getItem(mockTerminalStorageKey(ownerId))
+      || (ownerId ? null : localStorage.getItem(MOCK_PERSISTENT_TERMINAL_STORAGE_KEY));
     if (!raw) {
       return {
         started: false,
@@ -795,11 +800,11 @@ function readMockPersistentTerminalSnapshot(): PersistentTerminalSnapshot {
   }
 }
 
-function writeMockPersistentTerminalSnapshot(snapshot: PersistentTerminalSnapshot) {
+function writeMockPersistentTerminalSnapshot(snapshot: PersistentTerminalSnapshot, ownerId = "") {
   if (typeof localStorage === "undefined") {
     return;
   }
-  localStorage.setItem(MOCK_PERSISTENT_TERMINAL_STORAGE_KEY, JSON.stringify(snapshot));
+  localStorage.setItem(mockTerminalStorageKey(ownerId), JSON.stringify(snapshot));
 }
 
 function resolveMemberCapabilities(username: string) {
@@ -4336,11 +4341,11 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
-  async getTerminalSession(_ownerId: string): Promise<PersistentTerminalSnapshot> {
-    return readMockPersistentTerminalSnapshot();
+  async getTerminalSession(ownerId: string): Promise<PersistentTerminalSnapshot> {
+    return readMockPersistentTerminalSnapshot(ownerId);
   }
 
-  async rebuildTerminalSession(_ownerId: string, cwd: string, _shell = "auto"): Promise<PersistentTerminalSnapshot> {
+  async createTerminalSession(ownerId: string, cwd: string, _shell = "auto"): Promise<PersistentTerminalSnapshot> {
     const snapshot: PersistentTerminalSnapshot = {
       started: true,
       closed: false,
@@ -4349,19 +4354,23 @@ export class MockWebBotClient implements WebBotClient {
       connectionText: "运行中",
       lastSeq: 0,
     };
-    writeMockPersistentTerminalSnapshot(snapshot);
+    writeMockPersistentTerminalSnapshot(snapshot, ownerId);
     return snapshot;
   }
 
-  async closeTerminalSession(_ownerId: string): Promise<PersistentTerminalSnapshot> {
-    const current = readMockPersistentTerminalSnapshot();
+  async rebuildTerminalSession(ownerId: string, cwd: string, shell = "auto"): Promise<PersistentTerminalSnapshot> {
+    return this.createTerminalSession(ownerId, cwd, shell);
+  }
+
+  async closeTerminalSession(ownerId: string): Promise<PersistentTerminalSnapshot> {
+    const current = readMockPersistentTerminalSnapshot(ownerId);
     const snapshot: PersistentTerminalSnapshot = {
       ...current,
       started: false,
       closed: true,
       connectionText: "终端已关闭",
     };
-    writeMockPersistentTerminalSnapshot(snapshot);
+    writeMockPersistentTerminalSnapshot(snapshot, ownerId);
     return snapshot;
   }
 
@@ -4392,13 +4401,13 @@ export class MockWebBotClient implements WebBotClient {
   async runTerminalAction(
     _botAlias: string,
     actionId: string,
-    _input: TerminalActionRunInput,
+    input: TerminalActionRunInput,
   ): Promise<TerminalActionRunResult> {
     const action = this.terminalActionsConfig.actions.find((item) => item.id === actionId);
     if (!action) {
       throw new Error("快捷命令不存在");
     }
-    const current = readMockPersistentTerminalSnapshot();
+    const current = readMockPersistentTerminalSnapshot(input.ownerId);
     const snapshot: PersistentTerminalSnapshot = {
       ...current,
       started: true,
@@ -4407,7 +4416,7 @@ export class MockWebBotClient implements WebBotClient {
       ptyMode: current.ptyMode ?? true,
       connectionText: "运行中",
     };
-    writeMockPersistentTerminalSnapshot(snapshot);
+    writeMockPersistentTerminalSnapshot(snapshot, input.ownerId);
     const command = resolveMockTerminalActionCommand(action, this.terminalActionsConfig.runtimePlatform);
     return {
       actionId,

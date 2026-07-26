@@ -5379,8 +5379,8 @@ export class RealWebBotClient implements WebBotClient {
     return mapPersistentTerminalSnapshot(data);
   }
 
-  async rebuildTerminalSession(ownerId: string, cwd: string, shell = "auto"): Promise<PersistentTerminalSnapshot> {
-    const data = await this.requestJson<RawPersistentTerminalSnapshot>("/api/terminal/session/rebuild", {
+  async createTerminalSession(ownerId: string, cwd: string, shell = "auto"): Promise<PersistentTerminalSnapshot> {
+    const data = await this.requestJson<RawPersistentTerminalSnapshot>("/api/terminal/session/create", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -5392,6 +5392,10 @@ export class RealWebBotClient implements WebBotClient {
       }),
     });
     return mapPersistentTerminalSnapshot(data);
+  }
+
+  async rebuildTerminalSession(ownerId: string, cwd: string, shell = "auto"): Promise<PersistentTerminalSnapshot> {
+    return this.createTerminalSession(ownerId, cwd, shell);
   }
 
   async closeTerminalSession(ownerId: string): Promise<PersistentTerminalSnapshot> {

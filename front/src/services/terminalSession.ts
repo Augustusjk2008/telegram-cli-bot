@@ -277,7 +277,7 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
     const streamId = String(payload.stream_id || payload.streamId || "");
     const stream = recovery.beginStream(streamId);
     if (stream.changed) {
-      resetTerminalOutput("终端进程已重建，已切换到新的输出流");
+      resetTerminalOutput("终端进程已切换，已连接到新的输出流");
     }
     const type = String(payload.type || payload.kind || "");
     if (type === "gap" || type === "reset" || payload.snapshot_required === true) {

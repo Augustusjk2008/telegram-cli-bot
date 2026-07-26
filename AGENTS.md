@@ -6,6 +6,7 @@ Orbit Safe Claw 是 Windows 优先的 Python Web 控制台，把用户消息转�
 
 - 不得主动关闭、重启、kill 当前 agent 自身，或通过停服务、重启服务等方式让当前 agent 退出。
 - 如需重启 `python -m bot`、Web 服务或其它宿主进程，先让用户执行，或取得明确指令。
+- Agent 不得启动任何开发服务或预览服务，包括 `npm run dev`、Vite dev server、`vite preview`、临时 HTTP server 等，也不得在后台保留监听端口；需要开发服务时由用户自行启动。
 - 保留用户已有改动；不要用破坏性 Git 命令覆盖不属于当前任务的工作。
 
 ## 常用命令

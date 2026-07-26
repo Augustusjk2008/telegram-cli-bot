@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Maximize2, Minimize2, RefreshCw, X } from "lucide-react";
+import { Maximize2, Minimize2 } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { createTerminalSession, type TerminalSession } from "../services/terminalSession";
@@ -23,7 +23,6 @@ type Props = {
   botAlias: string;
   client?: WebBotClient;
   isVisible: boolean;
-  preferredWorkingDir: string;
   pendingWorkingDir?: string;
   themeName?: UiThemeName;
   isImmersive?: boolean;
@@ -79,7 +78,6 @@ export function TerminalScreen({
   botAlias,
   client = new MockWebBotClient(),
   isVisible,
-  preferredWorkingDir,
   pendingWorkingDir,
   themeName = DEFAULT_UI_THEME,
   isImmersive = false,
@@ -127,7 +125,6 @@ export function TerminalScreen({
   const visibleActions = actionsConfig?.actions.filter((action) => isTerminalActionVisible(action, runtimePlatform)) ?? [];
   const runningWorkingDir = terminal.snapshot.cwd.trim();
   const stagedWorkingDir = pendingWorkingDir?.trim() || "";
-  const preferredTerminalDir = preferredWorkingDir.trim();
   const resolvedPtyMode = ptyMode ?? terminal.snapshot.ptyMode;
   const hasRunningTerminal = terminal.snapshot.started && !terminal.snapshot.closed;
 
@@ -284,35 +281,6 @@ export function TerminalScreen({
     setPtyMode(null);
   }
 
-  async function rebuildTerminal() {
-    if (terminalDisabled) {
-      return;
-    }
-    const nextWorkingDir = stagedWorkingDir || preferredTerminalDir || runningWorkingDir;
-    if (!nextWorkingDir) {
-      return;
-    }
-    disposeSession();
-    setError("");
-    setFollowing(true);
-    try {
-      await terminal.rebuild(nextWorkingDir);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "重建终端失败");
-      setIsConnected(false);
-    }
-  }
-
-  async function closeTerminal() {
-    if (terminalDisabled) {
-      return;
-    }
-    disposeSession();
-    setError("");
-    setFollowing(true);
-    await terminal.close();
-  }
-
   async function runTerminalAction(action: TerminalAction) {
     if (terminalDisabled) {
       return;
@@ -328,11 +296,17 @@ export function TerminalScreen({
     setRunningActionId(action.id);
     setActionsError("");
     try {
+      const tab = await terminal.createTab({
+        title: action.label,
+        start: false,
+        activate: false,
+      });
       await client.runTerminalAction(botAlias, action.id, {
-        ownerId: terminal.ownerId,
+        ownerId: tab.ownerId,
         confirmed: true,
       });
-      await terminal.refreshSnapshot();
+      await terminal.refreshSnapshot(tab.ownerId);
+      terminal.selectTab(tab.id);
       setFollowing(true);
     } catch (err) {
       setActionsError(err instanceof Error ? err.message : "执行快捷命令失败");
@@ -527,15 +501,12 @@ export function TerminalScreen({
     : isConnected
       ? "已连接"
       : terminal.snapshot.connectionText || "未启动";
-  const canCloseTerminal = !terminalDisabled && terminal.snapshot.started && !terminal.snapshot.closed;
-  const canRebuildTerminal = !terminalDisabled && Boolean(stagedWorkingDir || preferredTerminalDir || runningWorkingDir);
-
   useEffect(() => {
     onWorkbenchStatusChange?.({
       connected: terminal.snapshot.started && !terminal.snapshot.closed,
       connectionText,
       currentCwd: runningWorkingDir,
-      nextRebuildCwd: stagedWorkingDir,
+      nextTerminalCwd: stagedWorkingDir,
     });
   }, [connectionText, onWorkbenchStatusChange, runningWorkingDir, stagedWorkingDir, terminal.snapshot.closed, terminal.snapshot.started]);
 
@@ -548,7 +519,7 @@ export function TerminalScreen({
               <h1 className="text-sm font-semibold text-[var(--text)]">{connectionText}</h1>
               {stagedWorkingDir ? (
                 <span className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-1.5 py-0.5 text-[10px] text-[var(--muted)]">
-                  下次重建目录
+                  新终端目录
                 </span>
               ) : null}
               {resolvedPtyMode !== null ? (
@@ -585,29 +556,11 @@ export function TerminalScreen({
                 {focused ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
               </button>
             ) : null}
-            <button
-              type="button"
-              onClick={closeTerminal}
-              disabled={!canCloseTerminal}
-              className={toolbarButtonClass("plain", "sm", "h-8")}
-            >
-              <X className="h-3.5 w-3.5" />
-              关闭终端
-            </button>
-            <button
-              type="button"
-              onClick={rebuildTerminal}
-              disabled={!canRebuildTerminal}
-              className={toolbarButtonClass("primary", "sm", "h-8")}
-            >
-              <RefreshCw className="h-3.5 w-3.5" />
-              重建终端
-            </button>
           </div>
         </div>
         {stagedWorkingDir ? (
           <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-2.5 py-1.5 text-xs shadow-[var(--shadow-soft)]">
-            <span className="font-medium text-[var(--text)]">下次重建目录</span>
+            <span className="font-medium text-[var(--text)]">新终端工作目录</span>
             <span className="truncate text-[var(--muted)]">{stagedWorkingDir}</span>
             <button
               type="button"
@@ -615,7 +568,7 @@ export function TerminalScreen({
               disabled={terminalDisabled}
               className={toolbarButtonClass("plain", "sm", "h-7")}
             >
-              设为下次重建
+              设为新终端目录
             </button>
             <button
               type="button"

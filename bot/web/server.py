@@ -2387,7 +2387,7 @@ class WebApiServer:
         data = await self._terminal_manager.get_snapshot(auth.user_id, owner_id)
         return _json({"ok": True, "data": data})
 
-    async def post_terminal_rebuild(self, request: web.Request) -> web.Response:
+    async def post_terminal_create(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_TERMINAL_EXEC)
         body = await self._parse_json(request)
         owner_id = self._resolve_terminal_owner_id(body.get("owner_id"))
@@ -2398,7 +2398,7 @@ class WebApiServer:
             cwd = os.getcwd()
         size = _parse_terminal_size(body)
         try:
-            data = await self._terminal_manager.rebuild(
+            data = await self._terminal_manager.create(
                 auth.user_id,
                 owner_id,
                 cwd=cwd,
@@ -2410,6 +2410,10 @@ class WebApiServer:
             logger.warning("终端启动失败 owner=%s shell=%s cwd=%s: %s", owner_id, shell_type, cwd, exc)
             raise self._terminal_launch_error(exc) from exc
         return _json({"ok": True, "data": data})
+
+    async def post_terminal_rebuild(self, request: web.Request) -> web.Response:
+        """Compatibility endpoint for older clients; new clients create a fresh tab."""
+        return await self.post_terminal_create(request)
 
     async def post_terminal_close(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_TERMINAL_EXEC)
@@ -2592,7 +2596,7 @@ class WebApiServer:
             shell_type = self._resolve_terminal_shell(body.get("shell"))
             size = _parse_terminal_size(body)
             try:
-                snapshot = await self._terminal_manager.rebuild(
+                snapshot = await self._terminal_manager.create(
                     auth.user_id,
                     owner_id,
                     cwd=action.resolved_cwd,

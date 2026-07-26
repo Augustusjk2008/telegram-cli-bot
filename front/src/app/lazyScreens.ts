@@ -9,7 +9,7 @@ const loadGitScreen = () => import("../screens/GitScreen").then((module) => ({ d
 const loadMobileDebugScreen = () => import("../screens/MobileDebugScreen").then((module) => ({ default: module.MobileDebugScreen }));
 const loadPluginsScreen = () => import("../screens/PluginsScreen").then((module) => ({ default: module.PluginsScreen }));
 const loadSettingsScreen = () => import("../screens/SettingsScreen").then((module) => ({ default: module.SettingsScreen }));
-const loadTerminalScreen = () => import("../screens/TerminalScreen").then((module) => ({ default: module.TerminalScreen }));
+const loadTerminalScreen = () => import("../screens/TerminalTabsScreen").then((module) => ({ default: module.TerminalTabsScreen }));
 const loadDesktopWorkbench = () => import("../workbench/DesktopWorkbench").then((module) => ({ default: module.DesktopWorkbench }));
 const loadSoloWorkbench = () => import("../workbench/SoloWorkbench").then((module) => ({ default: module.SoloWorkbench }));
 

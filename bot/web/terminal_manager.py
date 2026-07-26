@@ -549,7 +549,7 @@ class TerminalSessionManager:
             "dropped_bytes": sum(session.dropped_bytes for session in sessions),
         }
 
-    async def rebuild(
+    async def create(
         self,
         user_id: int,
         owner_id: str,
@@ -606,6 +606,26 @@ class TerminalSessionManager:
             session.last_gap_seq = 0
             session.pump_task = asyncio.create_task(self._pump_output(session, process, output_pump))
             return self._build_snapshot_locked(session)
+
+    async def rebuild(
+        self,
+        user_id: int,
+        owner_id: str,
+        *,
+        cwd: str,
+        shell_type: str,
+        cols: int | None,
+        rows: int | None,
+    ) -> dict[str, Any]:
+        """Compatibility alias for clients using the former rebuild name."""
+        return await self.create(
+            user_id,
+            owner_id,
+            cwd=cwd,
+            shell_type=shell_type,
+            cols=cols,
+            rows=rows,
+        )
 
     async def close(self, user_id: int, owner_id: str) -> dict[str, Any]:
         async with self._lock:
