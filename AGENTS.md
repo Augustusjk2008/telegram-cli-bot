@@ -47,6 +47,7 @@ cd front && npm run lint
 - 普通 CLI trace 只进入 `ChatTracePanel`；只有原生来源进入 `NativeAgentTranscript`。
 - Pi runtime 只能由 `pi_session_runtime.py` 的单 reader 读取 `client.events()`。
 - Pi session 绑定由 `cwd + model_id + pi_agent + reasoning_effort` 决定；任一项变化都必须失效旧 session 和 workspace-history rollback 链。
+- Web 终端会话按 `(user_id, owner_id)` 隔离；每个新标签必须使用独立 `owner_id`，关闭标签必须终止对应 shell；旧客户端的 `rebuild` 端点作为创建会话的兼容别名保留。
 
 修改 native agent/Pi/cluster、LiteLLM Transfer、Plugin 或安装/发布链路时，使用仓库级 `orbit-maintenance` skill，并只读取与当前子系统对应的 reference。
 
