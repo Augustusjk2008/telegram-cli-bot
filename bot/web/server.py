@@ -31,6 +31,7 @@ from ag_ui.encoder import EventEncoder
 
 from bot.app_settings import get_git_proxy_settings, update_git_proxy_address
 from bot.chat_identity import chat_session_user_id
+from bot.codex_usage import close_codex_usage_service_sync, get_codex_usage_service
 from bot.config import (
     ALLOWED_USER_IDS,
     CHAT_COMPLETION_NOTIFY_ENABLED,
@@ -163,6 +164,7 @@ from .routes import (
     bot_settings_routes,
     chat_routes,
     cluster_routes,
+    codex_usage_routes,
     debug_routes,
     files_routes,
     git_routes,
@@ -1095,6 +1097,7 @@ class WebApiServer:
         self.transfer_service = TransferService(host=self._host, port=self._port)
         self.inline_completion_config_store = InlineCompletionConfigStore()
         self.inline_completion_service = InlineCompletionService(config_store=self.inline_completion_config_store)
+        self.codex_usage_service = get_codex_usage_service()
         self._loop_lag_tracker = LoopLagTracker(threshold_ms=diag_loop_lag_ms())
         self._runtime_diagnostics = RuntimeDiagnosticsRegistry()
         self._runtime_diagnostics.register("loop_lag", self._loop_lag_tracker.diagnostics)
@@ -1109,6 +1112,7 @@ class WebApiServer:
         )
         self._runtime_diagnostics.register("litellm", self.transfer_service.diagnostics)
         self._runtime_diagnostics.register("language_servers", self.language_server_manager.diagnostics)
+        self._runtime_diagnostics.register("codex_usage", self.codex_usage_service.diagnostics)
         plugin_service = getattr(self.manager, "plugin_service", None)
         if plugin_service is not None:
             self._runtime_diagnostics.register("plugins", plugin_service.snapshot_cache_diagnostics)
@@ -4777,6 +4781,7 @@ class WebApiServer:
             auth_routes,
             announcement_routes,
             cluster_routes,
+            codex_usage_routes,
             chat_routes,
             terminal_routes,
             debug_routes,
@@ -5010,6 +5015,7 @@ class WebApiServer:
         await self._fixed_forward_service.stop()
         await self.transfer_service.close()
         await self._runner.cleanup()
+        await asyncio.to_thread(close_codex_usage_service_sync)
         await asyncio.to_thread(close_session_store)
         self._runner = None
         self._site = None

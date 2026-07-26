@@ -276,6 +276,61 @@ class TestParseClaudeStreamJsonOutput:
 
 
 class TestIncrementalCliParsers:
+    def test_codex_parser_captures_terminal_token_usage(self):
+        parser = CodexJsonStreamParser(raw_tail_max_bytes=1024, final_text_max_bytes=1024)
+
+        parser.consume_line(
+            '{"type":"turn.completed","usage":{"input_tokens":100,'
+            '"cached_input_tokens":40,"output_tokens":20,"reasoning_output_tokens":8}}\n'
+        )
+
+        result = parser.result()
+
+        assert result.token_usage is not None
+        assert result.token_usage.token_usage.input_tokens == 100
+        assert result.token_usage.token_usage.cached_input_tokens == 40
+        assert result.token_usage.token_usage.output_tokens == 20
+        assert result.token_usage.token_usage.reasoning_output_tokens == 8
+        assert result.token_usage.completed_at.tzinfo is not None
+        assert result.invalid_usage_count == 0
+        assert result.duplicate_terminal_count == 0
+
+    @pytest.mark.parametrize(
+        "usage",
+        [
+            '{"input_tokens":true,"output_tokens":1}',
+            '{"input_tokens":-1,"output_tokens":1}',
+            '{"input_tokens":1,"cached_input_tokens":2,"output_tokens":1}',
+            '{"input_tokens":1,"output_tokens":1,"reasoning_output_tokens":2}',
+            '{"input_tokens":1.5,"output_tokens":1}',
+        ],
+    )
+    def test_codex_parser_rejects_invalid_terminal_token_usage(self, usage: str):
+        parser = CodexJsonStreamParser(raw_tail_max_bytes=1024, final_text_max_bytes=1024)
+
+        parser.consume_line(f'{{"type":"turn.completed","usage":{usage}}}\n')
+
+        result = parser.result()
+        assert result.token_usage is None
+        assert result.invalid_usage_count == 1
+
+    def test_codex_parser_uses_latest_valid_duplicate_terminal_usage(self):
+        parser = CodexJsonStreamParser(raw_tail_max_bytes=1024, final_text_max_bytes=1024)
+
+        parser.consume_line(
+            '{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":2}}\n'
+        )
+        parser.consume_line(
+            '{"type":"turn.completed","usage":{"input_tokens":12,'
+            '"cached_input_tokens":3,"output_tokens":4}}\n'
+        )
+
+        result = parser.result()
+        assert result.token_usage is not None
+        assert result.token_usage.token_usage.input_tokens == 12
+        assert result.token_usage.token_usage.cached_input_tokens == 3
+        assert result.duplicate_terminal_count == 1
+
     def test_codex_parser_keeps_final_text_and_bounded_raw_tail(self):
         parser = CodexJsonStreamParser(raw_tail_max_bytes=96, final_text_max_bytes=1024)
 

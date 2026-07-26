@@ -49,6 +49,13 @@ import type {
   NativeAgentModelUpdateOptions,
   CliErrorStatsFilters,
   CliErrorStatsResult,
+  CodexUsageConfig,
+  CodexUsageDailyProviderStats,
+  CodexUsageDailyStats,
+  CodexUsageMetrics,
+  CodexUsageProviderStats,
+  CodexUsageStats,
+  CodexUsageStatsQuery,
   CliType,
   CliParamsPayload,
   ClusterConfigUpdateInput,
@@ -350,6 +357,55 @@ function cloneCliParamsPayload(payload: CliParamsPayload): CliParamsPayload {
         },
       ]),
     ),
+  };
+}
+
+function cloneCodexUsageConfig(config: CodexUsageConfig): CodexUsageConfig {
+  return {
+    ...config,
+    currentProvider: { ...config.currentProvider },
+    timeBasis: { ...config.timeBasis },
+    availableRange: { ...config.availableRange },
+  };
+}
+
+function cloneCodexUsageStats(stats: CodexUsageStats): CodexUsageStats {
+  return {
+    ...stats,
+    range: { ...stats.range },
+    timeBasis: { ...stats.timeBasis },
+    availableRange: { ...stats.availableRange },
+    availableProviders: stats.availableProviders.map((provider) => ({ ...provider })),
+    selectedProviderKeys: [...stats.selectedProviderKeys],
+    totals: { ...stats.totals },
+    byProvider: stats.byProvider.map((item) => ({ ...item, provider: { ...item.provider } })),
+    byDay: stats.byDay.map((item) => ({ ...item })),
+    dailyByProvider: stats.dailyByProvider.map((item) => ({ ...item, provider: { ...item.provider } })),
+  };
+}
+
+function sumCodexUsageMetrics(items: CodexUsageMetrics[]): CodexUsageMetrics {
+  const totals = items.reduce(
+    (current, item) => ({
+      requestCount: current.requestCount + item.requestCount,
+      inputTokens: current.inputTokens + item.inputTokens,
+      cachedInputTokens: current.cachedInputTokens + item.cachedInputTokens,
+      outputTokens: current.outputTokens + item.outputTokens,
+      reasoningOutputTokens: current.reasoningOutputTokens + item.reasoningOutputTokens,
+    }),
+    {
+      requestCount: 0,
+      inputTokens: 0,
+      cachedInputTokens: 0,
+      outputTokens: 0,
+      reasoningOutputTokens: 0,
+    },
+  );
+  return {
+    ...totals,
+    uncachedInputTokens: totals.inputTokens - totals.cachedInputTokens,
+    totalTokens: totals.inputTokens + totals.outputTokens,
+    cacheHitRate: totals.inputTokens > 0 ? totals.cachedInputTokens / totals.inputTokens : null,
   };
 }
 
@@ -1693,6 +1749,105 @@ export class MockWebBotClient implements WebBotClient {
         durationMs: 8000,
       },
     ],
+  };
+  private codexUsageConfig: CodexUsageConfig = {
+    enabled: false,
+    currentProvider: {
+      key: "openai_official",
+      kind: "openai_official",
+      label: "OpenAI 官方",
+      baseUrl: null,
+      resolution: "resolved",
+    },
+    timeBasis: {
+      mode: "server_local",
+      utcOffset: "+08:00",
+      today: "2026-07-26",
+    },
+    availableRange: {
+      firstDate: "2026-07-20",
+      lastDate: "2026-07-26",
+    },
+  };
+  private codexUsageStats: CodexUsageStats = {
+    range: {
+      startDate: "2026-06-27",
+      endDate: "2026-07-26",
+    },
+    enabled: false,
+    timeBasis: {
+      mode: "server_local",
+      utcOffset: "+08:00",
+      today: "2026-07-26",
+    },
+    availableRange: {
+      firstDate: "2026-07-20",
+      lastDate: "2026-07-26",
+    },
+    availableProviders: [{
+      key: "openai_official",
+      kind: "openai_official",
+      label: "OpenAI 官方",
+      baseUrl: null,
+      resolution: "resolved",
+    }],
+    selectedProviderKeys: [],
+    totals: {
+      requestCount: 12,
+      inputTokens: 18800,
+      cachedInputTokens: 6800,
+      uncachedInputTokens: 12000,
+      outputTokens: 4200,
+      reasoningOutputTokens: 950,
+      totalTokens: 23000,
+      cacheHitRate: 6800 / 18800,
+    },
+    byProvider: [{
+      provider: {
+        key: "openai_official",
+        kind: "openai_official",
+        label: "OpenAI 官方",
+        baseUrl: null,
+        resolution: "resolved",
+      },
+      requestCount: 12,
+      inputTokens: 18800,
+      cachedInputTokens: 6800,
+      uncachedInputTokens: 12000,
+      outputTokens: 4200,
+      reasoningOutputTokens: 950,
+      totalTokens: 23000,
+      cacheHitRate: 6800 / 18800,
+    }],
+    byDay: [{
+      date: "2026-07-26",
+      requestCount: 12,
+      inputTokens: 18800,
+      cachedInputTokens: 6800,
+      uncachedInputTokens: 12000,
+      outputTokens: 4200,
+      reasoningOutputTokens: 950,
+      totalTokens: 23000,
+      cacheHitRate: 6800 / 18800,
+    }],
+    dailyByProvider: [{
+      date: "2026-07-26",
+      provider: {
+        key: "openai_official",
+        kind: "openai_official",
+        label: "OpenAI 官方",
+        baseUrl: null,
+        resolution: "resolved",
+      },
+      requestCount: 12,
+      inputTokens: 18800,
+      cachedInputTokens: 6800,
+      uncachedInputTokens: 12000,
+      outputTokens: 4200,
+      reasoningOutputTokens: 950,
+      totalTokens: 23000,
+      cacheHitRate: 6800 / 18800,
+    }],
   };
   private updateStatus: AppUpdateStatus = {
     currentVersion: APP_VERSION,
@@ -5421,6 +5576,72 @@ export class MockWebBotClient implements WebBotClient {
       topErrors: this.cliErrorStats.topErrors.filter((item) => !filters.category || item.category === filters.category),
       items: items.slice(0, filters.limit || 200),
     };
+  }
+
+  async getCodexUsageConfig(): Promise<CodexUsageConfig> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权查看 Codex 用量", { status: 403, code: "forbidden" });
+    }
+    return cloneCodexUsageConfig(this.codexUsageConfig);
+  }
+
+  async updateCodexUsageConfig(input: { enabled: boolean }): Promise<CodexUsageConfig> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权修改 Codex 用量采集设置", { status: 403, code: "forbidden" });
+    }
+    this.codexUsageConfig = {
+      ...this.codexUsageConfig,
+      enabled: input.enabled,
+    };
+    this.codexUsageStats = {
+      ...this.codexUsageStats,
+      enabled: input.enabled,
+    };
+    return this.getCodexUsageConfig();
+  }
+
+  async getCodexUsageStats(query: CodexUsageStatsQuery = {}): Promise<CodexUsageStats> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权查看 Codex 用量", { status: 403, code: "forbidden" });
+    }
+    const selectedProviderKeys = Array.from(new Set(
+      (query.providerKeys || []).map((item) => item.trim()).filter(Boolean),
+    ));
+    const result = cloneCodexUsageStats(this.codexUsageStats);
+    result.enabled = this.codexUsageConfig.enabled;
+    result.range = {
+      startDate: query.startDate || result.range.startDate,
+      endDate: query.endDate || result.range.endDate,
+    };
+    result.selectedProviderKeys = selectedProviderKeys;
+    if (selectedProviderKeys.length) {
+      const selected = new Set(selectedProviderKeys);
+      result.byProvider = result.byProvider.filter((item) => selected.has(item.provider.key));
+      result.dailyByProvider = result.dailyByProvider.filter((item) => selected.has(item.provider.key));
+    }
+    if (query.startDate || query.endDate) {
+      const inRange = (date: string) => (
+        (!query.startDate || date >= query.startDate)
+        && (!query.endDate || date <= query.endDate)
+      );
+      result.dailyByProvider = result.dailyByProvider.filter((item) => inRange(item.date));
+    }
+    const providerGroups = new Map<string, CodexUsageDailyProviderStats[]>();
+    const dayGroups = new Map<string, CodexUsageDailyProviderStats[]>();
+    for (const item of result.dailyByProvider) {
+      providerGroups.set(item.provider.key, [...(providerGroups.get(item.provider.key) || []), item]);
+      dayGroups.set(item.date, [...(dayGroups.get(item.date) || []), item]);
+    }
+    result.byProvider = Array.from(providerGroups.values()).map<CodexUsageProviderStats>((items) => ({
+      provider: { ...items[0].provider },
+      ...sumCodexUsageMetrics(items),
+    }));
+    result.byDay = Array.from(dayGroups.entries()).map<CodexUsageDailyStats>(([date, items]) => ({
+      date,
+      ...sumCodexUsageMetrics(items),
+    }));
+    result.totals = sumCodexUsageMetrics(result.dailyByProvider);
+    return result;
   }
 
   async updateGitProxySettings(address: string): Promise<GitProxySettings> {

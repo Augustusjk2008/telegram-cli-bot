@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ArrowLeft, Bell, Copy, Eye, EyeOff, Globe, Plus, RefreshCw, RotateCcw, Save, Trash2 } from "lucide-react";
 import { AiInlineCompletionSettingsPanel } from "../components/AiInlineCompletionSettingsPanel";
 import { StateBadge } from "../components/StateBadge";
@@ -36,6 +36,10 @@ import type {
 import type { WebBotClient } from "../services/webBotClient";
 import { getErrorMessage } from "../utils/errorMessage";
 
+const CodexUsagePanel = lazy(() => import("../components/admin/CodexUsagePanel").then((module) => ({
+  default: module.CodexUsagePanel,
+})));
+
 type Props = {
   client?: WebBotClient;
   onClose: () => void;
@@ -49,6 +53,7 @@ type AdminCenterTab =
   | "users"
   | "invites"
   | "cli-errors"
+  | "codex-usage"
   | "updates"
   | "announcements"
   | "network"
@@ -464,6 +469,7 @@ export function AdminCenterScreen({
   const [offlinePackages, setOfflinePackages] = useState<OfflineUpdatePackageList | null>(null);
   const [cliErrorStats, setCliErrorStats] = useState<CliErrorStatsResult | null>(null);
   const [cliErrorHours, setCliErrorHours] = useState(24);
+  const [codexUsagePanelKey, setCodexUsagePanelKey] = useState(0);
   const [announcements, setAnnouncements] = useState<AnnouncementItem[]>([]);
   const [announcementDraft, setAnnouncementDraft] = useState<CreateAnnouncementInput>(DEFAULT_ANNOUNCEMENT_DRAFT);
   const [announcementSaving, setAnnouncementSaving] = useState(false);
@@ -502,6 +508,7 @@ export function AdminCenterScreen({
     users: false,
     invites: false,
     "cli-errors": false,
+    "codex-usage": false,
     updates: false,
     announcements: false,
     network: false,
@@ -531,6 +538,7 @@ export function AdminCenterScreen({
       "users",
       ...(canManageRegisterCodes ? (["invites"] as AdminCenterTab[]) : []),
       "cli-errors",
+      "codex-usage",
       "updates",
       "announcements",
       "network",
@@ -919,6 +927,11 @@ export function AdminCenterScreen({
       await loadInvites(nextNotice, refresh);
     } else if (activeTab === "cli-errors") {
       await loadCliErrorStats(nextNotice, refresh);
+    } else if (activeTab === "codex-usage") {
+      setLoadedTabs((prev) => ({ ...prev, "codex-usage": true }));
+      if (refresh) {
+        setCodexUsagePanelKey((current) => current + 1);
+      }
     } else if (activeTab === "updates") {
       await loadUpdates(nextNotice, refresh);
     } else if (activeTab === "network") {
@@ -1511,7 +1524,7 @@ export function AdminCenterScreen({
           </button>
         </header>
 
-        <div className="mb-4 flex flex-wrap items-center gap-2">
+        <div role="tablist" aria-label="管理中心功能" className="mb-4 flex flex-wrap items-center gap-2">
           {visibleTabs.map((tab) => (
             <button
               key={tab}
@@ -1531,6 +1544,8 @@ export function AdminCenterScreen({
                     ? "升级"
                     : tab === "cli-errors"
                       ? "CLI 错误"
+                    : tab === "codex-usage"
+                      ? "Codex 用量"
                     : tab === "announcements"
                       ? "公告"
                     : tab === "network"
@@ -2027,6 +2042,22 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
               </div>
             ) : null}
           </section>
+        ) : null}
+
+        {!loading && activeTab === "codex-usage" ? (
+          loadedTabs["codex-usage"] ? (
+            <Suspense fallback={(
+              <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-sm text-[var(--muted)]">
+                正在加载 Codex 用量面板…
+              </section>
+            )}>
+              <CodexUsagePanel key={codexUsagePanelKey} client={client} refreshKey={codexUsagePanelKey} />
+            </Suspense>
+          ) : (
+            <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-sm text-[var(--muted)]">
+              正在加载 Codex 用量面板…
+            </section>
+          )
         ) : null}
 
         {!loading && activeTab === "inline-completion" ? (

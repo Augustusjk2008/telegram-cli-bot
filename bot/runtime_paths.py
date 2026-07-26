@@ -119,6 +119,10 @@ def get_inline_completion_config_path() -> Path:
     return get_app_data_root() / "inline-completion" / "config.json"
 
 
+def get_codex_usage_db_path() -> Path:
+    return get_app_data_root() / "codex-usage" / "usage.sqlite3"
+
+
 def get_language_servers_root() -> Path:
     """托管语言服务器的运行态根目录，始终位于用户数据目录。"""
 

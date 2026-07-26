@@ -7,6 +7,7 @@ from . import (
     bot_settings_routes,
     chat_routes,
     cluster_routes,
+    codex_usage_routes,
     debug_routes,
     files_routes,
     git_routes,

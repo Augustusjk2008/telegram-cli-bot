@@ -72,6 +72,18 @@ import type {
   CliErrorStatsResult,
   CliErrorStatsSummary,
   CliErrorTopItem,
+  CodexUsageAvailableRange,
+  CodexUsageConfig,
+  CodexUsageDailyProviderStats,
+  CodexUsageDailyStats,
+  CodexUsageMetrics,
+  CodexUsageProvider,
+  CodexUsageProviderKind,
+  CodexUsageProviderResolution,
+  CodexUsageProviderStats,
+  CodexUsageStats,
+  CodexUsageStatsQuery,
+  CodexUsageTimeBasis,
   CliParamsPayload,
   CliType,
   AgentClusterConfig,
@@ -1396,6 +1408,75 @@ type RawCliErrorStatsResult = {
   summary?: RawCliErrorStatsSummary;
   top_errors?: RawCliErrorTopItem[];
   items?: RawCliErrorStatsItem[];
+};
+
+type RawCodexUsageProvider = {
+  key?: string;
+  kind?: string;
+  label?: string;
+  base_url?: string | null;
+  resolution?: string;
+};
+
+type RawCodexUsageTimeBasis = {
+  mode?: string;
+  utc_offset?: string;
+  today?: string;
+};
+
+type RawCodexUsageAvailableRange = {
+  first_date?: string | null;
+  last_date?: string | null;
+};
+
+type RawCodexUsageMetrics = {
+  request_count?: number;
+  input_tokens?: number;
+  cached_input_tokens?: number;
+  uncached_input_tokens?: number;
+  output_tokens?: number;
+  reasoning_output_tokens?: number;
+  total_tokens?: number;
+  cache_hit_rate?: number | null;
+};
+
+type RawCodexUsageConfig = {
+  enabled?: boolean;
+  current_provider?: RawCodexUsageProvider;
+  time_basis?: RawCodexUsageTimeBasis;
+  available_range?: RawCodexUsageAvailableRange;
+};
+
+type RawCodexUsageProviderStats = RawCodexUsageMetrics & {
+  provider?: RawCodexUsageProvider;
+  provider_key?: string;
+  provider_kind?: string;
+  provider_label?: string;
+  base_url?: string | null;
+  resolution?: string;
+};
+
+type RawCodexUsageDailyStats = RawCodexUsageMetrics & {
+  date?: string;
+  day?: string;
+};
+
+type RawCodexUsageDailyProviderStats = RawCodexUsageDailyStats & RawCodexUsageProviderStats;
+
+type RawCodexUsageStats = {
+  range?: {
+    start_date?: string;
+    end_date?: string;
+  };
+  enabled?: boolean;
+  time_basis?: RawCodexUsageTimeBasis;
+  available_range?: RawCodexUsageAvailableRange;
+  available_providers?: RawCodexUsageProvider[];
+  selected_provider_keys?: string[];
+  totals?: RawCodexUsageMetrics;
+  by_provider?: RawCodexUsageProviderStats[];
+  by_day?: RawCodexUsageDailyStats[];
+  daily_by_provider?: RawCodexUsageDailyProviderStats[];
 };
 
 type StreamEventPayload =
@@ -3349,6 +3430,131 @@ function mapCliErrorStatsResult(raw: RawCliErrorStatsResult): CliErrorStatsResul
   };
 }
 
+function numberOrZero(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function mapCodexUsageProviderKind(value: unknown): CodexUsageProviderKind {
+  if (value === "openai_official" || value === "base_url" || value === "unknown") {
+    return value;
+  }
+  return "unknown";
+}
+
+function mapCodexUsageProviderResolution(value: unknown): CodexUsageProviderResolution | undefined {
+  if (
+    value === "resolved"
+    || value === "config_missing"
+    || value === "config_invalid"
+    || value === "provider_missing"
+    || value === "invalid_base_url"
+    || value === "unsupported_override"
+  ) {
+    return value;
+  }
+  return undefined;
+}
+
+function mapCodexUsageProvider(raw: RawCodexUsageProvider | undefined): CodexUsageProvider {
+  const kind = mapCodexUsageProviderKind(raw?.kind);
+  return {
+    key: String(raw?.key || "unknown"),
+    kind,
+    label: String(raw?.label || (kind === "openai_official" ? "OpenAI 官方" : kind === "unknown" ? "无法识别" : "自定义 Provider")),
+    baseUrl: raw?.base_url ? String(raw.base_url) : null,
+    ...(mapCodexUsageProviderResolution(raw?.resolution) ? { resolution: mapCodexUsageProviderResolution(raw?.resolution) } : {}),
+  };
+}
+
+function mapCodexUsageTimeBasis(raw: RawCodexUsageTimeBasis | undefined): CodexUsageTimeBasis {
+  return {
+    mode: String(raw?.mode || "server_local"),
+    utcOffset: String(raw?.utc_offset || ""),
+    today: String(raw?.today || ""),
+  };
+}
+
+function mapCodexUsageAvailableRange(raw: RawCodexUsageAvailableRange | undefined): CodexUsageAvailableRange {
+  return {
+    firstDate: raw?.first_date ? String(raw.first_date) : null,
+    lastDate: raw?.last_date ? String(raw.last_date) : null,
+  };
+}
+
+function mapCodexUsageMetrics(raw: RawCodexUsageMetrics | undefined): CodexUsageMetrics {
+  const inputTokens = numberOrZero(raw?.input_tokens);
+  const cachedInputTokens = numberOrZero(raw?.cached_input_tokens);
+  const outputTokens = numberOrZero(raw?.output_tokens);
+  const cacheHitRate = raw?.cache_hit_rate;
+  return {
+    requestCount: numberOrZero(raw?.request_count),
+    inputTokens,
+    cachedInputTokens,
+    uncachedInputTokens: raw?.uncached_input_tokens === undefined
+      ? Math.max(0, inputTokens - cachedInputTokens)
+      : numberOrZero(raw.uncached_input_tokens),
+    outputTokens,
+    reasoningOutputTokens: numberOrZero(raw?.reasoning_output_tokens),
+    totalTokens: raw?.total_tokens === undefined
+      ? inputTokens + outputTokens
+      : numberOrZero(raw.total_tokens),
+    cacheHitRate: typeof cacheHitRate === "number" && Number.isFinite(cacheHitRate) ? cacheHitRate : null,
+  };
+}
+
+function mapCodexUsageProviderFromStats(raw: RawCodexUsageProviderStats): CodexUsageProvider {
+  return mapCodexUsageProvider(raw.provider || {
+    key: raw.provider_key,
+    kind: raw.provider_kind,
+    label: raw.provider_label,
+    base_url: raw.base_url,
+    resolution: raw.resolution,
+  });
+}
+
+function mapCodexUsageConfig(raw: RawCodexUsageConfig): CodexUsageConfig {
+  return {
+    enabled: Boolean(raw.enabled),
+    currentProvider: mapCodexUsageProvider(raw.current_provider),
+    timeBasis: mapCodexUsageTimeBasis(raw.time_basis),
+    availableRange: mapCodexUsageAvailableRange(raw.available_range),
+  };
+}
+
+function mapCodexUsageStats(raw: RawCodexUsageStats): CodexUsageStats {
+  const byProvider: CodexUsageProviderStats[] = (raw.by_provider || []).map((item) => ({
+    provider: mapCodexUsageProviderFromStats(item),
+    ...mapCodexUsageMetrics(item),
+  }));
+  const byDay: CodexUsageDailyStats[] = (raw.by_day || []).map((item) => ({
+    date: String(item.date || item.day || ""),
+    ...mapCodexUsageMetrics(item),
+  }));
+  const dailyByProvider: CodexUsageDailyProviderStats[] = (raw.daily_by_provider || []).map((item) => ({
+    date: String(item.date || item.day || ""),
+    provider: mapCodexUsageProviderFromStats(item),
+    ...mapCodexUsageMetrics(item),
+  }));
+  return {
+    range: {
+      startDate: String(raw.range?.start_date || ""),
+      endDate: String(raw.range?.end_date || ""),
+    },
+    enabled: Boolean(raw.enabled),
+    timeBasis: mapCodexUsageTimeBasis(raw.time_basis),
+    availableRange: mapCodexUsageAvailableRange(raw.available_range),
+    availableProviders: (raw.available_providers || []).map(mapCodexUsageProvider),
+    selectedProviderKeys: Array.isArray(raw.selected_provider_keys)
+      ? raw.selected_provider_keys.map((item) => String(item))
+      : [],
+    totals: mapCodexUsageMetrics(raw.totals),
+    byProvider,
+    byDay,
+    dailyByProvider,
+  };
+}
+
 function calculateDownloadPercent(downloadedBytes: number, totalBytes?: number) {
   if (!totalBytes || totalBytes <= 0) {
     return undefined;
@@ -4206,6 +4412,37 @@ export class RealWebBotClient implements WebBotClient {
     const query = params.toString();
     const data = await this.requestJson<RawCliErrorStatsResult>(`/api/admin/cli-errors${query ? `?${query}` : ""}`);
     return mapCliErrorStatsResult(data);
+  }
+
+  async getCodexUsageConfig(): Promise<CodexUsageConfig> {
+    const data = await this.requestJson<RawCodexUsageConfig>("/api/admin/codex-usage/config");
+    return mapCodexUsageConfig(data);
+  }
+
+  async updateCodexUsageConfig(input: { enabled: boolean }): Promise<CodexUsageConfig> {
+    const data = await this.requestJson<RawCodexUsageConfig>("/api/admin/codex-usage/config", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ enabled: input.enabled }),
+    });
+    return mapCodexUsageConfig(data);
+  }
+
+  async getCodexUsageStats(queryInput: CodexUsageStatsQuery = {}): Promise<CodexUsageStats> {
+    const params = new URLSearchParams();
+    if (queryInput.startDate) params.set("start_date", queryInput.startDate);
+    if (queryInput.endDate) params.set("end_date", queryInput.endDate);
+    for (const providerKey of queryInput.providerKeys || []) {
+      const key = providerKey.trim();
+      if (key) params.append("provider", key);
+    }
+    const query = params.toString();
+    const data = await this.requestJson<RawCodexUsageStats>(
+      `/api/admin/codex-usage/stats${query ? `?${query}` : ""}`,
+    );
+    return mapCodexUsageStats(data);
   }
 
   async listBots(): Promise<BotSummary[]> {

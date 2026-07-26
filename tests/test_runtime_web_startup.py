@@ -69,6 +69,17 @@ class FakeLanguageServerRuntimeManager:
         return {"requested": 0, "closed": 0, "failed": 0}
 
 
+class FakeCodexUsageService:
+    def __init__(self) -> None:
+        self.close_calls = 0
+
+    def diagnostics(self) -> dict[str, object]:
+        return {"enabled": False, "write_count": 0}
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+
 def _hold_tcp_port(host: str) -> tuple[socket.socket, int]:
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind((host, 0))
@@ -186,6 +197,34 @@ async def test_web_server_stop_closes_language_server_runtimes() -> None:
     await server.stop()
 
     assert language_servers.shutdown_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_web_server_registers_and_closes_codex_usage_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    usage_service = FakeCodexUsageService()
+    monkeypatch.setattr("bot.web.server.get_codex_usage_service", lambda: usage_service, raising=False)
+    monkeypatch.setattr(
+        "bot.web.server.close_codex_usage_service_sync",
+        usage_service.close,
+        raising=False,
+    )
+    server = WebApiServer(
+        object(),
+        host="127.0.0.1",
+        port=0,
+        tunnel_service=DummyTunnelService(),
+        fixed_forward_service=DummyFixedForwardService(),
+    )
+
+    assert server.codex_usage_service is usage_service
+    assert server._runtime_diagnostics.snapshot()["components"]["codex_usage"]["enabled"] is False
+
+    await server.start()
+    await server.stop()
+
+    assert usage_service.close_calls == 1
 
 
 @pytest.mark.asyncio

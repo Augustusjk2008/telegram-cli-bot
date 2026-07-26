@@ -373,6 +373,89 @@ export type CliErrorStatsFilters = {
   limit?: number;
 };
 
+export type CodexUsageProviderKind = "openai_official" | "base_url" | "unknown";
+
+export type CodexUsageProviderResolution =
+  | "resolved"
+  | "config_missing"
+  | "config_invalid"
+  | "provider_missing"
+  | "invalid_base_url"
+  | "unsupported_override";
+
+export type CodexUsageProvider = {
+  key: string;
+  kind: CodexUsageProviderKind;
+  label: string;
+  baseUrl: string | null;
+  resolution?: CodexUsageProviderResolution;
+};
+
+export type CodexUsageTimeBasis = {
+  mode: "server_local" | string;
+  utcOffset: string;
+  today: string;
+};
+
+export type CodexUsageAvailableRange = {
+  firstDate: string | null;
+  lastDate: string | null;
+};
+
+export type CodexUsageMetrics = {
+  requestCount: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  uncachedInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+  totalTokens: number;
+  cacheHitRate: number | null;
+};
+
+export type CodexUsageConfig = {
+  enabled: boolean;
+  currentProvider: CodexUsageProvider;
+  timeBasis: CodexUsageTimeBasis;
+  availableRange: CodexUsageAvailableRange;
+};
+
+export type CodexUsageStatsQuery = {
+  startDate?: string;
+  endDate?: string;
+  providerKeys?: string[];
+};
+
+export type CodexUsageStatsRange = {
+  startDate: string;
+  endDate: string;
+};
+
+export type CodexUsageProviderStats = CodexUsageMetrics & {
+  provider: CodexUsageProvider;
+};
+
+export type CodexUsageDailyStats = CodexUsageMetrics & {
+  date: string;
+};
+
+export type CodexUsageDailyProviderStats = CodexUsageDailyStats & {
+  provider: CodexUsageProvider;
+};
+
+export type CodexUsageStats = {
+  range: CodexUsageStatsRange;
+  enabled: boolean;
+  timeBasis: CodexUsageTimeBasis;
+  availableRange: CodexUsageAvailableRange;
+  availableProviders: CodexUsageProvider[];
+  selectedProviderKeys: string[];
+  totals: CodexUsageMetrics;
+  byProvider: CodexUsageProviderStats[];
+  byDay: CodexUsageDailyStats[];
+  dailyByProvider: CodexUsageDailyProviderStats[];
+};
+
 export type NativeAgentConfigView = {
   provider: string;
   model: string;

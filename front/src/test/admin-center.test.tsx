@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { AdminCenterScreen } from "../screens/AdminCenterScreen";
@@ -13,6 +13,92 @@ function createAdminClient(transferStatus: TransferBridgeStatus): WebBotClient {
     listBots: vi.fn(async () => []),
     getTransferAdminStatus: vi.fn(async () => transferStatus),
   });
+}
+
+const codexUsageConfigFixture = {
+  enabled: false,
+  currentProvider: {
+    key: "openai_official",
+    kind: "openai_official",
+    label: "OpenAI 官方",
+    baseUrl: null,
+    resolution: "resolved",
+  },
+  timeBasis: {
+    mode: "server_local",
+    utcOffset: "+08:00",
+    today: "2026-07-26",
+  },
+  availableRange: {
+    firstDate: "2026-07-20",
+    lastDate: "2026-07-26",
+  },
+};
+
+const codexUsageStatsFixture = {
+  range: {
+    startDate: "2026-06-27",
+    endDate: "2026-07-26",
+  },
+  enabled: false,
+  timeBasis: codexUsageConfigFixture.timeBasis,
+  availableRange: codexUsageConfigFixture.availableRange,
+  availableProviders: [codexUsageConfigFixture.currentProvider],
+  selectedProviderKeys: [],
+  totals: {
+    requestCount: 42,
+    inputTokens: 1200,
+    cachedInputTokens: 300,
+    uncachedInputTokens: 900,
+    outputTokens: 400,
+    reasoningOutputTokens: 80,
+    totalTokens: 1600,
+    cacheHitRate: 0.25,
+  },
+  byProvider: [{
+    provider: codexUsageConfigFixture.currentProvider,
+    requestCount: 42,
+    inputTokens: 1200,
+    cachedInputTokens: 300,
+    uncachedInputTokens: 900,
+    outputTokens: 400,
+    reasoningOutputTokens: 80,
+    totalTokens: 1600,
+    cacheHitRate: 0.25,
+  }],
+  byDay: [{
+    date: "2026-07-26",
+    requestCount: 42,
+    inputTokens: 1200,
+    cachedInputTokens: 300,
+    uncachedInputTokens: 900,
+    outputTokens: 400,
+    reasoningOutputTokens: 80,
+    totalTokens: 1600,
+    cacheHitRate: 0.25,
+  }],
+  dailyByProvider: [{
+    date: "2026-07-26",
+    provider: codexUsageConfigFixture.currentProvider,
+    requestCount: 42,
+    inputTokens: 1200,
+    cachedInputTokens: 300,
+    uncachedInputTokens: 900,
+    outputTokens: 400,
+    reasoningOutputTokens: 80,
+    totalTokens: 1600,
+    cacheHitRate: 0.25,
+  }],
+};
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 test("管理中心 LiteLLM 网关 tab 显示状态、链接和 Codex 配置提示", async () => {
@@ -282,4 +368,221 @@ test("管理中心 LiteLLM 网关 tab 拒绝高级参数覆盖核心字段", asy
 
   expect(updateTransferBridgeConfig).not.toHaveBeenCalled();
   expect(await screen.findByText("高级 LiteLLM params 不能包含 api_key")).toBeInTheDocument();
+});
+
+test("管理中心 Codex 用量页签惰性加载并展示关闭后的历史统计", async () => {
+  const user = userEvent.setup();
+  const client = Object.assign(new MockWebBotClient(), {
+    listAdminUsers: vi.fn(async () => []),
+    listBots: vi.fn(async () => []),
+    getCodexUsageConfig: vi.fn(async () => codexUsageConfigFixture),
+    getCodexUsageStats: vi.fn(async () => codexUsageStatsFixture),
+  });
+
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+
+  await screen.findByText("用户权限");
+  expect(client.getCodexUsageConfig).not.toHaveBeenCalled();
+  expect(client.getCodexUsageStats).not.toHaveBeenCalled();
+
+  await user.click(screen.getByRole("tab", { name: "Codex 用量" }));
+
+  expect(await screen.findByRole("heading", { name: "Codex 用量" })).toBeInTheDocument();
+  await waitFor(() => {
+    expect(client.getCodexUsageConfig).toHaveBeenCalledTimes(1);
+    expect(client.getCodexUsageStats).toHaveBeenCalledWith({
+      startDate: "2026-06-27",
+      endDate: "2026-07-26",
+    });
+  });
+  expect(screen.getByText("统计采集已关闭，历史数据仍可查询。")).toBeInTheDocument();
+  expect(screen.getAllByText("OpenAI 官方").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("1,600").length).toBeGreaterThan(0);
+  expect(screen.getByRole("table", { name: "Codex 用量每日明细" })).toBeInTheDocument();
+});
+
+test("管理中心 Codex 用量开关失败时恢复原状态", async () => {
+  const user = userEvent.setup();
+  const client = Object.assign(new MockWebBotClient(), {
+    listAdminUsers: vi.fn(async () => []),
+    listBots: vi.fn(async () => []),
+    getCodexUsageConfig: vi.fn(async () => codexUsageConfigFixture),
+    getCodexUsageStats: vi.fn(async () => codexUsageStatsFixture),
+    updateCodexUsageConfig: vi.fn(async () => {
+      throw new Error("网络异常");
+    }),
+  });
+
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+
+  await screen.findByText("用户权限");
+  await user.click(screen.getByRole("tab", { name: "Codex 用量" }));
+  const toggle = await screen.findByLabelText("启用 Codex 用量采集");
+  expect(toggle).not.toBeChecked();
+
+  await user.click(toggle);
+
+  await waitFor(() => {
+    expect(client.updateCodexUsageConfig).toHaveBeenCalledWith({ enabled: true });
+  });
+  expect(await screen.findByText("保存 Codex 用量采集设置失败：网络异常")).toBeInTheDocument();
+  expect(screen.getByLabelText("启用 Codex 用量采集")).not.toBeChecked();
+});
+
+test("管理中心 Codex 用量筛选支持快捷日期且清空 Provider 不发请求", async () => {
+  const user = userEvent.setup();
+  const getCodexUsageStats = vi.fn(async () => codexUsageStatsFixture);
+  const client = Object.assign(new MockWebBotClient(), {
+    listAdminUsers: vi.fn(async () => []),
+    listBots: vi.fn(async () => []),
+    getCodexUsageConfig: vi.fn(async () => codexUsageConfigFixture),
+    getCodexUsageStats,
+  });
+
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+
+  await screen.findByText("用户权限");
+  await user.click(screen.getByRole("tab", { name: "Codex 用量" }));
+  await screen.findByRole("heading", { name: "Codex 用量" });
+  await waitFor(() => expect(getCodexUsageStats).toHaveBeenCalledTimes(1));
+  getCodexUsageStats.mockClear();
+
+  await user.click(screen.getByRole("button", { name: "近 7 天" }));
+  await waitFor(() => {
+    expect(getCodexUsageStats).toHaveBeenCalledWith({
+      startDate: "2026-07-20",
+      endDate: "2026-07-26",
+    });
+  });
+
+  getCodexUsageStats.mockClear();
+  await user.click(screen.getByRole("button", { name: "清空" }));
+  await user.click(screen.getByRole("button", { name: "查询" }));
+  expect(await screen.findByText("请至少选择一个 Provider 后再查询。")).toBeInTheDocument();
+  expect(getCodexUsageStats).not.toHaveBeenCalled();
+
+  await user.click(screen.getByRole("button", { name: "全选" }));
+  await user.click(screen.getByRole("button", { name: "查询" }));
+  await waitFor(() => {
+    expect(getCodexUsageStats).toHaveBeenCalledWith({
+      startDate: "2026-07-20",
+      endDate: "2026-07-26",
+    });
+  });
+});
+
+test("管理中心 Codex 用量只提交最后一次查询的结果", async () => {
+  const user = userEvent.setup();
+  const sevenDayQuery = deferred<typeof codexUsageStatsFixture>();
+  const thirtyDayQuery = deferred<typeof codexUsageStatsFixture>();
+  const getCodexUsageStats = vi
+    .fn()
+    .mockResolvedValueOnce(codexUsageStatsFixture)
+    .mockReturnValueOnce(sevenDayQuery.promise)
+    .mockReturnValueOnce(thirtyDayQuery.promise);
+  const client = Object.assign(new MockWebBotClient(), {
+    listAdminUsers: vi.fn(async () => []),
+    listBots: vi.fn(async () => []),
+    getCodexUsageConfig: vi.fn(async () => codexUsageConfigFixture),
+    getCodexUsageStats,
+  });
+
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+
+  await screen.findByText("用户权限");
+  await user.click(screen.getByRole("tab", { name: "Codex 用量" }));
+  await screen.findByRole("heading", { name: "Codex 用量" });
+  await waitFor(() => expect(getCodexUsageStats).toHaveBeenCalledTimes(1));
+
+  await user.click(screen.getByRole("button", { name: "近 7 天" }));
+  await user.click(screen.getByRole("button", { name: "近 30 天" }));
+  await waitFor(() => expect(getCodexUsageStats).toHaveBeenCalledTimes(3));
+
+  await act(async () => {
+    thirtyDayQuery.resolve({
+      ...codexUsageStatsFixture,
+      range: { startDate: "2026-06-27", endDate: "2026-07-26" },
+      totals: { ...codexUsageStatsFixture.totals, totalTokens: 30_030 },
+    });
+    await thirtyDayQuery.promise;
+  });
+  expect(screen.getByText("30,030")).toBeInTheDocument();
+
+  await act(async () => {
+    sevenDayQuery.resolve({
+      ...codexUsageStatsFixture,
+      range: { startDate: "2026-07-20", endDate: "2026-07-26" },
+      totals: { ...codexUsageStatsFixture.totals, totalTokens: 7_007 },
+    });
+    await sevenDayQuery.promise;
+  });
+
+  expect(screen.getByText("30,030")).toBeInTheDocument();
+  expect(screen.queryByText("7,007")).not.toBeInTheDocument();
+});
+
+test("管理中心 Codex 用量统计加载失败时仍保留采集设置", async () => {
+  const user = userEvent.setup();
+  const client = Object.assign(new MockWebBotClient(), {
+    listAdminUsers: vi.fn(async () => []),
+    listBots: vi.fn(async () => []),
+    getCodexUsageConfig: vi.fn(async () => codexUsageConfigFixture),
+    getCodexUsageStats: vi.fn(async () => {
+      throw new Error("统计暂不可用");
+    }),
+  });
+
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+
+  await screen.findByText("用户权限");
+  await user.click(screen.getByRole("tab", { name: "Codex 用量" }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("统计暂不可用");
+  expect(screen.getByLabelText("启用 Codex 用量采集")).not.toBeChecked();
+  expect(screen.getByRole("button", { name: "查询" })).toBeEnabled();
+});
+
+test("Codex 用量 mock 客户端按筛选后的日明细重算汇总", async () => {
+  const client = new MockWebBotClient();
+
+  const stats = await client.getCodexUsageStats({
+    startDate: "2026-07-20",
+    endDate: "2026-07-20",
+  });
+
+  expect(stats.totals).toMatchObject({
+    requestCount: 0,
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    cacheHitRate: null,
+  });
+  expect(stats.byProvider).toEqual([]);
+  expect(stats.byDay).toEqual([]);
+  expect(stats.dailyByProvider).toEqual([]);
+});
+
+test("管理中心 Codex 用量不会把缺失的 Provider 解析状态显示为已解析", async () => {
+  const user = userEvent.setup();
+  const client = Object.assign(new MockWebBotClient(), {
+    listAdminUsers: vi.fn(async () => []),
+    listBots: vi.fn(async () => []),
+    getCodexUsageConfig: vi.fn(async () => ({
+      ...codexUsageConfigFixture,
+      currentProvider: {
+        ...codexUsageConfigFixture.currentProvider,
+        resolution: undefined,
+      },
+    })),
+    getCodexUsageStats: vi.fn(async () => codexUsageStatsFixture),
+  });
+
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+
+  await screen.findByText("用户权限");
+  await user.click(screen.getByRole("tab", { name: "Codex 用量" }));
+
+  expect(await screen.findByText("未知/未提供")).toBeInTheDocument();
+  expect(screen.queryByText("已解析")).not.toBeInTheDocument();
 });

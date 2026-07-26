@@ -4301,5 +4301,105 @@ describe("RealWebBotClient", () => {
     expect(catalog.providers[0]?.error).toBe("语言服务检测失败，请重新检测");
   });
 
+  test("Codex 用量客户端读取配置、更新开关并使用重复 provider 参数查询统计", async () => {
+    const provider = {
+      key: "openai_official",
+      kind: "openai_official",
+      label: "OpenAI 官方",
+      base_url: null,
+      resolution: "resolved",
+    };
+    const metrics = {
+      request_count: 42,
+      input_tokens: 1200,
+      cached_input_tokens: 300,
+      uncached_input_tokens: 900,
+      output_tokens: 400,
+      reasoning_output_tokens: 80,
+      total_tokens: 1600,
+      cache_hit_rate: 0.25,
+    };
+    fetchMock
+      .mockResolvedValueOnce(jsonOk({
+        enabled: false,
+        current_provider: provider,
+        time_basis: { mode: "server_local", utc_offset: "+08:00", today: "2026-07-26" },
+        available_range: { first_date: "2026-07-20", last_date: "2026-07-26" },
+      }))
+      .mockResolvedValueOnce(jsonOk({
+        enabled: true,
+        current_provider: provider,
+        time_basis: { mode: "server_local", utc_offset: "+08:00", today: "2026-07-26" },
+        available_range: { first_date: "2026-07-20", last_date: "2026-07-26" },
+      }))
+      .mockResolvedValueOnce(jsonOk({
+        range: { start_date: "2026-07-20", end_date: "2026-07-26" },
+        enabled: true,
+        time_basis: { mode: "server_local", utc_offset: "+08:00", today: "2026-07-26" },
+        available_range: { first_date: "2026-07-20", last_date: "2026-07-26" },
+        available_providers: [provider],
+        selected_provider_keys: ["openai_official", "base_url_sha256:abc"],
+        totals: metrics,
+        by_provider: [{ provider, ...metrics }],
+        by_day: [{ date: "2026-07-26", ...metrics }],
+        daily_by_provider: [{ date: "2026-07-26", provider, ...metrics }],
+      }));
+
+    const client = new RealWebBotClient() as unknown as {
+      getCodexUsageConfig?: () => Promise<unknown>;
+      updateCodexUsageConfig?: (input: { enabled: boolean }) => Promise<unknown>;
+      getCodexUsageStats?: (query: {
+        startDate?: string;
+        endDate?: string;
+        providerKeys?: string[];
+      }) => Promise<unknown>;
+    };
+
+    expect(typeof client.getCodexUsageConfig).toBe("function");
+    expect(typeof client.updateCodexUsageConfig).toBe("function");
+    expect(typeof client.getCodexUsageStats).toBe("function");
+    if (!client.getCodexUsageConfig || !client.updateCodexUsageConfig || !client.getCodexUsageStats) return;
+
+    await client.getCodexUsageConfig();
+    await client.updateCodexUsageConfig({ enabled: true });
+    const stats = await client.getCodexUsageStats({
+      startDate: "2026-07-20",
+      endDate: "2026-07-26",
+      providerKeys: ["openai_official", "base_url_sha256:abc"],
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/admin/codex-usage/config",
+      expect.objectContaining({ cache: "no-store", credentials: "same-origin" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/admin/codex-usage/config",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ enabled: true }),
+        headers: expect.objectContaining({ "Content-Type": "application/json" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/admin/codex-usage/stats?start_date=2026-07-20&end_date=2026-07-26&provider=openai_official&provider=base_url_sha256%3Aabc",
+      expect.objectContaining({ cache: "no-store", credentials: "same-origin" }),
+    );
+    expect(stats).toMatchObject({
+      totals: {
+        requestCount: 42,
+        totalTokens: 1600,
+        cacheHitRate: 0.25,
+      },
+      selectedProviderKeys: ["openai_official", "base_url_sha256:abc"],
+      dailyByProvider: [{
+        date: "2026-07-26",
+        provider: { label: "OpenAI 官方" },
+      }],
+    });
+  });
+
   
   });

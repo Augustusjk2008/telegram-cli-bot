@@ -17,6 +17,9 @@ import type {
   ChatTraceEvent,
   CliErrorStatsFilters,
   CliErrorStatsResult,
+  CodexUsageConfig,
+  CodexUsageStats,
+  CodexUsageStatsQuery,
   BotExecutionConfigInput,
   CliParamsPayload,
   CreateBotInput,
@@ -183,6 +186,9 @@ export interface WebBotClient {
   runNativeAgentPreflight(options?: { cwd?: string; piCommand?: string }): Promise<NativeAgentPreflightResult>;
   updateNativeAgentConfig(config: Record<string, unknown>): Promise<NativeAgentConfigPayload>;
   getCliErrorStats(filters?: CliErrorStatsFilters): Promise<CliErrorStatsResult>;
+  getCodexUsageConfig(): Promise<CodexUsageConfig>;
+  updateCodexUsageConfig(input: { enabled: boolean }): Promise<CodexUsageConfig>;
+  getCodexUsageStats(query?: CodexUsageStatsQuery): Promise<CodexUsageStats>;
   listBots(): Promise<BotSummary[]>;
   listPlugins(refresh?: boolean): Promise<PluginSummary[]>;
   listInstallablePlugins(): Promise<InstallablePluginSummary[]>;
