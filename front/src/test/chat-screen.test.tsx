@@ -966,6 +966,60 @@ test("keeps the scroll position after dragging the scrollbar away from the botto
   expect(scrollTop).toBe(500);
 });
 
+test("keeps resize auto-scroll inside the chat container", async () => {
+  class TestResizeObserver {
+    static instances: TestResizeObserver[] = [];
+    target: Element | null = null;
+
+    constructor(readonly callback: ResizeObserverCallback) {
+      TestResizeObserver.instances.push(this);
+    }
+
+    observe(target: Element) {
+      this.target = target;
+    }
+
+    disconnect() {
+      this.target = null;
+    }
+
+    unobserve() {}
+  }
+
+  vi.stubGlobal("ResizeObserver", TestResizeObserver);
+  vi.stubGlobal("requestAnimationFrame", vi.fn(() => 1));
+  render(<ChatScreen botAlias="main" client={createClient()} />);
+  await screen.findByText("暂无消息，开始聊天吧");
+
+  const container = screen.getByTestId("chat-scroll-container");
+  const content = screen.getByTestId("chat-scroll-content");
+  let scrollTop = 0;
+  Object.defineProperties(container, {
+    clientHeight: { configurable: true, get: () => 100 },
+    scrollHeight: { configurable: true, get: () => 1_000 },
+    scrollTop: {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => { scrollTop = value; },
+    },
+  });
+  const bottomAnchor = content.lastElementChild as HTMLElement;
+  const scrollIntoView = vi.fn();
+  bottomAnchor.scrollIntoView = scrollIntoView;
+
+  const contentObserver = TestResizeObserver.instances.find((observer) => observer.target === content);
+  expect(contentObserver).toBeDefined();
+  act(() => {
+    contentObserver?.callback(
+      [{ target: content, contentRect: { height: 1_000 } } as unknown as ResizeObserverEntry],
+      contentObserver as unknown as ResizeObserver,
+    );
+  });
+
+  expect(scrollTop).toBe(1_000);
+  expect(scrollIntoView).not.toHaveBeenCalled();
+});
+
 test("shows final answer actions for failed assistant messages", async () => {
   const user = userEvent.setup();
   const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async () => ({

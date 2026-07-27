@@ -2876,9 +2876,7 @@ export function ChatScreen({
         // Tests may replace scrollTop with a getter-only descriptor; browsers keep this writable.
       }
     }
-    if (bottomAnchorRef.current && typeof bottomAnchorRef.current.scrollIntoView === "function") {
-      bottomAnchorRef.current.scrollIntoView({ block: "end" });
-    }
+    // Keep streaming auto-scroll scoped to the chat container so transcript growth cannot move the outer page.
     userScrollIntentRef.current = false;
   }, []);
 
