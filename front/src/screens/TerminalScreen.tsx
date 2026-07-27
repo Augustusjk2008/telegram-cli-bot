@@ -368,9 +368,11 @@ export function TerminalScreen({
 
     try {
       let session!: TerminalSession;
+      const ownerId = terminal.ownerId;
       session = createTerminalSession(containerRef.current, {
         token: authToken,
-        ownerId: terminal.ownerId,
+        ownerId,
+        previousRecoveryState: terminal.getClientRecoveryState(ownerId),
         fontSize: terminalFontSize,
         themeName,
         onOpen: () => {
@@ -387,6 +389,9 @@ export function TerminalScreen({
         },
         onPtyMode: (enabled) => {
           setPtyMode(enabled);
+        },
+        onRecoveryState: (state) => {
+          terminal.setClientRecoveryState(ownerId, state);
         },
       });
 
@@ -413,7 +418,7 @@ export function TerminalScreen({
     } finally {
       launchPendingRef.current = false;
     }
-  }, [authToken, isVisible, terminal.attachNonce, terminal.ownerId, terminal.snapshot.closed, terminal.snapshot.started, terminalDisabled, terminalFontSize, themeName]);
+  }, [authToken, isVisible, terminal.attachNonce, terminal.getClientRecoveryState, terminal.ownerId, terminal.setClientRecoveryState, terminal.snapshot.closed, terminal.snapshot.started, terminalDisabled, terminalFontSize, themeName]);
 
   useEffect(() => {
     const becameVisible = !previousVisibleRef.current && isVisible;

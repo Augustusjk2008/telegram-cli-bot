@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { PersistentTerminalSnapshot } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import type { TerminalRecoverySnapshot } from "./terminalRecovery";
 import {
   createStoredTerminalTab,
   readTerminalTabs,
@@ -28,6 +29,8 @@ type PersistentTerminalContextValue = {
   phase: PersistentTerminalPhase;
   error: string;
   attachNonce: number;
+  getClientRecoveryState: (ownerId: string) => TerminalRecoverySnapshot | null;
+  setClientRecoveryState: (ownerId: string, state: TerminalRecoverySnapshot) => void;
   refreshSnapshot: (ownerId?: string) => Promise<void>;
   createTab: (options?: CreateTerminalTabOptions) => Promise<PersistentTerminalTab>;
   selectTab: (tabId: string) => void;
@@ -80,6 +83,7 @@ export function PersistentTerminalProvider({ client, children }: Props) {
   const [attachNonce, setAttachNonce] = useState(0);
   const tabsRef = useRef(tabs);
   const activeTabIdRef = useRef(activeTabId);
+  const clientRecoveryStatesRef = useRef<Record<string, TerminalRecoverySnapshot>>({});
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId);
   const activeOwnerId = activeTab?.ownerId || "";
@@ -112,6 +116,17 @@ export function PersistentTerminalProvider({ client, children }: Props) {
     if (next.cwd) {
       setTabs((current) => replaceTab(current, ownerId, { cwd: next.cwd }));
     }
+  }, []);
+
+  const getClientRecoveryState = useCallback((ownerId: string) => {
+    return ownerId ? clientRecoveryStatesRef.current[ownerId] || null : null;
+  }, []);
+
+  const setClientRecoveryState = useCallback((ownerId: string, state: TerminalRecoverySnapshot) => {
+    if (!ownerId) {
+      return;
+    }
+    clientRecoveryStatesRef.current[ownerId] = { ...state };
   }, []);
 
   const refreshSnapshot = useCallback(async (requestedOwnerId?: string) => {
@@ -193,6 +208,7 @@ export function PersistentTerminalProvider({ client, children }: Props) {
       delete next[tab.ownerId];
       return next;
     });
+    delete clientRecoveryStatesRef.current[tab.ownerId];
     if (activeTabIdRef.current === tabId) {
       const nextActive = nextTabs[Math.min(tabIndex, Math.max(nextTabs.length - 1, 0))];
       activeTabIdRef.current = nextActive?.id || "";
@@ -225,6 +241,8 @@ export function PersistentTerminalProvider({ client, children }: Props) {
     phase,
     error,
     attachNonce,
+    getClientRecoveryState,
+    setClientRecoveryState,
     refreshSnapshot,
     createTab,
     selectTab,
@@ -243,10 +261,12 @@ export function PersistentTerminalProvider({ client, children }: Props) {
     create,
     createTab,
     error,
+    getClientRecoveryState,
     phase,
     rebuild,
     refreshSnapshot,
     selectTab,
+    setClientRecoveryState,
     snapshot,
     tabs,
     updateTab,

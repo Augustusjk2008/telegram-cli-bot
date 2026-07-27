@@ -21,6 +21,7 @@ export type TerminalSessionOptions = {
   token: string;
   ownerId: string;
   fromSeq?: number;
+  previousRecoveryState?: TerminalRecoverySnapshot | null;
   fontSize?: number;
   themeName?: UiThemeName;
   onOpen?: () => void;
@@ -179,6 +180,9 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
   let reconnectTimer: number | null = null;
   let reconnectAttempt = 0;
   let v2MessageChain = Promise.resolve();
+  let replayedOutputWrites = 0;
+  let suppressResponsesThroughSequence = 0;
+  let previousRecoveryResolved = false;
   const connectionGenerations = new TerminalConnectionGeneration();
   const recovery = new TerminalRecoveryTracker(options.fromSeq ?? 0);
   const inputDisposable = term.onData((data) => {
@@ -188,6 +192,10 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
       socket.send(data);
     }
   });
+  const replayDeviceAttributesDisposable = term.parser.registerCsiHandler(
+    { final: "c" },
+    () => replayedOutputWrites > 0,
+  );
 
   term.loadAddon(fitAddon);
   term.open(container);
@@ -244,6 +252,34 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
     options.onRecoveryState?.(recovery.getSnapshot());
   }
 
+  function writeTerminalOutput(sequence: number, payload: Uint8Array) {
+    const suppressTerminalReply = sequence > 0 && sequence <= suppressResponsesThroughSequence;
+    const streamId = recovery.getSnapshot().streamId;
+    if (suppressTerminalReply) {
+      replayedOutputWrites += 1;
+    }
+    let completed = false;
+    const complete = () => {
+      if (completed) {
+        return;
+      }
+      completed = true;
+      if (suppressTerminalReply) {
+        replayedOutputWrites = Math.max(0, replayedOutputWrites - 1);
+      }
+      options.onRecoveryState?.({
+        streamId,
+        lastAppliedSequence: sequence,
+      });
+    };
+    try {
+      term.write(payload, complete);
+    } catch (error) {
+      complete();
+      throw error;
+    }
+  }
+
   function resetTerminalOutput(message?: string) {
     term.reset();
     term.clear();
@@ -269,14 +305,21 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
       }
       return;
     }
-    term.write(payload);
-    notifyRecoveryState();
+    writeTerminalOutput(sequence, payload);
   }
 
   function handleV2Control(payload: Record<string, unknown>) {
     const streamId = String(payload.stream_id || payload.streamId || "");
     const stream = recovery.beginStream(streamId);
+    if (!previousRecoveryResolved && streamId) {
+      previousRecoveryResolved = true;
+      const previous = options.previousRecoveryState;
+      suppressResponsesThroughSequence = previous?.streamId === streamId
+        ? Math.max(0, Math.floor(previous.lastAppliedSequence))
+        : 0;
+    }
     if (stream.changed) {
+      suppressResponsesThroughSequence = 0;
       resetTerminalOutput("终端进程已切换，已连接到新的输出流");
     }
     const type = String(payload.type || payload.kind || "");
@@ -669,6 +712,7 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
       cleanupSocket();
       cleanupFallback();
       inputDisposable.dispose();
+      replayDeviceAttributesDisposable.dispose();
       attachAddon?.dispose();
       attachAddon = null;
       socket?.close(1000);
