@@ -193,6 +193,13 @@ export function EditorPane({
     );
   }
 
+  const visibleStatusText = activeTab.statusText === "语言服务同步失败"
+    ? ""
+    : activeTab.statusText;
+  const visibleError = activeTab.error === "文档缺少语言标识"
+    ? ""
+    : activeTab.error;
+
   const activePluginTargets = activeTab.kind === "file" ? activeTab.pluginTargets || [] : [];
   const hasPluginMenu = activePluginTargets.length > 1;
   const singlePluginTarget = activePluginTargets.length === 1 ? activePluginTargets[0] : null;
@@ -435,14 +442,14 @@ export function EditorPane({
         </ol>
       </nav>
 
-      {activeTab.kind !== "file-preview" && activeTab.statusText ? (
+      {activeTab.kind !== "file-preview" && visibleStatusText ? (
         <div className="border-b border-[var(--border)] px-4 py-2 text-sm text-[var(--muted)]">
-          {activeTab.statusText}
+          {visibleStatusText}
         </div>
       ) : null}
-      {activeTab.kind !== "file-preview" && activeTab.error ? (
+      {activeTab.kind !== "file-preview" && visibleError ? (
         <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
-          {activeTab.error}
+          {visibleError}
         </div>
       ) : null}
 
@@ -453,8 +460,8 @@ export function EditorPane({
             result={activePreviewResult}
             loading={activeTab.loading}
             botAlias={botAlias}
-            statusText={activeTab.statusText}
-            error={activeTab.error}
+            statusText={visibleStatusText}
+            error={visibleError}
             onLoadFull={
               activePreviewPath
               && activePreviewResult

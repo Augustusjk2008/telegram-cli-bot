@@ -88,6 +88,18 @@ test("editor pane renders a file breadcrumb and preserves tab callbacks", async 
   expect(callbacks.onCloseOthers).toHaveBeenCalledWith("src/server.ts");
 });
 
+test("editor pane hides language-service document sync noise", () => {
+  const activeTab = createTab({
+    statusText: "语言服务同步失败",
+    error: "文档缺少语言标识",
+  });
+
+  renderEditor(activeTab);
+
+  expect(screen.queryByText("语言服务同步失败")).not.toBeInTheDocument();
+  expect(screen.queryByText("文档缺少语言标识")).not.toBeInTheDocument();
+});
+
 test("editor pane derives git and plugin breadcrumbs without exposing internal tab identities", () => {
   const gitTab = createTab({
     path: "git-diff:src/No8Demo/demo_basic.h",
