@@ -2,6 +2,7 @@ import { clsx } from "clsx";
 import { Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
+import { FilePreviewPane } from "../components/FilePreviewPane";
 import type { ViewMode } from "../app/layoutMode";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { getExternalSourceErrorMessage } from "../services/types";
@@ -221,7 +222,6 @@ export function DesktopWorkbench({
   const tabs = useEditorTabs({ botAlias, client, scopeKey: workspaceUserScope, structureOnly, canWriteFiles });
   const columnsRef = useRef<HTMLDivElement | null>(null);
   const centerRowsRef = useRef<HTMLDivElement | null>(null);
-  const editorPaneRef = useRef<HTMLElement | null>(null);
   const restoringRef = useRef(false);
   const previousBotAliasRef = useRef(botAlias);
   const previousWorkspaceRootRef = useRef("");
@@ -229,12 +229,6 @@ export function DesktopWorkbench({
     columnsWidthPx: 1440,
     centerHeightPx: 900,
   });
-  const [editorPaneBounds, setEditorPaneBounds] = useState<{
-    left: number;
-    top: number;
-    width: number;
-    height: number;
-  } | null>(null);
   const [pendingSidebarWorkdir, setPendingSidebarWorkdir] = useState("");
   const [previewName, setPreviewName] = useState("");
   const [previewContent, setPreviewContent] = useState("");
@@ -519,35 +513,11 @@ export function DesktopWorkbench({
     const updateLayoutBounds = () => {
       const nextColumnsWidthPx = columnsRef.current?.getBoundingClientRect().width ?? 0;
       const nextCenterHeightPx = centerRowsRef.current?.getBoundingClientRect().height ?? 0;
-      const nextEditorPaneRect = editorPaneRef.current?.getBoundingClientRect();
 
       setLayoutBounds((current) => ({
         columnsWidthPx: nextColumnsWidthPx > 0 ? nextColumnsWidthPx : current.columnsWidthPx,
         centerHeightPx: nextCenterHeightPx > 0 ? nextCenterHeightPx : current.centerHeightPx,
       }));
-
-      if (nextEditorPaneRect && nextEditorPaneRect.width > 0 && nextEditorPaneRect.height > 0) {
-        setEditorPaneBounds((current) => {
-          const nextBounds = {
-            left: nextEditorPaneRect.left,
-            top: nextEditorPaneRect.top,
-            width: nextEditorPaneRect.width,
-            height: nextEditorPaneRect.height,
-          };
-
-          if (
-            current
-            && current.left === nextBounds.left
-            && current.top === nextBounds.top
-            && current.width === nextBounds.width
-            && current.height === nextBounds.height
-          ) {
-            return current;
-          }
-
-          return nextBounds;
-        });
-      }
     };
 
     updateLayoutBounds();
@@ -781,6 +751,7 @@ export function DesktopWorkbench({
       return false;
     }
     if (target.kind === "plugin_view") {
+      closePreview();
       await Promise.allSettled([
         tabs.openPluginView(target),
         fileTree.revealPath(path),
@@ -809,6 +780,7 @@ export function DesktopWorkbench({
       return false;
     }
 
+    closePreview();
     await Promise.allSettled([
       tabs.openFile(path, target.pluginTargets),
       fileTree.revealPath(path),
@@ -1404,68 +1376,97 @@ export function DesktopWorkbench({
             {!structureOnly ? (
               <section
                 data-testid="desktop-pane-editor"
-                ref={editorPaneRef}
                 data-focused={focusedPane === "editor" ? "true" : "false"}
-                className="desktop-workbench-pane min-h-0 overflow-hidden"
+                className="desktop-workbench-pane relative min-h-0 overflow-hidden"
               >
-                <Suspense fallback={paneFallback}>
-                <EditorPane
-                  botAlias={botAlias}
-                  client={client}
-                  tabs={tabs.tabs}
-                  activeTab={tabs.activeTab}
-                  activeTabPath={tabs.activeTabPath}
-                  breakpointLines={tabs.activeTab ? debug.breakpointLinesForPath(tabs.activeTab.path) : []}
-                  currentLine={activeEditorLine}
-                  editorReveal={editorReveal}
-                  navigationCommand={editorNavigationCommand}
-                  canNavigateBack={codeNavigationHistory.canGoBack}
-                  canNavigateForward={codeNavigationHistory.canGoForward}
-                  allowCodeJump={allowCodeJump}
-                  canNavigateImplementation={canNavigateImplementation}
-                  canUseInlineCompletion={canUseInlineCompletion}
-                  onResolveCodeNavigation={(input) => {
-                    setEditorNavigationCommand(null);
-                    void handleResolveCodeNavigation(input);
-                  }}
-                  onNavigateBack={() => {
-                    void codeNavigationHistory.goBack();
-                  }}
-                  onNavigateForward={() => {
-                    void codeNavigationHistory.goForward();
-                  }}
-                  onToggleBreakpoint={tabs.activeTab
-                    ? (line) => {
-                        void debug.toggleBreakpoint(tabs.activeTab?.path || "", line);
-                      }
-                    : undefined}
-                  onActivateTab={(path) => {
-                    setEditorReveal(null);
-                    void tabs.activateTab(path);
-                  }}
-                  onCloseTab={tabs.closeTab}
-                  onChangeActiveContent={tabs.updateActiveContent}
-                  onSaveActiveTab={() => void tabs.saveActiveTab()}
-                  onCloseOthers={tabs.closeOtherTabs}
-                  onCloseTabsToRight={tabs.closeTabsToRight}
-                  onReopenLastClosed={() => {
-                    void tabs.reopenLastClosedTab();
-                  }}
-                  onRevealInTree={(path) => {
-                    setSidebarView("files");
-                    void fileTree.revealPath(path);
-                  }}
-                  onApplyHostEffects={runPluginHostEffects}
-                  onClosePluginTab={(path) => {
-                    tabs.closePath(path);
-                  }}
-                  onReopenPluginView={(target) => {
-                    void openPluginViewTab(target);
-                  }}
-                  focused={focusedPane === "editor"}
-                  onToggleFocus={() => toggleFocusedPane("editor")}
-                />
-                </Suspense>
+                <div
+                  aria-hidden={previewName ? "true" : undefined}
+                  className={clsx("h-full min-h-0", previewName && "hidden")}
+                >
+                  <Suspense fallback={paneFallback}>
+                    <EditorPane
+                      botAlias={botAlias}
+                      client={client}
+                      tabs={tabs.tabs}
+                      activeTab={tabs.activeTab}
+                      activeTabPath={tabs.activeTabPath}
+                      breakpointLines={tabs.activeTab ? debug.breakpointLinesForPath(tabs.activeTab.path) : []}
+                      currentLine={activeEditorLine}
+                      editorReveal={editorReveal}
+                      navigationCommand={editorNavigationCommand}
+                      canNavigateBack={codeNavigationHistory.canGoBack}
+                      canNavigateForward={codeNavigationHistory.canGoForward}
+                      allowCodeJump={allowCodeJump}
+                      canNavigateImplementation={canNavigateImplementation}
+                      canUseInlineCompletion={canUseInlineCompletion}
+                      onResolveCodeNavigation={(input) => {
+                        setEditorNavigationCommand(null);
+                        void handleResolveCodeNavigation(input);
+                      }}
+                      onNavigateBack={() => {
+                        void codeNavigationHistory.goBack();
+                      }}
+                      onNavigateForward={() => {
+                        void codeNavigationHistory.goForward();
+                      }}
+                      onToggleBreakpoint={tabs.activeTab
+                        ? (line) => {
+                            void debug.toggleBreakpoint(tabs.activeTab?.path || "", line);
+                          }
+                        : undefined}
+                      onActivateTab={(path) => {
+                        setEditorReveal(null);
+                        void tabs.activateTab(path);
+                      }}
+                      onCloseTab={tabs.closeTab}
+                      onChangeActiveContent={tabs.updateActiveContent}
+                      onSaveActiveTab={() => void tabs.saveActiveTab()}
+                      onCloseOthers={tabs.closeOtherTabs}
+                      onCloseTabsToRight={tabs.closeTabsToRight}
+                      onReopenLastClosed={() => {
+                        void tabs.reopenLastClosedTab();
+                      }}
+                      onRevealInTree={(path) => {
+                        setSidebarView("files");
+                        void fileTree.revealPath(path);
+                      }}
+                      onApplyHostEffects={runPluginHostEffects}
+                      onClosePluginTab={(path) => {
+                        tabs.closePath(path);
+                      }}
+                      onReopenPluginView={(target) => {
+                        void openPluginViewTab(target);
+                      }}
+                      focused={focusedPane === "editor"}
+                      onToggleFocus={() => toggleFocusedPane("editor")}
+                    />
+                  </Suspense>
+                </div>
+                {previewName ? (
+                  <div className="absolute inset-0 z-10">
+                    <FilePreviewPane
+                      title={previewName}
+                      content={previewContent}
+                      mode={previewMode}
+                      botAlias={botAlias}
+                      previewKind={previewResult?.previewKind}
+                      contentType={previewResult?.contentType}
+                      contentBase64={previewResult?.contentBase64}
+                      loading={previewLoading}
+                      statusText={previewStatusText}
+                      onClose={closePreview}
+                      onLoadFull={previewMode !== "full" && canLoadFull ? () => void loadPreview(previewName, "full") : undefined}
+                      onEdit={canEditPreview ? () => {
+                        const nextPath = previewName;
+                        closePreview();
+                        void openWorkspaceFile(nextPath);
+                      } : undefined}
+                      onDownload={() => void fileTree.downloadFile(previewName)}
+                      downloadProgressText={previewDownloadProgress ? formatDownloadProgress(previewDownloadProgress.downloadedBytes, previewDownloadProgress.totalBytes) : ""}
+                      downloadPercent={previewDownloadProgress?.percent}
+                    />
+                  </div>
+                ) : null}
               </section>
             ) : null}
 
@@ -1625,7 +1626,7 @@ export function DesktopWorkbench({
         />
       ) : null}
 
-      {previewName ? (
+      {previewName && structureOnly ? (
         <FilePreviewDialog
           title={previewName}
           content={previewContent}
@@ -1635,7 +1636,6 @@ export function DesktopWorkbench({
           contentType={previewResult?.contentType}
           contentBase64={previewResult?.contentBase64}
           variant="desktop"
-          desktopAnchorRect={editorPaneBounds}
           loading={previewLoading}
           statusText={previewStatusText}
           readOnly={structureOnly}

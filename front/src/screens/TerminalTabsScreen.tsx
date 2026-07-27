@@ -145,42 +145,28 @@ export function TerminalTabsScreen({
         </button>
       </div>
 
-      {activeTab ? (
-        <div id={`terminal-panel-${activeTab.id}`} role="tabpanel" className="min-h-0 flex-1">
-          <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">加载终端...</div>}>
-            <TerminalScreen
-              key={activeTab.id}
-              authToken={authToken}
-              botAlias={botAlias}
-              client={client}
-              isVisible={isVisible}
-              pendingWorkingDir={pendingWorkingDir}
-              themeName={themeName}
-              isImmersive={isImmersive}
-              disabledReason={disabledReason}
-              embedded={embedded}
-              focused={focused}
-              onToggleFocus={onToggleFocus}
-              onToggleImmersive={onToggleImmersive}
-              onAcceptPendingWorkingDir={onAcceptPendingWorkingDir}
-              onCancelPendingWorkingDir={onCancelPendingWorkingDir}
-              onWorkbenchStatusChange={onWorkbenchStatusChange}
-            />
-          </Suspense>
-        </div>
-      ) : (
-        <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-[var(--terminal-muted)]">
-          <button
-            type="button"
-            onClick={() => void createTerminal()}
-            disabled={Boolean(disabledReason) || creating}
-            className="inline-flex items-center gap-2 rounded-md border border-[var(--workbench-hairline)] px-3 py-2 hover:bg-[var(--workbench-hover-bg)] disabled:opacity-50"
-          >
-            <Plus className="h-4 w-4" />
-            新建终端
-          </button>
-        </div>
-      )}
+      <div id={`terminal-panel-${activeTab?.id || "empty"}`} role="tabpanel" className="min-h-0 flex-1">
+        <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">加载终端...</div>}>
+          <TerminalScreen
+            key={activeTab?.id || "empty-terminal"}
+            authToken={authToken}
+            botAlias={botAlias}
+            client={client}
+            isVisible={isVisible}
+            pendingWorkingDir={pendingWorkingDir}
+            themeName={themeName}
+            isImmersive={isImmersive}
+            disabledReason={disabledReason}
+            embedded={embedded}
+            focused={focused}
+            onToggleFocus={onToggleFocus}
+            onToggleImmersive={onToggleImmersive}
+            onAcceptPendingWorkingDir={onAcceptPendingWorkingDir}
+            onCancelPendingWorkingDir={onCancelPendingWorkingDir}
+            onWorkbenchStatusChange={onWorkbenchStatusChange}
+          />
+        </Suspense>
+      </div>
     </main>
   );
 }
