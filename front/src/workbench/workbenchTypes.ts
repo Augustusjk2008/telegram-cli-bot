@@ -1,4 +1,4 @@
-import type { PluginOpenTarget, PluginRenderResult } from "../services/types";
+import type { FileReadResult, PluginOpenTarget, PluginRenderResult } from "../services/types";
 
 export type DesktopSidebarView = "files" | "search" | "outline" | "debug" | "git" | "plugins" | "settings";
 export type WorkbenchActivityId = DesktopSidebarView;
@@ -156,8 +156,10 @@ export type EditorTab = {
   content: string;
   documentVersion: number;
   savedContent: string;
-  kind?: "file" | "git-diff" | "plugin-view" | "external-source";
+  kind?: "file" | "file-preview" | "git-diff" | "plugin-view" | "external-source";
+  filePreview?: FileReadResult;
   pluginTargets?: PluginOpenTarget[];
+  pluginOpenTarget?: PluginOpenTarget;
   pluginView?: PluginRenderResult;
   pluginInput?: Record<string, unknown>;
   sourcePath?: string;

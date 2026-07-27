@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { App, sortBotsForSwitcher } from "../app/App";
@@ -488,6 +488,65 @@ test("desktop file tree preserves read-only permissions and directory expansion 
   expect(clearSelection).toHaveBeenCalledTimes(1);
   expect(selectPath).not.toHaveBeenCalled();
   expect(toggleDirectory).toHaveBeenCalledWith("src");
+});
+
+test("desktop file tree reports directory deletion so descendant editor tabs can close", async () => {
+  const user = userEvent.setup();
+  const onDeletedFile = vi.fn();
+  const deletePath = vi.fn(async () => undefined);
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  const tree: UseFileTreeResult = {
+    rootPath: "C:\\workspace\\demo",
+    loading: false,
+    error: "",
+    rootEntries: [{ path: "src", name: "src", isDir: true, childCount: 2 }],
+    branches: {},
+    expandedPaths: [],
+    highlightedPath: "",
+    selectedPath: "",
+    downloadProgress: null,
+    selectPath: vi.fn(),
+    clearSelection: vi.fn(),
+    isExpanded: () => false,
+    toggleDirectory: vi.fn(),
+    refreshRoot: vi.fn(),
+    refreshTreeAndRoot: vi.fn(),
+    restoreExpandedPaths: vi.fn(),
+    revealPath: vi.fn(),
+    highlightPath: vi.fn(),
+    createDirectory: vi.fn(),
+    createFile: vi.fn(),
+    renameFile: vi.fn(),
+    copyFile: vi.fn(),
+    moveFile: vi.fn(),
+    deletePath,
+    downloadFile: vi.fn(),
+  };
+
+  render(
+    <FileTreePane
+      tree={tree}
+      onOpenFile={vi.fn()}
+      onCreatedFile={vi.fn()}
+      onRenamedFile={vi.fn()}
+      onDeletedFile={onDeletedFile}
+      onRequestPreview={vi.fn()}
+      onRequestUpload={vi.fn()}
+      onRequestHome={vi.fn()}
+      onRequestOpenSystemFolder={vi.fn()}
+      gitDecorations={{}}
+      onRefreshGitDecorations={vi.fn()}
+      onRequestSetWorkdir={vi.fn()}
+      focused={false}
+      onToggleFocus={vi.fn()}
+    />,
+  );
+
+  fireEvent.contextMenu(screen.getByRole("button", { name: "展开 src" }));
+  await user.click(within(screen.getByRole("menu", { name: "文件树菜单" })).getByRole("button", { name: "删除" }));
+
+  await waitFor(() => expect(deletePath).toHaveBeenCalledWith("src"));
+  expect(onDeletedFile).toHaveBeenCalledWith("src");
 });
 
 test("native desktop bot auto enters solo workbench", async () => {

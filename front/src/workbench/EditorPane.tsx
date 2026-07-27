@@ -2,11 +2,13 @@ import { clsx } from "clsx";
 import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Maximize2, Minimize2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { FileEditorSurface } from "../components/FileEditorSurface";
+import { FilePreviewPane } from "../components/FilePreviewPane";
 import { GitDiffViewer } from "../components/GitDiffViewer";
 import { PluginViewSurface } from "../components/plugin-renderers/PluginViewSurface";
 import type { CodeNavigationIntent, HostEffect, InlineCompletionConfig, PluginOpenTarget } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { inferFileEditorLanguageId } from "../utils/fileEditorLanguage";
+import { isFilePreviewFullyLoaded } from "../utils/filePreview";
 import type { EditorRevealLocation, EditorTab } from "./workbenchTypes";
 
 type Props = {
@@ -39,6 +41,7 @@ type Props = {
   onApplyHostEffects?: (effects: HostEffect[]) => Promise<void> | void;
   onClosePluginTab?: (path: string) => void | Promise<void>;
   onReopenPluginView?: (target: PluginOpenTarget) => Promise<void> | void;
+  onLoadFullPreview?: (path: string) => void | Promise<void>;
   onNotice?: (message: string) => void;
   focused: boolean;
   onToggleFocus: () => void;
@@ -63,6 +66,9 @@ export function buildEditorBreadcrumb(tab: EditorTab) {
   }
   if (tab.kind === "external-source") {
     return ["外部依赖 · 只读", ...splitBreadcrumbPath(tab.displayPath || tab.basename)];
+  }
+  if (tab.kind === "file-preview") {
+    return [...splitBreadcrumbPath(tab.sourcePath || tab.basename), "预览"];
   }
   return splitBreadcrumbPath(tab.path);
 }
@@ -117,6 +123,7 @@ export function EditorPane({
   onApplyHostEffects,
   onClosePluginTab,
   onReopenPluginView,
+  onLoadFullPreview,
   onNotice,
   focused,
   onToggleFocus,
@@ -190,6 +197,8 @@ export function EditorPane({
   const hasPluginMenu = activePluginTargets.length > 1;
   const singlePluginTarget = activePluginTargets.length === 1 ? activePluginTargets[0] : null;
   const breadcrumbParts = buildEditorBreadcrumb(activeTab);
+  const activePreviewPath = activeTab.kind === "file-preview" ? activeTab.sourcePath || "" : "";
+  const activePreviewResult = activeTab.kind === "file-preview" ? activeTab.filePreview || null : null;
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -197,6 +206,9 @@ export function EditorPane({
         <div role="tablist" aria-label="打开的编辑器" className="flex min-w-0 flex-1 items-stretch overflow-x-auto">
           {tabs.map((tab) => {
             const isActive = activeTabPath === tab.path;
+            const isFilePreview = tab.kind === "file-preview";
+            const tabLabel = isFilePreview ? `${tab.basename} 预览` : tab.basename;
+            const displayPath = isFilePreview ? tab.sourcePath || tab.basename : tab.displayPath || tab.path;
             return (
               <div
                 key={tab.path}
@@ -216,7 +228,8 @@ export function EditorPane({
                   type="button"
                   role="tab"
                   aria-selected={isActive}
-                  title={tab.displayPath || tab.path}
+                  aria-label={tabLabel}
+                  title={displayPath}
                   onClick={() => {
                     setMenuPath("");
                     void onActivateTab(tab.path);
@@ -227,9 +240,12 @@ export function EditorPane({
                       setMenuPath(tab.path);
                     }
                   }}
-                  className="max-w-52 truncate text-[13px] text-[var(--text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--workbench-focus-ring)]"
+                  className="inline-flex max-w-52 min-w-0 items-center gap-1.5 text-[13px] text-[var(--text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--workbench-focus-ring)]"
                 >
-                  {tab.basename}
+                  <span className="truncate">{tab.basename}</span>
+                  {isFilePreview ? (
+                    <span className="shrink-0 text-[10px] text-[var(--muted)]">预览</span>
+                  ) : null}
                 </button>
                 {tab.kind === "external-source" ? (
                   <span className="max-w-44 truncate text-[10px] text-[var(--muted)]" aria-label="外部依赖 · 只读">
@@ -244,7 +260,7 @@ export function EditorPane({
                 ) : null}
                 <button
                   type="button"
-                  aria-label={`关闭 ${tab.displayPath || tab.path}`}
+                  aria-label={`关闭 ${isFilePreview ? tabLabel : tab.displayPath || tab.path}`}
                   onClick={() => {
                     if (onCloseTab(tab.path)) {
                       setMenuPath((current) => current === tab.path ? "" : current);
@@ -419,19 +435,36 @@ export function EditorPane({
         </ol>
       </nav>
 
-      {activeTab.statusText ? (
+      {activeTab.kind !== "file-preview" && activeTab.statusText ? (
         <div className="border-b border-[var(--border)] px-4 py-2 text-sm text-[var(--muted)]">
           {activeTab.statusText}
         </div>
       ) : null}
-      {activeTab.error ? (
+      {activeTab.kind !== "file-preview" && activeTab.error ? (
         <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
           {activeTab.error}
         </div>
       ) : null}
 
       <div className="min-h-0 flex-1 overflow-hidden">
-        {activeTab.kind === "git-diff" ? (
+        {activeTab.kind === "file-preview" ? (
+          <FilePreviewPane
+            title={activePreviewPath || activeTab.basename}
+            result={activePreviewResult}
+            loading={activeTab.loading}
+            botAlias={botAlias}
+            statusText={activeTab.statusText}
+            error={activeTab.error}
+            onLoadFull={
+              activePreviewPath
+              && activePreviewResult
+              && !isFilePreviewFullyLoaded(activePreviewResult)
+              && onLoadFullPreview
+                ? () => void onLoadFullPreview(activePreviewPath)
+                : undefined
+            }
+          />
+        ) : activeTab.kind === "git-diff" ? (
           <GitDiffViewer
             content={activeTab.content}
             testId="desktop-git-diff-viewer"

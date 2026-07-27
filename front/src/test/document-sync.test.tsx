@@ -61,6 +61,45 @@ describe("editor language document sync", () => {
     await waitFor(() => expect(replacementSync).toHaveBeenCalled());
   });
 
+  test("renaming an open file migrates plugin inputs and the language-service document", async () => {
+    vi.useFakeTimers();
+    const client = new MockWebBotClient();
+    const sync = vi.spyOn(client, "syncWorkspaceDocuments");
+    const close = vi.spyOn(client, "closeWorkspaceDocuments");
+    const { result } = renderHook(() => useEditorTabs({ botAlias: "main", client }));
+    const target = {
+      pluginId: "demo-plugin",
+      viewId: "report",
+      title: "插件报告",
+      input: { path: "src/index.py" },
+    };
+
+    await act(async () => {
+      await result.current.openFile("src/index.py", [target]);
+      await vi.advanceTimersByTimeAsync(EDITOR_DOCUMENT_SYNC_DEBOUNCE_MS + 1);
+    });
+    sync.mockClear();
+
+    act(() => {
+      result.current.syncRenamedPath("src", "lib");
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(EDITOR_DOCUMENT_SYNC_DEBOUNCE_MS + 1);
+    });
+
+    expect(result.current.tabs[0]).toMatchObject({
+      path: "lib/index.py",
+      pluginTargets: [{ input: { path: "lib/index.py" } }],
+    });
+    expect(close).toHaveBeenCalledWith("main", {
+      documents: [{ path: "src/index.py", version: 1 }],
+    });
+    expect(sync).toHaveBeenCalledWith("main", expect.objectContaining({
+      event: "didOpen",
+      documents: [expect.objectContaining({ path: "lib/index.py" })],
+    }), expect.any(AbortSignal));
+  });
+
   test("replays dirty draft snapshots with their persisted document version", async () => {
     vi.useFakeTimers();
     const client = new MockWebBotClient();

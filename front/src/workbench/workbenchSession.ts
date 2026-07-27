@@ -15,6 +15,14 @@ function isExternalSourceTabPath(path: string) {
   return path.startsWith("external-source:");
 }
 
+function isFilePreviewTabPath(path: string) {
+  return path.startsWith("file-preview:");
+}
+
+function isTransientTabPath(path: string) {
+  return isExternalSourceTabPath(path) || isFilePreviewTabPath(path);
+}
+
 function normalizeTab(raw: unknown): PersistedWorkbenchTab | null {
   if (!raw || typeof raw !== "object") {
     return null;
@@ -22,7 +30,7 @@ function normalizeTab(raw: unknown): PersistedWorkbenchTab | null {
 
   const candidate = raw as Record<string, unknown>;
   const path = typeof candidate.path === "string" ? candidate.path.trim() : "";
-  if (!path || isExternalSourceTabPath(path)) {
+  if (!path || isTransientTabPath(path)) {
     return null;
   }
 
@@ -82,7 +90,7 @@ export function selectTabsForPersistence(
   let totalBytes = 0;
 
   for (const tab of tabs) {
-    if (tab.kind === "external-source") {
+    if (tab.kind === "external-source" || tab.kind === "file-preview" || isTransientTabPath(tab.path)) {
       continue;
     }
     const draftContent = tab.dirty ? tab.draftContent ?? tab.savedContent : undefined;
@@ -147,7 +155,7 @@ export function normalizePersistedWorkbenchSession(raw: unknown): PersistedWorkb
     selectedTreePath: typeof candidate.selectedTreePath === "string"
       ? candidate.selectedTreePath.trim()
       : undefined,
-    activeTabPath: isExternalSourceTabPath(activeTabPath) ? "" : activeTabPath,
+    activeTabPath: isTransientTabPath(activeTabPath) ? "" : activeTabPath,
     terminalOverrideCwd: typeof candidate.terminalOverrideCwd === "string" ? candidate.terminalOverrideCwd : undefined,
     focusedPane:
       candidate.focusedPane === "sidebar"

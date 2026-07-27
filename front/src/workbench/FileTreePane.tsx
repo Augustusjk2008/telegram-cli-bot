@@ -1202,9 +1202,7 @@ export function FileTreePane({
     setActionError("");
     try {
       await tree.deletePath(entry.path);
-      if (!entry.isDir) {
-        onDeletedFile(entry.path);
-      }
+      onDeletedFile(entry.path);
       await onRefreshGitDecorations();
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "删除失败");

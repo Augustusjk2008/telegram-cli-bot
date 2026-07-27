@@ -58,6 +58,7 @@ export function TerminalTabsScreen({
   const terminal = usePersistentTerminal();
   const [creating, setCreating] = useState(false);
   const [closingTabId, setClosingTabId] = useState("");
+  const [toolbarHost, setToolbarHost] = useState<HTMLDivElement | null>(null);
 
   const createTerminal = useCallback(async () => {
     if (disabledReason || creating) {
@@ -100,49 +101,58 @@ export function TerminalTabsScreen({
 
   return (
     <main data-testid="terminal-tabs-screen" className="flex h-full min-h-0 flex-col bg-[var(--workbench-panel-bg)]">
-      <div
-        role="tablist"
-        aria-label="终端选项卡"
-        className="flex min-h-10 shrink-0 items-stretch overflow-x-auto border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)]"
-      >
-        {terminal.tabs.map((tab) => {
-          const active = tab.id === terminal.activeTabId;
-          const closing = closingTabId === tab.id;
-          return (
-            <div key={tab.id} className="flex shrink-0 items-center border-r border-[var(--workbench-hairline)]">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={active}
-                aria-controls={`terminal-panel-${tab.id}`}
-                onClick={() => terminal.selectTab(tab.id)}
-                className={tabButtonClass(active)}
-              >
-                <span className="max-w-32 truncate">{tab.title}</span>
-              </button>
-              <button
-                type="button"
-                aria-label={`关闭${tab.title}`}
-                title={`关闭${tab.title}`}
-                disabled={Boolean(closingTabId) || Boolean(disabledReason)}
-                onClick={() => void closeTerminalTab(tab.id)}
-                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {closing ? <span className="text-[10px]">...</span> : <X className="h-3.5 w-3.5" />}
-              </button>
-            </div>
-          );
-        })}
-        <button
-          type="button"
-          aria-label="新建终端"
-          title="新建终端"
-          onClick={() => void createTerminal()}
-          disabled={Boolean(disabledReason) || creating}
-          className="ml-1 inline-flex h-8 w-8 shrink-0 self-center items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-50"
+      <div className="flex min-h-10 shrink-0 items-stretch border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)]">
+        <div
+          role="tablist"
+          aria-label="终端选项卡"
+          className="flex min-w-0 flex-1 items-stretch overflow-x-auto"
         >
-          <Plus className="h-4 w-4" />
-        </button>
+          {terminal.tabs.map((tab) => {
+            const active = tab.id === terminal.activeTabId;
+            const closing = closingTabId === tab.id;
+            return (
+              <div key={tab.id} className="flex shrink-0 items-center border-r border-[var(--workbench-hairline)]">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  aria-controls={`terminal-panel-${tab.id}`}
+                  onClick={() => terminal.selectTab(tab.id)}
+                  className={tabButtonClass(active)}
+                >
+                  <span className="max-w-32 truncate">{tab.title}</span>
+                </button>
+                <button
+                  type="button"
+                  aria-label={`关闭${tab.title}`}
+                  title={`关闭${tab.title}`}
+                  disabled={Boolean(closingTabId) || Boolean(disabledReason)}
+                  onClick={() => void closeTerminalTab(tab.id)}
+                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {closing ? <span className="text-[10px]">...</span> : <X className="h-3.5 w-3.5" />}
+                </button>
+              </div>
+            );
+          })}
+          <button
+            type="button"
+            aria-label="新建终端"
+            title="新建终端"
+            onClick={() => void createTerminal()}
+            disabled={Boolean(disabledReason) || creating}
+            className="ml-1 inline-flex h-8 w-8 shrink-0 self-center items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Plus className="h-4 w-4" />
+          </button>
+        </div>
+        {embedded ? (
+          <div
+            ref={setToolbarHost}
+            data-testid="terminal-tabs-toolbar"
+            className="ml-auto flex shrink-0 items-center gap-1 border-l border-[var(--workbench-hairline)] px-1"
+          />
+        ) : null}
       </div>
 
       <div id={`terminal-panel-${activeTab?.id || "empty"}`} role="tabpanel" className="min-h-0 flex-1">
@@ -159,6 +169,7 @@ export function TerminalTabsScreen({
             disabledReason={disabledReason}
             embedded={embedded}
             focused={focused}
+            toolbarHost={embedded ? toolbarHost : null}
             onToggleFocus={onToggleFocus}
             onToggleImmersive={onToggleImmersive}
             onAcceptPendingWorkingDir={onAcceptPendingWorkingDir}

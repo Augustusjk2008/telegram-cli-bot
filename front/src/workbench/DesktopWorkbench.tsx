@@ -1,8 +1,6 @@
 import { clsx } from "clsx";
 import { Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { FilePreviewDialog } from "../components/FilePreviewDialog";
-import { FilePreviewPane } from "../components/FilePreviewPane";
 import type { ViewMode } from "../app/layoutMode";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { getExternalSourceErrorMessage } from "../services/types";
@@ -94,6 +92,16 @@ function normalizeWorkbenchPathForCompare(value: string) {
   return /^[a-z]:/i.test(normalized) ? normalized.toLowerCase() : normalized;
 }
 
+function isSameOrDescendantWorkbenchPath(path: string, parentPath: string) {
+  const normalizedPath = normalizeWorkbenchPathForCompare(path);
+  const normalizedParentPath = normalizeWorkbenchPathForCompare(parentPath);
+  return Boolean(
+    normalizedPath
+    && normalizedParentPath
+    && (normalizedPath === normalizedParentPath || normalizedPath.startsWith(`${normalizedParentPath}/`)),
+  );
+}
+
 function resolveRepoRelativeDiffPath(path: string, absolutePath: string, repoPath: string) {
   const normalizedRepoPath = normalizeWorkbenchPath(repoPath);
   const normalizedAbsolutePath = normalizeWorkbenchPath(absolutePath);
@@ -126,6 +134,16 @@ function formatDownloadProgress(downloadedBytes: number, totalBytes?: number) {
     return `${formatBytes(downloadedBytes)} / ${formatBytes(totalBytes)}`;
   }
   return formatBytes(downloadedBytes);
+}
+
+function filePreviewStatusText(result: FileReadResult) {
+  if (result.previewKind === "image") {
+    return "已加载图片预览";
+  }
+  if (result.previewKind === "html") {
+    return "已加载 HTML 预览";
+  }
+  return isFilePreviewFullyLoaded(result) ? "已加载全文" : "";
 }
 
 type Props = {
@@ -222,7 +240,8 @@ export function DesktopWorkbench({
   const tabs = useEditorTabs({ botAlias, client, scopeKey: workspaceUserScope, structureOnly, canWriteFiles });
   const columnsRef = useRef<HTMLDivElement | null>(null);
   const centerRowsRef = useRef<HTMLDivElement | null>(null);
-  const restoringRef = useRef(false);
+  const restoringRef = useRef<{ scopeIdentity: string; requestSeq: number } | null>(null);
+  const restoreRequestSerialRef = useRef(0);
   const previousBotAliasRef = useRef(botAlias);
   const previousWorkspaceRootRef = useRef("");
   const [layoutBounds, setLayoutBounds] = useState({
@@ -230,12 +249,11 @@ export function DesktopWorkbench({
     centerHeightPx: 900,
   });
   const [pendingSidebarWorkdir, setPendingSidebarWorkdir] = useState("");
-  const [previewName, setPreviewName] = useState("");
-  const [previewContent, setPreviewContent] = useState("");
-  const [previewMode, setPreviewMode] = useState<"preview" | "full">("preview");
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const [previewResult, setPreviewResult] = useState<FileReadResult | null>(null);
-  const previewRequestSeqRef = useRef(0);
+  const previewRequestSeqRef = useRef(new Map<string, number>());
+  const previewRequestSerialRef = useRef(0);
+  const previewScopeIdentity = `${botAlias}\n${workspaceUserScope}`;
+  const previewScopeIdentityRef = useRef(previewScopeIdentity);
+  previewScopeIdentityRef.current = previewScopeIdentity;
   const [focusedPane, setFocusedPane] = useState<FocusedWorkbenchPane>(null);
   const [isResizingPane, setIsResizingPane] = useState(false);
   const [terminalOverride, setTerminalOverride] = useState<TerminalOverrideState | null>(null);
@@ -397,7 +415,9 @@ export function DesktopWorkbench({
           sidebarView: layoutState.sidebarView,
           expandedPaths: fileTree.expandedPaths,
           selectedTreePath: fileTree.selectedPath,
-          activeTabPath: tabs.activeTab?.kind === "external-source" ? "" : tabs.activeTabPath,
+          activeTabPath: tabs.activeTab?.kind === "external-source" || tabs.activeTab?.kind === "file-preview"
+            ? ""
+            : tabs.activeTabPath,
           terminalOverrideCwd: terminalOverride?.cwd,
           focusedPane,
           tabs: tabs.buildPersistenceSnapshot(),
@@ -430,14 +450,6 @@ export function DesktopWorkbench({
           ? "minmax(0, 1fr) 0px 0px"
           : `${layoutState.editorHeightPx}px ${PANE_RESIZER_SIZE_PX}px minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`;
   const workspaceName = fileTree.rootPath.split(/[\\/]+/).filter(Boolean).pop() || fileTree.rootPath || "/";
-  const previewStatusText = previewResult?.previewKind === "image"
-    ? "已加载图片预览"
-    : previewResult?.previewKind === "html"
-      ? "已加载 HTML 预览"
-      : isFilePreviewFullyLoaded(previewResult) ? "已加载全文" : "";
-  const canLoadFull = canPreviewFiles && !isFilePreviewFullyLoaded(previewResult);
-  const canEditPreview = canMutateFiles && previewResult?.previewKind !== "image";
-  const previewDownloadProgress = fileTree.downloadProgress?.path === previewName ? fileTree.downloadProgress : null;
   const showSidebarContent = focusedPane === "sidebar" || !layoutState.sidebarCollapsed;
   const sidebarContentMotion = resolveMotionProps(premiumMotion.sidebarContent, reduceMotion);
   const dialogPanelMotion = resolveMotionProps(premiumMotion.dialogPanel, reduceMotion);
@@ -557,12 +569,27 @@ export function DesktopWorkbench({
   }, [fileTree.rootPath, restoreSidebarView, tabs]);
 
   useEffect(() => {
-    if (!fileTree.rootPath || !session.restoreLoaded || session.restoreApplied || restoringRef.current) {
+    if (
+      !fileTree.rootPath
+      || !session.restoreLoaded
+      || session.restoreApplied
+      || restoringRef.current?.scopeIdentity === previewScopeIdentity
+    ) {
       return;
     }
 
-    restoringRef.current = true;
+    const restoreRequest = {
+      scopeIdentity: previewScopeIdentity,
+      requestSeq: restoreRequestSerialRef.current + 1,
+    };
+    restoreRequestSerialRef.current = restoreRequest.requestSeq;
+    restoringRef.current = restoreRequest;
     let cancelled = false;
+    const isCurrentRestore = () => (
+      !cancelled
+      && restoringRef.current === restoreRequest
+      && previewScopeIdentityRef.current === restoreRequest.scopeIdentity
+    );
 
     void (async () => {
       try {
@@ -574,14 +601,20 @@ export function DesktopWorkbench({
             ? { cwd: restoredSession.terminalOverrideCwd, source: "manual" }
             : null);
           await fileTree.restoreExpandedPaths(restoredSession.expandedPaths);
+          if (!isCurrentRestore()) {
+            return;
+          }
           if (restoredSession.selectedTreePath) {
             fileTree.selectPath(restoredSession.selectedTreePath);
           }
           await tabs.restoreFromSnapshot(restoredSession.tabs, restoredSession.activeTabPath);
         }
       } finally {
-        restoringRef.current = false;
-        if (!cancelled) {
+        const shouldMarkApplied = isCurrentRestore();
+        if (restoringRef.current === restoreRequest) {
+          restoringRef.current = null;
+        }
+        if (shouldMarkApplied) {
           session.markRestoreApplied();
         }
       }
@@ -589,8 +622,11 @@ export function DesktopWorkbench({
 
     return () => {
       cancelled = true;
+      if (restoringRef.current === restoreRequest) {
+        restoringRef.current = null;
+      }
     };
-  }, [fileTree.rootPath, session.restoreApplied, session.restoreLoaded, session.restoredSession]);
+  }, [fileTree.rootPath, previewScopeIdentity, session.restoreApplied, session.restoreLoaded, session.restoredSession]);
 
   useEffect(() => {
     if (!fileTree.rootPath) {
@@ -681,23 +717,36 @@ export function DesktopWorkbench({
     setSidebarView(item);
   }
 
-  function closePreview() {
-    setPreviewName("");
-    setPreviewContent("");
-    setPreviewResult(null);
-  }
-
   function isRasterImagePath(path: string) {
     return RASTER_IMAGE_PREVIEW_RE.test(path);
   }
 
-  const loadPreview = useCallback(async (path: string, mode: "preview" | "full") => {
+  function cancelPreviewRequestsUnder(path: string) {
+    for (const requestPath of previewRequestSeqRef.current.keys()) {
+      if (isSameOrDescendantWorkbenchPath(requestPath, path)) {
+        previewRequestSeqRef.current.delete(requestPath);
+      }
+    }
+  }
+
+  async function loadPreview(
+    path: string,
+    mode: "preview" | "full",
+    options?: { activate?: boolean },
+  ) {
     if (!canPreviewFiles) {
       return;
     }
-    const requestSeq = previewRequestSeqRef.current + 1;
-    previewRequestSeqRef.current = requestSeq;
-    setPreviewLoading(true);
+    const requestScopeIdentity = previewScopeIdentityRef.current;
+    const requestSeq = previewRequestSerialRef.current + 1;
+    previewRequestSerialRef.current = requestSeq;
+    previewRequestSeqRef.current.set(path, requestSeq);
+    tabs.openFilePreview({
+      path,
+      loading: true,
+      statusText: mode === "full" ? "正在读取全文" : "正在加载预览",
+      activate: options?.activate,
+    });
     try {
       let result = mode === "full"
         ? await client.readFileFull(botAlias, path)
@@ -705,24 +754,47 @@ export function DesktopWorkbench({
       if (mode === "preview" && shouldAutoLoadFullHtmlPreview(path, result)) {
         result = await client.readFileFull(botAlias, path);
       }
-      if (requestSeq !== previewRequestSeqRef.current) {
+      if (
+        previewScopeIdentityRef.current !== requestScopeIdentity
+        || previewRequestSeqRef.current.get(path) !== requestSeq
+      ) {
         return;
       }
       result = withDetectedPreviewKind(path, result);
-      setPreviewName(path);
-      setPreviewMode(result.mode === "cat" ? "full" : "preview");
-      setPreviewResult(result);
-      setPreviewContent(result.previewKind === "image" ? "" : result.content || "文件为空");
+      if (result.previewKind !== "image" && !result.content) {
+        result = { ...result, content: "文件为空" };
+      }
+      tabs.openFilePreview({
+        path,
+        result,
+        loading: false,
+        statusText: filePreviewStatusText(result),
+        activate: false,
+      });
+    } catch (error) {
+      if (
+        previewScopeIdentityRef.current !== requestScopeIdentity
+        || previewRequestSeqRef.current.get(path) !== requestSeq
+      ) {
+        return;
+      }
+      tabs.openFilePreview({
+        path,
+        loading: false,
+        statusText: "",
+        error: getErrorMessage(error, mode === "full" ? "读取全文失败" : "预览文件失败"),
+        activate: false,
+      });
     } finally {
-      if (requestSeq === previewRequestSeqRef.current) {
-        setPreviewLoading(false);
+      if (previewRequestSeqRef.current.get(path) === requestSeq) {
+        previewRequestSeqRef.current.delete(path);
       }
     }
-  }, [botAlias, canPreviewFiles, client]);
+  }
 
-  const handleRequestPreview = useCallback((path: string) => {
+  const handleRequestPreview = (path: string) => {
     void loadPreview(path, "preview");
-  }, [loadPreview]);
+  };
 
   const resolvedChatPaneContent = typeof chatPaneContent === "function"
     ? chatPaneContent({
@@ -736,27 +808,31 @@ export function DesktopWorkbench({
     column = 1,
     requestId = "",
     isCurrent: () => boolean = () => true,
+    expectedScopeIdentity = previewScopeIdentityRef.current,
   ) {
-    if (!isCurrent()) {
+    const isCurrentRequest = () => (
+      isCurrent()
+      && previewScopeIdentityRef.current === expectedScopeIdentity
+    );
+    if (!isCurrentRequest()) {
       return false;
     }
     const target = await client.resolveFileOpenTarget(botAlias, path);
-    if (!isCurrent()) {
+    if (!isCurrentRequest()) {
       return false;
     }
     if (!canPreviewFiles) {
       await fileTree.revealPath(path);
-      if (!isCurrent()) return false;
+      if (!isCurrentRequest()) return false;
       setEditorReveal(null);
       return false;
     }
     if (target.kind === "plugin_view") {
-      closePreview();
       await Promise.allSettled([
         tabs.openPluginView(target),
         fileTree.revealPath(path),
       ]);
-      if (!isCurrent()) return false;
+      if (!isCurrentRequest()) return false;
       setEditorReveal(null);
       return false;
     }
@@ -765,7 +841,7 @@ export function DesktopWorkbench({
         loadPreview(path, "preview"),
         fileTree.revealPath(path),
       ]);
-      if (!isCurrent()) return false;
+      if (!isCurrentRequest()) return false;
       setEditorReveal(null);
       return false;
     }
@@ -775,17 +851,16 @@ export function DesktopWorkbench({
         loadPreview(path, "preview"),
         fileTree.revealPath(path),
       ]);
-      if (!isCurrent()) return false;
+      if (!isCurrentRequest()) return false;
       setEditorReveal(null);
       return false;
     }
 
-    closePreview();
     await Promise.allSettled([
       tabs.openFile(path, target.pluginTargets),
       fileTree.revealPath(path),
     ]);
-    if (!isCurrent()) {
+    if (!isCurrentRequest()) {
       return false;
     }
     if (line && line > 0) {
@@ -813,8 +888,17 @@ export function DesktopWorkbench({
     });
   }
 
-  async function openPluginViewTab(target: PluginOpenTarget) {
+  async function openPluginViewTab(
+    target: PluginOpenTarget,
+    expectedScopeIdentity = previewScopeIdentityRef.current,
+  ) {
+    if (previewScopeIdentityRef.current !== expectedScopeIdentity) {
+      return;
+    }
     await tabs.openPluginView(target);
+    if (previewScopeIdentityRef.current !== expectedScopeIdentity) {
+      return;
+    }
     const sourcePath = typeof target.input.path === "string" ? target.input.path : "";
     if (sourcePath) {
       setSidebarView("files");
@@ -823,10 +907,14 @@ export function DesktopWorkbench({
   }
 
   async function runPluginHostEffects(effects: HostEffect[]) {
+    const effectScopeIdentity = previewScopeIdentityRef.current;
     for (const effect of effects) {
+      if (previewScopeIdentityRef.current !== effectScopeIdentity) {
+        return;
+      }
       if (effect.type === "open_file") {
         setSidebarView("files");
-        await openWorkspaceFile(effect.path, effect.line);
+        await openWorkspaceFile(effect.path, effect.line, 1, "", () => true, effectScopeIdentity);
         continue;
       }
       if (effect.type === "reveal_in_files") {
@@ -844,7 +932,7 @@ export function DesktopWorkbench({
         await client.downloadPluginArtifact(botAlias, effect.artifactId, effect.filename);
         continue;
       }
-      await openPluginViewTab(effect);
+      await openPluginViewTab(effect, effectScopeIdentity);
     }
   }
 
@@ -1097,11 +1185,21 @@ export function DesktopWorkbench({
             fileTree.highlightPath(path);
           }}
           onRenamedFile={(oldPath, nextPath) => {
-            tabs.syncRenamedPath(oldPath, nextPath);
+            cancelPreviewRequestsUnder(oldPath);
+            const renamedTabs = tabs.syncRenamedPath(oldPath, nextPath);
+            renamedTabs.previews.forEach((preview) => {
+              if (preview.loading && preview.path) {
+                void loadPreview(preview.path, preview.full ? "full" : "preview", { activate: false });
+              }
+            });
+            renamedTabs.pluginTargets.forEach((target) => {
+              void tabs.openPluginView(target, { activate: false });
+            });
             fileTree.highlightPath(nextPath);
           }}
           onDeletedFile={(path) => {
-            tabs.closePath(path);
+            cancelPreviewRequestsUnder(path);
+            tabs.closeDeletedPath(path);
           }}
           onRequestPreview={(path) => {
             void loadPreview(path, "preview");
@@ -1377,96 +1475,67 @@ export function DesktopWorkbench({
               <section
                 data-testid="desktop-pane-editor"
                 data-focused={focusedPane === "editor" ? "true" : "false"}
-                className="desktop-workbench-pane relative min-h-0 overflow-hidden"
+                className="desktop-workbench-pane min-h-0 overflow-hidden"
               >
-                <div
-                  aria-hidden={previewName ? "true" : undefined}
-                  className={clsx("h-full min-h-0", previewName && "hidden")}
-                >
-                  <Suspense fallback={paneFallback}>
-                    <EditorPane
-                      botAlias={botAlias}
-                      client={client}
-                      tabs={tabs.tabs}
-                      activeTab={tabs.activeTab}
-                      activeTabPath={tabs.activeTabPath}
-                      breakpointLines={tabs.activeTab ? debug.breakpointLinesForPath(tabs.activeTab.path) : []}
-                      currentLine={activeEditorLine}
-                      editorReveal={editorReveal}
-                      navigationCommand={editorNavigationCommand}
-                      canNavigateBack={codeNavigationHistory.canGoBack}
-                      canNavigateForward={codeNavigationHistory.canGoForward}
-                      allowCodeJump={allowCodeJump}
-                      canNavigateImplementation={canNavigateImplementation}
-                      canUseInlineCompletion={canUseInlineCompletion}
-                      onResolveCodeNavigation={(input) => {
-                        setEditorNavigationCommand(null);
-                        void handleResolveCodeNavigation(input);
-                      }}
-                      onNavigateBack={() => {
-                        void codeNavigationHistory.goBack();
-                      }}
-                      onNavigateForward={() => {
-                        void codeNavigationHistory.goForward();
-                      }}
-                      onToggleBreakpoint={tabs.activeTab
-                        ? (line) => {
-                            void debug.toggleBreakpoint(tabs.activeTab?.path || "", line);
-                          }
-                        : undefined}
-                      onActivateTab={(path) => {
-                        setEditorReveal(null);
-                        void tabs.activateTab(path);
-                      }}
-                      onCloseTab={tabs.closeTab}
-                      onChangeActiveContent={tabs.updateActiveContent}
-                      onSaveActiveTab={() => void tabs.saveActiveTab()}
-                      onCloseOthers={tabs.closeOtherTabs}
-                      onCloseTabsToRight={tabs.closeTabsToRight}
-                      onReopenLastClosed={() => {
-                        void tabs.reopenLastClosedTab();
-                      }}
-                      onRevealInTree={(path) => {
-                        setSidebarView("files");
-                        void fileTree.revealPath(path);
-                      }}
-                      onApplyHostEffects={runPluginHostEffects}
-                      onClosePluginTab={(path) => {
-                        tabs.closePath(path);
-                      }}
-                      onReopenPluginView={(target) => {
-                        void openPluginViewTab(target);
-                      }}
-                      focused={focusedPane === "editor"}
-                      onToggleFocus={() => toggleFocusedPane("editor")}
-                    />
-                  </Suspense>
-                </div>
-                {previewName ? (
-                  <div className="absolute inset-0 z-10">
-                    <FilePreviewPane
-                      title={previewName}
-                      content={previewContent}
-                      mode={previewMode}
-                      botAlias={botAlias}
-                      previewKind={previewResult?.previewKind}
-                      contentType={previewResult?.contentType}
-                      contentBase64={previewResult?.contentBase64}
-                      loading={previewLoading}
-                      statusText={previewStatusText}
-                      onClose={closePreview}
-                      onLoadFull={previewMode !== "full" && canLoadFull ? () => void loadPreview(previewName, "full") : undefined}
-                      onEdit={canEditPreview ? () => {
-                        const nextPath = previewName;
-                        closePreview();
-                        void openWorkspaceFile(nextPath);
-                      } : undefined}
-                      onDownload={() => void fileTree.downloadFile(previewName)}
-                      downloadProgressText={previewDownloadProgress ? formatDownloadProgress(previewDownloadProgress.downloadedBytes, previewDownloadProgress.totalBytes) : ""}
-                      downloadPercent={previewDownloadProgress?.percent}
-                    />
-                  </div>
-                ) : null}
+                <Suspense fallback={paneFallback}>
+                  <EditorPane
+                    botAlias={botAlias}
+                    client={client}
+                    tabs={tabs.tabs}
+                    activeTab={tabs.activeTab}
+                    activeTabPath={tabs.activeTabPath}
+                    breakpointLines={tabs.activeTab ? debug.breakpointLinesForPath(tabs.activeTab.path) : []}
+                    currentLine={activeEditorLine}
+                    editorReveal={editorReveal}
+                    navigationCommand={editorNavigationCommand}
+                    canNavigateBack={codeNavigationHistory.canGoBack}
+                    canNavigateForward={codeNavigationHistory.canGoForward}
+                    allowCodeJump={allowCodeJump}
+                    canNavigateImplementation={canNavigateImplementation}
+                    canUseInlineCompletion={canUseInlineCompletion}
+                    onResolveCodeNavigation={(input) => {
+                      setEditorNavigationCommand(null);
+                      void handleResolveCodeNavigation(input);
+                    }}
+                    onNavigateBack={() => {
+                      void codeNavigationHistory.goBack();
+                    }}
+                    onNavigateForward={() => {
+                      void codeNavigationHistory.goForward();
+                    }}
+                    onToggleBreakpoint={tabs.activeTab
+                      ? (line) => {
+                          void debug.toggleBreakpoint(tabs.activeTab?.path || "", line);
+                        }
+                      : undefined}
+                    onActivateTab={(path) => {
+                      setEditorReveal(null);
+                      void tabs.activateTab(path);
+                    }}
+                    onCloseTab={tabs.closeTab}
+                    onChangeActiveContent={tabs.updateActiveContent}
+                    onSaveActiveTab={() => void tabs.saveActiveTab()}
+                    onCloseOthers={tabs.closeOtherTabs}
+                    onCloseTabsToRight={tabs.closeTabsToRight}
+                    onReopenLastClosed={() => {
+                      void tabs.reopenLastClosedTab();
+                    }}
+                    onRevealInTree={(path) => {
+                      setSidebarView("files");
+                      void fileTree.revealPath(path);
+                    }}
+                    onApplyHostEffects={runPluginHostEffects}
+                    onClosePluginTab={(path) => {
+                      tabs.closePath(path);
+                    }}
+                    onReopenPluginView={(target) => {
+                      void openPluginViewTab(target);
+                    }}
+                    onLoadFullPreview={(path) => void loadPreview(path, "full")}
+                    focused={focusedPane === "editor"}
+                    onToggleFocus={() => toggleFocusedPane("editor")}
+                  />
+                </Suspense>
               </section>
             ) : null}
 
@@ -1623,32 +1692,6 @@ export function DesktopWorkbench({
           onOpenFile={async (path) => {
             await openWorkspaceFile(path);
           }}
-        />
-      ) : null}
-
-      {previewName && structureOnly ? (
-        <FilePreviewDialog
-          title={previewName}
-          content={previewContent}
-          mode={previewMode}
-          botAlias={botAlias}
-          previewKind={previewResult?.previewKind}
-          contentType={previewResult?.contentType}
-          contentBase64={previewResult?.contentBase64}
-          variant="desktop"
-          loading={previewLoading}
-          statusText={previewStatusText}
-          readOnly={structureOnly}
-          onClose={closePreview}
-          onLoadFull={previewMode !== "full" && canLoadFull ? () => void loadPreview(previewName, "full") : undefined}
-          onEdit={canEditPreview ? () => {
-            const nextPath = previewName;
-            closePreview();
-            void openWorkspaceFile(nextPath);
-          } : undefined}
-          onDownload={() => void fileTree.downloadFile(previewName)}
-          downloadProgressText={previewDownloadProgress ? formatDownloadProgress(previewDownloadProgress.downloadedBytes, previewDownloadProgress.totalBytes) : ""}
-          downloadPercent={previewDownloadProgress?.percent}
         />
       ) : null}
 

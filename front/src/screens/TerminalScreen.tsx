@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Maximize2, Minimize2 } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import { MockWebBotClient } from "../services/mockWebBotClient";
@@ -29,6 +30,7 @@ type Props = {
   disabledReason?: string;
   embedded?: boolean;
   focused?: boolean;
+  toolbarHost?: HTMLElement | null;
   onToggleFocus?: () => void;
   onToggleImmersive?: () => void;
   onAcceptPendingWorkingDir?: () => void;
@@ -84,6 +86,7 @@ export function TerminalScreen({
   disabledReason = "",
   embedded = false,
   focused = false,
+  toolbarHost = null,
   onToggleFocus,
   onToggleImmersive,
   onAcceptPendingWorkingDir,
@@ -510,9 +513,68 @@ export function TerminalScreen({
     });
   }, [connectionText, onWorkbenchStatusChange, runningWorkingDir, stagedWorkingDir, terminal.snapshot.closed, terminal.snapshot.started]);
 
+  function openActionsConfig() {
+    setActionsConfigError("");
+    setShowActionsConfig(true);
+  }
+
+  const stagedWorkingDirControls = stagedWorkingDir ? (
+    <div className={embedded
+      ? "flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-3 py-1.5 text-xs"
+      : "mt-2 flex flex-wrap items-center gap-2 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-2.5 py-1.5 text-xs shadow-[var(--shadow-soft)]"}
+    >
+      <span className="font-medium text-[var(--text)]">新终端工作目录</span>
+      <span className="truncate text-[var(--muted)]">{stagedWorkingDir}</span>
+      <button
+        type="button"
+        onClick={onAcceptPendingWorkingDir}
+        disabled={terminalDisabled}
+        className={toolbarButtonClass("plain", "sm", "h-7")}
+      >
+        设为新终端目录
+      </button>
+      <button
+        type="button"
+        onClick={onCancelPendingWorkingDir}
+        disabled={terminalDisabled}
+        className={toolbarButtonClass("ghost", "sm", "h-7")}
+      >
+        取消
+      </button>
+    </div>
+  ) : null;
+
+  const embeddedToolbar = embedded && toolbarHost ? createPortal(
+    <>
+      <TerminalActionsBar
+        actions={[]}
+        runtimePlatform={runtimePlatform}
+        canEdit={Boolean(actionsConfig?.editable) && !terminalDisabled}
+        disabled={terminalDisabled}
+        runningActionId=""
+        onRunAction={() => {}}
+        onOpenConfig={openActionsConfig}
+      />
+      {onToggleFocus ? (
+        <button
+          type="button"
+          aria-label={focused ? "退出聚焦终端" : "聚焦终端"}
+          title={focused ? "退出聚焦终端" : "聚焦终端"}
+          onClick={onToggleFocus}
+          className={toolbarButtonClass("ghost", "icon", "h-8 w-8 border-[var(--workbench-hairline)]")}
+        >
+          {focused ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+        </button>
+      ) : null}
+    </>,
+    toolbarHost,
+  ) : null;
+
   return (
     <main data-testid="terminal-screen-root" className="flex h-full flex-col bg-[var(--workbench-panel-bg)]">
-      <header className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-3 py-2">
+      {embeddedToolbar}
+      {!embedded ? (
+        <header className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-3 py-2">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -540,50 +602,25 @@ export function TerminalScreen({
               disabled={terminalDisabled}
               runningActionId=""
               onRunAction={() => {}}
-              onOpenConfig={() => {
-                setActionsConfigError("");
-                setShowActionsConfig(true);
-              }}
+              onOpenConfig={openActionsConfig}
             />
-            {embedded && onToggleFocus ? (
-              <button
-                type="button"
-                aria-label={focused ? "退出聚焦终端" : "聚焦终端"}
-                title={focused ? "退出聚焦终端" : "聚焦终端"}
-                onClick={onToggleFocus}
-                className={toolbarButtonClass("ghost", "icon", "h-8 w-8 border-[var(--workbench-hairline)]")}
-              >
-                {focused ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-              </button>
-            ) : null}
           </div>
         </div>
-        {stagedWorkingDir ? (
-          <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-2.5 py-1.5 text-xs shadow-[var(--shadow-soft)]">
-            <span className="font-medium text-[var(--text)]">新终端工作目录</span>
-            <span className="truncate text-[var(--muted)]">{stagedWorkingDir}</span>
-            <button
-              type="button"
-              onClick={onAcceptPendingWorkingDir}
-              disabled={terminalDisabled}
-              className={toolbarButtonClass("plain", "sm", "h-7")}
-            >
-              设为新终端目录
-            </button>
-            <button
-              type="button"
-              onClick={onCancelPendingWorkingDir}
-              disabled={terminalDisabled}
-              className={toolbarButtonClass("ghost", "sm", "h-7")}
-            >
-              取消
-            </button>
-          </div>
-        ) : null}
-        <div data-testid="terminal-instance-id" className="sr-only">
-          {instanceId}
-        </div>
-      </header>
+        {stagedWorkingDirControls}
+        </header>
+      ) : (
+        <>
+          {effectiveError ? (
+            <div role="alert" className="shrink-0 border-b border-[var(--workbench-hairline)] bg-red-50 px-3 py-1 text-xs text-red-600">
+              {effectiveError}
+            </div>
+          ) : null}
+          {stagedWorkingDirControls}
+        </>
+      )}
+      <div data-testid="terminal-instance-id" className="sr-only">
+        {instanceId}
+      </div>
 
       <section className="relative flex-1 overflow-hidden border-b border-[var(--workbench-hairline)] bg-[var(--terminal-bg)]">
         {!terminal.snapshot.started || terminal.snapshot.closed ? (

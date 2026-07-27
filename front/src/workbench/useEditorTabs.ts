@@ -3,7 +3,9 @@ import { inferFileEditorLanguageId } from "../utils/fileEditorLanguage";
 import { getExternalSourceErrorMessage } from "../services/types";
 import type {
   ExternalSourceReadResult,
+  FileReadResult,
   PluginOpenTarget,
+  PluginRenderResult,
   WorkspaceDocumentCloseInput,
   CodeNavigationDocumentSyncEvent,
   WorkspaceDocumentSyncInput,
@@ -57,6 +59,50 @@ function externalTabPath(sourceId: string) {
   return `external-source:${sourceId}`;
 }
 
+function filePreviewTabPath(path: string) {
+  return `file-preview:${path}`;
+}
+
+function normalizeEditorSourcePath(path: string) {
+  return path.trim().replace(/\\/g, "/").replace(/\/+/g, "/").replace(/\/$/, "");
+}
+
+function isSameOrDescendantSourcePath(path: string, parentPath: string) {
+  const normalizedPath = normalizeEditorSourcePath(path);
+  const normalizedParent = normalizeEditorSourcePath(parentPath);
+  return Boolean(
+    normalizedPath
+    && normalizedParent
+    && (normalizedPath === normalizedParent || normalizedPath.startsWith(`${normalizedParent}/`)),
+  );
+}
+
+function remapEditorSourcePath(path: string, oldPath: string, nextPath: string) {
+  const normalizedPath = normalizeEditorSourcePath(path);
+  const normalizedOldPath = normalizeEditorSourcePath(oldPath);
+  const normalizedNextPath = normalizeEditorSourcePath(nextPath);
+  if (!normalizedPath || !normalizedOldPath || !normalizedNextPath) {
+    return path;
+  }
+  if (normalizedPath === normalizedOldPath) {
+    return normalizedNextPath;
+  }
+  if (!normalizedPath.startsWith(`${normalizedOldPath}/`)) {
+    return path;
+  }
+  return `${normalizedNextPath}${normalizedPath.slice(normalizedOldPath.length)}`;
+}
+
+function editorTabSourcePath(tab: EditorTab) {
+  if (tab.kind === "file") {
+    return tab.path;
+  }
+  if (tab.kind === "file-preview" || tab.kind === "plugin-view" || tab.kind === "git-diff") {
+    return tab.sourcePath || "";
+  }
+  return "";
+}
+
 function externalDisplayName(displayPath: string, sourceId: string) {
   const normalized = String(displayPath || "").trim();
   return basename(normalized) || (sourceId ? "外部源码" : "外部依赖");
@@ -67,6 +113,26 @@ function clonePluginTargets(pluginTargets?: PluginOpenTarget[]) {
     ...target,
     input: { ...target.input },
   }));
+}
+
+function clonePluginTarget(target: PluginOpenTarget): PluginOpenTarget {
+  return {
+    ...target,
+    input: { ...target.input },
+  };
+}
+
+function pluginViewTabPath(target: PluginOpenTarget) {
+  const sourcePath = typeof target.input.path === "string" ? target.input.path : "";
+  return `plugin://${target.pluginId}/${target.viewId}/${sourcePath || target.title}`;
+}
+
+function remapPluginTarget(target: PluginOpenTarget, oldPath: string, nextPath: string) {
+  const sourcePath = typeof target.input.path === "string" ? target.input.path : "";
+  const nextSourcePath = sourcePath ? remapEditorSourcePath(sourcePath, oldPath, nextPath) : sourcePath;
+  return nextSourcePath && nextSourcePath !== sourcePath
+    ? { ...target, input: { ...target.input, path: nextSourcePath } }
+    : target;
 }
 
 function createTab(
@@ -141,6 +207,8 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
   const scopeIdentityRef = useRef(scopeIdentity);
   const scopeClientRef = useRef(client);
   const scopeGenerationRef = useRef(0);
+  const pluginViewRequestSerialRef = useRef(0);
+  const pluginViewRequestSeqRef = useRef(new Map<string, number>());
   if (scopeIdentityRef.current !== scopeIdentity || scopeClientRef.current !== client) {
     scopeIdentityRef.current = scopeIdentity;
     scopeClientRef.current = client;
@@ -276,12 +344,15 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
     closedTabsRef.current = closedTabs;
   }, [closedTabs]);
 
-  function disposePluginSession(tab?: EditorTab | null) {
-    const pluginView = tab?.pluginView;
+  function disposePluginRenderResult(pluginView?: PluginRenderResult | null) {
     if (!pluginView || pluginView.mode !== "session") {
       return;
     }
     void client.disposePluginViewSession(botAlias, pluginView.pluginId, pluginView.sessionId).catch(() => {});
+  }
+
+  function disposePluginSession(tab?: EditorTab | null) {
+    disposePluginRenderResult(tab?.pluginView);
   }
 
   useEffect(() => () => {
@@ -571,31 +642,70 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
     }
   }
 
-  async function openPluginView(target: PluginOpenTarget) {
+  async function openPluginView(target: PluginOpenTarget, options?: { activate?: boolean }) {
+    if (structureOnly) {
+      return;
+    }
+    const generation = scopeGenerationRef.current;
+    const nextTarget = clonePluginTarget(target);
     const sourcePath = typeof target.input.path === "string" ? target.input.path : undefined;
-    const tabPath = `plugin://${target.pluginId}/${target.viewId}/${sourcePath || target.title}`;
-    const existing = tabsRef.current.find((item) => item.path === tabPath);
-    if (!existing) {
-      setTabs((current) => [
-        ...current,
-        createTab(tabPath, "", undefined, {
+    const tabPath = pluginViewTabPath(target);
+    const requestSeq = pluginViewRequestSerialRef.current + 1;
+    pluginViewRequestSerialRef.current = requestSeq;
+    pluginViewRequestSeqRef.current.set(tabPath, requestSeq);
+    const currentTabs = tabsRef.current;
+    const existingIndex = currentTabs.findIndex((item) => item.path === tabPath);
+    const existing = existingIndex >= 0 ? currentTabs[existingIndex] : undefined;
+    const loadingTab = existing
+      ? {
+          ...existing,
+          basename: target.title,
+          kind: "plugin-view" as const,
+          pluginOpenTarget: nextTarget,
+          pluginInput: { ...target.input },
+          sourcePath,
+          readOnly: true,
+          statusText: "插件视图",
+          loading: true,
+          error: "",
+        }
+      : createTab(tabPath, "", undefined, {
           basename: target.title,
           kind: "plugin-view",
+          pluginOpenTarget: nextTarget,
+          pluginInput: { ...target.input },
           sourcePath,
           readOnly: true,
           statusText: "插件视图",
           loading: true,
           contentPersistence: "none",
-        }),
-      ]);
+        });
+    const loadingTabs = existingIndex >= 0 ? currentTabs.slice() : [...currentTabs, loadingTab];
+    if (existingIndex >= 0) {
+      loadingTabs[existingIndex] = loadingTab;
     }
-    setActiveTabPath(tabPath);
+    tabsRef.current = loadingTabs;
+    setTabs(loadingTabs);
+    if (options?.activate !== false) {
+      activeTabPathRef.current = tabPath;
+      setActiveTabPath(tabPath);
+    }
 
     try {
       const view = await client.openPluginView(botAlias, target.pluginId, target.viewId, target.input);
+      if (
+        !isCurrentScope(generation)
+        || pluginViewRequestSeqRef.current.get(tabPath) !== requestSeq
+        || !tabsRef.current.some((item) => item.path === tabPath)
+      ) {
+        disposePluginRenderResult(view);
+        return;
+      }
+      const currentTab = tabsRef.current.find((item) => item.path === tabPath);
       const nextTab = createTab(tabPath, "", undefined, {
         basename: target.title,
         kind: "plugin-view",
+        pluginOpenTarget: nextTarget,
         pluginView: view,
         pluginInput: { ...target.input },
         sourcePath,
@@ -605,35 +715,52 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
         contentPersistence: "none",
       });
       if (
-        existing?.pluginView?.mode === "session"
-        && (view.mode !== "session" || existing.pluginView.sessionId !== view.sessionId)
+        currentTab?.pluginView?.mode === "session"
+        && (view.mode !== "session" || currentTab.pluginView.sessionId !== view.sessionId)
       ) {
-        void client.disposePluginViewSession(botAlias, existing.pluginView.pluginId, existing.pluginView.sessionId).catch(() => {});
+        disposePluginRenderResult(currentTab.pluginView);
       }
       setTabs((current) => {
         const existingIndex = current.findIndex((item) => item.path === tabPath);
-        if (existingIndex >= 0) {
-          const next = current.slice();
-          next[existingIndex] = nextTab;
-          return next;
+        if (existingIndex < 0) {
+          tabsRef.current = current;
+          return current;
         }
-        return [...current, nextTab];
+        const next = current.slice();
+        next[existingIndex] = nextTab;
+        tabsRef.current = next;
+        return next;
       });
     } catch (error) {
+      if (
+        !isCurrentScope(generation)
+        || pluginViewRequestSeqRef.current.get(tabPath) !== requestSeq
+      ) {
+        return;
+      }
       const message = error instanceof Error ? error.message : "打开插件视图失败";
-      setTabs((current) => current.map((item) => item.path === tabPath
-          ? {
-              ...item,
-              basename: target.title,
-              kind: "plugin-view",
-              pluginInput: { ...target.input },
-              sourcePath,
-              readOnly: true,
-              loading: false,
-              error: message,
-            statusText: "插件视图",
-          }
-        : item));
+      setTabs((current) => {
+        const next = current.map((item) => item.path === tabPath
+            ? {
+                ...item,
+                basename: target.title,
+                kind: "plugin-view" as const,
+                pluginOpenTarget: nextTarget,
+                pluginInput: { ...target.input },
+                sourcePath,
+                readOnly: true,
+                loading: false,
+                error: message,
+                statusText: "插件视图",
+              }
+          : item);
+        tabsRef.current = next;
+        return next;
+      });
+    } finally {
+      if (pluginViewRequestSeqRef.current.get(tabPath) === requestSeq) {
+        pluginViewRequestSeqRef.current.delete(tabPath);
+      }
     }
   }
 
@@ -663,6 +790,76 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
       return [...current, nextTab];
     });
     setActiveTabPath(input.path);
+  }
+
+  function openFilePreview(input: {
+    path: string;
+    result?: FileReadResult | null;
+    loading?: boolean;
+    statusText?: string;
+    error?: string;
+    activate?: boolean;
+  }) {
+    if (structureOnly) {
+      return "";
+    }
+    const sourcePath = input.path.trim();
+    if (!sourcePath) {
+      return "";
+    }
+
+    const tabPath = filePreviewTabPath(sourcePath);
+    const buildPreviewTab = (existing?: EditorTab) => {
+      const filePreview = input.result === undefined
+        ? existing?.filePreview
+        : input.result || undefined;
+      return createTab(
+        tabPath,
+        filePreview?.previewKind === "image" ? "" : filePreview?.content || "",
+        filePreview?.lastModifiedNs,
+        {
+          basename: basename(sourcePath),
+          kind: "file-preview",
+          filePreview,
+          sourcePath,
+          readOnly: true,
+          loading: Boolean(input.loading),
+          statusText: input.statusText ?? existing?.statusText ?? "",
+          error: input.error ?? "",
+          contentPersistence: "none",
+        },
+      );
+    };
+    if (input.activate !== false) {
+      const currentTabs = tabsRef.current;
+      const existingIndex = currentTabs.findIndex((item) => item.path === tabPath);
+      const nextTab = buildPreviewTab(existingIndex >= 0 ? currentTabs[existingIndex] : undefined);
+      const nextTabs = existingIndex >= 0 ? currentTabs.slice() : [...currentTabs, nextTab];
+      if (existingIndex >= 0) {
+        nextTabs[existingIndex] = nextTab;
+      }
+      tabsRef.current = nextTabs;
+    }
+    setTabs((current) => {
+      const existingIndex = current.findIndex((item) => item.path === tabPath);
+      const existing = existingIndex >= 0 ? current[existingIndex] : undefined;
+      if (!existing && input.activate === false) {
+        tabsRef.current = current;
+        return current;
+      }
+      const nextTab = buildPreviewTab(existing);
+      const nextTabs = existingIndex >= 0 ? current.slice() : [...current, nextTab];
+      if (existingIndex >= 0) {
+        nextTabs[existingIndex] = nextTab;
+      }
+      tabsRef.current = nextTabs;
+      return nextTabs;
+    });
+    if (input.activate !== false) {
+      activeTabPathRef.current = tabPath;
+      setActiveTabPath(tabPath);
+    }
+    return tabPath;
   }
 
   async function activateTab(path: string) {
@@ -751,15 +948,50 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
     setTabs((current) => {
       const index = current.findIndex((item) => item.path === path);
       if (index < 0) {
+        tabsRef.current = current;
         return current;
       }
       const nextTabs = current.filter((item) => item.path !== path);
+      tabsRef.current = nextTabs;
       if (activeTabPathRef.current !== path) {
         return nextTabs;
       }
       const nextActive = nextTabs[Math.max(0, index - 1)]?.path || nextTabs[nextTabs.length - 1]?.path || "";
+      activeTabPathRef.current = nextActive;
       setActiveTabPath(nextActive);
       return nextTabs;
+    });
+  }
+
+  function closeDeletedPath(path: string) {
+    const removedTabs = tabsRef.current.filter((item) => {
+      const sourcePath = editorTabSourcePath(item);
+      return sourcePath && isSameOrDescendantSourcePath(sourcePath, path);
+    });
+    if (removedTabs.length > 0) {
+      void closeDocuments(removedTabs);
+      removedTabs.forEach((item) => disposePluginSession(item));
+    }
+
+    setTabs((current) => {
+      const activeIndex = current.findIndex((item) => item.path === activeTabPathRef.current);
+      const nextTabs = current.filter((item) => {
+        const sourcePath = editorTabSourcePath(item);
+        return !sourcePath || !isSameOrDescendantSourcePath(sourcePath, path);
+      });
+      tabsRef.current = nextTabs;
+      if (nextTabs.some((item) => item.path === activeTabPathRef.current)) {
+        return nextTabs;
+      }
+      const nextActive = nextTabs[Math.max(0, activeIndex - 1)]?.path || nextTabs[nextTabs.length - 1]?.path || "";
+      activeTabPathRef.current = nextActive;
+      setActiveTabPath(nextActive);
+      return nextTabs;
+    });
+    setClosedTabs((current) => {
+      const nextClosedTabs = current.filter((item) => !isSameOrDescendantSourcePath(item.path, path));
+      closedTabsRef.current = nextClosedTabs;
+      return nextClosedTabs;
     });
   }
 
@@ -777,25 +1009,38 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
   }
 
   function closeOtherTabs(path: string) {
-    const nextClosed = tabsRef.current.filter((item) => item.path !== path);
+    const currentTabs = tabsRef.current;
+    const nextClosed = currentTabs.filter((item) => item.path !== path);
     nextClosed.forEach((item) => pushClosedTab(item.path));
     nextClosed.forEach((item) => disposePluginSession(item));
     void closeDocuments(nextClosed);
-    setTabs((current) => current.filter((item) => item.path === path));
-    setActiveTabPath(path);
+    const nextTabs = currentTabs.filter((item) => item.path === path);
+    tabsRef.current = nextTabs;
+    setTabs(nextTabs);
+    const nextActivePath = nextTabs[0]?.path || "";
+    activeTabPathRef.current = nextActivePath;
+    setActiveTabPath(nextActivePath);
   }
 
   function closeTabsToRight(path: string) {
-    const index = tabsRef.current.findIndex((item) => item.path === path);
+    const currentTabs = tabsRef.current;
+    const index = currentTabs.findIndex((item) => item.path === path);
     if (index < 0) {
       return;
     }
-    tabsRef.current.slice(index + 1).forEach((item) => {
+    const closingTabs = currentTabs.slice(index + 1);
+    closingTabs.forEach((item) => {
       pushClosedTab(item.path);
       disposePluginSession(item);
     });
-    void closeDocuments(tabsRef.current.slice(index + 1));
-    setTabs((current) => current.slice(0, index + 1));
+    void closeDocuments(closingTabs);
+    const nextTabs = currentTabs.slice(0, index + 1);
+    tabsRef.current = nextTabs;
+    setTabs(nextTabs);
+    if (!nextTabs.some((item) => item.path === activeTabPathRef.current)) {
+      activeTabPathRef.current = path;
+      setActiveTabPath(path);
+    }
   }
 
   async function reopenLastClosedTab() {
@@ -811,17 +1056,100 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
   }
 
   function syncRenamedPath(oldPath: string, nextPath: string) {
-    setTabs((current) => current.map((item) => item.path === oldPath
-      ? {
+    const generation = scopeGenerationRef.current;
+    const currentTabs = tabsRef.current;
+    const nextTabs = currentTabs.map((item) => {
+      const sourcePath = editorTabSourcePath(item);
+      const nextSourcePath = sourcePath ? remapEditorSourcePath(sourcePath, oldPath, nextPath) : sourcePath;
+      if (!sourcePath || nextSourcePath === sourcePath) {
+        return item;
+      }
+      if (item.kind === "file") {
+        return {
           ...item,
-          path: nextPath,
-          basename: basename(nextPath),
+          path: nextSourcePath,
+          basename: basename(nextSourcePath),
+          pluginTargets: item.pluginTargets?.map((target) => remapPluginTarget(target, oldPath, nextPath)),
+        };
+      }
+      if (item.kind === "file-preview") {
+        return {
+          ...item,
+          path: filePreviewTabPath(nextSourcePath),
+          sourcePath: nextSourcePath,
+          basename: basename(nextSourcePath),
+        };
+      }
+      if (item.kind === "plugin-view") {
+        const nextPluginTarget = item.pluginOpenTarget
+          ? remapPluginTarget(item.pluginOpenTarget, oldPath, nextPath)
+          : undefined;
+        const nextTabPath = nextPluginTarget
+          ? pluginViewTabPath(nextPluginTarget)
+          : item.sourcePath && item.path.endsWith(item.sourcePath)
+            ? `${item.path.slice(0, -item.sourcePath.length)}${nextSourcePath}`
+            : item.path;
+        return {
+          ...item,
+          path: nextTabPath,
+          sourcePath: nextSourcePath,
+          pluginOpenTarget: nextPluginTarget,
+          pluginInput: item.pluginInput
+            ? { ...item.pluginInput, path: nextSourcePath }
+            : item.pluginInput,
+        };
+      }
+      return {
+        ...item,
+        sourcePath: nextSourcePath,
+      };
+    });
+    const renamedDocuments = currentTabs.flatMap((item, index) => {
+      const nextTab = nextTabs[index];
+      return isSyncableTab(item) && isSyncableTab(nextTab) && item.path !== nextTab.path
+        ? [{ previous: item, next: nextTab }]
+        : [];
+    });
+    const activeIndex = currentTabs.findIndex((item) => item.path === activeTabPathRef.current);
+    const nextActivePath = activeIndex >= 0 ? nextTabs[activeIndex]?.path || "" : activeTabPathRef.current;
+    tabsRef.current = nextTabs;
+    setTabs(nextTabs);
+    if (nextActivePath !== activeTabPathRef.current) {
+      activeTabPathRef.current = nextActivePath;
+      setActiveTabPath(nextActivePath);
+    }
+    setClosedTabs((current) => {
+      const nextClosedTabs = current.map((item) => {
+        const remappedPath = remapEditorSourcePath(item.path, oldPath, nextPath);
+        return remappedPath === item.path ? item : { ...item, path: remappedPath };
+      });
+      closedTabsRef.current = nextClosedTabs;
+      return nextClosedTabs;
+    });
+    if (renamedDocuments.length > 0) {
+      void (async () => {
+        await closeDocuments(renamedDocuments.map((item) => item.previous));
+        if (!isCurrentScope(generation)) {
+          return;
         }
-      : item));
-    setActiveTabPath((current) => current === oldPath ? nextPath : current);
-    setClosedTabs((current) => current.map((item) => item.path === oldPath
-      ? { ...item, path: nextPath }
-      : item));
+        renamedDocuments.forEach((item) => queueDocumentSync(item.next, "didOpen"));
+        await flushDocumentSync();
+      })();
+    }
+    return {
+      previews: currentTabs.flatMap((item, index) => item.kind === "file-preview" && nextTabs[index]?.sourcePath !== item.sourcePath
+        ? [{
+            path: nextTabs[index]?.sourcePath || "",
+            loading: item.loading,
+            full: item.statusText === "正在读取全文",
+          }]
+        : []),
+      pluginTargets: currentTabs.flatMap((item, index) => (
+        item.kind === "plugin-view"
+        && nextTabs[index]?.path !== item.path
+        && nextTabs[index]?.pluginOpenTarget
+      ) ? [nextTabs[index].pluginOpenTarget] : []),
+    };
   }
 
   async function restoreFromSnapshot(
@@ -883,7 +1211,12 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
         documentVersion: tab.documentVersion,
         lastModifiedNs: tab.lastModifiedNs,
         encoding: tab.encoding,
-      })).filter((tab) => tab.kind !== "git-diff" && tab.kind !== "plugin-view" && tab.kind !== "external-source"),
+      })).filter((tab) => (
+        tab.kind !== "file-preview"
+        && tab.kind !== "git-diff"
+        && tab.kind !== "plugin-view"
+        && tab.kind !== "external-source"
+      )),
     );
   }
 
@@ -896,6 +1229,7 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
     openFile,
     openExternalSource,
     openPluginView,
+    openFilePreview,
     openReadOnlyTab,
     openCreatedFile,
     restoreFromSnapshot,
@@ -905,6 +1239,7 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
     saveActiveTab,
     closeTab,
     closePath,
+    closeDeletedPath,
     closeOtherTabs,
     closeTabsToRight,
     reopenLastClosedTab,
