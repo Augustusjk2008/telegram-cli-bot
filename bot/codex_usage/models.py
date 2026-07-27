@@ -6,6 +6,14 @@ from typing import Any, Literal, Mapping
 
 
 ProviderKind = Literal["openai_official", "base_url", "unknown"]
+DEFAULT_CODEX_MODEL = "gpt-5.6-sol"
+
+
+def normalize_model_key(value: object) -> str:
+    normalized = str(value or "").strip()
+    if not normalized or normalized.casefold() == "unknown":
+        return DEFAULT_CODEX_MODEL
+    return normalized
 
 
 def _require_non_negative_int(value: Any, field_name: str) -> int:
@@ -118,6 +126,13 @@ class ProviderUsage:
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderModelUsage:
+    provider: ProviderInfo
+    model: str
+    totals: UsageTotals
+
+
+@dataclass(frozen=True, slots=True)
 class DayUsage:
     day: date
     totals: UsageTotals
@@ -131,11 +146,21 @@ class DailyProviderUsage:
 
 
 @dataclass(frozen=True, slots=True)
+class DailyProviderModelUsage:
+    day: date
+    provider: ProviderInfo
+    model: str
+    totals: UsageTotals
+
+
+@dataclass(frozen=True, slots=True)
 class UsageQueryResult:
     totals: UsageTotals
     by_provider: tuple[ProviderUsage, ...]
     by_day: tuple[DayUsage, ...]
     daily_by_provider: tuple[DailyProviderUsage, ...]
+    by_provider_model: tuple[ProviderModelUsage, ...]
+    daily_by_provider_model: tuple[DailyProviderModelUsage, ...]
 
 
 DayLike = date | datetime | int | str

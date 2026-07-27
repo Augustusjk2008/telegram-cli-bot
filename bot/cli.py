@@ -102,6 +102,7 @@ class CliStreamParseResult:
     token_usage: Optional[CodexUsageSample] = None
     invalid_usage_count: int = 0
     duplicate_terminal_count: int = 0
+    turn_failed: bool = False
 
 
 class CodexJsonStreamParser:
@@ -122,6 +123,8 @@ class CodexJsonStreamParser:
         self._terminal_usage_event_count = 0
         self.invalid_usage_count = 0
         self.duplicate_terminal_count = 0
+        self._turn_failed = False
+        self._turn_aborted = False
 
     def consume_line(self, line: str) -> Dict[str, Optional[str]]:
         value = str(line or "")
@@ -136,6 +139,18 @@ class CodexJsonStreamParser:
                 "error_text": None,
             }
         parsed = parse_codex_json_line(stripped)
+        try:
+            raw_event = json.loads(stripped)
+        except json.JSONDecodeError:
+            raw_event = None
+        if isinstance(raw_event, dict) and raw_event.get("type") == "turn.failed":
+            self._turn_failed = True
+        if isinstance(raw_event, dict):
+            payload = raw_event.get("payload")
+            if raw_event.get("type") == "turn_aborted" or (
+                isinstance(payload, dict) and payload.get("type") == "turn_aborted"
+            ):
+                self._turn_aborted = True
         terminal_usage_seen, token_usage = _parse_codex_terminal_usage(stripped)
         if terminal_usage_seen:
             if self._terminal_usage_event_count:
@@ -190,6 +205,7 @@ class CodexJsonStreamParser:
             token_usage=self._token_usage,
             invalid_usage_count=self.invalid_usage_count,
             duplicate_terminal_count=self.duplicate_terminal_count,
+            turn_failed=self._turn_failed and not self._turn_aborted,
         )
 
 
@@ -403,12 +419,15 @@ def _parse_codex_terminal_usage(line: str) -> tuple[bool, Optional[CodexUsageSam
         event: Any = json.loads(line)
     except json.JSONDecodeError:
         return False, None
-    if not isinstance(event, dict) or str(event.get("type") or "").strip() != "turn.completed":
+    if not isinstance(event, dict):
+        return False, None
+    event_type = str(event.get("type") or "").strip()
+    if event_type not in {"turn.completed", "turn.failed"}:
         return False, None
 
     usage = event.get("usage")
     if not isinstance(usage, dict):
-        return True, None
+        return event_type == "turn.completed" or "usage" in event, None
 
     def token_value(key: str, *, required: bool) -> Optional[int]:
         value = usage.get(key) if required or key in usage else 0

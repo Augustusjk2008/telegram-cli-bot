@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { DEFAULT_CODEX_USAGE_MODEL } from "../../services/types";
 import type {
   CodexUsageConfig,
-  CodexUsageDailyProviderStats,
+  CodexUsageDailyProviderModelStats,
   CodexUsageMetrics,
   CodexUsageProvider,
+  CodexUsageProviderModelStats,
   CodexUsageStats,
 } from "../../services/types";
 import type { WebBotClient } from "../../services/webBotClient";
@@ -36,8 +38,23 @@ const providerResolutionLabels: Record<NonNullable<CodexUsageProvider["resolutio
   unsupported_override: "检测到不支持的运行时覆盖",
 };
 
-function formatNumber(value: number) {
-  return numberFormat.format(value);
+function compactNumber(value: number) {
+  const exact = numberFormat.format(value);
+  const magnitude = Math.abs(value);
+  const units = [
+    { threshold: 1_000_000_000_000, suffix: "T" },
+    { threshold: 1_000_000_000, suffix: "B" },
+    { threshold: 1_000_000, suffix: "M" },
+    { threshold: 1_000, suffix: "K" },
+  ];
+  const unit = units.find((candidate) => magnitude >= candidate.threshold);
+  if (!unit) return { display: exact, exact };
+  const scaled = value / unit.threshold;
+  const display = new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 0,
+  }).format(scaled);
+  return { display: `${display}${unit.suffix}`, exact };
 }
 
 function formatRate(value: number | null) {
@@ -76,11 +93,20 @@ function sortProviders(left: CodexUsageProvider, right: CodexUsageProvider) {
   return providerLabel(left).localeCompare(providerLabel(right), "zh-CN");
 }
 
-function MetricCard({ label, value }: { label: string; value: string }) {
+function CompactNumber({ value }: { value: number }) {
+  const formatted = compactNumber(value);
+  return (
+    <span className="codex-usage-number" title={formatted.exact} aria-label={formatted.exact}>
+      {formatted.display}
+    </span>
+  );
+}
+
+function MetricCard({ label, value }: { label: string; value: number | string }) {
   return (
     <div className="codex-usage-metric-card">
       <dt>{label}</dt>
-      <dd>{value}</dd>
+      <dd>{typeof value === "number" ? <CompactNumber value={value} /> : value}</dd>
     </div>
   );
 }
@@ -88,13 +114,13 @@ function MetricCard({ label, value }: { label: string; value: string }) {
 function MetricCells({ metrics }: { metrics: CodexUsageMetrics }) {
   return (
     <>
-      <td>{formatNumber(metrics.requestCount)}</td>
-      <td>{formatNumber(metrics.inputTokens)}</td>
-      <td>{formatNumber(metrics.cachedInputTokens)}</td>
-      <td>{formatNumber(metrics.uncachedInputTokens)}</td>
-      <td>{formatNumber(metrics.outputTokens)}</td>
-      <td>{formatNumber(metrics.reasoningOutputTokens)}</td>
-      <td>{formatNumber(metrics.totalTokens)}</td>
+      <td><CompactNumber value={metrics.requestCount} /></td>
+      <td><CompactNumber value={metrics.inputTokens} /></td>
+      <td><CompactNumber value={metrics.cachedInputTokens} /></td>
+      <td><CompactNumber value={metrics.uncachedInputTokens} /></td>
+      <td><CompactNumber value={metrics.outputTokens} /></td>
+      <td><CompactNumber value={metrics.reasoningOutputTokens} /></td>
+      <td><CompactNumber value={metrics.totalTokens} /></td>
       <td>{formatRate(metrics.cacheHitRate)}</td>
     </>
   );
@@ -160,26 +186,31 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
     return Array.from(byKey.values()).sort(sortProviders);
   }, [config, stats]);
 
-  const providerRows = useMemo(
-    () => [...(stats?.byProvider || [])].sort((left, right) => sortProviders(left.provider, right.provider)),
+  const providerRows = useMemo<CodexUsageProviderModelStats[]>(
+    () => {
+      const detailedRows = stats?.byProviderModel || [];
+      const rows = detailedRows.length
+        ? detailedRows
+        : (stats?.byProvider || []).map((item) => ({ ...item, model: DEFAULT_CODEX_USAGE_MODEL }));
+      return [...rows].sort((left, right) => (
+        sortProviders(left.provider, right.provider) || left.model.localeCompare(right.model)
+      ));
+    },
     [stats],
   );
 
-  const dailyRows = useMemo<CodexUsageDailyProviderStats[]>(() => {
-    const detailedRows = stats?.dailyByProvider || [];
+  const dailyRows = useMemo<CodexUsageDailyProviderModelStats[]>(() => {
+    const detailedRows = stats?.dailyByProviderModel || [];
     const rows = detailedRows.length
       ? detailedRows
-      : (stats?.byDay || []).map((item) => ({
+      : (stats?.dailyByProvider || []).map((item) => ({
           ...item,
-          provider: {
-            key: "all-providers",
-            kind: "unknown" as const,
-            label: "全部 Provider",
-            baseUrl: null,
-          },
+          model: DEFAULT_CODEX_USAGE_MODEL,
         }));
     return [...rows].sort((left, right) => (
-      right.date.localeCompare(left.date) || sortProviders(left.provider, right.provider)
+      right.date.localeCompare(left.date)
+      || sortProviders(left.provider, right.provider)
+      || left.model.localeCompare(right.model)
     ));
   }, [stats]);
 
@@ -278,14 +309,14 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
   };
 
   const hasHistoricalData = Boolean(stats && stats.totals.requestCount > 0);
-  const noResults = Boolean(stats && !stats.byProvider.length && !stats.byDay.length && !stats.dailyByProvider.length);
+  const noResults = Boolean(stats && !providerRows.length && !dailyRows.length);
 
   return (
     <section aria-labelledby="codex-usage-title" className="codex-usage-panel">
       <div className="codex-usage-heading">
         <div>
           <h2 id="codex-usage-title">Codex 用量</h2>
-          <p>按服务端本地自然日和根 config.toml 的 base URL 汇总，不区分 Bot、用户或 Agent。</p>
+          <p>按服务端本地自然日、Provider 和模型汇总，不区分 Bot、用户或 Agent。</p>
         </div>
         <span className="codex-usage-time-basis">
           服务端本地时间 {config?.timeBasis.utcOffset || stats?.timeBasis.utcOffset || "—"}
@@ -420,12 +451,12 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
                   </div>
                 </div>
                 <dl className="codex-usage-metric-grid">
-                  <MetricCard label="请求次数" value={formatNumber(stats.totals.requestCount)} />
-                  <MetricCard label="输入 token" value={formatNumber(stats.totals.inputTokens)} />
-                  <MetricCard label="缓存命中 token" value={formatNumber(stats.totals.cachedInputTokens)} />
-                  <MetricCard label="非缓存输入" value={formatNumber(stats.totals.uncachedInputTokens)} />
-                  <MetricCard label="输出 token" value={formatNumber(stats.totals.outputTokens)} />
-                  <MetricCard label="总 token" value={formatNumber(stats.totals.totalTokens)} />
+                  <MetricCard label="请求次数" value={stats.totals.requestCount} />
+                  <MetricCard label="输入 token" value={stats.totals.inputTokens} />
+                  <MetricCard label="缓存命中 token" value={stats.totals.cachedInputTokens} />
+                  <MetricCard label="非缓存输入" value={stats.totals.uncachedInputTokens} />
+                  <MetricCard label="输出 token" value={stats.totals.outputTokens} />
+                  <MetricCard label="总 token" value={stats.totals.totalTokens} />
                   <MetricCard label="缓存命中率" value={formatRate(stats.totals.cacheHitRate)} />
                 </dl>
               </section>
@@ -434,13 +465,14 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
 
               {!noResults ? (
                 <section className="codex-usage-section" aria-labelledby="codex-usage-by-provider-title">
-                  <h3 id="codex-usage-by-provider-title">按 Provider 汇总</h3>
+                  <h3 id="codex-usage-by-provider-title">按 Provider / 模型汇总</h3>
                   <div className="codex-usage-table-wrap">
                     <table aria-label="Codex 用量 Provider 汇总">
-                      <caption>按 Provider 汇总</caption>
+                      <caption>按 Provider 和模型汇总</caption>
                       <thead>
                         <tr>
                           <th scope="col">Provider</th>
+                          <th scope="col">模型</th>
                           <th scope="col">请求</th>
                           <th scope="col">输入</th>
                           <th scope="col">缓存输入</th>
@@ -453,11 +485,12 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
                       </thead>
                       <tbody>
                         {providerRows.map((item) => (
-                          <tr key={item.provider.key}>
+                          <tr key={`${item.provider.key}:${item.model}`}>
                             <th scope="row">
                               <span>{providerLabel(item.provider)}</span>
                               {item.provider.baseUrl ? <small>{item.provider.baseUrl}</small> : null}
                             </th>
+                            <td className="codex-usage-model-cell">{item.model}</td>
                             <MetricCells metrics={item} />
                           </tr>
                         ))}
@@ -472,11 +505,12 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
                   <h3 id="codex-usage-daily-title">每日明细</h3>
                   <div className="codex-usage-table-wrap">
                     <table aria-label="Codex 用量每日明细">
-                      <caption>按日期和 Provider 的每日明细</caption>
+                      <caption>按日期、Provider 和模型的每日明细</caption>
                       <thead>
                         <tr>
                           <th scope="col">日期</th>
                           <th scope="col">Provider</th>
+                          <th scope="col">模型</th>
                           <th scope="col">请求</th>
                           <th scope="col">输入</th>
                           <th scope="col">缓存输入</th>
@@ -489,9 +523,10 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
                       </thead>
                       <tbody>
                         {dailyRows.map((item) => (
-                          <tr key={`${item.date}:${item.provider.key}`}>
+                          <tr key={`${item.date}:${item.provider.key}:${item.model}`}>
                             <th scope="row">{item.date}</th>
                             <td className="codex-usage-provider-cell">{providerLabel(item.provider)}</td>
+                            <td className="codex-usage-model-cell">{item.model}</td>
                             <MetricCells metrics={item} />
                           </tr>
                         ))}

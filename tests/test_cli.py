@@ -276,6 +276,35 @@ class TestParseClaudeStreamJsonOutput:
 
 
 class TestIncrementalCliParsers:
+    def test_codex_parser_only_marks_explicit_failed_turns(self):
+        failed = CodexJsonStreamParser(raw_tail_max_bytes=1024, final_text_max_bytes=1024)
+        aborted = CodexJsonStreamParser(raw_tail_max_bytes=1024, final_text_max_bytes=1024)
+        failed_then_aborted = CodexJsonStreamParser(
+            raw_tail_max_bytes=1024,
+            final_text_max_bytes=1024,
+        )
+
+        failed.consume_line(
+            '{"type":"thread.started","thread_id":"thread-failed"}\n'
+        )
+        failed.consume_line(
+            '{"type":"turn.failed","error":{"message":"boom"}}\n'
+        )
+        aborted.consume_line(
+            '{"type":"event_msg","payload":{"type":"turn_aborted","reason":"interrupted"}}\n'
+        )
+        failed_then_aborted.consume_line(
+            '{"type":"turn.failed","error":{"message":"stopped"}}\n'
+        )
+        failed_then_aborted.consume_line(
+            '{"type":"event_msg","payload":{"type":"turn_aborted","reason":"interrupted"}}\n'
+        )
+
+        assert failed.result().turn_failed is True
+        assert failed.result().session_id == "thread-failed"
+        assert aborted.result().turn_failed is False
+        assert failed_then_aborted.result().turn_failed is False
+
     def test_codex_parser_captures_terminal_token_usage(self):
         parser = CodexJsonStreamParser(raw_tail_max_bytes=1024, final_text_max_bytes=1024)
 

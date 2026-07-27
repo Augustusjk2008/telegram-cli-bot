@@ -54,6 +54,7 @@ class _ReaderProcess:
 class _UsageCapture:
     def __init__(self) -> None:
         self.calls: list[tuple[object, int, int]] = []
+        self.failure_contexts: list[tuple[bool, str | None]] = []
 
     async def record_once(
         self,
@@ -61,8 +62,11 @@ class _UsageCapture:
         *,
         invalid_usage_count: int = 0,
         duplicate_terminal_count: int = 0,
+        failed: bool = False,
+        session_id: str | None = None,
     ) -> None:
         self.calls.append((sample, invalid_usage_count, duplicate_terminal_count))
+        self.failure_contexts.append((failed, session_id))
 
 
 class _UsageProcess(_ReaderProcess):
@@ -260,6 +264,35 @@ async def test_codex_communicate_records_usage_once_during_cleanup():
     assert sample.input_tokens == 3
     assert invalid_count == 0
     assert duplicate_count == 1
+
+
+@pytest.mark.asyncio
+async def test_codex_communicate_only_requests_failed_usage_for_explicit_turn_failed():
+    failed_capture = _UsageCapture()
+    aborted_capture = _UsageCapture()
+
+    await _communicate_codex_process(
+        _ReaderProcess(
+            [
+                '{"type":"thread.started","thread_id":"failed-thread"}\n',
+                '{"type":"turn.failed","error":{"message":"boom"}}\n',
+            ]
+        ),
+        usage_capture=failed_capture,
+    )
+    await _communicate_codex_process(
+        _ReaderProcess(
+            [
+                '{"type":"thread.started","thread_id":"aborted-thread"}\n',
+                '{"type":"event_msg","payload":{"type":"turn_aborted"}}\n',
+            ]
+        ),
+        usage_capture=aborted_capture,
+    )
+
+    assert failed_capture.calls == [(None, 0, 0)]
+    assert failed_capture.failure_contexts == [(True, "failed-thread")]
+    assert aborted_capture.calls == []
 
 
 @pytest.mark.asyncio

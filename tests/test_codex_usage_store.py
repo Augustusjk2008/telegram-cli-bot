@@ -5,7 +5,7 @@ import importlib
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -62,7 +62,7 @@ def test_disabled_store_reads_and_close_are_lazy_without_creating_database(tmp_p
     assert not db_path.exists()
 
 
-def test_store_initializes_schema_v1_with_required_sqlite_pragmas(tmp_path: Path) -> None:
+def test_store_initializes_schema_v2_with_model_detail_and_required_sqlite_pragmas(tmp_path: Path) -> None:
     _, store_module, _ = _core_modules()
     db_path = tmp_path / "usage.sqlite3"
     store = store_module.CodexUsageStore(db_path)
@@ -70,7 +70,7 @@ def test_store_initializes_schema_v1_with_required_sqlite_pragmas(tmp_path: Path
     connection = store._connection
 
     assert connection is not None
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
     assert connection.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
     assert connection.execute("PRAGMA synchronous").fetchone()[0] == 1
     assert connection.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
@@ -90,10 +90,58 @@ def test_store_initializes_schema_v1_with_required_sqlite_pragmas(tmp_path: Path
             for row in check.execute("SELECT name FROM sqlite_master WHERE type = 'index'")
         }
 
-    assert {"settings", "providers", "daily_usage"}.issubset(tables)
+    assert {"settings", "providers", "daily_usage", "daily_model_usage"}.issubset(tables)
     assert "WITHOUT ROWID" in tables["settings"].upper()
     assert "WITHOUT ROWID" in tables["daily_usage"].upper()
+    assert "WITHOUT ROWID" in tables["daily_model_usage"].upper()
     assert "idx_daily_usage_provider_day" in indexes
+    assert "idx_daily_model_usage_provider_day" in indexes
+    store.close()
+
+
+def test_store_migrates_v1_provider_totals_to_default_model_without_changing_them(
+    tmp_path: Path,
+) -> None:
+    _, store_module, _ = _core_modules()
+    db_path = tmp_path / "usage.sqlite3"
+    with sqlite3.connect(db_path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE providers (
+                provider_id INTEGER PRIMARY KEY,
+                provider_key TEXT NOT NULL UNIQUE,
+                kind TEXT NOT NULL,
+                base_url TEXT
+            );
+            CREATE TABLE daily_usage (
+                day INTEGER NOT NULL,
+                provider_id INTEGER NOT NULL,
+                request_count INTEGER NOT NULL,
+                input_tokens INTEGER NOT NULL,
+                cached_input_tokens INTEGER NOT NULL,
+                output_tokens INTEGER NOT NULL,
+                reasoning_output_tokens INTEGER NOT NULL,
+                PRIMARY KEY (day, provider_id)
+            ) WITHOUT ROWID;
+            INSERT INTO providers(provider_id, provider_key, kind, base_url)
+            VALUES (1, 'openai_official', 'openai_official', NULL);
+            INSERT INTO daily_usage(
+                day, provider_id, request_count, input_tokens,
+                cached_input_tokens, output_tokens, reasoning_output_tokens
+            ) VALUES (20260726, 1, 3, 1200000, 200000, 50000, 10000);
+            PRAGMA user_version=1;
+            """
+        )
+
+    store = store_module.CodexUsageStore(db_path)
+    result = store.query(date(2026, 7, 26), date(2026, 7, 26))
+
+    assert result.totals.request_count == 3
+    assert result.totals.total_tokens == 1_250_000
+    assert len(result.by_provider_model) == 1
+    assert result.by_provider_model[0].model == "gpt-5.6-sol"
+    assert result.by_provider_model[0].totals == result.totals
+    assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 2
     store.close()
 
 
@@ -118,6 +166,51 @@ def test_store_atomically_aggregates_daily_usage_and_derives_token_totals(tmp_pa
     assert len(result.by_provider) == len(result.by_day) == len(result.daily_by_provider) == 1
     assert result.daily_by_provider[0].day == date(2026, 7, 26)
     assert result.daily_by_provider[0].provider.key == "openai_official"
+    store.close()
+
+
+def test_store_aggregates_by_provider_and_normalized_model_without_unknown_bucket(
+    tmp_path: Path,
+) -> None:
+    models, store_module, _ = _core_modules()
+    store = store_module.CodexUsageStore(tmp_path / "usage.sqlite3")
+    provider = _official_provider(models)
+
+    store.record(
+        provider,
+        _usage(
+            models,
+            input_tokens=10,
+            cached_input_tokens=2,
+            output_tokens=3,
+            reasoning_output_tokens=1,
+        ),
+        model_key="gpt-5.4",
+        terminal_at=date(2026, 7, 26),
+    )
+    store.record(
+        provider,
+        _usage(
+            models,
+            input_tokens=20,
+            cached_input_tokens=4,
+            output_tokens=5,
+            reasoning_output_tokens=1,
+        ),
+        model_key="unknown",
+        terminal_at=date(2026, 7, 26),
+    )
+    result = store.query(date(2026, 7, 26), date(2026, 7, 26))
+
+    assert result.totals.request_count == 2
+    assert [(item.model, item.totals.request_count) for item in result.by_provider_model] == [
+        ("gpt-5.4", 1),
+        ("gpt-5.6-sol", 1),
+    ]
+    assert {item.model for item in result.daily_by_provider_model} == {
+        "gpt-5.4",
+        "gpt-5.6-sol",
+    }
     store.close()
 
 
@@ -276,6 +369,17 @@ class _StaticResolver:
         return self.provider
 
 
+def test_codex_model_resolution_uses_effective_override_and_never_returns_unknown() -> None:
+    _, _, service_module = _core_modules()
+
+    assert service_module.resolve_codex_model(None) == "gpt-5.6-sol"
+    assert service_module.resolve_codex_model(["codex", "exec", "--model", "unknown"]) == "gpt-5.6-sol"
+    assert service_module.resolve_codex_model(["codex", "exec", "-m", "gpt-5.6-pro"]) == "gpt-5.6-pro"
+    assert service_module.resolve_codex_model(
+        ["codex", "exec", "--model", "gpt-5.4", "-c", 'model="gpt-5.6-sol"']
+    ) == "gpt-5.6-sol"
+
+
 @pytest.mark.asyncio
 async def test_service_skips_provider_io_and_database_creation_while_disabled(tmp_path: Path) -> None:
     models, _, service_module = _core_modules()
@@ -366,7 +470,7 @@ async def test_service_keeps_capture_callers_safe_when_recording_fails(tmp_path:
     models, store_module, service_module = _core_modules()
 
     class FailingStore(store_module.CodexUsageStore):
-        def record(self, provider, usage, *, terminal_at=None) -> None:
+        def record(self, provider, usage, *, model_key="gpt-5.6-sol", terminal_at=None) -> None:
             raise OSError("simulated disk failure")
 
     store = FailingStore(tmp_path / "usage.sqlite3")
@@ -478,6 +582,59 @@ async def test_capture_accepts_cli_usage_sample_command_and_parser_diagnostics(t
 
 
 @pytest.mark.asyncio
+async def test_capture_uses_rollout_only_for_explicit_failed_turn_and_snapshots_model(
+    tmp_path: Path,
+) -> None:
+    models, _, service_module = _core_modules()
+    resolver_calls: list[tuple[str, datetime, Path]] = []
+
+    def failed_usage_resolver(*, session_id: str, started_at: datetime, codex_home: Path):
+        resolver_calls.append((session_id, started_at, codex_home))
+        return _usage(
+            models,
+            input_tokens=30,
+            cached_input_tokens=4,
+            output_tokens=7,
+            reasoning_output_tokens=2,
+        )
+
+    service = service_module.CodexUsageService(
+        db_path=tmp_path / "usage.sqlite3",
+        resolver=_StaticResolver(_official_provider(models)),
+        failed_usage_resolver=failed_usage_resolver,
+    )
+    await service.set_enabled(True)
+    codex_home = tmp_path / "codex-home"
+
+    manual_capture = await service.create_capture(
+        env={"CODEX_HOME": str(codex_home)},
+        command=["codex", "exec", "--model", "unknown", "-"],
+    )
+    assert await manual_capture.record_once(None, failed=False, session_id="manual") is False
+    assert resolver_calls == []
+
+    failed_capture = await service.create_capture(
+        env={"CODEX_HOME": str(codex_home)},
+        command=["codex", "exec", "--model", "gpt-5.6-pro", "-"],
+    )
+    assert await failed_capture.record_once(
+        None,
+        failed=True,
+        session_id="failed-session",
+        terminal_at=date(2026, 7, 26),
+    ) is True
+    result = await service.query(date(2026, 7, 26), date(2026, 7, 26))
+
+    assert len(resolver_calls) == 1
+    assert resolver_calls[0][0] == "failed-session"
+    assert resolver_calls[0][1].tzinfo is not None
+    assert resolver_calls[0][2] == codex_home
+    assert result.by_provider_model[0].model == "gpt-5.6-pro"
+    assert result.totals.total_tokens == 37
+    await service.aclose()
+
+
+@pytest.mark.asyncio
 async def test_capture_record_once_is_concurrent_safe(tmp_path: Path) -> None:
     models, _, service_module = _core_modules()
     service = service_module.CodexUsageService(
@@ -528,7 +685,9 @@ async def test_service_exposes_admin_config_and_stats_views(tmp_path: Path) -> N
     assert stats["selected_provider_keys"] == [provider.key]
     assert stats["totals"]["request_count"] == 1
     assert stats["by_provider"][0]["provider"]["base_url"] == provider.base_url
+    assert stats["by_provider_model"][0]["model"] == "gpt-5.6-sol"
     assert stats["daily_by_provider"][0]["date"] == "2026-07-26"
+    assert stats["daily_by_provider_model"][0]["model"] == "gpt-5.6-sol"
     assert updated_config["enabled"] is False
     await service.aclose()
 
@@ -610,7 +769,7 @@ async def test_failed_capture_write_is_never_retried_by_the_same_capture(tmp_pat
             super().__init__(db_path)
             self.record_calls = 0
 
-        def record(self, provider, usage, *, terminal_at=None) -> None:
+        def record(self, provider, usage, *, model_key="gpt-5.6-sol", terminal_at=None) -> None:
             self.record_calls += 1
             raise OSError("simulated lock failure")
 

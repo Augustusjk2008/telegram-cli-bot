@@ -391,6 +391,8 @@ export type CodexUsageProvider = {
   resolution?: CodexUsageProviderResolution;
 };
 
+export const DEFAULT_CODEX_USAGE_MODEL = "gpt-5.6-sol";
+
 export type CodexUsageTimeBasis = {
   mode: "server_local" | string;
   utcOffset: string;
@@ -435,12 +437,20 @@ export type CodexUsageProviderStats = CodexUsageMetrics & {
   provider: CodexUsageProvider;
 };
 
+export type CodexUsageProviderModelStats = CodexUsageProviderStats & {
+  model: string;
+};
+
 export type CodexUsageDailyStats = CodexUsageMetrics & {
   date: string;
 };
 
 export type CodexUsageDailyProviderStats = CodexUsageDailyStats & {
   provider: CodexUsageProvider;
+};
+
+export type CodexUsageDailyProviderModelStats = CodexUsageDailyProviderStats & {
+  model: string;
 };
 
 export type CodexUsageStats = {
@@ -452,8 +462,10 @@ export type CodexUsageStats = {
   selectedProviderKeys: string[];
   totals: CodexUsageMetrics;
   byProvider: CodexUsageProviderStats[];
+  byProviderModel: CodexUsageProviderModelStats[];
   byDay: CodexUsageDailyStats[];
   dailyByProvider: CodexUsageDailyProviderStats[];
+  dailyByProviderModel: CodexUsageDailyProviderModelStats[];
 };
 
 export type NativeAgentConfigView = {

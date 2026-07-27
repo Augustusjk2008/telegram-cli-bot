@@ -4341,8 +4341,10 @@ describe("RealWebBotClient", () => {
         selected_provider_keys: ["openai_official", "base_url_sha256:abc"],
         totals: metrics,
         by_provider: [{ provider, ...metrics }],
+        by_provider_model: [{ provider, model: "unknown", ...metrics }],
         by_day: [{ date: "2026-07-26", ...metrics }],
         daily_by_provider: [{ date: "2026-07-26", provider, ...metrics }],
+        daily_by_provider_model: [{ date: "2026-07-26", provider, model: "gpt-5.6-pro", ...metrics }],
       }));
 
     const client = new RealWebBotClient() as unknown as {
@@ -4394,10 +4396,12 @@ describe("RealWebBotClient", () => {
         cacheHitRate: 0.25,
       },
       selectedProviderKeys: ["openai_official", "base_url_sha256:abc"],
+      byProviderModel: [{ model: "gpt-5.6-sol" }],
       dailyByProvider: [{
         date: "2026-07-26",
         provider: { label: "OpenAI 官方" },
       }],
+      dailyByProviderModel: [{ model: "gpt-5.6-pro" }],
     });
   });
 

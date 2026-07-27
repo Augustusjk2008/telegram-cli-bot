@@ -1,4 +1,4 @@
-import { WebApiClientError } from "./types";
+import { DEFAULT_CODEX_USAGE_MODEL, WebApiClientError } from "./types";
 import { buildWsUrl, withApiBase } from "../utils/publicBase";
 import { ChatStreamIncompleteError } from "./chatStreamError";
 import type {
@@ -75,12 +75,14 @@ import type {
   CodexUsageAvailableRange,
   CodexUsageConfig,
   CodexUsageDailyProviderStats,
+  CodexUsageDailyProviderModelStats,
   CodexUsageDailyStats,
   CodexUsageMetrics,
   CodexUsageProvider,
   CodexUsageProviderKind,
   CodexUsageProviderResolution,
   CodexUsageProviderStats,
+  CodexUsageProviderModelStats,
   CodexUsageStats,
   CodexUsageStatsQuery,
   CodexUsageTimeBasis,
@@ -1463,6 +1465,14 @@ type RawCodexUsageDailyStats = RawCodexUsageMetrics & {
 
 type RawCodexUsageDailyProviderStats = RawCodexUsageDailyStats & RawCodexUsageProviderStats;
 
+type RawCodexUsageProviderModelStats = RawCodexUsageProviderStats & {
+  model?: string;
+};
+
+type RawCodexUsageDailyProviderModelStats = RawCodexUsageDailyProviderStats & {
+  model?: string;
+};
+
 type RawCodexUsageStats = {
   range?: {
     start_date?: string;
@@ -1475,8 +1485,10 @@ type RawCodexUsageStats = {
   selected_provider_keys?: string[];
   totals?: RawCodexUsageMetrics;
   by_provider?: RawCodexUsageProviderStats[];
+  by_provider_model?: RawCodexUsageProviderModelStats[];
   by_day?: RawCodexUsageDailyStats[];
   daily_by_provider?: RawCodexUsageDailyProviderStats[];
+  daily_by_provider_model?: RawCodexUsageDailyProviderModelStats[];
 };
 
 type StreamEventPayload =
@@ -3513,6 +3525,11 @@ function mapCodexUsageProviderFromStats(raw: RawCodexUsageProviderStats): CodexU
   });
 }
 
+function mapCodexUsageModel(value: unknown): string {
+  const model = String(value || "").trim();
+  return !model || model.toLowerCase() === "unknown" ? DEFAULT_CODEX_USAGE_MODEL : model;
+}
+
 function mapCodexUsageConfig(raw: RawCodexUsageConfig): CodexUsageConfig {
   return {
     enabled: Boolean(raw.enabled),
@@ -3536,6 +3553,21 @@ function mapCodexUsageStats(raw: RawCodexUsageStats): CodexUsageStats {
     provider: mapCodexUsageProviderFromStats(item),
     ...mapCodexUsageMetrics(item),
   }));
+  const byProviderModel: CodexUsageProviderModelStats[] = raw.by_provider_model === undefined
+    ? byProvider.map((item) => ({ ...item, model: DEFAULT_CODEX_USAGE_MODEL }))
+    : raw.by_provider_model.map((item) => ({
+        provider: mapCodexUsageProviderFromStats(item),
+        model: mapCodexUsageModel(item.model),
+        ...mapCodexUsageMetrics(item),
+      }));
+  const dailyByProviderModel: CodexUsageDailyProviderModelStats[] = raw.daily_by_provider_model === undefined
+    ? dailyByProvider.map((item) => ({ ...item, model: DEFAULT_CODEX_USAGE_MODEL }))
+    : raw.daily_by_provider_model.map((item) => ({
+        date: String(item.date || item.day || ""),
+        provider: mapCodexUsageProviderFromStats(item),
+        model: mapCodexUsageModel(item.model),
+        ...mapCodexUsageMetrics(item),
+      }));
   return {
     range: {
       startDate: String(raw.range?.start_date || ""),
@@ -3550,8 +3582,10 @@ function mapCodexUsageStats(raw: RawCodexUsageStats): CodexUsageStats {
       : [],
     totals: mapCodexUsageMetrics(raw.totals),
     byProvider,
+    byProviderModel,
     byDay,
     dailyByProvider,
+    dailyByProviderModel,
   };
 }
 

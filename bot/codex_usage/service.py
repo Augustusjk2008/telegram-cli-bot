@@ -2,17 +2,80 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import shlex
 import threading
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from .models import CodexTokenUsage, DayLike, ProviderInfo, UsageQueryResult
+from .models import (
+    DEFAULT_CODEX_MODEL,
+    CodexTokenUsage,
+    DayLike,
+    ProviderInfo,
+    UsageQueryResult,
+    normalize_model_key,
+)
 from .provider import CodexProviderResolver
+from .rollout import resolve_failed_turn_usage
 from .store import CodexUsageStore
+
+try:
+    import tomllib
+except ImportError:  # pragma: no cover - exercised on Python 3.10 only
+    import tomli as tomllib  # type: ignore[no-redef]
 
 
 logger = logging.getLogger(__name__)
+
+
+def _model_from_config_override(value: str) -> str | None:
+    try:
+        parsed = tomllib.loads(value)
+    except (TypeError, tomllib.TOMLDecodeError):
+        return None
+    model = parsed.get("model") if isinstance(parsed, Mapping) else None
+    return model if isinstance(model, str) else None
+
+
+def resolve_codex_model(argv: Sequence[str] | str | None) -> str:
+    if argv is None:
+        return DEFAULT_CODEX_MODEL
+    arguments = shlex.split(argv) if isinstance(argv, str) else [str(item) for item in argv]
+    selected: str | None = None
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        config_override: str | None = None
+        if argument in {"--model", "-m"}:
+            if index + 1 < len(arguments):
+                index += 1
+                selected = arguments[index]
+        elif argument.startswith("--model="):
+            selected = argument.split("=", 1)[1]
+        elif argument.startswith("-m") and not argument.startswith("--") and len(argument) > 2:
+            selected = argument[2:]
+        elif argument in {"-c", "--config"}:
+            if index + 1 < len(arguments):
+                index += 1
+                config_override = arguments[index]
+        elif argument.startswith("--config="):
+            config_override = argument.split("=", 1)[1]
+        elif argument.startswith("-c") and len(argument) > 2:
+            config_override = argument[2:]
+        if config_override is not None:
+            configured_model = _model_from_config_override(config_override)
+            if configured_model is not None:
+                selected = configured_model
+        index += 1
+    return normalize_model_key(selected)
+
+
+def _codex_home(env: Mapping[str, str] | None) -> Path:
+    source = os.environ if env is None else env
+    configured = str(source.get("CODEX_HOME") or "").strip()
+    return Path(configured).expanduser() if configured else Path.home() / ".codex"
 
 
 def _default_db_path() -> Path:
@@ -42,10 +105,16 @@ class CodexUsageCapture:
         *,
         enabled: bool,
         provider: ProviderInfo,
+        model: str,
+        started_at: datetime,
+        codex_home: Path,
     ) -> None:
         self._service = service
         self.enabled = enabled
         self.provider = provider
+        self.model = normalize_model_key(model)
+        self.started_at = started_at
+        self.codex_home = codex_home
         self._attempted = False
 
     async def record_once(
@@ -56,6 +125,8 @@ class CodexUsageCapture:
         terminal_time: datetime | date | None = None,
         invalid_usage_count: int = 0,
         duplicate_terminal_count: int = 0,
+        failed: bool = False,
+        session_id: str | None = None,
     ) -> bool:
         """Best-effort record that never lets usage accounting fail chat execution."""
 
@@ -65,14 +136,29 @@ class CodexUsageCapture:
             self._service.note_duplicate_terminal()
             return False
         self._attempted = True
-        if not self.enabled or usage is None:
+        if not self.enabled:
             return False
+        if usage is None:
+            if not failed or not str(session_id or "").strip():
+                return False
+            usage = await self._service._resolve_failed_capture_usage(
+                session_id=str(session_id).strip(),
+                started_at=self.started_at,
+                codex_home=self.codex_home,
+            )
+            if usage is None:
+                return False
         timestamp = terminal_at if terminal_at is not None else terminal_time
         if timestamp is None:
             sample_time = getattr(usage, "completed_at", None)
             if isinstance(sample_time, (datetime, date)):
                 timestamp = sample_time
-        return await self._service._record_capture(self.provider, usage, timestamp)
+        return await self._service._record_capture(
+            self.provider,
+            self.model,
+            usage,
+            timestamp,
+        )
 
 
 class CodexUsageService:
@@ -84,11 +170,13 @@ class CodexUsageService:
         *,
         store: CodexUsageStore | None = None,
         resolver: CodexProviderResolver | Any | None = None,
+        failed_usage_resolver: Any | None = None,
     ) -> None:
         if store is None:
             store = CodexUsageStore(_default_db_path() if db_path is None else db_path)
         self._store = store
         self._resolver = resolver or CodexProviderResolver()
+        self._failed_usage_resolver = failed_usage_resolver or resolve_failed_turn_usage
         self._diagnostics_lock = threading.RLock()
         self._enabled_snapshot = False
         self._write_count = 0
@@ -135,6 +223,10 @@ class CodexUsageService:
         argv: Sequence[str] | str | None = None,
         command: Sequence[str] | str | None = None,
     ) -> CodexUsageCapture:
+        effective_argv = argv if argv is not None else command
+        started_at = datetime.now(timezone.utc)
+        model = resolve_codex_model(effective_argv)
+        codex_home = _codex_home(env)
         enabled = await self.get_enabled()
         if not enabled:
             return CodexUsageCapture(
@@ -146,6 +238,9 @@ class CodexUsageService:
                     base_url=None,
                     resolution="disabled",
                 ),
+                model=model,
+                started_at=started_at,
+                codex_home=codex_home,
             )
         try:
             provider = await self.resolve_current_provider(
@@ -164,7 +259,14 @@ class CodexUsageService:
         else:
             if provider.kind == "unknown":
                 self._mark_provider_resolution_failure(None)
-        return CodexUsageCapture(self, enabled=True, provider=provider)
+        return CodexUsageCapture(
+            self,
+            enabled=True,
+            provider=provider,
+            model=model,
+            started_at=started_at,
+            codex_home=codex_home,
+        )
 
     capture_for_process = create_capture
     start_capture = create_capture
@@ -172,6 +274,7 @@ class CodexUsageService:
     async def _record_capture(
         self,
         provider: ProviderInfo,
+        model: str,
         usage: CodexTokenUsage | Mapping[str, Any],
         terminal_at: datetime | date | None,
     ) -> bool:
@@ -180,6 +283,7 @@ class CodexUsageService:
                 self._store.record,
                 provider,
                 usage,
+                model_key=model,
                 terminal_at=terminal_at,
             )
         except ValueError as exc:
@@ -198,6 +302,24 @@ class CodexUsageService:
             self._write_count += 1
             self._last_write_at = datetime.now(timezone.utc).isoformat()
         return True
+
+    async def _resolve_failed_capture_usage(
+        self,
+        *,
+        session_id: str,
+        started_at: datetime,
+        codex_home: Path,
+    ) -> CodexTokenUsage | Mapping[str, Any] | None:
+        try:
+            return await asyncio.to_thread(
+                self._failed_usage_resolver,
+                session_id=session_id,
+                started_at=started_at,
+                codex_home=codex_home,
+            )
+        except Exception as exc:
+            logger.warning("Codex 失败轮用量恢复失败，已跳过: %s", type(exc).__name__)
+            return None
 
     async def query(
         self,
@@ -295,6 +417,31 @@ class CodexUsageService:
                         -value.day.toordinal(),
                         _provider_order(value.provider),
                         value.provider.key,
+                    ),
+                )
+            ],
+            "by_provider_model": [
+                {
+                    "provider": _provider_payload(item.provider),
+                    "model": item.model,
+                    **_totals_payload(item.totals),
+                }
+                for item in result.by_provider_model
+            ],
+            "daily_by_provider_model": [
+                {
+                    "date": item.day.isoformat(),
+                    "provider": _provider_payload(item.provider),
+                    "model": item.model,
+                    **_totals_payload(item.totals),
+                }
+                for item in sorted(
+                    result.daily_by_provider_model,
+                    key=lambda value: (
+                        -value.day.toordinal(),
+                        _provider_order(value.provider),
+                        value.provider.key,
+                        value.model,
                     ),
                 )
             ],

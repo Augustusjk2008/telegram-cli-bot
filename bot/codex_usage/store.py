@@ -8,20 +8,24 @@ from typing import Iterable
 
 from .models import (
     CodexTokenUsage,
+    DEFAULT_CODEX_MODEL,
+    DailyProviderModelUsage,
     DailyProviderUsage,
     DayLike,
     DayUsage,
     ProviderInfo,
+    ProviderModelUsage,
     ProviderUsage,
     UsageQueryResult,
     UsageTotals,
     coerce_token_usage,
     day_from_number,
     day_number,
+    normalize_model_key,
 )
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _SETTING_ENABLED = "enabled"
 
 _SCHEMA_SQL = """
@@ -55,6 +59,23 @@ CREATE TABLE IF NOT EXISTS daily_usage (
 
 CREATE INDEX IF NOT EXISTS idx_daily_usage_provider_day
 ON daily_usage(provider_id, day);
+
+CREATE TABLE IF NOT EXISTS daily_model_usage (
+    day INTEGER NOT NULL,
+    provider_id INTEGER NOT NULL REFERENCES providers(provider_id),
+    model_key TEXT NOT NULL,
+    request_count INTEGER NOT NULL DEFAULT 0 CHECK (request_count >= 0),
+    input_tokens INTEGER NOT NULL DEFAULT 0 CHECK (input_tokens >= 0),
+    cached_input_tokens INTEGER NOT NULL DEFAULT 0
+        CHECK (cached_input_tokens >= 0 AND cached_input_tokens <= input_tokens),
+    output_tokens INTEGER NOT NULL DEFAULT 0 CHECK (output_tokens >= 0),
+    reasoning_output_tokens INTEGER NOT NULL DEFAULT 0
+        CHECK (reasoning_output_tokens >= 0 AND reasoning_output_tokens <= output_tokens),
+    PRIMARY KEY (day, provider_id, model_key)
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_daily_model_usage_provider_day
+ON daily_model_usage(provider_id, day);
 """
 
 
@@ -99,10 +120,26 @@ class CodexUsageStore:
     @staticmethod
     def _ensure_schema(connection: sqlite3.Connection) -> None:
         version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if version not in {0, SCHEMA_VERSION}:
+        if version not in {0, 1, SCHEMA_VERSION}:
             raise RuntimeError(f"不支持的 Codex usage schema 版本: {version}")
         connection.executescript(_SCHEMA_SQL)
-        if version == 0:
+        if version == 1:
+            with connection:
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO daily_model_usage(
+                        day, provider_id, model_key, request_count, input_tokens,
+                        cached_input_tokens, output_tokens, reasoning_output_tokens
+                    )
+                    SELECT
+                        day, provider_id, ?, request_count, input_tokens,
+                        cached_input_tokens, output_tokens, reasoning_output_tokens
+                    FROM daily_usage
+                    """,
+                    (DEFAULT_CODEX_MODEL,),
+                )
+                connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        elif version == 0:
             connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     @staticmethod
@@ -131,6 +168,8 @@ class CodexUsageStore:
             by_provider=(),
             by_day=(),
             daily_by_provider=(),
+            by_provider_model=(),
+            daily_by_provider_model=(),
         )
 
     def get_enabled(self) -> bool:
@@ -172,6 +211,7 @@ class CodexUsageStore:
         provider: ProviderInfo,
         usage: CodexTokenUsage | dict[str, object],
         *,
+        model_key: str = DEFAULT_CODEX_MODEL,
         terminal_at: datetime | date | None = None,
     ) -> None:
         if provider.kind not in {"openai_official", "base_url", "unknown"}:
@@ -181,6 +221,7 @@ class CodexUsageStore:
         if provider.kind == "base_url" and not provider.base_url:
             raise ValueError("自定义 provider 必须包含 base_url")
         token_usage = coerce_token_usage(usage)
+        normalized_model = normalize_model_key(model_key)
         terminal_day = day_number(terminal_at or datetime.now().astimezone())
         with self._lock:
             connection = self._get_connection(create=True)
@@ -227,6 +268,35 @@ class CodexUsageStore:
                         token_usage.reasoning_output_tokens,
                     ),
                 )
+                connection.execute(
+                    """
+                    INSERT INTO daily_model_usage(
+                        day, provider_id, model_key, request_count, input_tokens,
+                        cached_input_tokens, output_tokens, reasoning_output_tokens
+                    ) VALUES (?, ?, ?, 1, ?, ?, ?, ?)
+                    ON CONFLICT(day, provider_id, model_key) DO UPDATE SET
+                        request_count = daily_model_usage.request_count + excluded.request_count,
+                        input_tokens = daily_model_usage.input_tokens + excluded.input_tokens,
+                        cached_input_tokens = (
+                            daily_model_usage.cached_input_tokens
+                            + excluded.cached_input_tokens
+                        ),
+                        output_tokens = daily_model_usage.output_tokens + excluded.output_tokens,
+                        reasoning_output_tokens = (
+                            daily_model_usage.reasoning_output_tokens
+                            + excluded.reasoning_output_tokens
+                        )
+                    """,
+                    (
+                        terminal_day,
+                        int(provider_row["provider_id"]),
+                        normalized_model,
+                        token_usage.input_tokens,
+                        token_usage.cached_input_tokens,
+                        token_usage.output_tokens,
+                        token_usage.reasoning_output_tokens,
+                    ),
+                )
 
     write_usage = record
 
@@ -249,12 +319,17 @@ class CodexUsageStore:
             if connection is None:
                 return self._empty_query()
             where = ["daily_usage.day >= ?", "daily_usage.day <= ?"]
+            model_where = [
+                "daily_model_usage.day >= ?",
+                "daily_model_usage.day <= ?",
+            ]
             parameters: list[object] = [start, end]
             if selected_keys is not None:
                 if not selected_keys:
                     return self._empty_query()
                 placeholders = ", ".join("?" for _ in selected_keys)
                 where.append(f"providers.provider_key IN ({placeholders})")
+                model_where.append(f"providers.provider_key IN ({placeholders})")
                 parameters.extend(selected_keys)
             rows = connection.execute(
                 f"""
@@ -272,6 +347,29 @@ class CodexUsageStore:
                 JOIN providers ON providers.provider_id = daily_usage.provider_id
                 WHERE {' AND '.join(where)}
                 ORDER BY daily_usage.day ASC, providers.provider_key ASC
+                """,
+                parameters,
+            ).fetchall()
+            model_rows = connection.execute(
+                f"""
+                SELECT
+                    daily_model_usage.day,
+                    daily_model_usage.model_key,
+                    daily_model_usage.request_count,
+                    daily_model_usage.input_tokens,
+                    daily_model_usage.cached_input_tokens,
+                    daily_model_usage.output_tokens,
+                    daily_model_usage.reasoning_output_tokens,
+                    providers.provider_key,
+                    providers.kind,
+                    providers.base_url
+                FROM daily_model_usage
+                JOIN providers ON providers.provider_id = daily_model_usage.provider_id
+                WHERE {' AND '.join(model_where)}
+                ORDER BY
+                    daily_model_usage.day ASC,
+                    providers.provider_key ASC,
+                    daily_model_usage.model_key ASC
                 """,
                 parameters,
             ).fetchall()
@@ -317,11 +415,58 @@ class CodexUsageStore:
                 ),
             )
         )
+        provider_model_totals: dict[
+            tuple[str, str], tuple[ProviderInfo, str, UsageTotals]
+        ] = {}
+        daily_model_rows: list[DailyProviderModelUsage] = []
+        for row in model_rows:
+            provider = self._provider_from_row(row)
+            model = normalize_model_key(row["model_key"])
+            totals = self._totals_from_row(row)
+            key = (provider.key, model)
+            current = provider_model_totals.get(key)
+            provider_model_totals[key] = (
+                provider,
+                model,
+                totals if current is None else current[2].plus(totals),
+            )
+            daily_model_rows.append(
+                DailyProviderModelUsage(
+                    day=day_from_number(int(row["day"])),
+                    provider=provider,
+                    model=model,
+                    totals=totals,
+                )
+            )
+        by_provider_model = tuple(
+            ProviderModelUsage(provider=provider, model=model, totals=totals)
+            for provider, model, totals in sorted(
+                provider_model_totals.values(),
+                key=lambda item: (
+                    kind_order.get(item[0].kind, 99),
+                    item[0].key,
+                    item[1],
+                ),
+            )
+        )
+        daily_by_provider_model = tuple(
+            sorted(
+                daily_model_rows,
+                key=lambda item: (
+                    item.day,
+                    kind_order.get(item.provider.kind, 99),
+                    item.provider.key,
+                    item.model,
+                ),
+            )
+        )
         return UsageQueryResult(
             totals=total,
             by_provider=by_provider,
             by_day=by_day,
             daily_by_provider=daily_by_provider,
+            by_provider_model=by_provider_model,
+            daily_by_provider_model=daily_by_provider_model,
         )
 
     query_usage = query

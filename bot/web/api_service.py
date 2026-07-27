@@ -3167,13 +3167,17 @@ async def _record_codex_usage_capture(usage_capture: Any, parsed_result: Any) ->
     sample = getattr(parsed_result, "token_usage", None)
     invalid_usage_count = int(getattr(parsed_result, "invalid_usage_count", 0) or 0)
     duplicate_terminal_count = int(getattr(parsed_result, "duplicate_terminal_count", 0) or 0)
-    if sample is None and not invalid_usage_count and not duplicate_terminal_count:
+    failed = bool(getattr(parsed_result, "turn_failed", False))
+    session_id = getattr(parsed_result, "session_id", None)
+    if sample is None and not failed and not invalid_usage_count and not duplicate_terminal_count:
         return
     try:
         record_once = usage_capture.record_once
         kwargs = {
             "invalid_usage_count": invalid_usage_count,
             "duplicate_terminal_count": duplicate_terminal_count,
+            "failed": failed,
+            "session_id": session_id,
         }
         if inspect.iscoroutinefunction(record_once):
             result = record_once(sample, **kwargs)

@@ -267,7 +267,7 @@
 
 .codex-usage-table-wrap table {
   width: 100%;
-  min-width: 980px;
+  min-width: 1080px;
   border-collapse: collapse;
   color: var(--text);
   font-size: 0.8rem;
@@ -299,8 +299,13 @@
 
 .codex-usage-table-wrap th:first-child,
 .codex-usage-table-wrap td:first-child,
-.codex-usage-table-wrap .codex-usage-provider-cell {
+.codex-usage-table-wrap .codex-usage-provider-cell,
+.codex-usage-table-wrap .codex-usage-model-cell {
   text-align: left;
+}
+
+.codex-usage-number {
+  font-variant-numeric: tabular-nums;
 }
 
 .codex-usage-table-wrap tbody th {

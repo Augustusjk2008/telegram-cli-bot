@@ -50,10 +50,12 @@ import type {
   CliErrorStatsFilters,
   CliErrorStatsResult,
   CodexUsageConfig,
+  CodexUsageDailyProviderModelStats,
   CodexUsageDailyProviderStats,
   CodexUsageDailyStats,
   CodexUsageMetrics,
   CodexUsageProviderStats,
+  CodexUsageProviderModelStats,
   CodexUsageStats,
   CodexUsageStatsQuery,
   CliType,
@@ -379,8 +381,10 @@ function cloneCodexUsageStats(stats: CodexUsageStats): CodexUsageStats {
     selectedProviderKeys: [...stats.selectedProviderKeys],
     totals: { ...stats.totals },
     byProvider: stats.byProvider.map((item) => ({ ...item, provider: { ...item.provider } })),
+    byProviderModel: stats.byProviderModel.map((item) => ({ ...item, provider: { ...item.provider } })),
     byDay: stats.byDay.map((item) => ({ ...item })),
     dailyByProvider: stats.dailyByProvider.map((item) => ({ ...item, provider: { ...item.provider } })),
+    dailyByProviderModel: stats.dailyByProviderModel.map((item) => ({ ...item, provider: { ...item.provider } })),
   };
 }
 
@@ -1824,6 +1828,24 @@ export class MockWebBotClient implements WebBotClient {
       totalTokens: 23000,
       cacheHitRate: 6800 / 18800,
     }],
+    byProviderModel: [{
+      provider: {
+        key: "openai_official",
+        kind: "openai_official",
+        label: "OpenAI 官方",
+        baseUrl: null,
+        resolution: "resolved",
+      },
+      model: "gpt-5.6-sol",
+      requestCount: 12,
+      inputTokens: 18800,
+      cachedInputTokens: 6800,
+      uncachedInputTokens: 12000,
+      outputTokens: 4200,
+      reasoningOutputTokens: 950,
+      totalTokens: 23000,
+      cacheHitRate: 6800 / 18800,
+    }],
     byDay: [{
       date: "2026-07-26",
       requestCount: 12,
@@ -1844,6 +1866,25 @@ export class MockWebBotClient implements WebBotClient {
         baseUrl: null,
         resolution: "resolved",
       },
+      requestCount: 12,
+      inputTokens: 18800,
+      cachedInputTokens: 6800,
+      uncachedInputTokens: 12000,
+      outputTokens: 4200,
+      reasoningOutputTokens: 950,
+      totalTokens: 23000,
+      cacheHitRate: 6800 / 18800,
+    }],
+    dailyByProviderModel: [{
+      date: "2026-07-26",
+      provider: {
+        key: "openai_official",
+        kind: "openai_official",
+        label: "OpenAI 官方",
+        baseUrl: null,
+        resolution: "resolved",
+      },
+      model: "gpt-5.6-sol",
       requestCount: 12,
       inputTokens: 18800,
       cachedInputTokens: 6800,
@@ -5626,7 +5667,9 @@ export class MockWebBotClient implements WebBotClient {
     if (selectedProviderKeys.length) {
       const selected = new Set(selectedProviderKeys);
       result.byProvider = result.byProvider.filter((item) => selected.has(item.provider.key));
+      result.byProviderModel = result.byProviderModel.filter((item) => selected.has(item.provider.key));
       result.dailyByProvider = result.dailyByProvider.filter((item) => selected.has(item.provider.key));
+      result.dailyByProviderModel = result.dailyByProviderModel.filter((item) => selected.has(item.provider.key));
     }
     if (query.startDate || query.endDate) {
       const inRange = (date: string) => (
@@ -5634,12 +5677,18 @@ export class MockWebBotClient implements WebBotClient {
         && (!query.endDate || date <= query.endDate)
       );
       result.dailyByProvider = result.dailyByProvider.filter((item) => inRange(item.date));
+      result.dailyByProviderModel = result.dailyByProviderModel.filter((item) => inRange(item.date));
     }
     const providerGroups = new Map<string, CodexUsageDailyProviderStats[]>();
     const dayGroups = new Map<string, CodexUsageDailyProviderStats[]>();
+    const providerModelGroups = new Map<string, CodexUsageDailyProviderModelStats[]>();
     for (const item of result.dailyByProvider) {
       providerGroups.set(item.provider.key, [...(providerGroups.get(item.provider.key) || []), item]);
       dayGroups.set(item.date, [...(dayGroups.get(item.date) || []), item]);
+    }
+    for (const item of result.dailyByProviderModel) {
+      const key = `${item.provider.key}\u0000${item.model}`;
+      providerModelGroups.set(key, [...(providerModelGroups.get(key) || []), item]);
     }
     result.byProvider = Array.from(providerGroups.values()).map<CodexUsageProviderStats>((items) => ({
       provider: { ...items[0].provider },
@@ -5647,6 +5696,11 @@ export class MockWebBotClient implements WebBotClient {
     }));
     result.byDay = Array.from(dayGroups.entries()).map<CodexUsageDailyStats>(([date, items]) => ({
       date,
+      ...sumCodexUsageMetrics(items),
+    }));
+    result.byProviderModel = Array.from(providerModelGroups.values()).map<CodexUsageProviderModelStats>((items) => ({
+      provider: { ...items[0].provider },
+      model: items[0].model,
       ...sumCodexUsageMetrics(items),
     }));
     result.totals = sumCodexUsageMetrics(result.dailyByProvider);

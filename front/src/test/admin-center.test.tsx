@@ -397,8 +397,50 @@ test("管理中心 Codex 用量页签惰性加载并展示关闭后的历史统�
   });
   expect(screen.getByText("统计采集已关闭，历史数据仍可查询。")).toBeInTheDocument();
   expect(screen.getAllByText("OpenAI 官方").length).toBeGreaterThan(0);
-  expect(screen.getAllByText("1,600").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("1.6K").length).toBeGreaterThan(0);
   expect(screen.getByRole("table", { name: "Codex 用量每日明细" })).toBeInTheDocument();
+});
+
+test("管理中心 Codex 用量按模型展示并为大数保留精确值", async () => {
+  const user = userEvent.setup();
+  const largeMetrics = {
+    requestCount: 42,
+    inputTokens: 1_200_000,
+    cachedInputTokens: 300_000,
+    uncachedInputTokens: 900_000,
+    outputTokens: 50_000,
+    reasoningOutputTokens: 8_000,
+    totalTokens: 1_250_000,
+    cacheHitRate: 0.25,
+  };
+  const client = Object.assign(new MockWebBotClient(), {
+    listAdminUsers: vi.fn(async () => []),
+    listBots: vi.fn(async () => []),
+    getCodexUsageConfig: vi.fn(async () => codexUsageConfigFixture),
+    getCodexUsageStats: vi.fn(async () => ({
+      ...codexUsageStatsFixture,
+      totals: largeMetrics,
+      byProviderModel: [{
+        provider: codexUsageConfigFixture.currentProvider,
+        model: "gpt-5.6-sol",
+        ...largeMetrics,
+      }],
+      dailyByProviderModel: [{
+        date: "2026-07-26",
+        provider: codexUsageConfigFixture.currentProvider,
+        model: "gpt-5.6-sol",
+        ...largeMetrics,
+      }],
+    })),
+  });
+
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+  await screen.findByText("用户权限");
+  await user.click(screen.getByRole("tab", { name: "Codex 用量" }));
+
+  expect((await screen.findAllByText("gpt-5.6-sol")).length).toBeGreaterThan(0);
+  const compactValues = screen.getAllByText("1.25M");
+  expect(compactValues.some((element) => element.getAttribute("title") === "1,250,000")).toBe(true);
 });
 
 test("管理中心 Codex 用量开关失败时恢复原状态", async () => {
@@ -506,7 +548,7 @@ test("管理中心 Codex 用量只提交最后一次查询的结果", async () =
     });
     await thirtyDayQuery.promise;
   });
-  expect(screen.getByText("30,030")).toBeInTheDocument();
+  expect(screen.getByText("30.03K")).toBeInTheDocument();
 
   await act(async () => {
     sevenDayQuery.resolve({
@@ -517,8 +559,8 @@ test("管理中心 Codex 用量只提交最后一次查询的结果", async () =
     await sevenDayQuery.promise;
   });
 
-  expect(screen.getByText("30,030")).toBeInTheDocument();
-  expect(screen.queryByText("7,007")).not.toBeInTheDocument();
+  expect(screen.getByText("30.03K")).toBeInTheDocument();
+  expect(screen.queryByText("7.01K")).not.toBeInTheDocument();
 });
 
 test("管理中心 Codex 用量统计加载失败时仍保留采集设置", async () => {
