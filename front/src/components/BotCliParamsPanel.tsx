@@ -15,7 +15,8 @@ type Props = {
 
 type DraftValues = Record<string, string | boolean>;
 
-const CHAT_CONTROLLED_CLI_PARAM_KEYS = new Set(["model"]);
+const CHAT_CONTROLLED_CLI_PARAM_KEYS = ["model", "reasoning_effort", "effort"] as const;
+const CHAT_CONTROLLED_CLI_PARAM_KEY_SET = new Set<string>(CHAT_CONTROLLED_CLI_PARAM_KEYS);
 const MODEL_OPTION_NONE = "none";
 
 function fieldLabel(key: string, field: CliParamField) {
@@ -40,7 +41,7 @@ function buildDraftValues(payload: CliParamsPayload): DraftValues {
 }
 
 function visibleEntries(payload: CliParamsPayload) {
-  return Object.entries(payload.schema).filter(([key]) => !CHAT_CONTROLLED_CLI_PARAM_KEYS.has(key));
+  return Object.entries(payload.schema).filter(([key]) => !CHAT_CONTROLLED_CLI_PARAM_KEY_SET.has(key));
 }
 
 function toRequestValue(field: CliParamField, value: string | boolean) {
@@ -61,6 +62,20 @@ function toModelOptionValue(value: unknown, options: string[]) {
     return value;
   }
   return options.includes(MODEL_OPTION_NONE) ? MODEL_OPTION_NONE : "";
+}
+
+function chatControlledParamValue(
+  payload: CliParamsPayload,
+  key: (typeof CHAT_CONTROLLED_CLI_PARAM_KEYS)[number],
+) {
+  if (!payload.schema[key]) {
+    return "";
+  }
+  if (key === "model") {
+    return toModelOptionValue(payload.params.model, payload.schema.model?.enum ?? []);
+  }
+  const value = payload.params[key];
+  return typeof value === "string" ? value : "";
 }
 
 export function BotCliParamsPanel({
@@ -143,11 +158,14 @@ export function BotCliParamsPanel({
     setError("");
     setNotice("");
     try {
-      const currentModel = toModelOptionValue(cliParams?.params.model, cliParams?.schema.model?.enum ?? []);
+      const preservedValues = cliParams
+        ? CHAT_CONTROLLED_CLI_PARAM_KEYS.map((key) => [key, chatControlledParamValue(cliParams, key)] as const)
+        : [];
       let next = await client.resetCliParams(botAlias);
-      const nextModel = toModelOptionValue(next.params.model, next.schema.model?.enum ?? []);
-      if (currentModel && nextModel !== currentModel) {
-        next = await client.updateCliParam(botAlias, "model", currentModel, next.cliType);
+      for (const [key, currentValue] of preservedValues) {
+        if (currentValue && chatControlledParamValue(next, key) !== currentValue) {
+          next = await client.updateCliParam(botAlias, key, currentValue, next.cliType);
+        }
       }
       setCliParams(next);
       setDraftValues(buildDraftValues(next));

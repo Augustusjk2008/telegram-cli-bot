@@ -1,10 +1,11 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
+import { BotCliParamsPanel } from "../components/BotCliParamsPanel";
 import { LanguageServicesPanel } from "../components/LanguageServicesPanel";
 import { SettingsScreen } from "../screens/SettingsScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { BotExecutionConfigInput, BotSummary, DirectoryListing, LanguageServerCatalog } from "../services/types";
+import type { BotExecutionConfigInput, BotSummary, CliParamsPayload, DirectoryListing, LanguageServerCatalog } from "../services/types";
 import { CHAT_COMPLETION_WEB_NOTIFICATION_KEY } from "../utils/chatNotificationEvents";
 
 afterEach(() => {
@@ -79,6 +80,99 @@ class DeferredLanguageServicesClient extends MockWebBotClient {
     this.resolveRefreshPromise?.(catalog);
   }
 }
+
+function composerControlledCliPayload(
+  cliType: "codex" | "claude",
+  reasoningKey: "reasoning_effort" | "effort",
+  reasoningValue: string,
+): CliParamsPayload {
+  return {
+    cliType,
+    params: {
+      model: "selected-model",
+      [reasoningKey]: reasoningValue,
+      yolo: true,
+    },
+    defaults: {
+      model: "default-model",
+      [reasoningKey]: "medium",
+      yolo: false,
+    },
+    schema: {
+      model: {
+        type: "string",
+        description: "模型选择",
+        enum: ["selected-model", "default-model"],
+      },
+      [reasoningKey]: {
+        type: "string",
+        description: `${cliType} 推理强度`,
+        enum: ["medium", reasoningValue],
+      },
+      yolo: {
+        type: "boolean",
+        description: "绕过审批和沙箱",
+      },
+    },
+  };
+}
+
+test.each([
+  { cliType: "codex" as const, reasoningKey: "reasoning_effort" as const, reasoningValue: "ultra" },
+  { cliType: "claude" as const, reasoningKey: "effort" as const, reasoningValue: "max" },
+])("CLI settings hide $cliType controls owned by the chat composer", async ({ cliType, reasoningKey, reasoningValue }) => {
+  const client = new MockWebBotClient();
+  const payload = composerControlledCliPayload(cliType, reasoningKey, reasoningValue);
+  vi.spyOn(client, "getCliParams").mockResolvedValue(structuredClone(payload));
+
+  render(<BotCliParamsPanel botAlias="main" client={client} />);
+
+  expect(await screen.findByText("CLI 参数")).toBeInTheDocument();
+  expect(screen.queryByLabelText("模型选择")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText(`${cliType} 推理强度`)).not.toBeInTheDocument();
+  expect(screen.getByLabelText("绕过审批和沙箱")).toBeInTheDocument();
+});
+
+test.each([
+  { cliType: "codex" as const, reasoningKey: "reasoning_effort" as const, reasoningValue: "ultra" },
+  { cliType: "claude" as const, reasoningKey: "effort" as const, reasoningValue: "max" },
+])("resetting $cliType CLI settings preserves chat composer selections", async ({ cliType, reasoningKey, reasoningValue }) => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  let payload = composerControlledCliPayload(cliType, reasoningKey, reasoningValue);
+  vi.spyOn(client, "getCliParams").mockImplementation(async () => structuredClone(payload));
+  vi.spyOn(client, "resetCliParams").mockImplementation(async () => {
+    payload = {
+      ...payload,
+      params: {
+        ...payload.params,
+        model: "default-model",
+        [reasoningKey]: "medium",
+        yolo: false,
+      },
+    };
+    return structuredClone(payload);
+  });
+  vi.spyOn(client, "updateCliParam").mockImplementation(async (_botAlias, key, value) => {
+    payload = {
+      ...payload,
+      params: {
+        ...payload.params,
+        [key]: value,
+      },
+    };
+    return structuredClone(payload);
+  });
+
+  render(<BotCliParamsPanel botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: "恢复默认参数" }));
+
+  await waitFor(() => {
+    expect(payload.params.model).toBe("selected-model");
+    expect(payload.params[reasoningKey]).toBe(reasoningValue);
+  });
+});
 
 
 test("native bots hide cli settings and params", async () => {
