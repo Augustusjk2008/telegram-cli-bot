@@ -444,7 +444,10 @@ const ToolTranscriptEntryRow = memo(function ToolTranscriptEntryRow({
       open={expanded}
       onToggle={(event) => setExpanded(event.currentTarget.open)}
     >
-      <summary className="cursor-pointer truncate text-[var(--muted)] marker:text-[var(--muted)]">
+      <summary
+        data-chat-scroll-lock-on-expand="true"
+        className="cursor-pointer truncate text-[var(--muted)] marker:text-[var(--muted)]"
+      >
         <span className="font-medium text-[var(--text)]">{entry.label}</span>
         {entry.summary ? <span className="ml-2">{entry.summary}</span> : null}
       </summary>
@@ -481,7 +484,10 @@ const TranscriptGroupRow = memo(function TranscriptGroupRow({
       className="group border-t border-[var(--workbench-hairline)] py-1"
       onToggle={(event) => setExpanded(event.currentTarget.open)}
     >
-      <summary className="flex cursor-pointer list-none items-center gap-2 py-1 text-[var(--muted)] marker:hidden [&::-webkit-details-marker]:hidden">
+      <summary
+        data-chat-scroll-lock-on-expand="true"
+        className="flex cursor-pointer list-none items-center gap-2 py-1 text-[var(--muted)] marker:hidden [&::-webkit-details-marker]:hidden"
+      >
         <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--muted)] transition-transform group-open:rotate-90" aria-hidden="true" />
         <span className="shrink-0 text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--accent)]">过程 {item.groupIndex}</span>
         <span className="min-w-0 truncate text-[11px] text-[var(--muted)]">{describeTranscriptGroup(item.entries)}</span>
@@ -598,6 +604,7 @@ export function NativeAgentTranscript({
         <section data-testid="native-agent-trace-summary" className="border-b border-[var(--workbench-hairline)] pb-2">
           <button
             type="button"
+            data-chat-scroll-lock-on-expand="true"
             aria-label={`${traceExpanded ? "收起" : "展开"}过程详情`}
             aria-expanded={traceExpanded}
             onClick={() => setTraceExpanded((value) => !value)}

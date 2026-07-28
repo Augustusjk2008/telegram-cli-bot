@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import io
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -63,6 +65,294 @@ def test_bounded_git_process_deadline_includes_blocked_stdin_write(tmp_path) -> 
 
     assert time.monotonic() - started_at < 0.3
     assert result.budget_reason == "timeout"
+
+
+def test_bounded_git_process_waits_for_tree_termination_before_return(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    termination_finished = threading.Event()
+
+    class TimedOutProcess:
+        def __init__(self) -> None:
+            self.stdin = None
+            self.stdout = io.BytesIO()
+            self.stderr = io.BytesIO()
+            self.returncode: int | None = None
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def wait(self, timeout: float | None = None) -> int:
+            if self.returncode is None:
+                raise subprocess.TimeoutExpired("git", timeout)
+            return self.returncode
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+    process = TimedOutProcess()
+
+    def terminate_tree(current: TimedOutProcess) -> None:
+        time.sleep(0.05)
+        current.returncode = 1
+        termination_finished.set()
+
+    monkeypatch.setattr(git_service.subprocess, "Popen", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(git_service, "terminate_process_tree_sync", terminate_tree)
+
+    result = git_service._run_bounded_process(
+        ["git", "add", "-A"],
+        cwd=str(tmp_path),
+        env=None,
+        profile=git_service._GitCommandProfile(timeout_seconds=0.01),
+    )
+
+    assert result.budget_reason == "timeout"
+    assert termination_finished.is_set()
+
+
+def test_bounded_git_process_uses_attached_process_job_on_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class TimedOutProcess:
+        def __init__(self) -> None:
+            self.stdin = None
+            self.stdout = io.BytesIO()
+            self.stderr = io.BytesIO()
+            self.returncode: int | None = None
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def wait(self, timeout: float | None = None) -> int:
+            if self.returncode is None:
+                raise subprocess.TimeoutExpired("git", timeout)
+            return self.returncode
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+    class ProcessJob:
+        def __init__(self, process: TimedOutProcess) -> None:
+            self.process = process
+            self.terminated = False
+            self.closed = False
+
+        def terminate(self) -> None:
+            self.terminated = True
+            self.process.returncode = 1
+
+        def close(self) -> None:
+            self.closed = True
+
+    process = TimedOutProcess()
+    process_job = ProcessJob(process)
+    fallback_called = False
+
+    def fallback_termination(current: TimedOutProcess) -> None:
+        nonlocal fallback_called
+        fallback_called = True
+        current.returncode = 1
+
+    monkeypatch.setattr(git_service.subprocess, "Popen", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(git_service, "attach_process_tree_job", lambda _process: process_job, raising=False)
+    monkeypatch.setattr(git_service, "terminate_process_tree_sync", fallback_termination)
+
+    result = git_service._run_bounded_process(
+        ["git", "commit", "-m", "message"],
+        cwd=str(tmp_path),
+        env=None,
+        profile=git_service._GitCommandProfile(timeout_seconds=0.01),
+    )
+
+    assert result.budget_reason == "timeout"
+    assert process_job.terminated is True
+    assert process_job.closed is True
+    assert fallback_called is False
+
+
+def test_bounded_git_process_drains_readers_before_closing_streams(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    process_finished = threading.Event()
+
+    class DelayedEofStream:
+        def __init__(self) -> None:
+            self.read_started = threading.Event()
+            self.reading = threading.Event()
+            self.closed = False
+            self.closed_while_reading = False
+
+        def read(self, _size: int) -> bytes:
+            self.read_started.set()
+            self.reading.set()
+            try:
+                assert process_finished.wait(timeout=1)
+                time.sleep(0.04)
+                return b""
+            finally:
+                self.reading.clear()
+
+        def close(self) -> None:
+            self.closed_while_reading = self.reading.is_set()
+            self.closed = True
+
+    class DelayedEofProcess:
+        def __init__(self) -> None:
+            self.stdin = None
+            self.stdout = DelayedEofStream()
+            self.stderr = DelayedEofStream()
+            self.returncode = 0
+
+        def poll(self) -> int:
+            assert self.stdout.read_started.wait(timeout=1)
+            assert self.stderr.read_started.wait(timeout=1)
+            return 0
+
+        def wait(self, timeout: float | None = None) -> int:
+            del timeout
+            process_finished.set()
+            return self.returncode
+
+        def kill(self) -> None:
+            self.returncode = 1
+            process_finished.set()
+
+    process = DelayedEofProcess()
+    monkeypatch.setattr(git_service.subprocess, "Popen", lambda *_args, **_kwargs: process)
+
+    git_service._run_bounded_process(
+        ["git", "status"],
+        cwd=str(tmp_path),
+        env=None,
+        profile=git_service._GitCommandProfile(timeout_seconds=1),
+    )
+
+    assert process.stdout.closed is True
+    assert process.stderr.closed is True
+    assert process.stdout.closed_while_reading is False
+    assert process.stderr.closed_while_reading is False
+
+
+@pytest.mark.parametrize("with_input", [False, True])
+def test_timed_out_index_write_removes_only_lock_created_by_command(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    with_input: bool,
+) -> None:
+    repo = tmp_path / ("with-input" if with_input else "without-input")
+    git_dir = repo / ".git"
+    git_dir.mkdir(parents=True)
+    index_lock = git_dir / "index.lock"
+
+    def timed_out_process(*_args, **_kwargs):
+        if not index_lock.exists():
+            index_lock.write_text("created-by-command", encoding="utf-8")
+        on_budget_exceeded = _kwargs.get("on_budget_exceeded")
+        if on_budget_exceeded is not None:
+            on_budget_exceeded()
+        result = subprocess.CompletedProcess(args=["git"], returncode=1, stdout="", stderr="")
+        result.budget_reason = "timeout"
+        return result
+
+    monkeypatch.setattr(git_service, "_run_bounded_process", timed_out_process)
+
+    with pytest.raises(git_service.GitCommandError, match="timeout"):
+        if with_input:
+            git_service._run_git_with_input(str(repo), ["commit", "-F", "-"], input_text="message")
+        else:
+            git_service._run_git(str(repo), ["add", "-A"])
+
+    assert index_lock.exists() is False
+
+    index_lock.write_text("pre-existing", encoding="utf-8")
+    with pytest.raises(git_service.GitCommandError, match="timeout"):
+        if with_input:
+            git_service._run_git_with_input(str(repo), ["commit", "-F", "-"], input_text="message")
+        else:
+            git_service._run_git(str(repo), ["add", "-A"])
+
+    assert index_lock.read_text(encoding="utf-8") == "pre-existing"
+
+
+def test_git_commands_for_same_repo_do_not_overlap(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    first_started = threading.Event()
+    release_first = threading.Event()
+    state_lock = threading.Lock()
+    active = 0
+    max_active = 0
+
+    def bounded_process(*_args, **_kwargs):
+        nonlocal active, max_active
+        with state_lock:
+            active += 1
+            max_active = max(max_active, active)
+            is_first = active == 1 and not first_started.is_set()
+        if is_first:
+            first_started.set()
+            assert release_first.wait(timeout=1)
+        with state_lock:
+            active -= 1
+        result = subprocess.CompletedProcess(args=["git"], returncode=0, stdout="", stderr="")
+        result.budget_reason = ""
+        return result
+
+    monkeypatch.setattr(git_service, "_run_bounded_process", bounded_process)
+
+    first = threading.Thread(target=git_service._run_git, args=(str(tmp_path), ["status"]))
+    second = threading.Thread(target=git_service._run_git, args=(str(tmp_path), ["status"]))
+    first.start()
+    assert first_started.wait(timeout=1)
+    second.start()
+    time.sleep(0.05)
+    release_first.set()
+    first.join(timeout=1)
+    second.join(timeout=1)
+
+    assert first.is_alive() is False
+    assert second.is_alive() is False
+    assert max_active == 1
+
+
+def test_git_status_disables_optional_index_locks(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    captured_env: dict[str, str] | None = None
+
+    def bounded_process(*_args, **kwargs):
+        nonlocal captured_env
+        captured_env = kwargs["env"]
+        result = subprocess.CompletedProcess(args=["git"], returncode=0, stdout="", stderr="")
+        result.budget_reason = ""
+        return result
+
+    monkeypatch.setattr(git_service, "_run_bounded_process", bounded_process)
+
+    git_service._run_git(str(tmp_path), ["status", "--porcelain=v2"])
+
+    assert captured_env is not None
+    assert captured_env["GIT_OPTIONAL_LOCKS"] == "0"
+
+
+def test_index_write_uses_longer_timeout_than_read_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    captured_timeouts: list[float] = []
+
+    def bounded_process(*_args, **kwargs):
+        captured_timeouts.append(kwargs["profile"].timeout_seconds)
+        result = subprocess.CompletedProcess(args=["git"], returncode=0, stdout="", stderr="")
+        result.budget_reason = ""
+        return result
+
+    monkeypatch.setattr(git_service, "_run_bounded_process", bounded_process)
+
+    git_service._run_git(str(tmp_path), ["status", "--short"])
+    git_service._run_git(str(tmp_path), ["add", "-A"])
+
+    assert captured_timeouts[1] > captured_timeouts[0]
 
 
 def test_real_porcelain_v2_z_parses_rename_and_space_paths(tmp_path: Path) -> None:

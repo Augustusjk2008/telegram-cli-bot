@@ -2067,6 +2067,7 @@ export function ChatScreen({
   const revealScrollFrameRef = useRef<number | null>(null);
   const revealScrollAttemptsRef = useRef(0);
   const userScrollIntentRef = useRef(false);
+  const traceInspectionAutoScrollPausedRef = useRef(false);
   const historyUpwardIntentRef = useRef(false);
   const historyRevealPendingRef = useRef(false);
   const historyPrependAnchorRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
@@ -2697,6 +2698,7 @@ export function ChatScreen({
     stopSseRecoveryWatch();
     shouldStickToBottomRef.current = true;
     forceAutoScrollRef.current = true;
+    traceInspectionAutoScrollPausedRef.current = false;
 
     const storedExecutionMode = forcedExecutionMode ?? readStoredExecutionMode(botAlias, storageScope);
     const requestedExecutionMode = forcedExecutionMode ?? storedExecutionMode ?? undefined;
@@ -2868,6 +2870,9 @@ export function ChatScreen({
   const lastItem = items[items.length - 1];
 
   const scrollToBottom = useCallback(() => {
+    if (traceInspectionAutoScrollPausedRef.current) {
+      return;
+    }
     userScrollIntentRef.current = false;
     if (scrollContainerRef.current) {
       try {
@@ -2889,7 +2894,7 @@ export function ChatScreen({
   }, []);
 
   const scheduleRevealScroll = useCallback(() => {
-    if (!isVisibleRef.current) {
+    if (!isVisibleRef.current || traceInspectionAutoScrollPausedRef.current) {
       return;
     }
     if (!forceAutoScrollRef.current && !shouldStickToBottomRef.current) {
@@ -2901,7 +2906,7 @@ export function ChatScreen({
 
     revealScrollFrameRef.current = window.requestAnimationFrame(() => {
       revealScrollFrameRef.current = null;
-      if (!isVisibleRef.current || loadingRef.current) {
+      if (!isVisibleRef.current || loadingRef.current || traceInspectionAutoScrollPausedRef.current) {
         return;
       }
       if (!forceAutoScrollRef.current && !shouldStickToBottomRef.current) {
@@ -2927,6 +2932,7 @@ export function ChatScreen({
     }
     shouldStickToBottomRef.current = true;
     forceAutoScrollRef.current = true;
+    traceInspectionAutoScrollPausedRef.current = false;
     revealScrollAttemptsRef.current = 0;
     scheduleRevealScroll();
   }, [cancelRevealScroll, isVisible, scheduleRevealScroll]);
@@ -2952,6 +2958,9 @@ export function ChatScreen({
     }
 
     const observer = new window.ResizeObserver(() => {
+      if (traceInspectionAutoScrollPausedRef.current) {
+        return;
+      }
       if (!forceAutoScrollRef.current && !shouldStickToBottomRef.current) {
         return;
       }
@@ -2972,6 +2981,9 @@ export function ChatScreen({
     const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
     shouldStickToBottomRef.current = distanceFromBottom <= 96;
     if (shouldStickToBottomRef.current) {
+      if (userScrollIntentRef.current) {
+        traceInspectionAutoScrollPausedRef.current = false;
+      }
       userScrollIntentRef.current = false;
       return;
     }
@@ -2981,6 +2993,26 @@ export function ChatScreen({
       cancelRevealScroll();
       userScrollIntentRef.current = false;
     }
+  }
+
+  function handleChatClickCapture(event: ReactMouseEvent<HTMLElement>) {
+    const target = event.target instanceof Element ? event.target : null;
+    const expandTrigger = target?.closest<HTMLElement>("[data-chat-scroll-lock-on-expand='true']");
+    if (!expandTrigger) {
+      return;
+    }
+    const ariaExpanded = expandTrigger.getAttribute("aria-expanded");
+    const details = expandTrigger.closest("details");
+    const willExpand = ariaExpanded === "false" || (ariaExpanded === null && Boolean(details && !details.open));
+    if (!willExpand) {
+      return;
+    }
+    shouldStickToBottomRef.current = false;
+    forceAutoScrollRef.current = false;
+    traceInspectionAutoScrollPausedRef.current = true;
+    userScrollIntentRef.current = false;
+    revealScrollAttemptsRef.current = 0;
+    cancelRevealScroll();
   }
 
   function isAtHistoryTop() {
@@ -3876,6 +3908,7 @@ export function ChatScreen({
     clusterRunIdRef.current = "";
     forceAutoScrollRef.current = true;
     shouldStickToBottomRef.current = true;
+    traceInspectionAutoScrollPausedRef.current = false;
     streamBatcher.cancel();
     releaseAgUiBatchState();
     setItems((prev) => [...prev, userMessage, assistantMessage]);
@@ -4837,6 +4870,7 @@ export function ChatScreen({
       <section
         ref={scrollContainerRef}
         data-testid="chat-scroll-container"
+        onClickCapture={handleChatClickCapture}
         onScroll={handleChatScroll}
         onPointerDown={markUserScrollIntent}
         onPointerUp={clearUserScrollIntent}

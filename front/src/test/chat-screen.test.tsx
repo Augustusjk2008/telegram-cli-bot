@@ -1007,10 +1007,15 @@ test("keeps resize auto-scroll inside the chat container", async () => {
   const scrollIntoView = vi.fn();
   bottomAnchor.scrollIntoView = scrollIntoView;
 
-  const contentObserver = TestResizeObserver.instances.find((observer) => observer.target === content);
-  expect(contentObserver).toBeDefined();
+  const contentObserver = await waitFor(() => {
+    const observer = TestResizeObserver.instances.find((instance) => instance.target === content);
+    if (!observer) {
+      throw new Error("chat content ResizeObserver is not attached yet");
+    }
+    return observer;
+  });
   act(() => {
-    contentObserver?.callback(
+    contentObserver.callback(
       [{ target: content, contentRect: { height: 1_000 } } as unknown as ResizeObserverEntry],
       contentObserver as unknown as ResizeObserver,
     );
@@ -1018,6 +1023,110 @@ test("keeps resize auto-scroll inside the chat container", async () => {
 
   expect(scrollTop).toBe(1_000);
   expect(scrollIntoView).not.toHaveBeenCalled();
+});
+
+test("pauses inspected trace auto-scroll until the user returns to the bottom", async () => {
+  class TestResizeObserver {
+    static instances: TestResizeObserver[] = [];
+    target: Element | null = null;
+
+    constructor(readonly callback: ResizeObserverCallback) {
+      TestResizeObserver.instances.push(this);
+    }
+
+    observe(target: Element) {
+      this.target = target;
+    }
+
+    disconnect() {
+      this.target = null;
+    }
+
+    unobserve() {}
+  }
+
+  const getMessageTrace = vi.fn(async (): Promise<ChatTraceDetails> => ({
+    trace: [{
+      id: "trace-inspected-1",
+      kind: "commentary",
+      summary: "过程详情已更新",
+    }],
+    traceCount: 1,
+    toolCallCount: 0,
+    processCount: 1,
+  }));
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [{
+      id: "assistant-inspected-trace",
+      role: "assistant",
+      text: "最终答复",
+      createdAt: new Date().toISOString(),
+      state: "done",
+      meta: {
+        traceCount: 1,
+        processCount: 1,
+      },
+    }],
+    getMessageTrace,
+  });
+
+  vi.stubGlobal("ResizeObserver", TestResizeObserver);
+  vi.stubGlobal("requestAnimationFrame", vi.fn(() => 1));
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  const container = screen.getByTestId("chat-scroll-container");
+  const content = screen.getByTestId("chat-scroll-content");
+  let scrollHeight = 1_000;
+  let scrollTop = 900;
+  Object.defineProperties(container, {
+    clientHeight: { configurable: true, get: () => 100 },
+    scrollHeight: { configurable: true, get: () => scrollHeight },
+    scrollTop: {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => { scrollTop = value; },
+    },
+  });
+
+  await userEvent.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
+  await waitFor(() => expect(getMessageTrace).toHaveBeenCalledWith("main", "assistant-inspected-trace"));
+  scrollTop = 900;
+  scrollHeight = 1_200;
+
+  const contentObserver = TestResizeObserver.instances.find((observer) => observer.target === content);
+  expect(contentObserver).toBeDefined();
+  act(() => {
+    contentObserver?.callback(
+      [{ target: content, contentRect: { height: scrollHeight } } as unknown as ResizeObserverEntry],
+      contentObserver as unknown as ResizeObserver,
+    );
+  });
+
+  expect(scrollTop).toBe(900);
+
+  scrollTop = 1_100;
+  fireEvent.scroll(container);
+  scrollHeight = 1_400;
+  act(() => {
+    contentObserver.callback(
+      [{ target: content, contentRect: { height: scrollHeight } } as unknown as ResizeObserverEntry],
+      contentObserver as unknown as ResizeObserver,
+    );
+  });
+  expect(scrollTop).toBe(1_100);
+
+  fireEvent.wheel(container, { deltaY: 120 });
+  scrollTop = 1_300;
+  fireEvent.scroll(container);
+  scrollHeight = 1_600;
+  act(() => {
+    contentObserver.callback(
+      [{ target: content, contentRect: { height: scrollHeight } } as unknown as ResizeObserverEntry],
+      contentObserver as unknown as ResizeObserver,
+    );
+  });
+  expect(scrollTop).toBe(1_600);
 });
 
 test("shows final answer actions for failed assistant messages", async () => {
