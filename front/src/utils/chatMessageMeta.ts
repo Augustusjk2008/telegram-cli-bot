@@ -77,6 +77,7 @@ export function mergeMessageMeta(
   const meta: ChatMessageMetaInfo = {
     completionState: incoming?.completionState || base?.completionState,
     summaryKind: incoming?.summaryKind || base?.summaryKind,
+    renderKey: incoming?.renderKey || base?.renderKey,
     traceVersion: incoming?.traceVersion ?? base?.traceVersion ?? (trace ? 1 : undefined),
     traceCount: pickTraceCount(incoming?.traceCount, base?.traceCount, traceSummary?.traceCount),
     traceLoadedCount: pickLoadedTraceCount(incoming?.traceLoadedCount, base?.traceLoadedCount),

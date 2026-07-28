@@ -1017,6 +1017,7 @@ export type ChatMessageContextUsage = {
 export type ChatMessageMetaInfo = {
   completionState?: string;
   summaryKind?: string;
+  renderKey?: string;
   traceVersion?: number;
   traceCount?: number;
   traceLoadedCount?: number;

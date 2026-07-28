@@ -5,7 +5,7 @@ import { ChatScreen } from "../screens/ChatScreen";
 import { EventType } from "../services/agUiProtocol";
 import { ChatStreamIncompleteError } from "../services/chatStreamError";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { BotOverview, ChatMessage, ChatTraceDetails, CliParamsPayload, ClusterTaskStatus, ConversationBulkDeleteResult, ConversationDeleteResult, ConversationListResult, ConversationSelectResult, FavoriteAnswerItem, GitActionResult, GitDiffPayload, GitOverview, PromptPreset } from "../services/types";
+import type { BotOverview, ChatMessage, ChatStatusUpdate, ChatTraceDetails, CliParamsPayload, ClusterTaskStatus, ConversationBulkDeleteResult, ConversationDeleteResult, ConversationListResult, ConversationSelectResult, FavoriteAnswerItem, GitActionResult, GitDiffPayload, GitOverview, PromptPreset } from "../services/types";
 import { WebApiClientError } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { createChatHistoryFixture } from "./fixtures/performance";
@@ -1543,6 +1543,112 @@ test("renders live cli trace as transcript after final message", async () => {
   expect(await within(transcript).findByText("shell_command")).toBeInTheDocument();
   expect(within(transcript).getAllByText("Exit code: 0").length).toBeGreaterThan(0);
   expect(within(transcript).getAllByText("我先检查目录。").length).toBeGreaterThan(0);
+});
+
+test("keeps an expanded streaming trace mounted until the final message resets it", async () => {
+  const user = userEvent.setup();
+  let emitStatus: ((status: ChatStatusUpdate) => void) | undefined;
+  let resolveFinal!: (message: ChatMessage) => void;
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias,
+    _text,
+    _onChunk,
+    onStatus,
+    onTrace,
+  ) => {
+    emitStatus = onStatus;
+    onTrace?.({
+      kind: "tool_call",
+      summary: "Get-ChildItem",
+      source: "codex",
+      toolName: "shell_command",
+      callId: "call-streaming-expanded",
+      payload: { arguments: "Get-ChildItem" },
+    });
+    onTrace?.({
+      kind: "tool_result",
+      summary: "Exit code: 0",
+      source: "codex",
+      callId: "call-streaming-expanded",
+      payload: { output: "Exit code: 0" },
+    });
+    return new Promise<ChatMessage>((resolve) => {
+      resolveFinal = resolve;
+    });
+  });
+  const client = createClient({
+    sendMessage,
+    listMessageDelta: async () => ({
+      items: [],
+      deletedIds: [],
+      revision: 0,
+      hasMore: false,
+      reset: false,
+    }),
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+  await user.type(screen.getByPlaceholderText("输入消息"), "检查目录");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  const liveTranscript = await screen.findByTestId("native-agent-transcript");
+  const liveGroup = within(liveTranscript).getByTestId("native-agent-event-group") as HTMLDetailsElement;
+  const scrollContainer = screen.getByTestId("chat-scroll-container");
+  let scrollHeight = 1_200;
+  let scrollTop = 700;
+  Object.defineProperties(scrollContainer, {
+    clientHeight: { configurable: true, get: () => 100 },
+    scrollHeight: { configurable: true, get: () => scrollHeight },
+    scrollTop: {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => { scrollTop = value; },
+    },
+  });
+  const liveMessage = liveTranscript.closest<HTMLElement>("[data-message-id]");
+  const liveMessageKey = liveMessage?.dataset.messageKey;
+  expect(liveMessageKey).toMatch(/^render\|assistant-/);
+  await user.click(liveGroup.querySelector("summary") as HTMLElement);
+  expect(liveGroup.open).toBe(true);
+  scrollTop = 700;
+
+  expect(emitStatus).toBeTypeOf("function");
+  act(() => {
+    emitStatus!({
+      assistantMessageId: "assistant-streaming-server",
+      replaceText: "正在检查目录",
+    });
+  });
+
+  await waitFor(() => {
+    const currentGroup = screen.getByTestId("native-agent-event-group") as HTMLDetailsElement;
+    const currentMessage = currentGroup.closest<HTMLElement>("[data-message-id]");
+    expect(currentMessage).toHaveAttribute("data-message-id", "assistant-streaming-server");
+    expect(currentMessage).toHaveAttribute("data-message-key", liveMessageKey);
+    expect(currentGroup.open).toBe(true);
+    expect(currentGroup).toBe(liveGroup);
+  });
+  expect(scrollTop).toBe(700);
+
+  scrollHeight = 1_600;
+  await act(async () => {
+    resolveFinal({
+      id: "assistant-streaming-server",
+      role: "assistant",
+      text: "检查完成",
+      createdAt: new Date().toISOString(),
+      state: "done",
+      meta: { traceCount: 2, toolCallCount: 1, processCount: 0 },
+    });
+  });
+
+  await waitFor(() => {
+    const completedGroup = screen.getByTestId("native-agent-event-group") as HTMLDetailsElement;
+    expect(completedGroup.open).toBe(false);
+    expect(completedGroup).not.toBe(liveGroup);
+    expect(scrollTop).toBe(1_600);
+  });
 });
 
 test("keeps live cli trace when done omits trace payload", async () => {

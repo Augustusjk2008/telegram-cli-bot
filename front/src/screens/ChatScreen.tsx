@@ -776,6 +776,10 @@ function getRenderedAttachmentStateKey(messageId: string, savedPath: string) {
 }
 
 function getMessageClientStateKey(item: ChatMessage) {
+  const renderKey = item.meta?.renderKey || "";
+  if (item.state === "streaming" && renderKey) {
+    return `render|${renderKey}`;
+  }
   const provider = item.meta?.nativeSource?.provider || "";
   const sessionId = item.meta?.nativeSource?.sessionId || "";
   if (item.role === "assistant" && (provider || sessionId) && item.createdAt) {
@@ -2226,6 +2230,14 @@ export function ChatScreen({
     }
   }, []);
 
+  const resumeTerminalAutoScroll = useCallback(() => {
+    cancelRevealScroll();
+    traceInspectionAutoScrollPausedRef.current = false;
+    shouldStickToBottomRef.current = true;
+    forceAutoScrollRef.current = true;
+    revealScrollAttemptsRef.current = 0;
+  }, [cancelRevealScroll]);
+
   useEffect(() => () => {
     cancelRevealScroll();
     if (clusterTaskPollTimerRef.current !== null) {
@@ -2338,6 +2350,7 @@ export function ChatScreen({
     overview: BotOverview,
     options: { keepStreamingRowsActive?: boolean } = {},
   ) => {
+    const wasStreaming = isStreamingRef.current;
     const hasStreamingMessage = hasPersistedStreamingAssistant(messages);
     const runtimeActive = Boolean(overview.isProcessing || (options.keepStreamingRowsActive && hasStreamingMessage));
     const nextItems = normalizeInactiveStreamingRows(messages, runtimeActive);
@@ -2352,11 +2365,14 @@ export function ChatScreen({
     if (shouldPoll) {
       setStreamStartedAtMs((prev) => prev ?? resolveStreamStartMs(nextItems));
     } else {
+      if (wasStreaming) {
+        resumeTerminalAutoScroll();
+      }
       setStreamStartedAtMs(null);
     }
 
     return { nextItems, shouldPoll };
-  }, []);
+  }, [resumeTerminalAutoScroll]);
 
   const stopAssistantPoll = useCallback(() => {
     if (assistantPollTimerRef.current !== null) {
@@ -3891,8 +3907,8 @@ export function ChatScreen({
       createdAt: new Date().toISOString(),
       state: "streaming",
       meta: nativeStreaming
-        ? { tracePresentation: "native_agent_flat" }
-        : undefined,
+        ? { tracePresentation: "native_agent_flat", renderKey: assistantId }
+        : { renderKey: assistantId },
     };
 
     setError("");
@@ -4160,6 +4176,7 @@ export function ChatScreen({
         setStreamMode("poll");
         scheduleAssistantPoll(0);
       } else {
+        resumeTerminalAutoScroll();
         isStreamingRef.current = false;
         streamModeRef.current = "";
         setIsStreaming(false);
@@ -4169,7 +4186,7 @@ export function ChatScreen({
         void drainQueuedMessageIfIdleRef.current?.({ botAlias: sendBotAlias, agentId: sendAgentId });
       }
     }
-  }, [botAlias, client, markSseActivity, onUnreadResult, pollClusterTasks, releaseAgUiBatchState, scheduleAssistantPoll, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch, streamBatcher]);
+  }, [botAlias, client, markSseActivity, onUnreadResult, pollClusterTasks, releaseAgUiBatchState, resumeTerminalAutoScroll, scheduleAssistantPoll, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch, streamBatcher]);
 
   drainQueuedMessageIfIdleRef.current = async (context) => {
     const targetBotAlias = context?.botAlias || botAlias;
