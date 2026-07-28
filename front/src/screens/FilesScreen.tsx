@@ -694,7 +694,7 @@ export function FilesScreen({
   };
 
   return (
-    <main className="flex h-full flex-col bg-[var(--workbench-titlebar-bg)]">
+    <main data-ui-density="compact" className="flex h-full flex-col bg-[var(--workbench-titlebar-bg)]">
       <header className="flex items-center justify-between border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-4 py-3">
         <div className="flex items-center gap-2 overflow-hidden">
           {currentPath !== "/" && currentPath !== "." && !isVirtualRoot && !isEditorOpen ? (

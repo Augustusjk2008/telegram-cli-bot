@@ -203,7 +203,7 @@ export function ConversationHistoryPanel({
                   key={item.id}
                   aria-current={item.active ? "true" : undefined}
                   className={item.active
-                    ? "flex rounded-lg border border-[var(--workbench-hover-border)] bg-[var(--workbench-active-bg)] shadow-[var(--shadow-soft)] disabled:opacity-60"
+                    ? "flex rounded-lg border border-[var(--workbench-hover-border)] bg-[var(--workbench-active-bg)] shadow-[var(--shadow-surface)] disabled:opacity-60"
                     : "flex rounded-lg border border-transparent hover:border-[var(--workbench-hairline)] hover:bg-[var(--workbench-hover-bg)] disabled:opacity-60"}
                 >
                   <button

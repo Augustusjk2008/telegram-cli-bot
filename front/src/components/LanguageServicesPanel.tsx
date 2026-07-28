@@ -41,10 +41,10 @@ function statusLabel(status: LanguageServerAvailability) {
 }
 
 function statusClassName(status: LanguageServerAvailability) {
-  if (status === "available") return "border-emerald-200 bg-emerald-50 text-emerald-700";
-  if (status === "installing") return "border-sky-200 bg-sky-50 text-sky-700";
-  if (status === "missing") return "border-amber-200 bg-amber-50 text-amber-700";
-  return "border-red-200 bg-red-50 text-red-700";
+  if (status === "available") return "border-[var(--status-success-border)] bg-[var(--status-success-bg)] text-[var(--status-success)]";
+  if (status === "installing") return "border-[var(--status-info-border)] bg-[var(--status-info-bg)] text-[var(--status-info)]";
+  if (status === "missing") return "border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] text-[var(--status-warning)]";
+  return "border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] text-[var(--status-danger)]";
 }
 
 function runtimeStatusLabel(state: LanguageServerRuntimeState | undefined) {
@@ -59,12 +59,12 @@ function runtimeStatusLabel(state: LanguageServerRuntimeState | undefined) {
 }
 
 function runtimeStatusClassName(state: LanguageServerRuntimeState | undefined) {
-  if (state === "ready") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (state === "ready") return "border-[var(--status-success-border)] bg-[var(--status-success-bg)] text-[var(--status-success)]";
   if (state === "starting" || state === "indexing" || state === "restarting") {
-    return "border-sky-200 bg-sky-50 text-sky-700";
+    return "border-[var(--status-info-border)] bg-[var(--status-info-bg)] text-[var(--status-info)]";
   }
-  if (state === "degraded") return "border-amber-200 bg-amber-50 text-amber-700";
-  return "border-red-200 bg-red-50 text-red-700";
+  if (state === "degraded") return "border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] text-[var(--status-warning)]";
+  return "border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] text-[var(--status-danger)]";
 }
 
 function needsRuntimePolling(status: LanguageServerProviderStatus) {
@@ -234,7 +234,7 @@ export function LanguageServicesPanel({ botAlias, client, canManage, onCatalogCh
   return (
     <section
       aria-labelledby="language-services-title"
-      className="space-y-4 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-4 shadow-[var(--shadow-soft)]"
+      className="space-y-3 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-3 shadow-[var(--shadow-surface)]"
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="space-y-1">
@@ -256,21 +256,21 @@ export function LanguageServicesPanel({ botAlias, client, canManage, onCatalogCh
       </div>
 
       {error ? (
-        <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+        <div role="alert" className="rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger)]">
           {error}
         </div>
       ) : null}
 
       {loading ? <div className="text-sm text-[var(--muted)]">正在读取语言服务状态...</div> : null}
 
-      <div className="space-y-3">
+      <div className="divide-y divide-[var(--workbench-hairline)]">
         {providers.map(({ id, label, shortLabel, status }) => {
           const updating = status.canUpdate && (status.status === "available" || !status.canInstall);
           const canManageItem = canManage && (status.canInstall || status.canUpdate);
           const operating = actionProvider === id;
           const runtimeLabel = runtimeStatusLabel(status.runtimeState);
           return (
-            <article key={id} data-testid={`language-service-${id}`} className="rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3">
+            <article key={id} data-testid={`language-service-${id}`} className="py-3 first:pt-0 last:pb-0">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0 space-y-2">
                   <div className="flex flex-wrap items-center gap-2">
@@ -300,7 +300,7 @@ export function LanguageServicesPanel({ botAlias, client, canManage, onCatalogCh
                     <dd className="break-all font-mono text-xs text-[var(--text)]">{status.commandSummary || "-"}</dd>
                   </dl>
                   {status.message ? (
-                    <p className={status.status === "error" ? "text-sm text-red-700" : "text-sm text-[var(--muted)]"}>
+                    <p className={status.status === "error" ? "text-sm text-[var(--status-danger)]" : "text-sm text-[var(--muted)]"}>
                       {status.message}
                     </p>
                   ) : null}

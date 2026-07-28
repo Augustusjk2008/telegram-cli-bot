@@ -132,13 +132,13 @@ export function WorkbenchStatusBar({
   return (
     <footer
       data-testid="desktop-workbench-statusbar"
-      className="desktop-workbench-statusbar flex items-center justify-between gap-2 border-t border-[var(--workbench-hairline)] bg-[var(--workbench-statusbar-bg)] px-2 py-1 text-xs text-[var(--text)]"
+      className="desktop-workbench-statusbar flex items-center justify-between gap-1.5 border-t border-[var(--workbench-hairline)] bg-[var(--workbench-statusbar-bg)] px-2 py-0.5 text-xs text-[var(--text)]"
     >
-      <div className="flex min-w-0 items-center gap-2">
+      <div className="flex min-w-0 items-center gap-1.5">
         <span className="truncate font-mono">{activeFilePath || "未打开文件"}</span>
         <span>{fileDirty ? "未保存" : "已保存"}</span>
       </div>
-      <div className="flex shrink-0 items-center gap-2">
+      <div className="flex shrink-0 items-center gap-1.5">
         <span>{debugStatus.connectionText}</span>
         {debugStatus.targetText ? <span className="font-mono">{debugStatus.targetText}</span> : null}
         {debugLocation ? <span className="max-w-[16rem] truncate font-mono">{debugLocation}</span> : null}

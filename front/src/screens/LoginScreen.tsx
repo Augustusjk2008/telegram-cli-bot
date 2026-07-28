@@ -65,7 +65,7 @@ export function LoginScreen({
       </div>
 
       <div className="relative z-10 mx-auto flex min-h-[calc(100dvh-1.5rem)] w-full max-w-6xl flex-col gap-4 sm:min-h-[calc(100dvh-2.5rem)]">
-        <div className="flex min-h-10 items-center justify-between gap-3 border border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2.5 py-2 shadow-[var(--shadow-soft)]">
+        <div className="flex min-h-10 items-center justify-between gap-3 border border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2.5 py-2 shadow-[var(--shadow-surface)]">
           <div className="flex min-w-0 items-center gap-2">
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--surface-glass)]">
               <AppLogo size={22} decorative />

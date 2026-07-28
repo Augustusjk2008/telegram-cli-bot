@@ -1,13 +1,10 @@
 .desktop-workbench-root {
   position: relative;
-  --desktop-workbench-control-radius: 6px;
-  --desktop-workbench-chip-radius: 6px;
-  --desktop-workbench-pane-radius: 8px;
+  --desktop-workbench-control-radius: var(--radius-control);
+  --desktop-workbench-chip-radius: var(--radius-control);
+  --desktop-workbench-pane-radius: var(--radius-panel);
   animation: workbenchShellReveal 120ms ease-out;
-  background:
-    radial-gradient(circle at 22% 0%, var(--bg-glow), transparent 34%),
-    radial-gradient(circle at 88% 0%, var(--bg-glow-strong), transparent 28%),
-    var(--workbench-shell-bg);
+  background: var(--workbench-shell-bg);
 }
 
 .desktop-workbench-root :where(
@@ -32,22 +29,15 @@
   border-radius: var(--desktop-workbench-pane-radius);
   border: 1px solid var(--workbench-hairline);
   background: var(--workbench-panel-bg);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 5%, transparent);
-  will-change: opacity, box-shadow;
+  box-shadow: var(--shadow-surface);
   transition:
     border-color 160ms ease,
-    box-shadow 160ms ease,
     opacity 160ms ease,
     background-color 160ms ease;
 }
 
 .desktop-workbench-pane::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  border-radius: inherit;
-  border: 1px solid color-mix(in srgb, var(--text) 4%, transparent);
+  content: none;
 }
 
 .desktop-workbench-root [data-testid="desktop-workbench-columns"] {
@@ -78,24 +68,11 @@
   z-index: 30;
   animation: workbenchFocusedPaneLift 160ms ease-out;
   border-color: var(--workbench-focus-ring);
-  box-shadow: 0 0 0 1px var(--workbench-focus-ring), 0 28px 80px rgba(0, 0, 0, 0.34);
+  box-shadow: 0 0 0 1px var(--workbench-focus-ring);
 }
 
 .desktop-workbench-pane[data-focused="true"]::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  border: 1px solid transparent;
-  background:
-    linear-gradient(120deg, transparent 0%, color-mix(in srgb, var(--accent) 28%, transparent) 42%, transparent 64%) border-box;
-  mask:
-    linear-gradient(#000 0 0) padding-box,
-    linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  opacity: 0;
-  transform: translateX(-10%);
-  animation: workbenchPaneSheen 320ms ease-out;
+  content: none;
 }
 
 .desktop-workbench-root[data-has-focus="true"] [data-testid="desktop-workbench-columns"] {
@@ -114,7 +91,7 @@
 }
 
 .desktop-workbench-root [data-testid="workbench-focus-backdrop"] {
-  backdrop-filter: blur(2px);
+  backdrop-filter: none;
 }
 
 .desktop-workbench-root [role="separator"] {
@@ -210,7 +187,7 @@
 }
 
 .workbench-topbar {
-  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--text) 4%, transparent);
+  box-shadow: none;
 }
 
 .workbench-topbar-logo,
@@ -225,12 +202,12 @@
 
 .workbench-status-chip {
   display: inline-flex;
-  height: 28px;
+  height: 26px;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
-  background: color-mix(in srgb, var(--surface-glass) 82%, transparent);
-  padding-inline: 8px;
+  background: transparent;
+  padding-inline: 6px;
   font-size: 12px;
 }
 
@@ -239,7 +216,7 @@
 }
 
 .workbench-activity-rail {
-  box-shadow: inset -1px 0 0 color-mix(in srgb, var(--text) 3%, transparent);
+  box-shadow: none;
 }
 
 .workbench-activity-button {
@@ -267,8 +244,8 @@
 }
 
 .desktop-workbench-statusbar {
-  min-height: 26px;
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 4%, transparent);
+  min-height: 24px;
+  box-shadow: none;
 }
 
 .chat-message-bubble-delight {
@@ -278,10 +255,7 @@
 
 .chat-message-bubble-delight[data-streaming="true"] {
   border-color: color-mix(in srgb, var(--accent) 46%, var(--workbench-hairline));
-  box-shadow:
-    var(--shadow-soft),
-    0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent),
-    0 10px 28px color-mix(in srgb, var(--accent) 10%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .chat-message-bubble-delight[data-streaming="true"]::after {
@@ -443,27 +417,11 @@
 
 @keyframes workbenchFocusedPaneLift {
   from {
-    box-shadow: 0 0 0 1px transparent, 0 10px 36px rgba(0, 0, 0, 0.18);
+    box-shadow: 0 0 0 1px transparent;
   }
 
   to {
-    box-shadow: 0 0 0 1px var(--workbench-focus-ring), 0 28px 80px rgba(0, 0, 0, 0.32);
-  }
-}
-
-@keyframes workbenchPaneSheen {
-  0% {
-    opacity: 0;
-    transform: translateX(-12%);
-  }
-
-  35% {
-    opacity: 1;
-  }
-
-  100% {
-    opacity: 0;
-    transform: translateX(12%);
+    box-shadow: 0 0 0 1px var(--workbench-focus-ring);
   }
 }
 

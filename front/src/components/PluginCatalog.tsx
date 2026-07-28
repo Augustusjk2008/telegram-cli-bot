@@ -78,7 +78,7 @@ function getFolderDialogTitle(action: PluginAction) {
 
 function sectionClass(extra = "") {
   return clsx(
-    "min-w-0 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] shadow-[var(--shadow-soft)]",
+    "min-w-0 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] shadow-[var(--shadow-surface)]",
     extra,
   );
 }
@@ -93,8 +93,8 @@ function buttonClass(extra = "") {
 
 function statusBadgeClass(enabled: boolean) {
   return enabled
-    ? "inline-flex rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700"
-    : "inline-flex rounded-md border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700";
+    ? "inline-flex rounded-md border border-[var(--status-success-border)] bg-[var(--status-success-bg)] px-2 py-0.5 text-[11px] font-medium text-[var(--status-success)]"
+    : "inline-flex rounded-md border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-2 py-0.5 text-[11px] font-medium text-[var(--status-danger)]";
 }
 
 export function PluginCatalog({
@@ -220,7 +220,7 @@ export function PluginCatalog({
             <article
               key={plugin.id}
               data-testid={`plugin-catalog-item-${plugin.id}`}
-              className="min-w-0 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] shadow-[var(--shadow-soft)]"
+              className="min-w-0 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] shadow-[var(--shadow-surface)]"
             >
               {(() => {
                 const primaryAction = client && botAlias ? getPrimaryCatalogAction(plugin) : null;
@@ -236,7 +236,7 @@ export function PluginCatalog({
 
                 return (
                   <>
-                    <div className="flex min-w-0 flex-col gap-3 px-3 py-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="flex min-w-0 flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0 flex-1">
                         <div className="truncate text-sm font-medium text-[var(--text)]">{plugin.name}</div>
                         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">

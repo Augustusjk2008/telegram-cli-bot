@@ -33,7 +33,7 @@ export function WorkbenchActivityRail({
   return (
     <aside
       data-testid="desktop-workbench-activity-rail"
-      className="workbench-activity-rail flex h-full min-h-0 flex-col items-center gap-1.5 border-r border-[var(--workbench-hairline)] bg-[var(--workbench-sidebar-bg)] px-1.5 py-2"
+      className="workbench-activity-rail flex h-full min-h-0 flex-col items-center gap-1 border-r border-[var(--workbench-hairline)] bg-[var(--workbench-sidebar-bg)] px-1 py-1.5"
     >
       <button
         type="button"

@@ -178,8 +178,8 @@ export function BotCliParamsPanel({
   }
 
   return (
-    <section className={`rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 ${className}`}>
-      <div className="flex items-start justify-between gap-4">
+    <section className={`rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 ${className}`}>
+      <div className="flex items-start justify-between gap-3">
         <div>
           <h2 className="text-base font-semibold text-[var(--text)]">CLI 参数</h2>
           <p className="text-sm text-[var(--muted)]">当前 CLI: {cliParams?.cliType || "加载中"}</p>
@@ -206,11 +206,11 @@ export function BotCliParamsPanel({
         </div>
       </div>
 
-      {error ? <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div> : null}
-      {notice ? <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{notice}</div> : null}
+      {error ? <div className="mt-3 rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger)]">{error}</div> : null}
+      {notice ? <div className="mt-3 rounded-lg border border-[var(--status-success-border)] bg-[var(--status-success-bg)] px-3 py-2 text-sm text-[var(--status-success)]">{notice}</div> : null}
       {loading ? <div className="mt-4 text-sm text-[var(--muted)]">加载中...</div> : null}
 
-      <div className="mt-4 space-y-3">
+      <div className="mt-3 space-y-3">
         {entries.map(([key, field]) => {
           const label = fieldLabel(key, field);
           const value = draftValues[key] ?? "";

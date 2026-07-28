@@ -632,7 +632,7 @@ export function FileEditorSurface({
               aria-haspopup="menu"
               aria-expanded={navigationMenuOpen}
               onClick={() => setNavigationMenuOpen((current) => !current)}
-              className="inline-flex h-9 w-9 touch-manipulation items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--muted)] shadow-[var(--shadow-soft)]"
+              className="inline-flex h-9 w-9 touch-manipulation items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--muted)] shadow-[var(--shadow-float)]"
             >
               <MoreHorizontal className="h-4 w-4" />
             </button>

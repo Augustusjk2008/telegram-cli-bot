@@ -134,8 +134,8 @@ export function AiInlineCompletionSettingsPanel({ client, onSaved, onError }: Pr
   };
 
   return (
-    <div className="rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-4 shadow-[var(--shadow-soft)]">
-      <div className="mb-4 flex items-center justify-between gap-3">
+    <div className="rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-3 shadow-[var(--shadow-surface)]">
+      <div className="mb-3 flex items-center justify-between gap-3">
         <h2 className="text-base font-semibold text-[var(--text)]">AI inline 补全（全局）</h2>
         <span className="rounded-md border border-[var(--border)] px-2 py-1 text-xs text-[var(--muted)]">
           {draft.configured ? "已配置" : "未配置"}
@@ -143,9 +143,9 @@ export function AiInlineCompletionSettingsPanel({ client, onSaved, onError }: Pr
       </div>
 
       {loading ? <div className="text-sm text-[var(--muted)]">加载中...</div> : null}
-      {localError ? <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{localError}</div> : null}
+      {localError ? <div className="mb-3 rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger)]">{localError}</div> : null}
 
-      <div className="space-y-4">
+      <div className="space-y-3">
         <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
           <span className="text-sm text-[var(--text)]">启用 AI inline 补全</span>
           <input
@@ -157,7 +157,7 @@ export function AiInlineCompletionSettingsPanel({ client, onSaved, onError }: Pr
           />
         </label>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="space-y-2">
             <span className="text-sm font-medium text-[var(--text)]">服务地址</span>
             <input
@@ -202,7 +202,7 @@ export function AiInlineCompletionSettingsPanel({ client, onSaved, onError }: Pr
           </label>
         </div>
 
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <label className="space-y-2">
             <span className="text-sm font-medium text-[var(--text)]">温度</span>
             <input aria-label="温度" type="number" step="0.1" value={numberInputValue(draft.temperature)} onChange={(event) => updateNumberDraft("temperature", event.target.value)} className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]" />
@@ -221,7 +221,7 @@ export function AiInlineCompletionSettingsPanel({ client, onSaved, onError }: Pr
           </label>
         </div>
 
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <label className="space-y-2">
             <span className="text-sm font-medium text-[var(--text)]">前缀字符上限</span>
             <input aria-label="前缀字符上限" type="number" value={numberInputValue(draft.maxPrefixChars)} onChange={(event) => updateNumberDraft("maxPrefixChars", event.target.value)} className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]" />
@@ -240,7 +240,7 @@ export function AiInlineCompletionSettingsPanel({ client, onSaved, onError }: Pr
           </label>
         </div>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
             <span className="text-sm text-[var(--text)]">自动触发</span>
             <input aria-label="自动触发" type="checkbox" checked={draft.autoTriggerEnabled} onChange={(event) => updateDraft("autoTriggerEnabled", event.target.checked)} className="h-4 w-4" />

@@ -199,7 +199,7 @@ export function PluginsScreen({
 
   return (
     <>
-      <main className={clsx("flex h-full min-h-0 flex-col", embedded ? "bg-[var(--workbench-titlebar-bg)]" : "bg-[var(--workbench-panel-bg)]")}>
+      <main data-ui-density="compact" className={clsx("flex h-full min-h-0 flex-col", embedded ? "bg-[var(--workbench-titlebar-bg)]" : "bg-[var(--workbench-panel-bg)]")}>
         {embedded ? null : (
           <header className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-4 py-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -270,8 +270,8 @@ export function PluginsScreen({
               )}
             />
             {notice ? (
-              <SurfacePanel className="border-emerald-200 bg-emerald-50 shadow-[var(--shadow-soft)]">
-                <div className={sectionBodyClass("py-2 text-sm text-emerald-700")}>{notice}</div>
+              <SurfacePanel className="border-[var(--status-success-border)] bg-[var(--status-success-bg)] shadow-[var(--shadow-surface)]">
+                <div className={sectionBodyClass("py-2 text-sm text-[var(--status-success)]")}>{notice}</div>
               </SurfacePanel>
             ) : null}
           </div>

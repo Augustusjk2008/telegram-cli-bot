@@ -1337,7 +1337,7 @@ function ClusterTaskPanel({ status, agents }: { status: ClusterTaskStatus; agent
   }
   const agentNameMap = new Map(agents.map((agent) => [agent.id, agent.name || agent.id]));
   return (
-    <section className="rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-3 text-sm text-[var(--text)] shadow-[var(--shadow-soft)]">
+    <section className="rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-3 py-2 text-sm text-[var(--text)] shadow-[var(--shadow-surface)]">
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium">智能体集群任务</span>
         {status.pendingCount > 0 ? (
@@ -1498,12 +1498,12 @@ const ChatMessageRow = memo(function ChatMessageRow({
               : [
                   "chat-message-bubble-delight",
                   isUser && isCurrentUserMessage
-                    ? "rounded-lg bg-[var(--accent)] px-4 py-2 text-[var(--accent-foreground)] shadow-[var(--shadow-soft)]"
+                    ? "rounded-lg bg-[var(--accent)] px-3 py-1.5 text-[var(--accent-foreground)] shadow-[var(--shadow-surface)]"
                     : isStreamingAssistant
-                      ? "min-w-0 overflow-hidden rounded-lg border border-[var(--accent)]/45 bg-[var(--workbench-panel-elevated-bg)] px-4 py-3 text-[var(--text)] shadow-[var(--shadow-soft)]"
+                      ? "min-w-0 overflow-hidden rounded-lg border border-[var(--accent)]/45 bg-[var(--workbench-panel-elevated-bg)] px-3 py-2 text-[var(--text)] shadow-[var(--shadow-surface)]"
                     : item.state === "error"
-                      ? "rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-red-700 shadow-[var(--shadow-soft)]"
-                      : "min-w-0 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-3 text-[var(--text)] shadow-[var(--shadow-soft)]",
+                      ? "rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-[var(--status-danger)] shadow-[var(--shadow-surface)]"
+                      : "min-w-0 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-3 py-2 text-[var(--text)] shadow-[var(--shadow-surface)]",
                 ].join(" ")}
           >
             {hasTranscript ? (
@@ -4641,7 +4641,7 @@ export function ChatScreen({
     }
     return options;
   }, [cliModelOptions, nativeExecutionMode, nativeModelOptions, nativeSelectedModel, selectedModel]);
-  const messageContentWidthClass = embedded ? "mx-auto w-full max-w-5xl space-y-4" : "w-full space-y-4";
+  const messageContentWidthClass = embedded ? "mx-auto w-full max-w-5xl space-y-3" : "w-full space-y-3";
   const composerPlaceholder = chatDisabledReason
     || (clusterMode && activeAgentId === "main" ? "@ 可指定智能体集群" : (showAgentSwitcher ? `发给 ${activeAgent.name}...` : "输入消息"));
   const deletedAttachmentKeysByMessage = useMemo(() => {
@@ -4863,7 +4863,7 @@ export function ChatScreen({
         />
       ) : null}
       {chatDisabledReason ? (
-        <section className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900 shadow-[var(--shadow-soft)]">
+        <section className="border-b border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] px-3 py-2 text-sm font-medium text-[var(--status-warning)] shadow-[var(--shadow-surface)]">
           {chatDisabledReason}
         </section>
       ) : null}
@@ -4881,14 +4881,14 @@ export function ChatScreen({
         onTouchEnd={clearUserScrollIntent}
         onTouchCancel={clearUserScrollIntent}
         onKeyDown={handleScrollKeyDown}
-        className={isImmersive ? "flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] px-4 pb-24 pt-4" : "flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] p-4"}
+        className={isImmersive ? "flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] px-3 pb-24 pt-3" : "flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] p-3"}
       >
         <div ref={scrollContentRef} data-testid="chat-scroll-content" className={messageContentWidthClass}>
           {loading ? (
-            <div className="mt-10 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-8 text-center text-sm text-[var(--muted)] shadow-[var(--shadow-soft)]">加载中...</div>
+            <div className="mt-10 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-8 text-center text-sm text-[var(--muted)] shadow-[var(--shadow-surface)]">加载中...</div>
           ) : null}
           {error ? (
-            <div data-testid="chat-error-banner" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-[var(--shadow-soft)]">
+            <div data-testid="chat-error-banner" className="rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger)] shadow-[var(--shadow-surface)]">
               {error}
             </div>
           ) : null}
@@ -4924,7 +4924,7 @@ export function ChatScreen({
             />
           ) : null}
           {clusterTaskError ? (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-[var(--shadow-soft)]">
+            <div className="rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger)] shadow-[var(--shadow-surface)]">
               {clusterTaskError}
             </div>
           ) : null}
@@ -4977,10 +4977,10 @@ export function ChatScreen({
       ) : null}
       <div className="border-t border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)]">
         {chatMutationsDisabled || nativePermissionPending ? (
-          <p className="px-4 pt-3 text-xs font-medium text-amber-700">{chatDisabledReason || "只读模式"}</p>
+          <p className="px-4 pt-3 text-xs font-medium text-[var(--status-warning)]">{chatDisabledReason || "只读模式"}</p>
         ) : null}
         {queuedMessage ? (
-          <div className="mx-3 mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 shadow-[var(--shadow-soft)]">
+          <div className="mx-3 mt-2 rounded-lg border border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] px-3 py-2 text-xs text-[var(--status-warning)] shadow-[var(--shadow-surface)]">
             <div className="font-medium">排队中</div>
             <div className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words">
               {buildComposedMessageText(queuedMessage.text, queuedMessage.attachments)}

@@ -21,17 +21,17 @@ export function PlanDraftCard({ content, executing = false, error = "", onExecut
   const effectiveContent = editing ? draft : content;
 
   return (
-    <SurfacePanel className="mt-3 border-emerald-200 bg-emerald-50/80 px-4 py-3 text-sm text-emerald-950 shadow-[var(--shadow-soft)]">
+    <SurfacePanel className="mt-3 border-[var(--status-success-border)] bg-[var(--status-success-bg)] px-3 py-2 text-sm text-[var(--text)] shadow-[var(--shadow-surface)]">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-emerald-700">方案草稿</div>
+          <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--status-success)]">方案草稿</div>
           <div className="mt-1 font-semibold">候选方案</div>
         </div>
         <div className="flex shrink-0 gap-2">
           <button
             type="button"
             onClick={() => setEditing((value) => !value)}
-            className={toolbarButtonClass("plain", "sm", "border-emerald-200 bg-white text-emerald-800 hover:bg-emerald-100")}
+            className={toolbarButtonClass("plain", "sm", "border-[var(--status-success-border)] bg-[var(--workbench-panel-elevated-bg)] text-[var(--status-success)] hover:bg-[var(--status-success-bg)]")}
           >
             {editing ? <X className="h-3.5 w-3.5" /> : <Pencil className="h-3.5 w-3.5" />}
             {editing ? "收起" : "修改方案"}
@@ -40,7 +40,7 @@ export function PlanDraftCard({ content, executing = false, error = "", onExecut
             type="button"
             disabled={executing || !effectiveContent.trim()}
             onClick={() => onExecute(effectiveContent)}
-            className={toolbarButtonClass("primary", "sm", "bg-emerald-700 text-white hover:bg-emerald-800")}
+            className={toolbarButtonClass("primary", "sm", "hover:opacity-90")}
           >
             <Check className="h-3.5 w-3.5" />
             {executing ? "执行中" : "执行方案"}
@@ -52,10 +52,10 @@ export function PlanDraftCard({ content, executing = false, error = "", onExecut
           aria-label="方案内容"
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
-          className="mt-3 min-h-56 w-full rounded-md border border-emerald-200 bg-white p-3 font-mono text-xs leading-5 text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200"
+          className="mt-3 min-h-56 w-full rounded-md border border-[var(--status-success-border)] bg-[var(--workbench-panel-elevated-bg)] p-3 font-mono text-xs leading-5 text-[var(--text)] outline-none focus:border-[var(--status-success)] focus:ring-2 focus:ring-[var(--status-success-border)]"
         />
       ) : null}
-      {error ? <div className="mt-2 text-xs text-red-700">{error}</div> : null}
+      {error ? <div className="mt-2 text-xs text-[var(--status-danger)]">{error}</div> : null}
     </SurfacePanel>
   );
 }

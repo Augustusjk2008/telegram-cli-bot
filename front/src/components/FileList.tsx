@@ -19,7 +19,7 @@ export function FileList({ files, onDirClick, onFileClick, onEdit, onRename, onD
   }
 
   return (
-    <ul className="overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] shadow-[var(--shadow-soft)] divide-y divide-[var(--workbench-hairline)]">
+    <ul className="divide-y divide-[var(--workbench-hairline)] overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] shadow-[var(--shadow-surface)]">
       {files.map((file) => (
         <li key={file.name} className="flex items-center gap-2 p-2">
           <button

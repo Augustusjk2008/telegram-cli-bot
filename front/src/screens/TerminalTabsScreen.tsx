@@ -100,7 +100,7 @@ export function TerminalTabsScreen({
   }, [activeTab, onWorkbenchStatusChange]);
 
   return (
-    <main data-testid="terminal-tabs-screen" className="flex h-full min-h-0 flex-col bg-[var(--workbench-panel-bg)]">
+    <main data-testid="terminal-tabs-screen" data-ui-density="compact" className="flex h-full min-h-0 flex-col bg-[var(--workbench-panel-bg)]">
       <div className="flex min-h-10 shrink-0 items-stretch border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)]">
         <div
           role="tablist"

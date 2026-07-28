@@ -526,7 +526,7 @@ export function TerminalScreen({
   const stagedWorkingDirControls = stagedWorkingDir ? (
     <div className={embedded
       ? "flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-3 py-1.5 text-xs"
-      : "mt-2 flex flex-wrap items-center gap-2 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-2.5 py-1.5 text-xs shadow-[var(--shadow-soft)]"}
+      : "mt-2 flex flex-wrap items-center gap-2 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-2.5 py-1.5 text-xs shadow-[var(--shadow-surface)]"}
     >
       <span className="font-medium text-[var(--text)]">新终端工作目录</span>
       <span className="truncate text-[var(--muted)]">{stagedWorkingDir}</span>
