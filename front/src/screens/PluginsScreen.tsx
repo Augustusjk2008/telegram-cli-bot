@@ -170,7 +170,7 @@ export function PluginsScreen({
   );
 
   const uninstallDialog = pendingUninstallPlugin ? (
-    <div role="dialog" aria-modal="true" aria-labelledby="plugin-uninstall-title" className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+    <div role="dialog" aria-modal="true" aria-labelledby="plugin-uninstall-title" className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-backdrop-50)] p-4">
       <SurfacePanel className="w-full max-w-md p-4">
         <h2 id="plugin-uninstall-title" className="text-base font-semibold text-[var(--text)]">卸载插件</h2>
         <p className="mt-2 text-sm text-[var(--muted)]">卸载后会停止插件运行时并清理视图缓存。</p>

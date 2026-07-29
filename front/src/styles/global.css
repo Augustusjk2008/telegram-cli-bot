@@ -95,7 +95,7 @@ select:disabled {
 }
 
 :where(button, [role="button"], a, input, textarea, select):focus-visible {
-  outline: 2px solid var(--accent-outline);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -113,6 +113,13 @@ select:disabled {
 }
 
 :root[data-theme="high-contrast"] :where(.backdrop-blur, [class*="backdrop-blur"]) {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+:root[data-theme="lunar-ceramic"] :where(.backdrop-blur, [class*="backdrop-blur"]),
+:root[data-theme="copper-night"] :where(.backdrop-blur, [class*="backdrop-blur"]),
+:root[data-theme="eclipse-film"] :where(.backdrop-blur, [class*="backdrop-blur"]) {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }
@@ -194,6 +201,10 @@ select:disabled {
 }
 
 .app-logo-image {
+  display: none;
+}
+
+.app-logo-image--deep {
   display: block;
 }
 
@@ -203,14 +214,32 @@ select:disabled {
 
 :root[data-theme="classic"] .app-logo-image--deep,
 :root[data-theme="lab-light"] .app-logo-image--deep,
-:root[data-theme="ink-paper"] .app-logo-image--deep {
+:root[data-theme="ink-paper"] .app-logo-image--deep,
+:root[data-theme="lunar-ceramic"] .app-logo-image--deep,
+:root[data-theme="copper-night"] .app-logo-image--deep,
+:root[data-theme="eclipse-film"] .app-logo-image--deep {
   display: none;
 }
 
 :root[data-theme="classic"] .app-logo-image--classic,
 :root[data-theme="lab-light"] .app-logo-image--classic,
-:root[data-theme="ink-paper"] .app-logo-image--classic {
+:root[data-theme="ink-paper"] .app-logo-image--classic,
+:root[data-theme="lunar-ceramic"] .app-logo-image--classic {
   display: block;
+}
+
+:root[data-theme="copper-night"] .app-logo-image--copper {
+  display: block;
+  filter: drop-shadow(0 0 10px rgba(216, 137, 85, 0.2));
+}
+
+:root[data-theme="eclipse-film"] .app-logo-image--eclipsedark {
+  display: block;
+  filter: none;
+}
+
+:root[data-theme="lunar-ceramic"] .app-logo-image--classic {
+  filter: drop-shadow(0 2px 3px rgba(45, 48, 54, 0.16));
 }
 
 .app-logo-mark {

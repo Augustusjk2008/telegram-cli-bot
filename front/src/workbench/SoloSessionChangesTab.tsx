@@ -243,7 +243,7 @@ export function SoloSessionChangesTab({
   }
 
   const rollbackDialog = pendingRollbackTurn ? (
-    <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/35 px-4">
+    <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-[var(--overlay-backdrop-35)] px-4">
       <div role="dialog" aria-modal="true" aria-label="确认撤回" className="w-full max-w-sm rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] p-4 shadow-[var(--shadow-card)]">
         <h2 className="text-sm font-semibold text-[var(--text)]">确认撤回</h2>
         <p className="mt-2 text-sm text-[var(--muted)]">会丢弃该点之后的会话和工作区改动，不可撤销</p>

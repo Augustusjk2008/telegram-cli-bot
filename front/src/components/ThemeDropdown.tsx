@@ -1,9 +1,11 @@
 import { clsx } from "clsx";
 import { useEffect, useRef, useState } from "react";
 import {
+  Aperture,
   BookOpen,
   Check,
   ChevronDown,
+  Compass,
   Contrast,
   FlaskConical,
   Moon,
@@ -23,6 +25,9 @@ const THEME_ICONS: Record<UiThemeName, ThemeIconComponent> = {
   "lab-light": FlaskConical,
   "ink-paper": BookOpen,
   "high-contrast": Contrast,
+  "lunar-ceramic": Moon,
+  "copper-night": Compass,
+  "eclipse-film": Aperture,
 };
 
 function ThemePreviewSwatches({ option, compact = false }: { option: ThemeOption; compact?: boolean }) {

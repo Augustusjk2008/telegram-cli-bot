@@ -1,4 +1,16 @@
-export const UI_THEME_NAMES = ["deep-space", "classic", "graphite", "lab-light", "ink-paper", "high-contrast"] as const;
+import { withPublicBase } from "./utils/publicBase";
+
+export const UI_THEME_NAMES = [
+  "deep-space",
+  "classic",
+  "graphite",
+  "lab-light",
+  "ink-paper",
+  "high-contrast",
+  "lunar-ceramic",
+  "copper-night",
+  "eclipse-film",
+] as const;
 export type UiThemeName = typeof UI_THEME_NAMES[number];
 export type ChatBodyFontFamilyName = "sans" | "serif" | "kai" | "fangsong" | "mono";
 export type ChatBodyFontSizeName = "small" | "medium" | "large";
@@ -20,6 +32,18 @@ export const DEFAULT_CHAT_BODY_FONT_FAMILY: ChatBodyFontFamilyName = "sans";
 export const DEFAULT_CHAT_BODY_FONT_SIZE: ChatBodyFontSizeName = "medium";
 export const DEFAULT_CHAT_BODY_LINE_HEIGHT: ChatBodyLineHeightName = "normal";
 export const DEFAULT_CHAT_BODY_PARAGRAPH_SPACING: ChatBodyParagraphSpacingName = "normal";
+
+const UI_THEME_FAVICON_PATHS: Record<UiThemeName, string> = {
+  "deep-space": "/assets/app-logo-favicon.svg",
+  classic: "/assets/app-logo-classic.svg",
+  graphite: "/assets/app-logo-favicon.svg",
+  "lab-light": "/assets/app-logo-classic.svg",
+  "ink-paper": "/assets/app-logo-classic.svg",
+  "high-contrast": "/assets/app-logo-favicon.svg",
+  "lunar-ceramic": "/assets/app-logo-classic.svg",
+  "copper-night": "/assets/app-logo-copper.svg",
+  "eclipse-film": "/assets/app-logo-eclipse.svg",
+};
 
 export const UI_THEME_OPTIONS: Array<{
   value: UiThemeName;
@@ -112,10 +136,49 @@ export const UI_THEME_OPTIONS: Array<{
       muted: "#d4d4d4",
     },
   },
+  {
+    value: "lunar-ceramic",
+    label: "月壤陶瓷",
+    description: "低反射月壤灰、钴紫釉与铁氧化物点缀的浅色工作台。",
+    preview: {
+      accent: "#615a88",
+      surface: "#f4f2ee",
+      accentStrong: "#934737",
+      border: "rgba(45, 48, 54, 0.14)",
+      text: "#2d3036",
+      muted: "#696d77",
+    },
+  },
+  {
+    value: "copper-night",
+    label: "赤铜夜航",
+    description: "酒褐哑光船体搭配赤铜航标与烟紫导航，适合低照度工作。",
+    preview: {
+      accent: "#d88955",
+      surface: "#1e1316",
+      accentStrong: "#a692d7",
+      border: "rgba(239, 199, 165, 0.16)",
+      text: "#f3e5d4",
+      muted: "#b6a092",
+    },
+  },
+  {
+    value: "eclipse-film",
+    label: "日蚀胶片",
+    description: "紫煤黑哑光胶片搭配玫瑰操作色，冰蓝仅用于焦点与信息。",
+    preview: {
+      accent: "#c47791",
+      surface: "#1a1b24",
+      accentStrong: "#9bcbdd",
+      border: "#707486",
+      text: "#f1eff4",
+      muted: "#a7a6b5",
+    },
+  },
 ];
 
 export function isLightUiTheme(themeName: string | undefined): themeName is UiThemeName {
-  return themeName === "classic" || themeName === "lab-light" || themeName === "ink-paper";
+  return themeName === "classic" || themeName === "lab-light" || themeName === "ink-paper" || themeName === "lunar-ceramic";
 }
 
 export const CHAT_BODY_FONT_FAMILY_OPTIONS: Array<{
@@ -204,6 +267,8 @@ export function applyUiTheme(themeName: UiThemeName) {
     return;
   }
   document.documentElement.dataset.theme = themeName;
+  const favicon = document.querySelector<HTMLLinkElement>("link[data-theme-favicon]");
+  favicon?.setAttribute("href", withPublicBase(UI_THEME_FAVICON_PATHS[themeName]));
 }
 
 export function readStoredChatBodyFontFamily(): ChatBodyFontFamilyName {
@@ -363,6 +428,78 @@ export function applyChatReadingPreferences(
 }
 
 export function getTerminalTheme(themeName: UiThemeName) {
+  if (themeName === "lunar-ceramic") {
+    return {
+      background: "#25282e",
+      foreground: "#fcfbf8",
+      cursor: "#a69fc8",
+      black: "#17191d",
+      red: "#a13f48",
+      green: "#5b7653",
+      yellow: "#926a24",
+      blue: "#707aa7",
+      magenta: "#8a73a8",
+      cyan: "#615a88",
+      white: "#e8e6e2",
+      brightBlack: "#6a6e78",
+      brightRed: "#c75b62",
+      brightGreen: "#78936f",
+      brightYellow: "#b78b3e",
+      brightBlue: "#929bd0",
+      brightMagenta: "#ae94cf",
+      brightCyan: "#a69fc8",
+      brightWhite: "#fcfbf8",
+    };
+  }
+
+  if (themeName === "copper-night") {
+    return {
+      background: "#191514",
+      foreground: "#f3e6d4",
+      cursor: "#d4874d",
+      black: "#100d0c",
+      red: "#c4624f",
+      green: "#81906c",
+      yellow: "#c99a53",
+      blue: "#8091ad",
+      magenta: "#a77991",
+      cyan: "#d4874d",
+      white: "#e2d3c0",
+      brightBlack: "#75675f",
+      brightRed: "#e0836c",
+      brightGreen: "#a4b489",
+      brightYellow: "#e4ba70",
+      brightBlue: "#a5b7d5",
+      brightMagenta: "#c99bb3",
+      brightCyan: "#efad71",
+      brightWhite: "#fff8ef",
+    };
+  }
+
+  if (themeName === "eclipse-film") {
+    return {
+      background: "#15171c",
+      foreground: "#e7e4dc",
+      cursor: "#aab6ca",
+      black: "#0e1014",
+      red: "#bb5c65",
+      green: "#718c7a",
+      yellow: "#ba9855",
+      blue: "#7689a8",
+      magenta: "#987e9d",
+      cyan: "#7689a8",
+      white: "#d8d6d0",
+      brightBlack: "#6b707c",
+      brightRed: "#df7c85",
+      brightGreen: "#91ad99",
+      brightYellow: "#d7b978",
+      brightBlue: "#aab6ca",
+      brightMagenta: "#b79cbd",
+      brightCyan: "#aab6ca",
+      brightWhite: "#f4f1ea",
+    };
+  }
+
   if (themeName === "classic") {
     return {
       background: "#fbf7ef",
@@ -509,6 +646,9 @@ export function getTerminalTheme(themeName: UiThemeName) {
 export function getTerminalMinimumContrastRatio(themeName: UiThemeName) {
   if (themeName === "high-contrast") {
     return 7;
+  }
+  if (themeName === "lunar-ceramic" || themeName === "copper-night" || themeName === "eclipse-film") {
+    return 4.5;
   }
   return isLightUiTheme(themeName) ? 4.5 : 1;
 }

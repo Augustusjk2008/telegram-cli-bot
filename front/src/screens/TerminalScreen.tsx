@@ -596,7 +596,7 @@ export function TerminalScreen({
               ) : null}
             </div>
             {effectiveError ? (
-              <p className="mt-0.5 text-xs text-red-600">{effectiveError}</p>
+              <p className="mt-0.5 text-xs text-[var(--status-danger)]">{effectiveError}</p>
             ) : null}
           </div>
           <div className="flex shrink-0 items-center gap-2">
@@ -616,7 +616,7 @@ export function TerminalScreen({
       ) : (
         <>
           {effectiveError ? (
-            <div role="alert" className="shrink-0 border-b border-[var(--workbench-hairline)] bg-red-50 px-3 py-1 text-xs text-red-600">
+            <div role="alert" className="shrink-0 border-b border-[var(--workbench-hairline)] bg-[var(--status-danger-bg)] px-3 py-1 text-xs text-[var(--status-danger)]">
               {effectiveError}
             </div>
           ) : null}

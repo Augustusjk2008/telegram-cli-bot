@@ -1380,7 +1380,7 @@ export function DesktopWorkbench({
           data-testid="workbench-focus-backdrop"
           aria-label="退出聚焦模式"
           onClick={() => setFocusedPane(null)}
-          className="absolute inset-0 z-20 bg-black/45"
+          className="absolute inset-0 z-20 bg-[var(--overlay-backdrop-45)]"
         />
       ) : null}
 
@@ -1696,7 +1696,7 @@ export function DesktopWorkbench({
       ) : null}
 
       {definitionCandidates.length > 0 || definitionMessage ? (
-        <div className="absolute inset-0 z-30 flex items-start justify-center bg-black/35 px-4 py-12">
+        <div className="absolute inset-0 z-30 flex items-start justify-center bg-[var(--overlay-backdrop-35)] px-4 py-12">
           <motion.div
             data-testid="desktop-definition-picker"
             className="w-full max-w-2xl border border-[var(--border)] bg-[var(--surface)] shadow-2xl"

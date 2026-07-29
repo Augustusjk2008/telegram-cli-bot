@@ -448,7 +448,7 @@ export function EditorPane({
         </div>
       ) : null}
       {activeTab.kind !== "file-preview" && visibleError ? (
-        <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+        <div className="border-b border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-4 py-2 text-sm text-[var(--status-danger)]">
           {visibleError}
         </div>
       ) : null}

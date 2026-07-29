@@ -186,10 +186,10 @@ function treeItemToneClass(gitDecoration?: GitTreeDecorationKind) {
     return "text-[var(--muted)]";
   }
   if (gitDecoration === "added") {
-    return "text-emerald-500";
+    return "text-[var(--status-success)]";
   }
   if (gitDecoration === "modified") {
-    return "text-yellow-400";
+    return "text-[var(--status-warning)]";
   }
   return "text-[var(--text)]";
 }
@@ -711,55 +711,55 @@ function treeIconToneClass(kind: TreeIconKind) {
   switch (kind) {
     case "folder-closed":
     case "folder-open":
-      return "text-amber-600";
+      return "text-[var(--status-warning)]";
     case "file-env":
-      return "text-lime-700";
+      return "text-[var(--status-success)]";
     case "file-git":
-      return "text-orange-600";
+      return "text-[var(--accent-strong)]";
     case "file-json":
-      return "text-amber-700";
+      return "text-[var(--status-warning)]";
     case "file-ini":
-      return "text-slate-600";
+      return "text-[var(--muted)]";
     case "file-html":
-      return "text-orange-600";
+      return "text-[var(--accent-strong)]";
     case "file-js-ts":
-      return "text-sky-600";
+      return "text-[var(--accent)]";
     case "file-python":
       return "text-[var(--muted)]";
     case "file-c-cpp":
-      return "text-cyan-700";
+      return "text-[var(--accent)]";
     case "file-shell":
-      return "text-lime-700";
+      return "text-[var(--status-success)]";
     case "file-csharp":
-      return "text-violet-600";
+      return "text-[var(--accent)]";
     case "file-code":
-      return "text-indigo-600";
+      return "text-[var(--accent)]";
     case "file-config":
-      return "text-fuchsia-600";
+      return "text-[var(--accent-strong)]";
     case "file-markdown":
-      return "text-emerald-700";
+      return "text-[var(--status-success)]";
     case "file-text":
-      return "text-slate-600";
+      return "text-[var(--muted)]";
     case "file-document":
-      return "text-slate-700";
+      return "text-[var(--muted)]";
     case "file-pdf":
-      return "text-red-600";
+      return "text-[var(--status-danger)]";
     case "file-sheet":
-      return "text-teal-600";
+      return "text-[var(--status-success)]";
     case "file-presentation":
-      return "text-orange-600";
+      return "text-[var(--accent-strong)]";
     case "file-image":
-      return "text-rose-600";
+      return "text-[var(--accent-strong)]";
     case "file-audio":
-      return "text-pink-600";
+      return "text-[var(--accent-strong)]";
     case "file-video":
-      return "text-indigo-500";
+      return "text-[var(--accent)]";
     case "file-font":
-      return "text-amber-700";
+      return "text-[var(--status-warning)]";
     case "file-database":
-      return "text-cyan-600";
+      return "text-[var(--accent)]";
     case "file-archive":
-      return "text-stone-600";
+      return "text-[var(--muted)]";
     default:
       return "text-[var(--muted)]";
   }
@@ -1422,7 +1422,7 @@ export function FileTreePane({
     if (row.type === "status") {
       return (
         <div
-          className={clsx("flex h-full items-center px-1 text-[11px]", row.tone === "error" ? "text-red-700" : "text-[var(--muted)]")}
+          className={clsx("flex h-full items-center px-1 text-[11px]", row.tone === "error" ? "text-[var(--status-danger)]" : "text-[var(--muted)]")}
           style={{ paddingLeft: `${row.depth * 12 + 36}px` }}
         >
           {row.text}
@@ -1765,7 +1765,7 @@ export function FileTreePane({
         )}
       >
         {actionError ? (
-          <div className="mb-2 rounded border border-red-200 bg-red-50 px-2 py-1.5 text-[12px] text-red-700">
+          <div className="mb-2 rounded border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-2 py-1.5 text-[12px] text-[var(--status-danger)]">
             {actionError}
           </div>
         ) : null}
@@ -1773,7 +1773,7 @@ export function FileTreePane({
           <div className="px-2 py-2 text-[12px] text-[var(--muted)]">加载中...</div>
         ) : null}
         {!tree.loading && tree.error ? (
-          <div className="px-2 py-2 text-[12px] text-red-700">{tree.error}</div>
+          <div className="px-2 py-2 text-[12px] text-[var(--status-danger)]">{tree.error}</div>
         ) : null}
         {!tree.loading && !tree.error ? (
           <VirtualList
@@ -1923,7 +1923,7 @@ export function FileTreePane({
                   closeContextMenu();
                   void handleDelete(contextMenu.entry);
                 }}
-                className="flex w-full rounded-sm px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+                className="flex w-full rounded-sm px-3 py-2 text-left text-sm text-[var(--status-danger)] hover:bg-[var(--status-danger-bg)]"
               >
                 删除
               </button>

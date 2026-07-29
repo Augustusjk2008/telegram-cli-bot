@@ -196,11 +196,11 @@ function createDebugExtensions(
         width: "10px",
         height: "10px",
         borderRadius: "9999px",
-        backgroundColor: "#dc2626",
-        boxShadow: "0 0 0 1px rgba(255, 255, 255, 0.15)",
+        backgroundColor: "var(--status-danger)",
+        boxShadow: "0 0 0 1px var(--status-danger-border)",
       },
       ".cm-debug-current-line": {
-        backgroundColor: "rgba(56, 189, 248, 0.14)",
+        backgroundColor: "var(--editor-active-line-bg)",
       },
     }),
   ];
@@ -546,7 +546,7 @@ export function FileEditorSurface({
             </div>
           </div>
           {statusText ? <p className="mt-2 text-sm text-[var(--muted)]">{statusText}</p> : null}
-          {error ? <p className="mt-2 text-sm text-red-600">{error}</p> : null}
+          {error ? <p className="mt-2 text-sm text-[var(--status-danger)]">{error}</p> : null}
         </div>
       ) : null}
       <div className="relative min-h-0 flex-1 overflow-hidden">

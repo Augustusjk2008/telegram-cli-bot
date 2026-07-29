@@ -889,7 +889,7 @@ function DeleteBotDialog({
 }) {
   const workspaceConfirmMatched = workspaceConfirmText.trim() === DELETE_WORKSPACE_CONFIRM_TEXT;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-backdrop-50)] p-4">
       <div
         role="dialog"
         aria-modal="true"

@@ -885,7 +885,7 @@ export function SettingsScreen({
 
       {pendingWorkdirConflict ? (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-backdrop-50)] p-4"
           role="dialog"
           aria-modal="true"
           aria-labelledby="workdir-reset-title"
@@ -927,7 +927,7 @@ export function SettingsScreen({
       ) : null}
 
       {showKillConfirm ? (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+        <div className="fixed inset-0 bg-[var(--overlay-backdrop-50)] flex items-center justify-center p-4 z-50">
           <div className="bg-[var(--surface)] rounded-2xl p-6 max-w-sm w-full shadow-[var(--shadow-card)]">
             <div className="flex items-center gap-3 text-[var(--danger)] mb-4">
               <AlertTriangle className="w-6 h-6" />

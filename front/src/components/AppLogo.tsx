@@ -4,6 +4,8 @@ import { withPublicBase } from "../utils/publicBase";
 
 export const APP_LOGO_SRC = withPublicBase("/assets/app-logo.svg");
 export const APP_LOGO_CLASSIC_SRC = withPublicBase("/assets/app-logo-classic.svg");
+export const APP_LOGO_COPPER_SRC = withPublicBase("/assets/app-logo-copper.svg");
+export const APP_LOGO_ECLIPSEDARK_SRC = withPublicBase("/assets/app-logo-eclipse.svg");
 
 type Props = {
   size?: number;
@@ -38,6 +40,20 @@ export function AppLogo({
         alt=""
         aria-hidden="true"
         className={clsx("app-logo-image app-logo-image--classic h-full w-full object-contain", imgClassName)}
+        draggable={false}
+      />
+      <img
+        src={APP_LOGO_COPPER_SRC}
+        alt=""
+        aria-hidden="true"
+        className={clsx("app-logo-image app-logo-image--copper h-full w-full object-contain", imgClassName)}
+        draggable={false}
+      />
+      <img
+        src={APP_LOGO_ECLIPSEDARK_SRC}
+        alt=""
+        aria-hidden="true"
+        className={clsx("app-logo-image app-logo-image--eclipsedark h-full w-full object-contain", imgClassName)}
         draggable={false}
       />
     </span>

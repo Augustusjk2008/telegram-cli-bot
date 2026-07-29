@@ -313,7 +313,7 @@ export function ChatComposer({
 
   const presetEditorDialog = presetEditorOpen ? (
     <div
-      className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/40 px-4 py-6"
+      className="fixed inset-0 z-[1000] flex items-center justify-center bg-[var(--overlay-backdrop-40)] px-4 py-6"
       onPointerDown={(event) => event.stopPropagation()}
       onMouseDown={(event) => event.stopPropagation()}
       onClick={(event) => {

@@ -111,7 +111,7 @@ export function TerminalActionsConfigDialog({
   const footerError = error || validationMessage;
 
   const dialog = (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4" role="dialog" aria-modal="true" aria-labelledby="terminal-actions-title">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-backdrop-45)] p-4" role="dialog" aria-modal="true" aria-labelledby="terminal-actions-title">
       <section className="flex max-h-[86vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-card)]">
         <header className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3">
           <div className="min-w-0">
