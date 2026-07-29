@@ -1,5 +1,4 @@
 import type {
-  AgentSummary,
   BotOverview,
   BotStatus,
   BotSummary,
@@ -54,16 +53,6 @@ export type BulkActionResult = {
   succeeded: string[];
   failed: Array<{ alias: string; message: string }>;
   skipped: Array<{ alias: string; reason: string }>;
-};
-
-export type BotConfigSnapshot = {
-  alias: string;
-  cliType: CliType;
-  cliPath: string;
-  workingDir: string;
-  runtimeBackend: ChatExecutionMode;
-  nativeAgent: NativeAgentDraft;
-  agents: AgentSummary[];
 };
 
 export const DEFAULT_NATIVE_AGENT_CONFIG: NativeAgentConfig = {
@@ -121,18 +110,6 @@ export function isNativeAgentGloballyEnabled(snapshot?: EnvConfigSnapshot | null
   return String(item.value || "").trim().toLowerCase() === "true";
 }
 
-export function isPureNativeBot(source?: ExecutionModeSource | null) {
-  const supported = getSupportedExecutionModes(source);
-  return supported.length === 1 && supported[0] === "native_agent";
-}
-
-export function nativeAgentConfigFromBot(bot: BotSummary): NativeAgentConfig {
-  return {
-    ...DEFAULT_NATIVE_AGENT_CONFIG,
-    ...(bot.nativeAgent || {}),
-  };
-}
-
 export function nativeAgentDraftFromBot(bot: BotSummary): NativeAgentDraft {
   return {
     ...DEFAULT_NATIVE_AGENT_DRAFT,
@@ -140,10 +117,6 @@ export function nativeAgentDraftFromBot(bot: BotSummary): NativeAgentDraft {
     apiKey: "",
     clearApiKey: false,
   };
-}
-
-export function supportsNativeAgent(bot: BotSummary) {
-  return getSupportedExecutionModes(bot).includes("native_agent");
 }
 
 const MANAGER_STATUS_PRIORITY: Record<BotStatus, number> = {
@@ -358,17 +331,5 @@ export function buildBulkActionPlan(action: BulkAction, bots: BotSummary[]): Bul
     targets,
     skipped,
     destructive: action === "delete",
-  };
-}
-
-export function getBotConfigSnapshot(bot: BotSummary): BotConfigSnapshot {
-  return {
-    alias: bot.alias,
-    cliType: bot.cliType,
-    cliPath: bot.cliPath || bot.cliType,
-    workingDir: bot.workingDir,
-    runtimeBackend: getRuntimeBackend(bot),
-    nativeAgent: nativeAgentDraftFromBot(bot),
-    agents: bot.agents || [],
   };
 }

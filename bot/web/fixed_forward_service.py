@@ -6,7 +6,6 @@ import asyncio
 import copy
 import json
 import logging
-import os
 import platform
 import socket
 import subprocess

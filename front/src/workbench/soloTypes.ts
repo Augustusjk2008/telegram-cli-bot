@@ -1,7 +1,5 @@
 import type { ChatExecutionMode } from "../services/types";
 
-export type SoloTabKind = "session" | "session-changes" | "file-preview" | "session-diff";
-
 export type SoloSessionSnapshot = {
   botAlias: string;
   agentId: string;

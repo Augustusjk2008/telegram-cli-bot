@@ -36,10 +36,6 @@
     background-color 160ms ease;
 }
 
-.desktop-workbench-pane::after {
-  content: none;
-}
-
 .desktop-workbench-root [data-testid="desktop-workbench-columns"] {
   transition:
     grid-template-columns 220ms cubic-bezier(0.2, 0, 0, 1),
@@ -69,10 +65,6 @@
   animation: workbenchFocusedPaneLift 160ms ease-out;
   border-color: var(--workbench-focus-ring);
   box-shadow: 0 0 0 1px var(--workbench-focus-ring);
-}
-
-.desktop-workbench-pane[data-focused="true"]::before {
-  content: none;
 }
 
 .desktop-workbench-root[data-has-focus="true"] [data-testid="desktop-workbench-columns"] {
@@ -574,7 +566,6 @@
   .desktop-workbench-root [data-testid="desktop-workbench-center-rows"],
   .desktop-workbench-pane,
   .desktop-workbench-pane[data-focused="true"],
-  .desktop-workbench-pane[data-focused="true"]::before,
   .desktop-workbench-statusbar [data-workbench-status="active"]::after,
   .chat-message-bubble-delight[data-streaming="true"]::after,
   .chat-composer-delight[data-pulse="true"],

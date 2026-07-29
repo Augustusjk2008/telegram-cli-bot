@@ -107,7 +107,3 @@ export function writeTerminalTabs(tabs: StoredTerminalTab[]) {
     // Storage can be unavailable in private browsing; runtime state still works.
   }
 }
-
-export function readTerminalOwnerId() {
-  return readTerminalTabs()[0]?.ownerId || createTerminalOwnerId();
-}

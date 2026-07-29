@@ -54,11 +54,7 @@ html {
   color: var(--text);
 }
 
-.tcb-solid-accent {
-  background: var(--accent);
-  color: var(--accent-foreground);
-}
-
+.tcb-solid-accent,
 .tcb-selected-accent {
   background: var(--accent);
   color: var(--accent-foreground);
@@ -267,14 +263,11 @@ select:disabled {
   margin: 0;
 }
 
-.chat-plain-text-content > p + p {
-  margin-top: var(--chat-body-paragraph-spacing);
-}
-
 .chat-markdown-content > * {
   margin-block: 0;
 }
 
+.chat-plain-text-content > p + p,
 .chat-markdown-content > * + * {
   margin-top: var(--chat-body-paragraph-spacing);
 }

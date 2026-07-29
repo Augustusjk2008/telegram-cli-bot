@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import sys
 from collections.abc import AsyncIterator
 from typing import Any
 
 from bot.debug.gdb_session import GdbMiError, GdbMiSession
-from bot.debug.models import DebugBreakpoint, DebugFrame, DebugProfile, DebugScope, DebugVariable
+from bot.debug.models import DebugBreakpoint, DebugProfile, DebugScope
 
 from .base import DebugProvider, DebugProviderError, DebugProviderSession
 

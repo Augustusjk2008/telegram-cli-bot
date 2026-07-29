@@ -13,7 +13,7 @@ from bot import app_settings
 from bot.cli import resolve_cli_executable, validate_cli_type
 from bot.cli_params import CliParamsConfig, coerce_param_value
 from bot.cluster.config import normalize_agent_cluster_config, normalize_bot_cluster_config
-from bot.config import BOT_ALIAS_RE, CLI_PATH, CLI_TYPE, RESERVED_ALIASES, WORKING_DIR, _DOTENV_VALUES
+from bot.config import BOT_ALIAS_RE, CLI_TYPE, RESERVED_ALIASES, WORKING_DIR, _DOTENV_VALUES
 from bot.agents import normalize_agent_id, normalize_agent_name, normalize_agent_prompt, now_iso
 from bot.models import (
     AgentProfile,
@@ -34,7 +34,7 @@ from bot.profile_store import (
     persist_main_profile,
     save_managed_profiles,
 )
-from bot.sessions import clear_bot_sessions, is_bot_processing, terminate_bot_processes, update_bot_alias, update_bot_working_dir
+from bot.sessions import clear_bot_sessions, is_bot_processing, update_bot_alias, update_bot_working_dir
 
 logger = logging.getLogger(__name__)
 

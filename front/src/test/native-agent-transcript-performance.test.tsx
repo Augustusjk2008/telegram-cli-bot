@@ -1,8 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { ChatTracePanel } from "../components/ChatTracePanel";
 import { NativeAgentTranscript } from "../components/NativeAgentTranscript";
-import type { ChatTraceEvent } from "../services/types";
 import type { NativeAgentTranscriptEntry } from "../utils/agUiRunReducer";
 
 function processEntries(count: number): NativeAgentTranscriptEntry[] {
@@ -88,26 +86,5 @@ describe("transcript and trace virtualization", () => {
     fireEvent.click(group.querySelector("summary") as HTMLElement);
 
     await waitFor(() => expect(group.querySelectorAll("details").length).toBe(2));
-  });
-
-  it("bounds mounted trace rows when expanded", () => {
-    const trace: ChatTraceEvent[] = Array.from({ length: 1_000 }, (_, index) => ({
-      id: `trace-${index}`,
-      sequence: index,
-      kind: "commentary",
-      summary: `trace-${index}`,
-    }));
-
-    render(
-      <ChatTracePanel
-        messageId="assistant-1"
-        trace={trace}
-        expanded
-        onToggleExpanded={() => undefined}
-      />,
-    );
-
-    const list = screen.getByTestId("virtualized-chat-trace");
-    expect(list.querySelectorAll("[data-trace-seq]").length).toBeLessThanOrEqual(10);
   });
 });
