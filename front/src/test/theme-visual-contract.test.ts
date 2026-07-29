@@ -323,6 +323,51 @@ describe("future theme visual contract", () => {
     expect(getHexToken(match[1], "--terminal-text").toLowerCase()).toBe(terminalTheme.foreground);
   });
 
+  it("keeps the lunar terminal light in the shared mobile and desktop path", () => {
+    const tokens = readSource("../styles/tokens.css");
+    const terminalTabs = readSource("../screens/TerminalTabsScreen.tsx");
+    const terminalScreen = readSource("../screens/TerminalScreen.tsx");
+    const match = getThemeBlock(tokens, "lunar-ceramic");
+    const terminalTheme = getTerminalTheme("lunar-ceramic");
+
+    expect(match).toBeTruthy();
+    if (!match) return;
+
+    const background = getHexToken(match[1], "--terminal-bg");
+    const foreground = getHexToken(match[1], "--terminal-text");
+    const muted = getHexToken(match[1], "--terminal-muted");
+    expect(relativeLuminance(background)).toBeGreaterThanOrEqual(0.7);
+    expect(contrastRatio(foreground, background)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(muted, background)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(terminalTheme.cursor, background)).toBeGreaterThanOrEqual(3);
+    for (const colorName of [
+      "foreground",
+      "black",
+      "red",
+      "green",
+      "yellow",
+      "blue",
+      "magenta",
+      "cyan",
+      "white",
+      "brightBlack",
+      "brightRed",
+      "brightGreen",
+      "brightYellow",
+      "brightBlue",
+      "brightMagenta",
+      "brightCyan",
+      "brightWhite",
+    ] as const) {
+      expect.soft(
+        contrastRatio(terminalTheme[colorName], background),
+        `lunar terminal ${colorName} must remain readable without xterm correction`,
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+    expect(terminalTabs).toContain("themeName={themeName}");
+    expect(terminalScreen).toContain('bg-[var(--terminal-bg)]');
+  });
+
   it("keeps FileTree semantic colors theme-token driven", () => {
     const fileTree = readSource("../workbench/FileTreePane.tsx");
 

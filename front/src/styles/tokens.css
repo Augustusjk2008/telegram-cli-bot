@@ -593,9 +593,9 @@
   --editor-syntax-function: color-mix(in srgb, var(--accent) 58%, var(--editor-text));
   --editor-syntax-meta: color-mix(in srgb, var(--danger) 56%, var(--accent));
   --editor-syntax-invalid: var(--danger);
-  --terminal-bg: #25282E;
-  --terminal-text: #FCFBF8;
-  --terminal-muted: #B8BAC0;
+  --terminal-bg: #E8E6E2;
+  --terminal-text: #25282E;
+  --terminal-muted: #62666F;
 }
 
 :root[data-theme="copper-night"] {

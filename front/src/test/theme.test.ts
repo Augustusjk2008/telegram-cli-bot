@@ -17,9 +17,9 @@ const NEW_THEME_NAMES = ["lunar-ceramic", "copper-night", "eclipse-film"] as con
 const NEW_TERMINAL_THEMES = [
   {
     name: "lunar-ceramic",
-    background: "#25282e",
-    foreground: "#fcfbf8",
-    cursor: "#a69fc8",
+    background: "#e8e6e2",
+    foreground: "#25282e",
+    cursor: "#615a88",
     accent: "#615a88",
   },
   {
@@ -122,6 +122,15 @@ describe("future UI themes", () => {
     expect.soft(terminalTheme.cursor).toBe(cursor);
     expect.soft(terminalTheme.cyan).toBe(accent);
     expect.soft(getTerminalMinimumContrastRatio(name as UiThemeName)).toBe(4.5);
+  });
+
+  it("gives the lunar terminal a visible light-theme cursor and selection", () => {
+    expect(getTerminalTheme("lunar-ceramic")).toMatchObject({
+      cursorAccent: "#fcfbf8",
+      selectionBackground: "#b4abc9",
+      selectionForeground: "#25282e",
+      selectionInactiveBackground: "#d2cdd9",
+    });
   });
 
   it.each(NEW_THEME_NAMES)("accepts %s from localStorage", (name) => {
