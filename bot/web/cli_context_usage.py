@@ -91,6 +91,16 @@ def _as_int(value: Any) -> int | None:
     return parsed if parsed > 0 else None
 
 
+def _as_nonnegative_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
 def _round_half_up(value: float) -> int:
     return int(Decimal(str(value)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
@@ -268,7 +278,7 @@ def _lookup_claude_context_window(model: str | None) -> int | None:
     return _CLAUDE_DEFAULT_CONTEXT_WINDOW_TOKENS
 
 
-def _extract_claude_message_usage(line: str) -> tuple[int, str] | None:
+def _extract_claude_message_usage(line: str) -> tuple[int, str, dict[str, int]] | None:
     try:
         item = json.loads(line)
     except json.JSONDecodeError:
@@ -283,13 +293,48 @@ def _extract_claude_message_usage(line: str) -> tuple[int, str] | None:
     if not isinstance(usage, dict):
         return None
 
-    used_tokens = _as_int(usage.get("input_tokens"))
-    if used_tokens is None:
+    token_breakdown: dict[str, int] = {}
+    for source_key, result_key in (
+        ("input_tokens", "input_tokens"),
+        ("cache_creation_input_tokens", "cache_write_tokens"),
+        ("cache_read_input_tokens", "cache_read_tokens"),
+        ("output_tokens", "output_tokens"),
+    ):
+        if source_key not in usage:
+            continue
+        value = _as_nonnegative_int(usage.get(source_key))
+        if value is not None:
+            token_breakdown[result_key] = value
+
+    if "cache_write_tokens" not in token_breakdown and usage.get("cache_creation_input_tokens") is None:
+        cache_creation = usage.get("cache_creation")
+        if isinstance(cache_creation, dict):
+            ttl_values = [
+                value
+                for key in ("ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens")
+                if key in cache_creation
+                if (value := _as_nonnegative_int(cache_creation.get(key))) is not None
+            ]
+            if ttl_values:
+                token_breakdown["cache_write_tokens"] = sum(ttl_values)
+
+    # Prompt cache changes billing and latency, but cached input still occupies
+    # the model context window. Output belongs to the response, not this input sum.
+    used_tokens = sum(
+        token_breakdown.get(key, 0)
+        for key in ("input_tokens", "cache_write_tokens", "cache_read_tokens")
+    )
+    if used_tokens <= 0:
         return None
-    return used_tokens, str(message.get("model") or "").strip()
+    return used_tokens, str(message.get("model") or "").strip(), token_breakdown
 
 
-def _build_claude_usage_estimate(session_id: str, used_tokens: int, model: str | None) -> dict[str, Any] | None:
+def _build_claude_usage_estimate(
+    session_id: str,
+    used_tokens: int,
+    model: str | None,
+    token_breakdown: dict[str, int] | None = None,
+) -> dict[str, Any] | None:
     used_display = _format_tokens_claude(used_tokens)
     context_window = _lookup_claude_context_window(model)
     result = {
@@ -300,6 +345,7 @@ def _build_claude_usage_estimate(session_id: str, used_tokens: int, model: str |
         "used_display": used_display,
         "status_text": f"{used_display} context used",
     }
+    result.update(token_breakdown or {})
     left_percent = _clamp_percent(_round_half_up((context_window - used_tokens) / context_window * 100))
     window_display = _format_tokens_claude(context_window)
     result.update(
@@ -322,8 +368,8 @@ def _resolve_claude_context_usage_from_lines(session_id: str, lines: list[str]) 
     for line in reversed(lines):
         message_usage = _extract_claude_message_usage(line.strip())
         if message_usage is not None:
-            used_tokens, model = message_usage
-            return _build_claude_usage_estimate(session_id, used_tokens, model)
+            used_tokens, model, token_breakdown = message_usage
+            return _build_claude_usage_estimate(session_id, used_tokens, model, token_breakdown)
 
     return None
 
