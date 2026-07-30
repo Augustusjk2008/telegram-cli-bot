@@ -285,7 +285,8 @@ function Get-NpmCommand {
 function Sync-PythonDependencies {
     param(
         [pscustomobject]$PythonRuntime,
-        [string]$RootDir
+        [string]$RootDir,
+        [switch]$ForceInstall
     )
 
     if (Test-Truthy $env:TCB_STARTUP_SKIP_DEP_SYNC) {
@@ -304,24 +305,71 @@ function Sync-PythonDependencies {
 
     if (
         (Test-StartupStampMatches -StampPath $stampPath -ExpectedHash $requirementsHash) -and
+        -not $ForceInstall -and
         -not (Test-Truthy $env:TCB_STARTUP_FORCE_DEP_INSTALL)
     ) {
         return $runtime
     }
 
-    Write-Info "检测到后端依赖清单变化，正在安装 requirements.txt..."
+    Write-Info "正在安装后端依赖 requirements.txt..."
     Ensure-Pip -PythonRuntime $runtime
-    & $runtime.Command @($runtime.Arguments + @("-m", "pip", "install", "--upgrade", "pip"))
+    & $runtime.Command @($runtime.Arguments + @("-m", "pip", "install", "--upgrade", "pip")) | Out-Host
     if ($LASTEXITCODE -ne 0) {
         throw "升级 pip 失败。"
     }
-    & $runtime.Command @($runtime.Arguments + @("-m", "pip", "install", "-r", $requirementsPath))
+    & $runtime.Command @($runtime.Arguments + @("-m", "pip", "install", "-r", $requirementsPath)) | Out-Host
     if ($LASTEXITCODE -ne 0) {
         throw "安装后端依赖失败。"
     }
     Write-StartupStamp -StampPath $stampPath -Value $requirementsHash
 
     return $runtime
+}
+
+$script:pythonRuntime = $null
+$script:pythonDependencyRepairAttempted = $false
+$script:lastPythonExitCode = 0
+
+function Invoke-CurrentPython {
+    param([string[]]$Arguments)
+
+    & $script:pythonRuntime.Command @($script:pythonRuntime.Arguments + $Arguments)
+    $script:lastPythonExitCode = $LASTEXITCODE
+}
+
+function Repair-PythonDependencies {
+    param([switch]$ForceInstall)
+
+    if (
+        $script:pythonDependencyRepairAttempted -or
+        (Test-Truthy $env:TCB_STARTUP_SKIP_DEP_SYNC)
+    ) {
+        return $false
+    }
+
+    $script:pythonDependencyRepairAttempted = $true
+    Write-Warn "Python 启动步骤失败，正在安装后端依赖后重试一次..."
+    $script:pythonRuntime = Sync-PythonDependencies `
+        -PythonRuntime $script:pythonRuntime `
+        -RootDir $scriptDir `
+        -ForceInstall:$ForceInstall
+    return $true
+}
+
+function Invoke-PythonStartupStep {
+    param([string[]]$Arguments)
+
+    Invoke-CurrentPython -Arguments $Arguments
+    if ($script:lastPythonExitCode -eq 0) {
+        return
+    }
+    if ($script:lastPythonExitCode -eq $restartExitCode) {
+        return
+    }
+
+    if (-not $script:pythonDependencyRepairAttempted -and (Repair-PythonDependencies -ForceInstall)) {
+        Invoke-CurrentPython -Arguments $Arguments
+    }
 }
 
 function Sync-FrontendAssets {
@@ -366,7 +414,7 @@ function Sync-FrontendAssets {
         throw "检测到前端资源需要重建，但未找到 npm。请先运行 install.ps1 安装 Node.js 依赖。"
     }
 
-    Write-Info "检测到前端源码或依赖变化，正在安装并构建前端..."
+    Write-Info "检测到前端源码变化，正在构建前端..."
     $buildScript = Join-Path $RootDir "scripts\build_web_frontend.bat"
     if (($env:OS -eq "Windows_NT") -and (Test-Path -LiteralPath $buildScript)) {
         & $buildScript
@@ -376,13 +424,17 @@ function Sync-FrontendAssets {
     } else {
         Push-Location (Join-Path $RootDir "front")
         try {
-            & $npmCommand install
-            if ($LASTEXITCODE -ne 0) {
-                throw "安装前端依赖失败。"
-            }
             & $npmCommand run build
             if ($LASTEXITCODE -ne 0) {
-                throw "前端构建失败。"
+                Write-Warn "前端构建失败，正在安装依赖后重试一次..."
+                & $npmCommand install
+                if ($LASTEXITCODE -ne 0) {
+                    throw "安装前端依赖失败。"
+                }
+                & $npmCommand run build
+                if ($LASTEXITCODE -ne 0) {
+                    throw "前端构建失败。"
+                }
             }
         } finally {
             Pop-Location
@@ -391,17 +443,6 @@ function Sync-FrontendAssets {
 
     $frontendHash = Get-StartupPathsHash -PythonRuntime $PythonRuntime -RootDir $RootDir -RelativePaths $frontendInputs
     Write-StartupStamp -StampPath $stampPath -Value $frontendHash
-}
-
-function Sync-RuntimeDependencies {
-    param(
-        [pscustomobject]$PythonRuntime,
-        [string]$RootDir
-    )
-
-    $runtime = Sync-PythonDependencies -PythonRuntime $PythonRuntime -RootDir $RootDir
-    Sync-FrontendAssets -PythonRuntime $runtime -RootDir $RootDir
-    return $runtime
 }
 
 function Show-TunnelHint {
@@ -476,7 +517,12 @@ try {
 
     Ensure-EnvFile -Path $envPath -RootDir $scriptDir
 
-    $pythonRuntime = Get-PythonRuntime
+    $projectVenvPythonPath = Get-ProjectVenvPythonPath -RootDir $scriptDir
+    if ($projectVenvPythonPath) {
+        $pythonRuntime = New-PythonRuntime -Command $projectVenvPythonPath
+    } else {
+        $pythonRuntime = Get-PythonRuntime
+    }
     if (-not $pythonRuntime) {
         Write-Fail "未找到 python 或 py -3，请先安装 Python 并加入 PATH。"
         exit 127
@@ -488,34 +534,60 @@ try {
     Write-Info ("启动目录: {0}" -f $scriptDir)
     Write-Info ("启动模式: {0}" -f $Mode)
 
-    $pythonRuntime = Sync-PythonDependencies -PythonRuntime $pythonRuntime -RootDir $scriptDir
+    $script:pythonRuntime = $pythonRuntime
+    if (Test-Truthy $env:TCB_STARTUP_FORCE_DEP_INSTALL) {
+        $script:pythonDependencyRepairAttempted = $true
+        $script:pythonRuntime = Sync-PythonDependencies `
+            -PythonRuntime $script:pythonRuntime `
+            -RootDir $scriptDir `
+            -ForceInstall
+    }
 
-    & $pythonRuntime.Command @($pythonRuntime.Arguments + @("-m", "bot.env_migration", "--env-path", $envPath))
-    if ($LASTEXITCODE -ne 0) {
+    Invoke-PythonStartupStep -Arguments @("-m", "bot.env_migration", "--env-path", $envPath)
+    if ($script:lastPythonExitCode -ne 0) {
         Write-Fail "迁移旧版 .env 配置失败。"
-        exit $LASTEXITCODE
+        exit $script:lastPythonExitCode
+    }
+
+    Invoke-PythonStartupStep -Arguments @("-c", "import bot.updater")
+    if ($script:lastPythonExitCode -ne 0) {
+        Write-Fail "Python 更新模块启动检查失败。"
+        exit $script:lastPythonExitCode
     }
 
     Write-Info "正在检查并应用待更新版本..."
-    & $pythonRuntime.Command @($pythonRuntime.Arguments + @("-m", "bot.updater", "apply-pending", "--repo-root", $scriptDir))
+    & $script:pythonRuntime.Command @($script:pythonRuntime.Arguments + @("-m", "bot.updater", "apply-pending", "--repo-root", $scriptDir))
     if ($LASTEXITCODE -ne 0) {
         Write-Fail "应用待更新版本失败，请检查 .web_admin_settings.json 和更新包缓存。"
         Write-Warn "更新未成功应用，继续启动当前程序。"
     }
 
-    $pythonRuntime = Sync-RuntimeDependencies -PythonRuntime $pythonRuntime -RootDir $scriptDir
+    if (Test-Truthy $env:TCB_STARTUP_FORCE_DEP_INSTALL) {
+        $script:pythonRuntime = Sync-PythonDependencies `
+            -PythonRuntime $script:pythonRuntime `
+            -RootDir $scriptDir `
+            -ForceInstall
+    }
+
+    Sync-FrontendAssets -PythonRuntime $script:pythonRuntime -RootDir $scriptDir
 
     Write-Info "正在迁移运行数据..."
-    & $pythonRuntime.Command @($pythonRuntime.Arguments + @("-m", "bot.migrations", "run", "--repo-root", $scriptDir))
-    if ($LASTEXITCODE -ne 0) {
+    Invoke-PythonStartupStep -Arguments @("-m", "bot.migrations", "run", "--repo-root", $scriptDir)
+    if ($script:lastPythonExitCode -ne 0) {
         Write-Fail "运行数据迁移失败。"
-        exit $LASTEXITCODE
+        exit $script:lastPythonExitCode
+    }
+
+    Invoke-PythonStartupStep -Arguments @("-c", "import bot.main")
+    if ($script:lastPythonExitCode -ne 0) {
+        Write-Fail "Python 启动检查失败。"
+        exit $script:lastPythonExitCode
     }
 
     Show-TunnelHint -Path $envPath
 
     while ($true) {
-        & $pythonRuntime.Command @($pythonRuntime.Arguments + @("-m", "bot"))
+        & $script:pythonRuntime.Command @($script:pythonRuntime.Arguments + @("-m", "bot"))
         $exitCode = $LASTEXITCODE
 
         if ($exitCode -ne $restartExitCode) {

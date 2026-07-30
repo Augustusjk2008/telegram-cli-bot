@@ -1,26 +1,87 @@
+import os
+import subprocess
 from pathlib import Path
 
+import pytest
 
-def test_start_sh_syncs_python_dependencies_before_env_migration() -> None:
+
+def _between(content: str, start: str, end: str) -> str:
+    start_index = content.index(start)
+    end_index = content.index(end, start_index)
+    return content[start_index:end_index]
+
+
+def _assert_build_before_install_and_retry(
+    content: str,
+    *,
+    build_command: str,
+    install_command: str,
+) -> None:
+    first_build_index = content.index(build_command)
+    install_index = content.index(install_command, first_build_index)
+    retry_build_index = content.index(build_command, install_index)
+
+    assert first_build_index < install_index < retry_build_index
+    assert content.index(install_command) == install_index
+    assert content.count(install_command) == 1
+    assert content.count(build_command) == 2
+
+
+def test_start_sh_repairs_python_dependencies_only_after_startup_step_fails() -> None:
     content = Path("start.sh").read_text(encoding="utf-8")
+    sync = _between(
+        content,
+        "sync_python_dependencies() {",
+        "\npython_dependency_repair_attempted=0",
+    )
+    helper = _between(
+        content,
+        "run_python_startup_step() {",
+        "\nsync_frontend_assets() {",
+    )
 
-    python_sync_index = content.index("sync_python_dependencies\n\nif ! \"$PYTHON_BIN\" -m bot.env_migration")
-    env_migration_index = content.index("bot.env_migration")
+    first_attempt_index = helper.index("run_current_python")
+    restart_guard_index = helper.index('"$last_python_exit_code" -eq 75')
+    repair_index = helper.index("repair_python_dependencies")
+    retry_index = helper.index("run_current_python", repair_index)
 
-    assert python_sync_index < env_migration_index
-    assert '"$PYTHON_BIN" -m pip install -r "$SCRIPT_DIR/requirements.txt"' in content
-    assert '"$PYTHON_BIN" -m venv "$SCRIPT_DIR/.venv"' in content
+    assert first_attempt_index < restart_guard_index < repair_index < retry_index
+    assert "python_dependency_repair_attempted" in helper
+    assert "sync_python_dependencies 1" in content
+    repair = _between(
+        content,
+        "repair_python_dependencies() {",
+        "\nrun_python_startup_step() {",
+    )
+    assert "last_python_exit_code=$?" in repair
+    assert sync.count("pip_exit_code=$?") == 2
+    assert sync.count('return "$pip_exit_code"') == 2
+    assert 'run_python_startup_step -m bot.env_migration --env-path "$SCRIPT_DIR/.env"' in content
+    assert 'run_python_startup_step -c "import bot.updater"' in content
+    assert 'run_python_startup_step -m bot.migrations run --repo-root "$SCRIPT_DIR"' in content
+    assert 'run_python_startup_step -c "import bot.main"' in content
+    assert '\n  "$PYTHON_BIN" -m bot\n' in content
 
 
-def test_start_sh_resyncs_dependencies_after_pending_update_before_boot() -> None:
+def test_start_sh_rebuilds_frontend_after_pending_update_without_eager_dependency_sync() -> None:
     content = Path("start.sh").read_text(encoding="utf-8")
+    main = content[content.index('if is_truthy "${TCB_STARTUP_FORCE_DEP_INSTALL:-}"; then') :]
 
-    update_index = content.index("bot.updater apply-pending")
-    runtime_sync_index = content.index("sync_runtime_dependencies", update_index)
-    migration_index = content.index("bot.migrations run")
-    boot_index = content.index('\n  "$PYTHON_BIN" -m bot\n')
+    update_index = main.index("bot.updater apply-pending")
+    frontend_build_index = main.index("sync_frontend_assets", update_index)
+    migration_index = main.index("bot.migrations run")
+    import_check_index = main.index('run_python_startup_step -c "import bot.main"')
+    boot_index = main.index('\n  "$PYTHON_BIN" -m bot\n')
 
-    assert update_index < runtime_sync_index < migration_index < boot_index
+    assert update_index < frontend_build_index < migration_index < import_check_index < boot_index
+    assert "sync_runtime_dependencies" not in main
+    force_install_indexes = [
+        index
+        for index in range(len(main))
+        if main.startswith("sync_python_dependencies 1", index)
+    ]
+    assert len(force_install_indexes) == 2
+    assert force_install_indexes[0] < update_index < force_install_indexes[1] < frontend_build_index
 
 
 def test_start_sh_rebuilds_frontend_when_frontend_inputs_change() -> None:
@@ -33,26 +94,59 @@ def test_start_sh_rebuilds_frontend_when_frontend_inputs_change() -> None:
     assert "frontend-build.sha256" in content
 
 
-def test_start_ps1_syncs_python_dependencies_before_env_migration() -> None:
+def test_start_ps1_repairs_python_dependencies_only_after_startup_step_fails() -> None:
     content = Path("start.ps1").read_text(encoding="utf-8")
+    helper = _between(
+        content,
+        "function Invoke-PythonStartupStep {",
+        "\nfunction Sync-FrontendAssets {",
+    )
 
-    python_sync_index = content.index("$pythonRuntime = Sync-PythonDependencies")
-    env_migration_index = content.index("bot.env_migration")
+    first_attempt_index = helper.index("Invoke-CurrentPython")
+    restart_guard_index = helper.index("$script:lastPythonExitCode -eq $restartExitCode")
+    repair_index = helper.index("Repair-PythonDependencies")
+    retry_index = helper.index("Invoke-CurrentPython", repair_index)
 
-    assert python_sync_index < env_migration_index
-    assert '"-m", "pip", "install", "-r", $requirementsPath' in content
-    assert '"-m", "venv", $venvDir' in content
+    assert first_attempt_index < restart_guard_index < repair_index < retry_index
+    assert "$script:pythonDependencyRepairAttempted" in helper
+    assert "-ForceInstall" in helper
+    assert 'Invoke-PythonStartupStep -Arguments @("-m", "bot.env_migration"' in content
+    assert 'Invoke-PythonStartupStep -Arguments @("-c", "import bot.updater")' in content
+    assert 'Invoke-PythonStartupStep -Arguments @("-m", "bot.migrations"' in content
+    assert 'Invoke-PythonStartupStep -Arguments @("-c", "import bot.main")' in content
+    assert '& $script:pythonRuntime.Command @($script:pythonRuntime.Arguments + @("-m", "bot"))' in content
 
 
-def test_start_ps1_resyncs_dependencies_after_pending_update_before_boot() -> None:
+def test_start_ps1_rebuilds_frontend_after_pending_update_without_eager_dependency_sync() -> None:
     content = Path("start.ps1").read_text(encoding="utf-8")
+    main = content[content.index("$script:pythonRuntime = $pythonRuntime") :]
 
-    update_index = content.index('"bot.updater", "apply-pending"')
-    runtime_sync_index = content.index("$pythonRuntime = Sync-RuntimeDependencies", update_index)
-    migration_index = content.index('"bot.migrations", "run"')
-    boot_index = content.index('@("-m", "bot")')
+    update_index = main.index('"bot.updater", "apply-pending"')
+    frontend_build_index = main.index("Sync-FrontendAssets", update_index)
+    migration_index = main.index('"bot.migrations", "run"')
+    import_check_index = main.index('Invoke-PythonStartupStep -Arguments @("-c", "import bot.main")')
+    boot_index = main.index('@("-m", "bot")')
 
-    assert update_index < runtime_sync_index < migration_index < boot_index
+    assert update_index < frontend_build_index < migration_index < import_check_index < boot_index
+    assert "Sync-RuntimeDependencies" not in main
+    force_install_indexes = [
+        index
+        for index in range(len(main))
+        if main.startswith("-ForceInstall", index)
+    ]
+    assert len(force_install_indexes) == 2
+    assert force_install_indexes[0] < update_index < force_install_indexes[1] < frontend_build_index
+
+
+def test_start_ps1_prefers_existing_project_venv_before_system_python() -> None:
+    content = Path("start.ps1").read_text(encoding="utf-8")
+    main = content[content.index("try {\n    Set-Location $scriptDir") :]
+
+    venv_lookup_index = main.index("Get-ProjectVenvPythonPath")
+    system_lookup_index = main.index("Get-PythonRuntime", venv_lookup_index)
+    runtime_assignment_index = main.index("$script:pythonRuntime = $pythonRuntime", system_lookup_index)
+
+    assert venv_lookup_index < system_lookup_index < runtime_assignment_index
 
 
 def test_start_ps1_rebuilds_frontend_when_frontend_inputs_change() -> None:
@@ -63,3 +157,59 @@ def test_start_ps1_rebuilds_frontend_when_frontend_inputs_change() -> None:
     assert "front\\public" in content
     assert "scripts\\build_web_frontend.bat" in content
     assert "frontend-build-windows.sha256" in content
+
+
+def test_frontend_build_scripts_install_only_after_build_failure() -> None:
+    shell_content = Path("scripts/build_web_frontend.sh").read_text(encoding="utf-8")
+    batch_content = Path("scripts/build_web_frontend.bat").read_text(encoding="utf-8")
+
+    _assert_build_before_install_and_retry(
+        shell_content,
+        build_command="npm run build",
+        install_command="npm install",
+    )
+    _assert_build_before_install_and_retry(
+        batch_content,
+        build_command="call npm run build",
+        install_command="call npm install",
+    )
+
+
+def test_start_bat_retries_after_windows_service_failure_instead_of_exiting() -> None:
+    content = Path("start.bat").read_text(encoding="utf-8")
+
+    start_label_index = content.index(":START_SERVICE")
+    launch_index = content.index('"%PS_EXE%" -NoProfile', start_label_index)
+    failure_index = content.index('if not "%EXIT_CODE%"=="0"', launch_index)
+    pause_index = content.index("pause", failure_index)
+    retry_index = content.index("goto START_SERVICE", pause_index)
+    success_exit_index = content.index("exit /b 0", retry_index)
+
+    assert start_label_index < launch_index < failure_index < pause_index < retry_index < success_exit_index
+    assert "exit /b %EXIT_CODE%" not in content[failure_index:]
+    assert content.index('set "ERRORLEVEL="') < start_label_index
+
+
+@pytest.mark.skipif(os.name != "nt", reason="仅验证 Windows cmd.exe 的 ERRORLEVEL 语义")
+def test_frontend_build_batch_ignores_shadowed_errorlevel(tmp_path: Path) -> None:
+    script_dir = tmp_path / "scripts"
+    script_dir.mkdir()
+    (tmp_path / "front").mkdir()
+    script_path = script_dir / "build_web_frontend.bat"
+    script_path.write_bytes(Path("scripts/build_web_frontend.bat").read_bytes())
+
+    env = os.environ.copy()
+    env["ERRORLEVEL"] = "0"
+    env["PATH"] = ""
+    completed = subprocess.run(
+        [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", str(script_path)],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+
+    assert completed.returncode != 0
