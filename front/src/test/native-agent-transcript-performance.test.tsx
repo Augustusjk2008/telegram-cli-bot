@@ -40,7 +40,7 @@ function groupedToolEntries(count: number): NativeAgentTranscriptEntry[] {
 }
 
 describe("transcript and trace virtualization", () => {
-  it("bounds mounted transcript rows for 1000 process events", () => {
+  it("defers 1000 process events until expansion and then virtualizes them", async () => {
     render(
       <NativeAgentTranscript
         entries={processEntries(1_000)}
@@ -49,7 +49,10 @@ describe("transcript and trace virtualization", () => {
       />,
     );
 
-    const list = screen.getByTestId("virtualized-native-agent-transcript");
+    expect(screen.queryByTestId("virtualized-native-agent-transcript")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "展开过程详情" }));
+
+    const list = await screen.findByTestId("virtualized-native-agent-transcript");
     expect(list.querySelectorAll("[data-transcript-entry-id]").length).toBeLessThanOrEqual(10);
   });
 
@@ -62,7 +65,10 @@ describe("transcript and trace virtualization", () => {
       />,
     );
 
-    const group = screen.getByTestId("native-agent-event-group");
+    expect(screen.queryByTestId("native-agent-event-group")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "展开过程详情" }));
+
+    const group = await screen.findByTestId("native-agent-event-group");
     expect(group.querySelectorAll("details").length).toBe(0);
 
     fireEvent.click(group.querySelector("summary") as HTMLElement);
@@ -80,7 +86,10 @@ describe("transcript and trace virtualization", () => {
       />,
     );
 
-    const group = screen.getByTestId("native-agent-event-group");
+    expect(screen.queryByTestId("native-agent-event-group")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "展开过程详情" }));
+
+    const group = await screen.findByTestId("native-agent-event-group");
     expect(group.querySelectorAll("details").length).toBe(0);
 
     fireEvent.click(group.querySelector("summary") as HTMLElement);

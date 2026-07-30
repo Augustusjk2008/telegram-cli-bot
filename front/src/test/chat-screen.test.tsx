@@ -1390,6 +1390,8 @@ test("deduplicates replayed anonymous native trace events in the live transcript
   await user.click(screen.getByRole("button", { name: "发送" }));
 
   const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(within(transcript).queryByText("重复过程")).not.toBeInTheDocument();
+  await user.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
   expect(within(transcript).getAllByText("重复过程")).toHaveLength(1);
   expect(within(transcript).getByText("最终答复")).toBeInTheDocument();
 });
@@ -1431,6 +1433,8 @@ test("updates one live native trace entry when commentary is cumulative", async 
   await user.click(screen.getByRole("button", { name: "发送" }));
 
   const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(within(transcript).queryByText("我先检查目录。")).not.toBeInTheDocument();
+  await user.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
   expect(within(transcript).getAllByText("我先检查目录。")).toHaveLength(1);
   expect(within(transcript).queryByText("我先")).not.toBeInTheDocument();
 });
@@ -2984,6 +2988,8 @@ test("live ag-ui stream renders flat transcript and final result last", async ()
 
   await waitFor(() => expect(sendMessage).toHaveBeenCalled());
   const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(within(transcript).queryByTestId("native-agent-event-group")).not.toBeInTheDocument();
+  await user.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
   const eventGroup = within(transcript).getByTestId("native-agent-event-group");
   expect(eventGroup.textContent).toContain("过程 1");
   expect(eventGroup.textContent).toContain("4 条事件 · 1 次工具");
@@ -3111,6 +3117,9 @@ test("native streaming keeps partial answer out of the final result section", as
   await user.click(screen.getByRole("button", { name: "发送" }));
 
   const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(within(transcript).getByRole("button", { name: "展开过程详情" })).toHaveAttribute("aria-expanded", "false");
+  expect(within(transcript).queryByText("仍在处理")).not.toBeInTheDocument();
+  await user.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
   expect(within(transcript).getByText("仍在处理")).toBeInTheDocument();
   expect(within(transcript).queryByText("只应在完成后显示的正文")).not.toBeInTheDocument();
   expect(within(transcript).queryByTestId("native-agent-final-result")).not.toBeInTheDocument();
@@ -3189,6 +3198,8 @@ test("native ag-ui commentary is visible while stream is still running", async (
   await user.click(screen.getByRole("button", { name: "发送" }));
 
   const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(within(transcript).queryByText("我先读取文件。")).not.toBeInTheDocument();
+  await user.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
   expect(within(transcript).getByText("我先读取文件。")).toBeInTheDocument();
   expect(screen.getByTestId("native-agent-streaming-status")).toBeInTheDocument();
 
@@ -3273,6 +3284,8 @@ test("native ag-ui delta commentary is visible while stream is still running", a
   await user.click(screen.getByRole("button", { name: "发送" }));
 
   const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(within(transcript).queryByText("我先读取文件。")).not.toBeInTheDocument();
+  await user.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
   expect(within(transcript).getByText("我先读取文件。")).toBeInTheDocument();
   expect(screen.getByTestId("native-agent-streaming-status")).toBeInTheDocument();
 
