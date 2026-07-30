@@ -13,6 +13,13 @@ import pytest
 
 ENTRYPOINT_PATH = Path("bot/__main__.py")
 MIGRATIONS_CHECKED_ARG = "--tcb-migrations-checked"
+SUBPROCESS_PACKAGE_ROOT_ENV = "TCB_TEST_PACKAGE_ROOT"
+SUBPROCESS_ENTRYPOINT = (
+    "import os, runpy, sys; "
+    f"sys.path.insert(0, os.environ[{SUBPROCESS_PACKAGE_ROOT_ENV!r}]); "
+    "sys.argv = ['bot', *sys.argv[1:]]; "
+    "runpy.run_module('bot', run_name='__main__')"
+)
 
 
 def _run_entrypoint(
@@ -96,7 +103,7 @@ def _write_subprocess_fixture(package_root: Path) -> None:
 
 
 @pytest.mark.parametrize("preflighted", [False, True])
-def test_python_module_entrypoint_preflight_gate_in_a_real_subprocess(
+def test_python_module_entrypoint_preflight_gate_in_an_isolated_real_subprocess(
     tmp_path: Path,
     preflighted: bool,
 ) -> None:
@@ -107,12 +114,12 @@ def test_python_module_entrypoint_preflight_gate_in_a_real_subprocess(
     env = os.environ.copy()
     env.update(
         {
-            "PYTHONPATH": str(package_root),
+            SUBPROCESS_PACKAGE_ROOT_ENV: str(package_root),
             "MIGRATION_CALL_PATH": str(migration_call_path),
             "MAIN_CALL_PATH": str(main_call_path),
         }
     )
-    args = [sys.executable, "-m", "bot"]
+    args = [sys.executable, "-I", "-c", SUBPROCESS_ENTRYPOINT]
     if preflighted:
         args.append(MIGRATIONS_CHECKED_ARG)
 
