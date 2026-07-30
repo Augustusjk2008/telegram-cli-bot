@@ -1057,7 +1057,7 @@ export function DesktopWorkbench({
             ? { sourceId: activeTab.sourceId }
             : { path: activeTab.path }),
           languageId: inferFileEditorLanguageId(activeTab.displayPath || activeTab.path),
-          version: sequence,
+          version: Math.max(1, Math.trunc(activeTab.documentVersion || 1)),
           content: activeTab.content,
         },
         position: { line: input.line, column: input.column },

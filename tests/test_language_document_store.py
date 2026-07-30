@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from decimal import Decimal
+from fractions import Fraction
 from pathlib import Path
 
 import pytest
 
 from bot.language_server.document_store import (
     LanguageDocument,
+    LanguageDocumentError,
     LanguageDocumentLimitError,
     LanguageDocumentRuntimeKey,
     LanguageDocumentStore,
@@ -70,6 +73,138 @@ def test_store_close_removes_only_selected_documents(tmp_path: Path) -> None:
     assert result.missing == ("missing.py",)
     assert store.get(key, "one.py") is None
     assert store.get(key, "two.py") is not None
+
+
+def test_store_versioned_close_requires_the_current_version_but_unversioned_close_forces(tmp_path: Path) -> None:
+    store = LanguageDocumentStore()
+    key = _key(tmp_path)
+    current = _document("v3", version=3)
+    reopened = _document("v1", version=1)
+
+    store.sync_documents(key, [_document("v2", version=2)])
+    store.sync_documents(key, [current])
+
+    stale_close = store.close_documents(key, [{"path": "main.py", "version": 2}])
+
+    assert stale_close.closed_count == 0
+    assert store.get(key, "main.py") == current
+
+    matching_close = store.close_documents(key, [{"path": "main.py", "version": 3}])
+
+    assert matching_close.closed == (current,)
+    assert store.get(key, "main.py") is None
+    assert store.sync_documents(key, [reopened]).accepted == (reopened,)
+    assert store.close_documents(key, [{"path": "main.py"}]).closed == (reopened,)
+
+
+def test_store_rejects_an_explicitly_missing_close_version(tmp_path: Path) -> None:
+    store = LanguageDocumentStore()
+    key = _key(tmp_path)
+    current = _document("v3", version=3)
+    store.sync_documents(key, [current])
+
+    with pytest.raises(LanguageDocumentError, match="关闭项版本无效"):
+        store.close_documents(key, [{"path": "main.py", "version": None}])
+
+    assert store.get(key, "main.py") == current
+
+
+@pytest.mark.parametrize(
+    "version",
+    [True, False, 3.5, -3.5, float("nan"), float("inf"), float("-inf")],
+    ids=("true", "false", "fractional", "negative-fractional", "nan", "positive-infinity", "negative-infinity"),
+)
+def test_store_rejects_non_integral_or_boolean_explicit_close_versions(tmp_path: Path, version: object) -> None:
+    store = LanguageDocumentStore()
+    key = _key(tmp_path)
+    current = _document("v3", version=3)
+    store.sync_documents(key, [current])
+
+    with pytest.raises(LanguageDocumentError, match="关闭项版本无效"):
+        store.close_documents(key, [{"path": "main.py", "version": version}])
+
+    assert store.get(key, "main.py") == current
+
+
+@pytest.mark.parametrize(
+    "version",
+    [Decimal("3"), Fraction(3, 1), Fraction(7, 2)],
+    ids=("decimal", "integral-fraction", "fractional-fraction"),
+)
+def test_store_rejects_non_protocol_mapping_close_versions(tmp_path: Path, version: object) -> None:
+    store = LanguageDocumentStore()
+    key = _key(tmp_path)
+    current = _document("v3", version=3)
+    store.sync_documents(key, [current])
+
+    with pytest.raises(LanguageDocumentError, match="关闭项版本无效"):
+        store.close_documents(key, [{"path": "main.py", "version": version}])
+
+    assert store.get(key, "main.py") == current
+
+
+@pytest.mark.parametrize(
+    ("version", "current_version"),
+    [
+        (True, 1),
+        (False, 0),
+        (None, 3),
+        (Decimal("3"), 3),
+        (Fraction(3, 1), 3),
+        (Fraction(7, 2), 3),
+        (3.5, 3),
+        (float("nan"), 3),
+        (float("inf"), 3),
+    ],
+    ids=("true", "false", "none", "decimal", "integral-fraction", "fractional-fraction", "fractional", "nan", "infinity"),
+)
+def test_store_rejects_invalid_language_document_close_versions(
+    tmp_path: Path,
+    version: object,
+    current_version: int,
+) -> None:
+    store = LanguageDocumentStore()
+    key = _key(tmp_path)
+    current = _document("current", version=current_version)
+    store.sync_documents(key, [current])
+    malformed = LanguageDocument("main.py", "python", version, "close")  # type: ignore[arg-type]
+
+    with pytest.raises(LanguageDocumentError, match="关闭项版本无效"):
+        store.close_documents(key, [malformed])
+
+    assert store.get(key, "main.py") == current
+
+
+def test_store_preview_close_keeps_a_newer_snapshot_when_committing_an_old_plan(tmp_path: Path) -> None:
+    store = LanguageDocumentStore()
+    key = _key(tmp_path)
+    v2 = _document("v2", version=2)
+    v3 = _document("v3", version=3)
+    store.sync_documents(key, [v2])
+
+    plan = store.preview_close_documents(key, [{"path": "main.py", "version": 2}])
+
+    assert plan.candidates == (v2,)
+    assert store.get(key, "main.py") == v2
+    store.sync_documents(key, [v3])
+    committed = store.commit_close_documents(key, plan.candidates)
+
+    assert committed.closed == ()
+    assert committed.missing == ("main.py",)
+    assert store.get(key, "main.py") == v3
+
+
+@pytest.mark.parametrize("version", [3, 3.0, "3"], ids=("integer", "integral-float", "integer-string"))
+def test_store_accepts_integral_explicit_close_versions(tmp_path: Path, version: object) -> None:
+    store = LanguageDocumentStore()
+    key = _key(tmp_path)
+    current = _document("v3", version=3)
+    store.sync_documents(key, [current])
+
+    result = store.close_documents(key, [{"path": "main.py", "version": version}])
+
+    assert result.closed == (current,)
+    assert store.get(key, "main.py") is None
 
 
 def test_store_normalizes_equivalent_workspace_paths(tmp_path: Path) -> None:

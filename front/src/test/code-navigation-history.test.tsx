@@ -401,6 +401,7 @@ test("desktop history reopens a closed workspace file and command navigation use
   const navigationRequests: Array<{
     kind: string;
     path: string;
+    version: number;
     line: number;
     column: number;
   }> = [];
@@ -409,6 +410,7 @@ test("desktop history reopens a closed workspace file and command navigation use
     navigationRequests.push({
       kind: request.kind,
       path: request.document.path,
+      version: request.document.version,
       line: request.position.line,
       column: request.position.column,
     });
@@ -451,6 +453,7 @@ test("desktop history reopens a closed workspace file and command navigation use
   expect(navigationRequests[0]).toEqual({
     kind: "definition",
     path: "src/index.ts",
+    version: 1,
     line: 1,
     column: 3,
   });
@@ -463,6 +466,7 @@ test("desktop history reopens a closed workspace file and command navigation use
   expect(navigationRequests[1]).toEqual({
     kind: "definition",
     path: "src/server.ts",
+    version: 1,
     line: 1,
     column: 4,
   });

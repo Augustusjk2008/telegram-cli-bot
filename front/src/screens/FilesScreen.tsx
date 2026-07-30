@@ -14,6 +14,7 @@ import type {
   FileEntry,
   FileReadResult,
   InlineCompletionConfig,
+  WorkspaceDocumentCloseItem,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import {
@@ -34,6 +35,142 @@ type Props = {
   canOpenSystemFolder?: boolean;
   canUseInlineCompletion?: boolean;
 };
+
+type EditorDocumentSnapshot = {
+  version: number;
+  content: string;
+};
+
+type ActiveEditorDocument = {
+  snapshot: EditorDocumentSnapshot;
+  activation: number;
+};
+
+type EditorDocumentScope = {
+  history: Map<string, EditorDocumentSnapshot>;
+  active: Map<string, ActiveEditorDocument>;
+  pendingResolves: Set<Promise<unknown>>;
+  closeBarrier: Promise<void> | null;
+  nextActivation: number;
+};
+
+type EditorDocumentScopeBinding = {
+  client: WebBotClient;
+  botAlias: string;
+  root: string;
+  scope: EditorDocumentScope;
+};
+
+const WORKSPACE_DOCUMENT_CLOSE_BATCH_SIZE = 64;
+const editorDocumentScopesByClient = new WeakMap<WebBotClient, Map<string, EditorDocumentScope>>();
+
+function editorDocumentScopeKey(botAlias: string, root: string) {
+  return `${botAlias}\n${root}`;
+}
+
+function getEditorDocumentScope(client: WebBotClient, botAlias: string, root: string) {
+  let scopes = editorDocumentScopesByClient.get(client);
+  if (!scopes) {
+    scopes = new Map<string, EditorDocumentScope>();
+    editorDocumentScopesByClient.set(client, scopes);
+  }
+  const key = editorDocumentScopeKey(botAlias, root);
+  let scope = scopes.get(key);
+  if (!scope) {
+    scope = {
+      history: new Map<string, EditorDocumentSnapshot>(),
+      active: new Map<string, ActiveEditorDocument>(),
+      pendingResolves: new Set<Promise<unknown>>(),
+      closeBarrier: null,
+      nextActivation: 0,
+    };
+    scopes.set(key, scope);
+  }
+  return scope;
+}
+
+function syncEditorDocumentSnapshot(scope: EditorDocumentScope, path: string, content: string) {
+  const previous = scope.history.get(path);
+  if (previous?.content === content) {
+    return previous;
+  }
+  const next: EditorDocumentSnapshot = {
+    version: previous ? previous.version + 1 : 1,
+    content,
+  };
+  scope.history.set(path, next);
+  return next;
+}
+
+function activateEditorDocument(scope: EditorDocumentScope, path: string, snapshot: EditorDocumentSnapshot) {
+  scope.nextActivation += 1;
+  scope.active.set(path, { snapshot, activation: scope.nextActivation });
+}
+
+function chunkWorkspaceDocumentCloseItems<T>(items: readonly T[]) {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += WORKSPACE_DOCUMENT_CLOSE_BATCH_SIZE) {
+    chunks.push(items.slice(index, index + WORKSPACE_DOCUMENT_CLOSE_BATCH_SIZE));
+  }
+  return chunks;
+}
+
+export async function closeWorkspaceDocumentsInBatches(
+  client: Pick<WebBotClient, "closeWorkspaceDocuments">,
+  botAlias: string,
+  documents: readonly WorkspaceDocumentCloseItem[],
+) {
+  for (const batch of chunkWorkspaceDocumentCloseItems(documents)) {
+    await client.closeWorkspaceDocuments(botAlias, { documents: batch });
+  }
+}
+
+async function waitForPendingCodeNavigation(scope: EditorDocumentScope) {
+  while (scope.pendingResolves.size > 0) {
+    await Promise.allSettled(Array.from(scope.pendingResolves));
+  }
+}
+
+async function waitForCloseBarrier(scope: EditorDocumentScope) {
+  while (true) {
+    const barrier = scope.closeBarrier;
+    if (!barrier) {
+      return;
+    }
+    await barrier;
+    if (barrier === scope.closeBarrier) {
+      return;
+    }
+  }
+}
+
+function queueEditorDocumentClose(
+  client: WebBotClient,
+  botAlias: string,
+  scope: EditorDocumentScope,
+  paths?: readonly string[],
+) {
+  const previousBarrier = scope.closeBarrier || Promise.resolve();
+  const requestedPaths = paths ? new Set(paths) : null;
+  const task = previousBarrier.then(async () => {
+    await waitForPendingCodeNavigation(scope);
+    const entries = Array.from(scope.active.entries())
+      .filter(([path]) => !requestedPaths || requestedPaths.has(path));
+    for (const batch of chunkWorkspaceDocumentCloseItems(entries)) {
+      await closeWorkspaceDocumentsInBatches(client, botAlias, batch.map(([path, active]) => ({
+        path,
+        version: active.snapshot.version,
+      })));
+      batch.forEach(([path, active]) => {
+        if (scope.active.get(path) === active) {
+          scope.active.delete(path);
+        }
+      });
+    }
+  });
+  scope.closeBarrier = task.then(() => undefined, () => undefined);
+  return task;
+}
 
 function joinBrowserPath(basePath: string, name: string) {
   if (!basePath || basePath === "/") {
@@ -131,16 +268,58 @@ export function FilesScreen({
   const listingRequestSeqRef = useRef(0);
   const previewRequestSeqRef = useRef(0);
   const codeNavigationRequestSeqRef = useRef(0);
+  const codeNavigationHoverRequestSeqRef = useRef(0);
   const codeNavigationAbortControllerRef = useRef<AbortController | null>(null);
+  const editorDocumentScopeRef = useRef<EditorDocumentScopeBinding | null>(null);
   const canPreviewFiles = !structureOnly;
   const canMutateFiles = canPreviewFiles && canWriteFiles;
   const languageService = useLanguageServerStatus(client, botAlias, editorPath);
   const canNavigateImplementation = languageService.status?.implementationSupported === true;
 
-  useEffect(() => () => {
+  const abortExplicitCodeNavigation = () => {
     codeNavigationRequestSeqRef.current += 1;
     codeNavigationAbortControllerRef.current?.abort();
     codeNavigationAbortControllerRef.current = null;
+  };
+
+  const bindEditorDocumentScope = (root: string) => {
+    const current = editorDocumentScopeRef.current;
+    if (current?.client === client && current.botAlias === botAlias && current.root === root) {
+      return current;
+    }
+    const binding: EditorDocumentScopeBinding = {
+      client,
+      botAlias,
+      root,
+      scope: getEditorDocumentScope(client, botAlias, root),
+    };
+    editorDocumentScopeRef.current = binding;
+    return binding;
+  };
+
+  const getCurrentEditorDocumentScope = () => {
+    const current = editorDocumentScopeRef.current;
+    if (current?.client === client && current.botAlias === botAlias) {
+      return current;
+    }
+    return currentPath ? bindEditorDocumentScope(currentPath) : null;
+  };
+
+  const syncCurrentEditorDocumentSnapshot = (path: string, content: string, binding = getCurrentEditorDocumentScope()) => {
+    if (!binding) {
+      return { version: 1, content };
+    }
+    return syncEditorDocumentSnapshot(binding.scope, path, content);
+  };
+
+  useEffect(() => () => {
+    listingRequestSeqRef.current += 1;
+    abortExplicitCodeNavigation();
+    const binding = editorDocumentScopeRef.current;
+    if (binding?.client === client && binding.botAlias === botAlias) {
+      void queueEditorDocumentClose(client, botAlias, binding.scope).catch(() => {});
+      editorDocumentScopeRef.current = null;
+    }
   }, [botAlias, client]);
 
   useEffect(() => {
@@ -184,6 +363,49 @@ export function FilesScreen({
     };
   }, [botAlias, canUseInlineCompletion, client, editorLastModifiedNs, editorLoading, editorPath, editorSaving, inlineCompletionConfig]);
 
+  const codeNavigationHover = useMemo(() => {
+    if (!editorPath) {
+      return undefined;
+    }
+    return {
+      request: async (input: CodeNavigationIntent, signal: AbortSignal) => {
+        if (input.path !== editorPath) {
+          return false;
+        }
+        const binding = getCurrentEditorDocumentScope();
+        if (binding) {
+          await waitForCloseBarrier(binding.scope);
+        }
+        if (signal.aborted) {
+          return false;
+        }
+        const document = syncCurrentEditorDocumentSnapshot(editorPath, editorContent, binding);
+        if (binding) {
+          activateEditorDocument(binding.scope, editorPath, document);
+        }
+        const requestId = `mobile-code-navigation-hover-${Date.now()}-${++codeNavigationHoverRequestSeqRef.current}`;
+        const request = client.resolveCodeNavigation(botAlias, {
+          kind: "definition",
+          requestId,
+          document: {
+            path: editorPath,
+            languageId: inferFileEditorLanguageId(editorPath),
+            version: document.version,
+            content: document.content,
+          },
+          position: { line: input.line, column: input.column },
+        }, signal);
+        binding?.scope.pendingResolves.add(request);
+        try {
+          const result = await request;
+          return !signal.aborted && result.items.some((item) => item.targetType === "workspace" && Boolean(item.path));
+        } finally {
+          binding?.scope.pendingResolves.delete(request);
+        }
+      },
+    };
+  }, [botAlias, client, editorContent, editorPath]);
+
   async function loadListing(targetPath?: string) {
     const requestSeq = listingRequestSeqRef.current + 1;
     listingRequestSeqRef.current = requestSeq;
@@ -197,6 +419,7 @@ export function FilesScreen({
       if (requestSeq !== listingRequestSeqRef.current) {
         return;
       }
+      bindEditorDocumentScope(listing.workingDir);
       setCurrentPath(listing.workingDir);
       setFiles(listing.entries);
       setIsVirtualRoot(Boolean(listing.isVirtualRoot));
@@ -218,8 +441,28 @@ export function FilesScreen({
   const isEditorOpen = Boolean(editorPath);
   const isDirty = isEditorOpen && editorContent !== savedContent;
 
+  const closeCurrentEditorDocumentScope = async (action: string) => {
+    abortExplicitCodeNavigation();
+    const binding = getCurrentEditorDocumentScope();
+    if (!binding) {
+      return true;
+    }
+    try {
+      await queueEditorDocumentClose(client, botAlias, binding.scope);
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "关闭请求失败";
+      setError(`关闭代码导航文档失败，未${action}：${message}`);
+      setStatusText("");
+      return false;
+    }
+  };
+
   const handleDirClick = async (name: string) => {
     try {
+      if (!await closeCurrentEditorDocumentScope("切换目录")) {
+        return;
+      }
       if (structureOnly) {
         await loadListing(joinBrowserPath(currentPath, name));
         return;
@@ -234,6 +477,9 @@ export function FilesScreen({
 
   const handleBack = async () => {
     try {
+      if (!await closeCurrentEditorDocumentScope("返回上级目录")) {
+        return;
+      }
       if (structureOnly) {
         await loadListing(getParentBrowserPath(currentPath));
         return;
@@ -251,6 +497,9 @@ export function FilesScreen({
       setError("");
       setStatusText("");
       const workingDir = await client.getCurrentPath(botAlias);
+      if (!await closeCurrentEditorDocumentScope("返回工作目录")) {
+        return;
+      }
       if (structureOnly) {
         await loadListing(workingDir);
         return;
@@ -398,7 +647,7 @@ export function FilesScreen({
   };
 
   const clearEditor = () => {
-    codeNavigationRequestSeqRef.current += 1;
+    abortExplicitCodeNavigation();
     setEditorPath("");
     setEditorContent("");
     setSavedContent("");
@@ -417,6 +666,7 @@ export function FilesScreen({
   const handleOpenEditor = async (
     name: string,
     reveal?: { line: number; column: number; requestId: string },
+    navigationSequence?: number,
   ) => {
     if (!canMutateFiles) {
       setError("无文件写入权限");
@@ -436,14 +686,23 @@ export function FilesScreen({
     setEditorError("");
     setEditorStatusText("");
     setEditorLoading(true);
+    const binding = getCurrentEditorDocumentScope();
     try {
       const result = await client.readFileFull(botAlias, name);
+      if (
+        (navigationSequence !== undefined && codeNavigationRequestSeqRef.current !== navigationSequence)
+        || (binding && editorDocumentScopeRef.current !== binding)
+      ) {
+        return false;
+      }
+      const content = result.content || "";
       setPreviewName("");
       setPreviewContent("");
       setPreviewResult(null);
+      syncCurrentEditorDocumentSnapshot(name, content, binding);
       setEditorPath(name);
-      setEditorContent(result.content || "");
-      setSavedContent(result.content || "");
+      setEditorContent(content);
+      setSavedContent(content);
       setEditorLastModifiedNs(result.lastModifiedNs);
       setEditorEncoding(result.encoding);
       setEditorReveal(reveal || null);
@@ -470,7 +729,7 @@ export function FilesScreen({
     setCodeNavigationSource("");
   };
 
-  const openCodeNavigationLocation = async (location: CodeLocation, requestId: string) => {
+  const openCodeNavigationLocation = async (location: CodeLocation, requestId: string, navigationSequence?: number) => {
     if (location.targetType !== "workspace" || !location.path) {
       return false;
     }
@@ -478,7 +737,7 @@ export function FilesScreen({
       line: location.selectionRange.start.line,
       column: location.selectionRange.start.column,
       requestId,
-    });
+    }, navigationSequence);
   };
 
   const handleResolveCodeNavigation = async (input: CodeNavigationIntent) => {
@@ -489,30 +748,47 @@ export function FilesScreen({
     ) {
       return;
     }
+    codeNavigationAbortControllerRef.current?.abort();
     const sequence = codeNavigationRequestSeqRef.current + 1;
     codeNavigationRequestSeqRef.current = sequence;
-    codeNavigationAbortControllerRef.current?.abort();
     const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
     codeNavigationAbortControllerRef.current = controller;
     const requestId = `mobile-code-navigation-${Date.now()}-${sequence}`;
+    const binding = getCurrentEditorDocumentScope();
+    let request: ReturnType<WebBotClient["resolveCodeNavigation"]> | null = null;
     try {
-      const result = await client.resolveCodeNavigation(botAlias, {
+      if (binding) {
+        await waitForCloseBarrier(binding.scope);
+      }
+      if (controller?.signal.aborted || codeNavigationRequestSeqRef.current !== sequence) {
+        return;
+      }
+      const document = syncCurrentEditorDocumentSnapshot(editorPath, editorContent, binding);
+      if (binding) {
+        activateEditorDocument(binding.scope, editorPath, document);
+      }
+      request = client.resolveCodeNavigation(botAlias, {
         kind: input.kind,
         requestId,
         document: {
           path: editorPath,
           languageId: inferFileEditorLanguageId(editorPath),
-          version: sequence,
-          content: editorContent,
+          version: document.version,
+          content: document.content,
         },
         position: { line: input.line, column: input.column },
       }, controller?.signal);
+      binding?.scope.pendingResolves.add(request);
+      const result = await request;
       if (controller?.signal.aborted || codeNavigationRequestSeqRef.current !== sequence) {
         return;
       }
       const semanticItems = result.items.filter((item) => item.targetType === "workspace" && item.path);
       if (semanticItems.length === 1) {
-        if (await openCodeNavigationLocation(semanticItems[0], result.requestId || requestId)) {
+        if (await openCodeNavigationLocation(semanticItems[0], result.requestId || requestId, sequence)) {
+          if (controller?.signal.aborted || codeNavigationRequestSeqRef.current !== sequence) {
+            return;
+          }
           clearCodeNavigationOverlay();
         }
         return;
@@ -540,6 +816,9 @@ export function FilesScreen({
       setCodeNavigationMessage(err instanceof Error ? err.message : "代码导航失败");
       setCodeNavigationSource(input.symbol || `${input.path}:${input.line}:${input.column}`);
     } finally {
+      if (binding && request) {
+        binding.scope.pendingResolves.delete(request);
+      }
       if (codeNavigationAbortControllerRef.current === controller) {
         codeNavigationAbortControllerRef.current = null;
       }
@@ -547,8 +826,11 @@ export function FilesScreen({
   };
 
   const handleEditorChange = (value: string) => {
-    if (!canMutateFiles) {
+    if (!canMutateFiles || value === editorContent) {
       return;
+    }
+    if (editorPath) {
+      syncCurrentEditorDocumentSnapshot(editorPath, value);
     }
     setEditorContent(value);
     setEditorStatusText("");
@@ -631,6 +913,7 @@ export function FilesScreen({
       const result = await client.createTextFile(botAlias, pendingFileName.trim(), "");
       setShowCreateFileDialog(false);
       setPendingFileName("");
+      syncCurrentEditorDocumentSnapshot(result.path, "");
       setEditorPath(result.path);
       setEditorContent("");
       setSavedContent("");
@@ -674,8 +957,31 @@ export function FilesScreen({
     }
     setRenameBusy(true);
     setRenameError("");
+    const oldPath = renameTargetPath;
+    const newName = renameValue.trim();
+    const binding = getCurrentEditorDocumentScope();
+    const oldSnapshot = binding?.scope.history.get(oldPath);
+    let oldPathClosed = false;
+    abortExplicitCodeNavigation();
     try {
-      const result = await client.renamePath(botAlias, renameTargetPath, renameValue.trim());
+      if (binding && oldSnapshot) {
+        activateEditorDocument(binding.scope, oldPath, oldSnapshot);
+        try {
+          await queueEditorDocumentClose(client, botAlias, binding.scope, [oldPath]);
+          oldPathClosed = true;
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "关闭请求失败";
+          setRenameError(`关闭重命名前的代码导航文档失败，未重命名：${message}`);
+          return;
+        }
+      }
+      const result = await client.renamePath(botAlias, oldPath, newName);
+      if (binding) {
+        binding.scope.history.delete(result.oldPath);
+        binding.scope.active.delete(result.oldPath);
+        binding.scope.history.delete(result.path);
+        binding.scope.active.delete(result.path);
+      }
       setShowRenameDialog(false);
       setRenameTargetPath("");
       setRenameValue("");
@@ -683,10 +989,14 @@ export function FilesScreen({
         setPreviewName(result.path);
       }
       if (editorPath === result.oldPath) {
+        syncCurrentEditorDocumentSnapshot(result.path, editorContent, binding);
         setEditorPath(result.path);
       }
       await loadListing();
     } catch (err) {
+      if (oldPathClosed && binding && oldSnapshot) {
+        activateEditorDocument(binding.scope, oldPath, oldSnapshot);
+      }
       setRenameError(err instanceof Error ? err.message : "重命名失败");
     } finally {
       setRenameBusy(false);
@@ -787,6 +1097,7 @@ export function FilesScreen({
           statusText={editorStatusText}
           error={editorError}
           inlineCompletion={inlineCompletion}
+          codeNavigationHover={codeNavigationHover}
           reveal={editorReveal}
           canNavigateImplementation={canNavigateImplementation}
           onResolveCodeNavigation={(input) => void handleResolveCodeNavigation(input)}
