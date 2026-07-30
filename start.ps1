@@ -571,13 +571,12 @@ try {
 
     Sync-FrontendAssets -PythonRuntime $script:pythonRuntime -RootDir $scriptDir
 
-    Write-Info "正在迁移运行数据..."
+    Write-Info "正在检查运行数据迁移..."
     Invoke-PythonStartupStep -Arguments @("-m", "bot.migrations", "run", "--repo-root", $scriptDir)
     if ($script:lastPythonExitCode -ne 0) {
         Write-Fail "运行数据迁移失败。"
         exit $script:lastPythonExitCode
     }
-
     Invoke-PythonStartupStep -Arguments @("-c", "import bot.main")
     if ($script:lastPythonExitCode -ne 0) {
         Write-Fail "Python 启动检查失败。"
@@ -587,7 +586,7 @@ try {
     Show-TunnelHint -Path $envPath
 
     while ($true) {
-        & $script:pythonRuntime.Command @($script:pythonRuntime.Arguments + @("-m", "bot"))
+        & $script:pythonRuntime.Command @($script:pythonRuntime.Arguments + @("-m", "bot", "--tcb-migrations-checked"))
         $exitCode = $LASTEXITCODE
 
         if ($exitCode -ne $restartExitCode) {

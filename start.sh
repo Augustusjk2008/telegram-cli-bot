@@ -385,6 +385,7 @@ if is_truthy "${TCB_STARTUP_FORCE_DEP_INSTALL:-}"; then
   sync_python_dependencies 1
 fi
 sync_frontend_assets
+info "正在检查运行数据迁移..."
 if ! run_python_startup_step -m bot.migrations run --repo-root "$SCRIPT_DIR"; then
   echo "[错误] 运行数据迁移失败。" >&2
   exit "$last_python_exit_code"
@@ -398,7 +399,7 @@ raise_nofile_limit
 
 while true; do
   set +e
-  "$PYTHON_BIN" -m bot
+  "$PYTHON_BIN" -m bot --tcb-migrations-checked
   exit_code=$?
   set -e
   if [[ "$exit_code" -ne 75 ]]; then

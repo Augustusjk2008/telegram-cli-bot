@@ -60,7 +60,7 @@ def test_start_sh_repairs_python_dependencies_only_after_startup_step_fails() ->
     assert 'run_python_startup_step -c "import bot.updater"' in content
     assert 'run_python_startup_step -m bot.migrations run --repo-root "$SCRIPT_DIR"' in content
     assert 'run_python_startup_step -c "import bot.main"' in content
-    assert '\n  "$PYTHON_BIN" -m bot\n' in content
+    assert '\n  "$PYTHON_BIN" -m bot --tcb-migrations-checked\n' in content
 
 
 def test_start_sh_rebuilds_frontend_after_pending_update_without_eager_dependency_sync() -> None:
@@ -71,7 +71,7 @@ def test_start_sh_rebuilds_frontend_after_pending_update_without_eager_dependenc
     frontend_build_index = main.index("sync_frontend_assets", update_index)
     migration_index = main.index("bot.migrations run")
     import_check_index = main.index('run_python_startup_step -c "import bot.main"')
-    boot_index = main.index('\n  "$PYTHON_BIN" -m bot\n')
+    boot_index = main.index('\n  "$PYTHON_BIN" -m bot --tcb-migrations-checked\n')
 
     assert update_index < frontend_build_index < migration_index < import_check_index < boot_index
     assert "sync_runtime_dependencies" not in main
@@ -82,6 +82,19 @@ def test_start_sh_rebuilds_frontend_after_pending_update_without_eager_dependenc
     ]
     assert len(force_install_indexes) == 2
     assert force_install_indexes[0] < update_index < force_install_indexes[1] < frontend_build_index
+
+
+def test_start_sh_checks_migrations_once_before_boot() -> None:
+    content = Path("start.sh").read_text(encoding="utf-8")
+
+    migration_index = content.index('run_python_startup_step -m bot.migrations run --repo-root "$SCRIPT_DIR"')
+    failure_exit_index = content.index('exit "$last_python_exit_code"', migration_index)
+    import_check_index = content.index('run_python_startup_step -c "import bot.main"')
+    boot_index = content.index('\n  "$PYTHON_BIN" -m bot --tcb-migrations-checked\n')
+
+    assert 'info "正在检查运行数据迁移..."' in content
+    assert "TCB_MIGRATIONS_CHECKED" not in content
+    assert migration_index < failure_exit_index < import_check_index < boot_index
 
 
 def test_start_sh_rebuilds_frontend_when_frontend_inputs_change() -> None:
@@ -114,7 +127,10 @@ def test_start_ps1_repairs_python_dependencies_only_after_startup_step_fails() -
     assert 'Invoke-PythonStartupStep -Arguments @("-c", "import bot.updater")' in content
     assert 'Invoke-PythonStartupStep -Arguments @("-m", "bot.migrations"' in content
     assert 'Invoke-PythonStartupStep -Arguments @("-c", "import bot.main")' in content
-    assert '& $script:pythonRuntime.Command @($script:pythonRuntime.Arguments + @("-m", "bot"))' in content
+    assert (
+        '& $script:pythonRuntime.Command '
+        '@($script:pythonRuntime.Arguments + @("-m", "bot", "--tcb-migrations-checked"))'
+    ) in content
 
 
 def test_start_ps1_rebuilds_frontend_after_pending_update_without_eager_dependency_sync() -> None:
@@ -125,7 +141,7 @@ def test_start_ps1_rebuilds_frontend_after_pending_update_without_eager_dependen
     frontend_build_index = main.index("Sync-FrontendAssets", update_index)
     migration_index = main.index('"bot.migrations", "run"')
     import_check_index = main.index('Invoke-PythonStartupStep -Arguments @("-c", "import bot.main")')
-    boot_index = main.index('@("-m", "bot")')
+    boot_index = main.index('@("-m", "bot", "--tcb-migrations-checked")')
 
     assert update_index < frontend_build_index < migration_index < import_check_index < boot_index
     assert "Sync-RuntimeDependencies" not in main
@@ -136,6 +152,20 @@ def test_start_ps1_rebuilds_frontend_after_pending_update_without_eager_dependen
     ]
     assert len(force_install_indexes) == 2
     assert force_install_indexes[0] < update_index < force_install_indexes[1] < frontend_build_index
+
+
+def test_start_ps1_checks_migrations_once_before_boot() -> None:
+    content = Path("start.ps1").read_text(encoding="utf-8")
+
+    migration_index = content.index('Invoke-PythonStartupStep -Arguments @("-m", "bot.migrations", "run"')
+    failure_exit_index = content.index("exit $script:lastPythonExitCode", migration_index)
+    import_check_index = content.index('Invoke-PythonStartupStep -Arguments @("-c", "import bot.main")')
+    boot_index = content.index('@("-m", "bot", "--tcb-migrations-checked")')
+
+    assert 'Write-Info "正在检查运行数据迁移..."' in content
+    assert "正在迁移运行数据..." not in content
+    assert "TCB_MIGRATIONS_CHECKED" not in content
+    assert migration_index < failure_exit_index < import_check_index < boot_index
 
 
 def test_start_ps1_prefers_existing_project_venv_before_system_python() -> None:
