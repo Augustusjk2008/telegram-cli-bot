@@ -170,7 +170,7 @@ export function PluginsScreen({
   );
 
   const uninstallDialog = pendingUninstallPlugin ? (
-    <div role="dialog" aria-modal="true" aria-labelledby="plugin-uninstall-title" className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+    <div role="dialog" aria-modal="true" aria-labelledby="plugin-uninstall-title" className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-backdrop-50)] p-4">
       <SurfacePanel className="w-full max-w-md p-4">
         <h2 id="plugin-uninstall-title" className="text-base font-semibold text-[var(--text)]">卸载插件</h2>
         <p className="mt-2 text-sm text-[var(--muted)]">卸载后会停止插件运行时并清理视图缓存。</p>
@@ -199,7 +199,7 @@ export function PluginsScreen({
 
   return (
     <>
-      <main className={clsx("flex h-full min-h-0 flex-col", embedded ? "bg-[var(--workbench-titlebar-bg)]" : "bg-[var(--workbench-panel-bg)]")}>
+      <main data-ui-density="compact" className={clsx("flex h-full min-h-0 flex-col", embedded ? "bg-[var(--workbench-titlebar-bg)]" : "bg-[var(--workbench-panel-bg)]")}>
         {embedded ? null : (
           <header className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-4 py-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -270,8 +270,8 @@ export function PluginsScreen({
               )}
             />
             {notice ? (
-              <SurfacePanel className="border-emerald-200 bg-emerald-50 shadow-[var(--shadow-soft)]">
-                <div className={sectionBodyClass("py-2 text-sm text-emerald-700")}>{notice}</div>
+              <SurfacePanel className="border-[var(--status-success-border)] bg-[var(--status-success-bg)] shadow-[var(--shadow-surface)]">
+                <div className={sectionBodyClass("py-2 text-sm text-[var(--status-success)]")}>{notice}</div>
               </SurfacePanel>
             ) : null}
           </div>

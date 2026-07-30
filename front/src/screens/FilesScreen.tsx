@@ -7,7 +7,14 @@ import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import { SurfacePanel } from "../components/SurfacePanel";
 import { ToolbarButton } from "../components/ToolbarButton";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { FileDownloadProgress, FileEntry, FileReadResult, InlineCompletionConfig } from "../services/types";
+import type {
+  CodeLocation,
+  CodeNavigationIntent,
+  FileDownloadProgress,
+  FileEntry,
+  FileReadResult,
+  InlineCompletionConfig,
+} from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import {
   getFilePreviewStatusText,
@@ -16,6 +23,8 @@ import {
   shouldAutoLoadFullHtmlPreview,
   withDetectedPreviewKind,
 } from "../utils/filePreview";
+import { inferFileEditorLanguageId } from "../utils/fileEditorLanguage";
+import { useLanguageServerStatus } from "../workbench/useLanguageServerStatus";
 
 type Props = {
   botAlias: string;
@@ -76,22 +85,6 @@ function formatDownloadDetail(progress: ActiveDownload) {
   return formatBytes(progress.downloadedBytes);
 }
 
-function inferLanguageId(path: string) {
-  const normalized = path.toLowerCase();
-  if (/\.py$/.test(normalized)) return "python";
-  if (/\.tsx$/.test(normalized)) return "typescriptreact";
-  if (/\.ts$/.test(normalized)) return "typescript";
-  if (/\.jsx$/.test(normalized)) return "javascriptreact";
-  if (/\.(js|mjs|cjs)$/.test(normalized)) return "javascript";
-  if (/\.json$/.test(normalized)) return "json";
-  if (/\.(md|markdown)$/.test(normalized)) return "markdown";
-  if (/\.(html|htm)$/.test(normalized)) return "html";
-  if (/\.css$/.test(normalized)) return "css";
-  if (/\.(v|vh|sv|svh)$/.test(normalized)) return "verilog";
-  if (/\.(c|cc|cp|cpp|cxx|h|hh|hpp|hxx)$/.test(normalized)) return "cpp";
-  return "";
-}
-
 export function FilesScreen({
   botAlias,
   client = new MockWebBotClient(),
@@ -119,6 +112,10 @@ export function FilesScreen({
   const [editorStatusText, setEditorStatusText] = useState("");
   const [editorLastModifiedNs, setEditorLastModifiedNs] = useState<string | undefined>(undefined);
   const [editorEncoding, setEditorEncoding] = useState<string | undefined>(undefined);
+  const [editorReveal, setEditorReveal] = useState<{ line: number; column: number; requestId: string } | null>(null);
+  const [codeNavigationCandidates, setCodeNavigationCandidates] = useState<CodeLocation[]>([]);
+  const [codeNavigationMessage, setCodeNavigationMessage] = useState("");
+  const [codeNavigationSource, setCodeNavigationSource] = useState("");
   const [showCreateFileDialog, setShowCreateFileDialog] = useState(false);
   const [pendingFileName, setPendingFileName] = useState("");
   const [createFileBusy, setCreateFileBusy] = useState(false);
@@ -133,8 +130,18 @@ export function FilesScreen({
   const [inlineCompletionConfig, setInlineCompletionConfig] = useState<InlineCompletionConfig | null>(null);
   const listingRequestSeqRef = useRef(0);
   const previewRequestSeqRef = useRef(0);
+  const codeNavigationRequestSeqRef = useRef(0);
+  const codeNavigationAbortControllerRef = useRef<AbortController | null>(null);
   const canPreviewFiles = !structureOnly;
   const canMutateFiles = canPreviewFiles && canWriteFiles;
+  const languageService = useLanguageServerStatus(client, botAlias, editorPath);
+  const canNavigateImplementation = languageService.status?.implementationSupported === true;
+
+  useEffect(() => () => {
+    codeNavigationRequestSeqRef.current += 1;
+    codeNavigationAbortControllerRef.current?.abort();
+    codeNavigationAbortControllerRef.current = null;
+  }, [botAlias, client]);
 
   useEffect(() => {
     let cancelled = false;
@@ -167,7 +174,7 @@ export function FilesScreen({
     return {
       editorId: `files:${botAlias}:${editorPath}`,
       path: editorPath,
-      languageId: inferLanguageId(editorPath),
+      languageId: inferFileEditorLanguageId(editorPath),
       lastModifiedNs: editorLastModifiedNs,
       disabled: editorLoading || editorSaving,
       autoTriggerEnabled: inlineCompletionConfig.autoTriggerEnabled,
@@ -391,6 +398,7 @@ export function FilesScreen({
   };
 
   const clearEditor = () => {
+    codeNavigationRequestSeqRef.current += 1;
     setEditorPath("");
     setEditorContent("");
     setSavedContent("");
@@ -400,13 +408,28 @@ export function FilesScreen({
     setEditorStatusText("");
     setEditorLastModifiedNs(undefined);
     setEditorEncoding(undefined);
+    setEditorReveal(null);
+    setCodeNavigationCandidates([]);
+    setCodeNavigationMessage("");
+    setCodeNavigationSource("");
   };
 
-  const handleOpenEditor = async (name: string) => {
+  const handleOpenEditor = async (
+    name: string,
+    reveal?: { line: number; column: number; requestId: string },
+  ) => {
     if (!canMutateFiles) {
       setError("无文件写入权限");
       setStatusText("");
-      return;
+      return false;
+    }
+    if (editorPath === name && reveal) {
+      setEditorReveal(reveal);
+      return true;
+    }
+    if (editorPath && editorPath !== name && isDirty) {
+      setEditorError("当前文件有未保存修改，请先保存后再跳转到其他文件");
+      return false;
     }
     setError("");
     setStatusText("");
@@ -423,6 +446,8 @@ export function FilesScreen({
       setSavedContent(result.content || "");
       setEditorLastModifiedNs(result.lastModifiedNs);
       setEditorEncoding(result.encoding);
+      setEditorReveal(reveal || null);
+      return true;
     } catch (err) {
       const message = err instanceof Error ? err.message : "读取文件失败";
       setEditorError(message);
@@ -433,8 +458,91 @@ export function FilesScreen({
         setPreviewContent("");
         setPreviewResult(null);
       }
+      return false;
     } finally {
       setEditorLoading(false);
+    }
+  };
+
+  const clearCodeNavigationOverlay = () => {
+    setCodeNavigationCandidates([]);
+    setCodeNavigationMessage("");
+    setCodeNavigationSource("");
+  };
+
+  const openCodeNavigationLocation = async (location: CodeLocation, requestId: string) => {
+    if (location.targetType !== "workspace" || !location.path) {
+      return false;
+    }
+    return handleOpenEditor(location.path, {
+      line: location.selectionRange.start.line,
+      column: location.selectionRange.start.column,
+      requestId,
+    });
+  };
+
+  const handleResolveCodeNavigation = async (input: CodeNavigationIntent) => {
+    if (
+      !editorPath
+      || input.path !== editorPath
+      || (input.kind === "implementation" && !canNavigateImplementation)
+    ) {
+      return;
+    }
+    const sequence = codeNavigationRequestSeqRef.current + 1;
+    codeNavigationRequestSeqRef.current = sequence;
+    codeNavigationAbortControllerRef.current?.abort();
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    codeNavigationAbortControllerRef.current = controller;
+    const requestId = `mobile-code-navigation-${Date.now()}-${sequence}`;
+    try {
+      const result = await client.resolveCodeNavigation(botAlias, {
+        kind: input.kind,
+        requestId,
+        document: {
+          path: editorPath,
+          languageId: inferFileEditorLanguageId(editorPath),
+          version: sequence,
+          content: editorContent,
+        },
+        position: { line: input.line, column: input.column },
+      }, controller?.signal);
+      if (controller?.signal.aborted || codeNavigationRequestSeqRef.current !== sequence) {
+        return;
+      }
+      const semanticItems = result.items.filter((item) => item.targetType === "workspace" && item.path);
+      if (semanticItems.length === 1) {
+        if (await openCodeNavigationLocation(semanticItems[0], result.requestId || requestId)) {
+          clearCodeNavigationOverlay();
+        }
+        return;
+      }
+      if (semanticItems.length > 1) {
+        setCodeNavigationCandidates(semanticItems);
+        setCodeNavigationMessage("");
+        setCodeNavigationSource(input.symbol || `${input.path}:${input.line}:${input.column}`);
+        return;
+      }
+      setCodeNavigationCandidates([]);
+      setCodeNavigationMessage(
+        result.message || (input.kind === "implementation" ? "未找到语义实现" : "未找到语义定义"),
+      );
+      setCodeNavigationSource(input.symbol || `${input.path}:${input.line}:${input.column}`);
+    } catch (err) {
+      if (
+        controller?.signal.aborted
+        || codeNavigationRequestSeqRef.current !== sequence
+        || (err as { name?: string })?.name === "AbortError"
+      ) {
+        return;
+      }
+      setCodeNavigationCandidates([]);
+      setCodeNavigationMessage(err instanceof Error ? err.message : "代码导航失败");
+      setCodeNavigationSource(input.symbol || `${input.path}:${input.line}:${input.column}`);
+    } finally {
+      if (codeNavigationAbortControllerRef.current === controller) {
+        codeNavigationAbortControllerRef.current = null;
+      }
     }
   };
 
@@ -586,7 +694,7 @@ export function FilesScreen({
   };
 
   return (
-    <main className="flex h-full flex-col bg-[var(--workbench-titlebar-bg)]">
+    <main data-ui-density="compact" className="flex h-full flex-col bg-[var(--workbench-titlebar-bg)]">
       <header className="flex items-center justify-between border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-4 py-3">
         <div className="flex items-center gap-2 overflow-hidden">
           {currentPath !== "/" && currentPath !== "." && !isVirtualRoot && !isEditorOpen ? (
@@ -679,6 +787,9 @@ export function FilesScreen({
           statusText={editorStatusText}
           error={editorError}
           inlineCompletion={inlineCompletion}
+          reveal={editorReveal}
+          canNavigateImplementation={canNavigateImplementation}
+          onResolveCodeNavigation={(input) => void handleResolveCodeNavigation(input)}
           onChange={handleEditorChange}
           onSave={() => void handleSaveEditor()}
           onClose={handleCloseEditor}
@@ -739,6 +850,59 @@ export function FilesScreen({
           )}
         </section>
       )}
+
+      {codeNavigationCandidates.length > 0 || codeNavigationMessage ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-[var(--overlay-backdrop-45)] p-0 sm:items-center sm:p-4">
+          <section
+            role="dialog"
+            aria-label="代码跳转"
+            className="max-h-[70dvh] w-full overflow-hidden rounded-t-xl border border-[var(--border)] bg-[var(--surface)] shadow-2xl sm:max-w-2xl sm:rounded-xl"
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3">
+              <div className="min-w-0">
+                <h2 className="text-sm font-semibold text-[var(--text)]">代码跳转</h2>
+                <p className="truncate text-xs text-[var(--muted)]">{codeNavigationSource || "当前位置"}</p>
+              </div>
+              <button
+                type="button"
+                aria-label="关闭代码跳转"
+                onClick={clearCodeNavigationOverlay}
+                className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs text-[var(--muted)]"
+              >
+                关闭
+              </button>
+            </div>
+            {codeNavigationMessage ? (
+              <div className="px-4 py-4 text-sm text-[var(--muted)]">{codeNavigationMessage}</div>
+            ) : (
+              <div className="max-h-[55dvh] overflow-y-auto">
+                {codeNavigationCandidates.map((item, index) => (
+                  <button
+                    key={`${item.path || item.sourceId || "unknown"}:${item.selectionRange.start.line}:${item.selectionRange.start.column}:${item.provider}:${index}`}
+                    type="button"
+                    onClick={() => {
+                      void openCodeNavigationLocation(item, `mobile-candidate-${Date.now()}-${index}`).then((opened) => {
+                        if (opened) {
+                          clearCodeNavigationOverlay();
+                        }
+                      });
+                    }}
+                    className="flex w-full items-start justify-between gap-3 border-b border-[var(--border)] px-4 py-3 text-left"
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-medium text-[var(--text)]">{item.path}</span>
+                      <span className="mt-1 block text-xs text-[var(--muted)]">
+                        第 {item.selectionRange.start.line} 行，列 {item.selectionRange.start.column}
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-xs text-[var(--muted)]">提供者：{item.provider}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      ) : null}
 
       {canPreviewFiles && previewName ? (
         <FilePreviewDialog

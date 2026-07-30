@@ -103,7 +103,7 @@ export function ConversationHistoryPanel({
   const searchLabel = activeTab === "favorites" ? "搜索收藏" : "搜索会话";
 
   return (
-    <div className="workbench-dialog-backdrop absolute inset-0 z-30 flex items-end bg-black/20 sm:items-stretch sm:bg-black/10">
+    <div className="workbench-dialog-backdrop absolute inset-0 z-30 flex items-end bg-[var(--overlay-backdrop-20)] sm:items-stretch sm:bg-[var(--overlay-backdrop-10)]">
       <aside className="workbench-sheet-panel flex max-h-[85%] w-full flex-col rounded-t-lg border-t border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] shadow-[var(--shadow-card)] sm:h-full sm:max-h-none sm:w-[380px] sm:rounded-none sm:border-r sm:border-t-0">
         <header className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] p-3">
           <div className="flex items-center justify-between gap-2">
@@ -203,7 +203,7 @@ export function ConversationHistoryPanel({
                   key={item.id}
                   aria-current={item.active ? "true" : undefined}
                   className={item.active
-                    ? "flex rounded-lg border border-[var(--workbench-hover-border)] bg-[var(--workbench-active-bg)] shadow-[var(--shadow-soft)] disabled:opacity-60"
+                    ? "flex rounded-lg border border-[var(--workbench-hover-border)] bg-[var(--workbench-active-bg)] shadow-[var(--shadow-surface)] disabled:opacity-60"
                     : "flex rounded-lg border border-transparent hover:border-[var(--workbench-hairline)] hover:bg-[var(--workbench-hover-bg)] disabled:opacity-60"}
                 >
                   <button
@@ -290,7 +290,7 @@ export function ConversationHistoryPanel({
       </aside>
       <button type="button" aria-label="关闭历史会话" className="hidden flex-1 sm:block" onClick={onClose} />
       {pendingDelete || pendingDeleteAll ? (
-        <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/30 px-4">
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-[var(--overlay-backdrop-30)] px-4">
           <div
             role="dialog"
             aria-modal="true"

@@ -124,7 +124,7 @@ function buttonClass(kind: "plain" | "primary" = "plain") {
 
 function sectionClass(extra = "") {
   return clsx(
-    "min-w-0 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] shadow-[var(--shadow-soft)]",
+    "min-w-0 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] shadow-[var(--shadow-surface)]",
     extra,
   );
 }
@@ -135,13 +135,13 @@ function sectionStackClass(extra = "") {
 
 function sectionHeaderClass(extra = "") {
   return clsx(
-    "flex items-center justify-between gap-2 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-3 py-2",
+    "flex items-center justify-between gap-2 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-3 py-1.5",
     extra,
   );
 }
 
 function sectionBodyClass(extra = "") {
-  return clsx("px-3 py-3", extra);
+  return clsx("px-3 py-2.5", extra);
 }
 
 function listClass(extra = "") {
@@ -1023,7 +1023,7 @@ export function GitScreen({
   }, [botAlias, client, diffLoadingPath, mutationBusy]);
 
   return (
-    <main className={clsx("flex h-full min-h-0 flex-col", embedded ? "bg-[var(--workbench-titlebar-bg)]" : "bg-[var(--workbench-panel-bg)]")}>
+    <main data-ui-density="compact" className={clsx("flex h-full min-h-0 flex-col", embedded ? "bg-[var(--workbench-titlebar-bg)]" : "bg-[var(--workbench-panel-bg)]")}>
       {embedded ? null : (
         <header className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-4 py-3">
           <div className="flex items-center justify-between gap-3">
@@ -1055,17 +1055,17 @@ export function GitScreen({
       >
         <div className={sectionStackClass("mx-auto w-full max-w-6xl")}>
           {loading ? (
-            <div className="rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-8 text-center text-sm text-[var(--muted)] shadow-[var(--shadow-soft)]">
+            <div className="rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-8 text-center text-sm text-[var(--muted)] shadow-[var(--shadow-surface)]">
               加载中...
             </div>
           ) : null}
           {error ? (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-[var(--shadow-soft)]">
+            <div className="rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger)] shadow-[var(--shadow-surface)]">
               {error}
             </div>
           ) : null}
           {notice ? (
-            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 shadow-[var(--shadow-soft)]">
+            <div className="rounded-lg border border-[var(--status-success-border)] bg-[var(--status-success-bg)] px-3 py-2 text-sm text-[var(--status-success)] shadow-[var(--shadow-surface)]">
               {notice}
             </div>
           ) : null}

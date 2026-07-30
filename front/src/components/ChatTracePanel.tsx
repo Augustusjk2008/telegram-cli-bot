@@ -228,7 +228,7 @@ function ChatTracePanelInner({
   return (
     <section
       data-testid={`chat-trace-panel-${messageId}`}
-      className="mt-2 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-3 py-2 shadow-[var(--shadow-soft)]"
+      className="mt-2 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-2.5 py-1.5 shadow-[var(--shadow-surface)]"
     >
       <div className="flex w-full items-center justify-between gap-3">
         <button

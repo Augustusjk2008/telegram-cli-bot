@@ -213,8 +213,8 @@ export function AgentSettingsPanel({
   }
 
   return (
-    <section className={`rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 ${className}`}>
-      <div className="flex items-start justify-between gap-4">
+    <section className={`rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 ${className}`}>
+      <div className="flex items-start justify-between gap-3">
         <div>
           <h2 className="text-base font-semibold text-[var(--text)]">子 agent</h2>
           <p className="text-sm text-[var(--muted)]">提示词改动对新会话生效</p>
@@ -231,11 +231,11 @@ export function AgentSettingsPanel({
         ) : null}
       </div>
 
-      {error ? <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div> : null}
-      {notice ? <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{notice}</div> : null}
+      {error ? <div className="mt-3 rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger)]">{error}</div> : null}
+      {notice ? <div className="mt-3 rounded-lg border border-[var(--status-success-border)] bg-[var(--status-success-bg)] px-3 py-2 text-sm text-[var(--status-success)]">{notice}</div> : null}
       {loading ? <div className="mt-4 text-sm text-[var(--muted)]">加载中...</div> : null}
 
-      <div className="mt-4 space-y-2">
+      <div className="mt-3 space-y-1.5">
         {agents.map((agent) => (
           <div
             key={agent.id}
@@ -245,7 +245,7 @@ export function AgentSettingsPanel({
               <div className="flex items-center gap-2">
                 <span className="truncate text-sm font-medium text-[var(--text)]">{agent.name}</span>
                 {agent.isMain ? <span className="rounded-full bg-[var(--surface-strong)] px-2 py-0.5 text-xs text-[var(--muted)]">主 agent</span> : null}
-                {!agent.enabled ? <span className="rounded-full bg-red-50 px-2 py-0.5 text-xs text-red-700">停用</span> : null}
+                {!agent.enabled ? <span className="rounded-full bg-[var(--status-danger-bg)] px-2 py-0.5 text-xs text-[var(--status-danger)]">停用</span> : null}
               </div>
               <div className="mt-0.5 truncate text-xs text-[var(--muted)]">{agent.id}</div>
             </div>
@@ -280,7 +280,7 @@ export function AgentSettingsPanel({
       </div>
 
       {formOpen ? (
-        <div className="mt-4 rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3">
+        <div className="mt-3 border-t border-[var(--border)] pt-3">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="space-y-1">
               <span className="text-sm font-medium text-[var(--text)]">名称</span>

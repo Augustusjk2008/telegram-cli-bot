@@ -138,7 +138,7 @@ export function AnnouncementDialog({ open, items, latestId, onClose }: Props) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45 p-0 sm:items-center sm:p-4">
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-[var(--overlay-backdrop-45)] p-0 sm:items-center sm:p-4">
       <section
         role="dialog"
         aria-modal="true"

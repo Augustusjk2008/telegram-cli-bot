@@ -67,7 +67,7 @@ export function SearchPane({ botAlias, client, onOpenFile }: Props) {
         </label>
         <div
           data-testid="workspace-search-field"
-          className="mt-2 flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-strong)] px-2 focus-within:border-[var(--accent-outline)] focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--accent-outline)]"
+          className="mt-2 flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-strong)] px-2 focus-within:border-[var(--focus-ring)] focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--focus-ring)]"
         >
           <Search className="h-4 w-4 shrink-0 text-[var(--muted)]" />
           <input

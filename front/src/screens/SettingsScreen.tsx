@@ -5,6 +5,7 @@ import { AgentSettingsPanel } from "../components/AgentSettingsPanel";
 import { BotCliParamsPanel } from "../components/BotCliParamsPanel";
 import { ClusterSetupPanel } from "../components/ClusterSetupPanel";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
+import { LanguageServicesPanel } from "../components/LanguageServicesPanel";
 import { NativeAgentConfigFields } from "../components/NativeAgentConfigFields";
 import { ThemeDropdown } from "../components/ThemeDropdown";
 import { toolbarButtonClass } from "../components/ToolbarButton";
@@ -72,18 +73,19 @@ type Props = {
   sessionCapabilities?: string[];
   showBotRuntimeSettings?: boolean;
   onOpenBotManager?: () => void;
+  onLanguageServerCatalogChanged?: () => void;
 };
 
 function settingsPanelClass(extra = "") {
   return clsx(
-    "rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-4 shadow-[var(--shadow-soft)]",
+    "rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-3 shadow-[var(--shadow-surface)]",
     extra,
   );
 }
 
 function settingsActionPanelClass(extra = "") {
   return clsx(
-    "overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] shadow-[var(--shadow-soft)]",
+    "overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] shadow-[var(--shadow-surface)]",
     extra,
   );
 }
@@ -159,6 +161,7 @@ export function SettingsScreen({
   sessionCapabilities = [],
   showBotRuntimeSettings = true,
   onOpenBotManager,
+  onLanguageServerCatalogChanged,
 }: Props) {
   const [overview, setOverview] = useState<BotOverview | null>(null);
   const [nativeAgentModels, setNativeAgentModels] = useState<NativeAgentModelsPayload | null>(null);
@@ -181,6 +184,7 @@ export function SettingsScreen({
   const [requestingNotificationPermission, setRequestingNotificationPermission] = useState(false);
   const isMainBot = botAlias === "main";
   const canManageBotRuntime = sessionCapabilities.length === 0 || sessionCapabilities.includes("manage_bots") || sessionCapabilities.includes("admin_ops");
+  const canManageLanguageServices = sessionCapabilities.length === 0 || sessionCapabilities.includes("admin_ops");
   const canCreateWorkdirDirectory =
     sessionCapabilities.length === 0
     || sessionCapabilities.includes("create_workdir_directory")
@@ -457,30 +461,30 @@ export function SettingsScreen({
   };
 
   return (
-    <main className={clsx("flex h-full min-h-0 flex-col", embedded ? "bg-[var(--workbench-titlebar-bg)]" : "bg-[var(--bg)]")}>
+    <main data-ui-density="compact" className={clsx("flex h-full min-h-0 flex-col", embedded ? "bg-[var(--workbench-titlebar-bg)]" : "bg-[var(--bg)]")}>
       {embedded ? null : (
-        <header className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] p-4">
+        <header className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] p-3">
           <h1 className="text-xl font-bold">设置</h1>
           <p className="text-sm text-[var(--muted)]">{overview?.alias || botAlias}</p>
         </header>
       )}
 
-      <section className={clsx("flex-1 overflow-y-auto space-y-4", embedded ? "bg-[var(--workbench-titlebar-bg)] p-3" : "p-4")}>
+      <section className={clsx("flex-1 space-y-3 overflow-y-auto", embedded ? "bg-[var(--workbench-titlebar-bg)] p-3" : "p-4")}>
         {loading ? (
           <div className="text-center text-[var(--muted)]">加载中...</div>
         ) : null}
         {error ? (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <div className="rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger)]">
             {error}
           </div>
         ) : null}
         {notice ? (
-          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+          <div className="rounded-lg border border-[var(--status-success-border)] bg-[var(--status-success-bg)] px-3 py-2 text-sm text-[var(--status-success)]">
             {notice}
           </div>
         ) : null}
 
-        <div className={settingsPanelClass("space-y-4")}>
+        <div className={settingsPanelClass("space-y-3")}>
           <h2 className="text-base font-semibold text-[var(--text)]">界面与阅读</h2>
 
           <div className="space-y-2">
@@ -488,7 +492,7 @@ export function SettingsScreen({
             <ThemeDropdown value={themeName} onChange={handleThemeChange} />
           </div>
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="space-y-2">
               <div className="text-sm font-medium text-[var(--text)]">聊天正文字体</div>
               <select
@@ -547,13 +551,13 @@ export function SettingsScreen({
           </div>
         </div>
 
-        <div className={settingsPanelClass("space-y-4")}>
+        <div className={settingsPanelClass("space-y-3")}>
           <div className="flex items-center gap-2">
             <Bell className="h-5 w-5 text-[var(--accent)]" />
             <h2 className="text-base font-semibold text-[var(--text)]">通知</h2>
           </div>
 
-          <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+          <label className="flex items-center justify-between gap-3 border-t border-[var(--border)] px-1 py-2">
             <span className="text-sm text-[var(--text)]">聊天完成网页通知</span>
             <input
               aria-label="聊天完成网页通知"
@@ -586,11 +590,18 @@ export function SettingsScreen({
           </div>
         </div>
 
+        <LanguageServicesPanel
+          botAlias={botAlias}
+          client={client}
+          canManage={canManageLanguageServices}
+          onCatalogChanged={onLanguageServerCatalogChanged}
+        />
+
         {overview ? (
           showBotRuntimeSettings ? (
             <section
               aria-labelledby={isMainBot ? "main-bot-ops-title" : "bot-runtime-title"}
-              className={settingsPanelClass("space-y-4 text-sm text-[var(--muted)]")}
+              className={settingsPanelClass("space-y-3 text-sm text-[var(--muted)]")}
             >
               <div className="space-y-1">
                 <h2
@@ -638,7 +649,7 @@ export function SettingsScreen({
                 </button>
               ) : null}
 
-              <div className="space-y-3 border-t border-[var(--border)] pt-4">
+              <div className="space-y-3 border-t border-[var(--border)] pt-3">
                 <h3 className="font-medium text-[var(--text)]">运行配置</h3>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <label className="space-y-1">
@@ -761,7 +772,7 @@ export function SettingsScreen({
                 </button>
               </div>
 
-              <div className="space-y-3 border-t border-[var(--border)] pt-4">
+              <div className="space-y-3 border-t border-[var(--border)] pt-3">
                 <div>
                   <label htmlFor="bot-workdir" className="font-medium text-[var(--text)]">工作目录</label>
                 </div>
@@ -851,7 +862,7 @@ export function SettingsScreen({
         <div className={settingsActionPanelClass("divide-y divide-[var(--workbench-hairline)]")}>
           <button
             onClick={() => setShowKillConfirm(true)}
-            className="w-full flex items-center justify-between p-4 hover:bg-[var(--workbench-hover-bg)] active:bg-[var(--workbench-active-bg)] text-[var(--danger)]"
+            className="flex w-full items-center justify-between px-3 py-2.5 text-[var(--danger)] hover:bg-[var(--workbench-hover-bg)] active:bg-[var(--workbench-active-bg)]"
           >
             <span className="flex items-center gap-3">
               <Square className="w-5 h-5" />
@@ -861,7 +872,7 @@ export function SettingsScreen({
           {embedded ? null : (
             <button
               onClick={onLogout}
-              className="w-full flex items-center justify-between p-4 hover:bg-[var(--workbench-hover-bg)] active:bg-[var(--workbench-active-bg)]"
+              className="flex w-full items-center justify-between px-3 py-2.5 hover:bg-[var(--workbench-hover-bg)] active:bg-[var(--workbench-active-bg)]"
             >
               <span className="flex items-center gap-3">
                 <LogOut className="w-5 h-5" />
@@ -874,7 +885,7 @@ export function SettingsScreen({
 
       {pendingWorkdirConflict ? (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-backdrop-50)] p-4"
           role="dialog"
           aria-modal="true"
           aria-labelledby="workdir-reset-title"
@@ -916,7 +927,7 @@ export function SettingsScreen({
       ) : null}
 
       {showKillConfirm ? (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+        <div className="fixed inset-0 bg-[var(--overlay-backdrop-50)] flex items-center justify-center p-4 z-50">
           <div className="bg-[var(--surface)] rounded-2xl p-6 max-w-sm w-full shadow-[var(--shadow-card)]">
             <div className="flex items-center gap-3 text-[var(--danger)] mb-4">
               <AlertTriangle className="w-6 h-6" />

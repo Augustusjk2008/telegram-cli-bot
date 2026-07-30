@@ -17,9 +17,9 @@ export function SurfacePanel({
     <section
       {...props}
       className={clsx(
-        "min-w-0 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] shadow-[var(--shadow-soft)]",
+        "min-w-0 overflow-hidden rounded-[var(--radius-panel)] border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] shadow-[var(--shadow-surface)]",
         elevated ? "bg-[var(--workbench-panel-elevated-bg)]" : "",
-        padded ? "p-4" : "",
+        padded ? "p-3" : "",
         className,
       )}
     >

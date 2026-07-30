@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="copperStroke" x1="50" y1="38" x2="207" y2="208" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F3E5D4"/>
+      <stop offset=".5" stop-color="#D88955"/>
+      <stop offset="1" stop-color="#A692D7"/>
+    </linearGradient>
+    <linearGradient id="copperFace" x1="99" y1="84" x2="158" y2="149" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F3E5D4" stop-opacity=".32"/>
+      <stop offset=".55" stop-color="#D88955" stop-opacity=".18"/>
+      <stop offset="1" stop-color="#A692D7" stop-opacity=".1"/>
+    </linearGradient>
+  </defs>
+  <g stroke-linecap="round" stroke-linejoin="round">
+    <path d="M128 42 190 78v71l-62 36-62-36V78z" fill="#130C0E" fill-opacity=".18" stroke="url(#copperStroke)" stroke-width="7"/>
+    <path d="M128 42v-19" stroke="url(#copperStroke)" stroke-width="7"/>
+    <path d="M72 150 47 172" stroke="url(#copperStroke)" stroke-width="7"/>
+    <path d="M184 150 209 172" stroke="url(#copperStroke)" stroke-width="7"/>
+    <circle cx="128" cy="20" r="10" fill="#130C0E" stroke="url(#copperStroke)" stroke-width="6"/>
+    <circle cx="44" cy="175" r="10" fill="#130C0E" stroke="url(#copperStroke)" stroke-width="6"/>
+    <circle cx="212" cy="175" r="10" fill="#130C0E" stroke="url(#copperStroke)" stroke-width="6"/>
+    <path d="m128 76 31 18v36l-31 18-31-18V94z" fill="url(#copperFace)" stroke="url(#copperStroke)" stroke-width="6"/>
+    <path d="m97 94 31 18 31-18" stroke="#F3E5D4" stroke-width="4" opacity=".62"/>
+    <path d="M128 112v36" stroke="#E6A36F" stroke-width="4" opacity=".65"/>
+    <path d="M66 78 128 114 190 78" stroke="#E9B589" stroke-width="3" opacity=".28"/>
+    <path d="M78 145 128 174 178 145" stroke="#C9B5E8" stroke-width="3" opacity=".24"/>
+    <circle cx="128" cy="112" r="4" fill="#FFFFFF"/>
+  </g>
+</svg>

@@ -1,4 +1,32 @@
+import type { LanguageServerProviderId } from "../services/types";
+
 type EditorExtension = unknown;
+
+export function inferFileEditorLanguageId(path: string) {
+  const normalized = path.toLowerCase();
+  if (/\.(py|pyi)$/.test(normalized)) return "python";
+  if (/\.tsx$/.test(normalized)) return "typescriptreact";
+  if (/\.(ts|mts|cts)$/.test(normalized)) return "typescript";
+  if (/\.jsx$/.test(normalized)) return "javascriptreact";
+  if (/\.(js|mjs|cjs)$/.test(normalized)) return "javascript";
+  if (/\.json$/.test(normalized)) return "json";
+  if (/\.(md|markdown)$/.test(normalized)) return "markdown";
+  if (/\.(html|htm)$/.test(normalized)) return "html";
+  if (/\.css$/.test(normalized)) return "css";
+  if (/\.(v|vh|sv|svh)$/.test(normalized)) return "verilog";
+  if (/\.(c|cc|cp|cpp|cxx|h|hh|hpp|hxx)$/.test(normalized)) return "cpp";
+  return "";
+}
+
+export function inferLanguageServerProviderId(path: string): LanguageServerProviderId | null {
+  const languageId = inferFileEditorLanguageId(path);
+  if (languageId === "python") return "pyright";
+  if (languageId === "typescript" || languageId === "typescriptreact" || languageId === "javascript" || languageId === "javascriptreact") {
+    return "typescript";
+  }
+  if (languageId === "cpp") return "clangd";
+  return null;
+}
 
 export async function loadFileEditorExtensions(path: string): Promise<EditorExtension[]> {
   const normalizedPath = path.toLowerCase();
@@ -8,9 +36,12 @@ export async function loadFileEditorExtensions(path: string): Promise<EditorExte
     return [markdown()];
   }
 
-  if (/\.(js|jsx|mjs|cjs|ts|tsx)$/.test(normalizedPath)) {
+  if (/\.(js|jsx|mjs|cjs|ts|tsx|mts|cts)$/.test(normalizedPath)) {
     const { javascript } = await import("@codemirror/lang-javascript");
-    return [javascript({ jsx: /(\.jsx|\.tsx)$/.test(normalizedPath), typescript: /(\.ts|\.tsx)$/.test(normalizedPath) })];
+    return [javascript({
+      jsx: /\.(jsx|tsx)$/.test(normalizedPath),
+      typescript: /\.(ts|tsx|mts|cts)$/.test(normalizedPath),
+    })];
   }
 
   if (/\.json$/.test(normalizedPath)) {

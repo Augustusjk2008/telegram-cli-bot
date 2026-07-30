@@ -4147,5 +4147,298 @@ describe("RealWebBotClient", () => {
     expect(status.pendingUpdatePath).toBe("C:\\pkg\\offline.zip");
   });
 
+  test("code navigation serializes the unified request and maps semantic locations", async () => {
+    fetchMock.mockResolvedValueOnce(jsonOk({
+      request_id: "nav-1",
+      message: "",
+      items: [{
+        target_type: "workspace",
+        path: "pkg/service.py",
+        provider: "python-ast",
+        range: {
+          start: { line: 3, column: 1 },
+          end: { line: 4, column: 16 },
+        },
+        selection_range: {
+          start: { line: 3, column: 5 },
+          end: { line: 3, column: 10 },
+        },
+      }],
+    }));
+    const client = new RealWebBotClient();
+    const request = {
+      kind: "definition" as const,
+      requestId: "nav-1",
+      document: {
+        path: "main.py",
+        languageId: "python",
+        version: 4,
+        content: "greet()\n",
+      },
+      position: { line: 1, column: 2 },
+    };
+
+    const result = await client.resolveCodeNavigation("main", request);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/bots/main/workspace/code-navigation/resolve",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify(request),
+      }),
+    );
+    expect(result).toEqual({
+      requestId: "nav-1",
+      message: "",
+      items: [{
+        targetType: "workspace",
+        path: "pkg/service.py",
+        provider: "python-ast",
+        range: {
+          start: { line: 3, column: 1 },
+          end: { line: 4, column: 16 },
+        },
+        selectionRange: {
+          start: { line: 3, column: 5 },
+          end: { line: 3, column: 10 },
+        },
+      }],
+    });
+  });
+
+  test("language server catalog maps discovery status and uses separated public/admin routes", async () => {
+    const payload = {
+      enabled: true,
+      platform: "windows-x64",
+      can_refresh: true,
+      providers: [
+        {
+          provider: "pyright",
+          status: "missing",
+          source: null,
+          version: "",
+          command_summary: "pyright-langserver",
+          can_install: true,
+          can_update: false,
+          message: "未发现可用命令；可由管理员安装受支持的托管版本",
+          error: "",
+        },
+        {
+          provider: "typescript",
+          status: "available",
+          source: "path",
+          version: "5.8.3",
+          command_summary: "typescript-language-server",
+          can_install: false,
+          can_update: false,
+          message: "使用 PATH 中的命令",
+          error: "",
+        },
+        {
+          provider: "clangd",
+          status: "installing",
+          source: "managed",
+          version: "17.0.6",
+          command_summary: "clangd",
+          can_install: false,
+          can_update: true,
+          message: "正在安装或更新托管版本",
+          error: "",
+        },
+      ],
+    };
+    fetchMock
+      .mockResolvedValueOnce(jsonOk(payload))
+      .mockResolvedValueOnce(jsonOk(payload))
+      .mockResolvedValueOnce(jsonOk({
+        installation: { provider: "pyright", status: "installed", update: true },
+        ...payload,
+      }));
+
+    const client = new RealWebBotClient();
+    const catalog = await client.getLanguageServerCatalog("main");
+    await client.refreshLanguageServerCatalog();
+    const installedCatalog = await client.installLanguageServer("pyright", { update: true });
+
+    expect(catalog).toEqual({
+      canRefresh: true,
+      providers: [
+        {
+          provider: "pyright",
+          status: "missing",
+          source: null,
+          version: "",
+          commandSummary: "pyright-langserver",
+          canInstall: true,
+          canUpdate: false,
+          message: "未发现可用命令；可由管理员安装受支持的托管版本",
+          error: "",
+        },
+        {
+          provider: "typescript",
+          status: "available",
+          source: "path",
+          version: "5.8.3",
+          commandSummary: "typescript-language-server",
+          canInstall: false,
+          canUpdate: false,
+          message: "使用 PATH 中的命令",
+          error: "",
+        },
+        {
+          provider: "clangd",
+          status: "installing",
+          source: "managed",
+          version: "17.0.6",
+          commandSummary: "clangd",
+          canInstall: false,
+          canUpdate: true,
+          message: "正在安装或更新托管版本",
+          error: "",
+        },
+      ],
+    });
+    expect(installedCatalog).toEqual(catalog);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/bots/main/workspace/language-servers",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/admin/language-servers/redetect",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/admin/language-servers/pyright/update",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+  });
+
+  test("language server catalog supplies a recoverable message for an error status without details", async () => {
+    fetchMock.mockResolvedValue(jsonOk({
+      providers: [{
+        id: "pyright",
+        status: "error",
+        source: "path",
+        version: "1.0.0",
+        commandSummary: "pyright-langserver",
+        canInstall: true,
+      }],
+    }));
+
+    const client = new RealWebBotClient();
+    const catalog = await client.getLanguageServerCatalog("main");
+
+    expect(catalog.providers[0]?.error).toBe("语言服务检测失败，请重新检测");
+  });
+
+  test("Codex 用量客户端读取配置、更新开关并使用重复 provider 参数查询统计", async () => {
+    const provider = {
+      key: "openai_official",
+      kind: "openai_official",
+      label: "OpenAI 官方",
+      base_url: null,
+      resolution: "resolved",
+    };
+    const metrics = {
+      request_count: 42,
+      input_tokens: 1200,
+      cached_input_tokens: 300,
+      uncached_input_tokens: 900,
+      output_tokens: 400,
+      reasoning_output_tokens: 80,
+      total_tokens: 1600,
+      cache_hit_rate: 0.25,
+    };
+    fetchMock
+      .mockResolvedValueOnce(jsonOk({
+        enabled: false,
+        current_provider: provider,
+        time_basis: { mode: "server_local", utc_offset: "+08:00", today: "2026-07-26" },
+        available_range: { first_date: "2026-07-20", last_date: "2026-07-26" },
+      }))
+      .mockResolvedValueOnce(jsonOk({
+        enabled: true,
+        current_provider: provider,
+        time_basis: { mode: "server_local", utc_offset: "+08:00", today: "2026-07-26" },
+        available_range: { first_date: "2026-07-20", last_date: "2026-07-26" },
+      }))
+      .mockResolvedValueOnce(jsonOk({
+        range: { start_date: "2026-07-20", end_date: "2026-07-26" },
+        enabled: true,
+        time_basis: { mode: "server_local", utc_offset: "+08:00", today: "2026-07-26" },
+        available_range: { first_date: "2026-07-20", last_date: "2026-07-26" },
+        available_providers: [provider],
+        selected_provider_keys: ["openai_official", "base_url_sha256:abc"],
+        totals: metrics,
+        by_provider: [{ provider, ...metrics }],
+        by_provider_model: [{ provider, model: "unknown", ...metrics }],
+        by_day: [{ date: "2026-07-26", ...metrics }],
+        daily_by_provider: [{ date: "2026-07-26", provider, ...metrics }],
+        daily_by_provider_model: [{ date: "2026-07-26", provider, model: "gpt-5.6-pro", ...metrics }],
+      }));
+
+    const client = new RealWebBotClient() as unknown as {
+      getCodexUsageConfig?: () => Promise<unknown>;
+      updateCodexUsageConfig?: (input: { enabled: boolean }) => Promise<unknown>;
+      getCodexUsageStats?: (query: {
+        startDate?: string;
+        endDate?: string;
+        providerKeys?: string[];
+      }) => Promise<unknown>;
+    };
+
+    expect(typeof client.getCodexUsageConfig).toBe("function");
+    expect(typeof client.updateCodexUsageConfig).toBe("function");
+    expect(typeof client.getCodexUsageStats).toBe("function");
+    if (!client.getCodexUsageConfig || !client.updateCodexUsageConfig || !client.getCodexUsageStats) return;
+
+    await client.getCodexUsageConfig();
+    await client.updateCodexUsageConfig({ enabled: true });
+    const stats = await client.getCodexUsageStats({
+      startDate: "2026-07-20",
+      endDate: "2026-07-26",
+      providerKeys: ["openai_official", "base_url_sha256:abc"],
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/admin/codex-usage/config",
+      expect.objectContaining({ cache: "no-store", credentials: "same-origin" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/admin/codex-usage/config",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ enabled: true }),
+        headers: expect.objectContaining({ "Content-Type": "application/json" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/admin/codex-usage/stats?start_date=2026-07-20&end_date=2026-07-26&provider=openai_official&provider=base_url_sha256%3Aabc",
+      expect.objectContaining({ cache: "no-store", credentials: "same-origin" }),
+    );
+    expect(stats).toMatchObject({
+      totals: {
+        requestCount: 42,
+        totalTokens: 1600,
+        cacheHitRate: 0.25,
+      },
+      selectedProviderKeys: ["openai_official", "base_url_sha256:abc"],
+      byProviderModel: [{ model: "gpt-5.6-sol" }],
+      dailyByProvider: [{
+        date: "2026-07-26",
+        provider: { label: "OpenAI 官方" },
+      }],
+      dailyByProviderModel: [{ model: "gpt-5.6-pro" }],
+    });
+  });
+
   
   });

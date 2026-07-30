@@ -3,10 +3,7 @@ html, body, #root {
   min-height: 100%;
   overflow-x: hidden;
   background-color: var(--bg);
-  background-image:
-    radial-gradient(circle at 12% 12%, var(--bg-glow) 0, transparent 32%),
-    radial-gradient(circle at 88% 0%, var(--bg-glow-strong) 0, transparent 26%),
-    linear-gradient(160deg, var(--bg-top), var(--bg-bottom));
+  background-image: linear-gradient(180deg, var(--bg-top), var(--bg-bottom));
   color: var(--text);
   font-family: var(--font-ui);
   color-scheme: inherit;
@@ -98,7 +95,7 @@ select:disabled {
 }
 
 :where(button, [role="button"], a, input, textarea, select):focus-visible {
-  outline: 2px solid var(--accent-outline);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -116,6 +113,13 @@ select:disabled {
 }
 
 :root[data-theme="high-contrast"] :where(.backdrop-blur, [class*="backdrop-blur"]) {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+:root[data-theme="lunar-ceramic"] :where(.backdrop-blur, [class*="backdrop-blur"]),
+:root[data-theme="copper-night"] :where(.backdrop-blur, [class*="backdrop-blur"]),
+:root[data-theme="eclipse-film"] :where(.backdrop-blur, [class*="backdrop-blur"]) {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }
@@ -143,7 +147,7 @@ select:disabled {
 }
 
 :where(.shadow-sm) {
-  box-shadow: var(--shadow-soft);
+  box-shadow: var(--shadow-surface);
 }
 
 :where(.shadow-2xl) {
@@ -152,6 +156,38 @@ select:disabled {
 
 :where(.shadow-\[var\(--shadow-card\)\]) {
   box-shadow: var(--shadow-card);
+}
+
+:root[data-theme="high-contrast"] :where(.shadow-sm) {
+  box-shadow: var(--shadow-soft);
+}
+
+[data-ui-density="compact"] :where(.p-4) {
+  padding: var(--space-4);
+}
+
+[data-ui-density="compact"] :where(.px-4) {
+  padding-inline: var(--space-4);
+}
+
+[data-ui-density="compact"] :where(.py-4) {
+  padding-block: var(--space-4);
+}
+
+[data-ui-density="compact"] :where(.pt-4) {
+  padding-top: var(--space-4);
+}
+
+[data-ui-density="compact"] :where(.pb-4) {
+  padding-bottom: var(--space-4);
+}
+
+[data-ui-density="compact"] :where(.gap-4) {
+  gap: var(--space-4);
+}
+
+[data-ui-density="compact"] :where(section.rounded-xl, article.rounded-xl, section.rounded-2xl, article.rounded-2xl) {
+  border-radius: var(--radius-panel);
 }
 
 @media (hover: none) and (pointer: coarse) {
@@ -165,6 +201,10 @@ select:disabled {
 }
 
 .app-logo-image {
+  display: none;
+}
+
+.app-logo-image--deep {
   display: block;
 }
 
@@ -174,14 +214,32 @@ select:disabled {
 
 :root[data-theme="classic"] .app-logo-image--deep,
 :root[data-theme="lab-light"] .app-logo-image--deep,
-:root[data-theme="ink-paper"] .app-logo-image--deep {
+:root[data-theme="ink-paper"] .app-logo-image--deep,
+:root[data-theme="lunar-ceramic"] .app-logo-image--deep,
+:root[data-theme="copper-night"] .app-logo-image--deep,
+:root[data-theme="eclipse-film"] .app-logo-image--deep {
   display: none;
 }
 
 :root[data-theme="classic"] .app-logo-image--classic,
 :root[data-theme="lab-light"] .app-logo-image--classic,
-:root[data-theme="ink-paper"] .app-logo-image--classic {
+:root[data-theme="ink-paper"] .app-logo-image--classic,
+:root[data-theme="lunar-ceramic"] .app-logo-image--classic {
   display: block;
+}
+
+:root[data-theme="copper-night"] .app-logo-image--copper {
+  display: block;
+  filter: drop-shadow(0 0 10px rgba(216, 137, 85, 0.2));
+}
+
+:root[data-theme="eclipse-film"] .app-logo-image--eclipsedark {
+  display: block;
+  filter: none;
+}
+
+:root[data-theme="lunar-ceramic"] .app-logo-image--classic {
+  filter: drop-shadow(0 2px 3px rgba(45, 48, 54, 0.16));
 }
 
 .app-logo-mark {

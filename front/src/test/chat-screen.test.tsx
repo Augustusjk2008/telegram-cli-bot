@@ -5,7 +5,7 @@ import { ChatScreen } from "../screens/ChatScreen";
 import { EventType } from "../services/agUiProtocol";
 import { ChatStreamIncompleteError } from "../services/chatStreamError";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { BotOverview, ChatMessage, ChatTraceDetails, CliParamsPayload, ClusterTaskStatus, ConversationBulkDeleteResult, ConversationDeleteResult, ConversationListResult, ConversationSelectResult, FavoriteAnswerItem, GitActionResult, GitDiffPayload, GitOverview, PromptPreset } from "../services/types";
+import type { BotOverview, ChatMessage, ChatStatusUpdate, ChatTraceDetails, CliParamsPayload, ClusterTaskStatus, ConversationBulkDeleteResult, ConversationDeleteResult, ConversationListResult, ConversationSelectResult, FavoriteAnswerItem, GitActionResult, GitDiffPayload, GitOverview, PromptPreset } from "../services/types";
 import { WebApiClientError } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { createChatHistoryFixture } from "./fixtures/performance";
@@ -966,6 +966,169 @@ test("keeps the scroll position after dragging the scrollbar away from the botto
   expect(scrollTop).toBe(500);
 });
 
+test("keeps resize auto-scroll inside the chat container", async () => {
+  class TestResizeObserver {
+    static instances: TestResizeObserver[] = [];
+    target: Element | null = null;
+
+    constructor(readonly callback: ResizeObserverCallback) {
+      TestResizeObserver.instances.push(this);
+    }
+
+    observe(target: Element) {
+      this.target = target;
+    }
+
+    disconnect() {
+      this.target = null;
+    }
+
+    unobserve() {}
+  }
+
+  vi.stubGlobal("ResizeObserver", TestResizeObserver);
+  vi.stubGlobal("requestAnimationFrame", vi.fn(() => 1));
+  render(<ChatScreen botAlias="main" client={createClient()} />);
+  await screen.findByText("暂无消息，开始聊天吧");
+
+  const container = screen.getByTestId("chat-scroll-container");
+  const content = screen.getByTestId("chat-scroll-content");
+  let scrollTop = 0;
+  Object.defineProperties(container, {
+    clientHeight: { configurable: true, get: () => 100 },
+    scrollHeight: { configurable: true, get: () => 1_000 },
+    scrollTop: {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => { scrollTop = value; },
+    },
+  });
+  const bottomAnchor = content.lastElementChild as HTMLElement;
+  const scrollIntoView = vi.fn();
+  bottomAnchor.scrollIntoView = scrollIntoView;
+
+  const contentObserver = await waitFor(() => {
+    const observer = TestResizeObserver.instances.find((instance) => instance.target === content);
+    if (!observer) {
+      throw new Error("chat content ResizeObserver is not attached yet");
+    }
+    return observer;
+  });
+  act(() => {
+    contentObserver.callback(
+      [{ target: content, contentRect: { height: 1_000 } } as unknown as ResizeObserverEntry],
+      contentObserver as unknown as ResizeObserver,
+    );
+  });
+
+  expect(scrollTop).toBe(1_000);
+  expect(scrollIntoView).not.toHaveBeenCalled();
+});
+
+test("pauses inspected trace auto-scroll until the user returns to the bottom", async () => {
+  class TestResizeObserver {
+    static instances: TestResizeObserver[] = [];
+    target: Element | null = null;
+
+    constructor(readonly callback: ResizeObserverCallback) {
+      TestResizeObserver.instances.push(this);
+    }
+
+    observe(target: Element) {
+      this.target = target;
+    }
+
+    disconnect() {
+      this.target = null;
+    }
+
+    unobserve() {}
+  }
+
+  const getMessageTrace = vi.fn(async (): Promise<ChatTraceDetails> => ({
+    trace: [{
+      id: "trace-inspected-1",
+      kind: "commentary",
+      summary: "过程详情已更新",
+    }],
+    traceCount: 1,
+    toolCallCount: 0,
+    processCount: 1,
+  }));
+  const client = createClient({
+    listMessages: async (): Promise<ChatMessage[]> => [{
+      id: "assistant-inspected-trace",
+      role: "assistant",
+      text: "最终答复",
+      createdAt: new Date().toISOString(),
+      state: "done",
+      meta: {
+        traceCount: 1,
+        processCount: 1,
+      },
+    }],
+    getMessageTrace,
+  });
+
+  vi.stubGlobal("ResizeObserver", TestResizeObserver);
+  vi.stubGlobal("requestAnimationFrame", vi.fn(() => 1));
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  const container = screen.getByTestId("chat-scroll-container");
+  const content = screen.getByTestId("chat-scroll-content");
+  let scrollHeight = 1_000;
+  let scrollTop = 900;
+  Object.defineProperties(container, {
+    clientHeight: { configurable: true, get: () => 100 },
+    scrollHeight: { configurable: true, get: () => scrollHeight },
+    scrollTop: {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => { scrollTop = value; },
+    },
+  });
+
+  await userEvent.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
+  await waitFor(() => expect(getMessageTrace).toHaveBeenCalledWith("main", "assistant-inspected-trace"));
+  scrollTop = 900;
+  scrollHeight = 1_200;
+
+  const contentObserver = TestResizeObserver.instances.find((observer) => observer.target === content);
+  expect(contentObserver).toBeDefined();
+  act(() => {
+    contentObserver?.callback(
+      [{ target: content, contentRect: { height: scrollHeight } } as unknown as ResizeObserverEntry],
+      contentObserver as unknown as ResizeObserver,
+    );
+  });
+
+  expect(scrollTop).toBe(900);
+
+  scrollTop = 1_100;
+  fireEvent.scroll(container);
+  scrollHeight = 1_400;
+  act(() => {
+    contentObserver.callback(
+      [{ target: content, contentRect: { height: scrollHeight } } as unknown as ResizeObserverEntry],
+      contentObserver as unknown as ResizeObserver,
+    );
+  });
+  expect(scrollTop).toBe(1_100);
+
+  fireEvent.wheel(container, { deltaY: 120 });
+  scrollTop = 1_300;
+  fireEvent.scroll(container);
+  scrollHeight = 1_600;
+  act(() => {
+    contentObserver.callback(
+      [{ target: content, contentRect: { height: scrollHeight } } as unknown as ResizeObserverEntry],
+      contentObserver as unknown as ResizeObserver,
+    );
+  });
+  expect(scrollTop).toBe(1_600);
+});
+
 test("shows final answer actions for failed assistant messages", async () => {
   const user = userEvent.setup();
   const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async () => ({
@@ -1372,10 +1535,120 @@ test("renders live cli trace as transcript after final message", async () => {
 
   const transcript = await screen.findByTestId("native-agent-transcript");
   expect(within(transcript).getByText("最终答复")).toBeInTheDocument();
+  expect(getMessageTrace).not.toHaveBeenCalled();
+  await user.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
   await waitFor(() => expect(getMessageTrace).toHaveBeenCalledWith("main", "assistant-cli-final"));
+  const liveEventGroup = within(transcript).getByTestId("native-agent-event-group");
+  await user.click(liveEventGroup.querySelector("summary") as HTMLElement);
   expect(await within(transcript).findByText("shell_command")).toBeInTheDocument();
   expect(within(transcript).getAllByText("Exit code: 0").length).toBeGreaterThan(0);
   expect(within(transcript).getAllByText("我先检查目录。").length).toBeGreaterThan(0);
+});
+
+test("keeps an expanded streaming trace mounted until the final message resets it", async () => {
+  const user = userEvent.setup();
+  let emitStatus: ((status: ChatStatusUpdate) => void) | undefined;
+  let resolveFinal!: (message: ChatMessage) => void;
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias,
+    _text,
+    _onChunk,
+    onStatus,
+    onTrace,
+  ) => {
+    emitStatus = onStatus;
+    onTrace?.({
+      kind: "tool_call",
+      summary: "Get-ChildItem",
+      source: "codex",
+      toolName: "shell_command",
+      callId: "call-streaming-expanded",
+      payload: { arguments: "Get-ChildItem" },
+    });
+    onTrace?.({
+      kind: "tool_result",
+      summary: "Exit code: 0",
+      source: "codex",
+      callId: "call-streaming-expanded",
+      payload: { output: "Exit code: 0" },
+    });
+    return new Promise<ChatMessage>((resolve) => {
+      resolveFinal = resolve;
+    });
+  });
+  const client = createClient({
+    sendMessage,
+    listMessageDelta: async () => ({
+      items: [],
+      deletedIds: [],
+      revision: 0,
+      hasMore: false,
+      reset: false,
+    }),
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
+  await user.type(screen.getByPlaceholderText("输入消息"), "检查目录");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  const liveTranscript = await screen.findByTestId("native-agent-transcript");
+  const liveGroup = within(liveTranscript).getByTestId("native-agent-event-group") as HTMLDetailsElement;
+  const scrollContainer = screen.getByTestId("chat-scroll-container");
+  let scrollHeight = 1_200;
+  let scrollTop = 700;
+  Object.defineProperties(scrollContainer, {
+    clientHeight: { configurable: true, get: () => 100 },
+    scrollHeight: { configurable: true, get: () => scrollHeight },
+    scrollTop: {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => { scrollTop = value; },
+    },
+  });
+  const liveMessage = liveTranscript.closest<HTMLElement>("[data-message-id]");
+  const liveMessageKey = liveMessage?.dataset.messageKey;
+  expect(liveMessageKey).toMatch(/^render\|assistant-/);
+  await user.click(liveGroup.querySelector("summary") as HTMLElement);
+  expect(liveGroup.open).toBe(true);
+  scrollTop = 700;
+
+  expect(emitStatus).toBeTypeOf("function");
+  act(() => {
+    emitStatus!({
+      assistantMessageId: "assistant-streaming-server",
+      replaceText: "正在检查目录",
+    });
+  });
+
+  await waitFor(() => {
+    const currentGroup = screen.getByTestId("native-agent-event-group") as HTMLDetailsElement;
+    const currentMessage = currentGroup.closest<HTMLElement>("[data-message-id]");
+    expect(currentMessage).toHaveAttribute("data-message-id", "assistant-streaming-server");
+    expect(currentMessage).toHaveAttribute("data-message-key", liveMessageKey);
+    expect(currentGroup.open).toBe(true);
+    expect(currentGroup).toBe(liveGroup);
+  });
+  expect(scrollTop).toBe(700);
+
+  scrollHeight = 1_600;
+  await act(async () => {
+    resolveFinal({
+      id: "assistant-streaming-server",
+      role: "assistant",
+      text: "检查完成",
+      createdAt: new Date().toISOString(),
+      state: "done",
+      meta: { traceCount: 2, toolCallCount: 1, processCount: 0 },
+    });
+  });
+
+  await waitFor(() => {
+    const completedGroup = screen.getByTestId("native-agent-event-group") as HTMLDetailsElement;
+    expect(completedGroup.open).toBe(false);
+    expect(completedGroup).not.toBe(liveGroup);
+    expect(scrollTop).toBe(1_600);
+  });
 });
 
 test("keeps live cli trace when done omits trace payload", async () => {
@@ -2184,7 +2457,7 @@ test("native agent @mention sends cluster options", async () => {
 
 
 
-test("auto-loads trace details and groups tool call/result into transcript", async () => {
+test("loads history trace details only after the transcript is expanded", async () => {
   const getMessageTrace = vi.fn(async () => ({
     trace: [
       {
@@ -2253,10 +2526,18 @@ test("auto-loads trace details and groups tool call/result into transcript", asy
   render(<ChatScreen botAlias="main" client={client} />);
 
   expect(await screen.findByText("目录已读取完成。")).toBeInTheDocument();
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(getMessageTrace).not.toHaveBeenCalled();
+  expect(within(transcript).getByRole("button", { name: "展开过程详情" })).toBeInTheDocument();
+  expect(transcript.textContent).toContain("3 条过程 · 1 次工具");
+  expect(transcript.textContent).not.toContain("Get-Content -Path todo.txt");
+
+  await userEvent.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
   await waitFor(() => expect(getMessageTrace).toHaveBeenCalledWith("main", "assistant-1"));
 
-  const transcript = await screen.findByTestId("native-agent-transcript");
   expect(await within(transcript).findByText("我先检查目录结构。")).toBeInTheDocument();
+  const historyEventGroup = within(transcript).getByTestId("native-agent-event-group");
+  await userEvent.click(historyEventGroup.querySelector("summary") as HTMLElement);
   expect(within(transcript).getByText("Get-Content -Path todo.txt")).toBeInTheDocument();
   expect(transcript.textContent).toContain("Exit code: 1");
   expect(transcript.textContent).toContain("Wall time: 1.3 seconds");
@@ -2321,7 +2602,7 @@ test("native permission trace can be approved from flat transcript", async () =>
   expect(await screen.findByText("原生 agent 权限已允许")).toBeInTheDocument();
 });
 
-test("native history auto-loads flat trace details", async () => {
+test("native history loads flat trace details after expansion", async () => {
   const getMessageTrace = vi.fn(async () => ({
     trace: [
       {
@@ -2376,12 +2657,16 @@ test("native history auto-loads flat trace details", async () => {
   render(<ChatScreen botAlias="main" client={client} />);
 
   const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(getMessageTrace).not.toHaveBeenCalled();
+  expect(within(transcript).getByRole("button", { name: "展开过程详情" })).toBeInTheDocument();
+  await userEvent.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
   await waitFor(() => expect(getMessageTrace).toHaveBeenCalledWith("main", "assistant-native-history"));
   expect(await within(transcript).findByText("我先检查目录结构。")).toBeInTheDocument();
   const eventGroup = within(transcript).getByTestId("native-agent-event-group");
   expect(eventGroup.textContent).toContain("过程 1");
   expect(eventGroup.textContent).toContain("2 条事件 · 1 次工具");
   expect(eventGroup.textContent).not.toContain("我先检查目录结构。");
+  await userEvent.click(eventGroup.querySelector("summary") as HTMLElement);
   expect(eventGroup.textContent).toContain("shell_command");
   expect(eventGroup.textContent).toContain("Exit code: 0");
   expect(within(transcript).getAllByText("shell_command").length).toBeGreaterThan(0);
@@ -2390,7 +2675,7 @@ test("native history auto-loads flat trace details", async () => {
   expect(screen.queryByRole("button", { name: "展开过程详情" })).not.toBeInTheDocument();
 });
 
-test("native history folds duplicate tool results and keeps commentary in trace order", async () => {
+test("native history loads duplicate-folded trace after expansion", async () => {
   const getMessageTrace = vi.fn(async () => ({
     trace: [
       {
@@ -2453,7 +2738,11 @@ test("native history folds duplicate tool results and keeps commentary in trace 
   render(<ChatScreen botAlias="main" client={client} />);
 
   const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(getMessageTrace).not.toHaveBeenCalled();
+  await userEvent.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
   await waitFor(() => expect(getMessageTrace).toHaveBeenCalledWith("main", "assistant-native-history"));
+  const eventGroup = within(transcript).getByTestId("native-agent-event-group");
+  await userEvent.click(eventGroup.querySelector("summary") as HTMLElement);
   const firstVisibleRow = transcript.firstElementChild as HTMLElement | null;
   expect(firstVisibleRow?.textContent).toContain("Get-ChildItem");
   expect(within(transcript).queryByText("partial")).not.toBeInTheDocument();
@@ -2461,7 +2750,7 @@ test("native history folds duplicate tool results and keeps commentary in trace 
   expect(within(transcript).getAllByText("final").length).toBeGreaterThan(0);
 });
 
-test("native history trace auto-load does not retry immediately after failure", async () => {
+test("native history trace does not load until expanded and does not retry immediately after failure", async () => {
   const getMessageTrace = vi.fn(async () => {
     throw new Error("trace unavailable");
   });
@@ -2485,7 +2774,9 @@ test("native history trace auto-load does not retry immediately after failure", 
 
   render(<ChatScreen botAlias="main" client={client} />);
 
-  await screen.findByTestId("native-agent-transcript");
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(getMessageTrace).not.toHaveBeenCalled();
+  await userEvent.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
   await waitFor(() => expect(getMessageTrace).toHaveBeenCalledTimes(1));
   await act(async () => {
     await new Promise((resolve) => window.setTimeout(resolve, 20));
@@ -2493,7 +2784,7 @@ test("native history trace auto-load does not retry immediately after failure", 
   expect(getMessageTrace).toHaveBeenCalledTimes(1);
 });
 
-test("non-native history trace auto-load does not retry immediately after failure", async () => {
+test("non-native history trace does not load until expanded and does not retry immediately after failure", async () => {
   const getMessageTrace = vi.fn(async () => {
     throw new Error("trace unavailable");
   });
@@ -2518,7 +2809,9 @@ test("non-native history trace auto-load does not retry immediately after failur
   render(<ChatScreen botAlias="main" client={client} />);
 
   expect(await screen.findByText("最终答复")).toBeInTheDocument();
-  expect(await screen.findByTestId("native-agent-transcript")).toBeInTheDocument();
+  const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(getMessageTrace).not.toHaveBeenCalled();
+  await userEvent.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
   await waitFor(() => expect(getMessageTrace).toHaveBeenCalledTimes(1));
   await act(async () => {
     await new Promise((resolve) => window.setTimeout(resolve, 20));
@@ -2736,11 +3029,12 @@ test("live ag-ui stream renders flat transcript and final result last", async ()
 
   await waitFor(() => expect(sendMessage).toHaveBeenCalled());
   const transcript = await screen.findByTestId("native-agent-transcript");
-  expect(within(transcript).getByText("运行中")).toBeInTheDocument();
-  expect(within(transcript).getByText("检查上下文")).toBeInTheDocument();
   const eventGroup = within(transcript).getByTestId("native-agent-event-group");
   expect(eventGroup.textContent).toContain("过程 1");
   expect(eventGroup.textContent).toContain("4 条事件 · 1 次工具");
+  await user.click(eventGroup.querySelector("summary") as HTMLElement);
+  expect(within(transcript).getByText("运行中")).toBeInTheDocument();
+  expect(within(transcript).getByText("检查上下文")).toBeInTheDocument();
   expect(eventGroup.textContent).toContain("检查上下文");
   expect(eventGroup.textContent).toContain("shell_command");
   expect(eventGroup.textContent).toContain("Exit code: 0");

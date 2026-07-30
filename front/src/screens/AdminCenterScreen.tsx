@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ArrowLeft, Bell, Copy, Eye, EyeOff, Globe, Plus, RefreshCw, RotateCcw, Save, Trash2 } from "lucide-react";
 import { AiInlineCompletionSettingsPanel } from "../components/AiInlineCompletionSettingsPanel";
 import { StateBadge } from "../components/StateBadge";
@@ -36,6 +36,10 @@ import type {
 import type { WebBotClient } from "../services/webBotClient";
 import { getErrorMessage } from "../utils/errorMessage";
 
+const CodexUsagePanel = lazy(() => import("../components/admin/CodexUsagePanel").then((module) => ({
+  default: module.CodexUsagePanel,
+})));
+
 type Props = {
   client?: WebBotClient;
   onClose: () => void;
@@ -49,6 +53,7 @@ type AdminCenterTab =
   | "users"
   | "invites"
   | "cli-errors"
+  | "codex-usage"
   | "updates"
   | "announcements"
   | "network"
@@ -464,6 +469,7 @@ export function AdminCenterScreen({
   const [offlinePackages, setOfflinePackages] = useState<OfflineUpdatePackageList | null>(null);
   const [cliErrorStats, setCliErrorStats] = useState<CliErrorStatsResult | null>(null);
   const [cliErrorHours, setCliErrorHours] = useState(24);
+  const [codexUsagePanelKey, setCodexUsagePanelKey] = useState(0);
   const [announcements, setAnnouncements] = useState<AnnouncementItem[]>([]);
   const [announcementDraft, setAnnouncementDraft] = useState<CreateAnnouncementInput>(DEFAULT_ANNOUNCEMENT_DRAFT);
   const [announcementSaving, setAnnouncementSaving] = useState(false);
@@ -502,6 +508,7 @@ export function AdminCenterScreen({
     users: false,
     invites: false,
     "cli-errors": false,
+    "codex-usage": false,
     updates: false,
     announcements: false,
     network: false,
@@ -531,6 +538,7 @@ export function AdminCenterScreen({
       "users",
       ...(canManageRegisterCodes ? (["invites"] as AdminCenterTab[]) : []),
       "cli-errors",
+      "codex-usage",
       "updates",
       "announcements",
       "network",
@@ -919,6 +927,11 @@ export function AdminCenterScreen({
       await loadInvites(nextNotice, refresh);
     } else if (activeTab === "cli-errors") {
       await loadCliErrorStats(nextNotice, refresh);
+    } else if (activeTab === "codex-usage") {
+      setLoadedTabs((prev) => ({ ...prev, "codex-usage": true }));
+      if (refresh) {
+        setCodexUsagePanelKey((current) => current + 1);
+      }
     } else if (activeTab === "updates") {
       await loadUpdates(nextNotice, refresh);
     } else if (activeTab === "network") {
@@ -1494,9 +1507,9 @@ export function AdminCenterScreen({
   };
 
   return (
-    <main className="min-h-[100dvh] bg-[var(--bg)]">
+    <main data-ui-density="compact" className="min-h-[100dvh] bg-[var(--bg)]">
       <div className="mx-auto flex min-h-[100dvh] max-w-6xl flex-col p-4">
-        <header className="mb-6 flex flex-wrap items-start justify-between gap-3 rounded-2xl border border-[var(--border)] bg-[var(--surface)] px-4 py-4">
+        <header className="mb-3 flex flex-wrap items-start justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-3">
           <div className="space-y-1">
             <h1 className="text-2xl font-bold text-[var(--text)]">管理中心</h1>
             <p className="text-sm text-[var(--muted)]">用户权限、邀请码和升级入口集中到这里。</p>
@@ -1511,7 +1524,7 @@ export function AdminCenterScreen({
           </button>
         </header>
 
-        <div className="mb-4 flex flex-wrap items-center gap-2">
+        <div role="tablist" aria-label="管理中心功能" className="mb-3 flex flex-wrap items-center gap-1.5">
           {visibleTabs.map((tab) => (
             <button
               key={tab}
@@ -1520,8 +1533,8 @@ export function AdminCenterScreen({
               aria-selected={activeTab === tab}
               onClick={() => setActiveTab(tab)}
               className={activeTab === tab
-                ? "rounded-md px-3 py-2 text-sm tcb-selected-accent"
-                : "rounded-md border border-[var(--border)] px-3 py-2 text-sm"}
+                ? "rounded-md px-2.5 py-1.5 text-sm tcb-selected-accent"
+                : "rounded-md border border-[var(--border)] px-2.5 py-1.5 text-sm"}
             >
               {tab === "users"
                 ? "用户权限"
@@ -1531,6 +1544,8 @@ export function AdminCenterScreen({
                     ? "升级"
                     : tab === "cli-errors"
                       ? "CLI 错误"
+                    : tab === "codex-usage"
+                      ? "Codex 用量"
                     : tab === "announcements"
                       ? "公告"
                     : tab === "network"
@@ -1552,7 +1567,7 @@ export function AdminCenterScreen({
             type="button"
             onClick={() => void refreshActiveTab("", true)}
             disabled={loading || refreshing}
-            className="ml-auto inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+            className="ml-auto inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
           >
             <RefreshCw className="h-4 w-4" />
             {refreshing ? "刷新中..." : "刷新"}
@@ -1560,24 +1575,24 @@ export function AdminCenterScreen({
         </div>
 
         {error ? (
-          <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <div className="mb-3 rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger)]">
             {error}
           </div>
         ) : null}
         {notice ? (
-          <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+          <div className="mb-3 rounded-lg border border-[var(--status-success-border)] bg-[var(--status-success-bg)] px-3 py-2 text-sm text-[var(--status-success)]">
             {notice}
           </div>
         ) : null}
 
         {loading ? (
-          <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-sm text-[var(--muted)]">
+          <section className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 text-sm text-[var(--muted)]">
             加载中...
           </section>
         ) : null}
 
         {!loading && activeTab === "users" ? (
-          <section aria-labelledby="user-permissions-title" className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+          <section aria-labelledby="user-permissions-title" className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h2 id="user-permissions-title" className="text-base font-semibold text-[var(--text)]">用户权限</h2>
@@ -2027,6 +2042,22 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
               </div>
             ) : null}
           </section>
+        ) : null}
+
+        {!loading && activeTab === "codex-usage" ? (
+          loadedTabs["codex-usage"] ? (
+            <Suspense fallback={(
+              <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-sm text-[var(--muted)]">
+                正在加载 Codex 用量面板…
+              </section>
+            )}>
+              <CodexUsagePanel key={codexUsagePanelKey} client={client} refreshKey={codexUsagePanelKey} />
+            </Suspense>
+          ) : (
+            <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-sm text-[var(--muted)]">
+              正在加载 Codex 用量面板…
+            </section>
+          )
         ) : null}
 
         {!loading && activeTab === "inline-completion" ? (

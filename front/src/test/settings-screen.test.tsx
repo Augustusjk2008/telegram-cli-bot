@@ -1,9 +1,11 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
+import { BotCliParamsPanel } from "../components/BotCliParamsPanel";
+import { LanguageServicesPanel } from "../components/LanguageServicesPanel";
 import { SettingsScreen } from "../screens/SettingsScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { BotExecutionConfigInput, BotSummary, DirectoryListing } from "../services/types";
+import type { BotExecutionConfigInput, BotSummary, CliParamsPayload, DirectoryListing, LanguageServerCatalog } from "../services/types";
 import { CHAT_COMPLETION_WEB_NOTIFICATION_KEY } from "../utils/chatNotificationEvents";
 
 afterEach(() => {
@@ -64,6 +66,113 @@ class SettingsRuntimeClient extends MockWebBotClient {
     return super.updateBotExecutionConfig(botAlias, input);
   }
 }
+
+class DeferredLanguageServicesClient extends MockWebBotClient {
+  private resolveRefreshPromise: ((catalog: LanguageServerCatalog) => void) | null = null;
+
+  async refreshLanguageServerCatalog(): Promise<LanguageServerCatalog> {
+    return new Promise<LanguageServerCatalog>((resolve) => {
+      this.resolveRefreshPromise = resolve;
+    });
+  }
+
+  resolveRefresh(catalog: LanguageServerCatalog) {
+    this.resolveRefreshPromise?.(catalog);
+  }
+}
+
+function composerControlledCliPayload(
+  cliType: "codex" | "claude",
+  reasoningKey: "reasoning_effort" | "effort",
+  reasoningValue: string,
+): CliParamsPayload {
+  return {
+    cliType,
+    params: {
+      model: "selected-model",
+      [reasoningKey]: reasoningValue,
+      yolo: true,
+    },
+    defaults: {
+      model: "default-model",
+      [reasoningKey]: "medium",
+      yolo: false,
+    },
+    schema: {
+      model: {
+        type: "string",
+        description: "模型选择",
+        enum: ["selected-model", "default-model"],
+      },
+      [reasoningKey]: {
+        type: "string",
+        description: `${cliType} 推理强度`,
+        enum: ["medium", reasoningValue],
+      },
+      yolo: {
+        type: "boolean",
+        description: "绕过审批和沙箱",
+      },
+    },
+  };
+}
+
+test.each([
+  { cliType: "codex" as const, reasoningKey: "reasoning_effort" as const, reasoningValue: "ultra" },
+  { cliType: "claude" as const, reasoningKey: "effort" as const, reasoningValue: "max" },
+])("CLI settings hide $cliType controls owned by the chat composer", async ({ cliType, reasoningKey, reasoningValue }) => {
+  const client = new MockWebBotClient();
+  const payload = composerControlledCliPayload(cliType, reasoningKey, reasoningValue);
+  vi.spyOn(client, "getCliParams").mockResolvedValue(structuredClone(payload));
+
+  render(<BotCliParamsPanel botAlias="main" client={client} />);
+
+  expect(await screen.findByText("CLI 参数")).toBeInTheDocument();
+  expect(screen.queryByLabelText("模型选择")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText(`${cliType} 推理强度`)).not.toBeInTheDocument();
+  expect(screen.getByLabelText("绕过审批和沙箱")).toBeInTheDocument();
+});
+
+test.each([
+  { cliType: "codex" as const, reasoningKey: "reasoning_effort" as const, reasoningValue: "ultra" },
+  { cliType: "claude" as const, reasoningKey: "effort" as const, reasoningValue: "max" },
+])("resetting $cliType CLI settings preserves chat composer selections", async ({ cliType, reasoningKey, reasoningValue }) => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  let payload = composerControlledCliPayload(cliType, reasoningKey, reasoningValue);
+  vi.spyOn(client, "getCliParams").mockImplementation(async () => structuredClone(payload));
+  vi.spyOn(client, "resetCliParams").mockImplementation(async () => {
+    payload = {
+      ...payload,
+      params: {
+        ...payload.params,
+        model: "default-model",
+        [reasoningKey]: "medium",
+        yolo: false,
+      },
+    };
+    return structuredClone(payload);
+  });
+  vi.spyOn(client, "updateCliParam").mockImplementation(async (_botAlias, key, value) => {
+    payload = {
+      ...payload,
+      params: {
+        ...payload.params,
+        [key]: value,
+      },
+    };
+    return structuredClone(payload);
+  });
+
+  render(<BotCliParamsPanel botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: "恢复默认参数" }));
+
+  await waitFor(() => {
+    expect(payload.params.model).toBe("selected-model");
+    expect(payload.params[reasoningKey]).toBe(reasoningValue);
+  });
+});
 
 
 test("native bots hide cli settings and params", async () => {
@@ -246,4 +355,174 @@ test("settings screen creates child agent", async () => {
     });
   });
   expect(await screen.findByText("agent 已新增")).toBeInTheDocument();
+});
+
+test("settings screen shows language service discovery details and keeps install asynchronous", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const refresh = vi.spyOn(client, "refreshLanguageServerCatalog");
+  const install = vi.spyOn(client, "installLanguageServer");
+
+  render(
+    <SettingsScreen
+      botAlias="main"
+      client={client}
+      onLogout={() => undefined}
+      sessionCapabilities={["admin_ops"]}
+    />,
+  );
+
+  expect(await screen.findByRole("heading", { name: "语言服务" })).toBeInTheDocument();
+  const pyright = screen.getByTestId("language-service-pyright");
+  expect(within(pyright).getByText("Python · Pyright")).toBeInTheDocument();
+  expect(within(pyright).getByText("缺失")).toBeInTheDocument();
+  expect(within(pyright).getByText("未发现")).toBeInTheDocument();
+  expect(within(pyright).getByText("pyright-langserver --stdio")).toBeInTheDocument();
+  expect(within(screen.getByTestId("language-service-typescript")).getByText("PATH")).toBeInTheDocument();
+  expect(within(screen.getByTestId("language-service-clangd")).getByText("错误")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "重新检测语言服务" }));
+  expect(refresh).toHaveBeenCalledTimes(1);
+
+  await user.click(screen.getByRole("button", { name: "安装 Pyright" }));
+  await waitFor(() => {
+    expect(install).toHaveBeenCalledWith("pyright", { update: false });
+  });
+  expect(within(pyright).getByText("托管安装")).toBeInTheDocument();
+  expect(within(pyright).getByText("可用")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "更新 Pyright" })).toBeEnabled();
+});
+
+test("language service panel exposes scoped runtime progress beside discovery status", async () => {
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getLanguageServerCatalog").mockResolvedValue({
+    canRefresh: true,
+    providers: [
+      {
+        provider: "pyright",
+        status: "available",
+        source: "path",
+        version: "1.1.410",
+        commandSummary: "pyright-langserver --stdio",
+        canInstall: false,
+        canUpdate: false,
+        message: "正在启动 Python 语言服务",
+        error: "",
+        runtimeState: "starting",
+        runtimeMessage: "正在启动 Python 语言服务",
+      },
+      {
+        provider: "typescript",
+        status: "available",
+        source: "path",
+        version: "5.8.3",
+        commandSummary: "typescript-language-server --stdio",
+        canInstall: false,
+        canUpdate: false,
+        message: "正在重启 TypeScript 语言服务",
+        error: "",
+        runtimeState: "restarting",
+        runtimeMessage: "正在重启 TypeScript 语言服务",
+      },
+      {
+        provider: "clangd",
+        status: "available",
+        source: "path",
+        version: "17.0.6",
+        commandSummary: "clangd --stdio",
+        canInstall: false,
+        canUpdate: false,
+        message: "连续故障，等待手动重启",
+        error: "",
+        runtimeState: "degraded",
+        runtimeMessage: "连续故障，等待手动重启",
+      },
+    ],
+  });
+
+  render(<LanguageServicesPanel botAlias="main" client={client} canManage={false} />);
+
+  expect(await screen.findByTestId("language-service-runtime-pyright")).toHaveTextContent("启动中");
+  expect(screen.getByTestId("language-service-runtime-typescript")).toHaveTextContent("重启中");
+  expect(screen.getByTestId("language-service-runtime-clangd")).toHaveTextContent("降级");
+  expect(screen.getByTestId("language-service-runtime-typescript")).toHaveAttribute("title", "正在重启 TypeScript 语言服务");
+});
+
+test("settings screen recovers after an admin language service re-detect failure", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const refresh = vi.spyOn(client, "refreshLanguageServerCatalog")
+    .mockRejectedValueOnce(new Error("网络暂不可用"))
+    .mockImplementation(() => MockWebBotClient.prototype.refreshLanguageServerCatalog.call(client));
+
+  render(
+    <SettingsScreen
+      botAlias="main"
+      client={client}
+      onLogout={() => undefined}
+      sessionCapabilities={["admin_ops"]}
+    />,
+  );
+
+  expect(await screen.findByRole("heading", { name: "语言服务" })).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "重新检测语言服务" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("网络暂不可用");
+  expect(screen.getByRole("button", { name: "重新检测语言服务" })).toBeEnabled();
+
+  await user.click(screen.getByRole("button", { name: "重新检测语言服务" }));
+  await waitFor(() => expect(refresh).toHaveBeenCalledTimes(2));
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+test("settings screen hides language service admin actions from non-admin users", async () => {
+  render(
+    <SettingsScreen
+      botAlias="main"
+      client={new MockWebBotClient()}
+      onLogout={() => undefined}
+      sessionCapabilities={["view_file_tree"]}
+    />,
+  );
+
+  expect(await screen.findByRole("heading", { name: "语言服务" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "安装 Pyright" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "重新检测语言服务" })).not.toBeInTheDocument();
+  expect(screen.getAllByText("仅管理员可以安装或更新语言服务。")).toHaveLength(2);
+});
+
+test("language service panel ignores a stale re-detect response after installation", async () => {
+  const user = userEvent.setup();
+  const client = new DeferredLanguageServicesClient();
+  const staleCatalog = await client.getLanguageServerCatalog("main");
+
+  render(<LanguageServicesPanel botAlias="main" client={client} canManage />);
+
+  const pyright = await screen.findByTestId("language-service-pyright");
+  await user.click(screen.getByRole("button", { name: "重新检测语言服务" }));
+  await user.click(screen.getByRole("button", { name: "安装 Pyright" }));
+  await waitFor(() => expect(within(pyright).getByText("可用")).toBeInTheDocument());
+
+  await act(async () => {
+    client.resolveRefresh(staleCatalog);
+    await Promise.resolve();
+  });
+
+  expect(within(pyright).getByText("可用")).toBeInTheDocument();
+});
+
+test("language service panel keeps an admin rejection recoverable", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  await client.loginGuest();
+
+  render(<LanguageServicesPanel botAlias="main" client={client} canManage />);
+
+  const install = await screen.findByRole("button", { name: "安装 Pyright" });
+  await user.click(install);
+  expect(await screen.findByRole("alert")).toHaveTextContent("当前账号没有此操作权限，请联系管理员");
+  expect(install).toBeEnabled();
+
+  await client.login({ username: "alice", password: "test" });
+  await user.click(install);
+  await waitFor(() => expect(screen.getByTestId("language-service-status-pyright")).toHaveTextContent("可用"));
 });

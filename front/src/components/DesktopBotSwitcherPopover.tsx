@@ -204,7 +204,7 @@ export function DesktopBotSwitcherPopover({
 
   return (
     <div className="fixed inset-0 z-50" onKeyDown={handleKeyDown}>
-      <motion.div className="absolute inset-0 bg-black/20" onClick={onClose} {...backdropMotion} />
+      <motion.div className="absolute inset-0 bg-[var(--overlay-backdrop-20)]" onClick={onClose} {...backdropMotion} />
       <motion.div
         role="dialog"
         aria-modal="true"

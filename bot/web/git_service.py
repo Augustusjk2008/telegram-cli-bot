@@ -17,7 +17,7 @@ import weakref
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from bot.cli import (
     build_cli_command,
@@ -30,7 +30,7 @@ from bot.cli_params import CliParamsConfig, coerce_param_value, with_global_extr
 from bot.app_settings import get_git_proxy_config_args
 from bot.git_runtime import apply_git_fsmonitor_disabled_env
 from bot.manager import MultiBotManager
-from bot.platform.processes import build_hidden_process_kwargs, terminate_process_tree_sync
+from bot.platform.processes import attach_process_tree_job, build_hidden_process_kwargs, terminate_process_tree_sync
 from bot.platform.subprocess_streams import close_process_streams
 from .api_common import WebApiError, get_profile_or_raise
 from .git_commit_message import (
@@ -48,6 +48,10 @@ GIT_OVERVIEW_CHANGED_FILES_LIMIT = 2000
 GIT_COMMIT_GRAPH_DEFAULT_LIMIT = 100
 GIT_COMMIT_GRAPH_MAX_LIMIT = 300
 GIT_LOCAL_TIMEOUT_SECONDS = max(0.1, float(os.environ.get("TCB_GIT_LOCAL_TIMEOUT_SECONDS", "10")))
+GIT_INDEX_WRITE_TIMEOUT_SECONDS = max(
+    GIT_LOCAL_TIMEOUT_SECONDS,
+    float(os.environ.get("TCB_GIT_INDEX_WRITE_TIMEOUT_SECONDS", "300")),
+)
 GIT_REMOTE_TIMEOUT_SECONDS = max(1.0, float(os.environ.get("TCB_GIT_REMOTE_TIMEOUT_SECONDS", "300")))
 GIT_STDOUT_MAX_BYTES = max(1024, int(os.environ.get("TCB_GIT_STDOUT_MAX_BYTES", str(2 * 1024 * 1024))))
 GIT_STDERR_MAX_BYTES = max(1024, int(os.environ.get("TCB_GIT_STDERR_MAX_BYTES", str(64 * 1024))))
@@ -58,7 +62,7 @@ _GIT_STATUS_CACHE_TTL_SECONDS = 0.75
 _GIT_STATUS_RETRY_DELAY_SECONDS = 0.15
 _GIT_STATUS_CACHE_LOCK = threading.Lock()
 _GIT_STATUS_CACHE: dict[str, dict[str, Any]] = {}
-_GIT_STATUS_REPO_LOCKS: weakref.WeakValueDictionary[str, threading.Lock] = weakref.WeakValueDictionary()
+_GIT_REPO_LOCKS: weakref.WeakValueDictionary[str, Any] = weakref.WeakValueDictionary()
 _GIT_RECENT_COMMITS_CACHE: dict[tuple[str, int], dict[str, Any]] = {}
 _GIT_DIAGNOSTICS_LOCK = threading.Lock()
 _GIT_DIAGNOSTICS = {
@@ -71,7 +75,29 @@ _GIT_DIAGNOSTICS = {
     "cache_hits": 0,
     "cache_misses": 0,
     "reader_error_count": 0,
+    "stale_index_lock_cleanup_count": 0,
+    "stale_index_lock_cleanup_failure_count": 0,
 }
+_GIT_INDEX_WRITE_COMMANDS = frozenset(
+    {
+        "add",
+        "am",
+        "apply",
+        "checkout",
+        "cherry-pick",
+        "commit",
+        "merge",
+        "pull",
+        "read-tree",
+        "rebase",
+        "reset",
+        "restore",
+        "rm",
+        "stash",
+        "switch",
+        "update-index",
+    }
+)
 _GIT_TRANSIENT_INDEX_ERROR_RE = re.compile(
     r"(index file open failed|Permission denied|unable to create .*index\.lock|File exists)",
     re.IGNORECASE,
@@ -94,6 +120,7 @@ class _GitCommandProfile:
 
 
 _GIT_LOCAL_PROFILE = _GitCommandProfile(GIT_LOCAL_TIMEOUT_SECONDS)
+_GIT_INDEX_WRITE_PROFILE = _GitCommandProfile(GIT_INDEX_WRITE_TIMEOUT_SECONDS)
 _GIT_REMOTE_PROFILE = _GitCommandProfile(GIT_REMOTE_TIMEOUT_SECONDS)
 _GIT_UNTRACKED_PROFILE = _GitCommandProfile(
     GIT_UNTRACKED_TIMEOUT_SECONDS,
@@ -109,7 +136,7 @@ def git_service_diagnostics() -> dict[str, int]:
             {
                 "status_cache_entries": len(_GIT_STATUS_CACHE),
                 "recent_commits_cache_entries": len(_GIT_RECENT_COMMITS_CACHE),
-                "repo_lock_entries": len(_GIT_STATUS_REPO_LOCKS),
+                "repo_lock_entries": len(_GIT_REPO_LOCKS),
             }
         )
     return diagnostics
@@ -128,6 +155,7 @@ def _run_bounded_process(
     env: dict[str, str] | None,
     profile: _GitCommandProfile,
     input_text: str | None = None,
+    on_budget_exceeded: Callable[[], None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     process = subprocess.Popen(
         command,
@@ -138,20 +166,15 @@ def _run_bounded_process(
         stderr=subprocess.PIPE,
         **build_hidden_process_kwargs(),
     )
+    process_job = attach_process_tree_job(process)
     _git_diag_add(active_processes=1, command_count=1)
     buffers = {"stdout": bytearray(), "stderr": bytearray()}
     limits = {"stdout": profile.stdout_max_bytes, "stderr": profile.stderr_max_bytes}
     exceeded = threading.Event()
+    closing = threading.Event()
     exceeded_name = [""]
     deadline = time.monotonic() + profile.timeout_seconds
     termination_thread: threading.Thread | None = None
-
-    def request_termination() -> None:
-        nonlocal termination_thread
-        if termination_thread is not None:
-            return
-        termination_thread = threading.Thread(target=terminate_process_tree_sync, args=(process,), daemon=True)
-        termination_thread.start()
 
     def reader(name: str, stream) -> None:
         try:
@@ -192,41 +215,59 @@ def _run_bounded_process(
     while True:
         if exceeded.is_set():
             budget_reason = f"{exceeded_name[0]}_bytes"
-            request_termination()
             break
         if process.poll() is not None:
             break
         if time.monotonic() >= deadline:
             budget_reason = "timeout"
-            request_termination()
             break
         time.sleep(0.01)
-    cleanup_deadline = time.monotonic() + 0.15
-    try:
-        process.wait(timeout=max(0.0, cleanup_deadline - time.monotonic()))
-    except subprocess.TimeoutExpired:
-        try:
-            process.kill()
-        except OSError:
-            pass
+
+    if budget_reason:
+        if on_budget_exceeded is not None:
+            try:
+                on_budget_exceeded()
+            except Exception:
+                pass
+        if process_job is not None:
+            process_job.terminate()
+        else:
+            termination_thread = threading.Thread(
+                target=terminate_process_tree_sync,
+                args=(process,),
+                daemon=True,
+            )
+            termination_thread.start()
+
+    cleanup_deadline = time.monotonic() + (0.15 if budget_reason else 2.0)
+    if termination_thread is not None and termination_thread.is_alive():
+        termination_thread.join(timeout=max(0.0, cleanup_deadline - time.monotonic()))
+
+    if process.poll() is None:
         try:
             process.wait(timeout=max(0.0, cleanup_deadline - time.monotonic()))
         except subprocess.TimeoutExpired:
-            pass
+            try:
+                process.kill()
+                process.wait(timeout=max(0.0, cleanup_deadline - time.monotonic()))
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+    else:
+        process.wait()
 
-    # Once the child has exited, let stdout/stderr readers consume the final
-    # bytes and observe EOF before closing their streams. This avoids closing
-    # a file object underneath stream.read().
-    for thread in (stdout_thread, stderr_thread, stdin_thread):
-        if thread is not None:
-            thread.join(timeout=max(0.0, cleanup_deadline - time.monotonic()))
+    if process_job is not None:
+        process_job.close()
+    drain_deadline = time.monotonic() + 1.0
+    for thread in (stdout_thread, stderr_thread):
+        thread.join(timeout=max(0.0, drain_deadline - time.monotonic()))
     if not budget_reason and exceeded.is_set():
         budget_reason = f"{exceeded_name[0]}_bytes"
-
+    closing.set()
     close_process_streams(process)
+    close_deadline = time.monotonic() + 0.2
     for thread in (stdout_thread, stderr_thread, stdin_thread):
-        if thread is not None and thread.is_alive():
-            thread.join(timeout=0.01)
+        if thread is not None:
+            thread.join(timeout=max(0.0, close_deadline - time.monotonic()))
     if termination_thread is not None and termination_thread.is_alive():
         termination_thread.join(timeout=0.01)
     stdout = bytes(buffers["stdout"]).decode("utf-8", errors="replace")
@@ -238,7 +279,8 @@ def _run_bounded_process(
         stdout_bytes=len(buffers["stdout"]),
         stderr_bytes=len(buffers["stderr"]),
     )
-    result = subprocess.CompletedProcess(command, process.returncode or 0, stdout, stderr)
+    returncode = process.returncode if isinstance(process.returncode, int) else -1
+    result = subprocess.CompletedProcess(command, returncode, stdout, stderr)
     result.budget_reason = budget_reason  # type: ignore[attr-defined]
     return result
 
@@ -327,6 +369,101 @@ def _build_git_command(args: list[str]) -> list[str]:
     return ["git", "-c", "core.fsmonitor=false", *get_git_proxy_config_args(), *args]
 
 
+def _git_command_name(args: list[str]) -> str:
+    return str(args[0] if args else "").strip().lower()
+
+
+def _git_command_writes_index(args: list[str]) -> bool:
+    return _git_command_name(args) in _GIT_INDEX_WRITE_COMMANDS
+
+
+def _git_command_profile(args: list[str], *, remote: bool) -> _GitCommandProfile:
+    if remote:
+        return _GIT_REMOTE_PROFILE
+    if _git_command_writes_index(args):
+        return _GIT_INDEX_WRITE_PROFILE
+    if _git_command_name(args) == "ls-files":
+        return _GIT_UNTRACKED_PROFILE
+    return _GIT_LOCAL_PROFILE
+
+
+def _git_command_env(args: list[str], env: dict[str, str] | None) -> dict[str, str] | None:
+    if _git_command_name(args) != "status":
+        return env
+    effective_env = os.environ.copy() if env is None else dict(env)
+    effective_env["GIT_OPTIONAL_LOCKS"] = "0"
+    return effective_env
+
+
+def _git_index_lock_path(repo_root: str) -> Path:
+    dot_git = Path(repo_root) / ".git"
+    if dot_git.is_file():
+        try:
+            marker = dot_git.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            marker = ""
+        if marker.lower().startswith("gitdir:"):
+            git_dir = Path(marker.split(":", 1)[1].strip())
+            if not git_dir.is_absolute():
+                git_dir = dot_git.parent / git_dir
+            return git_dir.resolve(strict=False) / "index.lock"
+    return dot_git / "index.lock"
+
+
+def _git_lock_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        stat_result = path.stat()
+    except OSError:
+        return None
+    return int(stat_result.st_dev), int(stat_result.st_ino)
+
+
+def _remove_command_index_lock(path: Path, expected_identity: tuple[int, int] | None) -> None:
+    if expected_identity is None or _git_lock_identity(path) != expected_identity:
+        return
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+    except OSError:
+        _git_diag_add(stale_index_lock_cleanup_failure_count=1)
+    else:
+        _git_diag_add(stale_index_lock_cleanup_count=1)
+
+
+def _run_git_process(
+    repo_root: str,
+    args: list[str],
+    *,
+    env: dict[str, str] | None,
+    remote: bool,
+    input_text: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    writes_index = _git_command_writes_index(args)
+    index_lock_path = _git_index_lock_path(repo_root) if writes_index else None
+    created_lock_identity: tuple[int, int] | None = None
+
+    with _git_repo_lock(repo_root):
+        index_lock_existed = bool(index_lock_path and index_lock_path.exists())
+
+        def capture_created_lock() -> None:
+            nonlocal created_lock_identity
+            if index_lock_path is not None and not index_lock_existed:
+                created_lock_identity = _git_lock_identity(index_lock_path)
+
+        result = _run_bounded_process(
+            _build_git_command(args),
+            cwd=repo_root,
+            input_text=input_text,
+            env=_git_command_env(args, env),
+            profile=_git_command_profile(args, remote=remote),
+            on_budget_exceeded=capture_created_lock if writes_index else None,
+        )
+        if str(getattr(result, "budget_reason", "") or "") and index_lock_path is not None:
+            _remove_command_index_lock(index_lock_path, created_lock_identity)
+        return result
+
+
 def _run_git(
     repo_root: str,
     args: list[str],
@@ -336,17 +473,11 @@ def _run_git(
     remote: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     try:
-        result = _run_bounded_process(
-            _build_git_command(args),
-            cwd=repo_root,
+        result = _run_git_process(
+            repo_root,
+            args,
             env=env,
-            profile=(
-                _GIT_REMOTE_PROFILE
-                if remote
-                else _GIT_UNTRACKED_PROFILE
-                if args and args[0] == "ls-files"
-                else _GIT_LOCAL_PROFILE
-            ),
+            remote=remote,
         )
     except FileNotFoundError as exc:
         _raise(500, "git_not_found", "未找到 git 可执行文件")
@@ -401,12 +532,12 @@ def _run_git_with_input(
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     try:
-        result = _run_bounded_process(
-            _build_git_command(args),
-            cwd=repo_root,
+        result = _run_git_process(
+            repo_root,
+            args,
             input_text=input_text,
             env=None,
-            profile=_GIT_LOCAL_PROFILE,
+            remote=False,
         )
     except FileNotFoundError as exc:
         _raise(500, "git_not_found", "未找到 git 可执行文件")
@@ -780,13 +911,13 @@ def _git_status_cache_key(repo_root: str) -> str:
     return os.path.normcase(os.path.abspath(repo_root))
 
 
-def _git_status_repo_lock(repo_root: str) -> threading.Lock:
+def _git_repo_lock(repo_root: str):
     cache_key = _git_status_cache_key(repo_root)
     with _GIT_STATUS_CACHE_LOCK:
-        lock = _GIT_STATUS_REPO_LOCKS.get(cache_key)
+        lock = _GIT_REPO_LOCKS.get(cache_key)
         if lock is None:
-            lock = threading.Lock()
-            _GIT_STATUS_REPO_LOCKS[cache_key] = lock
+            lock = threading.RLock()
+            _GIT_REPO_LOCKS[cache_key] = lock
         return lock
 
 
@@ -946,7 +1077,7 @@ def _build_repo_status_snapshot(repo_root: str) -> dict[str, Any]:
     if cached:
         return cached
 
-    with _git_status_repo_lock(repo_root):
+    with _git_repo_lock(repo_root):
         cached, head_token, index_token = _read_fresh_git_status_cache(repo_root)
         if cached:
             return cached

@@ -30,12 +30,12 @@ type Props = {
 };
 
 const groupClassName = "inline-flex shrink-0 items-center gap-1";
-const neutralButtonClassName = toolbarButtonClass("ghost", "sm", "h-8 rounded-md border-transparent bg-transparent px-2.5 text-[var(--muted)]");
+const neutralButtonClassName = toolbarButtonClass("ghost", "sm", "h-8 rounded-md border-transparent bg-transparent px-2 text-[var(--muted)]");
 const iconButtonClassName = toolbarButtonClass("ghost", "icon", "h-8 w-8 rounded-md border-transparent bg-transparent");
-const activeClusterButtonClassName = "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-[var(--accent-outline)] bg-[var(--accent-soft)] px-2.5 text-xs font-medium text-[var(--accent)] transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:opacity-60";
-const activePlanButtonClassName = "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-[var(--accent-outline)] bg-[var(--workbench-active-bg)] px-2.5 text-xs font-medium text-[var(--accent)] transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:opacity-60";
-const segmentedButtonClassName = "inline-flex h-8 shrink-0 items-center rounded-md border border-transparent px-2.5 text-xs font-medium text-[var(--muted)] transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:opacity-60";
-const activeSegmentedButtonClassName = "inline-flex h-8 shrink-0 items-center rounded-md border border-[var(--accent-outline)] bg-[var(--workbench-active-bg)] px-2.5 text-xs font-medium text-[var(--accent)] transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:opacity-60";
+const activeClusterButtonClassName = "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-[var(--accent-outline)] bg-[var(--accent-soft)] px-2 text-xs font-medium text-[var(--accent)] transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:opacity-60";
+const activePlanButtonClassName = "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-[var(--accent-outline)] bg-[var(--workbench-active-bg)] px-2 text-xs font-medium text-[var(--accent)] transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:opacity-60";
+const segmentedButtonClassName = "inline-flex h-8 shrink-0 items-center rounded-md border border-transparent px-2 text-xs font-medium text-[var(--muted)] transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:opacity-60";
+const activeSegmentedButtonClassName = "inline-flex h-8 shrink-0 items-center rounded-md border border-[var(--accent-outline)] bg-[var(--workbench-active-bg)] px-2 text-xs font-medium text-[var(--accent)] transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:opacity-60";
 
 export function ChatActionBar({
   executionMode,
@@ -63,10 +63,10 @@ export function ChatActionBar({
   killTaskBusy = false,
 }: Props) {
   return (
-    <section className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-3 py-2">
+    <section className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2 py-1.5">
       <div
         data-testid="chat-action-bar"
-        className="flex max-w-full gap-2 overflow-x-auto"
+        className="flex max-w-full gap-1.5 overflow-x-auto"
       >
         {supportedExecutionModes.length > 1 ? (
           <div className={groupClassName} role="group" aria-label="执行模式">

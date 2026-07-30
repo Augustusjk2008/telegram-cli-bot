@@ -11,6 +11,18 @@ function byteSize(value: string) {
   return new Blob([value]).size;
 }
 
+function isExternalSourceTabPath(path: string) {
+  return path.startsWith("external-source:");
+}
+
+function isFilePreviewTabPath(path: string) {
+  return path.startsWith("file-preview:");
+}
+
+function isTransientTabPath(path: string) {
+  return isExternalSourceTabPath(path) || isFilePreviewTabPath(path);
+}
+
 function normalizeTab(raw: unknown): PersistedWorkbenchTab | null {
   if (!raw || typeof raw !== "object") {
     return null;
@@ -18,11 +30,15 @@ function normalizeTab(raw: unknown): PersistedWorkbenchTab | null {
 
   const candidate = raw as Record<string, unknown>;
   const path = typeof candidate.path === "string" ? candidate.path.trim() : "";
-  if (!path) {
+  if (!path || isTransientTabPath(path)) {
     return null;
   }
 
   const dirty = candidate.dirty === true;
+  const rawDocumentVersion = Number(candidate.documentVersion);
+  const documentVersion = Number.isFinite(rawDocumentVersion) && rawDocumentVersion >= 1
+    ? Math.max(1, Math.trunc(rawDocumentVersion))
+    : undefined;
   const savedContent = typeof candidate.savedContent === "string" ? candidate.savedContent : undefined;
   const draftContent = typeof candidate.draftContent === "string" ? candidate.draftContent : undefined;
   const encoding = typeof candidate.encoding === "string" ? candidate.encoding : undefined;
@@ -43,6 +59,7 @@ function normalizeTab(raw: unknown): PersistedWorkbenchTab | null {
   return {
     path,
     dirty,
+    documentVersion,
     lastModifiedNs: typeof candidate.lastModifiedNs === "string" ? candidate.lastModifiedNs : undefined,
     encoding,
     savedContent: normalizedPersistence === "clean_snapshot" ? savedContent : undefined,
@@ -59,8 +76,10 @@ export function buildWorkbenchSessionStorageKey(botAlias: string, workspaceRoot:
 
 export function selectTabsForPersistence(
   tabs: Array<{
+    kind?: string;
     path: string;
     dirty: boolean;
+    documentVersion?: number;
     savedContent: string;
     draftContent?: string;
     lastModifiedNs?: string;
@@ -71,6 +90,9 @@ export function selectTabsForPersistence(
   let totalBytes = 0;
 
   for (const tab of tabs) {
+    if (tab.kind === "external-source" || tab.kind === "file-preview" || isTransientTabPath(tab.path)) {
+      continue;
+    }
     const draftContent = tab.dirty ? tab.draftContent ?? tab.savedContent : undefined;
     const savedContent = !tab.dirty ? tab.savedContent : undefined;
     const nextSize = byteSize(draftContent ?? savedContent ?? "");
@@ -80,6 +102,7 @@ export function selectTabsForPersistence(
     const persisted: PersistedWorkbenchTab = {
       path: tab.path,
       dirty: tab.dirty,
+      documentVersion: tab.documentVersion,
       lastModifiedNs: tab.lastModifiedNs,
       encoding: tab.encoding,
       savedContent: undefined,
@@ -116,6 +139,7 @@ export function normalizePersistedWorkbenchSession(raw: unknown): PersistedWorkb
   const botAlias = typeof candidate.botAlias === "string" ? candidate.botAlias.trim() : "";
   const workspaceRoot = typeof candidate.workspaceRoot === "string" ? candidate.workspaceRoot.trim() : "";
   const sidebarView = isDesktopSidebarView(candidate.sidebarView) ? candidate.sidebarView : "files";
+  const activeTabPath = typeof candidate.activeTabPath === "string" ? candidate.activeTabPath.trim() : "";
   if (!botAlias || !workspaceRoot) {
     return null;
   }
@@ -131,7 +155,7 @@ export function normalizePersistedWorkbenchSession(raw: unknown): PersistedWorkb
     selectedTreePath: typeof candidate.selectedTreePath === "string"
       ? candidate.selectedTreePath.trim()
       : undefined,
-    activeTabPath: typeof candidate.activeTabPath === "string" ? candidate.activeTabPath : "",
+    activeTabPath: isTransientTabPath(activeTabPath) ? "" : activeTabPath,
     terminalOverrideCwd: typeof candidate.terminalOverrideCwd === "string" ? candidate.terminalOverrideCwd : undefined,
     focusedPane:
       candidate.focusedPane === "sidebar"

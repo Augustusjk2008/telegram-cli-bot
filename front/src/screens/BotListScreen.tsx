@@ -53,7 +53,7 @@ function DeleteBotDialog({
 }) {
   const workspaceConfirmMatched = workspaceConfirmText.trim() === DELETE_WORKSPACE_CONFIRM_TEXT;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-backdrop-50)] p-4">
       <div
         role="dialog"
         aria-modal="true"
@@ -241,24 +241,24 @@ export function BotListScreen({
   const nativeAgentOptionVisible = nativeAgentFeatureEnabled !== false || createDraft.runtimeBackend === "native_agent";
 
   return (
-    <main className="flex-1 overflow-y-auto bg-[var(--bg)] p-4">
-      <header className="mb-6">
+    <main data-ui-density="compact" className="flex-1 overflow-y-auto bg-[var(--bg)] p-4">
+      <header className="mb-3">
         <h1 className="text-2xl font-bold">智能体管理</h1>
       </header>
 
       {error ? (
-        <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <div className="mb-3 rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger)]">
           {error}
         </div>
       ) : null}
       {notice ? (
-        <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+        <div className="mb-3 rounded-lg border border-[var(--status-success-border)] bg-[var(--status-success-bg)] px-3 py-2 text-sm text-[var(--status-success)]">
           {notice}
         </div>
       ) : null}
 
       {canManage ? (
-        <section className="mb-6 space-y-4 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
+        <section className="mb-4 space-y-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
         <h2 className="text-lg font-semibold">新增智能体</h2>
         <div className="space-y-3">
           <input

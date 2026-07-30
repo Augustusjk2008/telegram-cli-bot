@@ -72,6 +72,7 @@ import { extractPlanDraft, stripPlanDraftTags } from "../utils/planDraft";
 import { EventType, type AgUiEvent } from "../services/agUiProtocol";
 import {
   buildAgUiMessageMeta,
+  createAgUiRunAccumulator,
   type AgUiRunState,
   type NativeAgentPermissionReply,
 } from "../utils/agUiRunReducer";
@@ -778,6 +779,10 @@ function getRenderedAttachmentStateKey(messageId: string, savedPath: string) {
 }
 
 function getMessageClientStateKey(item: ChatMessage) {
+  const renderKey = item.meta?.renderKey || "";
+  if (item.state === "streaming" && renderKey) {
+    return `render|${renderKey}`;
+  }
   const provider = item.meta?.nativeSource?.provider || "";
   const sessionId = item.meta?.nativeSource?.sessionId || "";
   if (item.role === "assistant" && (provider || sessionId) && item.createdAt) {
@@ -1194,6 +1199,8 @@ function applyChatStreamEvents(
       const nextMeta = mergeMessageMeta(
         item.meta,
         buildLiveAgUiMessageMeta(event.state, event.nativeAgent),
+        undefined,
+        { traceMode: "replace" },
       );
       const completionState = nextMeta?.completionState || "";
       return {
@@ -1203,7 +1210,7 @@ function applyChatStreamEvents(
           ? "error"
           : (event.state.completed ? "done" : "streaming"),
         meta: event.state.contextUsage
-          ? mergeMessageMeta(nextMeta, { contextUsage: event.state.contextUsage })
+          ? { ...nextMeta, contextUsage: event.state.contextUsage }
           : nextMeta,
       };
     });
@@ -1337,7 +1344,7 @@ function ClusterTaskPanel({ status, agents }: { status: ClusterTaskStatus; agent
   }
   const agentNameMap = new Map(agents.map((agent) => [agent.id, agent.name || agent.id]));
   return (
-    <section className="rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-3 text-sm text-[var(--text)] shadow-[var(--shadow-soft)]">
+    <section className="rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-3 py-2 text-sm text-[var(--text)] shadow-[var(--shadow-surface)]">
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium">智能体集群任务</span>
         {status.pendingCount > 0 ? (
@@ -1380,6 +1387,8 @@ type ChatMessageRowProps = {
   item: ChatMessage;
   assistantName: string;
   allowTrace: boolean;
+  traceLoadState: Record<string, { loading: boolean; error?: string }>;
+  onLoadMessageTrace: (messageId: string) => void;
   deletedAttachmentKeys: Record<string, boolean>;
   deletingAttachmentKeys: Record<string, boolean>;
   onDeleteAttachment: (messageId: string, savedPath: string) => void;
@@ -1400,6 +1409,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
   item,
   assistantName,
   allowTrace,
+  traceLoadState,
+  onLoadMessageTrace,
   deletedAttachmentKeys,
   deletingAttachmentKeys,
   onDeleteAttachment,
@@ -1440,6 +1451,11 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const isAssistant = item.role === "assistant";
   const isNativeAgentAssistant = isAssistant && isNativeAgentMessage(item.meta);
   const traceCount = typeof item.meta?.traceCount === "number" ? item.meta.traceCount : trace?.length ?? 0;
+  const messageTraceLoadState = traceLoadState[messageClientStateKey];
+  const traceLoadedCount = typeof item.meta?.traceLoadedCount === "number"
+    ? item.meta.traceLoadedCount
+    : trace?.length ?? 0;
+  const traceLoaded = traceCount <= 0 || traceLoadedCount >= traceCount;
   const hasTrace = allowTrace && isAssistant && traceCount > 0;
   const hasCliTraceTranscript = hasTrace && !isNativeAgentAssistant && !agUiRunState && item.meta?.tracePresentation !== "generic";
   const hasTranscript = isAssistant && (isNativeAgentAssistant || hasCliTraceTranscript);
@@ -1489,12 +1505,12 @@ const ChatMessageRow = memo(function ChatMessageRow({
               : [
                   "chat-message-bubble-delight",
                   isUser && isCurrentUserMessage
-                    ? "rounded-lg bg-[var(--accent)] px-4 py-2 text-[var(--accent-foreground)] shadow-[var(--shadow-soft)]"
+                    ? "rounded-lg bg-[var(--accent)] px-3 py-1.5 text-[var(--accent-foreground)] shadow-[var(--shadow-surface)]"
                     : isStreamingAssistant
-                      ? "min-w-0 overflow-hidden rounded-lg border border-[var(--accent)]/45 bg-[var(--workbench-panel-elevated-bg)] px-4 py-3 text-[var(--text)] shadow-[var(--shadow-soft)]"
+                      ? "min-w-0 overflow-hidden rounded-lg border border-[var(--accent)]/45 bg-[var(--workbench-panel-elevated-bg)] px-3 py-2 text-[var(--text)] shadow-[var(--shadow-surface)]"
                     : item.state === "error"
-                      ? "rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-red-700 shadow-[var(--shadow-soft)]"
-                      : "min-w-0 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-3 text-[var(--text)] shadow-[var(--shadow-soft)]",
+                      ? "rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-[var(--status-danger)] shadow-[var(--shadow-surface)]"
+                      : "min-w-0 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-3 py-2 text-[var(--text)] shadow-[var(--shadow-surface)]",
                 ].join(" ")}
           >
             {hasTranscript ? (
@@ -1503,6 +1519,13 @@ const ChatMessageRow = memo(function ChatMessageRow({
                 resultText={item.text}
                 state={item.state}
                 mode={transcriptMode}
+                traceCount={traceCount}
+                toolCallCount={item.meta?.toolCallCount}
+                processCount={item.meta?.processCount}
+                traceLoaded={traceLoaded}
+                isTraceLoading={Boolean(messageTraceLoadState?.loading)}
+                traceLoadError={messageTraceLoadState?.error}
+                onLoadTrace={() => onLoadMessageTrace(item.id)}
                 onReplyPermission={isNativeAgentAssistant ? onReplyNativePermission : undefined}
                 onFileLinkClick={onFileLinkClick}
                 onCopyFinalAnswer={canCopyFinalAnswer ? () => onCopyFinalAnswer(item.text) : undefined}
@@ -1606,6 +1629,8 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
   scrollContainerRef: RefObject<HTMLElement | null>;
   assistantName: string;
   allowTrace: boolean;
+  traceLoadState: Record<string, { loading: boolean; error?: string }>;
+  handleLoadMessageTrace: (messageId: string) => void;
   handleDeleteAttachment: (messageId: string, savedPath: string) => void;
   handleFileLinkClick: (href: string) => void;
   handleCopyFinalAnswer: (text: string) => boolean | void | Promise<boolean | void>;
@@ -1622,6 +1647,8 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
   scrollContainerRef,
   assistantName,
   allowTrace,
+  traceLoadState,
+  handleLoadMessageTrace,
   handleDeleteAttachment,
   handleFileLinkClick,
   handleCopyFinalAnswer,
@@ -1641,6 +1668,8 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
         item={row.item}
         assistantName={assistantName}
         allowTrace={allowTrace}
+        traceLoadState={traceLoadState}
+        onLoadMessageTrace={handleLoadMessageTrace}
         deletedAttachmentKeys={row.deletedAttachmentKeys}
         deletingAttachmentKeys={row.deletingAttachmentKeys}
         onDeleteAttachment={handleDeleteAttachment}
@@ -1678,10 +1707,12 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
     handleDeleteAttachment,
     handleExecutePlan,
     handleFileLinkClick,
+    handleLoadMessageTrace,
     handleReplyNativePermission,
     handleRequestSoloRollback,
     handleToggleFavoriteAnswer,
     planExecuteError,
+    traceLoadState,
     wideMessages,
   ]);
 
@@ -2043,6 +2074,7 @@ export function ChatScreen({
   const revealScrollFrameRef = useRef<number | null>(null);
   const revealScrollAttemptsRef = useRef(0);
   const userScrollIntentRef = useRef(false);
+  const traceInspectionAutoScrollPausedRef = useRef(false);
   const historyUpwardIntentRef = useRef(false);
   const historyRevealPendingRef = useRef(false);
   const historyPrependAnchorRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
@@ -2056,11 +2088,18 @@ export function ChatScreen({
   const activationTargetRef = useRef<{ botAlias: string; client: WebBotClient; storageScope: string } | null>(null);
   const historyRevisionStateRef = useRef(new HistoryRevisionState());
   const agUiBatchStateRef = useRef<AgUiRunState | null>(null);
+  const agUiBatchReducerRef = useRef<ReturnType<typeof createAgUiRunAccumulator> | null>(null);
   const sawAgUiEventRef = useRef(false);
   const pollClusterTasksRef = useRef<() => void>(() => undefined);
   const isSseStreaming = () => streamModeRef.current === "sse";
   const streamBatcher = useChatStreamBatcher(useCallback((events: readonly ChatStreamInputEvent[]) => {
-    const batch = reduceChatStreamBatch(events, agUiBatchStateRef.current);
+    const reducer = agUiBatchReducerRef.current || createAgUiRunAccumulator();
+    agUiBatchReducerRef.current = reducer;
+    const batch = reduceChatStreamBatch(
+      events,
+      agUiBatchStateRef.current,
+      (_state, agUiEvents) => reducer.reduce(agUiEvents),
+    );
     if (batch.sawAgUiEvent) {
       sawAgUiEventRef.current = true;
       agUiBatchStateRef.current = batch.agUiState;
@@ -2083,6 +2122,13 @@ export function ChatScreen({
       assistantSendVersionRef.current,
     ));
   }, []));
+  const releaseAgUiBatchState = useCallback(() => {
+    agUiBatchReducerRef.current?.dispose();
+    agUiBatchReducerRef.current = null;
+    agUiBatchStateRef.current = null;
+    sawAgUiEventRef.current = false;
+  }, []);
+  useEffect(() => releaseAgUiBatchState, [releaseAgUiBatchState]);
 
   const setPlanMode = useCallback((value: boolean | ((current: boolean) => boolean)) => {
     setPlanModeState((current) => {
@@ -2186,6 +2232,14 @@ export function ChatScreen({
       revealScrollFrameRef.current = null;
     }
   }, []);
+
+  const resumeTerminalAutoScroll = useCallback(() => {
+    cancelRevealScroll();
+    traceInspectionAutoScrollPausedRef.current = false;
+    shouldStickToBottomRef.current = true;
+    forceAutoScrollRef.current = true;
+    revealScrollAttemptsRef.current = 0;
+  }, [cancelRevealScroll]);
 
   useEffect(() => () => {
     cancelRevealScroll();
@@ -2299,6 +2353,7 @@ export function ChatScreen({
     overview: BotOverview,
     options: { keepStreamingRowsActive?: boolean } = {},
   ) => {
+    const wasStreaming = isStreamingRef.current;
     const hasStreamingMessage = hasPersistedStreamingAssistant(messages);
     const runtimeActive = Boolean(overview.isProcessing || (options.keepStreamingRowsActive && hasStreamingMessage));
     const nextItems = normalizeInactiveStreamingRows(messages, runtimeActive);
@@ -2313,11 +2368,14 @@ export function ChatScreen({
     if (shouldPoll) {
       setStreamStartedAtMs((prev) => prev ?? resolveStreamStartMs(nextItems));
     } else {
+      if (wasStreaming) {
+        resumeTerminalAutoScroll();
+      }
       setStreamStartedAtMs(null);
     }
 
     return { nextItems, shouldPoll };
-  }, []);
+  }, [resumeTerminalAutoScroll]);
 
   const stopAssistantPoll = useCallback(() => {
     if (assistantPollTimerRef.current !== null) {
@@ -2659,6 +2717,7 @@ export function ChatScreen({
     stopSseRecoveryWatch();
     shouldStickToBottomRef.current = true;
     forceAutoScrollRef.current = true;
+    traceInspectionAutoScrollPausedRef.current = false;
 
     const storedExecutionMode = forcedExecutionMode ?? readStoredExecutionMode(botAlias, storageScope);
     const requestedExecutionMode = forcedExecutionMode ?? storedExecutionMode ?? undefined;
@@ -2830,6 +2889,9 @@ export function ChatScreen({
   const lastItem = items[items.length - 1];
 
   const scrollToBottom = useCallback(() => {
+    if (traceInspectionAutoScrollPausedRef.current) {
+      return;
+    }
     userScrollIntentRef.current = false;
     if (scrollContainerRef.current) {
       try {
@@ -2838,9 +2900,7 @@ export function ChatScreen({
         // Tests may replace scrollTop with a getter-only descriptor; browsers keep this writable.
       }
     }
-    if (bottomAnchorRef.current && typeof bottomAnchorRef.current.scrollIntoView === "function") {
-      bottomAnchorRef.current.scrollIntoView({ block: "end" });
-    }
+    // Keep streaming auto-scroll scoped to the chat container so transcript growth cannot move the outer page.
     userScrollIntentRef.current = false;
   }, []);
 
@@ -2853,7 +2913,7 @@ export function ChatScreen({
   }, []);
 
   const scheduleRevealScroll = useCallback(() => {
-    if (!isVisibleRef.current) {
+    if (!isVisibleRef.current || traceInspectionAutoScrollPausedRef.current) {
       return;
     }
     if (!forceAutoScrollRef.current && !shouldStickToBottomRef.current) {
@@ -2865,7 +2925,7 @@ export function ChatScreen({
 
     revealScrollFrameRef.current = window.requestAnimationFrame(() => {
       revealScrollFrameRef.current = null;
-      if (!isVisibleRef.current || loadingRef.current) {
+      if (!isVisibleRef.current || loadingRef.current || traceInspectionAutoScrollPausedRef.current) {
         return;
       }
       if (!forceAutoScrollRef.current && !shouldStickToBottomRef.current) {
@@ -2891,6 +2951,7 @@ export function ChatScreen({
     }
     shouldStickToBottomRef.current = true;
     forceAutoScrollRef.current = true;
+    traceInspectionAutoScrollPausedRef.current = false;
     revealScrollAttemptsRef.current = 0;
     scheduleRevealScroll();
   }, [cancelRevealScroll, isVisible, scheduleRevealScroll]);
@@ -2916,6 +2977,9 @@ export function ChatScreen({
     }
 
     const observer = new window.ResizeObserver(() => {
+      if (traceInspectionAutoScrollPausedRef.current) {
+        return;
+      }
       if (!forceAutoScrollRef.current && !shouldStickToBottomRef.current) {
         return;
       }
@@ -2936,6 +3000,9 @@ export function ChatScreen({
     const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
     shouldStickToBottomRef.current = distanceFromBottom <= 96;
     if (shouldStickToBottomRef.current) {
+      if (userScrollIntentRef.current) {
+        traceInspectionAutoScrollPausedRef.current = false;
+      }
       userScrollIntentRef.current = false;
       return;
     }
@@ -2945,6 +3012,26 @@ export function ChatScreen({
       cancelRevealScroll();
       userScrollIntentRef.current = false;
     }
+  }
+
+  function handleChatClickCapture(event: ReactMouseEvent<HTMLElement>) {
+    const target = event.target instanceof Element ? event.target : null;
+    const expandTrigger = target?.closest<HTMLElement>("[data-chat-scroll-lock-on-expand='true']");
+    if (!expandTrigger) {
+      return;
+    }
+    const ariaExpanded = expandTrigger.getAttribute("aria-expanded");
+    const details = expandTrigger.closest("details");
+    const willExpand = ariaExpanded === "false" || (ariaExpanded === null && Boolean(details && !details.open));
+    if (!willExpand) {
+      return;
+    }
+    shouldStickToBottomRef.current = false;
+    forceAutoScrollRef.current = false;
+    traceInspectionAutoScrollPausedRef.current = true;
+    userScrollIntentRef.current = false;
+    revealScrollAttemptsRef.current = 0;
+    cancelRevealScroll();
   }
 
   function isAtHistoryTop() {
@@ -3244,31 +3331,6 @@ export function ChatScreen({
       }));
     }
   }, [botAlias, client]);
-
-  useEffect(() => {
-    if (loading) {
-      return;
-    }
-    for (const item of items) {
-      if (item.role !== "assistant") {
-        continue;
-      }
-      const expectedTraceCount = item.meta?.traceCount || 0;
-      const embeddedTraceCount = (item.meta?.trace || []).length;
-      const loadedTraceCount = typeof item.meta?.traceLoadedCount === "number"
-        ? item.meta.traceLoadedCount
-        : Math.min(embeddedTraceCount, expectedTraceCount);
-      if (expectedTraceCount <= 0 || loadedTraceCount >= expectedTraceCount) {
-        continue;
-      }
-      const messageClientStateKey = getMessageClientStateKey(item);
-      if (traceLoadState[messageClientStateKey]?.loading || traceLoadState[messageClientStateKey]?.error) {
-        continue;
-      }
-      void loadMessageTrace(item.id);
-      break;
-    }
-  }, [items, loadMessageTrace, loading, traceLoadState]);
 
   const loadConversations = useCallback(async (query = "") => {
     setConversationLoading(true);
@@ -3848,8 +3910,8 @@ export function ChatScreen({
       createdAt: new Date().toISOString(),
       state: "streaming",
       meta: nativeStreaming
-        ? { tracePresentation: "native_agent_flat" }
-        : undefined,
+        ? { tracePresentation: "native_agent_flat", renderKey: assistantId }
+        : { renderKey: assistantId },
     };
 
     setError("");
@@ -3865,9 +3927,9 @@ export function ChatScreen({
     clusterRunIdRef.current = "";
     forceAutoScrollRef.current = true;
     shouldStickToBottomRef.current = true;
+    traceInspectionAutoScrollPausedRef.current = false;
     streamBatcher.cancel();
-    agUiBatchStateRef.current = null;
-    sawAgUiEventRef.current = false;
+    releaseAgUiBatchState();
     setItems((prev) => [...prev, userMessage, assistantMessage]);
     isStreamingRef.current = true;
     streamModeRef.current = "sse";
@@ -4019,17 +4081,20 @@ export function ChatScreen({
         return;
       }
 
+      const completedAgUiState = sawAgUiEventRef.current
+        ? (agUiBatchReducerRef.current?.snapshot() || agUiBatchStateRef.current)
+        : null;
       const elapsedSeconds = typeof finalMessage.elapsedSeconds === "number"
         ? finalMessage.elapsedSeconds
         : Math.max(0, Math.floor((Date.now() - localStartedAtMs) / 1000));
       const finalizedMessage: ChatMessage = normalizeResolvedFinalMessage({
         ...finalMessage,
         elapsedSeconds,
-        ...(sawAgUiEventRef.current && agUiBatchStateRef.current
+        ...(completedAgUiState
           ? {
               meta: mergeMessageMeta(
                 finalMessage.meta,
-                buildLiveAgUiMessageMeta(agUiBatchStateRef.current, executionModeRef.current === "native_agent"),
+                buildLiveAgUiMessageMeta(completedAgUiState, executionModeRef.current === "native_agent"),
               ),
             }
           : {}),
@@ -4103,6 +4168,7 @@ export function ChatScreen({
       if (sendVersion !== assistantSendVersionRef.current) {
         return;
       }
+      releaseAgUiBatchState();
       stopSseRecoveryWatch();
       sseLastActivityAtRef.current = null;
       setNativePermissionPending(false);
@@ -4113,6 +4179,7 @@ export function ChatScreen({
         setStreamMode("poll");
         scheduleAssistantPoll(0);
       } else {
+        resumeTerminalAutoScroll();
         isStreamingRef.current = false;
         streamModeRef.current = "";
         setIsStreaming(false);
@@ -4122,7 +4189,7 @@ export function ChatScreen({
         void drainQueuedMessageIfIdleRef.current?.({ botAlias: sendBotAlias, agentId: sendAgentId });
       }
     }
-  }, [botAlias, client, markSseActivity, onUnreadResult, pollClusterTasks, scheduleAssistantPoll, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch, streamBatcher]);
+  }, [botAlias, client, markSseActivity, onUnreadResult, pollClusterTasks, releaseAgUiBatchState, resumeTerminalAutoScroll, scheduleAssistantPoll, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch, streamBatcher]);
 
   drainQueuedMessageIfIdleRef.current = async (context) => {
     const targetBotAlias = context?.botAlias || botAlias;
@@ -4612,7 +4679,7 @@ export function ChatScreen({
     }
     return options;
   }, [cliModelCatalogItems, cliModelOptions, cliParams?.modelCatalog?.source, nativeExecutionMode, nativeModelOptions, nativeSelectedModel, selectedModel]);
-  const messageContentWidthClass = embedded ? "mx-auto w-full max-w-5xl space-y-4" : "w-full space-y-4";
+  const messageContentWidthClass = embedded ? "mx-auto w-full max-w-5xl space-y-3" : "w-full space-y-3";
   const composerPlaceholder = chatDisabledReason
     || (clusterMode && activeAgentId === "main" ? "@ 可指定智能体集群" : (showAgentSwitcher ? `发给 ${activeAgent.name}...` : "输入消息"));
   const deletedAttachmentKeysByMessage = useMemo(() => {
@@ -4778,7 +4845,7 @@ export function ChatScreen({
   }
 
   const soloRollbackDialog = soloRollbackTarget ? (
-    <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/35 px-4">
+    <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-[var(--overlay-backdrop-35)] px-4">
       <div role="dialog" aria-modal="true" aria-label="确认撤回" className="w-full max-w-sm rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] p-4 shadow-[var(--shadow-card)]">
         <h2 className="text-sm font-semibold text-[var(--text)]">确认撤回</h2>
         <p className="mt-2 text-sm text-[var(--muted)]">会丢弃该点之后的会话和工作区改动，不可撤销</p>
@@ -4834,13 +4901,14 @@ export function ChatScreen({
         />
       ) : null}
       {chatDisabledReason ? (
-        <section className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900 shadow-[var(--shadow-soft)]">
+        <section className="border-b border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] px-3 py-2 text-sm font-medium text-[var(--status-warning)] shadow-[var(--shadow-surface)]">
           {chatDisabledReason}
         </section>
       ) : null}
       <section
         ref={scrollContainerRef}
         data-testid="chat-scroll-container"
+        onClickCapture={handleChatClickCapture}
         onScroll={handleChatScroll}
         onPointerDown={markUserScrollIntent}
         onPointerUp={clearUserScrollIntent}
@@ -4851,14 +4919,14 @@ export function ChatScreen({
         onTouchEnd={clearUserScrollIntent}
         onTouchCancel={clearUserScrollIntent}
         onKeyDown={handleScrollKeyDown}
-        className={isImmersive ? "flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] px-4 pb-24 pt-4" : "flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] p-4"}
+        className={isImmersive ? "flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] px-3 pb-24 pt-3" : "flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] p-3"}
       >
         <div ref={scrollContentRef} data-testid="chat-scroll-content" className={messageContentWidthClass}>
           {loading ? (
-            <div className="mt-10 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-8 text-center text-sm text-[var(--muted)] shadow-[var(--shadow-soft)]">加载中...</div>
+            <div className="mt-10 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-8 text-center text-sm text-[var(--muted)] shadow-[var(--shadow-surface)]">加载中...</div>
           ) : null}
           {error ? (
-            <div data-testid="chat-error-banner" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-[var(--shadow-soft)]">
+            <div data-testid="chat-error-banner" className="rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger)] shadow-[var(--shadow-surface)]">
               {error}
             </div>
           ) : null}
@@ -4873,6 +4941,8 @@ export function ChatScreen({
             scrollContainerRef={scrollContainerRef}
             assistantName={assistantName}
             allowTrace={allowTrace}
+            traceLoadState={traceLoadState}
+            handleLoadMessageTrace={(messageId) => void loadMessageTrace(messageId)}
             handleDeleteAttachment={handleDeleteAttachment}
             handleFileLinkClick={handleFileLinkClick}
             handleCopyFinalAnswer={handleCopyFinalAnswer}
@@ -4892,7 +4962,7 @@ export function ChatScreen({
             />
           ) : null}
           {clusterTaskError ? (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-[var(--shadow-soft)]">
+            <div className="rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger)] shadow-[var(--shadow-surface)]">
               {clusterTaskError}
             </div>
           ) : null}
@@ -4945,10 +5015,10 @@ export function ChatScreen({
       ) : null}
       <div className="border-t border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)]">
         {chatMutationsDisabled || nativePermissionPending ? (
-          <p className="px-4 pt-3 text-xs font-medium text-amber-700">{chatDisabledReason || "只读模式"}</p>
+          <p className="px-4 pt-3 text-xs font-medium text-[var(--status-warning)]">{chatDisabledReason || "只读模式"}</p>
         ) : null}
         {queuedMessage ? (
-          <div className="mx-3 mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 shadow-[var(--shadow-soft)]">
+          <div className="mx-3 mt-2 rounded-lg border border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] px-3 py-2 text-xs text-[var(--status-warning)] shadow-[var(--shadow-surface)]">
             <div className="font-medium">排队中</div>
             <div className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words">
               {buildComposedMessageText(queuedMessage.text, queuedMessage.attachments)}

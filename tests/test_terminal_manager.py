@@ -252,6 +252,47 @@ async def test_terminal_replay_preserves_stream_and_chunk_sequences():
     ]
 
 
+@pytest.mark.asyncio
+async def test_terminal_create_and_close_are_isolated_by_owner(monkeypatch):
+    import bot.web.terminal_manager as terminal_manager
+
+    class FakeProcess:
+        is_pty = True
+
+    class FakePump:
+        def __init__(self, _process):
+            self._stop_event = asyncio.Event()
+
+        def start(self, _loop):
+            pass
+
+        def stop(self):
+            self._stop_event.set()
+
+        async def read(self):
+            await self._stop_event.wait()
+            return terminal_manager.TERMINAL_OUTPUT_EOF
+
+    monkeypatch.setattr(terminal_manager, "create_shell_process", lambda *_args, **_kwargs: FakeProcess())
+    monkeypatch.setattr(terminal_manager, "_TerminalOutputPump", FakePump)
+    monkeypatch.setattr(terminal_manager, "_cleanup_terminal_process_without_blocking", lambda _process: None)
+
+    manager = terminal_manager.TerminalSessionManager()
+    first = await manager.create(1, "owner-a", cwd="C:/one", shell_type="auto", cols=None, rows=None)
+    second = await manager.create(1, "owner-b", cwd="C:/two", shell_type="auto", cols=None, rows=None)
+
+    assert first["started"] is True
+    assert second["started"] is True
+    closed = await manager.close(1, "owner-a")
+    active = await manager.get_snapshot(1, "owner-b")
+
+    assert closed["closed"] is True
+    assert closed["started"] is False
+    assert active["started"] is True
+    assert active["closed"] is False
+    await manager.shutdown()
+
+
 def test_terminal_v2_binary_header_carries_version_flags_and_sequence():
     from bot.web.terminal_manager import (
         TERMINAL_WS_V2_HEADER,

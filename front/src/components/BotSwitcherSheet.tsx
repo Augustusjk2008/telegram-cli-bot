@@ -31,7 +31,7 @@ export function BotSwitcherSheet({
 }: Props) {
   return (
     <div className="fixed inset-0 z-50 flex flex-col justify-end">
-      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+      <div className="absolute inset-0 bg-[var(--overlay-backdrop-40)]" onClick={onClose} />
       <div
         role="dialog"
         aria-modal="true"

@@ -74,7 +74,7 @@ export function LanChatDock({ client, visible }: Props) {
         <button
           type="button"
           onClick={() => setListOpen(true)}
-          className="fixed bottom-16 right-3 z-40 max-w-80 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-left text-sm shadow-xl"
+          className="fixed bottom-16 right-3 z-40 max-w-80 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-left text-sm shadow-[var(--shadow-float)]"
         >
           {toastText}
         </button>

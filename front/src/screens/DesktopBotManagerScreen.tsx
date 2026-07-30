@@ -889,7 +889,7 @@ function DeleteBotDialog({
 }) {
   const workspaceConfirmMatched = workspaceConfirmText.trim() === DELETE_WORKSPACE_CONFIRM_TEXT;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-backdrop-50)] p-4">
       <div
         role="dialog"
         aria-modal="true"
@@ -1292,9 +1292,10 @@ export function DesktopBotManagerScreen({
   return (
     <main
       data-testid="desktop-bot-manager-screen"
+      data-ui-density="compact"
       className="flex h-[100dvh] min-h-0 flex-col bg-[var(--bg)] text-[var(--text)]"
     >
-      <header className="border-b border-[var(--border)] bg-[var(--surface)] px-4 py-3">
+      <header className="border-b border-[var(--border)] bg-[var(--surface)] px-3 py-2">
         <div className="flex items-center gap-3">
           <h1 className="text-lg font-semibold">智能体管理</h1>
           <div className="flex items-center gap-3 text-xs text-[var(--muted)]">

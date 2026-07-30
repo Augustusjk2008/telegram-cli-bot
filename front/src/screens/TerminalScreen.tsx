@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Maximize2, Minimize2, RefreshCw, X } from "lucide-react";
+import { createPortal } from "react-dom";
+import { Maximize2, Minimize2 } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { createTerminalSession, type TerminalSession } from "../services/terminalSession";
@@ -23,13 +24,13 @@ type Props = {
   botAlias: string;
   client?: WebBotClient;
   isVisible: boolean;
-  preferredWorkingDir: string;
   pendingWorkingDir?: string;
   themeName?: UiThemeName;
   isImmersive?: boolean;
   disabledReason?: string;
   embedded?: boolean;
   focused?: boolean;
+  toolbarHost?: HTMLElement | null;
   onToggleFocus?: () => void;
   onToggleImmersive?: () => void;
   onAcceptPendingWorkingDir?: () => void;
@@ -79,13 +80,13 @@ export function TerminalScreen({
   botAlias,
   client = new MockWebBotClient(),
   isVisible,
-  preferredWorkingDir,
   pendingWorkingDir,
   themeName = DEFAULT_UI_THEME,
   isImmersive = false,
   disabledReason = "",
   embedded = false,
   focused = false,
+  toolbarHost = null,
   onToggleFocus,
   onToggleImmersive,
   onAcceptPendingWorkingDir,
@@ -127,7 +128,6 @@ export function TerminalScreen({
   const visibleActions = actionsConfig?.actions.filter((action) => isTerminalActionVisible(action, runtimePlatform)) ?? [];
   const runningWorkingDir = terminal.snapshot.cwd.trim();
   const stagedWorkingDir = pendingWorkingDir?.trim() || "";
-  const preferredTerminalDir = preferredWorkingDir.trim();
   const resolvedPtyMode = ptyMode ?? terminal.snapshot.ptyMode;
   const hasRunningTerminal = terminal.snapshot.started && !terminal.snapshot.closed;
 
@@ -284,35 +284,6 @@ export function TerminalScreen({
     setPtyMode(null);
   }
 
-  async function rebuildTerminal() {
-    if (terminalDisabled) {
-      return;
-    }
-    const nextWorkingDir = stagedWorkingDir || preferredTerminalDir || runningWorkingDir;
-    if (!nextWorkingDir) {
-      return;
-    }
-    disposeSession();
-    setError("");
-    setFollowing(true);
-    try {
-      await terminal.rebuild(nextWorkingDir);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "重建终端失败");
-      setIsConnected(false);
-    }
-  }
-
-  async function closeTerminal() {
-    if (terminalDisabled) {
-      return;
-    }
-    disposeSession();
-    setError("");
-    setFollowing(true);
-    await terminal.close();
-  }
-
   async function runTerminalAction(action: TerminalAction) {
     if (terminalDisabled) {
       return;
@@ -328,11 +299,17 @@ export function TerminalScreen({
     setRunningActionId(action.id);
     setActionsError("");
     try {
+      const tab = await terminal.createTab({
+        title: action.label,
+        start: false,
+        activate: false,
+      });
       await client.runTerminalAction(botAlias, action.id, {
-        ownerId: terminal.ownerId,
+        ownerId: tab.ownerId,
         confirmed: true,
       });
-      await terminal.refreshSnapshot();
+      await terminal.refreshSnapshot(tab.ownerId);
+      terminal.selectTab(tab.id);
       setFollowing(true);
     } catch (err) {
       setActionsError(err instanceof Error ? err.message : "执行快捷命令失败");
@@ -391,9 +368,11 @@ export function TerminalScreen({
 
     try {
       let session!: TerminalSession;
+      const ownerId = terminal.ownerId;
       session = createTerminalSession(containerRef.current, {
         token: authToken,
-        ownerId: terminal.ownerId,
+        ownerId,
+        previousRecoveryState: terminal.getClientRecoveryState(ownerId),
         fontSize: terminalFontSize,
         themeName,
         onOpen: () => {
@@ -410,6 +389,9 @@ export function TerminalScreen({
         },
         onPtyMode: (enabled) => {
           setPtyMode(enabled);
+        },
+        onRecoveryState: (state) => {
+          terminal.setClientRecoveryState(ownerId, state);
         },
       });
 
@@ -436,7 +418,7 @@ export function TerminalScreen({
     } finally {
       launchPendingRef.current = false;
     }
-  }, [authToken, isVisible, terminal.attachNonce, terminal.ownerId, terminal.snapshot.closed, terminal.snapshot.started, terminalDisabled, terminalFontSize, themeName]);
+  }, [authToken, isVisible, terminal.attachNonce, terminal.getClientRecoveryState, terminal.ownerId, terminal.setClientRecoveryState, terminal.snapshot.closed, terminal.snapshot.started, terminalDisabled, terminalFontSize, themeName]);
 
   useEffect(() => {
     const becameVisible = !previousVisibleRef.current && isVisible;
@@ -527,28 +509,84 @@ export function TerminalScreen({
     : isConnected
       ? "已连接"
       : terminal.snapshot.connectionText || "未启动";
-  const canCloseTerminal = !terminalDisabled && terminal.snapshot.started && !terminal.snapshot.closed;
-  const canRebuildTerminal = !terminalDisabled && Boolean(stagedWorkingDir || preferredTerminalDir || runningWorkingDir);
-
   useEffect(() => {
     onWorkbenchStatusChange?.({
       connected: terminal.snapshot.started && !terminal.snapshot.closed,
       connectionText,
       currentCwd: runningWorkingDir,
-      nextRebuildCwd: stagedWorkingDir,
+      nextTerminalCwd: stagedWorkingDir,
     });
   }, [connectionText, onWorkbenchStatusChange, runningWorkingDir, stagedWorkingDir, terminal.snapshot.closed, terminal.snapshot.started]);
 
+  function openActionsConfig() {
+    setActionsConfigError("");
+    setShowActionsConfig(true);
+  }
+
+  const stagedWorkingDirControls = stagedWorkingDir ? (
+    <div className={embedded
+      ? "flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-3 py-1.5 text-xs"
+      : "mt-2 flex flex-wrap items-center gap-2 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-2.5 py-1.5 text-xs shadow-[var(--shadow-surface)]"}
+    >
+      <span className="font-medium text-[var(--text)]">新终端工作目录</span>
+      <span className="truncate text-[var(--muted)]">{stagedWorkingDir}</span>
+      <button
+        type="button"
+        onClick={onAcceptPendingWorkingDir}
+        disabled={terminalDisabled}
+        className={toolbarButtonClass("plain", "sm", "h-7")}
+      >
+        设为新终端目录
+      </button>
+      <button
+        type="button"
+        onClick={onCancelPendingWorkingDir}
+        disabled={terminalDisabled}
+        className={toolbarButtonClass("ghost", "sm", "h-7")}
+      >
+        取消
+      </button>
+    </div>
+  ) : null;
+
+  const embeddedToolbar = embedded && toolbarHost ? createPortal(
+    <>
+      <TerminalActionsBar
+        actions={[]}
+        runtimePlatform={runtimePlatform}
+        canEdit={Boolean(actionsConfig?.editable) && !terminalDisabled}
+        disabled={terminalDisabled}
+        runningActionId=""
+        onRunAction={() => {}}
+        onOpenConfig={openActionsConfig}
+      />
+      {onToggleFocus ? (
+        <button
+          type="button"
+          aria-label={focused ? "退出聚焦终端" : "聚焦终端"}
+          title={focused ? "退出聚焦终端" : "聚焦终端"}
+          onClick={onToggleFocus}
+          className={toolbarButtonClass("ghost", "icon", "h-8 w-8 border-[var(--workbench-hairline)]")}
+        >
+          {focused ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+        </button>
+      ) : null}
+    </>,
+    toolbarHost,
+  ) : null;
+
   return (
     <main data-testid="terminal-screen-root" className="flex h-full flex-col bg-[var(--workbench-panel-bg)]">
-      <header className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-3 py-2">
+      {embeddedToolbar}
+      {!embedded ? (
+        <header className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-3 py-2">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <h1 className="text-sm font-semibold text-[var(--text)]">{connectionText}</h1>
               {stagedWorkingDir ? (
                 <span className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-1.5 py-0.5 text-[10px] text-[var(--muted)]">
-                  下次重建目录
+                  新终端目录
                 </span>
               ) : null}
               {resolvedPtyMode !== null ? (
@@ -558,7 +596,7 @@ export function TerminalScreen({
               ) : null}
             </div>
             {effectiveError ? (
-              <p className="mt-0.5 text-xs text-red-600">{effectiveError}</p>
+              <p className="mt-0.5 text-xs text-[var(--status-danger)]">{effectiveError}</p>
             ) : null}
           </div>
           <div className="flex shrink-0 items-center gap-2">
@@ -569,68 +607,25 @@ export function TerminalScreen({
               disabled={terminalDisabled}
               runningActionId=""
               onRunAction={() => {}}
-              onOpenConfig={() => {
-                setActionsConfigError("");
-                setShowActionsConfig(true);
-              }}
+              onOpenConfig={openActionsConfig}
             />
-            {embedded && onToggleFocus ? (
-              <button
-                type="button"
-                aria-label={focused ? "退出聚焦终端" : "聚焦终端"}
-                title={focused ? "退出聚焦终端" : "聚焦终端"}
-                onClick={onToggleFocus}
-                className={toolbarButtonClass("ghost", "icon", "h-8 w-8 border-[var(--workbench-hairline)]")}
-              >
-                {focused ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-              </button>
-            ) : null}
-            <button
-              type="button"
-              onClick={closeTerminal}
-              disabled={!canCloseTerminal}
-              className={toolbarButtonClass("plain", "sm", "h-8")}
-            >
-              <X className="h-3.5 w-3.5" />
-              关闭终端
-            </button>
-            <button
-              type="button"
-              onClick={rebuildTerminal}
-              disabled={!canRebuildTerminal}
-              className={toolbarButtonClass("primary", "sm", "h-8")}
-            >
-              <RefreshCw className="h-3.5 w-3.5" />
-              重建终端
-            </button>
           </div>
         </div>
-        {stagedWorkingDir ? (
-          <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-2.5 py-1.5 text-xs shadow-[var(--shadow-soft)]">
-            <span className="font-medium text-[var(--text)]">下次重建目录</span>
-            <span className="truncate text-[var(--muted)]">{stagedWorkingDir}</span>
-            <button
-              type="button"
-              onClick={onAcceptPendingWorkingDir}
-              disabled={terminalDisabled}
-              className={toolbarButtonClass("plain", "sm", "h-7")}
-            >
-              设为下次重建
-            </button>
-            <button
-              type="button"
-              onClick={onCancelPendingWorkingDir}
-              disabled={terminalDisabled}
-              className={toolbarButtonClass("ghost", "sm", "h-7")}
-            >
-              取消
-            </button>
-          </div>
-        ) : null}
-        <div data-testid="terminal-instance-id" className="sr-only">
-          {instanceId}
-        </div>
-      </header>
+        {stagedWorkingDirControls}
+        </header>
+      ) : (
+        <>
+          {effectiveError ? (
+            <div role="alert" className="shrink-0 border-b border-[var(--workbench-hairline)] bg-[var(--status-danger-bg)] px-3 py-1 text-xs text-[var(--status-danger)]">
+              {effectiveError}
+            </div>
+          ) : null}
+          {stagedWorkingDirControls}
+        </>
+      )}
+      <div data-testid="terminal-instance-id" className="sr-only">
+        {instanceId}
+      </div>
 
       <section className="relative flex-1 overflow-hidden border-b border-[var(--workbench-hairline)] bg-[var(--terminal-bg)]">
         {!terminal.snapshot.started || terminal.snapshot.closed ? (

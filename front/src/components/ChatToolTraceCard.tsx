@@ -191,7 +191,7 @@ export function ChatToolTraceCard({ entry }: Props) {
   const label = entry.call ? `工具调用 ${entry.toolIndex}` : "工具返回（未匹配）";
 
   return (
-    <section className="rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-3 py-3 shadow-[var(--shadow-soft)]">
+    <section className="rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-3 py-2 shadow-[var(--shadow-surface)]">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--muted)]">

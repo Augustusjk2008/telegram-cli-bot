@@ -72,13 +72,13 @@ export function MobileShell({
       ));
 
   return (
-    <div className="relative flex h-[100dvh] w-full min-w-0 flex-col overflow-hidden bg-[var(--workbench-shell-bg)] text-[var(--text)] shadow-xl">
+    <div className="relative flex h-[100dvh] w-full min-w-0 flex-col overflow-hidden bg-[var(--workbench-shell-bg)] text-[var(--text)]">
       {!hideOuterChrome ? (
-        <header className="flex min-h-12 shrink-0 items-center justify-between gap-2 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2.5 py-2">
+        <header className="flex min-h-12 shrink-0 items-center justify-between gap-2 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2.5 py-1.5">
           <button
             onClick={onOpenBotSwitcher}
             className={clsx(
-              "relative flex h-8 min-w-0 max-w-[48vw] items-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--surface-glass)] px-2 text-sm font-semibold transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)]",
+              "relative flex h-9 min-w-0 max-w-[48vw] items-center gap-1.5 rounded-md border border-[var(--border)] bg-transparent px-2 text-sm font-semibold transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)]",
               hasUnreadOtherBots ? "pr-5" : "",
             )}
           >
@@ -100,7 +100,7 @@ export function MobileShell({
             <div
               aria-label="视图模式"
               role="group"
-              className="inline-flex h-8 shrink-0 items-center overflow-hidden rounded-md border border-[var(--border)] bg-[var(--surface-glass)] p-0.5"
+              className="inline-flex h-9 shrink-0 items-center overflow-hidden rounded-md border border-[var(--border)] bg-transparent p-0.5"
             >
               <span className="hidden h-7 items-center px-1 text-[var(--muted)] min-[380px]:inline-flex" aria-hidden="true">
                 <MonitorSmartphone className="h-3.5 w-3.5" />
@@ -113,7 +113,7 @@ export function MobileShell({
                   title={label}
                   onClick={() => onViewModeChange(nextMode)}
                   className={clsx(
-                    "h-7 min-w-8 px-1.5 text-[11px] font-medium transition-colors",
+                    "h-8 min-w-8 px-1.5 text-[11px] font-medium transition-colors",
                     viewMode === nextMode
                       ? "tcb-selected-accent"
                       : "text-[var(--text)] hover:bg-[var(--workbench-hover-bg)]",

@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="eclipseStroke" x1="50" y1="38" x2="207" y2="208" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F1EFF4"/>
+      <stop offset=".5" stop-color="#9BCBDD"/>
+      <stop offset="1" stop-color="#C47791"/>
+    </linearGradient>
+    <linearGradient id="eclipseFace" x1="99" y1="84" x2="158" y2="149" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F1EFF4" stop-opacity=".32"/>
+      <stop offset=".55" stop-color="#9BCBDD" stop-opacity=".18"/>
+      <stop offset="1" stop-color="#C47791" stop-opacity=".1"/>
+    </linearGradient>
+  </defs>
+  <g stroke-linecap="round" stroke-linejoin="round">
+    <path d="M128 42 190 78v71l-62 36-62-36V78z" fill="#12131A" fill-opacity=".18" stroke="url(#eclipseStroke)" stroke-width="7"/>
+    <path d="M128 42v-19" stroke="url(#eclipseStroke)" stroke-width="7"/>
+    <path d="M72 150 47 172" stroke="url(#eclipseStroke)" stroke-width="7"/>
+    <path d="M184 150 209 172" stroke="url(#eclipseStroke)" stroke-width="7"/>
+    <circle cx="128" cy="20" r="10" fill="#12131A" stroke="url(#eclipseStroke)" stroke-width="6"/>
+    <circle cx="44" cy="175" r="10" fill="#12131A" stroke="url(#eclipseStroke)" stroke-width="6"/>
+    <circle cx="212" cy="175" r="10" fill="#12131A" stroke="url(#eclipseStroke)" stroke-width="6"/>
+    <path d="m128 76 31 18v36l-31 18-31-18V94z" fill="url(#eclipseFace)" stroke="url(#eclipseStroke)" stroke-width="6"/>
+    <path d="m97 94 31 18 31-18" stroke="#F1EFF4" stroke-width="4" opacity=".62"/>
+    <path d="M128 112v36" stroke="#A9D4E3" stroke-width="4" opacity=".65"/>
+    <path d="M66 78 128 114 190 78" stroke="#B9DCE6" stroke-width="3" opacity=".28"/>
+    <path d="M78 145 128 174 178 145" stroke="#D49BB0" stroke-width="3" opacity=".24"/>
+    <circle cx="128" cy="112" r="4" fill="#FFFFFF"/>
+  </g>
+</svg>

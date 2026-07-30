@@ -105,9 +105,9 @@ export function WorkbenchHeader({
   return (
     <header
       data-testid="desktop-workbench-titlebar"
-      className="workbench-topbar flex min-h-10 items-center justify-between gap-3 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2.5 py-1.5"
+      className="workbench-topbar flex min-h-9 items-center justify-between gap-2 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2 py-1"
     >
-      <div className="flex min-w-0 items-center gap-2.5">
+      <div className="flex min-w-0 items-center gap-2">
         <span className="workbench-topbar-logo flex h-7 w-7 shrink-0 items-center justify-center border border-[var(--border)] bg-[var(--surface-glass)]">
           <AppLogo size={21} decorative />
         </span>
@@ -153,7 +153,7 @@ export function WorkbenchHeader({
           aria-label={`切换 Bot: ${currentBot}`}
           onClick={(event) => onOpenBotSwitcher(event.currentTarget.getBoundingClientRect())}
           className={clsx(
-            "workbench-bot-switch relative inline-flex h-7 max-w-[13rem] items-center gap-1.5 border border-[var(--border)] bg-[var(--surface-glass)] px-2 text-xs font-semibold text-[var(--text)] transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)]",
+            "workbench-bot-switch relative inline-flex h-7 max-w-[13rem] items-center gap-1.5 border border-[var(--border)] bg-transparent px-2 text-xs font-semibold text-[var(--text)] transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)]",
             hasUnreadOtherBots ? "pr-4.5" : "",
           )}
         >
@@ -187,7 +187,7 @@ export function WorkbenchHeader({
           </span>
         ) : null}
       </div>
-      <div className="flex shrink-0 items-center gap-2">
+      <div className="flex shrink-0 items-center gap-1.5">
         {announcementAction ? (
           <div className="flex items-center">{announcementAction}</div>
         ) : null}

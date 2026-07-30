@@ -1,10 +1,19 @@
 import { clsx } from "clsx";
 import { Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import type { ViewMode } from "../app/layoutMode";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { FileReadResult, GitTreeStatus, HostEffect, PluginOpenTarget, WorkspaceDefinitionItem } from "../services/types";
+import { getExternalSourceErrorMessage } from "../services/types";
+import type {
+  CodeLocation,
+  CodeNavigationIntent,
+  CodeNavigationKind,
+  FileReadResult,
+  GitTreeStatus,
+  HostEffect,
+  LanguageServerProviderId,
+  PluginOpenTarget,
+} from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { premiumMotion, resolveMotionProps } from "../motion/premiumMotion";
 import "../styles/workbench.css";
@@ -21,7 +30,9 @@ import {
   shouldAutoLoadFullHtmlPreview,
   withDetectedPreviewKind,
 } from "../utils/filePreview";
+import { getErrorMessage } from "../utils/errorMessage";
 import { WORKSPACE_DELETED_EVENT, isWorkspaceDeletedEvent } from "../utils/workspaceEvents";
+import { inferFileEditorLanguageId } from "../utils/fileEditorLanguage";
 import { ChatPane } from "./ChatPane";
 import { CommandPalette } from "./CommandPalette";
 import { FileTreePane } from "./FileTreePane";
@@ -41,8 +52,13 @@ import {
   LazyTerminalPane as TerminalPane,
 } from "./lazyPanes";
 import { useDebugSession } from "./useDebugSession";
+import {
+  useCodeNavigationHistory,
+  type CodeNavigationHistoryLocation,
+} from "./useCodeNavigationHistory";
 import { useEditorTabs } from "./useEditorTabs";
 import { useFileTree } from "./useFileTree";
+import { useLanguageServerStatus } from "./useLanguageServerStatus";
 import { useWorkbenchSession } from "./useWorkbenchSession";
 import { useWorkbenchState } from "./useWorkbenchState";
 import { toWorkspaceRelativeSourcePath } from "./debugSourcePath";
@@ -52,6 +68,7 @@ import {
   MIN_TERMINAL_HEIGHT_PX,
   PANE_RESIZER_SIZE_PX,
   type ChatWorkbenchStatus,
+  type EditorRevealLocation,
   type FocusedWorkbenchPane,
   type TerminalOverrideState,
   type TerminalWorkbenchStatus,
@@ -73,6 +90,16 @@ function normalizeWorkbenchPath(value: string) {
 function normalizeWorkbenchPathForCompare(value: string) {
   const normalized = normalizeWorkbenchPath(value);
   return /^[a-z]:/i.test(normalized) ? normalized.toLowerCase() : normalized;
+}
+
+function isSameOrDescendantWorkbenchPath(path: string, parentPath: string) {
+  const normalizedPath = normalizeWorkbenchPathForCompare(path);
+  const normalizedParentPath = normalizeWorkbenchPathForCompare(parentPath);
+  return Boolean(
+    normalizedPath
+    && normalizedParentPath
+    && (normalizedPath === normalizedParentPath || normalizedPath.startsWith(`${normalizedParentPath}/`)),
+  );
 }
 
 function resolveRepoRelativeDiffPath(path: string, absolutePath: string, repoPath: string) {
@@ -107,6 +134,16 @@ function formatDownloadProgress(downloadedBytes: number, totalBytes?: number) {
     return `${formatBytes(downloadedBytes)} / ${formatBytes(totalBytes)}`;
   }
   return formatBytes(downloadedBytes);
+}
+
+function filePreviewStatusText(result: FileReadResult) {
+  if (result.previewKind === "image") {
+    return "已加载图片预览";
+  }
+  if (result.previewKind === "html") {
+    return "已加载 HTML 预览";
+  }
+  return isFilePreviewFullyLoaded(result) ? "已加载全文" : "";
 }
 
 type Props = {
@@ -198,30 +235,25 @@ export function DesktopWorkbench({
 }: Props) {
   const { paneState, toggleSidebar, toggleTerminal, toggleChat, setSidebarView, restoreSidebarView, resizePane } = useWorkbenchState();
   const fileTree = useFileTree(botAlias, client, { structureOnly });
-  const tabs = useEditorTabs({ botAlias, client, structureOnly, canWriteFiles });
+  const workspaceUserScope = `${accountId || ""}\n${fileTree.rootPath}`;
+  const codeNavigationScope = `${accountId || ""}\n${botAlias}\n${fileTree.rootPath}`;
+  const tabs = useEditorTabs({ botAlias, client, scopeKey: workspaceUserScope, structureOnly, canWriteFiles });
   const columnsRef = useRef<HTMLDivElement | null>(null);
   const centerRowsRef = useRef<HTMLDivElement | null>(null);
-  const editorPaneRef = useRef<HTMLElement | null>(null);
-  const restoringRef = useRef(false);
+  const restoringRef = useRef<{ scopeIdentity: string; requestSeq: number } | null>(null);
+  const restoreRequestSerialRef = useRef(0);
   const previousBotAliasRef = useRef(botAlias);
   const previousWorkspaceRootRef = useRef("");
   const [layoutBounds, setLayoutBounds] = useState({
     columnsWidthPx: 1440,
     centerHeightPx: 900,
   });
-  const [editorPaneBounds, setEditorPaneBounds] = useState<{
-    left: number;
-    top: number;
-    width: number;
-    height: number;
-  } | null>(null);
   const [pendingSidebarWorkdir, setPendingSidebarWorkdir] = useState("");
-  const [previewName, setPreviewName] = useState("");
-  const [previewContent, setPreviewContent] = useState("");
-  const [previewMode, setPreviewMode] = useState<"preview" | "full">("preview");
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const [previewResult, setPreviewResult] = useState<FileReadResult | null>(null);
-  const previewRequestSeqRef = useRef(0);
+  const previewRequestSeqRef = useRef(new Map<string, number>());
+  const previewRequestSerialRef = useRef(0);
+  const previewScopeIdentity = `${botAlias}\n${workspaceUserScope}`;
+  const previewScopeIdentityRef = useRef(previewScopeIdentity);
+  previewScopeIdentityRef.current = previewScopeIdentity;
   const [focusedPane, setFocusedPane] = useState<FocusedWorkbenchPane>(null);
   const [isResizingPane, setIsResizingPane] = useState(false);
   const [terminalOverride, setTerminalOverride] = useState<TerminalOverrideState | null>(null);
@@ -239,12 +271,119 @@ export function DesktopWorkbench({
   const [gitDecorations, setGitDecorations] = useState<GitTreeStatus["items"]>({});
   const [gitRepoPath, setGitRepoPath] = useState("");
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
-  const [editorReveal, setEditorReveal] = useState<{ path: string; line: number } | null>(null);
-  const [definitionCandidates, setDefinitionCandidates] = useState<WorkspaceDefinitionItem[]>([]);
+  const [editorReveal, setEditorReveal] = useState<EditorRevealLocation | null>(null);
+  const [editorNavigationCommand, setEditorNavigationCommand] = useState<{
+    kind: "definition" | "implementation";
+    requestId: string;
+  } | null>(null);
+  const [definitionCandidates, setDefinitionCandidates] = useState<CodeLocation[]>([]);
   const [definitionMessage, setDefinitionMessage] = useState("");
   const [definitionSource, setDefinitionSource] = useState("");
+  const [languageServerCatalogRevision, setLanguageServerCatalogRevision] = useState(0);
+  const [languageServerRestart, setLanguageServerRestart] = useState<{
+    provider: LanguageServerProviderId | null;
+    pending: boolean;
+    error: string;
+  }>({ provider: null, pending: false, error: "" });
   const gitDecorationRequestRef = useRef(0);
+  const codeNavigationRequestRef = useRef(0);
+  const codeNavigationAbortControllerRef = useRef<AbortController | null>(null);
+  const codeNavigationScopeRef = useRef(codeNavigationScope);
+  const editorRevealRequestRef = useRef(0);
+  const editorNavigationCommandRef = useRef(0);
+  const languageServerRestartRequestRef = useRef(0);
+  const definitionSourceLocationRef = useRef<CodeNavigationHistoryLocation | null>(null);
+  const definitionSourceScopeRef = useRef("");
+  codeNavigationScopeRef.current = codeNavigationScope;
   const reduceMotion = useReducedMotion();
+  const activeLanguageServicePath = tabs.activeTab?.kind === "file" || tabs.activeTab?.kind === "external-source"
+    ? tabs.activeTab.displayPath || tabs.activeTab.path
+    : "";
+  const languageService = useLanguageServerStatus(client, botAlias, activeLanguageServicePath, languageServerCatalogRevision);
+  const canNavigateImplementation = Boolean(
+    allowCodeJump
+    && (tabs.activeTab?.kind === "file" || tabs.activeTab?.kind === "external-source")
+    && languageService.status?.implementationSupported === true,
+  );
+  const refreshLanguageServerCatalogStatus = useCallback(() => {
+    setLanguageServerCatalogRevision((current) => current + 1);
+  }, []);
+  const restartCurrentLanguageService = useCallback(async () => {
+    const provider = languageService.provider;
+    if (!provider || languageService.status?.status !== "available") {
+      return;
+    }
+    const requestId = languageServerRestartRequestRef.current + 1;
+    languageServerRestartRequestRef.current = requestId;
+    setLanguageServerRestart({ provider, pending: true, error: "" });
+    try {
+      await client.restartLanguageServer(botAlias, provider);
+      if (languageServerRestartRequestRef.current !== requestId) {
+        return;
+      }
+      setLanguageServerRestart({ provider, pending: false, error: "" });
+      refreshLanguageServerCatalogStatus();
+    } catch (error) {
+      if (languageServerRestartRequestRef.current !== requestId) {
+        return;
+      }
+      setLanguageServerRestart({
+        provider,
+        pending: false,
+        error: getErrorMessage(error, "重启当前语言服务失败，请稍后重试"),
+      });
+    }
+  }, [botAlias, client, languageService.provider, languageService.status?.status, refreshLanguageServerCatalogStatus]);
+  const isRestartingLanguageService = Boolean(
+    languageService.provider
+    && languageServerRestart.provider === languageService.provider
+    && languageServerRestart.pending,
+  ) || languageService.status?.runtimeState === "restarting";
+  const languageServerRestartError = languageServerRestart.provider === languageService.provider
+    ? languageServerRestart.error
+    : "";
+  const canRestartLanguageService = Boolean(
+    languageService.provider
+    && languageService.status?.status === "available",
+  );
+
+  useEffect(() => {
+    clearDefinitionOverlay();
+    return () => {
+      codeNavigationRequestRef.current += 1;
+      codeNavigationAbortControllerRef.current?.abort();
+      codeNavigationAbortControllerRef.current = null;
+    };
+  }, [client, codeNavigationScope]);
+
+  const codeNavigationHistory = useCodeNavigationHistory({
+    scopeKey: codeNavigationScope,
+    onNavigate: async (location) => {
+      const scope = codeNavigationScopeRef.current;
+      if (location.sourceId) {
+        const opened = await tabs.openExternalSource({
+          sourceId: location.sourceId,
+          displayPath: location.displayPath,
+        });
+        if (opened && codeNavigationScopeRef.current === scope) {
+          setEditorReveal({
+            path: location.path || `external-source:${location.sourceId}`,
+            line: location.line,
+            column: location.column,
+            requestId: `external-history-${Date.now()}`,
+          });
+        }
+        return opened;
+      }
+      return openWorkspaceFile(
+        location.path,
+        location.line,
+        location.column,
+        "",
+        () => codeNavigationScopeRef.current === scope,
+      );
+    },
+  });
 
   const layoutState = clampPaneState(paneState, {
     containerWidthPx: layoutBounds.columnsWidthPx,
@@ -276,7 +415,9 @@ export function DesktopWorkbench({
           sidebarView: layoutState.sidebarView,
           expandedPaths: fileTree.expandedPaths,
           selectedTreePath: fileTree.selectedPath,
-          activeTabPath: tabs.activeTabPath,
+          activeTabPath: tabs.activeTab?.kind === "external-source" || tabs.activeTab?.kind === "file-preview"
+            ? ""
+            : tabs.activeTabPath,
           terminalOverrideCwd: terminalOverride?.cwd,
           focusedPane,
           tabs: tabs.buildPersistenceSnapshot(),
@@ -309,14 +450,6 @@ export function DesktopWorkbench({
           ? "minmax(0, 1fr) 0px 0px"
           : `${layoutState.editorHeightPx}px ${PANE_RESIZER_SIZE_PX}px minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`;
   const workspaceName = fileTree.rootPath.split(/[\\/]+/).filter(Boolean).pop() || fileTree.rootPath || "/";
-  const previewStatusText = previewResult?.previewKind === "image"
-    ? "已加载图片预览"
-    : previewResult?.previewKind === "html"
-      ? "已加载 HTML 预览"
-      : isFilePreviewFullyLoaded(previewResult) ? "已加载全文" : "";
-  const canLoadFull = canPreviewFiles && !isFilePreviewFullyLoaded(previewResult);
-  const canEditPreview = canMutateFiles && previewResult?.previewKind !== "image";
-  const previewDownloadProgress = fileTree.downloadProgress?.path === previewName ? fileTree.downloadProgress : null;
   const showSidebarContent = focusedPane === "sidebar" || !layoutState.sidebarCollapsed;
   const sidebarContentMotion = resolveMotionProps(premiumMotion.sidebarContent, reduceMotion);
   const dialogPanelMotion = resolveMotionProps(premiumMotion.dialogPanel, reduceMotion);
@@ -331,11 +464,9 @@ export function DesktopWorkbench({
         ...(canViewPlugins ? ["plugins" as const] : []),
         "settings",
       ];
-  const activeEditorLine = tabs.activeTab && editorReveal?.path === tabs.activeTab.path
-    ? editorReveal.line
-    : tabs.activeTab
-      ? debug.currentLineForPath(tabs.activeTab.path)
-      : null;
+  const activeEditorLine = tabs.activeTab
+    ? debug.currentLineForPath(tabs.activeTab.path)
+    : null;
 
   const refreshGitDecorations = useCallback(async () => {
     const requestId = gitDecorationRequestRef.current + 1;
@@ -394,35 +525,11 @@ export function DesktopWorkbench({
     const updateLayoutBounds = () => {
       const nextColumnsWidthPx = columnsRef.current?.getBoundingClientRect().width ?? 0;
       const nextCenterHeightPx = centerRowsRef.current?.getBoundingClientRect().height ?? 0;
-      const nextEditorPaneRect = editorPaneRef.current?.getBoundingClientRect();
 
       setLayoutBounds((current) => ({
         columnsWidthPx: nextColumnsWidthPx > 0 ? nextColumnsWidthPx : current.columnsWidthPx,
         centerHeightPx: nextCenterHeightPx > 0 ? nextCenterHeightPx : current.centerHeightPx,
       }));
-
-      if (nextEditorPaneRect && nextEditorPaneRect.width > 0 && nextEditorPaneRect.height > 0) {
-        setEditorPaneBounds((current) => {
-          const nextBounds = {
-            left: nextEditorPaneRect.left,
-            top: nextEditorPaneRect.top,
-            width: nextEditorPaneRect.width,
-            height: nextEditorPaneRect.height,
-          };
-
-          if (
-            current
-            && current.left === nextBounds.left
-            && current.top === nextBounds.top
-            && current.width === nextBounds.width
-            && current.height === nextBounds.height
-          ) {
-            return current;
-          }
-
-          return nextBounds;
-        });
-      }
     };
 
     updateLayoutBounds();
@@ -462,12 +569,27 @@ export function DesktopWorkbench({
   }, [fileTree.rootPath, restoreSidebarView, tabs]);
 
   useEffect(() => {
-    if (!fileTree.rootPath || !session.restoreLoaded || session.restoreApplied || restoringRef.current) {
+    if (
+      !fileTree.rootPath
+      || !session.restoreLoaded
+      || session.restoreApplied
+      || restoringRef.current?.scopeIdentity === previewScopeIdentity
+    ) {
       return;
     }
 
-    restoringRef.current = true;
+    const restoreRequest = {
+      scopeIdentity: previewScopeIdentity,
+      requestSeq: restoreRequestSerialRef.current + 1,
+    };
+    restoreRequestSerialRef.current = restoreRequest.requestSeq;
+    restoringRef.current = restoreRequest;
     let cancelled = false;
+    const isCurrentRestore = () => (
+      !cancelled
+      && restoringRef.current === restoreRequest
+      && previewScopeIdentityRef.current === restoreRequest.scopeIdentity
+    );
 
     void (async () => {
       try {
@@ -479,14 +601,20 @@ export function DesktopWorkbench({
             ? { cwd: restoredSession.terminalOverrideCwd, source: "manual" }
             : null);
           await fileTree.restoreExpandedPaths(restoredSession.expandedPaths);
+          if (!isCurrentRestore()) {
+            return;
+          }
           if (restoredSession.selectedTreePath) {
             fileTree.selectPath(restoredSession.selectedTreePath);
           }
           await tabs.restoreFromSnapshot(restoredSession.tabs, restoredSession.activeTabPath);
         }
       } finally {
-        restoringRef.current = false;
-        if (!cancelled) {
+        const shouldMarkApplied = isCurrentRestore();
+        if (restoringRef.current === restoreRequest) {
+          restoringRef.current = null;
+        }
+        if (shouldMarkApplied) {
           session.markRestoreApplied();
         }
       }
@@ -494,8 +622,11 @@ export function DesktopWorkbench({
 
     return () => {
       cancelled = true;
+      if (restoringRef.current === restoreRequest) {
+        restoringRef.current = null;
+      }
     };
-  }, [fileTree.rootPath, session.restoreApplied, session.restoreLoaded, session.restoredSession]);
+  }, [fileTree.rootPath, previewScopeIdentity, session.restoreApplied, session.restoreLoaded, session.restoredSession]);
 
   useEffect(() => {
     if (!fileTree.rootPath) {
@@ -552,6 +683,10 @@ export function DesktopWorkbench({
       if (structureOnly) {
         return;
       }
+      if (codeNavigationHistory.handleShortcut(event)) {
+        event.preventDefault();
+        return;
+      }
       const key = event.key.toLowerCase();
       const primary = event.ctrlKey || event.metaKey;
       if (!primary) {
@@ -572,7 +707,7 @@ export function DesktopWorkbench({
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [setSidebarView, structureOnly]);
+  }, [codeNavigationHistory.handleShortcut, setSidebarView, structureOnly]);
 
   function toggleFocusedPane(nextPane: Exclude<FocusedWorkbenchPane, null>) {
     setFocusedPane((current) => current === nextPane ? null : nextPane);
@@ -582,23 +717,36 @@ export function DesktopWorkbench({
     setSidebarView(item);
   }
 
-  function closePreview() {
-    setPreviewName("");
-    setPreviewContent("");
-    setPreviewResult(null);
-  }
-
   function isRasterImagePath(path: string) {
     return RASTER_IMAGE_PREVIEW_RE.test(path);
   }
 
-  const loadPreview = useCallback(async (path: string, mode: "preview" | "full") => {
+  function cancelPreviewRequestsUnder(path: string) {
+    for (const requestPath of previewRequestSeqRef.current.keys()) {
+      if (isSameOrDescendantWorkbenchPath(requestPath, path)) {
+        previewRequestSeqRef.current.delete(requestPath);
+      }
+    }
+  }
+
+  async function loadPreview(
+    path: string,
+    mode: "preview" | "full",
+    options?: { activate?: boolean },
+  ) {
     if (!canPreviewFiles) {
       return;
     }
-    const requestSeq = previewRequestSeqRef.current + 1;
-    previewRequestSeqRef.current = requestSeq;
-    setPreviewLoading(true);
+    const requestScopeIdentity = previewScopeIdentityRef.current;
+    const requestSeq = previewRequestSerialRef.current + 1;
+    previewRequestSerialRef.current = requestSeq;
+    previewRequestSeqRef.current.set(path, requestSeq);
+    tabs.openFilePreview({
+      path,
+      loading: true,
+      statusText: mode === "full" ? "正在读取全文" : "正在加载预览",
+      activate: options?.activate,
+    });
     try {
       let result = mode === "full"
         ? await client.readFileFull(botAlias, path)
@@ -606,24 +754,47 @@ export function DesktopWorkbench({
       if (mode === "preview" && shouldAutoLoadFullHtmlPreview(path, result)) {
         result = await client.readFileFull(botAlias, path);
       }
-      if (requestSeq !== previewRequestSeqRef.current) {
+      if (
+        previewScopeIdentityRef.current !== requestScopeIdentity
+        || previewRequestSeqRef.current.get(path) !== requestSeq
+      ) {
         return;
       }
       result = withDetectedPreviewKind(path, result);
-      setPreviewName(path);
-      setPreviewMode(result.mode === "cat" ? "full" : "preview");
-      setPreviewResult(result);
-      setPreviewContent(result.previewKind === "image" ? "" : result.content || "文件为空");
+      if (result.previewKind !== "image" && !result.content) {
+        result = { ...result, content: "文件为空" };
+      }
+      tabs.openFilePreview({
+        path,
+        result,
+        loading: false,
+        statusText: filePreviewStatusText(result),
+        activate: false,
+      });
+    } catch (error) {
+      if (
+        previewScopeIdentityRef.current !== requestScopeIdentity
+        || previewRequestSeqRef.current.get(path) !== requestSeq
+      ) {
+        return;
+      }
+      tabs.openFilePreview({
+        path,
+        loading: false,
+        statusText: "",
+        error: getErrorMessage(error, mode === "full" ? "读取全文失败" : "预览文件失败"),
+        activate: false,
+      });
     } finally {
-      if (requestSeq === previewRequestSeqRef.current) {
-        setPreviewLoading(false);
+      if (previewRequestSeqRef.current.get(path) === requestSeq) {
+        previewRequestSeqRef.current.delete(path);
       }
     }
-  }, [botAlias, canPreviewFiles, client]);
+  }
 
-  const handleRequestPreview = useCallback((path: string) => {
+  const handleRequestPreview = (path: string) => {
     void loadPreview(path, "preview");
-  }, [loadPreview]);
+  };
 
   const resolvedChatPaneContent = typeof chatPaneContent === "function"
     ? chatPaneContent({
@@ -631,28 +802,48 @@ export function DesktopWorkbench({
       })
     : chatPaneContent;
 
-  async function openWorkspaceFile(path: string, line?: number) {
+  async function openWorkspaceFile(
+    path: string,
+    line?: number,
+    column = 1,
+    requestId = "",
+    isCurrent: () => boolean = () => true,
+    expectedScopeIdentity = previewScopeIdentityRef.current,
+  ) {
+    const isCurrentRequest = () => (
+      isCurrent()
+      && previewScopeIdentityRef.current === expectedScopeIdentity
+    );
+    if (!isCurrentRequest()) {
+      return false;
+    }
     const target = await client.resolveFileOpenTarget(botAlias, path);
+    if (!isCurrentRequest()) {
+      return false;
+    }
     if (!canPreviewFiles) {
       await fileTree.revealPath(path);
+      if (!isCurrentRequest()) return false;
       setEditorReveal(null);
-      return;
+      return false;
     }
     if (target.kind === "plugin_view") {
       await Promise.allSettled([
         tabs.openPluginView(target),
         fileTree.revealPath(path),
       ]);
-      setEditorReveal(typeof line === "number" && line > 0 ? { path, line } : null);
-      return;
+      if (!isCurrentRequest()) return false;
+      setEditorReveal(null);
+      return false;
     }
     if (isRasterImagePath(path) || isHtmlPreviewPath(path)) {
       await Promise.allSettled([
         loadPreview(path, "preview"),
         fileTree.revealPath(path),
       ]);
+      if (!isCurrentRequest()) return false;
       setEditorReveal(null);
-      return;
+      return false;
     }
 
     if (!canWriteFiles) {
@@ -660,19 +851,25 @@ export function DesktopWorkbench({
         loadPreview(path, "preview"),
         fileTree.revealPath(path),
       ]);
+      if (!isCurrentRequest()) return false;
       setEditorReveal(null);
-      return;
+      return false;
     }
 
     await Promise.allSettled([
       tabs.openFile(path, target.pluginTargets),
       fileTree.revealPath(path),
     ]);
+    if (!isCurrentRequest()) {
+      return false;
+    }
     if (line && line > 0) {
-      setEditorReveal({ path, line });
-      return;
+      const revealRequestId = requestId || `editor-reveal-${++editorRevealRequestRef.current}`;
+      setEditorReveal({ path, line, column: Math.max(1, column), requestId: revealRequestId });
+      return true;
     }
     setEditorReveal(null);
+    return true;
   }
 
   async function openGitDiffInEditor(path: string, staged: boolean, gitPath = path) {
@@ -691,8 +888,17 @@ export function DesktopWorkbench({
     });
   }
 
-  async function openPluginViewTab(target: PluginOpenTarget) {
+  async function openPluginViewTab(
+    target: PluginOpenTarget,
+    expectedScopeIdentity = previewScopeIdentityRef.current,
+  ) {
+    if (previewScopeIdentityRef.current !== expectedScopeIdentity) {
+      return;
+    }
     await tabs.openPluginView(target);
+    if (previewScopeIdentityRef.current !== expectedScopeIdentity) {
+      return;
+    }
     const sourcePath = typeof target.input.path === "string" ? target.input.path : "";
     if (sourcePath) {
       setSidebarView("files");
@@ -701,10 +907,14 @@ export function DesktopWorkbench({
   }
 
   async function runPluginHostEffects(effects: HostEffect[]) {
+    const effectScopeIdentity = previewScopeIdentityRef.current;
     for (const effect of effects) {
+      if (previewScopeIdentityRef.current !== effectScopeIdentity) {
+        return;
+      }
       if (effect.type === "open_file") {
         setSidebarView("files");
-        await openWorkspaceFile(effect.path, effect.line);
+        await openWorkspaceFile(effect.path, effect.line, 1, "", () => true, effectScopeIdentity);
         continue;
       }
       if (effect.type === "reveal_in_files") {
@@ -722,7 +932,7 @@ export function DesktopWorkbench({
         await client.downloadPluginArtifact(botAlias, effect.artifactId, effect.filename);
         continue;
       }
-      await openPluginViewTab(effect);
+      await openPluginViewTab(effect, effectScopeIdentity);
     }
   }
 
@@ -730,32 +940,212 @@ export function DesktopWorkbench({
     setDefinitionCandidates([]);
     setDefinitionMessage("");
     setDefinitionSource("");
+    definitionSourceLocationRef.current = null;
+    definitionSourceScopeRef.current = "";
   }
 
-  async function handleResolveDefinition(input: { path: string; line: number; column: number; symbol?: string }) {
-    if (!allowCodeJump || structureOnly) {
+  function requestEditorCodeNavigation(kind: CodeNavigationKind) {
+    if (
+      !allowCodeJump
+      || structureOnly
+      || (tabs.activeTab?.kind !== "file" && tabs.activeTab?.kind !== "external-source")
+      || (kind === "implementation" && !canNavigateImplementation)
+    ) {
+      return false;
+    }
+    setEditorNavigationCommand({
+      kind,
+      requestId: `editor-code-navigation-${++editorNavigationCommandRef.current}`,
+    });
+    return true;
+  }
+
+  async function openDefinitionCandidate(item: CodeLocation) {
+    const source = definitionSourceLocationRef.current;
+    const scope = definitionSourceScopeRef.current;
+    const path = item.path || "";
+    const target = {
+      path: item.targetType === "external" && item.sourceId
+        ? `external-source:${item.sourceId}`
+        : path,
+      line: item.selectionRange.start.line,
+      column: item.selectionRange.start.column,
+      ...(item.targetType === "external" && item.sourceId ? {
+        sourceId: item.sourceId,
+        displayPath: item.displayPath || path || "外部源码",
+      } : {}),
+    };
+    clearDefinitionOverlay();
+    if (!scope || codeNavigationScopeRef.current !== scope) {
       return;
     }
-    try {
-      const result = await client.resolveWorkspaceDefinition(botAlias, input);
-      if (result.items.length === 1) {
-        clearDefinitionOverlay();
-        await openWorkspaceFile(result.items[0].path, result.items[0].line);
+    if (item.targetType === "external") {
+      if (!item.sourceId) {
+        setDefinitionMessage("不支持的外部源码类型，仅支持 file:// 源码");
+        setDefinitionSource(path || "外部源码");
         return;
       }
-      if (result.items.length > 1) {
-        setDefinitionCandidates(result.items);
+      const opened = await tabs.openExternalSource({
+        sourceId: item.sourceId,
+        displayPath: item.displayPath || path || "外部源码",
+      });
+      if (opened && source && codeNavigationScopeRef.current === scope) {
+        codeNavigationHistory.recordNavigation(source, target);
+        setEditorReveal({
+          path: target.path,
+          line: target.line,
+          column: target.column,
+          requestId: `external-reveal-${Date.now()}`,
+        });
+      }
+      return;
+    }
+    if (!path) {
+      return;
+    }
+    const opened = await openWorkspaceFile(
+      path,
+      target.line,
+      target.column,
+      "",
+      () => codeNavigationScopeRef.current === scope,
+    );
+    if (opened && source && codeNavigationScopeRef.current === scope) {
+      codeNavigationHistory.recordNavigation(source, target);
+    }
+  }
+
+  async function handleResolveCodeNavigation(input: CodeNavigationIntent) {
+    if (!allowCodeJump || structureOnly || (input.kind === "implementation" && !canNavigateImplementation)) {
+      return;
+    }
+    const activeTab = tabs.activeTab;
+    if (
+      !activeTab
+      || (activeTab.kind !== "file" && activeTab.kind !== "external-source")
+      || activeTab.path !== input.path
+    ) {
+      return;
+    }
+    const source = {
+      path: input.path,
+      line: input.line,
+      column: input.column,
+      ...(activeTab.kind === "external-source" && activeTab.sourceId ? {
+        sourceId: activeTab.sourceId,
+        displayPath: activeTab.displayPath || activeTab.basename,
+      } : {}),
+    };
+    const sequence = codeNavigationRequestRef.current + 1;
+    codeNavigationRequestRef.current = sequence;
+    codeNavigationAbortControllerRef.current?.abort();
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    codeNavigationAbortControllerRef.current = controller;
+    const scope = codeNavigationScopeRef.current;
+    const isCurrent = () => (
+      codeNavigationScopeRef.current === scope
+      && codeNavigationRequestRef.current === sequence
+      && !controller?.signal.aborted
+    );
+    const requestId = `code-navigation-${Date.now()}-${sequence}`;
+    try {
+      const result = await client.resolveCodeNavigation(botAlias, {
+        kind: input.kind,
+        requestId,
+        document: {
+          ...(activeTab.kind === "external-source" && activeTab.sourceId
+            ? { sourceId: activeTab.sourceId }
+            : { path: activeTab.path }),
+          languageId: inferFileEditorLanguageId(activeTab.displayPath || activeTab.path),
+          version: sequence,
+          content: activeTab.content,
+        },
+        position: { line: input.line, column: input.column },
+      }, controller?.signal);
+      if (!isCurrent()) {
+        return;
+      }
+      const semanticItems = result.items.filter((item) => (
+        (item.targetType === "workspace" && Boolean(item.path))
+        || (item.targetType === "external" && Boolean(item.sourceId))
+      ));
+      const rejectedExternalItem = result.items.find((item) => item.targetType === "external" && !item.sourceId);
+      if (semanticItems.length === 0 && rejectedExternalItem) {
+        setDefinitionCandidates([]);
+        setDefinitionMessage(getExternalSourceErrorMessage({
+          code: result.message ? undefined : "unsupported_external_source_uri",
+          message: result.message || "不支持的外部源码类型",
+        }));
+        setDefinitionSource(input.symbol || `${input.path}:${input.line}:${input.column}`);
+        definitionSourceLocationRef.current = null;
+        return;
+      }
+      if (semanticItems.length === 1) {
+        clearDefinitionOverlay();
+        const item = semanticItems[0];
+        const target = {
+          path: item.targetType === "external" && item.sourceId
+            ? `external-source:${item.sourceId}`
+            : item.path || "",
+          line: item.selectionRange.start.line,
+          column: item.selectionRange.start.column,
+          ...(item.targetType === "external" && item.sourceId ? {
+            sourceId: item.sourceId,
+            displayPath: item.displayPath || item.path || "外部源码",
+          } : {}),
+        };
+        const opened = item.targetType === "external" && item.sourceId
+          ? await tabs.openExternalSource({ sourceId: item.sourceId, displayPath: item.displayPath || item.path || "外部源码" })
+          : await openWorkspaceFile(
+              target.path,
+              target.line,
+              target.column,
+              result.requestId || requestId,
+              isCurrent,
+            );
+        if (opened && isCurrent()) {
+          codeNavigationHistory.recordNavigation(source, target);
+          if (item.targetType === "external") {
+            setEditorReveal({
+              path: target.path,
+              line: target.line,
+              column: target.column,
+              requestId: result.requestId || requestId,
+            });
+          }
+        }
+        return;
+      }
+      if (semanticItems.length > 1) {
+        setDefinitionCandidates(semanticItems);
         setDefinitionMessage("");
         setDefinitionSource(input.symbol || `${input.path}:${input.line}:${input.column}`);
+        definitionSourceLocationRef.current = source;
+        definitionSourceScopeRef.current = scope;
         return;
       }
       setDefinitionCandidates([]);
-      setDefinitionMessage("未找到定义");
+      setDefinitionMessage(getExternalSourceErrorMessage({
+        message: result.message || (input.kind === "implementation" ? "未找到语义实现" : "未找到语义定义"),
+      }));
       setDefinitionSource(input.symbol || `${input.path}:${input.line}:${input.column}`);
+      definitionSourceLocationRef.current = null;
     } catch (error) {
+      if (
+        controller?.signal.aborted
+        || codeNavigationRequestRef.current !== sequence
+        || (error as { name?: string })?.name === "AbortError"
+      ) {
+        return;
+      }
       setDefinitionCandidates([]);
-      setDefinitionMessage(error instanceof Error ? error.message : "解析定义失败");
+      setDefinitionMessage(getExternalSourceErrorMessage(error));
       setDefinitionSource(input.symbol || `${input.path}:${input.line}:${input.column}`);
+      definitionSourceLocationRef.current = null;
+    } finally {
+      if (codeNavigationAbortControllerRef.current === controller) {
+        codeNavigationAbortControllerRef.current = null;
+      }
     }
   }
 
@@ -795,11 +1185,21 @@ export function DesktopWorkbench({
             fileTree.highlightPath(path);
           }}
           onRenamedFile={(oldPath, nextPath) => {
-            tabs.syncRenamedPath(oldPath, nextPath);
+            cancelPreviewRequestsUnder(oldPath);
+            const renamedTabs = tabs.syncRenamedPath(oldPath, nextPath);
+            renamedTabs.previews.forEach((preview) => {
+              if (preview.loading && preview.path) {
+                void loadPreview(preview.path, preview.full ? "full" : "preview", { activate: false });
+              }
+            });
+            renamedTabs.pluginTargets.forEach((target) => {
+              void tabs.openPluginView(target, { activate: false });
+            });
             fileTree.highlightPath(nextPath);
           }}
           onDeletedFile={(path) => {
-            tabs.closePath(path);
+            cancelPreviewRequestsUnder(path);
+            tabs.closeDeletedPath(path);
           }}
           onRequestPreview={(path) => {
             void loadPreview(path, "preview");
@@ -830,7 +1230,9 @@ export function DesktopWorkbench({
         <SearchPane
           botAlias={botAlias}
           client={client}
-          onOpenFile={openWorkspaceFile}
+          onOpenFile={async (path, line) => {
+            await openWorkspaceFile(path, line);
+          }}
         />
       );
     }
@@ -841,7 +1243,9 @@ export function DesktopWorkbench({
           botAlias={botAlias}
           client={client}
           activeFilePath={tabs.activeTab?.path || ""}
-          onOpenFile={openWorkspaceFile}
+          onOpenFile={async (path, line) => {
+            await openWorkspaceFile(path, line);
+          }}
         />
       );
     }
@@ -947,6 +1351,7 @@ export function DesktopWorkbench({
           sessionCapabilities={sessionCapabilities}
           showBotRuntimeSettings={false}
           onOpenBotManager={onOpenBotManager}
+          onLanguageServerCatalogChanged={refreshLanguageServerCatalogStatus}
         />
         </Suspense>
       );
@@ -975,7 +1380,7 @@ export function DesktopWorkbench({
           data-testid="workbench-focus-backdrop"
           aria-label="退出聚焦模式"
           onClick={() => setFocusedPane(null)}
-          className="absolute inset-0 z-20 bg-black/45"
+          className="absolute inset-0 z-20 bg-[var(--overlay-backdrop-45)]"
         />
       ) : null}
 
@@ -1069,54 +1474,67 @@ export function DesktopWorkbench({
             {!structureOnly ? (
               <section
                 data-testid="desktop-pane-editor"
-                ref={editorPaneRef}
                 data-focused={focusedPane === "editor" ? "true" : "false"}
                 className="desktop-workbench-pane min-h-0 overflow-hidden"
               >
                 <Suspense fallback={paneFallback}>
-                <EditorPane
-                  botAlias={botAlias}
-                  client={client}
-                  tabs={tabs.tabs}
-                  activeTab={tabs.activeTab}
-                  activeTabPath={tabs.activeTabPath}
-                  breakpointLines={tabs.activeTab ? debug.breakpointLinesForPath(tabs.activeTab.path) : []}
-                  currentLine={activeEditorLine}
-                  allowCodeJump={allowCodeJump}
-                  canUseInlineCompletion={canUseInlineCompletion}
-                  onResolveDefinition={(input) => {
-                    void handleResolveDefinition(input);
-                  }}
-                  onToggleBreakpoint={tabs.activeTab
-                    ? (line) => {
-                        void debug.toggleBreakpoint(tabs.activeTab?.path || "", line);
-                      }
-                    : undefined}
-                  onActivateTab={(path) => {
-                    void tabs.activateTab(path);
-                  }}
-                  onCloseTab={tabs.closeTab}
-                  onChangeActiveContent={tabs.updateActiveContent}
-                  onSaveActiveTab={() => void tabs.saveActiveTab()}
-                  onCloseOthers={tabs.closeOtherTabs}
-                  onCloseTabsToRight={tabs.closeTabsToRight}
-                  onReopenLastClosed={() => {
-                    void tabs.reopenLastClosedTab();
-                  }}
-                  onRevealInTree={(path) => {
-                    setSidebarView("files");
-                    void fileTree.revealPath(path);
-                  }}
-                  onApplyHostEffects={runPluginHostEffects}
-                  onClosePluginTab={(path) => {
-                    tabs.closePath(path);
-                  }}
-                  onReopenPluginView={(target) => {
-                    void openPluginViewTab(target);
-                  }}
-                  focused={focusedPane === "editor"}
-                  onToggleFocus={() => toggleFocusedPane("editor")}
-                />
+                  <EditorPane
+                    botAlias={botAlias}
+                    client={client}
+                    tabs={tabs.tabs}
+                    activeTab={tabs.activeTab}
+                    activeTabPath={tabs.activeTabPath}
+                    breakpointLines={tabs.activeTab ? debug.breakpointLinesForPath(tabs.activeTab.path) : []}
+                    currentLine={activeEditorLine}
+                    editorReveal={editorReveal}
+                    navigationCommand={editorNavigationCommand}
+                    canNavigateBack={codeNavigationHistory.canGoBack}
+                    canNavigateForward={codeNavigationHistory.canGoForward}
+                    allowCodeJump={allowCodeJump}
+                    canNavigateImplementation={canNavigateImplementation}
+                    canUseInlineCompletion={canUseInlineCompletion}
+                    onResolveCodeNavigation={(input) => {
+                      setEditorNavigationCommand(null);
+                      void handleResolveCodeNavigation(input);
+                    }}
+                    onNavigateBack={() => {
+                      void codeNavigationHistory.goBack();
+                    }}
+                    onNavigateForward={() => {
+                      void codeNavigationHistory.goForward();
+                    }}
+                    onToggleBreakpoint={tabs.activeTab
+                      ? (line) => {
+                          void debug.toggleBreakpoint(tabs.activeTab?.path || "", line);
+                        }
+                      : undefined}
+                    onActivateTab={(path) => {
+                      setEditorReveal(null);
+                      void tabs.activateTab(path);
+                    }}
+                    onCloseTab={tabs.closeTab}
+                    onChangeActiveContent={tabs.updateActiveContent}
+                    onSaveActiveTab={() => void tabs.saveActiveTab()}
+                    onCloseOthers={tabs.closeOtherTabs}
+                    onCloseTabsToRight={tabs.closeTabsToRight}
+                    onReopenLastClosed={() => {
+                      void tabs.reopenLastClosedTab();
+                    }}
+                    onRevealInTree={(path) => {
+                      setSidebarView("files");
+                      void fileTree.revealPath(path);
+                    }}
+                    onApplyHostEffects={runPluginHostEffects}
+                    onClosePluginTab={(path) => {
+                      tabs.closePath(path);
+                    }}
+                    onReopenPluginView={(target) => {
+                      void openPluginViewTab(target);
+                    }}
+                    onLoadFullPreview={(path) => void loadPreview(path, "full")}
+                    focused={focusedPane === "editor"}
+                    onToggleFocus={() => toggleFocusedPane("editor")}
+                  />
                 </Suspense>
               </section>
             ) : null}
@@ -1221,7 +1639,9 @@ export function DesktopWorkbench({
       </div>
 
       <WorkbenchStatusBar
-        activeFilePath={tabs.activeTab?.path || ""}
+        activeFilePath={tabs.activeTab?.kind === "external-source"
+          ? `外部依赖 · 只读${tabs.activeTab.displayPath ? ` / ${tabs.activeTab.displayPath}` : ""}`
+          : tabs.activeTab?.path || ""}
         fileDirty={Boolean(tabs.activeTab?.dirty)}
         terminalStatus={terminalStatus}
         chatStatus={externalChatStatus || localChatStatus}
@@ -1229,6 +1649,12 @@ export function DesktopWorkbench({
         restoreState={session.restoreState}
         branchName={gitBranchName}
         viewMode={viewMode}
+        languageServiceProvider={languageService.provider}
+        languageServiceStatus={languageService.status}
+        languageServiceLoading={languageService.loading}
+        languageServiceRestarting={isRestartingLanguageService}
+        languageServiceRestartError={languageServerRestartError}
+        onRestartLanguageService={canRestartLanguageService ? restartCurrentLanguageService : undefined}
         rightAction={(
           <div className="flex items-center gap-2">
             {fileTree.downloadProgress ? (
@@ -1250,40 +1676,27 @@ export function DesktopWorkbench({
           botAlias={botAlias}
           client={client}
           disabled={structureOnly}
+          canNavigateDefinition={allowCodeJump && (tabs.activeTab?.kind === "file" || tabs.activeTab?.kind === "external-source")}
+          canNavigateImplementation={canNavigateImplementation}
+          canNavigateBack={codeNavigationHistory.canGoBack}
+          canNavigateForward={codeNavigationHistory.canGoForward}
+          onNavigateDefinition={() => {
+            requestEditorCodeNavigation("definition");
+          }}
+          onNavigateImplementation={() => {
+            requestEditorCodeNavigation("implementation");
+          }}
+          onNavigateBack={() => codeNavigationHistory.goBack()}
+          onNavigateForward={() => codeNavigationHistory.goForward()}
           onClose={() => setCommandPaletteOpen(false)}
-          onOpenFile={openWorkspaceFile}
-        />
-      ) : null}
-
-      {previewName ? (
-        <FilePreviewDialog
-          title={previewName}
-          content={previewContent}
-          mode={previewMode}
-          botAlias={botAlias}
-          previewKind={previewResult?.previewKind}
-          contentType={previewResult?.contentType}
-          contentBase64={previewResult?.contentBase64}
-          variant="desktop"
-          desktopAnchorRect={editorPaneBounds}
-          loading={previewLoading}
-          statusText={previewStatusText}
-          readOnly={structureOnly}
-          onClose={closePreview}
-          onLoadFull={previewMode !== "full" && canLoadFull ? () => void loadPreview(previewName, "full") : undefined}
-          onEdit={canEditPreview ? () => {
-            const nextPath = previewName;
-            closePreview();
-            void openWorkspaceFile(nextPath);
-          } : undefined}
-          onDownload={() => void fileTree.downloadFile(previewName)}
-          downloadProgressText={previewDownloadProgress ? formatDownloadProgress(previewDownloadProgress.downloadedBytes, previewDownloadProgress.totalBytes) : ""}
-          downloadPercent={previewDownloadProgress?.percent}
+          onOpenFile={async (path) => {
+            await openWorkspaceFile(path);
+          }}
         />
       ) : null}
 
       {definitionCandidates.length > 0 || definitionMessage ? (
-        <div className="absolute inset-0 z-30 flex items-start justify-center bg-black/35 px-4 py-12">
+        <div className="absolute inset-0 z-30 flex items-start justify-center bg-[var(--overlay-backdrop-35)] px-4 py-12">
           <motion.div
             data-testid="desktop-definition-picker"
             className="w-full max-w-2xl border border-[var(--border)] bg-[var(--surface)] shadow-2xl"
@@ -1309,24 +1722,22 @@ export function DesktopWorkbench({
               <div className="max-h-[min(60vh,28rem)] overflow-y-auto">
                 {definitionCandidates.map((item) => (
                   <button
-                    key={`${item.path}:${item.line}:${item.column || 0}:${item.matchKind}`}
+                    key={`${item.targetType}:${item.path || item.sourceId || "unknown"}:${item.selectionRange.start.line}:${item.selectionRange.start.column}:${item.provider}`}
                     type="button"
                     onClick={() => {
-                      clearDefinitionOverlay();
-                      void openWorkspaceFile(item.path, item.line);
+                      void openDefinitionCandidate(item);
                     }}
                     className="flex w-full items-start justify-between gap-4 border-b border-[var(--border)] px-4 py-3 text-left hover:bg-[var(--surface-strong)]"
                   >
                     <div className="min-w-0">
-                      <div className="truncate text-sm font-medium text-[var(--text)]">{item.path}</div>
+                      <div className="truncate text-sm font-medium text-[var(--text)]">{item.path || "外部源码"}</div>
                       <div className="mt-1 text-xs text-[var(--muted)]">
-                        第 {item.line} 行
-                        {item.column ? `，列 ${item.column}` : ""}
+                        第 {item.selectionRange.start.line} 行，列 {item.selectionRange.start.column}
                       </div>
                     </div>
                     <div className="shrink-0 text-right text-[11px] text-[var(--muted)]">
-                      <div>{item.matchKind}</div>
-                      <div>{Math.round(item.confidence * 100)}%</div>
+                      <div>{item.provider}</div>
+                      <div>{item.targetType === "workspace" ? "工作区" : "外部源码"}</div>
                     </div>
                   </button>
                 ))}

@@ -1,4 +1,4 @@
-import type { PluginOpenTarget, PluginRenderResult } from "../services/types";
+import type { FileReadResult, PluginOpenTarget, PluginRenderResult } from "../services/types";
 
 export type DesktopSidebarView = "files" | "search" | "outline" | "debug" | "git" | "plugins" | "settings";
 export type WorkbenchActivityId = DesktopSidebarView;
@@ -9,6 +9,8 @@ export type PersistedTabContentPersistence = "none" | "clean_snapshot" | "dirty_
 export type PersistedWorkbenchTab = {
   path: string;
   dirty: boolean;
+  /** Monotonic version replayed to the language-service document store. */
+  documentVersion?: number;
   lastModifiedNs?: string;
   encoding?: string;
   savedContent?: string;
@@ -29,7 +31,7 @@ export type TerminalWorkbenchStatus = {
   connected: boolean;
   connectionText: string;
   currentCwd: string;
-  nextRebuildCwd?: string;
+  nextTerminalCwd?: string;
 };
 
 export type ChatWorkbenchStatus = {
@@ -152,12 +154,19 @@ export type EditorTab = {
   path: string;
   basename: string;
   content: string;
+  documentVersion: number;
   savedContent: string;
-  kind?: "file" | "git-diff" | "plugin-view";
+  kind?: "file" | "file-preview" | "git-diff" | "plugin-view" | "external-source";
+  filePreview?: FileReadResult;
   pluginTargets?: PluginOpenTarget[];
+  pluginOpenTarget?: PluginOpenTarget;
   pluginView?: PluginRenderResult;
   pluginInput?: Record<string, unknown>;
   sourcePath?: string;
+  /** Opaque server-issued identifier for an external dependency source. */
+  sourceId?: string;
+  /** Sanitized path shown to users; never sent back as a file path. */
+  displayPath?: string;
   readOnly?: boolean;
   dirty: boolean;
   loading: boolean;
@@ -169,4 +178,11 @@ export type EditorTab = {
   cold: boolean;
   missing: boolean;
   contentPersistence: PersistedTabContentPersistence;
+};
+
+export type EditorRevealLocation = {
+  path: string;
+  line: number;
+  column: number;
+  requestId: string;
 };

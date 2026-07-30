@@ -199,7 +199,7 @@ export function FilePreviewDialog({
     return (
       <div
         data-testid="desktop-workbench-preview"
-        className="workbench-dialog-backdrop pointer-events-none fixed inset-0 z-50 bg-black/35"
+        className="workbench-dialog-backdrop pointer-events-none fixed inset-0 z-50 bg-[var(--overlay-backdrop-35)]"
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -286,7 +286,7 @@ export function FilePreviewDialog({
 
   return (
     <div
-      className="workbench-dialog-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      className="workbench-dialog-backdrop fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-backdrop-50)] p-4"
       role="dialog"
       aria-modal="true"
       aria-label={title}

@@ -237,6 +237,45 @@ export type InlineCompletionResult = {
   };
 };
 
+export type LanguageServerProviderId = "pyright" | "typescript" | "clangd";
+
+export type LanguageServerAvailability = "available" | "missing" | "installing" | "error";
+
+export type LanguageServerSource = "custom" | "path" | "managed";
+
+export type LanguageServerRuntimeState = "starting" | "indexing" | "restarting" | "degraded" | "ready" | "error" | "stopped";
+
+export type LanguageServerProviderStatus = {
+  provider: LanguageServerProviderId;
+  status: LanguageServerAvailability;
+  source: LanguageServerSource | null;
+  version: string;
+  commandSummary: string;
+  canInstall: boolean;
+  canUpdate: boolean;
+  message: string;
+  error: string;
+  runtimeState?: LanguageServerRuntimeState;
+  runtimeMessage?: string;
+  implementationSupported?: boolean;
+};
+
+export type LanguageServerCatalog = {
+  providers: LanguageServerProviderStatus[];
+  canRefresh: boolean;
+};
+
+export type LanguageServerRestartResult = {
+  provider: LanguageServerProviderId;
+  restarted: boolean;
+  runtimeState: LanguageServerRuntimeState;
+  runtimeMessage: string;
+};
+
+export type LanguageServerInstallOptions = {
+  update?: boolean;
+};
+
 export type EnvConfigFieldType = "string" | "number" | "boolean" | "select" | "csv" | "path" | "password";
 
 export type EnvConfigValue = string | number | boolean | string[];
@@ -332,6 +371,101 @@ export type CliErrorStatsFilters = {
   cliType?: string;
   category?: string;
   limit?: number;
+};
+
+export type CodexUsageProviderKind = "openai_official" | "base_url" | "unknown";
+
+export type CodexUsageProviderResolution =
+  | "resolved"
+  | "config_missing"
+  | "config_invalid"
+  | "provider_missing"
+  | "invalid_base_url"
+  | "unsupported_override";
+
+export type CodexUsageProvider = {
+  key: string;
+  kind: CodexUsageProviderKind;
+  label: string;
+  baseUrl: string | null;
+  resolution?: CodexUsageProviderResolution;
+};
+
+export const DEFAULT_CODEX_USAGE_MODEL = "gpt-5.6-sol";
+
+export type CodexUsageTimeBasis = {
+  mode: "server_local" | string;
+  utcOffset: string;
+  today: string;
+};
+
+export type CodexUsageAvailableRange = {
+  firstDate: string | null;
+  lastDate: string | null;
+};
+
+export type CodexUsageMetrics = {
+  requestCount: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  uncachedInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+  totalTokens: number;
+  cacheHitRate: number | null;
+};
+
+export type CodexUsageConfig = {
+  enabled: boolean;
+  currentProvider: CodexUsageProvider;
+  timeBasis: CodexUsageTimeBasis;
+  availableRange: CodexUsageAvailableRange;
+};
+
+export type CodexUsageStatsQuery = {
+  startDate?: string;
+  endDate?: string;
+  providerKeys?: string[];
+};
+
+export type CodexUsageStatsRange = {
+  startDate: string;
+  endDate: string;
+};
+
+export type CodexUsageProviderStats = CodexUsageMetrics & {
+  provider: CodexUsageProvider;
+};
+
+export type CodexUsageProviderModelStats = CodexUsageProviderStats & {
+  model: string;
+};
+
+export type CodexUsageDailyStats = CodexUsageMetrics & {
+  date: string;
+};
+
+export type CodexUsageDailyProviderStats = CodexUsageDailyStats & {
+  provider: CodexUsageProvider;
+};
+
+export type CodexUsageDailyProviderModelStats = CodexUsageDailyProviderStats & {
+  model: string;
+};
+
+export type CodexUsageStats = {
+  range: CodexUsageStatsRange;
+  enabled: boolean;
+  timeBasis: CodexUsageTimeBasis;
+  availableRange: CodexUsageAvailableRange;
+  availableProviders: CodexUsageProvider[];
+  selectedProviderKeys: string[];
+  totals: CodexUsageMetrics;
+  byProvider: CodexUsageProviderStats[];
+  byProviderModel: CodexUsageProviderModelStats[];
+  byDay: CodexUsageDailyStats[];
+  dailyByProvider: CodexUsageDailyProviderStats[];
+  dailyByProviderModel: CodexUsageDailyProviderModelStats[];
 };
 
 export type NativeAgentConfigView = {
@@ -749,6 +883,60 @@ export class WebApiClientError extends Error {
   }
 }
 
+/**
+ * Maps external-source API failures to stable Chinese copy for the editor.
+ * Backend messages remain the fallback so newly introduced diagnostics are
+ * still visible without leaking an opaque token or absolute path.
+ */
+export function getExternalSourceErrorMessage(error: unknown): string {
+  const candidate = error as { code?: unknown; message?: unknown } | null;
+  const code = String(candidate?.code || "").trim().toLowerCase();
+  const rawMessage = String(candidate?.message || (error instanceof Error ? error.message : "") || "").trim();
+  const signal = `${code} ${rawMessage}`.toLowerCase();
+  if (
+    signal.includes("unauthorized")
+    || signal.includes("scope_mismatch")
+    || signal.includes("scope_invalid")
+    || signal.includes("cross_user")
+    || signal.includes("不属于当前范围")
+    || signal.includes("越权")
+  ) {
+    return "外部源码令牌无权访问或已失效，请重新执行代码跳转后再试";
+  }
+  if (
+    signal.includes("expired")
+    || signal.includes("过期")
+    || signal.includes("stale")
+    || signal.includes("token_invalid")
+    || signal.includes("source_not_found")
+    || signal.includes("source_missing")
+  ) {
+    return "外部源码令牌已过期或失效，请重新执行代码跳转后再试";
+  }
+  if (
+    (signal.includes("unsupported") && (signal.includes("uri") || signal.includes("scheme") || signal.includes("source")))
+    || signal.includes("不支持的外部源码")
+    || signal.includes("unsupported_uri")
+    || signal.includes("unsupported_scheme")
+  ) {
+    return "不支持的外部源码类型，仅支持 file:// 源码";
+  }
+  if (
+    signal.includes("policy")
+    || signal.includes("forbidden")
+    || signal.includes("denied")
+    || signal.includes("not_allowed")
+    || signal.includes("not_approved")
+    || signal.includes("external_source_not_file")
+    || signal.includes("策略拒绝")
+    || signal.includes("批准目录")
+    || signal.includes("拒绝")
+  ) {
+    return "外部源码被安全策略拒绝，无法打开";
+  }
+  return rawMessage || "读取外部源码失败";
+}
+
 export type RunningReply = {
   userText?: string;
   previewText?: string;
@@ -829,6 +1017,7 @@ export type ChatMessageContextUsage = {
 export type ChatMessageMetaInfo = {
   completionState?: string;
   summaryKind?: string;
+  renderKey?: string;
   traceVersion?: number;
   traceCount?: number;
   traceLoadedCount?: number;
@@ -1186,6 +1375,19 @@ export type FileReadResult = {
   previewKind?: FilePreviewKind;
   contentType?: string;
   contentBase64?: string;
+};
+
+/** A short-lived, read-only source snapshot issued by a language server. */
+export type ExternalSourceReadResult = {
+  sourceId: string;
+  displayPath: string;
+  content: string;
+  encoding?: string;
+  languageId?: string;
+  lastModifiedNs?: string;
+  fileSizeBytes?: number;
+  uri?: string;
+  scheme?: string;
 };
 
 export type FileWriteResult = {
@@ -1807,16 +2009,106 @@ export type WorkspaceOutlineResult = {
   items: WorkspaceOutlineItem[];
 };
 
-export type WorkspaceDefinitionItem = {
-  path: string;
+export type CodeNavigationKind = "definition" | "implementation";
+
+export type CodePosition = {
   line: number;
-  column?: number;
-  matchKind: "import" | "same_file" | "workspace_search";
-  confidence: number;
+  column: number;
 };
 
-export type WorkspaceDefinitionResult = {
-  items: WorkspaceDefinitionItem[];
+export type CodeRange = {
+  start: CodePosition;
+  end: CodePosition;
+};
+
+export type CodeNavigationDocument = {
+  path?: string;
+  sourceId?: string;
+  languageId: string;
+  version: number;
+  content: string;
+};
+
+export type CodeNavigationRequest = {
+  kind: CodeNavigationKind;
+  requestId: string;
+  document: CodeNavigationDocument;
+  position: CodePosition;
+};
+
+export type CodeNavigationDocumentSyncEvent = "didOpen" | "didChange";
+
+export type CodeNavigationDocumentChange = {
+  range: CodeRange;
+  text: string;
+};
+
+export type CodeNavigationDocumentSyncItem = {
+  path: string;
+  languageId: string;
+  version: number;
+  /** Full text is sent for full-sync servers and document opens. */
+  content?: string;
+  /** A single contiguous edit for incremental-sync servers. */
+  change?: CodeNavigationDocumentChange;
+};
+
+export type WorkspaceDocumentSyncInput = {
+  documents: CodeNavigationDocumentSyncItem[];
+  event?: CodeNavigationDocumentSyncEvent;
+};
+
+export type WorkspaceDocumentCloseItem = {
+  path: string;
+  version?: number;
+};
+
+export type WorkspaceDocumentCloseInput = {
+  documents: WorkspaceDocumentCloseItem[];
+};
+
+export type WorkspaceDocumentSyncResult = {
+  accepted?: number;
+  unchanged?: number;
+  rejected?: number;
+  documents?: Array<Record<string, unknown>>;
+  rejections?: Array<Record<string, unknown>>;
+  syncKind?: "full" | "incremental" | string;
+  supportsIncrementalChanges?: boolean;
+  maxDocumentBytes?: number;
+  maxBatchDocuments?: number;
+  maxBatchBytes?: number;
+};
+
+export type WorkspaceDocumentCloseResult = {
+  closed?: number;
+  documents?: Array<Record<string, unknown>>;
+  missing?: string[];
+};
+
+export type CodeLocation = {
+  targetType: "workspace" | "external";
+  path?: string;
+  displayPath?: string;
+  sourceId?: string;
+  provider: string;
+  range: CodeRange;
+  selectionRange: CodeRange;
+};
+
+export type CodeNavigationResult = {
+  requestId: string;
+  items: CodeLocation[];
+  message: string;
+};
+
+export type CodeNavigationIntent = {
+  kind: CodeNavigationKind;
+  path: string;
+  sourceId?: string;
+  line: number;
+  column: number;
+  symbol?: string;
 };
 
 export type ChatAttachmentUploadResult = {

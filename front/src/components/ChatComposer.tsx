@@ -109,12 +109,12 @@ export function ChatComposer({
   onSavePromptPresets,
 }: Props) {
   const shellClassName = compact
-    ? "chat-composer-delight border-t border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2 py-2"
-    : "chat-composer-delight border-t border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-3 py-3";
+    ? "chat-composer-delight border-t border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2 py-1.5"
+    : "chat-composer-delight border-t border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-3 py-2";
   const formClassName = "relative";
   const inputBarClassName = compact
-    ? "relative flex min-w-0 flex-col rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-1 shadow-[var(--shadow-soft)] focus-within:border-[var(--workbench-hover-border)]"
-    : "relative flex min-w-0 flex-col rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-1.5 shadow-[var(--shadow-soft)] focus-within:border-[var(--workbench-hover-border)]";
+    ? "relative flex min-w-0 flex-col rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-1 shadow-[var(--shadow-surface)] focus-within:border-[var(--workbench-hover-border)]"
+    : "relative flex min-w-0 flex-col rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-1 shadow-[var(--shadow-surface)] focus-within:border-[var(--workbench-hover-border)]";
   const inputDisabled = disabled || uploadingAttachments;
   const [message, setMessage] = useState("");
   const [presetMenuOpen, setPresetMenuOpen] = useState(false);
@@ -314,7 +314,7 @@ export function ChatComposer({
 
   const presetEditorDialog = presetEditorOpen ? (
     <div
-      className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/40 px-4 py-6"
+      className="fixed inset-0 z-[1000] flex items-center justify-center bg-[var(--overlay-backdrop-40)] px-4 py-6"
       onPointerDown={(event) => event.stopPropagation()}
       onMouseDown={(event) => event.stopPropagation()}
       onClick={(event) => {
@@ -447,7 +447,7 @@ export function ChatComposer({
   return (
     <div data-testid="chat-composer-root" data-pulse={pulse ? "true" : "false"} className={shellClassName}>
       {attachments.length > 0 || uploadingAttachments ? (
-        <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-2 py-2">
+        <div className="mb-1.5 flex flex-wrap items-center gap-1.5 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-2 py-1.5">
           {attachments.map((attachment) => (
             <span
               key={attachment.id}
@@ -477,7 +477,7 @@ export function ChatComposer({
       ) : null}
 
       {clusterMode && clusterAgents.length > 0 ? (
-        <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-2 py-2 text-xs">
+        <div className="mb-1.5 flex flex-wrap items-center gap-1.5 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-2 py-1.5 text-xs">
           <span className="font-medium text-[var(--accent)]">智能体集群</span>
           {clusterAgents.map((agent) => (
             <button

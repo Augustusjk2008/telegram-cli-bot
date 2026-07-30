@@ -17,6 +17,7 @@ import sys
 import time
 import uuid
 import zlib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
@@ -30,6 +31,7 @@ from ag_ui.encoder import EventEncoder
 
 from bot.app_settings import get_git_proxy_settings, update_git_proxy_address
 from bot.chat_identity import chat_session_user_id
+from bot.codex_usage import close_codex_usage_service_sync, get_codex_usage_service
 from bot.config import (
     ALLOWED_USER_IDS,
     CHAT_COMPLETION_NOTIFY_ENABLED,
@@ -69,6 +71,15 @@ from bot.config import (
     request_restart,
 )
 from bot.debug.service import DebugService
+from bot.language_server import (
+    ExternalSourceRegistry,
+    LanguageDocumentLimitError,
+    LanguageServerCatalog,
+    LanguageServerInstallError,
+    LanguageServerInstaller,
+    LanguageServerRuntimeManager,
+    LanguageServerUnavailableError,
+)
 from bot.manager import MultiBotManager
 from bot.models import session_persistence_diagnostics
 from bot.native_agent import get_native_agent_service
@@ -160,6 +171,7 @@ from .routes import (
     bot_settings_routes,
     chat_routes,
     cluster_routes,
+    codex_usage_routes,
     debug_routes,
     files_routes,
     git_routes,
@@ -311,13 +323,109 @@ from .workspace_search_service import (
     search_workspace_text,
     workspace_search_diagnostics,
 )
-from .workspace_definition_service import resolve_workspace_definition
+from .workspace_definition_service import (
+    adapt_code_navigation_to_legacy,
+    build_legacy_code_navigation_request,
+    resolve_code_navigation,
+    resolve_workspace_definition,
+)
 
 logger = logging.getLogger(__name__)
 DEFAULT_TERMINAL_OWNER_ID = "default"
 # 给浏览器留出响应落地时间，避免服务重启过快导致前端请求悬挂。
 RESTART_RESPONSE_DELAY_SECONDS = 1.0
 _TUNNEL_STATUS_REFRESH_TIMEOUT = 1.0
+_LANGUAGE_SERVER_PROVIDER_LABELS = {
+    "pyright": "Python",
+    "typescript": "TypeScript / JavaScript",
+    "clangd": "C / C++",
+}
+_LANGUAGE_SERVER_RUNTIME_STATES = frozenset(
+    {"starting", "indexing", "restarting", "degraded", "ready", "error", "stopped"}
+)
+
+
+def _language_server_runtime_message(provider_label: str, state: str) -> str:
+    return {
+        "starting": f"正在启动 {provider_label} 语言服务",
+        "indexing": f"{provider_label} 语言服务正在索引工作区",
+        "restarting": f"{provider_label} 语言服务正在重启",
+        "degraded": f"{provider_label} 语言服务已降级，请手动重启",
+        "ready": f"{provider_label} 语言服务已就绪",
+        "error": f"{provider_label} 语言服务启动失败",
+        "stopped": f"{provider_label} 语言服务已停止",
+    }.get(state, "")
+
+
+def _safe_language_server_runtime_state(value: object, *, default: str = "") -> str:
+    """Return only the lifecycle vocabulary that is safe to render in Web API responses."""
+
+    if not isinstance(value, str):
+        return default
+    state = value.strip().lower()
+    return state if state in _LANGUAGE_SERVER_RUNTIME_STATES else default
+
+
+def _safe_nonnegative_int(value: object) -> int:
+    if isinstance(value, bool):
+        return 0
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _safe_language_server_count_map(value: object, allowed_keys: frozenset[str]) -> dict[str, int]:
+    if not isinstance(value, Mapping):
+        return {}
+    return {
+        key: _safe_nonnegative_int(value[key])
+        for key in allowed_keys
+        if key in value
+    }
+
+
+def _safe_language_server_diagnostics_summary(value: object) -> dict[str, object]:
+    """Project LSP diagnostics to operational counters safe for browser delivery.
+
+    Runtime diagnostics deliberately retain stderr and error tails for local
+    troubleshooting.  They can include source text or absolute paths, so Web
+    responses must use an allow-list instead of copying that structure.
+    """
+
+    diagnostics = value if isinstance(value, Mapping) else {}
+    summary: dict[str, object] = {
+        "enabled": bool(diagnostics.get("enabled")) if isinstance(diagnostics.get("enabled"), bool) else False,
+        "runtime_count": _safe_nonnegative_int(diagnostics.get("runtime_count")),
+        "starting_count": _safe_nonnegative_int(diagnostics.get("starting_count")),
+        "restarting_count": _safe_nonnegative_int(diagnostics.get("restarting_count")),
+        "degraded_count": _safe_nonnegative_int(diagnostics.get("degraded_count")),
+        "restart_pending_count": _safe_nonnegative_int(diagnostics.get("restart_pending_count")),
+        "process_count": _safe_nonnegative_int(diagnostics.get("process_count")),
+        "active_request_count": _safe_nonnegative_int(diagnostics.get("active_request_count")),
+        "active_operation_count": _safe_nonnegative_int(diagnostics.get("active_operation_count")),
+        "pending_count": _safe_nonnegative_int(diagnostics.get("pending_count")),
+        "open_document_count": _safe_nonnegative_int(diagnostics.get("open_document_count")),
+        "restart_count": _safe_nonnegative_int(diagnostics.get("restart_count")),
+        "crash_count": _safe_nonnegative_int(diagnostics.get("crash_count")),
+        "provider_counts": _safe_language_server_count_map(
+            diagnostics.get("provider_counts"),
+            frozenset(_LANGUAGE_SERVER_PROVIDER_LABELS),
+        ),
+        "state_counts": _safe_language_server_count_map(
+            diagnostics.get("state_counts"),
+            _LANGUAGE_SERVER_RUNTIME_STATES,
+        ),
+    }
+    document_store = diagnostics.get("document_store")
+    if isinstance(document_store, Mapping):
+        summary["document_store"] = {
+            "runtime_count": _safe_nonnegative_int(document_store.get("runtime_count")),
+            "document_count": _safe_nonnegative_int(document_store.get("document_count")),
+        }
+    return summary
+
+
 _CLIENT_DISCONNECT_ERRORS = (
     ClientConnectionResetError,
     ConnectionResetError,
@@ -891,6 +999,10 @@ class WebApiServer:
         port: int | None = None,
         tunnel_service: TunnelService | None = None,
         fixed_forward_service: FixedForwardService | None = None,
+        language_server_catalog: LanguageServerCatalog | None = None,
+        language_server_installer: LanguageServerInstaller | None = None,
+        language_server_manager: LanguageServerRuntimeManager | None = None,
+        external_source_registry: ExternalSourceRegistry | None = None,
         instance_id: str | None = None,
     ):
         self.manager = manager
@@ -930,6 +1042,39 @@ class WebApiServer:
             messages_path=get_lan_chat_messages_path(),
         )
         self.env_config_service = EnvConfigService(_REPO_ROOT)
+        if language_server_catalog is not None:
+            self.language_server_catalog = language_server_catalog
+            self.language_server_installer = language_server_installer or language_server_catalog.installer
+        else:
+            self.language_server_installer = language_server_installer or LanguageServerInstaller()
+            self.language_server_catalog = LanguageServerCatalog(installer=self.language_server_installer)
+        manager_registry = (
+            getattr(language_server_manager, "external_source_registry", None)
+            if language_server_manager is not None
+            else None
+        )
+        # The provider that issued a source_id and the read endpoint must share
+        # one registry.  An explicitly supplied registry wins; otherwise reuse
+        # an injected runtime manager's registry before creating a new one.
+        self.external_source_registry = (
+            external_source_registry
+            if external_source_registry is not None
+            else manager_registry if manager_registry is not None else ExternalSourceRegistry()
+        )
+        if language_server_manager is None:
+            self.language_server_manager = LanguageServerRuntimeManager(
+                self.language_server_catalog,
+                external_source_registry=self.external_source_registry,
+            )
+        else:
+            self.language_server_manager = language_server_manager
+            # Keep custom managers/test doubles intact while allowing the real
+            # manager to receive the registry for future runtime instances.
+            if getattr(self.language_server_manager, "external_source_registry", None) is not self.external_source_registry:
+                try:
+                    self.language_server_manager.external_source_registry = self.external_source_registry
+                except Exception:
+                    pass
         self._git_smart_commit_jobs: dict[str, dict[str, Any]] = {}
         self._git_smart_commit_latest_by_alias: dict[str, str] = {}
         self._git_smart_commit_repo_locks: dict[str, str] = {}
@@ -971,6 +1116,7 @@ class WebApiServer:
         self.transfer_service = TransferService(host=self._host, port=self._port)
         self.inline_completion_config_store = InlineCompletionConfigStore()
         self.inline_completion_service = InlineCompletionService(config_store=self.inline_completion_config_store)
+        self.codex_usage_service = get_codex_usage_service()
         self._loop_lag_tracker = LoopLagTracker(threshold_ms=diag_loop_lag_ms())
         self._login_throttle = LoginThrottle(
             max_attempts=WEB_LOGIN_MAX_ATTEMPTS,
@@ -991,6 +1137,8 @@ class WebApiServer:
             lambda: {**session_store_diagnostics(), **session_persistence_diagnostics()},
         )
         self._runtime_diagnostics.register("litellm", self.transfer_service.diagnostics)
+        self._runtime_diagnostics.register("language_servers", self.language_server_manager.diagnostics)
+        self._runtime_diagnostics.register("codex_usage", self.codex_usage_service.diagnostics)
         plugin_service = getattr(self.manager, "plugin_service", None)
         if plugin_service is not None:
             self._runtime_diagnostics.register("plugins", plugin_service.snapshot_cache_diagnostics)
@@ -2291,7 +2439,7 @@ class WebApiServer:
         data = await self._terminal_manager.get_snapshot(auth.user_id, owner_id)
         return _json({"ok": True, "data": data})
 
-    async def post_terminal_rebuild(self, request: web.Request) -> web.Response:
+    async def post_terminal_create(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_TERMINAL_EXEC)
         body = await self._parse_json(request)
         owner_id = self._resolve_terminal_owner_id(body.get("owner_id"))
@@ -2302,7 +2450,7 @@ class WebApiServer:
             cwd = os.getcwd()
         size = _parse_terminal_size(body)
         try:
-            data = await self._terminal_manager.rebuild(
+            data = await self._terminal_manager.create(
                 auth.user_id,
                 owner_id,
                 cwd=cwd,
@@ -2314,6 +2462,10 @@ class WebApiServer:
             logger.warning("终端启动失败 owner=%s shell=%s cwd=%s: %s", owner_id, shell_type, cwd, exc)
             raise self._terminal_launch_error(exc) from exc
         return _json({"ok": True, "data": data})
+
+    async def post_terminal_rebuild(self, request: web.Request) -> web.Response:
+        """Compatibility endpoint for older clients; new clients create a fresh tab."""
+        return await self.post_terminal_create(request)
 
     async def post_terminal_close(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_TERMINAL_EXEC)
@@ -2496,7 +2648,7 @@ class WebApiServer:
             shell_type = self._resolve_terminal_shell(body.get("shell"))
             size = _parse_terminal_size(body)
             try:
-                snapshot = await self._terminal_manager.rebuild(
+                snapshot = await self._terminal_manager.create(
                     auth.user_id,
                     owner_id,
                     cwd=action.resolved_cwd,
@@ -2887,19 +3039,309 @@ class WebApiServer:
         data = await asyncio.to_thread(build_file_outline, workspace, path)
         return _json({"ok": True, "data": data})
 
+    async def get_workspace_language_servers(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
+        alias = self._manager_alias(request)
+        workspace = self._workspace_file_root(alias, auth)
+        provider_id = str(request.query.get("provider") or "").strip().lower()
+        should_prewarm = str(request.query.get("prewarm") or "").strip().lower() in {"1", "true", "yes", "on"}
+        provider_label = _LANGUAGE_SERVER_PROVIDER_LABELS.get(provider_id, "")
+        prewarm_error = ""
+        if should_prewarm and provider_label:
+            try:
+                await self.language_server_manager.prewarm(
+                    bot_alias=alias,
+                    user_id=self._chat_user_id(auth),
+                    workspace_root=workspace,
+                    provider_id=provider_id,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "%s 语言服务预热失败: bot=%s user_id=%s",
+                    provider_label,
+                    alias,
+                    self._chat_user_id(auth),
+                )
+                prewarm_error = f"{provider_label} 语言服务启动失败"
+        # 仅做发现；LanguageServerCatalog 不会调用安装器的 install，打开文件
+        # 或轮询状态均不会触发下载。
+        data = await asyncio.to_thread(self.language_server_catalog.api_snapshot)
+        if isinstance(data, dict):
+            providers = data.get("providers")
+            if isinstance(providers, list):
+                decorated: list[object] = []
+                for item in providers:
+                    if not isinstance(item, dict):
+                        decorated.append(item)
+                        continue
+                    item_provider_id = str(item.get("id") or item.get("provider") or "").strip().lower()
+                    item_provider_label = _LANGUAGE_SERVER_PROVIDER_LABELS.get(item_provider_id, "")
+                    if not item_provider_label:
+                        decorated.append(item)
+                        continue
+                    runtime_status = self.language_server_manager.runtime_status(
+                        bot_alias=alias,
+                        user_id=self._chat_user_id(auth),
+                        workspace_root=workspace,
+                        provider_id=item_provider_id,
+                    )
+                    item_prewarm_error = prewarm_error if item_provider_id == provider_id else ""
+                    runtime_state = (
+                        "error"
+                        if item_prewarm_error
+                        else _safe_language_server_runtime_state((runtime_status or {}).get("state"))
+                    )
+                    runtime_message = item_prewarm_error or _language_server_runtime_message(
+                        item_provider_label,
+                        runtime_state,
+                    )
+                    implementation_supported = (runtime_status or {}).get("implementation_supported")
+                    decorated.append(
+                        {
+                            **item,
+                            **({"runtimeState": runtime_state} if runtime_state else {}),
+                            **({"runtimeMessage": runtime_message} if runtime_message else {}),
+                            **(
+                                {"implementationSupported": implementation_supported}
+                                if isinstance(implementation_supported, bool)
+                                else {}
+                            ),
+                        }
+                    )
+                data = {**data, "providers": decorated}
+        return _json({"ok": True, "data": data})
+
+    async def post_workspace_language_server_restart(self, request: web.Request) -> web.Response:
+        """Restart one caller-scoped language server without restarting Web."""
+
+        auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
+        path_provider_id = str(request.match_info.get("provider_id") or "").strip().lower()
+        requested_provider_id = str(
+            body.get("provider")
+            or body.get("provider_id")
+            or request.query.get("provider")
+            or request.query.get("provider_id")
+            or ""
+        ).strip().lower()
+        if path_provider_id and requested_provider_id and path_provider_id != requested_provider_id:
+            raise WebApiError(400, "invalid_language_server_provider", "语言服务器 provider 不一致")
+        provider_id = path_provider_id or requested_provider_id
+        provider_label = _LANGUAGE_SERVER_PROVIDER_LABELS.get(provider_id, "")
+        if not provider_label:
+            raise WebApiError(400, "invalid_language_server_provider", "语言服务器 provider 无效")
+        workspace = self._workspace_file_root(alias, auth)
+        restart = getattr(self.language_server_manager, "restart_runtime", None)
+        if not callable(restart):
+            restart = getattr(self.language_server_manager, "restart_language_server", None)
+        if not callable(restart):
+            raise WebApiError(503, "language_server_restart_unavailable", "语言服务暂不支持单实例重启")
+        try:
+            result = await restart(
+                bot_alias=alias,
+                user_id=self._chat_user_id(auth),
+                workspace_root=workspace,
+                provider_id=provider_id,
+            )
+        except ValueError as exc:
+            logger.warning("语言服务单实例重启参数无效: bot=%s provider=%s", alias, provider_id, exc_info=exc)
+            raise WebApiError(400, "invalid_language_server_restart", "语言服务重启参数无效") from exc
+        except LanguageServerUnavailableError as exc:
+            raise WebApiError(503, "language_server_restart_failed", "语言服务重启失败，请稍后重试") from exc
+        except Exception as exc:
+            logger.exception("语言服务单实例重启失败: bot=%s provider=%s", alias, provider_id)
+            raise WebApiError(503, "language_server_restart_failed", "语言服务重启失败，请稍后重试") from exc
+
+        result_payload = dict(result) if isinstance(result, Mapping) else {}
+        runtime_status = result_payload if result_payload.get("state") else None
+        if runtime_status is None:
+            status = getattr(self.language_server_manager, "runtime_status", None)
+            if callable(status):
+                try:
+                    candidate = status(
+                        bot_alias=alias,
+                        user_id=self._chat_user_id(auth),
+                        workspace_root=workspace,
+                        provider_id=provider_id,
+                    )
+                except Exception:
+                    logger.exception("读取语言服务重启状态失败: bot=%s provider=%s", alias, provider_id)
+                else:
+                    if isinstance(candidate, Mapping):
+                        runtime_status = dict(candidate)
+        runtime_state = _safe_language_server_runtime_state(
+            (runtime_status or {}).get("state"),
+            default="starting",
+        )
+        payload = {
+            "restarted": result_payload.get("restarted") is not False,
+            "provider": provider_id,
+            # Keep the historical state field while only returning normalized
+            # lifecycle values; runtimeState is the newer UI-facing spelling.
+            "state": runtime_state,
+            "runtimeState": runtime_state,
+            "runtimeMessage": _language_server_runtime_message(provider_label, runtime_state),
+        }
+        return _json({"ok": True, "data": payload})
+
+    async def get_language_server_catalog(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_READ_FILE_CONTENT)
+        data = await asyncio.to_thread(self.language_server_catalog.api_snapshot)
+        return _json({"ok": True, "data": data})
+
+    async def refresh_language_server_catalog(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_READ_FILE_CONTENT)
+        data = await asyncio.to_thread(self.language_server_catalog.api_snapshot)
+        return _json({"ok": True, "data": data})
+
     async def post_workspace_resolve_definition(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         workspace = self._workspace_file_root(alias, auth)
-        data = await asyncio.to_thread(
-            resolve_workspace_definition,
-            workspace,
-            str(body.get("path", "")),
-            line=int(body.get("line") or 1),
-            column=int(body.get("column") or 1),
-            symbol=str(body.get("symbol", "")),
-        )
+        try:
+            path = str(body.get("path", ""))
+            line = int(body.get("line") or 1)
+            column = int(body.get("column") or 1)
+            navigation_request = await asyncio.to_thread(
+                build_legacy_code_navigation_request,
+                workspace,
+                path,
+                line=line,
+                column=column,
+            )
+            try:
+                navigation_result = await self.language_server_manager.resolve_code_navigation(
+                    bot_alias=alias,
+                    user_id=self._chat_user_id(auth),
+                    workspace_root=workspace,
+                    request=navigation_request,
+                )
+            except LanguageServerUnavailableError:
+                data = await asyncio.to_thread(
+                    resolve_workspace_definition,
+                    workspace,
+                    path,
+                    line=line,
+                    column=column,
+                    symbol=str(body.get("symbol", "")),
+                )
+            else:
+                document = navigation_request.get("document")
+                source_path = str(document.get("path") or path) if isinstance(document, dict) else path
+                data = adapt_code_navigation_to_legacy(navigation_result, source_path=source_path)
+        except ValueError as exc:
+            raise WebApiError(400, "invalid_code_navigation_request", str(exc)) from exc
+        except Exception as exc:
+            logger.exception("旧版语言服务定义跳转失败: bot=%s", alias)
+            raise WebApiError(
+                503,
+                "language_server_failed",
+                "语言服务请求失败，请稍后重试",
+            ) from exc
+        return _json({"ok": True, "data": data})
+
+    async def post_workspace_code_navigation_resolve(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        workspace = self._workspace_file_root(alias, auth)
+        try:
+            try:
+                data = await self.language_server_manager.resolve_code_navigation(
+                    bot_alias=alias,
+                    user_id=self._chat_user_id(auth),
+                    workspace_root=workspace,
+                    request=body,
+                )
+            except LanguageServerUnavailableError:
+                # 未启用或尚未安装时继续保留阶段 1 的 Python AST 语义能力；
+                # 一旦 Pyright 可用，空结果不会退回文本/AST 搜索。
+                data = await asyncio.to_thread(resolve_code_navigation, workspace, body)
+        except ValueError as exc:
+            raise WebApiError(400, "invalid_code_navigation_request", str(exc)) from exc
+        except Exception as exc:
+            logger.exception("语言服务代码导航失败: bot=%s", alias)
+            raise WebApiError(
+                503,
+                "language_server_failed",
+                "语言服务请求失败，请稍后重试",
+            ) from exc
+        return _json({"ok": True, "data": data})
+
+    async def post_workspace_code_navigation_cancel(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        request_id = str(body.get("requestId") or body.get("request_id") or "").strip()
+        if not request_id:
+            raise web.HTTPBadRequest(reason="缺少代码导航请求 ID")
+        workspace = self._workspace_file_root(alias, auth)
+        try:
+            cancelled = await self.language_server_manager.cancel_code_navigation(
+                bot_alias=alias,
+                user_id=self._chat_user_id(auth),
+                workspace_root=workspace,
+                request_id=request_id,
+            )
+        except ValueError as exc:
+            raise WebApiError(400, "invalid_code_navigation_request", str(exc)) from exc
+        except Exception as exc:
+            logger.exception("取消语言服务代码导航失败: bot=%s", alias)
+            raise WebApiError(
+                503,
+                "language_server_failed",
+                "语言服务请求失败，请稍后重试",
+            ) from exc
+        return _json({"ok": True, "data": {"cancelled": cancelled}})
+
+    async def post_workspace_code_navigation_documents_sync(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        documents = body.get("documents")
+        if not isinstance(documents, list):
+            raise WebApiError(400, "invalid_language_documents", "文档同步批次必须是数组")
+        workspace = self._workspace_file_root(alias, auth)
+        try:
+            data = await self.language_server_manager.sync_documents(
+                bot_alias=alias,
+                user_id=self._chat_user_id(auth),
+                workspace_root=workspace,
+                documents=documents,
+            )
+        except LanguageDocumentLimitError as exc:
+            raise WebApiError(413, "language_document_too_large", str(exc)) from exc
+        except ValueError as exc:
+            raise WebApiError(400, "invalid_language_documents", str(exc)) from exc
+        except Exception as exc:
+            logger.exception("语言服务文档同步失败: bot=%s", alias)
+            raise WebApiError(503, "language_document_sync_failed", "语言服务文档同步失败，请稍后重试") from exc
+        return _json({"ok": True, "data": data})
+
+    async def post_workspace_code_navigation_documents_close(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        documents = body.get("documents")
+        if not isinstance(documents, list):
+            raise WebApiError(400, "invalid_language_documents", "文档关闭批次必须是数组")
+        workspace = self._workspace_file_root(alias, auth)
+        try:
+            data = await self.language_server_manager.close_documents(
+                bot_alias=alias,
+                user_id=self._chat_user_id(auth),
+                workspace_root=workspace,
+                documents=documents,
+            )
+        except LanguageDocumentLimitError as exc:
+            raise WebApiError(413, "language_document_batch_too_large", str(exc)) from exc
+        except ValueError as exc:
+            raise WebApiError(400, "invalid_language_documents", str(exc)) from exc
+        except Exception as exc:
+            logger.exception("关闭语言服务文档失败: bot=%s", alias)
+            raise WebApiError(503, "language_document_close_failed", "关闭语言服务文档失败，请稍后重试") from exc
         return _json({"ok": True, "data": data})
 
     async def get_workspace_inline_completion_config(self, request: web.Request) -> web.Response:
@@ -4064,12 +4506,24 @@ class WebApiServer:
 
     async def admin_runtime_diagnostics(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
+        runtime = self._runtime_diagnostics.snapshot()
+        components = runtime.get("components")
+        if isinstance(components, Mapping):
+            runtime = {
+                **runtime,
+                "components": {
+                    **components,
+                    "language_servers": _safe_language_server_diagnostics_summary(
+                        components.get("language_servers")
+                    ),
+                },
+            }
         return _json(
             {
                 "ok": True,
                 "data": {
                     **migration_diagnostics(_REPO_ROOT),
-                    "runtime": self._runtime_diagnostics.snapshot(),
+                    "runtime": runtime,
                 },
             }
         )
@@ -4224,6 +4678,51 @@ class WebApiServer:
         body = await self._parse_json(request)
         return _json({"ok": True, "data": update_native_agent_config_payload(body)})
 
+    async def admin_language_server_install(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        body: dict[str, Any] = {}
+        if request.content_length not in {None, 0}:
+            body = await self._parse_json(request)
+        return await self._admin_install_language_server(request, update=bool(body.get("update", False)))
+
+    async def admin_language_server_update(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        return await self._admin_install_language_server(request, update=True)
+
+    async def admin_language_servers_redetect(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        data = await asyncio.to_thread(self.language_server_catalog.redetect)
+        return _json({"ok": True, "data": data})
+
+    async def _admin_install_language_server(self, request: web.Request, *, update: bool) -> web.Response:
+        provider_id = str(request.match_info.get("provider_id", "")).strip().lower()
+        try:
+            installation = await asyncio.to_thread(
+                self.language_server_installer.install,
+                provider_id,
+                update=update,
+            )
+        except LanguageServerInstallError as exc:
+            if exc.code == "language_server_install_locked":
+                status = 409
+            elif exc.code in {"invalid_language_server_provider", "language_server_platform_unsupported"}:
+                status = 400
+            elif exc.code == "language_server_manifest_unavailable":
+                status = 503
+            else:
+                status = 502
+            raise WebApiError(status, exc.code, exc.message, exc.data) from exc
+        catalog = await asyncio.to_thread(self.language_server_catalog.api_snapshot)
+        return _json(
+            {
+                "ok": True,
+                "data": {
+                    "installation": installation,
+                    **catalog,
+                },
+            }
+        )
+
     async def admin_env_patch(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
         body = await self._parse_json(request)
@@ -4339,6 +4838,7 @@ class WebApiServer:
             auth_routes,
             announcement_routes,
             cluster_routes,
+            codex_usage_routes,
             chat_routes,
             terminal_routes,
             debug_routes,
@@ -4563,6 +5063,8 @@ class WebApiServer:
             await plugin_service.shutdown()
         await self.lan_chat_service.close()
         await self.inline_completion_service.close()
+        await self.language_server_manager.shutdown()
+        self.external_source_registry.clear()
         if preserve_tunnel:
             self._tunnel_service.preserve_for_restart()
         else:
@@ -4570,6 +5072,7 @@ class WebApiServer:
         await self._fixed_forward_service.stop()
         await self.transfer_service.close()
         await self._runner.cleanup()
+        await asyncio.to_thread(close_codex_usage_service_sync)
         await asyncio.to_thread(close_session_store)
         self._runner = None
         self._site = None

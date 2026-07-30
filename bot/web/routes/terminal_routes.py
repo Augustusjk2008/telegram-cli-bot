@@ -12,6 +12,7 @@ def register(app: web.Application, server) -> None:
         server.post_run_terminal_action,
     )
     app.router.add_get("/api/terminal/session", server.get_terminal_session)
+    app.router.add_post("/api/terminal/session/create", server.post_terminal_create)
     app.router.add_get("/api/terminal/session/stream", server.get_terminal_stream)
     app.router.add_post("/api/terminal/session/input", server.post_terminal_input)
     app.router.add_get("/terminal/ws-probe", server.get_terminal_ws_probe)

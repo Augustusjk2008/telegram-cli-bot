@@ -502,7 +502,11 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
     if (!rootPath) {
       return;
     }
+    const generation = loadGenerationRef.current;
     const result = await client.revealFileTreePath(botAlias, path);
+    if (loadGenerationRef.current !== generation) {
+      return;
+    }
     const nextBranches = Object.fromEntries(
       Object.entries(result.branches).map(([branchPath, entries]) => [
         branchPath,

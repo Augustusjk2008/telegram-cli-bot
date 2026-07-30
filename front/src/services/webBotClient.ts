@@ -17,6 +17,9 @@ import type {
   ChatTraceEvent,
   CliErrorStatsFilters,
   CliErrorStatsResult,
+  CodexUsageConfig,
+  CodexUsageStats,
+  CodexUsageStatsQuery,
   BotExecutionConfigInput,
   CliParamsPayload,
   CreateBotInput,
@@ -29,6 +32,7 @@ import type {
   EnvConfigSnapshot,
   FileOpenTarget,
   FileTreeRevealResult,
+  ExternalSourceReadResult,
   FileCopyResult,
   FileCreateResult,
   FileDownloadProgress,
@@ -126,10 +130,19 @@ import type {
   InlineCompletionConfigInput,
   InlineCompletionRequest,
   InlineCompletionResult,
+  LanguageServerCatalog,
+  LanguageServerInstallOptions,
+  LanguageServerProviderId,
+  LanguageServerRestartResult,
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
   UserBotPermissions,
-  WorkspaceDefinitionResult,
+  CodeNavigationRequest,
+  CodeNavigationResult,
+  WorkspaceDocumentSyncInput,
+  WorkspaceDocumentSyncResult,
+  WorkspaceDocumentCloseInput,
+  WorkspaceDocumentCloseResult,
   WorkspaceOutlineResult,
   WorkspaceQuickOpenResult,
   WorkspaceSearchResult,
@@ -162,6 +175,10 @@ export interface WebBotClient {
   updateInlineCompletionConfig(input: InlineCompletionConfigInput): Promise<InlineCompletionConfig>;
   getInlineCompletionRuntimeConfig(botAlias: string): Promise<InlineCompletionConfig>;
   requestInlineCompletion(botAlias: string, input: InlineCompletionRequest, signal?: AbortSignal): Promise<InlineCompletionResult>;
+  getLanguageServerCatalog(botAlias: string, provider?: LanguageServerProviderId): Promise<LanguageServerCatalog>;
+  restartLanguageServer(botAlias: string, provider: LanguageServerProviderId): Promise<LanguageServerRestartResult>;
+  refreshLanguageServerCatalog(): Promise<LanguageServerCatalog>;
+  installLanguageServer(provider: LanguageServerProviderId, options?: LanguageServerInstallOptions): Promise<LanguageServerCatalog>;
   getEnvConfig(): Promise<EnvConfigSnapshot>;
   previewEnvConfig(input: EnvConfigPatchInput): Promise<EnvConfigPatchResult>;
   updateEnvConfig(input: EnvConfigPatchInput): Promise<EnvConfigPatchResult>;
@@ -169,6 +186,9 @@ export interface WebBotClient {
   runNativeAgentPreflight(options?: { cwd?: string; piCommand?: string }): Promise<NativeAgentPreflightResult>;
   updateNativeAgentConfig(config: Record<string, unknown>): Promise<NativeAgentConfigPayload>;
   getCliErrorStats(filters?: CliErrorStatsFilters): Promise<CliErrorStatsResult>;
+  getCodexUsageConfig(): Promise<CodexUsageConfig>;
+  updateCodexUsageConfig(input: { enabled: boolean }): Promise<CodexUsageConfig>;
+  getCodexUsageStats(query?: CodexUsageStatsQuery): Promise<CodexUsageStats>;
   listBots(): Promise<BotSummary[]>;
   listPlugins(refresh?: boolean): Promise<PluginSummary[]>;
   listInstallablePlugins(): Promise<InstallablePluginSummary[]>;
@@ -247,6 +267,7 @@ export interface WebBotClient {
   getDebugProfile(botAlias: string): Promise<DebugProfile | null>;
   getDebugState(botAlias: string): Promise<DebugState>;
   getTerminalSession(ownerId: string): Promise<PersistentTerminalSnapshot>;
+  createTerminalSession(ownerId: string, cwd: string, shell?: string): Promise<PersistentTerminalSnapshot>;
   rebuildTerminalSession(ownerId: string, cwd: string, shell?: string): Promise<PersistentTerminalSnapshot>;
   closeTerminalSession(ownerId: string): Promise<PersistentTerminalSnapshot>;
   getTerminalActionsConfig(botAlias: string): Promise<TerminalActionsConfig>;
@@ -263,6 +284,7 @@ export interface WebBotClient {
   resolveFileOpenTarget(botAlias: string, path: string): Promise<FileOpenTarget>;
   readFile(botAlias: string, filename: string): Promise<FileReadResult>;
   readFileFull(botAlias: string, filename: string): Promise<FileReadResult>;
+  readExternalSource(botAlias: string, sourceId: string): Promise<ExternalSourceReadResult>;
   openPluginView(
     botAlias: string,
     pluginId: string,
@@ -288,10 +310,21 @@ export interface WebBotClient {
   quickOpenWorkspace(botAlias: string, query: string, limit?: number): Promise<WorkspaceQuickOpenResult>;
   searchWorkspace(botAlias: string, query: string, limit?: number, signal?: AbortSignal): Promise<WorkspaceSearchResult>;
   getWorkspaceOutline(botAlias: string, path: string): Promise<WorkspaceOutlineResult>;
-  resolveWorkspaceDefinition(
+  resolveCodeNavigation(
     botAlias: string,
-    input: { path: string; line: number; column: number; symbol?: string },
-  ): Promise<WorkspaceDefinitionResult>;
+    input: CodeNavigationRequest,
+    signal?: AbortSignal,
+  ): Promise<CodeNavigationResult>;
+  syncWorkspaceDocuments(
+    botAlias: string,
+    input: WorkspaceDocumentSyncInput,
+    signal?: AbortSignal,
+  ): Promise<WorkspaceDocumentSyncResult>;
+  closeWorkspaceDocuments(
+    botAlias: string,
+    input: WorkspaceDocumentCloseInput,
+    signal?: AbortSignal,
+  ): Promise<WorkspaceDocumentCloseResult>;
   uploadChatAttachment(botAlias: string, file: File): Promise<ChatAttachmentUploadResult>;
   deleteChatAttachment(botAlias: string, savedPath: string): Promise<ChatAttachmentDeleteResult>;
   uploadFile(botAlias: string, file: File): Promise<void>;

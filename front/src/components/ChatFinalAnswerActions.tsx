@@ -9,6 +9,7 @@ type Props = {
   contextUsage?: ChatMessageContextUsage;
   favorite?: boolean;
   fullAnswerText?: string;
+  buildFullAnswerText?: () => string;
   onContinue?: () => void;
   onCopyFinalAnswer?: () => boolean | void | Promise<boolean | void>;
   onToggleFavorite?: () => void;
@@ -19,6 +20,7 @@ export function ChatFinalAnswerActions({
   contextUsage,
   favorite = false,
   fullAnswerText,
+  buildFullAnswerText,
   onContinue,
   onCopyFinalAnswer,
   onToggleFavorite,
@@ -31,6 +33,7 @@ export function ChatFinalAnswerActions({
   const fullAnswerCopyFeedbackTimerRef = useRef<number | null>(null);
   const contextDetails = formatContextUsageDetails(contextUsage);
   const fullAnswer = (fullAnswerText || "").trim();
+  const canBuildFullAnswer = typeof buildFullAnswerText === "function";
 
   useEffect(() => () => {
     if (copyFeedbackTimerRef.current !== null) {
@@ -44,7 +47,7 @@ export function ChatFinalAnswerActions({
     }
   }, []);
 
-  if (!onCopyFinalAnswer && !contextDetails && !fullAnswer && !onToggleFavorite && !(canContinue && onContinue)) {
+  if (!onCopyFinalAnswer && !contextDetails && !fullAnswer && !canBuildFullAnswer && !onToggleFavorite && !(canContinue && onContinue)) {
     return null;
   }
 
@@ -85,10 +88,14 @@ export function ChatFinalAnswerActions({
   };
 
   const copyFullAnswer = async () => {
-    if (!fullAnswer || copiedFullAnswer) {
+    if (copiedFullAnswer) {
       return;
     }
-    const ok = await copyText(fullAnswer);
+    const value = (fullAnswer || buildFullAnswerText?.() || "").trim();
+    if (!value) {
+      return;
+    }
+    const ok = await copyText(value);
     if (!ok) {
       return;
     }
@@ -150,7 +157,7 @@ export function ChatFinalAnswerActions({
           {copiedContextUsage ? <CheckCheck className="h-3.5 w-3.5" /> : <Gauge className="h-3.5 w-3.5" />}
         </button>
       ) : null}
-      {fullAnswer ? (
+      {fullAnswer || canBuildFullAnswer ? (
         <button
           type="button"
           aria-label={copiedFullAnswer ? "已复制完整回答" : "复制完整回答"}

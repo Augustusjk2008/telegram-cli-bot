@@ -2,17 +2,18 @@
 
 远程控制 AI 智能体的多 Bot Web 控制台。它把 `codex` / `claude`、项目文件、Git、终端、插件视图和管理中心聚合到同一浏览器界面，用于统一调度多个仓库、子 agent 和集群任务。
 
-- 当前版本：`1.4.5`
-- 文档最后更新：`2026-07-17`
+- 当前版本：`1.4.8`
+- 文档最后更新：`2026-07-29`
 
 ## 核心能力
 
 - 多 Bot 编排：主 Bot + 托管 Bot 共同运行，每个 Bot 绑定 CLI、工作目录、执行模式、CLI 参数和独立会话。
 - 集群协作：CLI Bot 支持子 agents、`@agent_id` 路由、集群模板、JSON bundle、MCP 连接和模型档位，适合并行分派审查、实现、验证等任务。
 - 原生 agent：Chat 支持普通 CLI 和原生 agent 执行模式，保留原生会话复用、上下文用量、工具调用、权限请求和过程详情。
-- 项目工作台：Chat、Files、Git、Terminal、Debug 组成一体化开发界面，覆盖对话执行、文件编辑、版本控制、终端和系统脚本；Chat 过程详情刷新前后保持一致。
+- 项目工作台：Chat、Files、Git、Terminal、Debug 组成一体化开发界面，覆盖对话执行、文件编辑、版本控制、终端和系统脚本；Terminal 支持持久化多标签会话，Chat 过程详情刷新前后保持一致。
 - 插件运行时：基于 `plugin.json` 扩展文件视图、插件配置和进程运行能力，支持 session 型重型视图，内置 Vivado waveform 示例。
 - 可选 LiteLLM 网关：在 Admin Center 独立启停 OpenAI 兼容转接，支持多路由、模型别名和 `auto` / `chat_completions` / `responses` endpoint 模式，并兼容 Codex 上下文压缩流。
+- Codex 用量统计：管理中心可按自然日和 API provider 查询普通 Codex CLI 的请求数、输入/缓存/输出 token；默认关闭，开启后即时生效。
 - 管理与交付：Admin Center 覆盖用户权限、邀请码、公告发布、LiteLLM 网关、更新检查、Release 下载和离线包管理；Cloudflare quick tunnel 支持移动端远程访问。
 
 ## 环境要求
@@ -248,10 +249,21 @@ LiteLLM 网关不是普通 CLI 的必经链路；不启用时，`codex` / `claud
 
 保存配置后网关会热切换，无需重启主 Web 服务。运行状态、最近请求和错误日志可在管理界面查看；上游密钥不会在状态接口中明文返回。
 
+### Codex 每日用量统计
+
+管理中心的“Codex 用量”页签可即时开启或关闭采集。功能默认关闭，只统计开启后由 Orbit 启动的新普通 Codex CLI 进程，不回填历史；关闭只停止新进程采集，不删除已有统计。Claude、Pi、原生 agent、LiteLLM Transfer、内联补全、手工终端进程和未经过 Web Chat Runtime 的 Codex 均不在统计范围内。
+
+Provider 仅按 Codex 用户级根配置归因：若子进程环境设置了 `CODEX_HOME`，读取 `<CODEX_HOME>/config.toml`，否则读取 `~/.codex/config.toml`。实现不模拟项目配置、profile 或 Codex 的完整配置优先级；检测到 `--profile` / `-p`、`--oss` 或通过 `-c` / `--config` 改写 provider/base URL 时归入 `unknown`。OpenAI 官方与规范化后的自定义 `http`/`https` base URL 分组展示，不保存配置原文、凭据、认证头、bot、用户、agent、模型或会话维度。
+
+每个收到有效 `turn.completed.usage` 的实际 Codex 进程计为一次请求，并归入 terminal usage 到达时的 Orbit 服务端本地自然日。`cached_input_tokens` 已包含在 `input_tokens` 中，`reasoning_output_tokens` 已包含在 `output_tokens` 中，因此总 token 为输入加输出；缓存命中率按聚合后的缓存输入除以总输入计算，输入为零时显示为空值。
+
+统计保存在 `~/.tcb/orbit-safe-claw/codex-usage/usage.sqlite3`，并服从 `TCB_DATA_DIR`。数据库按“日期 × provider”永久聚合，不保存逐轮明细，也不自动清理。管理页不提供删除按钮；需要人工重置时，先停止 Orbit，再删除该数据库及同目录的 WAL/SHM 文件。
+
 ## 工作界面
 
 - Bot：把 Web 消息转发到本地 `codex` / `claude`，支持普通 CLI 和原生 agent 执行模式，保留会话、trace、上下文用量、CLI 参数和子 agent 作用域。
 - Desktop Workbench：面向重复开发操作，集中承载文件树、编辑器、Git、终端、聊天和插件视图。
+- Terminal：支持持久化多标签终端会话。每个标签的 shell 与工作目录相互独立；切换标签或刷新页面会按浏览器本地记录重新连接仍在运行的会话，关闭标签会终止对应 shell。Web 服务重启后，原后台终端会话会结束。
 - Admin Center：面向运维管理，集中承载账号权限、邀请、公告、LiteLLM 网关和更新。
 
 ## 更新

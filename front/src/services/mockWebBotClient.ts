@@ -49,6 +49,15 @@ import type {
   NativeAgentModelUpdateOptions,
   CliErrorStatsFilters,
   CliErrorStatsResult,
+  CodexUsageConfig,
+  CodexUsageDailyProviderModelStats,
+  CodexUsageDailyProviderStats,
+  CodexUsageDailyStats,
+  CodexUsageMetrics,
+  CodexUsageProviderStats,
+  CodexUsageProviderModelStats,
+  CodexUsageStats,
+  CodexUsageStatsQuery,
   CliType,
   CliParamsPayload,
   ClusterConfigUpdateInput,
@@ -74,6 +83,7 @@ import type {
   EnvConfigSnapshot,
   FileOpenTarget,
   FileTreeRevealResult,
+  ExternalSourceReadResult,
   FileCopyResult,
   FileCreateResult,
   FileDownloadProgress,
@@ -103,6 +113,10 @@ import type {
   InlineCompletionConfigInput,
   InlineCompletionRequest,
   InlineCompletionResult,
+  LanguageServerCatalog,
+  LanguageServerInstallOptions,
+  LanguageServerProviderId,
+  LanguageServerRestartResult,
   LanChatConfig,
   LanChatConfigInput,
   LanChatConversation,
@@ -144,7 +158,12 @@ import type {
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
   UserBotPermissions,
-  WorkspaceDefinitionResult,
+  CodeNavigationRequest,
+  CodeNavigationResult,
+  WorkspaceDocumentSyncInput,
+  WorkspaceDocumentSyncResult,
+  WorkspaceDocumentCloseInput,
+  WorkspaceDocumentCloseResult,
   WorkspaceOutlineResult,
   WorkspaceQuickOpenResult,
   WorkspaceSearchResult,
@@ -363,6 +382,57 @@ function cloneCliParamsPayload(payload: CliParamsPayload): CliParamsPayload {
           },
         }
       : {}),
+  };
+}
+
+function cloneCodexUsageConfig(config: CodexUsageConfig): CodexUsageConfig {
+  return {
+    ...config,
+    currentProvider: { ...config.currentProvider },
+    timeBasis: { ...config.timeBasis },
+    availableRange: { ...config.availableRange },
+  };
+}
+
+function cloneCodexUsageStats(stats: CodexUsageStats): CodexUsageStats {
+  return {
+    ...stats,
+    range: { ...stats.range },
+    timeBasis: { ...stats.timeBasis },
+    availableRange: { ...stats.availableRange },
+    availableProviders: stats.availableProviders.map((provider) => ({ ...provider })),
+    selectedProviderKeys: [...stats.selectedProviderKeys],
+    totals: { ...stats.totals },
+    byProvider: stats.byProvider.map((item) => ({ ...item, provider: { ...item.provider } })),
+    byProviderModel: stats.byProviderModel.map((item) => ({ ...item, provider: { ...item.provider } })),
+    byDay: stats.byDay.map((item) => ({ ...item })),
+    dailyByProvider: stats.dailyByProvider.map((item) => ({ ...item, provider: { ...item.provider } })),
+    dailyByProviderModel: stats.dailyByProviderModel.map((item) => ({ ...item, provider: { ...item.provider } })),
+  };
+}
+
+function sumCodexUsageMetrics(items: CodexUsageMetrics[]): CodexUsageMetrics {
+  const totals = items.reduce(
+    (current, item) => ({
+      requestCount: current.requestCount + item.requestCount,
+      inputTokens: current.inputTokens + item.inputTokens,
+      cachedInputTokens: current.cachedInputTokens + item.cachedInputTokens,
+      outputTokens: current.outputTokens + item.outputTokens,
+      reasoningOutputTokens: current.reasoningOutputTokens + item.reasoningOutputTokens,
+    }),
+    {
+      requestCount: 0,
+      inputTokens: 0,
+      cachedInputTokens: 0,
+      outputTokens: 0,
+      reasoningOutputTokens: 0,
+    },
+  );
+  return {
+    ...totals,
+    uncachedInputTokens: totals.inputTokens - totals.cachedInputTokens,
+    totalTokens: totals.inputTokens + totals.outputTokens,
+    cacheHitRate: totals.inputTokens > 0 ? totals.cachedInputTokens / totals.inputTokens : null,
   };
 }
 
@@ -708,7 +778,11 @@ function cloneEnvItem(item: EnvConfigItem): EnvConfigItem {
   };
 }
 
-function readMockPersistentTerminalSnapshot(): PersistentTerminalSnapshot {
+function mockTerminalStorageKey(ownerId: string) {
+  return `${MOCK_PERSISTENT_TERMINAL_STORAGE_KEY}:${ownerId || "default"}`;
+}
+
+function readMockPersistentTerminalSnapshot(ownerId = ""): PersistentTerminalSnapshot {
   if (typeof localStorage === "undefined") {
     return {
       started: false,
@@ -720,7 +794,8 @@ function readMockPersistentTerminalSnapshot(): PersistentTerminalSnapshot {
     };
   }
   try {
-    const raw = localStorage.getItem(MOCK_PERSISTENT_TERMINAL_STORAGE_KEY);
+    const raw = localStorage.getItem(mockTerminalStorageKey(ownerId))
+      || (ownerId ? null : localStorage.getItem(MOCK_PERSISTENT_TERMINAL_STORAGE_KEY));
     if (!raw) {
       return {
         started: false,
@@ -752,11 +827,11 @@ function readMockPersistentTerminalSnapshot(): PersistentTerminalSnapshot {
   }
 }
 
-function writeMockPersistentTerminalSnapshot(snapshot: PersistentTerminalSnapshot) {
+function writeMockPersistentTerminalSnapshot(snapshot: PersistentTerminalSnapshot, ownerId = "") {
   if (typeof localStorage === "undefined") {
     return;
   }
-  localStorage.setItem(MOCK_PERSISTENT_TERMINAL_STORAGE_KEY, JSON.stringify(snapshot));
+  localStorage.setItem(mockTerminalStorageKey(ownerId), JSON.stringify(snapshot));
 }
 
 function resolveMemberCapabilities(username: string) {
@@ -1508,6 +1583,46 @@ export class MockWebBotClient implements WebBotClient {
     maxRelatedFileBytes: 4096,
     denyGlobs: [".env*", "managed_bots.json", "*.pem", "*.key", ".git/**", "node_modules/**", "dist/**", "build/**"],
   };
+  private languageServerCatalog: LanguageServerCatalog = {
+    canRefresh: true,
+    providers: [
+      {
+        provider: "pyright",
+        status: "missing",
+        source: null,
+        version: "",
+        commandSummary: "pyright-langserver --stdio",
+        canInstall: true,
+        canUpdate: false,
+        message: "未检测到 Pyright",
+        error: "未检测到 Pyright",
+      },
+      {
+        provider: "typescript",
+        status: "available",
+        source: "path",
+        version: "5.8.3",
+        commandSummary: "typescript-language-server --stdio",
+        canInstall: false,
+        canUpdate: false,
+        message: "使用 PATH 中的命令",
+        error: "",
+        implementationSupported: true,
+      },
+      {
+        provider: "clangd",
+        status: "error",
+        source: "path",
+        version: "17.0.6",
+        commandSummary: "clangd --stdio",
+        canInstall: true,
+        canUpdate: false,
+        message: "clangd 检测失败，可重新检测或改用托管安装",
+        error: "clangd 检测失败，可重新检测或改用托管安装",
+      },
+    ],
+  };
+  private restartingLanguageServers = new Set<LanguageServerProviderId>();
   private gitOverviews = new Map<string, GitOverview>([
     [
       "main",
@@ -1666,6 +1781,142 @@ export class MockWebBotClient implements WebBotClient {
         durationMs: 8000,
       },
     ],
+  };
+  private codexUsageConfig: CodexUsageConfig = {
+    enabled: false,
+    currentProvider: {
+      key: "openai_official",
+      kind: "openai_official",
+      label: "OpenAI 官方",
+      baseUrl: null,
+      resolution: "resolved",
+    },
+    timeBasis: {
+      mode: "server_local",
+      utcOffset: "+08:00",
+      today: "2026-07-26",
+    },
+    availableRange: {
+      firstDate: "2026-07-20",
+      lastDate: "2026-07-26",
+    },
+  };
+  private codexUsageStats: CodexUsageStats = {
+    range: {
+      startDate: "2026-06-27",
+      endDate: "2026-07-26",
+    },
+    enabled: false,
+    timeBasis: {
+      mode: "server_local",
+      utcOffset: "+08:00",
+      today: "2026-07-26",
+    },
+    availableRange: {
+      firstDate: "2026-07-20",
+      lastDate: "2026-07-26",
+    },
+    availableProviders: [{
+      key: "openai_official",
+      kind: "openai_official",
+      label: "OpenAI 官方",
+      baseUrl: null,
+      resolution: "resolved",
+    }],
+    selectedProviderKeys: [],
+    totals: {
+      requestCount: 12,
+      inputTokens: 18800,
+      cachedInputTokens: 6800,
+      uncachedInputTokens: 12000,
+      outputTokens: 4200,
+      reasoningOutputTokens: 950,
+      totalTokens: 23000,
+      cacheHitRate: 6800 / 18800,
+    },
+    byProvider: [{
+      provider: {
+        key: "openai_official",
+        kind: "openai_official",
+        label: "OpenAI 官方",
+        baseUrl: null,
+        resolution: "resolved",
+      },
+      requestCount: 12,
+      inputTokens: 18800,
+      cachedInputTokens: 6800,
+      uncachedInputTokens: 12000,
+      outputTokens: 4200,
+      reasoningOutputTokens: 950,
+      totalTokens: 23000,
+      cacheHitRate: 6800 / 18800,
+    }],
+    byProviderModel: [{
+      provider: {
+        key: "openai_official",
+        kind: "openai_official",
+        label: "OpenAI 官方",
+        baseUrl: null,
+        resolution: "resolved",
+      },
+      model: "gpt-5.6-sol",
+      requestCount: 12,
+      inputTokens: 18800,
+      cachedInputTokens: 6800,
+      uncachedInputTokens: 12000,
+      outputTokens: 4200,
+      reasoningOutputTokens: 950,
+      totalTokens: 23000,
+      cacheHitRate: 6800 / 18800,
+    }],
+    byDay: [{
+      date: "2026-07-26",
+      requestCount: 12,
+      inputTokens: 18800,
+      cachedInputTokens: 6800,
+      uncachedInputTokens: 12000,
+      outputTokens: 4200,
+      reasoningOutputTokens: 950,
+      totalTokens: 23000,
+      cacheHitRate: 6800 / 18800,
+    }],
+    dailyByProvider: [{
+      date: "2026-07-26",
+      provider: {
+        key: "openai_official",
+        kind: "openai_official",
+        label: "OpenAI 官方",
+        baseUrl: null,
+        resolution: "resolved",
+      },
+      requestCount: 12,
+      inputTokens: 18800,
+      cachedInputTokens: 6800,
+      uncachedInputTokens: 12000,
+      outputTokens: 4200,
+      reasoningOutputTokens: 950,
+      totalTokens: 23000,
+      cacheHitRate: 6800 / 18800,
+    }],
+    dailyByProviderModel: [{
+      date: "2026-07-26",
+      provider: {
+        key: "openai_official",
+        kind: "openai_official",
+        label: "OpenAI 官方",
+        baseUrl: null,
+        resolution: "resolved",
+      },
+      model: "gpt-5.6-sol",
+      requestCount: 12,
+      inputTokens: 18800,
+      cachedInputTokens: 6800,
+      uncachedInputTokens: 12000,
+      outputTokens: 4200,
+      reasoningOutputTokens: 950,
+      totalTokens: 23000,
+      cacheHitRate: 6800 / 18800,
+    }],
   };
   private updateStatus: AppUpdateStatus = {
     currentVersion: APP_VERSION,
@@ -3122,6 +3373,91 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
+  async getLanguageServerCatalog(
+    _botAlias: string,
+    _provider?: LanguageServerProviderId,
+  ): Promise<LanguageServerCatalog> {
+    const catalog = {
+      canRefresh: this.languageServerCatalog.canRefresh,
+      providers: this.languageServerCatalog.providers.map((item) => ({ ...item })),
+    };
+    if (this.restartingLanguageServers.size > 0) {
+      const restartedProviders = new Set(this.restartingLanguageServers);
+      this.restartingLanguageServers.clear();
+      this.languageServerCatalog = {
+        ...this.languageServerCatalog,
+        providers: this.languageServerCatalog.providers.map((item) => restartedProviders.has(item.provider)
+          ? {
+              ...item,
+              runtimeState: "ready",
+              runtimeMessage: "语言服务已就绪",
+              message: item.status === "available" ? "语言服务已就绪" : item.message,
+            }
+          : item),
+      };
+    }
+    return catalog;
+  }
+
+  async restartLanguageServer(
+    _botAlias: string,
+    provider: LanguageServerProviderId,
+  ): Promise<LanguageServerRestartResult> {
+    const current = this.languageServerCatalog.providers.find((item) => item.provider === provider);
+    if (!current || current.status !== "available") {
+      throw new WebApiClientError("当前语言服务不可重启", { status: 409, code: "language_server_unavailable" });
+    }
+    this.languageServerCatalog = {
+      ...this.languageServerCatalog,
+      providers: this.languageServerCatalog.providers.map((item) => item.provider === provider
+        ? {
+            ...item,
+            runtimeState: "restarting",
+            runtimeMessage: "正在重启语言服务",
+            message: "正在重启语言服务",
+            error: "",
+          }
+        : item),
+    };
+    this.restartingLanguageServers.add(provider);
+    return {
+      provider,
+      restarted: true,
+      runtimeState: "restarting",
+      runtimeMessage: "正在重启语言服务",
+    };
+  }
+
+  async refreshLanguageServerCatalog(): Promise<LanguageServerCatalog> {
+    return this.getLanguageServerCatalog("");
+  }
+
+  async installLanguageServer(
+    provider: LanguageServerProviderId,
+    options: LanguageServerInstallOptions = {},
+  ): Promise<LanguageServerCatalog> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权安装或更新语言服务", { status: 403, code: "forbidden" });
+    }
+    this.languageServerCatalog = {
+      ...this.languageServerCatalog,
+      providers: this.languageServerCatalog.providers.map((item) => item.provider === provider
+        ? {
+            ...item,
+            status: "available",
+            source: "managed",
+            version: options.update ? "mock-1.0.1" : "mock-1.0.0",
+            commandSummary: item.commandSummary || `${provider} --stdio`,
+            canInstall: false,
+            canUpdate: true,
+            message: "使用托管版本",
+            error: "",
+          }
+        : item),
+    };
+    return this.getLanguageServerCatalog("");
+  }
+
   async getNotificationSettings(): Promise<NotificationSettingsStatus> {
     return {
       pushPlusEnabled: true,
@@ -4069,11 +4405,11 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
-  async getTerminalSession(_ownerId: string): Promise<PersistentTerminalSnapshot> {
-    return readMockPersistentTerminalSnapshot();
+  async getTerminalSession(ownerId: string): Promise<PersistentTerminalSnapshot> {
+    return readMockPersistentTerminalSnapshot(ownerId);
   }
 
-  async rebuildTerminalSession(_ownerId: string, cwd: string, _shell = "auto"): Promise<PersistentTerminalSnapshot> {
+  async createTerminalSession(ownerId: string, cwd: string, _shell = "auto"): Promise<PersistentTerminalSnapshot> {
     const snapshot: PersistentTerminalSnapshot = {
       started: true,
       closed: false,
@@ -4082,19 +4418,23 @@ export class MockWebBotClient implements WebBotClient {
       connectionText: "运行中",
       lastSeq: 0,
     };
-    writeMockPersistentTerminalSnapshot(snapshot);
+    writeMockPersistentTerminalSnapshot(snapshot, ownerId);
     return snapshot;
   }
 
-  async closeTerminalSession(_ownerId: string): Promise<PersistentTerminalSnapshot> {
-    const current = readMockPersistentTerminalSnapshot();
+  async rebuildTerminalSession(ownerId: string, cwd: string, shell = "auto"): Promise<PersistentTerminalSnapshot> {
+    return this.createTerminalSession(ownerId, cwd, shell);
+  }
+
+  async closeTerminalSession(ownerId: string): Promise<PersistentTerminalSnapshot> {
+    const current = readMockPersistentTerminalSnapshot(ownerId);
     const snapshot: PersistentTerminalSnapshot = {
       ...current,
       started: false,
       closed: true,
       connectionText: "终端已关闭",
     };
-    writeMockPersistentTerminalSnapshot(snapshot);
+    writeMockPersistentTerminalSnapshot(snapshot, ownerId);
     return snapshot;
   }
 
@@ -4125,13 +4465,13 @@ export class MockWebBotClient implements WebBotClient {
   async runTerminalAction(
     _botAlias: string,
     actionId: string,
-    _input: TerminalActionRunInput,
+    input: TerminalActionRunInput,
   ): Promise<TerminalActionRunResult> {
     const action = this.terminalActionsConfig.actions.find((item) => item.id === actionId);
     if (!action) {
       throw new Error("快捷命令不存在");
     }
-    const current = readMockPersistentTerminalSnapshot();
+    const current = readMockPersistentTerminalSnapshot(input.ownerId);
     const snapshot: PersistentTerminalSnapshot = {
       ...current,
       started: true,
@@ -4140,7 +4480,7 @@ export class MockWebBotClient implements WebBotClient {
       ptyMode: current.ptyMode ?? true,
       connectionText: "运行中",
     };
-    writeMockPersistentTerminalSnapshot(snapshot);
+    writeMockPersistentTerminalSnapshot(snapshot, input.ownerId);
     const command = resolveMockTerminalActionCommand(action, this.terminalActionsConfig.runtimePlatform);
     return {
       actionId,
@@ -4513,6 +4853,34 @@ export class MockWebBotClient implements WebBotClient {
       fileSizeBytes: new TextEncoder().encode(content).length,
       isFullContent: true,
       lastModifiedNs: String(this.getFileVersion(botAlias, browserPath, filename)),
+    };
+  }
+
+  async readExternalSource(_botAlias: string, sourceId: string): Promise<ExternalSourceReadResult> {
+    const normalizedSourceId = String(sourceId || "").trim();
+    if (!normalizedSourceId) {
+      throw new WebApiClientError("外部源码令牌为空", { status: 400, code: "external_source_invalid" });
+    }
+    if (normalizedSourceId === "expired" || normalizedSourceId.includes("expired")) {
+      throw new WebApiClientError("外部源码令牌已过期", { status: 410, code: "external_source_expired" });
+    }
+    if (normalizedSourceId === "unsupported-uri") {
+      throw new WebApiClientError("不支持的外部源码 URI", { status: 400, code: "external_source_unsupported_uri" });
+    }
+    if (normalizedSourceId === "policy-denied") {
+      throw new WebApiClientError("外部源码被策略拒绝", { status: 403, code: "external_source_policy_denied" });
+    }
+    const displayPath = normalizedSourceId === "mock-external-source"
+      ? "依赖 / stdlib / example.py"
+      : `依赖 / ${normalizedSourceId}`;
+    return {
+      sourceId: normalizedSourceId,
+      displayPath,
+      content: "def external_example():\n    return True\n",
+      encoding: "utf-8",
+      languageId: "python",
+      lastModifiedNs: "1",
+      scheme: "file",
     };
   }
 
@@ -5135,26 +5503,68 @@ export class MockWebBotClient implements WebBotClient {
     return { items };
   }
 
-  async resolveWorkspaceDefinition(
+  async resolveCodeNavigation(
     botAlias: string,
-    input: { path: string; line: number; column: number; symbol?: string },
-  ): Promise<WorkspaceDefinitionResult> {
-    const symbol = input.symbol?.trim();
+    input: CodeNavigationRequest,
+    signal?: AbortSignal,
+  ): Promise<CodeNavigationResult> {
+    signal?.throwIfAborted?.();
+    const lineText = input.document.content.split(/\r?\n/)[Math.max(0, input.position.line - 1)] || "";
+    const cursorIndex = Math.min(Math.max(input.position.column - 1, 0), Math.max(0, lineText.length - 1));
+    const symbol = Array.from(lineText.matchAll(/[A-Za-z_$][\w$]*/g)).find((match) => {
+      const start = match.index;
+      return typeof start === "number" && cursorIndex >= start && cursorIndex < start + match[0].length;
+    })?.[0] || "";
     if (symbol === "run") {
       return {
+        requestId: input.requestId,
+        message: "",
         items: [
           {
+            targetType: "workspace",
             path: "src/service.py",
-            line: 12,
-            matchKind: "workspace_search",
-            confidence: 0.78,
+            provider: "mock-semantic",
+            range: {
+              start: { line: 12, column: 1 },
+              end: { line: 13, column: 16 },
+            },
+            selectionRange: {
+              start: { line: 12, column: 5 },
+              end: { line: 12, column: 8 },
+            },
           },
         ],
       };
     }
     return {
+      requestId: input.requestId,
       items: [],
+      message: input.kind === "implementation" ? "未找到语义实现" : "未找到语义定义",
     };
+  }
+
+  async syncWorkspaceDocuments(
+    _botAlias: string,
+    input: WorkspaceDocumentSyncInput,
+    signal?: AbortSignal,
+  ): Promise<WorkspaceDocumentSyncResult> {
+    signal?.throwIfAborted?.();
+    return {
+      accepted: input.documents.length,
+      syncKind: "full",
+      supportsIncrementalChanges: false,
+      maxDocumentBytes: 512 * 1024,
+      maxBatchBytes: 2 * 1024 * 1024,
+    };
+  }
+
+  async closeWorkspaceDocuments(
+    _botAlias: string,
+    input: WorkspaceDocumentCloseInput,
+    signal?: AbortSignal,
+  ): Promise<WorkspaceDocumentCloseResult> {
+    signal?.throwIfAborted?.();
+    return { closed: input.documents.length };
   }
 
   async uploadChatAttachment(botAlias: string, file: File): Promise<ChatAttachmentUploadResult> {
@@ -5239,6 +5649,85 @@ export class MockWebBotClient implements WebBotClient {
       topErrors: this.cliErrorStats.topErrors.filter((item) => !filters.category || item.category === filters.category),
       items: items.slice(0, filters.limit || 200),
     };
+  }
+
+  async getCodexUsageConfig(): Promise<CodexUsageConfig> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权查看 Codex 用量", { status: 403, code: "forbidden" });
+    }
+    return cloneCodexUsageConfig(this.codexUsageConfig);
+  }
+
+  async updateCodexUsageConfig(input: { enabled: boolean }): Promise<CodexUsageConfig> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权修改 Codex 用量采集设置", { status: 403, code: "forbidden" });
+    }
+    this.codexUsageConfig = {
+      ...this.codexUsageConfig,
+      enabled: input.enabled,
+    };
+    this.codexUsageStats = {
+      ...this.codexUsageStats,
+      enabled: input.enabled,
+    };
+    return this.getCodexUsageConfig();
+  }
+
+  async getCodexUsageStats(query: CodexUsageStatsQuery = {}): Promise<CodexUsageStats> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权查看 Codex 用量", { status: 403, code: "forbidden" });
+    }
+    const selectedProviderKeys = Array.from(new Set(
+      (query.providerKeys || []).map((item) => item.trim()).filter(Boolean),
+    ));
+    const result = cloneCodexUsageStats(this.codexUsageStats);
+    result.enabled = this.codexUsageConfig.enabled;
+    result.range = {
+      startDate: query.startDate || result.range.startDate,
+      endDate: query.endDate || result.range.endDate,
+    };
+    result.selectedProviderKeys = selectedProviderKeys;
+    if (selectedProviderKeys.length) {
+      const selected = new Set(selectedProviderKeys);
+      result.byProvider = result.byProvider.filter((item) => selected.has(item.provider.key));
+      result.byProviderModel = result.byProviderModel.filter((item) => selected.has(item.provider.key));
+      result.dailyByProvider = result.dailyByProvider.filter((item) => selected.has(item.provider.key));
+      result.dailyByProviderModel = result.dailyByProviderModel.filter((item) => selected.has(item.provider.key));
+    }
+    if (query.startDate || query.endDate) {
+      const inRange = (date: string) => (
+        (!query.startDate || date >= query.startDate)
+        && (!query.endDate || date <= query.endDate)
+      );
+      result.dailyByProvider = result.dailyByProvider.filter((item) => inRange(item.date));
+      result.dailyByProviderModel = result.dailyByProviderModel.filter((item) => inRange(item.date));
+    }
+    const providerGroups = new Map<string, CodexUsageDailyProviderStats[]>();
+    const dayGroups = new Map<string, CodexUsageDailyProviderStats[]>();
+    const providerModelGroups = new Map<string, CodexUsageDailyProviderModelStats[]>();
+    for (const item of result.dailyByProvider) {
+      providerGroups.set(item.provider.key, [...(providerGroups.get(item.provider.key) || []), item]);
+      dayGroups.set(item.date, [...(dayGroups.get(item.date) || []), item]);
+    }
+    for (const item of result.dailyByProviderModel) {
+      const key = `${item.provider.key}\u0000${item.model}`;
+      providerModelGroups.set(key, [...(providerModelGroups.get(key) || []), item]);
+    }
+    result.byProvider = Array.from(providerGroups.values()).map<CodexUsageProviderStats>((items) => ({
+      provider: { ...items[0].provider },
+      ...sumCodexUsageMetrics(items),
+    }));
+    result.byDay = Array.from(dayGroups.entries()).map<CodexUsageDailyStats>(([date, items]) => ({
+      date,
+      ...sumCodexUsageMetrics(items),
+    }));
+    result.byProviderModel = Array.from(providerModelGroups.values()).map<CodexUsageProviderModelStats>((items) => ({
+      provider: { ...items[0].provider },
+      model: items[0].model,
+      ...sumCodexUsageMetrics(items),
+    }));
+    result.totals = sumCodexUsageMetrics(result.dailyByProvider);
+    return result;
   }
 
   async updateGitProxySettings(address: string): Promise<GitProxySettings> {

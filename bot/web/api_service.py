@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import hmac
+import inspect
 import json
 import logging
 import os
@@ -62,9 +63,9 @@ from bot.config import CLI_MODEL_OPTIONS, WEB_PORT
 from bot.cli import (
     ClaudeJsonStreamParser,
     CodexJsonStreamParser,
+    CodexUsageSample,
     build_cli_command,
     normalize_cli_type,
-    parse_codex_json_output,
     resolve_cli_executable,
     should_mark_claude_session_initialized,
     should_reset_claude_session,
@@ -3179,6 +3180,66 @@ class _StreamPreviewState:
         return self._parser.result()
 
 
+@dataclass(frozen=True)
+class CodexProcessResult:
+    text: str
+    session_id: Optional[str]
+    returncode: int
+    token_usage: Optional[CodexUsageSample]
+    invalid_usage_count: int = 0
+    duplicate_terminal_count: int = 0
+
+
+async def _start_codex_usage_capture(*, env: dict[str, str], command: list[str]) -> Any:
+    try:
+        from bot.codex_usage import get_codex_usage_service
+
+        service = get_codex_usage_service()
+        starter = (
+            getattr(service, "start_capture", None)
+            or getattr(service, "create_capture", None)
+            or getattr(service, "begin_capture", None)
+        )
+        if starter is None:
+            return None
+        if inspect.iscoroutinefunction(starter):
+            capture = starter(env=env, command=command)
+        else:
+            capture = await asyncio.to_thread(starter, env=env, command=command)
+        return await capture if inspect.isawaitable(capture) else capture
+    except Exception as exc:
+        logger.warning("Codex 用量采集初始化失败，聊天流程将继续: %s", exc)
+        return None
+
+
+async def _record_codex_usage_capture(usage_capture: Any, parsed_result: Any) -> None:
+    if usage_capture is None or parsed_result is None:
+        return
+    sample = getattr(parsed_result, "token_usage", None)
+    invalid_usage_count = int(getattr(parsed_result, "invalid_usage_count", 0) or 0)
+    duplicate_terminal_count = int(getattr(parsed_result, "duplicate_terminal_count", 0) or 0)
+    failed = bool(getattr(parsed_result, "turn_failed", False))
+    session_id = getattr(parsed_result, "session_id", None)
+    if sample is None and not failed and not invalid_usage_count and not duplicate_terminal_count:
+        return
+    try:
+        record_once = usage_capture.record_once
+        kwargs = {
+            "invalid_usage_count": invalid_usage_count,
+            "duplicate_terminal_count": duplicate_terminal_count,
+            "failed": failed,
+            "session_id": session_id,
+        }
+        if inspect.iscoroutinefunction(record_once):
+            result = record_once(sample, **kwargs)
+        else:
+            result = await asyncio.to_thread(record_once, sample, **kwargs)
+        if inspect.isawaitable(result):
+            await result
+    except Exception as exc:
+        logger.warning("Codex 用量记录失败，聊天流程将继续: %s", exc)
+
+
 def _load_codex_json_event(line: str) -> dict[str, Any]:
     _parsed, event = _parse_codex_event(line)
     return event
@@ -3696,16 +3757,35 @@ async def _communicate_process(process: subprocess.Popen) -> tuple[str, int]:
         close_process_streams(process)
 
 
-async def _communicate_codex_process(process: subprocess.Popen) -> tuple[str, Optional[str], int]:
+async def _communicate_codex_process(
+    process: subprocess.Popen,
+    *,
+    usage_capture: Any = None,
+) -> CodexProcessResult:
     reader: _ProcessStdoutReader | None = None
+    parser: CodexJsonStreamParser | None = None
     try:
         stdout = getattr(process, "stdout", None)
         if stdout is None or not hasattr(stdout, "readline"):
             raw_output, returncode = await _communicate_process(process)
-            final_text, thread_id = parse_codex_json_output(raw_output)
+            parser = CodexJsonStreamParser(
+                raw_tail_max_bytes=_CLI_OUTPUT_LIMITS.raw_tail_max_bytes,
+                final_text_max_bytes=_CLI_OUTPUT_LIMITS.final_text_max_bytes,
+            )
+            for line in raw_output.splitlines(keepends=True):
+                parser.consume_line(line)
+            parsed_result = parser.result()
+            final_text = parsed_result.final_text
             if not final_text:
                 final_text = msg("chat", "no_output")
-            return final_text, thread_id, returncode
+            return CodexProcessResult(
+                text=final_text,
+                session_id=parsed_result.session_id,
+                returncode=returncode,
+                token_usage=parsed_result.token_usage,
+                invalid_usage_count=parsed_result.invalid_usage_count,
+                duplicate_terminal_count=parsed_result.duplicate_terminal_count,
+            )
 
         loop = asyncio.get_running_loop()
         output_queue: queue.Queue[Any] = queue.Queue(maxsize=_CLI_OUTPUT_LIMITS.queue_max_chunks)
@@ -3784,7 +3864,14 @@ async def _communicate_codex_process(process: subprocess.Popen) -> tuple[str, Op
             final_text = error_text or candidate_text or parsed_result.final_text
             if not final_text:
                 final_text = msg("chat", "no_output")
-            return final_text, thread_id or parsed_result.session_id, returncode
+            return CodexProcessResult(
+                text=final_text,
+                session_id=thread_id or parsed_result.session_id,
+                returncode=returncode,
+                token_usage=parsed_result.token_usage,
+                invalid_usage_count=parsed_result.invalid_usage_count,
+                duplicate_terminal_count=parsed_result.duplicate_terminal_count,
+            )
         except Exception:
             reader.stop()
             _terminate_process_sync(process)
@@ -3794,6 +3881,8 @@ async def _communicate_codex_process(process: subprocess.Popen) -> tuple[str, Op
             _terminate_process_sync(process)
             raise
     finally:
+        if parser is not None:
+            await _record_codex_usage_capture(usage_capture, parser.result())
         if reader is not None:
             reader.stop()
             reader.join(1.0)
@@ -4037,6 +4126,10 @@ async def _stream_cli_chat(
                 )
             except ValueError as exc:
                 _raise(400, "invalid_cli_command", str(exc))
+
+            usage_capture = None
+            if cli_type == "codex":
+                usage_capture = await _start_codex_usage_capture(env=env, command=cmd)
 
             try:
                 spawn_started_at = time.perf_counter()
@@ -4350,6 +4443,9 @@ async def _stream_cli_chat(
                     await loop.run_in_executor(None, _terminate_process_sync, process)
                 raise
             finally:
+                parsed_result = preview_state.result()
+                if cli_type == "codex":
+                    await _record_codex_usage_capture(usage_capture, parsed_result)
                 stdout_reader.stop()
                 stdout_reader.join(1.0)
                 with session._lock:
@@ -4684,6 +4780,10 @@ async def run_cli_chat(
             except ValueError as exc:
                 _raise(400, "invalid_cli_command", str(exc))
 
+            usage_capture = None
+            if cli_type == "codex":
+                usage_capture = await _start_codex_usage_capture(env=env, command=cmd)
+
             try:
                 spawn_started_at = time.perf_counter()
                 process = subprocess.Popen(
@@ -4743,7 +4843,13 @@ async def run_cli_chat(
             cli_started_at = time.perf_counter()
             try:
                 if cli_type == "codex":
-                    response, thread_id, returncode = await _communicate_codex_process(process)
+                    codex_result = await _communicate_codex_process(
+                        process,
+                        usage_capture=usage_capture,
+                    )
+                    response = codex_result.text
+                    thread_id = codex_result.session_id
+                    returncode = codex_result.returncode
                 elif cli_type == "claude":
                     response, _, returncode = await _communicate_claude_process(
                         process,

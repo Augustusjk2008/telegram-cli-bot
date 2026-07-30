@@ -17,9 +17,15 @@ function pickLoadedTraceCount(incomingValue?: number, baseValue?: number) {
   return values.length > 0 ? Math.max(...values) : undefined;
 }
 
+function isTerminalCompletionState(value?: string) {
+  const state = String(value || "").trim().toLowerCase();
+  return Boolean(state && !["streaming", "running", "in_progress", "in-progress"].includes(state));
+}
+
 export type MergeMessageMetaOptions = {
   reconcileTraceSnapshots?: boolean;
   dedupeAnonymous?: boolean;
+  traceMode?: "merge" | "replace";
 };
 
 export function summarizeTrace(trace?: ChatTraceEvent[]) {
@@ -39,19 +45,39 @@ export function mergeMessageMeta(
   const isNativeSource = isNativeAgentMessage(incoming) || isNativeAgentMessage(base);
   const tracePresentation = incoming?.tracePresentation || base?.tracePresentation || (isNativeSource ? "native_agent_flat" : undefined);
   const nativeFlatTrace = tracePresentation === "native_agent_flat";
-  const trace = mergeChatTraceEvents(
-    [base?.trace, incoming?.trace, streamedTrace],
-    {
-      nativeFlat: nativeFlatTrace,
-      autoNativeFlat: nativeFlatTrace,
-      reconcileTraceSnapshots: options.reconcileTraceSnapshots,
-      dedupeAnonymous: options.dedupeAnonymous,
-    },
-  );
-  const traceSummary = trace ? summarizeTrace(trace) : undefined;
+  const trace = options.traceMode === "replace"
+    ? incoming?.trace || base?.trace || streamedTrace
+    : mergeChatTraceEvents(
+        [base?.trace, incoming?.trace, streamedTrace],
+        {
+          nativeFlat: nativeFlatTrace,
+          autoNativeFlat: nativeFlatTrace,
+          reconcileTraceSnapshots: options.reconcileTraceSnapshots,
+          dedupeAnonymous: options.dedupeAnonymous,
+        },
+      );
+  const hasIncomingTraceSummary = options.traceMode === "replace"
+    && Boolean(incoming?.trace)
+    && [incoming?.traceCount, incoming?.toolCallCount, incoming?.processCount]
+      .every((value) => typeof value === "number" && Number.isFinite(value));
+  const traceSummary = trace && !hasIncomingTraceSummary ? summarizeTrace(trace) : undefined;
+  const incomingRunState = incoming?.agUiRunState && typeof incoming.agUiRunState === "object"
+    ? incoming.agUiRunState as { completed?: boolean }
+    : undefined;
+  const baseRunState = base?.agUiRunState && typeof base.agUiRunState === "object"
+    ? base.agUiRunState as { completed?: boolean }
+    : undefined;
+  const transientRunState = incoming?.agUiRunState || base?.agUiRunState;
+  const agUiRunState = isNativeSource
+    && !isTerminalCompletionState(incoming?.completionState)
+    && !incomingRunState?.completed
+    && !baseRunState?.completed
+    ? transientRunState
+    : undefined;
   const meta: ChatMessageMetaInfo = {
     completionState: incoming?.completionState || base?.completionState,
     summaryKind: incoming?.summaryKind || base?.summaryKind,
+    renderKey: incoming?.renderKey || base?.renderKey,
     traceVersion: incoming?.traceVersion ?? base?.traceVersion ?? (trace ? 1 : undefined),
     traceCount: pickTraceCount(incoming?.traceCount, base?.traceCount, traceSummary?.traceCount),
     traceLoadedCount: pickLoadedTraceCount(incoming?.traceLoadedCount, base?.traceLoadedCount),
@@ -59,7 +85,7 @@ export function mergeMessageMeta(
     processCount: pickTraceCount(incoming?.processCount, base?.processCount, traceSummary?.processCount),
     nativeSource: incoming?.nativeSource || base?.nativeSource,
     contextUsage: incoming?.contextUsage || base?.contextUsage,
-    agUiRunState: isNativeSource ? incoming?.agUiRunState || base?.agUiRunState : undefined,
+    agUiRunState,
     tracePresentation,
     trace,
     workspaceHistoryHead: incoming?.workspaceHistoryHead ?? base?.workspaceHistoryHead,

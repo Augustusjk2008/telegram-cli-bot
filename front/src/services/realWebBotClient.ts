@@ -1,4 +1,4 @@
-import { WebApiClientError } from "./types";
+import { DEFAULT_CODEX_USAGE_MODEL, WebApiClientError } from "./types";
 import { buildWsUrl, withApiBase } from "../utils/publicBase";
 import { ChatStreamIncompleteError } from "./chatStreamError";
 import type {
@@ -72,6 +72,20 @@ import type {
   CliErrorStatsResult,
   CliErrorStatsSummary,
   CliErrorTopItem,
+  CodexUsageAvailableRange,
+  CodexUsageConfig,
+  CodexUsageDailyProviderStats,
+  CodexUsageDailyProviderModelStats,
+  CodexUsageDailyStats,
+  CodexUsageMetrics,
+  CodexUsageProvider,
+  CodexUsageProviderKind,
+  CodexUsageProviderResolution,
+  CodexUsageProviderStats,
+  CodexUsageProviderModelStats,
+  CodexUsageStats,
+  CodexUsageStatsQuery,
+  CodexUsageTimeBasis,
   CliParamsPayload,
   CliType,
   AgentClusterConfig,
@@ -140,6 +154,11 @@ import type {
   InlineCompletionConfigInput,
   InlineCompletionRequest,
   InlineCompletionResult,
+  LanguageServerCatalog,
+  LanguageServerInstallOptions,
+  LanguageServerProviderId,
+  LanguageServerRestartResult,
+  LanguageServerProviderStatus,
   PluginActionInvokeInput,
   PluginActionResult,
   InstallablePluginSummary,
@@ -167,7 +186,13 @@ import type {
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
   UserBotPermissions,
-  WorkspaceDefinitionResult,
+  CodeNavigationRequest,
+  CodeNavigationResult,
+  ExternalSourceReadResult,
+  WorkspaceDocumentSyncInput,
+  WorkspaceDocumentSyncResult,
+  WorkspaceDocumentCloseInput,
+  WorkspaceDocumentCloseResult,
   WorkspaceOutlineResult,
   WorkspaceQuickOpenResult,
   WorkspaceSearchResult,
@@ -193,7 +218,6 @@ import type { WebBotClient } from "./webBotClient";
 import {
   createAgUiStreamAdapter,
   isAgUiEventType,
-  isSyntheticLegacyMessageId,
 } from "./agUiStreamAdapter";
 import {
   EventType,
@@ -201,9 +225,9 @@ import {
 } from "./agUiProtocol";
 import {
   buildAgUiMessageMeta,
+  createAgUiRunAccumulator,
   createAgUiRunState,
   findAgUiActivityForDelta,
-  reduceAgUiRunEvent,
   type AgUiActivityItem,
 } from "../utils/agUiRunReducer";
 import { mergeMessageMeta, summarizeTrace } from "../utils/chatMessageMeta";
@@ -222,6 +246,96 @@ type JsonEnvelope<T> = {
     data?: unknown;
   };
 };
+
+type RawCodeNavigationLocation = {
+  target_type?: "workspace" | "external";
+  targetType?: "workspace" | "external";
+  path?: string;
+  display_path?: string;
+  displayPath?: string;
+  source_id?: string;
+  sourceId?: string;
+  provider?: string;
+  range?: {
+    start?: { line?: number; column?: number };
+    end?: { line?: number; column?: number };
+  };
+  selection_range?: {
+    start?: { line?: number; column?: number };
+    end?: { line?: number; column?: number };
+  };
+  selectionRange?: {
+    start?: { line?: number; column?: number };
+    end?: { line?: number; column?: number };
+  };
+};
+
+type RawCodeNavigationResult = {
+  request_id?: string;
+  requestId?: string;
+  message?: string;
+  items?: RawCodeNavigationLocation | RawCodeNavigationLocation[] | null;
+};
+
+type RawWorkspaceDocumentSyncResult = {
+  accepted?: number;
+  unchanged?: number;
+  rejected?: number;
+  closed?: number;
+  documents?: Array<Record<string, unknown>>;
+  rejections?: Array<Record<string, unknown>>;
+  missing?: string[];
+  sync_kind?: string;
+  syncKind?: string;
+  supports_incremental_changes?: boolean;
+  supportsIncrementalChanges?: boolean;
+  max_document_bytes?: number;
+  maxDocumentBytes?: number;
+  max_batch_documents?: number;
+  maxBatchDocuments?: number;
+  max_batch_bytes?: number;
+  maxBatchBytes?: number;
+};
+
+function mapWorkspaceDocumentSyncResult(raw: RawWorkspaceDocumentSyncResult | null | undefined): WorkspaceDocumentSyncResult {
+  if (!raw) {
+    return {};
+  }
+  const result: WorkspaceDocumentSyncResult = {};
+  if (typeof raw.accepted === "number") result.accepted = raw.accepted;
+  if (typeof raw.unchanged === "number") result.unchanged = raw.unchanged;
+  if (typeof raw.rejected === "number") result.rejected = raw.rejected;
+  if (Array.isArray(raw.documents)) result.documents = raw.documents;
+  if (Array.isArray(raw.rejections)) result.rejections = raw.rejections;
+  const syncKind = raw.syncKind || raw.sync_kind;
+  if (typeof syncKind === "string" && syncKind) result.syncKind = syncKind;
+  const supportsIncrementalChanges = typeof raw.supportsIncrementalChanges === "boolean"
+    ? raw.supportsIncrementalChanges
+    : raw.supports_incremental_changes;
+  if (typeof supportsIncrementalChanges === "boolean") {
+    result.supportsIncrementalChanges = supportsIncrementalChanges;
+  }
+  const maxDocumentBytes = typeof raw.maxDocumentBytes === "number"
+    ? raw.maxDocumentBytes
+    : raw.max_document_bytes;
+  if (typeof maxDocumentBytes === "number") result.maxDocumentBytes = maxDocumentBytes;
+  const maxBatchDocuments = typeof raw.maxBatchDocuments === "number"
+    ? raw.maxBatchDocuments
+    : raw.max_batch_documents;
+  if (typeof maxBatchDocuments === "number") result.maxBatchDocuments = maxBatchDocuments;
+  const maxBatchBytes = typeof raw.maxBatchBytes === "number" ? raw.maxBatchBytes : raw.max_batch_bytes;
+  if (typeof maxBatchBytes === "number") result.maxBatchBytes = maxBatchBytes;
+  return result;
+}
+
+function mapWorkspaceDocumentCloseResult(raw: RawWorkspaceDocumentSyncResult | null | undefined): WorkspaceDocumentCloseResult {
+  if (!raw) return {};
+  return {
+    ...(typeof raw.closed === "number" ? { closed: raw.closed } : {}),
+    ...(Array.isArray(raw.documents) ? { documents: raw.documents } : {}),
+    ...(Array.isArray(raw.missing) ? { missing: raw.missing } : {}),
+  };
+}
 
 type RawBotSummary = {
   alias: string;
@@ -395,6 +509,50 @@ type RawInlineCompletionConfig = {
   max_related_files?: number;
   max_related_file_bytes?: number;
   deny_globs?: string[];
+};
+
+type RawLanguageServerProviderStatus = {
+  id?: string;
+  provider?: string;
+  status?: string;
+  source?: string | null;
+  version?: string;
+  managedVersion?: string;
+  managed_version?: string;
+  commandSummary?: string;
+  command_summary?: string;
+  canInstall?: boolean;
+  can_install?: boolean;
+  canUpdate?: boolean;
+  can_update?: boolean;
+  message?: string;
+  error?: string;
+  runtimeState?: string;
+  runtime_state?: string;
+  runtimeMessage?: string;
+  runtime_message?: string;
+  implementationSupported?: boolean;
+  implementation_supported?: boolean;
+};
+
+type RawLanguageServerCatalog = {
+  providers?: RawLanguageServerProviderStatus[];
+  canRefresh?: boolean;
+  can_refresh?: boolean;
+};
+
+type RawLanguageServerInstallResult = RawLanguageServerCatalog & {
+  catalog?: RawLanguageServerCatalog;
+};
+
+type RawLanguageServerRestartResult = {
+  provider?: string;
+  provider_id?: string;
+  restarted?: boolean;
+  runtimeState?: string;
+  runtime_state?: string;
+  runtimeMessage?: string;
+  runtime_message?: string;
 };
 
 type RawNotificationSettings = {
@@ -755,6 +913,24 @@ type RawFileReadResult = {
   preview_kind?: "text" | "image";
   content_type?: string;
   content_base64?: string;
+};
+
+type RawExternalSourceReadResult = {
+  source_id?: string;
+  sourceId?: string;
+  display_path?: string;
+  displayPath?: string;
+  path?: string;
+  content?: string;
+  encoding?: string;
+  language_id?: string;
+  languageId?: string;
+  last_modified_ns?: string | number;
+  lastModifiedNs?: string | number;
+  file_size_bytes?: number;
+  fileSizeBytes?: number;
+  uri?: string;
+  scheme?: string;
 };
 
 type RawFileWriteResult = {
@@ -1246,6 +1422,85 @@ type RawCliErrorStatsResult = {
   items?: RawCliErrorStatsItem[];
 };
 
+type RawCodexUsageProvider = {
+  key?: string;
+  kind?: string;
+  label?: string;
+  base_url?: string | null;
+  resolution?: string;
+};
+
+type RawCodexUsageTimeBasis = {
+  mode?: string;
+  utc_offset?: string;
+  today?: string;
+};
+
+type RawCodexUsageAvailableRange = {
+  first_date?: string | null;
+  last_date?: string | null;
+};
+
+type RawCodexUsageMetrics = {
+  request_count?: number;
+  input_tokens?: number;
+  cached_input_tokens?: number;
+  uncached_input_tokens?: number;
+  output_tokens?: number;
+  reasoning_output_tokens?: number;
+  total_tokens?: number;
+  cache_hit_rate?: number | null;
+};
+
+type RawCodexUsageConfig = {
+  enabled?: boolean;
+  current_provider?: RawCodexUsageProvider;
+  time_basis?: RawCodexUsageTimeBasis;
+  available_range?: RawCodexUsageAvailableRange;
+};
+
+type RawCodexUsageProviderStats = RawCodexUsageMetrics & {
+  provider?: RawCodexUsageProvider;
+  provider_key?: string;
+  provider_kind?: string;
+  provider_label?: string;
+  base_url?: string | null;
+  resolution?: string;
+};
+
+type RawCodexUsageDailyStats = RawCodexUsageMetrics & {
+  date?: string;
+  day?: string;
+};
+
+type RawCodexUsageDailyProviderStats = RawCodexUsageDailyStats & RawCodexUsageProviderStats;
+
+type RawCodexUsageProviderModelStats = RawCodexUsageProviderStats & {
+  model?: string;
+};
+
+type RawCodexUsageDailyProviderModelStats = RawCodexUsageDailyProviderStats & {
+  model?: string;
+};
+
+type RawCodexUsageStats = {
+  range?: {
+    start_date?: string;
+    end_date?: string;
+  };
+  enabled?: boolean;
+  time_basis?: RawCodexUsageTimeBasis;
+  available_range?: RawCodexUsageAvailableRange;
+  available_providers?: RawCodexUsageProvider[];
+  selected_provider_keys?: string[];
+  totals?: RawCodexUsageMetrics;
+  by_provider?: RawCodexUsageProviderStats[];
+  by_provider_model?: RawCodexUsageProviderModelStats[];
+  by_day?: RawCodexUsageDailyStats[];
+  daily_by_provider?: RawCodexUsageDailyProviderStats[];
+  daily_by_provider_model?: RawCodexUsageDailyProviderModelStats[];
+};
+
 type StreamEventPayload =
   | { type: "meta"; [key: string]: unknown }
   | { type: "delta"; text?: string }
@@ -1281,92 +1536,6 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
-}
-
-function mapAgUiTraceEvent(event: AgUiEvent, activityContent?: Record<string, unknown>): ChatTraceEvent | null {
-  if (event.type === EventType.TOOL_CALL_START) {
-    return {
-      kind: "tool_call",
-      summary: "",
-      title: event.toolCallName,
-      toolName: event.toolCallName,
-      callId: event.toolCallId,
-      payload: {
-        arguments: "",
-      },
-    };
-  }
-  if (event.type === EventType.TOOL_CALL_ARGS) {
-    return {
-      kind: "tool_call",
-      summary: event.delta,
-      callId: event.toolCallId,
-      payload: {
-        arguments: event.delta,
-      },
-    };
-  }
-  if (event.type === EventType.TOOL_CALL_RESULT) {
-    return {
-      kind: "tool_result",
-      summary: event.content,
-      callId: event.toolCallId,
-      payload: {
-        output: event.content,
-      },
-    };
-  }
-  if (event.type === EventType.ACTIVITY_SNAPSHOT || event.type === EventType.ACTIVITY_DELTA) {
-    const content = (
-      activityContent
-      || (event.type === EventType.ACTIVITY_SNAPSHOT ? asRecord(event.content) : {})
-    );
-    const summary = String(content.summary || content.previewText || content.message || content.reason || "").trim();
-    if (!summary && event.activityType === "TCB_NATIVE_AGENT_TRACE") {
-      return null;
-    }
-    const rawKind = String(content.rawKind || "").trim();
-    if (event.activityType === "TCB_META") {
-      return null;
-    }
-    const activityMessageId = String(event.messageId || "").trim();
-    const activityId = String(content.id || "").trim()
-      || (isSyntheticLegacyMessageId(activityMessageId) ? "" : activityMessageId);
-    return {
-      ...(activityId ? { id: activityId } : {}),
-      ...(typeof content.ordinal === "number" ? { ordinal: content.ordinal } : {}),
-      ...(typeof content.sequence === "number" ? { sequence: content.sequence } : {}),
-      ...(String(content.createdAt || content.created_at || "").trim()
-        ? { createdAt: String(content.createdAt || content.created_at || "").trim() }
-        : {}),
-      kind: event.activityType === "TCB_PERMISSION_REQUEST"
-        ? "permission"
-        : rawKind || (event.activityType === "TCB_STATUS" ? "status" : "event"),
-      summary,
-      source: String(content.source || "").trim() || undefined,
-      rawType: String(content.rawType || event.activityType).trim() || undefined,
-      title: String(content.title || "").trim() || undefined,
-      toolName: String(content.toolName || content.tool_name || "").trim() || undefined,
-      callId: String(content.callId || content.call_id || "").trim() || undefined,
-      payload: content,
-    };
-  }
-  if (event.type === EventType.REASONING_MESSAGE_CONTENT) {
-    return {
-      kind: "reasoning",
-      summary: event.delta,
-      source: "reasoning",
-      rawType: EventType.REASONING_MESSAGE_CONTENT,
-    };
-  }
-  if (event.type === EventType.RUN_ERROR) {
-    return {
-      kind: "error",
-      summary: event.message,
-      rawType: event.code,
-    };
-  }
-  return null;
 }
 
 function contentForAgUiActivityEvent(
@@ -3164,6 +3333,99 @@ function mapInlineCompletionConfigInput(input: InlineCompletionConfigInput) {
   };
 }
 
+function mapLanguageServerProviderId(raw: unknown): LanguageServerProviderId | null {
+  switch (String(raw || "").trim()) {
+    case "pyright":
+    case "typescript":
+    case "clangd":
+      return String(raw).trim() as LanguageServerProviderId;
+    default:
+      return null;
+  }
+}
+
+function mapLanguageServerProviderStatus(raw: RawLanguageServerProviderStatus): LanguageServerProviderStatus | null {
+  const provider = mapLanguageServerProviderId(raw.id ?? raw.provider);
+  if (!provider) {
+    return null;
+  }
+  const rawStatus = String(raw.status || "").trim();
+  const status = rawStatus === "available" || rawStatus === "missing" || rawStatus === "installing" || rawStatus === "error"
+    ? rawStatus
+    : "error";
+  const rawSource = String(raw.source || "").trim();
+  const source = rawSource === "custom" || rawSource === "path" || rawSource === "managed"
+    ? rawSource
+    : null;
+  const canInstall = Boolean(raw.canInstall ?? raw.can_install);
+  const managedVersion = String(raw.managedVersion ?? raw.managed_version ?? "").trim();
+  const canUpdate = raw.canUpdate ?? raw.can_update ?? (canInstall && Boolean(managedVersion));
+  const backendMessage = String(raw.message ?? raw.error ?? "").trim();
+  const message = backendMessage || (status === "error" ? "语言服务检测失败，请重新检测" : "");
+  const rawRuntimeState = String(raw.runtimeState ?? raw.runtime_state ?? "").trim();
+  const runtimeState = rawRuntimeState === "starting"
+    || rawRuntimeState === "indexing"
+    || rawRuntimeState === "restarting"
+    || rawRuntimeState === "degraded"
+    || rawRuntimeState === "ready"
+    || rawRuntimeState === "error"
+    || rawRuntimeState === "stopped"
+    ? rawRuntimeState
+    : undefined;
+  const implementationSupported = raw.implementationSupported ?? raw.implementation_supported;
+  return {
+    provider,
+    status,
+    source,
+    version: String(raw.version || ""),
+    commandSummary: String(raw.commandSummary ?? raw.command_summary ?? ""),
+    canInstall,
+    canUpdate: Boolean(canUpdate),
+    message,
+    error: status === "error" ? message : "",
+    ...(runtimeState ? { runtimeState } : {}),
+    ...(raw.runtimeMessage ?? raw.runtime_message
+      ? { runtimeMessage: String(raw.runtimeMessage ?? raw.runtime_message) }
+      : {}),
+    ...(typeof implementationSupported === "boolean" ? { implementationSupported } : {}),
+  } as LanguageServerProviderStatus;
+}
+
+function mapLanguageServerCatalog(raw: RawLanguageServerCatalog): LanguageServerCatalog {
+  const providers = Array.isArray(raw.providers)
+    ? raw.providers
+      .map(mapLanguageServerProviderStatus)
+      .filter((item): item is LanguageServerProviderStatus => item !== null)
+    : [];
+  return {
+    providers,
+    canRefresh: raw.canRefresh !== false && raw.can_refresh !== false,
+  };
+}
+
+function mapLanguageServerRestartResult(
+  raw: RawLanguageServerRestartResult,
+  fallbackProvider: LanguageServerProviderId,
+): LanguageServerRestartResult {
+  const provider = mapLanguageServerProviderId(raw.provider ?? raw.provider_id) || fallbackProvider;
+  const rawRuntimeState = String(raw.runtimeState ?? raw.runtime_state ?? "").trim();
+  const runtimeState = rawRuntimeState === "starting"
+    || rawRuntimeState === "indexing"
+    || rawRuntimeState === "restarting"
+    || rawRuntimeState === "degraded"
+    || rawRuntimeState === "ready"
+    || rawRuntimeState === "error"
+    || rawRuntimeState === "stopped"
+    ? rawRuntimeState as LanguageServerRestartResult["runtimeState"]
+    : "starting";
+  return {
+    provider,
+    restarted: raw.restarted !== false,
+    runtimeState,
+    runtimeMessage: String(raw.runtimeMessage ?? raw.runtime_message ?? "正在重启语言服务").trim() || "正在重启语言服务",
+  };
+}
+
 function mapCliErrorStatsSummary(raw: RawCliErrorStatsSummary | undefined): CliErrorStatsSummary {
   return {
     total: Number(raw?.total || 0),
@@ -3204,6 +3466,153 @@ function mapCliErrorStatsResult(raw: RawCliErrorStatsResult): CliErrorStatsResul
     summary: mapCliErrorStatsSummary(raw.summary),
     topErrors: (raw.top_errors || []).map(mapCliErrorTopItem),
     items: (raw.items || []).map(mapCliErrorStatsItem),
+  };
+}
+
+function numberOrZero(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function mapCodexUsageProviderKind(value: unknown): CodexUsageProviderKind {
+  if (value === "openai_official" || value === "base_url" || value === "unknown") {
+    return value;
+  }
+  return "unknown";
+}
+
+function mapCodexUsageProviderResolution(value: unknown): CodexUsageProviderResolution | undefined {
+  if (
+    value === "resolved"
+    || value === "config_missing"
+    || value === "config_invalid"
+    || value === "provider_missing"
+    || value === "invalid_base_url"
+    || value === "unsupported_override"
+  ) {
+    return value;
+  }
+  return undefined;
+}
+
+function mapCodexUsageProvider(raw: RawCodexUsageProvider | undefined): CodexUsageProvider {
+  const kind = mapCodexUsageProviderKind(raw?.kind);
+  return {
+    key: String(raw?.key || "unknown"),
+    kind,
+    label: String(raw?.label || (kind === "openai_official" ? "OpenAI 官方" : kind === "unknown" ? "无法识别" : "自定义 Provider")),
+    baseUrl: raw?.base_url ? String(raw.base_url) : null,
+    ...(mapCodexUsageProviderResolution(raw?.resolution) ? { resolution: mapCodexUsageProviderResolution(raw?.resolution) } : {}),
+  };
+}
+
+function mapCodexUsageTimeBasis(raw: RawCodexUsageTimeBasis | undefined): CodexUsageTimeBasis {
+  return {
+    mode: String(raw?.mode || "server_local"),
+    utcOffset: String(raw?.utc_offset || ""),
+    today: String(raw?.today || ""),
+  };
+}
+
+function mapCodexUsageAvailableRange(raw: RawCodexUsageAvailableRange | undefined): CodexUsageAvailableRange {
+  return {
+    firstDate: raw?.first_date ? String(raw.first_date) : null,
+    lastDate: raw?.last_date ? String(raw.last_date) : null,
+  };
+}
+
+function mapCodexUsageMetrics(raw: RawCodexUsageMetrics | undefined): CodexUsageMetrics {
+  const inputTokens = numberOrZero(raw?.input_tokens);
+  const cachedInputTokens = numberOrZero(raw?.cached_input_tokens);
+  const outputTokens = numberOrZero(raw?.output_tokens);
+  const cacheHitRate = raw?.cache_hit_rate;
+  return {
+    requestCount: numberOrZero(raw?.request_count),
+    inputTokens,
+    cachedInputTokens,
+    uncachedInputTokens: raw?.uncached_input_tokens === undefined
+      ? Math.max(0, inputTokens - cachedInputTokens)
+      : numberOrZero(raw.uncached_input_tokens),
+    outputTokens,
+    reasoningOutputTokens: numberOrZero(raw?.reasoning_output_tokens),
+    totalTokens: raw?.total_tokens === undefined
+      ? inputTokens + outputTokens
+      : numberOrZero(raw.total_tokens),
+    cacheHitRate: typeof cacheHitRate === "number" && Number.isFinite(cacheHitRate) ? cacheHitRate : null,
+  };
+}
+
+function mapCodexUsageProviderFromStats(raw: RawCodexUsageProviderStats): CodexUsageProvider {
+  return mapCodexUsageProvider(raw.provider || {
+    key: raw.provider_key,
+    kind: raw.provider_kind,
+    label: raw.provider_label,
+    base_url: raw.base_url,
+    resolution: raw.resolution,
+  });
+}
+
+function mapCodexUsageModel(value: unknown): string {
+  const model = String(value || "").trim();
+  return !model || model.toLowerCase() === "unknown" ? DEFAULT_CODEX_USAGE_MODEL : model;
+}
+
+function mapCodexUsageConfig(raw: RawCodexUsageConfig): CodexUsageConfig {
+  return {
+    enabled: Boolean(raw.enabled),
+    currentProvider: mapCodexUsageProvider(raw.current_provider),
+    timeBasis: mapCodexUsageTimeBasis(raw.time_basis),
+    availableRange: mapCodexUsageAvailableRange(raw.available_range),
+  };
+}
+
+function mapCodexUsageStats(raw: RawCodexUsageStats): CodexUsageStats {
+  const byProvider: CodexUsageProviderStats[] = (raw.by_provider || []).map((item) => ({
+    provider: mapCodexUsageProviderFromStats(item),
+    ...mapCodexUsageMetrics(item),
+  }));
+  const byDay: CodexUsageDailyStats[] = (raw.by_day || []).map((item) => ({
+    date: String(item.date || item.day || ""),
+    ...mapCodexUsageMetrics(item),
+  }));
+  const dailyByProvider: CodexUsageDailyProviderStats[] = (raw.daily_by_provider || []).map((item) => ({
+    date: String(item.date || item.day || ""),
+    provider: mapCodexUsageProviderFromStats(item),
+    ...mapCodexUsageMetrics(item),
+  }));
+  const byProviderModel: CodexUsageProviderModelStats[] = raw.by_provider_model === undefined
+    ? byProvider.map((item) => ({ ...item, model: DEFAULT_CODEX_USAGE_MODEL }))
+    : raw.by_provider_model.map((item) => ({
+        provider: mapCodexUsageProviderFromStats(item),
+        model: mapCodexUsageModel(item.model),
+        ...mapCodexUsageMetrics(item),
+      }));
+  const dailyByProviderModel: CodexUsageDailyProviderModelStats[] = raw.daily_by_provider_model === undefined
+    ? dailyByProvider.map((item) => ({ ...item, model: DEFAULT_CODEX_USAGE_MODEL }))
+    : raw.daily_by_provider_model.map((item) => ({
+        date: String(item.date || item.day || ""),
+        provider: mapCodexUsageProviderFromStats(item),
+        model: mapCodexUsageModel(item.model),
+        ...mapCodexUsageMetrics(item),
+      }));
+  return {
+    range: {
+      startDate: String(raw.range?.start_date || ""),
+      endDate: String(raw.range?.end_date || ""),
+    },
+    enabled: Boolean(raw.enabled),
+    timeBasis: mapCodexUsageTimeBasis(raw.time_basis),
+    availableRange: mapCodexUsageAvailableRange(raw.available_range),
+    availableProviders: (raw.available_providers || []).map(mapCodexUsageProvider),
+    selectedProviderKeys: Array.isArray(raw.selected_provider_keys)
+      ? raw.selected_provider_keys.map((item) => String(item))
+      : [],
+    totals: mapCodexUsageMetrics(raw.totals),
+    byProvider,
+    byProviderModel,
+    byDay,
+    dailyByProvider,
+    dailyByProviderModel,
   };
 }
 
@@ -3982,6 +4391,51 @@ export class RealWebBotClient implements WebBotClient {
     );
   }
 
+  async getLanguageServerCatalog(
+    botAlias: string,
+    provider?: LanguageServerProviderId,
+  ): Promise<LanguageServerCatalog> {
+    const query = provider
+      ? `?provider=${encodeURIComponent(provider)}&prewarm=1`
+      : "";
+    return mapLanguageServerCatalog(await this.requestJson<RawLanguageServerCatalog>(
+      `/api/bots/${encodeURIComponent(botAlias)}/workspace/language-servers${query}`,
+    ));
+  }
+
+  async restartLanguageServer(
+    botAlias: string,
+    provider: LanguageServerProviderId,
+  ): Promise<LanguageServerRestartResult> {
+    const result = await this.requestJson<RawLanguageServerRestartResult>(
+      `/api/bots/${encodeURIComponent(botAlias)}/workspace/language-servers/${encodeURIComponent(provider)}/restart`,
+      {
+        method: "POST",
+      },
+    );
+    return mapLanguageServerRestartResult(result, provider);
+  }
+
+  async refreshLanguageServerCatalog(): Promise<LanguageServerCatalog> {
+    return mapLanguageServerCatalog(await this.requestJson<RawLanguageServerCatalog>("/api/admin/language-servers/redetect", {
+      method: "POST",
+    }));
+  }
+
+  async installLanguageServer(
+    provider: LanguageServerProviderId,
+    options: LanguageServerInstallOptions = {},
+  ): Promise<LanguageServerCatalog> {
+    const action = options.update ? "update" : "install";
+    const result = await this.requestJson<RawLanguageServerInstallResult>(
+      `/api/admin/language-servers/${encodeURIComponent(provider)}/${action}`,
+      {
+        method: "POST",
+      },
+    );
+    return mapLanguageServerCatalog(result.catalog || result);
+  }
+
   async getEnvConfig(): Promise<EnvConfigSnapshot> {
     const data = await this.requestJson<RawEnvConfigSnapshot>("/api/admin/env");
     return mapEnvConfigSnapshot(data);
@@ -4019,6 +4473,37 @@ export class RealWebBotClient implements WebBotClient {
     const query = params.toString();
     const data = await this.requestJson<RawCliErrorStatsResult>(`/api/admin/cli-errors${query ? `?${query}` : ""}`);
     return mapCliErrorStatsResult(data);
+  }
+
+  async getCodexUsageConfig(): Promise<CodexUsageConfig> {
+    const data = await this.requestJson<RawCodexUsageConfig>("/api/admin/codex-usage/config");
+    return mapCodexUsageConfig(data);
+  }
+
+  async updateCodexUsageConfig(input: { enabled: boolean }): Promise<CodexUsageConfig> {
+    const data = await this.requestJson<RawCodexUsageConfig>("/api/admin/codex-usage/config", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ enabled: input.enabled }),
+    });
+    return mapCodexUsageConfig(data);
+  }
+
+  async getCodexUsageStats(queryInput: CodexUsageStatsQuery = {}): Promise<CodexUsageStats> {
+    const params = new URLSearchParams();
+    if (queryInput.startDate) params.set("start_date", queryInput.startDate);
+    if (queryInput.endDate) params.set("end_date", queryInput.endDate);
+    for (const providerKey of queryInput.providerKeys || []) {
+      const key = providerKey.trim();
+      if (key) params.append("provider", key);
+    }
+    const query = params.toString();
+    const data = await this.requestJson<RawCodexUsageStats>(
+      `/api/admin/codex-usage/stats${query ? `?${query}` : ""}`,
+    );
+    return mapCodexUsageStats(data);
   }
 
   async listBots(): Promise<BotSummary[]> {
@@ -4558,6 +5043,7 @@ export class RealWebBotClient implements WebBotClient {
     let streamFinished = false;
     let terminalSeen = false;
     const agUiAdapter = createAgUiStreamAdapter();
+    const agUiAccumulator = createAgUiRunAccumulator();
     let agUiState = createAgUiRunState();
     let sawAgUiEvent = false;
     const seenStreamSequences = new Set<number>();
@@ -4617,14 +5103,9 @@ export class RealWebBotClient implements WebBotClient {
         if (agUiEvents.length > 0) {
           sawAgUiEvent = true;
           for (const agUiEvent of agUiEvents) {
-            agUiState = reduceAgUiRunEvent(agUiState, agUiEvent);
+            agUiState = agUiAccumulator.reduce(agUiEvent);
             onAgUiEvent?.(agUiEvent);
             const activityContent = contentForAgUiActivityEvent(agUiState.activities, agUiEvent);
-            const traceEvent = mapAgUiTraceEvent(agUiEvent, activityContent);
-            if (traceEvent) {
-              const nativeFlatTrace = options?.executionMode === "native_agent";
-              appendStreamTrace(traceEvent, nativeFlatTrace);
-            }
             if (agUiEvent.type === EventType.ACTIVITY_SNAPSHOT || agUiEvent.type === EventType.ACTIVITY_DELTA) {
               const content = activityContent;
               if (agUiEvent.activityType === "TCB_STATUS") {
@@ -4771,6 +5252,11 @@ export class RealWebBotClient implements WebBotClient {
       if (done) {
         break;
       }
+    }
+
+    if (sawAgUiEvent) {
+      agUiState = agUiAccumulator.snapshot();
+      agUiAccumulator.dispose();
     }
 
     if (!terminalSeen) {
@@ -4954,8 +5440,8 @@ export class RealWebBotClient implements WebBotClient {
     return mapPersistentTerminalSnapshot(data);
   }
 
-  async rebuildTerminalSession(ownerId: string, cwd: string, shell = "auto"): Promise<PersistentTerminalSnapshot> {
-    const data = await this.requestJson<RawPersistentTerminalSnapshot>("/api/terminal/session/rebuild", {
+  async createTerminalSession(ownerId: string, cwd: string, shell = "auto"): Promise<PersistentTerminalSnapshot> {
+    const data = await this.requestJson<RawPersistentTerminalSnapshot>("/api/terminal/session/create", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -4967,6 +5453,10 @@ export class RealWebBotClient implements WebBotClient {
       }),
     });
     return mapPersistentTerminalSnapshot(data);
+  }
+
+  async rebuildTerminalSession(ownerId: string, cwd: string, shell = "auto"): Promise<PersistentTerminalSnapshot> {
+    return this.createTerminalSession(ownerId, cwd, shell);
   }
 
   async closeTerminalSession(ownerId: string): Promise<PersistentTerminalSnapshot> {
@@ -5193,6 +5683,33 @@ export class RealWebBotClient implements WebBotClient {
     return result;
   }
 
+  async readExternalSource(botAlias: string, sourceId: string): Promise<ExternalSourceReadResult> {
+    const normalizedSourceId = String(sourceId || "").trim();
+    if (!normalizedSourceId) {
+      throw new Error("外部源码令牌为空");
+    }
+    const data = await this.requestJson<RawExternalSourceReadResult>(
+      `/api/bots/${encodeURIComponent(botAlias)}/workspace/external-sources/${encodeURIComponent(normalizedSourceId)}`,
+    );
+    const sourceIdValue = String(data.source_id || data.sourceId || normalizedSourceId).trim();
+    const displayPath = String(data.display_path || data.displayPath || data.path || "外部源码").trim() || "外部源码";
+    return {
+      sourceId: sourceIdValue,
+      displayPath,
+      content: typeof data.content === "string" ? data.content : "",
+      ...(data.encoding ? { encoding: data.encoding } : {}),
+      ...(data.language_id || data.languageId ? { languageId: data.language_id || data.languageId } : {}),
+      ...(typeof data.last_modified_ns !== "undefined" || typeof data.lastModifiedNs !== "undefined"
+        ? { lastModifiedNs: String(data.last_modified_ns ?? data.lastModifiedNs) }
+        : {}),
+      ...(typeof data.file_size_bytes === "number" || typeof data.fileSizeBytes === "number"
+        ? { fileSizeBytes: Number(data.file_size_bytes ?? data.fileSizeBytes) }
+        : {}),
+      ...(data.uri ? { uri: data.uri } : {}),
+      ...(data.scheme ? { scheme: data.scheme } : {}),
+    };
+  }
+
   async openPluginView(
     botAlias: string,
     pluginId: string,
@@ -5410,34 +5927,104 @@ export class RealWebBotClient implements WebBotClient {
     );
   }
 
-  async resolveWorkspaceDefinition(
+  async resolveCodeNavigation(
     botAlias: string,
-    input: { path: string; line: number; column: number; symbol?: string },
-  ): Promise<WorkspaceDefinitionResult> {
-    const data = await this.requestJson<{
-      items?: Array<{
-        path: string;
-        line: number;
-        column?: number;
-        match_kind?: "import" | "same_file" | "workspace_search";
-        confidence?: number;
-      }>;
-    }>(`/api/bots/${encodeURIComponent(botAlias)}/workspace/resolve-definition`, {
+    input: CodeNavigationRequest,
+    signal?: AbortSignal,
+  ): Promise<CodeNavigationResult> {
+    const basePath = `/api/bots/${encodeURIComponent(botAlias)}/workspace/code-navigation`;
+    const cancelRequest = () => {
+      void this.requestJson<{ cancelled?: boolean }>(`${basePath}/cancel`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ requestId: input.requestId }),
+      }).catch(() => undefined);
+    };
+    if (signal && !signal.aborted) {
+      signal.addEventListener("abort", cancelRequest, { once: true });
+    }
+    let data: RawCodeNavigationResult | null;
+    try {
+      data = await this.requestJson<RawCodeNavigationResult | null>(`${basePath}/resolve`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(input),
+        signal,
+      });
+    } finally {
+      signal?.removeEventListener("abort", cancelRequest);
+    }
+    const mapPosition = (position?: { line?: number; column?: number }) => ({
+      line: Math.max(1, Number(position?.line) || 1),
+      column: Math.max(1, Number(position?.column) || 1),
+    });
+    const rawItems = data?.items;
+    const items = Array.isArray(rawItems) ? rawItems : rawItems ? [rawItems] : [];
+    return {
+      requestId: data?.request_id || data?.requestId || input.requestId,
+      message: data?.message || "",
+      items: items.map((item) => {
+        const targetType = item.target_type || item.targetType;
+        const path = item.path || item.display_path || item.displayPath;
+        const displayPath = item.display_path || item.displayPath || path;
+        const sourceId = item.source_id || item.sourceId;
+        const range = item.range;
+        const selectionRange = item.selection_range || item.selectionRange;
+        return {
+          targetType: targetType === "external" ? "external" : "workspace",
+          ...(path ? { path } : {}),
+          ...(targetType === "external" && displayPath ? { displayPath } : {}),
+          ...(sourceId ? { sourceId } : {}),
+          provider: item.provider || "unknown",
+          range: {
+            start: mapPosition(range?.start),
+            end: mapPosition(range?.end),
+          },
+          selectionRange: {
+            start: mapPosition(selectionRange?.start),
+            end: mapPosition(selectionRange?.end),
+          },
+        };
+      }),
+    };
+  }
+
+  async syncWorkspaceDocuments(
+    botAlias: string,
+    input: WorkspaceDocumentSyncInput,
+    signal?: AbortSignal,
+  ): Promise<WorkspaceDocumentSyncResult> {
+    const basePath = `/api/bots/${encodeURIComponent(botAlias)}/workspace/code-navigation/documents`;
+    const data = await this.requestJson<RawWorkspaceDocumentSyncResult | null>(`${basePath}/sync`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(input),
+      signal,
     });
-    return {
-      items: (data.items || []).map((item) => ({
-        path: item.path,
-        line: item.line,
-        ...(typeof item.column === "number" ? { column: item.column } : {}),
-        matchKind: item.match_kind || "workspace_search",
-        confidence: typeof item.confidence === "number" ? item.confidence : 0,
-      })),
-    };
+    return mapWorkspaceDocumentSyncResult(data);
+  }
+
+  async closeWorkspaceDocuments(
+    botAlias: string,
+    input: WorkspaceDocumentCloseInput,
+    signal?: AbortSignal,
+  ): Promise<WorkspaceDocumentCloseResult> {
+    const basePath = `/api/bots/${encodeURIComponent(botAlias)}/workspace/code-navigation/documents`;
+    const data = await this.requestJson<RawWorkspaceDocumentSyncResult | null>(`${basePath}/close`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+      signal,
+    });
+    return mapWorkspaceDocumentCloseResult(data);
   }
 
   async uploadChatAttachment(botAlias: string, file: File): Promise<ChatAttachmentUploadResult> {

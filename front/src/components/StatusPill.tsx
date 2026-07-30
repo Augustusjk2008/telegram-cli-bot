@@ -8,17 +8,17 @@ type Props = {
 
 export function StatusPill({ status, className }: Props) {
   const statusMap = {
-    online: { label: "在线", color: "bg-green-100 text-green-800 border-green-200" },
-    running: { label: "运行中", color: "bg-green-100 text-green-800 border-green-200" },
-    busy: { label: "处理中", color: "bg-yellow-100 text-yellow-800 border-yellow-200" },
-    unread: { label: "未读", color: "bg-sky-100 text-sky-800 border-sky-200" },
-    offline: { label: "离线", color: "bg-red-100 text-red-800 border-red-300 font-semibold shadow-sm shadow-red-200/70" },
+    online: { label: "在线", color: "border-[var(--status-success-border)] bg-[var(--status-success-bg)] text-[var(--status-success)]" },
+    running: { label: "运行中", color: "border-[var(--status-success-border)] bg-[var(--status-success-bg)] text-[var(--status-success)]" },
+    busy: { label: "处理中", color: "border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] text-[var(--status-warning)]" },
+    unread: { label: "未读", color: "border-[var(--status-info-border)] bg-[var(--status-info-bg)] text-[var(--status-info)]" },
+    offline: { label: "离线", color: "border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] font-semibold text-[var(--status-danger)]" },
   };
 
   const config = statusMap[status];
 
   return (
-    <span className={twMerge(clsx("px-2 py-0.5 text-xs rounded-full border", config.color), className)}>
+    <span className={twMerge(clsx("rounded-full border px-1.5 py-0.5 text-xs", config.color), className)}>
       {config.label}
     </span>
   );
