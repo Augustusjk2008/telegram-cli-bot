@@ -21,6 +21,7 @@
   <a href="https://github.com/Augustusjk2008/telegram-cli-bot/releases/latest">下载最新版</a> ·
   <a href="#功能导览">功能导览</a> ·
   <a href="#高级配置">高级配置</a> ·
+  <a href="#开源协议品牌与贡献">开源协议</a> ·
   <a href="https://github.com/Augustusjk2008/telegram-cli-bot/issues">反馈问题</a>
 </p>
 
@@ -29,6 +30,7 @@
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-20b8cd?style=flat-square" alt="Supported Platforms">
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&amp;logo=python&amp;logoColor=white" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/self--hosted-local--first-16a085?style=flat-square" alt="Self-hosted and local-first">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-3b82f6?style=flat-square" alt="Apache License 2.0"></a>
 </p>
 
 > [!NOTE]
@@ -369,6 +371,10 @@ APP_UPDATE_REPOSITORY=Augustusjk2008/telegram-cli-bot
 ├─ install.*               # 安装入口
 ├─ start.*                 # 启动入口
 ├─ managed_bots.example.json
+├─ LICENSE / NOTICE        # Apache-2.0 与版权声明
+├─ THIRD_PARTY_NOTICES.md  # 第三方组件许可汇总
+├─ TRADEMARKS.md           # 项目名称与 Logo 使用政策
+├─ CONTRIBUTING.md         # 贡献指南与贡献许可条款
 └─ AGENTS.md               # Coding Agent 工作约定
 ```
 
@@ -389,6 +395,14 @@ npm run build
 ```
 
 项目以 Windows 为优先平台，同时维护 Linux/macOS 安装与启动脚本。涉及布局的改动应补充浏览器级检查；涉及发布包时应运行后端测试、前端门禁、lint 和生产构建。
+
+## 开源协议、品牌与贡献
+
+本项目自行创作的代码、文档和 Logo 图稿按 [Apache License 2.0](LICENSE) 授权，版权声明见 [NOTICE](NOTICE)。该许可证允许商业使用、修改和再分发，并提供明确的专利授权；使用和分发时须遵守许可证中的保留声明、标注修改等条件。
+
+第三方组件继续受各自许可证约束，汇总见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)；生产构建会按实际前端模块生成 `front/dist/THIRD_PARTY_LICENSES.txt` 并随发布包交付。`Orbit Safe Claw` 名称和 `front/public/assets/app-logo*.svg` 中的 Logo 属于项目品牌标识；Logo 文件的著作权许可不等于取得商标、背书或官方身份，Apache License 2.0 不授予将其作为分支或衍生产品品牌的权利。允许范围和申请方式见 [TRADEMARKS.md](TRADEMARKS.md)。
+
+提交代码前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。除非提交者明确书面声明其他条款，有意提交并纳入项目的贡献将按 Apache License 2.0 提供。
 
 ## 获取帮助
 

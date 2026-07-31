@@ -21,6 +21,7 @@
   <a href="https://github.com/Augustusjk2008/telegram-cli-bot/releases/latest">Download</a> ·
   <a href="#feature-tour">Feature Tour</a> ·
   <a href="#advanced-configuration">Advanced Configuration</a> ·
+  <a href="#license-branding-and-contributions">License</a> ·
   <a href="https://github.com/Augustusjk2008/telegram-cli-bot/issues">Report an Issue</a>
 </p>
 
@@ -29,6 +30,7 @@
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-20b8cd?style=flat-square" alt="Supported Platforms">
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&amp;logo=python&amp;logoColor=white" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/self--hosted-local--first-16a085?style=flat-square" alt="Self-hosted and local-first">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-3b82f6?style=flat-square" alt="Apache License 2.0"></a>
 </p>
 
 > [!NOTE]
@@ -369,6 +371,10 @@ To use your own release repository, change the value to the corresponding `owner
 ├─ install.*               # Installation entry points
 ├─ start.*                 # Startup entry points
 ├─ managed_bots.example.json
+├─ LICENSE / NOTICE        # Apache-2.0 and copyright notice
+├─ THIRD_PARTY_NOTICES.md  # Third-party license inventory
+├─ TRADEMARKS.md           # Project name and logo policy
+├─ CONTRIBUTING.md         # Contribution guide and licensing terms
 └─ AGENTS.md               # Coding-agent conventions
 ```
 
@@ -389,6 +395,14 @@ npm run build
 ```
 
 Windows is the primary platform, with Linux and macOS installation and startup scripts maintained alongside it. Layout changes should include browser-level checks. Release-package changes should run the backend test suite, frontend gate, lint, and production build.
+
+## License, Branding, and Contributions
+
+Original project code, documentation, and logo artwork are licensed under the [Apache License 2.0](LICENSE); see [NOTICE](NOTICE) for copyright attribution. The license permits commercial use, modification, and redistribution and includes an express patent grant, subject to its notice, change-marking, and other conditions.
+
+Third-party components remain subject to their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Production builds generate `front/dist/THIRD_PARTY_LICENSES.txt` from the frontend modules actually emitted and include it in release archives. The `Orbit Safe Claw` name and the logos in `front/public/assets/app-logo*.svg` are project marks. The copyright license for the logo files does not confer trademark rights, endorsement, or official status, and Apache License 2.0 does not grant permission to brand a fork or derivative product with them. See [TRADEMARKS.md](TRADEMARKS.md) for permitted uses and permission requests.
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting changes. Unless explicitly stated otherwise in writing, contributions intentionally submitted for inclusion are provided under Apache License 2.0.
 
 ## Getting Help
 

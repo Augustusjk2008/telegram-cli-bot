@@ -1,10 +1,33 @@
 from __future__ import annotations
 
+import hashlib
+import io
 import json
+import subprocess
+import sys
+import tarfile
 import zipfile
 from pathlib import Path
 
 from bot import updater
+
+
+REQUIRED_RELEASE_LEGAL_FILES = (
+    "LICENSE",
+    "NOTICE",
+    "THIRD_PARTY_NOTICES.md",
+    "TRADEMARKS.md",
+    "CONTRIBUTING.md",
+)
+REQUIRED_RELEASE_ARCHIVE_FILES = (
+    *REQUIRED_RELEASE_LEGAL_FILES,
+    "front/dist/THIRD_PARTY_LICENSES.txt",
+)
+PORTABLE_RUNTIME_LICENSE_FILES = (
+    "runtime/python/LICENSE.txt",
+    "runtime/node/LICENSE",
+    "tools/git/LICENSE.txt",
+)
 
 
 def _announcement_payload(*item_ids: str) -> dict:
@@ -66,6 +89,142 @@ def test_release_scripts_force_root_base_and_export_announcements() -> None:
     assert 'export_release_announcements "$stage_dir"' in sh
 
     assert "Export-ReleaseAnnouncements -DestinationRoot $DestinationRoot" in portable
+
+
+def test_release_legal_files_are_present_and_required_by_every_packager(tmp_path: Path) -> None:
+    sources = (
+        Path(".release-local/publish-release.ps1").read_text(encoding="utf-8"),
+        Path(".release-local/publish-release.sh").read_text(encoding="utf-8"),
+        Path(".release-local/portable-win/build-portable.ps1").read_text(encoding="utf-8"),
+    )
+
+    for relative_path in REQUIRED_RELEASE_LEGAL_FILES:
+        assert Path(relative_path).is_file(), f"缺少发布法律文件: {relative_path}"
+
+    for relative_path in REQUIRED_RELEASE_ARCHIVE_FILES:
+        for source in sources:
+            assert f'"{relative_path}"' in source
+
+    assert "Assert-ReleaseLegalFilesInStage -StageDir $StageDir" in sources[0]
+    assert "Assert-ReleaseArchivesContainLegalFiles -Archives $archives" in sources[0]
+    assert "-PathType Leaf" in sources[0]
+    assert 'assert_release_legal_files_in_stage "$stage_dir"' in sources[1]
+    assert "assert_release_archives_contain_legal_files" in sources[1]
+    assert "Assert-ReleaseLegalFilesInStage -StageDir $DestinationRoot" in sources[2]
+    assert "Assert-PortableRuntimeLicenseFiles -PackageRoot $packageRoot" in sources[2]
+    assert "-PathType Leaf" in sources[2]
+
+    assert sources[0].rindex("Assert-ReleaseArchivesContainLegalFiles -Archives $archives") < sources[0].rindex(
+        "Ensure-TagAtHead -ReleaseTag $releaseTag"
+    )
+    assert sources[1].rindex("assert_release_archives_contain_legal_files") < sources[1].rindex(
+        'ensure_tag_at_head "$release_tag"'
+    )
+
+    verifier = Path("scripts/verify_release_legal_files.py")
+    assert verifier.is_file()
+    if Path(".git").exists():
+        ignore_result = subprocess.run(
+            ["git", "check-ignore", "--quiet", str(verifier)],
+            capture_output=True,
+            check=False,
+        )
+        assert ignore_result.returncode == 1, "发布归档校验器不得被 .gitignore 排除"
+
+    plan = updater._build_update_write_plan(tmp_path, list(REQUIRED_RELEASE_ARCHIVE_FILES))
+    assert [relative_path for _target, relative_path in plan] == list(REQUIRED_RELEASE_ARCHIVE_FILES)
+
+    license_text = Path("LICENSE").read_text(encoding="utf-8")
+    license_sha256 = hashlib.sha256(license_text.encode()).hexdigest()
+    assert license_sha256 == "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    assert "Copyright 2026 Jiang Kai" in Path("NOTICE").read_text(encoding="utf-8")
+
+    front_package = json.loads(Path("front/package.json").read_text(encoding="utf-8"))
+    front_lock = json.loads(Path("front/package-lock.json").read_text(encoding="utf-8"))
+    assert front_package["license"] == "Apache-2.0"
+    assert front_lock["packages"][""]["license"] == "Apache-2.0"
+
+
+def _write_legal_archive(path: Path, members: tuple[str, ...]) -> None:
+    if path.suffix == ".zip":
+        with zipfile.ZipFile(path, "w") as archive:
+            for member in members:
+                archive.writestr(member, f"content for {member}")
+        return
+    with tarfile.open(path, "w:gz") as archive:
+        for member in members:
+            payload = f"content for {member}".encode()
+            info = tarfile.TarInfo(f"./{member}")
+            info.size = len(payload)
+            archive.addfile(info, io.BytesIO(payload))
+
+
+def test_release_archive_legal_file_verifier_accepts_complete_zip_and_tar(tmp_path: Path) -> None:
+    verifier = Path("scripts/verify_release_legal_files.py")
+    zip_path = tmp_path / "release.zip"
+    tar_path = tmp_path / "release.tar.gz"
+    _write_legal_archive(zip_path, REQUIRED_RELEASE_ARCHIVE_FILES)
+    _write_legal_archive(tar_path, REQUIRED_RELEASE_ARCHIVE_FILES)
+
+    result = subprocess.run(
+        [sys.executable, str(verifier), str(zip_path), str(tar_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "发布归档法律文件完整" in result.stdout
+
+
+def test_release_archive_legal_file_verifier_rejects_missing_or_directory_entries(tmp_path: Path) -> None:
+    verifier = Path("scripts/verify_release_legal_files.py")
+    archive_path = tmp_path / "release.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        for member in REQUIRED_RELEASE_ARCHIVE_FILES[:-1]:
+            archive.writestr(member, "content")
+        archive.writestr(f"{REQUIRED_RELEASE_ARCHIVE_FILES[-1]}/", "")
+
+    result = subprocess.run(
+        [sys.executable, str(verifier), str(archive_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert REQUIRED_RELEASE_ARCHIVE_FILES[-1] in result.stderr
+
+
+def test_release_archive_legal_file_verifier_requires_portable_runtime_licenses(tmp_path: Path) -> None:
+    verifier = Path("scripts/verify_release_legal_files.py")
+    archive_path = tmp_path / "portable.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        for member in REQUIRED_RELEASE_ARCHIVE_FILES:
+            archive.writestr(member, "content")
+        archive.writestr("runtime/python/python.exe", "binary")
+
+    missing_result = subprocess.run(
+        [sys.executable, str(verifier), str(archive_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert missing_result.returncode == 1
+    for member in PORTABLE_RUNTIME_LICENSE_FILES:
+        assert member in missing_result.stderr
+
+    _write_legal_archive(
+        archive_path,
+        (*REQUIRED_RELEASE_ARCHIVE_FILES, *PORTABLE_RUNTIME_LICENSE_FILES, "runtime/python/python.exe"),
+    )
+    complete_result = subprocess.run(
+        [sys.executable, str(verifier), str(archive_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert complete_result.returncode == 0, complete_result.stderr
 
 
 def test_portable_build_does_not_embed_fixed_web_token() -> None:

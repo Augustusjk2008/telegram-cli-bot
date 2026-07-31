@@ -22,6 +22,15 @@ $script:PortableBuildScript = Join-Path $script:ScriptDir "portable-win\build-po
 $script:FrontDir = Join-Path $script:RepoRoot "front"
 $script:VersionFile = Join-Path $script:RepoRoot "VERSION"
 $script:PackageBaseName = "orbit-safe-claw"
+$script:ReleaseLegalVerifier = Join-Path $script:RepoRoot "scripts\verify_release_legal_files.py"
+$script:RequiredReleaseLegalFiles = @(
+    "LICENSE",
+    "NOTICE",
+    "THIRD_PARTY_NOTICES.md",
+    "TRADEMARKS.md",
+    "CONTRIBUTING.md",
+    "front/dist/THIRD_PARTY_LICENSES.txt"
+)
 
 function Write-Step {
     param([string]$Message)
@@ -388,6 +397,37 @@ function Invoke-PostPortableFrontBuild {
     Invoke-FrontBuild -StepMessage "恢复本机前端构建产物"
 }
 
+function Assert-ReleaseLegalFilesInStage {
+    param([string]$StageDir)
+
+    $missing = @(
+        foreach ($relativePath in $script:RequiredReleaseLegalFiles) {
+            if (-not (Test-Path -LiteralPath (Join-Path $StageDir $relativePath) -PathType Leaf)) {
+                $relativePath
+            }
+        }
+    )
+    if ($missing.Count -gt 0) {
+        throw "发布暂存区缺少必需法律文件（请确认文件已由 Git 跟踪）: $($missing -join ', ')"
+    }
+}
+
+function Assert-ReleaseArchivesContainLegalFiles {
+    param($Archives)
+
+    if (-not (Test-Path -LiteralPath $script:ReleaseLegalVerifier -PathType Leaf)) {
+        throw "未找到发布归档法律文件校验器: $($script:ReleaseLegalVerifier)"
+    }
+    $archivePaths = @(
+        $Archives.WindowsArchive,
+        $Archives.WindowsInstallerArchive,
+        $Archives.LinuxArchive,
+        $Archives.MacOSArchive
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+    $arguments = @($script:ReleaseLegalVerifier) + @($archivePaths)
+    Invoke-CheckedCommand -FilePath "python" -Arguments $arguments -FailureMessage "发布归档法律文件校验失败"
+}
+
 function Copy-TrackedFilesToStage {
     param([string]$StageDir)
 
@@ -420,6 +460,7 @@ function Copy-TrackedFilesToStage {
     Copy-Item -LiteralPath $frontDist -Destination $frontDistTarget -Recurse -Force
 
     Export-ReleaseAnnouncements -DestinationRoot $StageDir
+    Assert-ReleaseLegalFilesInStage -StageDir $StageDir
 }
 
 function New-ZipArchive {
@@ -776,6 +817,7 @@ try {
     } else {
         $archives = Get-ExistingReleaseArchives -NormalizedVersion $normalizedVersion
     }
+    Assert-ReleaseArchivesContainLegalFiles -Archives $archives
 
     if ($archives.WindowsArchive) {
         Write-Info ("Windows 绿色版包: {0}" -f $archives.WindowsArchive)

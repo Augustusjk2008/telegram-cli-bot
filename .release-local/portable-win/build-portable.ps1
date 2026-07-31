@@ -20,6 +20,14 @@ $script:PackageBaseName = "orbit-safe-claw"
 $script:NodeVersion = "22.17.1"
 $script:PiPackageSpec = "@earendil-works/pi-coding-agent@0.74.2"
 $script:PiWorkspaceHistoryPackageSpec = "pi-workspace-history@0.2.2"
+$script:RequiredReleaseLegalFiles = @(
+    "LICENSE",
+    "NOTICE",
+    "THIRD_PARTY_NOTICES.md",
+    "TRADEMARKS.md",
+    "CONTRIBUTING.md",
+    "front/dist/THIRD_PARTY_LICENSES.txt"
+)
 
 function Write-Step {
     param([string]$Message)
@@ -150,6 +158,41 @@ function Get-PythonEmbedUrl {
     }
 }
 
+function Assert-ReleaseLegalFilesInStage {
+    param([string]$StageDir)
+
+    $missing = @(
+        foreach ($relativePath in $script:RequiredReleaseLegalFiles) {
+            if (-not (Test-Path -LiteralPath (Join-Path $StageDir $relativePath) -PathType Leaf)) {
+                $relativePath
+            }
+        }
+    )
+    if ($missing.Count -gt 0) {
+        throw "发布暂存区缺少必需法律文件（请确认文件已由 Git 跟踪）: $($missing -join ', ')"
+    }
+}
+
+function Assert-PortableRuntimeLicenseFiles {
+    param([string]$PackageRoot)
+
+    $requiredFiles = @(
+        "runtime/python/LICENSE.txt",
+        "runtime/node/LICENSE",
+        "tools/git/LICENSE.txt"
+    )
+    $missing = @(
+        foreach ($relativePath in $requiredFiles) {
+            if (-not (Test-Path -LiteralPath (Join-Path $PackageRoot $relativePath) -PathType Leaf)) {
+                $relativePath
+            }
+        }
+    )
+    if ($missing.Count -gt 0) {
+        throw "Windows 绿色包缺少捆绑运行时许可证文件: $($missing -join ', ')"
+    }
+}
+
 function Copy-WorktreeFiles {
     param([string]$DestinationRoot)
 
@@ -193,6 +236,7 @@ function Copy-WorktreeFiles {
     Copy-Item -Path (Join-Path $frontDist "*") -Destination $frontDistTarget -Recurse -Force
 
     Export-ReleaseAnnouncements -DestinationRoot $DestinationRoot
+    Assert-ReleaseLegalFilesInStage -StageDir $DestinationRoot
 }
 
 function Install-EmbeddedPython {
@@ -977,6 +1021,7 @@ try {
     Write-PortableEnv -PackageRoot $packageRoot
     Write-PortableScripts -PackageRoot $packageRoot
     Write-PortableReadme -PackageRoot $packageRoot -Version $version
+    Assert-PortableRuntimeLicenseFiles -PackageRoot $packageRoot
     Test-PortableBundle -PackageRoot $packageRoot
     Write-DistributionMarker -Root $packageRoot -PackageKind "portable" -Platform "windows-x64" -Version $version
 
