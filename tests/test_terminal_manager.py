@@ -293,6 +293,85 @@ async def test_terminal_create_and_close_are_isolated_by_owner(monkeypatch):
     await manager.shutdown()
 
 
+@pytest.mark.asyncio
+async def test_terminal_close_releases_session_replay_memory_and_unknown_owner_is_not_retained():
+    from bot.web.terminal_manager import (
+        ManagedTerminalSession,
+        TerminalChunk,
+        TerminalSessionManager,
+    )
+
+    manager = TerminalSessionManager()
+    key = "1:owner-a"
+    session = ManagedTerminalSession(owner_key=key)
+    session.replay.append(TerminalChunk(seq=1, data=b"remembered output"))
+    session.replay_bytes = len(b"remembered output")
+    manager._sessions[key] = session
+
+    closed = await manager.close(1, "owner-a")
+
+    assert closed["closed"] is True
+    assert closed["started"] is False
+    assert key not in manager._sessions
+    assert manager.diagnostics()["sessions"] == 0
+    assert manager.diagnostics()["replay_bytes"] == 0
+
+    missing = await manager.close(1, "owner-missing")
+
+    assert missing["closed"] is True
+    assert manager.diagnostics()["sessions"] == 0
+
+
+@pytest.mark.asyncio
+async def test_terminal_close_waits_for_inflight_create_before_releasing_session(monkeypatch):
+    from bot.web.terminal_manager import TerminalSessionManager
+
+    manager = TerminalSessionManager()
+    create_started = asyncio.Event()
+    allow_create = asyncio.Event()
+
+    async def blocked_rebuild(
+        user_id,
+        owner_id,
+        *,
+        cwd,
+        shell_type,
+        cols,
+        rows,
+    ):
+        create_started.set()
+        await allow_create.wait()
+        async with manager._lock:
+            session = manager._get_or_create_locked(user_id, owner_id)
+            session.cwd = cwd
+            session.is_closed = False
+            return manager._build_snapshot_locked(session)
+
+    monkeypatch.setattr(manager, "_rebuild_locked", blocked_rebuild)
+    create_task = asyncio.create_task(
+        manager.create(
+            1,
+            "owner-a",
+            cwd="C:/one",
+            shell_type="auto",
+            cols=None,
+            rows=None,
+        )
+    )
+    await create_started.wait()
+    close_task = asyncio.create_task(manager.close(1, "owner-a"))
+    await asyncio.sleep(0)
+
+    assert close_task.done() is False
+
+    allow_create.set()
+    await create_task
+    closed = await close_task
+
+    assert closed["closed"] is True
+    assert manager.diagnostics()["sessions"] == 0
+
+
 def test_terminal_v2_binary_header_carries_version_flags_and_sequence():
     from bot.web.terminal_manager import (
         TERMINAL_WS_V2_HEADER,

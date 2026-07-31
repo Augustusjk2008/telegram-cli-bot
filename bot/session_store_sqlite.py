@@ -9,7 +9,7 @@ import time
 from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 logger = logging.getLogger(__name__)
@@ -30,6 +30,13 @@ def _parse_session_key(key: str) -> tuple[int, int, str]:
     if len(parts) == 3:
         return int(parts[0]), int(parts[1]), _normalize_agent_id(parts[2])
     raise ValueError(f"invalid session key: {key}")
+
+
+def _make_session_key(bot_id: int, user_id: int, agent_id: str) -> str:
+    normalized_agent_id = _normalize_agent_id(agent_id)
+    if normalized_agent_id == "main":
+        return f"{int(bot_id)}:{int(user_id)}"
+    return f"{int(bot_id)}:{int(user_id)}:{normalized_agent_id}"
 
 
 class SessionStoreSQLite:
@@ -213,6 +220,102 @@ class SessionStoreSQLite:
         except json.JSONDecodeError:
             return None
         return payload if isinstance(payload, dict) else None
+
+    def migrate_sessions_to_shared(
+        self,
+        bot_id: int,
+        shared_user_id: int,
+        merge_payloads: Callable[
+            [dict[str, Any] | None, dict[str, Any] | None],
+            dict[str, Any],
+        ],
+    ) -> int:
+        """Merge one bot's legacy user rows without scanning or replacing the store."""
+        self.ensure_ready()
+        normalized_bot_id = int(bot_id)
+        normalized_shared_user_id = int(shared_user_id)
+
+        with self._lock:
+            # Include pending snapshots in the migration and keep new writes from
+            # racing the read/merge/delete transaction.
+            self.flush()
+            with closing(self._connect()) as connection:
+                rows = connection.execute(
+                    """
+                    SELECT session_key, user_id, agent_id, payload_json
+                    FROM sessions
+                    WHERE bot_id = ?
+                    ORDER BY session_key
+                    """,
+                    (normalized_bot_id,),
+                ).fetchall()
+
+                target_payloads: dict[str, dict[str, Any]] = {}
+                source_rows: list[tuple[str, str, dict[str, Any]]] = []
+                for row in rows:
+                    try:
+                        payload = json.loads(str(row["payload_json"] or "{}"))
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(payload, dict):
+                        continue
+                    agent_id = _normalize_agent_id(str(row["agent_id"] or "main"))
+                    if int(row["user_id"]) == normalized_shared_user_id:
+                        target_payloads[agent_id] = payload
+                    else:
+                        source_rows.append((str(row["session_key"]), agent_id, payload))
+
+                if not source_rows:
+                    return 0
+
+                changed_agents: set[str] = set()
+                for _source_key, agent_id, source_payload in source_rows:
+                    target_payloads[agent_id] = merge_payloads(
+                        source_payload,
+                        target_payloads.get(agent_id),
+                    )
+                    changed_agents.add(agent_id)
+
+                now = _utc_now()
+                with connection:
+                    connection.executemany(
+                        "DELETE FROM sessions WHERE session_key = ?",
+                        ((source_key,) for source_key, _agent_id, _payload in source_rows),
+                    )
+                    for agent_id in sorted(changed_agents):
+                        target_key = _make_session_key(
+                            normalized_bot_id,
+                            normalized_shared_user_id,
+                            agent_id,
+                        )
+                        connection.execute(
+                            """
+                            INSERT INTO sessions(
+                                session_key,
+                                bot_id,
+                                user_id,
+                                agent_id,
+                                payload_json,
+                                updated_at
+                            ) VALUES (?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(session_key) DO UPDATE SET
+                                bot_id = excluded.bot_id,
+                                user_id = excluded.user_id,
+                                agent_id = excluded.agent_id,
+                                payload_json = excluded.payload_json,
+                                updated_at = excluded.updated_at
+                            """,
+                            (
+                                target_key,
+                                normalized_bot_id,
+                                normalized_shared_user_id,
+                                agent_id,
+                                json.dumps(target_payloads[agent_id], ensure_ascii=False),
+                                now,
+                            ),
+                        )
+            self._write_batch_count += 1
+        return len(source_rows)
 
     def queue_upsert(
         self,

@@ -54,6 +54,88 @@ class TestGetSession:
         assert main.codex_session_id == "codex-main"
         assert reviewer.codex_session_id == "codex-reviewer"
 
+    def test_concurrent_restore_initializes_the_session_once(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        temp_dir: Path,
+    ):
+        import bot.sessions as session_module
+
+        start = threading.Barrier(3)
+        load_started = threading.Event()
+        release_load = threading.Event()
+        counter_lock = threading.Lock()
+        load_calls = 0
+        migration_calls = 0
+        results: list[UserSession] = []
+        errors: list[BaseException] = []
+
+        def fake_migrate(_bot_id: int, _user_id: int) -> int:
+            nonlocal migration_calls
+            with counter_lock:
+                migration_calls += 1
+            return 0
+
+        def fake_load(_bot_id: int, _user_id: int, agent_id: str = "main") -> dict:
+            nonlocal load_calls
+            with counter_lock:
+                load_calls += 1
+            load_started.set()
+            assert release_load.wait(timeout=2)
+            return {"codex_session_id": f"restored-{agent_id}", "working_dir": str(temp_dir)}
+
+        monkeypatch.setattr(session_module, "migrate_sessions_to_shared", fake_migrate)
+        monkeypatch.setattr(session_module, "load_session", fake_load)
+
+        def worker() -> None:
+            try:
+                start.wait(timeout=2)
+                results.append(get_or_create_session(9101, "race", 100, str(temp_dir)))
+            except BaseException as exc:  # pragma: no cover - surfaced below
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker), threading.Thread(target=worker)]
+        for thread in threads:
+            thread.start()
+        start.wait(timeout=2)
+        assert load_started.wait(timeout=1)
+        time.sleep(0.05)
+        release_load.set()
+        for thread in threads:
+            thread.join(timeout=2)
+
+        assert errors == []
+        assert len(results) == 2
+        assert results[0] is results[1]
+        assert load_calls == 1
+        assert migration_calls == 1
+
+    def test_shared_session_migration_runs_once_across_agent_sessions(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        temp_dir: Path,
+    ):
+        import bot.sessions as session_module
+
+        migration_calls: list[tuple[int, int]] = []
+        load_calls: list[str] = []
+        monkeypatch.setattr(
+            session_module,
+            "migrate_sessions_to_shared",
+            lambda bot_id, user_id: migration_calls.append((bot_id, user_id)) or 0,
+        )
+        monkeypatch.setattr(
+            session_module,
+            "load_session",
+            lambda _bot_id, _user_id, agent_id="main": load_calls.append(agent_id) or None,
+        )
+
+        get_or_create_session(9102, "migration", 100, str(temp_dir), agent_id="main")
+        get_or_create_session(9102, "migration", 100, str(temp_dir), agent_id="reviewer")
+
+        assert migration_calls == [(9102, chat_session_user_id(100))]
+        assert load_calls == ["main", "reviewer"]
+
 class TestClearBotSessions:
     """测试 clear_bot_sessions"""
 

@@ -215,6 +215,53 @@ def test_sqlite_backend_coalesces_repeated_session_updates(
     assert loaded["codex_session_id"] == "thread-999"
 
 
+def test_sqlite_shared_session_migration_avoids_full_store_scan(
+    monkeypatch: pytest.MonkeyPatch,
+    temp_dir: Path,
+) -> None:
+    import bot.session_store as session_store
+
+    store_file = temp_dir / "session_store.json"
+    monkeypatch.setenv("SESSION_STORE_BACKEND", "sqlite")
+
+    with patch("bot.session_store.STORE_FILE", store_file):
+        save_session(
+            7,
+            100,
+            codex_session_id="legacy-thread",
+            working_dir=str(temp_dir),
+            message_count=4,
+        )
+        save_session(
+            7,
+            1,
+            working_dir=str(temp_dir),
+            message_count=1,
+        )
+        save_session(8, 100, codex_session_id="other-bot")
+        flush_session_store()
+        store = session_store._get_sqlite_store()
+
+        def fail_full_scan():
+            raise AssertionError("shared migration must not load the entire session store")
+
+        monkeypatch.setattr(store, "load_all", fail_full_scan)
+
+        moved = migrate_sessions_to_shared(7, 1)
+        migrated = load_session(7, 1)
+        legacy = load_session(7, 100)
+        other = load_session(8, 100)
+        close_session_store()
+
+    assert moved == 1
+    assert migrated is not None
+    assert migrated["codex_session_id"] == "legacy-thread"
+    assert migrated["message_count"] == 4
+    assert legacy is None
+    assert other is not None
+    assert other["codex_session_id"] == "other-bot"
+
+
 def test_sqlite_reads_wait_for_inflight_pending_batch(
     monkeypatch: pytest.MonkeyPatch,
     temp_dir: Path,

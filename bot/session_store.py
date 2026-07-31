@@ -47,6 +47,17 @@ def _session_store_sqlite_path() -> Path:
     return STORE_FILE.with_suffix(".sqlite3")
 
 
+def session_store_runtime_key() -> str:
+    """Return a stable key for process-local initialization/migration guards."""
+    backend = _session_store_backend()
+    path = _session_store_sqlite_path() if backend == "sqlite" else STORE_FILE
+    try:
+        normalized_path = path.expanduser().resolve()
+    except OSError:
+        normalized_path = path.expanduser().absolute()
+    return f"{backend}:{os.path.normcase(str(normalized_path))}"
+
+
 def _get_sqlite_store() -> SessionStoreSQLite:
     path = _session_store_sqlite_path().resolve()
     with _sqlite_stores_lock:
@@ -296,6 +307,21 @@ def load_session(bot_id: int, user_id: int, agent_id: str = "main") -> Optional[
 
 def migrate_sessions_to_shared(bot_id: int, shared_user_id: int) -> int:
     """将同一 bot 下旧用户会话快照合并到共享用户键。"""
+    if _using_sqlite():
+        moved = _get_sqlite_store().migrate_sessions_to_shared(
+            bot_id,
+            shared_user_id,
+            _merge_session_snapshots,
+        )
+        if moved:
+            logger.debug(
+                "已合并 bot 会话快照到共享用户: bot=%s shared_user=%s moved=%s",
+                bot_id,
+                shared_user_id,
+                moved,
+            )
+        return moved
+
     moved = 0
     with _store_lock:
         data = load_session_ids()
