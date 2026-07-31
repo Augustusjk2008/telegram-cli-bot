@@ -852,19 +852,6 @@ def _build_updated_frontend(repo_root: Path) -> tuple[bool, str]:
     return True, output or "Web 前端构建完成"
 
 
-def _iter_package_entries(package_path: Path) -> list[tuple[str, bytes]]:
-    if _is_zip_package(package_path):
-        if not zipfile.is_zipfile(package_path):
-            raise RuntimeError(_format_invalid_package_message(package_path))
-        return _iter_zip_entries(package_path)
-    if _is_tar_gz_package(package_path):
-        try:
-            return _iter_tar_entries(package_path)
-        except (OSError, tarfile.TarError) as exc:
-            raise RuntimeError(_format_invalid_package_message(package_path, exc)) from exc
-    raise RuntimeError(f"不支持的更新包格式: {package_path.name}")
-
-
 def _list_package_entry_paths(package_path: Path) -> list[str]:
     entries: list[str] = []
 
@@ -897,17 +884,6 @@ def _read_distribution_marker_from_package(package_path: Path) -> bytes:
     if marker_bytes is None:
         raise RuntimeError(f"更新包缺少分发标记: {package_path.name}")
     return marker_bytes
-
-
-def _read_package_distribution_from_entries(
-    package_entries: list[tuple[str, bytes]],
-    *,
-    package_name: str,
-) -> dict[str, str]:
-    raw_bytes = next((data for relative_path, data in package_entries if relative_path == DISTRIBUTION_MARKER_FILE), None)
-    if raw_bytes is None:
-        raise RuntimeError(f"更新包缺少分发标记: {package_name}")
-    return _read_package_distribution_from_bytes(raw_bytes, package_name=package_name)
 
 
 def _read_package_distribution_from_bytes(raw_bytes: bytes, *, package_name: str) -> dict[str, str]:
@@ -1256,35 +1232,6 @@ def _replace_target_from_stream(
     temp_output.replace(target_path)
 
 
-def _iter_zip_entries(package_path: Path) -> list[tuple[str, bytes]]:
-    entries: list[tuple[str, bytes]] = []
-    with zipfile.ZipFile(package_path) as archive:
-        for member in archive.infolist():
-            if member.is_dir():
-                continue
-            relative_path = _normalize_archive_path_for_package(package_path, member.filename)
-            if not relative_path:
-                continue
-            entries.append((relative_path, archive.read(member)))
-    return entries
-
-
-def _iter_tar_entries(package_path: Path) -> list[tuple[str, bytes]]:
-    entries: list[tuple[str, bytes]] = []
-    with tarfile.open(package_path, "r:gz") as archive:
-        for member in archive.getmembers():
-            if not member.isfile():
-                continue
-            relative_path = _normalize_archive_path_for_package(package_path, member.name)
-            if not relative_path:
-                continue
-            extracted = archive.extractfile(member)
-            if extracted is None:
-                continue
-            entries.append((relative_path, extracted.read()))
-    return entries
-
-
 def _stream_package_entries(
     package_path: Path,
     consumer: Any,
@@ -1407,15 +1354,6 @@ def _normalize_archive_path(raw_path: str) -> str:
             raise ValueError(f"非法归档路径: {raw_value}")
         parts.append(part)
     return "/".join(parts)
-
-
-def _normalize_archive_path_for_package(package_path: Path, raw_path: str) -> str:
-    try:
-        return _normalize_archive_path(raw_path)
-    except ValueError as exc:
-        raise RuntimeError(
-            _format_invalid_package_message(package_path, f"非法归档路径: {raw_path}")
-        ) from exc
 
 
 def _normalize_archive_path_for_stream(package_path: Path, raw_path: str) -> str:

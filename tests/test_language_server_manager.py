@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,25 @@ class FakeCatalog:
     def command_for(self, provider_id: str) -> tuple[str, ...] | None:
         assert provider_id == "pyright"
         return self.command
+
+
+class BlockingFirstLookupCatalog(FakeCatalog):
+    def __init__(self) -> None:
+        super().__init__()
+        self.first_lookup_entered = threading.Event()
+        self.release_first_lookup = threading.Event()
+        self._lookup_lock = threading.Lock()
+        self._first_lookup = True
+
+    def command_for(self, provider_id: str) -> tuple[str, ...] | None:
+        with self._lookup_lock:
+            block = self._first_lookup
+            self._first_lookup = False
+        if block:
+            self.first_lookup_entered.set()
+            if not self.release_first_lookup.wait(timeout=2):
+                raise RuntimeError("test did not release the first catalog lookup")
+        return super().command_for(provider_id)
 
 
 class FakeRuntime:
@@ -71,6 +91,107 @@ class FakeRuntime:
             "pending_count": self.pending_count,
             "open_document_count": self.open_document_count,
         }
+
+
+class BlockingDocumentRuntime(FakeRuntime):
+    def __init__(self, key: LanguageServerRuntimeKey, command: tuple[str, ...]) -> None:
+        super().__init__(key, command)
+        self.block_sync = False
+        self.sync_entered = asyncio.Event()
+        self.release_sync = asyncio.Event()
+        self.close_entered = asyncio.Event()
+        self.events: list[tuple[str, int]] = []
+        self.open_documents: dict[str, LanguageDocument] = {}
+
+    async def sync_documents(self, documents: list[LanguageDocument]) -> list[LanguageDocument]:
+        batch = list(documents)
+        if self.block_sync:
+            self.sync_entered.set()
+            await self.release_sync.wait()
+        self.synced_documents.extend(batch)
+        for document in batch:
+            self.events.append(("sync", document.version))
+            self.open_documents[document.path] = document
+        return batch
+
+    async def close_documents(self, documents: list[LanguageDocument]) -> list[str]:
+        batch = list(documents)
+        self.close_entered.set()
+        for document in batch:
+            self.events.append(("close", document.version))
+            self.open_documents.pop(document.path, None)
+        return [document.path for document in batch]
+
+
+class ControllableCloseRuntime(FakeRuntime):
+    def __init__(self, key: LanguageServerRuntimeKey, command: tuple[str, ...]) -> None:
+        super().__init__(key, command)
+        self.close_calls: list[list[LanguageDocument]] = []
+        self.close_entered = asyncio.Event()
+        self.close_finished = asyncio.Event()
+        self.release_close = asyncio.Event()
+        self.block_close = False
+        self.close_failure: BaseException | None = None
+        self.acknowledged_paths: list[str] | None = None
+
+    async def close_documents(self, documents: list[LanguageDocument]) -> list[str]:
+        batch = list(documents)
+        self.close_calls.append(batch)
+        self.close_entered.set()
+        try:
+            if self.block_close:
+                await self.release_close.wait()
+            if self.close_failure is not None:
+                raise self.close_failure
+            if self.acknowledged_paths is not None:
+                return list(self.acknowledged_paths)
+            return [document.path for document in batch]
+        finally:
+            self.close_finished.set()
+
+
+class AcknowledgingThenBlockingCloseRuntime(ControllableCloseRuntime):
+    """Sends didClose before withholding the acknowledgement result."""
+
+    def __init__(self, key: LanguageServerRuntimeKey, command: tuple[str, ...]) -> None:
+        super().__init__(key, command)
+        self.did_close_sent = asyncio.Event()
+        self.release_acknowledgement = asyncio.Event()
+
+    async def close_documents(self, documents: list[LanguageDocument]) -> list[str]:
+        batch = list(documents)
+        self.close_calls.append(batch)
+        self.close_entered.set()
+        try:
+            self.did_close_sent.set()
+            await self.release_acknowledgement.wait()
+            return [document.path for document in batch]
+        finally:
+            self.close_finished.set()
+
+
+class StartingDocumentRuntime(FakeRuntime):
+    """A candidate whose transport cannot accept didClose before replay."""
+
+    def __init__(self, key: LanguageServerRuntimeKey, command: tuple[str, ...]) -> None:
+        super().__init__(key, command)
+        self.state = "starting"
+        self.start_entered = asyncio.Event()
+        self.release_start = asyncio.Event()
+        self.close_document_batches: list[list[LanguageDocument]] = []
+
+    async def start(self) -> None:
+        self.started += 1
+        self.start_entered.set()
+        await self.release_start.wait()
+        self.state = "ready"
+
+    async def close_documents(self, documents: list[LanguageDocument]) -> list[str]:
+        batch = list(documents)
+        self.close_document_batches.append(batch)
+        if self.state not in {"ready", "indexing"}:
+            return []
+        return [document.path for document in batch]
 
 
 def _request(path: str = "main.py") -> dict[str, Any]:
@@ -311,6 +432,498 @@ async def test_manager_closes_open_external_source_by_scoped_source_id(tmp_path:
 
 
 @pytest.mark.asyncio
+async def test_manager_forwards_only_the_current_versioned_close_snapshot_to_runtime(tmp_path: Path) -> None:
+    class RecordingCloseRuntime(FakeRuntime):
+        def __init__(self, key: LanguageServerRuntimeKey, command: tuple[str, ...]) -> None:
+            super().__init__(key, command)
+            self.close_document_batches: list[list[LanguageDocument]] = []
+
+        async def close_documents(self, documents: list[Any]) -> list[str]:
+            self.close_document_batches.append(list(documents))
+            return [
+                document.path if isinstance(document, LanguageDocument) else str(document.get("path") or "")
+                for document in documents
+            ]
+
+    runtimes: list[RecordingCloseRuntime] = []
+
+    def factory(key: LanguageServerRuntimeKey, command: tuple[str, ...]) -> RecordingCloseRuntime:
+        runtime = RecordingCloseRuntime(key, command)
+        runtimes.append(runtime)
+        return runtime
+
+    manager = LanguageServerRuntimeManager(FakeCatalog(), runtime_factory=factory)
+    current = LanguageDocument("main.py", "python", 3, "v3")
+    await manager.sync_documents(
+        bot_alias="main",
+        user_id=1,
+        workspace_root=tmp_path,
+        documents=[current],
+    )
+
+    stale = await manager.close_documents(
+        bot_alias="main",
+        user_id=1,
+        workspace_root=tmp_path,
+        documents=[{"path": "main.py", "version": 2}],
+    )
+
+    assert stale["closed"] == 0
+    assert manager.document_store.get(runtimes[0].key, "main.py") == current
+    assert runtimes[0].close_document_batches == []
+
+    matching = await manager.close_documents(
+        bot_alias="main",
+        user_id=1,
+        workspace_root=tmp_path,
+        documents=[{"path": "main.py", "version": 3}],
+    )
+
+    assert matching["closed"] == 1
+    assert runtimes[0].close_document_batches == [[current]]
+    await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_manager_keeps_the_document_for_retry_when_runtime_close_raises(tmp_path: Path) -> None:
+    runtimes: list[ControllableCloseRuntime] = []
+
+    def factory(key: LanguageServerRuntimeKey, command: tuple[str, ...]) -> ControllableCloseRuntime:
+        runtime = ControllableCloseRuntime(key, command)
+        runtime.close_failure = RuntimeError("close failed")
+        runtimes.append(runtime)
+        return runtime
+
+    manager = LanguageServerRuntimeManager(FakeCatalog(), runtime_factory=factory)
+    document = LanguageDocument("main.py", "python", 2, "v2")
+    try:
+        await manager.sync_documents(
+            bot_alias="main",
+            user_id=1,
+            workspace_root=tmp_path,
+            documents=[document],
+        )
+
+        with pytest.raises(RuntimeError, match="close failed"):
+            await manager.close_documents(
+                bot_alias="main",
+                user_id=1,
+                workspace_root=tmp_path,
+                documents=[{"path": "main.py", "version": 2}],
+            )
+
+        runtime = runtimes[0]
+        assert manager.document_store.get(runtime.key, "main.py") == document
+        runtime.close_failure = None
+        retried = await manager.close_documents(
+            bot_alias="main",
+            user_id=1,
+            workspace_root=tmp_path,
+            documents=[{"path": "main.py", "version": 2}],
+        )
+
+        assert retried["closed"] == 1
+        assert manager.document_store.get(runtime.key, "main.py") is None
+    finally:
+        await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_manager_keeps_the_document_for_retry_when_runtime_close_is_cancelled(tmp_path: Path) -> None:
+    runtimes: list[ControllableCloseRuntime] = []
+
+    def factory(key: LanguageServerRuntimeKey, command: tuple[str, ...]) -> ControllableCloseRuntime:
+        runtime = ControllableCloseRuntime(key, command)
+        runtimes.append(runtime)
+        return runtime
+
+    manager = LanguageServerRuntimeManager(FakeCatalog(), runtime_factory=factory)
+    document = LanguageDocument("main.py", "python", 2, "v2")
+    closing: asyncio.Task[dict[str, object]] | None = None
+    try:
+        await manager.sync_documents(
+            bot_alias="main",
+            user_id=1,
+            workspace_root=tmp_path,
+            documents=[document],
+        )
+        runtime = runtimes[0]
+        runtime.block_close = True
+        closing = asyncio.create_task(
+            manager.close_documents(
+                bot_alias="main",
+                user_id=1,
+                workspace_root=tmp_path,
+                documents=[{"path": "main.py", "version": 2}],
+            )
+        )
+        await asyncio.wait_for(runtime.close_entered.wait(), timeout=1)
+        closing.cancel()
+        await asyncio.sleep(0)
+
+        # The lifecycle lock remains held until the shielded runtime close has
+        # settled, so a caller cancellation cannot split didClose from the
+        # exact store commit.  This runtime then reports cancellation itself,
+        # which leaves the snapshot available for retry.
+        assert not closing.done()
+        assert manager.document_store.get(runtime.key, "main.py") == document
+        runtime.close_failure = asyncio.CancelledError()
+        runtime.release_close.set()
+
+        result = await asyncio.gather(closing, return_exceptions=True)
+
+        assert isinstance(result[0], asyncio.CancelledError)
+        assert manager.document_store.get(runtime.key, "main.py") == document
+        await asyncio.wait_for(runtime.close_finished.wait(), timeout=1)
+        assert manager.document_store.get(runtime.key, "main.py") == document
+
+        runtime.block_close = False
+        runtime.close_failure = None
+        retried = await manager.close_documents(
+            bot_alias="main",
+            user_id=1,
+            workspace_root=tmp_path,
+            documents=[{"path": "main.py", "version": 2}],
+        )
+
+        assert retried["closed"] == 1
+        assert manager.document_store.get(runtime.key, "main.py") is None
+    finally:
+        for runtime in runtimes:
+            runtime.release_close.set()
+        if closing is not None and not closing.done():
+            await asyncio.gather(closing, return_exceptions=True)
+        await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_manager_commits_acknowledged_close_before_reraising_late_cancellation(tmp_path: Path) -> None:
+    runtimes: list[AcknowledgingThenBlockingCloseRuntime] = []
+
+    def factory(
+        key: LanguageServerRuntimeKey,
+        command: tuple[str, ...],
+    ) -> AcknowledgingThenBlockingCloseRuntime:
+        runtime = AcknowledgingThenBlockingCloseRuntime(key, command)
+        runtimes.append(runtime)
+        return runtime
+
+    manager = LanguageServerRuntimeManager(FakeCatalog(), runtime_factory=factory)
+    document = LanguageDocument("main.py", "python", 2, "v2")
+    closing: asyncio.Task[dict[str, object]] | None = None
+    try:
+        await manager.sync_documents(
+            bot_alias="main",
+            user_id=1,
+            workspace_root=tmp_path,
+            documents=[document],
+        )
+        runtime = runtimes[0]
+        closing = asyncio.create_task(
+            manager.close_documents(
+                bot_alias="main",
+                user_id=1,
+                workspace_root=tmp_path,
+                documents=[{"path": "main.py", "version": 2}],
+            )
+        )
+        await asyncio.wait_for(runtime.did_close_sent.wait(), timeout=1)
+        closing.cancel()
+        await asyncio.sleep(0)
+        runtime.release_acknowledgement.set()
+
+        result = await asyncio.gather(closing, return_exceptions=True)
+
+        assert isinstance(result[0], asyncio.CancelledError)
+        assert runtime.close_finished.is_set()
+        assert runtime.close_calls == [[document]]
+        assert manager.document_store.get(runtime.key, "main.py") is None
+    finally:
+        for runtime in runtimes:
+            runtime.release_acknowledgement.set()
+        if closing is not None and not closing.done():
+            await asyncio.gather(closing, return_exceptions=True)
+        await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_manager_closes_store_before_an_initial_candidate_can_replay_it(tmp_path: Path) -> None:
+    runtimes: list[StartingDocumentRuntime] = []
+
+    def factory(key: LanguageServerRuntimeKey, command: tuple[str, ...]) -> StartingDocumentRuntime:
+        runtime = StartingDocumentRuntime(key, command)
+        runtimes.append(runtime)
+        return runtime
+
+    manager = LanguageServerRuntimeManager(FakeCatalog(), runtime_factory=factory)
+    key = LanguageServerRuntimeKey("main", 1, tmp_path.resolve(), "pyright")
+    document = LanguageDocument("main.py", "python", 2, "v2")
+    manager.document_store.sync_documents(key, [document])
+    prewarming = asyncio.create_task(
+        manager.prewarm(
+            bot_alias="main",
+            user_id=1,
+            workspace_root=tmp_path,
+            provider_id="pyright",
+        )
+    )
+    try:
+        while not runtimes:
+            await asyncio.sleep(0)
+        runtime = runtimes[0]
+        await asyncio.wait_for(runtime.start_entered.wait(), timeout=1)
+
+        closed = await manager.close_documents(
+            bot_alias="main",
+            user_id=1,
+            workspace_root=tmp_path,
+            documents=[{"path": "main.py", "version": 2}],
+        )
+
+        assert closed["closed"] == 1
+        assert manager.document_store.get(key, "main.py") is None
+        assert runtime.close_document_batches == []
+
+        runtime.release_start.set()
+        assert await asyncio.wait_for(prewarming, timeout=1) is True
+        assert runtime.synced_documents == []
+    finally:
+        for runtime in runtimes:
+            runtime.release_start.set()
+        if not prewarming.done():
+            prewarming.cancel()
+            await asyncio.gather(prewarming, return_exceptions=True)
+        await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_manager_closes_store_before_a_replacement_candidate_can_replay_it(tmp_path: Path) -> None:
+    runtimes: list[FakeRuntime] = []
+
+    def factory(key: LanguageServerRuntimeKey, command: tuple[str, ...]) -> FakeRuntime:
+        runtime: FakeRuntime
+        if runtimes:
+            runtime = StartingDocumentRuntime(key, command)
+        else:
+            runtime = FakeRuntime(key, command)
+        runtimes.append(runtime)
+        return runtime
+
+    manager = LanguageServerRuntimeManager(
+        FakeCatalog(),
+        runtime_factory=factory,
+        restart_base_delay=0,
+        restart_max_delay=0,
+    )
+    key = LanguageServerRuntimeKey("main", 1, tmp_path.resolve(), "pyright")
+    document = LanguageDocument("main.py", "python", 2, "v2")
+    restart_task: asyncio.Task[Any] | None = None
+    try:
+        await manager.sync_documents(
+            bot_alias="main",
+            user_id=1,
+            workspace_root=tmp_path,
+            documents=[document],
+        )
+        old = runtimes[0]
+        failure_handler = getattr(old, "_failure_handler")
+        await failure_handler(old, LspJsonRpcClosedError("first runtime failed"))
+        restart_task = manager._restart_tasks[key]
+        while len(runtimes) < 2:
+            await asyncio.sleep(0)
+        replacement = runtimes[1]
+        assert isinstance(replacement, StartingDocumentRuntime)
+        await asyncio.wait_for(replacement.start_entered.wait(), timeout=1)
+
+        closed = await manager.close_documents(
+            bot_alias="main",
+            user_id=1,
+            workspace_root=tmp_path,
+            documents=[{"path": "main.py", "version": 2}],
+        )
+
+        assert closed["closed"] == 1
+        assert manager.document_store.get(key, "main.py") is None
+        assert replacement.close_document_batches == []
+
+        replacement.release_start.set()
+        await asyncio.wait_for(asyncio.shield(restart_task), timeout=1)
+        assert replacement.synced_documents == []
+        assert manager._runtimes[key] is replacement
+    finally:
+        for runtime in runtimes:
+            if isinstance(runtime, StartingDocumentRuntime):
+                runtime.release_start.set()
+        if restart_task is not None and not restart_task.done():
+            restart_task.cancel()
+            await asyncio.gather(restart_task, return_exceptions=True)
+        await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_manager_commits_only_runtime_acknowledged_close_documents(tmp_path: Path) -> None:
+    runtimes: list[ControllableCloseRuntime] = []
+
+    def factory(key: LanguageServerRuntimeKey, command: tuple[str, ...]) -> ControllableCloseRuntime:
+        runtime = ControllableCloseRuntime(key, command)
+        runtime.acknowledged_paths = ["one.py"]
+        runtimes.append(runtime)
+        return runtime
+
+    manager = LanguageServerRuntimeManager(FakeCatalog(), runtime_factory=factory)
+    one = LanguageDocument("one.py", "python", 2, "one")
+    two = LanguageDocument("two.py", "python", 2, "two")
+    try:
+        await manager.sync_documents(
+            bot_alias="main",
+            user_id=1,
+            workspace_root=tmp_path,
+            documents=[one, two],
+        )
+        runtime = runtimes[0]
+
+        result = await manager.close_documents(
+            bot_alias="main",
+            user_id=1,
+            workspace_root=tmp_path,
+            documents=[
+                {"path": "one.py", "version": 2},
+                {"path": "two.py", "version": 2},
+            ],
+        )
+
+        assert result["closed"] == 1
+        assert result["missing"] == ["two.py"]
+        assert manager.document_store.get(runtime.key, "one.py") is None
+        assert manager.document_store.get(runtime.key, "two.py") == two
+        runtime.acknowledged_paths = ["two.py"]
+        retried = await manager.close_documents(
+            bot_alias="main",
+            user_id=1,
+            workspace_root=tmp_path,
+            documents=[{"path": "two.py", "version": 2}],
+        )
+
+        assert retried["closed"] == 1
+        assert manager.document_store.get(runtime.key, "two.py") is None
+    finally:
+        await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_manager_does_not_close_v3_when_a_failed_v2_close_is_retried(tmp_path: Path) -> None:
+    runtimes: list[ControllableCloseRuntime] = []
+
+    def factory(key: LanguageServerRuntimeKey, command: tuple[str, ...]) -> ControllableCloseRuntime:
+        runtime = ControllableCloseRuntime(key, command)
+        runtime.close_failure = RuntimeError("close failed")
+        runtimes.append(runtime)
+        return runtime
+
+    manager = LanguageServerRuntimeManager(FakeCatalog(), runtime_factory=factory)
+    v2 = LanguageDocument("main.py", "python", 2, "v2")
+    v3 = LanguageDocument("main.py", "python", 3, "v3")
+    try:
+        await manager.sync_documents(
+            bot_alias="main",
+            user_id=1,
+            workspace_root=tmp_path,
+            documents=[v2],
+        )
+        runtime = runtimes[0]
+        with pytest.raises(RuntimeError, match="close failed"):
+            await manager.close_documents(
+                bot_alias="main",
+                user_id=1,
+                workspace_root=tmp_path,
+                documents=[{"path": "main.py", "version": 2}],
+            )
+        assert manager.document_store.get(runtime.key, "main.py") == v2
+
+        await manager.sync_documents(
+            bot_alias="main",
+            user_id=1,
+            workspace_root=tmp_path,
+            documents=[v3],
+        )
+        runtime.close_failure = None
+        retried = await manager.close_documents(
+            bot_alias="main",
+            user_id=1,
+            workspace_root=tmp_path,
+            documents=[{"path": "main.py", "version": 2}],
+        )
+
+        assert retried["closed"] == 0
+        assert len(runtime.close_calls) == 1
+        assert manager.document_store.get(runtime.key, "main.py") == v3
+    finally:
+        await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_manager_serializes_blocked_document_sync_before_matching_close(tmp_path: Path) -> None:
+    runtimes: list[BlockingDocumentRuntime] = []
+
+    def factory(key: LanguageServerRuntimeKey, command: tuple[str, ...]) -> BlockingDocumentRuntime:
+        runtime = BlockingDocumentRuntime(key, command)
+        runtimes.append(runtime)
+        return runtime
+
+    manager = LanguageServerRuntimeManager(FakeCatalog(), runtime_factory=factory)
+    document = LanguageDocument("main.py", "python", 2, "v2")
+    syncing: asyncio.Task[dict[str, object]] | None = None
+    closing: asyncio.Task[dict[str, object]] | None = None
+    try:
+        assert await manager.prewarm(
+            bot_alias="main",
+            user_id=1,
+            workspace_root=tmp_path,
+            provider_id="pyright",
+        ) is True
+        runtime = runtimes[0]
+        runtime.block_sync = True
+        syncing = asyncio.create_task(
+            manager.sync_documents(
+                bot_alias="main",
+                user_id=1,
+                workspace_root=tmp_path,
+                documents=[document],
+            )
+        )
+        await asyncio.wait_for(runtime.sync_entered.wait(), timeout=1)
+
+        closing = asyncio.create_task(
+            manager.close_documents(
+                bot_alias="main",
+                user_id=1,
+                workspace_root=tmp_path,
+                documents=[{"path": "main.py", "version": 2}],
+            )
+        )
+        await asyncio.sleep(0)
+
+        assert not runtime.close_entered.is_set()
+        assert not closing.done()
+
+        runtime.release_sync.set()
+        sync_result, close_result = await asyncio.gather(syncing, closing)
+
+        assert sync_result["accepted"] == 1
+        assert close_result["closed"] == 1
+        assert runtime.events == [("sync", 2), ("close", 2)]
+        assert runtime.open_documents == {}
+        assert manager.document_store.get(runtime.key, "main.py") is None
+    finally:
+        for runtime in runtimes:
+            runtime.release_sync.set()
+        pending = [task for task in (syncing, closing) if task is not None and not task.done()]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        await manager.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_manager_rejects_absolute_and_external_source_documents_from_sync_endpoints(tmp_path: Path) -> None:
     manager = LanguageServerRuntimeManager(FakeCatalog())
 
@@ -375,6 +988,43 @@ async def test_manager_serializes_concurrent_start_for_same_key(tmp_path: Path) 
 
     assert created == 1
     await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_manager_sync_waiting_on_a_lifecycle_lock_cannot_write_after_shutdown(tmp_path: Path) -> None:
+    manager = LanguageServerRuntimeManager(FakeCatalog(), runtime_factory=FakeRuntime)
+    key = LanguageServerRuntimeKey("main", 1, tmp_path.resolve(), "pyright")
+    lifecycle_lock = manager._document_lifecycle_lock(key)
+    syncing: asyncio.Task[dict[str, object]] | None = None
+    lock_held = False
+    try:
+        await lifecycle_lock.acquire()
+        lock_held = True
+        syncing = asyncio.create_task(
+            manager.sync_documents(
+                bot_alias="main",
+                user_id=1,
+                workspace_root=tmp_path,
+                documents=[LanguageDocument("main.py", "python", 1, "v1")],
+            )
+        )
+        await asyncio.sleep(0)
+        assert not syncing.done()
+
+        await manager.shutdown()
+        lifecycle_lock.release()
+        lock_held = False
+        result = await asyncio.gather(syncing, return_exceptions=True)
+
+        assert isinstance(result[0], RuntimeError)
+        assert "正在关闭" in str(result[0])
+        assert manager.document_store.get(key, "main.py") is None
+    finally:
+        if lock_held:
+            lifecycle_lock.release()
+        if syncing is not None and not syncing.done():
+            await asyncio.gather(syncing, return_exceptions=True)
+        await manager.shutdown()
 
 
 @pytest.mark.asyncio
@@ -451,6 +1101,150 @@ async def test_manager_remembers_cancel_that_arrives_before_request_registration
     assert isinstance(result[0], asyncio.CancelledError)
     assert created == 0
     assert manager.diagnostics()["runtime_count"] == 0
+    assert manager.document_store.get(
+        LanguageServerRuntimeKey("main", 101, tmp_path.resolve(), "pyright"),
+        "main.py",
+    ) is None
+    await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_manager_rechecks_the_current_document_before_dispatching_a_delayed_resolve(tmp_path: Path) -> None:
+    runtimes: list[FakeRuntime] = []
+
+    def factory(key: LanguageServerRuntimeKey, command: tuple[str, ...]) -> FakeRuntime:
+        runtime = FakeRuntime(key, command)
+        runtimes.append(runtime)
+        return runtime
+
+    catalog = BlockingFirstLookupCatalog()
+    manager = LanguageServerRuntimeManager(catalog, runtime_factory=factory)
+    old_request = _request()
+    old_request["requestId"] = "delayed-v2"
+    old_request["document"] = {
+        "path": "main.py",
+        "languageId": "python",
+        "version": 2,
+        "content": "old_target()\n",
+    }
+    delayed_resolve = asyncio.create_task(
+        manager.resolve_code_navigation(
+            bot_alias="main",
+            user_id=1,
+            workspace_root=tmp_path,
+            request=old_request,
+        )
+    )
+    assert await asyncio.to_thread(catalog.first_lookup_entered.wait, 1)
+
+    current = LanguageDocument("main.py", "python", 3, "old_target()\n")
+    await manager.sync_documents(
+        bot_alias="main",
+        user_id=1,
+        workspace_root=tmp_path,
+        documents=[current],
+    )
+    catalog.release_first_lookup.set()
+
+    await delayed_resolve
+
+    assert len(runtimes) == 1
+    assert runtimes[0].requests[0]["document"] == current.to_dict()
+    await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_manager_cancels_a_delayed_resolve_when_content_changes_before_its_position(tmp_path: Path) -> None:
+    runtimes: list[FakeRuntime] = []
+
+    def factory(key: LanguageServerRuntimeKey, command: tuple[str, ...]) -> FakeRuntime:
+        runtime = FakeRuntime(key, command)
+        runtimes.append(runtime)
+        return runtime
+
+    catalog = BlockingFirstLookupCatalog()
+    manager = LanguageServerRuntimeManager(catalog, runtime_factory=factory)
+    old_content = "target()\n"
+    old_request = _request()
+    old_request["requestId"] = "drift-v2"
+    old_request["document"] = {
+        "path": "main.py",
+        "languageId": "python",
+        "version": 2,
+        "content": old_content,
+    }
+    old_request["position"] = {"line": 1, "column": 2}
+    delayed_resolve = asyncio.create_task(
+        manager.resolve_code_navigation(
+            bot_alias="main",
+            user_id=1,
+            workspace_root=tmp_path,
+            request=old_request,
+        )
+    )
+    try:
+        assert await asyncio.to_thread(catalog.first_lookup_entered.wait, 1)
+        await manager.sync_documents(
+            bot_alias="main",
+            user_id=1,
+            workspace_root=tmp_path,
+            documents=[LanguageDocument("main.py", "python", 3, "x" + old_content)],
+        )
+    finally:
+        catalog.release_first_lookup.set()
+
+    result = await asyncio.gather(delayed_resolve, return_exceptions=True)
+
+    assert isinstance(result[0], asyncio.CancelledError)
+    assert len(runtimes) == 1
+    assert runtimes[0].requests == []
+    await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_manager_does_not_dispatch_a_delayed_resolve_after_its_document_closes(tmp_path: Path) -> None:
+    runtimes: list[FakeRuntime] = []
+
+    def factory(key: LanguageServerRuntimeKey, command: tuple[str, ...]) -> FakeRuntime:
+        runtime = FakeRuntime(key, command)
+        runtimes.append(runtime)
+        return runtime
+
+    catalog = BlockingFirstLookupCatalog()
+    manager = LanguageServerRuntimeManager(catalog, runtime_factory=factory)
+    old_request = _request()
+    old_request["requestId"] = "closed-v2"
+    old_request["document"] = {
+        "path": "main.py",
+        "languageId": "python",
+        "version": 2,
+        "content": "old_target()\n",
+    }
+    delayed_resolve = asyncio.create_task(
+        manager.resolve_code_navigation(
+            bot_alias="main",
+            user_id=1,
+            workspace_root=tmp_path,
+            request=old_request,
+        )
+    )
+    try:
+        assert await asyncio.to_thread(catalog.first_lookup_entered.wait, 1)
+        closed = await manager.close_documents(
+            bot_alias="main",
+            user_id=1,
+            workspace_root=tmp_path,
+            documents=[{"path": "main.py", "version": 2}],
+        )
+        assert closed["closed"] == 1
+    finally:
+        catalog.release_first_lookup.set()
+
+    result = await asyncio.gather(delayed_resolve, return_exceptions=True)
+
+    assert isinstance(result[0], asyncio.CancelledError)
+    assert len(runtimes) == 1
+    assert runtimes[0].requests == []
     await manager.shutdown()
 
 
@@ -889,6 +1683,138 @@ async def test_runtime_replays_document_store_snapshots_when_started(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_manager_serializes_initial_document_replay_before_matching_close(tmp_path: Path) -> None:
+    runtimes: list[BlockingDocumentRuntime] = []
+    runtime_created = asyncio.Event()
+
+    def factory(key: LanguageServerRuntimeKey, command: tuple[str, ...]) -> BlockingDocumentRuntime:
+        runtime = BlockingDocumentRuntime(key, command)
+        runtime.block_sync = True
+        runtimes.append(runtime)
+        runtime_created.set()
+        return runtime
+
+    manager = LanguageServerRuntimeManager(FakeCatalog(), runtime_factory=factory)
+    key = LanguageServerRuntimeKey("main", 1, tmp_path.resolve(), "pyright")
+    document = LanguageDocument("main.py", "python", 2, "v2")
+    manager.document_store.sync_documents(key, [document])
+    prewarm = asyncio.create_task(
+        manager.prewarm(
+            bot_alias="main",
+            user_id=1,
+            workspace_root=tmp_path,
+            provider_id="pyright",
+        )
+    )
+    closing: asyncio.Task[dict[str, object]] | None = None
+    try:
+        await asyncio.wait_for(runtime_created.wait(), timeout=1)
+        runtime = runtimes[0]
+        await asyncio.wait_for(runtime.sync_entered.wait(), timeout=1)
+
+        closing = asyncio.create_task(
+            manager.close_documents(
+                bot_alias="main",
+                user_id=1,
+                workspace_root=tmp_path,
+                documents=[{"path": "main.py", "version": 2}],
+            )
+        )
+        await asyncio.sleep(0)
+
+        assert not runtime.close_entered.is_set()
+        assert not closing.done()
+
+        runtime.release_sync.set()
+        assert await prewarm is True
+        close_result = await closing
+
+        assert close_result["closed"] == 1
+        assert runtime.events == [("sync", 2), ("close", 2)]
+        assert runtime.open_documents == {}
+        assert manager.document_store.get(key, "main.py") is None
+    finally:
+        for runtime in runtimes:
+            runtime.release_sync.set()
+        if closing is not None and not closing.done():
+            await asyncio.gather(closing, return_exceptions=True)
+        if not prewarm.done():
+            prewarm.cancel()
+            await asyncio.gather(prewarm, return_exceptions=True)
+        await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_manager_serializes_replacement_document_replay_before_matching_close(tmp_path: Path) -> None:
+    runtimes: list[BlockingDocumentRuntime] = []
+    replacement_created = asyncio.Event()
+
+    def factory(key: LanguageServerRuntimeKey, command: tuple[str, ...]) -> BlockingDocumentRuntime:
+        runtime = BlockingDocumentRuntime(key, command)
+        runtime.block_sync = len(runtimes) == 1
+        runtimes.append(runtime)
+        if len(runtimes) == 2:
+            replacement_created.set()
+        return runtime
+
+    manager = LanguageServerRuntimeManager(
+        FakeCatalog(),
+        runtime_factory=factory,
+        restart_base_delay=0,
+        restart_max_delay=0,
+    )
+    key = LanguageServerRuntimeKey("main", 1, tmp_path.resolve(), "pyright")
+    document = LanguageDocument("main.py", "python", 2, "v2")
+    closing: asyncio.Task[dict[str, object]] | None = None
+    restart_task: asyncio.Task[None] | None = None
+    try:
+        assert await manager.prewarm(
+            bot_alias="main",
+            user_id=1,
+            workspace_root=tmp_path,
+            provider_id="pyright",
+        ) is True
+        manager.document_store.sync_documents(key, [document])
+        failure_handler = getattr(runtimes[0], "_failure_handler")
+        await failure_handler(runtimes[0], LspJsonRpcClosedError("first runtime failed"))
+        restart_task = manager._restart_tasks[key]
+        await asyncio.wait_for(replacement_created.wait(), timeout=1)
+        replacement = runtimes[1]
+        await asyncio.wait_for(replacement.sync_entered.wait(), timeout=1)
+
+        closing = asyncio.create_task(
+            manager.close_documents(
+                bot_alias="main",
+                user_id=1,
+                workspace_root=tmp_path,
+                documents=[{"path": "main.py", "version": 2}],
+            )
+        )
+        await asyncio.sleep(0)
+
+        assert not replacement.close_entered.is_set()
+        assert not closing.done()
+
+        replacement.release_sync.set()
+        close_result = await closing
+        await asyncio.wait_for(asyncio.shield(restart_task), timeout=1)
+
+        assert close_result["closed"] == 1
+        assert replacement.events == [("sync", 2), ("close", 2)]
+        assert replacement.open_documents == {}
+        assert manager.document_store.get(key, "main.py") is None
+    finally:
+        for runtime in runtimes:
+            runtime.release_sync.set()
+        if closing is not None and not closing.done():
+            await asyncio.gather(closing, return_exceptions=True)
+        if restart_task is not None and not restart_task.done():
+            restart_task.cancel()
+            await asyncio.gather(restart_task, return_exceptions=True)
+        await manager.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_manager_evicts_idle_runtime_after_idle_timeout(tmp_path: Path) -> None:
     runtimes: list[FakeRuntime] = []
 
@@ -962,6 +1888,199 @@ async def test_manager_restart_runtime_replaces_only_the_requested_scope(tmp_pat
         provider_id="pyright",
     ) is not None
     await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_manager_manual_restart_blocks_concurrent_start_until_old_runtime_closes(tmp_path: Path) -> None:
+    class BlockingCloseRuntime(FakeRuntime):
+        def __init__(self, key: LanguageServerRuntimeKey, command: tuple[str, ...]) -> None:
+            super().__init__(key, command)
+            self.close_entered = asyncio.Event()
+            self.release_close = asyncio.Event()
+
+        async def close(self) -> None:
+            self.closed += 1
+            self.close_entered.set()
+            await self.release_close.wait()
+
+    runtimes: list[FakeRuntime] = []
+
+    def factory(key: LanguageServerRuntimeKey, command: tuple[str, ...]) -> FakeRuntime:
+        runtime: FakeRuntime
+        if not runtimes:
+            runtime = BlockingCloseRuntime(key, command)
+        else:
+            runtime = FakeRuntime(key, command)
+        runtimes.append(runtime)
+        return runtime
+
+    manager = LanguageServerRuntimeManager(FakeCatalog(), runtime_factory=factory)
+    key = LanguageServerRuntimeKey("main", 1, tmp_path.resolve(), "pyright")
+    restarting: asyncio.Task[dict[str, object]] | None = None
+    prewarming: asyncio.Task[bool] | None = None
+    navigating: asyncio.Task[dict[str, object]] | None = None
+    try:
+        assert await manager.prewarm(
+            bot_alias="main",
+            user_id=1,
+            workspace_root=tmp_path,
+            provider_id="pyright",
+        ) is True
+        old = runtimes[0]
+        assert isinstance(old, BlockingCloseRuntime)
+
+        restarting = asyncio.create_task(
+            manager.restart_runtime(
+                bot_alias="main",
+                user_id=1,
+                workspace_root=tmp_path,
+                provider_id="pyright",
+            )
+        )
+        await asyncio.wait_for(old.close_entered.wait(), timeout=1)
+        prewarming = asyncio.create_task(
+            manager.prewarm(
+                bot_alias="main",
+                user_id=1,
+                workspace_root=tmp_path,
+                provider_id="pyright",
+            )
+        )
+        request = _request()
+        request["requestId"] = "manual-restart-nav"
+        navigating = asyncio.create_task(
+            manager.resolve_code_navigation(
+                bot_alias="main",
+                user_id=1,
+                workspace_root=tmp_path,
+                request=request,
+            )
+        )
+        for _ in range(20):
+            await asyncio.sleep(0)
+            if len(runtimes) > 1:
+                break
+
+        assert not prewarming.done()
+        assert not navigating.done()
+        assert len(runtimes) == 1
+        assert key in manager._restart_tasks
+
+        old.release_close.set()
+        restart_result = await restarting
+        assert await prewarming is True
+        navigation_result = await navigating
+
+        assert restart_result["restarted"] is True
+        assert navigation_result["items"] == [{"provider": "pyright", "path": "target.py"}]
+        assert len(runtimes) == 2
+        assert runtimes[0].closed == 1
+        assert getattr(runtimes[1], "generation") == 2
+        assert runtimes[0].requests == []
+        assert len(runtimes[1].requests) == 1
+        assert key not in manager._restart_tasks
+        assert manager.runtime_status(
+            bot_alias="main",
+            user_id=1,
+            workspace_root=tmp_path,
+            provider_id="pyright",
+        )["generation"] == 2
+    finally:
+        for runtime in runtimes:
+            release_close = getattr(runtime, "release_close", None)
+            if isinstance(release_close, asyncio.Event):
+                release_close.set()
+        for task in (restarting, prewarming, navigating):
+            if task is not None and not task.done():
+                task.cancel()
+        await asyncio.gather(
+            *(task for task in (restarting, prewarming, navigating) if task is not None),
+            return_exceptions=True,
+        )
+        await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_manager_closes_store_while_manual_restart_is_closing_old_runtime(tmp_path: Path) -> None:
+    class BlockingRestartRuntime(ControllableCloseRuntime):
+        def __init__(self, key: LanguageServerRuntimeKey, command: tuple[str, ...]) -> None:
+            super().__init__(key, command)
+            self.state = "ready"
+            self.runtime_close_entered = asyncio.Event()
+            self.release_runtime_close = asyncio.Event()
+
+        async def close_documents(self, documents: list[LanguageDocument]) -> list[str]:
+            batch = list(documents)
+            self.close_calls.append(batch)
+            if self.state not in {"ready", "indexing"}:
+                return []
+            return [document.path for document in batch]
+
+        async def close(self) -> None:
+            self.closed += 1
+            self.runtime_close_entered.set()
+            await self.release_runtime_close.wait()
+
+    runtimes: list[FakeRuntime] = []
+
+    def factory(key: LanguageServerRuntimeKey, command: tuple[str, ...]) -> FakeRuntime:
+        runtime: FakeRuntime
+        if not runtimes:
+            runtime = BlockingRestartRuntime(key, command)
+        else:
+            runtime = FakeRuntime(key, command)
+        runtimes.append(runtime)
+        return runtime
+
+    manager = LanguageServerRuntimeManager(FakeCatalog(), runtime_factory=factory)
+    document = LanguageDocument("main.py", "python", 2, "v2")
+    restarting: asyncio.Task[dict[str, object]] | None = None
+    try:
+        await manager.sync_documents(
+            bot_alias="main",
+            user_id=1,
+            workspace_root=tmp_path,
+            documents=[document],
+        )
+        old = runtimes[0]
+        assert isinstance(old, BlockingRestartRuntime)
+
+        restarting = asyncio.create_task(
+            manager.restart_runtime(
+                bot_alias="main",
+                user_id=1,
+                workspace_root=tmp_path,
+                provider_id="pyright",
+            )
+        )
+        await asyncio.wait_for(old.runtime_close_entered.wait(), timeout=1)
+
+        result = await manager.close_documents(
+            bot_alias="main",
+            user_id=1,
+            workspace_root=tmp_path,
+            documents=[{"path": "main.py", "version": 2}],
+        )
+
+        assert result["closed"] == 1
+        assert result["missing"] == []
+        assert old.close_calls == []
+        assert manager.document_store.get(old.key, "main.py") is None
+
+        old.release_runtime_close.set()
+        await restarting
+
+        assert len(runtimes) == 2
+        assert runtimes[1].synced_documents == []
+    finally:
+        for runtime in runtimes:
+            release_runtime_close = getattr(runtime, "release_runtime_close", None)
+            if isinstance(release_runtime_close, asyncio.Event):
+                release_runtime_close.set()
+        if restarting is not None and not restarting.done():
+            restarting.cancel()
+            await asyncio.gather(restarting, return_exceptions=True)
+        await manager.shutdown()
 
 
 class _MemoryWriter:

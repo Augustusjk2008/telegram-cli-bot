@@ -32,6 +32,29 @@ def normalize_document_path(value: object) -> str:
     return "" if normalized == "." else normalized
 
 
+def _parse_close_version(value: object) -> int:
+    """Parse only protocol-shaped document versions for close operations."""
+
+    if isinstance(value, bool):
+        raise LanguageDocumentError("文档关闭项版本无效")
+    if isinstance(value, int):
+        version = value
+    elif isinstance(value, float):
+        if not value.is_integer():
+            raise LanguageDocumentError("文档关闭项版本无效")
+        version = int(value)
+    elif isinstance(value, str):
+        try:
+            version = int(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise LanguageDocumentError("文档关闭项版本无效") from exc
+    else:
+        raise LanguageDocumentError("文档关闭项版本无效")
+    if version < 0:
+        raise LanguageDocumentError("文档关闭项版本不能为负数")
+    return version
+
+
 @dataclass(frozen=True, slots=True)
 class LanguageDocumentRuntimeKey:
     bot_alias: str
@@ -190,6 +213,14 @@ class DocumentCloseResult:
         return self.to_dict()[key]
 
 
+@dataclass(frozen=True, slots=True)
+class DocumentClosePlan:
+    """当前快照的非破坏性关闭候选。"""
+
+    candidates: tuple[LanguageDocument, ...] = ()
+    missing: tuple[str, ...] = ()
+
+
 class LanguageDocumentStore:
     def __init__(
         self,
@@ -252,42 +283,109 @@ class LanguageDocumentStore:
 
     sync = sync_documents
 
-    def close_documents(self, runtime_key: Any, documents: Sequence[LanguageDocument | Mapping[str, Any] | str]) -> DocumentCloseResult:
-        key = LanguageDocumentRuntimeKey.from_value(runtime_key)
+    def _parse_close_identifiers(
+        self,
+        documents: Sequence[LanguageDocument | Mapping[str, Any] | str],
+    ) -> tuple[tuple[str, int | None], ...]:
         if isinstance(documents, (str, bytes)):
             values: list[Any] = [documents]
         else:
             values = list(documents)
         if len(values) > self.max_batch_documents:
             raise LanguageDocumentLimitError("文档关闭批次过大")
-        identifiers: list[str] = []
+        identifiers: list[tuple[str, int | None]] = []
         for value in values:
+            expected_version: int | None = None
             if isinstance(value, str):
                 identifier = normalize_document_path(value)
             elif isinstance(value, LanguageDocument):
                 identifier = value.document_id
+                expected_version = _parse_close_version(value.version)
             elif isinstance(value, Mapping):
                 identifier = normalize_document_path(value.get("path"))
                 if not identifier:
                     identifier = str(value.get("sourceId") or value.get("source_id") or "").strip()
+                if "version" in value:
+                    expected_version = _parse_close_version(value.get("version"))
             else:
                 raise LanguageDocumentError("文档关闭项格式无效")
             if not identifier:
                 raise LanguageDocumentError("文档关闭项缺少路径")
-            identifiers.append(identifier)
+            identifiers.append((identifier, expected_version))
+        return tuple(identifiers)
+
+    def _preview_close_documents_locked(
+        self,
+        key: LanguageDocumentRuntimeKey,
+        identifiers: Sequence[tuple[str, int | None]],
+    ) -> DocumentClosePlan:
+        candidates: list[LanguageDocument] = []
+        missing: list[str] = []
+        reserved: set[str] = set()
+        bucket = self._documents.get(key)
+        for identifier, expected_version in identifiers:
+            document = bucket.get(identifier) if bucket is not None else None
+            if identifier in reserved or document is None:
+                missing.append(identifier)
+            elif expected_version is not None and document.version != expected_version:
+                missing.append(identifier)
+            else:
+                candidates.append(document)
+                reserved.add(identifier)
+        return DocumentClosePlan(tuple(candidates), tuple(missing))
+
+    def _commit_close_documents_locked(
+        self,
+        key: LanguageDocumentRuntimeKey,
+        candidates: Sequence[LanguageDocument],
+    ) -> DocumentCloseResult:
         closed: list[LanguageDocument] = []
         missing: list[str] = []
-        with self._lock:
-            bucket = self._documents.get(key)
-            for identifier in identifiers:
-                document = bucket.pop(identifier, None) if bucket is not None else None
-                if document is None:
-                    missing.append(identifier)
-                else:
-                    closed.append(document)
-            if bucket is not None and not bucket:
-                self._documents.pop(key, None)
+        bucket = self._documents.get(key)
+        for candidate in candidates:
+            if not isinstance(candidate, LanguageDocument):
+                raise LanguageDocumentError("文档关闭项格式无效")
+            _parse_close_version(candidate.version)
+            identifier = candidate.document_id
+            document = bucket.get(identifier) if bucket is not None else None
+            if document != candidate:
+                missing.append(identifier)
+            else:
+                bucket.pop(identifier, None)
+                closed.append(document)
+        if bucket is not None and not bucket:
+            self._documents.pop(key, None)
         return DocumentCloseResult(tuple(closed), tuple(missing))
+
+    def preview_close_documents(
+        self,
+        runtime_key: Any,
+        documents: Sequence[LanguageDocument | Mapping[str, Any] | str],
+    ) -> DocumentClosePlan:
+        key = LanguageDocumentRuntimeKey.from_value(runtime_key)
+        identifiers = self._parse_close_identifiers(documents)
+        with self._lock:
+            return self._preview_close_documents_locked(key, identifiers)
+
+    def commit_close_documents(
+        self,
+        runtime_key: Any,
+        candidates: Sequence[LanguageDocument],
+    ) -> DocumentCloseResult:
+        key = LanguageDocumentRuntimeKey.from_value(runtime_key)
+        with self._lock:
+            return self._commit_close_documents_locked(key, tuple(candidates))
+
+    def close_documents(self, runtime_key: Any, documents: Sequence[LanguageDocument | Mapping[str, Any] | str]) -> DocumentCloseResult:
+        key = LanguageDocumentRuntimeKey.from_value(runtime_key)
+        identifiers = self._parse_close_identifiers(documents)
+        with self._lock:
+            plan = self._preview_close_documents_locked(key, identifiers)
+            committed = self._commit_close_documents_locked(key, plan.candidates)
+        return DocumentCloseResult(
+            committed.closed,
+            tuple((*plan.missing, *committed.missing)),
+        )
 
     close = close_documents
 

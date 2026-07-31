@@ -545,7 +545,9 @@ export function NativeAgentTranscript({
     || traceLoaded === true
     || (typeof traceLoaded === "undefined" && entries.length >= totalTraceCount);
   const shouldLazyLoadTrace = totalTraceCount > 0 && !hasCompleteTrace;
-  const traceSummaryProcessCount = typeof processCount === "number" ? processCount : totalTraceCount;
+  const traceSummaryProcessCount = typeof processCount === "number"
+    ? processCount
+    : Math.max(totalTraceCount, entries.length);
   const traceSummaryLabel = `${traceSummaryProcessCount} 条过程${toolCallCount && toolCallCount > 0 ? ` · ${toolCallCount} 次工具` : ""}`;
 
   useEffect(() => {
@@ -562,6 +564,24 @@ export function NativeAgentTranscript({
       ? filterDuplicateFinalErrorItems(filterDuplicateFinalProcessItems(renderItems, resultText), resultText)
       : renderItems
   ), [renderItems, resultText, shouldFilterDuplicateFinal]);
+  const alwaysVisibleRenderItems = useMemo(() => (
+    mode === "native"
+      ? displayRenderItems.filter((item) => (
+          item.kind === "entry"
+          && ["permission", "error", "cancelled"].includes(item.entry.kind)
+        ))
+      : []
+  ), [displayRenderItems, mode]);
+  const traceDetailRenderItems = useMemo(() => (
+    mode === "native"
+      ? displayRenderItems.filter((item) => !(
+          item.kind === "entry"
+          && ["permission", "error", "cancelled"].includes(item.entry.kind)
+        ))
+      : displayRenderItems
+  ), [displayRenderItems, mode]);
+  const shouldShowTraceDisclosure = shouldLazyLoadTrace
+    || (mode === "native" && traceDetailRenderItems.length > 0);
   const allowPermissionReply = mode === "native";
 
   const replyPermission = useCallback(async (reply: NativeAgentPermissionReply) => {
@@ -594,13 +614,33 @@ export function NativeAgentTranscript({
     )
   ), [allowPermissionReply, onFileLinkClick, replyPermission, replyingPermissionId]);
 
+  const renderTranscriptItems = (items: TranscriptRenderItem[]) => (
+    items.length > 100 ? (
+      <DynamicVirtualList
+        items={items}
+        getKey={(item) => item.kind === "entry"
+          ? item.entry.id
+          : `group-${item.groupIndex}-${item.entries[0]?.id || "empty"}`}
+        renderItem={renderTranscriptItem}
+        estimateHeight={72}
+        overscan={1}
+        dataTestId="virtualized-native-agent-transcript"
+        className="max-h-[60vh] min-h-[240px] overflow-auto"
+      />
+    ) : items.map((item) => (
+      <div key={item.kind === "entry" ? item.entry.id : `group-${item.groupIndex}-${item.entries[0]?.id || "empty"}`}>
+        {renderTranscriptItem(item)}
+      </div>
+    ))
+  );
+
   const visibleResultText = stripThinkingBlocks(resultText);
   const showFinalResult = state !== "streaming" && Boolean(visibleResultText);
   const showCopyFinalAnswer = state !== "streaming" && Boolean(visibleResultText.trim()) && Boolean(onCopyFinalAnswer);
 
   return (
     <div data-testid="native-agent-transcript" className="min-w-0 text-sm text-[var(--text)]">
-      {shouldLazyLoadTrace ? (
+      {shouldShowTraceDisclosure ? (
         <section data-testid="native-agent-trace-summary" className="border-b border-[var(--workbench-hairline)] pb-2">
           <button
             type="button"
@@ -634,24 +674,12 @@ export function NativeAgentTranscript({
               ) : null}
             </div>
           ) : null}
+          {traceExpanded && !isTraceLoading && !traceLoadError && !shouldLazyLoadTrace
+            ? renderTranscriptItems(traceDetailRenderItems)
+            : null}
         </section>
-      ) : displayRenderItems.length > 100 ? (
-        <DynamicVirtualList
-          items={displayRenderItems}
-          getKey={(item) => item.kind === "entry"
-            ? item.entry.id
-            : `group-${item.groupIndex}-${item.entries[0]?.id || "empty"}`}
-          renderItem={renderTranscriptItem}
-          estimateHeight={72}
-          overscan={1}
-          dataTestId="virtualized-native-agent-transcript"
-          className="max-h-[60vh] min-h-[240px] overflow-auto"
-        />
-      ) : displayRenderItems.map((item) => (
-        <div key={item.kind === "entry" ? item.entry.id : `group-${item.groupIndex}-${item.entries[0]?.id || "empty"}`}>
-          {renderTranscriptItem(item)}
-        </div>
-      ))}
+      ) : renderTranscriptItems(traceDetailRenderItems)}
+      {alwaysVisibleRenderItems.length > 0 ? renderTranscriptItems(alwaysVisibleRenderItems) : null}
 
       {showFinalResult ? (
         <div data-testid="native-agent-final-result" className="border-t border-[var(--workbench-hairline)] pt-2">

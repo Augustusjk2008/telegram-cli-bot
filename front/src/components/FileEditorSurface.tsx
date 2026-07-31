@@ -1,5 +1,5 @@
 import { MoreHorizontal } from "lucide-react";
-import { type ComponentType, type KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type ComponentType, type KeyboardEvent as ReactKeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import * as codemirrorState from "@codemirror/state";
 import type { Extension } from "@codemirror/state";
@@ -7,6 +7,13 @@ import * as codemirrorView from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import type { CodeNavigationIntent, CodeNavigationKind } from "../services/types";
 import { isLightUiTheme } from "../theme";
+import {
+  createFileEditorCodeNavigationHover,
+  extractFileEditorSymbolAt,
+  resolveFileEditorNavigationTargetAtCoordinates,
+  resolveFileEditorNavigationTargetAtPosition,
+  type FileEditorCodeNavigationHoverOptions,
+} from "../utils/fileEditorCodeNavigation";
 import { createFileEditorInlineCompletion, type FileEditorInlineCompletionOptions } from "../utils/fileEditorInlineCompletion";
 import { loadFileEditorExtensions } from "../utils/fileEditorLanguage";
 
@@ -27,6 +34,7 @@ type Props = {
   error?: string;
   hideHeader?: boolean;
   inlineCompletion?: FileEditorInlineCompletionOptions;
+  codeNavigationHover?: Omit<FileEditorCodeNavigationHoverOptions, "path"> & { contextKey?: unknown };
   onToggleBreakpoint?: (line: number) => void;
   onResolveCodeNavigation?: (input: CodeNavigationIntent) => void;
   onChange: (value: string) => void;
@@ -220,29 +228,6 @@ function createDebugExtensions(
   return extensions;
 }
 
-function isSymbolChar(char: string) {
-  return /[A-Za-z0-9_$]/.test(char);
-}
-
-function extractSymbolAt(text: string, index: number) {
-  if (!text) {
-    return "";
-  }
-  const boundedIndex = Math.min(Math.max(index, 0), text.length - 1);
-  if (!isSymbolChar(text[boundedIndex] || "")) {
-    return "";
-  }
-  let start = boundedIndex;
-  let end = boundedIndex;
-  while (start > 0 && isSymbolChar(text[start - 1] || "")) {
-    start -= 1;
-  }
-  while (end + 1 < text.length && isSymbolChar(text[end + 1] || "")) {
-    end += 1;
-  }
-  return text.slice(start, end + 1);
-}
-
 function resolveTextareaNavigationTarget(
   path: string,
   value: string,
@@ -257,7 +242,7 @@ function resolveTextareaNavigationTarget(
   const column = Array.from(value.slice(lineStart, boundedOffset)).length + 1;
   const lineEnd = value.indexOf("\n", boundedOffset);
   const currentLineText = value.slice(lineStart, lineEnd === -1 ? value.length : lineEnd);
-  const symbol = extractSymbolAt(currentLineText, Math.max(0, utf16ColumnOffset));
+  const symbol = extractFileEditorSymbolAt(currentLineText, Math.max(0, utf16ColumnOffset));
   return {
     kind,
     path,
@@ -265,39 +250,6 @@ function resolveTextareaNavigationTarget(
     column,
     ...(symbol ? { symbol } : {}),
   };
-}
-
-function resolveEditorNavigationTargetAtPosition(
-  view: CodeMirrorEditorView,
-  path: string,
-  position: number,
-  kind: CodeNavigationKind,
-) {
-  const lineInfo = view.state.doc.lineAt(position);
-  const utf16ColumnOffset = position - lineInfo.from;
-  const column = Array.from(lineInfo.text.slice(0, utf16ColumnOffset)).length + 1;
-  const symbol = extractSymbolAt(lineInfo.text, Math.max(0, utf16ColumnOffset));
-  return {
-    kind,
-    path,
-    line: lineInfo.number,
-    column,
-    ...(symbol ? { symbol } : {}),
-  };
-}
-
-function resolveEditorNavigationTargetAtCoordinates(
-  view: CodeMirrorEditorView,
-  path: string,
-  clientX: number,
-  clientY: number,
-  kind: CodeNavigationKind,
-) {
-  const position = view.posAtCoords({ x: clientX, y: clientY });
-  if (position === null) {
-    return null;
-  }
-  return resolveEditorNavigationTargetAtPosition(view, path, position, kind);
 }
 
 function textOffsetAtPosition(value: string, line: number, column: number) {
@@ -341,6 +293,7 @@ export function FileEditorSurface({
   error = "",
   hideHeader = false,
   inlineCompletion,
+  codeNavigationHover,
   onToggleBreakpoint,
   onResolveCodeNavigation,
   onChange,
@@ -351,11 +304,31 @@ export function FileEditorSurface({
   const [editorView, setEditorView] = useState<CodeMirrorEditorView | null>(null);
   const [navigationMenuOpen, setNavigationMenuOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const codeNavigationHoverRef = useRef(codeNavigationHover);
   const canUseCodeMirror = typeof window !== "undefined" && typeof window.ResizeObserver !== "undefined";
   const codeMirrorTheme = typeof document !== "undefined" && isLightUiTheme(document.documentElement.dataset.theme)
     ? "light"
     : "dark";
   const normalizedBreakpointLines = breakpointLines ?? EMPTY_BREAKPOINT_LINES;
+  const canShowCodeNavigationHover = Boolean(onResolveCodeNavigation && codeNavigationHover);
+  const codeNavigationHoverContextKey = codeNavigationHover?.contextKey ?? codeNavigationHover;
+
+  useLayoutEffect(() => {
+    codeNavigationHoverRef.current = codeNavigationHover;
+  }, [codeNavigationHover]);
+
+  const codeNavigationHoverExtensions = useMemo(() => {
+    if (!canShowCodeNavigationHover) {
+      return [];
+    }
+    return createFileEditorCodeNavigationHover({
+      path,
+      hoverDelayMs: codeNavigationHover?.hoverDelayMs,
+      request: (input, signal) => (
+        codeNavigationHoverRef.current?.request(input, signal) ?? Promise.resolve(false)
+      ),
+    });
+  }, [canShowCodeNavigationHover, codeNavigationHover?.hoverDelayMs, codeNavigationHoverContextKey, path]);
 
   useEffect(() => {
     let active = true;
@@ -414,8 +387,17 @@ export function FileEditorSurface({
     if (inlineCompletion) {
       extensions.push(...createFileEditorInlineCompletion(inlineCompletion));
     }
+    extensions.push(...codeNavigationHoverExtensions);
     return extensions;
-  }, [codeMirrorTheme, currentLine, editorRuntime, inlineCompletion, normalizedBreakpointLines, onToggleBreakpoint]);
+  }, [
+    codeMirrorTheme,
+    codeNavigationHoverExtensions,
+    currentLine,
+    editorRuntime,
+    inlineCompletion,
+    normalizedBreakpointLines,
+    onToggleBreakpoint,
+  ]);
 
   const CodeMirrorEditor = editorRuntime?.CodeMirrorEditor ?? null;
 
@@ -474,7 +456,7 @@ export function FileEditorSurface({
       return false;
     }
     const target = editorView
-      ? resolveEditorNavigationTargetAtPosition(editorView, path, editorView.state.selection.main.head, kind)
+      ? resolveFileEditorNavigationTargetAtPosition(editorView, path, editorView.state.selection.main.head, kind)
       : textareaRef.current
         ? resolveTextareaNavigationTarget(path, value, textareaRef.current.selectionStart ?? 0, kind)
         : null;
@@ -564,7 +546,7 @@ export function FileEditorSurface({
               if (target instanceof HTMLElement && target.closest(".cm-gutters")) {
                 return;
               }
-              const definitionTarget = resolveEditorNavigationTargetAtCoordinates(
+              const definitionTarget = resolveFileEditorNavigationTargetAtCoordinates(
                 editorView,
                 path,
                 event.clientX,

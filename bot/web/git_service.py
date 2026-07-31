@@ -1237,39 +1237,6 @@ def _encode_git_graph_cursor(*, offset: int, scope: str, head_token: str) -> str
     return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
 
 
-def _parse_git_graph_records(output: str) -> list[dict[str, Any]]:
-    commits: list[dict[str, Any]] = []
-    for record in (output or "").split("\x00"):
-        record = record.rstrip("\r\n")
-        if not record.strip():
-            continue
-        parts = record.split("\x1f", 6)
-        if len(parts) < 7:
-            continue
-        full_hash = parts[0]
-        parents_text = parts[1]
-        short_hash = parts[2]
-        author_name = parts[3]
-        authored_at = parts[4]
-        subject = parts[5]
-        message = parts[6]
-        full_hash = full_hash.strip()
-        if not full_hash:
-            continue
-        commits.append(
-            {
-                "hash": full_hash,
-                "parents": [item.strip() for item in parents_text.split() if item.strip()],
-                "short_hash": short_hash.strip(),
-                "author_name": author_name.strip(),
-                "authored_at": authored_at.strip(),
-                "subject": subject.strip(),
-                "message": message.rstrip("\r\n"),
-            }
-        )
-    return commits
-
-
 def _list_git_graph_commits(repo_root: str, *, scope: str, offset: int, limit: int) -> list[dict[str, Any]]:
     args = [
         "log",

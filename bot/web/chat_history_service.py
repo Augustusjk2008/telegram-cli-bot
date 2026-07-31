@@ -31,6 +31,7 @@ class StreamingPersistenceBuffer:
         *,
         loop,
         flush_interval_seconds: float = 0.25,
+        preview_flush_interval_seconds: float = 2.0,
         max_batch_events: int = 32,
         max_batch_bytes: int = 16 * 1024,
     ) -> None:
@@ -40,9 +41,15 @@ class StreamingPersistenceBuffer:
         self._loop_time = loop.time
         self._flush_interval_seconds = max(0.05, float(flush_interval_seconds))
         self._last_flush_at = float(self._loop_time())
+        self._preview_flush_interval_seconds = max(
+            self._flush_interval_seconds,
+            float(preview_flush_interval_seconds),
+        )
+        self._last_preview_flush_at = self._last_flush_at
         self._max_batch_events = max(1, int(max_batch_events))
         self._max_batch_bytes = max(1024, int(max_batch_bytes))
         self._pending_preview: str | None = None
+        self._last_persisted_preview: str | None = None
         self._pending_trace: list[dict[str, Any]] = []
         self._pending_trace_bytes = 0
         self._flush_task: asyncio.Task[None] | None = None
@@ -53,9 +60,14 @@ class StreamingPersistenceBuffer:
         self.trace_flush_count = 0
 
     def queue_preview(self, preview_text: str) -> None:
-        text = str(preview_text or "").strip()
+        text = str(preview_text or "").strip()[-800:]
         if text:
             with self._lock:
+                if text == self._pending_preview or (
+                    self._pending_preview is None
+                    and text == self._last_persisted_preview
+                ):
+                    return
                 self._pending_preview = text[-800:]
 
     def queue_trace(self, event: dict[str, Any]) -> None:
@@ -91,13 +103,27 @@ class StreamingPersistenceBuffer:
         with self._lock:
             if not self._pending_preview and not self._pending_trace:
                 return False
-            if len(self._pending_trace) >= self._max_batch_events:
-                return True
-            if self._pending_trace_bytes >= self._max_batch_bytes:
-                return True
-            if float(self._loop_time()) - self._last_flush_at >= self._flush_interval_seconds:
-                return True
+            now = float(self._loop_time())
+            return self._preview_is_due_locked(now) or self._trace_is_due_locked(now)
+
+    def _preview_is_due_locked(self, now: float, *, final: bool = False) -> bool:
+        return bool(
+            self._pending_preview
+            and (
+                final
+                or now - self._last_preview_flush_at >= self._preview_flush_interval_seconds
+            )
+        )
+
+    def _trace_is_due_locked(self, now: float, *, final: bool = False) -> bool:
+        if not self._pending_trace:
             return False
+        return bool(
+            final
+            or len(self._pending_trace) >= self._max_batch_events
+            or self._pending_trace_bytes >= self._max_batch_bytes
+            or now - self._last_flush_at >= self._flush_interval_seconds
+        )
 
     def _schedule_flush(self, *, final: bool) -> asyncio.Task[None] | None:
         with self._lock:
@@ -116,10 +142,16 @@ class StreamingPersistenceBuffer:
                 preview: str | None = None
                 trace: list[dict[str, Any]] = []
                 with self._lock:
-                    if self._pending_preview:
+                    now = float(self._loop_time())
+                    final = self._closing
+                    preview_due = self._preview_is_due_locked(now, final=final)
+                    trace_due = self._trace_is_due_locked(now, final=final)
+                    if not preview_due and not trace_due:
+                        return
+                    if preview_due:
                         preview = self._pending_preview
                         self._pending_preview = None
-                    if self._pending_trace:
+                    if trace_due:
                         trace = list(self._pending_trace)
                         self._pending_trace.clear()
                         self._pending_trace_bytes = 0
@@ -127,13 +159,17 @@ class StreamingPersistenceBuffer:
                     return
                 await asyncio.to_thread(self._flush_batch, preview, trace)
                 with self._lock:
-                    has_pending = bool(self._pending_preview or self._pending_trace)
-                if not self._closing and not has_pending:
-                    return
+                    flushed_at = float(self._loop_time())
+                    if preview:
+                        self._last_persisted_preview = preview
+                        self._last_preview_flush_at = flushed_at
+                        if self._pending_preview == preview:
+                            self._pending_preview = None
+                    if trace:
+                        self._last_flush_at = flushed_at
         finally:
             with self._lock:
                 self._flush_task = None
-                self._last_flush_at = float(self._loop_time())
                 if not self._pending_preview and not self._pending_trace:
                     self._closing = False
 

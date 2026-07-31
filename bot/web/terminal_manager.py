@@ -13,6 +13,7 @@ import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
+from weakref import WeakValueDictionary
 
 from bot.platform.terminal import PtyWrapper, TerminalLaunchError, create_shell_process
 
@@ -445,7 +446,7 @@ class TerminalSessionManager:
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
         self._sessions: dict[str, ManagedTerminalSession] = {}
-        self._rebuild_locks: dict[str, asyncio.Lock] = {}
+        self._rebuild_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
 
     def _key(self, user_id: int, owner_id: str) -> str:
         return f"{user_id}:{owner_id}"
@@ -628,14 +629,36 @@ class TerminalSessionManager:
         )
 
     async def close(self, user_id: int, owner_id: str) -> dict[str, Any]:
+        key = self._key(user_id, owner_id)
         async with self._lock:
-            session = self._get_or_create_locked(user_id, owner_id)
+            session = self._sessions.get(key)
+            rebuild_lock = self._rebuild_locks.get(key)
+            if session is None and rebuild_lock is None:
+                return self._build_snapshot_locked(
+                    ManagedTerminalSession(owner_key=key, is_closed=True)
+                )
+            if rebuild_lock is None:
+                rebuild_lock = asyncio.Lock()
+                self._rebuild_locks[key] = rebuild_lock
 
-        await self._terminate_process(session)
+        async with rebuild_lock:
+            async with self._lock:
+                session = self._sessions.get(key)
+                if session is None:
+                    return self._build_snapshot_locked(
+                        ManagedTerminalSession(owner_key=key, is_closed=True)
+                    )
 
-        async with self._lock:
-            session.is_closed = True
-            return self._build_snapshot_locked(session)
+            await self._terminate_process(session)
+
+            async with self._lock:
+                session.is_closed = True
+                snapshot = self._build_snapshot_locked(session)
+                if self._sessions.get(key) is session:
+                    self._sessions.pop(key, None)
+                session.replay.clear()
+                session.replay_bytes = 0
+                return snapshot
 
     async def attach(
         self,

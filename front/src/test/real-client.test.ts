@@ -3691,6 +3691,62 @@ describe("RealWebBotClient", () => {
     expect(message.meta?.processCount).toBe(1);
   });
 
+  test("sendMessage treats the persisted done trace as the authoritative snapshot", async () => {
+    const encoder = new TextEncoder();
+    const firstLiveEvent = {
+      id: "trace-1",
+      ordinal: 1,
+      kind: "commentary",
+      summary: "保留的过程",
+      source: "codex",
+    };
+    const staleLiveEvent = {
+      id: "trace-stale",
+      ordinal: 2,
+      kind: "commentary",
+      summary: "不应继续驻留的实时过程",
+      source: "codex",
+    };
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(`event: trace\ndata: ${JSON.stringify({ event: firstLiveEvent })}\n\n`));
+        controller.enqueue(encoder.encode(`event: trace\ndata: ${JSON.stringify({ event: staleLiveEvent })}\n\n`));
+        controller.enqueue(encoder.encode(`event: done\ndata: ${JSON.stringify({
+          output: "最终结果",
+          message: {
+            id: "assistant-final",
+            role: "assistant",
+            content: "最终结果",
+            created_at: "2026-06-06T00:00:00Z",
+            state: "done",
+            meta: {
+              trace: [firstLiveEvent],
+              trace_count: 1,
+              tool_call_count: 0,
+              process_count: 1,
+            },
+          },
+        })}\n\n`));
+        controller.close();
+      },
+    });
+
+    fetchMock
+      .mockResolvedValueOnce(jsonOk({ user_id: 1001 }))
+      .mockResolvedValueOnce({
+        ok: true,
+        body: stream,
+        json: async () => ({ ok: true, data: {} }),
+      });
+
+    const client = new RealWebBotClient();
+    await client.login("secret-token");
+    const message = await client.sendMessage("main", "hello", () => undefined, undefined, () => undefined);
+
+    expect(message.meta?.trace).toEqual([expect.objectContaining({ id: "trace-1" })]);
+    expect(message.meta?.traceCount).toBe(1);
+  });
+
   test("sendMessage keeps streamed trace when done only returns counts", async () => {
     const encoder = new TextEncoder();
     const traceEvent = {

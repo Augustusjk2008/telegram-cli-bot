@@ -20,7 +20,6 @@ export type ChatBodyParagraphSpacingName = "tight" | "normal" | "relaxed";
 export const APP_NAME = "Orbit Safe Claw";
 export const APP_LOGIN_NAME = "Orbit Safe Claw";
 export const APP_VERSION = __APP_VERSION__;
-export const APP_TAGLINE = "你的随身智能体指挥中心";
 export const APP_KICKER = "LOCAL AGENT CONTROL SURFACE";
 export const UI_THEME_STORAGE_KEY = "web-ui-theme";
 export const CHAT_BODY_FONT_FAMILY_STORAGE_KEY = "web-chat-body-font-family";

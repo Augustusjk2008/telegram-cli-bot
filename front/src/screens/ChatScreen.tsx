@@ -81,7 +81,7 @@ import {
   isNativeAgentMessage,
 } from "../utils/nativeAgentTranscript";
 import { fallbackAgents } from "../utils/defaultAgents";
-import { mergeMessageMeta } from "../utils/chatMessageMeta";
+import { compactCompletedMessageMeta, mergeMessageMeta } from "../utils/chatMessageMeta";
 import { useChatHistorySync } from "../hooks/useChatHistorySync";
 import { useChatStreamBatcher } from "../hooks/useChatStreamBatcher";
 import { FRONTEND_FEATURE_FLAGS } from "../app/featureFlags";
@@ -1515,6 +1515,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
           >
             {hasTranscript ? (
               <NativeAgentTranscript
+                key={`${messageClientStateKey}:${item.state || ""}`}
                 entries={nativeTranscriptEntries}
                 resultText={item.text}
                 state={item.state}
@@ -4081,41 +4082,35 @@ export function ChatScreen({
         return;
       }
 
-      const completedAgUiState = sawAgUiEventRef.current
-        ? (agUiBatchReducerRef.current?.snapshot() || agUiBatchStateRef.current)
-        : null;
       const elapsedSeconds = typeof finalMessage.elapsedSeconds === "number"
         ? finalMessage.elapsedSeconds
         : Math.max(0, Math.floor((Date.now() - localStartedAtMs) / 1000));
       const finalizedMessage: ChatMessage = normalizeResolvedFinalMessage({
         ...finalMessage,
         elapsedSeconds,
-        ...(completedAgUiState
-          ? {
-              meta: mergeMessageMeta(
-                finalMessage.meta,
-                buildLiveAgUiMessageMeta(completedAgUiState, executionModeRef.current === "native_agent"),
-              ),
-            }
-          : {}),
       });
-      const finalMetaHasTracePayload = Array.isArray(finalizedMessage.meta?.trace);
+      const callbackMessage = finalizedMessage.state === "done"
+        ? { ...finalizedMessage, meta: compactCompletedMessageMeta(finalizedMessage.meta) }
+        : finalizedMessage;
 
       setItems((prev) => upsertActiveAssistantMessage(
         prev,
         activeAssistantTarget(finalizedMessage),
         finalizedMessage,
-        (item, final) => ({
-          ...final,
-          meta: mergeMessageMeta(
+        (item, final) => {
+          const mergedMeta = mergeMessageMeta(
             item.meta,
             final.meta,
             undefined,
-            { reconcileTraceSnapshots: finalMetaHasTracePayload },
-          ),
-        }),
+            { traceMode: "replace" },
+          );
+          return {
+            ...final,
+            meta: final.state === "done" ? compactCompletedMessageMeta(mergedMeta) : mergedMeta,
+          };
+        },
       ));
-      options.onSuccess?.(finalizedMessage);
+      options.onSuccess?.(callbackMessage);
       if (!isVisibleRef.current) {
         onUnreadResult?.(botAlias);
       }

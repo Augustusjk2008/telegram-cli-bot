@@ -1359,6 +1359,7 @@ test("renders live cli trace without temporary answer while streaming", async ()
 
 test("deduplicates replayed anonymous native trace events in the live transcript", async () => {
   const user = userEvent.setup();
+  let resolveFinal!: (message: ChatMessage) => void;
   const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
     _botAlias,
     _text,
@@ -1374,13 +1375,9 @@ test("deduplicates replayed anonymous native trace events in the live transcript
         rawType: "message.text.reclassified",
       });
     }
-    return {
-      id: "assistant-native-replay",
-      role: "assistant",
-      text: "最终答复",
-      createdAt: new Date().toISOString(),
-      state: "done",
-    };
+    return new Promise<ChatMessage>((resolve) => {
+      resolveFinal = resolve;
+    });
   });
   const client = createClient({ sendMessage });
 
@@ -1390,12 +1387,22 @@ test("deduplicates replayed anonymous native trace events in the live transcript
   await user.click(screen.getByRole("button", { name: "发送" }));
 
   const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(within(transcript).queryByText("重复过程")).not.toBeInTheDocument();
+  await user.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
   expect(within(transcript).getAllByText("重复过程")).toHaveLength(1);
-  expect(within(transcript).getByText("最终答复")).toBeInTheDocument();
+  await act(async () => resolveFinal({
+    id: "assistant-native-replay",
+    role: "assistant",
+    text: "最终答复",
+    createdAt: new Date().toISOString(),
+    state: "done",
+  }));
+  expect(await screen.findByText("最终答复")).toBeInTheDocument();
 });
 
 test("updates one live native trace entry when commentary is cumulative", async () => {
   const user = userEvent.setup();
+  let resolveFinal!: (message: ChatMessage) => void;
   const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
     _botAlias,
     _text,
@@ -1415,13 +1422,9 @@ test("updates one live native trace entry when commentary is cumulative", async 
       source: "native",
       rawType: "assistant_message",
     });
-    return {
-      id: "assistant-native-cumulative",
-      role: "assistant",
-      text: "最终答复",
-      createdAt: new Date().toISOString(),
-      state: "done",
-    };
+    return new Promise<ChatMessage>((resolve) => {
+      resolveFinal = resolve;
+    });
   });
   const client = createClient({ sendMessage });
 
@@ -1431,8 +1434,18 @@ test("updates one live native trace entry when commentary is cumulative", async 
   await user.click(screen.getByRole("button", { name: "发送" }));
 
   const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(within(transcript).queryByText("我先检查目录。")).not.toBeInTheDocument();
+  await user.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
   expect(within(transcript).getAllByText("我先检查目录。")).toHaveLength(1);
   expect(within(transcript).queryByText("我先")).not.toBeInTheDocument();
+  await act(async () => resolveFinal({
+    id: "assistant-native-cumulative",
+    role: "assistant",
+    text: "最终答复",
+    createdAt: new Date().toISOString(),
+    state: "done",
+  }));
+  expect(await screen.findByText("最终答复")).toBeInTheDocument();
 });
 
 test("plain cli streaming text waits for done before rendering answer", async () => {
@@ -1545,7 +1558,7 @@ test("renders live cli trace as transcript after final message", async () => {
   expect(within(transcript).getAllByText("我先检查目录。").length).toBeGreaterThan(0);
 });
 
-test("keeps an expanded streaming trace mounted until the final message resets it", async () => {
+test("keeps an expanded streaming trace mounted until completion compacts it", async () => {
   const user = userEvent.setup();
   let emitStatus: ((status: ChatStatusUpdate) => void) | undefined;
   let resolveFinal!: (message: ChatMessage) => void;
@@ -1644,9 +1657,9 @@ test("keeps an expanded streaming trace mounted until the final message resets i
   });
 
   await waitFor(() => {
-    const completedGroup = screen.getByTestId("native-agent-event-group") as HTMLDetailsElement;
-    expect(completedGroup.open).toBe(false);
-    expect(completedGroup).not.toBe(liveGroup);
+    const completedTranscript = screen.getByTestId("native-agent-transcript");
+    expect(within(completedTranscript).queryByTestId("native-agent-event-group")).not.toBeInTheDocument();
+    expect(within(completedTranscript).getByRole("button", { name: "展开过程详情" })).toHaveAttribute("aria-expanded", "false");
     expect(scrollTop).toBe(1_600);
   });
 });
@@ -1704,10 +1717,10 @@ test("keeps authoritative final cli trace count when live trace matches final tr
   const user = userEvent.setup();
   const finalTrace = { kind: "commentary", summary: "我先检查目录。", rawType: "message", source: "codex" };
   const getMessageTrace = vi.fn(async () => ({
-    trace: [],
-    traceCount: 0,
+    trace: [finalTrace],
+    traceCount: 1,
     toolCallCount: 0,
-    processCount: 0,
+    processCount: 1,
   }));
   const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
     _botAlias,
@@ -1740,8 +1753,11 @@ test("keeps authoritative final cli trace count when live trace matches final tr
 
   const transcript = await screen.findByTestId("native-agent-transcript");
   expect(within(transcript).getByText("最终答复")).toBeInTheDocument();
-  expect(within(transcript).getByText("我先检查目录。")).toBeInTheDocument();
   expect(getMessageTrace).not.toHaveBeenCalled();
+  expect(within(transcript).getByText("1 条过程")).toBeInTheDocument();
+  await user.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
+  await waitFor(() => expect(getMessageTrace).toHaveBeenCalledWith("main", "assistant-cli-authoritative-final"));
+  expect(within(transcript).getByText("我先检查目录。")).toBeInTheDocument();
 });
 
 test("final resolved assistant message does not keep streaming state", async () => {
@@ -2974,6 +2990,33 @@ test("live non-native ag-ui session error stays in regular error bubble", async 
 test("live ag-ui stream renders flat transcript and final result last", async () => {
   const user = userEvent.setup();
   const writeText = mockClipboardWrite();
+  const getMessageTrace = vi.fn(async (): Promise<ChatTraceDetails> => ({
+    trace: [
+      { id: "trace-status", ordinal: 1, kind: "status", source: "native_agent", summary: "运行中" },
+      { id: "trace-reasoning", ordinal: 2, kind: "reasoning", source: "native_agent", summary: "检查上下文" },
+      {
+        id: "trace-tool-call",
+        ordinal: 3,
+        kind: "tool_call",
+        source: "native_agent",
+        toolName: "shell_command",
+        callId: "tool-1",
+        summary: "{\"command\":\"dir\"}",
+      },
+      {
+        id: "trace-tool-result",
+        ordinal: 4,
+        kind: "tool_result",
+        source: "native_agent",
+        callId: "tool-1",
+        summary: "Exit code: 0",
+        payload: { output: "Exit code: 0" },
+      },
+    ],
+    traceCount: 4,
+    toolCallCount: 1,
+    processCount: 2,
+  }));
   const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
     _botAlias,
     _text,
@@ -3019,6 +3062,7 @@ test("live ag-ui stream renders flat transcript and final result last", async ()
       supportedExecutionModes: ["native_agent"],
       defaultExecutionMode: "native_agent",
     }),
+    getMessageTrace,
     sendMessage,
   });
 
@@ -3029,7 +3073,14 @@ test("live ag-ui stream renders flat transcript and final result last", async ()
 
   await waitFor(() => expect(sendMessage).toHaveBeenCalled());
   const transcript = await screen.findByTestId("native-agent-transcript");
-  const eventGroup = within(transcript).getByTestId("native-agent-event-group");
+  expect(within(transcript).queryByTestId("native-agent-event-group")).not.toBeInTheDocument();
+  await user.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
+  await waitFor(() => expect(getMessageTrace).toHaveBeenCalledWith(
+    "main",
+    "assistant-live",
+    { executionMode: "native_agent" },
+  ));
+  const eventGroup = await within(transcript).findByTestId("native-agent-event-group");
   expect(eventGroup.textContent).toContain("过程 1");
   expect(eventGroup.textContent).toContain("4 条事件 · 1 次工具");
   await user.click(eventGroup.querySelector("summary") as HTMLElement);
@@ -3054,6 +3105,121 @@ test("live ag-ui stream renders flat transcript and final result last", async ()
   expect(copiedText).toContain("[工具结果] Exit code: 0");
   expect(copiedText).toContain("[最终回答]\n**answer**");
   expect(await screen.findByRole("button", { name: "已复制完整回答" })).toBeInTheDocument();
+});
+
+test("completed native stream releases live trace and reloads details on demand", async () => {
+  const user = userEvent.setup();
+  let finishStream!: () => void;
+  const getMessageTrace = vi.fn(async (): Promise<ChatTraceDetails> => ({
+    trace: [{
+      id: "trace-persisted",
+      ordinal: 1,
+      kind: "commentary",
+      source: "native_agent",
+      summary: "持久化过程详情",
+    }],
+    traceCount: 1,
+    toolCallCount: 0,
+    processCount: 1,
+  }));
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
+    _botAlias,
+    _text,
+    _onChunk,
+    _onStatus,
+    _onTrace,
+    _options,
+    onAgUiEvent,
+  ) => {
+    onAgUiEvent?.({ type: EventType.RUN_STARTED, threadId: "thread-compact", runId: "run-compact" });
+    onAgUiEvent?.({
+      type: EventType.ACTIVITY_SNAPSHOT,
+      messageId: "trace-live",
+      activityType: "TCB_NATIVE_AGENT_TRACE",
+      replace: true,
+      content: {
+        id: "trace-live",
+        ordinal: 1,
+        summary: "实时过程详情",
+        source: "native_agent",
+        rawKind: "commentary",
+        rawType: "message.text.reclassified",
+        payload: { output: "x".repeat(256 * 1024) },
+      },
+    });
+    return new Promise<ChatMessage>((resolve) => {
+      finishStream = () => {
+        onAgUiEvent?.({
+          type: EventType.RUN_FINISHED,
+          threadId: "thread-compact",
+          runId: "run-compact",
+          outcome: { type: "success" },
+        });
+        resolve({
+          id: "assistant-compact",
+          role: "assistant",
+          text: "最终答复",
+          createdAt: new Date().toISOString(),
+          state: "done",
+          meta: {
+            tracePresentation: "native_agent_flat",
+            nativeSource: { provider: "原生 agent", sessionId: "session-compact" },
+            traceCount: 1,
+            toolCallCount: 0,
+            processCount: 1,
+            trace: [{
+              id: "trace-live",
+              ordinal: 1,
+              kind: "commentary",
+              source: "native_agent",
+              summary: "实时过程详情",
+              payload: { output: "x".repeat(256 * 1024) },
+            }],
+          },
+        });
+      };
+    });
+  });
+  const client = createClient({
+    getBotOverview: async (): Promise<BotOverview> => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+      supportedExecutionModes: ["native_agent"],
+      defaultExecutionMode: "native_agent",
+    }),
+    getMessageTrace,
+    sendMessage,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  await screen.findByText("暂无消息，开始聊天吧");
+  await user.type(screen.getByPlaceholderText("输入消息"), "hi");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  const streamingTranscript = await screen.findByTestId("native-agent-transcript");
+  await user.click(within(streamingTranscript).getByRole("button", { name: "展开过程详情" }));
+  expect(within(streamingTranscript).getByText("实时过程详情")).toBeInTheDocument();
+  expect(getMessageTrace).not.toHaveBeenCalled();
+
+  await act(async () => finishStream());
+
+  expect(await screen.findByText("最终答复")).toBeInTheDocument();
+  const completedTranscript = await screen.findByTestId("native-agent-transcript");
+  const expandButton = within(completedTranscript).getByRole("button", { name: "展开过程详情" });
+  expect(expandButton).toHaveAttribute("aria-expanded", "false");
+  expect(within(completedTranscript).queryByText("实时过程详情")).not.toBeInTheDocument();
+  expect(getMessageTrace).not.toHaveBeenCalled();
+
+  await user.click(expandButton);
+  await waitFor(() => expect(getMessageTrace).toHaveBeenCalledWith(
+    "main",
+    "assistant-compact",
+    { executionMode: "native_agent" },
+  ));
+  expect(await within(completedTranscript).findByText("持久化过程详情")).toBeInTheDocument();
 });
 
 test("native send renders streaming transcript immediately without cli bubble chrome", async () => {
@@ -3156,6 +3322,9 @@ test("native streaming keeps partial answer out of the final result section", as
   await user.click(screen.getByRole("button", { name: "发送" }));
 
   const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(within(transcript).getByRole("button", { name: "展开过程详情" })).toHaveAttribute("aria-expanded", "false");
+  expect(within(transcript).queryByText("仍在处理")).not.toBeInTheDocument();
+  await user.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
   expect(within(transcript).getByText("仍在处理")).toBeInTheDocument();
   expect(within(transcript).queryByText("只应在完成后显示的正文")).not.toBeInTheDocument();
   expect(within(transcript).queryByTestId("native-agent-final-result")).not.toBeInTheDocument();
@@ -3234,6 +3403,8 @@ test("native ag-ui commentary is visible while stream is still running", async (
   await user.click(screen.getByRole("button", { name: "发送" }));
 
   const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(within(transcript).queryByText("我先读取文件。")).not.toBeInTheDocument();
+  await user.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
   expect(within(transcript).getByText("我先读取文件。")).toBeInTheDocument();
   expect(screen.getByTestId("native-agent-streaming-status")).toBeInTheDocument();
 
@@ -3318,6 +3489,8 @@ test("native ag-ui delta commentary is visible while stream is still running", a
   await user.click(screen.getByRole("button", { name: "发送" }));
 
   const transcript = await screen.findByTestId("native-agent-transcript");
+  expect(within(transcript).queryByText("我先读取文件。")).not.toBeInTheDocument();
+  await user.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
   expect(within(transcript).getByText("我先读取文件。")).toBeInTheDocument();
   expect(screen.getByTestId("native-agent-streaming-status")).toBeInTheDocument();
 

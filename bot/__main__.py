@@ -15,7 +15,12 @@ ensure_nofile_limit()
 
 from bot.migrations.runner import run_pending_migrations
 
-run_pending_migrations(repo_root=_package_root)
+_MIGRATIONS_CHECKED_ARG = "--tcb-migrations-checked"
+_migrations_checked = _MIGRATIONS_CHECKED_ARG in sys.argv[1:]
+if _migrations_checked:
+    sys.argv = [sys.argv[0], *(arg for arg in sys.argv[1:] if arg != _MIGRATIONS_CHECKED_ARG)]
+else:
+    run_pending_migrations(repo_root=_package_root)
 
 from bot.main import main
 

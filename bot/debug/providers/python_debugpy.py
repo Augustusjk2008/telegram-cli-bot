@@ -8,7 +8,7 @@ from typing import Any
 
 from bot.debug.models import DebugProfile
 
-from .base import DebugProvider, DebugProviderError, DebugProviderSession
+from .base import DebugProvider, DebugProviderSession
 from .dap_client import DapClient
 
 

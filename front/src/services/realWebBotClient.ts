@@ -5229,7 +5229,7 @@ export class RealWebBotClient implements WebBotClient {
               streamedContextUsage ? { contextUsage: streamedContextUsage } : undefined,
               finalMessage.meta,
               streamedTrace,
-              { reconcileTraceSnapshots: true, dedupeAnonymous: true },
+              { traceMode: "replace" },
             );
             finalText = finalMessage.text;
           } else {
@@ -5255,7 +5255,9 @@ export class RealWebBotClient implements WebBotClient {
     }
 
     if (sawAgUiEvent) {
-      agUiState = agUiAccumulator.snapshot();
+      if (!terminalSeen) {
+        agUiState = agUiAccumulator.snapshot();
+      }
       agUiAccumulator.dispose();
     }
 

@@ -349,15 +349,6 @@ def _supports_native_agent_runtime(profile: BotProfile) -> bool:
     return NATIVE_AGENT_PROVIDER in modes or default_mode == NATIVE_AGENT_PROVIDER
 
 
-def _build_session_ids(session: UserSession) -> dict[str, Any]:
-    return {
-        "codex_session_id": session.codex_session_id,
-        "claude_session_id": session.claude_session_id,
-        "native_agent_session_id": session.native_agent_session_id,
-        "claude_session_initialized": session.claude_session_initialized,
-    }
-
-
 def _clear_native_agent_session_locked(session: UserSession) -> bool:
     changed = bool(
         session.native_agent_session_id
@@ -380,17 +371,6 @@ def _clear_all_native_sessions_locked(session: UserSession) -> bool:
     session.claude_session_id = None
     session.claude_session_initialized = False
     return _clear_native_agent_session_locked(session) or changed
-
-
-def _build_running_reply_snapshot(session: UserSession) -> Optional[dict[str, Any]]:
-    if not session.running_started_at:
-        return None
-    return {
-        "user_text": session.running_user_text or "",
-        "preview_text": session.running_preview_text or "",
-        "started_at": session.running_started_at,
-        "updated_at": session.running_updated_at or session.running_started_at,
-    }
 
 
 def _get_chat_store(session: UserSession) -> ChatStore:
@@ -743,16 +723,6 @@ def _same_path(left: Path, right: Path) -> bool:
         return str(left.expanduser().resolve()).lower() == str(right.expanduser().resolve()).lower()
     except OSError:
         return str(left.expanduser()).lower() == str(right.expanduser()).lower()
-
-
-def _pi_mcp_command_points_to_launcher(command: Any, launcher_path: Path) -> bool:
-    if isinstance(command, str):
-        candidate = command
-    elif isinstance(command, list) and command:
-        candidate = command[0]
-    else:
-        return False
-    return _same_path(Path(str(candidate or "")), launcher_path)
 
 
 def _cluster_pi_mcp_target_status(*, active_cli_type: str) -> dict[str, str]:
@@ -1840,13 +1810,6 @@ def delete_conversation(
         "items": listed["items"],
         "messages": [] if is_active else None,
     }
-
-
-def _same_resolved_path(left: str | Path, right: str | Path) -> bool:
-    try:
-        return _normalized_resolved_path(left) == _normalized_resolved_path(right)
-    except Exception:
-        return False
 
 
 def _normalized_resolved_path(value: str | Path) -> str:
@@ -2979,14 +2942,6 @@ def _apply_agent_prompt_if_needed(prompt_text: str, agent: AgentProfile, session
     with session._lock:
         session.agent_prompt_hash_seen = prompt_hash or None
     return wrapped
-
-
-
-def _chunk_text(text: str, size: int = 160) -> list[str]:
-    cleaned = text or ""
-    if not cleaned:
-        return []
-    return [cleaned[index:index + size] for index in range(0, len(cleaned), size)]
 
 
 def _prepare_cli_attempt_state(session: UserSession, cli_type: str) -> CliAttemptState:

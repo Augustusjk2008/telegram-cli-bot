@@ -1,5 +1,6 @@
 @echo off
 setlocal EnableDelayedExpansion
+set "ERRORLEVEL="
 chcp 65001 >nul
 
 set "SCRIPT_DIR=%~dp0"
@@ -48,6 +49,7 @@ if not defined PS_EXE (
 )
 
 set "CLI_BRIDGE_PS_EXE=%PS_EXE%"
+:START_SERVICE
 echo [INFO] Starting service with %PS_EXE%...
 
 "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
@@ -68,6 +70,8 @@ echo [INFO] Starting service with %PS_EXE%...
 set "EXIT_CODE=%ERRORLEVEL%"
 if not "%EXIT_CODE%"=="0" (
     echo [ERROR] Service exited with code: %EXIT_CODE%
-    pause
+    echo [INFO] Press any key to retry. Close this window to stop.
+    pause >nul
+    goto START_SERVICE
 )
-exit /b %EXIT_CODE%
+exit /b 0

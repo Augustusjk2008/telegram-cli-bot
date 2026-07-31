@@ -1651,14 +1651,6 @@ export type TableViewSummary = {
   actions?: PluginAction[];
 };
 
-export type TableWindowRequest = {
-  offset: number;
-  limit: number;
-  sort?: TableSort;
-  query?: string;
-  filters?: Record<string, unknown>;
-};
-
 export type TableWindowPayload = {
   offset?: number;
   limit?: number;
@@ -1701,13 +1693,6 @@ export type TreeViewSummary = {
   searchPlaceholder?: string;
   statsText?: string;
   emptySearchText?: string;
-};
-
-export type TreeWindowRequest = {
-  op?: "children" | "search";
-  kind?: "children" | "search";
-  nodeId?: string;
-  query?: string;
 };
 
 export type TreeWindowPayload = {

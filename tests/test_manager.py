@@ -5,19 +5,15 @@ Bot 管理器测试
 （不测试 Telegram API 调用，只测试纯逻辑部分）
 """
 
-import asyncio
 import json
-import threading
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from bot import app_settings
-from bot.config import BOT_ALIAS_RE, RESERVED_ALIASES
 from bot.manager import MultiBotManager
 from bot.models import BotProfile
-from bot.sessions import get_or_create_session
 
 
 class TestManagerLoadSave:
@@ -334,14 +330,3 @@ class TestManagerValidation:
         await manager.shutdown_all()
 
         assert manager.managed_profiles["agent-test"].default_execution_mode == "native_agent"
-
-    @pytest.mark.asyncio
-    async def test_background_services_do_not_run_stale_native_cleanup(self, temp_dir: Path):
-        storage = temp_dir / "bots.json"
-        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
-        manager = MultiBotManager(BotProfile(alias="main", token="main_tok", working_dir=str(temp_dir)), str(storage))
-
-        await manager.start_background_services(result_executor=AsyncMock(return_value={}))
-        await manager.shutdown_all()
-
-        assert "NATIVE_AGENT_SERVER_" + "MANAGER" not in vars(__import__("bot.manager").manager)

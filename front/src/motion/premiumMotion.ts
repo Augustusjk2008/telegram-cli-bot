@@ -116,11 +116,6 @@ export const delightMotionStagger = {
   maxAnimatedItems: 12,
 } as const;
 
-export const compactMotionStagger = {
-  itemDelaySeconds: 0.015,
-  maxAnimatedItems: 8,
-} as const;
-
 export function resolveMotionProps(preset: PremiumMotionPreset, reduceMotion: boolean | null) {
   if (reduceMotion) {
     return {

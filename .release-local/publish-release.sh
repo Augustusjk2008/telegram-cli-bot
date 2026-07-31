@@ -9,6 +9,15 @@ portable_build_script="$script_dir/portable-win/build-portable.ps1"
 front_dir="$repo_root/front"
 version_file="$repo_root/VERSION"
 package_base_name="orbit-safe-claw"
+release_legal_verifier="$repo_root/scripts/verify_release_legal_files.py"
+required_release_legal_files=(
+  "LICENSE"
+  "NOTICE"
+  "THIRD_PARTY_NOTICES.md"
+  "TRADEMARKS.md"
+  "CONTRIBUTING.md"
+  "front/dist/THIRD_PARTY_LICENSES.txt"
+)
 
 python_bin="${PYTHON:-python3}"
 npm_bin="${NPM:-npm}"
@@ -417,6 +426,31 @@ restore_front_build_after_portable() {
   (cd "$front_dir" && "$npm_bin" run build)
 }
 
+assert_release_legal_files_in_stage() {
+  local stage_dir="$1"
+  local missing=()
+  local relative_path
+  for relative_path in "${required_release_legal_files[@]}"; do
+    if [[ ! -f "$stage_dir/$relative_path" ]]; then
+      missing+=("$relative_path")
+    fi
+  done
+  if ((${#missing[@]} > 0)); then
+    fail "发布暂存区缺少必需法律文件（请确认文件已由 Git 跟踪）: ${missing[*]}"
+  fi
+}
+
+assert_release_archives_contain_legal_files() {
+  if [[ ! -f "$release_legal_verifier" ]]; then
+    fail "未找到发布归档法律文件校验器: $release_legal_verifier"
+  fi
+  local archives=()
+  [[ -n "${windows_archive:-}" ]] && archives+=("$windows_archive")
+  archives+=("$windows_installer_archive" "$linux_archive" "$macos_archive")
+  run_checked_command "$repo_root" "发布归档法律文件校验失败" \
+    "$python_bin" "$release_legal_verifier" "${archives[@]}"
+}
+
 copy_tracked_files_to_stage() {
   local stage_dir="$1"
   write_step "复制 tracked 文件到暂存区"
@@ -442,6 +476,7 @@ copy_tracked_files_to_stage() {
   cp -a "$front_dist" "$front_dist_target"
 
   export_release_announcements "$stage_dir"
+  assert_release_legal_files_in_stage "$stage_dir"
 }
 
 new_zip_archive() {
@@ -833,6 +868,7 @@ main() {
   else
     get_existing_release_archives "$normalized_version"
   fi
+  assert_release_archives_contain_legal_files
 
   if [[ -n "${windows_archive:-}" ]]; then
     write_info "Windows 绿色版包: $windows_archive"

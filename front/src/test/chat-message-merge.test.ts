@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { mergeMessagesPreservingClientState } from "../screens/ChatScreen";
 import type { ChatMessage, ChatMessageMetaInfo, ChatTraceEvent } from "../services/types";
-import { mergeMessageMeta } from "../utils/chatMessageMeta";
+import { compactCompletedMessageMeta, mergeMessageMeta } from "../utils/chatMessageMeta";
 import { createAgUiRunState } from "../utils/agUiRunReducer";
 import { mergeChatTraceEvents } from "../utils/nativeAgentTranscript";
 
@@ -137,6 +137,41 @@ test("completed trace metadata drops the transient AG-UI run state", () => {
   );
 
   expect(merged?.agUiRunState).toBeUndefined();
+});
+
+test("completed message compaction releases full trace payloads but preserves summaries", () => {
+  const compact = compactCompletedMessageMeta({
+    completionState: "completed",
+    tracePresentation: "native_agent_flat",
+    traceLoadedCount: 2,
+    trace: [
+      {
+        id: "trace-1",
+        kind: "commentary",
+        summary: "过程",
+        payload: { output: "live-only-large-payload" },
+      },
+      {
+        id: "trace-2",
+        kind: "tool_call",
+        toolName: "shell_command",
+        summary: "dir",
+        payload: { arguments: { command: "dir" } },
+      },
+    ],
+    agUiRunState: { completed: true, entries: ["live-only-large-payload"] },
+  });
+
+  expect(compact?.trace).toBeUndefined();
+  expect(compact?.traceLoadedCount).toBeUndefined();
+  expect(compact?.agUiRunState).toBeUndefined();
+  expect(compact).toMatchObject({
+    completionState: "completed",
+    traceCount: 2,
+    toolCallCount: 1,
+    processCount: 1,
+    tracePresentation: "native_agent_flat",
+  });
 });
 
 test("anonymous native trace replay dedupe is opt-in and preserves stable events", () => {

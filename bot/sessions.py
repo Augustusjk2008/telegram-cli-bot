@@ -15,6 +15,7 @@ from bot.session_store import (
     remove_all_sessions_for_bot,
     remove_session,
     save_session,
+    session_store_runtime_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -24,8 +25,50 @@ sessions: Dict[Tuple[int, int, str], UserSession] = {}
 sessions_lock = threading.Lock()
 
 
+class _InitializationState:
+    def __init__(self) -> None:
+        self.ready = threading.Event()
+        self.error: BaseException | None = None
+
+
+_session_initializations: dict[Tuple[int, int, str], _InitializationState] = {}
+_shared_migration_initializations: dict[tuple[str, int, int], _InitializationState] = {}
+_shared_migration_completed: set[tuple[str, int, int]] = set()
+
+
 def _normalize_agent_id(agent_id: str | None) -> str:
     return str(agent_id or "main").strip().lower() or "main"
+
+
+def _ensure_shared_session_migration(bot_id: int, shared_user_id: int) -> None:
+    migration_key = (session_store_runtime_key(), int(bot_id), int(shared_user_id))
+    with sessions_lock:
+        if migration_key in _shared_migration_completed:
+            return
+        initialization = _shared_migration_initializations.get(migration_key)
+        is_initializer = initialization is None
+        if initialization is None:
+            initialization = _InitializationState()
+            _shared_migration_initializations[migration_key] = initialization
+
+    if not is_initializer:
+        initialization.ready.wait()
+        if initialization.error is not None:
+            raise initialization.error
+        return
+
+    try:
+        migrate_sessions_to_shared(bot_id, shared_user_id)
+        with sessions_lock:
+            _shared_migration_completed.add(migration_key)
+    except BaseException as exc:
+        initialization.error = exc
+        raise
+    finally:
+        with sessions_lock:
+            if _shared_migration_initializations.get(migration_key) is initialization:
+                _shared_migration_initializations.pop(migration_key, None)
+            initialization.ready.set()
 
 
 def _parse_stored_datetime(value) -> datetime:
@@ -107,40 +150,59 @@ def get_or_create_session(
     user_id = chat_session_user_id(user_id)
     normalized_agent_id = _normalize_agent_id(agent_id)
     key = (bot_id, user_id, normalized_agent_id)
-    should_persist_migration = False
 
-    with sessions_lock:
-        session = sessions.get(key)
+    while True:
+        with sessions_lock:
+            session = sessions.get(key)
+            if session is not None:
+                return session
+            initialization = _session_initializations.get(key)
+            is_initializer = initialization is None
+            if initialization is None:
+                initialization = _InitializationState()
+                _session_initializations[key] = initialization
 
-    if session is not None:
+        if is_initializer:
+            break
+        initialization.ready.wait()
+        if initialization.error is not None:
+            raise initialization.error
+
+    try:
+        if load_persisted_state:
+            _ensure_shared_session_migration(bot_id, user_id)
+        stored_data = (
+            load_session(bot_id, user_id, agent_id=normalized_agent_id)
+            if load_persisted_state
+            else None
+        )
+        session, should_persist_migration = _build_session_from_store(
+            bot_id=bot_id,
+            bot_alias=bot_alias,
+            user_id=user_id,
+            normalized_agent_id=normalized_agent_id,
+            default_working_dir=default_working_dir,
+            stored_data=stored_data,
+        )
+
+        with sessions_lock:
+            existing = sessions.get(key)
+            if existing is not None:
+                session = existing
+            else:
+                sessions[key] = session
+
+        if should_persist_migration:
+            _save_session_to_store(session)
         return session
-
-    if load_persisted_state:
-        migrate_sessions_to_shared(bot_id, user_id)
-    stored_data = load_session(bot_id, user_id, agent_id=normalized_agent_id) if load_persisted_state else None
-    (
-        session,
-        should_persist_migration,
-    ) = _build_session_from_store(
-        bot_id=bot_id,
-        bot_alias=bot_alias,
-        user_id=user_id,
-        normalized_agent_id=normalized_agent_id,
-        default_working_dir=default_working_dir,
-        stored_data=stored_data,
-    )
-
-    with sessions_lock:
-        existing = sessions.get(key)
-        if existing is not None:
-            session = existing
-        else:
-            sessions[key] = session
-            session = sessions[key]
-
-    if should_persist_migration:
-        _save_session_to_store(session)
-    return session
+    except BaseException as exc:
+        initialization.error = exc
+        raise
+    finally:
+        with sessions_lock:
+            if _session_initializations.get(key) is initialization:
+                _session_initializations.pop(key, None)
+            initialization.ready.set()
 
 
 # 保持向后兼容的别名
@@ -293,6 +355,11 @@ def clear_bot_sessions(bot_id: int):
         keys = [k for k in sessions if k[0] == bot_id]
         for key in keys:
             targets.append(sessions.pop(key))
+        completed_migrations = [
+            key for key in _shared_migration_completed if key[1] == int(bot_id)
+        ]
+        for key in completed_migrations:
+            _shared_migration_completed.discard(key)
 
     for session in targets:
         session.disable_persistence()

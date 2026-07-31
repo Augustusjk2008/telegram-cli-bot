@@ -5,6 +5,7 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import type { IncomingMessage } from 'http';
 import {defineConfig, loadEnv} from 'vite';
+import {thirdPartyLicensePlugin} from './scripts/thirdPartyLicensePlugin';
 
 function getNodeModulePackageName(id: string) {
   const normalized = id.replace(/\\/g, '/');
@@ -239,7 +240,7 @@ export default defineConfig(({mode}) => {
     : normalizeBasePath(env.VITE_BASE_PATH || env.WEB_BASE_PATH);
   return {
     base: viteBasePath,
-    plugins: [react(), tailwindcss()],
+    plugins: [react(), tailwindcss(), thirdPartyLicensePlugin(frontRoot)],
     test: {
       globals: true,
       environment: 'jsdom',

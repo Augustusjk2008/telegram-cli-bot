@@ -19,6 +19,7 @@ from bot.runtime_paths import get_language_servers_root
 from .clangd import ClangdProvider
 from .catalog import LanguageServerCatalog
 from .document_store import (
+    DocumentCloseResult,
     LanguageDocument,
     LanguageDocumentLimitError,
     LanguageDocumentStore,
@@ -623,7 +624,15 @@ class LanguageServerRuntimeManager:
             LanguageServerRuntimeKey,
             tuple[RuntimeProtocol, BaseException],
         ] = {}
-        self._restart_tasks: dict[LanguageServerRuntimeKey, asyncio.Task[None]] = {}
+        # A replacement stays private until its snapshot replay completes.  It
+        # may receive document lifecycle operations in the short interval
+        # between replay and public-generation commit, so retain that precise
+        # readiness distinction separately from transport state.
+        self._replacement_replayed_runtimes: dict[
+            LanguageServerRuntimeKey,
+            tuple[int, RuntimeProtocol],
+        ] = {}
+        self._restart_tasks: dict[LanguageServerRuntimeKey, asyncio.Task[Any]] = {}
         self._generation_by_key: dict[LanguageServerRuntimeKey, int] = {}
         self._crash_history: dict[LanguageServerRuntimeKey, deque[float]] = {}
         self._restart_count = 0
@@ -635,6 +644,11 @@ class LanguageServerRuntimeManager:
         ] = {}
         self._cancelled_requests: dict[tuple[str, int, Path, str], float] = {}
         self.document_store = LanguageDocumentStore()
+        # Store mutation and the corresponding LSP document operation must
+        # share one ordering domain.  These locks deliberately live for the
+        # manager lifetime: replacing a lock while an older task is waiting on
+        # it would reintroduce the very lifecycle ABA this barrier prevents.
+        self._document_lifecycle_locks: dict[LanguageServerRuntimeKey, asyncio.Lock] = {}
         self._lock = asyncio.Lock()
         self._shutdown_started = False
         self._maintenance_task: asyncio.Task[None] | None = None
@@ -680,6 +694,95 @@ class LanguageServerRuntimeManager:
         generation = int(self._generation_by_key.get(key, 0) or 0) + 1
         self._generation_by_key[key] = generation
         return generation
+
+    def _document_lifecycle_lock(self, key: LanguageServerRuntimeKey) -> asyncio.Lock:
+        """Return the independent document-operation barrier for one runtime key.
+
+        Async manager entry points run on one event loop and do not await while
+        creating this lock, so ``setdefault``-style lookup is atomic for this
+        purpose.  Callers must acquire this lock before ``self._lock`` and must
+        never await LSP I/O while holding ``self._lock``.
+        """
+
+        lock = self._document_lifecycle_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._document_lifecycle_locks[key] = lock
+        return lock
+
+    async def _runtime_for_document_close(self, key: LanguageServerRuntimeKey) -> RuntimeProtocol | None:
+        """Find the runtime that owns the current document lifecycle.
+
+        An initial candidate becomes public while holding the same lifecycle
+        lock that protects its replay.  A replacement has a short private
+        post-replay interval before generation commit; only that explicitly
+        replayed candidate can safely receive ``didClose``.  Sending a close to
+        a candidate before replay lets a later replay reopen the snapshot.
+        """
+
+        async with self._lock:
+            generation = int(self._generation_by_key.get(key, 0) or 0)
+            replacement = self._replacement_initializing_runtimes.get(key)
+            if replacement is not None and replacement[0] == generation:
+                replayed = self._replacement_replayed_runtimes.get(key)
+                if self._matches_initializing_candidate(replayed, generation, replacement[1]):
+                    return replacement[1]
+                return None
+            initial = self._initializing_runtimes.get(key)
+            if initial is not None and initial[0] == generation:
+                return None
+            runtime = self._runtimes.get(key)
+            if runtime is None or self._runtime_state(runtime) not in {"ready", "indexing"}:
+                return None
+            return runtime
+
+    @staticmethod
+    def _runtime_acknowledged_close_documents(
+        candidates: Sequence[LanguageDocument],
+        acknowledged: object,
+    ) -> tuple[LanguageDocument, ...]:
+        """Keep only exact planned documents explicitly acknowledged by a runtime."""
+
+        if isinstance(acknowledged, (str, bytes)) or not isinstance(acknowledged, Sequence):
+            return ()
+        identifiers = {
+            normalize_document_path(value)
+            for value in acknowledged
+            if isinstance(value, str) and normalize_document_path(value)
+        }
+        return tuple(document for document in candidates if document.document_id in identifiers)
+
+    @staticmethod
+    async def _await_runtime_close_acknowledgement(
+        close_task: asyncio.Task[Any],
+    ) -> tuple[object, asyncio.CancelledError | None]:
+        """Settle a shielded didClose before exposing caller cancellation.
+
+        The lifecycle lock must remain held until a successful close is either
+        committed to the store or known not to have succeeded.  Otherwise a
+        caller cancellation can land after the runtime accepted didClose but
+        before the exact-version store commit, making a later retry ambiguous.
+        """
+
+        caller_cancelled: asyncio.CancelledError | None = None
+        while True:
+            try:
+                return await asyncio.shield(close_task), caller_cancelled
+            except asyncio.CancelledError as exc:
+                if close_task.cancelled():
+                    if caller_cancelled is not None:
+                        raise caller_cancelled
+                    raise
+                caller_cancelled = caller_cancelled or exc
+                if close_task.done():
+                    try:
+                        return close_task.result(), caller_cancelled
+                    except BaseException:
+                        raise caller_cancelled
+            except BaseException:
+                if caller_cancelled is not None:
+                    raise caller_cancelled
+                raise
 
     @staticmethod
     def _runtime_state(runtime: RuntimeProtocol) -> str:
@@ -827,6 +930,9 @@ class LanguageServerRuntimeManager:
         if not self._matches_initializing_candidate(candidate, generation, runtime):
             return None
         self._replacement_initializing_runtimes.pop(key, None)
+        replayed = self._replacement_replayed_runtimes.get(key)
+        if self._matches_initializing_candidate(replayed, generation, runtime):
+            self._replacement_replayed_runtimes.pop(key, None)
         failure = self._replacement_initialization_failures.pop(key, None)
         return failure[1] if failure is not None and failure[0] is runtime else None
 
@@ -847,6 +953,9 @@ class LanguageServerRuntimeManager:
                 return
             replacement = self._replacement_initializing_runtimes.get(key)
             if self._matches_initializing_candidate(replacement, generation, runtime):
+                replayed = self._replacement_replayed_runtimes.get(key)
+                if self._matches_initializing_candidate(replayed, generation, runtime):
+                    self._replacement_replayed_runtimes.pop(key, None)
                 existing = self._replacement_initialization_failures.get(key)
                 if existing is None or existing[0] is not runtime:
                     self._replacement_initialization_failures[key] = (runtime, error)
@@ -1018,15 +1127,26 @@ class LanguageServerRuntimeManager:
             async with self._lock:
                 if self._shutdown_started or self._generation_by_key.get(key) != generation:
                     raise RuntimeError("语言服务器管理器正在关闭")
+                self._replacement_replayed_runtimes.pop(key, None)
                 self._replacement_initializing_runtimes[key] = (generation, runtime)
             await runtime.start()
             if self._runtime_state(runtime) in {"error", "stopped", "degraded"}:
                 raise RuntimeError("语言服务器启动后不可用")
-            snapshots = self.document_store.snapshot(key)
-            replay = getattr(runtime, "replay_documents", None)
-            sync = replay if callable(replay) else getattr(runtime, "sync_documents", None)
-            if snapshots and callable(sync):
-                await sync(snapshots)
+            async with self._document_lifecycle_lock(key):
+                snapshots = self.document_store.snapshot(key)
+                replay = getattr(runtime, "replay_documents", None)
+                sync = replay if callable(replay) else getattr(runtime, "sync_documents", None)
+                if snapshots and callable(sync):
+                    await sync(snapshots)
+                async with self._lock:
+                    candidate = self._replacement_initializing_runtimes.get(key)
+                    failure = self._replacement_initialization_failures.get(key)
+                    if (
+                        not self._shutdown_started
+                        and self._matches_initializing_candidate(candidate, generation, runtime)
+                        and (failure is None or failure[0] is not runtime)
+                    ):
+                        self._replacement_replayed_runtimes[key] = (generation, runtime)
             return runtime
         except BaseException:
             async with self._lock:
@@ -1150,25 +1270,32 @@ class LanguageServerRuntimeManager:
             provider_id=provider_id,
         )
         runtime_request = dict(request)
-        if not source_id:
-            document = LanguageDocument.from_value(document_value)
-            sync_result = self.document_store.sync_documents(key, [document])
-            current_document = self.document_store.get(key, document.path)
-            if current_document is not None and not sync_result.accepted:
-                runtime_request["document"] = current_document.to_dict()
-
+        document: LanguageDocument | None = None
         cancellation_key = (normalized_alias, normalized_user_id, root, request_id)
         current_task = asyncio.current_task()
         if current_task is None:
             raise RuntimeError("无法登记代码导航任务")
         active_key = (key, request_id)
-        async with self._lock:
-            if self._shutdown_started:
-                raise RuntimeError("语言服务器管理器正在关闭")
-            self._prune_cancelled_requests_locked()
-            if cancellation_key in self._cancelled_requests:
-                raise asyncio.CancelledError
-            self._active_requests.setdefault(active_key, set()).add(current_task)
+        lifecycle_lock = self._document_lifecycle_lock(key)
+        async with lifecycle_lock:
+            async with self._lock:
+                if self._shutdown_started:
+                    raise RuntimeError("语言服务器管理器正在关闭")
+                self._prune_cancelled_requests_locked()
+                if cancellation_key in self._cancelled_requests:
+                    raise asyncio.CancelledError
+                if not source_id:
+                    document = LanguageDocument.from_value(document_value)
+                    sync_result = self.document_store.sync_documents(key, [document])
+                    current_document = self.document_store.get(key, document.path)
+                    if current_document is not None and not sync_result.accepted:
+                        runtime_request["document"] = current_document.to_dict()
+                # The lifecycle lock keeps this synchronous store write and both
+                # cancellation fences indivisible with a matching close.
+                self._prune_cancelled_requests_locked()
+                if cancellation_key in self._cancelled_requests:
+                    raise asyncio.CancelledError
+                self._active_requests.setdefault(active_key, set()).add(current_task)
         try:
             command = await asyncio.to_thread(self.catalog.command_for, provider_id)
             if not command:
@@ -1179,7 +1306,24 @@ class LanguageServerRuntimeManager:
                 try:
                     runtime = await self._get_or_start(key, command_tuple)
                     generation = self._runtime_generation(runtime)
-                    result = await runtime.resolve_code_navigation(runtime_request)
+                    if document is not None:
+                        async with lifecycle_lock:
+                            async with self._lock:
+                                self._prune_cancelled_requests_locked()
+                                if cancellation_key in self._cancelled_requests:
+                                    raise asyncio.CancelledError
+                            current_document = self.document_store.get(key, document.path)
+                            if current_document is None or current_document.content != document.content:
+                                raise asyncio.CancelledError
+                            if current_document != document:
+                                runtime_request["document"] = current_document.to_dict()
+                            result = await runtime.resolve_code_navigation(runtime_request)
+                    else:
+                        async with self._lock:
+                            self._prune_cancelled_requests_locked()
+                            if cancellation_key in self._cancelled_requests:
+                                raise asyncio.CancelledError
+                        result = await runtime.resolve_code_navigation(runtime_request)
                 except asyncio.CancelledError:
                     raise
                 except BaseException as exc:
@@ -1250,7 +1394,12 @@ class LanguageServerRuntimeManager:
         sync_kinds: set[str] = set()
         for provider_id, provider_documents in grouped.items():
             key = LanguageServerRuntimeKey(normalized_alias, normalized_user_id, root, provider_id)
-            result = self.document_store.sync_documents(key, provider_documents)
+            lifecycle_lock = self._document_lifecycle_lock(key)
+            async with lifecycle_lock:
+                async with self._lock:
+                    if self._shutdown_started:
+                        raise RuntimeError("语言服务器管理器正在关闭")
+                    result = self.document_store.sync_documents(key, provider_documents)
             accepted.extend(result.accepted)
             unchanged.extend(result.unchanged)
             rejected.extend(item.to_dict() for item in result.rejected)
@@ -1262,9 +1411,15 @@ class LanguageServerRuntimeManager:
                 continue
             runtime = await self._get_or_start(key, tuple(command))
             if result.accepted:
-                sync = getattr(runtime, "sync_documents", None)
-                if callable(sync):
-                    await sync(result.accepted)
+                async with lifecycle_lock:
+                    current_documents = tuple(
+                        document
+                        for document in result.accepted
+                        if self.document_store.get(key, document.path) == document
+                    )
+                    sync = getattr(runtime, "sync_documents", None)
+                    if current_documents and callable(sync):
+                        await sync(current_documents)
             sync_kinds.add(_runtime_sync_kind(runtime))
 
         sync_kind = "incremental" if sync_kinds == {"incremental"} else "full"
@@ -1348,15 +1503,35 @@ class LanguageServerRuntimeManager:
         closed_external: list[str] = []
         for provider_id, provider_documents in grouped.items():
             key = LanguageServerRuntimeKey(normalized_alias, normalized_user_id, root, provider_id)
-            result = self.document_store.close_documents(key, provider_documents)
-            closed.extend(result.closed)
-            missing.extend(result.missing)
-            async with self._lock:
-                runtime = self._runtimes.get(key)
-            if runtime is not None:
-                close = getattr(runtime, "close_documents", None)
-                if callable(close):
-                    await close(provider_documents)
+            async with self._document_lifecycle_lock(key):
+                plan = self.document_store.preview_close_documents(key, provider_documents)
+                runtime = await self._runtime_for_document_close(key)
+                unacknowledged: tuple[str, ...] = ()
+                if runtime is None:
+                    result = self.document_store.commit_close_documents(key, plan.candidates)
+                else:
+                    close = getattr(runtime, "close_documents", None)
+                    if not callable(close):
+                        result = self.document_store.commit_close_documents(key, plan.candidates)
+                    elif not plan.candidates:
+                        result = DocumentCloseResult()
+                    else:
+                        close_task = asyncio.create_task(close(plan.candidates))
+                        acknowledged, caller_cancelled = await self._await_runtime_close_acknowledgement(
+                            close_task,
+                        )
+                        confirmed = self._runtime_acknowledged_close_documents(plan.candidates, acknowledged)
+                        result = self.document_store.commit_close_documents(key, confirmed)
+                        confirmed_ids = {document.document_id for document in confirmed}
+                        unacknowledged = tuple(
+                            document.document_id
+                            for document in plan.candidates
+                            if document.document_id not in confirmed_ids
+                        )
+                        if caller_cancelled is not None:
+                            raise caller_cancelled
+                closed.extend(result.closed)
+                missing.extend((*plan.missing, *unacknowledged, *result.missing))
         for provider_id, source_ids in external_grouped.items():
             key = LanguageServerRuntimeKey(normalized_alias, normalized_user_id, root, provider_id)
             async with self._lock:
@@ -1448,6 +1623,117 @@ class LanguageServerRuntimeManager:
         await self._get_or_start(key, tuple(command))
         return True
 
+    async def _run_manual_restart_transition(
+        self,
+        *,
+        key: LanguageServerRuntimeKey,
+        old: RuntimeProtocol,
+        command: tuple[str, ...],
+        generation: int,
+        previous_restart_task: asyncio.Task[Any] | None,
+        start_task: asyncio.Task[RuntimeProtocol] | None,
+        active_tasks: Sequence[asyncio.Task[Any]],
+    ) -> RuntimeProtocol:
+        """Publish one manual replacement while callers wait on ``_restart_tasks``."""
+
+        current_task = asyncio.current_task()
+        replacement: RuntimeProtocol | None = None
+        replacement_closed = False
+        published = False
+        try:
+            for task in (previous_restart_task, start_task):
+                if task is not None and task is not current_task and not task.done():
+                    task.cancel()
+            pending_transitions = [
+                task
+                for task in (previous_restart_task, start_task)
+                if task is not None and task is not current_task
+            ]
+            if pending_transitions:
+                await asyncio.gather(*pending_transitions, return_exceptions=True)
+            for task in active_tasks:
+                task.cancel()
+            if active_tasks:
+                await asyncio.gather(*active_tasks, return_exceptions=True)
+            try:
+                await old.close()
+            except asyncio.CancelledError:
+                raise
+            except BaseException:
+                pass
+            try:
+                replacement = await self._start_replacement(key, command, generation)
+            except asyncio.CancelledError:
+                raise
+            except BaseException as exc:
+                try:
+                    setattr(old, "state", "degraded")
+                except Exception:
+                    pass
+                async with self._lock:
+                    if not self._shutdown_started and self._generation_by_key.get(key) == generation:
+                        self._runtimes[key] = old
+                        self._record_error_locked(key, old, exc, record_runtime=False)
+                raise
+
+            replacement_failure: BaseException | None = None
+            async with self._lock:
+                if self._shutdown_started or self._generation_by_key.get(key) != generation:
+                    self._discard_replacement_initialization_locked(key, generation, replacement)
+                    stale = True
+                else:
+                    replacement_failure = self._discard_replacement_initialization_locked(
+                        key,
+                        generation,
+                        replacement,
+                    )
+                    if replacement_failure is not None:
+                        stale = False
+                    else:
+                        self._runtimes[key] = replacement
+                        self._restart_count += 1
+                        stale = False
+                        published = True
+                        try:
+                            setattr(replacement, "restart_count", self._restart_count)
+                            setattr(replacement, "last_restart_at", time.time())
+                        except Exception:
+                            pass
+                        if self._restart_tasks.get(key) is current_task:
+                            self._restart_tasks.pop(key, None)
+            if stale:
+                await replacement.close()
+                replacement_closed = True
+                raise RuntimeError("语言服务器重启已过期")
+            if replacement_failure is not None:
+                try:
+                    await replacement.close()
+                except asyncio.CancelledError:
+                    raise
+                except BaseException:
+                    pass
+                replacement_closed = True
+                try:
+                    setattr(old, "state", "degraded")
+                except Exception:
+                    pass
+                async with self._lock:
+                    if not self._shutdown_started and self._generation_by_key.get(key) == generation:
+                        self._runtimes[key] = old
+                        self._record_error_locked(key, old, replacement_failure, record_runtime=False)
+                raise replacement_failure
+            await self._ensure_maintenance_task()
+            return replacement
+        except BaseException:
+            if replacement is not None and not published and not replacement_closed:
+                with contextlib.suppress(BaseException):
+                    await replacement.close()
+            raise
+        finally:
+            async with self._lock:
+                if self._restart_tasks.get(key) is current_task:
+                    self._restart_tasks.pop(key, None)
+
     async def restart_runtime(
         self,
         *,
@@ -1480,12 +1766,17 @@ class LanguageServerRuntimeManager:
             workspace_root=root,
             provider_id=normalized_provider,
         )
+        manual_transition: asyncio.Task[RuntimeProtocol] | None = None
         async with self._lock:
             if self._shutdown_started:
                 raise RuntimeError("语言服务器管理器正在关闭")
-            old = self._runtimes.pop(key, None)
+            # Keep the predecessor visible until the transition either publishes
+            # its replacement or fails.  `_get_or_start` sees the transition
+            # first, while shutdown can still collect and close this runtime if
+            # the worker is cancelled before it reaches `old.close()`.
+            old = self._runtimes.get(key)
             start_task = self._start_tasks.pop(key, None)
-            restart_task = self._restart_tasks.pop(key, None)
+            previous_restart_task = self._restart_tasks.pop(key, None)
             generation = self._next_generation_locked(key) if old is not None else 0
             self._crash_history.pop(key, None)
             active_tasks = [
@@ -1495,77 +1786,38 @@ class LanguageServerRuntimeManager:
                 for task in tasks
                 if task is not asyncio.current_task() and not task.done()
             ]
-            for task in active_tasks:
-                task.cancel()
             if old is not None:
                 try:
                     setattr(old, "state", "restarting")
                 except Exception:
                     pass
-        for task in (restart_task, start_task):
+                manual_transition = asyncio.create_task(
+                    self._run_manual_restart_transition(
+                        key=key,
+                        old=old,
+                        command=tuple(command),
+                        generation=generation,
+                        previous_restart_task=previous_restart_task,
+                        start_task=start_task,
+                        active_tasks=active_tasks,
+                    )
+                )
+                self._restart_tasks[key] = manual_transition
+        if manual_transition is not None:
+            runtime = await asyncio.shield(manual_transition)
+            return {"restarted": True, **runtime.diagnostics()}
+
+        for task in (previous_restart_task, start_task):
             if task is not None and not task.done():
                 task.cancel()
-        if restart_task is not None:
-            await asyncio.gather(restart_task, return_exceptions=True)
-        if start_task is not None:
-            await asyncio.gather(start_task, return_exceptions=True)
+        pending_transitions = [task for task in (previous_restart_task, start_task) if task is not None]
+        if pending_transitions:
+            await asyncio.gather(*pending_transitions, return_exceptions=True)
+        for task in active_tasks:
+            task.cancel()
         if active_tasks:
             await asyncio.gather(*active_tasks, return_exceptions=True)
-        if old is None:
-            runtime = await self._get_or_start(key, tuple(command))
-            return {"restarted": True, **runtime.diagnostics()}
-        with contextlib.suppress(BaseException):
-            await old.close()
-        try:
-            runtime = await self._start_replacement(key, tuple(command), generation)
-        except BaseException as exc:
-            try:
-                setattr(old, "state", "degraded")
-            except Exception:
-                pass
-            async with self._lock:
-                if not self._shutdown_started and self._generation_by_key.get(key) == generation:
-                    self._runtimes[key] = old
-                    self._record_error_locked(key, old, exc, record_runtime=False)
-            raise
-        replacement_failure: BaseException | None = None
-        async with self._lock:
-            if self._shutdown_started or self._generation_by_key.get(key) != generation:
-                self._discard_replacement_initialization_locked(key, generation, runtime)
-                stale = True
-            else:
-                replacement_failure = self._discard_replacement_initialization_locked(
-                    key,
-                    generation,
-                    runtime,
-                )
-                if replacement_failure is not None:
-                    stale = False
-                else:
-                    self._runtimes[key] = runtime
-                    self._restart_count += 1
-                    stale = False
-                    try:
-                        setattr(runtime, "restart_count", self._restart_count)
-                        setattr(runtime, "last_restart_at", time.time())
-                    except Exception:
-                        pass
-        if stale:
-            await runtime.close()
-            raise RuntimeError("语言服务器重启已过期")
-        if replacement_failure is not None:
-            with contextlib.suppress(BaseException):
-                await runtime.close()
-            try:
-                setattr(old, "state", "degraded")
-            except Exception:
-                pass
-            async with self._lock:
-                if not self._shutdown_started and self._generation_by_key.get(key) == generation:
-                    self._runtimes[key] = old
-                    self._record_error_locked(key, old, replacement_failure, record_runtime=False)
-            raise replacement_failure
-        await self._ensure_maintenance_task()
+        runtime = await self._get_or_start(key, tuple(command))
         return {"restarted": True, **runtime.diagnostics()}
 
     async def restart_language_server(self, **kwargs: object) -> dict[str, object]:
@@ -1580,19 +1832,21 @@ class LanguageServerRuntimeManager:
     ) -> RuntimeProtocol:
         while True:
             stale: list[RuntimeProtocol] = []
-            wait_restart: asyncio.Task[None] | None = None
+            wait_restart: asyncio.Task[Any] | None = None
             async with self._lock:
                 if self._shutdown_started:
                     raise RuntimeError("语言服务器管理器正在关闭")
-                current = self._runtimes.get(key)
-                if current is not None:
-                    state = self._runtime_state(current)
-                    if state in {"ready", "indexing", "starting"}:
-                        return current
-                    if state == "degraded":
-                        raise LanguageServerUnavailableError("语言服务器已降级，请手动重启")
-                    wait_restart = self._restart_tasks.get(key)
-                    if wait_restart is None:
+                wait_restart = self._restart_tasks.get(key)
+                if wait_restart is asyncio.current_task():
+                    wait_restart = None
+                if wait_restart is None:
+                    current = self._runtimes.get(key)
+                    if current is not None:
+                        state = self._runtime_state(current)
+                        if state in {"ready", "indexing", "starting"}:
+                            return current
+                        if state == "degraded":
+                            raise LanguageServerUnavailableError("语言服务器已降级，请手动重启")
                         stale.append(current)
                         self._runtimes.pop(key, None)
                 task = self._start_tasks.get(key) if wait_restart is None else None
@@ -1627,23 +1881,24 @@ class LanguageServerRuntimeManager:
             await runtime.start()
             if self._runtime_state(runtime) in {"error", "stopped", "degraded"}:
                 raise RuntimeError("语言服务器启动后不可用")
-            snapshots = self.document_store.snapshot(key)
-            replay = getattr(runtime, "replay_documents", None)
-            sync = replay if callable(replay) else getattr(runtime, "sync_documents", None)
-            if snapshots and callable(sync):
-                await sync(snapshots)
-            async with self._lock:
-                current = self._runtimes.get(key)
-                if self._shutdown_started or self._generation_by_key.get(key) != generation:
-                    start_error: BaseException | None = RuntimeError("语言服务器管理器正在关闭")
-                elif current is runtime and key in self._restart_tasks:
-                    start_error = LspJsonRpcClosedError("语言服务器初始化期间传输已失效")
-                elif current is not None and current is not runtime:
-                    start_error = LspJsonRpcClosedError("语言服务器初始化已被新 generation 替换")
-                else:
-                    self._runtimes[key] = runtime
-                    self._initializing_runtimes.pop(key, None)
-                    start_error = None
+            async with self._document_lifecycle_lock(key):
+                snapshots = self.document_store.snapshot(key)
+                replay = getattr(runtime, "replay_documents", None)
+                sync = replay if callable(replay) else getattr(runtime, "sync_documents", None)
+                if snapshots and callable(sync):
+                    await sync(snapshots)
+                async with self._lock:
+                    current = self._runtimes.get(key)
+                    if self._shutdown_started or self._generation_by_key.get(key) != generation:
+                        start_error: BaseException | None = RuntimeError("语言服务器管理器正在关闭")
+                    elif current is runtime and key in self._restart_tasks:
+                        start_error = LspJsonRpcClosedError("语言服务器初始化期间传输已失效")
+                    elif current is not None and current is not runtime:
+                        start_error = LspJsonRpcClosedError("语言服务器初始化已被新 generation 替换")
+                    else:
+                        self._runtimes[key] = runtime
+                        self._initializing_runtimes.pop(key, None)
+                        start_error = None
             if start_error is not None:
                 raise start_error
             return runtime
@@ -1793,6 +2048,7 @@ class LanguageServerRuntimeManager:
                 and not self._start_tasks
                 and not self._initializing_runtimes
                 and not self._replacement_initializing_runtimes
+                and not self._replacement_replayed_runtimes
                 and not self._restart_tasks
             ):
                 return {"requested": 0, "closed": 0, "failed": 0}
@@ -1816,6 +2072,7 @@ class LanguageServerRuntimeManager:
             self._initializing_runtimes.clear()
             self._replacement_initializing_runtimes.clear()
             self._replacement_initialization_failures.clear()
+            self._replacement_replayed_runtimes.clear()
             self._restart_tasks.clear()
             self._active_requests.clear()
             self._cancelled_requests.clear()

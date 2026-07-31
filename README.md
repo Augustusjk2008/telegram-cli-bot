@@ -1,152 +1,240 @@
-# Orbit Safe Claw
+<p align="center">
+  <img src="front/public/assets/app-logo.svg" width="112" alt="Orbit Safe Claw Logo">
+</p>
 
-远程控制 AI 智能体的多 Bot Web 控制台。它把 `codex` / `claude`、项目文件、Git、终端、插件视图和管理中心聚合到同一浏览器界面，用于统一调度多个仓库、子 agent 和集群任务。
+<p align="center">
+  <strong>简体中文</strong> · <a href="README.en.md">English</a>
+</p>
 
-- 当前版本：`1.4.8`
-- 文档最后更新：`2026-07-29`
+<h1 align="center">Orbit Safe Claw</h1>
 
-## 核心能力
+<p align="center">
+  当前版本：`1.4.10` · 文档最后更新：`2026-07-31`
+</p>
 
-- 多 Bot 编排：主 Bot + 托管 Bot 共同运行，每个 Bot 绑定 CLI、工作目录、执行模式、CLI 参数和独立会话。
-- 集群协作：CLI Bot 支持子 agents、`@agent_id` 路由、集群模板、JSON bundle、MCP 连接和模型档位，适合并行分派审查、实现、验证等任务。
-- 原生 agent：Chat 支持普通 CLI 和原生 agent 执行模式，保留原生会话复用、上下文用量、工具调用、权限请求和过程详情。
-- 项目工作台：Chat、Files、Git、Terminal、Debug 组成一体化开发界面，覆盖对话执行、文件编辑、版本控制、终端和系统脚本；Terminal 支持持久化多标签会话，Chat 过程详情刷新前后保持一致。
-- 插件运行时：基于 `plugin.json` 扩展文件视图、插件配置和进程运行能力，支持 session 型重型视图，内置 Vivado waveform 示例。
-- 可选 LiteLLM 网关：在 Admin Center 独立启停 OpenAI 兼容转接，支持多路由、模型别名和 `auto` / `chat_completions` / `responses` endpoint 模式，并兼容 Codex 上下文压缩流。
-- Codex 用量统计：管理中心可按自然日和 API provider 查询普通 Codex CLI 的请求数、输入/缓存/输出 token；默认关闭，开启后即时生效。
-- 管理与交付：Admin Center 覆盖用户权限、邀请码、公告发布、LiteLLM 网关、更新检查、Release 下载和离线包管理；Cloudflare quick tunnel 支持移动端远程访问。
+<p align="center">
+  <strong>在浏览器中统一操控本地 Codex、Claude 与 Pi 的多工作区 AI 开发控制台。</strong>
+</p>
 
-## 环境要求
+<p align="center">
+  Chat · Files · Git · Terminal · Debug · Plugins · Multi-agent Cluster
+</p>
 
-- Windows 10 / 11
-- Ubuntu / Debian Linux
-- macOS 12+（首版为源码包，非 `.app` / DMG）
-- Python 3.10-3.13（推荐 3.12；暂不支持 3.14）
-- Node.js 22+
-- Git
+<p align="center">
+  <a href="#快速开始">快速开始</a> ·
+  <a href="https://github.com/Augustusjk2008/telegram-cli-bot/releases/latest">下载最新版</a> ·
+  <a href="#功能导览">功能导览</a> ·
+  <a href="#高级配置">高级配置</a> ·
+  <a href="#开源协议品牌与贡献">开源协议</a> ·
+  <a href="https://github.com/Augustusjk2008/telegram-cli-bot/issues">反馈问题</a>
+</p>
 
-## 项目目录
+<p align="center">
+  <a href="https://github.com/Augustusjk2008/telegram-cli-bot/releases/latest"><img src="https://img.shields.io/github/v/release/Augustusjk2008/telegram-cli-bot?display_name=tag&amp;sort=semver&amp;style=flat-square&amp;color=5865f2" alt="Latest Release"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-20b8cd?style=flat-square" alt="Supported Platforms">
+  <img src="https://img.shields.io/badge/Python-3.10--3.13-3776ab?style=flat-square&amp;logo=python&amp;logoColor=white" alt="Python 3.10-3.13">
+  <img src="https://img.shields.io/badge/self--hosted-local--first-16a085?style=flat-square" alt="Self-hosted and local-first">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-3b82f6?style=flat-square" alt="Apache License 2.0"></a>
+</p>
 
-```text
-.
-├─ bot/                    # Python 后端、Web API、bot manager、native agent、plugins
-├─ front/                  # React/Vite 前端，chat/files/git/terminal/admin/plugins UI
-├─ examples/plugins/       # 示例插件，如 Vivado waveform、CSV preview
-├─ tests/                  # 后端 pytest；含 Web/API、agent、plugin 集成测试
-├─ scripts/                # 辅助脚本
-├─ deploy/                 # 发布/部署相关文件
-├─ docs/                   # 本地参考资料和计划文档；通常不提交运行态资料
-├─ install.*               # 安装脚本
-├─ start.*                 # 启动脚本
-├─ managed_bots.example.json
-└─ AGENTS.md               # coding agent 工作约定
+> [!NOTE]
+> Orbit Safe Claw 不托管模型，也不替代 Codex、Claude 或 Pi。它把本机 AI CLI、工作区和开发工具接入一个可远程访问的 Web 工作台，让多个仓库、Bot、会话和子 Agent 更容易统一管理。
+
+## 一眼看懂
+
+```mermaid
+flowchart LR
+    Browser["🖥️ 浏览器 / 移动端"] --> Orbit["Orbit Safe Claw"]
+    Orbit --> Agents["🤖 Codex · Claude · Pi"]
+    Orbit --> Workbench["💻 Chat · Files · Git · Terminal · Debug"]
+    Orbit --> Cluster["🧭 子 Agent · Cluster"]
+    Orbit --> Extend["🧩 Plugins · LiteLLM · Admin"]
+
+    classDef orbit fill:#11162c,stroke:#49d8ff,color:#ffffff,stroke-width:2px;
+    classDef node fill:#f5f8ff,stroke:#6a79ff,color:#172033;
+    class Orbit orbit;
+    class Browser,Agents,Workbench,Cluster,Extend node;
 ```
 
-运行态/本地文件：
+<table>
+  <tr>
+    <td width="33%" valign="top"><strong>🤖 多 Bot 与多会话</strong><br><br>每个 Bot 绑定自己的 CLI、工作目录、执行模式和会话；不同用户与 Agent 作用域相互隔离。</td>
+    <td width="33%" valign="top"><strong>🧰 一体化开发工作台</strong><br><br>在同一页面完成聊天、文件编辑、Git、终端、调试和插件预览，减少窗口与上下文切换。</td>
+    <td width="33%" valign="top"><strong>🧭 子 Agent 与集群</strong><br><br>通过子 Agent、路由和集群模式拆分审查、实现与验证任务，并统一回收结果。</td>
+  </tr>
+  <tr>
+    <td valign="top"><strong>⚡ CLI 与原生执行</strong><br><br>Codex、Claude 使用普通 CLI 流；Pi 原生 Agent 使用 AG-UI，保留工具调用、权限请求和上下文用量。</td>
+    <td valign="top"><strong>🧩 可扩展插件运行时</strong><br><br>通过 <code>plugin.json</code> 扩展文件视图、配置页和后台进程，支持重型 session 视图。</td>
+    <td valign="top"><strong>🔒 本地优先、自主管理</strong><br><br>工作区、会话、配置和运行数据保留在自己的设备上，并提供用户权限、公告和更新管理。</td>
+  </tr>
+</table>
 
-- `.env`：本机配置，不提交
-- `managed_bots.json`：本机托管 bot 配置，不提交真实文件
-- `front/dist/`：前端构建产物
-- `Path.home()/.tcb/orbit-safe-claw`：默认运行态数据目录，可用 `TCB_DATA_DIR` 覆盖
+## 快速开始
 
-## 下载与安装
+### Windows：推荐使用绿色版
 
-推荐用 GitHub Releases 正式包：
+> [!TIP]
+> Windows 绿色版内置 Python、Node.js、Git、Pi CLI、Pi 扩展和前端产物；解压即可启动。它不内置 Codex 或 Claude CLI，如需使用请先在本机安装对应 CLI。
 
-Windows：
+1. 打开 [GitHub Releases](https://github.com/Augustusjk2008/telegram-cli-bot/releases/latest)。
+2. 下载 `orbit-safe-claw-windows-x64-<version>.zip` 并解压到可写目录。
+3. 双击 `start.bat`，或在终端执行：
 
-1. 打开 <https://github.com/Augustusjk2008/telegram-cli-bot/releases/latest>
-2. 绿色版：下载 `orbit-safe-claw-windows-x64-<version>.zip`，解压后运行 `start.bat`
-3. 安装版：下载 `orbit-safe-claw-windows-x64-installer-<version>.zip`，解压后运行 `install.bat`
+   ```powershell
+   .\start.bat
+   ```
 
-Windows 绿色版已带 Python、Git 和前端构建产物，无需安装 Python / Node / Git；不内置 AI CLI。使用前需本机可运行 `codex --version` / `claude --version`，并可在 Web 设置页或 `.env` 修改 `CLI_TYPE` / `CLI_PATH`。
+4. 按控制台输出打开 Web 地址。默认地址为 `http://127.0.0.1:8765`，登录口令保存在 `.env` 的 `WEB_API_TOKEN`。
 
-Pi 原生 agent 需额外满足：Node.js 22+、Pi CLI、Windows Git Bash。若 `pi` 不在 PATH，设置 `NATIVE_AGENT_PI_COMMAND` 为可执行文件路径。运行态数据默认在用户目录 `.tcb/orbit-safe-claw`；如设置 `TCB_DATA_DIR`，建议放 workspace 外，避免 workspace rollback 影响运行状态。Pi workspace history 默认不再在 preflight 阶段直接降级，插件可用性和锁文件改在运行时校验；rollback 失败只影响回滚能力，不阻断已完成回复。Pi workspace rollback 会丢弃目标 turn 之后记录，无 redo。
+需要传统安装流程时，下载 `orbit-safe-claw-windows-x64-installer-<version>.zip`，解压后运行 `install.bat`。
 
-Linux：
+### Linux / macOS
 
-1. 打开 <https://github.com/Augustusjk2008/telegram-cli-bot/releases/latest>
-2. 下载最新 `orbit-safe-claw-linux-x64-<version>.tar.gz`
-3. 解压后运行 `bash install.sh`
+| 平台 | 安装方式 |
+|---|---|
+| Linux x64 | 下载 `orbit-safe-claw-linux-x64-<version>.tar.gz`，解压后运行 `bash install.sh` |
+| macOS | 下载 `orbit-safe-claw-macos-universal-<version>.tar.gz`，解压后运行 `bash install.sh` |
 
-macOS：
-
-1. 打开 <https://github.com/Augustusjk2008/telegram-cli-bot/releases/latest>
-2. 下载最新 `orbit-safe-claw-macos-universal-<version>.tar.gz`
-3. 解压后运行：
+推荐解压到独立目录：
 
 ```bash
-tar -xzf orbit-safe-claw-macos-universal-<version>.tar.gz
+mkdir orbit-safe-claw
+tar -xzf orbit-safe-claw-<platform>-<version>.tar.gz -C orbit-safe-claw
 cd orbit-safe-claw
 bash install.sh
 bash start.sh
 ```
 
-macOS 需要 Python 3.10-3.13、Node.js 22+、Git，推荐先装 Homebrew。AI CLI 不内置，需自行安装 `codex` / `claude`。
+Linux/macOS 需要 Python 3.10-3.13（推荐 3.12；暂不支持 3.14）、Node.js 22+ 和 Git；Pi 原生 Agent 还需要 bash。AI CLI 不内置，需自行安装 `codex` / `claude`。
 
-源码快照安装：
+<details>
+<summary><strong>从源码快照安装</strong></summary>
 
 Windows：
 
 ```powershell
-$zip="$env:TEMP\\orbit-safe-claw.zip"; Invoke-WebRequest "https://github.com/Augustusjk2008/telegram-cli-bot/archive/refs/heads/master.zip" -OutFile $zip; Expand-Archive $zip -DestinationPath . -Force; Set-Location .\telegram-cli-bot-master; .\install.bat
+$zip="$env:TEMP\orbit-safe-claw.zip"
+Invoke-WebRequest "https://github.com/Augustusjk2008/telegram-cli-bot/archive/refs/heads/master.zip" -OutFile $zip
+Expand-Archive $zip -DestinationPath . -Force
+Set-Location .\telegram-cli-bot-master
+.\install.bat
 ```
 
-Linux：
+Linux/macOS：
 
 ```bash
-curl -L https://github.com/Augustusjk2008/telegram-cli-bot/archive/refs/heads/master.tar.gz | tar -xz && cd telegram-cli-bot-master && bash install.sh
+curl -L https://github.com/Augustusjk2008/telegram-cli-bot/archive/refs/heads/master.tar.gz \
+  | tar -xz
+cd telegram-cli-bot-master
+bash install.sh
 ```
 
-macOS：
+</details>
 
-```bash
-curl -L https://github.com/Augustusjk2008/telegram-cli-bot/archive/refs/heads/master.tar.gz | tar -xz && cd telegram-cli-bot-master && bash install.sh
-```
+## 功能导览
 
-安装器会准备：
+### 多工作区 Agent 控制
 
-- Python / Node.js / Git 检查
-- 后端依赖
-- 前端依赖和构建
-- `.env`
+- 主 Bot 与托管 Bot 可绑定不同仓库、CLI 和工作目录。
+- Web session 按用户、Bot 和 Agent 隔离，避免多工作区会话串线。
+- Codex 与 Claude 普通 CLI 保留流式正文、状态、trace 和完成态。
+- Pi 原生 Agent 保留 session、工具调用、权限请求、上下文用量和过程详情。
 
-安装器会检查本机 `codex` / `claude` 可用性，并给出后续配置提示。
+### Desktop Workbench
 
-## 如何运行
+- **Chat**：普通 CLI 与原生 Agent 对话、历史恢复、过程详情和上下文状态。
+- **Files**：文件树、编辑器、预览、多标签和语言服务导航。
+- **Git**：状态、diff、提交历史与工作区操作。
+- **Terminal**：持久化多标签 Web 终端，每个标签使用独立 shell 和 owner。
+- **Debug**：面向 Python、C/C++、Godot 和通用 DAP 的调试入口。
+- **Plugins**：PDF、DOCX、PPTX、CSV、Vivado waveform 等可扩展视图。
 
-Windows：
+### 子 Agent 与集群协作
 
-- 双击 `start.bat`
-- 或终端运行 `.\start.bat`
+- CLI Bot 支持子 Agent、`@agent_id` 路由、集群模板和模型档位。
+- 集群工具覆盖任务创建、状态查询、轮询和消息等待。
+- 非集群聊天只绑定一个 active Agent；集群模式按明确路由分发子任务。
 
-Linux：
+### 管理与扩展
 
-- 运行 `bash start.sh`
+- Admin Center 管理用户权限、邀请码、公告、更新和运行状态。
+- 可选 LiteLLM 网关提供模型别名、多上游路由和 OpenAI 兼容接口。
+- Codex CLI 用量统计可按本地自然日、Provider 和模型聚合展示。
+- Cloudflare quick tunnel 和固定公网转发可用于受控的移动端访问。
 
-macOS：
+## 支持矩阵
 
-- 运行 `bash start.sh`
+### 发布包
 
-首次启动时，Windows 的 `start.bat` / `start.ps1` 会自动补齐 `.env` 配置，再继续启动。
+| 发布包 | 适用场景 | 运行时 |
+|---|---|---|
+| Windows 绿色版 | 最快体验、离线携带 | 内置 Python、Node.js、Git、Pi CLI 与前端产物 |
+| Windows 安装版 | 常规本机安装 | 由安装脚本检查并准备依赖 |
+| Linux x64 | Linux 自托管 | 使用本机 Python、Node.js、Git |
+| macOS universal | macOS 源码包 | 使用本机 Python、Node.js、Git |
 
-默认 Web 绑定地址 `0.0.0.0:8765`，本机访问可用 `http://127.0.0.1:8765`。登录口令使用 `.env` 里的 `WEB_API_TOKEN`。
+### 执行模式
 
-如果 `.env` 里的 `WEB_PORT` 已被占用，启动时会自动尝试 `+1`，直到找到可用端口；控制台、健康检查和 tunnel 都会跟随实际端口。
+| 模式 | 主要目标 | 传输与展示 |
+|---|---|---|
+| `cli` | Codex、Claude | Legacy SSE：正文、状态、trace、完成态 |
+| `native_agent` | Pi | AG-UI：工具、权限、过程、上下文和原生 session |
+| Cluster | 按 Bot/Agent 配置 | 子任务路由、轮询、消息回告和模型档位 |
 
-如果启用了 `WEB_TUNNEL_MODE=cloudflare_quick` 且 tunnel 拉起成功，控制台会打印公网地址二维码，方便手机扫码打开。
+## 安全边界
 
-Web 终端默认在后端启动系统 shell：Windows 为 PowerShell，Linux 为 `bash`，macOS 为 `$SHELL` 或 `/bin/zsh`。如需指定 shell 可执行文件，设置：
+> [!WARNING]
+> Orbit Safe Claw 可以读写工作区、执行终端命令并操作 Git。不要把未加保护的实例直接暴露到公网。
+
+- 为 `WEB_API_TOKEN` 使用高强度随机值，并限制管理员账号权限。
+- 公网访问应经过可信反向代理、防火墙和 TLS；反向代理必须支持 WebSocket。
+- `.env`、真实 `managed_bots.json` 和 `~/.tcb/` 运行数据不得提交到仓库。
+- 建议将 `TCB_DATA_DIR` 放在工作区之外，避免 workspace rollback 影响运行状态。
+- 终端标签关闭时会终止对应 shell；Web 服务重启后，旧后台终端会话不会继续保留。
+
+## 基本配置
+
+首次安装后至少确认：
 
 ```env
-WEB_TERMINAL_SHELL_PATH=/usr/bin/zsh
+CLI_TYPE=codex
+CLI_PATH=codex
+WORKING_DIR=C:\Users\YourName\project
+WEB_ENABLED=true
+WEB_HOST=0.0.0.0
+WEB_PORT=8765
+WEB_API_TOKEN=<高强度随机口令>
 ```
 
-Windows 可写 `C:\Program Files\PowerShell\7\pwsh.exe`。这里配置的是 Web xterm 内运行的 shell，不是外部 GUI 终端窗口。
+运行态数据默认位于 `~/.tcb/orbit-safe-claw`，可通过 `TCB_DATA_DIR` 覆盖。
 
-## 固定公网地址和反向代理
+<details>
+<summary><strong>托管多个 Bot</strong></summary>
 
-固定 IP 服务器可通过 frp 反向代理内网机器。每台机器使用独立节点路径：
+参考 `managed_bots.example.json` 创建本地 `managed_bots.json`：
+
+```json
+{
+  "bots": [
+    {
+      "alias": "repo2",
+      "cli_type": "codex",
+      "cli_path": "codex",
+      "working_dir": "C:/work/repo2",
+      "enabled": true
+    }
+  ]
+}
+```
+
+</details>
+
+## 高级配置
+
+<details>
+<summary><strong>固定公网地址与 frp 反向代理</strong></summary>
+
+固定 IP 服务器可通过 frp 转发内网机器。每台机器必须使用独立节点路径，并完整保留 `/node/<节点 ID>/` 前缀：
 
 ```text
 http://<固定IP>:18088/node/<节点ID>/
@@ -175,7 +263,7 @@ vhostHTTPPort = 18765
 auth.token = "<frps-token>"
 ```
 
-Nginx 将路径转到 `frps` 的 HTTP 入口，并保留 WebSocket：
+Nginx 必须保留节点路径并支持 WebSocket：
 
 ```nginx
 map $http_upgrade $connection_upgrade {
@@ -199,98 +287,135 @@ server {
 }
 ```
 
-公网服务器放通 `18088`、`7000`，并确保 `WEB_BASE_PATH` 与反代路径一致。修改路径后重新构建前端并重启 Web。
+公网服务器需放通 `18088`、`7000`。`WEB_BASE_PATH` 必须与反代路径完全一致；修改路径后重新构建前端并重启 Web。
 
-## 基本配置
+</details>
 
-首次安装后至少确认这些 `.env` 项：
+<details>
+<summary><strong>非绿色版安装 Pi 原生 Agent</strong></summary>
+
+非绿色版依赖 Node.js 22+、Git 和 bash。安装固定版本：
+
+```bash
+npm install -g @earendil-works/pi-coding-agent@0.74.2 pi-workspace-history@0.2.2
+```
+
+至少配置：
 
 ```env
-CLI_TYPE=codex
-CLI_PATH=codex
-WORKING_DIR=C:\Users\YourName\project
-WEB_ENABLED=true
-WEB_HOST=0.0.0.0
-WEB_PORT=8765
-WEB_API_TOKEN=<本机随机口令>
+NATIVE_AGENT_ENABLED=true
+NATIVE_AGENT_PI_COMMAND=pi
 ```
 
-如需托管更多 Bot，可参考仓库内 `managed_bots.example.json` 新建本地 `managed_bots.json`：
+Pi 扩展默认位于 `~/.pi/agent/extensions`。使用 `PI_AGENT_SETTINGS` 或 `NATIVE_AGENT_PI_HOME` 时，应把 `workspace-history.ts` 和仓库内 `bot/cluster/pi_extension/tcb-cluster.ts` 放入实际生效的 extensions 目录。Windows 的 Pi `shellPath` 应指向 Git Bash。
 
-```json
-{
-  "bots": [
-    {
-      "alias": "repo2",
-      "cli_type": "codex",
-      "cli_path": "codex",
-      "working_dir": "C:/work/repo2",
-      "enabled": true
-    }
-  ]
-}
+Pi session 由工作目录、模型、Pi Agent 和推理强度共同绑定；任一项变化都会创建新的 session 与 workspace-history rollback 链。
+
+</details>
+
+<details>
+<summary><strong>可选 LiteLLM 网关</strong></summary>
+
+LiteLLM 网关不是普通 CLI 的必经链路；关闭时，Codex 和 Claude 继续直连自己的 Provider。
+
+每条路由可设置模型别名、LiteLLM model、上游地址、密钥、额外参数，以及 `auto`、`chat_completions`、`responses` 三种 endpoint 模式。保存后会热切换，不需要重启主 Web 服务；状态接口不会回显上游密钥。
+
+配置与日志默认位于 `~/.tcb/orbit-safe-claw/transfer`。
+
+</details>
+
+<details>
+<summary><strong>Codex CLI 用量统计</strong></summary>
+
+管理中心可即时开启或关闭采集。功能默认关闭，只统计启用后由 Orbit 启动的普通 Codex CLI 进程，不回填历史，也不统计 Claude、Pi、原生 Agent、LiteLLM Transfer、行内补全或手工终端进程。
+
+统计按日期、Provider 和模型聚合，数据默认保存在 `~/.tcb/orbit-safe-claw/codex-usage/usage.sqlite3`，不会保存逐轮提示词、认证头或 API 密钥。
+
+</details>
+
+<details>
+<summary><strong>指定 Web 终端 Shell</strong></summary>
+
+```env
+WEB_TERMINAL_SHELL_PATH=/usr/bin/zsh
 ```
 
-运行模型：
+Windows 示例：
 
-- Bot 支持普通 CLI 和原生 agent 执行模式
-- Bot 支持子 agent 和集群配置
+```env
+WEB_TERMINAL_SHELL_PATH=C:\Program Files\PowerShell\7\pwsh.exe
+```
 
-### 可选 LiteLLM 网关
+该配置只影响 Web xterm 内运行的 shell，不会启动外部 GUI 终端窗口。
 
-LiteLLM 网关不是普通 CLI 的必经链路；不启用时，`codex` / `claude` 继续使用各自原有 provider 配置。需要统一模型别名、多上游路由或兼容 OpenAI Responses 请求时，可在 Admin Center 的 LiteLLM 网关区域配置并启用。
-
-每条路由可设置：
-
-- LiteLLM model 和对外模型别名
-- 上游 API 地址与密钥
-- endpoint 模式：`auto`、`chat_completions` 或 `responses`
-- 额外 LiteLLM 参数
-
-保存配置后网关会热切换，无需重启主 Web 服务。运行状态、最近请求和错误日志可在管理界面查看；上游密钥不会在状态接口中明文返回。
-
-### Codex 每日用量统计
-
-管理中心的“Codex 用量”页签可即时开启或关闭采集。功能默认关闭，只统计开启后由 Orbit 启动的新普通 Codex CLI 进程，不回填历史；关闭只停止新进程采集，不删除已有统计。Claude、Pi、原生 agent、LiteLLM Transfer、内联补全、手工终端进程和未经过 Web Chat Runtime 的 Codex 均不在统计范围内。
-
-Provider 仅按 Codex 用户级根配置归因：若子进程环境设置了 `CODEX_HOME`，读取 `<CODEX_HOME>/config.toml`，否则读取 `~/.codex/config.toml`。实现不模拟项目配置、profile 或 Codex 的完整配置优先级；检测到 `--profile` / `-p`、`--oss` 或通过 `-c` / `--config` 改写 provider/base URL 时归入 `unknown`。OpenAI 官方与规范化后的自定义 `http`/`https` base URL 分组展示，不保存配置原文、凭据、认证头、bot、用户、agent、模型或会话维度。
-
-每个收到有效 `turn.completed.usage` 的实际 Codex 进程计为一次请求，并归入 terminal usage 到达时的 Orbit 服务端本地自然日。`cached_input_tokens` 已包含在 `input_tokens` 中，`reasoning_output_tokens` 已包含在 `output_tokens` 中，因此总 token 为输入加输出；缓存命中率按聚合后的缓存输入除以总输入计算，输入为零时显示为空值。
-
-统计保存在 `~/.tcb/orbit-safe-claw/codex-usage/usage.sqlite3`，并服从 `TCB_DATA_DIR`。数据库按“日期 × provider”永久聚合，不保存逐轮明细，也不自动清理。管理页不提供删除按钮；需要人工重置时，先停止 Orbit，再删除该数据库及同目录的 WAL/SHM 文件。
-
-## 工作界面
-
-- Bot：把 Web 消息转发到本地 `codex` / `claude`，支持普通 CLI 和原生 agent 执行模式，保留会话、trace、上下文用量、CLI 参数和子 agent 作用域。
-- Desktop Workbench：面向重复开发操作，集中承载文件树、编辑器、Git、终端、聊天和插件视图。
-- Terminal：支持持久化多标签终端会话。每个标签的 shell 与工作目录相互独立；切换标签或刷新页面会按浏览器本地记录重新连接仍在运行的会话，关闭标签会终止对应 shell。Web 服务重启后，原后台终端会话会结束。
-- Admin Center：面向运维管理，集中承载账号权限、邀请、公告、LiteLLM 网关和更新。
+</details>
 
 ## 更新
 
-主 Bot 设置页和管理中心支持 GitHub Release 自动检查、下载更新和离线包查看。下载后的更新会在下次启动或重启后生效。
+设置页和 Admin Center 会从 GitHub Releases 检查、下载更新。下载完成后，更新在下次启动或重启时应用。
 
-更新包按平台匹配：Windows 安装版 / 绿色版、Linux、macOS。macOS 离线包名形如 `orbit-safe-claw-macos-universal-<version>.tar.gz`。
-
-首次安装生成的 `.env` 默认写入：
+首次安装生成的 `.env` 默认包含：
 
 ```env
 APP_UPDATE_REPOSITORY=Augustusjk2008/telegram-cli-bot
 ```
 
-如果你用自己的 GitHub Releases 仓库，改成对应 `owner/repo` 即可。
+使用自己的 Release 仓库时，将其改成对应的 `owner/repo`。
 
-## 开发命令
+## 项目结构
+
+```text
+.
+├─ bot/                    # Python 后端、Web API、Bot、Native Agent、Plugins
+├─ front/                  # React/Vite 工作台前端
+├─ examples/plugins/       # 示例插件与文件预览器
+├─ tests/                  # 后端与集成测试
+├─ scripts/                # 安装、构建和辅助脚本
+├─ deploy/                 # 部署相关文件
+├─ install.*               # 安装入口
+├─ start.*                 # 启动入口
+├─ managed_bots.example.json
+├─ LICENSE / NOTICE        # Apache-2.0 与版权声明
+├─ THIRD_PARTY_NOTICES.md  # 第三方组件许可汇总
+├─ TRADEMARKS.md           # 项目名称与 Logo 使用政策
+├─ CONTRIBUTING.md         # 贡献指南与贡献许可条款
+└─ AGENTS.md               # Coding Agent 工作约定
+```
+
+本地运行文件包括 `.env`、`managed_bots.json`、`front/dist/` 和 `~/.tcb/orbit-safe-claw`；不要提交真实配置或运行数据。
 
 原始仓库与 feature 分支的固定同步流程见
 [BRANCH_SYNC_WORKFLOW.md](BRANCH_SYNC_WORKFLOW.md)。
 
+## 开发与验证
+
 ```bash
+# 后端
 python -m bot
 python -m pytest tests -q
-cd front && npm run test:gate
-cd front && npm run build
-cd front && npm run lint
+
+# 前端
+cd front
+npm run test:gate
+npm run lint
+npm run build
 ```
 
-测试规范见 [docs/testing-policy.md](docs/testing-policy.md)。
+项目以 Windows 为优先平台，同时维护 Linux/macOS 安装与启动脚本。涉及布局的改动应补充浏览器级检查；涉及发布包时应运行后端测试、前端门禁、lint 和生产构建。
+
+## 开源协议、品牌与贡献
+
+本项目自行创作的代码、文档和 Logo 图稿按 [Apache License 2.0](LICENSE) 授权，版权声明见 [NOTICE](NOTICE)。该许可证允许商业使用、修改和再分发，并提供明确的专利授权；使用和分发时须遵守许可证中的保留声明、标注修改等条件。
+
+第三方组件继续受各自许可证约束，汇总见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)；生产构建会按实际前端模块生成 `front/dist/THIRD_PARTY_LICENSES.txt` 并随发布包交付。`Orbit Safe Claw` 名称和 `front/public/assets/app-logo*.svg` 中的 Logo 属于项目品牌标识；Logo 文件的著作权许可不等于取得商标、背书或官方身份，Apache License 2.0 不授予将其作为分支或衍生产品品牌的权利。允许范围和申请方式见 [TRADEMARKS.md](TRADEMARKS.md)。
+
+提交代码前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。除非提交者明确书面声明其他条款，有意提交并纳入项目的贡献将按 Apache License 2.0 提供。
+
+## 获取帮助
+
+- 下载与版本：[GitHub Releases](https://github.com/Augustusjk2008/telegram-cli-bot/releases)
+- Bug 与功能建议：[GitHub Issues](https://github.com/Augustusjk2008/telegram-cli-bot/issues)
+- 配置示例：`.env.example`、`managed_bots.example.json`
+- 测试约定：`docs/testing-policy.md`
+
+如果这个项目对你有帮助，欢迎点一个 Star，或通过 Issue 分享你的使用场景。

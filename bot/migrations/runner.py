@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import argparse
 import base64
+import errno
 import hashlib
 import json
 import os
 import shutil
 import stat
+import sys
 import tempfile
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -55,6 +58,105 @@ class MigrationRunResult:
     completed: list[str]
     skipped: list[str]
     errors: list[str]
+    repairs: list[str] = field(default_factory=list)
+
+
+class _MigrationRunLock:
+    """无第三方依赖、由操作系统在进程退出时自动释放的跨进程迁移锁。"""
+
+    def __init__(self, path: Path, *, timeout_seconds: float = 30.0) -> None:
+        self.path = path
+        self.timeout_seconds = timeout_seconds
+        self._handle: Any | None = None
+        self._owned = False
+
+    def __enter__(self) -> "_MigrationRunLock":
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._handle = self.path.open("a+b")
+            _ensure_migration_lock_byte(self._handle)
+        except OSError as exc:
+            self._close()
+            raise RuntimeError(f"无法创建迁移锁文件: {self.path}") from exc
+
+        deadline = time.monotonic() + self.timeout_seconds
+        while True:
+            try:
+                acquired = _try_acquire_migration_lock(self._handle)
+            except OSError as exc:
+                self._close()
+                raise RuntimeError(f"无法获取迁移运行锁: {self.path}") from exc
+            if acquired:
+                self._owned = True
+                return self
+            if time.monotonic() >= deadline:
+                self._close()
+                raise RuntimeError(f"迁移正在由另一进程执行: {self.path}")
+            time.sleep(0.05)
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        self._close()
+
+    def _close(self) -> None:
+        handle = self._handle
+        if handle is None:
+            return
+        try:
+            if self._owned:
+                try:
+                    _release_migration_lock(handle)
+                except OSError:
+                    pass
+        finally:
+            self._owned = False
+            self._handle = None
+            try:
+                handle.close()
+            except OSError:
+                pass
+
+
+def _ensure_migration_lock_byte(handle: Any) -> None:
+    handle.seek(0, os.SEEK_END)
+    if handle.tell() == 0:
+        handle.write(b"\0")
+        handle.flush()
+    handle.seek(0)
+
+
+def _try_acquire_migration_lock(handle: Any) -> bool:
+    handle.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        try:
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError as exc:
+            if exc.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK, 13, 36}:
+                return False
+            raise
+        return True
+
+    import fcntl
+
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return False
+    return True
+
+
+def _release_migration_lock(handle: Any) -> None:
+    handle.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _utc_now() -> str:
@@ -567,7 +669,9 @@ def _repair_polluted_targets(repo_root: Path, *, skip_targets: set[str] | None =
     legacy = get_legacy_repo_state_paths(repo_root)
     repaired: list[str] = []
     skip_targets = skip_targets or set()
-    if _repair_app_settings_from_legacy(legacy["app_settings"], get_app_settings_path()):
+    if "app_settings" not in skip_targets and _repair_app_settings_from_legacy(
+        legacy["app_settings"], get_app_settings_path()
+    ):
         repaired.append("app_settings")
     if "permissions_bots" not in skip_targets and _repair_permissions_bots_from_legacy(
         legacy["permissions"], get_permissions_bots_path()
@@ -580,8 +684,53 @@ def _repair_polluted_targets(repo_root: Path, *, skip_targets: set[str] | None =
     return {"targets": repaired}
 
 
-def _load_state() -> dict[str, Any]:
-    return _read_json(get_migrations_state_path(), {"version": 1, "completed": [], "last_error": ""})
+def _load_state(state_path: Path | None = None) -> dict[str, Any]:
+    path = state_path or get_migrations_state_path()
+    if not path.exists():
+        return {"version": 1, "completed": [], "last_error": ""}
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"迁移状态文件无效，无法读取 JSON: {path}") from exc
+    if not isinstance(state, dict):
+        raise ValueError(f"迁移状态文件无效，根必须是对象: {path}")
+    version = state.get("version")
+    if type(version) is not int or version != 1:
+        raise ValueError(f"迁移状态文件无效，不支持的 version: {version!r}: {path}")
+    completed = state.get("completed")
+    if not isinstance(completed, list):
+        raise ValueError(f"迁移状态文件无效，completed 必须是数组: {path}")
+    for index, item in enumerate(completed):
+        if not isinstance(item, dict):
+            raise ValueError(f"迁移状态文件无效，completed[{index}] 必须是对象: {path}")
+        migration_id = item.get("id")
+        if not isinstance(migration_id, str) or not migration_id.strip():
+            raise ValueError(f"迁移状态文件无效，completed[{index}].id 必须是非空字符串: {path}")
+    completed_repairs = state.get("completed_repairs")
+    if completed_repairs is not None:
+        if not isinstance(completed_repairs, list):
+            raise ValueError(f"迁移状态文件无效，completed_repairs 必须是数组: {path}")
+        for index, target in enumerate(completed_repairs):
+            if not isinstance(target, str) or not target.strip():
+                raise ValueError(
+                    f"迁移状态文件无效，completed_repairs[{index}] 必须是非空字符串: {path}"
+                )
+    last_repair = state.get("last_repair")
+    if last_repair is not None:
+        if not isinstance(last_repair, dict):
+            raise ValueError(f"迁移状态文件无效，last_repair 必须是对象: {path}")
+        detail = last_repair.get("detail")
+        if not isinstance(detail, dict):
+            raise ValueError(f"迁移状态文件无效，last_repair.detail 必须是对象: {path}")
+        targets = detail.get("targets")
+        if not isinstance(targets, list):
+            raise ValueError(f"迁移状态文件无效，last_repair.detail.targets 必须是数组: {path}")
+        for index, target in enumerate(targets):
+            if not isinstance(target, str) or not target.strip():
+                raise ValueError(
+                    f"迁移状态文件无效，last_repair.detail.targets[{index}] 必须是非空字符串: {path}"
+                )
+    return state
 
 
 def _completed_ids(state: dict[str, Any]) -> set[str]:
@@ -591,18 +740,22 @@ def _completed_ids(state: dict[str, Any]) -> set[str]:
     return {str(item.get("id") or "") for item in completed if isinstance(item, dict)}
 
 
-def _save_state(state: dict[str, Any]) -> None:
+def _save_state(state: dict[str, Any], state_path: Path | None = None) -> None:
     state["version"] = 1
-    _atomic_write_json(get_migrations_state_path(), state)
+    _atomic_write_json(state_path or get_migrations_state_path(), state)
 
 
-def run_pending_migrations(repo_root: str | Path | None = None) -> MigrationRunResult:
-    root = Path(repo_root or Path.cwd()).expanduser().resolve()
-    state = _load_state()
+def _migration_lock_path(state_path: Path) -> Path:
+    return state_path.with_name(f"{state_path.name}.lock")
+
+
+def _run_pending_migrations_locked(root: Path, data_root: Path, state_path: Path) -> MigrationRunResult:
+    state = _load_state(state_path)
     completed_ids = _completed_ids(state)
     completed_now: list[str] = []
     skipped: list[str] = []
     errors: list[str] = []
+    repairs: list[str] = []
 
     for migration_id in MIGRATION_IDS:
         if migration_id in completed_ids:
@@ -620,52 +773,59 @@ def run_pending_migrations(repo_root: str | Path | None = None) -> MigrationRunR
                     "id": migration_id,
                     "completed_at": _utc_now(),
                     "repo_root": str(root),
-                    "data_root": str(get_app_data_root()),
+                    "data_root": str(data_root),
                     "detail": detail,
                 }
             )
             state["last_error"] = ""
             completed_now.append(migration_id)
             completed_ids.add(migration_id)
-            _save_state(state)
+            _save_state(state, state_path)
         except Exception as exc:
             message = f"{migration_id}: {exc}"
             errors.append(message)
             state["last_error"] = message
             state["last_error_at"] = _utc_now()
-            _save_state(state)
+            _save_state(state, state_path)
             raise
 
     try:
         completed_repairs = _completed_repair_targets(state)
-        if completed_repairs and sorted(completed_repairs) != state.get("completed_repairs"):
-            state["completed_repairs"] = sorted(completed_repairs)
-            _save_state(state)
         repair_detail = _repair_polluted_targets(root, skip_targets=completed_repairs)
         if repair_detail["targets"]:
+            repairs = list(repair_detail["targets"])
             state["completed_repairs"] = sorted(completed_repairs | set(repair_detail["targets"]))
             state["last_repair"] = {
                 "repaired_at": _utc_now(),
                 "repo_root": str(root),
-                "data_root": str(get_app_data_root()),
+                "data_root": str(data_root),
                 "detail": repair_detail,
             }
-            _save_state(state)
+            _save_state(state, state_path)
     except Exception as exc:
         message = f"repair_polluted_targets: {exc}"
         errors.append(message)
         state["last_error"] = message
         state["last_error_at"] = _utc_now()
-        _save_state(state)
+        _save_state(state, state_path)
         raise
 
     return MigrationRunResult(
-        data_root=get_app_data_root(),
-        state_path=get_migrations_state_path(),
+        data_root=data_root,
+        state_path=state_path,
         completed=completed_now,
         skipped=skipped,
         errors=errors,
+        repairs=repairs,
     )
+
+
+def run_pending_migrations(repo_root: str | Path | None = None) -> MigrationRunResult:
+    root = Path(repo_root or Path.cwd()).expanduser().resolve()
+    data_root = get_app_data_root()
+    state_path = get_migrations_state_path()
+    with _MigrationRunLock(_migration_lock_path(state_path)):
+        return _run_pending_migrations_locked(root, data_root, state_path)
 
 
 def migration_diagnostics(repo_root: str | Path | None = None) -> dict[str, Any]:
@@ -689,7 +849,26 @@ def main(argv: list[str] | None = None) -> int:
     if args.command != "run":
         parser.print_help()
         return 2
-    run_pending_migrations(repo_root=args.repo_root)
+    try:
+        result = run_pending_migrations(repo_root=args.repo_root)
+    except Exception as exc:
+        print(f"迁移失败：{exc}", file=sys.stderr)
+        return 1
+    if result.errors:
+        print("迁移失败：")
+        for error in result.errors:
+            print(f"- {error}")
+        return 1
+    if result.completed:
+        print("已完成迁移：")
+        for migration_id in result.completed:
+            print(f"- {migration_id}")
+    if result.repairs:
+        print("已修复：")
+        for target in result.repairs:
+            print(f"- {target}")
+    if not result.completed and not result.repairs:
+        print("检查完成，无待处理项")
     return 0
 
 

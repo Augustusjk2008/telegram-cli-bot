@@ -230,6 +230,8 @@ write_stamp() {
 }
 
 sync_python_dependencies() {
+  local force_install="${1:-0}"
+
   if is_truthy "${TCB_STARTUP_SKIP_DEP_SYNC:-}"; then
     warn "已跳过启动依赖同步。"
     return 0
@@ -241,19 +243,71 @@ sync_python_dependencies() {
 
   ensure_project_venv
 
-  local requirements_hash stamp_path
+  local requirements_hash stamp_path pip_exit_code
   requirements_hash="$(hash_startup_paths requirements.txt)"
   stamp_path="$STARTUP_STATE_DIR/python-requirements.sha256"
 
-  if stamp_matches "$stamp_path" "$requirements_hash" && ! is_truthy "${TCB_STARTUP_FORCE_DEP_INSTALL:-}"; then
+  if stamp_matches "$stamp_path" "$requirements_hash" && [[ "$force_install" != "1" ]] && ! is_truthy "${TCB_STARTUP_FORCE_DEP_INSTALL:-}"; then
     return 0
   fi
 
-  info "检测到后端依赖清单变化，正在安装 requirements.txt..."
+  info "正在安装后端依赖 requirements.txt..."
   ensure_pip
-  "$PYTHON_BIN" -m pip install --upgrade pip
-  "$PYTHON_BIN" -m pip install -r "$SCRIPT_DIR/requirements.txt"
+  if "$PYTHON_BIN" -m pip install --upgrade pip; then
+    :
+  else
+    pip_exit_code=$?
+    fail "升级 pip 失败。"
+    return "$pip_exit_code"
+  fi
+  if "$PYTHON_BIN" -m pip install -r "$SCRIPT_DIR/requirements.txt"; then
+    :
+  else
+    pip_exit_code=$?
+    fail "安装后端依赖失败。"
+    return "$pip_exit_code"
+  fi
   write_stamp "$stamp_path" "$requirements_hash"
+}
+
+python_dependency_repair_attempted=0
+last_python_exit_code=0
+
+run_current_python() {
+  set +e
+  "$PYTHON_BIN" "$@"
+  last_python_exit_code=$?
+  set -e
+}
+
+repair_python_dependencies() {
+  if [[ "$python_dependency_repair_attempted" -eq 1 ]] || is_truthy "${TCB_STARTUP_SKIP_DEP_SYNC:-}"; then
+    return 1
+  fi
+
+  python_dependency_repair_attempted=1
+  warn "Python 启动步骤失败，正在安装后端依赖后重试一次..."
+  if sync_python_dependencies 1; then
+    return 0
+  else
+    last_python_exit_code=$?
+    return "$last_python_exit_code"
+  fi
+}
+
+run_python_startup_step() {
+  run_current_python "$@"
+  if [[ "$last_python_exit_code" -eq 0 ]]; then
+    return 0
+  fi
+  if [[ "$last_python_exit_code" -eq 75 ]]; then
+    return 75
+  fi
+
+  if [[ "$python_dependency_repair_attempted" -eq 0 ]] && repair_python_dependencies; then
+    run_current_python "$@"
+  fi
+  return "$last_python_exit_code"
 }
 
 sync_frontend_assets() {
@@ -288,12 +342,15 @@ sync_frontend_assets() {
     exit 1
   fi
 
-  info "检测到前端源码或依赖变化，正在安装并构建前端..."
+  info "检测到前端源码变化，正在构建前端..."
   build_script="$SCRIPT_DIR/scripts/build_web_frontend.sh"
   if [[ -f "$build_script" ]]; then
     bash "$build_script"
   else
-    (cd "$SCRIPT_DIR/front" && npm ci && npm run build)
+    if ! (cd "$SCRIPT_DIR/front" && npm run build); then
+      warn "前端构建失败，正在安装依赖后重试一次..."
+      (cd "$SCRIPT_DIR/front" && npm install && npm run build)
+    fi
   fi
   frontend_hash="$(
     hash_startup_paths \
@@ -309,30 +366,40 @@ sync_frontend_assets() {
   write_stamp "$stamp_path" "$frontend_hash"
 }
 
-sync_runtime_dependencies() {
-  sync_python_dependencies
-  sync_frontend_assets
-}
-
-sync_python_dependencies
-
-if ! "$PYTHON_BIN" -m bot.env_migration --env-path "$SCRIPT_DIR/.env"; then
-  echo "[错误] 迁移旧版 .env 配置失败。" >&2
-  exit 1
+if is_truthy "${TCB_STARTUP_FORCE_DEP_INSTALL:-}"; then
+  python_dependency_repair_attempted=1
+  sync_python_dependencies 1
 fi
 
+if ! run_python_startup_step -m bot.env_migration --env-path "$SCRIPT_DIR/.env"; then
+  echo "[错误] 迁移旧版 .env 配置失败。" >&2
+  exit "$last_python_exit_code"
+fi
+
+if ! run_python_startup_step -c "import bot.updater"; then
+  echo "[错误] Python 更新模块启动检查失败。" >&2
+  exit "$last_python_exit_code"
+fi
 "$PYTHON_BIN" -m bot.updater apply-pending --repo-root "$SCRIPT_DIR"
-sync_runtime_dependencies
-if ! "$PYTHON_BIN" -m bot.migrations run --repo-root "$SCRIPT_DIR"; then
+if is_truthy "${TCB_STARTUP_FORCE_DEP_INSTALL:-}"; then
+  sync_python_dependencies 1
+fi
+sync_frontend_assets
+info "正在检查运行数据迁移..."
+if ! run_python_startup_step -m bot.migrations run --repo-root "$SCRIPT_DIR"; then
   echo "[错误] 运行数据迁移失败。" >&2
-  exit 1
+  exit "$last_python_exit_code"
+fi
+if ! run_python_startup_step -c "import bot.main"; then
+  echo "[错误] Python 启动检查失败。" >&2
+  exit "$last_python_exit_code"
 fi
 show_tunnel_hint
 raise_nofile_limit
 
 while true; do
   set +e
-  "$PYTHON_BIN" -m bot
+  "$PYTHON_BIN" -m bot --tcb-migrations-checked
   exit_code=$?
   set -e
   if [[ "$exit_code" -ne 75 ]]; then

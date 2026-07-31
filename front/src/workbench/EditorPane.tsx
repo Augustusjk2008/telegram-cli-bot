@@ -1,6 +1,6 @@
 import { clsx } from "clsx";
 import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Maximize2, Minimize2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { FileEditorSurface } from "../components/FileEditorSurface";
 import { FilePreviewPane } from "../components/FilePreviewPane";
 import { GitDiffViewer } from "../components/GitDiffViewer";
@@ -129,6 +129,7 @@ export function EditorPane({
   onToggleFocus,
 }: Props) {
   const [inlineCompletionConfig, setInlineCompletionConfig] = useState<InlineCompletionConfig | null>(null);
+  const codeNavigationHoverRequestSeqRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -170,6 +171,68 @@ export function EditorPane({
       request: (input, signal) => client.requestInlineCompletion(botAlias, input, signal),
     };
   }, [activeTab, botAlias, canUseInlineCompletion, client, inlineCompletionConfig]);
+
+  const codeNavigationHoverContextKey = useMemo(() => {
+    if (!activeTab) {
+      return null;
+    }
+    return {
+      botAlias,
+      client,
+      kind: activeTab.kind,
+      path: activeTab.path,
+      sourceId: activeTab.sourceId,
+      displayPath: activeTab.displayPath,
+      documentVersion: activeTab.documentVersion,
+      content: activeTab.content,
+    };
+  }, [
+    activeTab?.content,
+    activeTab?.displayPath,
+    activeTab?.documentVersion,
+    activeTab?.kind,
+    activeTab?.path,
+    activeTab?.sourceId,
+    botAlias,
+    client,
+  ]);
+
+  const codeNavigationHover = useMemo(() => {
+    if (
+      !allowCodeJump
+      || !onResolveCodeNavigation
+      || !activeTab
+      || (activeTab.kind !== "file" && activeTab.kind !== "external-source")
+    ) {
+      return undefined;
+    }
+    return {
+      contextKey: codeNavigationHoverContextKey,
+      request: async (input: CodeNavigationIntent, signal: AbortSignal) => {
+        if (input.path !== activeTab.path) {
+          return false;
+        }
+        const requestId = `code-navigation-hover-${Date.now()}-${++codeNavigationHoverRequestSeqRef.current}`;
+        const result = await client.resolveCodeNavigation(botAlias, {
+          kind: "definition",
+          requestId,
+          document: {
+            ...(activeTab.kind === "external-source" && activeTab.sourceId
+              ? { sourceId: activeTab.sourceId }
+              : { path: activeTab.path }),
+            languageId: inferFileEditorLanguageId(activeTab.displayPath || activeTab.path),
+            version: Math.max(1, Math.trunc(activeTab.documentVersion || 1)),
+            content: activeTab.content,
+          },
+          position: { line: input.line, column: input.column },
+        }, signal);
+        return !signal.aborted && result.items.some((item) => (
+          (item.targetType === "workspace" && Boolean(item.path))
+          || (item.targetType === "external" && Boolean(item.sourceId))
+        ));
+      },
+    };
+  }, [activeTab, allowCodeJump, botAlias, client, codeNavigationHoverContextKey, onResolveCodeNavigation]);
 
   const [menuPath, setMenuPath] = useState("");
   const [pluginMenuOpen, setPluginMenuOpen] = useState(false);
@@ -522,6 +585,7 @@ export function EditorPane({
             error=""
             hideHeader
             inlineCompletion={inlineCompletion}
+            codeNavigationHover={codeNavigationHover}
             onToggleBreakpoint={onToggleBreakpoint}
             onResolveCodeNavigation={allowCodeJump ? onResolveCodeNavigation : undefined}
             onChange={onChangeActiveContent}

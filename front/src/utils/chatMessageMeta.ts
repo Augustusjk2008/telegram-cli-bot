@@ -36,6 +36,28 @@ export function summarizeTrace(trace?: ChatTraceEvent[]) {
   };
 }
 
+export function compactCompletedMessageMeta(meta?: ChatMessageMetaInfo): ChatMessageMetaInfo | undefined {
+  if (!meta) {
+    return undefined;
+  }
+  const traceSummary = meta.trace ? summarizeTrace(meta.trace) : undefined;
+  const retainedTrace = meta.trace?.filter((event) => ["permission", "error", "cancelled"].includes(event.kind));
+  const {
+    trace: _trace,
+    traceLoadedCount: _traceLoadedCount,
+    agUiRunState: _agUiRunState,
+    ...persistentMeta
+  } = meta;
+  const compactMeta: ChatMessageMetaInfo = {
+    ...persistentMeta,
+    traceCount: pickTraceCount(meta.traceCount, undefined, traceSummary?.traceCount),
+    toolCallCount: pickTraceCount(meta.toolCallCount, undefined, traceSummary?.toolCallCount),
+    processCount: pickTraceCount(meta.processCount, undefined, traceSummary?.processCount),
+    trace: retainedTrace && retainedTrace.length > 0 ? retainedTrace : undefined,
+  };
+  return Object.values(compactMeta).some((value) => typeof value !== "undefined") ? compactMeta : undefined;
+}
+
 export function mergeMessageMeta(
   base?: ChatMessageMetaInfo,
   incoming?: ChatMessageMetaInfo,
