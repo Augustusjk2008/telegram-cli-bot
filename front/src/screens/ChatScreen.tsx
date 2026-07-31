@@ -1424,6 +1424,9 @@ const ChatMessageRow = memo(function ChatMessageRow({
   wideMessages,
 }: ChatMessageRowProps) {
   const reduceMotion = useReducedMotion();
+  const handleLoadMessageTrace = useCallback(() => {
+    onLoadMessageTrace(item.id);
+  }, [item.id, onLoadMessageTrace]);
 
   if (item.role === "system") {
     return (
@@ -1523,7 +1526,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
                 traceLoaded={traceLoaded}
                 isTraceLoading={Boolean(messageTraceLoadState?.loading)}
                 traceLoadError={messageTraceLoadState?.error}
-                onLoadTrace={() => onLoadMessageTrace(item.id)}
+                onLoadTrace={handleLoadMessageTrace}
                 onReplyPermission={isNativeAgentAssistant ? onReplyNativePermission : undefined}
                 onFileLinkClick={onFileLinkClick}
                 onCopyFinalAnswer={canCopyFinalAnswer ? () => onCopyFinalAnswer(item.text) : undefined}
@@ -4916,7 +4919,7 @@ export function ChatScreen({
             assistantName={assistantName}
             allowTrace={allowTrace}
             traceLoadState={traceLoadState}
-            handleLoadMessageTrace={(messageId) => void loadMessageTrace(messageId)}
+            handleLoadMessageTrace={loadMessageTrace}
             handleDeleteAttachment={handleDeleteAttachment}
             handleFileLinkClick={handleFileLinkClick}
             handleCopyFinalAnswer={handleCopyFinalAnswer}

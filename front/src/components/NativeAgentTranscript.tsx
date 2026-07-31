@@ -555,7 +555,7 @@ export function NativeAgentTranscript({
       return;
     }
     onLoadTrace();
-  }, [isTraceLoading, onLoadTrace, shouldLazyLoadTrace, traceExpanded, traceLoadError]);
+  }, [isTraceLoading, onLoadTrace, shouldLazyLoadTrace, totalTraceCount, traceExpanded, traceLoadError]);
 
   const renderItems = useMemo(() => groupTranscriptEntries(entries), [entries]);
   const shouldFilterDuplicateFinal = state !== "streaming" && Boolean(normalizedDisplayText(resultText));
@@ -654,6 +654,9 @@ export function NativeAgentTranscript({
             <span className="min-w-0 truncate text-xs font-medium text-[var(--text)]">过程详情</span>
             <span className="min-w-0 truncate text-[11px] text-[var(--muted)]">{traceSummaryLabel}</span>
           </button>
+          {traceExpanded && traceDetailRenderItems.length > 0
+            ? renderTranscriptItems(traceDetailRenderItems)
+            : null}
           {traceExpanded && isTraceLoading ? (
             <div className="flex items-center gap-2 py-2 text-xs text-[var(--muted)]">
               <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
@@ -674,9 +677,6 @@ export function NativeAgentTranscript({
               ) : null}
             </div>
           ) : null}
-          {traceExpanded && !isTraceLoading && !traceLoadError && !shouldLazyLoadTrace
-            ? renderTranscriptItems(traceDetailRenderItems)
-            : null}
         </section>
       ) : renderTranscriptItems(traceDetailRenderItems)}
       {alwaysVisibleRenderItems.length > 0 ? renderTranscriptItems(alwaysVisibleRenderItems) : null}
