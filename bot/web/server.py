@@ -859,6 +859,14 @@ def _build_public_host_info() -> dict[str, str]:
 
     system = str(platform.system() or "").strip() or "未知系统"
     release = str(platform.release() or "").strip()
+    # Older Python 3.10 builds can map Windows 11's 10.0 kernel to release "10".
+    if system == "Windows" and release == "10":
+        try:
+            windows_version = sys.getwindowsversion()
+            if windows_version.product_type == 1 and windows_version.build >= 22000:
+                release = "11"
+        except (AttributeError, TypeError, ValueError):
+            pass
     operating_system = " ".join(part for part in [system, release] if part).strip() or system
 
     hardware_platform = str(platform.machine() or "").strip() or "未知平台"

@@ -9,7 +9,7 @@
 <h1 align="center">Orbit Safe Claw</h1>
 
 <p align="center">
-  当前版本：`1.4.10` · 文档最后更新：`2026-07-31`
+  当前版本：`1.4.11` · 文档最后更新：`2026-08-01`
 </p>
 
 <p align="center">
