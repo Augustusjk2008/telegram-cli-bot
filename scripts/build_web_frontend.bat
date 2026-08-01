@@ -4,6 +4,7 @@ set "ERRORLEVEL="
 REM Rebuild web frontend in the front directory.
 
 cd /d "%~dp0..\front" || exit /b 1
+
 call npm run build
 set "BUILD_EXIT_CODE=%ERRORLEVEL%"
 if "%BUILD_EXIT_CODE%"=="0" goto :build_succeeded

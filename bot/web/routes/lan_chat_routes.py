@@ -4,7 +4,6 @@ import json
 
 from aiohttp import WSMsgType, web
 
-from bot.web.aiohttp_keys import SERVER_APP_KEY
 from bot.web.auth_store import CAP_ADMIN_OPS, CAP_CHAT_SEND, CAP_VIEW_CHAT_HISTORY
 from bot.web.lan_chat_types import LanChatError
 
@@ -33,13 +32,13 @@ def _raise_lan_error(exc: LanChatError) -> None:
 
 
 async def get_admin_config(request: web.Request) -> web.Response:
-    server = request.app[SERVER_APP_KEY]
+    server = request.app["server"]
     await server._with_capability(request, CAP_ADMIN_OPS)
     return _json(server.lan_chat_service.public_config())
 
 
 async def patch_admin_config(request: web.Request) -> web.Response:
-    server = request.app[SERVER_APP_KEY]
+    server = request.app["server"]
     await server._with_capability(request, CAP_ADMIN_OPS)
     payload = await server._parse_json(request)
     try:
@@ -49,20 +48,20 @@ async def patch_admin_config(request: web.Request) -> web.Response:
 
 
 async def get_status(request: web.Request) -> web.Response:
-    server = request.app[SERVER_APP_KEY]
+    server = request.app["server"]
     auth = await server._with_capability(request, CAP_VIEW_CHAT_HISTORY)
     return _json(server.lan_chat_service.status_for_user(auth))
 
 
 async def get_conversations(request: web.Request) -> web.Response:
-    server = request.app[SERVER_APP_KEY]
+    server = request.app["server"]
     auth = await server._with_capability(request, CAP_VIEW_CHAT_HISTORY)
     user = server.lan_chat_service.local_user(auth)
     return _json({"items": server.lan_chat_service.list_conversations(user)})
 
 
 async def post_private_conversation(request: web.Request) -> web.Response:
-    server = request.app[SERVER_APP_KEY]
+    server = request.app["server"]
     auth = await server._with_capability(request, CAP_CHAT_SEND)
     payload = await server._parse_json(request)
     target_room_user_id = str(payload.get("target_room_user_id") or "")
@@ -74,7 +73,7 @@ async def post_private_conversation(request: web.Request) -> web.Response:
 
 
 async def get_messages(request: web.Request) -> web.Response:
-    server = request.app[SERVER_APP_KEY]
+    server = request.app["server"]
     auth = await server._with_capability(request, CAP_VIEW_CHAT_HISTORY)
     user = server.lan_chat_service.local_user(auth)
     try:
@@ -98,7 +97,7 @@ async def get_messages(request: web.Request) -> web.Response:
 
 
 async def post_message(request: web.Request) -> web.Response:
-    server = request.app[SERVER_APP_KEY]
+    server = request.app["server"]
     auth = await server._with_capability(request, CAP_CHAT_SEND)
     payload = await server._parse_json(request)
     user = server.lan_chat_service.local_user(auth)
@@ -114,7 +113,7 @@ async def post_message(request: web.Request) -> web.Response:
 
 
 async def post_read(request: web.Request) -> web.Response:
-    server = request.app[SERVER_APP_KEY]
+    server = request.app["server"]
     auth = await server._with_capability(request, CAP_VIEW_CHAT_HISTORY)
     payload = await server._parse_json(request)
     user = server.lan_chat_service.local_user(auth)
@@ -127,7 +126,7 @@ async def post_read(request: web.Request) -> web.Response:
 
 
 async def browser_ws(request: web.Request) -> web.WebSocketResponse:
-    server = request.app[SERVER_APP_KEY]
+    server = request.app["server"]
     server._require_websocket_origin(request)
     auth = await server._with_capability(request, CAP_VIEW_CHAT_HISTORY)
     user = server.lan_chat_service.local_user(auth)
@@ -147,7 +146,7 @@ async def browser_ws(request: web.Request) -> web.WebSocketResponse:
 
 
 def _require_node_key(request: web.Request) -> None:
-    server = request.app[SERVER_APP_KEY]
+    server = request.app["server"]
     expected = str(server.lan_chat_service.config().get("room_key") or "")
     provided = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
     if not expected or provided != expected:
@@ -160,7 +159,7 @@ def _require_node_key(request: web.Request) -> None:
 
 async def post_node_message(request: web.Request) -> web.Response:
     _require_node_key(request)
-    server = request.app[SERVER_APP_KEY]
+    server = request.app["server"]
     payload = await server._parse_json(request)
     try:
         message = server.lan_chat_service.append_node_message(
@@ -178,7 +177,7 @@ async def post_node_message(request: web.Request) -> web.Response:
 
 async def node_ws(request: web.Request) -> web.WebSocketResponse:
     _require_node_key(request)
-    server = request.app[SERVER_APP_KEY]
+    server = request.app["server"]
     server._require_websocket_origin(request)
     instance_id = str(request.headers.get("X-Lan-Chat-Instance-Id") or request.query.get("instance_id") or "").strip()
     if not instance_id:
@@ -198,8 +197,8 @@ async def node_ws(request: web.Request) -> web.WebSocketResponse:
 
 
 def register(app: web.Application, server) -> None:
-    if SERVER_APP_KEY not in app:
-        app[SERVER_APP_KEY] = server
+    if "server" not in app:
+        app["server"] = server
     app.router.add_get("/api/admin/lan-chat/config", get_admin_config)
     app.router.add_patch("/api/admin/lan-chat/config", patch_admin_config)
     app.router.add_get("/api/lan-chat/status", get_status)

@@ -1095,19 +1095,51 @@ def _apply_cli_model_options(
     return next_schema
 
 
-def get_cli_params_payload(manager: MultiBotManager, alias: str, cli_type: Optional[str] = None) -> dict[str, Any]:
+async def _reconcile_codex_reasoning_effort(
+    manager: MultiBotManager,
+    alias: str,
+    profile: BotProfile,
+    catalog: dict[str, Any],
+) -> None:
+    if catalog.get("source") != "codex_cli":
+        return
+    selected_model = str(profile.cli_params.get_param("codex", "model") or "").strip()
+    model_item = find_catalog_model(catalog, selected_model)
+    if model_item is None:
+        return
+    selected_effort = str(profile.cli_params.get_param("codex", "reasoning_effort") or "").strip()
+    normalized_effort = _normalize_selected_reasoning_effort(model_item, selected_effort)
+    if normalized_effort and normalized_effort != selected_effort:
+        await manager.set_bot_cli_param(alias, "codex", "reasoning_effort", normalized_effort)
+
+
+async def get_cli_params_payload(
+    manager: MultiBotManager,
+    alias: str,
+    cli_type: Optional[str] = None,
+    *,
+    model_catalog: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     resolved_cli_type = (cli_type or profile.cli_type or "").strip().lower()
     if not resolved_cli_type:
         _raise(400, "missing_cli_type", "缺少 CLI 类型")
 
     try:
-        params = profile.cli_params.get_params(resolved_cli_type)
-        model_catalog = _codex_catalog_for_profile(profile) if resolved_cli_type == "codex" else None
-        schema = _apply_cli_model_options(get_params_schema(resolved_cli_type), catalog=model_catalog)
+        schema = get_params_schema(resolved_cli_type)
         defaults = get_default_params(resolved_cli_type)
     except ValueError as exc:
         _raise(400, "invalid_cli_type", str(exc))
+
+    try:
+        if resolved_cli_type == "codex" and model_catalog is None:
+            model_catalog = await asyncio.to_thread(_codex_catalog_for_profile, profile)
+        if resolved_cli_type == "codex" and model_catalog is not None:
+            await _reconcile_codex_reasoning_effort(manager, alias, profile, model_catalog)
+        params = profile.cli_params.get_params(resolved_cli_type)
+    except ValueError as exc:
+        _raise(400, "invalid_param_value", str(exc))
+    schema = _apply_cli_model_options(schema, catalog=model_catalog)
 
     return {
         "cli_type": resolved_cli_type,
@@ -1259,7 +1291,11 @@ async def update_cli_params(
         _raise(400, "missing_param_key", "缺少参数名")
 
     normalized_key = key.strip()
-    model_catalog = _codex_catalog_for_profile(profile) if resolved_cli_type == "codex" else None
+    model_catalog = (
+        await asyncio.to_thread(_codex_catalog_for_profile, profile)
+        if resolved_cli_type == "codex"
+        else None
+    )
     authoritative_catalog = model_catalog if model_catalog and model_catalog.get("source") == "codex_cli" else None
     if authoritative_catalog and normalized_key == "model":
         selected_model = str(value or "").strip()
@@ -1292,7 +1328,12 @@ async def update_cli_params(
     except ValueError as exc:
         _raise(400, "invalid_param_value", str(exc))
 
-    return await asyncio.to_thread(get_cli_params_payload, manager, alias, resolved_cli_type)
+    return await get_cli_params_payload(
+        manager,
+        alias,
+        resolved_cli_type,
+        model_catalog=model_catalog,
+    )
 
 
 async def reset_cli_params(manager: MultiBotManager, alias: str, cli_type: Optional[str] = None) -> dict[str, Any]:
@@ -1302,7 +1343,7 @@ async def reset_cli_params(manager: MultiBotManager, alias: str, cli_type: Optio
         await manager.reset_bot_cli_params(alias, resolved_cli_type)
     except ValueError as exc:
         _raise(400, "invalid_cli_type", str(exc))
-    return await asyncio.to_thread(get_cli_params_payload, manager, alias, resolved_cli_type)
+    return await get_cli_params_payload(manager, alias, resolved_cli_type)
 
 
 def get_history(

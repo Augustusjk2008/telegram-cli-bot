@@ -8,8 +8,6 @@ from typing import Any
 
 from aiohttp import web
 
-from bot.web.aiohttp_keys import SERVER_APP_KEY
-
 from bot.web.api_common import WebApiError
 from bot.web.auth_store import CAP_ADMIN_OPS
 from bot.web.transfer_service import TransferServiceError
@@ -564,7 +562,7 @@ def _json(data: dict[str, Any], status: int = 200) -> web.Response:
 
 
 def _server(request: web.Request):
-    return request.app[SERVER_APP_KEY]
+    return request.app["server"]
 
 
 def _is_loopback_value(value: object) -> bool:
@@ -736,7 +734,7 @@ async def config(request: web.Request) -> web.Response:
 
 
 def register(app: web.Application, server) -> None:
-    app[SERVER_APP_KEY] = server
+    app["server"] = server
     app.router.add_post("/v1/responses", create_response)
     app.router.add_post("/responses", create_response)
     app.router.add_get("/v1/responses/{response_id}", get_response)

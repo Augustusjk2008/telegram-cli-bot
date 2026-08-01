@@ -9,10 +9,6 @@
 <h1 align="center">Orbit Safe Claw</h1>
 
 <p align="center">
-  Current version: `1.4.11` · Documentation updated: `2026-08-01`
-</p>
-
-<p align="center">
   <strong>A self-hosted, multi-workspace AI development console for controlling local Codex, Claude, and Pi from your browser.</strong>
 </p>
 

@@ -9,10 +9,6 @@
 <h1 align="center">Orbit Safe Claw</h1>
 
 <p align="center">
-  当前版本：`1.4.11` · 文档最后更新：`2026-08-01`
-</p>
-
-<p align="center">
   <strong>在浏览器中统一操控本地 Codex、Claude 与 Pi 的多工作区 AI 开发控制台。</strong>
 </p>
 
@@ -383,9 +379,6 @@ APP_UPDATE_REPOSITORY=Augustusjk2008/telegram-cli-bot
 ```
 
 本地运行文件包括 `.env`、`managed_bots.json`、`front/dist/` 和 `~/.tcb/orbit-safe-claw`；不要提交真实配置或运行数据。
-
-原始仓库与 feature 分支的固定同步流程见
-[BRANCH_SYNC_WORKFLOW.md](BRANCH_SYNC_WORKFLOW.md)。
 
 ## 开发与验证
 

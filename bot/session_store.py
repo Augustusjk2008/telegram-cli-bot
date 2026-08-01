@@ -134,10 +134,6 @@ def session_store_diagnostics() -> dict[str, Any]:
 atexit.register(close_session_store)
 
 
-def _ensure_store_parent() -> None:
-    STORE_FILE.parent.mkdir(parents=True, exist_ok=True)
-
-
 def load_session_ids() -> Dict[str, dict]:
     """加载所有持久化的会话ID
 
@@ -168,7 +164,7 @@ def save_session_ids(data: Dict[str, dict]):
         return
     try:
         with _store_lock:
-            _ensure_store_parent()
+            STORE_FILE.parent.mkdir(parents=True, exist_ok=True)
             with open(STORE_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
     except IOError as e:
@@ -465,7 +461,7 @@ def save_session(
             data[key] = session_data
 
         try:
-            _ensure_store_parent()
+            STORE_FILE.parent.mkdir(parents=True, exist_ok=True)
             with open(STORE_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
         except IOError as e:
@@ -505,7 +501,6 @@ def remove_session(bot_id: int, user_id: int, agent_id: str = "main") -> bool:
 
         del data[key]
         try:
-            _ensure_store_parent()
             with open(STORE_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
         except IOError as e:

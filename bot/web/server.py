@@ -114,7 +114,6 @@ from .cli_error_stats import collect_cli_error_stats
 from .diagnostics import diag_enabled, diag_log_event, diag_log_slow, diag_loop_lag_ms
 from .runtime_diagnostics import LoopLagTracker, RuntimeDiagnosticsRegistry
 from .login_throttle import LoginThrottle
-from .aiohttp_keys import AUTH_REQUEST_KEY
 from .env_service import EnvConfigService, EnvValidationError
 from .exposure_service import WebExposureService
 from .fixed_forward_service import FixedForwardService
@@ -1250,7 +1249,7 @@ class WebApiServer:
 
     async def _with_auth(self, request: web.Request) -> AuthContext:
         auth = self._auth_context(request)
-        request[AUTH_REQUEST_KEY] = auth
+        request["auth"] = auth
         return auth
 
     async def _with_capability(self, request: web.Request, capability: str) -> AuthContext:
@@ -1259,10 +1258,10 @@ class WebApiServer:
         alias = str(raw_alias or "").strip().lower() if isinstance(raw_alias, str) else ""
         if alias:
             auth = self._bot_auth(auth, alias)
-            request[AUTH_REQUEST_KEY] = auth
+            request["auth"] = auth
         if self._allows_readonly_bot_capability(request, capability, auth):
             elevated = auth.with_capabilities({*auth.capabilities, capability})
-            request[AUTH_REQUEST_KEY] = elevated
+            request["auth"] = elevated
             return elevated
         _require_capability(auth, capability)
         return auth
@@ -1281,7 +1280,7 @@ class WebApiServer:
         alias = str(raw_alias or "").strip().lower() if isinstance(raw_alias, str) else ""
         if alias:
             auth = self._bot_auth(auth, alias)
-            request[AUTH_REQUEST_KEY] = auth
+            request["auth"] = auth
         return auth
 
     async def _with_cluster_bot_config_access(self, request: web.Request) -> AuthContext:
@@ -3430,7 +3429,7 @@ class WebApiServer:
         await self._with_bot_config_access(request)
         alias = self._manager_alias(request)
         cli_type = request.query.get("cli_type") or None
-        data = await asyncio.to_thread(get_cli_params_payload, self.manager, alias, cli_type)
+        data = await get_cli_params_payload(self.manager, alias, cli_type)
         return _json({"ok": True, "data": data})
 
     async def get_native_agent_models(self, request: web.Request) -> web.Response:
@@ -3735,7 +3734,7 @@ class WebApiServer:
         if not alias:
             raise WebApiError(400, "missing_alias", "缺少 Bot 别名")
         auth = self._bot_auth(auth, alias)
-        request[AUTH_REQUEST_KEY] = auth
+        request["auth"] = auth
         ws = web.WebSocketResponse(heartbeat=30.0)
         await ws.prepare(request)
 
@@ -4163,7 +4162,7 @@ class WebApiServer:
         auth = await self._with_auth(request)
         alias = self._manager_alias(request)
         auth = self._bot_auth(auth, alias)
-        request[AUTH_REQUEST_KEY] = auth
+        request["auth"] = auth
         if CAP_CREATE_WORKDIR_DIRECTORY not in auth.capabilities and CAP_MANAGE_BOTS not in auth.capabilities:
             _require_capability(auth, CAP_CREATE_WORKDIR_DIRECTORY)
         body = await self._parse_json(request)

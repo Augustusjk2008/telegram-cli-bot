@@ -95,6 +95,30 @@ class _Manager:
 
 
 @pytest.mark.asyncio
+async def test_cli_params_load_offloads_catalog_and_persists_supported_effort(monkeypatch, tmp_path: Path) -> None:
+    profile = BotProfile(alias="main", cli_type="codex", cli_path="codex", working_dir=str(tmp_path))
+    profile.cli_params.codex.update({"model": "gpt-5.5", "reasoning_effort": "ultra"})
+    manager = _Manager(profile)
+    offloaded: list[object] = []
+
+    def catalog_lookup(_profile: BotProfile) -> dict:
+        return _live_catalog()
+
+    async def fake_to_thread(function, *args, **kwargs):
+        offloaded.append(function)
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(api_service, "_codex_catalog_for_profile", catalog_lookup)
+    monkeypatch.setattr(api_service.asyncio, "to_thread", fake_to_thread)
+
+    result = await api_service.get_cli_params_payload(manager, "main", "codex")
+
+    assert offloaded == [catalog_lookup]
+    assert result["params"]["reasoning_effort"] == "medium"
+    assert profile.cli_params.get_param("codex", "reasoning_effort") == "medium"
+
+
+@pytest.mark.asyncio
 async def test_cli_model_update_rejects_unavailable_model_and_normalizes_effort(monkeypatch, tmp_path: Path) -> None:
     profile = BotProfile(alias="main", cli_type="codex", cli_path="codex", working_dir=str(tmp_path))
     profile.cli_params.codex.update({"model": "gpt-5.6-sol", "reasoning_effort": "ultra"})
