@@ -30,6 +30,7 @@ TERMINAL_OUTPUT_GAP = object()
 TERMINAL_GAP_NOTICE = "\r\n[终端输出已截断，请重新连接以同步最新状态]\r\n".encode("utf-8")
 TERMINAL_PROCESS_CLEANUP_JOIN_SECONDS = 1.0
 TERMINAL_PROCESS_CLEANUP_WARNING_SECONDS = 5.0
+TERMINAL_OUTPUT_PUMP_YIELD_EVERY_ITEMS = 32
 
 
 def _normalize_pipe_line_endings(data: bytes, *, previous_ended_with_cr: bool = False) -> tuple[bytes, bool]:
@@ -794,6 +795,7 @@ class TerminalSessionManager:
         output_pump: _TerminalOutputPump,
     ) -> None:
         pipe_previous_ended_with_cr = False
+        processed_items_since_yield = 0
         try:
             while True:
                 data = await output_pump.read()
@@ -827,6 +829,10 @@ class TerminalSessionManager:
                                 reason="pump_overflow",
                             ),
                         )
+                    processed_items_since_yield += 1
+                    if processed_items_since_yield >= TERMINAL_OUTPUT_PUMP_YIELD_EVERY_ITEMS:
+                        processed_items_since_yield = 0
+                        await asyncio.sleep(0)
                     continue
                 if isinstance(data, str):
                     data = data.encode("utf-8", errors="replace")
@@ -853,6 +859,10 @@ class TerminalSessionManager:
                                 payload=data,
                             ),
                         )
+                    processed_items_since_yield += 1
+                    if processed_items_since_yield >= TERMINAL_OUTPUT_PUMP_YIELD_EVERY_ITEMS:
+                        processed_items_since_yield = 0
+                        await asyncio.sleep(0)
                     continue
 
                 try:

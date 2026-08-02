@@ -3367,6 +3367,7 @@ def _terminate_process_sync(process: subprocess.Popen, kill_timeout: float = 2.0
 PROCESS_STDOUT_EXIT_DRAIN_SECONDS = 0.2
 _PROCESS_STDOUT_EOF = object()
 _CLI_OUTPUT_LIMITS = get_cli_output_limits()
+_CLI_STREAM_DRAIN_BATCH_SIZE = 64
 
 
 class CliOutputLimitError(RuntimeError):
@@ -4125,7 +4126,7 @@ async def _stream_cli_chat(
             try:
                 while not stdout_eof_seen and (not stdout_reader.done.is_set() or not output_queue.empty()):
                     drained = False
-                    while True:
+                    for _ in range(_CLI_STREAM_DRAIN_BATCH_SIZE):
                         try:
                             item = output_queue.get_nowait()
                         except queue.Empty:
@@ -4184,6 +4185,7 @@ async def _stream_cli_chat(
                         and done_terminate_started_at is None
                         and process.poll() is None
                         and (loop.time() - codex_done_seen_at) >= CODEX_DONE_QUIET_SECONDS
+                        and output_queue.empty()
                     ):
                         done_terminate_started_at = loop.time()
                         await loop.run_in_executor(None, _terminate_process_sync, process)
@@ -4280,7 +4282,9 @@ async def _stream_cli_chat(
                         yield status_event
                         last_status_signature = status_signature
 
-                    if not drained:
+                    if drained:
+                        await asyncio.sleep(0)
+                    else:
                         await asyncio.sleep(0.1)
 
                 waited_returncode = await loop.run_in_executor(None, _wait_for_process_exit_sync, process, 1.0)

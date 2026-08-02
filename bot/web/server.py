@@ -14,6 +14,7 @@ import platform
 import re
 import subprocess
 import sys
+import threading
 import time
 import uuid
 import zlib
@@ -107,7 +108,7 @@ from .announcement_store import AnnouncementStore
 from .async_chat_store import ChatStoreOverloadedError, chat_store_executor_diagnostics, run_chat_store_io
 from .cli_error_stats import collect_cli_error_stats
 from .diagnostics import diag_enabled, diag_log_event, diag_log_slow, diag_loop_lag_ms
-from .runtime_diagnostics import LoopLagTracker, RuntimeDiagnosticsRegistry
+from .runtime_diagnostics import EventLoopStallWatchdog, LoopLagTracker, RuntimeDiagnosticsRegistry
 from .env_service import EnvConfigService, EnvValidationError
 from .exposure_service import WebExposureService
 from .fixed_forward_service import FixedForwardService
@@ -327,6 +328,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_TERMINAL_OWNER_ID = "default"
 # 给浏览器留出响应落地时间，避免服务重启过快导致前端请求悬挂。
 RESTART_RESPONSE_DELAY_SECONDS = 1.0
+_LOOP_LAG_WATCH_INTERVAL_SECONDS = 1.0
 _TUNNEL_STATUS_REFRESH_TIMEOUT = 1.0
 _LANGUAGE_SERVER_PROVIDER_LABELS = {
     "pyright": "Python",
@@ -1106,9 +1108,21 @@ class WebApiServer:
         self.inline_completion_config_store = InlineCompletionConfigStore()
         self.inline_completion_service = InlineCompletionService(config_store=self.inline_completion_config_store)
         self.codex_usage_service = get_codex_usage_service()
-        self._loop_lag_tracker = LoopLagTracker(threshold_ms=diag_loop_lag_ms())
+        loop_lag_threshold_ms = diag_loop_lag_ms()
+        self._loop_lag_tracker = LoopLagTracker(threshold_ms=loop_lag_threshold_ms)
+        loop_stall_threshold_ms = max(
+            1,
+            loop_lag_threshold_ms + int(round(_LOOP_LAG_WATCH_INTERVAL_SECONDS * 1000)),
+        )
+        self._loop_stall_watchdog = EventLoopStallWatchdog(
+            threshold_ms=loop_stall_threshold_ms,
+            poll_interval_ms=min(1000.0, max(10.0, loop_stall_threshold_ms / 4)),
+            on_stall=self._log_loop_stall,
+            enabled=diag_enabled,
+        )
         self._runtime_diagnostics = RuntimeDiagnosticsRegistry()
         self._runtime_diagnostics.register("loop_lag", self._loop_lag_tracker.diagnostics)
+        self._runtime_diagnostics.register("loop_stall_watchdog", self._loop_stall_watchdog.diagnostics)
         self._runtime_diagnostics.register("terminal", self._terminal_manager.diagnostics)
         self._runtime_diagnostics.register("native_agent", get_native_agent_service().diagnostics)
         self._runtime_diagnostics.register("workspace_search", workspace_search_diagnostics)
@@ -4896,6 +4910,7 @@ class WebApiServer:
         await self._runner.setup()
         self._site = web.TCPSite(self._runner, host=self._host, port=self._port)
         await self._site.start()
+        self._start_loop_stall_watchdog()
         self._loop_lag_task = asyncio.create_task(self._watch_loop_lag(), name="web-loop-lag-watch")
         if get_update_status().get("update_enabled"):
             self._update_task = asyncio.create_task(self._auto_refresh_update_status())
@@ -4918,12 +4933,35 @@ class WebApiServer:
             WEB_FIXED_PUBLIC_FORWARD_URL or "",
         )
 
+    def _log_loop_stall(self, report: dict[str, object]) -> None:
+        stall_ms = float(report.get("stall_ms") or 0.0)
+        threshold_ms = int(float(report.get("threshold_ms") or diag_loop_lag_ms()))
+        diag_log_slow(
+            logger,
+            "event_loop_stall",
+            stall_ms,
+            threshold_ms=threshold_ms,
+            stall_ms=round(stall_ms, 3),
+            detected_at_unix_ms=report.get("detected_at_unix_ms"),
+            stack_available=report.get("stack_available"),
+            stack=report.get("stack"),
+        )
+
+    def _start_loop_stall_watchdog(self) -> None:
+        self._loop_stall_watchdog.start(loop_thread_id=threading.get_ident())
+
+    async def _stop_loop_stall_watchdog(self) -> None:
+        self._loop_stall_watchdog.stop()
+        await asyncio.to_thread(self._loop_stall_watchdog.join, 1.0)
+
     async def _watch_loop_lag(self) -> None:
         loop = asyncio.get_running_loop()
-        interval_seconds = 1.0
+        interval_seconds = _LOOP_LAG_WATCH_INTERVAL_SECONDS
         expected_at = loop.time() + interval_seconds
+        self._loop_stall_watchdog.beat()
         while True:
             await asyncio.sleep(interval_seconds)
+            self._loop_stall_watchdog.beat()
             now = loop.time()
             lag_ms = max(0, int(round((now - expected_at) * 1000)))
             expected_at = now + interval_seconds
@@ -4970,6 +5008,7 @@ class WebApiServer:
             self._update_task.cancel()
             await asyncio.gather(self._update_task, return_exceptions=True)
             self._update_task = None
+        await self._stop_loop_stall_watchdog()
         if self._loop_lag_task is not None:
             self._loop_lag_task.cancel()
             await asyncio.gather(self._loop_lag_task, return_exceptions=True)

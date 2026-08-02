@@ -136,6 +136,55 @@ async def test_terminal_output_pump_flushes_blocking_reader_without_waiting_for_
 
 
 @pytest.mark.asyncio
+async def test_terminal_output_pump_yields_during_continuous_ready_data_and_gaps():
+    from bot.web.terminal_manager import (
+        TERMINAL_OUTPUT_GAP,
+        _TERMINAL_OUTPUT_EOF,
+        ManagedTerminalSession,
+        TerminalSessionManager,
+    )
+
+    class AlwaysReadyProcess:
+        is_pty = True
+
+        def isalive(self):
+            return True
+
+    class AlwaysReadyPump:
+        def __init__(self) -> None:
+            self.queue_state = type("QueueState", (), {"dropped_bytes": 0})()
+            self.items = [
+                item
+                for _ in range(128)
+                for item in (TERMINAL_OUTPUT_GAP, b"x")
+            ] + [_TERMINAL_OUTPUT_EOF]
+
+        async def read(self):
+            return self.items.pop(0)
+
+    manager = TerminalSessionManager()
+    process = AlwaysReadyProcess()
+    session = ManagedTerminalSession(owner_key="1:main", process=process)
+    pump_task = asyncio.create_task(manager._pump_output(session, process, AlwaysReadyPump()))
+    observer_saw_active_pump: list[bool] = []
+
+    async def observe_ready_task() -> None:
+        await asyncio.sleep(0)
+        observer_saw_active_pump.append(not pump_task.done())
+
+    observer_task = asyncio.create_task(observe_ready_task())
+    await asyncio.wait_for(asyncio.gather(pump_task, observer_task), timeout=1.0)
+
+    assert observer_saw_active_pump == [True]
+    assert len(session.replay) == 256
+    assert session.replay[0].is_gap is True
+    assert session.replay[-1].data == b"x"
+    assert session.last_gap_seq == 255
+    assert session.next_seq == 257
+    assert session.is_closed is True
+
+
+@pytest.mark.asyncio
 async def test_slow_terminal_client_gets_gap_then_eof_without_affecting_peer():
     from bot.web.terminal_manager import (
         TERMINAL_CLIENT_EOF,
