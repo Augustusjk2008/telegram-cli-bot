@@ -6,11 +6,84 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from bot.web import git_service
 from bot.web.api_common import WebApiError
+
+
+@pytest.mark.asyncio
+async def test_generate_git_commit_message_records_codex_terminal_usage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    capture = object()
+    started: list[tuple[dict[str, str], list[str]]] = []
+    recorded: list[tuple[object, object]] = []
+    manager = SimpleNamespace(
+        get_git_commit_cli_config=lambda _alias: SimpleNamespace(
+            cli_type="codex",
+            cli_path="codex",
+            cli_params=object(),
+        )
+    )
+
+    monkeypatch.setattr(git_service, "get_profile_or_raise", lambda *_args: object())
+    monkeypatch.setattr(git_service, "resolve_cli_executable", lambda *_args: "codex")
+    monkeypatch.setattr(git_service, "build_commit_message_prompt", lambda **_kwargs: "prompt")
+    monkeypatch.setattr(git_service, "with_global_extra_args", lambda params, _extra: params)
+    monkeypatch.setattr(
+        git_service,
+        "build_cli_command",
+        lambda **_kwargs: (["codex", "exec", "--json"], True),
+    )
+    monkeypatch.setattr(git_service, "_start_cli_process", lambda *_args, **_kwargs: object())
+
+    async def communicate(_process: object, *, input_text: str | None = None) -> tuple[str, int]:
+        assert input_text == "prompt\n"
+        return (
+            "\n".join(
+                [
+                    '{"type":"thread.started","thread_id":"git-usage-thread"}',
+                    '{"type":"item.completed","item":{"type":"assistant_message","text":"<COMMIT_MESSAGE>feat: record git usage</COMMIT_MESSAGE>"}}',
+                    '{"type":"turn.completed","usage":{"input_tokens":17,"cached_input_tokens":6,"output_tokens":5,"reasoning_output_tokens":2}}',
+                ]
+            ),
+            0,
+        )
+
+    async def start_capture(*, env: dict[str, str], command: list[str]) -> object:
+        started.append((env, command))
+        return capture
+
+    async def record_capture(current_capture: object, parsed_result: object) -> None:
+        recorded.append((current_capture, parsed_result))
+
+    monkeypatch.setattr(git_service, "_communicate_process", communicate)
+    monkeypatch.setattr(git_service, "start_codex_usage_capture", start_capture, raising=False)
+    monkeypatch.setattr(git_service, "record_codex_usage_capture", record_capture, raising=False)
+
+    result = await git_service._generate_git_commit_message_from_context(
+        manager,
+        "main",
+        1001,
+        repo_root=str(tmp_path),
+        context={},
+    )
+
+    assert result == {"message": "feat: record git usage"}
+    assert len(started) == 1
+    assert started[0][1] == ["codex", "exec", "--json"]
+    assert len(recorded) == 1
+    assert recorded[0][0] is capture
+    parsed_result = recorded[0][1]
+    assert parsed_result.session_id == "git-usage-thread"
+    assert parsed_result.token_usage.input_tokens == 17
+    assert parsed_result.token_usage.cached_input_tokens == 6
+    assert parsed_result.token_usage.output_tokens == 5
+    assert parsed_result.token_usage.reasoning_output_tokens == 2
 
 
 def test_build_git_command_disables_fsmonitor() -> None:

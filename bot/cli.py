@@ -550,6 +550,19 @@ def parse_codex_json_line(line: str) -> Dict[str, Optional[str]]:
     return result
 
 
+def parse_codex_json_output_result(raw_output: str) -> CliStreamParseResult:
+    """Parse complete Codex JSON output while retaining terminal usage metadata."""
+
+    output_size = max(1, len(str(raw_output or "").encode("utf-8", errors="replace")))
+    parser = CodexJsonStreamParser(
+        raw_tail_max_bytes=output_size,
+        final_text_max_bytes=output_size,
+    )
+    for line in str(raw_output or "").splitlines(keepends=True):
+        parser.consume_line(line)
+    return parser.result()
+
+
 def parse_codex_json_output(raw_output: str) -> Tuple[str, Optional[str]]:
     """解析 codex --json 的完整输出文本，提取 assistant 文本和 thread_id。"""
     raw_lines: List[str] = []

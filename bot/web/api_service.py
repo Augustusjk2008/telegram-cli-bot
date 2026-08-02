@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import copy
 import hmac
-import inspect
 import json
 import logging
 import os
@@ -70,6 +69,10 @@ from bot.cli import (
     should_reset_claude_session,
     should_reset_codex_session,
     should_suggest_reset_codex_session,
+)
+from bot.codex_usage import (
+    record_codex_usage_capture as _record_codex_usage_capture,
+    start_codex_usage_capture as _start_codex_usage_capture,
 )
 from bot.manager import MultiBotManager
 from bot.messages import msg
@@ -3092,56 +3095,6 @@ class CodexProcessResult:
     token_usage: Optional[CodexUsageSample]
     invalid_usage_count: int = 0
     duplicate_terminal_count: int = 0
-
-
-async def _start_codex_usage_capture(*, env: dict[str, str], command: list[str]) -> Any:
-    try:
-        from bot.codex_usage import get_codex_usage_service
-
-        service = get_codex_usage_service()
-        starter = (
-            getattr(service, "start_capture", None)
-            or getattr(service, "create_capture", None)
-            or getattr(service, "begin_capture", None)
-        )
-        if starter is None:
-            return None
-        if inspect.iscoroutinefunction(starter):
-            capture = starter(env=env, command=command)
-        else:
-            capture = await asyncio.to_thread(starter, env=env, command=command)
-        return await capture if inspect.isawaitable(capture) else capture
-    except Exception as exc:
-        logger.warning("Codex 用量采集初始化失败，聊天流程将继续: %s", exc)
-        return None
-
-
-async def _record_codex_usage_capture(usage_capture: Any, parsed_result: Any) -> None:
-    if usage_capture is None or parsed_result is None:
-        return
-    sample = getattr(parsed_result, "token_usage", None)
-    invalid_usage_count = int(getattr(parsed_result, "invalid_usage_count", 0) or 0)
-    duplicate_terminal_count = int(getattr(parsed_result, "duplicate_terminal_count", 0) or 0)
-    failed = bool(getattr(parsed_result, "turn_failed", False))
-    session_id = getattr(parsed_result, "session_id", None)
-    if sample is None and not failed and not invalid_usage_count and not duplicate_terminal_count:
-        return
-    try:
-        record_once = usage_capture.record_once
-        kwargs = {
-            "invalid_usage_count": invalid_usage_count,
-            "duplicate_terminal_count": duplicate_terminal_count,
-            "failed": failed,
-            "session_id": session_id,
-        }
-        if inspect.iscoroutinefunction(record_once):
-            result = record_once(sample, **kwargs)
-        else:
-            result = await asyncio.to_thread(record_once, sample, **kwargs)
-        if inspect.isawaitable(result):
-            await result
-    except Exception as exc:
-        logger.warning("Codex 用量记录失败，聊天流程将继续: %s", exc)
 
 
 def _load_codex_json_event(line: str) -> dict[str, Any]:
