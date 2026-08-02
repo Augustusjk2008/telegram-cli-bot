@@ -380,6 +380,7 @@ function cloneCodexUsageStats(stats: CodexUsageStats): CodexUsageStats {
     availableProviders: stats.availableProviders.map((provider) => ({ ...provider })),
     selectedProviderKeys: [...stats.selectedProviderKeys],
     totals: { ...stats.totals },
+    dailyPagination: { ...stats.dailyPagination },
     byProvider: stats.byProvider.map((item) => ({ ...item, provider: { ...item.provider } })),
     byProviderModel: stats.byProviderModel.map((item) => ({ ...item, provider: { ...item.provider } })),
     byDay: stats.byDay.map((item) => ({ ...item })),
@@ -1894,6 +1895,14 @@ export class MockWebBotClient implements WebBotClient {
       totalTokens: 23000,
       cacheHitRate: 6800 / 18800,
     }],
+    dailyPagination: {
+      page: 1,
+      pageSize: 10,
+      totalItems: 1,
+      totalPages: 1,
+      hasPrevious: false,
+      hasNext: false,
+    },
   };
   private updateStatus: AppUpdateStatus = {
     currentVersion: APP_VERSION,
@@ -5679,14 +5688,16 @@ export class MockWebBotClient implements WebBotClient {
       result.dailyByProvider = result.dailyByProvider.filter((item) => inRange(item.date));
       result.dailyByProviderModel = result.dailyByProviderModel.filter((item) => inRange(item.date));
     }
+    const fullDailyByProvider = result.dailyByProvider;
+    const fullDailyByProviderModel = result.dailyByProviderModel;
     const providerGroups = new Map<string, CodexUsageDailyProviderStats[]>();
     const dayGroups = new Map<string, CodexUsageDailyProviderStats[]>();
     const providerModelGroups = new Map<string, CodexUsageDailyProviderModelStats[]>();
-    for (const item of result.dailyByProvider) {
+    for (const item of fullDailyByProvider) {
       providerGroups.set(item.provider.key, [...(providerGroups.get(item.provider.key) || []), item]);
       dayGroups.set(item.date, [...(dayGroups.get(item.date) || []), item]);
     }
-    for (const item of result.dailyByProviderModel) {
+    for (const item of fullDailyByProviderModel) {
       const key = `${item.provider.key}\u0000${item.model}`;
       providerModelGroups.set(key, [...(providerModelGroups.get(key) || []), item]);
     }
@@ -5703,7 +5714,30 @@ export class MockWebBotClient implements WebBotClient {
       model: items[0].model,
       ...sumCodexUsageMetrics(items),
     }));
-    result.totals = sumCodexUsageMetrics(result.dailyByProvider);
+    result.totals = sumCodexUsageMetrics(fullDailyByProvider);
+    const requestedPage = Number.isFinite(query.dailyPage)
+      ? Math.max(1, Math.floor(query.dailyPage!))
+      : 1;
+    const requestedPageSize = Number.isFinite(query.dailyPageSize)
+      ? Math.max(1, Math.floor(query.dailyPageSize!))
+      : 10;
+    const pageSize = Math.min(100, requestedPageSize);
+    const totalItems = fullDailyByProviderModel.length || fullDailyByProvider.length;
+    const totalPages = Math.ceil(totalItems / pageSize);
+    const page = requestedPage;
+    const startIndex = (page - 1) * pageSize;
+    result.dailyByProvider = fullDailyByProviderModel.length
+      ? []
+      : fullDailyByProvider.slice(startIndex, startIndex + pageSize);
+    result.dailyByProviderModel = fullDailyByProviderModel.slice(startIndex, startIndex + pageSize);
+    result.dailyPagination = {
+      page,
+      pageSize,
+      totalItems,
+      totalPages,
+      hasPrevious: page > 1,
+      hasNext: page < totalPages,
+    };
     return result;
   }
 

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { AdminCenterScreen } from "../screens/AdminCenterScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { NotificationSettingsStatus, TransferBridgeConfigInput, TransferBridgeStatus, TunnelSnapshot } from "../services/types";
+import type { CodexUsageStats, NotificationSettingsStatus, TransferBridgeConfigInput, TransferBridgeStatus, TunnelSnapshot } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 function createAdminClient(transferStatus: TransferBridgeStatus): WebBotClient {
@@ -89,7 +89,49 @@ const codexUsageStatsFixture = {
     totalTokens: 1600,
     cacheHitRate: 0.25,
   }],
+  dailyPagination: {
+    page: 1,
+    pageSize: 10,
+    totalItems: 1,
+    totalPages: 1,
+    hasPrevious: false,
+    hasNext: false,
+  },
 };
+
+function createPagedCodexUsageStats(page: number, pageSize: number, totalItems = 101) {
+  const allRows = Array.from({ length: totalItems }, (_, index) => {
+    const ordinal = index + 1;
+    return {
+      date: "2026-07-26",
+      provider: codexUsageConfigFixture.currentProvider,
+      model: `model-${String(ordinal).padStart(3, "0")}`,
+      requestCount: ordinal,
+      inputTokens: ordinal * 10,
+      cachedInputTokens: ordinal,
+      uncachedInputTokens: ordinal * 9,
+      outputTokens: ordinal * 5,
+      reasoningOutputTokens: 0,
+      totalTokens: ordinal * 15,
+      cacheHitRate: 0.1,
+    };
+  });
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  const rows = allRows.slice((page - 1) * pageSize, page * pageSize);
+  return {
+    ...codexUsageStatsFixture,
+    dailyByProvider: rows.map(({ model: _model, ...row }) => row),
+    dailyByProviderModel: rows,
+    dailyPagination: {
+      page,
+      pageSize,
+      totalItems,
+      totalPages,
+      hasPrevious: page > 1,
+      hasNext: page < totalPages,
+    },
+  };
+}
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -393,6 +435,8 @@ test("管理中心 Codex 用量页签惰性加载并展示关闭后的历史统�
     expect(client.getCodexUsageStats).toHaveBeenCalledWith({
       startDate: "2026-06-27",
       endDate: "2026-07-26",
+      dailyPage: 1,
+      dailyPageSize: 10,
     });
   });
   expect(screen.getByText("统计采集已关闭，历史数据仍可查询。")).toBeInTheDocument();
@@ -494,6 +538,8 @@ test("管理中心 Codex 用量筛选支持快捷日期且清空 Provider 不发
     expect(getCodexUsageStats).toHaveBeenCalledWith({
       startDate: "2026-07-20",
       endDate: "2026-07-26",
+      dailyPage: 1,
+      dailyPageSize: 10,
     });
   });
 
@@ -509,19 +555,122 @@ test("管理中心 Codex 用量筛选支持快捷日期且清空 Provider 不发
     expect(getCodexUsageStats).toHaveBeenCalledWith({
       startDate: "2026-07-20",
       endDate: "2026-07-26",
+      dailyPage: 1,
+      dailyPageSize: 10,
     });
   });
 });
 
-test("管理中心 Codex 用量只提交最后一次查询的结果", async () => {
+test("管理中心 Codex 用量每日明细支持展开、翻页和收起", async () => {
+  const user = userEvent.setup();
+  const getCodexUsageStats = vi.fn(async (query: { dailyPage?: number; dailyPageSize?: number } = {}) => {
+    return createPagedCodexUsageStats(query.dailyPage || 1, query.dailyPageSize || 10);
+  });
+  const client = Object.assign(new MockWebBotClient(), {
+    listAdminUsers: vi.fn(async () => []),
+    listBots: vi.fn(async () => []),
+    getCodexUsageConfig: vi.fn(async () => codexUsageConfigFixture),
+    getCodexUsageStats,
+  });
+
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+  await screen.findByText("用户权限");
+  await user.click(screen.getByRole("tab", { name: "Codex 用量" }));
+
+  await waitFor(() => {
+    expect(getCodexUsageStats).toHaveBeenCalledWith(expect.objectContaining({
+      dailyPage: 1,
+      dailyPageSize: 10,
+    }));
+  });
+  const dailyTable = await screen.findByRole("table", { name: "Codex 用量每日明细" });
+  expect(dailyTable.querySelectorAll("tbody tr")).toHaveLength(10);
+  expect(screen.getByText("model-001")).toBeInTheDocument();
+  expect(screen.queryByText("model-011")).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "展开更多" }));
+  await waitFor(() => {
+    expect(getCodexUsageStats).toHaveBeenLastCalledWith(expect.objectContaining({
+      dailyPage: 1,
+      dailyPageSize: 100,
+    }));
+  });
+  expect(dailyTable.querySelectorAll("tbody tr")).toHaveLength(100);
+  expect(screen.getByText("model-100")).toBeInTheDocument();
+  expect(screen.queryByText("model-101")).not.toBeInTheDocument();
+  expect(screen.getByText("第 1 / 2 页，共 101 条")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "下一页" }));
+  await waitFor(() => {
+    expect(getCodexUsageStats).toHaveBeenLastCalledWith(expect.objectContaining({
+      dailyPage: 2,
+      dailyPageSize: 100,
+    }));
+  });
+  expect(dailyTable.querySelectorAll("tbody tr")).toHaveLength(1);
+  expect(screen.getByText("model-101")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "收起" }));
+  await waitFor(() => {
+    expect(getCodexUsageStats).toHaveBeenLastCalledWith(expect.objectContaining({
+      dailyPage: 1,
+      dailyPageSize: 10,
+    }));
+  });
+  expect(dailyTable.querySelectorAll("tbody tr")).toHaveLength(10);
+});
+
+test("管理中心 Codex 用量快捷日期和重置会恢复每日明细第一页", async () => {
+  const user = userEvent.setup();
+  const getCodexUsageStats = vi.fn(async (query: { dailyPage?: number; dailyPageSize?: number } = {}) => {
+    return createPagedCodexUsageStats(query.dailyPage || 1, query.dailyPageSize || 10);
+  });
+  const client = Object.assign(new MockWebBotClient(), {
+    listAdminUsers: vi.fn(async () => []),
+    listBots: vi.fn(async () => []),
+    getCodexUsageConfig: vi.fn(async () => codexUsageConfigFixture),
+    getCodexUsageStats,
+  });
+
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+  await screen.findByText("用户权限");
+  await user.click(screen.getByRole("tab", { name: "Codex 用量" }));
+  await screen.findByRole("button", { name: "展开更多" });
+
+  await user.click(screen.getByRole("button", { name: "展开更多" }));
+  await waitFor(() => expect(getCodexUsageStats).toHaveBeenLastCalledWith(expect.objectContaining({ dailyPageSize: 100 })));
+
+  await user.click(screen.getByRole("button", { name: "近 7 天" }));
+  await waitFor(() => {
+    expect(getCodexUsageStats).toHaveBeenLastCalledWith(expect.objectContaining({
+      startDate: "2026-07-20",
+      endDate: "2026-07-26",
+      dailyPage: 1,
+      dailyPageSize: 10,
+    }));
+  });
+
+  await user.click(screen.getByRole("button", { name: "展开更多" }));
+  await waitFor(() => expect(getCodexUsageStats).toHaveBeenLastCalledWith(expect.objectContaining({ dailyPageSize: 100 })));
+
+  await user.click(screen.getByRole("button", { name: "重置" }));
+  await waitFor(() => {
+    expect(getCodexUsageStats).toHaveBeenLastCalledWith({
+      startDate: "2026-06-27",
+      endDate: "2026-07-26",
+      dailyPage: 1,
+      dailyPageSize: 10,
+    });
+  });
+});
+
+test("管理中心 Codex 用量请求期间禁用筛选按钮", async () => {
   const user = userEvent.setup();
   const sevenDayQuery = deferred<typeof codexUsageStatsFixture>();
-  const thirtyDayQuery = deferred<typeof codexUsageStatsFixture>();
   const getCodexUsageStats = vi
     .fn()
     .mockResolvedValueOnce(codexUsageStatsFixture)
-    .mockReturnValueOnce(sevenDayQuery.promise)
-    .mockReturnValueOnce(thirtyDayQuery.promise);
+    .mockReturnValueOnce(sevenDayQuery.promise);
   const client = Object.assign(new MockWebBotClient(), {
     listAdminUsers: vi.fn(async () => []),
     listBots: vi.fn(async () => []),
@@ -537,18 +686,9 @@ test("管理中心 Codex 用量只提交最后一次查询的结果", async () =
   await waitFor(() => expect(getCodexUsageStats).toHaveBeenCalledTimes(1));
 
   await user.click(screen.getByRole("button", { name: "近 7 天" }));
+  expect(screen.getByRole("button", { name: "近 30 天" })).toBeDisabled();
   await user.click(screen.getByRole("button", { name: "近 30 天" }));
-  await waitFor(() => expect(getCodexUsageStats).toHaveBeenCalledTimes(3));
-
-  await act(async () => {
-    thirtyDayQuery.resolve({
-      ...codexUsageStatsFixture,
-      range: { startDate: "2026-06-27", endDate: "2026-07-26" },
-      totals: { ...codexUsageStatsFixture.totals, totalTokens: 30_030 },
-    });
-    await thirtyDayQuery.promise;
-  });
-  expect(screen.getByText("30.03K")).toBeInTheDocument();
+  expect(getCodexUsageStats).toHaveBeenCalledTimes(2);
 
   await act(async () => {
     sevenDayQuery.resolve({
@@ -559,8 +699,7 @@ test("管理中心 Codex 用量只提交最后一次查询的结果", async () =
     await sevenDayQuery.promise;
   });
 
-  expect(screen.getByText("30.03K")).toBeInTheDocument();
-  expect(screen.queryByText("7.01K")).not.toBeInTheDocument();
+  expect(screen.getByText("7.01K")).toBeInTheDocument();
 });
 
 test("管理中心 Codex 用量统计加载失败时仍保留采集设置", async () => {
@@ -603,6 +742,105 @@ test("Codex 用量 mock 客户端按筛选后的日明细重算汇总", async ()
   expect(stats.byProvider).toEqual([]);
   expect(stats.byDay).toEqual([]);
   expect(stats.dailyByProvider).toEqual([]);
+});
+
+test("Codex 用量 mock 客户端在完整汇总后再分页每日明细", async () => {
+  const client = new MockWebBotClient();
+  const internals = client as unknown as { codexUsageStats: CodexUsageStats };
+  const firstDaily = internals.codexUsageStats.dailyByProvider[0]!;
+  const firstDetailed = internals.codexUsageStats.dailyByProviderModel[0]!;
+  const secondMetrics = {
+    requestCount: 3,
+    inputTokens: 100,
+    cachedInputTokens: 20,
+    uncachedInputTokens: 80,
+    outputTokens: 50,
+    reasoningOutputTokens: 10,
+    totalTokens: 150,
+    cacheHitRate: 0.2,
+  };
+  internals.codexUsageStats = {
+    ...internals.codexUsageStats,
+    dailyByProvider: [
+      firstDaily,
+      { ...firstDaily, date: "2026-07-25", ...secondMetrics },
+    ],
+    dailyByProviderModel: [
+      firstDetailed,
+      { ...firstDetailed, date: "2026-07-25", model: "gpt-5.6-pro", ...secondMetrics },
+    ],
+  };
+
+  const stats = await client.getCodexUsageStats({ dailyPage: 1, dailyPageSize: 1 });
+
+  expect(stats.dailyPagination).toEqual({
+    page: 1,
+    pageSize: 1,
+    totalItems: 2,
+    totalPages: 2,
+    hasPrevious: false,
+    hasNext: true,
+  });
+  expect(stats.dailyByProviderModel).toHaveLength(1);
+  expect(stats.dailyByProvider).toEqual([]);
+  expect(stats.totals).toMatchObject({ requestCount: 15, totalTokens: 23_150 });
+
+  const outOfRange = await client.getCodexUsageStats({ dailyPage: 3, dailyPageSize: 1 });
+  expect(outOfRange.dailyPagination).toMatchObject({ page: 3, totalPages: 2 });
+  expect(outOfRange.dailyByProviderModel).toEqual([]);
+
+  internals.codexUsageStats = {
+    ...internals.codexUsageStats,
+    dailyByProvider: [],
+    dailyByProviderModel: [],
+  };
+  const empty = await client.getCodexUsageStats({ dailyPage: 4, dailyPageSize: 10 });
+  expect(empty.dailyPagination).toMatchObject({ page: 4, totalItems: 0, totalPages: 0 });
+});
+
+test("管理中心 Codex 用量每日分页保持服务端行顺序", async () => {
+  const user = userEvent.setup();
+  const firstProvider = {
+    ...codexUsageConfigFixture.currentProvider,
+    key: "base_url_sha256:a",
+    label: "Z Provider",
+  };
+  const secondProvider = {
+    ...codexUsageConfigFixture.currentProvider,
+    key: "base_url_sha256:z",
+    label: "A Provider",
+  };
+  const serverOrderedStats = {
+    ...codexUsageStatsFixture,
+    dailyByProvider: [],
+    dailyByProviderModel: [
+      { ...codexUsageStatsFixture.dailyByProvider[0], provider: firstProvider, model: "model-a" },
+      { ...codexUsageStatsFixture.dailyByProvider[0], provider: secondProvider, model: "model-z" },
+    ],
+    dailyPagination: {
+      page: 1,
+      pageSize: 10,
+      totalItems: 2,
+      totalPages: 1,
+      hasPrevious: false,
+      hasNext: false,
+    },
+  };
+  const client = Object.assign(new MockWebBotClient(), {
+    listAdminUsers: vi.fn(async () => []),
+    listBots: vi.fn(async () => []),
+    getCodexUsageConfig: vi.fn(async () => codexUsageConfigFixture),
+    getCodexUsageStats: vi.fn(async () => serverOrderedStats),
+  });
+
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+  await screen.findByText("用户权限");
+  await user.click(screen.getByRole("tab", { name: "Codex 用量" }));
+
+  const table = await screen.findByRole("table", { name: "Codex 用量每日明细" });
+  const rows = Array.from(table.querySelectorAll("tbody tr"));
+  expect(rows[0]).toHaveTextContent("Z Provider");
+  expect(rows[1]).toHaveTextContent("A Provider");
 });
 
 test("管理中心 Codex 用量不会把缺失的 Provider 解析状态显示为已解析", async () => {

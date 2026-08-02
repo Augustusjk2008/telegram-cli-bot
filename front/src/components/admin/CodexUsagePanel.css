@@ -10,7 +10,9 @@
 .codex-usage-switch,
 .codex-usage-form-actions,
 .codex-usage-quick-actions,
-.codex-usage-provider-actions {
+.codex-usage-provider-actions,
+.codex-usage-daily-pagination,
+.codex-usage-daily-page-controls {
   display: flex;
   align-items: center;
   gap: 0.75rem;
@@ -212,7 +214,8 @@
 }
 
 .codex-usage-filter-form button,
-.codex-usage-form-actions button {
+.codex-usage-form-actions button,
+.codex-usage-daily-pagination button {
   border: 1px solid var(--border);
   border-radius: 0.5rem;
   background: var(--surface);
@@ -222,11 +225,13 @@
 }
 
 .codex-usage-filter-form button:hover:not(:disabled),
-.codex-usage-form-actions button:hover:not(:disabled) {
+.codex-usage-form-actions button:hover:not(:disabled),
+.codex-usage-daily-pagination button:hover:not(:disabled) {
   background: var(--surface-strong);
 }
 
 .codex-usage-filter-form button:focus-visible,
+.codex-usage-daily-pagination button:focus-visible,
 .codex-usage-switch input:focus-visible,
 .codex-usage-date-fields input:focus-visible,
 .codex-usage-provider-option input:focus-visible {
@@ -243,6 +248,7 @@
 }
 
 .codex-usage-filter-form button:disabled,
+.codex-usage-daily-pagination button:disabled,
 .codex-usage-switch input:disabled {
   cursor: not-allowed;
   opacity: 0.6;
@@ -320,6 +326,19 @@
   color: var(--muted);
   font-size: 0.7rem;
   font-weight: 400;
+}
+
+.codex-usage-daily-pagination {
+  justify-content: space-between;
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+}
+
+.codex-usage-daily-page-controls {
+  flex-wrap: wrap;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.8rem;
 }
 
 @media (max-width: 900px) {

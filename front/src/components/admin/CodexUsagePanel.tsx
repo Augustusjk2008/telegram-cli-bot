@@ -38,6 +38,9 @@ const providerResolutionLabels: Record<NonNullable<CodexUsageProvider["resolutio
   unsupported_override: "检测到不支持的运行时覆盖",
 };
 
+const COLLAPSED_DAILY_PAGE_SIZE = 10;
+const EXPANDED_DAILY_PAGE_SIZE = 100;
+
 function compactNumber(value: number) {
   const exact = numberFormat.format(value);
   const magnitude = Math.abs(value);
@@ -133,6 +136,8 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
   const [endDate, setEndDate] = useState("");
   // null 表示全部 Provider；空数组表示用户明确清空了全部选择。
   const [selectedProviderKeys, setSelectedProviderKeys] = useState<string[] | null>(null);
+  const [dailyPage, setDailyPage] = useState(1);
+  const [dailyPageSize, setDailyPageSize] = useState(COLLAPSED_DAILY_PAGE_SIZE);
   const [loading, setLoading] = useState(true);
   const [querying, setQuerying] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -142,30 +147,36 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
 
   useEffect(() => {
     let cancelled = false;
-    queryRequestIdRef.current += 1;
+    const requestId = ++queryRequestIdRef.current;
 
     const load = async () => {
       setLoading(true);
       setError("");
       setNotice("");
       setSelectedProviderKeys(null);
+      setDailyPage(1);
+      setDailyPageSize(COLLAPSED_DAILY_PAGE_SIZE);
       try {
         const nextConfig = await client.getCodexUsageConfig();
-        if (cancelled) return;
+        if (cancelled || requestId !== queryRequestIdRef.current) return;
         const range = defaultRange(nextConfig.timeBasis.today);
         setConfig(nextConfig);
         setStartDate(range.startDate);
         setEndDate(range.endDate);
 
-        const nextStats = await client.getCodexUsageStats(range);
-        if (cancelled) return;
+        const nextStats = await client.getCodexUsageStats({
+          ...range,
+          dailyPage: 1,
+          dailyPageSize: COLLAPSED_DAILY_PAGE_SIZE,
+        });
+        if (cancelled || requestId !== queryRequestIdRef.current) return;
         setStats(nextStats);
       } catch (nextError) {
-        if (!cancelled) {
+        if (!cancelled && requestId === queryRequestIdRef.current) {
           setError(getErrorMessage(nextError, "加载 Codex 用量失败"));
         }
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && requestId === queryRequestIdRef.current) setLoading(false);
       }
     };
 
@@ -207,17 +218,15 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
           ...item,
           model: DEFAULT_CODEX_USAGE_MODEL,
         }));
-    return [...rows].sort((left, right) => (
-      right.date.localeCompare(left.date)
-      || sortProviders(left.provider, right.provider)
-      || left.model.localeCompare(right.model)
-    ));
+    return rows;
   }, [stats]);
 
   const runStatsQuery = async (
     nextStartDate = startDate,
     nextEndDate = endDate,
     nextSelectedProviderKeys = selectedProviderKeys,
+    nextDailyPage = 1,
+    nextDailyPageSize = COLLAPSED_DAILY_PAGE_SIZE,
   ) => {
     const normalizedStartDate = nextStartDate.trim();
     const normalizedEndDate = nextEndDate.trim();
@@ -235,6 +244,11 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
     }
 
     const requestId = ++queryRequestIdRef.current;
+    const requestedDailyPage = Math.max(1, Math.floor(nextDailyPage));
+    const requestedDailyPageSize = Math.min(
+      EXPANDED_DAILY_PAGE_SIZE,
+      Math.max(1, Math.floor(nextDailyPageSize)),
+    );
     setQuerying(true);
     setError("");
     setNotice("");
@@ -243,9 +257,13 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
         startDate: normalizedStartDate,
         endDate: normalizedEndDate,
         ...(nextSelectedProviderKeys === null ? {} : { providerKeys: nextSelectedProviderKeys }),
+        dailyPage: requestedDailyPage,
+        dailyPageSize: requestedDailyPageSize,
       });
       if (requestId === queryRequestIdRef.current) {
         setStats(nextStats);
+        setDailyPage(requestedDailyPage);
+        setDailyPageSize(requestedDailyPageSize);
       }
     } catch (nextError) {
       if (requestId === queryRequestIdRef.current) {
@@ -285,10 +303,16 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
       : {
           startDate: subtractDays(today, Math.max(0, days - 1)) || today,
           endDate: today,
-        };
+    };
     setStartDate(range.startDate);
     setEndDate(range.endDate);
-    void runStatsQuery(range.startDate, range.endDate);
+    void runStatsQuery(
+      range.startDate,
+      range.endDate,
+      selectedProviderKeys,
+      1,
+      COLLAPSED_DAILY_PAGE_SIZE,
+    );
   };
 
   const resetFilters = () => {
@@ -296,7 +320,7 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
     setStartDate(range.startDate);
     setEndDate(range.endDate);
     setSelectedProviderKeys(null);
-    void runStatsQuery(range.startDate, range.endDate, null);
+    void runStatsQuery(range.startDate, range.endDate, null, 1, COLLAPSED_DAILY_PAGE_SIZE);
   };
 
   const toggleProvider = (providerKey: string) => {
@@ -308,8 +332,40 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
     });
   };
 
+  const expandDailyRows = () => {
+    void runStatsQuery(
+      startDate,
+      endDate,
+      selectedProviderKeys,
+      1,
+      EXPANDED_DAILY_PAGE_SIZE,
+    );
+  };
+
+  const collapseDailyRows = () => {
+    void runStatsQuery(
+      startDate,
+      endDate,
+      selectedProviderKeys,
+      1,
+      COLLAPSED_DAILY_PAGE_SIZE,
+    );
+  };
+
+  const changeDailyPage = (nextPage: number) => {
+    void runStatsQuery(
+      startDate,
+      endDate,
+      selectedProviderKeys,
+      nextPage,
+      EXPANDED_DAILY_PAGE_SIZE,
+    );
+  };
+
   const hasHistoricalData = Boolean(stats && stats.totals.requestCount > 0);
   const noResults = Boolean(stats && !providerRows.length && !dailyRows.length);
+  const dailyPagination = stats?.dailyPagination;
+  const dailyExpanded = dailyPageSize > COLLAPSED_DAILY_PAGE_SIZE;
 
   return (
     <section aria-labelledby="codex-usage-title" className="codex-usage-panel">
@@ -388,30 +444,30 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
                 <p>日期按服务端本地自然日计算。</p>
               </div>
               <div className="codex-usage-quick-actions" aria-label="日期快捷范围">
-                <button type="button" onClick={() => applyQuickRange(1)}>今天</button>
-                <button type="button" onClick={() => applyQuickRange(7)}>近 7 天</button>
-                <button type="button" onClick={() => applyQuickRange(30)}>近 30 天</button>
-                <button type="button" onClick={() => applyQuickRange(90)}>近 90 天</button>
-                <button type="button" onClick={() => applyQuickRange(null)}>全部</button>
+                <button type="button" disabled={querying} onClick={() => applyQuickRange(1)}>今天</button>
+                <button type="button" disabled={querying} onClick={() => applyQuickRange(7)}>近 7 天</button>
+                <button type="button" disabled={querying} onClick={() => applyQuickRange(30)}>近 30 天</button>
+                <button type="button" disabled={querying} onClick={() => applyQuickRange(90)}>近 90 天</button>
+                <button type="button" disabled={querying} onClick={() => applyQuickRange(null)}>全部</button>
               </div>
             </div>
 
             <div className="codex-usage-date-fields">
               <label>
                 起始日期
-                <input aria-label="起始日期" type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} />
+                <input aria-label="起始日期" type="date" value={startDate} disabled={querying} onChange={(event) => setStartDate(event.target.value)} />
               </label>
               <label>
                 结束日期
-                <input aria-label="结束日期" type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} />
+                <input aria-label="结束日期" type="date" value={endDate} disabled={querying} onChange={(event) => setEndDate(event.target.value)} />
               </label>
             </div>
 
             <fieldset className="codex-usage-provider-filters">
               <legend>Provider</legend>
               <div className="codex-usage-provider-actions">
-                <button type="button" onClick={() => setSelectedProviderKeys(null)}>全选</button>
-                <button type="button" onClick={() => setSelectedProviderKeys([])}>清空</button>
+                <button type="button" disabled={querying} onClick={() => setSelectedProviderKeys(null)}>全选</button>
+                <button type="button" disabled={querying} onClick={() => setSelectedProviderKeys([])}>清空</button>
               </div>
               <div className="codex-usage-provider-options">
                 {providers.map((provider) => {
@@ -422,6 +478,7 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
                         aria-label={`筛选 Provider：${providerLabel(provider)}`}
                         type="checkbox"
                         checked={checked}
+                        disabled={querying}
                         onChange={() => toggleProvider(provider.key)}
                       />
                       <span>{providerLabel(provider)}</span>
@@ -502,7 +559,12 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
 
               {!noResults ? (
                 <section className="codex-usage-section" aria-labelledby="codex-usage-daily-title">
-                  <h3 id="codex-usage-daily-title">每日明细</h3>
+                  <div className="codex-usage-section-heading">
+                    <div>
+                      <h3 id="codex-usage-daily-title">每日明细</h3>
+                      {dailyPagination ? <p>当前仅显示服务端返回的明细行。</p> : null}
+                    </div>
+                  </div>
                   <div className="codex-usage-table-wrap">
                     <table aria-label="Codex 用量每日明细">
                       <caption>按日期、Provider 和模型的每日明细</caption>
@@ -533,6 +595,37 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
                       </tbody>
                     </table>
                   </div>
+                  {dailyPagination ? (
+                    <div className="codex-usage-daily-pagination">
+                      {!dailyExpanded && dailyPagination.totalItems > COLLAPSED_DAILY_PAGE_SIZE ? (
+                        <button type="button" disabled={querying} onClick={expandDailyRows}>展开更多</button>
+                      ) : null}
+                      {dailyExpanded ? (
+                        <>
+                          <button type="button" disabled={querying} onClick={collapseDailyRows}>收起</button>
+                          {dailyPagination.totalPages > 1 ? (
+                            <div className="codex-usage-daily-page-controls">
+                              <button
+                                type="button"
+                                disabled={querying || !dailyPagination.hasPrevious}
+                                onClick={() => changeDailyPage(dailyPagination.page - 1)}
+                              >
+                                上一页
+                              </button>
+                              <span>第 {dailyPagination.page} / {dailyPagination.totalPages} 页，共 {dailyPagination.totalItems} 条</span>
+                              <button
+                                type="button"
+                                disabled={querying || !dailyPagination.hasNext}
+                                onClick={() => changeDailyPage(dailyPagination.page + 1)}
+                              >
+                                下一页
+                              </button>
+                            </div>
+                          ) : null}
+                        </>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </section>
               ) : null}
             </>

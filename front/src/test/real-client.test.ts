@@ -4401,6 +4401,14 @@ describe("RealWebBotClient", () => {
         by_day: [{ date: "2026-07-26", ...metrics }],
         daily_by_provider: [{ date: "2026-07-26", provider, ...metrics }],
         daily_by_provider_model: [{ date: "2026-07-26", provider, model: "gpt-5.6-pro", ...metrics }],
+        daily_pagination: {
+          page: 2,
+          page_size: 100,
+          total_items: 101,
+          total_pages: 2,
+          has_previous: true,
+          has_next: false,
+        },
       }));
 
     const client = new RealWebBotClient() as unknown as {
@@ -4410,6 +4418,8 @@ describe("RealWebBotClient", () => {
         startDate?: string;
         endDate?: string;
         providerKeys?: string[];
+        dailyPage?: number;
+        dailyPageSize?: number;
       }) => Promise<unknown>;
     };
 
@@ -4424,6 +4434,8 @@ describe("RealWebBotClient", () => {
       startDate: "2026-07-20",
       endDate: "2026-07-26",
       providerKeys: ["openai_official", "base_url_sha256:abc"],
+      dailyPage: 2,
+      dailyPageSize: 100,
     });
 
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -4442,7 +4454,7 @@ describe("RealWebBotClient", () => {
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       3,
-      "/api/admin/codex-usage/stats?start_date=2026-07-20&end_date=2026-07-26&provider=openai_official&provider=base_url_sha256%3Aabc",
+      "/api/admin/codex-usage/stats?start_date=2026-07-20&end_date=2026-07-26&provider=openai_official&provider=base_url_sha256%3Aabc&daily_page=2&daily_page_size=100",
       expect.objectContaining({ cache: "no-store", credentials: "same-origin" }),
     );
     expect(stats).toMatchObject({
@@ -4458,7 +4470,99 @@ describe("RealWebBotClient", () => {
         provider: { label: "OpenAI 官方" },
       }],
       dailyByProviderModel: [{ model: "gpt-5.6-pro" }],
+      dailyPagination: {
+        page: 2,
+        pageSize: 100,
+        totalItems: 101,
+        totalPages: 2,
+        hasPrevious: true,
+        hasNext: false,
+      },
     });
+  });
+
+  test("Codex 用量客户端兼容缺少每日分页的旧响应", async () => {
+    fetchMock.mockResolvedValue(jsonOk({
+      range: { start_date: "2026-07-26", end_date: "2026-07-26" },
+      enabled: true,
+      time_basis: { mode: "server_local", utc_offset: "+08:00", today: "2026-07-26" },
+      available_range: { first_date: "2026-07-26", last_date: "2026-07-26" },
+      totals: {
+        request_count: 1,
+        input_tokens: 2,
+        cached_input_tokens: 0,
+        uncached_input_tokens: 2,
+        output_tokens: 3,
+        reasoning_output_tokens: 0,
+        total_tokens: 5,
+        cache_hit_rate: 0,
+      },
+      daily_by_provider_model: [{
+        date: "2026-07-26",
+        provider: { key: "openai_official", kind: "openai_official", label: "OpenAI 官方" },
+        model: "gpt-5.6-sol",
+        request_count: 1,
+        input_tokens: 2,
+        cached_input_tokens: 0,
+        uncached_input_tokens: 2,
+        output_tokens: 3,
+        reasoning_output_tokens: 0,
+        total_tokens: 5,
+        cache_hit_rate: 0,
+      }],
+    }));
+
+    const stats = await new RealWebBotClient().getCodexUsageStats({ dailyPage: 1, dailyPageSize: 10 });
+
+    expect(stats.dailyPagination).toEqual({
+      page: 1,
+      pageSize: 1,
+      totalItems: 1,
+      totalPages: 1,
+      hasPrevious: false,
+      hasNext: false,
+    });
+  });
+
+  test("Codex 用量客户端保留服务端空结果和页外分页语义", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonOk({
+        daily_by_provider_model: [],
+        daily_pagination: {
+          page: 4,
+          page_size: 10,
+          total_items: 0,
+          total_pages: 0,
+          has_previous: true,
+          has_next: false,
+        },
+      }))
+      .mockResolvedValueOnce(jsonOk({
+        daily_by_provider_model: [],
+        daily_pagination: {
+          page: 4,
+          page_size: 100,
+          total_items: 101,
+          total_pages: 2,
+          has_previous: true,
+          has_next: false,
+        },
+      }));
+
+    const client = new RealWebBotClient();
+    const emptyStats = await client.getCodexUsageStats({ dailyPage: 4, dailyPageSize: 10 });
+    const outOfRangeStats = await client.getCodexUsageStats({ dailyPage: 4, dailyPageSize: 100 });
+
+    expect(emptyStats.dailyPagination).toEqual({
+      page: 4,
+      pageSize: 10,
+      totalItems: 0,
+      totalPages: 0,
+      hasPrevious: true,
+      hasNext: false,
+    });
+    expect(outOfRangeStats.dailyPagination.page).toBe(4);
+    expect(outOfRangeStats.dailyPagination.totalPages).toBe(2);
   });
 
   
