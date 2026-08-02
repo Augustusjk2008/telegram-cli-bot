@@ -3944,6 +3944,43 @@ test("queues and merges messages typed while a reply is streaming", async () => 
   expect(window.localStorage.getItem("tcb.queuedMessage.main.main")).toBeNull();
 });
 
+test("cancels a queued message before the active reply finishes", async () => {
+  const user = userEvent.setup();
+  let resolveFirst: ((message: ChatMessage) => void) | null = null;
+  const sendMessage = vi.fn((
+    _botAlias: string,
+    _text: string,
+    _onChunk: (chunk: string) => void,
+  ) => new Promise<ChatMessage>((resolve) => {
+    resolveFirst = resolve;
+  }));
+  const client = createClient({ sendMessage: sendMessage as never });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  await user.type(await screen.findByPlaceholderText("输入消息"), "第一条");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+  await user.type(screen.getByRole("textbox"), "不再发送这一条");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(screen.getByText("排队中")).toBeInTheDocument();
+  expect(window.localStorage.getItem("tcb.queuedMessage.main.main")).not.toBeNull();
+  await user.click(screen.getByRole("button", { name: "取消排队消息" }));
+
+  expect(screen.queryByText("排队中")).not.toBeInTheDocument();
+  expect(window.localStorage.getItem("tcb.queuedMessage.main.main")).toBeNull();
+
+  resolveFirst?.({
+    id: "assistant-first",
+    role: "assistant",
+    text: "第一条完成",
+    createdAt: new Date().toISOString(),
+    state: "done",
+  });
+
+  expect(await screen.findByText("第一条完成")).toBeInTheDocument();
+  await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+});
+
 test("sends native agent execution mode from action bar", async () => {
   const user = userEvent.setup();
   const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (

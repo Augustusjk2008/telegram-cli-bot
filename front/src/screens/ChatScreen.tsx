@@ -4330,6 +4330,13 @@ export function ChatScreen({
     });
   }, [botOverview?.cluster?.enabled, pendingAttachments, planMode, sendMessageInternal, setPlanMode, soloMode]);
 
+  const handleCancelQueuedMessage = useCallback(() => {
+    setQueuedMessageState(null, {
+      botAlias,
+      agentId: activeAgentIdRef.current || "main",
+    });
+  }, [botAlias, setQueuedMessageState]);
+
   const handleContinueFinalAnswer = useCallback(() => {
     const currentExecutionMode = executionModeRef.current;
     const nativeSend = currentExecutionMode === "native_agent";
@@ -4995,11 +5002,20 @@ export function ChatScreen({
           <p className="px-4 pt-3 text-xs font-medium text-[var(--status-warning)]">{chatDisabledReason || "只读模式"}</p>
         ) : null}
         {queuedMessage ? (
-          <div className="mx-3 mt-2 rounded-lg border border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] px-3 py-2 text-xs text-[var(--status-warning)] shadow-[var(--shadow-surface)]">
+          <div className="relative mx-3 mt-2 rounded-lg border border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] px-3 py-2 pr-20 text-xs text-[var(--status-warning)] shadow-[var(--shadow-surface)]">
             <div className="font-medium">排队中</div>
             <div className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words">
               {buildComposedMessageText(queuedMessage.text, queuedMessage.attachments)}
             </div>
+            <button
+              type="button"
+              aria-label="取消排队消息"
+              title="取消排队消息"
+              onClick={handleCancelQueuedMessage}
+              className="absolute right-2 top-2 rounded-md border border-[var(--status-warning-border)] px-2 py-1 font-medium transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)]"
+            >
+              取消
+            </button>
           </div>
         ) : null}
         <ChatComposer
