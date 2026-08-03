@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FileCopyResult, FileCreateResult, FileDownloadProgress, FileMoveResult, FileRenameResult } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
-import { getErrorMessage } from "../utils/errorMessage";
+import { getErrorMessage, isAbortError } from "../utils/errorMessage";
 import { WORKBENCH_EXPANDED_PATH_RESTORE_LIMIT, WORKBENCH_HIGHLIGHT_DURATION_MS } from "./workbenchTypes";
 
 export type FileTreeNode = {
@@ -60,6 +60,7 @@ export type UseFileTreeResult = {
   moveFile: (path: string, targetParentPath: string) => Promise<FileMoveResult>;
   deletePath: (path: string) => Promise<void>;
   downloadFile: (path: string) => Promise<void>;
+  cancelDownload: () => void;
 };
 
 function joinTreePath(parent: string, name: string) {
@@ -162,6 +163,7 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
   const branchRequestSeqRef = useRef<Map<string, number>>(new Map());
   const inFlightBranchLoadsRef = useRef<Map<string, InFlightBranchLoad>>(new Map());
   const backgroundRestoreIdRef = useRef(0);
+  const downloadAbortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     expandedPathsRef.current = expandedPaths;
@@ -458,6 +460,11 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
     };
   }, []);
 
+  useEffect(() => () => {
+    downloadAbortControllerRef.current?.abort();
+    downloadAbortControllerRef.current = null;
+  }, [botAlias, client]);
+
   function selectPath(path: string) {
     const nextPath = path.trim();
     selectedPathRef.current = nextPath;
@@ -637,17 +644,39 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
   }
 
   async function downloadFile(path: string) {
+    const controller = new AbortController();
+    downloadAbortControllerRef.current?.abort();
+    downloadAbortControllerRef.current = controller;
+    setError("");
     setDownloadProgress({ path, downloadedBytes: 0 });
     try {
       await client.downloadFile(botAlias, path, (progress) => {
-        setDownloadProgress({ path, ...progress });
-      });
+        if (downloadAbortControllerRef.current === controller && !controller.signal.aborted) {
+          setDownloadProgress({ path, ...progress });
+        }
+      }, controller.signal);
     } catch (nextError) {
-      setError(getErrorMessage(nextError, "下载文件失败"));
-      throw nextError;
+      if (!isAbortError(nextError)) {
+        if (downloadAbortControllerRef.current === controller) {
+          setError(getErrorMessage(nextError, "下载文件失败"));
+        }
+        throw nextError;
+      }
     } finally {
-      setDownloadProgress(null);
+      if (downloadAbortControllerRef.current === controller) {
+        downloadAbortControllerRef.current = null;
+        setDownloadProgress(null);
+      }
     }
+  }
+
+  function cancelDownload() {
+    const controller = downloadAbortControllerRef.current;
+    if (!controller) {
+      return;
+    }
+    controller.abort();
+    setDownloadProgress(null);
   }
 
   return {
@@ -676,5 +705,6 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
     moveFile,
     deletePath,
     downloadFile,
+    cancelDownload,
   };
 }

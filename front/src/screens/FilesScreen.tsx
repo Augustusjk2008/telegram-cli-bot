@@ -25,6 +25,7 @@ import {
   withDetectedPreviewKind,
 } from "../utils/filePreview";
 import { inferFileEditorLanguageId } from "../utils/fileEditorLanguage";
+import { isAbortError } from "../utils/errorMessage";
 import { useLanguageServerStatus } from "../workbench/useLanguageServerStatus";
 
 type Props = {
@@ -270,6 +271,7 @@ export function FilesScreen({
   const codeNavigationRequestSeqRef = useRef(0);
   const codeNavigationHoverRequestSeqRef = useRef(0);
   const codeNavigationAbortControllerRef = useRef<AbortController | null>(null);
+  const downloadAbortControllerRef = useRef<AbortController | null>(null);
   const editorDocumentScopeRef = useRef<EditorDocumentScopeBinding | null>(null);
   const canPreviewFiles = !structureOnly;
   const canMutateFiles = canPreviewFiles && canWriteFiles;
@@ -312,14 +314,19 @@ export function FilesScreen({
     return syncEditorDocumentSnapshot(binding.scope, path, content);
   };
 
-  useEffect(() => () => {
-    listingRequestSeqRef.current += 1;
-    abortExplicitCodeNavigation();
-    const binding = editorDocumentScopeRef.current;
-    if (binding?.client === client && binding.botAlias === botAlias) {
-      void queueEditorDocumentClose(client, botAlias, binding.scope).catch(() => {});
-      editorDocumentScopeRef.current = null;
-    }
+  useEffect(() => {
+    setDownloadProgress(null);
+    return () => {
+      listingRequestSeqRef.current += 1;
+      abortExplicitCodeNavigation();
+      downloadAbortControllerRef.current?.abort();
+      downloadAbortControllerRef.current = null;
+      const binding = editorDocumentScopeRef.current;
+      if (binding?.client === client && binding.botAlias === botAlias) {
+        void queueEditorDocumentClose(client, botAlias, binding.scope).catch(() => {});
+        editorDocumentScopeRef.current = null;
+      }
+    };
   }, [botAlias, client]);
 
   useEffect(() => {
@@ -567,6 +574,9 @@ export function FilesScreen({
     if (!canPreviewFiles) {
       return;
     }
+    const controller = new AbortController();
+    downloadAbortControllerRef.current?.abort();
+    downloadAbortControllerRef.current = controller;
     try {
       setError("");
       setStatusText("");
@@ -576,17 +586,33 @@ export function FilesScreen({
         ...(typeof file.size === "number" ? { totalBytes: file.size, percent: 0 } : {}),
       });
       await client.downloadFile(botAlias, file.name, (progress) => {
-        setDownloadProgress({
-          filename: file.name,
-          ...progress,
-        });
-      });
+        if (downloadAbortControllerRef.current === controller && !controller.signal.aborted) {
+          setDownloadProgress({
+            filename: file.name,
+            ...progress,
+          });
+        }
+      }, controller.signal);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "下载文件失败");
-      setStatusText("");
+      if (!isAbortError(err) && downloadAbortControllerRef.current === controller) {
+        setError(err instanceof Error ? err.message : "下载文件失败");
+        setStatusText("");
+      }
     } finally {
-      setDownloadProgress(null);
+      if (downloadAbortControllerRef.current === controller) {
+        downloadAbortControllerRef.current = null;
+        setDownloadProgress(null);
+      }
     }
+  };
+
+  const handleCancelDownload = () => {
+    const controller = downloadAbortControllerRef.current;
+    if (!controller) {
+      return;
+    }
+    controller.abort();
+    setDownloadProgress(null);
   };
 
   const loadPreview = async (name: string, mode: "preview" | "full") => {
@@ -1125,9 +1151,18 @@ export function FilesScreen({
             >
               <div className="mb-2 flex items-center justify-between gap-3">
                 <span className="min-w-0 truncate font-medium">正在下载 {downloadProgress.filename}</span>
-                <span className="shrink-0 font-mono text-xs text-[var(--muted)]">
-                  {typeof downloadProgress.percent === "number" ? `${downloadProgress.percent}%` : formatDownloadDetail(downloadProgress)}
-                </span>
+                <div className="flex shrink-0 items-center gap-3">
+                  <span className="font-mono text-xs text-[var(--muted)]">
+                    {typeof downloadProgress.percent === "number" ? `${downloadProgress.percent}%` : formatDownloadDetail(downloadProgress)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleCancelDownload}
+                    className="rounded-lg border border-[var(--workbench-hairline)] px-3 py-1.5 text-xs text-[var(--danger)] hover:bg-[var(--workbench-hover-bg)]"
+                  >
+                    取消下载
+                  </button>
+                </div>
               </div>
               <div
                 role="progressbar"
@@ -1234,6 +1269,7 @@ export function FilesScreen({
           onLoadFull={previewMode !== "full" && canLoadFull ? () => void loadPreview(previewName, "full") : undefined}
           onEdit={canEditPreview ? () => void handleOpenEditor(previewName) : undefined}
           onDownload={canPreviewFiles ? () => void handleDownloadEntry({ name: previewName, isDir: false }) : undefined}
+          onCancelDownload={previewDownloadProgress ? handleCancelDownload : undefined}
           downloadProgressText={previewDownloadProgress ? formatDownloadDetail(previewDownloadProgress) : ""}
           downloadPercent={previewDownloadProgress?.percent}
         />

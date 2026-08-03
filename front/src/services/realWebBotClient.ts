@@ -6098,11 +6098,17 @@ export class RealWebBotClient implements WebBotClient {
     }
   }
 
-  async downloadFile(botAlias: string, filename: string, onProgress?: (progress: FileDownloadProgress) => void): Promise<void> {
+  async downloadFile(
+    botAlias: string,
+    filename: string,
+    onProgress?: (progress: FileDownloadProgress) => void,
+    signal?: AbortSignal,
+  ): Promise<void> {
     const params = new URLSearchParams({ filename });
     const response = await fetch(withApiBase(`/api/bots/${encodeURIComponent(botAlias)}/files/download?${params.toString()}`), {
       credentials: "same-origin",
       headers: this.headers(),
+      signal,
     });
     if (!response.ok) {
       throw new Error("下载失败");

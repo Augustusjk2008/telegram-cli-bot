@@ -58,6 +58,7 @@ import type { WebBotClient } from "../services/webBotClient";
 import { delightMotion, resolveMotionProps } from "../motion/premiumMotion";
 import { resolvePreviewFilePath } from "../utils/fileLinks";
 import { copyText } from "../utils/clipboard";
+import { isAbortError } from "../utils/errorMessage";
 import {
   getFilePreviewStatusText,
   isFilePreviewFullyLoaded,
@@ -2016,6 +2017,7 @@ export function ChatScreen({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewResult, setPreviewResult] = useState<FileReadResult | null>(null);
   const [previewDownloadProgress, setPreviewDownloadProgress] = useState<FileDownloadProgress | null>(null);
+  const previewDownloadAbortControllerRef = useRef<AbortController | null>(null);
   const previewRequestSeqRef = useRef(0);
   const [botOverview, setBotOverview] = useState<BotOverview | null>(null);
   const [deletedAttachmentKeys, setDeletedAttachmentKeys] = useState<Record<string, boolean>>({});
@@ -3154,18 +3156,47 @@ export function ChatScreen({
     }
   }, [botAlias, client]);
 
+  const cancelPreviewDownload = useCallback(() => {
+    const controller = previewDownloadAbortControllerRef.current;
+    if (!controller) {
+      return;
+    }
+    controller.abort();
+    setPreviewDownloadProgress(null);
+  }, []);
+
+  useEffect(() => {
+    setPreviewDownloadProgress(null);
+    return () => {
+      previewDownloadAbortControllerRef.current?.abort();
+      previewDownloadAbortControllerRef.current = null;
+    };
+  }, [botAlias, client]);
+
   const downloadPreview = useCallback(async () => {
     if (!previewName) {
       return;
     }
+    const controller = new AbortController();
+    previewDownloadAbortControllerRef.current?.abort();
+    previewDownloadAbortControllerRef.current = controller;
     setPreviewDownloadProgress({ downloadedBytes: 0 });
     setError("");
     try {
-      await client.downloadFile(botAlias, previewName, setPreviewDownloadProgress);
+      await client.downloadFile(botAlias, previewName, (progress) => {
+        if (previewDownloadAbortControllerRef.current === controller && !controller.signal.aborted) {
+          setPreviewDownloadProgress(progress);
+        }
+      }, controller.signal);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "下载文件失败");
+      if (!isAbortError(err) && previewDownloadAbortControllerRef.current === controller) {
+        setError(err instanceof Error ? err.message : "下载文件失败");
+      }
     } finally {
-      setPreviewDownloadProgress(null);
+      if (previewDownloadAbortControllerRef.current === controller) {
+        previewDownloadAbortControllerRef.current = null;
+        setPreviewDownloadProgress(null);
+      }
     }
   }, [botAlias, client, previewName]);
 
@@ -5061,13 +5092,14 @@ export function ChatScreen({
           loading={previewLoading}
           statusText={previewStatusText}
           onClose={() => {
+            cancelPreviewDownload();
             setPreviewName("");
             setPreviewContent("");
             setPreviewResult(null);
-            setPreviewDownloadProgress(null);
           }}
           onLoadFull={previewMode !== "full" && canLoadFull ? () => void loadPreview(previewName, "full") : undefined}
           onDownload={() => void downloadPreview()}
+          onCancelDownload={previewDownloadProgress ? cancelPreviewDownload : undefined}
           downloadProgressText={previewDownloadProgress ? formatDownloadProgress(previewDownloadProgress) : ""}
           downloadPercent={previewDownloadProgress?.percent}
         />

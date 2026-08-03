@@ -328,7 +328,12 @@ export interface WebBotClient {
   uploadChatAttachment(botAlias: string, file: File): Promise<ChatAttachmentUploadResult>;
   deleteChatAttachment(botAlias: string, savedPath: string): Promise<ChatAttachmentDeleteResult>;
   uploadFile(botAlias: string, file: File): Promise<void>;
-  downloadFile(botAlias: string, filename: string, onProgress?: (progress: FileDownloadProgress) => void): Promise<void>;
+  downloadFile(
+    botAlias: string,
+    filename: string,
+    onProgress?: (progress: FileDownloadProgress) => void,
+    signal?: AbortSignal,
+  ): Promise<void>;
   resetSession(botAlias: string): Promise<void>;
   killTask(botAlias: string, options?: AgentScopedOptions): Promise<string>;
   restartService(): Promise<void>;

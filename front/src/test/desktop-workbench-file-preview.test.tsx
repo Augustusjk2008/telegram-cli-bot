@@ -274,3 +274,34 @@ test("vertical file screen keeps file previews in a dialog", async () => {
   expect(await screen.findByRole("dialog", { name: "README.md" })).toBeInTheDocument();
   expect(screen.queryByTestId("desktop-inline-file-preview")).not.toBeInTheDocument();
 });
+
+test("vertical file preview can cancel an active download", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "readFile").mockResolvedValue({
+    content: "# Mobile preview\n",
+    mode: "head",
+    isFullContent: true,
+  });
+  let capturedSignal: AbortSignal | undefined;
+  vi.spyOn(client, "downloadFile").mockImplementation(((_botAlias, _filename, onProgress, signal) => {
+    capturedSignal = signal;
+    onProgress?.({ downloadedBytes: 128, totalBytes: 640, percent: 20 });
+    return new Promise<void>((_resolve, reject) => {
+      signal?.addEventListener("abort", () => {
+        reject(new DOMException("下载已取消", "AbortError"));
+      }, { once: true });
+    });
+  }) as typeof client.downloadFile);
+
+  render(<FilesScreen botAlias="main" client={client} />);
+
+  await user.click(await screen.findByRole("button", { name: "打开 README.md" }));
+  const dialog = await screen.findByRole("dialog", { name: "README.md" });
+  await user.click(within(dialog).getByRole("button", { name: "下载" }));
+  await user.click(await within(dialog).findByRole("button", { name: "取消下载" }));
+
+  await waitFor(() => expect(capturedSignal?.aborted).toBe(true));
+  await waitFor(() => expect(within(dialog).queryByRole("button", { name: "取消下载" })).not.toBeInTheDocument());
+  expect(screen.queryByText("下载已取消")).not.toBeInTheDocument();
+});

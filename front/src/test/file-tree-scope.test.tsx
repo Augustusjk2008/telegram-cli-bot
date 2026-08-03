@@ -61,3 +61,70 @@ test("an old workspace reveal cannot mutate the new workspace tree", async () =>
   expect(result.current.highlightedPath).toBe("");
   expect(result.current.branches.old).toBeUndefined();
 });
+
+test("an active file-tree download can be cancelled without surfacing an error", async () => {
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "listFiles").mockResolvedValue({
+    workingDir: "C:\\workspace",
+    entries: [{ name: "large.bin", isDir: false, size: 1024 }],
+  });
+  let capturedSignal: AbortSignal | undefined;
+  vi.spyOn(client, "downloadFile").mockImplementation(((_botAlias, _filename, onProgress, signal) => {
+    capturedSignal = signal;
+    onProgress?.({ downloadedBytes: 128, totalBytes: 1024, percent: 13 });
+    return new Promise<void>((resolve, reject) => {
+      signal?.addEventListener("abort", () => {
+        reject(new DOMException("下载已取消", "AbortError"));
+      }, { once: true });
+      if (signal?.aborted) {
+        reject(new DOMException("下载已取消", "AbortError"));
+      }
+      void resolve;
+    });
+  }) as typeof client.downloadFile);
+
+  const { result } = renderHook(() => useFileTree("main", client));
+  await waitFor(() => expect(result.current.rootPath).toBe("C:\\workspace"));
+
+  let downloadPromise!: Promise<void>;
+  act(() => {
+    downloadPromise = result.current.downloadFile("large.bin");
+  });
+  await waitFor(() => expect(result.current.downloadProgress?.percent).toBe(13));
+
+  act(() => {
+    (result.current as typeof result.current & { cancelDownload: () => void }).cancelDownload();
+  });
+  await act(async () => {
+    await downloadPromise;
+  });
+
+  expect(capturedSignal?.aborted).toBe(true);
+  expect(result.current.downloadProgress).toBeNull();
+  expect(result.current.error).toBe("");
+});
+
+test("unmounting the file tree aborts its active download", async () => {
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "listFiles").mockResolvedValue({ workingDir: "C:\\workspace", entries: [] });
+  let capturedSignal: AbortSignal | undefined;
+  vi.spyOn(client, "downloadFile").mockImplementation(((_botAlias, _filename, _onProgress, signal) => {
+    capturedSignal = signal;
+    return new Promise<void>((_resolve, reject) => {
+      signal?.addEventListener("abort", () => {
+        reject(new DOMException("下载已取消", "AbortError"));
+      }, { once: true });
+    });
+  }) as typeof client.downloadFile);
+
+  const { result, unmount } = renderHook(() => useFileTree("main", client));
+  await waitFor(() => expect(result.current.rootPath).toBe("C:\\workspace"));
+
+  act(() => {
+    void result.current.downloadFile("large.bin");
+  });
+  await waitFor(() => expect(result.current.downloadProgress?.path).toBe("large.bin"));
+  unmount();
+
+  expect(capturedSignal?.aborted).toBe(true);
+});

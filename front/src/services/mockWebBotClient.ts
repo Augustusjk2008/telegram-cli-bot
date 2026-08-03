@@ -5576,7 +5576,13 @@ export class MockWebBotClient implements WebBotClient {
     return;
   }
 
-  async downloadFile(botAlias: string, filename: string, onProgress?: (progress: FileDownloadProgress) => void): Promise<void> {
+  async downloadFile(
+    botAlias: string,
+    filename: string,
+    onProgress?: (progress: FileDownloadProgress) => void,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    signal?.throwIfAborted();
     onProgress?.({ downloadedBytes: 0, totalBytes: 1, percent: 0 });
     onProgress?.({ downloadedBytes: 1, totalBytes: 1, percent: 100 });
     return;

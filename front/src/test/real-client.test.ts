@@ -162,6 +162,26 @@ describe("RealWebBotClient", () => {
     );
   });
 
+  test("file downloads forward the caller abort signal to fetch", async () => {
+    fetchMock.mockResolvedValue({ ok: false });
+    const controller = new AbortController();
+    const client = new RealWebBotClient();
+    const downloadFile = client.downloadFile as (
+      botAlias: string,
+      filename: string,
+      onProgress?: undefined,
+      signal?: AbortSignal,
+    ) => Promise<void>;
+
+    await expect(downloadFile.call(client, "main", "docs/readme.md", undefined, controller.signal))
+      .rejects.toThrow("下载失败");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/bots/main/files/download?filename=docs%2Freadme.md",
+      expect.objectContaining({ signal: controller.signal }),
+    );
+  });
+
   test("transfer bridge status maps snake case response", async () => {
     fetchMock.mockResolvedValue(jsonOk({
       enabled: true,
