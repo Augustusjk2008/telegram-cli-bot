@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { ChatComposer } from "../components/ChatComposer";
 import { SurfacePanel } from "../components/SurfacePanel";
 import { ToolbarButton } from "../components/ToolbarButton";
 
@@ -27,6 +28,46 @@ describe("compact UI contract", () => {
 
     expect(screen.getByTestId("panel")).toHaveClass("p-3", "shadow-[var(--shadow-surface)]");
     expect(screen.getByRole("button", { name: "操作" })).toHaveClass("h-8");
+  });
+
+  it("keeps the cluster strip and message input flat with one divider", () => {
+    render(
+      <ChatComposer
+        onSend={() => undefined}
+        onAttachFiles={() => undefined}
+        onRemoveAttachment={() => undefined}
+        attachments={[]}
+        clusterMode
+        agents={[
+          {
+            id: "tester",
+            name: "测试专家",
+            systemPrompt: "",
+            enabled: true,
+            isMain: false,
+          },
+        ]}
+      />,
+    );
+
+    const clusterStrip = screen.getByTestId("chat-composer-cluster-strip");
+    const inputSurface = screen.getByTestId("chat-composer-input-surface");
+
+    expect(clusterStrip).toHaveClass("border-b", "border-[var(--workbench-hairline)]");
+    expect(clusterStrip).not.toHaveClass(
+      "rounded-lg",
+      "border",
+      "bg-[var(--workbench-panel-elevated-bg)]",
+    );
+    expect(inputSurface).not.toHaveClass(
+      "rounded-lg",
+      "border",
+      "bg-[var(--workbench-panel-bg)]",
+      "shadow-[var(--shadow-surface)]",
+    );
+    expect(
+      clusterStrip.compareDocumentPosition(inputSurface) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it("keeps mobile safety and chat reading contracts intact", () => {
