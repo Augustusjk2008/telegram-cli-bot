@@ -67,7 +67,14 @@ async def record_codex_usage_capture(usage_capture: Any, parsed_result: Any) -> 
     duplicate_terminal_count = int(getattr(parsed_result, "duplicate_terminal_count", 0) or 0)
     failed = bool(getattr(parsed_result, "turn_failed", False))
     session_id = getattr(parsed_result, "session_id", None)
-    if sample is None and not failed and not invalid_usage_count and not duplicate_terminal_count:
+    # A forced stop can prevent Codex from emitting turn_aborted or terminal usage.
+    # The session id still lets the capture recover this turn from its rollout.
+    if (
+        sample is None
+        and not str(session_id or "").strip()
+        and not invalid_usage_count
+        and not duplicate_terminal_count
+    ):
         return
     try:
         record_once = usage_capture.record_once

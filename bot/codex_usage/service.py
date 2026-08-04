@@ -139,10 +139,11 @@ class CodexUsageCapture:
         if not self.enabled:
             return False
         if usage is None:
-            if not failed or not str(session_id or "").strip():
+            normalized_session_id = str(session_id or "").strip()
+            if not normalized_session_id:
                 return False
             usage = await self._service._resolve_failed_capture_usage(
-                session_id=str(session_id).strip(),
+                session_id=normalized_session_id,
                 started_at=self.started_at,
                 codex_home=self.codex_home,
             )
@@ -318,7 +319,7 @@ class CodexUsageService:
                 codex_home=codex_home,
             )
         except Exception as exc:
-            logger.warning("Codex 失败轮用量恢复失败，已跳过: %s", type(exc).__name__)
+            logger.warning("Codex 未完整终态用量恢复失败，已跳过: %s", type(exc).__name__)
             return None
 
     async def query(

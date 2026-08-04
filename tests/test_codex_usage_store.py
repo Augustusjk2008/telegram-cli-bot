@@ -720,7 +720,7 @@ async def test_capture_accepts_cli_usage_sample_command_and_parser_diagnostics(t
 
 
 @pytest.mark.asyncio
-async def test_capture_uses_rollout_only_for_explicit_failed_turn_and_snapshots_model(
+async def test_capture_uses_rollout_when_terminal_usage_is_missing_and_snapshots_model(
     tmp_path: Path,
 ) -> None:
     models, _, service_module = _core_modules()
@@ -748,8 +748,13 @@ async def test_capture_uses_rollout_only_for_explicit_failed_turn_and_snapshots_
         env={"CODEX_HOME": str(codex_home)},
         command=["codex", "exec", "--model", "unknown", "-"],
     )
-    assert await manual_capture.record_once(None, failed=False, session_id="manual") is False
-    assert resolver_calls == []
+    assert await manual_capture.record_once(
+        None,
+        failed=False,
+        session_id="interrupted-session",
+        terminal_at=date(2026, 7, 26),
+    ) is True
+    assert resolver_calls[0][0] == "interrupted-session"
 
     failed_capture = await service.create_capture(
         env={"CODEX_HOME": str(codex_home)},
@@ -763,12 +768,16 @@ async def test_capture_uses_rollout_only_for_explicit_failed_turn_and_snapshots_
     ) is True
     result = await service.query(date(2026, 7, 26), date(2026, 7, 26))
 
-    assert len(resolver_calls) == 1
-    assert resolver_calls[0][0] == "failed-session"
-    assert resolver_calls[0][1].tzinfo is not None
-    assert resolver_calls[0][2] == codex_home
-    assert result.by_provider_model[0].model == "gpt-5.6-pro"
-    assert result.totals.total_tokens == 37
+    assert len(resolver_calls) == 2
+    assert resolver_calls[1][0] == "failed-session"
+    assert resolver_calls[1][1].tzinfo is not None
+    assert resolver_calls[1][2] == codex_home
+    assert {item.model for item in result.by_provider_model} == {
+        models.DEFAULT_CODEX_MODEL,
+        "gpt-5.6-pro",
+    }
+    assert result.totals.request_count == 2
+    assert result.totals.total_tokens == 74
     await service.aclose()
 
 

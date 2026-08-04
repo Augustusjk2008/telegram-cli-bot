@@ -46,17 +46,6 @@
       "enabled": false
     },
     {
-      "id": "Publish",
-      "label": "发布",
-      "icon": "Terminal",
-      "windowsCommand": "$next = ([version]((Get-Content VERSION -Raw).Trim())); $v = \"{0}.{1}.{2}\" -f $next.Major, $next.Minor, ($next.Build + 1); pwsh -ExecutionPolicy Bypass -File .release-local/publish-release.ps1 -Version $v -RunChecks -AutoConfirmDirtyWorktree -ReleaseNotesFile \".\\docs\\release-notes\\v$($v).md\"",
-      "linuxCommand": "",
-      "macosCommand": "",
-      "cwd": ".",
-      "confirm": true,
-      "enabled": true
-    },
-    {
       "id": "todesk",
       "label": "远程操控",
       "icon": "Terminal",
@@ -95,6 +84,17 @@
       "icon": "Upload",
       "windowsCommand": "codegraph sync .",
       "linuxCommand": "codegraph sync .",
+      "macosCommand": "",
+      "cwd": ".",
+      "confirm": false,
+      "enabled": true
+    },
+    {
+      "id": "memory",
+      "label": "内存占用",
+      "icon": "Terminal",
+      "windowsCommand": "$os = Get-CimInstance Win32_OperatingSystem; $totalGB = $os.TotalVisibleMemorySize / 1048576; $freeGB = $os.FreePhysicalMemory / 1048576; $usedGB = $totalGB - $freeGB; Write-Host \"当前物理内存占用率: $([math]::Round(($usedGB / $totalGB) * 100, 2))%，已用: $([math]::Round($usedGB, 2)) GB，总计: $([math]::Round($totalGB, 2)) GB\"",
+      "linuxCommand": "",
       "macosCommand": "",
       "cwd": ".",
       "confirm": false,

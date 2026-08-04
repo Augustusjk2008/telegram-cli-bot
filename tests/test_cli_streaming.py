@@ -299,9 +299,10 @@ async def test_codex_communicate_records_usage_once_during_cleanup():
 
 
 @pytest.mark.asyncio
-async def test_codex_communicate_only_requests_failed_usage_for_explicit_turn_failed():
+async def test_codex_communicate_requests_rollout_usage_when_terminal_usage_is_missing():
     failed_capture = _UsageCapture()
     aborted_capture = _UsageCapture()
+    interrupted_capture = _UsageCapture()
 
     await _communicate_codex_process(
         _ReaderProcess(
@@ -321,10 +322,19 @@ async def test_codex_communicate_only_requests_failed_usage_for_explicit_turn_fa
         ),
         usage_capture=aborted_capture,
     )
+    await _communicate_codex_process(
+        _ReaderProcess(
+            ['{"type":"thread.started","thread_id":"interrupted-thread"}\n']
+        ),
+        usage_capture=interrupted_capture,
+    )
 
     assert failed_capture.calls == [(None, 0, 0)]
     assert failed_capture.failure_contexts == [(True, "failed-thread")]
-    assert aborted_capture.calls == []
+    assert aborted_capture.calls == [(None, 0, 0)]
+    assert aborted_capture.failure_contexts == [(False, "aborted-thread")]
+    assert interrupted_capture.calls == [(None, 0, 0)]
+    assert interrupted_capture.failure_contexts == [(False, "interrupted-thread")]
 
 
 @pytest.mark.asyncio
