@@ -431,7 +431,6 @@ async def run_all_bots():
     finally:
         await web_server.stop(preserve_tunnel=config.RESTART_REQUESTED)
         await get_native_agent_service().shutdown()
-        await manager.shutdown_all()
         # 保存所有会话到持久化存储
         from bot.sessions import save_all_sessions
         save_all_sessions()

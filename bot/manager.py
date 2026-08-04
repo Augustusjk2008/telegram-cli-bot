@@ -7,7 +7,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from bot import app_settings
 from bot.cli import resolve_cli_executable, validate_cli_type
@@ -27,14 +27,13 @@ from bot.models import (
 )
 from bot.native_agent.legacy_migration import migrate_native_agent_payload
 from bot.plugins.service import PluginService
-from bot.platform.paths import truncate_path_for_display
 from bot.profile_store import (
     apply_persisted_main_profile,
     load_managed_profiles,
     persist_main_profile,
     save_managed_profiles,
 )
-from bot.sessions import clear_bot_sessions, is_bot_processing, update_bot_alias, update_bot_working_dir
+from bot.sessions import update_bot_alias, update_bot_working_dir
 
 logger = logging.getLogger(__name__)
 
@@ -85,10 +84,6 @@ class MultiBotManager:
             ),
         )
         self.managed_profiles: Dict[str, BotProfile] = {}
-        # Web-only 运行时保留该字段做兼容，不再持有 Telegram Application。
-        self.applications: Dict[str, object] = {}
-        self.bot_id_to_alias: Dict[int, str] = {}
-        self._watchdog_task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
 
         self._load_profiles()
@@ -325,53 +320,9 @@ class MultiBotManager:
                 "agents": [self._agent_to_summary(profile, agent) for agent in profile.normalized_agents() if agent.id != "main"],
             }
 
-    async def _start_profile(self, profile: BotProfile, is_main: bool = False) -> object | None:
-        existing = self.applications.get(profile.alias)
-        if existing is not None:
-            return existing
-        logger.info("Web-only 模式不再启动独立聊天运行时 alias=%s is_main=%s", profile.alias, is_main)
-        return None
-
-    async def _stop_application(self, alias: str) -> None:
-        app = self.applications.pop(alias, None)
-        bot_id = None
-        if app is not None:
-            bot_data = getattr(app, "bot_data", None)
-            if isinstance(bot_data, dict):
-                value = bot_data.get("bot_id")
-                if isinstance(value, int):
-                    bot_id = value
-
-        if isinstance(bot_id, int):
-            self.bot_id_to_alias.pop(bot_id, None)
-            clear_bot_sessions(bot_id)
-
-    async def start_all(self) -> None:
-        return None
-
-    async def start_background_services(self, **_: Any) -> None:
-        return None
-
-    async def start_watchdog(self) -> None:
-        self._watchdog_task = None
-
-    async def stop_watchdog(self) -> None:
-        self._watchdog_task = None
-
-    async def stop_background_services(self) -> None:
-        return None
-
-    async def shutdown_all(self) -> None:
-        await self.stop_background_services()
-        await self.stop_watchdog()
-        for alias in list(self.applications.keys()):
-            await self._stop_application(alias)
-        self.bot_id_to_alias.clear()
-
     async def add_bot(
         self,
         alias: str,
-        token: str = "",
         cli_type: Optional[str] = None,
         cli_path: Optional[str] = None,
         working_dir: Optional[str] = None,
@@ -381,7 +332,6 @@ class MultiBotManager:
         bypass_approval_and_sandbox: bool = False,
     ) -> BotProfile:
         normalized_alias = str(alias or "").strip().lower()
-        normalized_token = str(token or "").strip()
         self._validate_alias(normalized_alias)
 
         resolved_cli_type = validate_cli_type(cli_type or CLI_TYPE)
@@ -415,7 +365,6 @@ class MultiBotManager:
                 raise ValueError(f"alias `{normalized_alias}` 已存在")
             profile = BotProfile(
                 alias=normalized_alias,
-                token=normalized_token,
                 cli_type=resolved_cli_type,
                 cli_path=resolved_cli_path,
                 working_dir=resolved_working_dir,
@@ -433,7 +382,6 @@ class MultiBotManager:
 
             self.managed_profiles[normalized_alias] = profile
             self._save_profiles()
-            await self._start_profile(profile, is_main=False)
             return profile
 
     async def set_bot_prompt_presets(self, alias: str, presets: Any) -> list[dict[str, str]]:
@@ -457,7 +405,6 @@ class MultiBotManager:
         async with self._lock:
             if normalized_alias not in self.managed_profiles:
                 raise ValueError(f"不存在 alias `{normalized_alias}`")
-            await self._stop_application(normalized_alias)
             del self.managed_profiles[normalized_alias]
             self._save_profiles()
 
@@ -472,7 +419,6 @@ class MultiBotManager:
             profile = self.managed_profiles[normalized_alias]
             profile.enabled = True
             self._save_profiles()
-            await self._start_profile(profile, is_main=False)
 
     async def stop_bot(self, alias: str) -> None:
         normalized_alias = str(alias or "").strip().lower()
@@ -485,7 +431,6 @@ class MultiBotManager:
             profile = self.managed_profiles[normalized_alias]
             profile.enabled = False
             self._save_profiles()
-            await self._stop_application(normalized_alias)
 
     async def set_bot_cli(self, alias: str, cli_type: str, cli_path: str) -> None:
         normalized_alias = str(alias or "").strip().lower()
@@ -587,16 +532,6 @@ class MultiBotManager:
             profile.alias = normalized_new_alias
             self.managed_profiles[normalized_new_alias] = profile
 
-            app = self.applications.pop(normalized_alias, None)
-            if app is not None:
-                self.applications[normalized_new_alias] = app
-                bot_data = getattr(app, "bot_data", None)
-                if isinstance(bot_data, dict):
-                    bot_data["bot_alias"] = normalized_new_alias
-                    bot_id = bot_data.get("bot_id")
-                    if isinstance(bot_id, int):
-                        self.bot_id_to_alias[bot_id] = normalized_new_alias
-
             update_bot_alias(normalized_alias, normalized_new_alias)
             self._save_profiles()
             return profile
@@ -682,66 +617,3 @@ class MultiBotManager:
             self._git_commit_cli_config = None
             self._persist_git_commit_cli_config(None)
             return self.get_git_commit_cli_config(normalized_alias)
-
-    def get_status_lines(self) -> List[str]:
-        lines: List[str] = []
-        lines.append("<b>📊 Bot 状态概览</b>\n")
-
-        def status_badge(status: str) -> str:
-            badges = {
-                "running": "🟢 <code>运行中</code>",
-                "working": "🔵 <code>处理中</code>",
-                "stopped": "🔴 <code>已停止</code>",
-                "enabled": "✅ 已启用",
-                "disabled": "⚪ 已禁用",
-            }
-            return badges.get(status, status)
-
-        main_app = self.applications.get(self.main_profile.alias)
-        if main_app is not None:
-            bot_data = getattr(main_app, "bot_data", None)
-            main_bot_id = bot_data.get("bot_id") if isinstance(bot_data, dict) else None
-            main_working = is_bot_processing(main_bot_id) if isinstance(main_bot_id, int) else False
-            main_status = "working" if main_working else "running"
-            main_username = (bot_data.get("bot_username") if isinstance(bot_data, dict) else "") or "unknown"
-        else:
-            main_status = "stopped"
-            main_username = "unknown"
-
-        lines.append(
-            f"<b>👑 主 Bot</b>\n"
-            f"  <b>别名:</b> <code>main</code>\n"
-            f"  <b>用户名:</b> @{main_username}\n"
-            f"  <b>状态:</b> {status_badge(main_status)}\n"
-            f"  <b>CLI:</b> <code>{self.main_profile.cli_type}</code>\n"
-            f"  <b>工作目录:</b> <code>{truncate_path_for_display(self.main_profile.working_dir, 30)}</code>\n"
-        )
-
-        if self.managed_profiles:
-            lines.append(f"<b>🤖 托管 Bot</b> (<code>{len(self.managed_profiles)}</code> 个)\n")
-            for alias in sorted(self.managed_profiles.keys()):
-                profile = self.managed_profiles[alias]
-                app = self.applications.get(alias)
-                if app is not None:
-                    bot_data = getattr(app, "bot_data", None)
-                    bot_id = bot_data.get("bot_id") if isinstance(bot_data, dict) else None
-                    is_working = is_bot_processing(bot_id) if isinstance(bot_id, int) else False
-                    run_status = "working" if is_working else "running"
-                    username = (bot_data.get("bot_username") if isinstance(bot_data, dict) else "") or "unknown"
-                else:
-                    run_status = "stopped"
-                    username = "unknown"
-
-                enable_status = "enabled" if profile.enabled else "disabled"
-                lines.append(
-                    f"  ┌ <b>别名:</b> <code>{alias}</code>\n"
-                    f"  ├ <b>用户名:</b> @{username}\n"
-                    f"  ├ <b>运行状态:</b> {status_badge(run_status)}\n"
-                    f"  ├ <b>启用状态:</b> {status_badge(enable_status)}\n"
-                    f"  ├ <b>CLI:</b> <code>{profile.cli_type}</code>\n"
-                    f"  └ <b>工作目录:</b> <code>{truncate_path_for_display(profile.working_dir, 28)}</code>\n"
-                )
-        else:
-            lines.append("<i>💤 暂无托管 Bot</i>")
-
-        return lines

@@ -48,7 +48,6 @@ def _build_manager(tmp_path: Path) -> MultiBotManager:
                 "bots": [
                     {
                         "alias": "team2",
-                        "token": "team_tok",
                         "cli_type": "codex",
                         "cli_path": "codex",
                         "working_dir": str(tmp_path / "team2"),
@@ -61,7 +60,6 @@ def _build_manager(tmp_path: Path) -> MultiBotManager:
     return MultiBotManager(
         BotProfile(
             alias="main",
-            token="main_tok",
             cli_type="codex",
             cli_path="codex",
             working_dir=str(tmp_path / "main"),

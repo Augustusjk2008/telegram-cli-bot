@@ -18,7 +18,6 @@ def web_manager(tmp_path: Path) -> MultiBotManager:
     storage_file.write_text(json.dumps({"bots": []}), encoding="utf-8")
     profile = BotProfile(
         alias="main",
-        token="dummy-token",
         cli_type="codex",
         cli_path="codex",
         working_dir=str(tmp_path),

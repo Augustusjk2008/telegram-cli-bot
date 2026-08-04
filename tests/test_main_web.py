@@ -23,10 +23,6 @@ async def test_run_all_bots_starts_web_server_when_enabled(monkeypatch):
     import bot.main as main_module
 
     fake_manager = MagicMock()
-    fake_manager.start_all = AsyncMock()
-    fake_manager.start_watchdog = AsyncMock()
-    fake_manager.start_background_services = AsyncMock()
-    fake_manager.shutdown_all = AsyncMock()
 
     fake_web_server = MagicMock()
     fake_web_server.start = AsyncMock()
@@ -47,22 +43,15 @@ async def test_run_all_bots_starts_web_server_when_enabled(monkeypatch):
          patch.object(main_module, "WebApiServer", return_value=fake_web_server):
         await main_module.run_all_bots()
 
-    fake_manager.start_all.assert_not_called()
-    fake_manager.start_watchdog.assert_not_called()
     fake_web_server.start.assert_awaited_once()
     fake_web_server.stop.assert_awaited_once_with(preserve_tunnel=False)
     fake_native_service.shutdown.assert_awaited_once()
-    fake_manager.shutdown_all.assert_awaited_once()
 
 @pytest.mark.asyncio
 async def test_run_all_bots_preserves_tunnel_when_restart_requested(monkeypatch):
     import bot.main as main_module
 
     fake_manager = MagicMock()
-    fake_manager.start_all = AsyncMock()
-    fake_manager.start_watchdog = AsyncMock()
-    fake_manager.start_background_services = AsyncMock()
-    fake_manager.shutdown_all = AsyncMock()
 
     fake_web_server = MagicMock()
     fake_web_server.start = AsyncMock()
@@ -87,14 +76,12 @@ async def test_run_all_bots_preserves_tunnel_when_restart_requested(monkeypatch)
     fake_web_server.start.assert_awaited_once()
     fake_web_server.stop.assert_awaited_once_with(preserve_tunnel=True)
     fake_native_service.shutdown.assert_awaited_once()
-    fake_manager.shutdown_all.assert_awaited_once()
 
 @pytest.mark.asyncio
 async def test_run_all_bots_requires_web_runtime(monkeypatch):
     import bot.main as main_module
 
     fake_manager = MagicMock()
-    fake_manager.shutdown_all = AsyncMock()
 
     monkeypatch.setattr(main_module.config, "WEB_ENABLED", False)
 

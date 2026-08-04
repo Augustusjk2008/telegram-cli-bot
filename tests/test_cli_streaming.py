@@ -127,7 +127,6 @@ def usage_manager(tmp_path: Path) -> MultiBotManager:
     return MultiBotManager(
         BotProfile(
             alias="main",
-            token="dummy",
             cli_type="codex",
             cli_path="codex",
             working_dir=str(tmp_path),

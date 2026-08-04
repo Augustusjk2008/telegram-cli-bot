@@ -85,7 +85,6 @@ def _build_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> WebApiServ
     manager = MultiBotManager(
         BotProfile(
             alias="main",
-            token="main_tok",
             cli_type="codex",
             cli_path="codex",
             working_dir=str(tmp_path),

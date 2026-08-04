@@ -2,12 +2,11 @@
 Bot 管理器测试
 
 测试 MultiBotManager 的配置加载/保存和验证逻辑
-（不测试 Telegram API 调用，只测试纯逻辑部分）
 """
 
 import json
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -31,7 +30,6 @@ class TestManagerLoadSave:
             "bots": [
                 {
                     "alias": "sub1",
-                    "token": "tok1",
                     "cli_type": "codex",
                     "cli_path": "codex",
                     "working_dir": str(temp_dir),
@@ -39,17 +37,16 @@ class TestManagerLoadSave:
                 }
             ]
         }))
-        profile = BotProfile(alias="main", token="main_tok")
+        profile = BotProfile(alias="main")
         m = MultiBotManager(main_profile=profile, storage_file=str(storage))
         assert "sub1" in m.managed_profiles
-        assert m.managed_profiles["sub1"].token == "tok1"
 
     def test_save_bots_format(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
-        profile = BotProfile(alias="main", token="main_tok")
+        profile = BotProfile(alias="main")
         m = MultiBotManager(main_profile=profile, storage_file=str(storage))
         m.managed_profiles["sub1"] = BotProfile(
-            alias="sub1", token="tok1", cli_type="claude",
+            alias="sub1", cli_type="claude",
             cli_path="claude", working_dir=str(temp_dir),
         )
         m._save_profiles()
@@ -84,27 +81,25 @@ class TestManagerLoadSave:
     async def test_add_native_agent_bot_skips_cli_validation_and_persists_native_config(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
-        manager = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
+        manager = MultiBotManager(BotProfile(alias="main"), str(storage))
 
-        with patch.object(manager, "_start_profile", AsyncMock(return_value=None)):
-            await manager.add_bot(
-                "native1",
-                "",
-                "codex",
-                "missing-cli",
-                str(temp_dir),
-                supported_execution_modes=["native_agent"],
-                default_execution_mode="native_agent",
-                native_agent={
-                    "provider": "anthropic",
-                    "model": "claude-sonnet-4-5",
-                    "pi_agent": "reviewer",
-                    "base_url": "https://cdn.codeflow.asia/v1",
-                    "api_key": "sk-create-1234",
-                },
-            )
+        await manager.add_bot(
+            "native1",
+            "codex",
+            "missing-cli",
+            str(temp_dir),
+            supported_execution_modes=["native_agent"],
+            default_execution_mode="native_agent",
+            native_agent={
+                "provider": "anthropic",
+                "model": "claude-sonnet-4-5",
+                "pi_agent": "reviewer",
+                "base_url": "https://cdn.codeflow.asia/v1",
+                "api_key": "sk-create-1234",
+            },
+        )
 
-        restored = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
+        restored = MultiBotManager(BotProfile(alias="main"), str(storage))
         profile = restored.managed_profiles["native1"]
 
         assert profile.supported_execution_modes == ["native_agent"]
@@ -115,13 +110,11 @@ class TestManagerLoadSave:
     async def test_add_bot_defaults_yolo_false_without_persisting_cli_params(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
-        manager = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
+        manager = MultiBotManager(BotProfile(alias="main"), str(storage))
 
-        with patch("bot.manager.resolve_cli_executable", return_value="codex"), \
-             patch.object(manager, "_start_profile", AsyncMock(return_value=None)):
+        with patch("bot.manager.resolve_cli_executable", return_value="codex"):
             profile = await manager.add_bot(
                 "safe1",
-                "",
                 "codex",
                 "codex",
                 str(temp_dir),
@@ -136,13 +129,11 @@ class TestManagerLoadSave:
     async def test_add_bot_persists_bypass_approval_and_sandbox_yolo(self, temp_dir: Path, cli_type: str):
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
-        manager = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
+        manager = MultiBotManager(BotProfile(alias="main"), str(storage))
 
-        with patch("bot.manager.resolve_cli_executable", return_value=cli_type), \
-             patch.object(manager, "_start_profile", AsyncMock(return_value=None)):
+        with patch("bot.manager.resolve_cli_executable", return_value=cli_type):
             await manager.add_bot(
                 f"{cli_type}unsafe",
-                "",
                 cli_type,
                 cli_type,
                 str(temp_dir),
@@ -152,7 +143,7 @@ class TestManagerLoadSave:
         data = json.loads(storage.read_text(encoding="utf-8"))
         assert data["bots"][0]["cli_params"][cli_type]["yolo"] is True
 
-        restored = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(storage))
+        restored = MultiBotManager(BotProfile(alias="main"), str(storage))
         assert restored.managed_profiles[f"{cli_type}unsafe"].cli_params.get_param(cli_type, "yolo") is True
 
 class TestManagerValidation:
@@ -169,10 +160,10 @@ class TestManagerValidation:
         old_dir.mkdir()
         new_dir.mkdir()
 
-        manager = MultiBotManager(BotProfile(alias="main", token="main_tok", working_dir=str(old_dir)), str(storage))
+        manager = MultiBotManager(BotProfile(alias="main", working_dir=str(old_dir)), str(storage))
         await manager.set_bot_workdir("main", str(new_dir))
 
-        restored = MultiBotManager(BotProfile(alias="main", token="main_tok", working_dir=str(old_dir)), str(storage))
+        restored = MultiBotManager(BotProfile(alias="main", working_dir=str(old_dir)), str(storage))
 
         assert restored.main_profile.working_dir == str(new_dir)
 
@@ -183,7 +174,7 @@ class TestManagerValidation:
         settings_file = temp_dir / ".web_admin_settings.json"
         monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", settings_file)
 
-        manager = MultiBotManager(BotProfile(alias="main", token="main_tok", working_dir=str(temp_dir)), str(storage))
+        manager = MultiBotManager(BotProfile(alias="main", working_dir=str(temp_dir)), str(storage))
         await manager.set_bot_execution_config(
             "main",
             {
@@ -244,7 +235,7 @@ class TestManagerValidation:
             },
         )
 
-        restored = MultiBotManager(BotProfile(alias="main", token="main_tok", working_dir=str(temp_dir)), str(storage))
+        restored = MultiBotManager(BotProfile(alias="main", working_dir=str(temp_dir)), str(storage))
 
         assert restored.main_profile.supported_execution_modes == ["native_agent"]
         assert restored.main_profile.default_execution_mode == "native_agent"
@@ -254,7 +245,7 @@ class TestManagerValidation:
     async def test_native_agent_bot_config_ignores_global_provider_fields(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
-        manager = MultiBotManager(BotProfile(alias="main", token="main_tok", working_dir=str(temp_dir)), str(storage))
+        manager = MultiBotManager(BotProfile(alias="main", working_dir=str(temp_dir)), str(storage))
 
         await manager.set_bot_execution_config(
             "main",
@@ -280,7 +271,6 @@ class TestManagerValidation:
         manager = MultiBotManager(
             BotProfile(
                 alias="main",
-                token="main_tok",
                 working_dir=str(temp_dir),
                 supported_execution_modes=["native_agent"],
                 default_execution_mode="native_agent",
@@ -290,7 +280,7 @@ class TestManagerValidation:
 
         await manager.set_bot_native_agent_model("main", "jojocode/gpt-5.4", "high")
         restored = MultiBotManager(
-            BotProfile(alias="main", token="main_tok", working_dir=str(temp_dir)),
+            BotProfile(alias="main", working_dir=str(temp_dir)),
             str(storage),
         )
 
@@ -299,34 +289,3 @@ class TestManagerValidation:
             "model": "jojocode/gpt-5.4",
             "reasoning_effort": "high",
         }
-
-    @pytest.mark.asyncio
-    async def test_background_services_do_not_start_native_agent_server(self, temp_dir: Path):
-        storage = temp_dir / "bots.json"
-        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
-        manager = MultiBotManager(BotProfile(alias="main", token="main_tok", working_dir=str(temp_dir)), str(storage))
-
-        await manager.start_background_services(result_executor=AsyncMock(return_value={}))
-        await manager.shutdown_all()
-
-        assert "NATIVE_AGENT_SERVER_" + "MANAGER" not in vars(__import__("bot.manager").manager)
-
-    @pytest.mark.asyncio
-    async def test_background_services_skip_native_bot_workdir_prewarm(self, temp_dir: Path):
-        storage = temp_dir / "bots.json"
-        native_dir = temp_dir / "native"
-        native_dir.mkdir()
-        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
-        manager = MultiBotManager(BotProfile(alias="main", token="main_tok", working_dir=str(temp_dir)), str(storage))
-        manager.managed_profiles["agent-test"] = BotProfile(
-            alias="agent-test",
-            token="",
-            working_dir=str(native_dir),
-            supported_execution_modes=["native_agent"],
-            default_execution_mode="native_agent",
-        )
-
-        await manager.start_background_services(result_executor=AsyncMock(return_value={}))
-        await manager.shutdown_all()
-
-        assert manager.managed_profiles["agent-test"].default_execution_mode == "native_agent"

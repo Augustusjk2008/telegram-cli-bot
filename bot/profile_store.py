@@ -39,7 +39,6 @@ def load_managed_profiles(storage_file: Path) -> dict[str, BotProfile]:
             continue
 
         alias = str(item.get("alias", "")).strip().lower()
-        token = str(item.get("token", "")).strip()
         if not alias or alias in RESERVED_ALIASES:
             continue
 
@@ -52,7 +51,6 @@ def load_managed_profiles(storage_file: Path) -> dict[str, BotProfile]:
 
         profile_data = {
             "alias": alias,
-            "token": token,
             "cli_type": cli_type,
             "cli_path": str(item.get("cli_path", CLI_PATH)).strip() or CLI_PATH,
             "working_dir": os.path.abspath(
