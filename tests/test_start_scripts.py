@@ -205,6 +205,17 @@ def test_frontend_build_scripts_install_only_after_build_failure() -> None:
     )
 
 
+def test_frontend_build_batch_sets_utf8_code_page_before_chinese_output() -> None:
+    content = Path("scripts/build_web_frontend.bat").read_text(encoding="utf-8")
+
+    utf8_setup_index = content.find("chcp 65001 >nul")
+    first_non_ascii_index = next(
+        index for index, character in enumerate(content) if ord(character) > 127
+    )
+
+    assert 0 <= utf8_setup_index < first_non_ascii_index
+
+
 def test_start_bat_retries_after_windows_service_failure_instead_of_exiting() -> None:
     content = Path("start.bat").read_text(encoding="utf-8")
 

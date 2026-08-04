@@ -1658,12 +1658,21 @@ export function DesktopWorkbench({
         rightAction={(
           <div className="flex items-center gap-2">
             {fileTree.downloadProgress ? (
-              <span role="status" aria-label="下载进度" className="max-w-[18rem] truncate">
-                下载 {fileTree.downloadProgress.path}
-                {typeof fileTree.downloadProgress.percent === "number"
-                  ? ` ${fileTree.downloadProgress.percent}%`
-                  : ` ${formatDownloadProgress(fileTree.downloadProgress.downloadedBytes, fileTree.downloadProgress.totalBytes)}`}
-              </span>
+              <div className="flex items-center gap-2">
+                <span role="status" aria-label="下载进度" className="max-w-[18rem] truncate">
+                  下载 {fileTree.downloadProgress.path}
+                  {typeof fileTree.downloadProgress.percent === "number"
+                    ? ` ${fileTree.downloadProgress.percent}%`
+                    : ` ${formatDownloadProgress(fileTree.downloadProgress.downloadedBytes, fileTree.downloadProgress.totalBytes)}`}
+                </span>
+                <button
+                  type="button"
+                  onClick={fileTree.cancelDownload}
+                  className="rounded border border-[var(--workbench-hairline)] px-2 py-0.5 text-[var(--danger)] hover:bg-[var(--workbench-hover-bg)]"
+                >
+                  取消下载
+                </button>
+              </div>
             ) : null}
             {lanChatDock}
           </div>

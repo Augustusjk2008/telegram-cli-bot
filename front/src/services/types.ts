@@ -426,6 +426,8 @@ export type CodexUsageStatsQuery = {
   startDate?: string;
   endDate?: string;
   providerKeys?: string[];
+  dailyPage?: number;
+  dailyPageSize?: number;
 };
 
 export type CodexUsageStatsRange = {
@@ -453,6 +455,15 @@ export type CodexUsageDailyProviderModelStats = CodexUsageDailyProviderStats & {
   model: string;
 };
 
+export type CodexUsageDailyPagination = {
+  page: number;
+  pageSize: number;
+  totalItems: number;
+  totalPages: number;
+  hasPrevious: boolean;
+  hasNext: boolean;
+};
+
 export type CodexUsageStats = {
   range: CodexUsageStatsRange;
   enabled: boolean;
@@ -466,6 +477,7 @@ export type CodexUsageStats = {
   byDay: CodexUsageDailyStats[];
   dailyByProvider: CodexUsageDailyProviderStats[];
   dailyByProviderModel: CodexUsageDailyProviderModelStats[];
+  dailyPagination: CodexUsageDailyPagination;
 };
 
 export type NativeAgentConfigView = {

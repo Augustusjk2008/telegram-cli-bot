@@ -88,6 +88,38 @@ class _UsageProcess(_ReaderProcess):
         self.returncode = -9
 
 
+class _ContinuouslyRefilledOutputQueue:
+    def __init__(self, max_items_before_yield: int = 512) -> None:
+        self.release_eof = False
+        self.get_calls = 0
+        self._max_items_before_yield = max_items_before_yield
+
+    def empty(self) -> bool:
+        return False
+
+    def get_nowait(self) -> object:
+        self.get_calls += 1
+        if self.release_eof:
+            return _PROCESS_STDOUT_EOF
+        if self.get_calls > self._max_items_before_yield:
+            raise AssertionError("stdout drain did not cooperatively yield to the event loop")
+        return '{"type":"item.delta","item":{"type":"assistant_message","delta":"x"}}\n'
+
+
+class _ContinuousOutputReader:
+    def __init__(self) -> None:
+        self.done = threading.Event()
+
+    def close_stdout(self) -> None:
+        self.done.set()
+
+    def join(self, _timeout: float | None = None) -> None:
+        return None
+
+    def stop(self) -> None:
+        self.done.set()
+
+
 @pytest.fixture
 def usage_manager(tmp_path: Path) -> MultiBotManager:
     storage = tmp_path / "managed_bots.json"
@@ -267,9 +299,10 @@ async def test_codex_communicate_records_usage_once_during_cleanup():
 
 
 @pytest.mark.asyncio
-async def test_codex_communicate_only_requests_failed_usage_for_explicit_turn_failed():
+async def test_codex_communicate_requests_rollout_usage_when_terminal_usage_is_missing():
     failed_capture = _UsageCapture()
     aborted_capture = _UsageCapture()
+    interrupted_capture = _UsageCapture()
 
     await _communicate_codex_process(
         _ReaderProcess(
@@ -289,10 +322,19 @@ async def test_codex_communicate_only_requests_failed_usage_for_explicit_turn_fa
         ),
         usage_capture=aborted_capture,
     )
+    await _communicate_codex_process(
+        _ReaderProcess(
+            ['{"type":"thread.started","thread_id":"interrupted-thread"}\n']
+        ),
+        usage_capture=interrupted_capture,
+    )
 
     assert failed_capture.calls == [(None, 0, 0)]
     assert failed_capture.failure_contexts == [(True, "failed-thread")]
-    assert aborted_capture.calls == []
+    assert aborted_capture.calls == [(None, 0, 0)]
+    assert aborted_capture.failure_contexts == [(False, "aborted-thread")]
+    assert interrupted_capture.calls == [(None, 0, 0)]
+    assert interrupted_capture.failure_contexts == [(False, "interrupted-thread")]
 
 
 @pytest.mark.asyncio
@@ -327,6 +369,82 @@ async def test_stream_cli_chat_starts_capture_before_spawn_and_records_once(
     assert next(event for event in events if event["type"] == "done")["output"] == "done"
     assert len(capture.calls) == 1
     assert capture.calls[0][0].input_tokens == 11
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_yields_when_stdout_queue_stays_nonempty(
+    usage_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    output_queue = _ContinuouslyRefilledOutputQueue()
+    reader = _ContinuousOutputReader()
+
+    async def start_capture(*, env, command):
+        return _UsageCapture()
+
+    monkeypatch.setattr(api_service, "_start_codex_usage_capture", start_capture, raising=False)
+    monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
+    monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: (["codex"], False))
+    monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(api_service.subprocess, "Popen", lambda *_args, **_kwargs: _UsageProcess())
+    monkeypatch.setattr(api_service.queue, "Queue", lambda *_args, **_kwargs: output_queue)
+    monkeypatch.setattr(api_service, "_start_process_stdout_reader", lambda *_args, **_kwargs: reader)
+
+    stream = api_service._stream_cli_chat(usage_manager, "main", 1001, "hello")
+    meta = await anext(stream)
+    assert meta["type"] == "meta"
+
+    asyncio.get_running_loop().call_soon(setattr, output_queue, "release_eof", True)
+    events = [meta]
+    async for event in stream:
+        events.append(event)
+
+    done = next(event for event in events if event["type"] == "done")
+    assert output_queue.release_eof is True
+    assert done["turn_id"] == meta["turn_id"]
+    assert done["assistant_message_id"] == meta["assistant_message_id"]
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_waits_for_queued_tail_before_quiet_finish_termination(
+    usage_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    output_queue: queue.Queue[object] = queue.Queue()
+    output_queue.put('{"type":"item.completed","item":{"type":"assistant_message","text":"done"}}\n')
+    output_queue.put('{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n')
+    for index in range(128):
+        output_queue.put(f'{{"type":"thread.started","thread_id":"tail-{index}"}}\n')
+    output_queue.put(_PROCESS_STDOUT_EOF)
+    reader = _ContinuousOutputReader()
+    reader.done.set()
+    process = _UsageProcess()
+    termination_queue_empty: list[bool] = []
+
+    async def start_capture(*, env, command):
+        return _UsageCapture()
+
+    def terminate_after_drain(_process) -> None:
+        termination_queue_empty.append(output_queue.empty())
+        process.returncode = 0
+
+    monkeypatch.setattr(api_service, "CODEX_DONE_QUIET_SECONDS", 0)
+    monkeypatch.setattr(api_service, "_start_codex_usage_capture", start_capture, raising=False)
+    monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
+    monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: (["codex"], False))
+    monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(api_service.subprocess, "Popen", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(api_service.queue, "Queue", lambda *_args, **_kwargs: output_queue)
+    monkeypatch.setattr(api_service, "_start_process_stdout_reader", lambda *_args, **_kwargs: reader)
+    monkeypatch.setattr(api_service, "_terminate_process_sync", terminate_after_drain)
+
+    events = [
+        event
+        async for event in api_service._stream_cli_chat(usage_manager, "main", 1001, "hello")
+    ]
+
+    assert any(event["type"] == "done" for event in events)
+    assert termination_queue_empty == [True]
 
 
 @pytest.mark.asyncio

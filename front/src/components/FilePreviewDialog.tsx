@@ -28,6 +28,7 @@ type Props = {
   onLoadFull?: () => void;
   onEdit?: () => void;
   onDownload?: () => void;
+  onCancelDownload?: () => void;
   onFileLinkClick?: (href: string) => void;
 };
 
@@ -61,6 +62,7 @@ export function FilePreviewDialog({
   onLoadFull,
   onEdit,
   onDownload,
+  onCancelDownload,
   onFileLinkClick,
 }: Props) {
   const [desktopOffset, setDesktopOffset] = useState({ x: 0, y: 0 });
@@ -173,24 +175,35 @@ export function FilePreviewDialog({
       return null;
     }
     return (
-      <div className="min-w-[12rem] text-xs text-[var(--muted)]">
-        <div className="mb-1 flex items-center justify-between gap-2">
-          <span className="truncate">{downloadProgressText}</span>
-          {typeof downloadPercent === "number" ? <span className="font-mono">{downloadPercent}%</span> : null}
-        </div>
-        <div
-          role="progressbar"
-          aria-label={`${title} 下载进度`}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={typeof downloadPercent === "number" ? downloadPercent : undefined}
-          className="h-1.5 overflow-hidden rounded-full bg-[var(--surface-strong)]"
-        >
+      <div className="flex min-w-[12rem] items-center gap-2 text-xs text-[var(--muted)]">
+        <div className="min-w-0 flex-1">
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <span className="truncate">{downloadProgressText}</span>
+            {typeof downloadPercent === "number" ? <span className="font-mono">{downloadPercent}%</span> : null}
+          </div>
           <div
-            className="h-full rounded-full bg-[var(--accent)] transition-[width]"
-            style={{ width: `${typeof downloadPercent === "number" ? downloadPercent : 100}%` }}
-          />
+            role="progressbar"
+            aria-label={`${title} 下载进度`}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={typeof downloadPercent === "number" ? downloadPercent : undefined}
+            className="h-1.5 overflow-hidden rounded-full bg-[var(--surface-strong)]"
+          >
+            <div
+              className="h-full rounded-full bg-[var(--accent)] transition-[width]"
+              style={{ width: `${typeof downloadPercent === "number" ? downloadPercent : 100}%` }}
+            />
+          </div>
         </div>
+        {onCancelDownload ? (
+          <button
+            type="button"
+            onClick={onCancelDownload}
+            className="shrink-0 rounded-lg border border-[var(--workbench-hairline)] px-3 py-2 text-sm text-[var(--danger)] hover:bg-[var(--workbench-hover-bg)]"
+          >
+            取消下载
+          </button>
+        ) : null}
       </div>
     );
   }
@@ -267,7 +280,7 @@ export function FilePreviewDialog({
                   在编辑器中打开
                 </button>
               ) : null}
-              {onDownload ? (
+              {onDownload && (!isDownloading || !onCancelDownload) ? (
                 <button
                   type="button"
                   onClick={onDownload}
@@ -334,7 +347,7 @@ export function FilePreviewDialog({
                 在编辑器中打开
               </button>
             ) : null}
-            {onDownload ? (
+            {onDownload && (!isDownloading || !onCancelDownload) ? (
               <button
                 type="button"
                 onClick={onDownload}

@@ -139,10 +139,11 @@ class CodexUsageCapture:
         if not self.enabled:
             return False
         if usage is None:
-            if not failed or not str(session_id or "").strip():
+            normalized_session_id = str(session_id or "").strip()
+            if not normalized_session_id:
                 return False
             usage = await self._service._resolve_failed_capture_usage(
-                session_id=str(session_id).strip(),
+                session_id=normalized_session_id,
                 started_at=self.started_at,
                 codex_home=self.codex_home,
             )
@@ -318,7 +319,7 @@ class CodexUsageService:
                 codex_home=codex_home,
             )
         except Exception as exc:
-            logger.warning("Codex 失败轮用量恢复失败，已跳过: %s", type(exc).__name__)
+            logger.warning("Codex 未完整终态用量恢复失败，已跳过: %s", type(exc).__name__)
             return None
 
     async def query(
@@ -327,12 +328,16 @@ class CodexUsageService:
         end_day: DayLike,
         *,
         provider_keys: Sequence[str] | None = None,
+        daily_page: int | None = None,
+        daily_page_size: int | None = None,
     ) -> UsageQueryResult:
         return await asyncio.to_thread(
             self._store.query,
             start_day,
             end_day,
             provider_keys=provider_keys,
+            daily_page=daily_page,
+            daily_page_size=daily_page_size,
         )
 
     query_usage = query
@@ -369,6 +374,8 @@ class CodexUsageService:
         start_date: date | None,
         end_date: date | None,
         provider_keys: Sequence[str] | None = None,
+        daily_page: int = 1,
+        daily_page_size: int = 10,
     ) -> dict[str, Any]:
         start, end = _resolve_query_dates(start_date, end_date)
         selected_keys = list(
@@ -387,7 +394,12 @@ class CodexUsageService:
             start,
             end,
             provider_keys=selected_keys or None,
+            daily_page=daily_page,
+            daily_page_size=daily_page_size,
         )
+        daily_pagination = result.daily_pagination
+        if daily_pagination is None:  # pragma: no cover - query_stats always requests a page
+            raise RuntimeError("Codex 用量分页结果缺失")
         first_date, last_date = await self.available_range()
         return {
             "range": {"start_date": start.isoformat(), "end_date": end.isoformat()},
@@ -405,21 +417,7 @@ class CodexUsageService:
                 {"date": item.day.isoformat(), **_totals_payload(item.totals)}
                 for item in sorted(result.by_day, key=lambda value: value.day, reverse=True)
             ],
-            "daily_by_provider": [
-                {
-                    "date": item.day.isoformat(),
-                    "provider": _provider_payload(item.provider),
-                    **_totals_payload(item.totals),
-                }
-                for item in sorted(
-                    result.daily_by_provider,
-                    key=lambda value: (
-                        -value.day.toordinal(),
-                        _provider_order(value.provider),
-                        value.provider.key,
-                    ),
-                )
-            ],
+            "daily_by_provider": [],
             "by_provider_model": [
                 {
                     "provider": _provider_payload(item.provider),
@@ -445,6 +443,14 @@ class CodexUsageService:
                     ),
                 )
             ],
+            "daily_pagination": {
+                "page": daily_pagination.page,
+                "page_size": daily_pagination.page_size,
+                "total_items": daily_pagination.total_items,
+                "total_pages": daily_pagination.total_pages,
+                "has_previous": daily_pagination.has_previous,
+                "has_next": daily_pagination.has_next,
+            },
         }
 
     async def _safe_current_provider(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import re
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -134,13 +135,22 @@ def test_store_migrates_v1_provider_totals_to_default_model_without_changing_the
         )
 
     store = store_module.CodexUsageStore(db_path)
-    result = store.query(date(2026, 7, 26), date(2026, 7, 26))
+    result = store.query(
+        date(2026, 7, 26),
+        date(2026, 7, 26),
+        daily_page=1,
+        daily_page_size=10,
+    )
 
     assert result.totals.request_count == 3
     assert result.totals.total_tokens == 1_250_000
     assert len(result.by_provider_model) == 1
     assert result.by_provider_model[0].model == "gpt-5.6-sol"
     assert result.by_provider_model[0].totals == result.totals
+    assert len(result.daily_by_provider_model) == 1
+    assert result.daily_by_provider_model[0].model == "gpt-5.6-sol"
+    assert result.daily_pagination is not None
+    assert result.daily_pagination.total_items == 1
     assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 2
     store.close()
 
@@ -211,6 +221,134 @@ def test_store_aggregates_by_provider_and_normalized_model_without_unknown_bucke
         "gpt-5.4",
         "gpt-5.6-sol",
     }
+    store.close()
+
+
+def test_store_query_paginates_daily_model_rows_in_sqlite_without_changing_full_aggregates(
+    tmp_path: Path,
+) -> None:
+    models, store_module, _ = _core_modules()
+    store = store_module.CodexUsageStore(tmp_path / "usage.sqlite3")
+    official = _official_provider(models)
+    custom = _custom_provider(models, "pagination")
+
+    for current_day in (date(2026, 7, 1), date(2026, 7, 2), date(2026, 7, 3)):
+        store.record(
+            official,
+            _usage(
+                models,
+                input_tokens=10,
+                cached_input_tokens=1,
+                output_tokens=2,
+                reasoning_output_tokens=0,
+            ),
+            model_key="official-model",
+            terminal_at=current_day,
+        )
+        store.record(
+            custom,
+            _usage(
+                models,
+                input_tokens=20,
+                cached_input_tokens=2,
+                output_tokens=3,
+                reasoning_output_tokens=0,
+            ),
+            model_key="custom-model",
+            terminal_at=current_day,
+        )
+
+    connection = store._connection
+    assert connection is not None
+    statements: list[str] = []
+    connection.set_trace_callback(statements.append)
+    second_page = store.query(
+        date(2026, 7, 1),
+        date(2026, 7, 3),
+        daily_page=2,
+        daily_page_size=2,
+    )
+    connection.set_trace_callback(None)
+    out_of_range = store.query(
+        date(2026, 7, 1),
+        date(2026, 7, 3),
+        daily_page=4,
+        daily_page_size=2,
+    )
+    legacy_result = store.query(date(2026, 7, 1), date(2026, 7, 3))
+
+    assert second_page.daily_pagination is not None
+    assert second_page.daily_pagination.page == 2
+    assert second_page.daily_pagination.page_size == 2
+    assert second_page.daily_pagination.total_items == 6
+    assert second_page.daily_pagination.total_pages == 3
+    assert second_page.daily_pagination.has_previous is True
+    assert second_page.daily_pagination.has_next is True
+    assert [
+        (item.day, item.provider.key, item.model)
+        for item in second_page.daily_by_provider_model
+    ] == [
+        (date(2026, 7, 2), official.key, "official-model"),
+        (date(2026, 7, 2), custom.key, "custom-model"),
+    ]
+    assert second_page.totals.request_count == 6
+    assert [item.totals.request_count for item in second_page.by_provider] == [3, 3]
+    assert [item.totals.request_count for item in second_page.by_provider_model] == [3, 3]
+    assert [item.totals.request_count for item in second_page.by_day] == [2, 2, 2]
+    assert second_page.daily_by_provider == ()
+    assert out_of_range.daily_by_provider_model == ()
+    assert out_of_range.daily_pagination is not None
+    assert out_of_range.daily_pagination.total_items == 6
+    assert out_of_range.daily_pagination.total_pages == 3
+    assert out_of_range.daily_pagination.has_previous is True
+    assert out_of_range.daily_pagination.has_next is False
+    assert legacy_result.daily_pagination is None
+    assert len(legacy_result.daily_by_provider_model) == 6
+    assert any(
+        "DAILY_MODEL_USAGE" in statement.upper() and "COUNT(*)" in statement.upper()
+        for statement in statements
+    )
+    assert any(
+        "DAILY_MODEL_USAGE" in statement.upper()
+        and re.search(r"\bLIMIT\s+2\s+OFFSET\s+2\b", statement, re.IGNORECASE)
+        for statement in statements
+    )
+    store.close()
+
+
+def test_store_rejects_daily_page_size_above_api_limit(tmp_path: Path) -> None:
+    _, store_module, _ = _core_modules()
+    store = store_module.CodexUsageStore(tmp_path / "usage.sqlite3")
+
+    with pytest.raises(ValueError, match="不能超过 100"):
+        store.query(
+            date(2026, 7, 1),
+            date(2026, 7, 1),
+            daily_page=1,
+            daily_page_size=101,
+        )
+
+    store.close()
+
+
+def test_store_empty_pagination_preserves_requested_page_and_zero_pages(tmp_path: Path) -> None:
+    _, store_module, _ = _core_modules()
+    store = store_module.CodexUsageStore(tmp_path / "usage.sqlite3")
+
+    result = store.query(
+        date(2026, 7, 1),
+        date(2026, 7, 1),
+        daily_page=4,
+        daily_page_size=10,
+    )
+
+    assert result.daily_by_provider_model == ()
+    assert result.daily_pagination is not None
+    assert result.daily_pagination.page == 4
+    assert result.daily_pagination.total_items == 0
+    assert result.daily_pagination.total_pages == 0
+    assert result.daily_pagination.has_previous is True
+    assert result.daily_pagination.has_next is False
     store.close()
 
 
@@ -582,7 +720,7 @@ async def test_capture_accepts_cli_usage_sample_command_and_parser_diagnostics(t
 
 
 @pytest.mark.asyncio
-async def test_capture_uses_rollout_only_for_explicit_failed_turn_and_snapshots_model(
+async def test_capture_uses_rollout_when_terminal_usage_is_missing_and_snapshots_model(
     tmp_path: Path,
 ) -> None:
     models, _, service_module = _core_modules()
@@ -610,8 +748,13 @@ async def test_capture_uses_rollout_only_for_explicit_failed_turn_and_snapshots_
         env={"CODEX_HOME": str(codex_home)},
         command=["codex", "exec", "--model", "unknown", "-"],
     )
-    assert await manual_capture.record_once(None, failed=False, session_id="manual") is False
-    assert resolver_calls == []
+    assert await manual_capture.record_once(
+        None,
+        failed=False,
+        session_id="interrupted-session",
+        terminal_at=date(2026, 7, 26),
+    ) is True
+    assert resolver_calls[0][0] == "interrupted-session"
 
     failed_capture = await service.create_capture(
         env={"CODEX_HOME": str(codex_home)},
@@ -625,12 +768,16 @@ async def test_capture_uses_rollout_only_for_explicit_failed_turn_and_snapshots_
     ) is True
     result = await service.query(date(2026, 7, 26), date(2026, 7, 26))
 
-    assert len(resolver_calls) == 1
-    assert resolver_calls[0][0] == "failed-session"
-    assert resolver_calls[0][1].tzinfo is not None
-    assert resolver_calls[0][2] == codex_home
-    assert result.by_provider_model[0].model == "gpt-5.6-pro"
-    assert result.totals.total_tokens == 37
+    assert len(resolver_calls) == 2
+    assert resolver_calls[1][0] == "failed-session"
+    assert resolver_calls[1][1].tzinfo is not None
+    assert resolver_calls[1][2] == codex_home
+    assert {item.model for item in result.by_provider_model} == {
+        models.DEFAULT_CODEX_MODEL,
+        "gpt-5.6-pro",
+    }
+    assert result.totals.request_count == 2
+    assert result.totals.total_tokens == 74
     await service.aclose()
 
 
@@ -686,9 +833,62 @@ async def test_service_exposes_admin_config_and_stats_views(tmp_path: Path) -> N
     assert stats["totals"]["request_count"] == 1
     assert stats["by_provider"][0]["provider"]["base_url"] == provider.base_url
     assert stats["by_provider_model"][0]["model"] == "gpt-5.6-sol"
-    assert stats["daily_by_provider"][0]["date"] == "2026-07-26"
+    assert stats["daily_by_provider"] == []
     assert stats["daily_by_provider_model"][0]["model"] == "gpt-5.6-sol"
+    assert stats["daily_pagination"] == {
+        "page": 1,
+        "page_size": 10,
+        "total_items": 1,
+        "total_pages": 1,
+        "has_previous": False,
+        "has_next": False,
+    }
     assert updated_config["enabled"] is False
+    await service.aclose()
+
+
+@pytest.mark.asyncio
+async def test_service_stats_defaults_daily_model_detail_to_ten_rows(tmp_path: Path) -> None:
+    models, _, service_module = _core_modules()
+    provider = _official_provider(models)
+    service = service_module.CodexUsageService(
+        db_path=tmp_path / "usage.sqlite3",
+        resolver=_StaticResolver(provider),
+    )
+    for day in range(1, 12):
+        service._store.record(
+            provider,
+            _usage(
+                models,
+                input_tokens=day,
+                cached_input_tokens=0,
+                output_tokens=1,
+                reasoning_output_tokens=0,
+            ),
+            model_key=f"model-{day:02d}",
+            terminal_at=date(2026, 7, day),
+        )
+
+    stats = await service.query_stats(
+        start_date=date(2026, 7, 1),
+        end_date=date(2026, 7, 11),
+        provider_keys=[provider.key],
+    )
+
+    assert stats["totals"]["request_count"] == 11
+    assert len(stats["by_day"]) == 11
+    assert stats["daily_by_provider"] == []
+    assert [item["date"] for item in stats["daily_by_provider_model"]] == [
+        f"2026-07-{day:02d}" for day in range(11, 1, -1)
+    ]
+    assert stats["daily_pagination"] == {
+        "page": 1,
+        "page_size": 10,
+        "total_items": 11,
+        "total_pages": 2,
+        "has_previous": False,
+        "has_next": True,
+    }
     await service.aclose()
 
 

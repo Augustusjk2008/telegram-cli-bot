@@ -154,6 +154,16 @@ class DailyProviderModelUsage:
 
 
 @dataclass(frozen=True, slots=True)
+class DailyUsagePagination:
+    page: int
+    page_size: int
+    total_items: int
+    total_pages: int
+    has_previous: bool
+    has_next: bool
+
+
+@dataclass(frozen=True, slots=True)
 class UsageQueryResult:
     totals: UsageTotals
     by_provider: tuple[ProviderUsage, ...]
@@ -161,6 +171,7 @@ class UsageQueryResult:
     daily_by_provider: tuple[DailyProviderUsage, ...]
     by_provider_model: tuple[ProviderModelUsage, ...]
     daily_by_provider_model: tuple[DailyProviderModelUsage, ...]
+    daily_pagination: DailyUsagePagination | None = None
 
 
 DayLike = date | datetime | int | str

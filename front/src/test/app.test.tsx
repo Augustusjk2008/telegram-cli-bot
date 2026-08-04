@@ -317,6 +317,7 @@ test("desktop file tree keeps compact workspace actions and moves secondary acti
     moveFile: vi.fn(),
     deletePath: vi.fn(),
     downloadFile: vi.fn(),
+    cancelDownload: vi.fn(),
   };
 
   render(
@@ -421,6 +422,7 @@ test("desktop file tree preserves read-only permissions and directory expansion 
     moveFile: vi.fn(),
     deletePath: vi.fn(),
     downloadFile: vi.fn(),
+    cancelDownload: vi.fn(),
   };
 
   const { rerender } = render(
@@ -521,6 +523,7 @@ test("desktop file tree reports directory deletion so descendant editor tabs can
     moveFile: vi.fn(),
     deletePath,
     downloadFile: vi.fn(),
+    cancelDownload: vi.fn(),
   };
 
   render(

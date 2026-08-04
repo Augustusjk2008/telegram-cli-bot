@@ -112,9 +112,7 @@ export function ChatComposer({
     ? "chat-composer-delight border-t border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2 py-1.5"
     : "chat-composer-delight border-t border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-3 py-2";
   const formClassName = "relative";
-  const inputBarClassName = compact
-    ? "relative flex min-w-0 flex-col rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-1 shadow-[var(--shadow-surface)] focus-within:border-[var(--workbench-hover-border)]"
-    : "relative flex min-w-0 flex-col rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-1 shadow-[var(--shadow-surface)] focus-within:border-[var(--workbench-hover-border)]";
+  const inputBarClassName = "relative flex min-w-0 flex-col p-1 transition-colors focus-within:bg-[var(--workbench-hover-bg)]";
   const inputDisabled = disabled || uploadingAttachments;
   const [message, setMessage] = useState("");
   const [presetMenuOpen, setPresetMenuOpen] = useState(false);
@@ -477,7 +475,10 @@ export function ChatComposer({
       ) : null}
 
       {clusterMode && clusterAgents.length > 0 ? (
-        <div className="mb-1.5 flex flex-wrap items-center gap-1.5 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-2 py-1.5 text-xs">
+        <div
+          data-testid="chat-composer-cluster-strip"
+          className="mb-1 flex flex-wrap items-center gap-1.5 border-b border-[var(--workbench-hairline)] px-1 pb-2 pt-0.5 text-xs"
+        >
           <span className="font-medium text-[var(--accent)]">智能体集群</span>
           {clusterAgents.map((agent) => (
             <button
@@ -505,7 +506,7 @@ export function ChatComposer({
           setMentionQuery(null);
         }}
       >
-        <div className={inputBarClassName}>
+        <div data-testid="chat-composer-input-surface" className={inputBarClassName}>
           <div className="relative min-h-8 w-full min-w-0">
             <textarea
               ref={measureTextareaRef}

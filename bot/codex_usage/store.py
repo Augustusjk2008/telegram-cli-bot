@@ -11,6 +11,7 @@ from .models import (
     DEFAULT_CODEX_MODEL,
     DailyProviderModelUsage,
     DailyProviderUsage,
+    DailyUsagePagination,
     DayLike,
     DayUsage,
     ProviderInfo,
@@ -162,7 +163,10 @@ class CodexUsageStore:
         )
 
     @staticmethod
-    def _empty_query() -> UsageQueryResult:
+    def _empty_query(
+        *,
+        daily_pagination: DailyUsagePagination | None = None,
+    ) -> UsageQueryResult:
         return UsageQueryResult(
             totals=UsageTotals(),
             by_provider=(),
@@ -170,6 +174,24 @@ class CodexUsageStore:
             daily_by_provider=(),
             by_provider_model=(),
             daily_by_provider_model=(),
+            daily_pagination=daily_pagination,
+        )
+
+    @staticmethod
+    def _daily_pagination(
+        *,
+        page: int,
+        page_size: int,
+        total_items: int,
+    ) -> DailyUsagePagination:
+        total_pages = (total_items + page_size - 1) // page_size
+        return DailyUsagePagination(
+            page=page,
+            page_size=page_size,
+            total_items=total_items,
+            total_pages=total_pages,
+            has_previous=page > 1,
+            has_next=page < total_pages,
         )
 
     def get_enabled(self) -> bool:
@@ -306,18 +328,44 @@ class CodexUsageStore:
         end_day: DayLike,
         *,
         provider_keys: Iterable[str] | None = None,
+        daily_page: int | None = None,
+        daily_page_size: int | None = None,
     ) -> UsageQueryResult:
         start = day_number(start_day)
         end = day_number(end_day)
         if start > end:
             raise ValueError("起始日期不能晚于结束日期")
+        pagination_requested = daily_page is not None or daily_page_size is not None
+        empty_pagination: DailyUsagePagination | None = None
+        if pagination_requested:
+            if daily_page is None or daily_page_size is None:
+                raise ValueError("daily_page 和 daily_page_size 必须同时提供")
+            if (
+                isinstance(daily_page, bool)
+                or not isinstance(daily_page, int)
+                or daily_page <= 0
+            ):
+                raise ValueError("daily_page 必须是正整数")
+            if (
+                isinstance(daily_page_size, bool)
+                or not isinstance(daily_page_size, int)
+                or daily_page_size <= 0
+            ):
+                raise ValueError("daily_page_size 必须是正整数")
+            if daily_page_size > 100:
+                raise ValueError("daily_page_size 不能超过 100")
+            empty_pagination = self._daily_pagination(
+                page=daily_page,
+                page_size=daily_page_size,
+                total_items=0,
+            )
         selected_keys = None
         if provider_keys is not None:
             selected_keys = tuple(dict.fromkeys(str(item) for item in provider_keys))
         with self._lock:
             connection = self._get_connection(create=False)
             if connection is None:
-                return self._empty_query()
+                return self._empty_query(daily_pagination=empty_pagination)
             where = ["daily_usage.day >= ?", "daily_usage.day <= ?"]
             model_where = [
                 "daily_model_usage.day >= ?",
@@ -326,7 +374,7 @@ class CodexUsageStore:
             parameters: list[object] = [start, end]
             if selected_keys is not None:
                 if not selected_keys:
-                    return self._empty_query()
+                    return self._empty_query(daily_pagination=empty_pagination)
                 placeholders = ", ".join("?" for _ in selected_keys)
                 where.append(f"providers.provider_key IN ({placeholders})")
                 model_where.append(f"providers.provider_key IN ({placeholders})")
@@ -350,31 +398,118 @@ class CodexUsageStore:
                 """,
                 parameters,
             ).fetchall()
-            model_rows = connection.execute(
+            if not rows:
+                return self._empty_query(daily_pagination=empty_pagination)
+            model_total_rows = connection.execute(
                 f"""
                 SELECT
-                    daily_model_usage.day,
                     daily_model_usage.model_key,
-                    daily_model_usage.request_count,
-                    daily_model_usage.input_tokens,
-                    daily_model_usage.cached_input_tokens,
-                    daily_model_usage.output_tokens,
-                    daily_model_usage.reasoning_output_tokens,
+                    SUM(daily_model_usage.request_count) AS request_count,
+                    SUM(daily_model_usage.input_tokens) AS input_tokens,
+                    SUM(daily_model_usage.cached_input_tokens) AS cached_input_tokens,
+                    SUM(daily_model_usage.output_tokens) AS output_tokens,
+                    SUM(daily_model_usage.reasoning_output_tokens) AS reasoning_output_tokens,
                     providers.provider_key,
                     providers.kind,
                     providers.base_url
                 FROM daily_model_usage
                 JOIN providers ON providers.provider_id = daily_model_usage.provider_id
                 WHERE {' AND '.join(model_where)}
+                GROUP BY
+                    daily_model_usage.provider_id,
+                    daily_model_usage.model_key,
+                    providers.provider_key,
+                    providers.kind,
+                    providers.base_url
                 ORDER BY
-                    daily_model_usage.day ASC,
+                    CASE providers.kind
+                        WHEN 'openai_official' THEN 0
+                        WHEN 'base_url' THEN 1
+                        WHEN 'unknown' THEN 2
+                        ELSE 99
+                    END ASC,
                     providers.provider_key ASC,
                     daily_model_usage.model_key ASC
                 """,
                 parameters,
             ).fetchall()
-        if not rows:
-            return self._empty_query()
+            daily_pagination: DailyUsagePagination | None = None
+            if pagination_requested:
+                assert daily_page is not None
+                assert daily_page_size is not None
+                count_row = connection.execute(
+                    f"""
+                    SELECT COUNT(*) AS total_items
+                    FROM daily_model_usage
+                    JOIN providers ON providers.provider_id = daily_model_usage.provider_id
+                    WHERE {' AND '.join(model_where)}
+                    """,
+                    parameters,
+                ).fetchone()
+                total_items = int(count_row["total_items"])
+                daily_pagination = self._daily_pagination(
+                    page=daily_page,
+                    page_size=daily_page_size,
+                    total_items=total_items,
+                )
+                if daily_page > daily_pagination.total_pages:
+                    model_rows: list[sqlite3.Row] = []
+                else:
+                    offset = (daily_page - 1) * daily_page_size
+                    model_rows = connection.execute(
+                        f"""
+                        SELECT
+                            daily_model_usage.day,
+                            daily_model_usage.model_key,
+                            daily_model_usage.request_count,
+                            daily_model_usage.input_tokens,
+                            daily_model_usage.cached_input_tokens,
+                            daily_model_usage.output_tokens,
+                            daily_model_usage.reasoning_output_tokens,
+                            providers.provider_key,
+                            providers.kind,
+                            providers.base_url
+                        FROM daily_model_usage
+                        JOIN providers ON providers.provider_id = daily_model_usage.provider_id
+                        WHERE {' AND '.join(model_where)}
+                        ORDER BY
+                            daily_model_usage.day DESC,
+                            CASE providers.kind
+                                WHEN 'openai_official' THEN 0
+                                WHEN 'base_url' THEN 1
+                                WHEN 'unknown' THEN 2
+                                ELSE 99
+                            END ASC,
+                            providers.provider_key ASC,
+                            daily_model_usage.model_key ASC
+                        LIMIT ? OFFSET ?
+                        """,
+                        [*parameters, daily_page_size, offset],
+                    ).fetchall()
+            else:
+                model_rows = connection.execute(
+                    f"""
+                    SELECT
+                        daily_model_usage.day,
+                        daily_model_usage.model_key,
+                        daily_model_usage.request_count,
+                        daily_model_usage.input_tokens,
+                        daily_model_usage.cached_input_tokens,
+                        daily_model_usage.output_tokens,
+                        daily_model_usage.reasoning_output_tokens,
+                        providers.provider_key,
+                        providers.kind,
+                        providers.base_url
+                    FROM daily_model_usage
+                    JOIN providers ON providers.provider_id = daily_model_usage.provider_id
+                    WHERE {' AND '.join(model_where)}
+                    ORDER BY
+                        daily_model_usage.day ASC,
+                        providers.provider_key ASC,
+                        daily_model_usage.model_key ASC
+                    """,
+                    parameters,
+                ).fetchall()
         total = UsageTotals()
         provider_totals: dict[str, tuple[ProviderInfo, UsageTotals]] = {}
         day_totals: dict[date, UsageTotals] = {}
@@ -389,9 +524,10 @@ class CodexUsageStore:
             )
             current_day = day_from_number(int(row["day"]))
             day_totals[current_day] = day_totals.get(current_day, UsageTotals()).plus(totals)
-            daily_rows.append(
-                DailyProviderUsage(day=current_day, provider=provider, totals=totals)
-            )
+            if not pagination_requested:
+                daily_rows.append(
+                    DailyProviderUsage(day=current_day, provider=provider, totals=totals)
+                )
             total = total.plus(totals)
         kind_order = {"openai_official": 0, "base_url": 1, "unknown": 2}
         by_provider = tuple(
@@ -405,7 +541,7 @@ class CodexUsageStore:
             DayUsage(day=current_day, totals=totals)
             for current_day, totals in sorted(day_totals.items())
         )
-        daily_by_provider = tuple(
+        daily_by_provider = () if pagination_requested else tuple(
             sorted(
                 daily_rows,
                 key=lambda item: (
@@ -419,7 +555,7 @@ class CodexUsageStore:
             tuple[str, str], tuple[ProviderInfo, str, UsageTotals]
         ] = {}
         daily_model_rows: list[DailyProviderModelUsage] = []
-        for row in model_rows:
+        for row in model_total_rows:
             provider = self._provider_from_row(row)
             model = normalize_model_key(row["model_key"])
             totals = self._totals_from_row(row)
@@ -430,6 +566,10 @@ class CodexUsageStore:
                 model,
                 totals if current is None else current[2].plus(totals),
             )
+        for row in model_rows:
+            provider = self._provider_from_row(row)
+            model = normalize_model_key(row["model_key"])
+            totals = self._totals_from_row(row)
             daily_model_rows.append(
                 DailyProviderModelUsage(
                     day=day_from_number(int(row["day"])),
@@ -449,17 +589,20 @@ class CodexUsageStore:
                 ),
             )
         )
-        daily_by_provider_model = tuple(
-            sorted(
-                daily_model_rows,
-                key=lambda item: (
-                    item.day,
-                    kind_order.get(item.provider.kind, 99),
-                    item.provider.key,
-                    item.model,
-                ),
+        if pagination_requested:
+            daily_by_provider_model = tuple(daily_model_rows)
+        else:
+            daily_by_provider_model = tuple(
+                sorted(
+                    daily_model_rows,
+                    key=lambda item: (
+                        item.day,
+                        kind_order.get(item.provider.kind, 99),
+                        item.provider.key,
+                        item.model,
+                    ),
+                )
             )
-        )
         return UsageQueryResult(
             totals=total,
             by_provider=by_provider,
@@ -467,6 +610,7 @@ class CodexUsageStore:
             daily_by_provider=daily_by_provider,
             by_provider_model=by_provider_model,
             daily_by_provider_model=daily_by_provider_model,
+            daily_pagination=daily_pagination,
         )
 
     query_usage = query

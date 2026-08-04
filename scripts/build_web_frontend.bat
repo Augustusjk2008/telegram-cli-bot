@@ -1,5 +1,6 @@
 @echo off
 setlocal
+chcp 65001 >nul
 set "ERRORLEVEL="
 REM Rebuild web frontend in the front directory.
 

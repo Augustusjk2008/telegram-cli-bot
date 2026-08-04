@@ -1483,6 +1483,15 @@ type RawCodexUsageDailyProviderModelStats = RawCodexUsageDailyProviderStats & {
   model?: string;
 };
 
+type RawCodexUsageDailyPagination = {
+  page?: number;
+  page_size?: number;
+  total_items?: number;
+  total_pages?: number;
+  has_previous?: boolean;
+  has_next?: boolean;
+};
+
 type RawCodexUsageStats = {
   range?: {
     start_date?: string;
@@ -1499,6 +1508,7 @@ type RawCodexUsageStats = {
   by_day?: RawCodexUsageDailyStats[];
   daily_by_provider?: RawCodexUsageDailyProviderStats[];
   daily_by_provider_model?: RawCodexUsageDailyProviderModelStats[];
+  daily_pagination?: RawCodexUsageDailyPagination;
 };
 
 type StreamEventPayload =
@@ -3566,6 +3576,41 @@ function mapCodexUsageConfig(raw: RawCodexUsageConfig): CodexUsageConfig {
   };
 }
 
+function positiveInteger(value: unknown, fallback: number) {
+  const parsed = Math.floor(numberOrZero(value));
+  return parsed > 0 ? parsed : fallback;
+}
+
+function mapCodexUsageDailyPagination(raw: RawCodexUsageDailyPagination | undefined, returnedItemCount: number) {
+  if (!raw) {
+    const totalItems = Math.max(0, returnedItemCount);
+    return {
+      page: 1,
+      pageSize: totalItems > 0 ? totalItems : 10,
+      totalItems,
+      totalPages: totalItems > 0 ? 1 : 0,
+      hasPrevious: false,
+      hasNext: false,
+    };
+  }
+  const pageSize = positiveInteger(raw.page_size, Math.max(1, returnedItemCount));
+  const totalItems = Math.max(0, Math.floor(numberOrZero(raw.total_items)));
+  const derivedTotalPages = Math.ceil(totalItems / pageSize);
+  const rawTotalPages = Number(raw.total_pages);
+  const totalPages = Number.isFinite(rawTotalPages) && rawTotalPages >= 0
+    ? Math.floor(rawTotalPages)
+    : derivedTotalPages;
+  const page = positiveInteger(raw.page, 1);
+  return {
+    page,
+    pageSize,
+    totalItems,
+    totalPages,
+    hasPrevious: typeof raw.has_previous === "boolean" ? raw.has_previous : page > 1,
+    hasNext: typeof raw.has_next === "boolean" ? raw.has_next : page < totalPages,
+  };
+}
+
 function mapCodexUsageStats(raw: RawCodexUsageStats): CodexUsageStats {
   const byProvider: CodexUsageProviderStats[] = (raw.by_provider || []).map((item) => ({
     provider: mapCodexUsageProviderFromStats(item),
@@ -3595,6 +3640,7 @@ function mapCodexUsageStats(raw: RawCodexUsageStats): CodexUsageStats {
         model: mapCodexUsageModel(item.model),
         ...mapCodexUsageMetrics(item),
       }));
+  const dailyItemCount = dailyByProviderModel.length || dailyByProvider.length;
   return {
     range: {
       startDate: String(raw.range?.start_date || ""),
@@ -3613,6 +3659,7 @@ function mapCodexUsageStats(raw: RawCodexUsageStats): CodexUsageStats {
     byDay,
     dailyByProvider,
     dailyByProviderModel,
+    dailyPagination: mapCodexUsageDailyPagination(raw.daily_pagination, dailyItemCount),
   };
 }
 
@@ -4498,6 +4545,12 @@ export class RealWebBotClient implements WebBotClient {
     for (const providerKey of queryInput.providerKeys || []) {
       const key = providerKey.trim();
       if (key) params.append("provider", key);
+    }
+    if (Number.isFinite(queryInput.dailyPage) && (queryInput.dailyPage || 0) > 0) {
+      params.set("daily_page", String(Math.floor(queryInput.dailyPage!)));
+    }
+    if (Number.isFinite(queryInput.dailyPageSize) && (queryInput.dailyPageSize || 0) > 0) {
+      params.set("daily_page_size", String(Math.floor(queryInput.dailyPageSize!)));
     }
     const query = params.toString();
     const data = await this.requestJson<RawCodexUsageStats>(
@@ -6072,11 +6125,17 @@ export class RealWebBotClient implements WebBotClient {
     }
   }
 
-  async downloadFile(botAlias: string, filename: string, onProgress?: (progress: FileDownloadProgress) => void): Promise<void> {
+  async downloadFile(
+    botAlias: string,
+    filename: string,
+    onProgress?: (progress: FileDownloadProgress) => void,
+    signal?: AbortSignal,
+  ): Promise<void> {
     const params = new URLSearchParams({ filename });
     const response = await fetch(withApiBase(`/api/bots/${encodeURIComponent(botAlias)}/files/download?${params.toString()}`), {
       credentials: "same-origin",
       headers: this.headers(),
+      signal,
     });
     if (!response.ok) {
       throw new Error("下载失败");

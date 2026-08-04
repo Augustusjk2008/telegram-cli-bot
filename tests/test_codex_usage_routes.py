@@ -34,7 +34,7 @@ class _DummyTunnelService:
 class _FakeUsageService:
     def __init__(self) -> None:
         self.enabled = False
-        self.stats_calls: list[tuple[date | None, date | None, list[str]]] = []
+        self.stats_calls: list[tuple[date | None, date | None, list[str], int, int]] = []
 
     async def config_snapshot(self):
         return {
@@ -60,8 +60,12 @@ class _FakeUsageService:
         start_date: date | None,
         end_date: date | None,
         provider_keys: list[str],
+        daily_page: int,
+        daily_page_size: int,
     ):
-        self.stats_calls.append((start_date, end_date, provider_keys))
+        self.stats_calls.append(
+            (start_date, end_date, provider_keys, daily_page, daily_page_size)
+        )
         return {
             "range": {
                 "start_date": start_date.isoformat() if start_date else "2026-06-27",
@@ -76,6 +80,15 @@ class _FakeUsageService:
             "by_provider": [],
             "by_day": [],
             "daily_by_provider": [],
+            "daily_by_provider_model": [],
+            "daily_pagination": {
+                "page": daily_page,
+                "page_size": daily_page_size,
+                "total_items": 0,
+                "total_pages": 0,
+                "has_previous": False,
+                "has_next": False,
+            },
         }
 
     def diagnostics(self):
@@ -146,8 +159,66 @@ async def test_codex_usage_stats_parses_dates_and_repeated_provider_filters(monk
             response_text = await response.text()
 
     assert response.status == 200
-    assert service.stats_calls == [(date(2026, 7, 1), date(2026, 7, 26), ["openai_official", "unknown"])]
+    assert service.stats_calls == [
+        (date(2026, 7, 1), date(2026, 7, 26), ["openai_official", "unknown"], 1, 10)
+    ]
     assert json.loads(response_text)["data"]["selected_provider_keys"] == ["openai_official", "unknown"]
+    assert json.loads(response_text)["data"]["daily_pagination"]["page_size"] == 10
+
+
+@pytest.mark.asyncio
+async def test_codex_usage_stats_accepts_default_and_maximum_daily_pagination(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server, service = _build_server(monkeypatch)
+    app = server._build_app()
+
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            default_response = await client.get("/api/admin/codex-usage/stats")
+            maximum_response = await client.get(
+                "/api/admin/codex-usage/stats",
+                params={"daily_page": "2", "daily_page_size": "100"},
+            )
+            default_text = await default_response.text()
+            maximum_text = await maximum_response.text()
+
+    assert default_response.status == 200
+    assert maximum_response.status == 200
+    assert service.stats_calls == [
+        (None, None, [], 1, 10),
+        (None, None, [], 2, 100),
+    ]
+    assert json.loads(default_text)["data"]["daily_pagination"]["page_size"] == 10
+    assert json.loads(maximum_text)["data"]["daily_pagination"]["page_size"] == 100
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query",
+    [
+        "?daily_page=0",
+        "?daily_page_size=0",
+        "?daily_page_size=101",
+        "?daily_page=not-a-number",
+        "?daily_page_size=not-a-number",
+    ],
+)
+async def test_codex_usage_stats_rejects_invalid_daily_pagination(
+    monkeypatch: pytest.MonkeyPatch,
+    query: str,
+) -> None:
+    server, service = _build_server(monkeypatch)
+    app = server._build_app()
+
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            response = await client.get(f"/api/admin/codex-usage/stats{query}")
+            response_text = await response.text()
+
+    assert response.status == 400
+    assert json.loads(response_text)["error"]["code"] == "invalid_daily_pagination"
+    assert service.stats_calls == []
 
 
 @pytest.mark.asyncio
