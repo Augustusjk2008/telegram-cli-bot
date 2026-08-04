@@ -35,6 +35,7 @@ function payloadText(trace: ChatTraceEvent) {
     || stringifyValue(payload.raw_arguments).trim()
     || stringifyValue(payload.output).trim()
     || stringifyValue(payload.content).trim()
+    || stringifyValue(trace.payload).trim()
   );
 }
 

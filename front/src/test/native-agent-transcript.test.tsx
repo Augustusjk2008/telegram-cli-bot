@@ -1,7 +1,8 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { NativeAgentTranscript } from "../components/NativeAgentTranscript";
 import type { NativeAgentTranscriptEntry } from "../utils/agUiRunReducer";
+import { buildNativeAgentTranscriptEntries } from "../utils/nativeAgentTranscript";
 
 function processEntry(id: string, summary: string, seq: number): NativeAgentTranscriptEntry {
   return {
@@ -22,6 +23,58 @@ function processEntry(id: string, summary: string, seq: number): NativeAgentTran
 }
 
 describe("NativeAgentTranscript process details", () => {
+  it("expands raw custom tool call and result payloads", async () => {
+    const entries = buildNativeAgentTranscriptEntries({
+      mode: "cli",
+      trace: [
+        {
+          kind: "tool_call",
+          rawType: "custom_tool_call",
+          summary: "委派前端检查",
+          toolName: "ask_agent",
+          callId: "call-1",
+          payload: {
+            run_id: "run-1",
+            agent_id: "frontend-owner",
+            message: "检查展开行为",
+          },
+        },
+        {
+          kind: "tool_result",
+          rawType: "custom_tool_call_output",
+          summary: "任务已创建",
+          callId: "call-1",
+          payload: {
+            ok: true,
+            data: {
+              task_id: "task-1",
+            },
+          },
+        },
+      ],
+    });
+
+    render(
+      <NativeAgentTranscript
+        entries={entries}
+        resultText=""
+        state="done"
+        mode="cli"
+      />,
+    );
+
+    const group = screen.getByTestId("native-agent-event-group");
+    fireEvent.click(group.querySelector("summary") as HTMLElement);
+
+    await waitFor(() => expect(group.querySelectorAll("details")).toHaveLength(2));
+    const toolRows = Array.from(group.querySelectorAll("details"));
+    toolRows.forEach((row) => fireEvent.click(row.querySelector("summary") as HTMLElement));
+
+    await waitFor(() => expect(group.querySelectorAll("pre")).toHaveLength(2));
+    expect(group.textContent).toContain('"agent_id": "frontend-owner"');
+    expect(group.textContent).toContain('"task_id": "task-1"');
+  });
+
   it("keeps live AG-UI details collapsed through updates until manually expanded", () => {
     const firstEntry = processEntry("first", "先检查目录", 1);
     const secondEntry = processEntry("second", "再读取文件", 2);
