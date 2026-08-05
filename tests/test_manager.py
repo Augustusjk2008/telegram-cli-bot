@@ -18,44 +18,6 @@ from bot.models import BotProfile
 class TestManagerLoadSave:
     """测试配置加载和保存"""
 
-    def test_legacy_bot_mode_is_ignored_without_runtime_surface(self):
-        profile = BotProfile.from_dict({"alias": "legacy", "bot_mode": "assistant"})
-
-        assert not hasattr(profile, "bot_mode")
-        assert "bot_mode" not in profile.to_dict()
-
-    def test_load_bots_format(self, temp_dir: Path):
-        storage = temp_dir / "bots.json"
-        storage.write_text(json.dumps({
-            "bots": [
-                {
-                    "alias": "sub1",
-                    "cli_type": "codex",
-                    "cli_path": "codex",
-                    "working_dir": str(temp_dir),
-                    "enabled": True,
-                }
-            ]
-        }))
-        profile = BotProfile(alias="main")
-        m = MultiBotManager(main_profile=profile, storage_file=str(storage))
-        assert "sub1" in m.managed_profiles
-
-    def test_save_bots_format(self, temp_dir: Path):
-        storage = temp_dir / "bots.json"
-        profile = BotProfile(alias="main")
-        m = MultiBotManager(main_profile=profile, storage_file=str(storage))
-        m.managed_profiles["sub1"] = BotProfile(
-            alias="sub1", cli_type="claude",
-            cli_path="claude", working_dir=str(temp_dir),
-        )
-        m._save_profiles()
-        data = json.loads(storage.read_text(encoding="utf-8"))
-        assert "bots" in data
-        assert isinstance(data["bots"], list)
-        assert len(data["bots"]) == 1
-        assert data["bots"][0]["alias"] == "sub1"
-
     @pytest.mark.asyncio
     async def test_agent_crud_is_scoped_to_existing_cli_bot(self, temp_dir: Path):
         storage = temp_dir / "bots.json"

@@ -1,18 +1,24 @@
 from __future__ import annotations
 
 import json
+
 from pathlib import Path
+
 from typing import Any
 
 import pytest
+
 from aiohttp.test_utils import TestClient, TestServer
 
 from bot.manager import MultiBotManager
-from bot.models import BotProfile
-from bot.web.api_common import AuthContext
-from bot.web.auth_store import CAP_ADMIN_OPS, CAP_INLINE_COMPLETION, CAP_READ_FILE_CONTENT
-from bot.web.server import WebApiServer
 
+from bot.models import BotProfile
+
+from bot.web.api_common import AuthContext
+
+from bot.web.auth_store import CAP_ADMIN_OPS, CAP_INLINE_COMPLETION, CAP_READ_FILE_CONTENT
+
+from bot.web.server import WebApiServer
 
 class DummyTunnelService:
     def should_autostart(self) -> bool:
@@ -41,7 +47,6 @@ class DummyTunnelService:
             "pid": None,
         }
 
-
 class FakeInlineCompletionService:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
@@ -56,7 +61,6 @@ class FakeInlineCompletionService:
             "context": {"relatedFiles": [], "truncated": False},
         }
 
-
 def _build_manager(tmp_path: Path) -> MultiBotManager:
     storage = tmp_path / "managed_bots.json"
     storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
@@ -70,12 +74,10 @@ def _build_manager(tmp_path: Path) -> MultiBotManager:
         str(storage),
     )
 
-
 def _build_server(manager: MultiBotManager, monkeypatch: pytest.MonkeyPatch) -> WebApiServer:
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
     monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "")
     return WebApiServer(manager, host="127.0.0.1", port=8765, tunnel_service=DummyTunnelService())
-
 
 def _auth_context(*capabilities: str) -> AuthContext:
     return AuthContext(
@@ -86,7 +88,6 @@ def _auth_context(*capabilities: str) -> AuthContext:
         capabilities=set(capabilities),
         is_local_admin=False,
     )
-
 
 @pytest.mark.asyncio
 async def test_admin_inline_completion_config_masks_api_key(
@@ -119,7 +120,6 @@ async def test_admin_inline_completion_config_masks_api_key(
     assert payload["data"]["api_key_set"] is True
     assert "api_key" not in payload["data"]
     assert "sk-secret" not in json.dumps(get_payload)
-
 
 @pytest.mark.asyncio
 async def test_inline_completion_workspace_route_requires_capability(

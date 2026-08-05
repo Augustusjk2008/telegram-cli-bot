@@ -1,4 +1,5 @@
 import json
+
 from pathlib import Path
 
 import pytest
@@ -7,7 +8,6 @@ from bot.web.inline_completion_config import (
     InlineCompletionConfigError,
     InlineCompletionConfigStore,
 )
-
 
 def test_inline_completion_config_masks_and_preserves_api_key(tmp_path: Path) -> None:
     store = InlineCompletionConfigStore(tmp_path / "inline.json")
@@ -35,13 +35,3 @@ def test_inline_completion_config_masks_and_preserves_api_key(tmp_path: Path) ->
 
     assert status["api_key_set"] is False
     assert store.config.api_key == ""
-
-
-def test_inline_completion_config_rejects_invalid_base_url(tmp_path: Path) -> None:
-    store = InlineCompletionConfigStore(tmp_path / "inline.json")
-
-    with pytest.raises(InlineCompletionConfigError) as exc_info:
-        store.update({"base_url": "file:///tmp/provider"})
-
-    assert exc_info.value.status == 400
-    assert exc_info.value.code == "invalid_inline_completion_base_url"

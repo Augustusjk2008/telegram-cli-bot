@@ -132,7 +132,25 @@ describe("terminal session", () => {
     terminalState.deferWriteCompletion = false;
     terminalState.writeCallbacks.length = 0;
     terminalState.writes.length = 0;
+    window.history.replaceState(null, "", "/");
     vi.unstubAllGlobals();
+  });
+
+  it("keeps the active node base and tab owner in the terminal WebSocket URL", () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    vi.stubGlobal("__PUBLIC_ENV__", { VITE_API_BASE_URL: "/node/nanjing-laptop" });
+    window.history.replaceState(null, "", "/node/nanjing-laptop/terminal");
+
+    const session = createTerminalSession(document.createElement("div"), {
+      token: "session-secret",
+      ownerId: "terminal-tab-42",
+    });
+    session.connect();
+
+    const socketUrl = new URL(sockets[0].url);
+    expect(socketUrl.pathname).toBe("/node/nanjing-laptop/terminal/ws");
+    expect(socketUrl.searchParams.get("owner_id")).toBe("terminal-tab-42");
+    session.dispose();
   });
 
   it("forwards xterm input after a v2 WebSocket handshake", () => {

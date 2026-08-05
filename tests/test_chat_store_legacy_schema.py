@@ -26,18 +26,11 @@ def _create_legacy_chat_db(path: Path) -> None:
                 session_epoch INTEGER NOT NULL,
                 status TEXT NOT NULL,
                 native_provider TEXT,
-                native_session_id TEXT,
-                native_session_meta_json TEXT,
                 assistant_home TEXT,
                 managed_prompt_hash TEXT,
                 prompt_surface_version TEXT,
-                agent_prompt_hash TEXT,
                 title TEXT,
                 last_message_preview TEXT,
-                message_count INTEGER NOT NULL DEFAULT 0,
-                pinned INTEGER NOT NULL DEFAULT 0,
-                archived_at TEXT,
-                revision INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -56,11 +49,6 @@ def _create_legacy_chat_db(path: Path) -> None:
                 started_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 completed_at TEXT,
-                error_code TEXT,
-                error_message TEXT,
-                trace_recovery_attempted_at TEXT,
-                trace_recovery_status TEXT,
-                context_usage_json TEXT,
                 UNIQUE(conversation_id, seq),
                 FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
             );
@@ -114,73 +102,43 @@ def _create_incomplete_chat_db(path: Path) -> None:
         )
 
 
-def test_chat_store_migrates_removed_assistant_columns(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def _open_legacy_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, create_db) -> tuple[Path, ChatStore]:
     db_path = tmp_path / "chat.sqlite"
     metadata_path = tmp_path / "workspace.json"
-    _create_legacy_chat_db(db_path)
+    create_db(db_path)
     clear_chat_store_prepare_cache()
     monkeypatch.setattr(chat_store_module, "get_chat_history_db_path", lambda _workspace: db_path)
     monkeypatch.setattr(chat_store_module, "get_chat_workspace_metadata_path", lambda _workspace: metadata_path)
     monkeypatch.setattr(chat_store_module, "get_legacy_project_chat_db_path", lambda _workspace: tmp_path / "missing.sqlite")
+    return db_path, ChatStore(tmp_path / "workspace")
 
-    store = ChatStore(tmp_path / "workspace")
-    migrated = store.get_conversation("conv-legacy")
-    listed = store.list_conversations(
-        bot_id=1,
-        user_id=2,
-        agent_id="main",
-        working_dir="C:/legacy",
-    )
+
+@pytest.mark.parametrize(
+    ("create_db", "conversation_id", "bot_id", "user_id", "working_dir"),
+    [
+        (_create_legacy_chat_db, "conv-legacy", 1, 2, "C:/legacy"),
+        (_create_incomplete_chat_db, "conv-incomplete", 3, 4, "C:/incomplete"),
+    ],
+)
+def test_chat_store_migrates_legacy_schemas(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, create_db, conversation_id: str,
+    bot_id: int, user_id: int, working_dir: str,
+) -> None:
+    db_path, store = _open_legacy_store(tmp_path, monkeypatch, create_db)
+    conversation = store.get_conversation(conversation_id)
+    listed = store.list_conversations(bot_id=bot_id, user_id=user_id, agent_id="main", working_dir=working_dir)
 
     with sqlite3.connect(db_path) as conn:
         conversation_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(conversations)")}
-        turn_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(turns)")}
-        stored_turn = conn.execute("SELECT id FROM turns WHERE id = 'turn-legacy'").fetchone()
-
-    assert {
-        "bot_mode",
-        "assistant_home",
-        "managed_prompt_hash",
-        "prompt_surface_version",
-    }.isdisjoint(conversation_columns)
-    assert "managed_prompt_hash" not in turn_columns
-    assert migrated["id"] == "conv-legacy"
-    assert migrated["title"] == "旧会话"
-    assert "bot_mode" not in migrated
-    assert [conversation["id"] for conversation in listed] == ["conv-legacy"]
-    assert "bot_mode" not in listed[0]
-    assert stored_turn == ("turn-legacy",)
-
-
-def test_chat_store_migrates_missing_conversation_columns(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    db_path = tmp_path / "chat.sqlite"
-    metadata_path = tmp_path / "workspace.json"
-    _create_incomplete_chat_db(db_path)
-    clear_chat_store_prepare_cache()
-    monkeypatch.setattr(chat_store_module, "get_chat_history_db_path", lambda _workspace: db_path)
-    monkeypatch.setattr(chat_store_module, "get_chat_workspace_metadata_path", lambda _workspace: metadata_path)
-    monkeypatch.setattr(chat_store_module, "get_legacy_project_chat_db_path", lambda _workspace: tmp_path / "missing.sqlite")
-
-    store = ChatStore(tmp_path / "workspace")
-    conversation = store.get_conversation("conv-incomplete")
-    listed = store.list_conversations(
-        bot_id=3,
-        user_id=4,
-        agent_id="main",
-        working_dir="C:/incomplete",
-    )
-
-    with sqlite3.connect(db_path) as conn:
-        columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(conversations)")}
-
-    assert {"bot_alias", "agent_id", "cli_type", "status", "revision"}.issubset(columns)
-    assert conversation["agent_id"] == "main"
-    assert conversation["message_count"] == 0
-    assert conversation["pinned"] is False
-    assert [item["id"] for item in listed] == ["conv-incomplete"]
+        if conversation_id == "conv-legacy":
+            turn_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(turns)")}
+            stored_turn = conn.execute("SELECT id FROM turns WHERE id = 'turn-legacy'").fetchone()
+    assert [item["id"] for item in listed] == [conversation_id]
+    if conversation_id == "conv-legacy":
+        assert {"bot_mode", "assistant_home", "managed_prompt_hash", "prompt_surface_version"}.isdisjoint(conversation_columns)
+        assert "managed_prompt_hash" not in turn_columns
+        assert conversation["title"] == "旧会话" and "bot_mode" not in conversation
+        assert "bot_mode" not in listed[0] and stored_turn == ("turn-legacy",)
+    else:
+        assert {"bot_alias", "agent_id", "cli_type", "status", "revision"}.issubset(conversation_columns)
+        assert (conversation["agent_id"], conversation["message_count"], conversation["pinned"]) == ("main", 0, False)
