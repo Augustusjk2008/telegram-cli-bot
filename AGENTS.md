@@ -44,7 +44,7 @@ cd front && npm run lint
 - 用户文本以 `//` 开头时改写为 `/...`；Codex CLI 使用 JSON output。
 - `execution_mode=native_agent` 使用 AG-UI；普通 CLI 保持 legacy SSE `delta/status/trace/done`。
 - CLI SSE 的 `meta/status/trace/done` 顶层必须保留 `turn_id`、`assistant_message_id`，以稳定绑定当前轮。
-- 普通 CLI trace 只进入 `ChatTracePanel`；只有原生来源进入 `NativeAgentTranscript`。
+- 普通 CLI trace 与原生过程统一进入 `NativeAgentTranscript`；CLI 使用 `mode="cli"`，不得显示原生权限操作。
 - Pi runtime 只能由 `pi_session_runtime.py` 的单 reader 读取 `client.events()`。
 - Pi session 绑定由 `cwd + model_id + pi_agent + reasoning_effort` 决定；任一项变化都必须失效旧 session 和 workspace-history rollback 链。
 - Web 终端会话按 `(user_id, owner_id)` 隔离；每个新标签必须使用独立 `owner_id`，关闭标签必须终止对应 shell；旧客户端的 `rebuild` 端点作为创建会话的兼容别名保留。

@@ -94,3 +94,25 @@ test("non-admin session cannot mutate runtime or language-service settings", asy
   expect(screen.queryByRole("button", { name: "重新检测语言服务" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "安装 Pyright" })).not.toBeInTheDocument();
 });
+
+test("updates the local Enter-to-send preference", async () => {
+  const user = userEvent.setup();
+  const onChatEnterToSendChange = vi.fn();
+
+  render(
+    <SettingsScreen
+      botAlias="main"
+      client={new MockWebBotClient()}
+      onLogout={() => undefined}
+      chatEnterToSend={false}
+      onChatEnterToSendChange={onChatEnterToSendChange}
+    />,
+  );
+
+  const toggle = await screen.findByLabelText("Enter 键发送消息");
+  expect(toggle).not.toBeChecked();
+
+  await user.click(toggle);
+
+  expect(onChatEnterToSendChange).toHaveBeenCalledWith(true);
+});

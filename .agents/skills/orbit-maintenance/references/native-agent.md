@@ -22,7 +22,7 @@
 - Pi runtime 只能由 `pi_session_runtime.py` 的单 reader 消费 `client.events()`。
 - Web rollback 使用本地 `ShadowGitHistory`，不依赖 Pi `workspace_history` RPC。
 - Pi session 指纹固定为 `cwd + model_id + pi_agent + reasoning_effort`；任一项变化必须失效旧 session 和 rollback 链。
-- 普通 CLI trace 只进入 `ChatTracePanel`；原生来源进入 `NativeAgentTranscript`。
+- 普通 CLI trace 与原生过程统一进入 `NativeAgentTranscript`；CLI 使用 `mode="cli"`，不得显示原生权限操作。
 - CLI SSE `meta/status/trace/done` 顶层保留 `turn_id`、`assistant_message_id`。
 - 非 cluster chat 只绑定一个 active agent；cluster mode 通过 `@agent_id` 分发 child agents。
 

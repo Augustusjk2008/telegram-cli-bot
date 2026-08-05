@@ -26,6 +26,7 @@ export const CHAT_BODY_FONT_FAMILY_STORAGE_KEY = "web-chat-body-font-family";
 export const CHAT_BODY_FONT_SIZE_STORAGE_KEY = "web-chat-body-font-size";
 export const CHAT_BODY_LINE_HEIGHT_STORAGE_KEY = "web-chat-body-line-height";
 export const CHAT_BODY_PARAGRAPH_SPACING_STORAGE_KEY = "web-chat-body-paragraph-spacing";
+export const CHAT_ENTER_TO_SEND_STORAGE_KEY = "web-chat-enter-to-send";
 export const DEFAULT_UI_THEME: UiThemeName = "deep-space";
 export const DEFAULT_CHAT_BODY_FONT_FAMILY: ChatBodyFontFamilyName = "sans";
 export const DEFAULT_CHAT_BODY_FONT_SIZE: ChatBodyFontSizeName = "medium";
@@ -357,6 +358,47 @@ export function persistChatBodyParagraphSpacing(paragraphSpacing: ChatBodyParagr
   }
   try {
     window.localStorage.setItem(CHAT_BODY_PARAGRAPH_SPACING_STORAGE_KEY, paragraphSpacing);
+  } catch {
+    // Ignore storage failures and keep the in-memory state.
+  }
+}
+
+function getDefaultChatEnterToSend() {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return true;
+  }
+  try {
+    return window.matchMedia("(pointer: fine)").matches;
+  } catch {
+    return true;
+  }
+}
+
+export function readStoredChatEnterToSend() {
+  const fallback = getDefaultChatEnterToSend();
+  if (typeof window === "undefined") {
+    return fallback;
+  }
+  try {
+    const raw = window.localStorage.getItem(CHAT_ENTER_TO_SEND_STORAGE_KEY)?.trim();
+    if (raw === "true") {
+      return true;
+    }
+    if (raw === "false") {
+      return false;
+    }
+  } catch {
+    return fallback;
+  }
+  return fallback;
+}
+
+export function persistChatEnterToSend(enabled: boolean) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.localStorage.setItem(CHAT_ENTER_TO_SEND_STORAGE_KEY, String(enabled));
   } catch {
     // Ignore storage failures and keep the in-memory state.
   }

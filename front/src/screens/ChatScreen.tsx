@@ -112,6 +112,7 @@ type Props = {
   isVisible?: boolean;
   isImmersive?: boolean;
   embedded?: boolean;
+  enterToSend?: boolean;
   focused?: boolean;
   onToggleFocus?: () => void;
   onToggleImmersive?: () => void;
@@ -1981,6 +1982,7 @@ export function ChatScreen({
   isVisible = true,
   isImmersive = false,
   embedded = false,
+  enterToSend = true,
   focused = false,
   onToggleFocus,
   onToggleImmersive,
@@ -5060,6 +5062,7 @@ export function ChatScreen({
           clusterMode={clusterMode}
           disabled={chatMutationsDisabled || nativePermissionPending || loading}
           compact={isImmersive || embedded}
+          enterToSend={enterToSend}
           uploadingAttachments={uploadingAttachments}
           placeholder={composerPlaceholder}
           modelOptions={visibleModelOptions}

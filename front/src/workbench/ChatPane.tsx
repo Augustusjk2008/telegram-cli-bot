@@ -9,6 +9,7 @@ type Props = {
   readOnlyReason?: string;
   disabledReason?: string;
   allowTrace?: boolean;
+  enterToSend?: boolean;
   visible?: boolean;
   focused?: boolean;
   onToggleFocus?: () => void;
@@ -24,6 +25,7 @@ export function ChatPane({
   readOnlyReason,
   disabledReason,
   allowTrace = true,
+  enterToSend = true,
   visible = true,
   focused = false,
   onToggleFocus,
@@ -39,6 +41,7 @@ export function ChatPane({
       readOnlyReason={readOnlyReason}
       disabledReason={disabledReason}
       allowTrace={allowTrace}
+      enterToSend={enterToSend}
       isVisible={visible}
       embedded
       focused={focused}

@@ -351,7 +351,7 @@ test("non-native permission trace never exposes native permission actions", asyn
   expect(screen.queryByRole("button", { name: "拒绝" })).not.toBeInTheDocument();
 });
 
-test("renders CLI trace only in ChatTracePanel", async () => {
+test("renders CLI trace in the unified AG-UI transcript", async () => {
   const client = createClient({
     listMessages: async (): Promise<ChatMessage[]> => [{
       id: "assistant-cli-trace",
@@ -370,9 +370,10 @@ test("renders CLI trace only in ChatTracePanel", async () => {
   render(<ChatScreen botAlias="main" client={client} />);
 
   const row = await screen.findByTestId("chat-message-row");
-  expect(within(row).queryByTestId("native-agent-transcript")).not.toBeInTheDocument();
-  const panel = within(row).getByTestId("chat-trace-panel-assistant-cli-trace");
-  expect(within(panel).getByText("展开过程详情")).toBeInTheDocument();
+  const transcript = within(row).getByTestId("native-agent-transcript");
+  expect(within(transcript).getByText("CLI 路由哨兵")).toBeInTheDocument();
+  expect(within(transcript).getByTestId("native-agent-final-result")).toHaveTextContent("CLI 最终答复");
+  expect(within(row).queryByTestId("chat-trace-panel-assistant-cli-trace")).not.toBeInTheDocument();
 });
 
 test("live non-native ag-ui stream renders regular assistant message", async () => {

@@ -172,6 +172,8 @@ type Props = {
   onChatBodyLineHeightChange?: (lineHeight: ChatBodyLineHeightName) => void;
   chatBodyParagraphSpacing?: ChatBodyParagraphSpacingName;
   onChatBodyParagraphSpacingChange?: (paragraphSpacing: ChatBodyParagraphSpacingName) => void;
+  chatEnterToSend?: boolean;
+  onChatEnterToSendChange?: (enabled: boolean) => void;
   sessionCapabilities?: string[];
   viewMode?: ViewMode;
   hasUnreadOtherBots?: boolean;
@@ -216,6 +218,8 @@ export function DesktopWorkbench({
   onChatBodyLineHeightChange,
   chatBodyParagraphSpacing,
   onChatBodyParagraphSpacingChange,
+  chatEnterToSend = true,
+  onChatEnterToSendChange,
   sessionCapabilities = [],
   viewMode = "desktop",
   hasUnreadOtherBots = false,
@@ -1348,6 +1352,8 @@ export function DesktopWorkbench({
           onChatBodyLineHeightChange={onChatBodyLineHeightChange}
           chatBodyParagraphSpacing={chatBodyParagraphSpacing}
           onChatBodyParagraphSpacingChange={onChatBodyParagraphSpacingChange}
+          chatEnterToSend={chatEnterToSend}
+          onChatEnterToSendChange={onChatEnterToSendChange}
           sessionCapabilities={sessionCapabilities}
           showBotRuntimeSettings={false}
           onOpenBotManager={onOpenBotManager}
@@ -1626,6 +1632,7 @@ export function DesktopWorkbench({
                 readOnlyReason={chatReadOnlyReason}
                 disabledReason={chatDisabledReason}
                 allowTrace={allowTrace}
+                enterToSend={chatEnterToSend}
                 visible={showChatPane}
                 focused={focusedPane === "chat"}
                 onToggleFocus={() => toggleFocusedPane("chat")}
