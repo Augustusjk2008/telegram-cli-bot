@@ -6,7 +6,7 @@ function normalizedCompactionCount(count?: number) {
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
-export function formatCompactionCount(count?: number) {
+function formatCompactionCount(count?: number) {
   const value = normalizedCompactionCount(count);
   if (value <= 0) {
     return "";
@@ -20,14 +20,14 @@ export function formatCompactionCount(count?: number) {
   return `compacted ${value} times`;
 }
 
-export function formatTokenNumber(value?: number) {
+function formatTokenNumber(value?: number) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "";
   }
   return Math.max(0, Math.floor(value)).toLocaleString("zh-CN");
 }
 
-export function clampPercent(value: number) {
+function clampPercent(value: number) {
   if (!Number.isFinite(value)) {
     return 0;
   }

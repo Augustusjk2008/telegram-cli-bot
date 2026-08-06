@@ -1006,15 +1006,6 @@ function visibleTurnCountForMessage(items: readonly ChatMessage[], messageIndex:
   return Math.max(CHAT_INITIAL_VISIBLE_TURNS, starts.length - targetTurnIndex);
 }
 
-function shouldShowContextRing(meta?: ChatMessageMetaInfo) {
-  const provider = String(meta?.contextUsage?.provider || "").trim().toLowerCase();
-  return (
-    isNativeAgentMessage(meta)
-    || provider === "native_agent"
-    || provider === "原生 agent"
-  );
-}
-
 function appendTraceToMessage(item: ChatMessage, traceEvent: ChatTraceEvent, tracePresentation?: ChatMessageMetaInfo["tracePresentation"]): ChatMessage {
   const nativeTrace = tracePresentation === "native_agent_flat"
     || isNativeAgentMessage(item.meta)
@@ -1465,7 +1456,6 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const hasFinalAnswerText = item.role === "assistant" && item.state !== "streaming" && Boolean(item.text.trim());
   const canCopyFinalAnswer = hasFinalAnswerText && (item.state === "done" || item.state === "error");
   const canFavoriteFinalAnswer = item.role === "assistant" && item.state === "done" && Boolean(item.text.trim());
-  const showContextRing = item.role === "assistant" && shouldShowContextRing(item.meta);
   const nativeTranscriptEntries = buildNativeAgentTranscriptEntries({
     trace,
     agUiState: agUiRunState,
@@ -1486,7 +1476,6 @@ const ChatMessageRow = memo(function ChatMessageRow({
           createdAt={chatMessageDisplayTime(item)}
           align={messageAlign}
           contextUsage={!isUser ? item.meta?.contextUsage : undefined}
-          contextVariant={showContextRing ? "ring" : "text"}
         />
         <div className={showSoloRollback ? "flex items-start justify-end gap-1.5" : undefined}>
           {showSoloRollback ? (
