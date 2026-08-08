@@ -2052,6 +2052,11 @@ export function ChatScreen({
   const [favoriteError, setFavoriteError] = useState("");
   const [deletingFavoriteId, setDeletingFavoriteId] = useState("");
   const migratedFavoriteScopeRef = useRef("");
+  const cliParamsLoadRef = useRef<{
+    client: WebBotClient;
+    botAlias: string;
+    state: "loading" | "loaded";
+  } | null>(null);
   const [historyPanelOpen, setHistoryPanelOpen] = useState(false);
   const [historyPanelTab, setHistoryPanelTab] = useState<ConversationHistoryPanelTab>("history");
   const [conversationQuery, setConversationQuery] = useState("");
@@ -2066,6 +2071,16 @@ export function ChatScreen({
   const [clusterSaving, setClusterSaving] = useState(false);
   const [planMode, setPlanModeState] = useState(() => readStoredPlanMode(botAlias, storageScope));
   const [executionMode, setExecutionModeState] = useState<ChatExecutionMode>(() => forcedExecutionMode ?? readStoredExecutionMode(botAlias, storageScope) ?? "cli");
+  const favoriteScopeKey = JSON.stringify([botAlias, storageScope, activeAgentId, executionMode]);
+  const favoriteAutoLoadRef = useRef<{
+    client: WebBotClient;
+    scopeKey: string;
+    state: "loading" | "loaded";
+  } | null>(null);
+  const favoriteScopeKeyRef = useRef(favoriteScopeKey);
+  favoriteScopeKeyRef.current = favoriteScopeKey;
+  const favoriteClientRef = useRef(client);
+  favoriteClientRef.current = client;
   const [nativePermissionPending, setNativePermissionPending] = useState(false);
   const [executingPlanMessageId, setExecutingPlanMessageId] = useState("");
   const [planExecuteError, setPlanExecuteError] = useState("");
@@ -2330,25 +2345,38 @@ export function ChatScreen({
   }, [clusterRunId]);
 
   useEffect(() => {
-    let active = true;
-    setCliParams(null);
+    const current = cliParamsLoadRef.current;
+    const matchesScope = current?.client === client && current.botAlias === botAlias;
+    if (!matchesScope) {
+      cliParamsLoadRef.current = null;
+      setCliParams(null);
+    }
+    if (!isForeground || matchesScope) {
+      return;
+    }
 
+    const request: NonNullable<typeof cliParamsLoadRef.current> = {
+      client,
+      botAlias,
+      state: "loading",
+    };
+    cliParamsLoadRef.current = request;
     void client.getCliParams(botAlias)
       .then((payload) => {
-        if (active) {
-          setCliParams(payload);
+        if (cliParamsLoadRef.current !== request) {
+          return;
         }
+        request.state = "loaded";
+        setCliParams(payload);
       })
       .catch(() => {
-        if (active) {
-          setCliParams(null);
+        if (cliParamsLoadRef.current !== request) {
+          return;
         }
+        cliParamsLoadRef.current = null;
+        setCliParams(null);
       });
-
-    return () => {
-      active = false;
-    };
-  }, [botAlias, client]);
+  }, [botAlias, client, isForeground]);
 
   useEffect(() => {
     const supported = getSupportedExecutionModes(botOverview);
@@ -3475,40 +3503,80 @@ export function ChatScreen({
   }, [botAlias, client]);
 
   const loadFavorites = useCallback(async (query = "") => {
+    const requestClient = client;
+    const requestScopeKey = favoriteScopeKey;
     setFavoriteLoading(true);
     setFavoriteError("");
     try {
       const data = await client.listFavoriteAnswers(botAlias, query, {
-        agentId: activeAgentIdRef.current || "main",
-        executionMode: executionModeRef.current,
+        agentId: activeAgentId || "main",
+        executionMode,
       });
+      if (favoriteClientRef.current !== requestClient || favoriteScopeKeyRef.current !== requestScopeKey) {
+        return null;
+      }
       setFavoriteItems(data.items);
       return data.items;
     } catch (err) {
+      if (favoriteClientRef.current !== requestClient || favoriteScopeKeyRef.current !== requestScopeKey) {
+        return null;
+      }
       const message = err instanceof Error ? err.message : "加载收藏失败";
       setFavoriteError(message);
       return null;
     } finally {
-      setFavoriteLoading(false);
+      if (favoriteClientRef.current === requestClient && favoriteScopeKeyRef.current === requestScopeKey) {
+        setFavoriteLoading(false);
+      }
     }
-  }, [botAlias, client]);
+  }, [activeAgentId, botAlias, client, executionMode, favoriteScopeKey]);
 
   useEffect(() => {
-    setFavoriteItems([]);
-    setFavoriteError("");
-    migratedFavoriteScopeRef.current = "";
-    void loadFavorites("");
-  }, [activeAgentId, executionMode, loadFavorites]);
+    const current = favoriteAutoLoadRef.current;
+    const matchesScope = current?.client === client && current.scopeKey === favoriteScopeKey;
+    if (!matchesScope) {
+      favoriteAutoLoadRef.current = null;
+      setFavoriteItems([]);
+      setFavoriteError("");
+      migratedFavoriteScopeRef.current = "";
+    }
+    if (!isForeground || matchesScope) {
+      return;
+    }
+
+    const request: NonNullable<typeof favoriteAutoLoadRef.current> = {
+      client,
+      scopeKey: favoriteScopeKey,
+      state: "loading",
+    };
+    favoriteAutoLoadRef.current = request;
+    void loadFavorites("").then((loaded) => {
+      if (favoriteAutoLoadRef.current !== request) {
+        return;
+      }
+      if (loaded === null) {
+        favoriteAutoLoadRef.current = null;
+        return;
+      }
+      request.state = "loaded";
+    });
+  }, [client, favoriteScopeKey, isForeground, loadFavorites]);
 
   useEffect(() => {
-    if (favoriteLoading) {
+    const autoLoad = favoriteAutoLoadRef.current;
+    if (
+      !isForeground
+      || favoriteLoading
+      || autoLoad?.client !== client
+      || autoLoad.scopeKey !== favoriteScopeKey
+      || autoLoad.state !== "loaded"
+    ) {
       return;
     }
-    const scopeKey = `${botAlias}:${storageScope || ""}:${activeAgentId}:${executionMode}`;
-    if (migratedFavoriteScopeRef.current === scopeKey) {
+    if (migratedFavoriteScopeRef.current === favoriteScopeKey) {
       return;
     }
-    migratedFavoriteScopeRef.current = scopeKey;
+    migratedFavoriteScopeRef.current = favoriteScopeKey;
     const legacyKeys = readLegacyFavoriteAnswerKeys(botAlias, storageScope);
     if (legacyKeys.length === 0) {
       return;
@@ -3560,8 +3628,10 @@ export function ChatScreen({
     client,
     conversations,
     executionMode,
+    favoriteScopeKey,
     favoriteItems,
     favoriteLoading,
+    isForeground,
     storageScope,
   ]);
 
