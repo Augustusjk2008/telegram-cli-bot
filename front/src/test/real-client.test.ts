@@ -202,6 +202,10 @@ describe("RealWebBotClient", () => {
         (trace) => traces.push(`${trace.kind}:${trace.summary}`),
       );
 
+      expect(JSON.parse(String(fetchMock.mock.calls[0][1].body))).toMatchObject({
+        message: "hello",
+        stream_protocol_version: 2,
+      });
       expect(message).toMatchObject({ id: assistantMessageId, turnId, text: "完成", state: "done" });
       if (eventType === "meta" || eventType === "status") {
         expect(statuses).toContainEqual(expect.objectContaining({ turnId, assistantMessageId }));
@@ -211,6 +215,48 @@ describe("RealWebBotClient", () => {
       }
     },
   );
+
+  test("maps compact CLI v1 and v2 terminal frames to identical final messages", async () => {
+    const persistedMessage = {
+      id: "assistant-compact-cli",
+      turn_id: "turn-compact-cli",
+      role: "assistant",
+      content: "CLI 最终答复",
+      created_at: "2026-08-08T00:00:00Z",
+      state: "done",
+    };
+    const terminalEvents = [
+      {
+        type: "done",
+        turn_id: "turn-compact-cli",
+        assistant_message_id: "assistant-compact-cli",
+        output: "CLI 最终答复",
+        message: persistedMessage,
+      },
+      {
+        type: "done",
+        turn_id: "turn-compact-cli",
+        assistant_message_id: "assistant-compact-cli",
+        message: persistedMessage,
+      },
+    ];
+    const messages = [];
+    for (const doneEvent of terminalEvents) {
+      fetchMock.mockResolvedValueOnce(streamOk(`event: done\ndata: ${JSON.stringify(doneEvent)}\n\n`));
+      messages.push(await new RealWebBotClient().sendMessage("main", "hello", () => undefined));
+    }
+
+    expect(messages[0]).toEqual(messages[1]);
+    expect(messages[0]).toMatchObject({
+      id: "assistant-compact-cli",
+      turnId: "turn-compact-cli",
+      text: "CLI 最终答复",
+      state: "done",
+    });
+    for (const request of fetchMock.mock.calls) {
+      expect(JSON.parse(String(request[1].body))).toMatchObject({ stream_protocol_version: 2 });
+    }
+  });
 
   test("uses minimal plugin install, update, and uninstall routes with a trusted dev source path", async () => {
     fetchMock
@@ -263,11 +309,63 @@ describe("RealWebBotClient", () => {
 
     const request = fetchMock.mock.calls[0];
     expect(request[0]).toBe("/api/bots/main/chat/stream?protocol=ag-ui");
-    expect(JSON.parse(String(request[1].body))).toMatchObject({ execution_mode: "native_agent", protocol: "ag-ui" });
+    expect(JSON.parse(String(request[1].body))).toMatchObject({
+      execution_mode: "native_agent",
+      protocol: "ag-ui",
+      stream_protocol_version: 2,
+    });
     expect(agUiEvents).toEqual([EventType.RUN_STARTED, EventType.ACTIVITY_SNAPSHOT, EventType.RUN_FINISHED]);
     expect(legacyTraces).toEqual([]);
     expect(message).toMatchObject({ text: "原生完成", state: "done" });
     expect(message.meta).toMatchObject({ tracePresentation: "native_agent_flat", traceCount: 1 });
+  });
+
+  test("maps compact AG-UI v1 and v2 terminal frames to identical final messages", async () => {
+    const persistedMessage = {
+      id: "assistant-compact-native",
+      turn_id: "turn-compact-native",
+      role: "assistant",
+      content: "原生最终答复",
+      created_at: "2026-08-08T00:00:00Z",
+      state: "done",
+    };
+    const results = [
+      { content: "原生最终答复", message: persistedMessage },
+      { message: persistedMessage },
+    ];
+    const messages = [];
+    for (const result of results) {
+      fetchMock.mockResolvedValueOnce(streamOk(
+        `event: message\ndata: ${JSON.stringify({
+          type: EventType.RUN_FINISHED,
+          threadId: "thread-compact-native",
+          runId: "run-compact-native",
+          result: {
+            ...result,
+            completion_state: "completed",
+            turn_id: "turn-compact-native",
+            assistant_message_id: "assistant-compact-native",
+          },
+          outcome: { type: "success" },
+        })}\n\n`,
+      ));
+      messages.push(await new RealWebBotClient().sendMessage(
+        "main",
+        "hello",
+        () => undefined,
+        undefined,
+        undefined,
+        { executionMode: "native_agent" },
+      ));
+    }
+
+    expect(messages[0]).toEqual(messages[1]);
+    expect(messages[0]).toMatchObject({
+      id: "assistant-compact-native",
+      turnId: "turn-compact-native",
+      text: "原生最终答复",
+      state: "done",
+    });
   });
 
   test("drains an unterminated done frame at EOF", async () => {

@@ -5044,6 +5044,7 @@ export class RealWebBotClient implements WebBotClient {
       }),
       body: JSON.stringify({
         message: text,
+        stream_protocol_version: 2,
         ...(options?.taskMode ? { task_mode: options.taskMode } : {}),
         ...(options?.taskPayload ? { task_payload: options.taskPayload } : {}),
         ...(options?.visibleText ? { visible_text: options.visibleText } : {}),
