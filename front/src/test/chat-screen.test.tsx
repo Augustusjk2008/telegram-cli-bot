@@ -17,7 +17,7 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
       workingDir: "C:\\workspace",
       isProcessing: false,
     }),
-    listMessages: async () => [],
+    listMessages: async () => ({ items: [] }),
     listConversations: async (): Promise<ConversationListResult> => ({
       activeConversationId: "",
       items: [],
@@ -113,7 +113,7 @@ test("recovers an authoritative final reply after EOF arrives before the termina
   let overviewCalls = 0;
   const listMessageDelta = vi.fn<WebBotClient["listMessageDelta"]>(async () => ({
     reset: true,
-    revision: 1,
+    revision: 8,
     nextCursor: "1",
     items: [
       {
@@ -170,7 +170,7 @@ test("recovers an authoritative final reply after EOF arrives before the termina
         historyCount: overviewCalls === 1 ? 0 : 2,
       };
     }),
-    listMessages: vi.fn(async () => []),
+    listMessages: vi.fn(async () => ({ items: [], revision: 7 })),
     listMessageDelta,
     sendMessage,
   });
@@ -190,6 +190,12 @@ test("recovers an authoritative final reply after EOF arrives before the termina
   });
 
   expect(listMessageDelta).toHaveBeenCalledTimes(1);
+  expect(listMessageDelta).toHaveBeenCalledWith(
+    "main",
+    expect.any(String),
+    50,
+    expect.objectContaining({ revision: 7 }),
+  );
   expect(screen.getAllByText("无需 F5 的权威终答")).toHaveLength(1);
   expect(screen.queryByText("聊天响应在收到结束事件前中断，正在从历史记录恢复")).not.toBeInTheDocument();
 });
@@ -207,7 +213,7 @@ test("native permission trace can be approved from flat transcript", async () =>
       supportedExecutionModes: ["cli", "native_agent"],
       defaultExecutionMode: "cli",
     }),
-    listMessages: async (): Promise<ChatMessage[]> => [
+    listMessages: async () => ({ items: [
       {
         id: "assistant-1",
         role: "assistant",
@@ -227,7 +233,7 @@ test("native permission trace can be approved from flat transcript", async () =>
           }],
         },
       },
-    ],
+    ] }),
     replyNativeAgentPermission,
   });
 
@@ -279,7 +285,7 @@ test("native history loads flat trace details after expansion", async () => {
     processCount: 1,
   }));
   const client = createClient({
-    listMessages: async (): Promise<ChatMessage[]> => [
+    listMessages: async () => ({ items: [
       {
         id: "assistant-native-history",
         role: "assistant",
@@ -294,7 +300,7 @@ test("native history loads flat trace details after expansion", async () => {
           processCount: 1,
         },
       },
-    ],
+    ] }),
     getMessageTrace: getMessageTrace as never,
   });
 
@@ -323,7 +329,7 @@ test("non-native permission trace never exposes native permission actions", asyn
       supportedExecutionModes: ["cli", "native_agent"],
       defaultExecutionMode: "cli",
     }),
-    listMessages: async (): Promise<ChatMessage[]> => [
+    listMessages: async () => ({ items: [
       {
         id: "assistant-1",
         role: "assistant",
@@ -341,7 +347,7 @@ test("non-native permission trace never exposes native permission actions", asyn
           }],
         },
       },
-    ],
+    ] }),
   });
 
   render(<ChatScreen botAlias="main" client={client} />);
@@ -353,7 +359,7 @@ test("non-native permission trace never exposes native permission actions", asyn
 
 test("renders CLI trace in the unified AG-UI transcript", async () => {
   const client = createClient({
-    listMessages: async (): Promise<ChatMessage[]> => [{
+    listMessages: async () => ({ items: [{
       id: "assistant-cli-trace",
       role: "assistant",
       text: "CLI 最终答复",
@@ -364,7 +370,7 @@ test("renders CLI trace in the unified AG-UI transcript", async () => {
         processCount: 1,
         trace: [{ kind: "commentary", source: "codex", summary: "CLI 路由哨兵" }],
       },
-    }],
+    }] }),
   });
 
   render(<ChatScreen botAlias="main" client={client} />);
@@ -476,17 +482,17 @@ test("chat screen switches agent and scopes history requests", async () => {
       { id: "reviewer", name: "代码审查", systemPrompt: "先列风险", enabled: true, isMain: false },
     ],
   }));
-  const listMessages = vi.fn(async (_botAlias: string, options?: { agentId?: string }): Promise<ChatMessage[]> => {
+  const listMessages = vi.fn<WebBotClient["listMessages"]>(async (_botAlias, options) => {
     if (options?.agentId === "reviewer") {
-      return [{
+      return { items: [{
         id: "reviewer-1",
         role: "assistant",
         text: "reviewer-history",
         createdAt: new Date().toISOString(),
         state: "done",
-      }];
+      }] };
     }
-    return [];
+    return { items: [] };
   });
   const listConversations = vi.fn(async (): Promise<ConversationListResult> => ({
     activeConversationId: "",
@@ -521,7 +527,7 @@ test("execution mode switch reloads scoped history", async () => {
     defaultExecutionMode: "cli",
     executionMode: options?.executionMode === "native_agent" ? "native_agent" : "cli",
   }));
-  const listMessages = vi.fn<WebBotClient["listMessages"]>(async (_botAlias, options) => options?.executionMode === "native_agent"
+  const listMessages = vi.fn<WebBotClient["listMessages"]>(async (_botAlias, options) => ({ items: options?.executionMode === "native_agent"
     ? [{
       id: "assistant-native",
       role: "assistant",
@@ -535,7 +541,7 @@ test("execution mode switch reloads scoped history", async () => {
       text: "CLI 历史",
       createdAt: new Date().toISOString(),
       state: "done",
-    }]);
+    }] }));
   const client = createClient({ getBotOverview, listMessages });
 
   render(<ChatScreen botAlias="main" client={client} />);
@@ -589,9 +595,9 @@ test("native user bubble rollback confirms and refreshes history outside solo mo
     state: "done",
     meta: { workspaceHistoryHead: "head-2", linearIndex: 2, rollbackSupported: true },
   };
-  const listMessages = vi.fn<WebBotClient["listMessages"]>(async () => (
-    rolledBack ? [user1, assistant1] : [user1, assistant1, user2, assistant2]
-  ));
+  const listMessages = vi.fn<WebBotClient["listMessages"]>(async () => ({
+    items: rolledBack ? [user1, assistant1] : [user1, assistant1, user2, assistant2],
+  }));
   const listConversations = vi.fn<WebBotClient["listConversations"]>(async (): Promise<ConversationListResult> => ({
     activeConversationId: "conv-1",
     items: [{

@@ -303,7 +303,7 @@ describe("RealWebBotClient", () => {
       }));
 
     const client = new RealWebBotClient();
-    await client.listMessages("main", { agentId: "reviewer", executionMode: "native_agent" });
+    const history = await client.listMessages("main", { agentId: "reviewer", executionMode: "native_agent" });
     const conversations = await client.listConversations("main", "", {
       agentId: "reviewer",
       executionMode: "native_agent",
@@ -323,5 +323,19 @@ describe("RealWebBotClient", () => {
       agentId: "reviewer",
       nativeSource: { sessionId: "thread-1" },
     });
+    expect(history).toEqual({ items: [] });
+  });
+
+  test.each([
+    [{ items: [], current_revision: 7 }, 7],
+    [{ items: [], revision: 0 }, 0],
+    [{ items: [] }, undefined],
+  ])("maps history snapshot revision from compatible response fields", async (payload, revision) => {
+    fetchMock.mockResolvedValueOnce(jsonOk(payload));
+
+    const snapshot = await new RealWebBotClient().listMessages("main");
+
+    expect(snapshot.items).toEqual([]);
+    expect(snapshot.revision).toBe(revision);
   });
 });

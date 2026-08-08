@@ -199,6 +199,7 @@ import type {
   WorkdirChangeConflict,
   HistoryDeltaResult,
   HistoryDeltaOptions,
+  HistorySnapshotResult,
   LanChatConfig,
   LanChatConfigInput,
   LanChatConversation,
@@ -4756,13 +4757,23 @@ export class RealWebBotClient implements WebBotClient {
     return overview;
   }
 
-  async listMessages(botAlias: string, options: AgentScopedOptions = {}): Promise<ChatMessage[]> {
+  async listMessages(botAlias: string, options: AgentScopedOptions = {}): Promise<HistorySnapshotResult> {
     const params = new URLSearchParams();
     appendAgentParam(params, options.agentId);
     appendExecutionModeParam(params, options.executionMode);
     const suffix = params.toString() ? `?${params.toString()}` : "";
-    const data = await this.requestJson<{ items: RawHistoryItem[] }>(`/api/bots/${encodeURIComponent(botAlias)}/history${suffix}`);
-    return data.items.map((item, index) => mapChatMessage(item, index));
+    const data = await this.requestJson<{
+      items: RawHistoryItem[];
+      current_revision?: number;
+      revision?: number;
+    }>(`/api/bots/${encodeURIComponent(botAlias)}/history${suffix}`);
+    const revision = typeof data.current_revision === "number"
+      ? data.current_revision
+      : typeof data.revision === "number" ? data.revision : undefined;
+    return {
+      items: data.items.map((item, index) => mapChatMessage(item, index)),
+      ...(revision !== undefined ? { revision } : {}),
+    };
   }
 
   async listConversations(botAlias: string, query = "", options: AgentScopedOptions = {}): Promise<ConversationListResult> {

@@ -2,7 +2,7 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { BotOverview, ChatMessage } from "../services/types";
+import type { BotOverview, ChatMessage, HistorySnapshotResult } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
@@ -53,7 +53,7 @@ afterEach(() => {
 });
 
 test("restarts initial history loading after a hidden cached bot cancels the first request", async () => {
-  const firstHistory = createDeferred<ChatMessage[]>();
+  const firstHistory = createDeferred<HistorySnapshotResult>();
   const staleHistory: ChatMessage[] = [{
     id: "stale-history-message",
     role: "assistant",
@@ -72,7 +72,7 @@ test("restarts initial history loading after a hidden cached bot cancels the fir
   vi.spyOn(client, "getBotOverview").mockResolvedValue(createOverview());
   const listMessages = vi.spyOn(client, "listMessages")
     .mockImplementationOnce(() => firstHistory.promise)
-    .mockResolvedValueOnce(reloadedHistory);
+    .mockResolvedValueOnce({ items: reloadedHistory });
 
   const { rerender } = render(<ChatScreen botAlias="main" client={client} isVisible />);
   await waitFor(() => {
@@ -82,7 +82,7 @@ test("restarts initial history loading after a hidden cached bot cancels the fir
 
   rerender(<ChatScreen botAlias="main" client={client} isVisible={false} />);
   await act(async () => {
-    firstHistory.resolve(staleHistory);
+    firstHistory.resolve({ items: staleHistory });
     await Promise.resolve();
   });
   expect(screen.queryByText("不应显示的过期历史")).not.toBeInTheDocument();

@@ -50,6 +50,7 @@ import type {
   FavoriteAnswerItem,
   FileDownloadProgress,
   FileReadResult,
+  HistorySnapshotResult,
   PromptPreset,
   NativeAgentModelsPayload,
   NativeAgentModelOption,
@@ -932,6 +933,23 @@ function resolveActiveConversationId(conversations: ConversationSummary[], items
     || items.find((item) => item.conversationId)?.conversationId
     || ""
   );
+}
+
+function historyScopeForSnapshot(
+  botAlias: string,
+  agentId: string,
+  executionMode: ChatExecutionMode,
+  snapshot: HistorySnapshotResult,
+  overview: BotOverview | null,
+  conversations: ConversationSummary[] = [],
+) {
+  return {
+    botAlias,
+    agentId,
+    executionMode,
+    conversationId: overview?.agents?.find((agent) => agent.id === agentId)?.activeConversationId
+      || resolveActiveConversationId(conversations, snapshot.items),
+  };
 }
 
 function chatTurnStartIndexes(items: readonly ChatMessage[]) {
@@ -2725,7 +2743,7 @@ export function ChatScreen({
       listScopedMessages(client, botAlias, requestedAgentId, requestedExecutionMode),
       getScopedOverview(client, botAlias, requestedAgentId, requestedExecutionMode),
     ])
-      .then(async ([agentData, initialMessages, initialOverview]) => {
+      .then(async ([agentData, initialSnapshot, initialOverview]) => {
         if (cancelled) return;
         const nextAgents = agentData.items.length > 0 ? agentData.items : fallbackAgents();
         const supportedModes = getSupportedExecutionModes(initialOverview);
@@ -2738,7 +2756,7 @@ export function ChatScreen({
           : getDefaultExecutionMode(initialOverview);
         const preferredAgentId = requestedAgentId;
         const nextAgentId = nextAgents.some((agent) => agent.id === preferredAgentId) ? preferredAgentId : "main";
-        let messages = initialMessages;
+        let snapshot = initialSnapshot;
         let overview = initialOverview;
         if (forcedExecutionMode) {
           setTransientExecutionMode(nextExecutionMode);
@@ -2756,7 +2774,7 @@ export function ChatScreen({
         const requestedComparisonMode = requestedExecutionMode ?? "cli";
         const executionModeNeedsReload = nextExecutionMode !== requestedComparisonMode;
         if (nextAgentId !== requestedAgentId || executionModeNeedsReload) {
-          [messages, overview] = await Promise.all([
+          [snapshot, overview] = await Promise.all([
             listScopedMessages(client, botAlias, nextAgentId, nextExecutionMode),
             getScopedOverview(client, botAlias, nextAgentId, nextExecutionMode),
           ]);
@@ -2764,13 +2782,20 @@ export function ChatScreen({
             return;
           }
         }
+        if (cancelled || activeAgentIdRef.current !== nextAgentId || executionModeRef.current !== nextExecutionMode) {
+          return;
+        }
+        historyRevisionStateRef.current.seed(
+          historyScopeForSnapshot(botAlias, nextAgentId, nextExecutionMode, snapshot, overview),
+          snapshot,
+        );
         setAgents(nextAgents);
         setBotOverview(overview);
         setWorkingDir(overview.workingDir || "");
         restoreClusterRunFromOverview(overview);
         const storedQueuedMessage = readStoredQueuedMessage(botAlias, nextAgentId, storageScope);
         setQueuedMessageState(storedQueuedMessage, { botAlias, agentId: nextAgentId });
-        const { shouldPoll } = applyHistoryView(messages, overview);
+        const { shouldPoll } = applyHistoryView(snapshot.items, overview);
         initialLoadSettled = true;
         loadingRef.current = false;
         setLoading(false);
@@ -3464,19 +3489,31 @@ export function ChatScreen({
       return;
     }
     const agentId = activeAgentIdRef.current || "main";
+    const sendVersion = assistantSendVersionRef.current;
     setError("");
     try {
-      const [messages, conversationData] = await Promise.all([
+      const [snapshot, conversationData] = await Promise.all([
         listScopedMessages(client, botAlias, agentId, "native_agent"),
         listScopedConversations(client, botAlias, conversationQuery, agentId, "native_agent"),
       ]);
+      if (
+        sendVersion !== assistantSendVersionRef.current
+        || activeAgentIdRef.current !== agentId
+        || executionModeRef.current !== "native_agent"
+      ) {
+        return;
+      }
       setConversations(conversationData.items);
-      itemsRef.current = messages;
+      historyRevisionStateRef.current.seed(
+        historyScopeForSnapshot(botAlias, agentId, "native_agent", snapshot, botOverviewRef.current, conversationData.items),
+        snapshot,
+      );
+      itemsRef.current = snapshot.items;
       const overview = botOverviewRef.current;
       if (overview) {
-        applyHistoryView(messages, overview);
+        applyHistoryView(snapshot.items, overview);
       } else {
-        setItems(messages);
+        setItems(snapshot.items);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "刷新会话历史失败");
@@ -3788,15 +3825,20 @@ export function ChatScreen({
     setIsStreaming(false);
     setStreamMode("");
     setStreamStartedAtMs(null);
+    const requestedExecutionMode = executionModeRef.current;
 
     Promise.all([
-      listScopedMessages(client, botAlias, normalized, executionModeRef.current),
-      getScopedOverview(client, botAlias, normalized, executionModeRef.current),
+      listScopedMessages(client, botAlias, normalized, requestedExecutionMode),
+      getScopedOverview(client, botAlias, normalized, requestedExecutionMode),
     ])
-      .then(([messages, overview]) => {
-        if (activeAgentIdRef.current !== normalized) {
+      .then(([snapshot, overview]) => {
+        if (activeAgentIdRef.current !== normalized || executionModeRef.current !== requestedExecutionMode) {
           return;
         }
+        historyRevisionStateRef.current.seed(
+          historyScopeForSnapshot(botAlias, normalized, requestedExecutionMode, snapshot, overview),
+          snapshot,
+        );
         setBotOverview(overview);
         setWorkingDir(overview.workingDir || "");
         restoreClusterRunFromOverview(overview);
@@ -3805,7 +3847,7 @@ export function ChatScreen({
         }
         const storedQueuedMessage = readStoredQueuedMessage(botAlias, normalized, storageScope);
         setQueuedMessageState(storedQueuedMessage, { botAlias, agentId: normalized });
-        const { shouldPoll } = applyHistoryView(messages, overview);
+        const { shouldPoll } = applyHistoryView(snapshot.items, overview);
         loadingRef.current = false;
         setLoading(false);
         if (!shouldPoll) {
@@ -3813,7 +3855,7 @@ export function ChatScreen({
         }
       })
       .catch((err: Error) => {
-        if (activeAgentIdRef.current !== normalized) {
+        if (activeAgentIdRef.current !== normalized || executionModeRef.current !== requestedExecutionMode) {
           return;
         }
         setError(err.message || "切换 agent 失败");
@@ -4533,17 +4575,21 @@ export function ChatScreen({
       listScopedMessages(client, botAlias, nextAgentId, mode),
       getScopedOverview(client, botAlias, nextAgentId, mode),
     ])
-      .then(([messages, overview]) => {
+      .then(([snapshot, overview]) => {
         if (activeAgentIdRef.current !== nextAgentId || executionModeRef.current !== mode) {
           return;
         }
+        historyRevisionStateRef.current.seed(
+          historyScopeForSnapshot(botAlias, nextAgentId, mode, snapshot, overview),
+          snapshot,
+        );
         setBotOverview(overview);
         setWorkingDir(overview.workingDir || "");
         restoreClusterRunFromOverview(overview);
         if (overview.agents && overview.agents.length > 0) {
           setAgents(overview.agents);
         }
-        const { shouldPoll } = applyHistoryView(messages, overview);
+        const { shouldPoll } = applyHistoryView(snapshot.items, overview);
         loadingRef.current = false;
         setLoading(false);
         if (historyPanelOpen) {

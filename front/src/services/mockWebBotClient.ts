@@ -141,6 +141,7 @@ import type {
   PersistentTerminalSnapshot,
   FileWriteResult,
   HistoryDeltaResult,
+  HistorySnapshotResult,
   PublicHostInfo,
   RegisterCodeCreateResult,
   RegisterCodeItem,
@@ -4218,8 +4219,8 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
-  async listMessages(botAlias: string, options: AgentScopedOptions = {}): Promise<ChatMessage[]> {
-    return this.getAgentMessages(botAlias, options.agentId || "main");
+  async listMessages(botAlias: string, options: AgentScopedOptions = {}): Promise<HistorySnapshotResult> {
+    return { items: this.getAgentMessages(botAlias, options.agentId || "main") };
   }
 
   async listMessageDelta(botAlias: string, afterId: string, limit = 50, options: AgentScopedOptions = {}): Promise<HistoryDeltaResult> {

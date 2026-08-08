@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import type {
   AgentScopedOptions,
   ChatMessage,
+  HistorySnapshotResult,
   NativeAgentHistoryChangedFile,
   NativeAgentHistoryChangesPayload,
   NativeAgentHistoryDiffPayload,
@@ -13,7 +14,7 @@ import type {
 import type { SoloSessionSnapshot } from "./soloTypes";
 
 export type SoloSessionChangesClient = {
-  listMessages(botAlias: string, options?: AgentScopedOptions): Promise<ChatMessage[]>;
+  listMessages(botAlias: string, options?: AgentScopedOptions): Promise<HistorySnapshotResult>;
   getNativeAgentHistoryChanges(
     botAlias: string,
     input: { conversationId: string; turnId: string; agentId?: string },
@@ -143,11 +144,11 @@ export function SoloSessionChangesTab({
     setTurnsLoading(true);
     setTurnsError("");
     try {
-      const messages = await client.listMessages(botAlias, {
+      const snapshot = await client.listMessages(botAlias, {
         executionMode: "native_agent",
         ...(agentId ? { agentId } : {}),
       });
-      const nextTurns = buildTurns(messages, conversationId);
+      const nextTurns = buildTurns(snapshot.items, conversationId);
       setTurns(nextTurns);
       setSelectedTurnId((current) => {
         if (current && nextTurns.some((turn) => turn.turnId === current)) return current;
