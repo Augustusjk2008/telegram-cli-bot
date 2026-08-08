@@ -235,6 +235,7 @@ WORKDIR_CHANGE_BLOCKED_PROCESSING = "workdir_change_blocked_processing"
 CODEX_DONE_QUIET_SECONDS = 0.5
 CODEX_TERMINATE_GRACE_SECONDS = 1.0
 CLI_CONTEXT_USAGE_RESOLVE_TIMEOUT_SECONDS = 0.25
+CLI_STATUS_MIN_INTERVAL_SECONDS = 0.25
 CLI_LIVE_TRACE_MAX_EVENTS = 2000
 _CLI_CONTEXT_USAGE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cli-context-usage")
 @dataclass
@@ -4069,6 +4070,8 @@ async def _stream_cli_chat(
             )
             thread_id: Optional[str] = None
             last_status_signature: tuple[int, Optional[str], tuple[tuple[str, str], ...] | None] | None = None
+            pending_status_event: dict[str, Any] | None = None
+            last_status_sent_at: float | None = None
             last_context_usage: dict[str, Any] | None = None
             last_context_usage_session_id = ""
             last_context_usage_signature: tuple[tuple[str, str], ...] | None = None
@@ -4090,6 +4093,23 @@ async def _stream_cli_chat(
             live_trace_truncated = False
             latest_preview_text = ""
             last_context_usage_resolved_at = 0.0
+
+            def take_pending_status(*, force: bool = False) -> dict[str, Any] | None:
+                nonlocal pending_status_event, last_status_sent_at
+                if pending_status_event is None:
+                    return None
+                now = loop.time()
+                if (
+                    not force
+                    and last_status_sent_at is not None
+                    and now - last_status_sent_at < CLI_STATUS_MIN_INTERVAL_SECONDS
+                ):
+                    return None
+                event = pending_status_event
+                pending_status_event = None
+                last_status_sent_at = now
+                return event
+
             def append_live_trace_event(trace_event: dict[str, Any]) -> dict[str, Any] | None:
                 nonlocal live_trace_truncated
                 event_key = _trace_event_key(trace_event)
@@ -4276,8 +4296,12 @@ async def _stream_cli_chat(
                             latest_preview_text = preview_text
                             persistence_buffer.queue_preview(preview_text)
                             persistence_buffer.maybe_flush()
-                        yield status_event
+                        pending_status_event = status_event
                         last_status_signature = status_signature
+
+                    ready_status = take_pending_status()
+                    if ready_status is not None:
+                        yield ready_status
 
                     if drained:
                         await asyncio.sleep(0)
@@ -4295,6 +4319,9 @@ async def _stream_cli_chat(
                     await loop.run_in_executor(None, _terminate_process_sync, process)
                 raise
             except Exception:
+                final_status = take_pending_status(force=True)
+                if final_status is not None:
+                    yield final_status
                 stdout_reader.stop()
                 await persistence_buffer.close()
                 if process.poll() is None:
@@ -4309,6 +4336,9 @@ async def _stream_cli_chat(
                 with session._lock:
                     session.process = None
                 close_process_streams(process)
+            final_status = take_pending_status(force=True)
+            if final_status is not None:
+                yield final_status
             stage_durations["cli_ms"] += max(0, int(round((time.perf_counter() - cli_started_at) * 1000)))
             sqlite_flush_count = persistence_buffer.flush_count
 

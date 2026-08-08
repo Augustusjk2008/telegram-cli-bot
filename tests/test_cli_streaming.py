@@ -387,6 +387,96 @@ async def test_stream_cli_chat_normalizes_slash_and_preserves_ids_on_legacy_sse_
 
 
 @pytest.mark.asyncio
+async def test_stream_cli_chat_coalesces_status_and_flushes_latest_before_done(
+    usage_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    process = _UsageProcess()
+    process.stdout = _StreamingStdout([
+        '{"type":"thread.started","thread_id":"status-thread"}\n',
+        *[
+            f'{{"type":"item.delta","item":{{"type":"assistant_message","delta":"{index}"}}}}\n'
+            for index in range(20)
+        ],
+        '{"type":"item.completed","item":{"type":"function_call","name":"shell_command",'
+        '"call_id":"status-call","arguments":"{\\"command\\":\\"pwd\\"}"}}\n',
+        '{"type":"item.completed","item":{"type":"assistant_message","text":"done"}}\n',
+        '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n',
+    ])
+
+    async def start_capture(*, env, command):
+        return _UsageCapture()
+
+    monkeypatch.setattr(api_service, "CLI_STATUS_MIN_INTERVAL_SECONDS", 5.0)
+    monkeypatch.setattr(api_service, "_CLI_STREAM_DRAIN_BATCH_SIZE", 1)
+    monkeypatch.setattr(api_service, "_start_codex_usage_capture", start_capture, raising=False)
+    monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
+    monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: (["codex"], False))
+    monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(api_service.subprocess, "Popen", lambda *_args, **_kwargs: process)
+
+    async def collect_events():
+        return [
+            event async for event in api_service._stream_cli_chat(usage_manager, "main", 1001, "hello")
+        ]
+
+    events = await asyncio.wait_for(collect_events(), timeout=2.0)
+    statuses = [event for event in events if event["type"] == "status"]
+    meta = next(event for event in events if event["type"] == "meta")
+
+    assert len(statuses) == 2
+    assert statuses[-1]["preview_text"].endswith("1819")
+    assert events[-2] == statuses[-1]
+    assert events[-1]["type"] == "done"
+    assert any(event["type"] == "trace" for event in events)
+    for event in statuses:
+        assert event["turn_id"] == meta["turn_id"]
+        assert event["assistant_message_id"] == meta["assistant_message_id"]
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_flushes_pending_status_before_error(
+    usage_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    output_queue: queue.Queue[object] = queue.Queue()
+    output_queue.put('{"type":"thread.started","thread_id":"error-thread"}\n')
+    output_queue.put('{"type":"item.delta","item":{"type":"assistant_message","delta":"first"}}\n')
+    output_queue.put('{"type":"item.delta","item":{"type":"assistant_message","delta":"latest"}}\n')
+    output_queue.put(RuntimeError("stream failed"))
+    reader = _ContinuousOutputReader()
+    reader.done.set()
+    process = _UsageProcess()
+
+    async def start_capture(*, env, command):
+        return _UsageCapture()
+
+    monkeypatch.setattr(api_service, "CLI_STATUS_MIN_INTERVAL_SECONDS", 5.0)
+    monkeypatch.setattr(api_service, "_CLI_STREAM_DRAIN_BATCH_SIZE", 1)
+    monkeypatch.setattr(api_service, "_start_codex_usage_capture", start_capture, raising=False)
+    monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
+    monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: (["codex"], False))
+    monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(api_service.subprocess, "Popen", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(api_service.queue, "Queue", lambda *_args, **_kwargs: output_queue)
+    monkeypatch.setattr(api_service, "_start_process_stdout_reader", lambda *_args, **_kwargs: reader)
+    monkeypatch.setattr(api_service, "_terminate_process_sync", lambda current: setattr(current, "returncode", -1))
+
+    events: list[dict[str, object]] = []
+    with pytest.raises(RuntimeError, match="stream failed"):
+        async for event in api_service._stream_cli_chat(usage_manager, "main", 1001, "hello"):
+            events.append(event)
+
+    statuses = [event for event in events if event["type"] == "status"]
+    meta = next(event for event in events if event["type"] == "meta")
+    assert len(statuses) == 2
+    assert statuses[-1]["preview_text"] == "firstlatest"
+    assert events[-1] == statuses[-1]
+    assert statuses[-1]["turn_id"] == meta["turn_id"]
+    assert statuses[-1]["assistant_message_id"] == meta["assistant_message_id"]
+
+
+@pytest.mark.asyncio
 async def test_stream_cli_chat_yields_when_stdout_queue_stays_nonempty(
     usage_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
