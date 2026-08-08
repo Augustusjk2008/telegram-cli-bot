@@ -134,6 +134,89 @@ async def test_web_base_path_serves_api_and_spa(monkeypatch: pytest.MonkeyPatch,
 
 
 @pytest.mark.asyncio
+async def test_vite_manifest_assets_use_sidecars_and_immutable_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "/node/nanjing-laptop")
+    dist = tmp_path / "dist"
+    assets = dist / "assets"
+    manifest_dir = dist / ".vite"
+    assets.mkdir(parents=True)
+    manifest_dir.mkdir()
+    (dist / "index.html").write_text("<!doctype html><title>app</title>", encoding="utf-8")
+    (manifest_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "src/main.tsx": {
+                    "file": "assets/app-ABCDEFGH.js",
+                    "css": ["assets/app-ABCDEFGH.css"],
+                    "isEntry": True,
+                },
+                "src/plain.ts": {"file": "assets/plain.js"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (assets / "app-ABCDEFGH.js").write_bytes(b"identity-js")
+    (assets / "app-ABCDEFGH.js.br").write_bytes(b"brotli-js")
+    (assets / "app-ABCDEFGH.js.gz").write_bytes(b"gzip-js")
+    (assets / "app-ABCDEFGH.css").write_bytes(b"identity-css")
+    (assets / "app-ABCDEFGH.css.br").write_bytes(b"brotli-css")
+    (assets / "app-ABCDEFGH.css.gz").write_bytes(b"gzip-css")
+    (assets / "plain.js").write_bytes(b"plain")
+    (assets / "app-logo.svg").write_text("<svg/>", encoding="utf-8")
+
+    server = WebApiServer(object(), host="127.0.0.1", port=8768, tunnel_service=DummyTunnelService())
+    monkeypatch.setattr(server, "_get_static_dir", lambda subdir=None: str(dist / subdir) if subdir else str(dist))
+
+    app = server._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server, auto_decompress=False) as client:
+            brotli = await client.get("/assets/app-ABCDEFGH.js", headers={"Accept-Encoding": "br"})
+            brotli_body = await brotli.read()
+            gzip = await client.get(
+                "/node/nanjing-laptop/assets/app-ABCDEFGH.css",
+                headers={"Accept-Encoding": "gzip"},
+            )
+            gzip_body = await gzip.read()
+            identity = await client.get(
+                "/assets/app-ABCDEFGH.js",
+                headers={"Accept-Encoding": "identity"},
+            )
+            identity_body = await identity.read()
+            not_modified = await client.get(
+                "/assets/app-ABCDEFGH.js",
+                headers={"Accept-Encoding": "br", "If-None-Match": brotli.headers["ETag"]},
+            )
+            plain = await client.get("/assets/plain.js", headers={"Accept-Encoding": "identity"})
+            logo = await client.get("/assets/app-logo.svg")
+            favicon = await client.get("/favicon.svg")
+            index = await client.get("/")
+            health = await client.get("/api/health")
+
+    for response in (brotli, gzip, identity, not_modified):
+        assert response.headers["Cache-Control"] == "public, max-age=31536000, immutable"
+        assert "accept-encoding" in response.headers["Vary"].lower()
+    assert brotli.status == 200
+    assert brotli.headers["Content-Encoding"] == "br"
+    assert brotli_body == b"brotli-js"
+    assert gzip.status == 200
+    assert gzip.headers["Content-Encoding"] == "gzip"
+    assert gzip_body == b"gzip-css"
+    assert identity.status == 200
+    assert "Content-Encoding" not in identity.headers
+    assert identity_body == b"identity-js"
+    assert not_modified.status == 304
+    assert not_modified.headers["ETag"] == brotli.headers["ETag"]
+    assert "immutable" not in plain.headers.get("Cache-Control", "")
+    assert "immutable" not in logo.headers.get("Cache-Control", "")
+    assert "immutable" not in favicon.headers.get("Cache-Control", "")
+    assert "no-store" in index.headers["Cache-Control"]
+    assert health.status == 200
+
+
+@pytest.mark.asyncio
 async def test_runtime_public_env_replaces_stale_build_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "/node/nanjing-laptop")
     dist = tmp_path / "dist"
