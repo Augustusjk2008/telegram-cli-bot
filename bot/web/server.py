@@ -233,6 +233,7 @@ from .api_service import (
     read_file_content,
     rename_path,
     move_path,
+    normalize_stream_protocol_version,
     remove_managed_bot,
     remove_managed_bot_with_history,
     reset_user_session,
@@ -2192,6 +2193,9 @@ class WebApiServer:
         ag_ui_encoder = EventEncoder() if wants_ag_ui else None
         allow_unsafe_cli = CAP_RUN_UNSAFE_CLI in auth.capabilities
         include_trace = CAP_VIEW_CHAT_TRACE in auth.capabilities
+        stream_protocol_version = normalize_stream_protocol_version(
+            body.get("stream_protocol_version", body.get("streamProtocolVersion"))
+        )
         raw_stream_id = body.get("stream_id", body.get("streamId", ""))
         raw_turn_id = body.get("turn_id", body.get("turnId", ""))
         if not isinstance(raw_stream_id, str) or not isinstance(raw_turn_id, str):
@@ -2237,6 +2241,7 @@ class WebApiServer:
             "after_sequence": after_sequence,
             "enable_reconnect": enable_reconnect,
             "include_trace": include_trace,
+            "stream_protocol_version": stream_protocol_version,
         }
         if execution_mode:
             stream_kwargs["execution_mode"] = execution_mode

@@ -124,6 +124,28 @@ def build_run_finished_event(
     )
 
 
+def compact_run_finished_event(event: Any, stream_protocol_version: int) -> Any:
+    if stream_protocol_version != 2:
+        return event
+    event_type = event.get("type") if isinstance(event, dict) else getattr(event, "type", None)
+    if hasattr(event_type, "value"):
+        event_type = event_type.value
+    if str(event_type or "").strip().upper() != "RUN_FINISHED":
+        return event
+    result = event.get("result") if isinstance(event, dict) else getattr(event, "result", None)
+    if not isinstance(result, dict) or "content" not in result:
+        return event
+    message = result.get("message")
+    if not isinstance(message, dict) or message.get("content") != result.get("content"):
+        return event
+    compact_result = dict(result)
+    compact_result.pop("content", None)
+    if isinstance(event, dict):
+        return {**event, "result": compact_result}
+    model_copy = getattr(event, "model_copy", None)
+    return model_copy(update={"result": compact_result}) if callable(model_copy) else event
+
+
 def build_run_error_event(message: str, *, code: str = "native_agent_error") -> core.RunErrorEvent:
     return core.RunErrorEvent(
         timestamp=_timestamp_ms(),

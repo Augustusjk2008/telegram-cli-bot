@@ -285,9 +285,12 @@ async def test_codex_communicate_requests_rollout_usage_when_terminal_usage_is_m
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("stream_protocol_version", "expects_output"), [(1, True), (2, False)])
 async def test_stream_cli_chat_starts_capture_before_spawn_and_records_once(
     usage_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
+    stream_protocol_version: int,
+    expects_output: bool,
 ):
     capture = _UsageCapture()
     spawned = False
@@ -310,12 +313,67 @@ async def test_stream_cli_chat_starts_capture_before_spawn_and_records_once(
     monkeypatch.setattr(api_service.subprocess, "Popen", popen)
 
     events = [
-        event async for event in api_service._stream_cli_chat(usage_manager, "main", 1001, "hello")
+        event
+        async for event in api_service._stream_cli_chat(
+            usage_manager,
+            "main",
+            1001,
+            "hello",
+            stream_protocol_version=stream_protocol_version,
+        )
     ]
 
-    assert next(event for event in events if event["type"] == "done")["output"] == "done"
+    done = next(event for event in events if event["type"] == "done")
+    assert done["message"]["content"] == "done"
+    assert ("output" in done) is expects_output
+    if expects_output:
+        assert done["output"] == "done"
+    assert done["turn_id"]
+    assert done["assistant_message_id"]
+    assert isinstance(done["elapsed_seconds"], int)
+    assert done["returncode"] == 0
+    assert isinstance(done["session"], dict)
     assert len(capture.calls) == 1
     assert capture.calls[0][0].input_tokens == 11
+
+
+@pytest.mark.parametrize(
+    ("stream_protocol_version", "output", "message_content", "expects_output"),
+    [
+        (1, "same", "same", True),
+        (2, "same", "same", False),
+        (2, "", "", True),
+        (2, "fallback", "", True),
+        (3, "same", "same", True),
+    ],
+)
+def test_compact_cli_done_event_preserves_v1_empty_and_mismatched_output(
+    stream_protocol_version: int,
+    output: str,
+    message_content: str,
+    expects_output: bool,
+):
+    event = {
+        "type": "done",
+        "turn_id": "turn-compact",
+        "assistant_message_id": "assistant-compact",
+        "output": output,
+        "message": {
+            "id": "assistant-compact",
+            "content": message_content,
+            "state": "error",
+            "meta": {"completion_state": "error"},
+        },
+    }
+
+    compacted = api_service._compact_cli_done_event(event, stream_protocol_version)
+
+    assert ("output" in compacted) is expects_output
+    assert compacted["message"]["content"] == message_content
+    assert compacted["message"]["state"] == "error"
+    assert compacted["message"]["meta"]["completion_state"] == "error"
+    assert compacted["turn_id"] == "turn-compact"
+    assert compacted["assistant_message_id"] == "assistant-compact"
 
 
 @pytest.mark.asyncio

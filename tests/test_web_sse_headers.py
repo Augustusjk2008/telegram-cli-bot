@@ -76,11 +76,27 @@ def _build_manager(tmp_path: Path) -> MultiBotManager:
         ({CAP_CHAT_SEND, CAP_VIEW_CHAT_TRACE}, True),
     ],
 )
+@pytest.mark.parametrize(
+    ("protocol_fields", "expected_stream_protocol_version"),
+    [
+        ({}, 1),
+        ({"stream_protocol_version": 2}, 2),
+        ({"streamProtocolVersion": 2}, 2),
+        ({"stream_protocol_version": "2"}, 1),
+        ({"stream_protocol_version": 2.0}, 1),
+        ({"stream_protocol_version": None}, 1),
+        ({"stream_protocol_version": 3}, 1),
+        ({"stream_protocol_version": True}, 1),
+        ({"stream_protocol_version": 1, "streamProtocolVersion": 2}, 1),
+    ],
+)
 async def test_chat_stream_sends_sse_headers_and_ready_comment(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capabilities: set[str],
     expected_include_trace: bool,
+    protocol_fields: dict[str, object],
+    expected_stream_protocol_version: int,
 ) -> None:
     manager = _build_manager(tmp_path)
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
@@ -108,7 +124,10 @@ async def test_chat_stream_sends_sse_headers_and_ready_comment(
     app = server._build_app()
     async with TestServer(app) as test_server:
         async with TestClient(test_server) as client:
-            response = await client.post("/api/bots/main/chat/stream", json={"message": "hello"})
+            response = await client.post(
+                "/api/bots/main/chat/stream",
+                json={"message": "hello", **protocol_fields},
+            )
             body = await response.text()
 
     assert response.status == 200
@@ -119,6 +138,7 @@ async def test_chat_stream_sends_sse_headers_and_ready_comment(
     assert response.headers["Expires"] == "0"
     assert response.headers["X-Accel-Buffering"] == "no"
     assert captured_kwargs["include_trace"] is expected_include_trace
+    assert captured_kwargs["stream_protocol_version"] == expected_stream_protocol_version
     assert body.startswith(": ready\n\n")
     assert 'event: done\ndata: {"type": "done", "output": "ok", "elapsed_seconds": 0}' in body
 
