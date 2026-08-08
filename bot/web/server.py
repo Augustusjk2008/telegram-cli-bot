@@ -2190,6 +2190,7 @@ class WebApiServer:
         wants_ag_ui = protocol.lower() == "ag-ui"
         ag_ui_encoder = EventEncoder() if wants_ag_ui else None
         allow_unsafe_cli = CAP_RUN_UNSAFE_CLI in auth.capabilities
+        include_trace = CAP_VIEW_CHAT_TRACE in auth.capabilities
         raw_stream_id = body.get("stream_id", body.get("streamId", ""))
         raw_turn_id = body.get("turn_id", body.get("turnId", ""))
         if not isinstance(raw_stream_id, str) or not isinstance(raw_turn_id, str):
@@ -2234,6 +2235,7 @@ class WebApiServer:
             "resume_turn_id": resume_turn_id,
             "after_sequence": after_sequence,
             "enable_reconnect": enable_reconnect,
+            "include_trace": include_trace,
         }
         if execution_mode:
             stream_kwargs["execution_mode"] = execution_mode

@@ -4,6 +4,7 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
+from ag_ui import core
 
 from bot.native_agent.pi_turn_stream import PiTurnChannel
 from bot.web import api_service
@@ -121,7 +122,22 @@ async def test_native_stream_resume_does_not_start_cluster_or_send_prompt(monkey
     class FakeChannel:
         async def events(self, *, after_sequence: int):
             assert after_sequence == 4
-            yield {"type": "done", "stream_id": "pit-existing", "sequence": 5}
+            yield {"type": "trace", "event": {"summary": "hidden"}, "sequence": 5}
+            yield {
+                "type": "ag_ui",
+                "event": core.ToolCallStartEvent(toolCallId="call-1", toolCallName="shell_command"),
+                "sequence": 6,
+            }
+            yield {
+                "type": "ag_ui",
+                "event": core.ActivitySnapshotEvent(
+                    messageId="permission-1",
+                    activityType="TCB_PERMISSION_REQUEST",
+                    content={},
+                ),
+                "sequence": 7,
+            }
+            yield {"type": "done", "stream_id": "pit-existing", "sequence": 8}
 
     class FakeService:
         def resume_turn_channel(self, stream_id: str, *, turn_id: str):
@@ -153,10 +169,13 @@ async def test_native_stream_resume_does_not_start_cluster_or_send_prompt(monkey
             resume_stream_id="pit-existing",
             resume_turn_id="turn-existing",
             after_sequence=4,
+            include_trace=False,
         )
     ]
 
-    assert events == [{"type": "done", "stream_id": "pit-existing", "sequence": 5}]
+    assert [event["sequence"] for event in events] == [7, 8]
+    assert events[0]["event"].activity_type == "TCB_PERMISSION_REQUEST"
+    assert events[1]["type"] == "done"
 
 
 @pytest.mark.asyncio

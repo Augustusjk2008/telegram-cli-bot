@@ -11,6 +11,12 @@ from bot.native_agent.aggregator import NativeAgentAggregationResult
 from bot.native_agent.events import NativeAgentEvent
 
 _FILTERED_EVENT_TYPES = {"server.connected", "server.heartbeat"}
+_TRACE_EVENT_TYPES = {
+    "TOOL_CALL_START",
+    "TOOL_CALL_ARGS",
+    "TOOL_CALL_END",
+    "TOOL_CALL_RESULT",
+}
 
 
 @dataclass
@@ -36,6 +42,22 @@ class AgUiTurnState:
 
 def should_filter_event(event: NativeAgentEvent | None) -> bool:
     return event is None or event.type in _FILTERED_EVENT_TYPES
+
+
+def is_ag_ui_trace_event(event: Any) -> bool:
+    """Return whether an AG-UI event exposes ordinary tool/trace activity."""
+    event_type = getattr(event, "type", None)
+    if hasattr(event_type, "value"):
+        event_type = event_type.value
+    normalized_type = str(event_type or "").strip().upper()
+    if normalized_type in _TRACE_EVENT_TYPES:
+        return True
+    if normalized_type != "ACTIVITY_SNAPSHOT":
+        return False
+    activity_type = getattr(event, "activity_type", None)
+    if activity_type is None and isinstance(event, dict):
+        activity_type = event.get("activityType", event.get("activity_type"))
+    return str(activity_type or "").strip() == "TCB_NATIVE_AGENT_TRACE"
 
 
 def build_run_started_event(

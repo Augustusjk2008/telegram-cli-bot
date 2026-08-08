@@ -9,7 +9,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from bot.manager import MultiBotManager
 from bot.models import BotProfile
 from bot.web.api_common import AuthContext
-from bot.web.auth_store import CAP_CHAT_SEND
+from bot.web.auth_store import CAP_CHAT_SEND, CAP_VIEW_CHAT_TRACE
 from bot.web.permission_store import BotPermissionStore
 from bot.web.server import WebApiServer, _sse_headers
 
@@ -69,9 +69,18 @@ def _build_manager(tmp_path: Path) -> MultiBotManager:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("capabilities", "expected_include_trace"),
+    [
+        ({CAP_CHAT_SEND}, False),
+        ({CAP_CHAT_SEND, CAP_VIEW_CHAT_TRACE}, True),
+    ],
+)
 async def test_chat_stream_sends_sse_headers_and_ready_comment(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    capabilities: set[str],
+    expected_include_trace: bool,
 ) -> None:
     manager = _build_manager(tmp_path)
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
@@ -81,12 +90,15 @@ async def test_chat_stream_sends_sse_headers_and_ready_comment(
 
     async def chat_send_only(_request, capability: str) -> AuthContext:
         assert capability == CAP_CHAT_SEND
-        return AuthContext(user_id=123, token_used=True, capabilities={CAP_CHAT_SEND})
+        return AuthContext(user_id=123, token_used=True, capabilities=capabilities)
 
     async def event_source():
         yield {"type": "done", "output": "ok", "elapsed_seconds": 0}
 
-    def fake_stream_chat(*_args, **_kwargs):
+    captured_kwargs: dict[str, object] = {}
+
+    def fake_stream_chat(*_args, **kwargs):
+        captured_kwargs.update(kwargs)
         return event_source()
 
     monkeypatch.setattr(server, "_with_capability", chat_send_only)
@@ -106,6 +118,7 @@ async def test_chat_stream_sends_sse_headers_and_ready_comment(
     assert response.headers["Pragma"] == "no-cache"
     assert response.headers["Expires"] == "0"
     assert response.headers["X-Accel-Buffering"] == "no"
+    assert captured_kwargs["include_trace"] is expected_include_trace
     assert body.startswith(": ready\n\n")
     assert 'event: done\ndata: {"type": "done", "output": "ok", "elapsed_seconds": 0}' in body
 

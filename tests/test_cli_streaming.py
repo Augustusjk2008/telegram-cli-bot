@@ -319,9 +319,12 @@ async def test_stream_cli_chat_starts_capture_before_spawn_and_records_once(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("include_trace", "expected_trace"), [(True, True), (False, False)])
 async def test_stream_cli_chat_normalizes_slash_and_preserves_ids_on_legacy_sse_events(
     usage_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
+    include_trace: bool,
+    expected_trace: bool,
 ):
     capture = _UsageCapture()
     process = _UsageProcess()
@@ -336,6 +339,7 @@ async def test_stream_cli_chat_normalizes_slash_and_preserves_ids_on_legacy_sse_
         ]
     )
     captured_command: dict[str, object] = {}
+    persisted_trace: list[dict[str, object]] = []
 
     async def start_capture(*, env, command):
         return capture
@@ -344,22 +348,42 @@ async def test_stream_cli_chat_normalizes_slash_and_preserves_ids_on_legacy_sse_
         captured_command.update(kwargs)
         return ["codex"], False
 
+    original_queue_trace = api_service.StreamingPersistenceBuffer.queue_trace
+
+    def queue_trace(buffer, event):
+        persisted_trace.append(event)
+        return original_queue_trace(buffer, event)
+
     monkeypatch.setattr(api_service, "_start_codex_usage_capture", start_capture, raising=False)
     monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
     monkeypatch.setattr(api_service, "build_cli_command", build_command)
+    monkeypatch.setattr(api_service.StreamingPersistenceBuffer, "queue_trace", queue_trace)
     monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(api_service.subprocess, "Popen", lambda *_args, **_kwargs: process)
 
     events = [
-        event async for event in api_service._stream_cli_chat(usage_manager, "main", 1001, "//status")
+        event
+        async for event in api_service._stream_cli_chat(
+            usage_manager,
+            "main",
+            1001,
+            "//status",
+            include_trace=include_trace,
+        )
     ]
 
     assert captured_command["user_text"] == "/status"
     meta = next(event for event in events if event["type"] == "meta")
-    for event_type in {"meta", "status", "trace", "done"}:
+    assert any(event["type"] == "trace" for event in events) is expected_trace
+    assert persisted_trace
+    for event_type in {"meta", "status", "done"}:
         event = next(event for event in events if event["type"] == event_type)
         assert event["turn_id"] == meta["turn_id"]
         assert event["assistant_message_id"] == meta["assistant_message_id"]
+    if expected_trace:
+        trace = next(event for event in events if event["type"] == "trace")
+        assert trace["turn_id"] == meta["turn_id"]
+        assert trace["assistant_message_id"] == meta["assistant_message_id"]
 
 
 @pytest.mark.asyncio

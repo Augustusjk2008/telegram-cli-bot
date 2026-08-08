@@ -83,6 +83,7 @@ from bot.native_agent import (
     normalize_execution_mode,
 )
 from bot.native_agent.configuration import effective_native_agent_config
+from bot.native_agent.ag_ui_mapper import is_ag_ui_trace_event
 from bot.native_agent.pi_turn_stream import pi_turn_reconnect_enabled
 from bot.native_agent.config_store import (
     find_configured_model,
@@ -3865,6 +3866,7 @@ async def _stream_cli_chat(
     allow_unsafe_cli: bool = False,
     cluster_run_id: str = "",
     cluster_mentions: list[dict[str, Any]] | None = None,
+    include_trace: bool = True,
 ) -> AsyncIterator[dict[str, Any]]:
     total_started_at = time.perf_counter()
     user_id = chat_session_user_id(user_id)
@@ -4138,7 +4140,7 @@ async def _stream_cli_chat(
                         preview_state.consume(text_chunk)
                         for trace_event in consume_stream_trace_chunk(cli_type, text_chunk, trace_state):
                             appended_trace = append_live_trace_event(trace_event)
-                            if appended_trace is not None:
+                            if appended_trace is not None and include_trace:
                                 yield {"type": "trace", **turn_event_ids, "event": appended_trace}
 
                         if cli_type == "codex":
@@ -4980,6 +4982,15 @@ async def _run_native_agent_chat(
             _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
 
 
+def _chat_stream_event_is_visible(event: dict[str, Any], *, include_trace: bool) -> bool:
+    if include_trace:
+        return True
+    event_type = str(event.get("type") or "")
+    if event_type == "trace":
+        return False
+    return event_type != "ag_ui" or not is_ag_ui_trace_event(event.get("event"))
+
+
 async def _stream_native_agent_chat(
     manager: MultiBotManager,
     alias: str,
@@ -5001,6 +5012,7 @@ async def _stream_native_agent_chat(
     resume_turn_id: str = "",
     after_sequence: int = 0,
     enable_reconnect: bool = False,
+    include_trace: bool = True,
 ) -> AsyncIterator[dict[str, Any]]:
     shared_user_id = chat_session_user_id(user_id)
     profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, agent_id)
@@ -5015,7 +5027,8 @@ async def _stream_native_agent_chat(
         events = channel.events(after_sequence=max(0, int(after_sequence or 0)))
         try:
             async for event in events:
-                yield event
+                if _chat_stream_event_is_visible(event, include_trace=include_trace):
+                    yield event
         finally:
             await events.aclose()
         return
@@ -5079,7 +5092,8 @@ async def _stream_native_agent_chat(
         events = channel.events(after_sequence=0)
         try:
             async for event in events:
-                yield event
+                if _chat_stream_event_is_visible(event, include_trace=include_trace):
+                    yield event
         finally:
             await events.aclose()
         return
@@ -5087,7 +5101,8 @@ async def _stream_native_agent_chat(
     events = produce()
     try:
         async for event in events:
-            yield event
+            if _chat_stream_event_is_visible(event, include_trace=include_trace):
+                yield event
     finally:
         await events.aclose()
 
@@ -5189,6 +5204,7 @@ async def stream_chat(
     resume_turn_id: str = "",
     after_sequence: int = 0,
     enable_reconnect: bool = False,
+    include_trace: bool = True,
 ) -> AsyncIterator[dict[str, Any]]:
     try:
         profile = get_profile_or_raise(manager, alias)
@@ -5214,6 +5230,7 @@ async def stream_chat(
                 resume_turn_id=resume_turn_id,
                 after_sequence=after_sequence,
                 enable_reconnect=enable_reconnect,
+                include_trace=include_trace,
             ):
                 yield event
             return
@@ -5247,6 +5264,7 @@ async def stream_chat(
                 cluster_run_id=cluster_run.run_id if cluster_run else "",
                 cluster_mentions=list(mentions or []),
                 allow_unsafe_cli=allow_unsafe_cli,
+                include_trace=include_trace,
             ):
                 if event.get("type") == "error":
                     run_status = "error"
