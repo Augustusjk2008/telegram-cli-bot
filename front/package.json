@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
-    "build": "vite build && node scripts/check-build-budget.mjs",
+    "build": "vite build && node scripts/precompress-assets.mjs && node scripts/check-build-budget.mjs",
     "check:build-budget": "node scripts/check-build-budget.mjs",
     "verify:portable-dist": "node scripts/verify-build-assets.mjs",
     "preview": "vite preview",

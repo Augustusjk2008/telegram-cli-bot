@@ -92,6 +92,16 @@ def test_release_scripts_force_root_base_and_export_announcements() -> None:
     assert "Export-ReleaseAnnouncements -DestinationRoot $DestinationRoot" in portable
 
 
+def test_release_packagers_copy_the_complete_front_dist_tree() -> None:
+    ps1 = Path(".release-local/publish-release.ps1").read_text(encoding="utf-8")
+    sh = Path(".release-local/publish-release.sh").read_text(encoding="utf-8")
+    portable = Path(".release-local/portable-win/build-portable.ps1").read_text(encoding="utf-8")
+
+    assert "Copy-Item -LiteralPath $frontDist -Destination $frontDistTarget -Recurse -Force" in ps1
+    assert 'cp -a "$front_dist" "$front_dist_target"' in sh
+    assert 'Copy-Item -Path (Join-Path $frontDist "*") -Destination $frontDistTarget -Recurse -Force' in portable
+
+
 def test_release_legal_files_are_present_and_required_by_every_packager(tmp_path: Path) -> None:
     sources = (
         Path(".release-local/publish-release.ps1").read_text(encoding="utf-8"),

@@ -158,6 +158,17 @@ def test_frontend_build_scripts_install_only_after_build_failure() -> None:
     )
 
 
+def test_frontend_precompression_script_is_part_of_build_and_startup_hashes() -> None:
+    package = Path("front/package.json").read_text(encoding="utf-8")
+    powershell = Path("start.ps1").read_text(encoding="utf-8")
+    shell = Path("start.sh").read_text(encoding="utf-8")
+
+    build_command = 'vite build && node scripts/precompress-assets.mjs && node scripts/check-build-budget.mjs'
+    assert build_command in package
+    assert powershell.count('"front\\scripts\\precompress-assets.mjs"') == 1
+    assert shell.count("front/scripts/precompress-assets.mjs") == 2
+
+
 def test_start_bat_retries_after_windows_service_failure_instead_of_exiting() -> None:
     content = Path("start.bat").read_text(encoding="utf-8")
 
