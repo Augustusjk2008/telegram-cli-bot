@@ -109,6 +109,179 @@ test("binds stream metadata to the placeholder before a deferred final and repla
   expect(document.querySelectorAll('[data-message-id="assistant-stream-bound"]')).toHaveLength(1);
 });
 
+test("pauses auxiliary sync while hidden and reconciles once after returning", async () => {
+  let visibilityState: DocumentVisibilityState = "visible";
+  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibilityState);
+  const clusterStatus = {
+    tasks: [],
+    queuedCount: 1,
+    runningCount: 0,
+    completedCount: 0,
+    failedCount: 0,
+    pendingCount: 1,
+  };
+  const getBotOverview = vi.fn<WebBotClient["getBotOverview"]>(async (): Promise<BotOverview> => ({
+    alias: "main",
+    cliType: "codex",
+    status: "running",
+    workingDir: "C:\\workspace",
+    isProcessing: true,
+    historyCount: 1,
+    activeClusterRun: { runId: "cluster-foreground", status: "running", tasks: clusterStatus },
+  }));
+  const listMessageDelta = vi.fn<WebBotClient["listMessageDelta"]>(async () => ({
+    reset: false,
+    revision: 7,
+    nextCursor: "",
+    items: [],
+  }));
+  const getClusterTaskStatus = vi.fn<WebBotClient["getClusterTaskStatus"]>(async () => clusterStatus);
+  const client = createClient({
+    getBotOverview,
+    listMessages: vi.fn<WebBotClient["listMessages"]>(async () => ({
+      items: [{
+        id: "assistant-background-poll",
+        role: "assistant",
+        text: "辅助同步运行中",
+        createdAt: "2026-08-08T00:00:00Z",
+        state: "streaming",
+      }],
+      revision: 7,
+    })),
+    listMessageDelta,
+    getClusterTaskStatus,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  await waitFor(() => expect(getClusterTaskStatus).toHaveBeenCalledTimes(1));
+
+  visibilityState = "hidden";
+  await act(async () => {
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  const hiddenCounts = {
+    overview: getBotOverview.mock.calls.length,
+    delta: listMessageDelta.mock.calls.length,
+    cluster: getClusterTaskStatus.mock.calls.length,
+  };
+
+  vi.useFakeTimers();
+  await act(async () => vi.advanceTimersByTimeAsync(30_000));
+  expect(getBotOverview).toHaveBeenCalledTimes(hiddenCounts.overview);
+  expect(listMessageDelta).toHaveBeenCalledTimes(hiddenCounts.delta);
+  expect(getClusterTaskStatus).toHaveBeenCalledTimes(hiddenCounts.cluster);
+
+  visibilityState = "visible";
+  await act(async () => {
+    document.dispatchEvent(new Event("visibilitychange"));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  expect(getBotOverview).toHaveBeenCalledTimes(hiddenCounts.overview + 1);
+  expect(listMessageDelta).toHaveBeenCalledTimes(hiddenCounts.delta + 1);
+  expect(getClusterTaskStatus).toHaveBeenCalledTimes(hiddenCounts.cluster + 1);
+
+  visibilityState = "hidden";
+  await act(async () => {
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  const secondHiddenCounts = {
+    overview: getBotOverview.mock.calls.length,
+    delta: listMessageDelta.mock.calls.length,
+    cluster: getClusterTaskStatus.mock.calls.length,
+  };
+  await act(async () => vi.advanceTimersByTimeAsync(30_000));
+  expect(getBotOverview).toHaveBeenCalledTimes(secondHiddenCounts.overview);
+  expect(listMessageDelta).toHaveBeenCalledTimes(secondHiddenCounts.delta);
+  expect(getClusterTaskStatus).toHaveBeenCalledTimes(secondHiddenCounts.cluster);
+});
+
+test("does not abort the active SSE request when the document is hidden", async () => {
+  let visibilityState: DocumentVisibilityState = "visible";
+  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibilityState);
+  let activeSignal: AbortSignal | undefined;
+  const final = deferred<ChatMessage>();
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>((
+    _botAlias,
+    _text,
+    _onChunk,
+    onStatus,
+    _onTrace,
+    options,
+  ) => {
+    activeSignal = options?.signal;
+    onStatus?.({ turnId: "turn-visible-sse", assistantMessageId: "assistant-visible-sse" });
+    return final.promise;
+  });
+  let overviewCalls = 0;
+  const getBotOverview = vi.fn<WebBotClient["getBotOverview"]>(async (): Promise<BotOverview> => {
+    overviewCalls += 1;
+    return {
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: overviewCalls > 1,
+      historyCount: 0,
+    };
+  });
+  const listMessageDelta = vi.fn<WebBotClient["listMessageDelta"]>(async () => ({
+    reset: false,
+    revision: 3,
+    nextCursor: "",
+    items: [],
+  }));
+  const client = createClient({
+    getBotOverview,
+    listMessages: vi.fn(async () => ({ items: [], revision: 3 })),
+    listMessageDelta,
+    sendMessage,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  await screen.findByText("暂无消息，开始聊天吧");
+  fireEvent.change(screen.getByPlaceholderText("输入消息"), { target: { value: "保持主 SSE" } });
+  fireEvent.click(screen.getByRole("button", { name: "发送" }));
+  await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+  expect(activeSignal).toBeDefined();
+
+  visibilityState = "hidden";
+  await act(async () => {
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  const hiddenCounts = {
+    overview: getBotOverview.mock.calls.length,
+    delta: listMessageDelta.mock.calls.length,
+  };
+  vi.useFakeTimers();
+  await act(async () => vi.advanceTimersByTimeAsync(30_000));
+
+  expect(activeSignal?.aborted).toBe(false);
+  expect(getBotOverview).toHaveBeenCalledTimes(hiddenCounts.overview);
+  expect(listMessageDelta).toHaveBeenCalledTimes(hiddenCounts.delta);
+
+  visibilityState = "visible";
+  await act(async () => {
+    document.dispatchEvent(new Event("visibilitychange"));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  expect(activeSignal?.aborted).toBe(false);
+
+  await act(async () => {
+    final.resolve({
+      id: "assistant-visible-sse",
+      turnId: "turn-visible-sse",
+      role: "assistant",
+      text: "主 SSE 完成",
+      createdAt: "2026-08-08T00:00:00Z",
+      state: "done",
+    });
+  });
+});
+
 test("recovers an authoritative final reply after EOF arrives before the terminal event", async () => {
   let overviewCalls = 0;
   const listMessageDelta = vi.fn<WebBotClient["listMessageDelta"]>(async () => ({

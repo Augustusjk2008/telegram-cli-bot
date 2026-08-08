@@ -197,6 +197,19 @@ const IMMERSIVE_BUTTON_DEFAULT_RIGHT_PX = 16;
 const IMMERSIVE_BUTTON_DEFAULT_BOTTOM_PX = 320;
 const IMMERSIVE_BUTTON_DRAG_CLICK_THRESHOLD_PX = 4;
 
+function useDocumentVisible() {
+  const [visible, setVisible] = useState(() => (
+    typeof document === "undefined" || document.visibilityState !== "hidden"
+  ));
+  useEffect(() => {
+    const handleVisibilityChange = () => setVisible(document.visibilityState !== "hidden");
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    handleVisibilityChange();
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, []);
+  return visible;
+}
+
 type FloatingButtonPosition = {
   x: number;
   y: number;
@@ -2004,6 +2017,8 @@ export function ChatScreen({
   onSoloHistoryRollback,
 }: Props) {
   const storageScope = accountId?.trim() || "";
+  const documentVisible = useDocumentVisible();
+  const isForeground = isVisible && documentVisible;
   const [items, setItems] = useState<ChatMessage[]>([]);
   const [visibleTurnCount, setVisibleTurnCount] = useState(CHAT_INITIAL_VISIBLE_TURNS);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -2065,6 +2080,8 @@ export function ChatScreen({
   const shouldStickToBottomRef = useRef(true);
   const forceAutoScrollRef = useRef(true);
   const isVisibleRef = useRef(isVisible);
+  const isForegroundRef = useRef(isForeground);
+  isForegroundRef.current = isForeground;
   const loadingRef = useRef(loading);
   const isStreamingRef = useRef(isStreaming);
   const streamModeRef = useRef(streamMode);
@@ -2080,7 +2097,7 @@ export function ChatScreen({
   const sseRecoveryTimerRef = useRef<number | null>(null);
   const sseLastActivityAtRef = useRef<number | null>(null);
   const sseAbortControllerRef = useRef<AbortController | null>(null);
-  const pollAssistantStateRef = useRef<(() => Promise<boolean>) | null>(null);
+  const pollAssistantStateRef = useRef<((options?: { allowDuringSse?: boolean }) => Promise<boolean>) | null>(null);
   const drainQueuedMessageIfIdleRef = useRef<((context?: { botAlias: string; agentId: string }) => Promise<void>) | null>(null);
   const clusterTaskPollTimerRef = useRef<number | null>(null);
   const revealScrollFrameRef = useRef<number | null>(null);
@@ -2097,6 +2114,7 @@ export function ChatScreen({
   const previousBotAliasRef = useRef(botAlias);
   const previousStorageScopeRef = useRef(storageScope);
   const hasActivatedRef = useRef(false);
+  const previousForegroundRef = useRef(isForeground);
   const activationTargetRef = useRef<{ botAlias: string; client: WebBotClient; storageScope: string } | null>(null);
   const historyRevisionStateRef = useRef(new HistoryRevisionState());
   const agUiBatchStateRef = useRef<AgUiRunState | null>(null);
@@ -2429,12 +2447,12 @@ export function ChatScreen({
 
   const pollClusterTasks = useCallback(async () => {
     const runId = clusterRunIdRef.current;
-    if (!runId) {
+    if (!runId || !isForegroundRef.current) {
       return;
     }
     try {
       const status = await client.getClusterTaskStatus(botAlias, runId);
-      if (clusterRunIdRef.current !== runId) {
+      if (clusterRunIdRef.current !== runId || !isForegroundRef.current) {
         return;
       }
       setClusterTaskStatus(status);
@@ -2447,7 +2465,7 @@ export function ChatScreen({
         }, CLUSTER_TASK_POLL_INTERVAL_MS);
       }
     } catch (err) {
-      if (clusterRunIdRef.current !== runId) {
+      if (clusterRunIdRef.current !== runId || !isForegroundRef.current) {
         return;
       }
       if (isMissingClusterRunError(err)) {
@@ -2479,15 +2497,21 @@ export function ChatScreen({
 
   const scheduleAssistantPoll = useCallback((delayMs = ACTIVE_CHAT_POLL_INTERVAL_MS) => {
     stopAssistantPoll();
+    if (!isForegroundRef.current) {
+      return;
+    }
     assistantPollTimerRef.current = window.setTimeout(() => {
       assistantPollTimerRef.current = null;
+      if (!isForegroundRef.current) {
+        return;
+      }
       void pollAssistantStateRef.current?.();
     }, delayMs);
   }, [stopAssistantPoll]);
 
   const scheduleSseRecoveryWatch = useCallback(() => {
     stopSseRecoveryWatch();
-    if (!isSseStreaming() || !isVisibleRef.current) {
+    if (!isSseStreaming() || !isForegroundRef.current) {
       return;
     }
 
@@ -2498,7 +2522,7 @@ export function ChatScreen({
       const sendVersion = assistantSendVersionRef.current;
 
       void (async () => {
-        if (!isSseStreaming() || !isVisibleRef.current) {
+        if (!isSseStreaming() || !isForegroundRef.current) {
           return;
         }
 
@@ -2506,7 +2530,11 @@ export function ChatScreen({
           const agentId = activeAgentIdRef.current;
           const currentExecutionMode = executionModeRef.current;
           const overview = await getScopedOverview(client, botAlias, agentId, currentExecutionMode);
-          if (sendVersion !== assistantSendVersionRef.current || !isSseStreaming()) {
+          if (
+            sendVersion !== assistantSendVersionRef.current
+            || !isSseStreaming()
+            || !isForegroundRef.current
+          ) {
             return;
           }
 
@@ -2535,11 +2563,19 @@ export function ChatScreen({
               query.cursor,
             ),
             {
-              isCurrent: () => sendVersion === assistantSendVersionRef.current && isSseStreaming(),
+              isCurrent: () => (
+                sendVersion === assistantSendVersionRef.current
+                && isSseStreaming()
+                && isForegroundRef.current
+              ),
             },
           );
           const messages = recovered.items;
-          if (sendVersion !== assistantSendVersionRef.current || !isSseStreaming()) {
+          if (
+            sendVersion !== assistantSendVersionRef.current
+            || !isSseStreaming()
+            || !isForegroundRef.current
+          ) {
             return;
           }
 
@@ -2582,9 +2618,10 @@ export function ChatScreen({
     }
   }, [scheduleSseRecoveryWatch]);
 
-  pollAssistantStateRef.current = async () => {
+  pollAssistantStateRef.current = async (options = {}) => {
     const sendVersion = assistantSendVersionRef.current;
-    if (isSseStreaming()) {
+    const allowDuringSse = options.allowDuringSse === true;
+    if (!isForegroundRef.current || (isSseStreaming() && !allowDuringSse)) {
       return true;
     }
 
@@ -2593,7 +2630,11 @@ export function ChatScreen({
       const agentId = activeAgentIdRef.current;
       const currentExecutionMode = executionModeRef.current;
       const overview = await getScopedOverview(client, botAlias, agentId, currentExecutionMode);
-      if (sendVersion !== assistantSendVersionRef.current || isSseStreaming()) {
+      if (
+        sendVersion !== assistantSendVersionRef.current
+        || !isForegroundRef.current
+        || (isSseStreaming() && !allowDuringSse)
+      ) {
         return;
       }
 
@@ -2634,13 +2675,27 @@ export function ChatScreen({
             query.cursor,
           ),
           {
-            isCurrent: () => sendVersion === assistantSendVersionRef.current && !isSseStreaming(),
+            isCurrent: () => (
+              sendVersion === assistantSendVersionRef.current
+              && isForegroundRef.current
+              && (allowDuringSse || !isSseStreaming())
+            ),
           },
         );
         messages = applied.items;
       }
-      if (sendVersion !== assistantSendVersionRef.current || isSseStreaming()) {
+      if (
+        sendVersion !== assistantSendVersionRef.current
+        || !isForegroundRef.current
+        || (isSseStreaming() && !allowDuringSse)
+      ) {
         return;
+      }
+
+      if (allowDuringSse && isSseStreaming()) {
+        const activeMessages = normalizeInactiveStreamingRows(messages, true);
+        setItems((prev) => mergeMessagesPreservingClientState(prev, activeMessages));
+        return true;
       }
 
       const { nextItems, shouldPoll } = applyHistoryView(messages, overview, { keepStreamingRowsActive: overview.isProcessing });
@@ -2653,14 +2708,18 @@ export function ChatScreen({
       }
     } catch (err) {
       succeeded = false;
-      setError(err instanceof Error ? err.message : "恢复任务状态失败");
-      setIsStreaming(false);
-      setStreamMode("");
-      setStreamStartedAtMs(null);
+      if (isForegroundRef.current) {
+        setError(err instanceof Error ? err.message : "恢复任务状态失败");
+        setIsStreaming(false);
+        setStreamMode("");
+        setStreamStartedAtMs(null);
+      }
     } finally {
-      const shouldContinue = isVisibleRef.current && !loadingRef.current;
+      const shouldContinue = isForegroundRef.current && !loadingRef.current;
       const runtimeActive = streamModeRef.current === "poll" || botOverviewRef.current?.isProcessing;
-      if (shouldContinue && runtimeActive) {
+      if (shouldContinue && allowDuringSse && isSseStreaming()) {
+        scheduleSseRecoveryWatch();
+      } else if (shouldContinue && runtimeActive) {
         scheduleAssistantPoll(ACTIVE_CHAT_POLL_INTERVAL_MS);
       } else {
         stopAssistantPoll();
@@ -2799,7 +2858,7 @@ export function ChatScreen({
         initialLoadSettled = true;
         loadingRef.current = false;
         setLoading(false);
-        if (isVisibleRef.current && overview.isProcessing) {
+        if (isForegroundRef.current && overview.isProcessing) {
           scheduleAssistantPoll(ACTIVE_CHAT_POLL_INTERVAL_MS);
         } else {
           stopAssistantPoll();
@@ -2869,32 +2928,54 @@ export function ChatScreen({
     });
   }, [elapsedSeconds, error, isStreaming, loading, onWorkbenchStatusChange]);
 
-  useEffect(() => {
-    if (streamMode !== "sse" || !isVisible) {
+  useLayoutEffect(() => {
+    const wasForeground = previousForegroundRef.current;
+    previousForegroundRef.current = isForeground;
+
+    if (!isForeground) {
+      stopAssistantPoll();
       stopSseRecoveryWatch();
+      stopClusterTaskPoll();
       return;
     }
-    scheduleSseRecoveryWatch();
-    return () => {
-      stopSseRecoveryWatch();
-    };
-  }, [isVisible, scheduleSseRecoveryWatch, stopSseRecoveryWatch, streamMode]);
 
-  useLayoutEffect(() => {
-    const shouldPollActively = isVisible && !loading && streamMode === "poll";
-    if (!shouldPollActively) {
-      if (streamMode !== "poll") {
-        stopAssistantPoll();
+    if (!wasForeground) {
+      stopAssistantPoll();
+      stopSseRecoveryWatch();
+      stopClusterTaskPoll();
+      if (hasActivatedRef.current && !loading) {
+        void pollAssistantStateRef.current?.({ allowDuringSse: true });
       }
       return;
     }
-    if (assistantPollTimerRef.current === null) {
-      scheduleAssistantPoll(ACTIVE_CHAT_POLL_INTERVAL_MS);
+
+    if (streamMode === "sse") {
+      stopAssistantPoll();
+      scheduleSseRecoveryWatch();
+      return;
     }
-  }, [isVisible, loading, scheduleAssistantPoll, stopAssistantPoll, streamMode]);
+
+    stopSseRecoveryWatch();
+    if (!loading && streamMode === "poll" && assistantPollTimerRef.current === null) {
+      scheduleAssistantPoll(ACTIVE_CHAT_POLL_INTERVAL_MS);
+      return;
+    }
+    if (streamMode !== "poll") {
+      stopAssistantPoll();
+    }
+  }, [
+    isForeground,
+    loading,
+    scheduleAssistantPoll,
+    scheduleSseRecoveryWatch,
+    stopAssistantPoll,
+    stopClusterTaskPoll,
+    stopSseRecoveryWatch,
+    streamMode,
+  ]);
 
   useChatHistorySync({
-    enabled: isVisible && !loading,
+    enabled: isForeground && !loading,
     isStreaming,
     isSseHealthy: () => (
       streamModeRef.current === "sse"

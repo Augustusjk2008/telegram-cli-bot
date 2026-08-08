@@ -51,27 +51,49 @@ describe("useChatHistorySync", () => {
     expect(sync).not.toHaveBeenCalled();
   });
 
-  it("pauses while hidden and resumes with the initial delay", async () => {
+  it("pauses while disabled and resumes with the initial delay", async () => {
     vi.useFakeTimers();
-    let visibilityState: DocumentVisibilityState = "hidden";
-    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibilityState);
     const sync = vi.fn(async () => true);
 
-    renderHook(() => useChatHistorySync({
-      enabled: true,
+    const { rerender } = renderHook(({ enabled }) => useChatHistorySync({
+      enabled,
       isStreaming: false,
       isSseHealthy: () => false,
       sync,
       initialDelayMs: 5_000,
       idleIntervalMs: 10_000,
-    }));
+    }), { initialProps: { enabled: false } });
 
     await act(async () => vi.advanceTimersByTimeAsync(30_000));
     expect(sync).not.toHaveBeenCalled();
 
-    visibilityState = "visible";
-    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    rerender({ enabled: true });
     await act(async () => vi.advanceTimersByTimeAsync(5_000));
+    expect(sync).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reschedule after an in-flight sync is disabled", async () => {
+    vi.useFakeTimers();
+    let resolveSync: ((value: boolean) => void) | undefined;
+    const sync = vi.fn(() => new Promise<boolean>((resolve) => {
+      resolveSync = resolve;
+    }));
+
+    const { rerender } = renderHook(({ enabled }) => useChatHistorySync({
+      enabled,
+      isStreaming: false,
+      isSseHealthy: () => false,
+      sync,
+      initialDelayMs: 5_000,
+      idleIntervalMs: 10_000,
+    }), { initialProps: { enabled: true } });
+
+    await act(async () => vi.advanceTimersByTimeAsync(5_000));
+    expect(sync).toHaveBeenCalledTimes(1);
+
+    rerender({ enabled: false });
+    await act(async () => resolveSync?.(true));
+    await act(async () => vi.advanceTimersByTimeAsync(60_000));
     expect(sync).toHaveBeenCalledTimes(1);
   });
 
