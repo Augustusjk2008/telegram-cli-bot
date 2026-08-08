@@ -148,6 +148,33 @@ describe("RealWebBotClient", () => {
     expect(JSON.stringify(loaded)).not.toContain("sk-leaked");
   });
 
+  test("omits cluster task output only when requested", async () => {
+    const status = {
+      tasks: [],
+      queued_count: 0,
+      running_count: 0,
+      completed_count: 0,
+      failed_count: 0,
+      pending_count: 0,
+    };
+    fetchMock.mockResolvedValue(jsonOk(status));
+    const client = new RealWebBotClient();
+
+    await client.getClusterTaskStatus("main", "run-1", { includeOutput: false });
+    await client.getClusterTaskStatus("main", "run-1");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/bots/main/cluster/runs/run-1/tasks?include_output=0",
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/bots/main/cluster/runs/run-1/tasks?include_output=1",
+      expect.any(Object),
+    );
+  });
+
   test.each(["meta", "status", "trace", "done"] as const)(
     "preserves top-level turn binding from legacy %s frames",
     async (eventType) => {

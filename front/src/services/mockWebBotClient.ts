@@ -3751,7 +3751,11 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
-  async getClusterTaskStatus(_botAlias: string, _runId: string): Promise<ClusterTaskStatus> {
+  async getClusterTaskStatus(
+    _botAlias: string,
+    _runId: string,
+    _options?: { includeOutput?: boolean },
+  ): Promise<ClusterTaskStatus> {
     return {
       tasks: [],
       queuedCount: 0,

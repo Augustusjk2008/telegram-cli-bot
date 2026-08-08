@@ -4630,8 +4630,12 @@ export class RealWebBotClient implements WebBotClient {
     return mapClusterStatus(data);
   }
 
-  async getClusterTaskStatus(botAlias: string, runId: string): Promise<ClusterTaskStatus> {
-    const params = new URLSearchParams({ include_output: "1" });
+  async getClusterTaskStatus(
+    botAlias: string,
+    runId: string,
+    options?: { includeOutput?: boolean },
+  ): Promise<ClusterTaskStatus> {
+    const params = new URLSearchParams({ include_output: options?.includeOutput === false ? "0" : "1" });
     const data = await this.requestJson<unknown>(
       `/api/bots/${encodeURIComponent(botAlias)}/cluster/runs/${encodeURIComponent(runId)}/tasks?${params.toString()}`,
     );

@@ -113,11 +113,45 @@ test("pauses auxiliary sync while hidden and reconciles once after returning", a
   let visibilityState: DocumentVisibilityState = "visible";
   vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibilityState);
   const clusterStatus = {
-    tasks: [],
-    queuedCount: 1,
-    runningCount: 0,
-    completedCount: 0,
-    failedCount: 0,
+    tasks: [
+      {
+        taskId: "task-running",
+        agentId: "worker-running",
+        status: "running",
+        modelTier: "medium",
+        allowWrite: false,
+        createdAt: "2026-08-08T00:00:00Z",
+        startedAt: "2026-08-08T00:00:01Z",
+        completedAt: "",
+        error: "",
+      },
+      {
+        taskId: "task-completed",
+        agentId: "worker-completed",
+        status: "completed",
+        modelTier: "medium",
+        allowWrite: false,
+        createdAt: "2026-08-08T00:00:00Z",
+        startedAt: "2026-08-08T00:00:01Z",
+        completedAt: "2026-08-08T00:00:02Z",
+        error: "",
+      },
+      {
+        taskId: "task-failed",
+        agentId: "worker-failed",
+        status: "failed",
+        modelTier: "medium",
+        allowWrite: false,
+        createdAt: "2026-08-08T00:00:00Z",
+        startedAt: "2026-08-08T00:00:01Z",
+        completedAt: "2026-08-08T00:00:02Z",
+        error: "子任务失败",
+      },
+    ],
+    queuedCount: 0,
+    runningCount: 1,
+    completedCount: 1,
+    failedCount: 1,
     pendingCount: 1,
   };
   const getBotOverview = vi.fn<WebBotClient["getBotOverview"]>(async (): Promise<BotOverview> => ({
@@ -154,6 +188,16 @@ test("pauses auxiliary sync while hidden and reconciles once after returning", a
 
   render(<ChatScreen botAlias="main" client={client} />);
   await waitFor(() => expect(getClusterTaskStatus).toHaveBeenCalledTimes(1));
+  expect(getClusterTaskStatus).toHaveBeenLastCalledWith(
+    "main",
+    "cluster-foreground",
+    { includeOutput: false },
+  );
+  expect(await screen.findByText("智能体集群任务")).toBeInTheDocument();
+  expect(screen.getByText("1 项进行中")).toBeInTheDocument();
+  expect(screen.getByText("已完成")).toBeInTheDocument();
+  expect(screen.getByText("失败")).toBeInTheDocument();
+  expect(screen.getByText("子任务失败")).toBeInTheDocument();
 
   visibilityState = "hidden";
   await act(async () => {

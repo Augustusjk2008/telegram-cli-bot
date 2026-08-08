@@ -2451,7 +2451,7 @@ export function ChatScreen({
       return;
     }
     try {
-      const status = await client.getClusterTaskStatus(botAlias, runId);
+      const status = await client.getClusterTaskStatus(botAlias, runId, { includeOutput: false });
       if (clusterRunIdRef.current !== runId || !isForegroundRef.current) {
         return;
       }
