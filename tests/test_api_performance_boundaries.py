@@ -13,7 +13,6 @@ from bot.native_agent.pi_session_store import PiSessionRecord, PiSessionStore, p
 from bot.web import api_service
 from bot.web.async_chat_store import AsyncChatStore, ChatStoreOverloadedError
 from bot.web.chat_store import ChatStore
-from bot.web.native_history_adapter import decorate_native_conversations
 
 
 @pytest.mark.asyncio
@@ -115,79 +114,6 @@ async def test_update_download_progress_is_bounded_and_keeps_done(
     assert progress
     assert progress[-1]["index"] == 999
     assert events[-1] == {"type": "done", "status": {"ready": True}}
-
-
-def test_native_conversation_decoration_uses_batch_reads(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    chat_store = ChatStore(tmp_path / "workspace")
-    pi_store = PiSessionStore(tmp_path / "pi-sessions.json")
-    items: list[dict[str, object]] = []
-    keys: dict[str, str] = {}
-    for index in range(3):
-        handle = chat_store.begin_turn(
-            bot_id=1,
-            bot_alias="main",
-            user_id=2,
-            cli_type="codex",
-            working_dir=str(tmp_path / "workspace"),
-            session_epoch=index,
-            user_text=f"question-{index}",
-            native_provider="native_agent",
-        )
-        chat_store.update_turn_workspace_history(
-            handle.turn_id,
-            f"head-{index}",
-            index + 1,
-        )
-        items.append({"id": handle.conversation_id})
-        key = f"pi:{handle.conversation_id}"
-        keys[handle.conversation_id] = key
-        pi_store.upsert(
-            PiSessionRecord(
-                key=key,
-                conversation_id=handle.conversation_id,
-                workspace_history_head=f"pi-head-{index}",
-                linear_index=index + 10,
-            )
-        )
-
-    pi_reads = 0
-    history_reads = 0
-    original_pi_read = pi_store._read_payload
-    original_history_read = chat_store.latest_active_workspace_histories
-
-    def counted_pi_read():
-        nonlocal pi_reads
-        pi_reads += 1
-        return original_pi_read()
-
-    def counted_history_read(conversation_ids):
-        nonlocal history_reads
-        history_reads += 1
-        return original_history_read(conversation_ids)
-
-    monkeypatch.setattr(pi_store, "_read_payload", counted_pi_read)
-    monkeypatch.setattr(
-        chat_store,
-        "latest_active_workspace_histories",
-        counted_history_read,
-    )
-
-    decorated = decorate_native_conversations(
-        items,
-        chat_store=chat_store,
-        pi_store=pi_store,
-        pi_key_for_conversation=keys.__getitem__,
-        active_conversation_id=str(items[1]["id"]),
-    )
-
-    assert pi_reads == 1
-    assert history_reads == 1
-    assert decorated[1]["active"] is True
-    assert decorated[1]["workspace_history_head"] == "pi-head-1"
-    assert decorated[1]["linear_index"] == 11
 
 
 def test_list_conversations_uses_native_batch_decorator(

@@ -41,11 +41,13 @@ import {
   persistChatBodyFontSize,
   persistChatBodyLineHeight,
   persistChatBodyParagraphSpacing,
+  persistChatEnterToSend,
   persistUiTheme,
   readStoredChatBodyFontFamily,
   readStoredChatBodyFontSize,
   readStoredChatBodyLineHeight,
   readStoredChatBodyParagraphSpacing,
+  readStoredChatEnterToSend,
   readStoredUiTheme,
   type ChatBodyFontFamilyName,
   type ChatBodyFontSizeName,
@@ -238,6 +240,7 @@ export function App() {
   const [chatBodyFontSize, setChatBodyFontSize] = useState<ChatBodyFontSizeName>(() => readStoredChatBodyFontSize());
   const [chatBodyLineHeight, setChatBodyLineHeight] = useState<ChatBodyLineHeightName>(() => readStoredChatBodyLineHeight());
   const [chatBodyParagraphSpacing, setChatBodyParagraphSpacing] = useState<ChatBodyParagraphSpacingName>(() => readStoredChatBodyParagraphSpacing());
+  const [chatEnterToSend, setChatEnterToSend] = useState(() => readStoredChatEnterToSend());
   const [viewMode, setViewMode] = useState<ViewMode>(() => readStoredViewMode());
   const [viewportWidth, setViewportWidth] = useState(() => readViewportWidth());
   const [session, setSession] = useState<SessionState | null>(null);
@@ -548,6 +551,10 @@ export function App() {
   }, [chatBodyFontFamily, chatBodyFontSize, chatBodyLineHeight, chatBodyParagraphSpacing]);
 
   useEffect(() => {
+    persistChatEnterToSend(chatEnterToSend);
+  }, [chatEnterToSend]);
+
+  useEffect(() => {
     if (!isLoggedIn) {
       document.title = APP_NAME;
       return;
@@ -756,6 +763,10 @@ export function App() {
     setChatBodyParagraphSpacing(nextParagraphSpacing);
   }
 
+  function handleChatEnterToSendChange(enabled: boolean) {
+    setChatEnterToSend(enabled);
+  }
+
   useEffect(() => {
     if (!currentBot) {
       return;
@@ -906,6 +917,7 @@ export function App() {
                 disabledReason={chatDisabledReason}
                 allowTrace={allowTrace}
                 embedded
+                enterToSend={chatEnterToSend}
                 forcedExecutionMode={instanceKey === chatInstanceKey ? options.forcedExecutionMode : undefined}
                 soloMode={instanceKey === chatInstanceKey ? options.soloMode : false}
                 soloHistoryRevision={instanceKey === chatInstanceKey ? options.soloHistoryRevision : undefined}
@@ -954,6 +966,7 @@ export function App() {
               readOnly={chatReadOnly || !canOperateCurrentBot}
               disabledReason={chatDisabledReason}
               allowTrace={allowTrace}
+              enterToSend={chatEnterToSend}
               isImmersive={instanceKey === chatInstanceKey ? isChatImmersive : false}
               onToggleImmersive={instanceKey === chatInstanceKey
                 ? () => setIsChatImmersive((prev) => !prev)
@@ -1048,6 +1061,8 @@ export function App() {
           onChatBodyLineHeightChange={handleChatBodyLineHeightChange}
           chatBodyParagraphSpacing={chatBodyParagraphSpacing}
           onChatBodyParagraphSpacingChange={handleChatBodyParagraphSpacingChange}
+          chatEnterToSend={chatEnterToSend}
+          onChatEnterToSendChange={handleChatEnterToSendChange}
           sessionCapabilities={session?.capabilities}
         />
       </div>
@@ -1170,6 +1185,8 @@ export function App() {
               onChatBodyLineHeightChange={handleChatBodyLineHeightChange}
               chatBodyParagraphSpacing={chatBodyParagraphSpacing}
               onChatBodyParagraphSpacingChange={handleChatBodyParagraphSpacingChange}
+              chatEnterToSend={chatEnterToSend}
+              onChatEnterToSendChange={handleChatEnterToSendChange}
               sessionCapabilities={session?.capabilities}
               viewMode={viewMode}
               hasUnreadOtherBots={hasUnreadOtherBots}

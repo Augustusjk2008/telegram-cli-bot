@@ -1,9 +1,9 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { ChatTracePanel } from "../components/ChatTracePanel";
 import { MarkdownContent } from "../components/MarkdownPreview";
+import { NativeAgentTranscript } from "../components/NativeAgentTranscript";
 import { DynamicVirtualList } from "../components/virtual/DynamicVirtualList";
-import type { ChatTraceEvent } from "../services/types";
+import type { NativeAgentTranscriptEntry } from "../utils/agUiRunReducer";
 import { createChatHistoryFixture } from "./fixtures/performance";
 
 describe("frontend performance invariants", () => {
@@ -31,22 +31,33 @@ describe("frontend performance invariants", () => {
   });
 
   it("bounds mounted rows for 5000 expanded trace events", () => {
-    const trace: ChatTraceEvent[] = Array.from({ length: 5_000 }, (_, index) => ({
+    const entries: NativeAgentTranscriptEntry[] = Array.from({ length: 5_000 }, (_, index) => ({
       id: `trace-${index}`,
-      sequence: index,
-      kind: "commentary",
+      seq: index,
+      kind: "event",
+      label: "事件",
       summary: `trace-${index}`,
+      collapsedByDefault: false,
+      trace: {
+        id: `trace-${index}`,
+        sequence: index,
+        kind: "status",
+        source: "codex",
+        summary: `trace-${index}`,
+      },
     }));
     render(
-      <ChatTracePanel
-        messageId="assistant-performance"
-        trace={trace}
-        expanded
-        onToggleExpanded={() => undefined}
+      <NativeAgentTranscript
+        entries={entries}
+        resultText=""
+        mode="cli"
+        traceCount={entries.length}
+        processCount={entries.length}
+        traceLoaded
       />,
     );
 
-    const list = screen.getByTestId("virtualized-chat-trace");
-    expect(list.querySelectorAll("[data-trace-seq]").length).toBeLessThanOrEqual(10);
+    const list = screen.getByTestId("virtualized-native-agent-transcript");
+    expect(list.querySelectorAll("[data-transcript-entry-id]").length).toBeLessThanOrEqual(10);
   });
 });

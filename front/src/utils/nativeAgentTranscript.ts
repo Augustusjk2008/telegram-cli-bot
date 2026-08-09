@@ -30,12 +30,15 @@ function stringifyValue(value: unknown) {
 
 function payloadText(trace: ChatTraceEvent) {
   const payload = asRecord(trace.payload);
-  return (
+  const wrappedPayloadText = (
     stringifyValue(payload.arguments).trim()
     || stringifyValue(payload.raw_arguments).trim()
     || stringifyValue(payload.output).trim()
     || stringifyValue(payload.content).trim()
   );
+  const hasWrappedPayload = ["arguments", "raw_arguments", "output", "content"]
+    .some((key) => Object.prototype.hasOwnProperty.call(payload, key));
+  return wrappedPayloadText || (hasWrappedPayload ? "" : stringifyValue(trace.payload).trim());
 }
 
 function pickString(...values: Array<unknown>) {

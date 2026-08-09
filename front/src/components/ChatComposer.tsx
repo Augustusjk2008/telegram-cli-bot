@@ -25,6 +25,7 @@ type Props = {
   clusterMode?: boolean;
   disabled?: boolean;
   compact?: boolean;
+  enterToSend?: boolean;
   pulse?: boolean;
   uploadingAttachments?: boolean;
   placeholder?: string;
@@ -89,6 +90,7 @@ export function ChatComposer({
   clusterMode = false,
   disabled,
   compact = false,
+  enterToSend = true,
   pulse = false,
   uploadingAttachments = false,
   placeholder = "输入消息",
@@ -530,12 +532,15 @@ export function ChatComposer({
                 setMentionQuery(clusterMode ? getMentionQuery(target.value, target.selectionStart) : null);
               }}
               onKeyDown={(event) => {
+                if (event.nativeEvent.isComposing) {
+                  return;
+                }
                 if (mentionOptions.length > 0 && (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey))) {
                   event.preventDefault();
                   insertMention(mentionOptions[0]);
                   return;
                 }
-                if (event.key !== "Enter" || !event.shiftKey || event.nativeEvent.isComposing) {
+                if (event.key !== "Enter" || event.shiftKey || !enterToSend) {
                   return;
                 }
                 event.preventDefault();

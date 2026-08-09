@@ -1,9 +1,12 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyUiTheme,
+  CHAT_ENTER_TO_SEND_STORAGE_KEY,
   getTerminalMinimumContrastRatio,
   getTerminalTheme,
   isLightUiTheme,
+  persistChatEnterToSend,
+  readStoredChatEnterToSend,
   readStoredUiTheme,
   UI_THEME_NAMES,
   UI_THEME_OPTIONS,
@@ -73,6 +76,37 @@ const APPROVED_THEME_PREVIEWS = [
     },
   },
 ] as const;
+
+describe("chat Enter-to-send preference", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("defaults to newline on coarse-pointer devices", () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false })));
+
+    expect(readStoredChatEnterToSend()).toBe(false);
+  });
+
+  it("defaults to Enter-to-send on fine-pointer devices", () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true })));
+
+    expect(readStoredChatEnterToSend()).toBe(true);
+  });
+
+  it("persists an explicit preference that overrides the device default", () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false })));
+
+    persistChatEnterToSend(true);
+
+    expect(localStorage.getItem(CHAT_ENTER_TO_SEND_STORAGE_KEY)).toBe("true");
+    expect(readStoredChatEnterToSend()).toBe(true);
+  });
+});
 
 describe("future UI themes", () => {
   beforeEach(() => {

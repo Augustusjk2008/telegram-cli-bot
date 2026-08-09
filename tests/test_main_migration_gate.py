@@ -57,23 +57,15 @@ def _run_entrypoint(
     return migration_calls, main_calls
 
 
-def test_main_skips_pending_migrations_only_for_explicit_preflight_argument(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    migration_calls, main_calls = _run_entrypoint(monkeypatch, [MIGRATIONS_CHECKED_ARG])
+@pytest.mark.parametrize("preflighted", [False, True])
+def test_main_migration_preflight_gate(monkeypatch: pytest.MonkeyPatch, preflighted: bool) -> None:
+    migration_calls, main_calls = _run_entrypoint(
+        monkeypatch, [MIGRATIONS_CHECKED_ARG] if preflighted else []
+    )
 
-    assert migration_calls == []
+    assert migration_calls == ([] if preflighted else [str(ENTRYPOINT_PATH.parent.parent.resolve())])
     assert len(main_calls) == 1
     assert MIGRATIONS_CHECKED_ARG not in main_calls[0]
-
-
-def test_main_runs_pending_migrations_without_preflight_argument(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    migration_calls, main_calls = _run_entrypoint(monkeypatch, [])
-
-    assert migration_calls == [str(ENTRYPOINT_PATH.parent.parent.resolve())]
-    assert len(main_calls) == 1
 
 
 def _write_subprocess_fixture(package_root: Path) -> None:

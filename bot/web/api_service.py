@@ -454,9 +454,6 @@ def _build_capabilities(is_main: bool) -> list[str]:
 
 
 def _build_run_status(manager: MultiBotManager, alias: str, profile: BotProfile) -> str:
-    app = manager.applications.get(alias)
-    if app:
-        return "running"
     if alias == manager.main_profile.alias:
         return "configured"
     return "configured" if profile.enabled else "stopped"
@@ -525,7 +522,6 @@ def build_bot_summary(
     session: Optional[UserSession] = None,
 ) -> dict[str, Any]:
     profile = profile or get_profile_or_raise(manager, alias)
-    app = manager.applications.get(alias)
     run_status = _build_run_status(manager, alias, profile)
     service_status = "offline" if run_status in {"stopped", "offline"} else "online"
     bot_id = resolve_session_bot_id(manager, alias)
@@ -569,7 +565,6 @@ def build_bot_summary(
         "cluster": profile.cluster.to_dict(),
         "last_answer_completed_at": latest_answer_completed_at,
         **activity,
-        "bot_username": (app.bot_data.get("bot_username") if app else "") or "",
         "capabilities": _build_capabilities(alias == manager.main_profile.alias),
     }
 
@@ -5566,7 +5561,6 @@ async def add_managed_bot(
     cli_type: Optional[str],
     cli_path: Optional[str],
     working_dir: Optional[str],
-    token: str = "",
     supported_execution_modes: Any = None,
     default_execution_mode: Any = None,
     native_agent: Any = None,
@@ -5575,7 +5569,6 @@ async def add_managed_bot(
     try:
         profile = await manager.add_bot(
             alias=alias,
-            token=token,
             cli_type=cli_type,
             cli_path=cli_path,
             working_dir=working_dir,

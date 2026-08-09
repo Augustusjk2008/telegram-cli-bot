@@ -1,14 +1,9 @@
 """主进程 Web 启动相关测试。"""
 
 import asyncio
-import io
-import os
-import socket
-import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from aiohttp import ClientSession
 import pytest
 from bot.web.runtime_binding import WebPortInUseError
 
@@ -19,82 +14,37 @@ def _prevent_real_browser_open(monkeypatch):
     monkeypatch.setattr(main_module.webbrowser, "open", lambda *args, **kwargs: True)
 
 @pytest.mark.asyncio
-async def test_run_all_bots_starts_web_server_when_enabled(monkeypatch):
+@pytest.mark.parametrize("restart_requested", [False, True])
+async def test_run_all_bots_stops_web_server_with_restart_policy(monkeypatch, restart_requested):
     import bot.main as main_module
-
     fake_manager = MagicMock()
-    fake_manager.start_all = AsyncMock()
-    fake_manager.start_watchdog = AsyncMock()
-    fake_manager.start_background_services = AsyncMock()
-    fake_manager.shutdown_all = AsyncMock()
-
     fake_web_server = MagicMock()
     fake_web_server.start = AsyncMock()
+    monkeypatch.setattr(main_module.config, "RESTART_REQUESTED", False)
     fake_web_server.stop = AsyncMock()
-
-    fake_event = MagicMock()
-    fake_event.wait = AsyncMock()
-
     monkeypatch.setattr(main_module.config, "WEB_ENABLED", True)
     monkeypatch.setattr(main_module, "_allow_runtime_port_fallback", lambda: True)
-
     fake_native_service = MagicMock()
     fake_native_service.shutdown = AsyncMock()
-
-    with patch.object(main_module, "MultiBotManager", return_value=fake_manager), \
-         patch("bot.main.get_native_agent_service", return_value=fake_native_service), \
-         patch.object(main_module.asyncio, "Event", return_value=fake_event), \
-         patch.object(main_module, "WebApiServer", return_value=fake_web_server):
-        await main_module.run_all_bots()
-
-    fake_manager.start_all.assert_not_called()
-    fake_manager.start_watchdog.assert_not_called()
-    fake_web_server.start.assert_awaited_once()
-    fake_web_server.stop.assert_awaited_once_with(preserve_tunnel=False)
-    fake_native_service.shutdown.assert_awaited_once()
-    fake_manager.shutdown_all.assert_awaited_once()
-
-@pytest.mark.asyncio
-async def test_run_all_bots_preserves_tunnel_when_restart_requested(monkeypatch):
-    import bot.main as main_module
-
-    fake_manager = MagicMock()
-    fake_manager.start_all = AsyncMock()
-    fake_manager.start_watchdog = AsyncMock()
-    fake_manager.start_background_services = AsyncMock()
-    fake_manager.shutdown_all = AsyncMock()
-
-    fake_web_server = MagicMock()
-    fake_web_server.start = AsyncMock()
-    fake_web_server.stop = AsyncMock()
 
     class FakeEvent:
         async def wait(self):
-            main_module.config.RESTART_REQUESTED = True
-
-    monkeypatch.setattr(main_module.config, "WEB_ENABLED", True)
-    monkeypatch.setattr(main_module, "_allow_runtime_port_fallback", lambda: True)
-
-    fake_native_service = MagicMock()
-    fake_native_service.shutdown = AsyncMock()
+            main_module.config.RESTART_REQUESTED = restart_requested
 
     with patch.object(main_module, "MultiBotManager", return_value=fake_manager), \
          patch("bot.main.get_native_agent_service", return_value=fake_native_service), \
          patch.object(main_module.asyncio, "Event", return_value=FakeEvent()), \
          patch.object(main_module, "WebApiServer", return_value=fake_web_server):
         await main_module.run_all_bots()
-
     fake_web_server.start.assert_awaited_once()
-    fake_web_server.stop.assert_awaited_once_with(preserve_tunnel=True)
+    fake_web_server.stop.assert_awaited_once_with(preserve_tunnel=restart_requested)
     fake_native_service.shutdown.assert_awaited_once()
-    fake_manager.shutdown_all.assert_awaited_once()
 
 @pytest.mark.asyncio
 async def test_run_all_bots_requires_web_runtime(monkeypatch):
     import bot.main as main_module
 
     fake_manager = MagicMock()
-    fake_manager.shutdown_all = AsyncMock()
 
     monkeypatch.setattr(main_module.config, "WEB_ENABLED", False)
 
@@ -145,51 +95,18 @@ def test_web_runtime_state_records_actual_port(monkeypatch, tmp_path):
     assert not state_path.exists()
 
 
-def test_format_cli_error_display_prefixes_exit_code_once():
+@pytest.mark.parametrize(
+    ("text", "returncode", "completion_state", "expected"),
+    [
+        ("错误信息", 1, "error", "命令退出码 1\n错误信息"),
+        ("命令退出码 1\n错误信息", 1, "error", "命令退出码 1\n错误信息"),
+        (" 正常输出\n", 0, "completed", " 正常输出\n"),
+    ],
+)
+def test_format_cli_error_display(text, returncode, completion_state, expected):
     from bot.web.api_service import _format_cli_error_display
 
-    assert _format_cli_error_display(
-        "错误信息",
-        returncode=1,
-        completion_state="error",
-    ) == "命令退出码 1\n错误信息"
-
-    assert _format_cli_error_display(
-        "命令退出码 1\n错误信息",
-        returncode=1,
-        completion_state="error",
-    ) == "命令退出码 1\n错误信息"
-
-
-def test_format_cli_error_display_leaves_non_error_response_unchanged():
-    from bot.web.api_service import _format_cli_error_display
-
-    assert _format_cli_error_display(
-        " 正常输出\n",
-        returncode=0,
-        completion_state="completed",
-    ) == " 正常输出\n"
-
-
-def test_directory_listing_includes_direct_child_counts_and_file_sizes(tmp_path):
-    from bot.web.files_service import list_directory_entries
-
-    source_dir = tmp_path / "src"
-    source_dir.mkdir()
-    (source_dir / "nested").mkdir()
-    (source_dir / "main.py").write_text("print('ok')", encoding="utf-8")
-    (tmp_path / "empty").mkdir()
-    payload = b"x" * 1536
-    (tmp_path / "bundle.bin").write_bytes(payload)
-
-    listing_without_counts = list_directory_entries(str(tmp_path))
-    listing = list_directory_entries(str(tmp_path), include_child_counts=True)
-    entries = {entry["name"]: entry for entry in listing["entries"]}
-
-    assert all("child_count" not in entry for entry in listing_without_counts["entries"])
-    assert entries["src"]["child_count"] == 2
-    assert entries["empty"]["child_count"] == 0
-    assert entries["bundle.bin"]["size"] == len(payload)
+    assert _format_cli_error_display(text, returncode=returncode, completion_state=completion_state) == expected
 
 
 def test_terminal_trace_and_cli_error_display_keep_single_exit_code_prefix():

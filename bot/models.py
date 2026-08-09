@@ -477,7 +477,6 @@ class AgentProfile:
 class BotProfile:
     """Bot 配置档案"""
     alias: str
-    token: str = ""
     cli_type: str = CLI_TYPE
     cli_path: str = CLI_PATH
     working_dir: str = WORKING_DIR
@@ -558,7 +557,6 @@ class BotProfile:
         
         return cls(
             alias=data["alias"],
-            token=str(data.get("token", "") or ""),
             cli_type=normalize_cli_type_config(data.get("cli_type", CLI_TYPE)),
             cli_path=data.get("cli_path", CLI_PATH),
             working_dir=data.get("working_dir", WORKING_DIR),

@@ -75,11 +75,6 @@ def get_profile_or_raise(manager: MultiBotManager, alias: str) -> BotProfile:
 
 
 def resolve_session_bot_id(manager: MultiBotManager, alias: str) -> int:
-    app = manager.applications.get(alias)
-    if app:
-        bot_id = app.bot_data.get("bot_id")
-        if isinstance(bot_id, int):
-            return bot_id
     return -int(zlib.adler32(f"web:{alias}".encode("utf-8")))
 
 

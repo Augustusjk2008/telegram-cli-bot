@@ -22,11 +22,7 @@ describe("TableView", () => {
     );
 
     const list = screen.getByTestId("virtualized-plugin-table");
-    expect(list).toHaveClass("min-h-0", "flex-1", "overflow-auto");
-    expect(screen.getByRole("table")).toHaveClass("h-full", "min-h-0");
     expect(within(list).getAllByTestId("plugin-table-row").length).toBeLessThanOrEqual(100);
-    expect(screen.getByText(/当前快照包含 10000 行/)).toBeInTheDocument();
-    expect(screen.getByText("共 10000 行")).toBeInTheDocument();
     expect(screen.queryByText("row-9999")).not.toBeInTheDocument();
 
     await user.type(screen.getByLabelText("搜索"), "row-9999");

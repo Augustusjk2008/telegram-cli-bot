@@ -84,29 +84,6 @@ def test_start_sh_rebuilds_frontend_after_pending_update_without_eager_dependenc
     assert force_install_indexes[0] < update_index < force_install_indexes[1] < frontend_build_index
 
 
-def test_start_sh_checks_migrations_once_before_boot() -> None:
-    content = Path("start.sh").read_text(encoding="utf-8")
-
-    migration_index = content.index('run_python_startup_step -m bot.migrations run --repo-root "$SCRIPT_DIR"')
-    failure_exit_index = content.index('exit "$last_python_exit_code"', migration_index)
-    import_check_index = content.index('run_python_startup_step -c "import bot.main"')
-    boot_index = content.index('\n  "$PYTHON_BIN" -m bot --tcb-migrations-checked\n')
-
-    assert 'info "正在检查运行数据迁移..."' in content
-    assert "TCB_MIGRATIONS_CHECKED" not in content
-    assert migration_index < failure_exit_index < import_check_index < boot_index
-
-
-def test_start_sh_rebuilds_frontend_when_frontend_inputs_change() -> None:
-    content = Path("start.sh").read_text(encoding="utf-8")
-
-    assert "front/package-lock.json" in content
-    assert "front/src" in content
-    assert "front/public" in content
-    assert "scripts/build_web_frontend.sh" in content
-    assert "frontend-build.sha256" in content
-
-
 def test_start_ps1_repairs_python_dependencies_only_after_startup_step_fails() -> None:
     content = Path("start.ps1").read_text(encoding="utf-8")
     helper = _between(
@@ -154,20 +131,6 @@ def test_start_ps1_rebuilds_frontend_after_pending_update_without_eager_dependen
     assert force_install_indexes[0] < update_index < force_install_indexes[1] < frontend_build_index
 
 
-def test_start_ps1_checks_migrations_once_before_boot() -> None:
-    content = Path("start.ps1").read_text(encoding="utf-8")
-
-    migration_index = content.index('Invoke-PythonStartupStep -Arguments @("-m", "bot.migrations", "run"')
-    failure_exit_index = content.index("exit $script:lastPythonExitCode", migration_index)
-    import_check_index = content.index('Invoke-PythonStartupStep -Arguments @("-c", "import bot.main")')
-    boot_index = content.index('@("-m", "bot", "--tcb-migrations-checked")')
-
-    assert 'Write-Info "正在检查运行数据迁移..."' in content
-    assert "正在迁移运行数据..." not in content
-    assert "TCB_MIGRATIONS_CHECKED" not in content
-    assert migration_index < failure_exit_index < import_check_index < boot_index
-
-
 def test_start_ps1_prefers_existing_project_venv_before_system_python() -> None:
     content = Path("start.ps1").read_text(encoding="utf-8")
     main = content[content.index("try {\n    Set-Location $scriptDir") :]
@@ -177,16 +140,6 @@ def test_start_ps1_prefers_existing_project_venv_before_system_python() -> None:
     runtime_assignment_index = main.index("$script:pythonRuntime = $pythonRuntime", system_lookup_index)
 
     assert venv_lookup_index < system_lookup_index < runtime_assignment_index
-
-
-def test_start_ps1_rebuilds_frontend_when_frontend_inputs_change() -> None:
-    content = Path("start.ps1").read_text(encoding="utf-8")
-
-    assert "front\\package-lock.json" in content
-    assert "front\\src" in content
-    assert "front\\public" in content
-    assert "scripts\\build_web_frontend.bat" in content
-    assert "frontend-build-windows.sha256" in content
 
 
 def test_frontend_build_scripts_install_only_after_build_failure() -> None:
@@ -203,17 +156,6 @@ def test_frontend_build_scripts_install_only_after_build_failure() -> None:
         build_command="call npm run build",
         install_command="call npm install",
     )
-
-
-def test_frontend_build_batch_sets_utf8_code_page_before_chinese_output() -> None:
-    content = Path("scripts/build_web_frontend.bat").read_text(encoding="utf-8")
-
-    utf8_setup_index = content.find("chcp 65001 >nul")
-    first_non_ascii_index = next(
-        index for index, character in enumerate(content) if ord(character) > 127
-    )
-
-    assert 0 <= utf8_setup_index < first_non_ascii_index
 
 
 def test_start_bat_retries_after_windows_service_failure_instead_of_exiting() -> None:

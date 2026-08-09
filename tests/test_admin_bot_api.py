@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
-
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
@@ -49,7 +47,6 @@ def _build_manager(tmp_path: Path) -> MultiBotManager:
     return MultiBotManager(
         BotProfile(
             alias="main",
-            token="main_tok",
             cli_type="codex",
             cli_path="codex",
             working_dir=str(tmp_path),
@@ -140,23 +137,22 @@ async def test_admin_add_bot_persists_bypass_with_unsafe_or_admin_capability(
 
     alias = "unsafe" + extra_capability.replace("_", "")
     app = server._build_app()
-    with patch.object(manager, "_start_profile", AsyncMock(return_value=None)):
-        async with TestServer(app) as test_server:
-            async with TestClient(test_server) as client:
-                response = await client.post(
-                    "/api/admin/bots",
-                    json={
-                        "alias": alias,
-                        "cli_type": "codex",
-                        "cli_path": "codex",
-                        "working_dir": str(tmp_path),
-                        field_name: True,
-                    },
-                )
-                payload = await response.json()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            response = await client.post(
+                "/api/admin/bots",
+                json={
+                    "alias": alias,
+                    "cli_type": "codex",
+                    "cli_path": "codex",
+                    "working_dir": str(tmp_path),
+                    field_name: True,
+                },
+            )
+            payload = await response.json()
 
     assert response.status == 200
     assert payload["data"]["bot"]["alias"] == alias
 
-    restored = MultiBotManager(BotProfile(alias="main", token="main_tok"), str(manager.storage_file))
+    restored = MultiBotManager(BotProfile(alias="main"), str(manager.storage_file))
     assert restored.managed_profiles[alias].cli_params.get_param("codex", "yolo") is True

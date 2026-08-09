@@ -7,6 +7,24 @@ import time
 import pytest
 
 
+class _AlivePtyProcess:
+    is_pty = True
+
+    def isalive(self):
+        return True
+
+
+def _seed_replay(manager, chunks, *, next_seq, stream_id=""):
+    from bot.web.terminal_manager import ManagedTerminalSession, TerminalChunk
+
+    session = ManagedTerminalSession(owner_key="1:main", process=_AlivePtyProcess(), stream_id=stream_id)
+    session.next_seq = next_seq
+    session.replay.extend(TerminalChunk(seq=seq, data=data) for seq, data in chunks)
+    session.replay_bytes = sum(len(data) for _, data in chunks)
+    manager._sessions["1:main"] = session
+    return session
+
+
 def test_terminal_cleanup_does_not_warn_for_short_background_cleanup(monkeypatch, caplog):
     import bot.web.terminal_manager as terminal_manager
 
@@ -53,30 +71,23 @@ def test_pty_wrapper_terminate_uses_process_tree_for_plain_popen(monkeypatch):
     assert calls == [process]
 
 
-def test_pipe_line_ending_normalizer_adds_cr_before_lone_lf():
+def test_pipe_line_ending_normalizer_preserves_terminal_control_updates_and_lone_lf():
     from bot.web.terminal_manager import _normalize_pipe_line_endings
 
     output, previous_cr = _normalize_pipe_line_endings(b"A\nB\r\nC\r", previous_ended_with_cr=False)
 
-    assert output == b"A\r\nB\r\nC\r"
-    assert previous_cr is True
+    assert (output, previous_cr) == (b"A\r\nB\r\nC\r", True)
 
     output, previous_cr = _normalize_pipe_line_endings(b"\nD\n", previous_ended_with_cr=previous_cr)
 
-    assert output == b"\nD\r\n"
-    assert previous_cr is False
-
-
-def test_pipe_line_ending_normalizer_preserves_carriage_return_updates():
-    from bot.web.terminal_manager import _normalize_pipe_line_endings
+    assert (output, previous_cr) == (b"\nD\r\n", False)
 
     output, previous_cr = _normalize_pipe_line_endings(
         b"\r\x1b[K| scanning\r\x1b[K* done\n",
         previous_ended_with_cr=False,
     )
 
-    assert output == b"\r\x1b[K| scanning\r\x1b[K* done\r\n"
-    assert previous_cr is False
+    assert (output, previous_cr) == (b"\r\x1b[K| scanning\r\x1b[K* done\r\n", False)
 
 
 @pytest.mark.asyncio
@@ -98,9 +109,7 @@ async def test_terminal_output_pump_drops_old_output_and_emits_gap_without_block
     pump._put(b"abcdefgh")
 
     assert pump.queue_state.queued_bytes <= 10
-    assert pump.queue_state.dropped_bytes == 8
-    assert await pump.read() is TERMINAL_OUTPUT_GAP
-    assert await pump.read() == b"abcdefgh"
+    assert (pump.queue_state.dropped_bytes, await pump.read(), await pump.read()) == (8, TERMINAL_OUTPUT_GAP, b"abcdefgh")
 
 
 @pytest.mark.asyncio
@@ -175,13 +184,10 @@ async def test_terminal_output_pump_yields_during_continuous_ready_data_and_gaps
     observer_task = asyncio.create_task(observe_ready_task())
     await asyncio.wait_for(asyncio.gather(pump_task, observer_task), timeout=1.0)
 
-    assert observer_saw_active_pump == [True]
-    assert len(session.replay) == 256
-    assert session.replay[0].is_gap is True
-    assert session.replay[-1].data == b"x"
-    assert session.last_gap_seq == 255
-    assert session.next_seq == 257
-    assert session.is_closed is True
+    assert (
+        observer_saw_active_pump, len(session.replay), session.replay[0].is_gap, session.replay[-1].data,
+        session.last_gap_seq, session.next_seq, session.is_closed,
+    ) == ([True], 256, True, b"x", 255, 257, True)
 
 
 @pytest.mark.asyncio
@@ -195,26 +201,12 @@ async def test_slow_terminal_client_gets_gap_then_eof_without_affecting_peer():
     slow = TerminalClientQueue(soft_max_bytes=8, hard_max_bytes=12)
     healthy = TerminalClientQueue(soft_max_bytes=8, hard_max_bytes=64)
 
-    assert slow.put_output(b"12345678") is True
-    assert healthy.put_output(b"12345678") is True
-    assert slow.put_output(b"abcdefgh") is False
-    assert healthy.put_output(b"abcdefgh") is True
-
-    assert await slow.get() == TERMINAL_GAP_NOTICE
-    assert await slow.get() is TERMINAL_CLIENT_EOF
-    assert await healthy.get() == b"12345678abcdefgh"
-
-
-@pytest.mark.asyncio
-async def test_terminal_client_preserves_normal_output_before_close_eof():
-    from bot.web.terminal_manager import TERMINAL_CLIENT_EOF, TerminalClientQueue
-
-    client = TerminalClientQueue(soft_max_bytes=8, hard_max_bytes=64)
-    client.put_output(b"pending")
-    client.put_eof()
-
-    assert await client.get() == b"pending"
-    assert await client.get() is TERMINAL_CLIENT_EOF
+    assert (slow.put_output(b"12345678"), healthy.put_output(b"12345678"),
+            slow.put_output(b"abcdefgh"), healthy.put_output(b"abcdefgh")) == (True, True, False, True)
+    healthy.put_eof()
+    assert (await slow.get(), await slow.get(), await healthy.get(), await healthy.get()) == (
+        TERMINAL_GAP_NOTICE, TERMINAL_CLIENT_EOF, b"12345678abcdefgh", TERMINAL_CLIENT_EOF,
+    )
 
 
 @pytest.mark.asyncio
@@ -222,35 +214,17 @@ async def test_attach_from_expired_sequence_reports_reset_and_replays_tail():
     from bot.web.terminal_manager import (
         TERMINAL_CLIENT_EOF,
         TERMINAL_GAP_NOTICE,
-        ManagedTerminalSession,
-        TerminalChunk,
         TerminalSessionManager,
     )
 
-    class AliveProcess:
-        is_pty = True
-
-        def isalive(self):
-            return True
-
     manager = TerminalSessionManager()
-    session = ManagedTerminalSession(owner_key="1:main", process=AliveProcess())
-    session.next_seq = 5
-    session.replay.extend(
-        [
-            TerminalChunk(seq=3, data=b"three"),
-            TerminalChunk(seq=4, data=b"four"),
-        ]
-    )
-    session.replay_bytes = 9
-    manager._sessions["1:main"] = session
+    _seed_replay(manager, [(3, b"three"), (4, b"four")], next_seq=5)
 
     client, snapshot = await manager.attach(1, "main", from_seq=1)
 
-    assert snapshot["reset_required"] is True
-    assert snapshot["earliest_seq"] == 3
-    assert snapshot["gap_from"] == 2
-    assert snapshot["gap_to"] == 2
+    assert {key: snapshot[key] for key in ("reset_required", "earliest_seq", "gap_from", "gap_to")} == {
+        "reset_required": True, "earliest_seq": 3, "gap_from": 2, "gap_to": 2,
+    }
     assert await client.get() == TERMINAL_GAP_NOTICE
     assert await client.get() == b"threefour"
 
@@ -263,38 +237,20 @@ async def test_attach_from_expired_sequence_reports_reset_and_replays_tail():
 @pytest.mark.asyncio
 async def test_terminal_replay_preserves_stream_and_chunk_sequences():
     from bot.web.terminal_manager import (
-        ManagedTerminalSession,
-        TerminalChunk,
         TerminalDelivery,
         TerminalSessionManager,
     )
 
-    class AliveProcess:
-        is_pty = True
-
-        def isalive(self):
-            return True
-
     manager = TerminalSessionManager()
-    session = ManagedTerminalSession(owner_key="1:main", process=AliveProcess(), stream_id="term-stream")
-    session.next_seq = 4
-    session.replay.extend(
-        [
-            TerminalChunk(seq=1, data=b"one"),
-            TerminalChunk(seq=2, data=b"two"),
-            TerminalChunk(seq=3, data=b"three"),
-        ]
+    _seed_replay(
+        manager, [(1, b"one"), (2, b"two"), (3, b"three")], next_seq=4, stream_id="term-stream"
     )
-    session.replay_bytes = 11
-    manager._sessions["1:main"] = session
 
     client, snapshot = await manager.attach(1, "main", from_seq=1, protocol_version=2)
     first = await client.get()
     second = await client.get()
 
-    assert snapshot["stream_id"] == "term-stream"
-    assert isinstance(first, TerminalDelivery)
-    assert isinstance(second, TerminalDelivery)
+    assert snapshot["stream_id"] == "term-stream" and all(isinstance(item, TerminalDelivery) for item in (first, second))
     assert [(first.sequence, first.payload), (second.sequence, second.payload)] == [
         (2, b"two"),
         (3, b"three"),
@@ -302,7 +258,7 @@ async def test_terminal_replay_preserves_stream_and_chunk_sequences():
 
 
 @pytest.mark.asyncio
-async def test_terminal_create_and_close_are_isolated_by_owner(monkeypatch):
+async def test_terminal_close_is_isolated_by_user_and_owner_and_unknown_owner_is_stateless(monkeypatch):
     import bot.web.terminal_manager as terminal_manager
 
     class FakeProcess:
@@ -322,28 +278,37 @@ async def test_terminal_create_and_close_are_isolated_by_owner(monkeypatch):
             await self._stop_event.wait()
             return terminal_manager.TERMINAL_OUTPUT_EOF
 
-    monkeypatch.setattr(terminal_manager, "create_shell_process", lambda *_args, **_kwargs: FakeProcess())
+    created = []
+    cleaned = []
+
+    def create_process(*_args, **_kwargs):
+        process = FakeProcess()
+        created.append(process)
+        return process
+
+    monkeypatch.setattr(terminal_manager, "create_shell_process", create_process)
     monkeypatch.setattr(terminal_manager, "_TerminalOutputPump", FakePump)
-    monkeypatch.setattr(terminal_manager, "_cleanup_terminal_process_without_blocking", lambda _process: None)
+    monkeypatch.setattr(terminal_manager, "_cleanup_terminal_process_without_blocking", cleaned.append)
 
     manager = terminal_manager.TerminalSessionManager()
     first = await manager.create(1, "owner-a", cwd="C:/one", shell_type="auto", cols=None, rows=None)
     second = await manager.create(1, "owner-b", cwd="C:/two", shell_type="auto", cols=None, rows=None)
+    other_user = await manager.create(2, "owner-a", cwd="C:/three", shell_type="auto", cols=None, rows=None)
+    unknown = await manager.close(3, "owner-a")
 
-    assert first["started"] is True
-    assert second["started"] is True
     closed = await manager.close(1, "owner-a")
     active = await manager.get_snapshot(1, "owner-b")
-
-    assert closed["closed"] is True
-    assert closed["started"] is False
-    assert active["started"] is True
-    assert active["closed"] is False
+    isolated_user = await manager.get_snapshot(2, "owner-a")
+    assert (
+        first["started"], second["started"], other_user["started"], unknown["closed"],
+        "3:owner-a" in manager._sessions, "3:owner-a" in manager._rebuild_locks,
+    ) == (True, True, True, True, False, False)
+    assert (closed["closed"], closed["started"], active["started"], isolated_user["started"], created[0] in cleaned, created[2] in cleaned) == (True, False, True, True, True, False)
     await manager.shutdown()
 
 
 @pytest.mark.asyncio
-async def test_terminal_close_releases_session_replay_memory_and_unknown_owner_is_not_retained():
+async def test_terminal_close_releases_session_replay_memory():
     from bot.web.terminal_manager import (
         ManagedTerminalSession,
         TerminalChunk,
@@ -359,16 +324,8 @@ async def test_terminal_close_releases_session_replay_memory_and_unknown_owner_i
 
     closed = await manager.close(1, "owner-a")
 
-    assert closed["closed"] is True
-    assert closed["started"] is False
-    assert key not in manager._sessions
-    assert manager.diagnostics()["sessions"] == 0
-    assert manager.diagnostics()["replay_bytes"] == 0
-
-    missing = await manager.close(1, "owner-missing")
-
-    assert missing["closed"] is True
-    assert manager.diagnostics()["sessions"] == 0
+    assert (closed["closed"], closed["started"], key in manager._sessions,
+            manager.diagnostics()["sessions"], manager.diagnostics()["replay_bytes"]) == (True, False, False, 0, 0)
 
 
 @pytest.mark.asyncio
@@ -441,6 +398,6 @@ def test_terminal_v2_binary_header_carries_version_flags_and_sequence():
         encoded[: TERMINAL_WS_V2_HEADER.size]
     )
 
-    assert magic == TERMINAL_WS_V2_MAGIC
-    assert (version, flags, sequence) == (2, 0, 42)
-    assert encoded[TERMINAL_WS_V2_HEADER.size :] == b"payload"
+    assert (magic, version, flags, sequence, encoded[TERMINAL_WS_V2_HEADER.size :]) == (
+        TERMINAL_WS_V2_MAGIC, 2, 0, 42, b"payload",
+    )

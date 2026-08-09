@@ -7,11 +7,11 @@ from bot.web.chat_store import ChatStore
 from bot.web import api_service
 
 
-def _begin(store: ChatStore, *, conversation_id: str | None = None, text: str = "hello"):
+def _begin(store: ChatStore, *, conversation_id: str | None = None, text: str = "hello", user_id: int = 2):
     return store.begin_turn(
         bot_id=1,
         bot_alias="main",
-        user_id=2,
+        user_id=user_id,
         agent_id="main",
         cli_type="codex",
         working_dir=str(store.workspace_dir),
@@ -57,31 +57,14 @@ def test_latest_completed_turn_at_ignores_incomplete_turns(tmp_path: Path) -> No
     first_latest = store.get_latest_completed_turn_at(bot_id=1, user_id=2)
     incomplete = _begin(store, conversation_id=completed.conversation_id, text="incomplete")
     store.complete_turn(incomplete, content="error", completion_state="error")
+    other = _begin(store, text="other", user_id=3)
+    store.complete_turn(other, content="other answer", completion_state="completed")
 
     latest = store.get_latest_completed_turn_at(bot_id=1, user_id=2)
 
     assert first_latest
     assert latest == first_latest
-
-
-def test_latest_completed_turn_at_can_be_scoped_to_user(tmp_path: Path) -> None:
-    store = ChatStore(tmp_path)
-    first = _begin(store, text="first")
-    store.complete_turn(first, content="answer", completion_state="completed")
-    other = store.begin_turn(
-        bot_id=1,
-        bot_alias="main",
-        user_id=3,
-        agent_id="main",
-        cli_type="codex",
-        working_dir=str(store.workspace_dir),
-        session_epoch=0,
-        user_text="other",
-        native_provider="codex",
-    )
-    store.complete_turn(other, content="other answer", completion_state="completed")
-
-    assert store.get_latest_completed_turn_at(bot_id=1, user_id=2) != store.get_latest_completed_turn_at(bot_id=1, user_id=3)
+    assert latest != store.get_latest_completed_turn_at(bot_id=1, user_id=3)
 
 
 def test_history_revision_delta_emits_tombstones_for_discarded_turns(tmp_path: Path) -> None:

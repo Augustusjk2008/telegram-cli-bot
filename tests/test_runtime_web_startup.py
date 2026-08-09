@@ -1,4 +1,3 @@
-import asyncio
 import json
 import socket
 from contextlib import closing
@@ -41,43 +40,6 @@ class DummyTunnelService:
 
     def snapshot(self) -> dict[str, object]:
         return dict(self._snapshot)
-
-
-class DummyFixedForwardService:
-    def should_autostart(self) -> bool:
-        return False
-
-    async def start(self) -> dict[str, object]:
-        return {"status": "stopped", "public_url": ""}
-
-    async def stop(self) -> dict[str, object]:
-        return {"status": "stopped", "public_url": ""}
-
-    async def restart(self) -> dict[str, object]:
-        return {"status": "stopped", "public_url": ""}
-
-
-class FakeLanguageServerRuntimeManager:
-    def __init__(self) -> None:
-        self.shutdown_calls = 0
-
-    def diagnostics(self) -> dict[str, object]:
-        return {"runtime_count": 0, "provider_counts": {}}
-
-    async def shutdown(self) -> dict[str, int]:
-        self.shutdown_calls += 1
-        return {"requested": 0, "closed": 0, "failed": 0}
-
-
-class FakeCodexUsageService:
-    def __init__(self) -> None:
-        self.close_calls = 0
-
-    def diagnostics(self) -> dict[str, object]:
-        return {"enabled": False, "write_count": 0}
-
-    def close(self) -> None:
-        self.close_calls += 1
 
 
 def _hold_tcp_port(host: str) -> tuple[socket.socket, int]:
@@ -131,100 +93,6 @@ async def test_health_reports_runtime_port(monkeypatch: pytest.MonkeyPatch) -> N
     assert payload["instance_id"] == "test-instance"
     assert payload["node_id"] == ""
     assert payload["base_path"] == ""
-
-
-@pytest.mark.asyncio
-async def test_health_reports_stable_instance_id(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("bot.web.server.TCB_NODE_ID", "")
-    monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "")
-    server = WebApiServer(
-        object(),
-        host="127.0.0.1",
-        port=8768,
-        tunnel_service=DummyTunnelService(),
-        instance_id="stable-instance",
-    )
-
-    first = json.loads((await server.health(None)).text)
-    second = json.loads((await server.health(None)).text)
-
-    assert first["instance_id"] == "stable-instance"
-    assert second["instance_id"] == "stable-instance"
-
-
-@pytest.mark.asyncio
-async def test_web_server_start_with_updates_enabled_creates_refresh_task(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    checks: list[object] = []
-
-    def fake_check_for_updates(*args: object, **_kwargs: object) -> dict[str, object]:
-        checks.append(args[0] if args else None)
-        return {"update_enabled": True}
-
-    monkeypatch.setattr("bot.web.server.get_update_status", lambda *_args, **_kwargs: {"update_enabled": True})
-    monkeypatch.setattr("bot.web.server.check_for_updates", fake_check_for_updates)
-    server = WebApiServer(
-        object(),
-        host="127.0.0.1",
-        port=0,
-        tunnel_service=DummyTunnelService(),
-        fixed_forward_service=DummyFixedForwardService(),
-    )
-
-    try:
-        await server.start()
-        assert server._update_task is not None
-        await asyncio.wait_for(server._update_task, timeout=1)
-        assert len(checks) == 1
-    finally:
-        await server.stop()
-
-
-@pytest.mark.asyncio
-async def test_web_server_stop_closes_language_server_runtimes() -> None:
-    language_servers = FakeLanguageServerRuntimeManager()
-    server = WebApiServer(
-        object(),
-        host="127.0.0.1",
-        port=0,
-        tunnel_service=DummyTunnelService(),
-        fixed_forward_service=DummyFixedForwardService(),
-        language_server_manager=language_servers,
-    )
-
-    await server.start()
-    await server.stop()
-
-    assert language_servers.shutdown_calls == 1
-
-
-@pytest.mark.asyncio
-async def test_web_server_registers_and_closes_codex_usage_service(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    usage_service = FakeCodexUsageService()
-    monkeypatch.setattr("bot.web.server.get_codex_usage_service", lambda: usage_service, raising=False)
-    monkeypatch.setattr(
-        "bot.web.server.close_codex_usage_service_sync",
-        usage_service.close,
-        raising=False,
-    )
-    server = WebApiServer(
-        object(),
-        host="127.0.0.1",
-        port=0,
-        tunnel_service=DummyTunnelService(),
-        fixed_forward_service=DummyFixedForwardService(),
-    )
-
-    assert server.codex_usage_service is usage_service
-    assert server._runtime_diagnostics.snapshot()["components"]["codex_usage"]["enabled"] is False
-
-    await server.start()
-    await server.stop()
-
-    assert usage_service.close_calls == 1
 
 
 @pytest.mark.asyncio

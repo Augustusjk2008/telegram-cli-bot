@@ -70,6 +70,8 @@ type Props = {
   onChatBodyLineHeightChange?: (lineHeight: ChatBodyLineHeightName) => void;
   chatBodyParagraphSpacing?: ChatBodyParagraphSpacingName;
   onChatBodyParagraphSpacingChange?: (paragraphSpacing: ChatBodyParagraphSpacingName) => void;
+  chatEnterToSend?: boolean;
+  onChatEnterToSendChange?: (enabled: boolean) => void;
   sessionCapabilities?: string[];
   showBotRuntimeSettings?: boolean;
   onOpenBotManager?: () => void;
@@ -158,6 +160,8 @@ export function SettingsScreen({
   onChatBodyLineHeightChange,
   chatBodyParagraphSpacing = DEFAULT_CHAT_BODY_PARAGRAPH_SPACING,
   onChatBodyParagraphSpacingChange,
+  chatEnterToSend = true,
+  onChatEnterToSendChange,
   sessionCapabilities = [],
   showBotRuntimeSettings = true,
   onOpenBotManager,
@@ -460,6 +464,14 @@ export function SettingsScreen({
     onChatBodyParagraphSpacingChange?.(nextParagraphSpacing);
   };
 
+  const handleChatEnterToSendChange = (enabled: boolean) => {
+    if (enabled === chatEnterToSend) {
+      return;
+    }
+    setNotice("发送快捷键已更新");
+    onChatEnterToSendChange?.(enabled);
+  };
+
   return (
     <main data-ui-density="compact" className={clsx("flex h-full min-h-0 flex-col", embedded ? "bg-[var(--workbench-titlebar-bg)]" : "bg-[var(--bg)]")}>
       {embedded ? null : (
@@ -549,6 +561,17 @@ export function SettingsScreen({
               </select>
             </label>
           </div>
+
+          <label className="flex items-center justify-between gap-3 border-t border-[var(--border)] px-1 py-2">
+            <span className="text-sm text-[var(--text)]">Enter 键发送消息</span>
+            <input
+              aria-label="Enter 键发送消息"
+              type="checkbox"
+              checked={chatEnterToSend}
+              onChange={(event) => handleChatEnterToSendChange(event.target.checked)}
+              className="h-4 w-4"
+            />
+          </label>
         </div>
 
         <div className={settingsPanelClass("space-y-3")}>

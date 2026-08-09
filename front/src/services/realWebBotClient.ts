@@ -1540,6 +1540,10 @@ type StreamEventPayload =
 
 type StreamEvent = StreamEventPayload & {
   sequence?: number;
+  turn_id?: string;
+  turnId?: string;
+  assistant_message_id?: string;
+  assistantMessageId?: string;
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -5101,6 +5105,20 @@ export class RealWebBotClient implements WebBotClient {
     let sawAgUiEvent = false;
     const seenStreamSequences = new Set<number>();
 
+    const captureStreamBinding = (event: StreamEvent) => {
+      const turnIdValue = event.turn_id ?? event.turnId;
+      const assistantMessageIdValue = event.assistant_message_id ?? event.assistantMessageId;
+      const turnId = typeof turnIdValue === "string" ? turnIdValue : "";
+      const assistantMessageId = typeof assistantMessageIdValue === "string" ? assistantMessageIdValue : "";
+      if (turnId) {
+        streamTurnId = turnId;
+      }
+      if (assistantMessageId) {
+        streamAssistantMessageId = assistantMessageId;
+      }
+      return { turnId, assistantMessageId };
+    };
+
     const appendStreamTrace = (traceEvent: ChatTraceEvent, nativeFlat: boolean) => {
       const previousTrace = streamedTrace.slice();
       const mergedTrace = mergeChatTraceEvents([streamedTrace, [traceEvent]], {
@@ -5220,6 +5238,8 @@ export class RealWebBotClient implements WebBotClient {
           continue;
         }
 
+        const { turnId, assistantMessageId } = captureStreamBinding(event);
+
         if (event.type === "delta" && event.text) {
           streamedText += event.text;
           onChunk(event.text);
@@ -5232,16 +5252,6 @@ export class RealWebBotClient implements WebBotClient {
           });
         } else if (event.type === "meta") {
           const clusterRunId = typeof event.cluster_run_id === "string" ? event.cluster_run_id : "";
-          const turnId = typeof (event.turn_id ?? event.turnId) === "string" ? (event.turn_id ?? event.turnId) as string : "";
-          const assistantMessageId = typeof (event.assistant_message_id ?? event.assistantMessageId) === "string"
-            ? (event.assistant_message_id ?? event.assistantMessageId) as string
-            : "";
-          if (turnId) {
-            streamTurnId = turnId;
-          }
-          if (assistantMessageId) {
-            streamAssistantMessageId = assistantMessageId;
-          }
           if (clusterRunId || turnId || assistantMessageId) {
             onStatus?.({
               ...(clusterRunId ? { clusterRunId } : {}),
@@ -5260,6 +5270,8 @@ export class RealWebBotClient implements WebBotClient {
           const statusUpdate: ChatStatusUpdate = {
             elapsedSeconds: event.elapsed_seconds,
             previewText: event.preview_text,
+            ...(turnId ? { turnId } : {}),
+            ...(assistantMessageId ? { assistantMessageId } : {}),
           };
           if (contextUsage) {
             statusUpdate.contextUsage = contextUsage;

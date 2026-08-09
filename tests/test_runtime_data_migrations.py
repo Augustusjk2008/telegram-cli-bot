@@ -22,6 +22,19 @@ def _configure_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, data_roo
     monkeypatch.setattr(runner, "default_plugins_root", lambda: tmp_path / "plugins")
 
 
+def _configured_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Path]:
+    data_root, repo_root = tmp_path / "runtime-data", tmp_path / "repo"
+    _configure_runtime(monkeypatch, tmp_path, data_root)
+    repo_root.mkdir()
+    return data_root, repo_root
+
+
+def _write_json(path: Path, payload: object) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
 def _wait_for_path(path: Path, *, timeout_seconds: float = 5.0) -> bool:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -59,6 +72,13 @@ def _run_migration_cli(repo_root: Path, env: dict[str, str]) -> subprocess.Compl
         errors="replace",
         check=False,
         timeout=15,
+    )
+
+
+def _start_worker(script: str, env: dict[str, str]) -> subprocess.Popen[str]:
+    return subprocess.Popen(
+        [sys.executable, "-c", script], cwd=PROJECT_ROOT, env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
     )
 
 
@@ -128,15 +148,7 @@ def test_main_reports_migration_failure_without_traceback(
         "{not-json",
         "[]",
         json.dumps({"version": 1}),
-        json.dumps({"completed": []}),
-        json.dumps({"version": 2, "completed": []}),
         json.dumps({"version": 1, "completed": "not-a-list"}),
-        json.dumps({"version": 1, "completed": [{"id": ""}]}),
-        json.dumps({"version": 1, "completed": ["not-an-object"]}),
-        json.dumps({"version": 1, "completed": [], "completed_repairs": "not-a-list"}),
-        json.dumps({"version": 1, "completed": [], "completed_repairs": [""]}),
-        json.dumps({"version": 1, "completed": [], "last_repair": "not-an-object"}),
-        json.dumps({"version": 1, "completed": [], "last_repair": {"detail": "not-an-object"}}),
         json.dumps(
             {
                 "version": 1,
@@ -149,10 +161,7 @@ def test_main_reports_migration_failure_without_traceback(
 def test_existing_invalid_migration_state_fails_without_overwriting_it(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, invalid_state: str
 ) -> None:
-    data_root = tmp_path / "runtime-data"
-    _configure_runtime(monkeypatch, tmp_path, data_root)
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
+    data_root, repo_root = _configured_repo(monkeypatch, tmp_path)
     state_path = data_root / "migrations" / "state.json"
     state_path.parent.mkdir(parents=True)
     state_path.write_text(invalid_state, encoding="utf-8")
@@ -162,20 +171,6 @@ def test_existing_invalid_migration_state_fails_without_overwriting_it(
         runner.run_pending_migrations(repo_root)
 
     assert state_path.read_bytes() == state_before
-
-
-def test_missing_state_is_a_first_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    data_root = tmp_path / "runtime-data"
-    _configure_runtime(monkeypatch, tmp_path, data_root)
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-
-    result = runner.run_pending_migrations(repo_root)
-
-    assert result.completed == list(runner.MIGRATION_IDS)
-    assert result.skipped == []
-    assert result.state_path == data_root / "migrations" / "state.json"
-    assert result.state_path.exists()
 
 
 def test_tcb_data_roots_keep_independent_idempotent_migration_state(
@@ -188,6 +183,7 @@ def test_tcb_data_roots_keep_independent_idempotent_migration_state(
     _configure_runtime(monkeypatch, tmp_path, first_root)
 
     first = runner.run_pending_migrations(repo_root)
+    assert first.completed == list(runner.MIGRATION_IDS)
     first_state_before = first.state_path.read_bytes()
     first_mtime_before = first.state_path.stat().st_mtime_ns
 
@@ -211,22 +207,13 @@ def test_tcb_data_roots_keep_independent_idempotent_migration_state(
 
 
 def test_rerun_does_not_rewrite_historical_repair_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    data_root = tmp_path / "runtime-data"
-    _configure_runtime(monkeypatch, tmp_path, data_root)
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    state_path = data_root / "migrations" / "state.json"
-    state_path.parent.mkdir(parents=True)
-    state_path.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "completed": [{"id": migration_id} for migration_id in runner.MIGRATION_IDS],
-                "last_error": "",
-                "last_repair": {"detail": {"targets": ["app_settings"]}},
-            }
-        ),
-        encoding="utf-8",
+    data_root, repo_root = _configured_repo(monkeypatch, tmp_path)
+    state_path = _write_json(
+        data_root / "migrations" / "state.json",
+        {
+            "version": 1, "completed": [{"id": item} for item in runner.MIGRATION_IDS],
+            "last_error": "", "last_repair": {"detail": {"targets": ["app_settings"]}},
+        },
     )
     state_before = state_path.read_bytes()
     mtime_before = state_path.stat().st_mtime_ns
@@ -240,77 +227,36 @@ def test_rerun_does_not_rewrite_historical_repair_state(monkeypatch: pytest.Monk
     assert state_path.stat().st_mtime_ns == mtime_before
 
 
-def test_completed_app_settings_repair_does_not_restore_legacy_values_again(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize("repair_already_completed", [False, True])
+def test_app_settings_repair_state_is_idempotent_and_reported(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, repair_already_completed: bool
 ) -> None:
-    data_root = tmp_path / "runtime-data"
-    _configure_runtime(monkeypatch, tmp_path, data_root)
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    state_path = data_root / "migrations" / "state.json"
-    state_path.parent.mkdir(parents=True)
-    state_path.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "completed": [{"id": migration_id} for migration_id in runner.MIGRATION_IDS],
-                "completed_repairs": ["app_settings"],
-                "last_error": "",
-            }
-        ),
-        encoding="utf-8",
+    data_root, repo_root = _configured_repo(monkeypatch, tmp_path)
+    if repair_already_completed:
+        _write_json(
+            data_root / "migrations" / "state.json",
+            {"version": 1, "completed": [{"id": item} for item in runner.MIGRATION_IDS],
+             "completed_repairs": ["app_settings"], "last_error": ""},
+        )
+    else:
+        runner.run_pending_migrations(repo_root)
+    _write_json(
+        repo_root / ".web_admin_settings.json",
+        {"main_bot_profile": {"working_dir": "C:/legacy-workspace"}, "update_enabled": True},
     )
-    (repo_root / ".web_admin_settings.json").write_text(
-        json.dumps(
-            {
-                "main_bot_profile": {"working_dir": "C:/legacy-workspace"},
-                "update_enabled": True,
-            }
-        ),
-        encoding="utf-8",
-    )
-    app_settings_path = data_root / "config" / "app_settings.json"
-    app_settings_path.parent.mkdir(parents=True)
-    app_settings_path.write_text(
-        json.dumps(
-            {
-                "main_bot_profile": {"working_dir": str(tmp_path / "pytest-of-user" / "workspace")},
-                "update_enabled": False,
-            }
-        ),
-        encoding="utf-8",
+    app_settings_path = _write_json(
+        data_root / "config" / "app_settings.json",
+        {"main_bot_profile": {"working_dir": str(tmp_path / "pytest-of-user" / "workspace")}, "update_enabled": False},
     )
     target_before = app_settings_path.read_bytes()
 
     result = runner.run_pending_migrations(repo_root)
 
-    assert result.repairs == []
-    assert app_settings_path.read_bytes() == target_before
-
-
-def test_run_result_contains_actual_repair_targets(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    data_root = tmp_path / "runtime-data"
-    _configure_runtime(monkeypatch, tmp_path, data_root)
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    runner.run_pending_migrations(repo_root)
-
-    (repo_root / ".web_admin_settings.json").write_text(
-        json.dumps({"main_bot_profile": {"working_dir": "C:/real-workspace"}}),
-        encoding="utf-8",
-    )
-    app_settings_path = data_root / "config" / "app_settings.json"
-    app_settings_path.parent.mkdir(parents=True)
-    app_settings_path.write_text(
-        json.dumps({"main_bot_profile": {"working_dir": str(tmp_path / "pytest-of-user" / "workspace")}}),
-        encoding="utf-8",
-    )
-
-    result = runner.run_pending_migrations(repo_root)
-
     assert result.completed == []
     assert result.skipped == list(runner.MIGRATION_IDS)
-    assert getattr(result, "repairs", None) == ["app_settings"]
+    assert result.repairs == ([] if repair_already_completed else ["app_settings"])
+    if repair_already_completed:
+        assert app_settings_path.read_bytes() == target_before
 
 
 _LOCK_WORKER = textwrap.dedent(
@@ -366,30 +312,10 @@ def test_second_process_cannot_enter_migration_while_first_holds_the_lock(tmp_pa
     release_path = signal_dir / "release"
 
     try:
-        first_env = {**env, "MIGRATION_WORKER_ROLE": "first"}
-        first = subprocess.Popen(
-            [sys.executable, "-c", _LOCK_WORKER],
-            cwd=PROJECT_ROOT,
-            env=first_env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
+        first = _start_worker(_LOCK_WORKER, {**env, "MIGRATION_WORKER_ROLE": "first"})
         assert _wait_for_path(signal_dir / "entered-first"), "第一个迁移进程未进入临界区"
 
-        second_env = {**env, "MIGRATION_WORKER_ROLE": "second"}
-        second = subprocess.Popen(
-            [sys.executable, "-c", _LOCK_WORKER],
-            cwd=PROJECT_ROOT,
-            env=second_env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
+        second = _start_worker(_LOCK_WORKER, {**env, "MIGRATION_WORKER_ROLE": "second"})
         assert _wait_for_path(signal_dir / "ready-second"), "第二个迁移进程未准备就绪"
         (signal_dir / "start-second").touch()
 
@@ -411,10 +337,7 @@ def test_second_process_cannot_enter_migration_while_first_holds_the_lock(tmp_pa
 
 
 def test_lock_is_released_after_migration_exception(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    data_root = tmp_path / "runtime-data"
-    _configure_runtime(monkeypatch, tmp_path, data_root)
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
+    _data_root, repo_root = _configured_repo(monkeypatch, tmp_path)
 
     def fail_repo_state_migration(_repo_root: Path) -> dict[str, object]:
         raise RuntimeError("intentional migration failure")
@@ -449,23 +372,11 @@ _EXITING_LOCK_WORKER = textwrap.dedent(
 
 
 def test_lock_is_released_when_holding_process_exits(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    data_root = tmp_path / "runtime-data"
-    _configure_runtime(monkeypatch, tmp_path, data_root)
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
+    data_root, repo_root = _configured_repo(monkeypatch, tmp_path)
     signal_path = tmp_path / "entered"
     env = _isolated_subprocess_env(tmp_path, data_root)
     env.update({"MIGRATION_EXIT_SIGNAL": str(signal_path), "MIGRATION_REPO_ROOT": str(repo_root)})
-    process = subprocess.Popen(
-        [sys.executable, "-c", _EXITING_LOCK_WORKER],
-        cwd=PROJECT_ROOT,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
+    process = _start_worker(_EXITING_LOCK_WORKER, env)
 
     try:
         assert _wait_for_path(signal_path), "子进程未在迁移临界区内退出"

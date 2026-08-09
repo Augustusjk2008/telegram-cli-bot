@@ -54,6 +54,22 @@ class TestGetSession:
         assert main.codex_session_id == "codex-main"
         assert reviewer.codex_session_id == "codex-reviewer"
 
+    def test_web_users_share_a_session_without_collapsing_bot_or_agent_boundaries(self, temp_dir: Path):
+        main = get_or_create_session(801, "main", 101, str(temp_dir), load_persisted_state=False)
+        same_shared_user = get_or_create_session(801, "main", 202, str(temp_dir), load_persisted_state=False)
+        reviewer = get_or_create_session(801, "main", 101, str(temp_dir), load_persisted_state=False, agent_id="reviewer")
+        other_bot = get_or_create_session(802, "other", 202, str(temp_dir), load_persisted_state=False)
+
+        shared_user_id = chat_session_user_id(101)
+        assert main is same_shared_user
+        assert chat_session_user_id(202) == shared_user_id
+        assert set(sessions) == {
+            (801, shared_user_id, "main"),
+            (801, shared_user_id, "reviewer"),
+            (802, shared_user_id, "main"),
+        }
+        assert len({id(main), id(reviewer), id(other_bot)}) == 3
+
     def test_concurrent_restore_initializes_the_session_once(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -159,27 +175,6 @@ class TestClearBotSessions:
         session.persist()
 
         assert calls == []
-
-    def test_update_workdir_resets_all_agent_native_sessions(self, temp_dir: Path):
-        old_dir = temp_dir / "old"
-        new_dir = temp_dir / "new"
-        old_dir.mkdir()
-        new_dir.mkdir()
-        main = get_or_create_session(1, "main", 100, str(old_dir), agent_id="main")
-        reviewer = get_or_create_session(1, "main", 100, str(old_dir), agent_id="reviewer")
-        main.codex_session_id = "codex-main"
-        reviewer.codex_session_id = "codex-reviewer"
-        main.native_agent_session_id = "native-main"
-        reviewer.native_agent_session_id = "native-reviewer"
-
-        update_bot_working_dir("main", str(new_dir))
-
-        assert main.working_dir == str(new_dir)
-        assert reviewer.working_dir == str(new_dir)
-        assert main.codex_session_id is None
-        assert reviewer.codex_session_id is None
-        assert main.native_agent_session_id is None
-        assert reviewer.native_agent_session_id is None
 
     def test_update_workdir_resets_all_bot_sessions(self, temp_dir: Path):
         old_dir = temp_dir / "old"

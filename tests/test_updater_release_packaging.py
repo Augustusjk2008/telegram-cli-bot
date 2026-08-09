@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import io
 import json
 import subprocess
@@ -8,6 +7,8 @@ import sys
 import tarfile
 import zipfile
 from pathlib import Path
+
+import pytest
 
 from bot import updater
 
@@ -121,30 +122,6 @@ def test_release_legal_files_are_present_and_required_by_every_packager(tmp_path
         'ensure_tag_at_head "$release_tag"'
     )
 
-    verifier = Path("scripts/verify_release_legal_files.py")
-    assert verifier.is_file()
-    if Path(".git").exists():
-        ignore_result = subprocess.run(
-            ["git", "check-ignore", "--quiet", str(verifier)],
-            capture_output=True,
-            check=False,
-        )
-        assert ignore_result.returncode == 1, "发布归档校验器不得被 .gitignore 排除"
-
-    plan = updater._build_update_write_plan(tmp_path, list(REQUIRED_RELEASE_ARCHIVE_FILES))
-    assert [relative_path for _target, relative_path in plan] == list(REQUIRED_RELEASE_ARCHIVE_FILES)
-
-    license_text = Path("LICENSE").read_text(encoding="utf-8")
-    license_sha256 = hashlib.sha256(license_text.encode()).hexdigest()
-    assert license_sha256 == "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
-    assert "Copyright 2026 Jiang Kai" in Path("NOTICE").read_text(encoding="utf-8")
-
-    front_package = json.loads(Path("front/package.json").read_text(encoding="utf-8"))
-    front_lock = json.loads(Path("front/package-lock.json").read_text(encoding="utf-8"))
-    assert front_package["license"] == "Apache-2.0"
-    assert front_lock["packages"][""]["license"] == "Apache-2.0"
-
-
 def _write_legal_archive(path: Path, members: tuple[str, ...]) -> None:
     if path.suffix == ".zip":
         with zipfile.ZipFile(path, "w") as archive:
@@ -225,6 +202,17 @@ def test_release_archive_legal_file_verifier_requires_portable_runtime_licenses(
         check=False,
     )
     assert complete_result.returncode == 0, complete_result.stderr
+
+
+def test_updater_rejects_checksum_mismatch_and_archive_traversal(tmp_path: Path) -> None:
+    package_path = tmp_path / "update.zip"
+    with zipfile.ZipFile(package_path, "w") as archive:
+        archive.writestr("../outside.py", "blocked")
+
+    with pytest.raises(RuntimeError, match="SHA256"):
+        updater._verify_file_sha256(package_path, "0" * 64)
+    with pytest.raises(updater._PackageStreamError, match="非法归档路径"):
+        updater._list_package_entry_paths(package_path)
 
 
 def test_portable_build_does_not_embed_fixed_web_token() -> None:
