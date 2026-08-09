@@ -26,6 +26,7 @@ import {
 import { GitCommitCliConfigPanel } from "../components/GitCommitCliConfigPanel";
 import { GitDiffViewer } from "../components/GitDiffViewer";
 import { StateBadge } from "../components/StateBadge";
+import { TouchHint } from "../components/TouchHint";
 import { toolbarButtonClass } from "../components/ToolbarButton";
 import { DynamicVirtualList } from "../components/virtual/DynamicVirtualList";
 import { MockWebBotClient } from "../services/mockWebBotClient";
@@ -308,21 +309,21 @@ function GitCommitGraphLite({ nodes, selectedHash, disabled, onSelect }: GitComm
         const commitTitle = (node.message || node.subject || "-").trim() || "-";
         const incomingEdges = incomingEdgesByRow[rowIndex] || [];
         return (
-          <button
-            key={node.hash}
-            type="button"
-            data-testid={`git-graph-row-${shortHash}`}
-            data-selected={selected ? "true" : "false"}
-            aria-label={`选择提交 ${shortHash}`}
-            onClick={() => onSelect(node.hash)}
-            disabled={disabled}
-            className={clsx(
-              "grid w-full min-w-0 items-stretch gap-2 px-2 py-0 text-left transition-colors",
-              "hover:bg-[var(--workbench-hover-bg)] disabled:cursor-not-allowed disabled:opacity-70",
-              selected ? "bg-[var(--workbench-active-bg)]" : "",
-            )}
-            style={{ gridTemplateColumns: `${laneWidth}px minmax(0, 1fr)` }}
-          >
+          <TouchHint key={node.hash} content={commitTitle} block>
+            <button
+              type="button"
+              data-testid={`git-graph-row-${shortHash}`}
+              data-selected={selected ? "true" : "false"}
+              aria-label={`选择提交 ${shortHash}`}
+              onClick={() => onSelect(node.hash)}
+              disabled={disabled}
+              className={clsx(
+                "grid w-full min-w-0 items-stretch gap-2 px-2 py-0 text-left transition-colors",
+                "hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:cursor-not-allowed disabled:opacity-70",
+                selected ? "bg-[var(--workbench-active-bg)]" : "",
+              )}
+              style={{ gridTemplateColumns: `${laneWidth}px minmax(0, 1fr)` }}
+            >
             <svg
               data-testid={`git-graph-lanes-${shortHash}`}
               aria-hidden="true"
@@ -414,11 +415,12 @@ function GitCommitGraphLite({ nodes, selectedHash, disabled, onSelect }: GitComm
                   </span>
                 ) : null}
               </div>
-              <div className="min-w-0 truncate text-sm font-medium text-[var(--text)]" title={commitTitle}>
+              <div className="min-w-0 truncate text-sm font-medium text-[var(--text)]">
                 {node.subject || "-"}
               </div>
             </div>
-          </button>
+            </button>
+          </TouchHint>
         );
       })}
     </div>
