@@ -42,6 +42,17 @@ describe("ChatFinalAnswerActions", () => {
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
+  it("keeps low context left text red and emphasized inside the interactive badge", () => {
+    render(<ChatFinalAnswerActions contextUsage={{ contextLeftPercent: 20 }} />);
+
+    const badge = screen.getByTestId("chat-message-context-usage-bottom");
+    const text = screen.getByText("ctx 20%");
+
+    expect(badge).toHaveClass("border-red-200", "bg-red-50");
+    expect(text.tagName).toBe("SPAN");
+    expect(text).toHaveClass("font-medium", "text-red-600");
+  });
+
   it("supports focus, Escape, and a second tap for the context hint", () => {
     render(
       <ChatFinalAnswerActions
