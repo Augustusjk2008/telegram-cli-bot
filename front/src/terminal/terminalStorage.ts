@@ -8,6 +8,8 @@ export type StoredTerminalTab = {
   title: string;
   cwd: string;
   shell: string;
+  terminalActionBotAlias?: string;
+  terminalActionId?: string;
 };
 
 function createTerminalOwnerId() {
@@ -48,12 +50,33 @@ function normalizeStoredTab(value: unknown, index: number): StoredTerminalTab | 
   const shell = typeof candidate.shell === "string" && candidate.shell.trim()
     ? candidate.shell.trim()
     : "auto";
-  return { id, ownerId, title, cwd, shell };
+  const terminalActionBotAlias = typeof candidate.terminalActionBotAlias === "string"
+    ? candidate.terminalActionBotAlias.trim()
+    : "";
+  const terminalActionId = typeof candidate.terminalActionId === "string"
+    ? candidate.terminalActionId.trim()
+    : "";
+  return {
+    id,
+    ownerId,
+    title,
+    cwd,
+    shell,
+    ...(terminalActionBotAlias && terminalActionId
+      ? { terminalActionBotAlias, terminalActionId }
+      : {}),
+  };
 }
 
 export function createStoredTerminalTab(
   tabs: StoredTerminalTab[] = [],
-  options: { title?: string; cwd?: string; shell?: string } = {},
+  options: {
+    title?: string;
+    cwd?: string;
+    shell?: string;
+    terminalActionBotAlias?: string;
+    terminalActionId?: string;
+  } = {},
 ): StoredTerminalTab {
   const ownerId = createTerminalOwnerId();
   let title = options.title?.trim() || "";
@@ -65,12 +88,17 @@ export function createStoredTerminalTab(
     }
     title = `终端 ${index}`;
   }
+  const terminalActionBotAlias = options.terminalActionBotAlias?.trim() || "";
+  const terminalActionId = options.terminalActionId?.trim() || "";
   return {
     id: ownerId,
     ownerId,
     title,
     cwd: options.cwd?.trim() || "",
     shell: options.shell?.trim() || "auto",
+    ...(terminalActionBotAlias && terminalActionId
+      ? { terminalActionBotAlias, terminalActionId }
+      : {}),
   };
 }
 

@@ -18,6 +18,8 @@ type CreateTerminalTabOptions = {
   shell?: string;
   start?: boolean;
   activate?: boolean;
+  terminalActionBotAlias?: string;
+  terminalActionId?: string;
 };
 
 type PersistentTerminalContextValue = {

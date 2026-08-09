@@ -299,11 +299,19 @@ export function TerminalScreen({
     setRunningActionId(action.id);
     setActionsError("");
     try {
-      const tab = await terminal.createTab({
-        title: action.label,
-        start: false,
-        activate: false,
-      });
+      let tab = terminal.tabs.find((item) => (
+        item.terminalActionBotAlias === botAlias
+        && item.terminalActionId === action.id
+      ));
+      if (!tab) {
+        tab = await terminal.createTab({
+          title: action.label,
+          start: false,
+          activate: false,
+          terminalActionBotAlias: botAlias,
+          terminalActionId: action.id,
+        });
+      }
       await client.runTerminalAction(botAlias, action.id, {
         ownerId: tab.ownerId,
         confirmed: true,
