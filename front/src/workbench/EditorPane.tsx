@@ -1,5 +1,5 @@
 import { clsx } from "clsx";
-import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Maximize2, Minimize2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Maximize2, Minimize2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FileEditorSurface } from "../components/FileEditorSurface";
 import { FilePreviewPane } from "../components/FilePreviewPane";
@@ -34,6 +34,7 @@ type Props = {
   onCloseTab: (path: string) => boolean;
   onChangeActiveContent: (content: string) => void;
   onSaveActiveTab: () => void;
+  onCloseAll: () => void;
   onCloseOthers: (path: string) => void;
   onCloseTabsToRight: (path: string) => void;
   onReopenLastClosed: () => void | Promise<void>;
@@ -116,6 +117,7 @@ export function EditorPane({
   onCloseTab,
   onChangeActiveContent,
   onSaveActiveTab,
+  onCloseAll,
   onCloseOthers,
   onCloseTabsToRight,
   onReopenLastClosed,
@@ -421,6 +423,17 @@ export function EditorPane({
           >
             <ArrowRight className="h-4 w-4" />
           </button>
+          {tabs.length > 1 ? (
+            <button
+              type="button"
+              aria-label="关闭全部标签页"
+              title="关闭全部标签页"
+              onClick={onCloseAll}
+              className="inline-flex h-7 w-7 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--workbench-focus-ring)]"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          ) : null}
           {singlePluginTarget ? (
             <button
               type="button"

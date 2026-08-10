@@ -17,7 +17,7 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
       workingDir: "C:\\workspace",
       isProcessing: false,
     }),
-    listMessages: async () => [],
+    listMessages: async () => ({ items: [] }),
     listConversations: async (): Promise<ConversationListResult> => ({
       activeConversationId: "",
       items: [],
@@ -154,11 +154,228 @@ test("binds stream metadata to the placeholder before a deferred final and repla
   expect(document.querySelectorAll('[data-message-id="assistant-stream-bound"]')).toHaveLength(1);
 });
 
+test("pauses auxiliary sync while hidden and reconciles once after returning", async () => {
+  let visibilityState: DocumentVisibilityState = "visible";
+  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibilityState);
+  const clusterStatus = {
+    tasks: [
+      {
+        taskId: "task-running",
+        agentId: "worker-running",
+        status: "running",
+        modelTier: "medium",
+        allowWrite: false,
+        createdAt: "2026-08-08T00:00:00Z",
+        startedAt: "2026-08-08T00:00:01Z",
+        completedAt: "",
+        error: "",
+      },
+      {
+        taskId: "task-completed",
+        agentId: "worker-completed",
+        status: "completed",
+        modelTier: "medium",
+        allowWrite: false,
+        createdAt: "2026-08-08T00:00:00Z",
+        startedAt: "2026-08-08T00:00:01Z",
+        completedAt: "2026-08-08T00:00:02Z",
+        error: "",
+      },
+      {
+        taskId: "task-failed",
+        agentId: "worker-failed",
+        status: "failed",
+        modelTier: "medium",
+        allowWrite: false,
+        createdAt: "2026-08-08T00:00:00Z",
+        startedAt: "2026-08-08T00:00:01Z",
+        completedAt: "2026-08-08T00:00:02Z",
+        error: "子任务失败",
+      },
+    ],
+    queuedCount: 0,
+    runningCount: 1,
+    completedCount: 1,
+    failedCount: 1,
+    pendingCount: 1,
+  };
+  const getBotOverview = vi.fn<WebBotClient["getBotOverview"]>(async (): Promise<BotOverview> => ({
+    alias: "main",
+    cliType: "codex",
+    status: "running",
+    workingDir: "C:\\workspace",
+    isProcessing: true,
+    historyCount: 1,
+    activeClusterRun: { runId: "cluster-foreground", status: "running", tasks: clusterStatus },
+  }));
+  const listMessageDelta = vi.fn<WebBotClient["listMessageDelta"]>(async () => ({
+    reset: false,
+    revision: 7,
+    nextCursor: "",
+    items: [],
+  }));
+  const getClusterTaskStatus = vi.fn<WebBotClient["getClusterTaskStatus"]>(async () => clusterStatus);
+  const client = createClient({
+    getBotOverview,
+    listMessages: vi.fn<WebBotClient["listMessages"]>(async () => ({
+      items: [{
+        id: "assistant-background-poll",
+        role: "assistant",
+        text: "辅助同步运行中",
+        createdAt: "2026-08-08T00:00:00Z",
+        state: "streaming",
+      }],
+      revision: 7,
+    })),
+    listMessageDelta,
+    getClusterTaskStatus,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  await waitFor(() => expect(getClusterTaskStatus).toHaveBeenCalledTimes(1));
+  expect(getClusterTaskStatus).toHaveBeenLastCalledWith(
+    "main",
+    "cluster-foreground",
+    { includeOutput: false },
+  );
+  expect(await screen.findByText("智能体集群任务")).toBeInTheDocument();
+  expect(screen.getByText("1 项进行中")).toBeInTheDocument();
+  expect(screen.getByText("已完成")).toBeInTheDocument();
+  expect(screen.getByText("失败")).toBeInTheDocument();
+  expect(screen.getByText("子任务失败")).toBeInTheDocument();
+
+  visibilityState = "hidden";
+  await act(async () => {
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  const hiddenCounts = {
+    overview: getBotOverview.mock.calls.length,
+    delta: listMessageDelta.mock.calls.length,
+    cluster: getClusterTaskStatus.mock.calls.length,
+  };
+
+  vi.useFakeTimers();
+  await act(async () => vi.advanceTimersByTimeAsync(30_000));
+  expect(getBotOverview).toHaveBeenCalledTimes(hiddenCounts.overview);
+  expect(listMessageDelta).toHaveBeenCalledTimes(hiddenCounts.delta);
+  expect(getClusterTaskStatus).toHaveBeenCalledTimes(hiddenCounts.cluster);
+
+  visibilityState = "visible";
+  await act(async () => {
+    document.dispatchEvent(new Event("visibilitychange"));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  expect(getBotOverview).toHaveBeenCalledTimes(hiddenCounts.overview + 1);
+  expect(listMessageDelta).toHaveBeenCalledTimes(hiddenCounts.delta + 1);
+  expect(getClusterTaskStatus).toHaveBeenCalledTimes(hiddenCounts.cluster + 1);
+
+  visibilityState = "hidden";
+  await act(async () => {
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  const secondHiddenCounts = {
+    overview: getBotOverview.mock.calls.length,
+    delta: listMessageDelta.mock.calls.length,
+    cluster: getClusterTaskStatus.mock.calls.length,
+  };
+  await act(async () => vi.advanceTimersByTimeAsync(30_000));
+  expect(getBotOverview).toHaveBeenCalledTimes(secondHiddenCounts.overview);
+  expect(listMessageDelta).toHaveBeenCalledTimes(secondHiddenCounts.delta);
+  expect(getClusterTaskStatus).toHaveBeenCalledTimes(secondHiddenCounts.cluster);
+});
+
+test("does not abort the active SSE request when the document is hidden", async () => {
+  let visibilityState: DocumentVisibilityState = "visible";
+  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibilityState);
+  let activeSignal: AbortSignal | undefined;
+  const final = deferred<ChatMessage>();
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>((
+    _botAlias,
+    _text,
+    _onChunk,
+    onStatus,
+    _onTrace,
+    options,
+  ) => {
+    activeSignal = options?.signal;
+    onStatus?.({ turnId: "turn-visible-sse", assistantMessageId: "assistant-visible-sse" });
+    return final.promise;
+  });
+  let overviewCalls = 0;
+  const getBotOverview = vi.fn<WebBotClient["getBotOverview"]>(async (): Promise<BotOverview> => {
+    overviewCalls += 1;
+    return {
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: overviewCalls > 1,
+      historyCount: 0,
+    };
+  });
+  const listMessageDelta = vi.fn<WebBotClient["listMessageDelta"]>(async () => ({
+    reset: false,
+    revision: 3,
+    nextCursor: "",
+    items: [],
+  }));
+  const client = createClient({
+    getBotOverview,
+    listMessages: vi.fn(async () => ({ items: [], revision: 3 })),
+    listMessageDelta,
+    sendMessage,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  await screen.findByText("暂无消息，开始聊天吧");
+  fireEvent.change(screen.getByPlaceholderText("输入消息"), { target: { value: "保持主 SSE" } });
+  fireEvent.click(screen.getByRole("button", { name: "发送" }));
+  await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+  expect(activeSignal).toBeDefined();
+
+  visibilityState = "hidden";
+  await act(async () => {
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  const hiddenCounts = {
+    overview: getBotOverview.mock.calls.length,
+    delta: listMessageDelta.mock.calls.length,
+  };
+  vi.useFakeTimers();
+  await act(async () => vi.advanceTimersByTimeAsync(30_000));
+
+  expect(activeSignal?.aborted).toBe(false);
+  expect(getBotOverview).toHaveBeenCalledTimes(hiddenCounts.overview);
+  expect(listMessageDelta).toHaveBeenCalledTimes(hiddenCounts.delta);
+
+  visibilityState = "visible";
+  await act(async () => {
+    document.dispatchEvent(new Event("visibilitychange"));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  expect(activeSignal?.aborted).toBe(false);
+
+  await act(async () => {
+    final.resolve({
+      id: "assistant-visible-sse",
+      turnId: "turn-visible-sse",
+      role: "assistant",
+      text: "主 SSE 完成",
+      createdAt: "2026-08-08T00:00:00Z",
+      state: "done",
+    });
+  });
+});
+
 test("recovers an authoritative final reply after EOF arrives before the terminal event", async () => {
   let overviewCalls = 0;
   const listMessageDelta = vi.fn<WebBotClient["listMessageDelta"]>(async () => ({
     reset: true,
-    revision: 1,
+    revision: 8,
     nextCursor: "1",
     items: [
       {
@@ -215,7 +432,7 @@ test("recovers an authoritative final reply after EOF arrives before the termina
         historyCount: overviewCalls === 1 ? 0 : 2,
       };
     }),
-    listMessages: vi.fn(async () => []),
+    listMessages: vi.fn(async () => ({ items: [], revision: 7 })),
     listMessageDelta,
     sendMessage,
   });
@@ -235,6 +452,12 @@ test("recovers an authoritative final reply after EOF arrives before the termina
   });
 
   expect(listMessageDelta).toHaveBeenCalledTimes(1);
+  expect(listMessageDelta).toHaveBeenCalledWith(
+    "main",
+    expect.any(String),
+    50,
+    expect.objectContaining({ revision: 7 }),
+  );
   expect(screen.getAllByText("无需 F5 的权威终答")).toHaveLength(1);
   expect(screen.queryByText("聊天响应在收到结束事件前中断，正在从历史记录恢复")).not.toBeInTheDocument();
 });
@@ -252,7 +475,7 @@ test("native permission trace can be approved from flat transcript", async () =>
       supportedExecutionModes: ["cli", "native_agent"],
       defaultExecutionMode: "cli",
     }),
-    listMessages: async (): Promise<ChatMessage[]> => [
+    listMessages: async () => ({ items: [
       {
         id: "assistant-1",
         role: "assistant",
@@ -272,7 +495,7 @@ test("native permission trace can be approved from flat transcript", async () =>
           }],
         },
       },
-    ],
+    ] }),
     replyNativeAgentPermission,
   });
 
@@ -324,7 +547,7 @@ test("native history loads flat trace details after expansion", async () => {
     processCount: 1,
   }));
   const client = createClient({
-    listMessages: async (): Promise<ChatMessage[]> => [
+    listMessages: async () => ({ items: [
       {
         id: "assistant-native-history",
         role: "assistant",
@@ -339,7 +562,7 @@ test("native history loads flat trace details after expansion", async () => {
           processCount: 1,
         },
       },
-    ],
+    ] }),
     getMessageTrace: getMessageTrace as never,
   });
 
@@ -368,7 +591,7 @@ test("non-native permission trace never exposes native permission actions", asyn
       supportedExecutionModes: ["cli", "native_agent"],
       defaultExecutionMode: "cli",
     }),
-    listMessages: async (): Promise<ChatMessage[]> => [
+    listMessages: async () => ({ items: [
       {
         id: "assistant-1",
         role: "assistant",
@@ -386,7 +609,7 @@ test("non-native permission trace never exposes native permission actions", asyn
           }],
         },
       },
-    ],
+    ] }),
   });
 
   render(<ChatScreen botAlias="main" client={client} />);
@@ -398,7 +621,7 @@ test("non-native permission trace never exposes native permission actions", asyn
 
 test("renders CLI trace in the unified AG-UI transcript", async () => {
   const client = createClient({
-    listMessages: async (): Promise<ChatMessage[]> => [{
+    listMessages: async () => ({ items: [{
       id: "assistant-cli-trace",
       role: "assistant",
       text: "CLI 最终答复",
@@ -409,7 +632,7 @@ test("renders CLI trace in the unified AG-UI transcript", async () => {
         processCount: 1,
         trace: [{ kind: "commentary", source: "codex", summary: "CLI 路由哨兵" }],
       },
-    }],
+    }] }),
   });
 
   render(<ChatScreen botAlias="main" client={client} />);
@@ -521,17 +744,17 @@ test("chat screen switches agent and scopes history requests", async () => {
       { id: "reviewer", name: "代码审查", systemPrompt: "先列风险", enabled: true, isMain: false },
     ],
   }));
-  const listMessages = vi.fn(async (_botAlias: string, options?: { agentId?: string }): Promise<ChatMessage[]> => {
+  const listMessages = vi.fn<WebBotClient["listMessages"]>(async (_botAlias, options) => {
     if (options?.agentId === "reviewer") {
-      return [{
+      return { items: [{
         id: "reviewer-1",
         role: "assistant",
         text: "reviewer-history",
         createdAt: new Date().toISOString(),
         state: "done",
-      }];
+      }] };
     }
-    return [];
+    return { items: [] };
   });
   const listConversations = vi.fn(async (): Promise<ConversationListResult> => ({
     activeConversationId: "",
@@ -566,7 +789,7 @@ test("execution mode switch reloads scoped history", async () => {
     defaultExecutionMode: "cli",
     executionMode: options?.executionMode === "native_agent" ? "native_agent" : "cli",
   }));
-  const listMessages = vi.fn<WebBotClient["listMessages"]>(async (_botAlias, options) => options?.executionMode === "native_agent"
+  const listMessages = vi.fn<WebBotClient["listMessages"]>(async (_botAlias, options) => ({ items: options?.executionMode === "native_agent"
     ? [{
       id: "assistant-native",
       role: "assistant",
@@ -580,7 +803,7 @@ test("execution mode switch reloads scoped history", async () => {
       text: "CLI 历史",
       createdAt: new Date().toISOString(),
       state: "done",
-    }]);
+    }] }));
   const client = createClient({ getBotOverview, listMessages });
 
   render(<ChatScreen botAlias="main" client={client} />);
@@ -634,9 +857,9 @@ test("native user bubble rollback confirms and refreshes history outside solo mo
     state: "done",
     meta: { workspaceHistoryHead: "head-2", linearIndex: 2, rollbackSupported: true },
   };
-  const listMessages = vi.fn<WebBotClient["listMessages"]>(async () => (
-    rolledBack ? [user1, assistant1] : [user1, assistant1, user2, assistant2]
-  ));
+  const listMessages = vi.fn<WebBotClient["listMessages"]>(async () => ({
+    items: rolledBack ? [user1, assistant1] : [user1, assistant1, user2, assistant2],
+  }));
   const listConversations = vi.fn<WebBotClient["listConversations"]>(async (): Promise<ConversationListResult> => ({
     activeConversationId: "conv-1",
     items: [{

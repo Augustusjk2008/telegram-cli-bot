@@ -285,9 +285,12 @@ async def test_codex_communicate_requests_rollout_usage_when_terminal_usage_is_m
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("stream_protocol_version", "expects_output"), [(1, True), (2, False)])
 async def test_stream_cli_chat_starts_capture_before_spawn_and_records_once(
     usage_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
+    stream_protocol_version: int,
+    expects_output: bool,
 ):
     capture = _UsageCapture()
     spawned = False
@@ -310,18 +313,76 @@ async def test_stream_cli_chat_starts_capture_before_spawn_and_records_once(
     monkeypatch.setattr(api_service.subprocess, "Popen", popen)
 
     events = [
-        event async for event in api_service._stream_cli_chat(usage_manager, "main", 1001, "hello")
+        event
+        async for event in api_service._stream_cli_chat(
+            usage_manager,
+            "main",
+            1001,
+            "hello",
+            stream_protocol_version=stream_protocol_version,
+        )
     ]
 
-    assert next(event for event in events if event["type"] == "done")["output"] == "done"
+    done = next(event for event in events if event["type"] == "done")
+    assert done["message"]["content"] == "done"
+    assert ("output" in done) is expects_output
+    if expects_output:
+        assert done["output"] == "done"
+    assert done["turn_id"]
+    assert done["assistant_message_id"]
+    assert isinstance(done["elapsed_seconds"], int)
+    assert done["returncode"] == 0
+    assert isinstance(done["session"], dict)
     assert len(capture.calls) == 1
     assert capture.calls[0][0].input_tokens == 11
 
 
+@pytest.mark.parametrize(
+    ("stream_protocol_version", "output", "message_content", "expects_output"),
+    [
+        (1, "same", "same", True),
+        (2, "same", "same", False),
+        (2, "", "", True),
+        (2, "fallback", "", True),
+        (3, "same", "same", True),
+    ],
+)
+def test_compact_cli_done_event_preserves_v1_empty_and_mismatched_output(
+    stream_protocol_version: int,
+    output: str,
+    message_content: str,
+    expects_output: bool,
+):
+    event = {
+        "type": "done",
+        "turn_id": "turn-compact",
+        "assistant_message_id": "assistant-compact",
+        "output": output,
+        "message": {
+            "id": "assistant-compact",
+            "content": message_content,
+            "state": "error",
+            "meta": {"completion_state": "error"},
+        },
+    }
+
+    compacted = api_service._compact_cli_done_event(event, stream_protocol_version)
+
+    assert ("output" in compacted) is expects_output
+    assert compacted["message"]["content"] == message_content
+    assert compacted["message"]["state"] == "error"
+    assert compacted["message"]["meta"]["completion_state"] == "error"
+    assert compacted["turn_id"] == "turn-compact"
+    assert compacted["assistant_message_id"] == "assistant-compact"
+
+
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("include_trace", "expected_trace"), [(True, True), (False, False)])
 async def test_stream_cli_chat_normalizes_slash_and_preserves_ids_on_legacy_sse_events(
     usage_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
+    include_trace: bool,
+    expected_trace: bool,
 ):
     capture = _UsageCapture()
     process = _UsageProcess()
@@ -336,6 +397,7 @@ async def test_stream_cli_chat_normalizes_slash_and_preserves_ids_on_legacy_sse_
         ]
     )
     captured_command: dict[str, object] = {}
+    persisted_trace: list[dict[str, object]] = []
 
     async def start_capture(*, env, command):
         return capture
@@ -344,22 +406,132 @@ async def test_stream_cli_chat_normalizes_slash_and_preserves_ids_on_legacy_sse_
         captured_command.update(kwargs)
         return ["codex"], False
 
+    original_queue_trace = api_service.StreamingPersistenceBuffer.queue_trace
+
+    def queue_trace(buffer, event):
+        persisted_trace.append(event)
+        return original_queue_trace(buffer, event)
+
     monkeypatch.setattr(api_service, "_start_codex_usage_capture", start_capture, raising=False)
     monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
     monkeypatch.setattr(api_service, "build_cli_command", build_command)
+    monkeypatch.setattr(api_service.StreamingPersistenceBuffer, "queue_trace", queue_trace)
     monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(api_service.subprocess, "Popen", lambda *_args, **_kwargs: process)
 
     events = [
-        event async for event in api_service._stream_cli_chat(usage_manager, "main", 1001, "//status")
+        event
+        async for event in api_service._stream_cli_chat(
+            usage_manager,
+            "main",
+            1001,
+            "//status",
+            include_trace=include_trace,
+        )
     ]
 
     assert captured_command["user_text"] == "/status"
     meta = next(event for event in events if event["type"] == "meta")
-    for event_type in {"meta", "status", "trace", "done"}:
+    assert any(event["type"] == "trace" for event in events) is expected_trace
+    assert persisted_trace
+    for event_type in {"meta", "status", "done"}:
         event = next(event for event in events if event["type"] == event_type)
         assert event["turn_id"] == meta["turn_id"]
         assert event["assistant_message_id"] == meta["assistant_message_id"]
+    if expected_trace:
+        trace = next(event for event in events if event["type"] == "trace")
+        assert trace["turn_id"] == meta["turn_id"]
+        assert trace["assistant_message_id"] == meta["assistant_message_id"]
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_coalesces_status_and_flushes_latest_before_done(
+    usage_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    process = _UsageProcess()
+    process.stdout = _StreamingStdout([
+        '{"type":"thread.started","thread_id":"status-thread"}\n',
+        *[
+            f'{{"type":"item.delta","item":{{"type":"assistant_message","delta":"{index}"}}}}\n'
+            for index in range(20)
+        ],
+        '{"type":"item.completed","item":{"type":"function_call","name":"shell_command",'
+        '"call_id":"status-call","arguments":"{\\"command\\":\\"pwd\\"}"}}\n',
+        '{"type":"item.completed","item":{"type":"assistant_message","text":"done"}}\n',
+        '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n',
+    ])
+
+    async def start_capture(*, env, command):
+        return _UsageCapture()
+
+    monkeypatch.setattr(api_service, "CLI_STATUS_MIN_INTERVAL_SECONDS", 5.0)
+    monkeypatch.setattr(api_service, "_CLI_STREAM_DRAIN_BATCH_SIZE", 1)
+    monkeypatch.setattr(api_service, "_start_codex_usage_capture", start_capture, raising=False)
+    monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
+    monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: (["codex"], False))
+    monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(api_service.subprocess, "Popen", lambda *_args, **_kwargs: process)
+
+    async def collect_events():
+        return [
+            event async for event in api_service._stream_cli_chat(usage_manager, "main", 1001, "hello")
+        ]
+
+    events = await asyncio.wait_for(collect_events(), timeout=2.0)
+    statuses = [event for event in events if event["type"] == "status"]
+    meta = next(event for event in events if event["type"] == "meta")
+
+    assert len(statuses) == 2
+    assert statuses[-1]["preview_text"].endswith("1819")
+    assert events[-2] == statuses[-1]
+    assert events[-1]["type"] == "done"
+    assert any(event["type"] == "trace" for event in events)
+    for event in statuses:
+        assert event["turn_id"] == meta["turn_id"]
+        assert event["assistant_message_id"] == meta["assistant_message_id"]
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_flushes_pending_status_before_error(
+    usage_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    output_queue: queue.Queue[object] = queue.Queue()
+    output_queue.put('{"type":"thread.started","thread_id":"error-thread"}\n')
+    output_queue.put('{"type":"item.delta","item":{"type":"assistant_message","delta":"first"}}\n')
+    output_queue.put('{"type":"item.delta","item":{"type":"assistant_message","delta":"latest"}}\n')
+    output_queue.put(RuntimeError("stream failed"))
+    reader = _ContinuousOutputReader()
+    reader.done.set()
+    process = _UsageProcess()
+
+    async def start_capture(*, env, command):
+        return _UsageCapture()
+
+    monkeypatch.setattr(api_service, "CLI_STATUS_MIN_INTERVAL_SECONDS", 5.0)
+    monkeypatch.setattr(api_service, "_CLI_STREAM_DRAIN_BATCH_SIZE", 1)
+    monkeypatch.setattr(api_service, "_start_codex_usage_capture", start_capture, raising=False)
+    monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
+    monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: (["codex"], False))
+    monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(api_service.subprocess, "Popen", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(api_service.queue, "Queue", lambda *_args, **_kwargs: output_queue)
+    monkeypatch.setattr(api_service, "_start_process_stdout_reader", lambda *_args, **_kwargs: reader)
+    monkeypatch.setattr(api_service, "_terminate_process_sync", lambda current: setattr(current, "returncode", -1))
+
+    events: list[dict[str, object]] = []
+    with pytest.raises(RuntimeError, match="stream failed"):
+        async for event in api_service._stream_cli_chat(usage_manager, "main", 1001, "hello"):
+            events.append(event)
+
+    statuses = [event for event in events if event["type"] == "status"]
+    meta = next(event for event in events if event["type"] == "meta")
+    assert len(statuses) == 2
+    assert statuses[-1]["preview_text"] == "firstlatest"
+    assert events[-1] == statuses[-1]
+    assert statuses[-1]["turn_id"] == meta["turn_id"]
+    assert statuses[-1]["assistant_message_id"] == meta["assistant_message_id"]
 
 
 @pytest.mark.asyncio

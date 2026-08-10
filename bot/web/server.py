@@ -239,6 +239,7 @@ from .api_service import (
     read_file_content,
     rename_path,
     move_path,
+    normalize_stream_protocol_version,
     remove_managed_bot,
     remove_managed_bot_with_history,
     reset_user_session,
@@ -437,6 +438,7 @@ _PUBLIC_RUNTIME_ENV_SCRIPT_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _HEAD_TAG_RE = re.compile(r"<head\b[^>]*>", re.IGNORECASE)
+_VITE_FINGERPRINTED_ASSET_RE = re.compile(r"^assets/.+-[A-Za-z0-9_-]{8}\.(?:js|css)$")
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -2241,6 +2243,10 @@ class WebApiServer:
         wants_ag_ui = protocol.lower() == "ag-ui"
         ag_ui_encoder = EventEncoder() if wants_ag_ui else None
         allow_unsafe_cli = CAP_RUN_UNSAFE_CLI in auth.capabilities
+        include_trace = CAP_VIEW_CHAT_TRACE in auth.capabilities
+        stream_protocol_version = normalize_stream_protocol_version(
+            body.get("stream_protocol_version", body.get("streamProtocolVersion"))
+        )
         raw_stream_id = body.get("stream_id", body.get("streamId", ""))
         raw_turn_id = body.get("turn_id", body.get("turnId", ""))
         if not isinstance(raw_stream_id, str) or not isinstance(raw_turn_id, str):
@@ -2285,6 +2291,8 @@ class WebApiServer:
             "resume_turn_id": resume_turn_id,
             "after_sequence": after_sequence,
             "enable_reconnect": enable_reconnect,
+            "include_trace": include_trace,
+            "stream_protocol_version": stream_protocol_version,
         }
         if execution_mode:
             stream_kwargs["execution_mode"] = execution_mode
@@ -4841,16 +4849,17 @@ class WebApiServer:
             client_max_size=25 * 1024 * 1024,
         )
         self._register_app_routes(app)
+        immutable_assets = self._load_vite_immutable_assets()
         base_path = self._web_base_path()
         if base_path:
             subapp = web.Application(
                 client_max_size=25 * 1024 * 1024,
             )
             self._register_app_routes(subapp)
-            self._register_static_routes(subapp)
+            self._register_static_routes(subapp, immutable_assets=immutable_assets)
             self._register_spa_fallback(subapp)
             app.add_subapp(base_path, subapp)
-        self._register_static_routes(app)
+        self._register_static_routes(app, immutable_assets=immutable_assets)
         self._register_spa_fallback(app)
         return app
 
@@ -4876,10 +4885,71 @@ class WebApiServer:
         app.router.add_post("/api/notifications/pushplus/test", self.post_pushplus_test)
         app.router.add_get("/api/notifications/ws", self.notifications_ws)
 
-    def _register_static_routes(self, app: web.Application) -> None:
+    def _load_vite_immutable_assets(self) -> frozenset[str]:
+        manifest_path = Path(self._get_static_dir()) / ".vite" / "manifest.json"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            logger.warning("读取 Vite manifest 失败，不启用长期静态缓存: %s", exc)
+            return frozenset()
+        if not isinstance(manifest, dict):
+            logger.warning("Vite manifest 格式无效，不启用长期静态缓存")
+            return frozenset()
+
+        assets: set[str] = set()
+        for entry in manifest.values():
+            if not isinstance(entry, dict):
+                continue
+            candidates = [entry.get("file")]
+            css_files = entry.get("css")
+            if isinstance(css_files, list):
+                candidates.extend(css_files)
+            for candidate in candidates:
+                normalized = str(candidate or "").replace("\\", "/").lstrip("/")
+                if _VITE_FINGERPRINTED_ASSET_RE.fullmatch(normalized):
+                    assets.add(normalized)
+        return frozenset(assets)
+
+    @staticmethod
+    async def _prepare_vite_static_response(
+        request: web.Request,
+        response: web.StreamResponse,
+        *,
+        immutable_assets: frozenset[str],
+    ) -> None:
+        if response.status not in {200, 304}:
+            return
+        filename = request.match_info.get("filename")
+        if not isinstance(filename, str):
+            return
+        normalized_filename = filename.replace("\\", "/").lstrip("/")
+        asset_path = f"assets/{normalized_filename}"
+        if asset_path not in immutable_assets:
+            return
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        vary = [item.strip() for item in response.headers.get("Vary", "").split(",") if item.strip()]
+        if not any(item.lower() == "accept-encoding" for item in vary):
+            vary.append("Accept-Encoding")
+        response.headers["Vary"] = ", ".join(vary)
+
+    def _register_static_routes(
+        self,
+        app: web.Application,
+        *,
+        immutable_assets: frozenset[str],
+    ) -> None:
         assets_dir = Path(self._get_static_dir("assets"))
         if assets_dir.exists():
             app.router.add_static("/assets", path=str(assets_dir), name="assets")
+
+            async def prepare_static_response(request: web.Request, response: web.StreamResponse) -> None:
+                await self._prepare_vite_static_response(
+                    request,
+                    response,
+                    immutable_assets=immutable_assets,
+                )
+
+            app.on_response_prepare.append(prepare_static_response)
 
     def _register_spa_fallback(self, app: web.Application) -> None:
         app.router.add_get("/{tail:.*}", self.serve_index, name="index")

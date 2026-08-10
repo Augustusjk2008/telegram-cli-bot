@@ -1,12 +1,11 @@
 import type { ChatMessageContextUsage } from "../services/types";
-import { ChatContextUsageBadge, clampPercent, formatCompactionCount, formatTokenNumber } from "./ChatContextUsageBadge";
+import { ChatContextUsageBadge } from "./ChatContextUsageBadge";
 
 type Props = {
   name: string;
   createdAt: string;
   align?: "left" | "right";
   contextUsage?: ChatMessageContextUsage;
-  contextVariant?: "text" | "ring";
 };
 
 function formatTime(createdAt: string) {
@@ -35,45 +34,7 @@ function formatTime(createdAt: string) {
   return `${dateText} ${timeText}`;
 }
 
-function formatRingContextUsage(contextUsage?: ChatMessageContextUsage) {
-  if (!contextUsage) {
-    return null;
-  }
-  const contextUsed = typeof contextUsage.contextUsed === "number"
-    ? contextUsage.contextUsed
-    : contextUsage.usedTokens;
-  const contextWindow = contextUsage.contextWindow;
-  const hasWindow = typeof contextWindow === "number" && contextWindow > 0;
-  const usedPercent = typeof contextUsage.contextUsedPercent === "number"
-    ? contextUsage.contextUsedPercent
-    : hasWindow && typeof contextUsed === "number"
-      ? (contextUsed / contextWindow) * 100
-      : typeof contextUsage.contextLeftPercent === "number"
-        ? 100 - contextUsage.contextLeftPercent
-        : 0;
-  const detailRows = [
-    hasWindow ? `context window: ${formatTokenNumber(contextWindow)}` : "未配置 context window",
-    typeof contextUsed === "number" ? `context used: ${formatTokenNumber(contextUsed)}` : "",
-    typeof contextUsage.inputTokens === "number" ? `input: ${formatTokenNumber(contextUsage.inputTokens)}` : "",
-    typeof contextUsage.cacheReadTokens === "number" ? `cache read: ${formatTokenNumber(contextUsage.cacheReadTokens)}` : "",
-    typeof contextUsage.cacheWriteTokens === "number" ? `cache write: ${formatTokenNumber(contextUsage.cacheWriteTokens)}` : "",
-    typeof contextUsage.outputTokens === "number" ? `output: ${formatTokenNumber(contextUsage.outputTokens)}` : "",
-    typeof contextUsage.reasoningTokens === "number" ? `reasoning: ${formatTokenNumber(contextUsage.reasoningTokens)}` : "",
-    contextUsage.model ? `model: ${contextUsage.model}` : "",
-  ].filter(Boolean);
-  const compactionText = formatCompactionCount(contextUsage.compactionCount);
-  if (compactionText) {
-    detailRows.push(compactionText);
-  }
-  return {
-    percent: hasWindow ? clampPercent(usedPercent) : 0,
-    title: detailRows.join("\n"),
-    label: hasWindow ? `context 已用 ${Math.round(clampPercent(usedPercent))}%` : "未配置 context window",
-  };
-}
-
-export function ChatMessageMeta({ name, createdAt, align = "left", contextUsage, contextVariant = "text" }: Props) {
-  const ringContext = contextVariant === "ring" ? formatRingContextUsage(contextUsage) : null;
+export function ChatMessageMeta({ name, createdAt, align = "left", contextUsage }: Props) {
   return (
     <div
       className={align === "right"
@@ -88,33 +49,7 @@ export function ChatMessageMeta({ name, createdAt, align = "left", contextUsage,
         {name}
       </span>
       <span className="shrink-0 text-[var(--muted)]">{formatTime(createdAt)}</span>
-      {contextVariant === "text" ? (
-        <ChatContextUsageBadge contextUsage={contextUsage} testId="chat-message-context-usage-text" />
-      ) : null}
-      {ringContext ? (
-        <span
-          aria-label={ringContext.label}
-          className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-[var(--muted)]"
-          data-testid="chat-message-context-usage"
-          title={ringContext.title}
-        >
-          <svg viewBox="0 0 20 20" className="h-4 w-4" aria-hidden="true">
-            <circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" />
-            <circle
-              cx="10"
-              cy="10"
-              r="7"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeDasharray={43.98}
-              strokeDashoffset={43.98 - (43.98 * ringContext.percent) / 100}
-              strokeLinecap="round"
-              transform="rotate(-90 10 10)"
-            />
-          </svg>
-        </span>
-      ) : null}
+      <ChatContextUsageBadge contextUsage={contextUsage} testId="chat-message-context-usage-text" />
     </div>
   );
 }

@@ -1008,6 +1008,23 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
     return true;
   }
 
+  function closeAllTabs() {
+    const closingTabs = tabsRef.current;
+    if (closingTabs.some((item) => item.dirty) && !window.confirm("存在未保存的文件，确定关闭全部并放弃修改吗？")) {
+      return false;
+    }
+    closingTabs.forEach((item) => {
+      pushClosedTab(item.path);
+      disposePluginSession(item);
+    });
+    void closeDocuments(closingTabs);
+    tabsRef.current = [];
+    setTabs([]);
+    activeTabPathRef.current = "";
+    setActiveTabPath("");
+    return true;
+  }
+
   function closeOtherTabs(path: string) {
     const currentTabs = tabsRef.current;
     const nextClosed = currentTabs.filter((item) => item.path !== path);
@@ -1238,6 +1255,7 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
     updateActiveContent,
     saveActiveTab,
     closeTab,
+    closeAllTabs,
     closePath,
     closeDeletedPath,
     closeOtherTabs,

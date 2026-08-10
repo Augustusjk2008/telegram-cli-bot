@@ -77,6 +77,45 @@ test("没有打开终端时仍显示可新建终端的预设命令", async () =>
   expect(await screen.findByRole("button", { name: "新开终端" })).toBeInTheDocument();
 });
 
+test("重复执行同一快捷命令会复用原终端", async () => {
+  const runTerminalAction = vi.fn(async (_botAlias: string, actionId: string, input: { ownerId: string }) => ({
+    actionId,
+    command: "cmd",
+    cwd: "C:/workspace",
+    startedTerminal: true,
+    snapshot: { ...snapshot(), started: true, connectionText: "运行中" },
+  }));
+  const client = {
+    getTerminalSession: vi.fn(async () => snapshot()),
+    getTerminalActionsConfig: vi.fn(async () => actionsConfig),
+    runTerminalAction,
+    createTerminalSession: vi.fn(async () => snapshot()),
+    closeTerminalSession: vi.fn(async () => ({ ...snapshot(), closed: true, connectionText: "终端已关闭" })),
+  } as unknown as WebBotClient;
+
+  render(
+    <PersistentTerminalProvider client={client}>
+      <TerminalTabsScreen
+        authToken="token"
+        botAlias="repo"
+        client={client}
+        isVisible
+        preferredWorkingDir="C:/workspace"
+      />
+    </PersistentTerminalProvider>,
+  );
+
+  fireEvent.click(await screen.findByRole("button", { name: "新开终端" }));
+  await waitFor(() => expect(runTerminalAction).toHaveBeenCalledTimes(1));
+  const firstOwnerId = runTerminalAction.mock.calls[0]?.[2].ownerId;
+
+  fireEvent.click(await screen.findByRole("button", { name: "新开终端" }));
+  await waitFor(() => expect(runTerminalAction).toHaveBeenCalledTimes(2));
+
+  expect(runTerminalAction.mock.calls[1]?.[2].ownerId).toBe(firstOwnerId);
+  expect(screen.getAllByRole("tab")).toHaveLength(2);
+});
+
 test("嵌入式终端把预设和聚焦按钮合并到终端标签栏", async () => {
   const client = {
     getTerminalSession: vi.fn(async () => snapshot()),

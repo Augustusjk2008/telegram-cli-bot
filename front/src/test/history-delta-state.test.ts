@@ -61,6 +61,67 @@ describe("HistoryRevisionState", () => {
     expect(historyScopeKey(mainScope)).not.toBe(historyScopeKey(otherScope));
   });
 
+  it("seeds snapshot revisions including zero and clears old tombstones", () => {
+    const state = new HistoryRevisionState();
+    const zeroScope = { ...mainScope, conversationId: "conversation-zero" };
+    const legacyScope = { ...mainScope, conversationId: "conversation-legacy" };
+    state.apply(mainScope, [message("a")], {
+      items: [],
+      deletedIds: ["a"],
+      revision: 6,
+      reset: false,
+    });
+
+    state.seed(mainScope, { items: [message("a"), message("b")], revision: 7 });
+    state.seed(zeroScope, { items: [], revision: 0 });
+    state.seed(legacyScope, { items: [message("legacy")] });
+
+    expect(state.query(mainScope, [message("a"), message("b")])).toEqual({
+      afterId: "b",
+      revision: 7,
+      cursor: "",
+    });
+    expect(state.query(zeroScope, [])).toMatchObject({ revision: 0 });
+    expect(state.query(legacyScope, [message("legacy")])).toEqual({
+      afterId: "legacy",
+      revision: 0,
+      cursor: "",
+    });
+    expect(state.apply(mainScope, [message("a"), message("b")], {
+      items: [message("a", "restored")],
+      revision: 8,
+      reset: false,
+    }).items[0].text).toBe("restored");
+  });
+
+  it("invalidates a pre-seed delta and catches messages added after the snapshot", async () => {
+    const state = new HistoryRevisionState();
+    let resolveOld!: (value: {
+      items: ChatMessage[];
+      revision: number;
+      reset: boolean;
+    }) => void;
+    const oldSync = state.sync(mainScope, [message("old")], () => new Promise((resolve) => {
+      resolveOld = resolve;
+    }));
+    await Promise.resolve();
+
+    const snapshot = { items: [message("snapshot")], revision: 7 };
+    state.seed(mainScope, snapshot);
+    const fetchNext = vi.fn(async (query: { afterId: string; revision: number }) => {
+      expect(query).toMatchObject({ afterId: "snapshot", revision: 7 });
+      return { items: [message("late")], revision: 8, reset: false };
+    });
+    const fresh = await state.sync(mainScope, snapshot.items, fetchNext);
+    resolveOld({ items: [message("stale")], revision: 1, reset: false });
+    const stale = await oldSync;
+
+    expect(fetchNext).toHaveBeenCalledTimes(1);
+    expect(fresh.items.map((item) => item.id)).toEqual(["snapshot", "late"]);
+    expect(stale.stale).toBe(true);
+    expect(state.query(mainScope, fresh.items).revision).toBe(8);
+  });
+
   it("uses reset payloads as an authoritative snapshot", () => {
     expect(applyHistoryDelta([message("old")], {
       items: [message("fresh")],

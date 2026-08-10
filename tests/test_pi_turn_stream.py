@@ -4,6 +4,7 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
+from ag_ui import core
 
 from bot.native_agent.pi_turn_stream import PiTurnChannel
 from bot.web import api_service
@@ -121,7 +122,22 @@ async def test_native_stream_resume_does_not_start_cluster_or_send_prompt(monkey
     class FakeChannel:
         async def events(self, *, after_sequence: int):
             assert after_sequence == 4
-            yield {"type": "done", "stream_id": "pit-existing", "sequence": 5}
+            yield {"type": "trace", "event": {"summary": "hidden"}, "sequence": 5}
+            yield {
+                "type": "ag_ui",
+                "event": core.ToolCallStartEvent(toolCallId="call-1", toolCallName="shell_command"),
+                "sequence": 6,
+            }
+            yield {
+                "type": "ag_ui",
+                "event": core.ActivitySnapshotEvent(
+                    messageId="permission-1",
+                    activityType="TCB_PERMISSION_REQUEST",
+                    content={},
+                ),
+                "sequence": 7,
+            }
+            yield {"type": "done", "stream_id": "pit-existing", "sequence": 8}
 
     class FakeService:
         def resume_turn_channel(self, stream_id: str, *, turn_id: str):
@@ -153,10 +169,76 @@ async def test_native_stream_resume_does_not_start_cluster_or_send_prompt(monkey
             resume_stream_id="pit-existing",
             resume_turn_id="turn-existing",
             after_sequence=4,
+            include_trace=False,
         )
     ]
 
-    assert events == [{"type": "done", "stream_id": "pit-existing", "sequence": 5}]
+    assert [event["sequence"] for event in events] == [7, 8]
+    assert events[0]["event"].activity_type == "TCB_PERMISSION_REQUEST"
+    assert events[1]["type"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_native_stream_compacts_replay_per_consumer_without_mutating_canonical_event(monkeypatch) -> None:
+    canonical = core.RunFinishedEvent(
+        threadId="thread-compact",
+        runId="run-compact",
+        result={
+            "content": "最终答复",
+            "message": {"id": "assistant-compact", "content": "最终答复"},
+            "completion_state": "completed",
+            "turn_id": "turn-compact",
+            "assistant_message_id": "assistant-compact",
+        },
+        outcome=core.RunFinishedSuccessOutcome(type="success"),
+    )
+
+    class FakeChannel:
+        async def events(self, *, after_sequence: int):
+            assert after_sequence == 0
+            yield {"type": "ag_ui", "event": canonical, "sequence": 1}
+
+    class FakeService:
+        def resume_turn_channel(self, stream_id: str, *, turn_id: str):
+            assert stream_id == "pit-compact"
+            assert turn_id == "turn-compact"
+            return FakeChannel()
+
+    profile = SimpleNamespace(cli_type="codex")
+    session = SimpleNamespace()
+    monkeypatch.setattr(api_service, "get_chat_session_for_alias", lambda *_args: (profile, None, session))
+    monkeypatch.setattr(api_service, "get_native_agent_service", lambda: FakeService())
+
+    compact_events = [
+        event
+        async for event in api_service._stream_native_agent_chat(
+            None,
+            "main",
+            1,
+            "",
+            resume_stream_id="pit-compact",
+            resume_turn_id="turn-compact",
+            stream_protocol_version=2,
+        )
+    ]
+    legacy_events = [
+        event
+        async for event in api_service._stream_native_agent_chat(
+            None,
+            "main",
+            1,
+            "",
+            resume_stream_id="pit-compact",
+            resume_turn_id="turn-compact",
+            stream_protocol_version=1,
+        )
+    ]
+
+    assert "content" not in compact_events[0]["event"].result
+    assert compact_events[0]["sequence"] == 1
+    assert compact_events[0]["event"].result["message"]["content"] == "最终答复"
+    assert legacy_events[0]["event"].result["content"] == "最终答复"
+    assert canonical.result["content"] == "最终答复"
 
 
 @pytest.mark.asyncio

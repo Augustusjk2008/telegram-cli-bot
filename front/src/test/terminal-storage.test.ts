@@ -32,6 +32,19 @@ test("多个 tab 保存独立 owner 和工作目录", () => {
   expect(restored[0].ownerId).not.toBe(restored[1].ownerId);
 });
 
+test("快捷命令关联会随 tab 持久化", () => {
+  const tab = createStoredTerminalTab([], {
+    terminalActionBotAlias: "repo",
+    terminalActionId: "start",
+  });
+  writeTerminalTabs([tab]);
+
+  expect(readTerminalTabs()[0]).toMatchObject({
+    terminalActionBotAlias: "repo",
+    terminalActionId: "start",
+  });
+});
+
 test("关闭全部 tab 后允许恢复为空列表", () => {
   writeTerminalTabs([]);
 

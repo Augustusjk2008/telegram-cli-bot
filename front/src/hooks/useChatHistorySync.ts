@@ -52,7 +52,7 @@ export function useChatHistorySync({
     };
     const schedule = () => {
       cancelTimer();
-      if (disposed || document.visibilityState === "hidden") {
+      if (disposed) {
         return;
       }
       timer = window.setTimeout(async () => {
@@ -69,20 +69,10 @@ export function useChatHistorySync({
         schedule();
       }, delay);
     };
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "hidden") {
-        cancelTimer();
-        return;
-      }
-      delay = initialDelayMs;
-      schedule();
-    };
-    document.addEventListener("visibilitychange", handleVisibilityChange);
     schedule();
     return () => {
       disposed = true;
       cancelTimer();
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [enabled, idleIntervalMs, incrementalEnabled, initialDelayMs, isStreaming, maxBackoffMs]);
 }

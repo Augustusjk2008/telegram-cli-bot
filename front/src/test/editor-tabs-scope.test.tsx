@@ -84,3 +84,50 @@ describe("plugin view sessions", () => {
     expect(dispose).toHaveBeenCalledWith("main", "demo-plugin", "old-scope-session");
   });
 });
+
+test("close all clears every editor tab and the active selection", async () => {
+  const client = new MockWebBotClient();
+  const closeDocuments = vi.spyOn(client, "closeWorkspaceDocuments");
+  const { result } = renderHook(() => useEditorTabs({ botAlias: "main", client }));
+
+  act(() => {
+    result.current.openCreatedFile("first.py", "first = 1\n");
+    result.current.openCreatedFile("second.py", "second = 2\n");
+  });
+  act(() => {
+    result.current.closeAllTabs();
+  });
+
+  expect(result.current.tabs).toEqual([]);
+  expect(result.current.activeTab).toBeNull();
+  await waitFor(() => expect(closeDocuments).toHaveBeenCalledWith("main", {
+    documents: [
+      { path: "first.py", version: 1 },
+      { path: "second.py", version: 1 },
+    ],
+  }));
+});
+
+test("close all keeps every tab open when discarding unsaved content is canceled", () => {
+  const client = new MockWebBotClient();
+  const closeDocuments = vi.spyOn(client, "closeWorkspaceDocuments");
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  const { result } = renderHook(() => useEditorTabs({ botAlias: "main", client }));
+
+  act(() => {
+    result.current.openCreatedFile("first.py", "first = 1\n");
+    result.current.openCreatedFile("second.py", "second = 2\n");
+    result.current.updateActiveContent("second = 3\n");
+  });
+
+  let closed = true;
+  act(() => {
+    closed = result.current.closeAllTabs();
+  });
+
+  expect(closed).toBe(false);
+  expect(confirm).toHaveBeenCalledOnce();
+  expect(result.current.tabs).toHaveLength(2);
+  expect(closeDocuments).not.toHaveBeenCalled();
+  confirm.mockRestore();
+});

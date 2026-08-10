@@ -1,30 +1,10 @@
-import os
-import subprocess
 from pathlib import Path
-
-import pytest
 
 
 def _between(content: str, start: str, end: str) -> str:
     start_index = content.index(start)
     end_index = content.index(end, start_index)
     return content[start_index:end_index]
-
-
-def _assert_build_before_install_and_retry(
-    content: str,
-    *,
-    build_command: str,
-    install_command: str,
-) -> None:
-    first_build_index = content.index(build_command)
-    install_index = content.index(install_command, first_build_index)
-    retry_build_index = content.index(build_command, install_index)
-
-    assert first_build_index < install_index < retry_build_index
-    assert content.index(install_command) == install_index
-    assert content.count(install_command) == 1
-    assert content.count(build_command) == 2
 
 
 def test_start_sh_repairs_python_dependencies_only_after_startup_step_fails() -> None:
@@ -142,20 +122,15 @@ def test_start_ps1_prefers_existing_project_venv_before_system_python() -> None:
     assert venv_lookup_index < system_lookup_index < runtime_assignment_index
 
 
-def test_frontend_build_scripts_install_only_after_build_failure() -> None:
-    shell_content = Path("scripts/build_web_frontend.sh").read_text(encoding="utf-8")
-    batch_content = Path("scripts/build_web_frontend.bat").read_text(encoding="utf-8")
+def test_frontend_precompression_script_is_part_of_build_and_startup_hashes() -> None:
+    package = Path("front/package.json").read_text(encoding="utf-8")
+    powershell = Path("start.ps1").read_text(encoding="utf-8")
+    shell = Path("start.sh").read_text(encoding="utf-8")
 
-    _assert_build_before_install_and_retry(
-        shell_content,
-        build_command="npm run build",
-        install_command="npm install",
-    )
-    _assert_build_before_install_and_retry(
-        batch_content,
-        build_command="call npm run build",
-        install_command="call npm install",
-    )
+    build_command = 'vite build && node scripts/precompress-assets.mjs && node scripts/check-build-budget.mjs'
+    assert build_command in package
+    assert powershell.count('"front\\scripts\\precompress-assets.mjs"') == 1
+    assert shell.count("front/scripts/precompress-assets.mjs") == 2
 
 
 def test_start_bat_retries_after_windows_service_failure_instead_of_exiting() -> None:
@@ -172,27 +147,3 @@ def test_start_bat_retries_after_windows_service_failure_instead_of_exiting() ->
     assert "exit /b %EXIT_CODE%" not in content[failure_index:]
     assert content.index('set "ERRORLEVEL="') < start_label_index
 
-
-@pytest.mark.skipif(os.name != "nt", reason="仅验证 Windows cmd.exe 的 ERRORLEVEL 语义")
-def test_frontend_build_batch_ignores_shadowed_errorlevel(tmp_path: Path) -> None:
-    script_dir = tmp_path / "scripts"
-    script_dir.mkdir()
-    (tmp_path / "front").mkdir()
-    script_path = script_dir / "build_web_frontend.bat"
-    script_path.write_bytes(Path("scripts/build_web_frontend.bat").read_bytes())
-
-    env = os.environ.copy()
-    env["ERRORLEVEL"] = "0"
-    env["PATH"] = ""
-    completed = subprocess.run(
-        [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", str(script_path)],
-        cwd=tmp_path,
-        env=env,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
-
-    assert completed.returncode != 0

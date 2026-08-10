@@ -1,4 +1,9 @@
-import type { ChatExecutionMode, ChatMessage, HistoryDeltaResult } from "../services/types";
+import type {
+  ChatExecutionMode,
+  ChatMessage,
+  HistoryDeltaResult,
+  HistorySnapshotResult,
+} from "../services/types";
 
 export type HistoryScope = {
   botAlias: string;
@@ -139,6 +144,19 @@ export class HistoryRevisionState {
 
   query(scope: HistoryScope, messages: readonly ChatMessage[]): HistoryDeltaQueryState {
     return queryForState(this.scopes.get(historyScopeKey(scope)), messages);
+  }
+
+  seed(scope: HistoryScope, snapshot: HistorySnapshotResult) {
+    const key = historyScopeKey(scope);
+    const revision = typeof snapshot.revision === "number" ? snapshot.revision : undefined;
+    this.scopes.set(key, {
+      revision: revision ?? 0,
+      cursor: "",
+      revisionSupported: revision !== undefined,
+      tombstones: new Set(),
+    });
+    this.inFlight.delete(key);
+    this.scopeVersions.set(key, (this.scopeVersions.get(key) ?? 0) + 1);
   }
 
   apply(scope: HistoryScope, messages: readonly ChatMessage[], delta: HistoryDeltaResult) {

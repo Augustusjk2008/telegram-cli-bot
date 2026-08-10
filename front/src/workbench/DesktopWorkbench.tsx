@@ -1521,6 +1521,7 @@ export function DesktopWorkbench({
                     onCloseTab={tabs.closeTab}
                     onChangeActiveContent={tabs.updateActiveContent}
                     onSaveActiveTab={() => void tabs.saveActiveTab()}
+                    onCloseAll={tabs.closeAllTabs}
                     onCloseOthers={tabs.closeOtherTabs}
                     onCloseTabsToRight={tabs.closeTabsToRight}
                     onReopenLastClosed={() => {

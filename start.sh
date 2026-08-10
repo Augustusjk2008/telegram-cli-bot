@@ -325,6 +325,7 @@ sync_frontend_assets() {
       front/package-lock.json \
       front/index.html \
       front/vite.config.ts \
+      front/scripts/precompress-assets.mjs \
       front/tsconfig.json \
       front/src \
       front/public \
@@ -358,6 +359,7 @@ sync_frontend_assets() {
       front/package-lock.json \
       front/index.html \
       front/vite.config.ts \
+      front/scripts/precompress-assets.mjs \
       front/tsconfig.json \
       front/src \
       front/public \

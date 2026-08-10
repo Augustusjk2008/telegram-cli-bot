@@ -104,6 +104,7 @@ import type {
   ConversationSelectResult,
   HistoryDeltaOptions,
   HistoryDeltaResult,
+  HistorySnapshotResult,
   PublicHostInfo,
   PluginViewWindowRequest,
   PluginViewWindowPayload,
@@ -205,7 +206,11 @@ export interface WebBotClient {
   updateAgent(botAlias: string, agentId: string, input: AgentInput): Promise<AgentMutationResult>;
   deleteAgent(botAlias: string, agentId: string): Promise<void>;
   getClusterStatus(botAlias: string): Promise<ClusterStatus>;
-  getClusterTaskStatus(botAlias: string, runId: string): Promise<ClusterTaskStatus>;
+  getClusterTaskStatus(
+    botAlias: string,
+    runId: string,
+    options?: { includeOutput?: boolean },
+  ): Promise<ClusterTaskStatus>;
   prepareClusterSetup(botAlias: string): Promise<ClusterSetupPrepareResult>;
   updateClusterConfig(botAlias: string, input: ClusterConfigUpdateInput): Promise<ClusterConfigUpdateResult>;
   updateBotPromptPresets(botAlias: string, presets: PromptPreset[]): Promise<BotSummary>;
@@ -233,7 +238,7 @@ export interface WebBotClient {
     options?: AgentScopedOptions & { deleteNativeSession?: boolean },
   ): Promise<ConversationBulkDeleteResult>;
   executePlan(botAlias: string, input: PlanExecuteInput): Promise<PlanExecuteResult>;
-  listMessages(botAlias: string, options?: AgentScopedOptions): Promise<ChatMessage[]>;
+  listMessages(botAlias: string, options?: AgentScopedOptions): Promise<HistorySnapshotResult>;
   listMessageDelta(botAlias: string, afterId: string, limit?: number, options?: HistoryDeltaOptions): Promise<HistoryDeltaResult>;
   getMessageTrace(botAlias: string, messageId: string, options?: AgentScopedOptions): Promise<ChatTraceDetails>;
   sendMessage(

@@ -45,6 +45,7 @@ test("editor pane keeps breadcrumbs and tab actions scoped to the selected tab",
       onCloseTab={onCloseTab}
       onChangeActiveContent={vi.fn()}
       onSaveActiveTab={vi.fn()}
+      onCloseAll={vi.fn()}
       onCloseOthers={onCloseOthers}
       onCloseTabsToRight={vi.fn()}
       onReopenLastClosed={vi.fn()}
@@ -62,4 +63,34 @@ test("editor pane keeps breadcrumbs and tab actions scoped to the selected tab",
   fireEvent.contextMenu(screen.getByRole("tab", { name: "server.ts" }));
   await user.click(screen.getByRole("button", { name: "关闭其他标签页" }));
   expect(onCloseOthers).toHaveBeenCalledWith("src/server.ts");
+});
+
+test("editor pane offers one-click close all when multiple tabs are open", async () => {
+  const user = userEvent.setup();
+  const activeTab = createTab();
+  const onCloseAll = vi.fn();
+
+  render(
+    <EditorPane
+      botAlias="main"
+      client={new MockWebBotClient()}
+      tabs={[activeTab, createTab({ path: "src/server.ts", basename: "server.ts" })]}
+      activeTab={activeTab}
+      activeTabPath={activeTab.path}
+      focused={false}
+      onActivateTab={vi.fn()}
+      onCloseTab={vi.fn(() => true)}
+      onChangeActiveContent={vi.fn()}
+      onSaveActiveTab={vi.fn()}
+      onCloseAll={onCloseAll}
+      onCloseOthers={vi.fn()}
+      onCloseTabsToRight={vi.fn()}
+      onReopenLastClosed={vi.fn()}
+      onRevealInTree={vi.fn()}
+      onToggleFocus={vi.fn()}
+    />,
+  );
+
+  await user.click(screen.getByRole("button", { name: "关闭全部标签页" }));
+  expect(onCloseAll).toHaveBeenCalledOnce();
 });

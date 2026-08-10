@@ -119,6 +119,7 @@ test("外部源码标签显示只读标识且不提供文件树定位", () => {
       onCloseTab={vi.fn(() => true)}
       onChangeActiveContent={vi.fn()}
       onSaveActiveTab={vi.fn()}
+      onCloseAll={vi.fn()}
       onCloseOthers={vi.fn()}
       onCloseTabsToRight={vi.fn()}
       onReopenLastClosed={vi.fn()}

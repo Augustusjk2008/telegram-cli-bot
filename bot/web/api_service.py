@@ -84,6 +84,7 @@ from bot.native_agent import (
     normalize_execution_mode,
 )
 from bot.native_agent.configuration import effective_native_agent_config
+from bot.native_agent.ag_ui_mapper import compact_run_finished_event, is_ag_ui_trace_event
 from bot.native_agent.pi_turn_stream import pi_turn_reconnect_enabled
 from bot.native_agent.config_store import (
     find_configured_model,
@@ -235,6 +236,7 @@ WORKDIR_CHANGE_BLOCKED_PROCESSING = "workdir_change_blocked_processing"
 CODEX_DONE_QUIET_SECONDS = 0.5
 CODEX_TERMINATE_GRACE_SECONDS = 1.0
 CLI_CONTEXT_USAGE_RESOLVE_TIMEOUT_SECONDS = 0.25
+CLI_STATUS_MIN_INTERVAL_SECONDS = 0.25
 CLI_LIVE_TRACE_MAX_EVENTS = 2000
 _CLI_CONTEXT_USAGE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cli-context-usage")
 @dataclass
@@ -274,6 +276,20 @@ def _optional_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def normalize_stream_protocol_version(value: Any) -> int:
+    return 2 if type(value) is int and value == 2 else 1
+
+
+def _compact_cli_done_event(event: dict[str, Any], stream_protocol_version: int) -> dict[str, Any]:
+    if normalize_stream_protocol_version(stream_protocol_version) != 2:
+        return event
+    message = event.get("message")
+    output = event.get("output")
+    if isinstance(message, dict) and isinstance(output, str) and output and message.get("content") == output:
+        event.pop("output", None)
+    return event
 
 
 def _build_chat_run_request(
@@ -3957,6 +3973,8 @@ async def _stream_cli_chat(
     allow_unsafe_cli: bool = False,
     cluster_run_id: str = "",
     cluster_mentions: list[dict[str, Any]] | None = None,
+    include_trace: bool = True,
+    stream_protocol_version: int = 1,
 ) -> AsyncIterator[dict[str, Any]]:
     total_started_at = time.perf_counter()
     user_id = chat_session_user_id(user_id)
@@ -4159,6 +4177,8 @@ async def _stream_cli_chat(
             )
             thread_id: Optional[str] = None
             last_status_signature: tuple[int, Optional[str], tuple[tuple[str, str], ...] | None] | None = None
+            pending_status_event: dict[str, Any] | None = None
+            last_status_sent_at: float | None = None
             last_context_usage: dict[str, Any] | None = None
             last_context_usage_session_id = ""
             last_context_usage_signature: tuple[tuple[str, str], ...] | None = None
@@ -4180,6 +4200,23 @@ async def _stream_cli_chat(
             live_trace_truncated = False
             latest_preview_text = ""
             last_context_usage_resolved_at = 0.0
+
+            def take_pending_status(*, force: bool = False) -> dict[str, Any] | None:
+                nonlocal pending_status_event, last_status_sent_at
+                if pending_status_event is None:
+                    return None
+                now = loop.time()
+                if (
+                    not force
+                    and last_status_sent_at is not None
+                    and now - last_status_sent_at < CLI_STATUS_MIN_INTERVAL_SECONDS
+                ):
+                    return None
+                event = pending_status_event
+                pending_status_event = None
+                last_status_sent_at = now
+                return event
+
             def append_live_trace_event(trace_event: dict[str, Any]) -> dict[str, Any] | None:
                 nonlocal live_trace_truncated
                 event_key = _trace_event_key(trace_event)
@@ -4230,7 +4267,7 @@ async def _stream_cli_chat(
                         preview_state.consume(text_chunk)
                         for trace_event in consume_stream_trace_chunk(cli_type, text_chunk, trace_state):
                             appended_trace = append_live_trace_event(trace_event)
-                            if appended_trace is not None:
+                            if appended_trace is not None and include_trace:
                                 yield {"type": "trace", **turn_event_ids, "event": appended_trace}
 
                         if cli_type == "codex":
@@ -4366,8 +4403,12 @@ async def _stream_cli_chat(
                             latest_preview_text = preview_text
                             persistence_buffer.queue_preview(preview_text)
                             persistence_buffer.maybe_flush()
-                        yield status_event
+                        pending_status_event = status_event
                         last_status_signature = status_signature
+
+                    ready_status = take_pending_status()
+                    if ready_status is not None:
+                        yield ready_status
 
                     if drained:
                         await asyncio.sleep(0)
@@ -4385,6 +4426,9 @@ async def _stream_cli_chat(
                     await loop.run_in_executor(None, _terminate_process_sync, process)
                 raise
             except Exception:
+                final_status = take_pending_status(force=True)
+                if final_status is not None:
+                    yield final_status
                 stdout_reader.stop()
                 await persistence_buffer.close()
                 if process.poll() is None:
@@ -4399,6 +4443,9 @@ async def _stream_cli_chat(
                 with session._lock:
                     session.process = None
                 close_process_streams(process)
+            final_status = take_pending_status(force=True)
+            if final_status is not None:
+                yield final_status
             stage_durations["cli_ms"] += max(0, int(round((time.perf_counter() - cli_started_at) * 1000)))
             sqlite_flush_count = persistence_buffer.flush_count
 
@@ -4554,6 +4601,7 @@ async def _stream_cli_chat(
                 "returncode": returncode,
                 "session": build_session_snapshot(profile, session),
             }
+            _compact_cli_done_event(done_event, stream_protocol_version)
             elapsed_ms = int(round((time.perf_counter() - total_started_at) * 1000))
             diag_log_event(
                 logger,
@@ -5072,6 +5120,29 @@ async def _run_native_agent_chat(
             _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
 
 
+def _chat_stream_event_is_visible(event: dict[str, Any], *, include_trace: bool) -> bool:
+    if include_trace:
+        return True
+    event_type = str(event.get("type") or "")
+    if event_type == "trace":
+        return False
+    return event_type != "ag_ui" or not is_ag_ui_trace_event(event.get("event"))
+
+
+def _chat_stream_event_for_consumer(
+    event: dict[str, Any],
+    *,
+    include_trace: bool,
+    stream_protocol_version: int,
+) -> dict[str, Any] | None:
+    if not _chat_stream_event_is_visible(event, include_trace=include_trace):
+        return None
+    if str(event.get("type") or "") != "ag_ui":
+        return event
+    compacted = compact_run_finished_event(event.get("event"), stream_protocol_version)
+    return event if compacted is event.get("event") else {**event, "event": compacted}
+
+
 async def _stream_native_agent_chat(
     manager: MultiBotManager,
     alias: str,
@@ -5093,6 +5164,8 @@ async def _stream_native_agent_chat(
     resume_turn_id: str = "",
     after_sequence: int = 0,
     enable_reconnect: bool = False,
+    include_trace: bool = True,
+    stream_protocol_version: int = 1,
 ) -> AsyncIterator[dict[str, Any]]:
     shared_user_id = chat_session_user_id(user_id)
     profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, agent_id)
@@ -5107,7 +5180,13 @@ async def _stream_native_agent_chat(
         events = channel.events(after_sequence=max(0, int(after_sequence or 0)))
         try:
             async for event in events:
-                yield event
+                prepared = _chat_stream_event_for_consumer(
+                    event,
+                    include_trace=include_trace,
+                    stream_protocol_version=stream_protocol_version,
+                )
+                if prepared is not None:
+                    yield prepared
         finally:
             await events.aclose()
         return
@@ -5171,7 +5250,13 @@ async def _stream_native_agent_chat(
         events = channel.events(after_sequence=0)
         try:
             async for event in events:
-                yield event
+                prepared = _chat_stream_event_for_consumer(
+                    event,
+                    include_trace=include_trace,
+                    stream_protocol_version=stream_protocol_version,
+                )
+                if prepared is not None:
+                    yield prepared
         finally:
             await events.aclose()
         return
@@ -5179,7 +5264,13 @@ async def _stream_native_agent_chat(
     events = produce()
     try:
         async for event in events:
-            yield event
+            prepared = _chat_stream_event_for_consumer(
+                event,
+                include_trace=include_trace,
+                stream_protocol_version=stream_protocol_version,
+            )
+            if prepared is not None:
+                yield prepared
     finally:
         await events.aclose()
 
@@ -5281,10 +5372,13 @@ async def stream_chat(
     resume_turn_id: str = "",
     after_sequence: int = 0,
     enable_reconnect: bool = False,
+    include_trace: bool = True,
+    stream_protocol_version: int = 1,
 ) -> AsyncIterator[dict[str, Any]]:
     try:
         profile = get_profile_or_raise(manager, alias)
         shared_user_id = chat_session_user_id(user_id)
+        normalized_stream_protocol_version = normalize_stream_protocol_version(stream_protocol_version)
         resolved_execution_mode = _resolve_chat_execution_mode(profile, execution_mode)
         if resolved_execution_mode == NATIVE_AGENT_PROVIDER:
             async for event in _stream_native_agent_chat(
@@ -5306,6 +5400,8 @@ async def stream_chat(
                 resume_turn_id=resume_turn_id,
                 after_sequence=after_sequence,
                 enable_reconnect=enable_reconnect,
+                include_trace=include_trace,
+                stream_protocol_version=normalized_stream_protocol_version,
             ):
                 yield event
             return
@@ -5339,6 +5435,8 @@ async def stream_chat(
                 cluster_run_id=cluster_run.run_id if cluster_run else "",
                 cluster_mentions=list(mentions or []),
                 allow_unsafe_cli=allow_unsafe_cli,
+                include_trace=include_trace,
+                stream_protocol_version=normalized_stream_protocol_version,
             ):
                 if event.get("type") == "error":
                     run_status = "error"

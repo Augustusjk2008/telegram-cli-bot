@@ -9,7 +9,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from bot.manager import MultiBotManager
 from bot.models import BotProfile
 from bot.web.api_common import AuthContext
-from bot.web.auth_store import CAP_CHAT_SEND
+from bot.web.auth_store import CAP_CHAT_SEND, CAP_VIEW_CHAT_TRACE
 from bot.web.permission_store import BotPermissionStore
 from bot.web.server import WebApiServer, _sse_headers
 
@@ -69,9 +69,34 @@ def _build_manager(tmp_path: Path) -> MultiBotManager:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("capabilities", "expected_include_trace"),
+    [
+        ({CAP_CHAT_SEND}, False),
+        ({CAP_CHAT_SEND, CAP_VIEW_CHAT_TRACE}, True),
+    ],
+)
+@pytest.mark.parametrize(
+    ("protocol_fields", "expected_stream_protocol_version"),
+    [
+        ({}, 1),
+        ({"stream_protocol_version": 2}, 2),
+        ({"streamProtocolVersion": 2}, 2),
+        ({"stream_protocol_version": "2"}, 1),
+        ({"stream_protocol_version": 2.0}, 1),
+        ({"stream_protocol_version": None}, 1),
+        ({"stream_protocol_version": 3}, 1),
+        ({"stream_protocol_version": True}, 1),
+        ({"stream_protocol_version": 1, "streamProtocolVersion": 2}, 1),
+    ],
+)
 async def test_chat_stream_sends_sse_headers_and_ready_comment(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    capabilities: set[str],
+    expected_include_trace: bool,
+    protocol_fields: dict[str, object],
+    expected_stream_protocol_version: int,
 ) -> None:
     manager = _build_manager(tmp_path)
     monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
@@ -81,12 +106,15 @@ async def test_chat_stream_sends_sse_headers_and_ready_comment(
 
     async def chat_send_only(_request, capability: str) -> AuthContext:
         assert capability == CAP_CHAT_SEND
-        return AuthContext(user_id=123, token_used=True, capabilities={CAP_CHAT_SEND})
+        return AuthContext(user_id=123, token_used=True, capabilities=capabilities)
 
     async def event_source():
         yield {"type": "done", "output": "ok", "elapsed_seconds": 0}
 
-    def fake_stream_chat(*_args, **_kwargs):
+    captured_kwargs: dict[str, object] = {}
+
+    def fake_stream_chat(*_args, **kwargs):
+        captured_kwargs.update(kwargs)
         return event_source()
 
     monkeypatch.setattr(server, "_with_capability", chat_send_only)
@@ -96,7 +124,10 @@ async def test_chat_stream_sends_sse_headers_and_ready_comment(
     app = server._build_app()
     async with TestServer(app) as test_server:
         async with TestClient(test_server) as client:
-            response = await client.post("/api/bots/main/chat/stream", json={"message": "hello"})
+            response = await client.post(
+                "/api/bots/main/chat/stream",
+                json={"message": "hello", **protocol_fields},
+            )
             body = await response.text()
 
     assert response.status == 200
@@ -106,6 +137,8 @@ async def test_chat_stream_sends_sse_headers_and_ready_comment(
     assert response.headers["Pragma"] == "no-cache"
     assert response.headers["Expires"] == "0"
     assert response.headers["X-Accel-Buffering"] == "no"
+    assert captured_kwargs["include_trace"] is expected_include_trace
+    assert captured_kwargs["stream_protocol_version"] == expected_stream_protocol_version
     assert body.startswith(": ready\n\n")
     assert 'event: done\ndata: {"type": "done", "output": "ok", "elapsed_seconds": 0}' in body
 

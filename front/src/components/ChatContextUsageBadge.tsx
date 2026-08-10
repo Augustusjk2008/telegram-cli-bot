@@ -1,12 +1,13 @@
 import { ChevronsDownUp } from "lucide-react";
 import type { ChatMessageContextUsage } from "../services/types";
+import { TouchHint } from "./TouchHint";
 
 function normalizedCompactionCount(count?: number) {
   const value = Math.floor(Number(count || 0));
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
-export function formatCompactionCount(count?: number) {
+function formatCompactionCount(count?: number) {
   const value = normalizedCompactionCount(count);
   if (value <= 0) {
     return "";
@@ -20,14 +21,14 @@ export function formatCompactionCount(count?: number) {
   return `compacted ${value} times`;
 }
 
-export function formatTokenNumber(value?: number) {
+function formatTokenNumber(value?: number) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "";
   }
   return Math.max(0, Math.floor(value)).toLocaleString("zh-CN");
 }
 
-export function clampPercent(value: number) {
+function clampPercent(value: number) {
   if (!Number.isFinite(value)) {
     return 0;
   }
@@ -153,27 +154,33 @@ export function ChatContextUsageBadge({ contextUsage, className = "", compact = 
   }
   const compactionCount = compact ? normalizedCompactionCount(contextUsage?.compactionCount) : 0;
   const baseClassName = textContext.isLow
-    ? "inline-flex min-w-0 items-center rounded-md border border-red-200 bg-red-50 px-1.5 py-0.5 font-medium text-red-600"
-    : "inline-flex min-w-0 items-center rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-1.5 py-0.5 text-[var(--muted)]";
+    ? "inline-flex min-w-0 items-center rounded-md border border-red-200 bg-red-50 px-1.5 py-0.5"
+    : "inline-flex min-w-0 items-center rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-1.5 py-0.5";
+  const textClassName = textContext.isLow ? "font-medium text-red-600" : "text-[var(--muted)]";
   return (
-    <span
-      className={[baseClassName, className].filter(Boolean).join(" ")}
-      data-testid={testId}
-      title={textContext.title}
-    >
-      {compactionCount > 0 ? (
-        <>
-          <span className="min-w-0 truncate pr-1">{textContext.text}</span>
-          <span
-            aria-label={`已 compact ${compactionCount} 次`}
-            className="inline-flex shrink-0 items-center gap-0.5 border-l border-current/20 pl-1"
-            data-testid={testId ? `${testId}-compaction` : undefined}
-          >
-            <ChevronsDownUp aria-hidden="true" className="h-3 w-3" />
-            <span aria-hidden="true">×{compactionCount}</span>
-          </span>
-        </>
-      ) : textContext.text}
-    </span>
+    <TouchHint content={textContext.title}>
+      <button
+        type="button"
+        aria-label={`查看上下文详情：${textContext.text}`}
+        data-testid={testId}
+        className={[baseClassName, className, "cursor-help text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)]"].filter(Boolean).join(" ")}
+      >
+        <span className={["inline-flex min-w-0 items-center", textClassName].join(" ")}>
+          {compactionCount > 0 ? (
+            <>
+              <span className="min-w-0 truncate pr-1">{textContext.text}</span>
+              <span
+                aria-label={`已 compact ${compactionCount} 次`}
+                className="inline-flex shrink-0 items-center gap-0.5 border-l border-current/20 pl-1"
+                data-testid={testId ? `${testId}-compaction` : undefined}
+              >
+                <ChevronsDownUp aria-hidden="true" className="h-3 w-3" />
+                <span aria-hidden="true">×{compactionCount}</span>
+              </span>
+            </>
+          ) : textContext.text}
+        </span>
+      </button>
+    </TouchHint>
   );
 }

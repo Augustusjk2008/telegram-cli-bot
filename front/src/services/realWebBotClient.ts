@@ -199,6 +199,7 @@ import type {
   WorkdirChangeConflict,
   HistoryDeltaResult,
   HistoryDeltaOptions,
+  HistorySnapshotResult,
   LanChatConfig,
   LanChatConfigInput,
   LanChatConversation,
@@ -4656,8 +4657,12 @@ export class RealWebBotClient implements WebBotClient {
     return mapClusterStatus(data);
   }
 
-  async getClusterTaskStatus(botAlias: string, runId: string): Promise<ClusterTaskStatus> {
-    const params = new URLSearchParams({ include_output: "1" });
+  async getClusterTaskStatus(
+    botAlias: string,
+    runId: string,
+    options?: { includeOutput?: boolean },
+  ): Promise<ClusterTaskStatus> {
+    const params = new URLSearchParams({ include_output: options?.includeOutput === false ? "0" : "1" });
     const data = await this.requestJson<unknown>(
       `/api/bots/${encodeURIComponent(botAlias)}/cluster/runs/${encodeURIComponent(runId)}/tasks?${params.toString()}`,
     );
@@ -4783,13 +4788,23 @@ export class RealWebBotClient implements WebBotClient {
     return overview;
   }
 
-  async listMessages(botAlias: string, options: AgentScopedOptions = {}): Promise<ChatMessage[]> {
+  async listMessages(botAlias: string, options: AgentScopedOptions = {}): Promise<HistorySnapshotResult> {
     const params = new URLSearchParams();
     appendAgentParam(params, options.agentId);
     appendExecutionModeParam(params, options.executionMode);
     const suffix = params.toString() ? `?${params.toString()}` : "";
-    const data = await this.requestJson<{ items: RawHistoryItem[] }>(`/api/bots/${encodeURIComponent(botAlias)}/history${suffix}`);
-    return data.items.map((item, index) => mapChatMessage(item, index));
+    const data = await this.requestJson<{
+      items: RawHistoryItem[];
+      current_revision?: number;
+      revision?: number;
+    }>(`/api/bots/${encodeURIComponent(botAlias)}/history${suffix}`);
+    const revision = typeof data.current_revision === "number"
+      ? data.current_revision
+      : typeof data.revision === "number" ? data.revision : undefined;
+    return {
+      items: data.items.map((item, index) => mapChatMessage(item, index)),
+      ...(revision !== undefined ? { revision } : {}),
+    };
   }
 
   async listConversations(botAlias: string, query = "", options: AgentScopedOptions = {}): Promise<ConversationListResult> {
@@ -5056,6 +5071,7 @@ export class RealWebBotClient implements WebBotClient {
       }),
       body: JSON.stringify({
         message: text,
+        stream_protocol_version: 2,
         ...(options?.taskMode ? { task_mode: options.taskMode } : {}),
         ...(options?.taskPayload ? { task_payload: options.taskPayload } : {}),
         ...(options?.visibleText ? { visible_text: options.visibleText } : {}),

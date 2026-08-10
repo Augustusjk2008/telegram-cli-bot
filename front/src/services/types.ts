@@ -1075,6 +1075,11 @@ export type ChatMessage = {
   author?: ChatMessageAuthor;
 };
 
+export type HistorySnapshotResult = {
+  items: ChatMessage[];
+  revision?: number;
+};
+
 export type HistoryDeltaResult = {
   items: ChatMessage[];
   deletedIds?: string[];

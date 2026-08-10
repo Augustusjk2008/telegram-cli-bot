@@ -60,7 +60,7 @@ test("Ctrl-hover probes a definition without navigating, while Ctrl-click naviga
     <EditorPane
       botAlias="main" client={client} tabs={[activeTab]} activeTab={activeTab} activeTabPath={activeTab.path} focused={false}
       onResolveCodeNavigation={onResolveCodeNavigation} onActivateTab={vi.fn()} onCloseTab={vi.fn(() => true)}
-      onChangeActiveContent={vi.fn()} onSaveActiveTab={vi.fn()} onCloseOthers={vi.fn()} onCloseTabsToRight={vi.fn()}
+      onChangeActiveContent={vi.fn()} onSaveActiveTab={vi.fn()} onCloseAll={vi.fn()} onCloseOthers={vi.fn()} onCloseTabsToRight={vi.fn()}
       onReopenLastClosed={vi.fn()} onRevealInTree={vi.fn()} onToggleFocus={vi.fn()}
     />,
   );

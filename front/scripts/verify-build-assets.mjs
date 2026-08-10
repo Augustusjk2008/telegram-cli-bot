@@ -6,6 +6,7 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const frontRoot = path.resolve(scriptDir, '..');
 const indexPath = path.join(frontRoot, 'dist', 'index.html');
 const thirdPartyLicensesPath = path.join(frontRoot, 'dist', 'THIRD_PARTY_LICENSES.txt');
+const manifestPath = path.join(frontRoot, 'dist', '.vite', 'manifest.json');
 
 if (!fs.existsSync(indexPath)) {
   console.error('缺少 front/dist/index.html，请先构建前端。');
@@ -15,6 +16,37 @@ if (!fs.existsSync(indexPath)) {
 if (!fs.existsSync(thirdPartyLicensesPath)) {
   console.error('缺少 front/dist/THIRD_PARTY_LICENSES.txt，请重新构建前端。');
   process.exit(1);
+}
+
+if (!fs.existsSync(manifestPath)) {
+  console.error('缺少 front/dist/.vite/manifest.json，请重新构建前端。');
+  process.exit(1);
+}
+const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+const compressedAssets = new Set();
+for (const entry of Object.values(manifest)) {
+  if (!entry || typeof entry !== 'object') {
+    continue;
+  }
+  const candidates = [entry.file, ...(Array.isArray(entry.css) ? entry.css : [])];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && /\.(?:js|css)$/i.test(candidate)) {
+      compressedAssets.add(candidate);
+    }
+  }
+}
+if (compressedAssets.size === 0) {
+  console.error('Vite manifest 未列出可验证的 JS/CSS 资源。');
+  process.exit(1);
+}
+for (const relativePath of compressedAssets) {
+  const assetPath = path.resolve(frontRoot, 'dist', relativePath);
+  for (const candidatePath of [assetPath, `${assetPath}.br`, `${assetPath}.gz`]) {
+    if (!fs.existsSync(candidatePath) || !fs.statSync(candidatePath).isFile()) {
+      console.error(`缺少 Vite 构建资源或预压缩副本: ${path.relative(frontRoot, candidatePath)}`);
+      process.exit(1);
+    }
+  }
 }
 const thirdPartyLicenses = fs.readFileSync(thirdPartyLicensesPath, 'utf8');
 if (!thirdPartyLicenses.startsWith('ORBIT SAFE CLAW - FRONTEND THIRD-PARTY LICENSES\n')

@@ -81,6 +81,21 @@ if exist "%SRC_FILE%" (
     echo Warning: config.toml not found in %TARGET_FOLDER%
 )
 
+:: Copy models_cache.json
+set "SRC_FILE=%TARGET_DIR%\models_cache.json"
+set "DST_FILE=%CODEX_DIR%\models_cache.json"
+if exist "%SRC_FILE%" (
+    copy /y "%SRC_FILE%" "%DST_FILE%" >nul
+    if errorlevel 1 (
+        echo Error: Failed to copy models_cache.json
+        set "COPY_OK=0"
+    ) else (
+        echo Copied models_cache.json from %TARGET_FOLDER%
+    )
+) else (
+    echo Warning: models_cache.json not found in %TARGET_FOLDER%
+)
+
 if %COPY_OK% equ 0 (
     echo Switch aborted due to copy errors.
     exit /b 1
@@ -115,6 +130,19 @@ if exist "%CODEX_DIR%\config.toml" (
     )
 ) else (
     echo config.toml not found, skipped
+)
+
+:: Delete models_cache.json
+if exist "%CODEX_DIR%\models_cache.json" (
+    del /q "%CODEX_DIR%\models_cache.json" >nul 2>&1
+    if errorlevel 1 (
+        echo Error: Failed to delete models_cache.json
+        set "DEL_OK=0"
+    ) else (
+        echo Deleted models_cache.json
+    )
+) else (
+    echo models_cache.json not found, skipped
 )
 
 if exist "%STATE_FILE%" (

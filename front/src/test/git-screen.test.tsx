@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { GitScreen } from "../screens/GitScreen";
@@ -137,9 +137,10 @@ function createGitScreenClient() {
     ].join("\n"),
     truncated: false,
   }));
+  const getGitCommitGraph = vi.fn(async () => graphPayload);
   const client = {
     getGitOverview,
-    getGitCommitGraph: vi.fn(async () => graphPayload),
+    getGitCommitGraph,
     getGitIdentityConfig: vi.fn(async () => identityConfig),
     getActiveGitSmartCommit: vi.fn(async () => null),
     listGitBranches: vi.fn(async () => branchList),
@@ -156,6 +157,7 @@ function createGitScreenClient() {
     client: client as unknown as WebBotClient,
     getGitDiff,
     getGitOverview,
+    getGitCommitGraph,
   };
 }
 
@@ -168,6 +170,35 @@ test("allows git users to manage commit message cli config", async () => {
     expect(within(panel).getByRole("button", { name: /恢复默认/ })).toBeEnabled();
   });
   expect(within(panel).queryByText("当前模式只读")).not.toBeInTheDocument();
+});
+
+test("reveals the full commit message when a commit row is tapped", async () => {
+  const { client, getGitCommitGraph } = createGitScreenClient();
+  getGitCommitGraph.mockResolvedValue({
+    ...graphPayload,
+    nodes: [{
+      hash: "abcdef1234567890",
+      shortHash: "abcdef1",
+      parents: [],
+      authorName: "Kai",
+      authoredAt: "2026-08-08T12:00:00Z",
+      subject: "修复提交标题",
+      message: "修复提交标题\n\n这是完整的 commit message 详情。",
+      refs: [],
+      graph: { column: 0, width: 1, edges: [] },
+    }],
+  });
+
+  render(<GitScreen botAlias="main" client={client} />);
+
+  const row = await screen.findByTestId("git-graph-row-abcdef1");
+  expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+
+  fireEvent.pointerDown(row, { pointerType: "touch" });
+  fireEvent.pointerUp(row, { pointerType: "touch" });
+  fireEvent.click(row);
+
+  expect(screen.getByRole("tooltip")).toHaveTextContent("这是完整的 commit message 详情。");
 });
 
 test("renders compact change rows with basename, stats, and retained actions", async () => {
