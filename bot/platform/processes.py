@@ -5,7 +5,13 @@ import contextlib
 import os
 import signal
 import subprocess
+import threading
+import time
+from collections.abc import Callable
 from typing import Any
+
+
+_POPEN_TYPE = subprocess.Popen
 
 
 if os.name == "nt":
@@ -14,6 +20,7 @@ if os.name == "nt":
 
     _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
     _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
+    _CREATE_SUSPENDED = 0x00000004
 
     class _JobObjectBasicLimitInformation(ctypes.Structure):
         _fields_ = [
@@ -61,6 +68,7 @@ if os.name == "nt":
     _kernel32.CloseHandle.restype = wintypes.BOOL
 else:
     _kernel32 = None
+    _CREATE_SUSPENDED = 0
 
 
 class ProcessTreeJob:
@@ -83,6 +91,69 @@ class ProcessTreeJob:
         _kernel32.CloseHandle(handle)
 
 
+class ProcessTreeHandle:
+    """Best-effort ownership handle for a spawned process tree."""
+
+    def __init__(
+        self,
+        process: Any,
+        process_job: ProcessTreeJob | None,
+        terminate_fallback: Callable[[Any], None] | None = None,
+        process_group_id: int | None = None,
+    ) -> None:
+        self._process = process
+        self._process_job = process_job
+        self._terminate_fallback = terminate_fallback
+        self._process_group_id = process_group_id
+        self._lock = threading.Lock()
+        self._terminated = False
+        self._closed = False
+
+    def terminate(self) -> None:
+        with self._lock:
+            if self._closed or self._terminated:
+                return
+            if self._process_job is not None:
+                self._process_job.terminate()
+            elif self._process_group_id is not None:
+                _terminate_posix_process_group_sync(self._process_group_id)
+            else:
+                terminate = self._terminate_fallback or terminate_process_tree_sync
+                terminate(self._process)
+            self._terminated = True
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            if self._process_job is not None:
+                self._process_job.close()
+
+    @property
+    def is_contained(self) -> bool:
+        return self._process_job is not None or self._process_group_id is not None
+
+
+def _terminate_posix_process_group_sync(process_group_id: int) -> None:
+    try:
+        os.killpg(process_group_id, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except Exception:
+        return
+
+    time.sleep(0.2)
+    try:
+        os.killpg(process_group_id, 0)
+    except ProcessLookupError:
+        return
+    except Exception:
+        return
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(process_group_id, getattr(signal, "SIGKILL", signal.SIGTERM))
+
+
 def attach_process_tree_job(process: subprocess.Popen) -> ProcessTreeJob | None:
     """Attach a Windows process to a kill-on-close Job Object when possible."""
 
@@ -90,6 +161,10 @@ def attach_process_tree_job(process: subprocess.Popen) -> ProcessTreeJob | None:
         return None
     process_handle = getattr(process, "_handle", None)
     if process_handle is None:
+        return None
+    try:
+        process_handle_value = int(process_handle)
+    except (TypeError, ValueError):
         return None
     job_handle = _kernel32.CreateJobObjectW(None, None)
     if not job_handle:
@@ -104,10 +179,30 @@ def attach_process_tree_job(process: subprocess.Popen) -> ProcessTreeJob | None:
     ):
         _kernel32.CloseHandle(job_handle)
         return None
-    if not _kernel32.AssignProcessToJobObject(job_handle, wintypes.HANDLE(int(process_handle))):
+    if not _kernel32.AssignProcessToJobObject(job_handle, wintypes.HANDLE(process_handle_value)):
         _kernel32.CloseHandle(job_handle)
         return None
     return ProcessTreeJob(job_handle)
+
+
+def attach_process_tree(
+    process: Any,
+    *,
+    terminate_fallback: Callable[[Any], None] | None = None,
+) -> ProcessTreeHandle:
+    process_group_id = None
+    if os.name != "nt" and isinstance(process, _POPEN_TYPE):
+        process_pid = getattr(process, "pid", None)
+        try:
+            process_group_id = int(process_pid) if process_pid else None
+        except (TypeError, ValueError):
+            process_group_id = None
+    return ProcessTreeHandle(
+        process,
+        attach_process_tree_job(process),
+        terminate_fallback=terminate_fallback,
+        process_group_id=process_group_id,
+    )
 
 
 def build_subprocess_group_kwargs() -> dict:
@@ -116,7 +211,7 @@ def build_subprocess_group_kwargs() -> dict:
     return {"start_new_session": True}
 
 
-def build_chat_cli_process_kwargs() -> dict:
+def build_chat_cli_process_kwargs(*, suspended: bool = False) -> dict:
     if os.name != "nt":
         return {"start_new_session": True}
 
@@ -125,9 +220,21 @@ def build_chat_cli_process_kwargs() -> dict:
         "CREATE_NEW_PROCESS_GROUP",
         0,
     )
+    if suspended:
+        creationflags |= _CREATE_SUSPENDED
     if not creationflags:
         return {}
     return {"creationflags": creationflags}
+
+
+def resume_suspended_process(process: Any, process_tree: ProcessTreeHandle) -> None:
+    if os.name != "nt" or getattr(process, "_handle", None) is None:
+        return
+    if not process_tree.is_contained:
+        raise RuntimeError("无法将 CLI 进程绑定到 Windows Job Object")
+    import psutil
+
+    psutil.Process(int(process.pid)).resume()
 
 
 def build_hidden_process_kwargs() -> dict:

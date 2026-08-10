@@ -101,7 +101,14 @@ from bot.native_agent.pi_rpc_preflight import PiWindowsPreflightRequest, run_pi_
 from bot.native_agent.pi_session_store import PiSessionStore, pi_session_key
 from bot.native_agent.shadow_git_history import ShadowGitHistory
 from bot.platform.output import strip_ansi_escape
-from bot.platform.processes import build_chat_cli_process_kwargs, build_hidden_process_kwargs, terminate_process_tree_sync
+from bot.platform.processes import (
+    ProcessTreeHandle,
+    attach_process_tree,
+    build_chat_cli_process_kwargs,
+    build_hidden_process_kwargs,
+    resume_suspended_process,
+    terminate_process_tree_sync,
+)
 from bot.platform.subprocess_streams import close_process_streams
 from bot.session_store import (
     rename_bot_sessions as rename_stored_bot_sessions,
@@ -2373,16 +2380,19 @@ async def kill_user_process(
                 await _cancel_cluster_run(cluster_run.run_id, "主 agent 已停止")
                 result["cluster_run_cancelled"] = cluster_run.run_id
             return result
-        if process is not None and process.poll() is None:
-            _terminate_process_sync(process)
-            close_process_streams(process)
+        process_lifecycle = _get_cli_process_lifecycle(process)
+        if process is not None and (process_lifecycle is not None or process.poll() is None):
+            if process_lifecycle is not None:
+                await _terminate_cli_process_lifecycle(process_lifecycle)
+            else:
+                await asyncio.to_thread(_terminate_process_sync, process)
             session.persist()
             result = {"killed": True, "message": msg("kill", "killed"), "stop_requested": True}
             if cluster_run := _find_active_cluster_run_for_session(alias, user_id, session):
                 await _cancel_cluster_run(cluster_run.run_id, "主 agent 已停止")
                 result["cluster_run_cancelled"] = cluster_run.run_id
             return result
-        close_process_streams(process)
+        await asyncio.to_thread(close_process_streams, process)
         with session._lock:
             _reset_session_runtime_flags(session)
         _get_chat_history_service(session).reconcile_idle_streaming_turns(session)
@@ -3419,19 +3429,16 @@ class _ProcessStdoutReader:
         self.max_total_bytes = max(self.max_line_bytes, int(max_total_bytes))
         self.done = threading.Event()
         self._stop = threading.Event()
-        self._closing = threading.Event()
         self._thread = threading.Thread(target=self._run, name="cli-stdout-reader", daemon=True)
 
     def start(self) -> None:
         self._thread.start()
 
-    def stop(self) -> None:
+    def request_stop(self) -> None:
         self._stop.set()
-        self.close_stdout()
 
-    def close_stdout(self) -> None:
-        self._closing.set()
-        _close_process_stdout(self.process)
+    def stop(self) -> None:
+        self.request_stop()
 
     def join(self, timeout: float | None = None) -> None:
         self._thread.join(timeout)
@@ -3473,21 +3480,21 @@ class _ProcessStdoutReader:
                 if not self._put(line):
                     return
         except Exception as exc:
-            if not self._closing.is_set() and not self._stop.is_set():
+            if not self._stop.is_set():
                 self._put_critical(exc)
         finally:
             self._put_critical(_PROCESS_STDOUT_EOF)
             self.done.set()
 
 
-def _close_process_stdout(process: Any) -> None:
-    stdout = getattr(process, "stdout", None)
-    if stdout is None:
+def _request_process_stdout_reader_stop(reader: Any) -> None:
+    request_stop = getattr(reader, "request_stop", None)
+    if callable(request_stop):
+        request_stop()
         return
-    try:
-        stdout.close()
-    except Exception:
-        pass
+    stop = getattr(reader, "stop", None)
+    if callable(stop):
+        stop()
 
 
 def _start_process_stdout_reader(
@@ -3505,6 +3512,122 @@ def _start_process_stdout_reader(
     )
     reader.start()
     return reader
+
+
+_CLI_PROCESS_LIFECYCLE_ATTR = "_tcb_cli_process_lifecycle"
+_CLI_READER_CLEANUP_TIMEOUT_SECONDS = 1.0
+_CLI_DEFERRED_CLEANUP_TIMEOUT_SECONDS = 30.0
+
+
+@dataclass
+class _CliProcessLifecycle:
+    process: Any
+    process_tree: ProcessTreeHandle
+    reader: _ProcessStdoutReader | None = None
+    cleanup_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    state_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    streams_closed: bool = False
+    finalizer_started: bool = False
+
+
+def _create_cli_process_lifecycle(process: Any) -> _CliProcessLifecycle:
+    lifecycle = _CliProcessLifecycle(
+        process=process,
+        process_tree=attach_process_tree(
+            process,
+            terminate_fallback=_terminate_process_sync,
+        ),
+    )
+    try:
+        setattr(process, _CLI_PROCESS_LIFECYCLE_ATTR, lifecycle)
+    except Exception:
+        pass
+    return lifecycle
+
+
+def _get_cli_process_lifecycle(process: Any) -> _CliProcessLifecycle | None:
+    lifecycle = getattr(process, _CLI_PROCESS_LIFECYCLE_ATTR, None)
+    return lifecycle if isinstance(lifecycle, _CliProcessLifecycle) else None
+
+
+def _ensure_cli_process_lifecycle(
+    process: Any,
+    lifecycle: _CliProcessLifecycle | None = None,
+) -> _CliProcessLifecycle:
+    return lifecycle or _get_cli_process_lifecycle(process) or _create_cli_process_lifecycle(process)
+
+
+async def _terminate_cli_process_lifecycle(lifecycle: _CliProcessLifecycle) -> None:
+    await asyncio.to_thread(lifecycle.process_tree.terminate)
+
+
+def _deferred_cli_stream_cleanup(lifecycle: _CliProcessLifecycle) -> None:
+    reader = lifecycle.reader
+    if reader is not None:
+        if not reader.done.wait(_CLI_DEFERRED_CLEANUP_TIMEOUT_SECONDS):
+            logger.warning(
+                "CLI stdout reader 清理超时，保留流以避免跨线程 close: pid=%s",
+                getattr(lifecycle.process, "pid", 0),
+            )
+            return
+        reader.join(0.1)
+    _close_cli_process_streams_once(lifecycle)
+
+
+def _close_cli_process_streams_once(lifecycle: _CliProcessLifecycle) -> None:
+    with lifecycle.state_lock:
+        if lifecycle.streams_closed:
+            return
+        lifecycle.streams_closed = True
+    close_process_streams(lifecycle.process)
+
+
+def _start_deferred_cli_stream_cleanup(lifecycle: _CliProcessLifecycle) -> None:
+    with lifecycle.state_lock:
+        if lifecycle.finalizer_started:
+            return
+        lifecycle.finalizer_started = True
+    threading.Thread(
+        target=_deferred_cli_stream_cleanup,
+        args=(lifecycle,),
+        name="cli-stream-finalizer",
+        daemon=True,
+    ).start()
+
+
+async def _run_cli_process_lifecycle_cleanup(lifecycle: _CliProcessLifecycle) -> None:
+    await _terminate_cli_process_lifecycle(lifecycle)
+    await asyncio.to_thread(lifecycle.process_tree.close)
+
+    reader = lifecycle.reader
+    if reader is not None:
+        reader_done = await asyncio.to_thread(
+            reader.done.wait,
+            _CLI_READER_CLEANUP_TIMEOUT_SECONDS,
+        )
+        if not reader_done:
+            _start_deferred_cli_stream_cleanup(lifecycle)
+            return
+        await asyncio.to_thread(reader.join, 0.1)
+
+    await asyncio.to_thread(_close_cli_process_streams_once, lifecycle)
+
+
+async def _cleanup_cli_process_lifecycle(
+    lifecycle: _CliProcessLifecycle,
+    *,
+    abort: bool,
+) -> None:
+    if abort and lifecycle.reader is not None:
+        _request_process_stdout_reader_stop(lifecycle.reader)
+    cleanup_task = lifecycle.cleanup_task
+    if cleanup_task is None:
+        cleanup_task = asyncio.create_task(
+            _run_cli_process_lifecycle_cleanup(lifecycle),
+            name="cli-process-cleanup",
+        )
+        lifecycle.cleanup_task = cleanup_task
+    await asyncio.shield(cleanup_task)
 
 
 def _maybe_stop_waiting_for_stdout_after_exit(
@@ -3526,7 +3649,6 @@ def _maybe_stop_waiting_for_stdout_after_exit(
         return False, exit_seen_at
     if now - exit_seen_at < drain_seconds:
         return False, exit_seen_at
-    reader.close_stdout()
     return True, exit_seen_at
 
 
@@ -3541,8 +3663,40 @@ def _reset_session_runtime_flags(session: UserSession) -> None:
     session.running_updated_at = None
 
 
-async def _communicate_process(process: subprocess.Popen) -> tuple[str, int]:
+def _log_cli_history_reconcile_result(task: asyncio.Task[Any]) -> None:
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        return
+    except Exception as exc:
+        logger.warning("CLI 异常轮次后台收尾失败: %s", exc)
+
+
+async def _reconcile_idle_cli_turns(session: UserSession) -> None:
+    task = asyncio.create_task(
+        asyncio.to_thread(
+            _get_chat_history_service(session).reconcile_idle_streaming_turns,
+            session,
+        ),
+        name="cli-history-reconcile",
+    )
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        task.add_done_callback(_log_cli_history_reconcile_result)
+        raise
+    except Exception as exc:
+        logger.warning("CLI 异常轮次收尾失败: %s", exc)
+
+
+async def _communicate_process(
+    process: subprocess.Popen,
+    *,
+    lifecycle: _CliProcessLifecycle | None = None,
+) -> tuple[str, int]:
+    lifecycle = _ensure_cli_process_lifecycle(process, lifecycle)
     reader: _ProcessStdoutReader | None = None
+    cleanup_abort = False
     try:
         stdout = getattr(process, "stdout", None)
         if stdout is None or not hasattr(stdout, "readline"):
@@ -3569,12 +3723,12 @@ async def _communicate_process(process: subprocess.Popen) -> tuple[str, int]:
                 )
                 return output_buffer.text(), _resolve_process_returncode(process, waited_returncode)
             except asyncio.CancelledError:
-                _close_process_stdout(process)
-                _terminate_process_sync(process)
+                cleanup_abort = True
                 raise
 
         output_queue: queue.Queue[Any] = queue.Queue(maxsize=_CLI_OUTPUT_LIMITS.queue_max_chunks)
         reader = _start_process_stdout_reader(process, output_queue)
+        lifecycle.reader = reader
         output_buffer = _BoundedOutputBuffer(_CLI_OUTPUT_LIMITS.final_text_max_bytes)
         eof_seen = False
         stdout_exit_seen_at: float | None = None
@@ -3595,21 +3749,21 @@ async def _communicate_process(process: subprocess.Popen) -> tuple[str, int]:
                         raise item
                     output_buffer.append(str(item))
 
-                _, stdout_exit_seen_at = _maybe_stop_waiting_for_stdout_after_exit(
+                stop_waiting, stdout_exit_seen_at = _maybe_stop_waiting_for_stdout_after_exit(
                     process,
                     reader,
                     output_queue,
                     stdout_exit_seen_at,
                 )
+                if stop_waiting:
+                    await _terminate_cli_process_lifecycle(lifecycle)
                 if not drained:
                     await asyncio.sleep(0.05)
         except Exception:
-            reader.stop()
-            _terminate_process_sync(process)
+            cleanup_abort = True
             raise
         except asyncio.CancelledError:
-            reader.stop()
-            _terminate_process_sync(process)
+            cleanup_abort = True
             raise
 
         waited_returncode = await asyncio.get_running_loop().run_in_executor(
@@ -3620,23 +3774,23 @@ async def _communicate_process(process: subprocess.Popen) -> tuple[str, int]:
         )
         return output_buffer.text(), _resolve_process_returncode(process, waited_returncode)
     finally:
-        if reader is not None:
-            reader.stop()
-            reader.join(1.0)
-        close_process_streams(process)
+        await _cleanup_cli_process_lifecycle(lifecycle, abort=cleanup_abort)
 
 
 async def _communicate_codex_process(
     process: subprocess.Popen,
     *,
     usage_capture: Any = None,
+    lifecycle: _CliProcessLifecycle | None = None,
 ) -> CodexProcessResult:
+    lifecycle = _ensure_cli_process_lifecycle(process, lifecycle)
     reader: _ProcessStdoutReader | None = None
     parser: CodexJsonStreamParser | None = None
+    cleanup_abort = False
     try:
         stdout = getattr(process, "stdout", None)
         if stdout is None or not hasattr(stdout, "readline"):
-            raw_output, returncode = await _communicate_process(process)
+            raw_output, returncode = await _communicate_process(process, lifecycle=lifecycle)
             parser = CodexJsonStreamParser(
                 raw_tail_max_bytes=_CLI_OUTPUT_LIMITS.raw_tail_max_bytes,
                 final_text_max_bytes=_CLI_OUTPUT_LIMITS.final_text_max_bytes,
@@ -3659,6 +3813,7 @@ async def _communicate_codex_process(
         loop = asyncio.get_running_loop()
         output_queue: queue.Queue[Any] = queue.Queue(maxsize=_CLI_OUTPUT_LIMITS.queue_max_chunks)
         reader = _start_process_stdout_reader(process, output_queue)
+        lifecycle.reader = reader
         parser = CodexJsonStreamParser(
             raw_tail_max_bytes=_CLI_OUTPUT_LIMITS.raw_tail_max_bytes,
             final_text_max_bytes=_CLI_OUTPUT_LIMITS.final_text_max_bytes,
@@ -3668,7 +3823,6 @@ async def _communicate_codex_process(
         candidate_seen_at: Optional[float] = None
         done_terminate_started_at: Optional[float] = None
         done_force_killed = False
-        done_stdout_closed = False
         eof_seen = False
         stdout_exit_seen_at: float | None = None
 
@@ -3700,12 +3854,10 @@ async def _communicate_codex_process(
                 now = loop.time()
                 if candidate_seen_at is not None and (now - candidate_seen_at) >= CODEX_DONE_QUIET_SECONDS:
                     if process.poll() is not None and output_queue.empty():
-                        if not done_stdout_closed:
-                            reader.close_stdout()
-                            done_stdout_closed = True
+                        await _terminate_cli_process_lifecycle(lifecycle)
                     if done_terminate_started_at is None and process.poll() is None:
                         done_terminate_started_at = now
-                        await loop.run_in_executor(None, _terminate_process_sync, process)
+                        await _terminate_cli_process_lifecycle(lifecycle)
                     elif (
                         done_terminate_started_at is not None
                         and not done_force_killed
@@ -3713,14 +3865,16 @@ async def _communicate_codex_process(
                         and (now - done_terminate_started_at) >= CODEX_TERMINATE_GRACE_SECONDS
                     ):
                         done_force_killed = True
-                        await loop.run_in_executor(None, _terminate_process_sync, process)
+                        await _terminate_cli_process_lifecycle(lifecycle)
 
-                _, stdout_exit_seen_at = _maybe_stop_waiting_for_stdout_after_exit(
+                stop_waiting, stdout_exit_seen_at = _maybe_stop_waiting_for_stdout_after_exit(
                     process,
                     reader,
                     output_queue,
                     stdout_exit_seen_at,
                 )
+                if stop_waiting:
+                    await _terminate_cli_process_lifecycle(lifecycle)
                 if not drained:
                     await asyncio.sleep(0.05)
             waited_returncode = await loop.run_in_executor(None, _wait_for_process_exit_sync, process, 1.0)
@@ -3742,32 +3896,32 @@ async def _communicate_codex_process(
                 duplicate_terminal_count=parsed_result.duplicate_terminal_count,
             )
         except Exception:
-            reader.stop()
-            _terminate_process_sync(process)
+            cleanup_abort = True
             raise
         except asyncio.CancelledError:
-            reader.stop()
-            _terminate_process_sync(process)
+            cleanup_abort = True
             raise
     finally:
-        if parser is not None:
-            await _record_codex_usage_capture(usage_capture, parser.result())
-        if reader is not None:
-            reader.stop()
-            reader.join(1.0)
-        close_process_streams(process)
+        try:
+            if parser is not None:
+                await _record_codex_usage_capture(usage_capture, parser.result())
+        finally:
+            await _cleanup_cli_process_lifecycle(lifecycle, abort=cleanup_abort)
 
 
 async def _communicate_claude_process(
     process: subprocess.Popen,
     *,
     done_session=None,
+    lifecycle: _CliProcessLifecycle | None = None,
 ) -> tuple[str, Optional[str], int]:
+    lifecycle = _ensure_cli_process_lifecycle(process, lifecycle)
     reader: _ProcessStdoutReader | None = None
+    cleanup_abort = False
     try:
         stdout = getattr(process, "stdout", None)
         if stdout is None or not hasattr(stdout, "readline"):
-            raw_output, returncode = await _communicate_process(process)
+            raw_output, returncode = await _communicate_process(process, lifecycle=lifecycle)
             parser = ClaudeJsonStreamParser(
                 raw_tail_max_bytes=_CLI_OUTPUT_LIMITS.raw_tail_max_bytes,
                 final_text_max_bytes=_CLI_OUTPUT_LIMITS.final_text_max_bytes,
@@ -3784,6 +3938,7 @@ async def _communicate_claude_process(
         loop = asyncio.get_running_loop()
         output_queue: queue.Queue[Any] = queue.Queue(maxsize=_CLI_OUTPUT_LIMITS.queue_max_chunks)
         reader = _start_process_stdout_reader(process, output_queue)
+        lifecycle.reader = reader
         parser = ClaudeJsonStreamParser(
             raw_tail_max_bytes=_CLI_OUTPUT_LIMITS.raw_tail_max_bytes,
             final_text_max_bytes=_CLI_OUTPUT_LIMITS.final_text_max_bytes,
@@ -3822,7 +3977,7 @@ async def _communicate_claude_process(
                     and process.poll() is None
                 ):
                     done_terminate_started_at = now
-                    await loop.run_in_executor(None, _terminate_process_sync, process)
+                    await _terminate_cli_process_lifecycle(lifecycle)
                 elif (
                     done_terminate_started_at is not None
                     and not done_force_killed
@@ -3830,14 +3985,16 @@ async def _communicate_claude_process(
                     and (now - done_terminate_started_at) >= 1.0
                 ):
                     done_force_killed = True
-                    await loop.run_in_executor(None, _terminate_process_sync, process)
+                    await _terminate_cli_process_lifecycle(lifecycle)
 
-                _, stdout_exit_seen_at = _maybe_stop_waiting_for_stdout_after_exit(
+                stop_waiting, stdout_exit_seen_at = _maybe_stop_waiting_for_stdout_after_exit(
                     process,
                     reader,
                     output_queue,
                     stdout_exit_seen_at,
                 )
+                if stop_waiting:
+                    await _terminate_cli_process_lifecycle(lifecycle)
                 if not drained:
                     await asyncio.sleep(0.1)
 
@@ -3855,18 +4012,13 @@ async def _communicate_claude_process(
                 final_text = msg("chat", "no_output")
             return final_text, parsed_result.session_id, returncode
         except Exception:
-            reader.stop()
-            _terminate_process_sync(process)
+            cleanup_abort = True
             raise
         except asyncio.CancelledError:
-            reader.stop()
-            _terminate_process_sync(process)
+            cleanup_abort = True
             raise
     finally:
-        if reader is not None:
-            reader.stop()
-            reader.join(1.0)
-        close_process_streams(process)
+        await _cleanup_cli_process_lifecycle(lifecycle, abort=cleanup_abort)
 
 
 async def _stream_cli_chat(
@@ -3936,7 +4088,7 @@ async def _stream_cli_chat(
     sqlite_flush_count = 0
     completion_state_for_diag = ""
     normal_return_for_diag = False
-    active_process: subprocess.Popen | None = None
+    active_lifecycle: _CliProcessLifecycle | None = None
     try:
         session.touch()
         loop = asyncio.get_running_loop()
@@ -4015,9 +4167,20 @@ async def _stream_cli_chat(
                     env=env,
                     encoding="utf-8",
                     errors="replace",
-                    **build_chat_cli_process_kwargs(),
+                    **build_chat_cli_process_kwargs(suspended=True),
                 )
-                active_process = process
+                process_lifecycle = _create_cli_process_lifecycle(process)
+                active_lifecycle = process_lifecycle
+                try:
+                    await asyncio.to_thread(
+                        resume_suspended_process,
+                        process,
+                        process_lifecycle.process_tree,
+                    )
+                except Exception as exc:
+                    await _cleanup_cli_process_lifecycle(process_lifecycle, abort=True)
+                    active_lifecycle = None
+                    _raise(500, "cli_process_isolation_failed", f"CLI 进程隔离初始化失败: {exc}")
                 process_pid = int(getattr(process, "pid", 0) or 0)
                 diag_log_event(
                     logger,
@@ -4050,9 +4213,6 @@ async def _stream_cli_chat(
                     process.stdin.flush()
                     process.stdin.close()
                 except (BrokenPipeError, OSError) as exc:
-                    close_process_streams(process)
-                    _terminate_process_sync(process)
-                    _wait_for_process_exit_sync(process, 1.0)
                     _raise(500, "cli_write_failed", msg("chat", "cli_failed") + f": {exc}")
 
             with session._lock:
@@ -4077,6 +4237,7 @@ async def _stream_cli_chat(
 
             output_queue: queue.Queue[Any] = queue.Queue(maxsize=_CLI_OUTPUT_LIMITS.queue_max_chunks)
             stdout_reader = _start_process_stdout_reader(process, output_queue)
+            process_lifecycle.reader = stdout_reader
             preview_state = _StreamPreviewState(cli_type)
             persistence_buffer = StreamingPersistenceBuffer(
                 service,
@@ -4097,7 +4258,6 @@ async def _stream_cli_chat(
                 claude_detector = ClaudeDoneDetector(done_session.sentinel, done_session.quiet_seconds)
             done_terminate_started_at: Optional[float] = None
             done_force_killed = False
-            done_stdout_closed = False
             stdout_eof_seen = False
             stdout_exit_seen_at: float | None = None
             codex_done_candidate: Optional[str] = None
@@ -4154,6 +4314,7 @@ async def _stream_cli_chat(
                 return trace_event
 
             cli_started_at = time.perf_counter()
+            cleanup_abort = False
 
             try:
                 while not stdout_eof_seen and (not stdout_reader.done.is_set() or not output_queue.empty()):
@@ -4199,10 +4360,10 @@ async def _stream_cli_chat(
                     if (
                         stop_requested
                         and done_terminate_started_at is None
-                        and process.poll() is None
                     ):
-                        done_terminate_started_at = loop.time()
-                        await loop.run_in_executor(None, _terminate_process_sync, process)
+                        if process.poll() is None:
+                            done_terminate_started_at = loop.time()
+                        await _terminate_cli_process_lifecycle(process_lifecycle)
                     elif (
                         claude_detector is not None
                         and done_terminate_started_at is None
@@ -4210,7 +4371,7 @@ async def _stream_cli_chat(
                         and process.poll() is None
                     ):
                         done_terminate_started_at = loop.time()
-                        await loop.run_in_executor(None, _terminate_process_sync, process)
+                        await _terminate_cli_process_lifecycle(process_lifecycle)
                     elif (
                         cli_type == "codex"
                         and codex_done_seen_at is not None
@@ -4220,7 +4381,7 @@ async def _stream_cli_chat(
                         and output_queue.empty()
                     ):
                         done_terminate_started_at = loop.time()
-                        await loop.run_in_executor(None, _terminate_process_sync, process)
+                        await _terminate_cli_process_lifecycle(process_lifecycle)
                     elif (
                         done_terminate_started_at is not None
                         and not done_force_killed
@@ -4228,7 +4389,7 @@ async def _stream_cli_chat(
                         and (loop.time() - done_terminate_started_at) >= CODEX_TERMINATE_GRACE_SECONDS
                     ):
                         done_force_killed = True
-                        await loop.run_in_executor(None, _terminate_process_sync, process)
+                        await _terminate_cli_process_lifecycle(process_lifecycle)
 
                     if (
                         cli_type == "codex"
@@ -4237,16 +4398,16 @@ async def _stream_cli_chat(
                         and process.poll() is not None
                         and output_queue.empty()
                     ):
-                        if not done_stdout_closed:
-                            stdout_reader.close_stdout()
-                            done_stdout_closed = True
+                        await _terminate_cli_process_lifecycle(process_lifecycle)
 
-                    _, stdout_exit_seen_at = _maybe_stop_waiting_for_stdout_after_exit(
+                    stop_waiting, stdout_exit_seen_at = _maybe_stop_waiting_for_stdout_after_exit(
                         process,
                         stdout_reader,
                         output_queue,
                         stdout_exit_seen_at,
                     )
+                    if stop_waiting:
+                        await _terminate_cli_process_lifecycle(process_lifecycle)
 
                     status_event = preview_state.status_event(elapsed_seconds=int(loop.time() - started_at))
                     status_event.update(turn_event_ids)
@@ -4328,29 +4489,28 @@ async def _stream_cli_chat(
                 if done_terminate_started_at is not None:
                     returncode = 0
             except asyncio.CancelledError:
-                stdout_reader.stop()
+                cleanup_abort = True
                 await persistence_buffer.close()
-                if process.poll() is None:
-                    await loop.run_in_executor(None, _terminate_process_sync, process)
                 raise
             except Exception:
+                cleanup_abort = True
                 final_status = take_pending_status(force=True)
                 if final_status is not None:
                     yield final_status
-                stdout_reader.stop()
                 await persistence_buffer.close()
-                if process.poll() is None:
-                    await loop.run_in_executor(None, _terminate_process_sync, process)
                 raise
             finally:
                 parsed_result = preview_state.result()
-                if cli_type == "codex":
-                    await _record_codex_usage_capture(usage_capture, parsed_result)
-                stdout_reader.stop()
-                stdout_reader.join(1.0)
-                with session._lock:
-                    session.process = None
-                close_process_streams(process)
+                try:
+                    if cli_type == "codex":
+                        await _record_codex_usage_capture(usage_capture, parsed_result)
+                finally:
+                    try:
+                        await _cleanup_cli_process_lifecycle(process_lifecycle, abort=cleanup_abort)
+                    finally:
+                        with session._lock:
+                            session.process = None
+                        active_lifecycle = None
             final_status = take_pending_status(force=True)
             if final_status is not None:
                 yield final_status
@@ -4566,14 +4726,18 @@ async def _stream_cli_chat(
         lingering_process: subprocess.Popen | None = None
         with session._lock:
             lingering_process = session.process
-            _reset_session_runtime_flags(session)
-        lingering_process = lingering_process or active_process
-        if lingering_process is not None and lingering_process.poll() is None:
-            if loop is not None:
-                await loop.run_in_executor(None, _terminate_process_sync, lingering_process)
-            else:
-                _terminate_process_sync(lingering_process)
-        close_process_streams(lingering_process)
+        lingering_lifecycle = _get_cli_process_lifecycle(lingering_process) or active_lifecycle
+        try:
+            if lingering_lifecycle is not None:
+                await _cleanup_cli_process_lifecycle(lingering_lifecycle, abort=True)
+            elif lingering_process is not None:
+                await asyncio.to_thread(_terminate_process_sync, lingering_process)
+                await asyncio.to_thread(close_process_streams, lingering_process)
+        finally:
+            with session._lock:
+                _reset_session_runtime_flags(session)
+        if not normal_return_for_diag:
+            await _reconcile_idle_cli_turns(session)
 
 
 async def run_cli_chat(
@@ -4639,7 +4803,7 @@ async def run_cli_chat(
     final_trace_count = 0
     completion_state_for_diag = ""
     normal_return_for_diag = False
-    active_process: subprocess.Popen | None = None
+    active_lifecycle: _CliProcessLifecycle | None = None
     try:
         session.touch()
         loop = asyncio.get_running_loop()
@@ -4701,9 +4865,20 @@ async def run_cli_chat(
                     env=env,
                     encoding="utf-8",
                     errors="replace",
-                    **build_chat_cli_process_kwargs(),
+                    **build_chat_cli_process_kwargs(suspended=True),
                 )
-                active_process = process
+                process_lifecycle = _create_cli_process_lifecycle(process)
+                active_lifecycle = process_lifecycle
+                try:
+                    await asyncio.to_thread(
+                        resume_suspended_process,
+                        process,
+                        process_lifecycle.process_tree,
+                    )
+                except Exception as exc:
+                    await _cleanup_cli_process_lifecycle(process_lifecycle, abort=True)
+                    active_lifecycle = None
+                    _raise(500, "cli_process_isolation_failed", f"CLI 进程隔离初始化失败: {exc}")
                 process_pid = int(getattr(process, "pid", 0) or 0)
                 diag_log_event(
                     logger,
@@ -4736,20 +4911,19 @@ async def run_cli_chat(
                     process.stdin.flush()
                     process.stdin.close()
                 except (BrokenPipeError, OSError) as exc:
-                    close_process_streams(process)
-                    _terminate_process_sync(process)
-                    _wait_for_process_exit_sync(process, 1.0)
                     _raise(500, "cli_write_failed", msg("chat", "cli_failed") + f": {exc}")
 
             with session._lock:
                 session.process = process
 
             cli_started_at = time.perf_counter()
+            cleanup_abort = False
             try:
                 if cli_type == "codex":
                     codex_result = await _communicate_codex_process(
                         process,
                         usage_capture=usage_capture,
+                        lifecycle=process_lifecycle,
                     )
                     response = codex_result.text
                     thread_id = codex_result.session_id
@@ -4758,19 +4932,25 @@ async def run_cli_chat(
                     response, _, returncode = await _communicate_claude_process(
                         process,
                         done_session=done_session,
+                        lifecycle=process_lifecycle,
                     )
                 else:
-                    response, returncode = await _communicate_process(process)
+                    response, returncode = await _communicate_process(
+                        process,
+                        lifecycle=process_lifecycle,
+                    )
                     response = response.strip() or msg("chat", "no_output")
                 output_bytes = len(str(response or "").encode("utf-8", errors="replace"))
             except Exception:
-                if process.poll() is None:
-                    _terminate_process_sync(process)
+                cleanup_abort = True
                 raise
             finally:
-                with session._lock:
-                    session.process = None
-                close_process_streams(process)
+                try:
+                    await _cleanup_cli_process_lifecycle(process_lifecycle, abort=cleanup_abort)
+                finally:
+                    with session._lock:
+                        session.process = None
+                    active_lifecycle = None
             stage_durations["cli_ms"] += max(0, int(round((time.perf_counter() - cli_started_at) * 1000)))
             should_force_error_output = False
 
@@ -4935,11 +5115,18 @@ async def run_cli_chat(
             )
         with session._lock:
             lingering_process = session.process
-            _reset_session_runtime_flags(session)
-        lingering_process = lingering_process or active_process
-        if lingering_process is not None and lingering_process.poll() is None:
-            _terminate_process_sync(lingering_process)
-        close_process_streams(lingering_process)
+        lingering_lifecycle = _get_cli_process_lifecycle(lingering_process) or active_lifecycle
+        try:
+            if lingering_lifecycle is not None:
+                await _cleanup_cli_process_lifecycle(lingering_lifecycle, abort=True)
+            elif lingering_process is not None:
+                await asyncio.to_thread(_terminate_process_sync, lingering_process)
+                await asyncio.to_thread(close_process_streams, lingering_process)
+        finally:
+            with session._lock:
+                _reset_session_runtime_flags(session)
+        if not normal_return_for_diag:
+            await _reconcile_idle_cli_turns(session)
 
 
 def _normalized_chat_text(
