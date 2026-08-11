@@ -131,6 +131,8 @@ function MetricCells({ metrics }: { metrics: CodexUsageMetrics }) {
 }
 
 const percentValueFormat = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 1 });
+const durationDaysFormat = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 });
+const MAX_RATE_LIMIT_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
 
 function formatPercentValue(value: number) {
   return `${percentValueFormat.format(value)}%`;
@@ -138,6 +140,30 @@ function formatPercentValue(value: number) {
 
 function remainingPercent(sample: CodexRateLimitSample) {
   return Math.min(100, Math.max(0, 100 - sample.usedPercent));
+}
+
+function remainingDurationMs(sample: CodexRateLimitSample) {
+  const sampledAt = Date.parse(sample.sampledAt);
+  const resetsAt = Date.parse(sample.resetsAt);
+  if (!Number.isFinite(sampledAt) || !Number.isFinite(resetsAt)) return 0;
+  return Math.min(MAX_RATE_LIMIT_DURATION_MS, Math.max(0, resetsAt - sampledAt));
+}
+
+function remainingDurationPercent(sample: CodexRateLimitSample) {
+  return (remainingDurationMs(sample) / MAX_RATE_LIMIT_DURATION_MS) * 100;
+}
+
+function formatRemainingDuration(durationMs: number) {
+  const totalMinutes = Math.floor(durationMs / (60 * 1000));
+  const days = Math.floor(totalMinutes / (24 * 60));
+  const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
+  const minutes = totalMinutes % 60;
+  const parts = [
+    ...(days ? [`${numberFormat.format(days)} 天`] : []),
+    ...(hours ? [`${numberFormat.format(hours)} 小时`] : []),
+    ...(minutes ? [`${numberFormat.format(minutes)} 分钟`] : []),
+  ];
+  return parts.length ? parts.join(" ") : "0 分钟";
 }
 
 function formatServerLocalTime(value: string) {
@@ -160,6 +186,7 @@ function rateLimitTooltip(sample: CodexRateLimitSample) {
   return [
     `采样时间：${formatServerLocalTime(sample.sampledAt)}`,
     `剩余百分比：${formatPercentValue(remainingPercent(sample))}`,
+    `剩余时长：${formatRemainingDuration(remainingDurationMs(sample))}`,
     `已用百分比：${formatPercentValue(sample.usedPercent)}`,
     `窗口时长：${formatWindow(sample.windowMinutes)}（${numberFormat.format(sample.windowMinutes)} 分钟）`,
     `重置时间：${formatServerLocalTime(sample.resetsAt)}`,
@@ -185,10 +212,10 @@ function CodexRateLimitChart({ samples }: { samples: CodexRateLimitSample[] }) {
   }
 
   const width = 640;
-  const height = 240;
-  const left = 48;
-  const right = 16;
-  const top = 18;
+  const height = 250;
+  const left = 64;
+  const right = 64;
+  const top = 32;
   const bottom = 42;
   const plotWidth = width - left - right;
   const plotHeight = height - top - bottom;
@@ -206,20 +233,22 @@ function CodexRateLimitChart({ samples }: { samples: CodexRateLimitSample[] }) {
           ? (timestamps[index] - minTimestamp) / timestampRange
           : index / (orderedSamples.length - 1)
     ))) * plotWidth,
-    y: top + ((100 - remainingPercent(sample)) / 100) * plotHeight,
+    quotaY: top + ((100 - remainingPercent(sample)) / 100) * plotHeight,
+    durationY: top + ((100 - remainingDurationPercent(sample)) / 100) * plotHeight,
   }));
   const latestRemaining = remainingPercent(latest);
-  const accessibleLabel = `通用 Codex 剩余额度趋势，共 ${orderedSamples.length} 个样本，当前剩余 ${formatPercentValue(latestRemaining)}`;
+  const latestDuration = formatRemainingDuration(remainingDurationMs(latest));
+  const accessibleLabel = `通用 Codex 剩余额度与剩余时长趋势，共 ${orderedSamples.length} 个样本，当前剩余 ${formatPercentValue(latestRemaining)}，剩余时长 ${latestDuration}`;
 
   return (
     <section className="codex-usage-section" aria-labelledby="codex-rate-limit-title">
       <div className="codex-usage-section-heading codex-usage-rate-limit-heading">
         <div>
           <h3 id="codex-rate-limit-title">通用 Codex 剩余额度趋势</h3>
-          <p>纵轴为剩余额度，固定显示 0% 至 100%。</p>
         </div>
         <div className="codex-usage-rate-limit-summary" aria-label="最新限额样本摘要">
           <strong>当前剩余 {formatPercentValue(latestRemaining)}</strong>
+          <span>剩余时长 {latestDuration}</span>
           <span>已用 {formatPercentValue(latest.usedPercent)}</span>
           <span>{formatWindow(latest.windowMinutes)}窗口</span>
           <span>重置时间 {formatServerLocalTime(latest.resetsAt)}</span>
@@ -227,28 +256,87 @@ function CodexRateLimitChart({ samples }: { samples: CodexRateLimitSample[] }) {
       </div>
       <div className="codex-usage-rate-limit-chart">
         <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={accessibleLabel}>
-          <title>通用 Codex 剩余额度趋势</title>
-          <desc>按采样时间展示通用 Codex 剩余额度，纵轴范围为百分之零到百分之一百。</desc>
+          <title>通用 Codex 剩余额度与剩余时长趋势</title>
+          <desc>按采样时间展示通用 Codex 剩余额度与剩余时长；左纵轴为百分之零到百分之一百，右纵轴为零天到七天。</desc>
+          <line
+            className="codex-usage-rate-limit-quota-axis"
+            x1={left}
+            x2={left}
+            y1={top}
+            y2={top + plotHeight}
+          />
+          <line
+            className="codex-usage-rate-limit-duration-axis"
+            x1={width - right}
+            x2={width - right}
+            y1={top}
+            y2={top + plotHeight}
+          />
+          <text
+            className="codex-usage-rate-limit-quota-axis-title"
+            x={left}
+            y={18}
+            textAnchor="start"
+          >
+            剩余额度
+          </text>
+          <text
+            className="codex-usage-rate-limit-duration-axis-title"
+            x={width - right}
+            y={18}
+            textAnchor="end"
+          >
+            剩余时长
+          </text>
           {[0, 25, 50, 75, 100].map((remaining) => {
             const y = top + ((100 - remaining) / 100) * plotHeight;
             return (
               <g key={remaining} className="codex-usage-rate-limit-grid">
                 <line x1={left} x2={width - right} y1={y} y2={y} />
-                <text x={left - 8} y={y + 4} textAnchor="end">{remaining}%</text>
+                <text
+                  className="codex-usage-rate-limit-quota-tick"
+                  x={left - 10}
+                  y={y + 4}
+                  textAnchor="end"
+                >
+                  {remaining}%
+                </text>
+                <text
+                  className="codex-usage-rate-limit-duration-tick"
+                  x={width - right + 10}
+                  y={y + 4}
+                  textAnchor="start"
+                >
+                  {durationDaysFormat.format(remaining * 0.07)} 天
+                </text>
               </g>
             );
           })}
           {points.length > 1 ? (
-            <polyline
-              className="codex-usage-rate-limit-line"
-              points={points.map((point) => `${point.x},${point.y}`).join(" ")}
-            />
+            <>
+              <polyline
+                className="codex-usage-rate-limit-line"
+                points={points.map((point) => `${point.x},${point.quotaY}`).join(" ")}
+              />
+              <polyline
+                className="codex-usage-rate-limit-duration-line"
+                points={points.map((point) => `${point.x},${point.durationY}`).join(" ")}
+              />
+            </>
           ) : null}
-          {points.map(({ sample, x, y }, index) => {
+          {points.map(({ sample, x, quotaY, durationY }, index) => {
             const tooltip = rateLimitTooltip(sample);
             return (
               <g key={`${sample.sampledAt}:${index}`} tabIndex={0} aria-label={tooltip}>
-                <circle className="codex-usage-rate-limit-point" cx={x} cy={y} r={points.length === 1 ? 5 : 4}>
+                <circle className="codex-usage-rate-limit-point" cx={x} cy={quotaY} r={points.length === 1 ? 5 : 4}>
+                  <title>{tooltip}</title>
+                </circle>
+                <circle
+                  className="codex-usage-rate-limit-duration-point"
+                  cx={x}
+                  cy={durationY}
+                  r={points.length === 1 ? 3 : 2.5}
+                >
                   <title>{tooltip}</title>
                 </circle>
               </g>

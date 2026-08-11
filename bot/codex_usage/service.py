@@ -159,7 +159,11 @@ class CodexUsageCapture:
                 usage,
                 timestamp,
             )
-        if self.provider.kind == "openai_official" and normalized_session_id:
+        if (
+            self.provider.kind == "openai_official"
+            and normalized_session_id
+            and self.model.casefold() != "gpt-5.3-codex-spark"
+        ):
             await self._service._record_rate_limit_capture(
                 session_id=normalized_session_id,
                 started_at=self.started_at,

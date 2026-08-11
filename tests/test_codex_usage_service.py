@@ -104,6 +104,34 @@ async def test_official_capture_records_one_rate_limit_sample(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_spark_capture_excludes_general_rate_limit(tmp_path: Path) -> None:
+    rate_limit_resolver = _RateLimitResolver(_sample())
+    service = CodexUsageService(
+        tmp_path / "usage.sqlite3",
+        resolver=_ProviderResolver(_provider()),
+        rate_limit_resolver=rate_limit_resolver,
+    )
+    await service.set_enabled(True)
+    capture = await service.create_capture(
+        env={"CODEX_HOME": str(tmp_path)},
+        argv=["codex", "exec", "--model", "gpt-5.3-codex-spark"],
+    )
+
+    recorded = await capture.record_once(
+        CodexTokenUsage(input_tokens=2, output_tokens=1),
+        terminal_at=date(2026, 8, 11),
+        session_id="session-1",
+    )
+    result = await service.query(date(2026, 8, 11), date(2026, 8, 11))
+
+    assert capture.model == "gpt-5.3-codex-spark"
+    assert recorded is True
+    assert [item.model for item in result.by_provider_model] == ["gpt-5.3-codex-spark"]
+    assert rate_limit_resolver.calls == []
+    assert result.rate_limit_samples == ()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["base_url", "unknown"])
 async def test_non_official_capture_does_not_resolve_rate_limit(
     tmp_path: Path,
