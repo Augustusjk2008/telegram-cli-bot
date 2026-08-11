@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Literal, Mapping
@@ -7,6 +8,7 @@ from typing import Any, Literal, Mapping
 
 ProviderKind = Literal["openai_official", "base_url", "unknown"]
 DEFAULT_CODEX_MODEL = "gpt-5.6-sol"
+SQLITE_INT64_MAX = 2**63 - 1
 
 
 def normalize_model_key(value: object) -> str:
@@ -73,6 +75,51 @@ class CodexTokenUsage:
         if self.input_tokens == 0:
             return None
         return self.cached_input_tokens / self.input_tokens
+
+
+@dataclass(frozen=True, slots=True)
+class CodexRateLimitSample:
+    sampled_at: datetime
+    used_percent: float
+    window_minutes: int
+    resets_at: datetime
+    plan_type: str | None = None
+
+    def __post_init__(self) -> None:
+        for field_name in ("sampled_at", "resets_at"):
+            value = getattr(self, field_name)
+            if (
+                not isinstance(value, datetime)
+                or value.tzinfo is None
+                or value.utcoffset() is None
+            ):
+                raise ValueError(f"{field_name} 必须是带时区的时间")
+            try:
+                timestamp = value.timestamp()
+            except (OSError, OverflowError, ValueError) as exc:
+                raise ValueError(f"{field_name} 无效") from exc
+            if not math.isfinite(timestamp) or timestamp < 0:
+                raise ValueError(f"{field_name} 无效")
+        if (
+            isinstance(self.used_percent, bool)
+            or not isinstance(self.used_percent, (int, float))
+            or (
+                isinstance(self.used_percent, float)
+                and not math.isfinite(self.used_percent)
+            )
+            or not 0 <= self.used_percent <= 100
+        ):
+            raise ValueError("used_percent 必须在 0 到 100 之间")
+        object.__setattr__(self, "used_percent", float(self.used_percent))
+        if (
+            isinstance(self.window_minutes, bool)
+            or not isinstance(self.window_minutes, int)
+            or self.window_minutes <= 0
+            or self.window_minutes > SQLITE_INT64_MAX
+        ):
+            raise ValueError("window_minutes 必须是 SQLite 有符号 64 位正整数")
+        if self.plan_type is not None and not isinstance(self.plan_type, str):
+            raise ValueError("plan_type 必须是字符串或空值")
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,6 +219,7 @@ class UsageQueryResult:
     by_provider_model: tuple[ProviderModelUsage, ...]
     daily_by_provider_model: tuple[DailyProviderModelUsage, ...]
     daily_pagination: DailyUsagePagination | None = None
+    rate_limit_samples: tuple[CodexRateLimitSample, ...] = ()
 
 
 DayLike = date | datetime | int | str

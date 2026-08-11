@@ -74,6 +74,7 @@ import type {
   CliErrorTopItem,
   CodexUsageAvailableRange,
   CodexUsageConfig,
+  CodexRateLimitSample,
   CodexUsageDailyProviderStats,
   CodexUsageDailyProviderModelStats,
   CodexUsageDailyStats,
@@ -1443,6 +1444,14 @@ type RawCodexUsageMetrics = {
   cache_hit_rate?: number | null;
 };
 
+type RawCodexRateLimitSample = {
+  sampled_at?: unknown;
+  used_percent?: unknown;
+  window_minutes?: unknown;
+  resets_at?: unknown;
+  plan_type?: unknown;
+};
+
 type RawCodexUsageConfig = {
   enabled?: boolean;
   current_provider?: RawCodexUsageProvider;
@@ -1500,6 +1509,7 @@ type RawCodexUsageStats = {
   daily_by_provider?: RawCodexUsageDailyProviderStats[];
   daily_by_provider_model?: RawCodexUsageDailyProviderModelStats[];
   daily_pagination?: RawCodexUsageDailyPagination;
+  rate_limit_samples?: RawCodexRateLimitSample[];
 };
 
 type StreamEventPayload =
@@ -3554,6 +3564,35 @@ function mapCodexUsageConfig(raw: RawCodexUsageConfig): CodexUsageConfig {
   };
 }
 
+function mapCodexRateLimitSample(raw: RawCodexRateLimitSample): CodexRateLimitSample | null {
+  const sampledAt = typeof raw.sampled_at === "string" ? raw.sampled_at.trim() : "";
+  const resetsAt = typeof raw.resets_at === "string" ? raw.resets_at.trim() : "";
+  const sampledAtMs = Date.parse(sampledAt);
+  const resetsAtMs = Date.parse(resetsAt);
+  const usedPercent = raw.used_percent;
+  const windowMinutes = raw.window_minutes;
+  if (
+    !sampledAt
+    || !Number.isFinite(sampledAtMs)
+    || !resetsAt
+    || !Number.isFinite(resetsAtMs)
+    || resetsAtMs < 0
+    || typeof usedPercent !== "number"
+    || !Number.isFinite(usedPercent)
+    || usedPercent < 0
+    || usedPercent > 100
+    || typeof windowMinutes !== "number"
+    || !Number.isInteger(windowMinutes)
+    || windowMinutes <= 0
+  ) {
+    return null;
+  }
+  const planType = typeof raw.plan_type === "string" && raw.plan_type.trim()
+    ? raw.plan_type.trim()
+    : null;
+  return { sampledAt, usedPercent, windowMinutes, resetsAt, planType };
+}
+
 function positiveInteger(value: unknown, fallback: number) {
   const parsed = Math.floor(numberOrZero(value));
   return parsed > 0 ? parsed : fallback;
@@ -3638,6 +3677,9 @@ function mapCodexUsageStats(raw: RawCodexUsageStats): CodexUsageStats {
     dailyByProvider,
     dailyByProviderModel,
     dailyPagination: mapCodexUsageDailyPagination(raw.daily_pagination, dailyItemCount),
+    rateLimitSamples: (raw.rate_limit_samples || [])
+      .map(mapCodexRateLimitSample)
+      .filter((sample): sample is CodexRateLimitSample => sample !== null),
   };
 }
 

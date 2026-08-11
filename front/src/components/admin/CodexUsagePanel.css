@@ -39,6 +39,7 @@
 .codex-usage-section-heading p,
 .codex-usage-helper,
 .codex-usage-provider-options > p,
+.codex-usage-empty-state,
 .codex-usage-empty,
 .codex-usage-loading {
   margin: 0.35rem 0 0;
@@ -262,6 +263,78 @@
   font-size: 1.05rem;
 }
 
+.codex-usage-rate-limit-heading {
+  gap: 1rem;
+}
+
+.codex-usage-rate-limit-summary {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.35rem 0.75rem;
+  max-width: 32rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.codex-usage-rate-limit-summary strong {
+  color: var(--text);
+}
+
+.codex-usage-rate-limit-chart {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin-top: 0.75rem;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  background: var(--bg);
+}
+
+.codex-usage-rate-limit-chart svg {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+}
+
+.codex-usage-rate-limit-grid line {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.codex-usage-rate-limit-grid text,
+.codex-usage-rate-limit-axis-label {
+  fill: var(--muted);
+  font-size: 11px;
+}
+
+.codex-usage-rate-limit-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.codex-usage-rate-limit-point {
+  fill: var(--surface);
+  stroke: var(--accent);
+  stroke-width: 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.codex-usage-rate-limit-chart g:focus {
+  outline: none;
+}
+
+.codex-usage-rate-limit-chart g:focus .codex-usage-rate-limit-point {
+  stroke-width: 5;
+}
+
 .codex-usage-table-wrap {
   max-width: 100%;
   min-width: 0;
@@ -355,6 +428,11 @@
   .codex-usage-heading,
   .codex-usage-section-heading {
     flex-direction: column;
+  }
+
+  .codex-usage-rate-limit-summary {
+    justify-content: flex-start;
+    max-width: 100%;
   }
 
   .codex-usage-switch {

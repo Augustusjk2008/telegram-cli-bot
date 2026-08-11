@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_CODEX_USAGE_MODEL } from "../../services/types";
 import type {
+  CodexRateLimitSample,
   CodexUsageConfig,
   CodexUsageDailyProviderModelStats,
   CodexUsageMetrics,
@@ -126,6 +127,144 @@ function MetricCells({ metrics }: { metrics: CodexUsageMetrics }) {
       <td><CompactNumber value={metrics.totalTokens} /></td>
       <td>{formatRate(metrics.cacheHitRate)}</td>
     </>
+  );
+}
+
+const percentValueFormat = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 1 });
+
+function formatPercentValue(value: number) {
+  return `${percentValueFormat.format(value)}%`;
+}
+
+function remainingPercent(sample: CodexRateLimitSample) {
+  return Math.min(100, Math.max(0, 100 - sample.usedPercent));
+}
+
+function formatServerLocalTime(value: string) {
+  const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}(?::\d{2})?)(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?$/.exec(value);
+  return match ? `${match[1]} ${match[2]}` : value;
+}
+
+function formatAxisTime(value: string) {
+  const match = /^\d{4}-(\d{2}-\d{2})T(\d{2}:\d{2})/.exec(value);
+  return match ? `${match[1]} ${match[2]}` : value;
+}
+
+function formatWindow(minutes: number) {
+  if (minutes % 1440 === 0) return `${numberFormat.format(minutes / 1440)} 天`;
+  if (minutes % 60 === 0) return `${numberFormat.format(minutes / 60)} 小时`;
+  return `${numberFormat.format(minutes)} 分钟`;
+}
+
+function rateLimitTooltip(sample: CodexRateLimitSample) {
+  return [
+    `采样时间：${formatServerLocalTime(sample.sampledAt)}`,
+    `剩余百分比：${formatPercentValue(remainingPercent(sample))}`,
+    `已用百分比：${formatPercentValue(sample.usedPercent)}`,
+    `窗口时长：${formatWindow(sample.windowMinutes)}（${numberFormat.format(sample.windowMinutes)} 分钟）`,
+    `重置时间：${formatServerLocalTime(sample.resetsAt)}`,
+    ...(sample.planType ? [`套餐类型：${sample.planType}`] : []),
+  ].join("\n");
+}
+
+function CodexRateLimitChart({ samples }: { samples: CodexRateLimitSample[] }) {
+  const orderedSamples = useMemo(
+    () => [...samples].sort((left, right) => Date.parse(left.sampledAt) - Date.parse(right.sampledAt)),
+    [samples],
+  );
+  const latest = orderedSamples.at(-1);
+  if (!latest) {
+    return (
+      <section className="codex-usage-section" aria-labelledby="codex-rate-limit-title">
+        <h3 id="codex-rate-limit-title">通用 Codex 剩余额度趋势</h3>
+        <p className="codex-usage-empty-state">
+          暂无通用 Codex 限额样本；开启采集并完成一次 OpenAI 官方 Codex turn 后显示。
+        </p>
+      </section>
+    );
+  }
+
+  const width = 640;
+  const height = 240;
+  const left = 48;
+  const right = 16;
+  const top = 18;
+  const bottom = 42;
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+  const timestamps = orderedSamples.map((sample) => Date.parse(sample.sampledAt));
+  const hasValidTimestamps = timestamps.every(Number.isFinite);
+  const minTimestamp = hasValidTimestamps ? timestamps[0] : 0;
+  const maxTimestamp = hasValidTimestamps ? timestamps[timestamps.length - 1] : 0;
+  const timestampRange = maxTimestamp - minTimestamp;
+  const points = orderedSamples.map((sample, index) => ({
+    sample,
+    x: left + Math.min(1, Math.max(0, (
+      orderedSamples.length === 1
+        ? 0.5
+        : timestampRange > 0
+          ? (timestamps[index] - minTimestamp) / timestampRange
+          : index / (orderedSamples.length - 1)
+    ))) * plotWidth,
+    y: top + ((100 - remainingPercent(sample)) / 100) * plotHeight,
+  }));
+  const latestRemaining = remainingPercent(latest);
+  const accessibleLabel = `通用 Codex 剩余额度趋势，共 ${orderedSamples.length} 个样本，当前剩余 ${formatPercentValue(latestRemaining)}`;
+
+  return (
+    <section className="codex-usage-section" aria-labelledby="codex-rate-limit-title">
+      <div className="codex-usage-section-heading codex-usage-rate-limit-heading">
+        <div>
+          <h3 id="codex-rate-limit-title">通用 Codex 剩余额度趋势</h3>
+          <p>纵轴为剩余额度，固定显示 0% 至 100%。</p>
+        </div>
+        <div className="codex-usage-rate-limit-summary" aria-label="最新限额样本摘要">
+          <strong>当前剩余 {formatPercentValue(latestRemaining)}</strong>
+          <span>已用 {formatPercentValue(latest.usedPercent)}</span>
+          <span>{formatWindow(latest.windowMinutes)}窗口</span>
+          <span>重置时间 {formatServerLocalTime(latest.resetsAt)}</span>
+        </div>
+      </div>
+      <div className="codex-usage-rate-limit-chart">
+        <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={accessibleLabel}>
+          <title>通用 Codex 剩余额度趋势</title>
+          <desc>按采样时间展示通用 Codex 剩余额度，纵轴范围为百分之零到百分之一百。</desc>
+          {[0, 25, 50, 75, 100].map((remaining) => {
+            const y = top + ((100 - remaining) / 100) * plotHeight;
+            return (
+              <g key={remaining} className="codex-usage-rate-limit-grid">
+                <line x1={left} x2={width - right} y1={y} y2={y} />
+                <text x={left - 8} y={y + 4} textAnchor="end">{remaining}%</text>
+              </g>
+            );
+          })}
+          {points.length > 1 ? (
+            <polyline
+              className="codex-usage-rate-limit-line"
+              points={points.map((point) => `${point.x},${point.y}`).join(" ")}
+            />
+          ) : null}
+          {points.map(({ sample, x, y }, index) => {
+            const tooltip = rateLimitTooltip(sample);
+            return (
+              <g key={`${sample.sampledAt}:${index}`} tabIndex={0} aria-label={tooltip}>
+                <circle className="codex-usage-rate-limit-point" cx={x} cy={y} r={points.length === 1 ? 5 : 4}>
+                  <title>{tooltip}</title>
+                </circle>
+              </g>
+            );
+          })}
+          <text className="codex-usage-rate-limit-axis-label" x={left} y={height - 12} textAnchor="start">
+            {formatAxisTime(orderedSamples[0].sampledAt)}
+          </text>
+          {orderedSamples.length > 1 ? (
+            <text className="codex-usage-rate-limit-axis-label" x={width - right} y={height - 12} textAnchor="end">
+              {formatAxisTime(latest.sampledAt)}
+            </text>
+          ) : null}
+        </svg>
+      </div>
+    </section>
   );
 }
 
@@ -362,8 +501,10 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
     );
   };
 
-  const hasHistoricalData = Boolean(stats && stats.totals.requestCount > 0);
-  const noResults = Boolean(stats && !providerRows.length && !dailyRows.length);
+  const hasRateLimitSamples = Boolean(stats?.rateLimitSamples.length);
+  const hasHistoricalData = Boolean(stats && (stats.totals.requestCount > 0 || hasRateLimitSamples));
+  const hasUsageRows = Boolean(providerRows.length || dailyRows.length);
+  const noResults = Boolean(stats && !hasUsageRows && !hasRateLimitSamples);
   const dailyPagination = stats?.dailyPagination;
   const dailyExpanded = dailyPageSize > COLLAPSED_DAILY_PAGE_SIZE;
 
@@ -518,9 +659,11 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
                 </dl>
               </section>
 
+              <CodexRateLimitChart samples={stats.rateLimitSamples} />
+
               {noResults ? <p className="codex-usage-empty">暂无符合筛选条件的 Codex 用量数据。</p> : null}
 
-              {!noResults ? (
+              {hasUsageRows ? (
                 <section className="codex-usage-section" aria-labelledby="codex-usage-by-provider-title">
                   <h3 id="codex-usage-by-provider-title">按 Provider / 模型汇总</h3>
                   <div className="codex-usage-table-wrap">
@@ -557,7 +700,7 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
                 </section>
               ) : null}
 
-              {!noResults ? (
+              {hasUsageRows ? (
                 <section className="codex-usage-section" aria-labelledby="codex-usage-daily-title">
                   <div className="codex-usage-section-heading">
                     <div>

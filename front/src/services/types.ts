@@ -415,6 +415,14 @@ export type CodexUsageMetrics = {
   cacheHitRate: number | null;
 };
 
+export type CodexRateLimitSample = {
+  sampledAt: string;
+  usedPercent: number;
+  windowMinutes: number;
+  resetsAt: string;
+  planType: string | null;
+};
+
 export type CodexUsageConfig = {
   enabled: boolean;
   currentProvider: CodexUsageProvider;
@@ -478,6 +486,7 @@ export type CodexUsageStats = {
   dailyByProvider: CodexUsageDailyProviderStats[];
   dailyByProviderModel: CodexUsageDailyProviderModelStats[];
   dailyPagination: CodexUsageDailyPagination;
+  rateLimitSamples: CodexRateLimitSample[];
 };
 
 export type NativeAgentConfigView = {
