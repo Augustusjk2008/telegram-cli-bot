@@ -55,3 +55,19 @@ def test_post_mcp_tool_reports_context_when_bad_gateway_persists(monkeypatch) ->
     assert result["status"] == 502
     assert "HTTP 502" in str(result["error"])
     assert "poll_agent_tasks" in str(result["error"])
+
+
+def test_post_mcp_tool_does_not_retry_new_agent_session(monkeypatch) -> None:
+    config = McpBridgeConfig(bridge_url="http://bridge.test", token="token")
+    attempts: list[str] = []
+
+    def fake_urlopen(request, timeout):
+        attempts.append(request.full_url)
+        raise _http_error(request.full_url, 502)
+
+    monkeypatch.setattr("bot.cluster.mcp_client.urllib.request.urlopen", fake_urlopen)
+
+    result = post_mcp_tool(config, "new_agent_session", {"agent_id": "worker"}, run_id="clr_1")
+
+    assert result["ok"] is False
+    assert len(attempts) == 1

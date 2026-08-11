@@ -35,6 +35,18 @@ def _tools_for_environment() -> list[dict[str, Any]]:
             },
         },
         {
+            "name": "new_agent_session",
+            "description": "为没有 queued/running 集群任务且当前会话空闲的子 agent 新开会话。必须传 run_id；旧会话历史会保留。",
+            "inputSchema": {
+                "type": "object",
+                "required": ["agent_id"],
+                "properties": {
+                    "agent_id": {"type": "string"},
+                    "run_id": {"type": "string"},
+                },
+            },
+        },
+        {
             "name": "ask_agent",
             "description": "异步启动个 TCB 子 agent 任务并立即返回 task_id。必须传 run_id。主 agent 可继续调用 poll_agent_tasks 等待/汇总，也可先结束让任务后台运行。timeout_seconds 是软期限，未传时使用目标 agent 的 cluster.timeout_seconds，超时不强行中断子 agent；poll_agent_tasks 会返回 deadline_exceeded。model_tier 可选 low/medium/high，并使用该档配置的模型和思考深度；档位配置留空时继承主 agent。",
             "inputSchema": {

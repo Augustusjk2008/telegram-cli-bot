@@ -130,6 +130,16 @@ export default function (pi: ExtensionAPI) {
 		(params) => withoutRunId(params),
 	));
 	pi.registerTool(clusterTool(
+		"new_agent_session",
+		"New Agent Session",
+		"为没有 queued/running 集群任务且当前会话空闲的子 agent 新开会话；旧会话历史会保留。",
+		Type.Object({
+			run_id: runIdParam,
+			agent_id: Type.String(),
+		}),
+		(params) => withoutRunId(params),
+	));
+	pi.registerTool(clusterTool(
 		"ask_agent",
 		"Ask Agent",
 		"异步启动 TCB 子 agent 任务并立即返回 task_id；非后台任务随后应等待结果并汇总。",

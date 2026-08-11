@@ -40,7 +40,8 @@ def _http_error_result(exc: urllib.error.HTTPError, *, tool_name: str) -> dict[s
 def post_mcp_tool(config: McpBridgeConfig, tool_name: str, payload: dict[str, Any], *, run_id: str) -> dict[str, Any]:
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     url = f"{config.bridge_url}/api/internal/cluster/mcp/tools/{tool_name}"
-    for attempt in range(1, _MAX_TRANSIENT_HTTP_ATTEMPTS + 1):
+    max_attempts = 1 if tool_name == "new_agent_session" else _MAX_TRANSIENT_HTTP_ATTEMPTS
+    for attempt in range(1, max_attempts + 1):
         request = urllib.request.Request(
             url,
             data=body,
@@ -55,7 +56,7 @@ def post_mcp_tool(config: McpBridgeConfig, tool_name: str, payload: dict[str, An
             with urllib.request.urlopen(request, timeout=900) as response:
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            if exc.code in _TRANSIENT_HTTP_STATUSES and attempt < _MAX_TRANSIENT_HTTP_ATTEMPTS:
+            if exc.code in _TRANSIENT_HTTP_STATUSES and attempt < max_attempts:
                 time.sleep(_TRANSIENT_RETRY_DELAY_SECONDS * attempt)
                 continue
             return _http_error_result(exc, tool_name=tool_name)

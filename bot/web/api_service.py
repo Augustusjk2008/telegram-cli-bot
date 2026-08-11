@@ -1002,6 +1002,29 @@ async def handle_cluster_mcp_tool(
             return {"ok": True, "data": _CLUSTER_RUNTIME.build_status(run_id)}
         if tool_name == "list_agents":
             return {"ok": True, "data": _CLUSTER_RUNTIME.build_status(run_id)["agents"]}
+        if tool_name == "new_agent_session":
+            agent_id = _CLUSTER_RUNTIME.validate_new_agent_session(run_id, payload)
+            try:
+                conversation_data = create_conversation(
+                    manager,
+                    run.bot_alias,
+                    run.user_id,
+                    agent_id=agent_id,
+                    execution_mode=run.execution_mode,
+                )
+            except WebApiError as exc:
+                if exc.status == 409 and exc.code == "conversation_switch_blocked":
+                    _raise(409, "cluster_agent_busy", "子 agent 正在运行，请等待完成后再新开会话")
+                raise
+            conversation = conversation_data["conversation"]
+            return {
+                "ok": True,
+                "data": {
+                    "agent_id": agent_id,
+                    "conversation_id": str(conversation.get("id") or ""),
+                    "execution_mode": run.execution_mode,
+                },
+            }
         if tool_name == "poll_agent_tasks":
             raw_task_ids = payload.get("task_ids", payload.get("taskIds"))
             task_ids = [str(item) for item in raw_task_ids] if isinstance(raw_task_ids, list) else None
@@ -1055,7 +1078,7 @@ async def handle_cluster_mcp_tool(
     except KeyError:
         _raise(404, "cluster_run_not_found", "未找到集群任务")
     except ClusterToolError as exc:
-        _raise(400, exc.code, exc.message)
+        _raise(409 if exc.code == "cluster_agent_busy" else 400, exc.code, exc.message)
 
 
 async def create_agent(manager: MultiBotManager, alias: str, data: dict[str, Any]) -> dict[str, Any]:

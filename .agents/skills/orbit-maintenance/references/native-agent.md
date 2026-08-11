@@ -29,7 +29,7 @@
 ## Pi 扩展和环境
 
 - `workspace-history.ts` 来自 `pi-workspace-history@0.2.2`，提供 Pi 侧 `/checkpoint`、`/undo`、`/redo`；Web rollback 仍以 `ShadowGitHistory` 为准。
-- `bot/cluster/pi_extension/tcb-cluster.ts` 注册 `cluster_status`、`list_agents`、`ask_agent`、`poll_agent_tasks`、`wait_agent_messages`。
+- `bot/cluster/pi_extension/tcb-cluster.ts` 注册 `cluster_status`、`list_agents`、`new_agent_session`、`ask_agent`、`poll_agent_tasks`、`wait_agent_messages`。
 - cluster runtime 依赖 `TCB_CLUSTER_MCP_CONFIG` 和 `TCB_CLUSTER_RUN_ID`，由 Web cluster/native 链路注入。
 - Pi 扩展默认位于 `~/.pi/agent/extensions`；设置 `PI_AGENT_SETTINGS` 时使用同目录的 `extensions`；设置 `NATIVE_AGENT_PI_HOME` 时使用该 HOME 下的 `.pi/agent/extensions`。
 - `.env` 至少配置 `NATIVE_AGENT_ENABLED=true`、`NATIVE_AGENT_PI_COMMAND=pi`。

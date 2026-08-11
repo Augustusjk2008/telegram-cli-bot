@@ -538,6 +538,28 @@ class ClusterRuntime:
             "tasks": self.build_task_status(run_id, include_output=False),
         }
 
+    def validate_new_agent_session(self, run_id: str, payload: dict[str, Any]) -> str:
+        run = self._runs[str(run_id)]
+        agent_id = str(payload.get("agent_id") or payload.get("agentId") or "").strip().lower()
+        if not agent_id:
+            raise ClusterToolError("cluster_agent_not_found", "未找到子 agent")
+        if agent_id == "main":
+            raise ClusterToolError("cluster_tool_forbidden", "不能为主 agent 新开子 agent 会话")
+        try:
+            agent = run.profile.get_agent(agent_id)
+        except KeyError as exc:
+            raise ClusterToolError("cluster_agent_not_found", "未找到子 agent") from exc
+        if not agent.enabled or not agent.cluster.allow_cluster:
+            raise ClusterToolError("cluster_agent_disabled", "子 agent 未启用集群调用")
+        if any(
+            task.agent_id == agent_id and task.status in {"queued", "running"}
+            for candidate_run in self._runs.values()
+            if candidate_run.bot_alias == run.bot_alias and candidate_run.user_id == run.user_id
+            for task in candidate_run.tasks.values()
+        ):
+            raise ClusterToolError("cluster_agent_busy", "子 agent 正在运行，请等待完成后再新开会话")
+        return agent_id
+
     def validate_ask_agent(self, run_id: str, payload: dict[str, Any]) -> AskAgentRequest:
         run = self._runs[str(run_id)]
         agent_id = str(payload.get("agent_id") or payload.get("agentId") or "").strip().lower()
