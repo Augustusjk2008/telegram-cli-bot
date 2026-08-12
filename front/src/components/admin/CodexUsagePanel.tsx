@@ -182,18 +182,6 @@ function formatWindow(minutes: number) {
   return `${numberFormat.format(minutes)} 分钟`;
 }
 
-function rateLimitTooltip(sample: CodexRateLimitSample) {
-  return [
-    `采样时间：${formatServerLocalTime(sample.sampledAt)}`,
-    `剩余百分比：${formatPercentValue(remainingPercent(sample))}`,
-    `剩余时长：${formatRemainingDuration(remainingDurationMs(sample))}`,
-    `已用百分比：${formatPercentValue(sample.usedPercent)}`,
-    `窗口时长：${formatWindow(sample.windowMinutes)}（${numberFormat.format(sample.windowMinutes)} 分钟）`,
-    `重置时间：${formatServerLocalTime(sample.resetsAt)}`,
-    ...(sample.planType ? [`套餐类型：${sample.planType}`] : []),
-  ].join("\n");
-}
-
 function CodexRateLimitChart({ samples }: { samples: CodexRateLimitSample[] }) {
   const orderedSamples = useMemo(
     () => [...samples].sort((left, right) => Date.parse(left.sampledAt) - Date.parse(right.sampledAt)),
@@ -225,7 +213,6 @@ function CodexRateLimitChart({ samples }: { samples: CodexRateLimitSample[] }) {
   const maxTimestamp = hasValidTimestamps ? timestamps[timestamps.length - 1] : 0;
   const timestampRange = maxTimestamp - minTimestamp;
   const points = orderedSamples.map((sample, index) => ({
-    sample,
     x: left + Math.min(1, Math.max(0, (
       orderedSamples.length === 1
         ? 0.5
@@ -324,24 +311,6 @@ function CodexRateLimitChart({ samples }: { samples: CodexRateLimitSample[] }) {
               />
             </>
           ) : null}
-          {points.map(({ sample, x, quotaY, durationY }, index) => {
-            const tooltip = rateLimitTooltip(sample);
-            return (
-              <g key={`${sample.sampledAt}:${index}`} tabIndex={0} aria-label={tooltip}>
-                <circle className="codex-usage-rate-limit-point" cx={x} cy={quotaY} r={points.length === 1 ? 5 : 4}>
-                  <title>{tooltip}</title>
-                </circle>
-                <circle
-                  className="codex-usage-rate-limit-duration-point"
-                  cx={x}
-                  cy={durationY}
-                  r={points.length === 1 ? 3 : 2.5}
-                >
-                  <title>{tooltip}</title>
-                </circle>
-              </g>
-            );
-          })}
           <text className="codex-usage-rate-limit-axis-label" x={left} y={height - 12} textAnchor="start">
             {formatAxisTime(orderedSamples[0].sampledAt)}
           </text>

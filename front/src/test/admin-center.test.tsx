@@ -123,7 +123,7 @@ test("Transfer Admin Center rejects advanced params that could override the upst
   expect(await screen.findByText("高级 LiteLLM params 不能包含 api_key")).toBeInTheDocument();
 });
 
-test("Codex 用量趋势展示多点曲线、完整提示和仅限额样本状态", async () => {
+test("Codex 用量趋势展示双曲线、不绘制数据点并支持仅限额样本状态", async () => {
   const user = userEvent.setup();
   const client = createAdminClient();
   const stats = await client.getCodexUsageStats();
@@ -173,35 +173,24 @@ test("Codex 用量趋势展示多点曲线、完整提示和仅限额样本状�
     "0 天", "1.75 天", "3.5 天", "5.25 天", "7 天",
   ]);
   expect(durationTicks.at(-1)?.getAttribute("y")).toBe("36");
-  expect(container.querySelectorAll(".codex-usage-rate-limit-line")).toHaveLength(1);
-  expect(container.querySelectorAll(".codex-usage-rate-limit-duration-line")).toHaveLength(1);
-  expect(container.querySelector(".codex-usage-rate-limit-line")?.getAttribute("points"))
-    .not.toBe(container.querySelector(".codex-usage-rate-limit-duration-line")?.getAttribute("points"));
-  const points = Array.from(container.querySelectorAll(".codex-usage-rate-limit-point"));
-  const durationPoints = Array.from(container.querySelectorAll(".codex-usage-rate-limit-duration-point"));
-  expect(points).toHaveLength(3);
-  expect(durationPoints).toHaveLength(3);
-  expect(durationPoints.map((point) => Number(point.getAttribute("cy")))).toEqual([208, 120, 32]);
-  expect(durationPoints.every((point, index) => (
-    Number(point.getAttribute("r")) < Number(points[index].getAttribute("r"))
-  ))).toBe(true);
-  const xCoordinates = points.map((point) => Number(point.getAttribute("cx")));
+  const quotaLine = container.querySelector(".codex-usage-rate-limit-line");
+  const durationLine = container.querySelector(".codex-usage-rate-limit-duration-line");
+  expect(quotaLine).toBeInTheDocument();
+  expect(durationLine).toBeInTheDocument();
+  expect(quotaLine?.getAttribute("points")).not.toBe(durationLine?.getAttribute("points"));
+  expect(container.querySelector(".codex-usage-rate-limit-chart circle")).not.toBeInTheDocument();
+  const durationCoordinates = durationLine?.getAttribute("points")?.split(" ").map((point) => (
+    point.split(",").map(Number)
+  ));
+  expect(durationCoordinates?.map(([, y]) => y)).toEqual([208, 120, 32]);
+  const xCoordinates = durationCoordinates?.map(([x]) => x) || [];
   const firstGap = xCoordinates[1] - xCoordinates[0];
   const secondGap = xCoordinates[2] - xCoordinates[1];
   expect(firstGap).toBeGreaterThan(0);
   expect(secondGap).toBeCloseTo(firstGap * 5);
-  const tooltips = container.querySelectorAll(".codex-usage-rate-limit-point title");
-  const latestTooltip = tooltips.item(tooltips.length - 1).textContent || "";
-  expect(latestTooltip).toContain("采样时间：2026-07-26 18:45:00");
-  expect(latestTooltip).toContain("剩余百分比：92%");
-  expect(latestTooltip).toContain("剩余时长：7 天");
-  expect(latestTooltip).toContain("已用百分比：8%");
-  expect(latestTooltip).toContain("窗口时长：7 天（10,080 分钟）");
-  expect(latestTooltip).toContain("重置时间：2026-08-02 18:45:00");
-  expect(latestTooltip).toContain("套餐类型：pro");
 });
 
-test("Codex 用量趋势仅有一个样本时绘制圆点而不绘制折线", async () => {
+test("Codex 用量趋势仅有一个样本时不绘制折线或数据点", async () => {
   const user = userEvent.setup();
   const client = createAdminClient();
   const stats = await client.getCodexUsageStats();
@@ -214,10 +203,7 @@ test("Codex 用量趋势仅有一个样本时绘制圆点而不绘制折线", as
 
   await screen.findByRole("img", { name: /共 1 个样本/ });
   expect(screen.getByText("剩余时长 0 分钟")).toBeInTheDocument();
-  expect(container.querySelectorAll(".codex-usage-rate-limit-point")).toHaveLength(1);
-  expect(container.querySelectorAll(".codex-usage-rate-limit-duration-point")).toHaveLength(1);
-  expect(Number(container.querySelector(".codex-usage-rate-limit-duration-point")?.getAttribute("r")))
-    .toBeLessThan(Number(container.querySelector(".codex-usage-rate-limit-point")?.getAttribute("r")));
+  expect(container.querySelector(".codex-usage-rate-limit-chart circle")).not.toBeInTheDocument();
   expect(container.querySelector(".codex-usage-rate-limit-line")).not.toBeInTheDocument();
   expect(container.querySelector(".codex-usage-rate-limit-duration-line")).not.toBeInTheDocument();
 });

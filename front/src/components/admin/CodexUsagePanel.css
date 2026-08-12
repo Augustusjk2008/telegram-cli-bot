@@ -364,32 +364,6 @@
   vector-effect: non-scaling-stroke;
 }
 
-.codex-usage-rate-limit-point {
-  fill: var(--surface);
-  stroke: var(--accent);
-  stroke-width: 3;
-  vector-effect: non-scaling-stroke;
-}
-
-.codex-usage-rate-limit-duration-point {
-  fill: var(--accent-strong);
-  stroke: var(--surface);
-  stroke-width: 1.5;
-  vector-effect: non-scaling-stroke;
-}
-
-.codex-usage-rate-limit-chart g:focus {
-  outline: none;
-}
-
-.codex-usage-rate-limit-chart g:focus .codex-usage-rate-limit-point {
-  stroke-width: 5;
-}
-
-.codex-usage-rate-limit-chart g:focus .codex-usage-rate-limit-duration-point {
-  stroke-width: 2.5;
-}
-
 .codex-usage-table-wrap {
   max-width: 100%;
   min-width: 0;
