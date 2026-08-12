@@ -11,6 +11,7 @@ from typing import Any, Mapping, Sequence
 
 from .models import (
     DEFAULT_CODEX_MODEL,
+    CodexRateLimitSample,
     CodexTokenUsage,
     DayLike,
     ProviderInfo,
@@ -18,7 +19,7 @@ from .models import (
     normalize_model_key,
 )
 from .provider import CodexProviderResolver
-from .rollout import resolve_failed_turn_usage
+from .rollout import resolve_failed_turn_usage, resolve_turn_rate_limit
 from .store import CodexUsageStore
 
 try:
@@ -138,28 +139,37 @@ class CodexUsageCapture:
         self._attempted = True
         if not self.enabled:
             return False
-        if usage is None:
-            normalized_session_id = str(session_id or "").strip()
-            if not normalized_session_id:
-                return False
+        normalized_session_id = str(session_id or "").strip()
+        if usage is None and normalized_session_id:
             usage = await self._service._resolve_failed_capture_usage(
                 session_id=normalized_session_id,
                 started_at=self.started_at,
                 codex_home=self.codex_home,
             )
-            if usage is None:
-                return False
-        timestamp = terminal_at if terminal_at is not None else terminal_time
-        if timestamp is None:
-            sample_time = getattr(usage, "completed_at", None)
-            if isinstance(sample_time, (datetime, date)):
-                timestamp = sample_time
-        return await self._service._record_capture(
-            self.provider,
-            self.model,
-            usage,
-            timestamp,
-        )
+        token_recorded = False
+        if usage is not None:
+            timestamp = terminal_at if terminal_at is not None else terminal_time
+            if timestamp is None:
+                sample_time = getattr(usage, "completed_at", None)
+                if isinstance(sample_time, (datetime, date)):
+                    timestamp = sample_time
+            token_recorded = await self._service._record_capture(
+                self.provider,
+                self.model,
+                usage,
+                timestamp,
+            )
+        if (
+            self.provider.kind == "openai_official"
+            and normalized_session_id
+            and self.model.casefold() != "gpt-5.3-codex-spark"
+        ):
+            await self._service._record_rate_limit_capture(
+                session_id=normalized_session_id,
+                started_at=self.started_at,
+                codex_home=self.codex_home,
+            )
+        return token_recorded
 
 
 class CodexUsageService:
@@ -172,12 +182,14 @@ class CodexUsageService:
         store: CodexUsageStore | None = None,
         resolver: CodexProviderResolver | Any | None = None,
         failed_usage_resolver: Any | None = None,
+        rate_limit_resolver: Any | None = None,
     ) -> None:
         if store is None:
             store = CodexUsageStore(_default_db_path() if db_path is None else db_path)
         self._store = store
         self._resolver = resolver or CodexProviderResolver()
         self._failed_usage_resolver = failed_usage_resolver or resolve_failed_turn_usage
+        self._rate_limit_resolver = rate_limit_resolver or resolve_turn_rate_limit
         self._diagnostics_lock = threading.RLock()
         self._enabled_snapshot = False
         self._write_count = 0
@@ -322,6 +334,30 @@ class CodexUsageService:
             logger.warning("Codex 未完整终态用量恢复失败，已跳过: %s", type(exc).__name__)
             return None
 
+    async def _record_rate_limit_capture(
+        self,
+        *,
+        session_id: str,
+        started_at: datetime,
+        codex_home: Path,
+    ) -> None:
+        try:
+            sample = await asyncio.to_thread(
+                self._rate_limit_resolver,
+                session_id=session_id,
+                started_at=started_at,
+                codex_home=codex_home,
+            )
+        except Exception as exc:
+            logger.warning("Codex 限额解析失败，已跳过: %s", type(exc).__name__)
+            return
+        if sample is None:
+            return
+        try:
+            await asyncio.to_thread(self._store.record_rate_limit_sample, sample)
+        except Exception as exc:
+            logger.warning("Codex 限额写入失败，已忽略: %s", type(exc).__name__)
+
     async def query(
         self,
         start_day: DayLike,
@@ -408,6 +444,9 @@ class CodexUsageService:
             "available_range": _available_range_payload(first_date, last_date),
             "available_providers": [_provider_payload(provider) for provider in available_providers],
             "selected_provider_keys": selected_keys,
+            "rate_limit_samples": [
+                _rate_limit_payload(sample) for sample in result.rate_limit_samples
+            ],
             "totals": _totals_payload(result.totals),
             "by_provider": [
                 {"provider": _provider_payload(item.provider), **_totals_payload(item.totals)}
@@ -589,6 +628,16 @@ def _totals_payload(totals: Any) -> dict[str, int | float | None]:
         "reasoning_output_tokens": totals.reasoning_output_tokens,
         "total_tokens": totals.total_tokens,
         "cache_hit_rate": totals.cache_hit_rate,
+    }
+
+
+def _rate_limit_payload(sample: CodexRateLimitSample) -> dict[str, Any]:
+    return {
+        "sampled_at": sample.sampled_at.astimezone().isoformat(),
+        "used_percent": sample.used_percent,
+        "window_minutes": sample.window_minutes,
+        "resets_at": sample.resets_at.astimezone().isoformat(),
+        "plan_type": sample.plan_type,
     }
 
 

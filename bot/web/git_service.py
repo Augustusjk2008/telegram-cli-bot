@@ -729,7 +729,10 @@ def _parse_git_numstat(output: str) -> dict[str, dict[str, int]]:
 
 
 def _read_git_numstat(repo_root: str, args: list[str]) -> dict[str, dict[str, int]]:
-    result = _run_git(repo_root, args, check=False)
+    try:
+        result = _run_git(repo_root, args, check=False)
+    except GitCommandError:
+        return {}
     if result.returncode != 0:
         return {}
     return _parse_git_numstat(result.stdout or "")

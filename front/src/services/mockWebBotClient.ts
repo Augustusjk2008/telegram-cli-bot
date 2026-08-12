@@ -410,6 +410,7 @@ function cloneCodexUsageStats(stats: CodexUsageStats): CodexUsageStats {
     byDay: stats.byDay.map((item) => ({ ...item })),
     dailyByProvider: stats.dailyByProvider.map((item) => ({ ...item, provider: { ...item.provider } })),
     dailyByProviderModel: stats.dailyByProviderModel.map((item) => ({ ...item, provider: { ...item.provider } })),
+    rateLimitSamples: stats.rateLimitSamples.map((sample) => ({ ...sample })),
   };
 }
 
@@ -1818,13 +1819,22 @@ export class MockWebBotClient implements WebBotClient {
       firstDate: "2026-07-20",
       lastDate: "2026-07-26",
     },
-    availableProviders: [{
-      key: "openai_official",
-      kind: "openai_official",
-      label: "OpenAI 官方",
-      baseUrl: null,
-      resolution: "resolved",
-    }],
+    availableProviders: [
+      {
+        key: "openai_official",
+        kind: "openai_official",
+        label: "OpenAI 官方",
+        baseUrl: null,
+        resolution: "resolved",
+      },
+      {
+        key: "base_url:https://api.example.test/v1",
+        kind: "base_url",
+        label: "自定义 Provider",
+        baseUrl: "https://api.example.test/v1",
+        resolution: "resolved",
+      },
+    ],
     selectedProviderKeys: [],
     totals: {
       requestCount: 12,
@@ -1927,6 +1937,29 @@ export class MockWebBotClient implements WebBotClient {
       hasPrevious: false,
       hasNext: false,
     },
+    rateLimitSamples: [
+      {
+        sampledAt: "2026-07-20T09:15:00+08:00",
+        usedPercent: 18,
+        windowMinutes: 10080,
+        resetsAt: "2026-07-27T09:00:00+08:00",
+        planType: "pro",
+      },
+      {
+        sampledAt: "2026-07-23T14:30:00+08:00",
+        usedPercent: 36,
+        windowMinutes: 10080,
+        resetsAt: "2026-07-27T09:00:00+08:00",
+        planType: "pro",
+      },
+      {
+        sampledAt: "2026-07-26T18:45:00+08:00",
+        usedPercent: 8,
+        windowMinutes: 10080,
+        resetsAt: "2026-08-02T09:00:00+08:00",
+        planType: "pro",
+      },
+    ],
   };
   private updateStatus: AppUpdateStatus = {
     currentVersion: APP_VERSION,
@@ -5707,6 +5740,9 @@ export class MockWebBotClient implements WebBotClient {
       endDate: query.endDate || result.range.endDate,
     };
     result.selectedProviderKeys = selectedProviderKeys;
+    if (selectedProviderKeys.length && !selectedProviderKeys.includes("openai_official")) {
+      result.rateLimitSamples = [];
+    }
     if (selectedProviderKeys.length) {
       const selected = new Set(selectedProviderKeys);
       result.byProvider = result.byProvider.filter((item) => selected.has(item.provider.key));
@@ -5721,6 +5757,7 @@ export class MockWebBotClient implements WebBotClient {
       );
       result.dailyByProvider = result.dailyByProvider.filter((item) => inRange(item.date));
       result.dailyByProviderModel = result.dailyByProviderModel.filter((item) => inRange(item.date));
+      result.rateLimitSamples = result.rateLimitSamples.filter((sample) => inRange(sample.sampledAt.slice(0, 10)));
     }
     const fullDailyByProvider = result.dailyByProvider;
     const fullDailyByProviderModel = result.dailyByProviderModel;

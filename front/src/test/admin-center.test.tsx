@@ -54,6 +54,12 @@ async function openTransferTab(user: ReturnType<typeof userEvent.setup>) {
   await screen.findByRole("heading", { name: "LiteLLM 网关" });
 }
 
+async function openCodexUsageTab(user: ReturnType<typeof userEvent.setup>) {
+  await screen.findByText("用户权限");
+  await user.click(screen.getByRole("tab", { name: "Codex 用量" }));
+  await screen.findByRole("heading", { name: "Codex 用量" });
+}
+
 test("Transfer Admin Center exposes only providerApiKeySet, never an upstream key returned by status", async () => {
   const user = userEvent.setup();
   const leakedStatus = Object.assign(transferStatus(), { providerApiKey: "sk-status-must-not-render" });
@@ -115,4 +121,140 @@ test("Transfer Admin Center rejects advanced params that could override the upst
 
   expect(updateTransferBridgeConfig).not.toHaveBeenCalled();
   expect(await screen.findByText("高级 LiteLLM params 不能包含 api_key")).toBeInTheDocument();
+});
+
+test("Codex 用量趋势展示多点曲线、完整提示和仅限额样本状态", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  const stats = await client.getCodexUsageStats();
+  stats.totals = {
+    requestCount: 0,
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    uncachedInputTokens: 0,
+    outputTokens: 0,
+    reasoningOutputTokens: 0,
+    totalTokens: 0,
+    cacheHitRate: null,
+  };
+  stats.byProvider = [];
+  stats.byProviderModel = [];
+  stats.byDay = [];
+  stats.dailyByProvider = [];
+  stats.dailyByProviderModel = [];
+  stats.rateLimitSamples[0].sampledAt = "2026-07-20T18:45:00+08:00";
+  stats.rateLimitSamples[0].resetsAt = "2026-07-20T18:45:00+08:00";
+  stats.rateLimitSamples[1].sampledAt = "2026-07-21T18:45:00+08:00";
+  stats.rateLimitSamples[1].resetsAt = "2026-07-25T06:45:00+08:00";
+  stats.rateLimitSamples[2].sampledAt = "2026-07-26T18:45:00+08:00";
+  stats.rateLimitSamples[2].resetsAt = "2026-08-02T18:45:00+08:00";
+  vi.spyOn(client, "getCodexUsageStats").mockResolvedValue(stats);
+
+  const { container } = render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+  await openCodexUsageTab(user);
+
+  const chart = await screen.findByRole("img", { name: /共 3 个样本，当前剩余 92%/ });
+  expect(screen.getByText("当前剩余 92%")).toBeInTheDocument();
+  expect(screen.getByText("剩余时长 7 天")).toBeInTheDocument();
+  expect(screen.getByText("已用 8%")).toBeInTheDocument();
+  expect(screen.getByText("7 天窗口")).toBeInTheDocument();
+  expect(screen.queryByText("纵轴为剩余额度，固定显示 0% 至 100%。")).not.toBeInTheDocument();
+  expect(screen.queryByText("暂无符合筛选条件的 Codex 用量数据。")).not.toBeInTheDocument();
+  expect(screen.queryByRole("table", { name: "Codex 用量 Provider 汇总" })).not.toBeInTheDocument();
+  expect(chart.querySelector("title")?.textContent).toBe("通用 Codex 剩余额度与剩余时长趋势");
+  expect(chart.querySelector("desc")?.textContent).toContain("剩余时长");
+  const quotaAxisTitle = chart.querySelector(".codex-usage-rate-limit-quota-axis-title");
+  const durationAxisTitle = chart.querySelector(".codex-usage-rate-limit-duration-axis-title");
+  expect(quotaAxisTitle?.textContent).toBe("剩余额度");
+  expect(durationAxisTitle?.textContent).toBe("剩余时长");
+  expect(Number(quotaAxisTitle?.getAttribute("x"))).toBeLessThan(Number(durationAxisTitle?.getAttribute("x")));
+  const durationTicks = Array.from(chart.querySelectorAll(".codex-usage-rate-limit-duration-tick"));
+  expect(durationTicks.map((tick) => tick.textContent?.trim())).toEqual([
+    "0 天", "1.75 天", "3.5 天", "5.25 天", "7 天",
+  ]);
+  expect(durationTicks.at(-1)?.getAttribute("y")).toBe("36");
+  expect(container.querySelectorAll(".codex-usage-rate-limit-line")).toHaveLength(1);
+  expect(container.querySelectorAll(".codex-usage-rate-limit-duration-line")).toHaveLength(1);
+  expect(container.querySelector(".codex-usage-rate-limit-line")?.getAttribute("points"))
+    .not.toBe(container.querySelector(".codex-usage-rate-limit-duration-line")?.getAttribute("points"));
+  const points = Array.from(container.querySelectorAll(".codex-usage-rate-limit-point"));
+  const durationPoints = Array.from(container.querySelectorAll(".codex-usage-rate-limit-duration-point"));
+  expect(points).toHaveLength(3);
+  expect(durationPoints).toHaveLength(3);
+  expect(durationPoints.map((point) => Number(point.getAttribute("cy")))).toEqual([208, 120, 32]);
+  expect(durationPoints.every((point, index) => (
+    Number(point.getAttribute("r")) < Number(points[index].getAttribute("r"))
+  ))).toBe(true);
+  const xCoordinates = points.map((point) => Number(point.getAttribute("cx")));
+  const firstGap = xCoordinates[1] - xCoordinates[0];
+  const secondGap = xCoordinates[2] - xCoordinates[1];
+  expect(firstGap).toBeGreaterThan(0);
+  expect(secondGap).toBeCloseTo(firstGap * 5);
+  const tooltips = container.querySelectorAll(".codex-usage-rate-limit-point title");
+  const latestTooltip = tooltips.item(tooltips.length - 1).textContent || "";
+  expect(latestTooltip).toContain("采样时间：2026-07-26 18:45:00");
+  expect(latestTooltip).toContain("剩余百分比：92%");
+  expect(latestTooltip).toContain("剩余时长：7 天");
+  expect(latestTooltip).toContain("已用百分比：8%");
+  expect(latestTooltip).toContain("窗口时长：7 天（10,080 分钟）");
+  expect(latestTooltip).toContain("重置时间：2026-08-02 18:45:00");
+  expect(latestTooltip).toContain("套餐类型：pro");
+});
+
+test("Codex 用量趋势仅有一个样本时绘制圆点而不绘制折线", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  const stats = await client.getCodexUsageStats();
+  stats.rateLimitSamples = stats.rateLimitSamples.slice(0, 1);
+  stats.rateLimitSamples[0].resetsAt = "not-a-time";
+  vi.spyOn(client, "getCodexUsageStats").mockResolvedValue(stats);
+
+  const { container } = render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+  await openCodexUsageTab(user);
+
+  await screen.findByRole("img", { name: /共 1 个样本/ });
+  expect(screen.getByText("剩余时长 0 分钟")).toBeInTheDocument();
+  expect(container.querySelectorAll(".codex-usage-rate-limit-point")).toHaveLength(1);
+  expect(container.querySelectorAll(".codex-usage-rate-limit-duration-point")).toHaveLength(1);
+  expect(Number(container.querySelector(".codex-usage-rate-limit-duration-point")?.getAttribute("r")))
+    .toBeLessThan(Number(container.querySelector(".codex-usage-rate-limit-point")?.getAttribute("r")));
+  expect(container.querySelector(".codex-usage-rate-limit-line")).not.toBeInTheDocument();
+  expect(container.querySelector(".codex-usage-rate-limit-duration-line")).not.toBeInTheDocument();
+});
+
+test("Codex 用量趋势在没有官方限额样本时显示中文空状态", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  const stats = await client.getCodexUsageStats();
+  stats.rateLimitSamples = [];
+  vi.spyOn(client, "getCodexUsageStats").mockResolvedValue(stats);
+
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+  await openCodexUsageTab(user);
+
+  expect(await screen.findByText(
+    "暂无通用 Codex 限额样本；开启采集并完成一次 OpenAI 官方 Codex turn 后显示。",
+  )).toBeInTheDocument();
+  expect(screen.queryByRole("img", { name: /通用 Codex 剩余额度与剩余时长趋势/ })).not.toBeInTheDocument();
+});
+
+test("Codex 用量 Provider 筛选排除 OpenAI 官方时清空趋势", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  const getCodexUsageStats = vi.spyOn(client, "getCodexUsageStats");
+
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+  await openCodexUsageTab(user);
+  await screen.findByRole("img", { name: /通用 Codex 剩余额度与剩余时长趋势/ });
+
+  await user.click(screen.getByLabelText("筛选 Provider：OpenAI 官方"));
+  await user.click(screen.getByRole("button", { name: "查询" }));
+
+  await waitFor(() => expect(getCodexUsageStats).toHaveBeenLastCalledWith(expect.objectContaining({
+    providerKeys: ["base_url:https://api.example.test/v1"],
+  })));
+  expect(await screen.findByText(
+    "暂无通用 Codex 限额样本；开启采集并完成一次 OpenAI 官方 Codex turn 后显示。",
+  )).toBeInTheDocument();
+  expect(screen.queryByText("当前剩余 92%")).not.toBeInTheDocument();
 });

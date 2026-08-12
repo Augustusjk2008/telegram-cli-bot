@@ -148,6 +148,54 @@ describe("RealWebBotClient", () => {
     expect(JSON.stringify(loaded)).not.toContain("sk-leaked");
   });
 
+  test("maps valid Codex rate limit samples and filters invalid samples", async () => {
+    fetchMock.mockResolvedValue(jsonOk({
+      rate_limit_samples: [
+        {
+          sampled_at: "2026-08-11T12:57:53+08:00",
+          used_percent: 8,
+          window_minutes: 10080,
+          resets_at: "2026-08-18T08:01:25+08:00",
+          plan_type: "pro",
+        },
+        {
+          sampled_at: "2026-08-11T13:00:00+08:00",
+          used_percent: 100,
+          window_minutes: 60,
+          resets_at: "1970-01-01T00:00:00Z",
+        },
+        { sampled_at: "invalid", used_percent: 8, window_minutes: 60, resets_at: "2026-08-18T08:01:25+08:00" },
+        { sampled_at: "2026-08-11T13:01:00+08:00", used_percent: -1, window_minutes: 60, resets_at: "2026-08-18T08:01:25+08:00" },
+        { sampled_at: "2026-08-11T13:02:00+08:00", used_percent: 101, window_minutes: 60, resets_at: "2026-08-18T08:01:25+08:00" },
+        { sampled_at: "2026-08-11T13:03:00+08:00", used_percent: "8", window_minutes: 60, resets_at: "2026-08-18T08:01:25+08:00" },
+        { sampled_at: "2026-08-11T13:04:00+08:00", used_percent: 8, window_minutes: 0, resets_at: "2026-08-18T08:01:25+08:00" },
+        { sampled_at: "2026-08-11T13:05:00+08:00", used_percent: 8, window_minutes: 1.5, resets_at: "2026-08-18T08:01:25+08:00" },
+        { sampled_at: "2026-08-11T13:06:00+08:00", used_percent: 8, window_minutes: 60, resets_at: "invalid" },
+        { sampled_at: "2026-08-11T13:07:00+08:00", used_percent: 8, window_minutes: 60, resets_at: "1969-12-31T23:59:59Z" },
+      ],
+    }));
+
+    const stats = await new RealWebBotClient().getCodexUsageStats();
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/codex-usage/stats", expect.objectContaining({ cache: "no-store" }));
+    expect(stats.rateLimitSamples).toEqual([
+      {
+        sampledAt: "2026-08-11T12:57:53+08:00",
+        usedPercent: 8,
+        windowMinutes: 10080,
+        resetsAt: "2026-08-18T08:01:25+08:00",
+        planType: "pro",
+      },
+      {
+        sampledAt: "2026-08-11T13:00:00+08:00",
+        usedPercent: 100,
+        windowMinutes: 60,
+        resetsAt: "1970-01-01T00:00:00Z",
+        planType: null,
+      },
+    ]);
+  });
+
   test("omits cluster task output only when requested", async () => {
     const status = {
       tasks: [],

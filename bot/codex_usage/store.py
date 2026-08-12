@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import sqlite3
 import threading
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable
 
 from .models import (
+    CodexRateLimitSample,
     CodexTokenUsage,
     DEFAULT_CODEX_MODEL,
     DailyProviderModelUsage,
@@ -26,7 +27,7 @@ from .models import (
 )
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 _SETTING_ENABLED = "enabled"
 
 _SCHEMA_SQL = """
@@ -77,6 +78,22 @@ CREATE TABLE IF NOT EXISTS daily_model_usage (
 
 CREATE INDEX IF NOT EXISTS idx_daily_model_usage_provider_day
 ON daily_model_usage(provider_id, day);
+
+CREATE TABLE IF NOT EXISTS rate_limit_samples (
+    sample_id INTEGER PRIMARY KEY,
+    day INTEGER NOT NULL,
+    sampled_at_ms INTEGER NOT NULL,
+    used_percent REAL NOT NULL
+        CHECK (used_percent >= 0 AND used_percent <= 100),
+    window_minutes INTEGER NOT NULL
+        CHECK (window_minutes > 0),
+    resets_at INTEGER NOT NULL
+        CHECK (resets_at >= 0),
+    plan_type TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_rate_limit_samples_day_time
+ON rate_limit_samples(day, sampled_at_ms, sample_id);
 """
 
 
@@ -121,7 +138,7 @@ class CodexUsageStore:
     @staticmethod
     def _ensure_schema(connection: sqlite3.Connection) -> None:
         version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if version not in {0, 1, SCHEMA_VERSION}:
+        if version not in {0, 1, 2, SCHEMA_VERSION}:
             raise RuntimeError(f"不支持的 Codex usage schema 版本: {version}")
         connection.executescript(_SCHEMA_SQL)
         if version == 1:
@@ -140,7 +157,7 @@ class CodexUsageStore:
                     (DEFAULT_CODEX_MODEL,),
                 )
                 connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
-        elif version == 0:
+        elif version in {0, 2}:
             connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     @staticmethod
@@ -163,8 +180,20 @@ class CodexUsageStore:
         )
 
     @staticmethod
+    def _rate_limit_from_row(row: sqlite3.Row) -> CodexRateLimitSample:
+        epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        return CodexRateLimitSample(
+            sampled_at=epoch + timedelta(milliseconds=int(row["sampled_at_ms"])),
+            used_percent=float(row["used_percent"]),
+            window_minutes=int(row["window_minutes"]),
+            resets_at=epoch + timedelta(seconds=int(row["resets_at"])),
+            plan_type=row["plan_type"],
+        )
+
+    @staticmethod
     def _empty_query(
         *,
+        rate_limit_samples: tuple[CodexRateLimitSample, ...] = (),
         daily_pagination: DailyUsagePagination | None = None,
     ) -> UsageQueryResult:
         return UsageQueryResult(
@@ -174,6 +203,7 @@ class CodexUsageStore:
             daily_by_provider=(),
             by_provider_model=(),
             daily_by_provider_model=(),
+            rate_limit_samples=rate_limit_samples,
             daily_pagination=daily_pagination,
         )
 
@@ -322,6 +352,40 @@ class CodexUsageStore:
 
     write_usage = record
 
+    def record_rate_limit_sample(self, sample: CodexRateLimitSample) -> None:
+        if not isinstance(sample, CodexRateLimitSample):
+            raise ValueError("sample 必须是 CodexRateLimitSample")
+        epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        sampled_delta = sample.sampled_at.astimezone(timezone.utc) - epoch
+        reset_delta = sample.resets_at.astimezone(timezone.utc) - epoch
+        sampled_at_ms = (
+            sampled_delta.days * 86_400_000
+            + sampled_delta.seconds * 1_000
+            + sampled_delta.microseconds // 1_000
+        )
+        resets_at = reset_delta.days * 86_400 + reset_delta.seconds
+        sample_day = day_number(sample.sampled_at)
+        with self._lock:
+            connection = self._get_connection(create=True)
+            assert connection is not None
+            with connection:
+                connection.execute(
+                    """
+                    INSERT INTO rate_limit_samples(
+                        day, sampled_at_ms, used_percent,
+                        window_minutes, resets_at, plan_type
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        sample_day,
+                        sampled_at_ms,
+                        sample.used_percent,
+                        sample.window_minutes,
+                        resets_at,
+                        sample.plan_type,
+                    ),
+                )
+
     def query(
         self,
         start_day: DayLike,
@@ -362,10 +426,26 @@ class CodexUsageStore:
         selected_keys = None
         if provider_keys is not None:
             selected_keys = tuple(dict.fromkeys(str(item) for item in provider_keys))
+            if not selected_keys:
+                return self._empty_query(daily_pagination=empty_pagination)
         with self._lock:
             connection = self._get_connection(create=False)
             if connection is None:
                 return self._empty_query(daily_pagination=empty_pagination)
+            rate_limit_samples: tuple[CodexRateLimitSample, ...] = ()
+            if selected_keys is None or "openai_official" in selected_keys:
+                rate_limit_rows = connection.execute(
+                    """
+                    SELECT sampled_at_ms, used_percent, window_minutes, resets_at, plan_type
+                    FROM rate_limit_samples
+                    WHERE day >= ? AND day <= ?
+                    ORDER BY sampled_at_ms ASC, sample_id ASC
+                    """,
+                    (start, end),
+                ).fetchall()
+                rate_limit_samples = tuple(
+                    self._rate_limit_from_row(row) for row in rate_limit_rows
+                )
             where = ["daily_usage.day >= ?", "daily_usage.day <= ?"]
             model_where = [
                 "daily_model_usage.day >= ?",
@@ -373,8 +453,6 @@ class CodexUsageStore:
             ]
             parameters: list[object] = [start, end]
             if selected_keys is not None:
-                if not selected_keys:
-                    return self._empty_query(daily_pagination=empty_pagination)
                 placeholders = ", ".join("?" for _ in selected_keys)
                 where.append(f"providers.provider_key IN ({placeholders})")
                 model_where.append(f"providers.provider_key IN ({placeholders})")
@@ -399,7 +477,10 @@ class CodexUsageStore:
                 parameters,
             ).fetchall()
             if not rows:
-                return self._empty_query(daily_pagination=empty_pagination)
+                return self._empty_query(
+                    rate_limit_samples=rate_limit_samples,
+                    daily_pagination=empty_pagination,
+                )
             model_total_rows = connection.execute(
                 f"""
                 SELECT
@@ -610,6 +691,7 @@ class CodexUsageStore:
             daily_by_provider=daily_by_provider,
             by_provider_model=by_provider_model,
             daily_by_provider_model=daily_by_provider_model,
+            rate_limit_samples=rate_limit_samples,
             daily_pagination=daily_pagination,
         )
 
@@ -631,14 +713,39 @@ class CodexUsageStore:
                 END, provider_key
                 """
             ).fetchall()
-            return tuple(self._provider_from_row(row) for row in rows)
+            providers = [self._provider_from_row(row) for row in rows]
+            has_rate_limits = connection.execute(
+                "SELECT 1 FROM rate_limit_samples LIMIT 1"
+            ).fetchone() is not None
+            if has_rate_limits and not any(
+                provider.key == "openai_official" for provider in providers
+            ):
+                providers.insert(
+                    0,
+                    ProviderInfo(
+                        key="openai_official",
+                        kind="openai_official",
+                        base_url=None,
+                        resolution="resolved",
+                    ),
+                )
+            return tuple(providers)
 
     def available_range(self) -> tuple[date | None, date | None]:
         with self._lock:
             connection = self._get_connection(create=False)
             if connection is None:
                 return None, None
-            row = connection.execute("SELECT MIN(day), MAX(day) FROM daily_usage").fetchone()
+            row = connection.execute(
+                """
+                SELECT MIN(day), MAX(day)
+                FROM (
+                    SELECT day FROM daily_usage
+                    UNION ALL
+                    SELECT day FROM rate_limit_samples
+                )
+                """
+            ).fetchone()
             if row is None or row[0] is None:
                 return None, None
             return day_from_number(int(row[0])), day_from_number(int(row[1]))

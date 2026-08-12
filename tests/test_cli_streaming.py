@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import queue
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -119,6 +121,10 @@ class _ContinuousOutputReader:
         self.done.set()
 
 
+async def _collect_stream_events(stream) -> list[dict[str, object]]:
+    return [event async for event in stream]
+
+
 @pytest.fixture
 def usage_manager(tmp_path: Path) -> MultiBotManager:
     storage = tmp_path / "managed_bots.json"
@@ -223,6 +229,344 @@ async def test_communicate_cancellation_stops_reader_and_process(monkeypatch):
 
     assert process.terminated is True
     assert process.stdout.closed is True
+
+
+@pytest.mark.asyncio
+async def test_cli_lifecycle_cleanup_continues_after_caller_is_cancelled(monkeypatch):
+    terminate_started = threading.Event()
+    release_terminate = threading.Event()
+    tree_closed = threading.Event()
+    streams_closed = threading.Event()
+
+    class BlockingProcessTree:
+        def terminate(self) -> None:
+            terminate_started.set()
+            release_terminate.wait(timeout=2)
+
+        def close(self) -> None:
+            tree_closed.set()
+
+    lifecycle = api_service._CliProcessLifecycle(
+        process=object(),
+        process_tree=BlockingProcessTree(),
+    )
+    monkeypatch.setattr(
+        api_service,
+        "close_process_streams",
+        lambda _process: streams_closed.set(),
+    )
+    cleanup_task = asyncio.create_task(
+        api_service._cleanup_cli_process_lifecycle(lifecycle, abort=True)
+    )
+    assert await asyncio.to_thread(terminate_started.wait, 1)
+
+    cleanup_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cleanup_task
+    release_terminate.set()
+
+    assert await asyncio.to_thread(tree_closed.wait, 1)
+    assert await asyncio.to_thread(streams_closed.wait, 1)
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_resets_session_after_repeated_cancellation(
+    usage_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    terminate_started = threading.Event()
+    release_terminate = threading.Event()
+    reader_started = threading.Event()
+
+    class BlockingStdout:
+        def __init__(self) -> None:
+            self.closed = False
+            self.release = threading.Event()
+
+        def readline(self, _size: int = -1) -> str:
+            reader_started.set()
+            self.release.wait(timeout=2)
+            return ""
+
+        def close(self) -> None:
+            self.closed = True
+            self.release.set()
+
+    class BlockingProcess:
+        def __init__(self) -> None:
+            self.stdout = BlockingStdout()
+            self.stdin = None
+            self.returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            if not self.stdout.release.wait(timeout=timeout):
+                raise subprocess.TimeoutExpired("blocking", timeout)
+            return self.returncode
+
+    class BlockingProcessTree:
+        is_contained = True
+
+        def __init__(self, process: BlockingProcess) -> None:
+            self.process = process
+
+        def terminate(self) -> None:
+            terminate_started.set()
+            release_terminate.wait(timeout=2)
+            self.process.returncode = -15
+            self.process.stdout.release.set()
+
+        def close(self) -> None:
+            return None
+
+    process = BlockingProcess()
+
+    async def start_capture(*, env, command):
+        return _UsageCapture()
+
+    monkeypatch.setattr(api_service, "_start_codex_usage_capture", start_capture, raising=False)
+    monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
+    monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: (["codex"], False))
+    monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(api_service.subprocess, "Popen", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(
+        api_service,
+        "attach_process_tree",
+        lambda _process, **_kwargs: BlockingProcessTree(process),
+    )
+
+    stream = api_service._stream_cli_chat(usage_manager, "main", 1001, "hello")
+    meta = await anext(stream)
+    assert meta["type"] == "meta"
+    next_event = asyncio.create_task(anext(stream))
+    assert await asyncio.to_thread(reader_started.wait, 1)
+
+    next_event.cancel()
+    assert await asyncio.to_thread(terminate_started.wait, 1)
+    next_event.cancel()
+    release_terminate.set()
+    with pytest.raises(asyncio.CancelledError):
+        await next_event
+
+    _profile, _agent, session = api_service.get_chat_session_for_alias(
+        usage_manager,
+        "main",
+        1001,
+        "main",
+    )
+    assert session.process is None
+    assert session.is_processing is False
+    assert session.stop_requested is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [True, False])
+async def test_cli_chat_reconciles_history_when_process_isolation_fails(
+    usage_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    streaming: bool,
+):
+    process = _UsageProcess()
+    reconciled_sessions: list[object] = []
+    original_reconcile = api_service.ChatHistoryService.reconcile_idle_streaming_turns
+
+    def reconcile(service, session):
+        reconciled_sessions.append(session)
+        return original_reconcile(service, session)
+
+    async def start_capture(*, env, command):
+        return _UsageCapture()
+
+    monkeypatch.setattr(api_service, "_start_codex_usage_capture", start_capture, raising=False)
+    monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
+    monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: (["codex"], False))
+    monkeypatch.setattr(api_service.subprocess, "Popen", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(
+        api_service,
+        "resume_suspended_process",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("job unavailable")),
+    )
+    monkeypatch.setattr(
+        api_service.ChatHistoryService,
+        "reconcile_idle_streaming_turns",
+        reconcile,
+    )
+
+    with pytest.raises(api_service.WebApiError) as exc_info:
+        if streaming:
+            _ = [
+                event
+                async for event in api_service._stream_cli_chat(
+                    usage_manager,
+                    "main",
+                    1001,
+                    "hello",
+                )
+            ]
+        else:
+            await api_service.run_cli_chat(usage_manager, "main", 1001, "hello")
+
+    assert exc_info.value.code == "cli_process_isolation_failed"
+    assert len(reconciled_sessions) == 1
+    session = reconciled_sessions[0]
+    assert session.process is None
+    assert session.is_processing is False
+
+
+@pytest.mark.asyncio
+async def test_cli_stream_cleanup_keeps_event_loop_responsive_with_inherited_stdout_pipe(
+    usage_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    release_path = tmp_path / "release-grandchild"
+    done_path = tmp_path / "grandchild-done"
+    grandchild_code = (
+        "import pathlib,sys,time\n"
+        "release = pathlib.Path(sys.argv[1])\n"
+        "done = pathlib.Path(sys.argv[2])\n"
+        "deadline = time.monotonic() + 10\n"
+        "while time.monotonic() < deadline and not release.exists():\n"
+        "    time.sleep(0.02)\n"
+        "done.write_text('done', encoding='utf-8')\n"
+    )
+    parent_code = (
+        "import subprocess,sys\n"
+        f"subprocess.Popen([sys.executable, '-I', '-c', {grandchild_code!r}, "
+        f"{str(release_path)!r}, {str(done_path)!r}], "
+        "stdin=subprocess.DEVNULL, stdout=sys.stdout, stderr=sys.stderr, close_fds=False)\n"
+        "print('{\"type\":\"thread.started\",\"thread_id\":\"pipe-thread\"}', flush=True)\n"
+        "print('{\"type\":\"item.completed\",\"item\":{\"type\":\"assistant_message\",\"text\":\"done\"}}', flush=True)\n"
+        "print('{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}', flush=True)\n"
+    )
+    command = [sys.executable, "-I", "-c", parent_code]
+    blocked_read_entered = threading.Event()
+    captured_process: dict[str, subprocess.Popen] = {}
+    captured_popen_kwargs: dict[str, object] = {}
+    captured_reader: dict[str, object] = {}
+    timer_holder: dict[str, threading.Timer] = {}
+    loop = asyncio.get_running_loop()
+    probe_ran = asyncio.Event()
+    probe_times: dict[str, float] = {}
+
+    def record_probe() -> None:
+        probe_times["ran"] = time.perf_counter()
+        probe_ran.set()
+
+    def send_probe() -> None:
+        probe_times["sent"] = time.perf_counter()
+        loop.call_soon_threadsafe(record_probe)
+
+    class ObservedPipeStdout:
+        def __init__(self, raw_stdout) -> None:
+            self.raw_stdout = raw_stdout
+            self.readline_calls = 0
+
+        def readline(self, size: int = -1) -> str:
+            self.readline_calls += 1
+            if self.readline_calls == 4:
+                probe_times["blocked"] = time.perf_counter()
+                blocked_read_entered.set()
+                timer = threading.Timer(0.4, send_probe)
+                timer_holder["timer"] = timer
+                timer.start()
+            return self.raw_stdout.readline(size)
+
+        def close(self) -> None:
+            self.raw_stdout.close()
+
+        @property
+        def closed(self) -> bool:
+            return self.raw_stdout.closed
+
+    original_popen = subprocess.Popen
+
+    def popen(*args, **kwargs):
+        captured_popen_kwargs.update(kwargs)
+        process = original_popen(*args, **kwargs)
+        assert process.stdout is not None
+        process.stdout = ObservedPipeStdout(process.stdout)
+        captured_process["process"] = process
+        return process
+
+    original_start_reader = api_service._start_process_stdout_reader
+
+    def start_reader(*args, **kwargs):
+        reader = original_start_reader(*args, **kwargs)
+        captured_reader["reader"] = reader
+        return reader
+
+    async def start_capture(*, env, command):
+        return _UsageCapture()
+
+    monkeypatch.setattr(api_service, "CODEX_DONE_QUIET_SECONDS", 0.1)
+    monkeypatch.setattr(api_service, "_start_codex_usage_capture", start_capture, raising=False)
+    monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
+    monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: (command, False))
+    monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(api_service.subprocess, "Popen", popen)
+    monkeypatch.setattr(api_service, "_start_process_stdout_reader", start_reader)
+
+    stream_task = asyncio.create_task(
+        asyncio.wait_for(
+            _collect_stream_events(api_service._stream_cli_chat(usage_manager, "main", 1001, "hello")),
+            timeout=5,
+        )
+    )
+    try:
+        assert await asyncio.to_thread(blocked_read_entered.wait, 2), "未形成后代继承 stdout 的阻塞读取"
+        process = captured_process["process"]
+        assert await asyncio.to_thread(process.wait, 1) == 0
+        reader = captured_reader["reader"]
+        assert reader.done.is_set() is False
+        assert done_path.exists() is False
+
+        events = await stream_task
+        await asyncio.wait_for(probe_ran.wait(), timeout=1)
+
+        probe_delay = probe_times["ran"] - probe_times["sent"]
+        assert probe_delay < 0.5, (
+            f"event loop blocked {probe_delay:.3f}s while closing inherited stdout pipe"
+        )
+        assert any(event["type"] == "done" for event in events)
+        assert time.perf_counter() - probe_times["blocked"] < 3
+        if sys.platform == "win32":
+            assert int(captured_popen_kwargs["creationflags"]) & 0x00000004
+        assert reader.done.is_set() is True
+        await asyncio.to_thread(reader.join, 0.5)
+        assert process.stdout.closed is True
+        _profile, _agent, session = api_service.get_chat_session_for_alias(
+            usage_manager,
+            "main",
+            1001,
+            "main",
+        )
+        assert session.process is None
+        assert session.is_processing is False
+        assert session.stop_requested is False
+    finally:
+        release_path.touch(exist_ok=True)
+        timer = timer_holder.get("timer")
+        if timer is not None:
+            timer.cancel()
+            if timer.is_alive():
+                await asyncio.to_thread(timer.join, 1)
+        if not stream_task.done():
+            stream_task.cancel()
+            await asyncio.gather(stream_task, return_exceptions=True)
+        process = captured_process.get("process")
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                await asyncio.to_thread(process.wait, 1)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                await asyncio.to_thread(process.wait, 1)
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline and not done_path.exists():
+            await asyncio.sleep(0.02)
 
 
 @pytest.mark.asyncio
@@ -608,6 +952,65 @@ async def test_stream_cli_chat_waits_for_queued_tail_before_quiet_finish_termina
 
     assert any(event["type"] == "done" for event in events)
     assert termination_queue_empty == [True]
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_drains_tail_enqueued_while_terminating(
+    usage_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    output_queue: queue.Queue[object] = queue.Queue()
+    output_queue.put('{"type":"thread.started","thread_id":"tail-thread"}\n')
+    output_queue.put('{"type":"item.completed","item":{"type":"assistant_message","text":"done"}}\n')
+    capture = _UsageCapture()
+    process = _UsageProcess()
+    process.returncode = 0
+
+    class TailReader:
+        def __init__(self) -> None:
+            self.done = threading.Event()
+            self.stop_requested = False
+
+        def request_stop(self) -> None:
+            self.stop_requested = True
+
+        def stop(self) -> None:
+            self.request_stop()
+
+        def join(self, _timeout: float | None = None) -> None:
+            return None
+
+    reader = TailReader()
+
+    async def start_capture(*, env, command):
+        return capture
+
+    def terminate_with_tail(_process) -> None:
+        output_queue.put(
+            '{"type":"turn.completed","usage":{"input_tokens":9,"output_tokens":3}}\n'
+        )
+        output_queue.put(_PROCESS_STDOUT_EOF)
+        reader.done.set()
+
+    monkeypatch.setattr(api_service, "CODEX_DONE_QUIET_SECONDS", 0)
+    monkeypatch.setattr(api_service, "_start_codex_usage_capture", start_capture, raising=False)
+    monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
+    monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: (["codex"], False))
+    monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(api_service.subprocess, "Popen", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(api_service.queue, "Queue", lambda *_args, **_kwargs: output_queue)
+    monkeypatch.setattr(api_service, "_start_process_stdout_reader", lambda *_args, **_kwargs: reader)
+    monkeypatch.setattr(api_service, "_terminate_process_sync", terminate_with_tail)
+
+    events = [
+        event
+        async for event in api_service._stream_cli_chat(usage_manager, "main", 1001, "hello")
+    ]
+
+    usage_sample = capture.calls[0][0]
+    assert usage_sample is not None
+    assert usage_sample.input_tokens == 9
+    assert any(event["type"] == "done" for event in events)
 
 
 @pytest.mark.asyncio
