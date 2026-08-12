@@ -13,6 +13,7 @@ from bot import app_settings
 from bot.cli import resolve_cli_executable, validate_cli_type
 from bot.cli_params import CliParamsConfig, coerce_param_value
 from bot.cluster.config import normalize_agent_cluster_config, normalize_bot_cluster_config
+from bot.cluster.team import ClusterSlotsLockedError
 from bot.config import BOT_ALIAS_RE, CLI_TYPE, RESERVED_ALIASES, WORKING_DIR, _DOTENV_VALUES
 from bot.agents import normalize_agent_id, normalize_agent_name, normalize_agent_prompt, now_iso
 from bot.models import (
@@ -226,9 +227,15 @@ class MultiBotManager:
         else:
             self._save_profiles()
 
+    @staticmethod
+    def _require_legacy_agent_mutation_allowed(profile: BotProfile) -> None:
+        if profile.cluster.enabled:
+            raise ClusterSlotsLockedError()
+
     async def create_bot_agent(self, alias: str, data: dict[str, Any]) -> dict[str, Any]:
         async with self._lock:
             profile = self._get_profile_for_update(alias)
+            self._require_legacy_agent_mutation_allowed(profile)
             agent_id = normalize_agent_id(data.get("id"), allow_main=False)
             if any(agent.id == agent_id for agent in profile.normalized_agents()):
                 raise ValueError("agent id 已存在")
@@ -249,6 +256,7 @@ class MultiBotManager:
     async def update_bot_agent(self, alias: str, agent_id: str, data: dict[str, Any]) -> dict[str, Any]:
         async with self._lock:
             profile = self._get_profile_for_update(alias)
+            self._require_legacy_agent_mutation_allowed(profile)
             normalized_agent_id = normalize_agent_id(agent_id, allow_main=True)
             if normalized_agent_id == "main":
                 raise ValueError("主 agent 不支持编辑")
@@ -271,6 +279,8 @@ class MultiBotManager:
         async with self._lock:
             profile = self._get_profile_for_update(alias)
             profile.cluster = normalize_bot_cluster_config(data)
+            if profile.cluster.enabled:
+                profile.ensure_cluster_slots()
             if profile.alias == self.main_profile.alias:
                 self._persist_main_profile()
             else:
@@ -280,6 +290,7 @@ class MultiBotManager:
     async def delete_bot_agent(self, alias: str, agent_id: str) -> None:
         async with self._lock:
             profile = self._get_profile_for_update(alias)
+            self._require_legacy_agent_mutation_allowed(profile)
             normalized_agent_id = normalize_agent_id(agent_id, allow_main=True)
             if normalized_agent_id == "main":
                 raise ValueError("主 agent 不能删除")
@@ -296,7 +307,8 @@ class MultiBotManager:
         agents: list[dict[str, Any]],
     ) -> dict[str, Any]:
         async with self._lock:
-            profile = self._ensure_cli_agent_profile(alias)
+            profile = self._get_profile_for_update(alias)
+            self._require_legacy_agent_mutation_allowed(profile)
             profile.cluster = normalize_bot_cluster_config(cluster)
             now = now_iso()
             replaced_agents: list[AgentProfile] = []
@@ -314,6 +326,8 @@ class MultiBotManager:
                     )
                 )
             profile.agents = replaced_agents
+            if profile.cluster.enabled:
+                profile.ensure_cluster_slots()
             self._persist_profile_agents(profile)
             return {
                 "cluster": profile.cluster.to_dict(),

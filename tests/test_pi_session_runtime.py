@@ -495,19 +495,46 @@ async def test_registry_restarts_runtime_when_process_environment_changes(
 
     monkeypatch.setattr(PiRpcClient, "start", fake_start)
     registry = PiSessionRuntimeRegistry()
-    first_request = _request(tmp_path)
+    first_env = {"TCB_CLUSTER_MCP_CONFIG": str(tmp_path / "cluster-a.json")}
+    first_request = replace(_request(tmp_path), env=first_env)
     first = await registry.open_or_create(first_request)
-    cluster_env = {
-        "TCB_CLUSTER_RUN_ID": "run-123",
-        "TCB_CLUSTER_MCP_CONFIG": str(tmp_path / "cluster.json"),
-    }
-    cluster_request = replace(_request(tmp_path), env=cluster_env)
+    second_env = {"TCB_CLUSTER_MCP_CONFIG": str(tmp_path / "cluster-b.json")}
+    cluster_request = replace(_request(tmp_path), env=second_env)
 
     second = await registry.open_or_create(cluster_request)
 
     assert second is not first
     assert first.client.close_count == 1
-    assert starts == [None, cluster_env]
+    assert starts == [first_env, second_env]
+    await registry.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_cluster_run_id_change_reuses_runtime_with_stable_cluster_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    starts = 0
+
+    async def fake_start(_request: Any) -> _FakeClient:
+        nonlocal starts
+        starts += 1
+        return _FakeClient()
+
+    config_path = tmp_path / "cluster.json"
+    monkeypatch.setattr(PiRpcClient, "start", fake_start)
+    monkeypatch.setattr("bot.native_agent.service.get_cluster_mcp_config_path", lambda: config_path)
+    service = NativeAgentService()
+    registry = PiSessionRuntimeRegistry()
+
+    first_request = replace(_request(tmp_path), env=service._pi_runtime_env("run-1"))
+    second_request = replace(_request(tmp_path), env=service._pi_runtime_env("run-2"))
+    first = await registry.open_or_create(first_request)
+    second = await registry.open_or_create(second_request)
+
+    assert second is first
+    assert starts == 1
+    assert first.state.env == {"TCB_CLUSTER_MCP_CONFIG": str(config_path)}
     await registry.shutdown()
 
 

@@ -865,7 +865,7 @@ export function SettingsScreen({
           />
         ) : null}
 
-        {overview && showBotRuntimeSettings ? (
+        {overview && showBotRuntimeSettings && !overview.cluster?.enabled ? (
           <AgentSettingsPanel
             botAlias={botAlias}
             client={client}

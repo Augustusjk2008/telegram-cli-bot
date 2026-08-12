@@ -22,6 +22,10 @@ def register(app: web.Application, server) -> None:
         "/api/bots/{alias}/conversations/{conversation_id}/select",
         server.post_conversation_select_view,
     )
+    app.router.add_post(
+        "/api/bots/{alias}/conversations/{conversation_id}/archive",
+        server.post_conversation_archive_view,
+    )
     app.router.add_delete(
         "/api/bots/{alias}/conversations/{conversation_id}",
         server.delete_conversation_view,

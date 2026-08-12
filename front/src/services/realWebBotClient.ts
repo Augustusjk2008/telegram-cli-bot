@@ -106,6 +106,11 @@ import type {
   ClusterSetupPrepareResult,
   ClusterStatus,
   ClusterAgentTask,
+  ClusterResizeBlockedData,
+  ClusterResizeBlocker,
+  ClusterSlotStatus,
+  ClusterTeam,
+  ClusterTeamAssignment,
   ClusterTaskMessage,
   ClusterTaskStatus,
   ClusterTemplateListResult,
@@ -113,6 +118,7 @@ import type {
   ConversationBulkDeleteResult,
   ConversationListResult,
   ConversationDeleteResult,
+  ConversationArchiveResult,
   FavoriteAnswerInput,
   FavoriteAnswerItem,
   FavoriteAnswerListResult,
@@ -625,6 +631,10 @@ type RawConversationSummary = {
   degraded?: boolean;
   degraded_reason?: string;
   degradedReason?: string;
+  cluster_team?: unknown;
+  clusterTeam?: unknown;
+  cluster_team_revision?: number;
+  clusterTeamRevision?: number;
   created_at?: string;
   createdAt?: string;
   updated_at?: string;
@@ -835,6 +845,13 @@ type RawClusterAgentTask = {
   taskId?: string;
   agent_id?: string;
   agentId?: string;
+  role_name?: string;
+  roleName?: string;
+  responsibility?: string;
+  team_revision?: number;
+  teamRevision?: number;
+  assignment_revision?: number;
+  assignmentRevision?: number;
   message?: string;
   status?: string;
   model_tier?: string;
@@ -875,15 +892,28 @@ type RawClusterTaskMessage = {
 type RawClusterTaskStatus = {
   tasks?: RawClusterAgentTask[];
   queued_count?: number;
+  queuedCount?: number;
   running_count?: number;
+  runningCount?: number;
   completed_count?: number;
+  completedCount?: number;
   failed_count?: number;
+  failedCount?: number;
   pending_count?: number;
+  pendingCount?: number;
 };
 
 type RawActiveClusterRun = {
   run_id?: string;
+  runId?: string;
   status?: string;
+  team?: unknown;
+  team_revision?: number;
+  teamRevision?: number;
+  capacity?: number;
+  free_slots?: number;
+  freeSlots?: number;
+  slots?: unknown[];
   tasks?: RawClusterTaskStatus;
 };
 
@@ -1720,14 +1750,52 @@ function mapClusterReasoningEfforts(raw: unknown): ClusterReasoningEfforts {
 
 function mapBotClusterConfig(raw: unknown): BotClusterConfig {
   const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const rawWritePolicy = String(value.write_policy ?? value.writePolicy ?? "main_only");
   return {
     enabled: Boolean(value.enabled),
-    writePolicy: String(value.write_policy ?? value.writePolicy ?? "selected_agents") as BotClusterConfig["writePolicy"],
+    writePolicy: rawWritePolicy === "all_agents" ? "all_agents" : "main_only",
     conflictPolicy: String(value.conflict_policy ?? value.conflictPolicy ?? "snapshot_diff") as BotClusterConfig["conflictPolicy"],
     maxParallelAgents: Number(value.max_parallel_agents ?? value.maxParallelAgents ?? 2),
     defaultTimeoutSeconds: Number(value.default_timeout_seconds ?? value.defaultTimeoutSeconds ?? 600),
     modelTiers: mapClusterModelTiers(value.model_tiers ?? value.modelTiers),
     reasoningEfforts: mapClusterReasoningEfforts(value.reasoning_efforts ?? value.reasoningEfforts),
+  };
+}
+
+function mapClusterTeamAssignment(raw: unknown): ClusterTeamAssignment {
+  const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  return {
+    agentId: String(value.agent_id ?? value.agentId ?? value.id ?? ""),
+    name: String(value.name ?? value.role_name ?? value.roleName ?? ""),
+    responsibility: String(value.responsibility ?? value.description ?? ""),
+    assignmentRevision: Number(value.assignment_revision ?? value.assignmentRevision ?? 0),
+  };
+}
+
+function mapClusterTeam(raw: unknown): ClusterTeam | undefined {
+  if (!raw || (typeof raw !== "object" && !Array.isArray(raw))) {
+    return undefined;
+  }
+  const value = Array.isArray(raw) ? {} : raw as Record<string, unknown>;
+  const assignments = Array.isArray(raw)
+    ? raw
+    : Array.isArray(value.assignments) ? value.assignments : [];
+  return {
+    version: 1,
+    assignments: assignments.map(mapClusterTeamAssignment).filter((item) => item.agentId),
+  };
+}
+
+function mapClusterSlotStatus(raw: unknown): ClusterSlotStatus {
+  const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const status = String(value.status || "idle");
+  return {
+    agentId: String(value.agent_id ?? value.agentId ?? ""),
+    assigned: Boolean(value.assigned),
+    roleName: String(value.role_name ?? value.roleName ?? ""),
+    responsibility: String(value.responsibility ?? ""),
+    assignmentRevision: Number(value.assignment_revision ?? value.assignmentRevision ?? 0),
+    status: status === "queued" || status === "running" || status === "idle" ? status : "unknown",
   };
 }
 
@@ -1826,6 +1894,14 @@ function mapClusterAgentTask(raw: RawClusterAgentTask): ClusterAgentTask {
   return {
     taskId: String(raw.task_id ?? raw.taskId ?? ""),
     agentId: String(raw.agent_id ?? raw.agentId ?? ""),
+    roleName: String(raw.role_name ?? raw.roleName ?? "") || undefined,
+    responsibility: String(raw.responsibility ?? "") || undefined,
+    teamRevision: typeof (raw.team_revision ?? raw.teamRevision) === "number"
+      ? Number(raw.team_revision ?? raw.teamRevision)
+      : undefined,
+    assignmentRevision: typeof (raw.assignment_revision ?? raw.assignmentRevision) === "number"
+      ? Number(raw.assignment_revision ?? raw.assignmentRevision)
+      : undefined,
     status: String(raw.status || "queued") as ClusterAgentTask["status"],
     modelTier: String(raw.model_tier ?? raw.modelTier ?? "") as ClusterAgentTask["modelTier"],
     allowWrite: Boolean(raw.allow_write ?? raw.allowWrite),
@@ -1867,23 +1943,32 @@ function mapClusterTaskStatus(raw: unknown): ClusterTaskStatus {
   const value = raw && typeof raw === "object" ? raw as RawClusterTaskStatus : {};
   return {
     tasks: (value.tasks || []).map(mapClusterAgentTask),
-    queuedCount: Number(value.queued_count || 0),
-    runningCount: Number(value.running_count || 0),
-    completedCount: Number(value.completed_count || 0),
-    failedCount: Number(value.failed_count || 0),
-    pendingCount: Number(value.pending_count || 0),
+    queuedCount: Number(value.queued_count ?? value.queuedCount ?? 0),
+    runningCount: Number(value.running_count ?? value.runningCount ?? 0),
+    completedCount: Number(value.completed_count ?? value.completedCount ?? 0),
+    failedCount: Number(value.failed_count ?? value.failedCount ?? 0),
+    pendingCount: Number(value.pending_count ?? value.pendingCount ?? 0),
   };
 }
 
 function mapActiveClusterRun(raw: unknown) {
   const value = raw && typeof raw === "object" ? raw as RawActiveClusterRun : null;
-  const runId = String(value?.run_id || "");
+  const runId = String(value?.run_id ?? value?.runId ?? "");
   if (!runId) {
     return null;
   }
   return {
     runId,
     status: String(value?.status || ""),
+    team: mapClusterTeam(value?.team),
+    teamRevision: typeof (value?.team_revision ?? value?.teamRevision) === "number"
+      ? Number(value?.team_revision ?? value?.teamRevision)
+      : undefined,
+    capacity: typeof value?.capacity === "number" ? value.capacity : undefined,
+    freeSlots: typeof (value?.free_slots ?? value?.freeSlots) === "number"
+      ? Number(value?.free_slots ?? value?.freeSlots)
+      : undefined,
+    slots: Array.isArray(value?.slots) ? value.slots.map(mapClusterSlotStatus).filter((slot) => slot.agentId) : undefined,
     tasks: value?.tasks ? mapClusterTaskStatus(value.tasks) : undefined,
   };
 }
@@ -2025,6 +2110,31 @@ function mapWorkdirChangeConflict(raw: unknown): WorkdirChangeConflict | undefin
 function mapApiErrorData(code: string | undefined, raw: unknown): unknown {
   if (code === "workdir_change_requires_reset" || code === "workdir_change_blocked_processing") {
     return mapWorkdirChangeConflict(raw);
+  }
+  const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  if (code === "cluster_resize_blocked" || value.code === "cluster_resize_blocked") {
+    const blockers = Array.isArray(value.blockers) ? value.blockers : [];
+    return {
+      code: "cluster_resize_blocked",
+      targetSize: Number(value.target_size ?? value.targetSize ?? 0),
+      minimumSize: Number(value.minimum_size ?? value.minimumSize ?? 0),
+      blockers: blockers.map((rawBlocker): ClusterResizeBlocker => {
+        const blocker = rawBlocker && typeof rawBlocker === "object" ? rawBlocker as Record<string, unknown> : {};
+        const executionMode = String(blocker.execution_mode ?? blocker.executionMode ?? "cli");
+        const minimumSize = blocker.minimum_size ?? blocker.minimumSize;
+        const outsideAgentIds = blocker.outside_agent_ids ?? blocker.outsideAgentIds;
+        return {
+          conversationId: String(blocker.conversation_id ?? blocker.conversationId ?? ""),
+          title: String(blocker.title || "新会话"),
+          executionMode: executionMode === "native_agent" ? "native_agent" : "cli",
+          roleCount: Number(blocker.role_count ?? blocker.roleCount ?? 0),
+          outsideAgentIds: Array.isArray(outsideAgentIds)
+            ? outsideAgentIds.map((item) => String(item))
+            : [],
+          ...(typeof minimumSize === "number" ? { minimumSize } : {}),
+        };
+      }),
+    } satisfies ClusterResizeBlockedData;
   }
   return raw;
 }
@@ -2476,6 +2586,8 @@ function mapConversationSummary(raw: RawConversationSummary): ConversationSummar
   const rollbackSupported = raw.rollback_supported ?? raw.rollbackSupported;
   const degraded = raw.degraded;
   const degradedReason = raw.degraded_reason ?? raw.degradedReason;
+  const clusterTeam = mapClusterTeam(raw.cluster_team ?? raw.clusterTeam);
+  const clusterTeamRevision = raw.cluster_team_revision ?? raw.clusterTeamRevision;
   return {
     id: String(raw.id || ""),
     title: String(raw.title || "新会话"),
@@ -2499,6 +2611,8 @@ function mapConversationSummary(raw: RawConversationSummary): ConversationSummar
     ...(typeof rollbackSupported === "boolean" ? { rollbackSupported } : {}),
     ...(typeof degraded === "boolean" ? { degraded } : {}),
     ...(typeof degradedReason === "string" ? { degradedReason } : {}),
+    ...(clusterTeam ? { clusterTeam } : {}),
+    ...(typeof clusterTeamRevision === "number" ? { clusterTeamRevision } : {}),
     createdAt: String(raw.created_at ?? raw.createdAt ?? ""),
     updatedAt: String(raw.updated_at ?? raw.updatedAt ?? ""),
   };
@@ -4832,9 +4946,13 @@ export class RealWebBotClient implements WebBotClient {
     const data = await this.requestJson<{ items: RawConversationSummary[]; active_conversation_id: string }>(
       `/api/bots/${encodeURIComponent(botAlias)}/conversations?${params.toString()}`,
     );
+    const activeConversationId = String(data.active_conversation_id || "");
     return {
-      items: data.items.map(mapConversationSummary),
-      activeConversationId: String(data.active_conversation_id || ""),
+      items: data.items.map(mapConversationSummary).map((item) => ({
+        ...item,
+        active: activeConversationId ? item.id === activeConversationId : item.active,
+      })),
+      activeConversationId,
     };
   }
 
@@ -4869,15 +4987,6 @@ export class RealWebBotClient implements WebBotClient {
           ...(input.title ? { title: input.title } : {}),
           ...(input.agentId ? { agent_id: input.agentId } : {}),
           ...(input.executionMode ? { execution_mode: input.executionMode } : {}),
-          ...(input.cluster ? { cluster: true } : {}),
-          ...(input.mentions ? {
-            mentions: input.mentions.map((mention) => ({
-              agent_id: mention.agentId,
-              label: mention.label,
-              start: mention.start,
-              end: mention.end,
-            })),
-          } : {}),
         }),
       },
     );
@@ -4989,6 +5098,35 @@ export class RealWebBotClient implements WebBotClient {
     };
   }
 
+  async archiveConversation(
+    botAlias: string,
+    conversationId: string,
+    options: AgentScopedOptions = {},
+  ): Promise<ConversationArchiveResult> {
+    const data = await this.requestJson<{
+      archived_conversation_id?: string;
+      active_conversation_id?: string;
+      items?: RawConversationSummary[];
+      messages?: RawHistoryItem[];
+    }>(
+      `/api/bots/${encodeURIComponent(botAlias)}/conversations/${encodeURIComponent(conversationId)}/archive`,
+      {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify({
+          ...scopedRequestBody(options),
+          ...(options.executionMode ? { execution_mode: options.executionMode } : {}),
+        }),
+      },
+    );
+    return {
+      archivedConversationId: String(data.archived_conversation_id || conversationId),
+      activeConversationId: String(data.active_conversation_id || ""),
+      items: (data.items || []).map(mapConversationSummary),
+      ...(Array.isArray(data.messages) ? { messages: data.messages.map((item, index) => mapChatMessage(item, index)) } : {}),
+    };
+  }
+
   async deleteAllConversations(
     botAlias: string,
     options: AgentScopedOptions & { deleteNativeSession?: boolean } = {},
@@ -5094,15 +5232,6 @@ export class RealWebBotClient implements WebBotClient {
         ...(options?.executionMode ? { execution_mode: options.executionMode } : {}),
         ...(options?.soloMode ? { solo_mode: true } : {}),
         ...(useAgUiProtocol ? { protocol: "ag-ui" } : {}),
-        ...(options?.cluster ? { cluster: true } : {}),
-        ...(options?.mentions ? {
-          mentions: options.mentions.map((mention) => ({
-            agent_id: mention.agentId,
-            label: mention.label,
-            start: mention.start,
-            end: mention.end,
-          })),
-        } : {}),
       }),
     });
 

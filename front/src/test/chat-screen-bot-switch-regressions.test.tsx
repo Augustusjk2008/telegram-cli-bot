@@ -52,6 +52,36 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
+test("returns a stored child selection to the main Agent when cluster is enabled", async () => {
+  window.localStorage.setItem("tcb.activeAgent.main", "reviewer");
+  const client = createClient();
+  const overview: BotOverview = {
+    ...createOverview(),
+    cluster: {
+      enabled: true,
+      writePolicy: "main_only",
+      conflictPolicy: "snapshot_diff",
+      maxParallelAgents: 2,
+      defaultTimeoutSeconds: 600,
+      modelTiers: { low: "", medium: "", high: "" },
+      reasoningEfforts: { low: "", medium: "", high: "" },
+    },
+    agents: [
+      { id: "main", name: "主 Agent", systemPrompt: "", enabled: true, isMain: true },
+      { id: "reviewer", name: "旧固定角色", systemPrompt: "", enabled: true, isMain: false },
+    ],
+  };
+  vi.spyOn(client, "getBotOverview").mockResolvedValue(overview);
+  vi.spyOn(client, "listAgents").mockResolvedValue({ items: overview.agents || [] });
+  const listMessages = vi.spyOn(client, "listMessages").mockResolvedValue({ items: [] });
+
+  render(<ChatScreen botAlias="main" client={client} isVisible />);
+
+  await waitFor(() => expect(window.localStorage.getItem("tcb.activeAgent.main")).toBe("main"));
+  expect(listMessages).toHaveBeenLastCalledWith("main");
+  expect(screen.queryByRole("combobox", { name: "当前 agent" })).not.toBeInTheDocument();
+});
+
 test("restarts initial history loading after a hidden cached bot cancels the first request", async () => {
   const firstHistory = createDeferred<HistorySnapshotResult>();
   const staleHistory: ChatMessage[] = [{

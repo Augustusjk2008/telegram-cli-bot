@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -17,6 +18,9 @@ class ClusterRunRequest:
     execution_mode: str = "cli"
     mentions: list[dict[str, Any]] = field(default_factory=list)
     allow_unsafe_cli: bool = False
+    main_conversation_id: str = ""
+    team_revision: int = 0
+    team: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -26,6 +30,10 @@ class AskAgentRequest:
     model_tier: str
     timeout_seconds: int
     allow_write: bool
+    role_name: str = ""
+    responsibility: str = ""
+    team_revision: int = 0
+    assignment_revision: int = 0
 
 
 @dataclass
@@ -46,6 +54,10 @@ class ClusterAgentTask:
     model_tier: str
     timeout_seconds: int
     allow_write: bool
+    role_name: str
+    responsibility: str
+    team_revision: int
+    assignment_revision: int
     status: str
     created_at: str
     started_at: str = ""
@@ -65,6 +77,9 @@ class ClusterRun:
     profile: BotProfile
     mentions: list[dict[str, Any]]
     allow_unsafe_cli: bool
+    main_conversation_id: str
+    team_revision: int
+    team: dict[str, Any]
     started_at: str
     updated_at: str
     events: list[dict[str, Any]] = field(default_factory=list)
@@ -115,9 +130,12 @@ class ClusterRuntime:
             user_id=request.user_id,
             execution_mode=str(request.execution_mode or "cli").strip().lower() or "cli",
             status="running",
-            profile=request.profile,
+            profile=copy.deepcopy(request.profile),
             mentions=[dict(item) for item in request.mentions],
             allow_unsafe_cli=bool(request.allow_unsafe_cli),
+            main_conversation_id=str(request.main_conversation_id or "").strip(),
+            team_revision=max(0, int(request.team_revision or 0)),
+            team=copy.deepcopy(request.team) if isinstance(request.team, dict) else {"version": 1, "assignments": []},
             started_at=now,
             updated_at=now,
             events=[{"kind": "run_started", "created_at": now}],
@@ -127,6 +145,36 @@ class ClusterRuntime:
 
     def get_run(self, run_id: str) -> ClusterRun | None:
         return self._runs.get(str(run_id or "").strip())
+
+    def get_team_assignment(self, run_id: str, agent_id: str) -> dict[str, Any] | None:
+        run = self._runs[str(run_id)]
+        assignment = self._team_assignment(run, str(agent_id or "").strip().lower())
+        return copy.deepcopy(assignment) if assignment is not None else None
+
+    def update_run_team(self, run_id: str, team: dict[str, Any], team_revision: int) -> ClusterRun:
+        run = self._runs[str(run_id)]
+        run.team = copy.deepcopy(team)
+        run.team_revision = max(0, int(team_revision or 0))
+        run.updated_at = self._now_iso()
+        return run
+
+    def has_pending_tasks(
+        self,
+        *,
+        bot_alias: str,
+        user_id: int | None = None,
+        main_conversation_id: str = "",
+    ) -> bool:
+        alias = str(bot_alias or "").strip()
+        conversation_id = str(main_conversation_id or "").strip()
+        return any(
+            task.status in {"queued", "running"}
+            for run in self._runs.values()
+            if run.bot_alias == alias
+            and (user_id is None or run.user_id == user_id)
+            and (not conversation_id or run.main_conversation_id == conversation_id)
+            for task in run.tasks.values()
+        )
 
     def find_active_run(self, bot_alias: str, user_id: int) -> ClusterRun | None:
         self.cleanup_finished_runs()
@@ -182,6 +230,10 @@ class ClusterRuntime:
             model_tier=request.model_tier,
             timeout_seconds=request.timeout_seconds,
             allow_write=request.allow_write,
+            role_name=request.role_name,
+            responsibility=request.responsibility,
+            team_revision=request.team_revision,
+            assignment_revision=request.assignment_revision,
             status="queued",
             created_at=now,
         )
@@ -368,6 +420,10 @@ class ClusterRuntime:
             "timeout_seconds": task.timeout_seconds,
             "deadline_exceeded": self._task_deadline_exceeded(task),
             "allow_write": task.allow_write,
+            "role_name": task.role_name,
+            "responsibility": task.responsibility,
+            "team_revision": task.team_revision,
+            "assignment_revision": task.assignment_revision,
             "created_at": task.created_at,
             "started_at": task.started_at,
             "completed_at": task.completed_at,
@@ -528,11 +584,43 @@ class ClusterRuntime:
                 "session_policy": agent.cluster.session_policy,
                 "timeout_seconds": agent.cluster.timeout_seconds,
             })
+        capacity = max(1, int(run.profile.cluster.max_parallel_agents or 1))
+        active_agents = [agent for agent in run.profile.normalized_agents() if agent.id != "main"][:capacity]
+        assignments = {
+            str(item.get("agent_id") or "").strip().lower(): item
+            for item in list(run.team.get("assignments") or [])
+            if isinstance(item, dict) and str(item.get("agent_id") or "").strip()
+        }
+        slots = []
+        for agent in active_agents:
+            assignment = assignments.get(agent.id)
+            pending_statuses = [
+                task.status
+                for candidate_run in self._runs.values()
+                if candidate_run.bot_alias == run.bot_alias and candidate_run.user_id == run.user_id
+                for task in candidate_run.tasks.values()
+                if task.agent_id == agent.id and task.status in {"queued", "running"}
+            ]
+            slot_status = "running" if "running" in pending_statuses else "queued" if pending_statuses else "idle"
+            slots.append({
+                "agent_id": agent.id,
+                "assigned": assignment is not None,
+                "role_name": str((assignment or {}).get("name") or "").strip(),
+                "responsibility": str((assignment or {}).get("responsibility") or "").strip(),
+                "assignment_revision": max(0, int((assignment or {}).get("assignment_revision") or 0)),
+                "status": slot_status,
+            })
         return {
             "run_id": run.run_id,
             "bot_alias": run.bot_alias,
             "execution_mode": run.execution_mode,
             "status": run.status,
+            "main_conversation_id": run.main_conversation_id,
+            "team_revision": run.team_revision,
+            "team": copy.deepcopy(run.team),
+            "capacity": capacity,
+            "free_slots": max(0, capacity - len(assignments)),
+            "slots": slots,
             "agents": agents,
             "events": list(run.events),
             "tasks": self.build_task_status(run_id, include_output=False),
@@ -545,12 +633,13 @@ class ClusterRuntime:
             raise ClusterToolError("cluster_agent_not_found", "未找到子 agent")
         if agent_id == "main":
             raise ClusterToolError("cluster_tool_forbidden", "不能为主 agent 新开子 agent 会话")
+        assignment = self._team_assignment(run, agent_id)
+        if run.main_conversation_id and assignment is None:
+            raise ClusterToolError("cluster_agent_not_assigned", "该槽位不在当前编组中")
         try:
             agent = run.profile.get_agent(agent_id)
         except KeyError as exc:
             raise ClusterToolError("cluster_agent_not_found", "未找到子 agent") from exc
-        if not agent.enabled or not agent.cluster.allow_cluster:
-            raise ClusterToolError("cluster_agent_disabled", "子 agent 未启用集群调用")
         if any(
             task.agent_id == agent_id and task.status in {"queued", "running"}
             for candidate_run in self._runs.values()
@@ -570,6 +659,9 @@ class ClusterRuntime:
             raise ClusterToolError("cluster_agent_not_found", "未找到子 agent")
         if agent_id == "main":
             raise ClusterToolError("cluster_tool_forbidden", "不能通过 ask_agent 调用主 agent")
+        assignment = self._team_assignment(run, agent_id)
+        if run.main_conversation_id and assignment is None:
+            raise ClusterToolError("cluster_agent_not_assigned", "该槽位不在当前编组中")
         try:
             agent = run.profile.get_agent(agent_id)
         except KeyError as exc:
@@ -581,23 +673,46 @@ class ClusterRuntime:
         elif "timeoutSeconds" in payload:
             timeout_source = payload.get("timeoutSeconds")
         else:
-            timeout_source = agent.cluster.timeout_seconds
+            timeout_source = run.profile.cluster.default_timeout_seconds
         timeout_seconds = _int(
             timeout_source,
             run.profile.cluster.default_timeout_seconds,
             minimum=60,
             maximum=3600,
         )
-        if not agent.enabled or not agent.cluster.allow_cluster:
-            raise ClusterToolError("cluster_agent_disabled", "子 agent 未启用集群调用")
         if allow_write and run.profile.cluster.write_policy == "main_only":
             raise ClusterToolError("cluster_tool_forbidden", "当前策略不允许子 agent 写文件")
-        if allow_write and not agent.cluster.allow_write and run.profile.cluster.write_policy != "all_agents":
-            raise ClusterToolError("cluster_tool_forbidden", "该子 agent 未允许写文件")
+        if any(
+            task.agent_id == agent_id and task.status in {"queued", "running"}
+            for candidate_run in self._runs.values()
+            if candidate_run.run_id != run.run_id
+            and candidate_run.bot_alias == run.bot_alias
+            and candidate_run.user_id == run.user_id
+            for task in candidate_run.tasks.values()
+        ):
+            raise ClusterToolError("cluster_agent_busy", "子 agent 正在另一轮任务中，请等待完成后重试")
         return AskAgentRequest(
             agent_id=agent_id,
             message=message,
             model_tier=model_tier,
             timeout_seconds=timeout_seconds,
             allow_write=allow_write,
+            role_name=str((assignment or {}).get("name") or "").strip(),
+            responsibility=str((assignment or {}).get("responsibility") or "").strip(),
+            team_revision=run.team_revision,
+            assignment_revision=max(0, int((assignment or {}).get("assignment_revision") or 0)),
+        )
+
+    @staticmethod
+    def _team_assignment(run: ClusterRun, agent_id: str) -> dict[str, Any] | None:
+        assignments = run.team.get("assignments") if isinstance(run.team, dict) else []
+        if not isinstance(assignments, list):
+            return None
+        return next(
+            (
+                item
+                for item in assignments
+                if isinstance(item, dict) and str(item.get("agent_id") or "").strip().lower() == agent_id
+            ),
+            None,
         )

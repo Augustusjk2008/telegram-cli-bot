@@ -30,44 +30,25 @@ describe("compact UI contract", () => {
     expect(screen.getByRole("button", { name: "操作" })).toHaveClass("h-8");
   });
 
-  it("keeps the cluster strip and message input flat with one divider", () => {
+  it("keeps the message input flat without a manual cluster strip", () => {
     render(
       <ChatComposer
         onSend={() => undefined}
         onAttachFiles={() => undefined}
         onRemoveAttachment={() => undefined}
         attachments={[]}
-        clusterMode
-        agents={[
-          {
-            id: "tester",
-            name: "测试专家",
-            systemPrompt: "",
-            enabled: true,
-            isMain: false,
-          },
-        ]}
       />,
     );
 
-    const clusterStrip = screen.getByTestId("chat-composer-cluster-strip");
     const inputSurface = screen.getByTestId("chat-composer-input-surface");
 
-    expect(clusterStrip).toHaveClass("border-b", "border-[var(--workbench-hairline)]");
-    expect(clusterStrip).not.toHaveClass(
-      "rounded-lg",
-      "border",
-      "bg-[var(--workbench-panel-elevated-bg)]",
-    );
+    expect(screen.queryByTestId("chat-composer-cluster-strip")).not.toBeInTheDocument();
     expect(inputSurface).not.toHaveClass(
       "rounded-lg",
       "border",
       "bg-[var(--workbench-panel-bg)]",
       "shadow-[var(--shadow-surface)]",
     );
-    expect(
-      clusterStrip.compareDocumentPosition(inputSurface) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
   });
 
   it("keeps mobile safety and chat reading contracts intact", () => {

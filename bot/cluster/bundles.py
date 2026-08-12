@@ -96,8 +96,6 @@ def normalize_cluster_bundle(raw: Any) -> dict[str, Any]:
     description = str(raw.get("description") or "").strip()
     cluster = normalize_bot_cluster_config(raw.get("cluster")).to_dict()
     agents = _normalize_bundle_agents(raw.get("agents"))
-    if any(agent["cluster"]["allow_write"] for agent in agents) and cluster["write_policy"] == "main_only":
-        raise ClusterBundleError("cluster_bundle_write_policy_conflict", "存在可写 agent 时 write_policy 不能为 main_only")
     return {
         "id": bundle_id,
         "name": name[:64] or "自定义集群",
@@ -122,7 +120,7 @@ def build_cluster_bundle_schema() -> dict[str, Any]:
                     "required": ["enabled", "write_policy", "conflict_policy", "max_parallel_agents", "default_timeout_seconds", "model_tiers"],
                     "properties": {
                         "enabled": {"type": "boolean"},
-                        "write_policy": {"enum": ["main_only", "selected_agents", "all_agents"]},
+                        "write_policy": {"enum": ["main_only", "all_agents"]},
                         "conflict_policy": {"enum": ["warn_only", "snapshot_diff", "block_same_file"]},
                         "max_parallel_agents": {"type": "integer", "minimum": 1, "maximum": 8},
                         "default_timeout_seconds": {"type": "integer", "minimum": 60, "maximum": 3600},

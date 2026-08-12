@@ -53,7 +53,7 @@
       ],
       "cluster": {
         "enabled": true,
-        "write_policy": "selected_agents",
+        "write_policy": "main_only",
         "conflict_policy": "snapshot_diff",
         "max_parallel_agents": 3,
         "default_timeout_seconds": 1200,

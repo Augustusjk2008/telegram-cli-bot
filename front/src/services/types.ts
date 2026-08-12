@@ -660,7 +660,7 @@ export type ClusterReasoningEfforts = ClusterTierValues;
 
 export type BotClusterConfig = {
   enabled: boolean;
-  writePolicy: "main_only" | "selected_agents" | "all_agents";
+  writePolicy: "main_only" | "all_agents";
   conflictPolicy: "warn_only" | "snapshot_diff" | "block_same_file";
   maxParallelAgents: number;
   defaultTimeoutSeconds: number;
@@ -719,6 +719,10 @@ export type ClusterStatus = {
 export type ClusterAgentTask = {
   taskId: string;
   agentId: string;
+  roleName?: string;
+  responsibility?: string;
+  teamRevision?: number;
+  assignmentRevision?: number;
   status: "queued" | "running" | "completed" | "failed" | "cancelled" | string;
   modelTier: ClusterModelTier | string;
   allowWrite: boolean;
@@ -747,7 +751,49 @@ export type ClusterTaskStatus = {
 export type ActiveClusterRun = {
   runId: string;
   status: string;
+  team?: ClusterTeam;
+  teamRevision?: number;
+  capacity?: number;
+  freeSlots?: number;
+  slots?: ClusterSlotStatus[];
   tasks?: ClusterTaskStatus;
+};
+
+export type ClusterTeamAssignment = {
+  agentId: string;
+  name: string;
+  responsibility: string;
+  assignmentRevision: number;
+};
+
+export type ClusterTeam = {
+  version: 1;
+  assignments: ClusterTeamAssignment[];
+};
+
+export type ClusterSlotStatus = {
+  agentId: string;
+  assigned: boolean;
+  roleName: string;
+  responsibility: string;
+  assignmentRevision: number;
+  status: "idle" | "queued" | "running" | "unknown";
+};
+
+export type ClusterResizeBlocker = {
+  conversationId: string;
+  title: string;
+  executionMode: ChatExecutionMode;
+  roleCount: number;
+  outsideAgentIds: string[];
+  minimumSize?: number;
+};
+
+export type ClusterResizeBlockedData = {
+  code: "cluster_resize_blocked";
+  targetSize: number;
+  minimumSize: number;
+  blockers: ClusterResizeBlocker[];
 };
 
 export type ClusterTaskMessage = {
@@ -843,13 +889,6 @@ export type ClusterBundleSchemaResult = {
   version: number;
   schema: Record<string, unknown>;
   instructions: string;
-};
-
-export type AgentMention = {
-  agentId: string;
-  label: string;
-  start: number;
-  end: number;
 };
 
 export type AgentMutationResult = {
@@ -1162,6 +1201,8 @@ export type ConversationSummary = {
   rollbackSupported?: boolean;
   degraded?: boolean;
   degradedReason?: string;
+  clusterTeam?: ClusterTeam;
+  clusterTeamRevision?: number;
   createdAt: string;
   updatedAt: string;
 };
@@ -1181,6 +1222,13 @@ export type ConversationDeleteResult = {
   deletedFavoriteCount?: number;
   activeConversationId: string;
   nativeSessionCleared: boolean;
+  items: ConversationSummary[];
+  messages?: ChatMessage[];
+};
+
+export type ConversationArchiveResult = {
+  archivedConversationId: string;
+  activeConversationId: string;
   items: ConversationSummary[];
   messages?: ChatMessage[];
 };
@@ -1244,8 +1292,6 @@ export type PlanExecuteInput = {
   title?: string;
   agentId?: string;
   executionMode?: ChatExecutionMode;
-  cluster?: boolean;
-  mentions?: AgentMention[];
 };
 
 export type PlanExecuteResult = {
@@ -1260,8 +1306,6 @@ export type ChatSendOptions = {
   taskPayload?: Record<string, unknown>;
   visibleText?: string;
   agentId?: string;
-  cluster?: boolean;
-  mentions?: AgentMention[];
   executionMode?: ChatExecutionMode;
   soloMode?: boolean;
   signal?: AbortSignal;

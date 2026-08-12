@@ -5,10 +5,8 @@ import { ChatComposer } from "../components/ChatComposer";
 
 function renderComposer({
   enterToSend = true,
-  clusterMode = false,
 }: {
   enterToSend?: boolean;
-  clusterMode?: boolean;
 } = {}) {
   const onSend = vi.fn();
   render(
@@ -18,14 +16,6 @@ function renderComposer({
       onRemoveAttachment={() => undefined}
       attachments={[]}
       enterToSend={enterToSend}
-      clusterMode={clusterMode}
-      agents={clusterMode ? [{
-        id: "reviewer",
-        name: "审查专家",
-        systemPrompt: "",
-        enabled: true,
-        isMain: false,
-      }] : []}
     />,
   );
   return {
@@ -42,7 +32,7 @@ describe("ChatComposer send shortcuts", () => {
     await user.type(input, "运行测试");
     await user.keyboard("{Enter}");
 
-    expect(onSend).toHaveBeenCalledWith("运行测试", []);
+    expect(onSend).toHaveBeenCalledWith("运行测试");
     expect(input).toHaveValue("");
   });
 
@@ -79,15 +69,15 @@ describe("ChatComposer send shortcuts", () => {
     expect(input).toHaveValue("拼音");
   });
 
-  it("accepts an agent mention with Enter before sending", async () => {
+  it("keeps @ text unchanged without parsing an agent mention", async () => {
     const user = userEvent.setup();
-    const { input, onSend } = renderComposer({ clusterMode: true });
+    const { input, onSend } = renderComposer();
 
-    await user.type(input, "@rev");
-    expect(await screen.findByRole("option", { name: "@reviewer 审查专家" })).toBeInTheDocument();
+    await user.type(input, "@reviewer 请审查");
+    expect(screen.queryByRole("option", { name: /reviewer/ })).not.toBeInTheDocument();
     await user.keyboard("{Enter}");
 
-    expect(onSend).not.toHaveBeenCalled();
-    expect(input).toHaveValue("@reviewer ");
+    expect(onSend).toHaveBeenCalledWith("@reviewer 请审查");
+    expect(input).toHaveValue("");
   });
 });

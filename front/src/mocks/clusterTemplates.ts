@@ -81,7 +81,7 @@ export const MOCK_CLUSTER_TEMPLATES: ClusterConfigBundle[] = [
     description: "实现、测试和审查并行协作。",
     cluster: {
       enabled: true,
-      writePolicy: "selected_agents",
+      writePolicy: "main_only",
       conflictPolicy: "snapshot_diff",
       maxParallelAgents: 3,
       defaultTimeoutSeconds: 1200,
@@ -118,7 +118,7 @@ export const MOCK_CLUSTER_TEMPLATES: ClusterConfigBundle[] = [
     description: "开发、测试和审查三角色协作，适合围绕测试问题快速修复和回归验证。",
     cluster: {
       enabled: true,
-      writePolicy: "selected_agents",
+      writePolicy: "main_only",
       conflictPolicy: "snapshot_diff",
       maxParallelAgents: 3,
       defaultTimeoutSeconds: 1200,

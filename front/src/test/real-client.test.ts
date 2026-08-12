@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { EventType } from "../services/agUiProtocol";
 import { RealWebBotClient } from "../services/realWebBotClient";
+import { WebApiClientError } from "../services/types";
 import { buildFileDownloadUrl } from "../utils/fileLinks";
 
 describe("RealWebBotClient", () => {
@@ -221,6 +222,161 @@ describe("RealWebBotClient", () => {
       "/api/bots/main/cluster/runs/run-1/tasks?include_output=1",
       expect.any(Object),
     );
+  });
+
+  test("maps conversation teams and dynamic cluster run snapshots", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonOk({
+        active_conversation_id: "conv-1",
+        items: [{
+          id: "conv-1",
+          active: true,
+          cluster_team_revision: 3,
+          cluster_team: {
+            version: 1,
+            assignments: [{
+              agent_id: "cluster-slot-1",
+              name: "前端审查",
+              responsibility: "检查前端回归",
+              assignment_revision: 2,
+            }],
+          },
+        }],
+      }))
+      .mockResolvedValueOnce(jsonOk({
+        bot: { alias: "main", cli_type: "codex", cluster: { enabled: true, max_parallel_agents: 4 } },
+        session: { working_dir: "C:\\workspace", message_count: 0, history_count: 0, is_processing: true },
+        active_cluster_run: {
+          run_id: "run-team",
+          status: "running",
+          team_revision: 3,
+          capacity: 4,
+          free_slots: 3,
+          slots: [{
+            agent_id: "cluster-slot-1",
+            assigned: true,
+            role_name: "前端审查",
+            responsibility: "检查前端回归",
+            assignment_revision: 2,
+            status: "running",
+          }],
+          team: {
+            version: 1,
+            assignments: [{
+              agent_id: "cluster-slot-1",
+              name: "前端审查",
+              responsibility: "检查前端回归",
+              assignment_revision: 2,
+            }],
+          },
+          tasks: {
+            tasks: [{
+              task_id: "task-1",
+              agent_id: "cluster-slot-1",
+              role_name: "动态测试角色",
+              responsibility: "验证任务快照",
+              team_revision: 3,
+              assignment_revision: 2,
+              status: "running",
+            }],
+            running_count: 1,
+            pending_count: 1,
+          },
+        },
+      }));
+
+    const client = new RealWebBotClient();
+    const conversations = await client.listConversations("main");
+    const overview = await client.getBotOverview("main");
+
+    expect(conversations.items[0]).toMatchObject({
+      clusterTeamRevision: 3,
+      clusterTeam: { assignments: [{ agentId: "cluster-slot-1", name: "前端审查", assignmentRevision: 2 }] },
+    });
+    expect(overview.activeClusterRun).toMatchObject({
+      runId: "run-team",
+      teamRevision: 3,
+      capacity: 4,
+      freeSlots: 3,
+      slots: [{
+        agentId: "cluster-slot-1",
+        assigned: true,
+        roleName: "前端审查",
+        responsibility: "检查前端回归",
+        assignmentRevision: 2,
+        status: "running",
+      }],
+      tasks: {
+        tasks: [{
+          roleName: "动态测试角色",
+          responsibility: "验证任务快照",
+          teamRevision: 3,
+          assignmentRevision: 2,
+        }],
+      },
+    });
+  });
+
+  test("never sends legacy cluster or mention dispatch fields", async () => {
+    fetchMock.mockResolvedValue(streamOk("event: done\ndata: {\"type\":\"done\",\"output\":\"完成\"}\n\n"));
+    const legacyOptions = {
+      cluster: true,
+      mentions: [{ agentId: "reviewer", label: "审查", start: 0, end: 9 }],
+    } as unknown as Parameters<RealWebBotClient["sendMessage"]>[5];
+
+    await new RealWebBotClient().sendMessage("main", "@reviewer 请审查", () => undefined, undefined, undefined, legacyOptions);
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1].body)) as Record<string, unknown>;
+    expect(body.message).toBe("@reviewer 请审查");
+    expect(body).not.toHaveProperty("cluster");
+    expect(body).not.toHaveProperty("mentions");
+  });
+
+  test("maps cluster resize blockers to camelCase error data", async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 409,
+      json: async () => ({
+        ok: false,
+        error: {
+          code: "cluster_resize_blocked",
+          message: "缩容受阻",
+          data: {
+            code: "cluster_resize_blocked",
+            target_size: 2,
+            minimum_size: 4,
+            blockers: [{
+              conversation_id: "conv-old",
+              title: "旧会话",
+              execution_mode: "native_agent",
+              role_count: 3,
+              outside_agent_ids: ["cluster-slot-4"],
+              minimum_size: 4,
+            }],
+          },
+        },
+      }),
+    });
+
+    const request = new RealWebBotClient().updateClusterConfig("main", { maxParallelAgents: 2 });
+
+    await expect(request).rejects.toBeInstanceOf(WebApiClientError);
+    await expect(request).rejects.toEqual(expect.objectContaining({
+      code: "cluster_resize_blocked",
+      data: {
+        code: "cluster_resize_blocked",
+        targetSize: 2,
+        minimumSize: 4,
+        blockers: [{
+          conversationId: "conv-old",
+          title: "旧会话",
+          executionMode: "native_agent",
+          roleCount: 3,
+          outsideAgentIds: ["cluster-slot-4"],
+          minimumSize: 4,
+        }],
+      },
+    }));
   });
 
   test.each(["meta", "status", "trace", "done"] as const)(
@@ -497,6 +653,32 @@ describe("RealWebBotClient", () => {
       nativeSource: { sessionId: "thread-1" },
     });
     expect(history).toEqual({ items: [] });
+  });
+
+  test("archives one conversation without using the destructive delete route", async () => {
+    fetchMock.mockResolvedValueOnce(jsonOk({
+      archived_conversation_id: "conv-old",
+      active_conversation_id: "",
+      items: [],
+    }));
+
+    const result = await new RealWebBotClient().archiveConversation("main", "conv-old", {
+      agentId: "main",
+      executionMode: "cli",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/bots/main/conversations/conv-old/archive",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ agent_id: "main", execution_mode: "cli" }),
+      }),
+    );
+    expect(result).toEqual({
+      archivedConversationId: "conv-old",
+      activeConversationId: "",
+      items: [],
+    });
   });
 
   test.each([

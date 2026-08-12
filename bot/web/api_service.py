@@ -17,9 +17,11 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncIterator, Optional
+from types import SimpleNamespace
+from typing import Any, AsyncIterator, Coroutine, Optional
 
 from bot import app_settings
 from bot.claude_done import ClaudeDoneDetector, build_claude_done_session, strip_claude_done_sentinel
@@ -44,6 +46,7 @@ from bot.cluster.bundles import (
     normalize_cluster_bundle,
 )
 from bot.cluster.runtime import ClusterRuntime, ClusterRunRequest, ClusterToolError
+from bot.cluster.team_service import ClusterTeamService
 from bot.cluster.setup import (
     CLUSTER_MCP_SERVER_NAME,
     build_cli_install_command,
@@ -128,6 +131,7 @@ from bot.updater import download_latest_update
 from bot.utils import is_dangerous_command, split_command_argv
 from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenceBuffer
 from bot.web.chat_favorite_store import ChatFavoriteStore, FavoriteScope, build_favorite_item
+from bot.web.async_chat_store import run_chat_store_io
 from bot.web.chat_store import ChatStore
 from bot.web.cli_context_usage import resolve_cli_context_usage
 from bot.web.diagnostics import diag_log_event, diag_log_slow
@@ -222,6 +226,7 @@ from bot.web.terminal_actions import (
 logger = logging.getLogger(__name__)
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CLUSTER_RUNTIME = ClusterRuntime()
+_CLUSTER_TEAM_SERVICE = ClusterTeamService()
 
 
 @dataclass
@@ -601,6 +606,11 @@ def get_overview(manager: MultiBotManager, alias: str, user_id: int, agent_id: s
     resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     bot_id = resolve_session_bot_id(manager, alias)
     active_cluster_run = _find_active_cluster_run_for_session(alias, user_id, session)
+    active_cluster_status = (
+        _CLUSTER_RUNTIME.build_status(active_cluster_run.run_id)
+        if active_cluster_run is not None
+        else None
+    )
     history_service = _history_service_for_execution_mode(session, resolved_execution_mode)
     return {
         "bot": {
@@ -615,6 +625,11 @@ def get_overview(manager: MultiBotManager, alias: str, user_id: int, agent_id: s
                 "run_id": active_cluster_run.run_id,
                 "status": active_cluster_run.status,
                 "tasks": _CLUSTER_RUNTIME.build_task_status(active_cluster_run.run_id, include_output=True),
+                "team": active_cluster_status["team"],
+                "team_revision": active_cluster_status["team_revision"],
+                "capacity": active_cluster_status["capacity"],
+                "free_slots": active_cluster_status["free_slots"],
+                "slots": active_cluster_status["slots"],
             }
             if active_cluster_run is not None
             else None
@@ -842,8 +857,39 @@ def prepare_cluster_setup(manager: MultiBotManager, alias: str) -> dict[str, Any
 
 async def update_cluster_config(manager: MultiBotManager, alias: str, data: dict[str, Any]) -> dict[str, Any]:
     try:
-        source = data.get("cluster") if isinstance(data.get("cluster"), dict) else data
-        cluster = await manager.update_bot_cluster(alias, normalize_bot_cluster_config(source).to_dict())
+        async with _CLUSTER_TEAM_SERVICE.bot_lock(alias):
+            source = data.get("cluster") if isinstance(data.get("cluster"), dict) else data
+            profile = get_profile_or_raise(manager, alias)
+            next_config = normalize_bot_cluster_config(source)
+            current_size = max(1, int(profile.cluster.max_parallel_agents or 1))
+            target_size = max(1, int(next_config.max_parallel_agents or 1))
+            if target_size < current_size:
+                slot_agent_ids = [agent.id for agent in profile.normalized_agents() if agent.id != "main"]
+                blockers = ChatStore(Path(profile.working_dir)).list_cluster_resize_blockers(
+                    bot_id=resolve_session_bot_id(manager, alias),
+                    slot_agent_ids=slot_agent_ids,
+                    target_size=target_size,
+                )
+                has_pending_tasks = _CLUSTER_RUNTIME.has_pending_tasks(bot_alias=alias)
+                if blockers or has_pending_tasks:
+                    minimum_size = max(
+                        [target_size, *[int(item.get("minimum_size") or target_size) for item in blockers]],
+                    )
+                    if has_pending_tasks:
+                        minimum_size = max(minimum_size, current_size)
+                    _raise(
+                        409,
+                        "cluster_resize_blocked",
+                        "仍有会话编组或运行中子任务占用目标范围之外的槽位",
+                        {
+                            "code": "cluster_resize_blocked",
+                            "target_size": target_size,
+                            "minimum_size": minimum_size,
+                            "blockers": blockers,
+                            **({"active_tasks": True} if has_pending_tasks else {}),
+                        },
+                    )
+            cluster = await manager.update_bot_cluster(alias, next_config.to_dict())
     except ValueError as exc:
         _raise(400, "invalid_cluster_config", str(exc))
     return {"cluster": cluster, "status": get_cluster_status(manager, alias)}
@@ -880,12 +926,19 @@ async def apply_cluster_template(manager: MultiBotManager, alias: str, data: dic
     if data.get("confirm_overwrite_agents", data.get("confirmOverwriteAgents")) is not True:
         _raise(409, "cluster_bundle_overwrite_not_confirmed", "应用模板会覆盖当前子 agent 配置，请确认后重试")
     profile = get_profile_or_raise(manager, alias)
+    if profile.cluster.enabled:
+        _raise(409, "cluster_slots_managed", "集群已启用，不能通过模板修改物理槽位")
     try:
         bundle = get_cluster_template(str(data.get("template_id", data.get("templateId", "")) or ""))
         diff = build_cluster_bundle_diff(profile, bundle)
     except ClusterBundleError as exc:
         _raise_cluster_bundle_error(exc)
-    result = await manager.replace_bot_cluster_bundle(alias, bundle["cluster"], bundle["agents"])
+    try:
+        result = await manager.replace_bot_cluster_bundle(alias, bundle["cluster"], bundle["agents"])
+    except ValueError as exc:
+        if "集群已启用" in str(exc):
+            _raise(409, "cluster_slots_managed", str(exc))
+        raise
     return {**result, "bundle": bundle, "diff": diff, "status": get_cluster_status(manager, alias)}
 
 
@@ -903,12 +956,19 @@ async def apply_cluster_config_bundle(manager: MultiBotManager, alias: str, data
     if data.get("confirm_overwrite_agents", data.get("confirmOverwriteAgents")) is not True:
         _raise(409, "cluster_bundle_overwrite_not_confirmed", "应用配置会覆盖当前子 agent 配置，请确认后重试")
     profile = get_profile_or_raise(manager, alias)
+    if profile.cluster.enabled:
+        _raise(409, "cluster_slots_managed", "集群已启用，不能通过配置包修改物理槽位")
     try:
         bundle = normalize_cluster_bundle(data.get("bundle", data))
         diff = build_cluster_bundle_diff(profile, bundle)
     except ClusterBundleError as exc:
         _raise_cluster_bundle_error(exc)
-    result = await manager.replace_bot_cluster_bundle(alias, bundle["cluster"], bundle["agents"])
+    try:
+        result = await manager.replace_bot_cluster_bundle(alias, bundle["cluster"], bundle["agents"])
+    except ValueError as exc:
+        if "集群已启用" in str(exc):
+            _raise(409, "cluster_slots_managed", str(exc))
+        raise
     return {**result, "bundle": bundle, "diff": diff, "status": get_cluster_status(manager, alias)}
 
 
@@ -984,6 +1044,37 @@ async def _wait_for_cluster_tasks_if_requested(
     await _CLUSTER_RUNTIME.wait_for_task_change(run_id, task_ids, wait_seconds)
 
 
+def _chat_store_for_cluster_run(manager: MultiBotManager, run: Any) -> ChatStore:
+    _profile, _agent, session = get_chat_session_for_alias(
+        manager,
+        run.bot_alias,
+        run.user_id,
+        "main",
+    )
+    return _get_chat_store(session)
+
+
+def _active_main_conversation_for_cluster_run(manager: MultiBotManager, run: Any) -> str:
+    _profile, _agent, session = get_chat_session_for_alias(
+        manager,
+        run.bot_alias,
+        run.user_id,
+        "main",
+    )
+    return str(session.active_conversation_id or "").strip()
+
+
+def _require_current_cluster_team(manager: MultiBotManager, run: Any) -> None:
+    parent_conversation_id = str(run.main_conversation_id or "").strip()
+    if not parent_conversation_id:
+        return
+    if _active_main_conversation_for_cluster_run(manager, run) != parent_conversation_id:
+        raise ClusterToolError("cluster_team_changed", "主会话已切换，请在当前会话重新委派")
+    state = _chat_store_for_cluster_run(manager, run).get_conversation_team(parent_conversation_id)
+    if int(state.get("cluster_team_revision") or 0) != int(run.team_revision or 0):
+        raise ClusterToolError("cluster_team_changed", "编组已被另一轮更新，请重新读取后重试")
+
+
 async def handle_cluster_mcp_tool(
     manager: MultiBotManager,
     run_id: str,
@@ -1001,27 +1092,36 @@ async def handle_cluster_mcp_tool(
         if tool_name == "cluster_status":
             return {"ok": True, "data": _CLUSTER_RUNTIME.build_status(run_id)}
         if tool_name == "list_agents":
-            return {"ok": True, "data": _CLUSTER_RUNTIME.build_status(run_id)["agents"]}
+            return {"ok": True, "data": _CLUSTER_RUNTIME.build_status(run_id)}
+        if tool_name == "configure_team":
+            configured = await _CLUSTER_TEAM_SERVICE.configure(
+                runtime=_CLUSTER_RUNTIME,
+                store=_chat_store_for_cluster_run(manager, run),
+                run_id=run_id,
+                payload=payload,
+                current_profile=current_profile,
+            )
+            return {"ok": True, "data": configured}
         if tool_name == "new_agent_session":
+            _require_current_cluster_team(manager, run)
             agent_id = _CLUSTER_RUNTIME.validate_new_agent_session(run_id, payload)
-            try:
-                conversation_data = create_conversation(
-                    manager,
-                    run.bot_alias,
-                    run.user_id,
+            assignment = _CLUSTER_RUNTIME.get_team_assignment(run_id, agent_id)
+            if assignment is None:
+                raise ClusterToolError("cluster_agent_not_assigned", "该槽位不在当前编组中")
+            conversation_id = _ensure_cluster_child_conversation(
+                manager,
+                run,
+                SimpleNamespace(
                     agent_id=agent_id,
-                    execution_mode=run.execution_mode,
-                )
-            except WebApiError as exc:
-                if exc.status == 409 and exc.code == "conversation_switch_blocked":
-                    _raise(409, "cluster_agent_busy", "子 agent 正在运行，请等待完成后再新开会话")
-                raise
-            conversation = conversation_data["conversation"]
+                    assignment_revision=int(assignment.get("assignment_revision") or 0),
+                ),
+                force_new=True,
+            )
             return {
                 "ok": True,
                 "data": {
                     "agent_id": agent_id,
-                    "conversation_id": str(conversation.get("id") or ""),
+                    "conversation_id": conversation_id,
                     "execution_mode": run.execution_mode,
                 },
             }
@@ -1057,8 +1157,20 @@ async def handle_cluster_mcp_tool(
         if tool_name != "ask_agent":
             _raise(404, "cluster_tool_not_found", "未知集群工具")
 
-        request = _CLUSTER_RUNTIME.validate_ask_agent(run_id, payload)
-        task = _CLUSTER_RUNTIME.create_agent_task(run_id, request)
+        parent_conversation_id = str(run.main_conversation_id or "").strip()
+        if parent_conversation_id:
+            async with _CLUSTER_TEAM_SERVICE.conversation_lock(
+                run.bot_alias,
+                run.user_id,
+                parent_conversation_id,
+            ):
+                _require_current_cluster_team(manager, run)
+                request = _CLUSTER_RUNTIME.validate_ask_agent(run_id, payload)
+                task = _CLUSTER_RUNTIME.create_agent_task(run_id, request)
+        else:
+            _require_current_cluster_team(manager, run)
+            request = _CLUSTER_RUNTIME.validate_ask_agent(run_id, payload)
+            task = _CLUSTER_RUNTIME.create_agent_task(run_id, request)
         control = _cluster_run_control(run_id, run.profile.cluster.max_parallel_agents)
         background_task = asyncio.create_task(_run_cluster_agent_task(manager, run_id, task.task_id))
         control.tasks.add(background_task)
@@ -1078,13 +1190,21 @@ async def handle_cluster_mcp_tool(
     except KeyError:
         _raise(404, "cluster_run_not_found", "未找到集群任务")
     except ClusterToolError as exc:
-        _raise(409 if exc.code == "cluster_agent_busy" else 400, exc.code, exc.message)
+        conflict_codes = {
+            "cluster_agent_busy",
+            "cluster_team_busy",
+            "cluster_team_changed",
+            "cluster_team_sync_failed",
+        }
+        _raise(409 if exc.code in conflict_codes else 400, exc.code, exc.message)
 
 
 async def create_agent(manager: MultiBotManager, alias: str, data: dict[str, Any]) -> dict[str, Any]:
     try:
         agent = await manager.create_bot_agent(alias, data)
     except ValueError as exc:
+        if "集群已启用" in str(exc):
+            _raise(409, "cluster_slots_managed", str(exc))
         _raise(400, "invalid_agent", str(exc))
     return {"agent": agent}
 
@@ -1095,6 +1215,8 @@ async def update_agent(manager: MultiBotManager, alias: str, agent_id: str, data
     except KeyError:
         _raise(404, "agent_not_found", "未找到 agent")
     except ValueError as exc:
+        if "集群已启用" in str(exc):
+            _raise(409, "cluster_slots_managed", str(exc))
         _raise(400, "invalid_agent", str(exc))
     return {"agent": agent}
 
@@ -1105,6 +1227,8 @@ async def delete_agent(manager: MultiBotManager, alias: str, agent_id: str) -> d
     except KeyError:
         _raise(404, "agent_not_found", "未找到 agent")
     except ValueError as exc:
+        if "集群已启用" in str(exc):
+            _raise(409, "cluster_slots_managed", str(exc))
         _raise(400, "invalid_agent", str(exc))
     return {"deleted": True}
 
@@ -1565,6 +1689,8 @@ def _create_agent_conversation(
     *,
     title: str = "",
     execution_mode: str = "",
+    cluster_parent_conversation_id: str | None = None,
+    cluster_assignment_revision: int | None = None,
 ) -> tuple[ChatStore, str]:
     store = _get_chat_store(session)
     resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
@@ -1579,6 +1705,8 @@ def _create_agent_conversation(
         session_epoch=max(0, int(getattr(session, "session_epoch", 0) or 0)),
         native_provider=native_provider,
         title=title,
+        cluster_parent_conversation_id=cluster_parent_conversation_id,
+        cluster_assignment_revision=cluster_assignment_revision,
     )
     with session._lock:
         session.active_conversation_id = conversation_id
@@ -1589,33 +1717,102 @@ def _create_agent_conversation(
     return store, conversation_id
 
 
-def _create_cluster_child_conversations(
+def _clear_cluster_child_session_bindings(
     manager: MultiBotManager,
     alias: str,
     user_id: int,
     profile: BotProfile,
-    *,
-    execution_mode: str = "",
+    parent_conversation_id: str,
 ) -> None:
-    if not profile.cluster.enabled:
+    normalized_parent_id = str(parent_conversation_id or "").strip()
+    if not normalized_parent_id:
         return
-    resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     for agent in profile.normalized_agents():
-        if agent.id == "main" or not agent.enabled:
+        if agent.id == "main":
             continue
         _profile, _agent, child_session = get_chat_session_for_alias(manager, alias, user_id, agent.id)
         with child_session._lock:
-            is_processing = bool(child_session.is_processing)
-        if is_processing:
-            _raise(409, "conversation_switch_blocked", "子 agent 正在运行，先终止或等待完成")
-    for agent in profile.normalized_agents():
-        if agent.id == "main" or not agent.enabled:
+            active_conversation_id = str(child_session.active_conversation_id or "").strip()
+            if child_session.is_processing or not active_conversation_id:
+                continue
+        try:
+            conversation = _get_chat_store(child_session).get_conversation(active_conversation_id)
+        except KeyError:
             continue
-        _profile, _agent, child_session = get_chat_session_for_alias(manager, alias, user_id, agent.id)
-        _create_agent_conversation(profile, child_session, execution_mode=resolved_execution_mode)
+        if str(conversation.get("cluster_parent_conversation_id") or "").strip() != normalized_parent_id:
+            continue
+        with child_session._lock:
+            if child_session.is_processing:
+                continue
+            if str(child_session.active_conversation_id or "").strip() != active_conversation_id:
+                continue
+            child_session.active_conversation_id = None
+            _clear_all_native_sessions_locked(child_session)
+        child_session.persist()
 
 
-def create_conversation(
+def _retire_cluster_child_conversations(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    parent_conversation_id: str,
+) -> int:
+    normalized_parent_id = str(parent_conversation_id or "").strip()
+    if not normalized_parent_id:
+        return 0
+    _profile, _agent, main_session = get_chat_session_for_alias(manager, alias, user_id, "main")
+    return _get_chat_store(main_session).deactivate_cluster_child_conversations(normalized_parent_id)
+
+
+@asynccontextmanager
+async def _cluster_parent_lock_scope(
+    alias: str,
+    user_id: int,
+    *parent_conversation_ids: str,
+) -> AsyncIterator[None]:
+    normalized_user_id = chat_session_user_id(user_id)
+    conversation_ids = sorted({
+        str(conversation_id or "").strip()
+        for conversation_id in parent_conversation_ids
+        if str(conversation_id or "").strip()
+    })
+    locks = [
+        _CLUSTER_TEAM_SERVICE.conversation_lock(alias, normalized_user_id, conversation_id)
+        for conversation_id in conversation_ids
+    ]
+    acquired_locks: list[asyncio.Lock] = []
+    try:
+        for lock in locks:
+            await lock.acquire()
+            acquired_locks.append(lock)
+        yield
+    finally:
+        for lock in reversed(acquired_locks):
+            lock.release()
+
+
+async def _await_cancel_safe_lifecycle_io(
+    awaitable: Coroutine[Any, Any, Any],
+) -> Any:
+    inner_task = asyncio.create_task(awaitable)
+    try:
+        return await asyncio.shield(inner_task)
+    except asyncio.CancelledError as cancelled:
+        while not inner_task.done():
+            try:
+                await asyncio.shield(inner_task)
+            except asyncio.CancelledError:
+                continue
+            except BaseException:
+                break
+        try:
+            inner_task.result()
+        except BaseException:
+            pass
+        raise cancelled
+
+
+def _create_conversation_locked(
     manager: MultiBotManager,
     alias: str,
     user_id: int,
@@ -1629,16 +1826,28 @@ def create_conversation(
         is_processing = bool(session.is_processing)
     if is_processing:
         _raise(409, "conversation_switch_blocked", "当前任务运行中，先终止或等待完成")
+    previous_conversation_id = str(session.active_conversation_id or "").strip()
+    if (
+        session.agent_id == "main"
+        and previous_conversation_id
+        and _CLUSTER_RUNTIME.has_pending_tasks(
+            bot_alias=alias,
+            user_id=chat_session_user_id(user_id),
+            main_conversation_id=previous_conversation_id,
+        )
+    ):
+        _raise(409, "cluster_team_busy", "当前主会话仍有子任务运行，暂不能切换会话")
 
-    if session.agent_id == "main":
-        _create_cluster_child_conversations(
+    store, conversation_id = _create_agent_conversation(profile, session, title=title, execution_mode=resolved_execution_mode)
+    if session.agent_id == "main" and conversation_id != previous_conversation_id:
+        _retire_cluster_child_conversations(manager, alias, user_id, previous_conversation_id)
+        _clear_cluster_child_session_bindings(
             manager,
             alias,
             user_id,
             profile,
-            execution_mode=resolved_execution_mode,
+            previous_conversation_id,
         )
-    store, conversation_id = _create_agent_conversation(profile, session, title=title, execution_mode=resolved_execution_mode)
     return {
         "conversation": {
             **store.get_conversation(conversation_id),
@@ -1650,7 +1859,45 @@ def create_conversation(
     }
 
 
-def select_conversation(
+async def create_conversation(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    title: str = "",
+    agent_id: str = "main",
+    execution_mode: str = "",
+) -> dict[str, Any]:
+    _profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    normalized_agent_id = str(session.agent_id or "main").strip().lower() or "main"
+    write_key = f"{alias}:{chat_session_user_id(user_id)}:{normalized_agent_id}"
+    while True:
+        previous_conversation_id = (
+            str(session.active_conversation_id or "").strip()
+            if normalized_agent_id == "main"
+            else ""
+        )
+        async with _cluster_parent_lock_scope(alias, user_id, previous_conversation_id):
+            if (
+                normalized_agent_id == "main"
+                and str(session.active_conversation_id or "").strip() != previous_conversation_id
+            ):
+                continue
+            io = run_chat_store_io(
+                _create_conversation_locked,
+                manager,
+                alias,
+                user_id,
+                title,
+                agent_id=normalized_agent_id,
+                execution_mode=execution_mode,
+                write_key=write_key,
+            )
+            if normalized_agent_id == "main" and previous_conversation_id:
+                return await _await_cancel_safe_lifecycle_io(io)
+            return await io
+
+
+def _select_conversation_locked(
     manager: MultiBotManager,
     alias: str,
     user_id: int,
@@ -1664,6 +1911,17 @@ def select_conversation(
         is_processing = bool(session.is_processing)
     if is_processing:
         _raise(409, "conversation_switch_blocked", "当前任务运行中，先终止或等待完成")
+    previous_conversation_id = str(session.active_conversation_id or "").strip()
+    if (
+        session.agent_id == "main"
+        and str(conversation_id or "").strip() != previous_conversation_id
+        and _CLUSTER_RUNTIME.has_pending_tasks(
+            bot_alias=alias,
+            user_id=chat_session_user_id(user_id),
+            main_conversation_id=previous_conversation_id,
+        )
+    ):
+        _raise(409, "cluster_team_busy", "当前主会话仍有子任务运行，暂不能切换会话")
 
     store = _get_chat_store(session)
     try:
@@ -1707,6 +1965,15 @@ def select_conversation(
             session.native_agent_session_id = native_session_id or None
             session.native_agent_server_key = None
     session.persist()
+    if session.agent_id == "main" and str(conversation["id"]) != previous_conversation_id:
+        _retire_cluster_child_conversations(manager, alias, user_id, previous_conversation_id)
+        _clear_cluster_child_session_bindings(
+            manager,
+            alias,
+            user_id,
+            profile,
+            previous_conversation_id,
+        )
 
     messages = _history_service_for_execution_mode(session, conversation_execution_mode).list_history(profile, session, limit=50)
     return {
@@ -1721,7 +1988,52 @@ def select_conversation(
     }
 
 
-def delete_conversation(
+async def select_conversation(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    conversation_id: str,
+    agent_id: str = "main",
+    execution_mode: str = "",
+) -> dict[str, Any]:
+    _profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    normalized_agent_id = str(session.agent_id or "main").strip().lower() or "main"
+    target_conversation_id = str(conversation_id or "").strip()
+    write_key = f"{alias}:{chat_session_user_id(user_id)}:{normalized_agent_id}"
+    while True:
+        previous_conversation_id = (
+            str(session.active_conversation_id or "").strip()
+            if normalized_agent_id == "main"
+            else ""
+        )
+        target_parent_id = target_conversation_id if normalized_agent_id == "main" else ""
+        async with _cluster_parent_lock_scope(
+            alias,
+            user_id,
+            previous_conversation_id,
+            target_parent_id,
+        ):
+            if (
+                normalized_agent_id == "main"
+                and str(session.active_conversation_id or "").strip() != previous_conversation_id
+            ):
+                continue
+            io = run_chat_store_io(
+                _select_conversation_locked,
+                manager,
+                alias,
+                user_id,
+                target_conversation_id,
+                agent_id=normalized_agent_id,
+                execution_mode=execution_mode,
+                write_key=write_key,
+            )
+            if normalized_agent_id == "main":
+                return await _await_cancel_safe_lifecycle_io(io)
+            return await io
+
+
+def _delete_conversation_locked(
     manager: MultiBotManager,
     alias: str,
     user_id: int,
@@ -1759,6 +2071,12 @@ def delete_conversation(
     if str(conversation.get("native_provider") or "").strip().lower() == NATIVE_AGENT_PROVIDER:
         native_provider = NATIVE_AGENT_PROVIDER
     _ensure_conversation_execution_mode(conversation, requested_execution_mode)
+    if session.agent_id == "main" and _CLUSTER_RUNTIME.has_pending_tasks(
+        bot_alias=alias,
+        user_id=chat_session_user_id(user_id),
+        main_conversation_id=str(conversation_id or "").strip(),
+    ):
+        _raise(409, "cluster_team_busy", "该主会话仍有子任务运行，暂不能删除")
     native_session_id = str(conversation.get("native_session_id") or "").strip()
     pi_record_deleted = False
     if delete_native_session and native_provider == NATIVE_AGENT_PROVIDER:
@@ -1790,6 +2108,15 @@ def delete_conversation(
     session.persist()
 
     store.delete_conversation_by_id(conversation_id)
+    if session.agent_id == "main":
+        _retire_cluster_child_conversations(manager, alias, user_id, conversation_id)
+        _clear_cluster_child_session_bindings(
+            manager,
+            alias,
+            user_id,
+            profile,
+            conversation_id,
+        )
     deleted_favorite_count = ChatFavoriteStore(session.working_dir).delete_favorites_for_conversations(
         [conversation_id],
         _favorite_scope_for_session(session, requested_execution_mode),
@@ -1803,6 +2130,134 @@ def delete_conversation(
         "items": listed["items"],
         "messages": [] if is_active else None,
     }
+
+
+async def delete_conversation(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    conversation_id: str,
+    *,
+    agent_id: str = "main",
+    delete_native_session: bool = False,
+    execution_mode: str = "",
+) -> dict[str, Any]:
+    normalized_agent_id = str(agent_id or "main").strip().lower() or "main"
+    write_key = f"{alias}:{chat_session_user_id(user_id)}:{normalized_agent_id}"
+
+    async def run_delete() -> dict[str, Any]:
+        return await run_chat_store_io(
+            _delete_conversation_locked,
+            manager,
+            alias,
+            user_id,
+            conversation_id,
+            agent_id=normalized_agent_id,
+            delete_native_session=delete_native_session,
+            execution_mode=execution_mode,
+            write_key=write_key,
+        )
+
+    if normalized_agent_id != "main":
+        return await run_delete()
+    async with _cluster_parent_lock_scope(alias, user_id, conversation_id):
+        return await _await_cancel_safe_lifecycle_io(run_delete())
+
+
+def _archive_conversation_locked(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    conversation_id: str,
+    *,
+    agent_id: str = "main",
+    execution_mode: str = "",
+) -> dict[str, Any]:
+    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    requested_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
+    with session._lock:
+        if session.is_processing:
+            _raise(409, "conversation_switch_blocked", "当前任务运行中，先终止或等待完成")
+        is_active = str(session.active_conversation_id or "") == str(conversation_id or "")
+    store = _get_chat_store(session)
+    try:
+        conversation = store.get_conversation(conversation_id)
+    except KeyError:
+        _raise(404, "conversation_not_found", "未找到会话")
+    if int(conversation.get("bot_id") or 0) != session.bot_id or int(conversation.get("user_id") or 0) != session.user_id:
+        _raise(404, "conversation_not_found", "未找到会话")
+    if str(conversation.get("agent_id") or "main") != session.agent_id:
+        _raise(404, "conversation_not_found", "未找到会话")
+    if str(conversation.get("working_dir") or "") != session.working_dir:
+        _raise(409, "conversation_workdir_mismatch", "会话工作目录和当前 Bot 不一致")
+    if str(conversation.get("archived_at") or "").strip():
+        _raise(404, "conversation_not_found", "未找到会话")
+    _ensure_conversation_execution_mode(conversation, requested_execution_mode)
+    if session.agent_id == "main" and _CLUSTER_RUNTIME.has_pending_tasks(
+        bot_alias=alias,
+        user_id=chat_session_user_id(user_id),
+        main_conversation_id=str(conversation_id or "").strip(),
+    ):
+        _raise(409, "cluster_team_busy", "该主会话仍有子任务运行，暂不能归档")
+
+    store.archive_conversation_by_id(conversation_id)
+    if session.agent_id == "main":
+        _retire_cluster_child_conversations(manager, alias, user_id, conversation_id)
+        _clear_cluster_child_session_bindings(
+            manager,
+            alias,
+            user_id,
+            profile,
+            conversation_id,
+        )
+    if is_active:
+        with session._lock:
+            session.active_conversation_id = None
+            _clear_all_native_sessions_locked(session)
+        session.persist()
+    listed = list_conversations(
+        manager,
+        alias,
+        user_id,
+        agent_id=agent_id,
+        execution_mode=requested_execution_mode,
+    )
+    return {
+        "archived_conversation_id": str(conversation_id or ""),
+        "active_conversation_id": str(session.active_conversation_id or ""),
+        "items": listed["items"],
+        "messages": [] if is_active else None,
+    }
+
+
+async def archive_conversation(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    conversation_id: str,
+    *,
+    agent_id: str = "main",
+    execution_mode: str = "",
+) -> dict[str, Any]:
+    normalized_agent_id = str(agent_id or "main").strip().lower() or "main"
+    write_key = f"{alias}:{chat_session_user_id(user_id)}:{normalized_agent_id}"
+
+    async def run_archive() -> dict[str, Any]:
+        return await run_chat_store_io(
+            _archive_conversation_locked,
+            manager,
+            alias,
+            user_id,
+            conversation_id,
+            agent_id=normalized_agent_id,
+            execution_mode=execution_mode,
+            write_key=write_key,
+        )
+
+    if normalized_agent_id != "main":
+        return await run_archive()
+    async with _cluster_parent_lock_scope(alias, user_id, conversation_id):
+        return await _await_cancel_safe_lifecycle_io(run_archive())
 
 
 def _normalized_resolved_path(value: str | Path) -> str:
@@ -2620,11 +3075,18 @@ def _start_cluster_run_if_requested(
     execution_mode: str,
     mentions: list[dict[str, Any]] | None,
     allow_unsafe_cli: bool,
+    agent_id: str = "main",
+    solo_mode: bool = False,
+    internal_continuation: bool = False,
+    main_conversation_id: str = "",
+    team_state: dict[str, Any] | None = None,
 ):
-    if not cluster:
-        return None
+    del cluster  # Legacy clients may still send this field; orchestration is Bot-scoped.
     if not profile.cluster.enabled:
-        _raise(409, "cluster_not_enabled", "该 Bot 未启用集群模式")
+        return None
+    if str(agent_id or "main").strip().lower() != "main" or solo_mode or internal_continuation:
+        return None
+    saved_team_state = team_state if isinstance(team_state, dict) else {}
     return _CLUSTER_RUNTIME.start_run(
         ClusterRunRequest(
             bot_alias=alias,
@@ -2633,8 +3095,96 @@ def _start_cluster_run_if_requested(
             execution_mode=execution_mode,
             mentions=list(mentions or []),
             allow_unsafe_cli=allow_unsafe_cli,
+            main_conversation_id=str(main_conversation_id or "").strip(),
+            team_revision=max(0, int(saved_team_state.get("cluster_team_revision") or 0)),
+            team=(
+                dict(saved_team_state.get("cluster_team"))
+                if isinstance(saved_team_state.get("cluster_team"), dict)
+                else {"version": 1, "assignments": []}
+            ),
         )
     )
+
+
+def _ensure_cluster_main_conversation_locked(
+    manager: MultiBotManager,
+    profile: BotProfile,
+    alias: str,
+    user_id: int,
+    execution_mode: str,
+) -> tuple[str, dict[str, Any]]:
+    _profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, "main")
+    store = _get_chat_store(session)
+    conversation_id = str(session.active_conversation_id or "").strip()
+    previous_conversation_id = conversation_id
+    retire_previous = False
+    if conversation_id:
+        try:
+            conversation = store.get_conversation(conversation_id)
+        except KeyError:
+            conversation_id = ""
+        else:
+            provider = str(conversation.get("native_provider") or "").strip().lower()
+            expected_native = str(execution_mode or "").strip().lower() == NATIVE_AGENT_PROVIDER
+            if bool(provider == NATIVE_AGENT_PROVIDER) != expected_native:
+                if _CLUSTER_RUNTIME.has_pending_tasks(
+                    bot_alias=alias,
+                    user_id=chat_session_user_id(user_id),
+                    main_conversation_id=conversation_id,
+                ):
+                    _raise(409, "cluster_team_busy", "当前主会话仍有子任务运行，暂不能切换执行模式")
+                conversation_id = ""
+                retire_previous = True
+    if not conversation_id:
+        store, conversation_id = _create_agent_conversation(
+            profile,
+            session,
+            execution_mode=execution_mode,
+        )
+        if retire_previous and previous_conversation_id:
+            _retire_cluster_child_conversations(manager, alias, user_id, previous_conversation_id)
+            _clear_cluster_child_session_bindings(
+                manager,
+                alias,
+                user_id,
+                profile,
+                previous_conversation_id,
+            )
+    return conversation_id, store.get_conversation_team(conversation_id)
+
+
+async def _ensure_cluster_main_conversation(
+    manager: MultiBotManager,
+    profile: BotProfile,
+    alias: str,
+    user_id: int,
+    execution_mode: str,
+) -> tuple[str, dict[str, Any]]:
+    _profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, "main")
+    while True:
+        parent_conversation_id = str(session.active_conversation_id or "").strip()
+        if not parent_conversation_id:
+            return _ensure_cluster_main_conversation_locked(
+                manager,
+                profile,
+                alias,
+                user_id,
+                execution_mode,
+            )
+        async with _CLUSTER_TEAM_SERVICE.conversation_lock(
+            alias,
+            chat_session_user_id(user_id),
+            parent_conversation_id,
+        ):
+            if str(session.active_conversation_id or "").strip() != parent_conversation_id:
+                continue
+            return _ensure_cluster_main_conversation_locked(
+                manager,
+                profile,
+                alias,
+                user_id,
+                execution_mode,
+            )
 
 
 def _cluster_agent_result_error(result: dict[str, Any]) -> str:
@@ -2651,6 +3201,66 @@ def _cluster_agent_result_error(result: dict[str, Any]) -> str:
         reason = completion_state or state or "error"
         return output or str(message.get("content") or "").strip() or f"子 agent 执行失败: {reason}"
     return ""
+
+
+def _build_cluster_delegated_prompt(task: Any) -> str:
+    return (
+        "<tcb_team_role>\n"
+        f"名称：{str(task.role_name or '').strip()}\n"
+        f"职责：{str(task.responsibility or '').strip()}\n"
+        "边界：只完成委派任务，不扩展职责，不自行创建子代理。\n"
+        "</tcb_team_role>\n\n"
+        "<tcb_delegated_task>\n"
+        f"{str(task.message or '').strip()}\n"
+        "</tcb_delegated_task>"
+    )
+
+
+def _ensure_cluster_child_conversation(
+    manager: MultiBotManager,
+    run: Any,
+    task: Any,
+    *,
+    force_new: bool = False,
+) -> str:
+    if not str(run.main_conversation_id or "").strip() or int(task.assignment_revision or 0) < 1:
+        raise ClusterToolError("cluster_team_changed", "子 agent 的角色分配已失效，请重新编组后重试")
+    profile, _agent, child_session = get_chat_session_for_alias(
+        manager,
+        run.bot_alias,
+        run.user_id,
+        task.agent_id,
+    )
+    with child_session._lock:
+        if child_session.is_processing:
+            raise ClusterToolError("cluster_agent_busy", "子 agent 正在运行，请等待完成后重试")
+    store = _get_chat_store(child_session)
+    existing = None
+    if not force_new:
+        existing = store.find_active_cluster_child_conversation(
+            parent_conversation_id=run.main_conversation_id,
+            agent_id=task.agent_id,
+            assignment_revision=task.assignment_revision,
+            execution_mode=run.execution_mode,
+        )
+    if existing is not None:
+        _select_conversation_locked(
+            manager,
+            run.bot_alias,
+            run.user_id,
+            str(existing["id"]),
+            agent_id=task.agent_id,
+            execution_mode=run.execution_mode,
+        )
+        return str(existing["id"])
+    _store, conversation_id = _create_agent_conversation(
+        profile,
+        child_session,
+        execution_mode=run.execution_mode,
+        cluster_parent_conversation_id=run.main_conversation_id,
+        cluster_assignment_revision=task.assignment_revision,
+    )
+    return conversation_id
 
 
 async def _run_cluster_agent_task(
@@ -2680,6 +3290,14 @@ async def _run_cluster_agent_task(
                 live_task = _CLUSTER_RUNTIME.mark_agent_task_running(run_id, task_id)
                 if _cluster_task_is_cancelled(run_id, task_id, control):
                     return
+                dynamic_cluster_task = bool(live_run.main_conversation_id)
+                if dynamic_cluster_task:
+                    _ensure_cluster_child_conversation(manager, live_run, live_task)
+                delegated_prompt = (
+                    _build_cluster_delegated_prompt(live_task)
+                    if dynamic_cluster_task
+                    else live_task.message
+                )
                 final_output = ""
                 returncode = 0
                 event_stream = (
@@ -2687,20 +3305,22 @@ async def _run_cluster_agent_task(
                         manager,
                         live_run.bot_alias,
                         live_run.user_id,
-                        live_task.message,
+                        delegated_prompt,
                         agent_id=live_task.agent_id,
                         solo_mode=True,
                         allow_unsafe_cli=live_run.allow_unsafe_cli,
+                        suppress_agent_prompt=dynamic_cluster_task,
                     )
                     if live_run.execution_mode == NATIVE_AGENT_PROVIDER
                     else _stream_cli_chat(
                         manager,
                         live_run.bot_alias,
                         live_run.user_id,
-                        live_task.message,
+                        delegated_prompt,
                         agent_id=live_task.agent_id,
                         cli_params_override=build_cluster_cli_params_override(live_run.profile, live_task.model_tier),
                         allow_unsafe_cli=live_run.allow_unsafe_cli,
+                        suppress_agent_prompt=dynamic_cluster_task,
                     )
                 )
                 async for event in event_stream:
@@ -4058,6 +4678,7 @@ async def _stream_cli_chat(
     cluster_mentions: list[dict[str, Any]] | None = None,
     include_trace: bool = True,
     stream_protocol_version: int = 1,
+    suppress_agent_prompt: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
     total_started_at = time.perf_counter()
     user_id = chat_session_user_id(user_id)
@@ -4083,14 +4704,13 @@ async def _stream_cli_chat(
     env = _build_cli_env(cli_type)
     if cluster_run_id:
         env["TCB_CLUSTER_ACTIVE"] = "1"
-        env["TCB_CLUSTER_RUN_ID"] = cluster_run_id
         env["TCB_CLUSTER_BOT_ALIAS"] = alias
         env["TCB_CLUSTER_USER_ID"] = str(user_id)
     resolved_cli = resolve_cli_executable(profile.cli_path, session.working_dir)
     if resolved_cli is None:
         _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
 
-    if agent.id != "main":
+    if agent.id != "main" and not suppress_agent_prompt:
         prompt_text = _apply_agent_prompt_if_needed(prompt_text, agent, session, cli_type)
 
     done_session = None
@@ -4800,7 +5420,6 @@ async def run_cli_chat(
     env = _build_cli_env(cli_type)
     if cluster_run_id:
         env["TCB_CLUSTER_ACTIVE"] = "1"
-        env["TCB_CLUSTER_RUN_ID"] = cluster_run_id
         env["TCB_CLUSTER_BOT_ALIAS"] = alias
         env["TCB_CLUSTER_USER_ID"] = str(user_id)
     resolved_cli = resolve_cli_executable(profile.cli_path, session.working_dir)
@@ -5200,6 +5819,16 @@ async def _run_native_agent_chat(
         actor=actor,
     )
     is_plan_mode = effective_task_mode == PLAN_MODE_TASK_MODE
+    main_conversation_id = ""
+    cluster_team_state: dict[str, Any] | None = None
+    if profile.cluster.enabled and str(agent_id or "main").strip().lower() == "main" and not solo_mode:
+        main_conversation_id, cluster_team_state = await _ensure_cluster_main_conversation(
+            manager,
+            profile,
+            alias,
+            shared_user_id,
+            NATIVE_AGENT_PROVIDER,
+        )
     cluster_run = _start_cluster_run_if_requested(
         profile=profile,
         alias=alias,
@@ -5208,6 +5837,10 @@ async def _run_native_agent_chat(
         execution_mode=NATIVE_AGENT_PROVIDER,
         mentions=mentions,
         allow_unsafe_cli=allow_unsafe_cli,
+        agent_id=agent_id,
+        solo_mode=solo_mode,
+        main_conversation_id=main_conversation_id,
+        team_state=cluster_team_state,
     )
     run_status = "completed"
     try:
@@ -5284,6 +5917,7 @@ async def _stream_native_agent_chat(
     enable_reconnect: bool = False,
     include_trace: bool = True,
     stream_protocol_version: int = 1,
+    suppress_agent_prompt: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
     shared_user_id = chat_session_user_id(user_id)
     profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, agent_id)
@@ -5322,6 +5956,16 @@ async def _stream_native_agent_chat(
         actor=actor,
     )
     is_plan_mode = effective_task_mode == PLAN_MODE_TASK_MODE
+    main_conversation_id = ""
+    cluster_team_state: dict[str, Any] | None = None
+    if profile.cluster.enabled and str(agent_id or "main").strip().lower() == "main" and not solo_mode:
+        main_conversation_id, cluster_team_state = await _ensure_cluster_main_conversation(
+            manager,
+            profile,
+            alias,
+            shared_user_id,
+            NATIVE_AGENT_PROVIDER,
+        )
     cluster_run = _start_cluster_run_if_requested(
         profile=profile,
         alias=alias,
@@ -5330,6 +5974,11 @@ async def _stream_native_agent_chat(
         execution_mode=NATIVE_AGENT_PROVIDER,
         mentions=mentions,
         allow_unsafe_cli=allow_unsafe_cli,
+        agent_id=agent_id,
+        solo_mode=solo_mode,
+        internal_continuation=bool(normalized_resume_stream_id),
+        main_conversation_id=main_conversation_id,
+        team_state=cluster_team_state,
     )
     async def produce() -> AsyncIterator[dict[str, Any]]:
         run_status = "completed"
@@ -5351,6 +6000,7 @@ async def _stream_native_agent_chat(
                 protocol=protocol,
                 cluster_run_id=cluster_run.run_id if cluster_run else "",
                 solo_mode=solo_mode,
+                suppress_agent_prompt=suppress_agent_prompt,
             ):
                 if event.get("type") == "error":
                     run_status = "error"
@@ -5429,6 +6079,16 @@ async def run_chat(
             actor=actor,
             allow_unsafe_cli=allow_unsafe_cli,
         )
+    main_conversation_id = ""
+    cluster_team_state: dict[str, Any] | None = None
+    if profile.cluster.enabled and str(agent_id or "main").strip().lower() == "main" and not solo_mode:
+        main_conversation_id, cluster_team_state = await _ensure_cluster_main_conversation(
+            manager,
+            profile,
+            alias,
+            shared_user_id,
+            EXECUTION_MODE_CLI,
+        )
     cluster_run = _start_cluster_run_if_requested(
         profile=profile,
         alias=alias,
@@ -5437,6 +6097,10 @@ async def run_chat(
         execution_mode=EXECUTION_MODE_CLI,
         mentions=mentions,
         allow_unsafe_cli=allow_unsafe_cli,
+        agent_id=agent_id,
+        solo_mode=solo_mode,
+        main_conversation_id=main_conversation_id,
+        team_state=cluster_team_state,
     )
     run_status = "completed"
     request = _build_chat_run_request(
@@ -5523,6 +6187,16 @@ async def stream_chat(
             ):
                 yield event
             return
+        main_conversation_id = ""
+        cluster_team_state: dict[str, Any] | None = None
+        if profile.cluster.enabled and str(agent_id or "main").strip().lower() == "main" and not solo_mode and not resume_stream_id:
+            main_conversation_id, cluster_team_state = await _ensure_cluster_main_conversation(
+                manager,
+                profile,
+                alias,
+                shared_user_id,
+                EXECUTION_MODE_CLI,
+            )
         cluster_run = _start_cluster_run_if_requested(
             profile=profile,
             alias=alias,
@@ -5531,6 +6205,11 @@ async def stream_chat(
             execution_mode=EXECUTION_MODE_CLI,
             mentions=mentions,
             allow_unsafe_cli=allow_unsafe_cli,
+            agent_id=agent_id,
+            solo_mode=solo_mode,
+            internal_continuation=bool(resume_stream_id),
+            main_conversation_id=main_conversation_id,
+            team_state=cluster_team_state,
         )
         run_status = "completed"
         request = _build_chat_run_request(
@@ -5618,7 +6297,7 @@ async def execute_shell_command(manager: MultiBotManager, alias: str, user_id: i
 
 
 
-def execute_plan(
+async def execute_plan(
     manager: MultiBotManager,
     alias: str,
     user_id: int,
@@ -5634,7 +6313,7 @@ def execute_plan(
         _raise(400, "empty_plan", "方案不能为空")
     _profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
     saved = save_execution_plan(session.working_dir, plan_text, title=title)
-    conversation_data = create_conversation(
+    conversation_data = await create_conversation(
         manager,
         alias,
         user_id,

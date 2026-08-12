@@ -1,7 +1,7 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ChevronDown, LoaderCircle, Paperclip, Plus, Send, Settings, Trash2, X } from "lucide-react";
-import type { AgentMention, AgentSummary, PromptPreset } from "../services/types";
+import type { PromptPreset } from "../services/types";
 
 export type ChatComposerModelOption = {
   value: string;
@@ -16,12 +16,10 @@ type ComposerAttachment = {
 };
 
 type Props = {
-  onSend: (text: string, mentions?: AgentMention[]) => void;
+  onSend: (text: string) => void;
   onAttachFiles: (files: File[]) => void;
   onRemoveAttachment: (attachmentId: string) => void;
   attachments: ComposerAttachment[];
-  agents?: AgentSummary[];
-  clusterMode?: boolean;
   disabled?: boolean;
   compact?: boolean;
   enterToSend?: boolean;
@@ -47,35 +45,6 @@ type Props = {
 
 type PresetScope = "global" | "bot";
 
-function collectMentions(text: string, agents: AgentSummary[] = []): AgentMention[] {
-  const result: AgentMention[] = [];
-  for (const agent of agents) {
-    const needle = `@${agent.id}`;
-    let index = text.indexOf(needle);
-    while (index >= 0) {
-      result.push({ agentId: agent.id, label: agent.name, start: index, end: index + needle.length });
-      index = text.indexOf(needle, index + needle.length);
-    }
-  }
-  return result;
-}
-
-type MentionQuery = {
-  query: string;
-  start: number;
-  end: number;
-};
-
-function getMentionQuery(text: string, cursor: number): MentionQuery | null {
-  const beforeCursor = text.slice(0, cursor);
-  const match = beforeCursor.match(/(?:^|\s)@([a-z0-9_-]*)$/i);
-  if (!match) {
-    return null;
-  }
-  const atIndex = beforeCursor.lastIndexOf("@");
-  return { query: match[1].toLowerCase(), start: atIndex, end: cursor };
-}
-
 function clonePromptPresetList(presets: PromptPreset[] = []) {
   return presets.map((preset) => ({ ...preset }));
 }
@@ -85,8 +54,6 @@ export function ChatComposer({
   onAttachFiles,
   onRemoveAttachment,
   attachments,
-  agents = [],
-  clusterMode = false,
   disabled,
   compact = false,
   enterToSend = true,
@@ -125,7 +92,6 @@ export function ChatComposer({
   });
   const [presetSaving, setPresetSaving] = useState(false);
   const [presetError, setPresetError] = useState("");
-  const [mentionQuery, setMentionQuery] = useState<MentionQuery | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const measureTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const presetIdCounterRef = useRef(1);
@@ -135,19 +101,6 @@ export function ChatComposer({
   const draftPresets = draftPresetsByScope[editingPresetScope];
   const showAnyPromptPresets = resolvedGlobalPromptPresets.length > 0 || resolvedBotPromptPresets.length > 0;
   const editingPresetScopeLabel = editingPresetScope === "global" ? "全局" : "当前 Bot";
-  const clusterAgents = useMemo(
-    () => agents.filter((agent) => agent.enabled && !agent.isMain),
-    [agents],
-  );
-  const mentionOptions = useMemo(() => {
-    if (!clusterMode || !mentionQuery) {
-      return [];
-    }
-    return clusterAgents.filter((agent) => {
-      const query = mentionQuery.query;
-      return agent.id.toLowerCase().includes(query) || agent.name.toLowerCase().includes(query);
-    }).slice(0, 8);
-  }, [clusterAgents, clusterMode, mentionQuery]);
   const showPromptPresetControls = showAnyPromptPresets || canManagePromptPresets;
   const selectedModelOption = modelOptions.find((model) => model.value === selectedModel);
   const composerTextareaBaseClassName = "max-h-72 min-h-8 w-full resize-none border border-transparent bg-transparent px-1.5 py-1.5 leading-5 text-[var(--text)] outline-none placeholder:text-[var(--muted)] disabled:opacity-60";
@@ -158,12 +111,6 @@ export function ChatComposer({
   const actionButtonClassName = "inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50";
   const compactSelectClassName = "h-8 w-full appearance-none rounded-md border-0 bg-transparent py-0 pl-1.5 pr-4 text-xs font-medium text-[var(--text)] hover:bg-[var(--workbench-hover-bg)] focus:outline-none focus:ring-2 focus:ring-[var(--workbench-focus-ring)] disabled:cursor-not-allowed disabled:opacity-50";
   const presetMenuClassName = "absolute bottom-full right-10 z-40 mb-2 w-64 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-1 shadow-[var(--shadow-card)]";
-  const mentionMenuClassName = "absolute bottom-full left-2 right-2 z-30 mb-2 max-h-56 overflow-y-auto rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-1 shadow-[var(--shadow-card)]";
-
-  function updateMessage(next: string, cursor: number) {
-    setMessage(next);
-    setMentionQuery(clusterMode ? getMentionQuery(next, cursor) : null);
-  }
 
   useEffect(() => {
     if (inputDisabled) {
@@ -200,7 +147,7 @@ export function ChatComposer({
     const end = textarea?.selectionEnd ?? start;
     const next = `${message.slice(0, start)}${content}${message.slice(end)}`;
     const cursor = start + content.length;
-    updateMessage(next, cursor);
+    setMessage(next);
     setPresetMenuOpen(false);
     focusTextarea(cursor);
   }
@@ -270,20 +217,6 @@ export function ChatComposer({
     } finally {
       setPresetSaving(false);
     }
-  }
-
-  function insertMention(agent: AgentSummary) {
-    const token = `@${agent.id} `;
-    const current = message;
-    const range = mentionQuery;
-    const needsPrefix = current.length > 0 && !/\s$/.test(current);
-    const prefix = needsPrefix ? " " : "";
-    const next = range
-      ? `${current.slice(0, range.start)}${token}${current.slice(range.end)}`
-      : `${current}${prefix}${token}`;
-    setMessage(next);
-    setMentionQuery(null);
-    focusTextarea((range ? range.start : current.length + prefix.length) + token.length);
   }
 
   function renderPresetSection(title: string, presets: PromptPreset[]) {
@@ -475,36 +408,14 @@ export function ChatComposer({
         </div>
       ) : null}
 
-      {clusterMode && clusterAgents.length > 0 ? (
-        <div
-          data-testid="chat-composer-cluster-strip"
-          className="mb-1 flex flex-wrap items-center gap-1.5 border-b border-[var(--workbench-hairline)] px-1 pb-2 pt-0.5 text-xs"
-        >
-          <span className="font-medium text-[var(--accent)]">智能体集群</span>
-          {clusterAgents.map((agent) => (
-            <button
-              key={agent.id}
-              type="button"
-              aria-label={`@${agent.id} ${agent.name}`}
-              onClick={() => insertMention(agent)}
-              disabled={inputDisabled}
-              className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-[var(--workbench-hairline)] bg-[var(--surface)] px-2.5 py-1 text-[var(--text)] hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] disabled:opacity-60"
-            >
-              <span className="truncate font-medium">@{agent.name}</span>
-            </button>
-          ))}
-        </div>
-      ) : null}
-
       <form
         className={formClassName}
         onSubmit={(event) => {
           event.preventDefault();
           const text = message.trim();
           if (!text && attachments.length === 0) return;
-          onSend(text, clusterMode ? collectMentions(text, agents) : []);
+          onSend(text);
           setMessage("");
-          setMentionQuery(null);
         }}
       >
         <div data-testid="chat-composer-input-surface" className={inputBarClassName}>
@@ -525,18 +436,9 @@ export function ChatComposer({
               placeholder={placeholder}
               rows={1}
               disabled={inputDisabled}
-              onChange={(event) => updateMessage(event.currentTarget.value, event.currentTarget.selectionStart)}
-              onSelect={(event) => {
-                const target = event.currentTarget;
-                setMentionQuery(clusterMode ? getMentionQuery(target.value, target.selectionStart) : null);
-              }}
+              onChange={(event) => setMessage(event.currentTarget.value)}
               onKeyDown={(event) => {
                 if (event.nativeEvent.isComposing) {
-                  return;
-                }
-                if (mentionOptions.length > 0 && (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey))) {
-                  event.preventDefault();
-                  insertMention(mentionOptions[0]);
                   return;
                 }
                 if (event.key !== "Enter" || event.shiftKey || !enterToSend) {
@@ -671,28 +573,6 @@ export function ChatComposer({
                   配置预设
                 </button>
               ) : null}
-            </div>
-          ) : null}
-          {mentionOptions.length > 0 ? (
-            <div
-              role="listbox"
-              aria-label="智能体集群列表"
-              className={mentionMenuClassName}
-            >
-              {mentionOptions.map((agent) => (
-                <button
-                  key={agent.id}
-                  type="button"
-                  role="option"
-                  aria-label={`@${agent.id} ${agent.name}`}
-                  aria-selected={false}
-                  onClick={() => insertMention(agent)}
-                  className="flex w-full items-center gap-2 rounded-md border border-transparent px-3 py-2 text-left text-sm hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)]"
-                >
-                  <span className="font-medium text-[var(--text)]">@{agent.id}</span>
-                  <span className="truncate text-[var(--muted)]">{agent.name}</span>
-                </button>
-              ))}
             </div>
           ) : null}
         </div>

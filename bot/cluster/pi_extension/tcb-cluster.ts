@@ -16,7 +16,7 @@ function clusterConfigPath(): string {
 }
 
 function clusterRunId(inputRunId?: string): string {
-	const runId = String(inputRunId || process.env.TCB_CLUSTER_RUN_ID || "").trim();
+	const runId = String(inputRunId || "").trim();
 	if (!runId) {
 		throw new Error("run_id is required");
 	}
@@ -24,10 +24,7 @@ function clusterRunId(inputRunId?: string): string {
 }
 
 function clusterRuntimeEnabled(): boolean {
-	return Boolean(
-		String(process.env.TCB_CLUSTER_MCP_CONFIG || "").trim()
-		&& String(process.env.TCB_CLUSTER_RUN_ID || "").trim(),
-	);
+	return Boolean(String(process.env.TCB_CLUSTER_MCP_CONFIG || "").trim());
 }
 
 function loadBridgeConfig(): { bridgeUrl: string; token: string } {
@@ -94,7 +91,7 @@ function clusterTool(
 		description,
 		promptSnippet: description,
 		promptGuidelines: [
-			`Use ${name} only inside <tcb_cluster_mode> and pass the current run_id when it is available.`,
+			`Use ${name} only inside <tcb_cluster_mode> and always pass the current run_id.`,
 		],
 		parameters,
 		async execute(_toolCallId, params, signal) {
@@ -105,7 +102,15 @@ function clusterTool(
 	});
 }
 
-const runIdParam = Type.Optional(Type.String({ description: "TCB cluster run id; defaults to TCB_CLUSTER_RUN_ID." }));
+const runIdParam = Type.String({ description: "TCB cluster run id." });
+const configureTeamParams = Type.Object({
+	run_id: runIdParam,
+	mode: Type.String({ enum: ["extend", "replace"] }),
+	roles: Type.Array(Type.Object({
+		name: Type.String(),
+		responsibility: Type.String(),
+	})),
+});
 
 export default function (pi: ExtensionAPI) {
 	if (!clusterRuntimeEnabled()) {
@@ -113,16 +118,23 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	pi.registerTool(clusterTool(
+		"configure_team",
+		"Configure Team",
+		"配置当前主会话编组。extend 可由主 agent 自主在空闲槽位扩编；replace 仅在用户明确要求重新编组、缩编或清空时使用。",
+		configureTeamParams,
+		(params) => withoutRunId(params),
+	));
+	pi.registerTool(clusterTool(
 		"cluster_status",
 		"Cluster Status",
-		"查看当前 TCB 集群运行状态和可用子 agent。",
+		"查看当前编组、角色内部 agent ID、容量、空闲槽位和任务占用。",
 		Type.Object({ run_id: runIdParam }),
 		(params) => withoutRunId(params),
 	));
 	pi.registerTool(clusterTool(
 		"list_agents",
 		"List Agents",
-		"列出当前 TCB 集群可调用子 agent。",
+		"列出当前编组、角色内部 agent ID、容量、空闲槽位和任务占用。",
 		Type.Object({
 			run_id: runIdParam,
 			include_disabled: Type.Optional(Type.Boolean()),

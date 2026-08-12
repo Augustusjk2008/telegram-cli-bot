@@ -109,6 +109,80 @@ test("binds stream metadata to the placeholder before a deferred final and repla
   expect(document.querySelectorAll('[data-message-id="assistant-stream-bound"]')).toHaveLength(1);
 });
 
+test("cluster chat stays on the main Agent, preserves @ text, and sends no dispatch fields", async () => {
+  const user = userEvent.setup();
+  const cluster = {
+    enabled: true,
+    writePolicy: "main_only" as const,
+    conflictPolicy: "snapshot_diff" as const,
+    maxParallelAgents: 3,
+    defaultTimeoutSeconds: 600,
+    modelTiers: { low: "", medium: "", high: "" },
+    reasoningEfforts: { low: "", medium: "", high: "" },
+  };
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async () => ({
+    id: "assistant-cluster-main",
+    role: "assistant",
+    text: "已由主 Agent 处理",
+    createdAt: "2026-08-12T00:00:00Z",
+    state: "done",
+  }));
+  const client = createClient({
+    getBotOverview: vi.fn(async (): Promise<BotOverview> => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+      cluster,
+      agents: [
+        { id: "main", name: "主 Agent", systemPrompt: "", enabled: true, isMain: true },
+        { id: "cluster-slot-1", name: "旧静态角色", systemPrompt: "", enabled: true, isMain: false },
+      ],
+    })),
+    listAgents: vi.fn(async () => ({ items: [
+      { id: "main", name: "主 Agent", systemPrompt: "", enabled: true, isMain: true },
+      { id: "cluster-slot-1", name: "旧静态角色", systemPrompt: "", enabled: true, isMain: false },
+    ] })),
+    listConversations: vi.fn<WebBotClient["listConversations"]>(async (): Promise<ConversationListResult> => ({
+      activeConversationId: "conv-main",
+      items: [{
+        id: "conv-main",
+        title: "当前会话",
+        lastMessagePreview: "",
+        messageCount: 0,
+        pinned: false,
+        active: true,
+        status: "active",
+        botAlias: "main",
+        cliType: "codex",
+        agentId: "main",
+        workingDir: "C:\\workspace",
+        clusterTeam: { version: 1, assignments: [] },
+        clusterTeamRevision: 0,
+        createdAt: "2026-08-12T00:00:00Z",
+        updatedAt: "2026-08-12T00:00:00Z",
+      }],
+    })),
+    sendMessage,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByText("当前未编组，主 Agent 会在任务需要时自动分配角色")).toBeInTheDocument();
+  expect(screen.queryByRole("combobox", { name: "当前 agent" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /开启集群模式|关闭集群模式/ })).not.toBeInTheDocument();
+
+  await user.type(screen.getByPlaceholderText("输入消息"), "@reviewer 请审查");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+  await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+
+  expect(sendMessage.mock.calls[0][1]).toBe("@reviewer 请审查");
+  const sendOptions = sendMessage.mock.calls[0][5] as unknown as Record<string, unknown>;
+  expect(sendOptions).not.toHaveProperty("cluster");
+  expect(sendOptions).not.toHaveProperty("mentions");
+});
+
 test("pauses auxiliary sync while hidden and reconciles once after returning", async () => {
   let visibilityState: DocumentVisibilityState = "visible";
   vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibilityState);
@@ -117,6 +191,8 @@ test("pauses auxiliary sync while hidden and reconciles once after returning", a
       {
         taskId: "task-running",
         agentId: "worker-running",
+        roleName: "动态审查员",
+        responsibility: "检查前端状态",
         status: "running",
         modelTier: "medium",
         allowWrite: false,
@@ -128,6 +204,8 @@ test("pauses auxiliary sync while hidden and reconciles once after returning", a
       {
         taskId: "task-completed",
         agentId: "worker-completed",
+        roleName: "动态测试员",
+        responsibility: "执行回归测试",
         status: "completed",
         modelTier: "medium",
         allowWrite: false,
@@ -139,6 +217,8 @@ test("pauses auxiliary sync while hidden and reconciles once after returning", a
       {
         taskId: "task-failed",
         agentId: "worker-failed",
+        roleName: "动态构建员",
+        responsibility: "验证构建产物",
         status: "failed",
         modelTier: "medium",
         allowWrite: false,
@@ -161,7 +241,31 @@ test("pauses auxiliary sync while hidden and reconciles once after returning", a
     workingDir: "C:\\workspace",
     isProcessing: true,
     historyCount: 1,
-    activeClusterRun: { runId: "cluster-foreground", status: "running", tasks: clusterStatus },
+    cluster: {
+      enabled: true,
+      writePolicy: "main_only",
+      conflictPolicy: "snapshot_diff",
+      maxParallelAgents: 3,
+      defaultTimeoutSeconds: 600,
+      modelTiers: { low: "", medium: "", high: "" },
+      reasoningEfforts: { low: "", medium: "", high: "" },
+    },
+    activeClusterRun: {
+      runId: "cluster-foreground",
+      status: "running",
+      capacity: 3,
+      teamRevision: 1,
+      team: {
+        version: 1,
+        assignments: [{
+          agentId: "worker-running",
+          name: "动态审查员",
+          responsibility: "检查前端状态",
+          assignmentRevision: 1,
+        }],
+      },
+      tasks: clusterStatus,
+    },
   }));
   const listMessageDelta = vi.fn<WebBotClient["listMessageDelta"]>(async () => ({
     reset: false,
@@ -194,6 +298,9 @@ test("pauses auxiliary sync while hidden and reconciles once after returning", a
     { includeOutput: false },
   );
   expect(await screen.findByText("智能体集群任务")).toBeInTheDocument();
+  expect(screen.getAllByText("动态审查员").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("检查前端状态").length).toBeGreaterThan(0);
+  expect(screen.getByText("已分配 1 / 集群规模 3")).toBeInTheDocument();
   expect(screen.getByText("1 项进行中")).toBeInTheDocument();
   expect(screen.getByText("已完成")).toBeInTheDocument();
   expect(screen.getByText("失败")).toBeInTheDocument();
