@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -15,6 +16,14 @@ _USAGE_FIELDS = (
     "output_tokens",
     "reasoning_output_tokens",
 )
+
+
+@dataclass(frozen=True, slots=True)
+class TurnRateLimitResolution:
+    """The usable quota sample or a signal to refresh the general bucket."""
+
+    sample: CodexRateLimitSample | None = None
+    refresh_general: bool = False
 
 
 def _timestamp(value: object) -> datetime | None:
@@ -80,12 +89,12 @@ def _scan_turn(
 ) -> tuple[
     dict[str, int],
     dict[str, int] | None,
-    CodexRateLimitSample | None,
+    TurnRateLimitResolution | None,
 ] | None:
     capture_started_at = _capture_started_at(started_at)
     baseline = {field: 0 for field in _USAGE_FIELDS}
     latest_usage: dict[str, int] | None = None
-    latest_rate_limit: CodexRateLimitSample | None = None
+    latest_rate_limit: TurnRateLimitResolution | None = None
     target_started = False
     try:
         with Path(rollout_path).open("r", encoding="utf-8", errors="replace") as handle:
@@ -104,7 +113,7 @@ def _scan_turn(
                     usage = _total_usage(payload)
                     if usage is not None:
                         latest_usage = usage
-                    rate_limit = _rate_limit_sample(event_time, payload)
+                    rate_limit = _rate_limit_resolution(event_time, payload)
                     if rate_limit is not None:
                         latest_rate_limit = rate_limit
                     continue
@@ -118,14 +127,11 @@ def _scan_turn(
     return baseline, latest_usage, latest_rate_limit
 
 
-def _rate_limit_sample(
+def _codex_rate_limit_sample(
     event_time: datetime | None,
-    payload: Mapping[str, Any],
+    rate_limits: Mapping[str, Any],
 ) -> CodexRateLimitSample | None:
-    if payload.get("type") != "token_count" or event_time is None:
-        return None
-    rate_limits = payload.get("rate_limits")
-    if not isinstance(rate_limits, Mapping) or rate_limits.get("limit_id") != "codex":
+    if event_time is None:
         return None
     primary = rate_limits.get("primary")
     if not isinstance(primary, Mapping):
@@ -162,6 +168,24 @@ def _rate_limit_sample(
         return None
 
 
+def _rate_limit_resolution(
+    event_time: datetime | None,
+    payload: Mapping[str, Any],
+) -> TurnRateLimitResolution | None:
+    if payload.get("type") != "token_count" or event_time is None:
+        return None
+    rate_limits = payload.get("rate_limits")
+    if not isinstance(rate_limits, Mapping):
+        return None
+    limit_id = rate_limits.get("limit_id")
+    if limit_id == "codex_bengalfox":
+        return TurnRateLimitResolution(refresh_general=True)
+    if limit_id != "codex":
+        return None
+    sample = _codex_rate_limit_sample(event_time, rate_limits)
+    return TurnRateLimitResolution(sample=sample) if sample is not None else None
+
+
 def read_failed_turn_usage(
     rollout_path: Path | str,
     *,
@@ -192,6 +216,17 @@ def read_turn_rate_limit(
     scanned = _scan_turn(rollout_path, started_at=started_at)
     if scanned is None:
         return None
+    return scanned[2].sample if scanned[2] is not None else None
+
+
+def read_turn_rate_limit_resolution(
+    rollout_path: Path | str,
+    *,
+    started_at: datetime,
+) -> TurnRateLimitResolution | None:
+    scanned = _scan_turn(rollout_path, started_at=started_at)
+    if scanned is None:
+        return None
     return scanned[2]
 
 
@@ -217,15 +252,34 @@ def resolve_turn_rate_limit(
 ) -> CodexRateLimitSample | None:
     from bot.web.native_history_locator import locate_codex_transcript
 
+    resolution = resolve_turn_rate_limit_resolution(
+        session_id=session_id,
+        started_at=started_at,
+        codex_home=codex_home,
+    )
+    return resolution.sample if resolution is not None else None
+
+
+def resolve_turn_rate_limit_resolution(
+    *,
+    session_id: str,
+    started_at: datetime,
+    codex_home: Path,
+) -> TurnRateLimitResolution | None:
+    from bot.web.native_history_locator import locate_codex_transcript
+
     located = locate_codex_transcript(session_id, codex_home=codex_home)
     if located is None:
         return None
-    return read_turn_rate_limit(located.path, started_at=started_at)
+    return read_turn_rate_limit_resolution(located.path, started_at=started_at)
 
 
 __all__ = [
+    "TurnRateLimitResolution",
     "read_failed_turn_usage",
     "read_turn_rate_limit",
+    "read_turn_rate_limit_resolution",
     "resolve_failed_turn_usage",
     "resolve_turn_rate_limit",
+    "resolve_turn_rate_limit_resolution",
 ]

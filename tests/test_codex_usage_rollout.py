@@ -164,6 +164,53 @@ def test_turn_rate_limit_uses_last_valid_codex_sample_inside_target_turn(
     assert sample.plan_type == "pro"
 
 
+def test_turn_rate_limit_resolution_flags_bengalfox_for_general_refresh(
+    tmp_path: Path,
+) -> None:
+    from bot.codex_usage.rollout import read_turn_rate_limit_resolution
+
+    rollout = tmp_path / "rollout.jsonl"
+    with rollout.open("w", encoding="utf-8") as handle:
+        _write_event(handle, "2026-08-11T02:00:01Z", {"type": "task_started"})
+        _write_event(
+            handle,
+            "2026-08-11T02:00:02Z",
+            _rate_limit(limit_id="codex_bengalfox"),
+        )
+
+    resolution = read_turn_rate_limit_resolution(
+        rollout,
+        started_at=datetime(2026, 8, 11, 2, 0, 0, tzinfo=timezone.utc),
+    )
+
+    assert resolution.sample is None
+    assert resolution.refresh_general is True
+
+
+def test_turn_rate_limit_resolution_uses_last_relevant_bucket(
+    tmp_path: Path,
+) -> None:
+    from bot.codex_usage.rollout import read_turn_rate_limit_resolution
+
+    rollout = tmp_path / "rollout.jsonl"
+    with rollout.open("w", encoding="utf-8") as handle:
+        _write_event(handle, "2026-08-11T02:00:01Z", {"type": "task_started"})
+        _write_event(handle, "2026-08-11T02:00:02Z", _rate_limit(used_percent=8))
+        _write_event(
+            handle,
+            "2026-08-11T02:00:03Z",
+            _rate_limit(limit_id="codex_bengalfox", used_percent=99),
+        )
+
+    resolution = read_turn_rate_limit_resolution(
+        rollout,
+        started_at=datetime(2026, 8, 11, 2, 0, 0, tzinfo=timezone.utc),
+    )
+
+    assert resolution.sample is None
+    assert resolution.refresh_general is True
+
+
 @pytest.mark.parametrize(
     "timestamp,rate_limit",
     [
