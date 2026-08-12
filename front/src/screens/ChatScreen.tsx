@@ -2016,6 +2016,7 @@ export function ChatScreen({
   const [cliParams, setCliParams] = useState<CliParamsPayload | null>(null);
   const [nativeAgentModels, setNativeAgentModels] = useState<NativeAgentModelsPayload | null>(null);
   const [modelSaving, setModelSaving] = useState(false);
+  const [clusterSaving, setClusterSaving] = useState(false);
   const [pendingAttachments, setPendingAttachments] = useState<PendingChatAttachment[]>([]);
   const [queuedMessage, setQueuedMessage] = useState<QueuedChatMessage | null>(null);
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
@@ -2087,6 +2088,8 @@ export function ChatScreen({
   const traceLoadStateRef = useRef<Record<string, { loading: boolean; error?: string }>>({});
   const workingDirRef = useRef("");
   const botOverviewRef = useRef<BotOverview | null>(null);
+  const clusterSaveScopeRef = useRef({ botAlias, client });
+  clusterSaveScopeRef.current = { botAlias, client };
   const queuedMessageRef = useRef<QueuedChatMessage | null>(null);
   const agentsRef = useRef<AgentSummary[]>(fallbackAgents());
   const activeAgentIdRef = useRef(activeAgentId);
@@ -2215,6 +2218,10 @@ export function ChatScreen({
     executionModeRef.current = storedExecutionMode;
     setExecutionModeState(storedExecutionMode);
   }, [botAlias, forcedExecutionMode, storageScope, streamBatcher]);
+
+  useEffect(() => {
+    setClusterSaving(false);
+  }, [botAlias, client]);
 
   useEffect(() => {
     isVisibleRef.current = isVisible;
@@ -4567,6 +4574,56 @@ export function ChatScreen({
       setActionLoading("");
     }
   }
+
+  async function handleToggleClusterMode() {
+    const overview = botOverviewRef.current;
+    const config = overview?.cluster;
+    if (!config || clusterSaving || overview.canOperate === false) {
+      return;
+    }
+
+    const requestScope = { botAlias, client };
+    setClusterSaving(true);
+    setError("");
+    try {
+      const result = await client.updateClusterConfig(botAlias, {
+        enabled: !config.enabled,
+        writePolicy: config.writePolicy,
+        conflictPolicy: config.conflictPolicy,
+        maxParallelAgents: config.maxParallelAgents,
+        defaultTimeoutSeconds: config.defaultTimeoutSeconds,
+        modelTiers: config.modelTiers,
+        reasoningEfforts: config.reasoningEfforts,
+      });
+      if (
+        clusterSaveScopeRef.current.botAlias !== requestScope.botAlias
+        || clusterSaveScopeRef.current.client !== requestScope.client
+      ) {
+        return;
+      }
+      const current = botOverviewRef.current;
+      if (current) {
+        const next = { ...current, cluster: result.cluster };
+        botOverviewRef.current = next;
+        setBotOverview(next);
+      }
+    } catch (err) {
+      if (
+        clusterSaveScopeRef.current.botAlias === requestScope.botAlias
+        && clusterSaveScopeRef.current.client === requestScope.client
+      ) {
+        setError(err instanceof Error ? err.message : "切换集群模式失败");
+      }
+    } finally {
+      if (
+        clusterSaveScopeRef.current.botAlias === requestScope.botAlias
+        && clusterSaveScopeRef.current.client === requestScope.client
+      ) {
+        setClusterSaving(false);
+      }
+    }
+  }
+
   async function handleModelChange(nextModel: string) {
     if (!nextModel || nextModel === selectedModel) {
       return;
@@ -5034,6 +5091,10 @@ export function ChatScreen({
           planMode={planMode}
           planDisabled={loading || isStreaming || chatMutationsDisabled}
           onTogglePlanMode={() => setPlanMode((value) => !value)}
+          clusterEnabled={clusterMode}
+          clusterDisabled={loading || clusterSaving || !botOverview?.cluster || botOverview?.canOperate === false}
+          clusterSaving={clusterSaving}
+          onToggleClusterMode={() => void handleToggleClusterMode()}
           embedded={embedded}
           focused={focused}
           onToggleFocus={onToggleFocus}

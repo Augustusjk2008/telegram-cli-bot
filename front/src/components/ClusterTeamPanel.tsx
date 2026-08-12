@@ -38,6 +38,9 @@ function slotStatusText(status: ClusterSlotStatus["status"]) {
 
 export function ClusterTeamPanel({ team, capacity, tasks = [], slots = [] }: Props) {
   const assignments = team?.assignments || [];
+  if (assignments.length === 0) {
+    return null;
+  }
   const safeCapacity = Math.max(capacity, assignments.length);
 
   return (
@@ -49,27 +52,23 @@ export function ClusterTeamPanel({ team, capacity, tasks = [], slots = [] }: Pro
         <span className="font-medium">集群编组</span>
         <span className="text-xs text-[var(--muted)]">已分配 {assignments.length} / 集群规模 {safeCapacity}</span>
       </div>
-      {assignments.length === 0 ? (
-        <p className="mt-2 text-sm text-[var(--muted)]">当前未编组，主 Agent 会在任务需要时自动分配角色</p>
-      ) : (
-        <div className="mt-3 space-y-2">
-          {assignments.map((assignment) => {
-            const slot = slots.find((item) => item.agentId === assignment.agentId)
-              || slotStatusForAssignment(assignment, tasks);
-            return (
-              <div key={`${assignment.agentId}:${assignment.assignmentRevision}`} className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--surface)] px-3 py-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-medium">{assignment.name || assignment.agentId}</span>
-                  <span className="rounded-md bg-[var(--surface-strong)] px-2 py-0.5 text-xs text-[var(--muted)]">
-                    {slotStatusText(slot.status)}
-                  </span>
-                </div>
-                <p className="mt-1 whitespace-pre-wrap break-words text-xs text-[var(--muted)]">{assignment.responsibility}</p>
+      <div className="mt-3 space-y-2">
+        {assignments.map((assignment) => {
+          const slot = slots.find((item) => item.agentId === assignment.agentId)
+            || slotStatusForAssignment(assignment, tasks);
+          return (
+            <div key={`${assignment.agentId}:${assignment.assignmentRevision}`} className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--surface)] px-3 py-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-medium">{assignment.name || assignment.agentId}</span>
+                <span className="rounded-md bg-[var(--surface-strong)] px-2 py-0.5 text-xs text-[var(--muted)]">
+                  {slotStatusText(slot.status)}
+                </span>
               </div>
-            );
-          })}
-        </div>
-      )}
+              <p className="mt-1 whitespace-pre-wrap break-words text-xs text-[var(--muted)]">{assignment.responsibility}</p>
+            </div>
+          );
+        })}
+      </div>
       <p className="mt-2 text-xs text-[var(--muted)]">如需调整角色，请通过普通聊天告诉主 Agent“重新编组”。</p>
     </section>
   );

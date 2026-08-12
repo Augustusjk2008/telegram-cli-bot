@@ -2,11 +2,10 @@ import { render, screen } from "@testing-library/react";
 import { expect, test } from "vitest";
 import { ClusterTeamPanel } from "../components/ClusterTeamPanel";
 
-test("shows the automatic assignment hint for an empty team", () => {
+test("hides an empty team", () => {
   render(<ClusterTeamPanel team={{ version: 1, assignments: [] }} capacity={3} />);
 
-  expect(screen.getByText("当前未编组，主 Agent 会在任务需要时自动分配角色")).toBeInTheDocument();
-  expect(screen.getByText("已分配 0 / 集群规模 3")).toBeInTheDocument();
+  expect(screen.queryByTestId("cluster-team-panel")).not.toBeInTheDocument();
 });
 
 test("shows assigned roles, responsibilities, and current task status", () => {

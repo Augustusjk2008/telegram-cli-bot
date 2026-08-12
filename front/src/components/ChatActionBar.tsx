@@ -1,4 +1,4 @@
-import { ClipboardList, History, LoaderCircle, Maximize2, Minimize2, Square } from "lucide-react";
+import { ClipboardList, History, LoaderCircle, Maximize2, Minimize2, Network, Square } from "lucide-react";
 import { AgentSwitcher } from "./AgentSwitcher";
 import { toolbarButtonClass } from "./ToolbarButton";
 import type { AgentSummary, ChatExecutionMode } from "../services/types";
@@ -15,6 +15,10 @@ type Props = {
   planMode: boolean;
   planDisabled?: boolean;
   onTogglePlanMode: () => void;
+  clusterEnabled: boolean;
+  clusterDisabled?: boolean;
+  clusterSaving?: boolean;
+  onToggleClusterMode: () => void;
   embedded?: boolean;
   focused?: boolean;
   onToggleFocus?: () => void;
@@ -43,6 +47,10 @@ export function ChatActionBar({
   planMode,
   planDisabled = false,
   onTogglePlanMode,
+  clusterEnabled,
+  clusterDisabled = false,
+  clusterSaving = false,
+  onToggleClusterMode,
   embedded = false,
   focused = false,
   onToggleFocus,
@@ -102,6 +110,19 @@ export function ChatActionBar({
           >
             <ClipboardList className="h-4 w-4" />
             计划
+          </button>
+          <button
+            type="button"
+            aria-pressed={clusterEnabled}
+            aria-label={clusterEnabled ? "关闭集群模式" : "开启集群模式"}
+            onClick={onToggleClusterMode}
+            disabled={clusterDisabled}
+            className={clusterEnabled
+              ? activePlanButtonClassName
+              : neutralButtonClassName}
+          >
+            {clusterSaving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Network className="h-4 w-4" />}
+            集群
           </button>
         </div>
         <div className={groupClassName} role="group" aria-label="聊天会话">

@@ -169,9 +169,10 @@ test("cluster chat stays on the main Agent, preserves @ text, and sends no dispa
 
   render(<ChatScreen botAlias="main" client={client} />);
 
-  expect(await screen.findByText("当前未编组，主 Agent 会在任务需要时自动分配角色")).toBeInTheDocument();
+  await screen.findByText("暂无消息，开始聊天吧");
+  expect(screen.queryByTestId("cluster-team-panel")).not.toBeInTheDocument();
   expect(screen.queryByRole("combobox", { name: "当前 agent" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: /开启集群模式|关闭集群模式/ })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "关闭集群模式" })).toHaveAttribute("aria-pressed", "true");
 
   await user.type(screen.getByPlaceholderText("输入消息"), "@reviewer 请审查");
   await user.click(screen.getByRole("button", { name: "发送" }));
@@ -181,6 +182,75 @@ test("cluster chat stays on the main Agent, preserves @ text, and sends no dispa
   const sendOptions = sendMessage.mock.calls[0][5] as unknown as Record<string, unknown>;
   expect(sendOptions).not.toHaveProperty("cluster");
   expect(sendOptions).not.toHaveProperty("mentions");
+});
+
+test("toggles the Bot cluster config from chat and only shows an assigned enabled team", async () => {
+  const user = userEvent.setup();
+  const cluster = {
+    enabled: false,
+    writePolicy: "all_agents" as const,
+    conflictPolicy: "block_same_file" as const,
+    maxParallelAgents: 2,
+    defaultTimeoutSeconds: 900,
+    modelTiers: { low: "fast-model", medium: "", high: "strong-model" },
+    reasoningEfforts: { low: "low", medium: "medium", high: "high" },
+  };
+  const client = createClient({
+    getBotOverview: vi.fn(async (): Promise<BotOverview> => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+      canOperate: true,
+      cluster,
+    })),
+    listConversations: vi.fn<WebBotClient["listConversations"]>(async (): Promise<ConversationListResult> => ({
+      activeConversationId: "conv-main",
+      items: [{
+        id: "conv-main",
+        title: "当前会话",
+        lastMessagePreview: "",
+        messageCount: 0,
+        pinned: false,
+        active: true,
+        status: "active",
+        botAlias: "main",
+        cliType: "codex",
+        agentId: "main",
+        workingDir: "C:\\workspace",
+        clusterTeam: {
+          version: 1,
+          assignments: [{
+            agentId: "cluster-slot-1",
+            name: "前端审查",
+            responsibility: "检查界面状态",
+            assignmentRevision: 1,
+          }],
+        },
+        clusterTeamRevision: 1,
+        createdAt: "2026-08-12T00:00:00Z",
+        updatedAt: "2026-08-12T00:00:00Z",
+      }],
+    })),
+  });
+  const updateClusterConfig = vi.spyOn(client, "updateClusterConfig");
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  const toggle = await screen.findByRole("button", { name: "开启集群模式" });
+  expect(toggle).toHaveAttribute("aria-pressed", "false");
+  expect(screen.queryByTestId("cluster-team-panel")).not.toBeInTheDocument();
+
+  await user.click(toggle);
+
+  await waitFor(() => expect(updateClusterConfig).toHaveBeenCalledWith("main", {
+    ...cluster,
+    enabled: true,
+  }));
+  expect(await screen.findByRole("button", { name: "关闭集群模式" })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByTestId("cluster-team-panel")).toBeInTheDocument();
+  expect(screen.getByText("前端审查")).toBeInTheDocument();
 });
 
 test("pauses auxiliary sync while hidden and reconciles once after returning", async () => {

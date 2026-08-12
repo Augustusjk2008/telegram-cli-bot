@@ -116,7 +116,7 @@ async def test_spark_capture_excludes_general_rate_limit(tmp_path: Path) -> None
     rate_limit_resolver = _RateLimitResolver(
         TurnRateLimitResolution(sample=None, refresh_general=True)
     )
-    account_rate_limit_resolver = _AccountRateLimitResolver(None)
+    account_rate_limit_resolver = _AccountRateLimitResolver(_sample())
     service = CodexUsageService(
         tmp_path / "usage.sqlite3",
         resolver=_ProviderResolver(_provider()),
@@ -139,8 +139,8 @@ async def test_spark_capture_excludes_general_rate_limit(tmp_path: Path) -> None
     assert capture.model == "gpt-5.3-codex-spark"
     assert recorded is True
     assert [item.model for item in result.by_provider_model] == ["gpt-5.3-codex-spark"]
-    assert len(rate_limit_resolver.calls) == 1
-    assert len(account_rate_limit_resolver.calls) == 1
+    assert rate_limit_resolver.calls == []
+    assert account_rate_limit_resolver.calls == []
     assert result.rate_limit_samples == ()
 
 
