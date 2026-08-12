@@ -1,17 +1,12 @@
 import { ClipboardList, History, LoaderCircle, Maximize2, Minimize2, Network, Square } from "lucide-react";
-import { AgentSwitcher } from "./AgentSwitcher";
 import { toolbarButtonClass } from "./ToolbarButton";
-import type { AgentSummary, ChatExecutionMode } from "../services/types";
+import type { ChatExecutionMode } from "../services/types";
 
 type Props = {
   executionMode: ChatExecutionMode;
   supportedExecutionModes?: ChatExecutionMode[];
   executionModeDisabled?: boolean;
   onExecutionModeChange: (mode: ChatExecutionMode) => void;
-  agents: AgentSummary[];
-  activeAgentId: string;
-  agentDisabled?: boolean;
-  onSelectAgent: (agentId: string) => void;
   planMode: boolean;
   planDisabled?: boolean;
   onTogglePlanMode: () => void;
@@ -40,10 +35,6 @@ export function ChatActionBar({
   supportedExecutionModes = ["cli"],
   executionModeDisabled = false,
   onExecutionModeChange,
-  agents,
-  activeAgentId,
-  agentDisabled = false,
-  onSelectAgent,
   planMode,
   planDisabled = false,
   onTogglePlanMode,
@@ -85,16 +76,6 @@ export function ChatActionBar({
             >
               原生 agent
             </button>
-          </div>
-        ) : null}
-        {agents.length > 1 ? (
-          <div className={groupClassName} role="group" aria-label="聊天上下文">
-            <AgentSwitcher
-              agents={agents}
-              activeAgentId={activeAgentId}
-              disabled={agentDisabled}
-              onSelect={onSelectAgent}
-            />
           </div>
         ) : null}
         <div className={groupClassName} role="group" aria-label="聊天模式">

@@ -38,6 +38,8 @@ import type {
   BotSummary,
   ChatAttachmentUploadResult,
   ClusterAgentTask,
+  ClusterSlotStatus,
+  ClusterTeam,
   ClusterTaskStatus,
   ChatMessage,
   ChatMessageMetaInfo,
@@ -126,6 +128,13 @@ type Props = {
   soloHistoryRevision?: number;
   onSoloSessionInfoChange?: (snapshot: SoloSessionSnapshot) => void;
   onSoloHistoryRollback?: () => void;
+};
+
+type ClusterTeamViewSnapshot = {
+  team: ClusterTeam;
+  capacity: number;
+  tasks?: ClusterAgentTask[];
+  slots?: ClusterSlotStatus[];
 };
 
 type PendingChatAttachment = ChatAttachmentUploadResult & {
@@ -279,13 +288,6 @@ function isPlanExecutionPrompt(text: string) {
 
 function queuedMessageStorageKey(botAlias: string, agentId: string, accountId?: string) {
   return `tcb.queuedMessage.${storageScopePrefix(accountId)}${botAlias}.${agentId || "main"}`;
-}
-
-function readStoredAgentId(botAlias: string, accountId?: string) {
-  if (typeof window === "undefined") {
-    return "main";
-  }
-  return window.localStorage.getItem(activeAgentStorageKey(botAlias, accountId)) || "main";
 }
 
 function readStoredPlanMode(botAlias: string, accountId?: string) {
@@ -1330,64 +1332,6 @@ export function mergeMessagesPreservingClientState(previousItems: ChatMessage[],
   return dedupedItems;
 }
 
-function clusterTaskStatusText(task: ClusterAgentTask) {
-  if (task.status === "completed") return "已完成";
-  if (task.status === "failed") return "失败";
-  if (task.status === "running") return "运行中";
-  if (task.status === "queued") return "排队中";
-  if (task.status === "cancelled") return "已取消";
-  return task.status || "未知";
-}
-
-function clusterTaskStatusClass(task: ClusterAgentTask) {
-  if (task.status === "completed") return "bg-[var(--accent-soft)] text-[var(--accent)]";
-  if (task.status === "failed") return "bg-[var(--surface-strong)] text-[var(--danger)]";
-  return "bg-[var(--surface-strong)] text-[var(--text)]";
-}
-
-function ClusterTaskPanel({ status }: { status: ClusterTaskStatus }) {
-  if (status.tasks.length === 0) {
-    return null;
-  }
-  return (
-    <section className="rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-3 py-2 text-sm text-[var(--text)] shadow-[var(--shadow-surface)]">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="font-medium">智能体集群任务</span>
-        {status.pendingCount > 0 ? (
-          <span className="inline-flex items-center gap-1 rounded-md bg-[var(--surface-strong)] px-2 py-0.5 text-xs text-[var(--text)]">
-            <LoaderCircle className="h-3 w-3 animate-spin" />
-            {status.pendingCount} 项进行中
-          </span>
-        ) : (
-          <span className="rounded-md bg-[var(--surface-strong)] px-2 py-0.5 text-xs text-[var(--text)]">已汇总</span>
-        )}
-      </div>
-      <div className="mt-3 space-y-2">
-        {status.tasks.map((task) => {
-          const roleName = task.roleName || task.agentId || "子 Agent";
-          return (
-            <div key={task.taskId} className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--surface)] px-3 py-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-medium">{roleName}</span>
-                <span className={`rounded-md px-2 py-0.5 text-xs ${clusterTaskStatusClass(task)}`}>
-                  {clusterTaskStatusText(task)}
-                </span>
-                {task.modelTier ? <span className="text-xs text-[var(--muted)]">{task.modelTier}</span> : null}
-              </div>
-              {task.responsibility ? (
-                <p className="mt-1 whitespace-pre-wrap break-words text-xs text-[var(--muted)]">{task.responsibility}</p>
-              ) : null}
-              {task.error ? (
-                <p className="mt-2 whitespace-pre-wrap break-words text-xs text-[var(--danger)]">{task.error}</p>
-              ) : null}
-            </div>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
 type ChatMessageRowProps = {
   item: ChatMessage;
   assistantName: string;
@@ -2049,10 +1993,11 @@ export function ChatScreen({
   const [deletingConversationId, setDeletingConversationId] = useState("");
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [agents, setAgents] = useState<AgentSummary[]>(fallbackAgents());
-  const [activeAgentId, setActiveAgentId] = useState(() => readStoredAgentId(botAlias, storageScope));
+  const [activeAgentId, setActiveAgentId] = useState("main");
   const [clusterRunId, setClusterRunId] = useState("");
   const [clusterTaskStatus, setClusterTaskStatus] = useState<ClusterTaskStatus | null>(null);
   const [clusterTaskError, setClusterTaskError] = useState("");
+  const [clusterTeamSnapshot, setClusterTeamSnapshot] = useState<ClusterTeamViewSnapshot | null>(null);
   const [planMode, setPlanModeState] = useState(() => readStoredPlanMode(botAlias, storageScope));
   const [executionMode, setExecutionModeState] = useState<ChatExecutionMode>(() => forcedExecutionMode ?? readStoredExecutionMode(botAlias, storageScope) ?? "cli");
   const favoriteScopeKey = JSON.stringify([botAlias, storageScope, activeAgentId, executionMode]);
@@ -2244,9 +2189,10 @@ export function ChatScreen({
     clusterRunIdRef.current = "";
     setQueuedMessage(null);
     queuedMessageRef.current = null;
-    const storedAgentId = readStoredAgentId(botAlias, storageScope);
-    setActiveAgentId(storedAgentId);
-    activeAgentIdRef.current = storedAgentId;
+    setClusterTeamSnapshot(null);
+    setActiveAgentId("main");
+    activeAgentIdRef.current = "main";
+    window.localStorage.setItem(activeAgentStorageKey(botAlias, storageScope), "main");
   }, [botAlias, forcedExecutionMode, storageScope]);
 
   useEffect(() => {
@@ -2817,7 +2763,7 @@ export function ChatScreen({
 
     const storedExecutionMode = forcedExecutionMode ?? readStoredExecutionMode(botAlias, storageScope);
     const requestedExecutionMode = forcedExecutionMode ?? storedExecutionMode ?? undefined;
-    const requestedAgentId = activeAgentIdRef.current || "main";
+    const requestedAgentId = "main";
     const loadAgents = typeof client.listAgents === "function"
       ? client.listAgents(botAlias).catch(() => ({ items: fallbackAgents() }))
       : Promise.resolve({ items: fallbackAgents() });
@@ -2839,8 +2785,7 @@ export function ChatScreen({
             ? storedExecutionMode
             : getDefaultExecutionMode(initialOverview))
           : getDefaultExecutionMode(initialOverview);
-        const preferredAgentId = initialOverview.cluster?.enabled ? "main" : requestedAgentId;
-        const nextAgentId = nextAgents.some((agent) => agent.id === preferredAgentId) ? preferredAgentId : "main";
+        const nextAgentId = "main";
         let snapshot = initialSnapshot;
         let overview = initialOverview;
         let conversationData = initialConversationData;
@@ -3950,7 +3895,7 @@ export function ChatScreen({
   }
 
   const handleSelectAgent = useCallback((agentId: string) => {
-    const normalized = botOverviewRef.current?.cluster?.enabled ? "main" : agentId || "main";
+    const normalized = agentId || "main";
     const previousAgentId = activeAgentIdRef.current || "main";
     setQueuedMessageState(null, { botAlias, agentId: previousAgentId });
     activeAgentIdRef.current = normalized;
@@ -3960,16 +3905,11 @@ export function ChatScreen({
     assistantSendVersionRef.current += 1;
     stopAssistantPoll();
     stopSseRecoveryWatch();
-    stopClusterTaskPoll();
     loadingRef.current = true;
     setLoading(true);
     setError("");
     setItems([]);
     setVisibleTurnCount(CHAT_INITIAL_VISIBLE_TURNS);
-    setClusterRunId("");
-    setClusterTaskStatus(null);
-    setClusterTaskError("");
-    clusterRunIdRef.current = "";
     setConversations([]);
     setTraceLoadState({});
     setPendingAttachments([]);
@@ -4020,13 +3960,17 @@ export function ChatScreen({
         loadingRef.current = false;
         setLoading(false);
       });
-  }, [applyHistoryView, botAlias, client, restoreClusterRunFromOverview, setQueuedMessageState, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch, storageScope]);
+  }, [applyHistoryView, botAlias, client, restoreClusterRunFromOverview, setQueuedMessageState, stopAssistantPoll, stopSseRecoveryWatch, storageScope]);
 
   useEffect(() => {
-    if (botOverview?.cluster?.enabled && activeAgentId !== "main") {
+    if (botOverview?.cluster?.enabled === false) {
+      setClusterTeamSnapshot(null);
+      clearClusterTaskState();
+    }
+    if (botOverview?.cluster?.enabled === false && activeAgentId !== "main") {
       handleSelectAgent("main");
     }
-  }, [activeAgentId, botOverview?.cluster?.enabled, handleSelectAgent]);
+  }, [activeAgentId, botOverview?.cluster?.enabled, clearClusterTaskState, handleSelectAgent]);
 
   const handleAttachFiles = useCallback(async (files: File[]) => {
     if (files.length === 0) {
@@ -4814,7 +4758,6 @@ export function ChatScreen({
   }, [botAlias, client]);
 
   const terminateVisible = isStreaming || actionLoading === "kill";
-  const assistantName = botAlias;
   const activeAgent = agents.find((agent) => agent.id === activeAgentId) || agents[0] || fallbackAgents()[0];
   const rawSupportedExecutionModes = getSupportedExecutionModes(botOverview);
   const forcedNativeSupported = forcedExecutionMode === "native_agent"
@@ -4825,12 +4768,26 @@ export function ChatScreen({
     : supportedExecutionModes.includes(executionMode) ? executionMode : getDefaultExecutionMode(botOverview);
   const nativeExecutionMode = effectiveExecutionMode === "native_agent";
   const clusterMode = Boolean(botOverview?.cluster?.enabled);
+  const activeConversation = conversations.find((conversation) => conversation.active);
+  const liveClusterTeam = botOverview?.activeClusterRun?.team || activeConversation?.clusterTeam;
+  const liveClusterTeamView: ClusterTeamViewSnapshot | null = liveClusterTeam ? {
+    team: liveClusterTeam,
+    capacity: botOverview?.activeClusterRun?.capacity ?? botOverview?.cluster?.maxParallelAgents ?? 0,
+    tasks: clusterTaskStatus?.tasks || botOverview?.activeClusterRun?.tasks?.tasks,
+    slots: botOverview?.activeClusterRun?.slots,
+  } : null;
+  const clusterTeamView = liveClusterTeamView || clusterTeamSnapshot;
+  const activeClusterAssignment = clusterTeamView?.team.assignments.find(
+    (assignment) => assignment.agentId === activeAgentId,
+  );
+  const assistantName = activeAgentId === "main"
+    ? botAlias
+    : activeClusterAssignment?.name || activeAgent.name || botAlias;
   const chatMutationsDisabled = readOnly;
   const chatDisabledReason = nativePermissionPending
     ? "等待权限处理"
     : disabledReason || readOnlyReason || (readOnly ? "主机已关闭聊天，当前无法发送消息" : "");
   const killTaskDisabled = chatMutationsDisabled || !isStreaming || actionLoading === "kill";
-  const showAgentSwitcher = agents.length > 1 && !clusterMode;
   const showActionBar = !isImmersive;
   const showImmersiveButton = !embedded && isVisible && Boolean(onToggleImmersive);
   const immersiveButtonStorageKey = immersiveButtonPositionStorageKey(botAlias, storageScope);
@@ -4886,7 +4843,7 @@ export function ChatScreen({
   }, [cliModelOptions, nativeExecutionMode, nativeModelOptions, nativeSelectedModel, selectedModel]);
   const messageContentWidthClass = embedded ? "mx-auto w-full max-w-5xl space-y-3" : "w-full space-y-3";
   const composerPlaceholder = chatDisabledReason
-    || (showAgentSwitcher ? `发给 ${activeAgent.name}...` : "输入消息");
+    || (activeAgentId !== "main" ? `发给 ${assistantName}...` : "输入消息");
   const deletedAttachmentKeysByMessage = useMemo(() => {
     const next: Record<string, Record<string, boolean>> = {};
     for (const [key, value] of Object.entries(deletedAttachmentKeys)) {
@@ -5038,7 +4995,7 @@ export function ChatScreen({
   function emitBotActivityForActiveAgent(activityStatus: "idle" | "busy") {
     const agentId = activeAgentIdRef.current || "main";
     const agent = agentsRef.current.find((item) => item.id === agentId) || activeAgent;
-    const agentName = agent.name || agentId;
+    const agentName = activeClusterAssignment?.name || agent.name || agentId;
     onBotActivityChange?.(botAlias, {
       activityStatus,
       agentId,
@@ -5084,10 +5041,6 @@ export function ChatScreen({
           supportedExecutionModes={supportedExecutionModes}
           executionModeDisabled={loading || isStreaming || readOnly}
           onExecutionModeChange={handleExecutionModeChange}
-          agents={showAgentSwitcher ? agents : []}
-          activeAgentId={activeAgentId}
-          agentDisabled={loading}
-          onSelectAgent={handleSelectAgent}
           planMode={planMode}
           planDisabled={loading || isStreaming || chatMutationsDisabled}
           onTogglePlanMode={() => setPlanMode((value) => !value)}
@@ -5159,16 +5112,24 @@ export function ChatScreen({
             handleExecutePlan={handleExecutePlan}
             wideMessages={!embedded}
           />
-          {clusterMode && activeAgentId === "main" ? (
+          {clusterMode && clusterTeamView ? (
             <ClusterTeamPanel
-              team={botOverview?.activeClusterRun?.team || conversations.find((conversation) => conversation.active)?.clusterTeam}
-              capacity={botOverview?.activeClusterRun?.capacity ?? botOverview?.cluster?.maxParallelAgents ?? 0}
-              tasks={clusterTaskStatus?.tasks || botOverview?.activeClusterRun?.tasks?.tasks}
-              slots={botOverview?.activeClusterRun?.slots}
+              team={clusterTeamView.team}
+              capacity={clusterTeamView.capacity}
+              tasks={clusterTaskStatus?.tasks || clusterTeamView.tasks}
+              slots={clusterTeamView.slots}
+              activeAgentId={activeAgentId}
+              navigationDisabled={loading}
+              onSelectAgent={(agentId) => {
+                if (agentId !== "main") {
+                  setClusterTeamSnapshot({
+                    ...clusterTeamView,
+                    tasks: clusterTaskStatus?.tasks || clusterTeamView.tasks,
+                  });
+                }
+                handleSelectAgent(agentId);
+              }}
             />
-          ) : null}
-          {clusterTaskStatus ? (
-            <ClusterTaskPanel status={clusterTaskStatus} />
           ) : null}
           {clusterTaskError ? (
             <div className="rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger)] shadow-[var(--shadow-surface)]">

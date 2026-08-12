@@ -4,72 +4,118 @@ import type {
   ClusterTeam,
   ClusterTeamAssignment,
 } from "../services/types";
+import { toolbarButtonClass } from "./ToolbarButton";
 
 type Props = {
   team?: ClusterTeam | null;
   capacity: number;
   tasks?: ClusterAgentTask[];
   slots?: ClusterSlotStatus[];
+  activeAgentId: string;
+  navigationDisabled?: boolean;
+  onSelectAgent: (agentId: string) => void;
 };
 
-function slotStatusForAssignment(
+function tasksForAssignment(
   assignment: ClusterTeamAssignment,
   tasks: ClusterAgentTask[],
-): ClusterSlotStatus {
-  const task = [...tasks].reverse().find((item) => item.agentId === assignment.agentId);
-  const status = task && ["queued", "running", "completed", "failed", "cancelled"].includes(task.status)
-    ? task.status as ClusterSlotStatus["status"]
-    : "idle";
-  return {
-    agentId: assignment.agentId,
-    assigned: true,
-    roleName: assignment.name,
-    responsibility: assignment.responsibility,
-    assignmentRevision: assignment.assignmentRevision,
-    status: status === "queued" || status === "running" ? status : "idle",
-  };
+) {
+  return tasks.filter((task) => (
+    task.agentId === assignment.agentId
+    && (
+      typeof task.assignmentRevision !== "number"
+      || task.assignmentRevision === assignment.assignmentRevision
+    )
+  ));
 }
 
-function slotStatusText(status: ClusterSlotStatus["status"]) {
-  if (status === "queued") return "排队中";
-  if (status === "running") return "运行中";
-  return "待命";
-}
-
-export function ClusterTeamPanel({ team, capacity, tasks = [], slots = [] }: Props) {
+export function ClusterTeamPanel({
+  team,
+  capacity,
+  tasks,
+  slots = [],
+  activeAgentId,
+  navigationDisabled = false,
+  onSelectAgent,
+}: Props) {
   const assignments = team?.assignments || [];
   if (assignments.length === 0) {
     return null;
   }
+
+  const viewingChild = activeAgentId !== "main";
+  const visibleAssignments = viewingChild
+    ? assignments.filter((assignment) => assignment.agentId === activeAgentId)
+    : assignments;
   const safeCapacity = Math.max(capacity, assignments.length);
 
   return (
     <section
       data-testid="cluster-team-panel"
-      className="rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-3 py-2 text-sm text-[var(--text)] shadow-[var(--shadow-surface)]"
+      className="bg-[var(--workbench-panel-elevated-bg)] px-3 py-2 text-sm text-[var(--text)]"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="font-medium">集群编组</span>
-        <span className="text-xs text-[var(--muted)]">已分配 {assignments.length} / 集群规模 {safeCapacity}</span>
+        {viewingChild ? (
+          <button
+            type="button"
+            aria-label="返回主 Agent"
+            disabled={navigationDisabled}
+            onClick={() => onSelectAgent("main")}
+            className={toolbarButtonClass("ghost", "sm", "h-7 rounded-md px-2")}
+          >
+            返回主 Agent
+          </button>
+        ) : (
+          <span className="text-xs text-[var(--muted)]">已分配 {assignments.length} / 集群规模 {safeCapacity}</span>
+        )}
       </div>
-      <div className="mt-3 space-y-2">
-        {assignments.map((assignment) => {
-          const slot = slots.find((item) => item.agentId === assignment.agentId)
-            || slotStatusForAssignment(assignment, tasks);
+      <div className="mt-1">
+        {visibleAssignments.map((assignment) => {
+          const matchingTasks = tasksForAssignment(assignment, tasks || []);
+          const completedCount = matchingTasks.filter((task) => task.status === "completed").length;
+          const processing = tasks !== undefined
+            ? matchingTasks.some((task) => task.status === "queued" || task.status === "running")
+            : slots.some((slot) => (
+              slot.agentId === assignment.agentId
+              && (slot.status === "queued" || slot.status === "running")
+            ));
+          const name = assignment.name || assignment.agentId;
           return (
-            <div key={`${assignment.agentId}:${assignment.assignmentRevision}`} className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--surface)] px-3 py-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-medium">{assignment.name || assignment.agentId}</span>
-                <span className="rounded-md bg-[var(--surface-strong)] px-2 py-0.5 text-xs text-[var(--muted)]">
-                  {slotStatusText(slot.status)}
-                </span>
+            <div
+              key={`${assignment.agentId}:${assignment.assignmentRevision}`}
+              data-testid="cluster-team-assignment"
+              className="flex items-start gap-3 border-t border-[var(--workbench-hairline)] py-2"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <span className="font-medium">{name}</span>
+                  {completedCount > 0 ? (
+                    <span className="text-xs text-[var(--muted)]">
+                      {completedCount === 1 ? "已完成" : `已完成x${completedCount}`}
+                    </span>
+                  ) : null}
+                  <span className={processing ? "text-xs font-medium text-[var(--accent)]" : "text-xs text-[var(--muted)]"}>
+                    {processing ? "处理中" : "待命"}
+                  </span>
+                </div>
+                <p className="mt-0.5 whitespace-pre-wrap break-words text-xs text-[var(--muted)]">{assignment.responsibility}</p>
               </div>
-              <p className="mt-1 whitespace-pre-wrap break-words text-xs text-[var(--muted)]">{assignment.responsibility}</p>
+              {!viewingChild ? (
+                <button
+                  type="button"
+                  aria-label={`查看${name}对话`}
+                  disabled={navigationDisabled}
+                  onClick={() => onSelectAgent(assignment.agentId)}
+                  className={toolbarButtonClass("ghost", "sm", "h-7 rounded-md px-2")}
+                >
+                  查看
+                </button>
+              ) : null}
             </div>
           );
         })}
       </div>
-      <p className="mt-2 text-xs text-[var(--muted)]">如需调整角色，请通过普通聊天告诉主 Agent“重新编组”。</p>
     </section>
   );
 }
