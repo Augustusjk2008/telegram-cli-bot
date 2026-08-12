@@ -910,8 +910,24 @@ test("opens child conversations from the dynamic cluster team and returns to mai
     agents: (await listAgents()).items,
   }));
   const listConversations = vi.fn<WebBotClient["listConversations"]>(async (_botAlias, _query, options): Promise<ConversationListResult> => ({
-    activeConversationId: options?.agentId ? "" : "conv-main",
-    items: options?.agentId ? [] : [{
+    activeConversationId: options?.agentId ? "conv-reviewer" : "conv-main",
+    items: options?.agentId ? [{
+      id: "conv-reviewer",
+      title: "子 Agent 会话",
+      lastMessagePreview: "reviewer-history",
+      messageCount: 1,
+      pinned: false,
+      active: true,
+      status: "active",
+      botAlias: "main",
+      cliType: "codex",
+      agentId: "reviewer",
+      workingDir: "C:\\workspace",
+      clusterTeam: { version: 1, assignments: [] },
+      clusterTeamRevision: 0,
+      createdAt: "2026-08-12T00:00:00Z",
+      updatedAt: "2026-08-12T00:00:00Z",
+    }] : [{
       id: "conv-main",
       title: "当前会话",
       lastMessagePreview: "",
@@ -958,9 +974,11 @@ test("opens child conversations from the dynamic cluster team and returns to mai
     expect(listMessages).toHaveBeenLastCalledWith("main", { agentId: "reviewer" });
   });
   expect(await screen.findByText("reviewer-history")).toBeInTheDocument();
-  const childTeamPanel = screen.getByTestId("cluster-team-panel");
+  const childTeamDock = screen.getByTestId("cluster-team-dock");
+  const childTeamPanel = within(childTeamDock).getByTestId("cluster-team-panel");
   expect(within(childTeamPanel).getByText("动态审查员")).toBeInTheDocument();
   expect(within(childTeamPanel).queryByText("动态测试员")).not.toBeInTheDocument();
+  expect(within(screen.getByTestId("chat-scroll-container")).queryByRole("button", { name: "返回主 Agent" })).not.toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "历史会话" }));
   await waitFor(() => {

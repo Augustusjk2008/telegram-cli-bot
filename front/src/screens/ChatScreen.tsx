@@ -4770,13 +4770,15 @@ export function ChatScreen({
   const clusterMode = Boolean(botOverview?.cluster?.enabled);
   const activeConversation = conversations.find((conversation) => conversation.active);
   const liveClusterTeam = botOverview?.activeClusterRun?.team || activeConversation?.clusterTeam;
-  const liveClusterTeamView: ClusterTeamViewSnapshot | null = liveClusterTeam ? {
+  const liveClusterTeamView: ClusterTeamViewSnapshot | null = liveClusterTeam?.assignments.length ? {
     team: liveClusterTeam,
     capacity: botOverview?.activeClusterRun?.capacity ?? botOverview?.cluster?.maxParallelAgents ?? 0,
     tasks: clusterTaskStatus?.tasks || botOverview?.activeClusterRun?.tasks?.tasks,
     slots: botOverview?.activeClusterRun?.slots,
   } : null;
-  const clusterTeamView = liveClusterTeamView || clusterTeamSnapshot;
+  const clusterTeamView = activeAgentId === "main"
+    ? liveClusterTeamView
+    : liveClusterTeamView || clusterTeamSnapshot;
   const activeClusterAssignment = clusterTeamView?.team.assignments.find(
     (assignment) => assignment.agentId === activeAgentId,
   );
@@ -5112,7 +5114,20 @@ export function ChatScreen({
             handleExecutePlan={handleExecutePlan}
             wideMessages={!embedded}
           />
-          {clusterMode && clusterTeamView ? (
+          {clusterTaskError ? (
+            <div className="rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger)] shadow-[var(--shadow-surface)]">
+              {clusterTaskError}
+            </div>
+          ) : null}
+          <div ref={bottomAnchorRef} aria-hidden="true" />
+        </div>
+      </section>
+      {clusterMode && clusterTeamView ? (
+        <div
+          data-testid="cluster-team-dock"
+          className="shrink-0 border-t border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)]"
+        >
+          <div className={embedded ? "mx-auto w-full max-w-5xl" : "w-full"}>
             <ClusterTeamPanel
               team={clusterTeamView.team}
               capacity={clusterTeamView.capacity}
@@ -5130,15 +5145,9 @@ export function ChatScreen({
                 handleSelectAgent(agentId);
               }}
             />
-          ) : null}
-          {clusterTaskError ? (
-            <div className="rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger)] shadow-[var(--shadow-surface)]">
-              {clusterTaskError}
-            </div>
-          ) : null}
-          <div ref={bottomAnchorRef} aria-hidden="true" />
+          </div>
         </div>
-      </section>
+      ) : null}
       <ConversationHistoryPanel
         open={historyPanelOpen}
         activeTab={historyPanelTab}
