@@ -601,7 +601,7 @@ class BotProfile:
 
 @dataclass
 class UserSession:
-    """按 (bot_id, user_id) 隔离的用户会话状态"""
+    """按 (bot_id, user_id, agent_id) 隔离的用户会话状态"""
 
     bot_id: int
     bot_alias: str

@@ -4055,6 +4055,10 @@ export function ChatScreen({
   ) => {
     const sendBotAlias = botAlias;
     const sendAgentId = activeAgentIdRef.current || "main";
+    if (sendAgentId !== "main") {
+      options.onError?.("不能直接给子 Agent 发消息");
+      return;
+    }
     const composedText = buildComposedMessageText(text, options.attachments || []);
     const hideProcessPreview = false;
     if (!composedText) {
@@ -4380,6 +4384,9 @@ export function ChatScreen({
   };
 
   const handleExecutePlan = useCallback(async (messageId: string, content: string) => {
+    if (activeAgentIdRef.current !== "main") {
+      return;
+    }
     const planContent = content.trim();
     if (!planContent) {
       return;
@@ -4431,6 +4438,9 @@ export function ChatScreen({
   }, [botAlias, botOverview, client, sendMessageInternal, soloMode, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch, setQueuedMessageState]);
 
   const handleSend = useCallback(async (text: string) => {
+    if (activeAgentIdRef.current !== "main") {
+      return;
+    }
     const currentExecutionMode = executionModeRef.current;
     const nativeSend = currentExecutionMode === "native_agent";
     const isExecutingPlanPrompt = isPlanExecutionPrompt(text);
@@ -4489,6 +4499,9 @@ export function ChatScreen({
   }, [botAlias, setQueuedMessageState]);
 
   const handleContinueFinalAnswer = useCallback(() => {
+    if (activeAgentIdRef.current !== "main") {
+      return;
+    }
     const currentExecutionMode = executionModeRef.current;
     const nativeSend = currentExecutionMode === "native_agent";
     void sendMessageInternal("继续", {
@@ -4785,11 +4798,14 @@ export function ChatScreen({
   const assistantName = activeAgentId === "main"
     ? botAlias
     : activeClusterAssignment?.name || activeAgent.name || botAlias;
-  const chatMutationsDisabled = readOnly;
+  const childAgentReadOnly = activeAgentId !== "main";
+  const chatMutationsDisabled = readOnly || childAgentReadOnly;
   const chatDisabledReason = nativePermissionPending
     ? "等待权限处理"
+    : childAgentReadOnly
+    ? "不能直接给子 Agent 发消息"
     : disabledReason || readOnlyReason || (readOnly ? "主机已关闭聊天，当前无法发送消息" : "");
-  const killTaskDisabled = chatMutationsDisabled || !isStreaming || actionLoading === "kill";
+  const killTaskDisabled = readOnly || !isStreaming || actionLoading === "kill";
   const showActionBar = !isImmersive;
   const showImmersiveButton = !embedded && isVisible && Boolean(onToggleImmersive);
   const immersiveButtonStorageKey = immersiveButtonPositionStorageKey(botAlias, storageScope);

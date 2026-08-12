@@ -81,6 +81,9 @@ export function ClusterTeamPanel({
               && (slot.status === "queued" || slot.status === "running")
             ));
           const name = assignment.name || assignment.agentId;
+          const modelTier = [...matchingTasks]
+            .reverse()
+            .find((task) => String(task.modelTier || "").trim())?.modelTier || "medium";
           return (
             <div
               key={`${assignment.agentId}:${assignment.assignmentRevision}`}
@@ -98,8 +101,8 @@ export function ClusterTeamPanel({
                   <span className={processing ? "text-xs font-medium text-[var(--accent)]" : "text-xs text-[var(--muted)]"}>
                     {processing ? "处理中" : "待命"}
                   </span>
+                  <span className="text-xs text-[var(--muted)]">模型档位：{modelTier}</span>
                 </div>
-                <p className="mt-0.5 whitespace-pre-wrap break-words text-xs text-[var(--muted)]">{assignment.responsibility}</p>
               </div>
               {!viewingChild ? (
                 <button

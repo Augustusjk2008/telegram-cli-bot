@@ -9,13 +9,14 @@ function task(
   agentId: string,
   status: ClusterAgentTask["status"],
   assignmentRevision: number,
+  modelTier: ClusterAgentTask["modelTier"] = "medium",
 ): ClusterAgentTask {
   return {
     taskId,
     agentId,
     assignmentRevision,
     status,
-    modelTier: "medium",
+    modelTier,
     allowWrite: false,
     createdAt: "2026-08-12T00:00:00Z",
     startedAt: "2026-08-12T00:00:01Z",
@@ -78,7 +79,7 @@ test("shows completed counts and live status inside flat assignment rows", async
         task("task-1", "cluster-slot-1", "completed", 2),
         task("task-2", "cluster-slot-1", "completed", 2),
         task("task-3", "cluster-slot-1", "completed", 2),
-        task("task-running", "cluster-slot-1", "running", 2),
+        task("task-running", "cluster-slot-1", "running", 2, "high"),
         task("task-old-revision", "cluster-slot-1", "completed", 1),
         task("task-backend", "cluster-slot-2", "completed", 1),
       ]}
@@ -88,10 +89,12 @@ test("shows completed counts and live status inside flat assignment rows", async
   const rows = screen.getAllByTestId("cluster-team-assignment");
   expect(rows).toHaveLength(2);
   expect(within(rows[0]).getByText("前端审查")).toBeInTheDocument();
+  expect(within(rows[0]).getByText("模型档位：high")).toBeInTheDocument();
   expect(within(rows[0]).getByText("已完成x3")).toBeInTheDocument();
   expect(within(rows[0]).getByText("处理中")).toBeInTheDocument();
   expect(within(rows[1]).getByText("已完成")).toBeInTheDocument();
   expect(within(rows[1]).getByText("待命")).toBeInTheDocument();
+  expect(screen.queryByText("检查界面状态与回归测试")).not.toBeInTheDocument();
   expect(screen.queryByText("旧静态名称")).not.toBeInTheDocument();
   expect(screen.queryByText(/如需调整角色/)).not.toBeInTheDocument();
   expect(screen.getByTestId("cluster-team-panel").className).not.toContain("shadow-");
@@ -114,7 +117,9 @@ test("shows only the current child Agent and offers a return to main", async () 
   );
 
   expect(screen.getByText("后端验证")).toBeInTheDocument();
+  expect(screen.getByText("模型档位：medium")).toBeInTheDocument();
   expect(screen.queryByText("前端审查")).not.toBeInTheDocument();
+  expect(screen.queryByText("验证接口与任务状态")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /查看.*对话/ })).not.toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "返回主 Agent" }));

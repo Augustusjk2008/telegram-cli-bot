@@ -147,9 +147,9 @@ bash install.sh
 
 ### Sub-agent and Cluster Collaboration
 
-- CLI bots support sub-agents, `@agent_id` routing, cluster templates, and model tiers.
-- Cluster tools cover task creation, status checks, polling, and message waiting.
-- Non-cluster chats bind to one active agent; cluster mode distributes subtasks through explicit routing.
+- Regular chats can select an explicit `agent_id` and use an isolated agent session; cluster templates prepare bot-level parallel slots and model tiers.
+- Cluster tools cover dynamic team configuration, status checks, fresh sub-agent sessions, asynchronous task creation, polling, and message waiting.
+- Once bot-level clustering is enabled, the main agent delegates through the shared `tcb-cluster` tool surface: Codex and Claude use stdio MCP, while Pi adapts the same bridge through an extension.
 
 ### Administration and Extensions
 
@@ -175,7 +175,7 @@ bash install.sh
 |---|---|---|
 | `cli` | Codex, Claude | Legacy SSE: text, status, trace, and completion events |
 | `native_agent` | Pi | AG-UI: tools, permissions, execution details, context, and native sessions |
-| Cluster | Per bot/agent configuration | Subtask routing, polling, result messages, and model tiers |
+| Cluster | Per-bot configuration and per-conversation teams | Dynamic team setup, asynchronous delegation, polling, result messages, and model tiers |
 
 ## Security Boundary
 
@@ -296,16 +296,17 @@ Non-portable installations require Node.js 22+, Git, and bash. Install the pinne
 npm install -g @earendil-works/pi-coding-agent@0.74.2 pi-workspace-history@0.2.2
 ```
 
-Configure at least:
+Enable the native agent with:
 
 ```env
 NATIVE_AGENT_ENABLED=true
-NATIVE_AGENT_PI_COMMAND=pi
 ```
 
-Pi extensions live in `~/.pi/agent/extensions` by default. If you use `PI_AGENT_SETTINGS` or `NATIVE_AGENT_PI_HOME`, place `workspace-history.ts` and the repository's `bot/cluster/pi_extension/tcb-cluster.ts` in the extensions directory that is actually active. On Windows, Pi's `shellPath` should point to Git Bash.
+`NATIVE_AGENT_PI_COMMAND` defaults to `pi`; set it only when PATH resolution is insufficient or a custom command is required.
 
-A Pi session is bound to the working directory, model, Pi agent, and reasoning effort. Changing any of these creates a new session and a new workspace-history rollback chain.
+Pi extensions live in `~/.pi/agent/extensions` by default. If you use `PI_AGENT_SETTINGS` or `NATIVE_AGENT_PI_HOME`, place `workspace-history.ts` and the repository's `bot/cluster/pi_extension/tcb-cluster.ts` in the extensions directory that is actually active. The current setup helper only follows `PI_AGENT_SETTINGS` or the system HOME, so verify the destination manually when only `NATIVE_AGENT_PI_HOME` is set. On Windows, Pi's `shellPath` should preferably point to Git Bash.
+
+Pi runtimes and persisted sessions are currently scoped primarily by the bot/user/agent conversation and working directory. Changing only the model, Pi agent, or reasoning effort inside the same conversation does not automatically rotate the existing Pi session or rollback chain; create a new conversation when full isolation is required.
 
 </details>
 

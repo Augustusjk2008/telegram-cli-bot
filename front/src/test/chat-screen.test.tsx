@@ -370,7 +370,8 @@ test("pauses auxiliary sync while hidden and reconciles once after returning", a
     { includeOutput: false },
   );
   expect(await screen.findByText("动态审查员")).toBeInTheDocument();
-  expect(screen.getByText("检查前端状态")).toBeInTheDocument();
+  expect(screen.getByText("模型档位：medium")).toBeInTheDocument();
+  expect(screen.queryByText("检查前端状态")).not.toBeInTheDocument();
   expect(screen.getByText("已分配 1 / 集群规模 3")).toBeInTheDocument();
   expect(screen.getByText("已完成")).toBeInTheDocument();
   expect(screen.getByText("处理中")).toBeInTheDocument();
@@ -962,6 +963,7 @@ test("opens child conversations from the dynamic cluster team and returns to mai
     }],
   }));
   const client = createClient({ getBotOverview, listAgents, listMessages, listConversations });
+  const sendMessage = vi.spyOn(client, "sendMessage");
 
   render(<ChatScreen botAlias="main" client={client} />);
 
@@ -978,6 +980,11 @@ test("opens child conversations from the dynamic cluster team and returns to mai
   const childTeamPanel = within(childTeamDock).getByTestId("cluster-team-panel");
   expect(within(childTeamPanel).getByText("动态审查员")).toBeInTheDocument();
   expect(within(childTeamPanel).queryByText("动态测试员")).not.toBeInTheDocument();
+  expect(within(childTeamPanel).queryByText("审查本轮改动")).not.toBeInTheDocument();
+  expect(screen.getByPlaceholderText("不能直接给子 Agent 发消息")).toBeDisabled();
+  expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
+  await user.click(screen.getByRole("button", { name: "发送" }));
+  expect(sendMessage).not.toHaveBeenCalled();
   expect(within(screen.getByTestId("chat-scroll-container")).queryByRole("button", { name: "返回主 Agent" })).not.toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "历史会话" }));
