@@ -94,6 +94,7 @@ async def test_official_capture_records_one_rate_limit_sample(tmp_path: Path) ->
 
     first = await capture.record_once(
         CodexTokenUsage(input_tokens=2, output_tokens=1),
+        terminal_at=date(2026, 8, 11),
         session_id=" session-1 ",
     )
     second = await capture.record_once(
