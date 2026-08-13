@@ -56,7 +56,7 @@ test("hides an empty team", () => {
   expect(screen.queryByTestId("cluster-team-panel")).not.toBeInTheDocument();
 });
 
-test("shows completed counts and live status inside flat assignment rows", async () => {
+test("keeps assignments collapsed until the cluster toggle is opened", async () => {
   const user = userEvent.setup();
   const onSelectAgent = vi.fn();
   render(
@@ -86,6 +86,17 @@ test("shows completed counts and live status inside flat assignment rows", async
     />,
   );
 
+  const panel = screen.getByTestId("cluster-team-panel");
+  const toggle = within(panel).getByRole("button", { name: "展开集群编组" });
+  expect(toggle).toHaveAttribute("aria-expanded", "false");
+  expect(toggle).toHaveTextContent("▲");
+  expect(screen.queryAllByTestId("cluster-team-assignment")).toHaveLength(0);
+
+  await user.click(toggle);
+
+  const collapseToggle = within(panel).getByRole("button", { name: "收起集群编组" });
+  expect(collapseToggle).toHaveAttribute("aria-expanded", "true");
+  expect(collapseToggle).toHaveTextContent("▼");
   const rows = screen.getAllByTestId("cluster-team-assignment");
   expect(rows).toHaveLength(2);
   expect(within(rows[0]).getByText("前端审查")).toBeInTheDocument();
@@ -99,8 +110,13 @@ test("shows completed counts and live status inside flat assignment rows", async
   expect(screen.queryByText(/如需调整角色/)).not.toBeInTheDocument();
   expect(screen.getByTestId("cluster-team-panel").className).not.toContain("shadow-");
 
-  await user.click(within(rows[0]).getByRole("button", { name: "查看前端审查对话" }));
+  const viewButton = within(rows[0]).getByRole("button", { name: "查看前端审查对话" });
+  expect(viewButton).toHaveClass("h-4", "leading-4");
+  await user.click(viewButton);
   expect(onSelectAgent).toHaveBeenCalledWith("cluster-slot-1");
+
+  await user.click(within(panel).getByRole("button", { name: "收起集群编组" }));
+  expect(screen.queryAllByTestId("cluster-team-assignment")).toHaveLength(0);
 });
 
 test("shows only the current child Agent and offers a return to main", async () => {
@@ -116,6 +132,9 @@ test("shows only the current child Agent and offers a return to main", async () 
     />,
   );
 
+  const panel = screen.getByTestId("cluster-team-panel");
+  expect(screen.queryByText("后端验证")).not.toBeInTheDocument();
+  await user.click(within(panel).getByRole("button", { name: "展开集群编组" }));
   expect(screen.getByText("后端验证")).toBeInTheDocument();
   expect(screen.getByText("模型档位：medium")).toBeInTheDocument();
   expect(screen.queryByText("前端审查")).not.toBeInTheDocument();

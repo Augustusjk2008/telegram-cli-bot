@@ -249,7 +249,8 @@ test("toggles the Bot cluster config from chat and only shows an assigned enable
     enabled: true,
   }));
   expect(await screen.findByRole("button", { name: "关闭集群模式" })).toHaveAttribute("aria-pressed", "true");
-  expect(screen.getByTestId("cluster-team-panel")).toBeInTheDocument();
+  const teamPanel = screen.getByTestId("cluster-team-panel");
+  await user.click(within(teamPanel).getByRole("button", { name: "展开集群编组" }));
   expect(screen.getByText("前端审查")).toBeInTheDocument();
 });
 
@@ -369,10 +370,12 @@ test("pauses auxiliary sync while hidden and reconciles once after returning", a
     "cluster-foreground",
     { includeOutput: false },
   );
-  expect(await screen.findByText("动态审查员")).toBeInTheDocument();
+  expect(await screen.findByText("已分配 1 / 集群规模 3")).toBeInTheDocument();
+  expect(screen.queryByText("动态审查员")).not.toBeInTheDocument();
+  fireEvent.click(within(screen.getByTestId("cluster-team-panel")).getByRole("button", { name: "展开集群编组" }));
+  expect(screen.getByText("动态审查员")).toBeInTheDocument();
   expect(screen.getByText("模型档位：medium")).toBeInTheDocument();
   expect(screen.queryByText("检查前端状态")).not.toBeInTheDocument();
-  expect(screen.getByText("已分配 1 / 集群规模 3")).toBeInTheDocument();
   expect(screen.getByText("已完成")).toBeInTheDocument();
   expect(screen.getByText("处理中")).toBeInTheDocument();
   expect(screen.queryByText("智能体集群任务")).not.toBeInTheDocument();
@@ -967,7 +970,9 @@ test("opens child conversations from the dynamic cluster team and returns to mai
 
   render(<ChatScreen botAlias="main" client={client} />);
 
-  expect(await screen.findByText("动态审查员")).toBeInTheDocument();
+  const teamPanel = await screen.findByTestId("cluster-team-panel");
+  await user.click(within(teamPanel).getByRole("button", { name: "展开集群编组" }));
+  expect(screen.getByText("动态审查员")).toBeInTheDocument();
   expect(screen.queryByRole("combobox", { name: "当前 agent" })).not.toBeInTheDocument();
   expect(screen.queryByText("旧固定角色")).not.toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "查看动态审查员对话" }));
@@ -993,6 +998,7 @@ test("opens child conversations from the dynamic cluster team and returns to mai
   });
   await user.click(screen.getByRole("button", { name: "返回主 Agent" }));
   await waitFor(() => expect(listMessages).toHaveBeenLastCalledWith("main"));
+  await user.click(within(screen.getByTestId("cluster-team-panel")).getByRole("button", { name: "展开集群编组" }));
   expect(await screen.findByText("动态测试员")).toBeInTheDocument();
 });
 

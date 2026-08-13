@@ -1,3 +1,4 @@
+import { useId, useState } from "react";
 import type {
   ClusterAgentTask,
   ClusterSlotStatus,
@@ -38,6 +39,8 @@ export function ClusterTeamPanel({
   navigationDisabled = false,
   onSelectAgent,
 }: Props) {
+  const [expanded, setExpanded] = useState(false);
+  const assignmentsId = useId();
   const assignments = team?.assignments || [];
   if (assignments.length === 0) {
     return null;
@@ -56,21 +59,33 @@ export function ClusterTeamPanel({
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="font-medium">集群编组</span>
-        {viewingChild ? (
+        <div className="flex items-center gap-1">
+          {viewingChild ? (
+            <button
+              type="button"
+              aria-label="返回主 Agent"
+              disabled={navigationDisabled}
+              onClick={() => onSelectAgent("main")}
+              className={toolbarButtonClass("ghost", "sm", "h-7 rounded-md px-2")}
+            >
+              返回主 Agent
+            </button>
+          ) : (
+            <span className="text-xs text-[var(--muted)]">已分配 {assignments.length} / 集群规模 {safeCapacity}</span>
+          )}
           <button
             type="button"
-            aria-label="返回主 Agent"
-            disabled={navigationDisabled}
-            onClick={() => onSelectAgent("main")}
-            className={toolbarButtonClass("ghost", "sm", "h-7 rounded-md px-2")}
+            aria-label={expanded ? "收起集群编组" : "展开集群编组"}
+            aria-controls={assignmentsId}
+            aria-expanded={expanded}
+            onClick={() => setExpanded((current) => !current)}
+            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-xs text-[var(--muted)] transition-colors hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)]"
           >
-            返回主 Agent
+            <span aria-hidden="true">{expanded ? "▼" : "▲"}</span>
           </button>
-        ) : (
-          <span className="text-xs text-[var(--muted)]">已分配 {assignments.length} / 集群规模 {safeCapacity}</span>
-        )}
+        </div>
       </div>
-      <div className="mt-1">
+      {expanded ? <div id={assignmentsId} className="mt-1">
         {visibleAssignments.map((assignment) => {
           const matchingTasks = tasksForAssignment(assignment, tasks || []);
           const completedCount = matchingTasks.filter((task) => task.status === "completed").length;
@@ -110,7 +125,7 @@ export function ClusterTeamPanel({
                   aria-label={`查看${name}对话`}
                   disabled={navigationDisabled}
                   onClick={() => onSelectAgent(assignment.agentId)}
-                  className={toolbarButtonClass("ghost", "sm", "h-7 rounded-md px-2")}
+                  className="inline-flex h-4 shrink-0 items-center justify-center rounded px-1.5 text-xs font-medium leading-4 text-[var(--muted)] transition-colors hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:pointer-events-none disabled:opacity-55"
                 >
                   查看
                 </button>
@@ -118,7 +133,7 @@ export function ClusterTeamPanel({
             </div>
           );
         })}
-      </div>
+      </div> : null}
     </section>
   );
 }

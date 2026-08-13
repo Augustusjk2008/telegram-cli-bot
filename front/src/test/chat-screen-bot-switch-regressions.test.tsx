@@ -240,6 +240,7 @@ test("reloads favorites for agent and execution mode scopes without reloading CL
   render(<ChatScreen botAlias="main" client={client} isVisible />);
   await waitFor(() => expect(listFavoriteAnswers).toHaveBeenCalledTimes(1));
 
+  fireEvent.click(await screen.findByRole("button", { name: "展开集群编组" }));
   fireEvent.click(await screen.findByRole("button", { name: "查看动态审查员对话" }));
   await waitFor(() => expect(listFavoriteAnswers).toHaveBeenCalledTimes(2));
   expect(listFavoriteAnswers).toHaveBeenLastCalledWith("main", "", {
