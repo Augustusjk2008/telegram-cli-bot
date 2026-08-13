@@ -42,11 +42,12 @@ cd front && npm run lint
 
 - Web session 按 `(bot_id, shared_user_id, agent_id)` 隔离；Web 用户 id 通过 `chat_session_user_id()` 归一化。
 - 用户文本以 `//` 开头时改写为 `/...`；Codex CLI 使用 JSON output。
-- `execution_mode=native_agent` 使用 AG-UI；普通 CLI 保持 legacy SSE `delta/status/trace/done`。
+- `execution_mode=native_agent` 使用 AG-UI；普通 CLI 保持 legacy SSE `meta/status/trace/done`，增量正文预览放在 `status.preview_text`。
 - CLI SSE 的 `meta/status/trace/done` 顶层必须保留 `turn_id`、`assistant_message_id`，以稳定绑定当前轮。
 - 普通 CLI trace 与原生过程统一进入 `NativeAgentTranscript`；CLI 使用 `mode="cli"`，不得显示原生权限操作。
 - Pi runtime 只能由 `pi_session_runtime.py` 的单 reader 读取 `client.events()`。
 - Pi session 绑定由 `cwd + model_id + pi_agent + reasoning_effort` 决定；任一项变化都必须失效旧 session 和 workspace-history rollback 链。
+- 已知实现差距：当前 Pi runtime/session 复用路径尚未完整比较并失效上述 fingerprint；修改该链路时应补齐实现与回归测试，不得把现状固化为较弱契约。
 - Web 终端会话按 `(user_id, owner_id)` 隔离；每个新标签必须使用独立 `owner_id`，关闭标签必须终止对应 shell；旧客户端的 `rebuild` 端点作为创建会话的兼容别名保留。
 
 修改 native agent/Pi/cluster、LiteLLM Transfer、Plugin 或安装/发布链路时，使用仓库级 `orbit-maintenance` skill，并只读取与当前子系统对应的 reference。

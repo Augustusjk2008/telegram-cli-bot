@@ -380,11 +380,7 @@ class NativeAgentService:
         await asyncio.to_thread(persist)
 
     def _pi_runtime_env(self, cluster_run_id: str = "") -> dict[str, str] | None:
-        env: dict[str, str] = {}
-        normalized_cluster_run_id = str(cluster_run_id or "").strip()
-        if normalized_cluster_run_id:
-            env["TCB_CLUSTER_RUN_ID"] = normalized_cluster_run_id
-            env["TCB_CLUSTER_MCP_CONFIG"] = str(get_cluster_mcp_config_path())
+        env = {"TCB_CLUSTER_MCP_CONFIG": str(get_cluster_mcp_config_path())}
         pi_home = str(getattr(config, "NATIVE_AGENT_PI_HOME", "") or "").strip()
         if pi_home:
             env["NATIVE_AGENT_PI_HOME"] = pi_home
@@ -428,8 +424,15 @@ class NativeAgentService:
         )
         return wrapped, hash_agent_prompt(prompt)
 
-    def _append_system_prompt(self, profile: BotProfile, session: UserSession, *, solo_mode: bool) -> tuple[str, str]:
-        child_prompt, child_prompt_hash = self._child_agent_prompt(profile, session)
+    def _append_system_prompt(
+        self,
+        profile: BotProfile,
+        session: UserSession,
+        *,
+        solo_mode: bool,
+        suppress_agent_prompt: bool = False,
+    ) -> tuple[str, str]:
+        child_prompt, child_prompt_hash = ("", "") if suppress_agent_prompt else self._child_agent_prompt(profile, session)
         parts = [
             part
             for part in (
@@ -607,6 +610,7 @@ class NativeAgentService:
         protocol: str = "",
         cluster_run_id: str = "",
         solo_mode: bool = False,
+        suppress_agent_prompt: bool = False,
     ) -> AsyncIterator[dict[str, Any]]:
         self._ensure_runtime_eviction_task()
         loop = asyncio.get_running_loop()
@@ -655,7 +659,12 @@ class NativeAgentService:
                 actor=actor,
             )
             model_id, agent_id, reasoning_effort, system_prompt = self._prompt_options(profile)
-            append_system_prompt, child_agent_prompt_hash = self._append_system_prompt(profile, session, solo_mode=solo_mode)
+            append_system_prompt, child_agent_prompt_hash = self._append_system_prompt(
+                profile,
+                session,
+                solo_mode=solo_mode,
+                suppress_agent_prompt=suppress_agent_prompt,
+            )
             native_agent_config = effective_native_agent_config(getattr(profile, "native_agent", {}))
             workspace_history_enabled = bool(native_agent_config.get("workspace_history_enabled", True))
             pi_command = str(

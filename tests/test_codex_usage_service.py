@@ -8,6 +8,7 @@ import pytest
 
 from bot.codex_usage import models
 from bot.codex_usage.models import CodexTokenUsage, ProviderInfo
+from bot.codex_usage.rollout import TurnRateLimitResolution
 from bot.codex_usage.service import CodexUsageService
 from bot.codex_usage.store import CodexUsageStore
 
@@ -30,6 +31,10 @@ class _RateLimitResolver:
     def __call__(self, **kwargs: object) -> object | None:
         self.calls.append(kwargs)
         return self.result
+
+
+class _AccountRateLimitResolver(_RateLimitResolver):
+    pass
 
 
 def _provider(kind: str = "openai_official") -> ProviderInfo:
@@ -77,10 +82,12 @@ async def test_disabled_capture_does_not_resolve_or_record_rate_limit(tmp_path: 
 @pytest.mark.asyncio
 async def test_official_capture_records_one_rate_limit_sample(tmp_path: Path) -> None:
     rate_limit_resolver = _RateLimitResolver(_sample())
+    account_rate_limit_resolver = _AccountRateLimitResolver(None)
     service = CodexUsageService(
         tmp_path / "usage.sqlite3",
         resolver=_ProviderResolver(_provider()),
         rate_limit_resolver=rate_limit_resolver,
+        account_rate_limit_resolver=account_rate_limit_resolver,
     )
     await service.set_enabled(True)
     capture = await service.create_capture(env={"CODEX_HOME": str(tmp_path)})
@@ -99,6 +106,7 @@ async def test_official_capture_records_one_rate_limit_sample(tmp_path: Path) ->
     assert first is True
     assert second is False
     assert len(rate_limit_resolver.calls) == 1
+    assert account_rate_limit_resolver.calls == []
     assert rate_limit_resolver.calls[0]["session_id"] == "session-1"
     assert result.totals.request_count == 1
     assert result.rate_limit_samples == (_sample(),)
@@ -106,11 +114,15 @@ async def test_official_capture_records_one_rate_limit_sample(tmp_path: Path) ->
 
 @pytest.mark.asyncio
 async def test_spark_capture_excludes_general_rate_limit(tmp_path: Path) -> None:
-    rate_limit_resolver = _RateLimitResolver(_sample())
+    rate_limit_resolver = _RateLimitResolver(
+        TurnRateLimitResolution(sample=None, refresh_general=True)
+    )
+    account_rate_limit_resolver = _AccountRateLimitResolver(_sample())
     service = CodexUsageService(
         tmp_path / "usage.sqlite3",
         resolver=_ProviderResolver(_provider()),
         rate_limit_resolver=rate_limit_resolver,
+        account_rate_limit_resolver=account_rate_limit_resolver,
     )
     await service.set_enabled(True)
     capture = await service.create_capture(
@@ -129,7 +141,45 @@ async def test_spark_capture_excludes_general_rate_limit(tmp_path: Path) -> None
     assert recorded is True
     assert [item.model for item in result.by_provider_model] == ["gpt-5.3-codex-spark"]
     assert rate_limit_resolver.calls == []
+    assert account_rate_limit_resolver.calls == []
     assert result.rate_limit_samples == ()
+
+
+@pytest.mark.asyncio
+async def test_bengalfox_turn_queries_general_rate_limit_once(tmp_path: Path) -> None:
+    rate_limit_resolver = _RateLimitResolver(
+        TurnRateLimitResolution(sample=None, refresh_general=True)
+    )
+    account_rate_limit_resolver = _AccountRateLimitResolver(_sample())
+    service = CodexUsageService(
+        tmp_path / "usage.sqlite3",
+        resolver=_ProviderResolver(_provider()),
+        rate_limit_resolver=rate_limit_resolver,
+        account_rate_limit_resolver=account_rate_limit_resolver,
+    )
+    await service.set_enabled(True)
+    capture = await service.create_capture(
+        env={"CODEX_HOME": str(tmp_path)},
+        command=["codex", "exec", "--json"],
+    )
+
+    first = await capture.record_once(
+        CodexTokenUsage(input_tokens=2, output_tokens=1),
+        session_id=" session-1 ",
+    )
+    second = await capture.record_once(
+        CodexTokenUsage(input_tokens=9, output_tokens=9),
+        session_id="session-1",
+    )
+    result = await service.query(date(2026, 8, 11), date(2026, 8, 11))
+
+    assert first is True
+    assert second is False
+    assert len(rate_limit_resolver.calls) == 1
+    assert len(account_rate_limit_resolver.calls) == 1
+    assert account_rate_limit_resolver.calls[0]["limit_id"] == "codex"
+    assert account_rate_limit_resolver.calls[0]["executable"] == "codex"
+    assert result.rate_limit_samples == (_sample(),)
 
 
 @pytest.mark.asyncio
@@ -218,6 +268,7 @@ async def test_spark_only_rate_limit_result_is_not_recorded(
     service = CodexUsageService(
         tmp_path / "usage.sqlite3",
         resolver=_ProviderResolver(_provider()),
+        account_rate_limit_resolver=lambda **_kwargs: None,
     )
     await service.set_enabled(True)
     capture = await service.create_capture(env={"CODEX_HOME": str(tmp_path)})
@@ -245,6 +296,35 @@ async def test_rate_limit_resolution_failure_does_not_affect_token_recording(
         tmp_path / "usage.sqlite3",
         resolver=_ProviderResolver(_provider()),
         rate_limit_resolver=fail_rate_limit,
+    )
+    await service.set_enabled(True)
+    capture = await service.create_capture(env={"CODEX_HOME": str(tmp_path)})
+
+    recorded = await capture.record_once(
+        CodexTokenUsage(input_tokens=2, output_tokens=1),
+        session_id="session-1",
+    )
+    result = await service.query(date.today(), date.today())
+
+    assert recorded is True
+    assert result.totals.request_count == 1
+    assert result.rate_limit_samples == ()
+
+
+@pytest.mark.asyncio
+async def test_account_rate_limit_resolution_failure_does_not_affect_token_recording(
+    tmp_path: Path,
+) -> None:
+    def fail_account_rate_limit(**_kwargs: object) -> None:
+        raise RuntimeError("account lookup failed")
+
+    service = CodexUsageService(
+        tmp_path / "usage.sqlite3",
+        resolver=_ProviderResolver(_provider()),
+        rate_limit_resolver=_RateLimitResolver(
+            TurnRateLimitResolution(sample=None, refresh_general=True)
+        ),
+        account_rate_limit_resolver=fail_account_rate_limit,
     )
     await service.set_enabled(True)
     capture = await service.create_capture(env={"CODEX_HOME": str(tmp_path)})

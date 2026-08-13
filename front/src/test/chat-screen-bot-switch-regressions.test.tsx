@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { BotOverview, ChatMessage, HistorySnapshotResult } from "../services/types";
+import type { BotOverview, ChatMessage, ConversationListResult, HistorySnapshotResult } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
@@ -50,6 +50,37 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   window.localStorage.clear();
+});
+
+test.each([true, false])("starts on the main Agent without the legacy agent dropdown when cluster enabled=%s", async (clusterEnabled) => {
+  window.localStorage.setItem("tcb.activeAgent.main", "reviewer");
+  const client = createClient();
+  const overview: BotOverview = {
+    ...createOverview(),
+    cluster: {
+      enabled: clusterEnabled,
+      writePolicy: "main_only",
+      conflictPolicy: "snapshot_diff",
+      maxParallelAgents: 2,
+      defaultTimeoutSeconds: 600,
+      modelTiers: { low: "", medium: "", high: "" },
+      reasoningEfforts: { low: "", medium: "", high: "" },
+    },
+    agents: [
+      { id: "main", name: "主 Agent", systemPrompt: "", enabled: true, isMain: true },
+      { id: "reviewer", name: "旧固定角色", systemPrompt: "", enabled: true, isMain: false },
+    ],
+  };
+  vi.spyOn(client, "getBotOverview").mockResolvedValue(overview);
+  vi.spyOn(client, "listAgents").mockResolvedValue({ items: overview.agents || [] });
+  const listMessages = vi.spyOn(client, "listMessages").mockResolvedValue({ items: [] });
+
+  render(<ChatScreen botAlias="main" client={client} isVisible />);
+
+  await waitFor(() => expect(window.localStorage.getItem("tcb.activeAgent.main")).toBe("main"));
+  expect(listMessages).toHaveBeenLastCalledWith("main");
+  expect(screen.queryByRole("combobox", { name: "当前 agent" })).not.toBeInTheDocument();
+  expect(screen.queryByText("旧固定角色")).not.toBeInTheDocument();
 });
 
 test("restarts initial history loading after a hidden cached bot cancels the first request", async () => {
@@ -149,15 +180,52 @@ test("reloads favorites for agent and execution mode scopes without reloading CL
   const client = createClient();
   const overview: BotOverview = {
     ...createOverview(),
+    cluster: {
+      enabled: true,
+      writePolicy: "main_only",
+      conflictPolicy: "snapshot_diff",
+      maxParallelAgents: 2,
+      defaultTimeoutSeconds: 600,
+      modelTiers: { low: "", medium: "", high: "" },
+      reasoningEfforts: { low: "", medium: "", high: "" },
+    },
     agents: [
       { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true },
-      { id: "reviewer", name: "代码审查", systemPrompt: "", enabled: true, isMain: false },
+      { id: "reviewer", name: "旧固定角色", systemPrompt: "", enabled: true, isMain: false },
     ],
     supportedExecutionModes: ["cli", "native_agent"],
   };
   vi.spyOn(client, "getBotOverview").mockResolvedValue(overview);
   vi.spyOn(client, "listAgents").mockResolvedValue({ items: overview.agents || [] });
   vi.spyOn(client, "listMessages").mockResolvedValue({ items: [] });
+  vi.spyOn(client, "listConversations").mockImplementation(async (_botAlias, _query, options): Promise<ConversationListResult> => ({
+    activeConversationId: options?.agentId ? "" : "conv-main",
+    items: options?.agentId ? [] : [{
+      id: "conv-main",
+      title: "当前会话",
+      lastMessagePreview: "",
+      messageCount: 0,
+      pinned: false,
+      active: true,
+      status: "active",
+      botAlias: "main",
+      cliType: "codex",
+      agentId: "main",
+      workingDir: "C:\\workspace",
+      clusterTeam: {
+        version: 1,
+        assignments: [{
+          agentId: "reviewer",
+          name: "动态审查员",
+          responsibility: "审查本轮改动",
+          assignmentRevision: 1,
+        }],
+      },
+      clusterTeamRevision: 1,
+      createdAt: "2026-08-12T00:00:00Z",
+      updatedAt: "2026-08-12T00:00:00Z",
+    }],
+  }));
   const getCliParams = vi.spyOn(client, "getCliParams").mockResolvedValue({
     cliType: "codex",
     params: {},
@@ -172,9 +240,8 @@ test("reloads favorites for agent and execution mode scopes without reloading CL
   render(<ChatScreen botAlias="main" client={client} isVisible />);
   await waitFor(() => expect(listFavoriteAnswers).toHaveBeenCalledTimes(1));
 
-  fireEvent.change(await screen.findByRole("combobox", { name: "当前 agent" }), {
-    target: { value: "reviewer" },
-  });
+  fireEvent.click(await screen.findByRole("button", { name: "展开集群编组" }));
+  fireEvent.click(await screen.findByRole("button", { name: "查看动态审查员对话" }));
   await waitFor(() => expect(listFavoriteAnswers).toHaveBeenCalledTimes(2));
   expect(listFavoriteAnswers).toHaveBeenLastCalledWith("main", "", {
     agentId: "reviewer",

@@ -147,9 +147,9 @@ bash install.sh
 
 ### 子 Agent 与集群协作
 
-- CLI Bot 支持子 Agent、`@agent_id` 路由、集群模板和模型档位。
-- 集群工具覆盖任务创建、状态查询、轮询和消息等待。
-- 非集群聊天只绑定一个 active Agent；集群模式按明确路由分发子任务。
+- 普通聊天可按显式 `agent_id` 进入隔离的 Agent 会话；集群模板用于准备 Bot 级并行槽位和模型档位。
+- 集群工具覆盖动态编组、状态查询、子 Agent 新会话、异步任务创建、轮询和消息等待。
+- 启用 Bot 级集群后，主 Agent 通过统一的 `tcb-cluster` 工具面委派子任务；Codex、Claude 使用 stdio MCP，Pi 使用扩展适配同一 bridge。
 
 ### 管理与扩展
 
@@ -175,7 +175,7 @@ bash install.sh
 |---|---|---|
 | `cli` | Codex、Claude | Legacy SSE：正文、状态、trace、完成态 |
 | `native_agent` | Pi | AG-UI：工具、权限、过程、上下文和原生 session |
-| Cluster | 按 Bot/Agent 配置 | 子任务路由、轮询、消息回告和模型档位 |
+| Cluster | 按 Bot 配置、按主会话编组 | 动态编组、异步委派、轮询、消息回告和模型档位 |
 
 ## 安全边界
 
@@ -296,16 +296,17 @@ server {
 npm install -g @earendil-works/pi-coding-agent@0.74.2 pi-workspace-history@0.2.2
 ```
 
-至少配置：
+启用原生 Agent 必须配置：
 
 ```env
 NATIVE_AGENT_ENABLED=true
-NATIVE_AGENT_PI_COMMAND=pi
 ```
 
-Pi 扩展默认位于 `~/.pi/agent/extensions`。使用 `PI_AGENT_SETTINGS` 或 `NATIVE_AGENT_PI_HOME` 时，应把 `workspace-history.ts` 和仓库内 `bot/cluster/pi_extension/tcb-cluster.ts` 放入实际生效的 extensions 目录。Windows 的 Pi `shellPath` 应指向 Git Bash。
+`NATIVE_AGENT_PI_COMMAND` 默认是 `pi`，仅在 PATH 无法解析或使用自定义命令时设置。
 
-Pi session 由工作目录、模型、Pi Agent 和推理强度共同绑定；任一项变化都会创建新的 session 与 workspace-history rollback 链。
+Pi 扩展默认位于 `~/.pi/agent/extensions`。使用 `PI_AGENT_SETTINGS` 或 `NATIVE_AGENT_PI_HOME` 时，应把 `workspace-history.ts` 和仓库内 `bot/cluster/pi_extension/tcb-cluster.ts` 放入实际生效的 extensions 目录。当前管理页安装助手只识别 `PI_AGENT_SETTINGS` 或系统 HOME；仅设置 `NATIVE_AGENT_PI_HOME` 时需手动确认目标目录。Windows 的 Pi `shellPath` 建议指向 Git Bash。
+
+Pi runtime 和持久化 session 当前以 Bot/用户/Agent 的 conversation 与工作目录为主要作用域。在同一 conversation 内仅修改模型、Pi Agent 或推理强度，不会自动轮换已有 Pi session 和 rollback 链；需要完全隔离时请新建会话。
 
 </details>
 

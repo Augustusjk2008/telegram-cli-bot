@@ -18,8 +18,13 @@ from .models import (
     UsageQueryResult,
     normalize_model_key,
 )
+from .app_server_rate_limits import resolve_account_rate_limit
 from .provider import CodexProviderResolver
-from .rollout import resolve_failed_turn_usage, resolve_turn_rate_limit
+from .rollout import (
+    TurnRateLimitResolution,
+    resolve_failed_turn_usage,
+    resolve_turn_rate_limit_resolution,
+)
 from .store import CodexUsageStore
 
 try:
@@ -73,6 +78,16 @@ def resolve_codex_model(argv: Sequence[str] | str | None) -> str:
     return normalize_model_key(selected)
 
 
+def _command_executable(argv: Sequence[str] | str | None) -> str:
+    if isinstance(argv, str):
+        arguments = shlex.split(argv)
+    elif argv is None:
+        arguments = []
+    else:
+        arguments = [str(item) for item in argv]
+    return arguments[0] if arguments else "codex"
+
+
 def _codex_home(env: Mapping[str, str] | None) -> Path:
     source = os.environ if env is None else env
     configured = str(source.get("CODEX_HOME") or "").strip()
@@ -109,6 +124,8 @@ class CodexUsageCapture:
         model: str,
         started_at: datetime,
         codex_home: Path,
+        executable: str,
+        environment: Mapping[str, str] | None,
     ) -> None:
         self._service = service
         self.enabled = enabled
@@ -116,6 +133,8 @@ class CodexUsageCapture:
         self.model = normalize_model_key(model)
         self.started_at = started_at
         self.codex_home = codex_home
+        self.executable = executable
+        self.environment = dict(environment) if environment is not None else None
         self._attempted = False
 
     async def record_once(
@@ -168,6 +187,8 @@ class CodexUsageCapture:
                 session_id=normalized_session_id,
                 started_at=self.started_at,
                 codex_home=self.codex_home,
+                executable=self.executable,
+                environment=self.environment,
             )
         return token_recorded
 
@@ -183,13 +204,15 @@ class CodexUsageService:
         resolver: CodexProviderResolver | Any | None = None,
         failed_usage_resolver: Any | None = None,
         rate_limit_resolver: Any | None = None,
+        account_rate_limit_resolver: Any | None = None,
     ) -> None:
         if store is None:
             store = CodexUsageStore(_default_db_path() if db_path is None else db_path)
         self._store = store
         self._resolver = resolver or CodexProviderResolver()
         self._failed_usage_resolver = failed_usage_resolver or resolve_failed_turn_usage
-        self._rate_limit_resolver = rate_limit_resolver or resolve_turn_rate_limit
+        self._rate_limit_resolver = rate_limit_resolver or resolve_turn_rate_limit_resolution
+        self._account_rate_limit_resolver = account_rate_limit_resolver or resolve_account_rate_limit
         self._diagnostics_lock = threading.RLock()
         self._enabled_snapshot = False
         self._write_count = 0
@@ -240,6 +263,8 @@ class CodexUsageService:
         started_at = datetime.now(timezone.utc)
         model = resolve_codex_model(effective_argv)
         codex_home = _codex_home(env)
+        executable = _command_executable(effective_argv)
+        environment = dict(env) if env is not None else None
         enabled = await self.get_enabled()
         if not enabled:
             return CodexUsageCapture(
@@ -254,6 +279,8 @@ class CodexUsageService:
                 model=model,
                 started_at=started_at,
                 codex_home=codex_home,
+                executable=executable,
+                environment=environment,
             )
         try:
             provider = await self.resolve_current_provider(
@@ -279,6 +306,8 @@ class CodexUsageService:
             model=model,
             started_at=started_at,
             codex_home=codex_home,
+            executable=executable,
+            environment=environment,
         )
 
     capture_for_process = create_capture
@@ -340,9 +369,11 @@ class CodexUsageService:
         session_id: str,
         started_at: datetime,
         codex_home: Path,
+        executable: str,
+        environment: Mapping[str, str] | None,
     ) -> None:
         try:
-            sample = await asyncio.to_thread(
+            resolution = await asyncio.to_thread(
                 self._rate_limit_resolver,
                 session_id=session_id,
                 started_at=started_at,
@@ -351,6 +382,25 @@ class CodexUsageService:
         except Exception as exc:
             logger.warning("Codex 限额解析失败，已跳过: %s", type(exc).__name__)
             return
+        sample: CodexRateLimitSample | None = None
+        refresh_general = False
+        if isinstance(resolution, TurnRateLimitResolution):
+            sample = resolution.sample
+            refresh_general = resolution.refresh_general
+        elif isinstance(resolution, CodexRateLimitSample):
+            # Keep compatibility with injected legacy resolvers.
+            sample = resolution
+        if refresh_general:
+            try:
+                sample = await asyncio.to_thread(
+                    self._account_rate_limit_resolver,
+                    executable=executable,
+                    env=environment,
+                    limit_id="codex",
+                )
+            except Exception as exc:
+                logger.warning("Codex 通用限额主动查询失败，已跳过: %s", type(exc).__name__)
+                sample = None
         if sample is None:
             return
         try:

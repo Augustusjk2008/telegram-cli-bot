@@ -1,25 +1,19 @@
 import { ClipboardList, History, LoaderCircle, Maximize2, Minimize2, Network, Square } from "lucide-react";
-import { AgentSwitcher } from "./AgentSwitcher";
 import { toolbarButtonClass } from "./ToolbarButton";
-import type { AgentSummary, ChatExecutionMode } from "../services/types";
+import type { ChatExecutionMode } from "../services/types";
 
 type Props = {
   executionMode: ChatExecutionMode;
   supportedExecutionModes?: ChatExecutionMode[];
   executionModeDisabled?: boolean;
   onExecutionModeChange: (mode: ChatExecutionMode) => void;
-  agents: AgentSummary[];
-  activeAgentId: string;
-  agentDisabled?: boolean;
-  onSelectAgent: (agentId: string) => void;
-  showClusterToggle: boolean;
-  clusterMode: boolean;
-  clusterSaving: boolean;
-  clusterDisabled?: boolean;
-  onToggleClusterMode: () => void;
   planMode: boolean;
   planDisabled?: boolean;
   onTogglePlanMode: () => void;
+  clusterEnabled: boolean;
+  clusterDisabled?: boolean;
+  clusterSaving?: boolean;
+  onToggleClusterMode: () => void;
   embedded?: boolean;
   focused?: boolean;
   onToggleFocus?: () => void;
@@ -32,7 +26,6 @@ type Props = {
 const groupClassName = "inline-flex shrink-0 items-center gap-1";
 const neutralButtonClassName = toolbarButtonClass("ghost", "sm", "h-8 rounded-md border-transparent bg-transparent px-2 text-[var(--muted)]");
 const iconButtonClassName = toolbarButtonClass("ghost", "icon", "h-8 w-8 rounded-md border-transparent bg-transparent");
-const activeClusterButtonClassName = "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-[var(--accent-outline)] bg-[var(--accent-soft)] px-2 text-xs font-medium text-[var(--accent)] transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:opacity-60";
 const activePlanButtonClassName = "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-[var(--accent-outline)] bg-[var(--workbench-active-bg)] px-2 text-xs font-medium text-[var(--accent)] transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:opacity-60";
 const segmentedButtonClassName = "inline-flex h-8 shrink-0 items-center rounded-md border border-transparent px-2 text-xs font-medium text-[var(--muted)] transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:opacity-60";
 const activeSegmentedButtonClassName = "inline-flex h-8 shrink-0 items-center rounded-md border border-[var(--accent-outline)] bg-[var(--workbench-active-bg)] px-2 text-xs font-medium text-[var(--accent)] transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:opacity-60";
@@ -42,18 +35,13 @@ export function ChatActionBar({
   supportedExecutionModes = ["cli"],
   executionModeDisabled = false,
   onExecutionModeChange,
-  agents,
-  activeAgentId,
-  agentDisabled = false,
-  onSelectAgent,
-  showClusterToggle,
-  clusterMode,
-  clusterSaving,
-  clusterDisabled = false,
-  onToggleClusterMode,
   planMode,
   planDisabled = false,
   onTogglePlanMode,
+  clusterEnabled,
+  clusterDisabled = false,
+  clusterSaving = false,
+  onToggleClusterMode,
   embedded = false,
   focused = false,
   onToggleFocus,
@@ -90,36 +78,7 @@ export function ChatActionBar({
             </button>
           </div>
         ) : null}
-        {agents.length > 1 ? (
-          <div className={groupClassName} role="group" aria-label="聊天上下文">
-            <AgentSwitcher
-              agents={agents}
-              activeAgentId={activeAgentId}
-              disabled={agentDisabled}
-              onSelect={onSelectAgent}
-            />
-          </div>
-        ) : null}
         <div className={groupClassName} role="group" aria-label="聊天模式">
-          {showClusterToggle ? (
-            <button
-              type="button"
-              aria-pressed={clusterMode}
-              aria-label={clusterMode ? "关闭集群模式" : "开启集群模式"}
-              onClick={onToggleClusterMode}
-              disabled={clusterDisabled}
-              className={clusterMode
-                ? activeClusterButtonClassName
-                : neutralButtonClassName}
-            >
-              {clusterSaving ? (
-                <LoaderCircle className="h-4 w-4 animate-spin" />
-              ) : (
-                <Network className="h-4 w-4" />
-              )}
-              {clusterSaving ? "保存中" : "集群"}
-            </button>
-          ) : null}
           <button
             type="button"
             aria-pressed={planMode}
@@ -132,6 +91,19 @@ export function ChatActionBar({
           >
             <ClipboardList className="h-4 w-4" />
             计划
+          </button>
+          <button
+            type="button"
+            aria-pressed={clusterEnabled}
+            aria-label={clusterEnabled ? "关闭集群模式" : "开启集群模式"}
+            onClick={onToggleClusterMode}
+            disabled={clusterDisabled}
+            className={clusterEnabled
+              ? activePlanButtonClassName
+              : neutralButtonClassName}
+          >
+            {clusterSaving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Network className="h-4 w-4" />}
+            集群
           </button>
         </div>
         <div className={groupClassName} role="group" aria-label="聊天会话">

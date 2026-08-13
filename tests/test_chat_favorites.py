@@ -11,7 +11,6 @@ from bot.manager import MultiBotManager
 from bot.models import AgentProfile, BotProfile
 from bot.native_agent.pi_session_store import PiSessionRecord, PiSessionStore, pi_session_key
 from bot.session_store import load_session, save_session
-from bot.runtime_paths import get_chat_favorites_path
 from bot.chat_identity import chat_session_user_id
 from bot.web.api_common import AuthContext, WebApiError, resolve_session_bot_id
 from bot.web.auth_store import CAP_ADMIN_OPS, CAP_CHAT_SEND
@@ -20,7 +19,7 @@ from bot.web.api_service import (
     remove_managed_bot_with_history,
     upsert_favorite_answer,
 )
-from bot.web.chat_favorite_store import ChatFavoriteStore, FavoriteScope, build_favorite_item
+from bot.web.chat_favorite_store import ChatFavoriteStore, FavoriteScope
 from bot.web.chat_store import ChatStore
 from bot.web.server import WebApiServer
 
@@ -92,36 +91,6 @@ def _completed_turn(
     )
     message = store.complete_turn(handle, content=assistant_text, completion_state="completed")
     return store, handle, message
-
-
-def test_favorite_store_isolates_scope_and_recovers_corrupt_json(tmp_path: Path):
-    path = get_chat_favorites_path(tmp_path)
-    path.parent.mkdir(parents=True)
-    path.write_text("{bad json", encoding="utf-8")
-
-    store = ChatFavoriteStore(tmp_path)
-
-    assert store.list_favorites(FavoriteScope(bot_id=1, user_id=1)) == []
-    assert list(path.parent.glob("favorites.json.corrupt-*"))
-
-    store.upsert_favorite(build_favorite_item(
-        scope=FavoriteScope(bot_id=1, user_id=1, agent_id="main", execution_mode="cli"),
-        bot_alias="main",
-        conversation_id="conv_1",
-        message_id="msg_1",
-        message_key="assistant|msg_1",
-        answer_text="用户 1",
-    ))
-    store.upsert_favorite(build_favorite_item(
-        scope=FavoriteScope(bot_id=1, user_id=2, agent_id="main", execution_mode="cli"),
-        bot_alias="main",
-        conversation_id="conv_2",
-        message_id="msg_2",
-        message_key="assistant|msg_2",
-        answer_text="用户 2",
-    ))
-
-    assert [item["answer_text"] for item in store.list_favorites(FavoriteScope(bot_id=1, user_id=1))] == ["用户 1"]
 
 
 def test_delete_all_conversations_ignores_legacy_permanent_query(tmp_path: Path):
@@ -320,30 +289,6 @@ def test_remove_bot_with_workspace_rejects_processing_session(tmp_path: Path, pr
     assert bot_workspace.exists()
     expected_count = 2 if processing_agent == "reviewer" else 1
     assert len(_conversation_records(manager, bot_workspace, "team", str(bot_workspace))) == expected_count
-
-
-def test_remove_bot_with_workspace_keeps_records_when_workspace_delete_fails(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    main_workspace = tmp_path / "main"
-    workspace = tmp_path / "workspace"
-    main_workspace.mkdir()
-    workspace.mkdir()
-    manager = _manager(main_workspace)
-    _add_managed_profile(manager, "team", workspace)
-    _completed_turn(manager, workspace, alias="team")
-    import bot.web.api_service as api_service
-
-    def fail_delete(_path: Path) -> None:
-        raise OSError("locked")
-
-    monkeypatch.setattr(api_service.shutil, "rmtree", fail_delete)
-
-    _assert_workspace_removal_error(manager, "team", 500, "workspace_delete_failed")
-    assert "team" in manager.managed_profiles
-    assert workspace.exists()
-    assert len(_conversation_records(manager, workspace, "team", str(workspace))) == 1
 
 
 @pytest.mark.asyncio

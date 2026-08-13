@@ -1,11 +1,11 @@
 """会话快照持久化存储。
 
-按 (bot_id, user_id) 将会话相关状态保存到 JSON 文件，程序重启后可以恢复：
+按 (bot_id, user_id, agent_id) 保存会话相关状态，程序重启后可以恢复：
 - 各 CLI 的 session_id
 - 用户工作目录
 - 文件浏览目录
-- Web 端最小 overlay 快照
-- 运行中回复的最近快照
+
+默认后端是 SQLite；JSON 用于显式选择、SQLite 初始化失败后的自动回退和旧数据迁移。聊天消息、trace 和运行中回复由 ChatStore 管理，不写入此处。
 """
 
 import atexit
@@ -22,7 +22,7 @@ from bot.session_store_sqlite import SessionStoreSQLite
 logger = logging.getLogger(__name__)
 LOCAL_HISTORY_BACKEND = "local_v1"
 
-# 存储文件路径
+# JSON 回退及旧数据迁移路径；SQLite 默认使用同名 .sqlite3 文件。
 STORE_FILE = get_session_store_path()
 
 _store_lock = threading.RLock()
@@ -138,7 +138,7 @@ def load_session_ids() -> Dict[str, dict]:
     """加载所有持久化的会话ID
 
     Returns:
-        Dict[str, dict]: 键为 "bot_id:user_id"，值为 session 信息字典
+        Dict[str, dict]: main agent 键为 "bot_id:user_id"，child agent 键追加 ":agent_id"
     """
     if _using_sqlite():
         return _get_sqlite_store().load_all()

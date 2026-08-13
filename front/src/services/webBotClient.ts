@@ -96,6 +96,7 @@ import type {
   ConversationListResult,
   ConversationBulkDeleteResult,
   ConversationDeleteResult,
+  ConversationArchiveResult,
   FavoriteAnswerInput,
   FavoriteAnswerItem,
   FavoriteAnswerListResult,
@@ -233,6 +234,11 @@ export interface WebBotClient {
     conversationId: string,
     options?: AgentScopedOptions & { deleteNativeSession?: boolean },
   ): Promise<ConversationDeleteResult>;
+  archiveConversation(
+    botAlias: string,
+    conversationId: string,
+    options?: AgentScopedOptions,
+  ): Promise<ConversationArchiveResult>;
   deleteAllConversations(
     botAlias: string,
     options?: AgentScopedOptions & { deleteNativeSession?: boolean },

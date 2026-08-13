@@ -17,6 +17,7 @@ from bot.cluster.config import (
     normalize_agent_cluster_config,
     normalize_bot_cluster_config,
 )
+from bot.cluster.team import ClusterSlotStatus
 from bot.native_agent.legacy_migration import migrate_native_agent_payload
 
 if TYPE_CHECKING:
@@ -490,7 +491,31 @@ class BotProfile:
     default_execution_mode: str = "cli"
     native_agent: Dict[str, Any] = field(default_factory=dict)
 
+    def ensure_cluster_slots(self) -> list[ClusterSlotStatus]:
+        child_agents = [agent for agent in self.agents if agent.id != "main"]
+        existing_ids = {agent.id for agent in self.agents}
+        slot_number = 1
+        while len(child_agents) < self.cluster.max_parallel_agents:
+            while f"cluster-slot-{slot_number}" in existing_ids:
+                slot_number += 1
+            agent_id = f"cluster-slot-{slot_number}"
+            agent = AgentProfile(id=agent_id, name=f"集群槽位 {slot_number}")
+            self.agents.append(agent)
+            child_agents.append(agent)
+            existing_ids.add(agent_id)
+            slot_number += 1
+        return [
+            ClusterSlotStatus(
+                agent_id=agent.id,
+                ordinal=ordinal,
+                active=ordinal <= self.cluster.max_parallel_agents,
+            )
+            for ordinal, agent in enumerate(child_agents, start=1)
+        ]
+
     def to_dict(self) -> dict:
+        if self.cluster.enabled:
+            self.ensure_cluster_slots()
         supported_execution_modes, default_execution_mode = normalize_execution_mode_config(
             self.supported_execution_modes,
             self.default_execution_mode,
@@ -555,7 +580,7 @@ class BotProfile:
             data.get("default_execution_mode", data.get("defaultExecutionMode", "cli")),
         )
         
-        return cls(
+        profile = cls(
             alias=data["alias"],
             cli_type=normalize_cli_type_config(data.get("cli_type", CLI_TYPE)),
             cli_path=data.get("cli_path", CLI_PATH),
@@ -569,11 +594,14 @@ class BotProfile:
             default_execution_mode=default_execution_mode,
             native_agent=normalize_native_agent_config(data.get("native_agent", data.get("nativeAgent"))),
         )
+        if profile.cluster.enabled:
+            profile.ensure_cluster_slots()
+        return profile
 
 
 @dataclass
 class UserSession:
-    """按 (bot_id, user_id) 隔离的用户会话状态"""
+    """按 (bot_id, user_id, agent_id) 隔离的用户会话状态"""
 
     bot_id: int
     bot_alias: str

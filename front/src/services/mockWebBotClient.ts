@@ -17,6 +17,7 @@ import type {
   ChatSendOptions,
   ConversationBulkDeleteResult,
   ConversationDeleteResult,
+  ConversationArchiveResult,
   ConversationListResult,
   FavoriteAnswerInput,
   FavoriteAnswerItem,
@@ -277,7 +278,7 @@ const MOCK_CLI_MODEL_OPTIONS = [
 ];
 const DEFAULT_CLUSTER = {
   enabled: false,
-  writePolicy: "selected_agents" as const,
+  writePolicy: "main_only" as const,
   conflictPolicy: "snapshot_diff" as const,
   maxParallelAgents: 2,
   defaultTimeoutSeconds: 600,
@@ -4068,6 +4069,10 @@ export class MockWebBotClient implements WebBotClient {
         degraded: false,
         degradedReason: "",
       } : {}),
+      ...(agentId === "main" ? {
+        clusterTeam: { version: 1, assignments: [] },
+        clusterTeamRevision: 0,
+      } : {}),
       createdAt: messages[0]?.createdAt || now,
       updatedAt: messages[messages.length - 1]?.createdAt || now,
     };
@@ -4112,6 +4117,10 @@ export class MockWebBotClient implements WebBotClient {
         rollbackSupported: true,
         degraded: false,
         degradedReason: "",
+      } : {}),
+      ...(agentId === "main" ? {
+        clusterTeam: { version: 1, assignments: [] },
+        clusterTeamRevision: 0,
       } : {}),
       createdAt: now,
       updatedAt: now,
@@ -4249,6 +4258,37 @@ export class MockWebBotClient implements WebBotClient {
       deletedFavoriteCount: 0,
       activeConversationId: this.activeConversationByBot.get(key) || "",
       nativeSessionCleared: Boolean(options.deleteNativeSession),
+      items: nextItems,
+      ...(wasActive ? { messages: [] } : {}),
+    };
+  }
+
+  async archiveConversation(
+    botAlias: string,
+    conversationId: string,
+    options: AgentScopedOptions = {},
+  ): Promise<ConversationArchiveResult> {
+    const agentId = options.agentId || "main";
+    const key = this.getConversationKey(botAlias, agentId);
+    const items = this.ensureConversations(botAlias, agentId);
+    const conversation = items.find((item) => item.id === conversationId);
+    if (!conversation) {
+      throw new WebApiClientError("未找到会话", { status: 404, code: "conversation_not_found" });
+    }
+    const wasActive = (this.activeConversationByBot.get(key) || "") === conversationId || conversation.active;
+    const nextItems = items.filter((item) => item.id !== conversationId);
+    this.conversationsByBot.set(key, nextItems);
+    if (wasActive) {
+      this.activeConversationByBot.set(key, "");
+      if (agentId === "main") {
+        mockChatMessages[botAlias] = [];
+      } else {
+        mockChatMessages[this.agentKey(botAlias, agentId)] = [];
+      }
+    }
+    return {
+      archivedConversationId: conversationId,
+      activeConversationId: this.activeConversationByBot.get(key) || "",
       items: nextItems,
       ...(wasActive ? { messages: [] } : {}),
     };

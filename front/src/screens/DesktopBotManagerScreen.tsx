@@ -24,6 +24,7 @@ import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
 import { NativeAgentConfigFields } from "../components/NativeAgentConfigFields";
 import { StatusPill } from "../components/StatusPill";
 import { MockWebBotClient } from "../services/mockWebBotClient";
+import { WebApiClientError } from "../services/types";
 import { getBotAccentColor, getBotAccentStyle } from "../utils/botVisual";
 import type {
   BotClusterConfig,
@@ -31,6 +32,8 @@ import type {
   ChatExecutionMode,
   CliType,
   CliParamsPayload,
+  ClusterResizeBlockedData,
+  ClusterResizeBlocker,
   ClusterStatus,
   UpdateBotWorkdirOptions,
   WorkdirChangeConflict,
@@ -82,7 +85,7 @@ const INSPECTOR_DEFAULT_WIDTH = 400;
 const DELETE_WORKSPACE_CONFIRM_TEXT = "永久删除";
 const DEFAULT_CLUSTER_CONFIG: BotClusterConfig = {
   enabled: false,
-  writePolicy: "selected_agents",
+  writePolicy: "main_only",
   conflictPolicy: "snapshot_diff",
   maxParallelAgents: 2,
   defaultTimeoutSeconds: 600,
@@ -486,6 +489,7 @@ function EditPanel({
   nativeAgentFeatureEnabled,
   onCancel,
   onSaved,
+  onOpenConversation,
   onDirtyChange,
 }: {
   bot: BotSummary;
@@ -496,6 +500,7 @@ function EditPanel({
   nativeAgentFeatureEnabled: boolean | null;
   onCancel: () => void;
   onSaved: (alias: string) => void;
+  onOpenConversation: (alias: string) => void;
   onDirtyChange: (dirty: boolean) => void;
 }) {
   const [draft, setDraft] = useState<EditDraft>(draftFromBot(bot));
@@ -506,6 +511,8 @@ function EditPanel({
   const [cliParams, setCliParams] = useState<CliParamsPayload | null>(null);
   const [clusterSaving, setClusterSaving] = useState(false);
   const [clusterError, setClusterError] = useState("");
+  const [clusterResizeBlocked, setClusterResizeBlocked] = useState<ClusterResizeBlockedData | null>(null);
+  const [clusterBlockerAction, setClusterBlockerAction] = useState("");
   const dirty = !draftEquals(draft, draftFromBot(bot));
   const directoryBrowserAlias = manager.bots.find((item) => isMainBot(item))?.alias || manager.bots[0]?.alias || "main";
   const nativeAgentOptionVisible = nativeAgentFeatureEnabled !== false || draft.runtimeBackend === "native_agent";
@@ -514,6 +521,7 @@ function EditPanel({
     setDraft(draftFromBot(bot));
     setClusterConfig(clusterConfigFromBot(bot));
     setPendingWorkdirConflict(null);
+    setClusterResizeBlocked(null);
   }, [bot]);
 
   useEffect(() => {
@@ -594,10 +602,54 @@ function EditPanel({
       });
       setClusterConfig(result.cluster);
       setClusterStatus(result.status);
+      setClusterResizeBlocked(null);
+      await manager.loadBots();
     } catch (err) {
+      if (
+        err instanceof WebApiClientError
+        && (err.code === "cluster_resize_blocked" || (err.data as { code?: string } | undefined)?.code === "cluster_resize_blocked")
+      ) {
+        setClusterResizeBlocked(err.data as ClusterResizeBlockedData);
+      }
       setClusterError(err instanceof Error ? err.message : "保存集群配置失败");
     } finally {
       setClusterSaving(false);
+    }
+  }
+
+  async function openBlockingConversation(blocker: ClusterResizeBlocker) {
+    setClusterBlockerAction(`open:${blocker.conversationId}`);
+    setClusterError("");
+    try {
+      await manager.client.selectConversation(bot.alias, blocker.conversationId, {
+        agentId: "main",
+        executionMode: blocker.executionMode,
+      });
+      onOpenConversation(bot.alias);
+    } catch (err) {
+      setClusterError(err instanceof Error ? err.message : "打开阻塞会话失败");
+    } finally {
+      setClusterBlockerAction("");
+    }
+  }
+
+  async function archiveBlockingConversation(blocker: ClusterResizeBlocker) {
+    setClusterBlockerAction(`archive:${blocker.conversationId}`);
+    setClusterError("");
+    try {
+      await manager.client.archiveConversation(bot.alias, blocker.conversationId, {
+        agentId: "main",
+        executionMode: blocker.executionMode,
+      });
+      setClusterResizeBlocked((current) => {
+        if (!current) return current;
+        const blockers = current.blockers.filter((item) => item.conversationId !== blocker.conversationId);
+        return blockers.length > 0 ? { ...current, blockers } : null;
+      });
+    } catch (err) {
+      setClusterError(err instanceof Error ? err.message : "归档阻塞会话失败");
+    } finally {
+      setClusterBlockerAction("");
     }
   }
 
@@ -763,14 +815,48 @@ function EditPanel({
             {clusterSaving ? <span className="text-xs text-[var(--muted)]">保存中...</span> : null}
           </div>
           {clusterError ? <div className="text-sm text-red-700">{clusterError}</div> : null}
+          {clusterResizeBlocked ? (
+            <section role="alert" aria-label="缩容受阻" className="rounded-lg border border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] p-3 text-sm text-[var(--text)]">
+              <div className="font-medium">集群规模暂时无法缩小到 {clusterResizeBlocked.targetSize}</div>
+              <p className="mt-1 text-xs text-[var(--muted)]">至少需要 {clusterResizeBlocked.minimumSize} 个槽位。请打开会话要求主 Agent 重新编组，或归档不再需要的会话。</p>
+              <div className="mt-3 space-y-2">
+                {clusterResizeBlocked.blockers.map((blocker) => (
+                  <div key={blocker.conversationId} className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--surface)] p-2">
+                    <div className="font-medium">{blocker.title || "新会话"}</div>
+                    <div className="mt-1 text-xs text-[var(--muted)]">
+                      当前角色 {blocker.roleCount}；超出槽位：{blocker.outsideAgentIds.join("、") || "运行中任务"}
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void openBlockingConversation(blocker)}
+                        disabled={Boolean(clusterBlockerAction)}
+                        className="h-8 rounded-md border border-[var(--border)] px-2 text-xs hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                      >
+                        {clusterBlockerAction === `open:${blocker.conversationId}` ? "打开中..." : "打开会话"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void archiveBlockingConversation(blocker)}
+                        disabled={Boolean(clusterBlockerAction)}
+                        className="h-8 rounded-md border border-[var(--border)] px-2 text-xs hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                      >
+                        {clusterBlockerAction === `archive:${blocker.conversationId}` ? "归档中..." : "归档会话"}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
           {clusterStatus ? (
             <section className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4">
               <h2 className="text-base font-semibold text-[var(--text)]">集群运行参数</h2>
               <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <label className="grid gap-1 text-sm">
-                  <span className="font-medium text-[var(--text)]">并发子 agent 数</span>
+                  <span className="font-medium text-[var(--text)]">集群规模</span>
                   <select
-                    aria-label="并发子 agent 数"
+                    aria-label="集群规模"
                     value={clusterConfig.maxParallelAgents}
                     disabled={!canConfigureBot || clusterSaving}
                     onChange={(event) => void saveCluster({ maxParallelAgents: Number(event.target.value) })}
@@ -780,6 +866,32 @@ function EditPanel({
                       <option key={count} value={count}>{count}</option>
                     ))}
                   </select>
+                </label>
+                <label className="grid gap-1 text-sm">
+                  <span className="font-medium text-[var(--text)]">子 Agent 写入策略</span>
+                  <select
+                    aria-label="子 Agent 写入策略"
+                    value={clusterConfig.writePolicy}
+                    disabled={!canConfigureBot || clusterSaving}
+                    onChange={(event) => void saveCluster({ writePolicy: event.target.value as BotClusterConfig["writePolicy"] })}
+                    className="h-9 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 text-sm"
+                  >
+                    <option value="main_only">仅主 Agent 可写</option>
+                    <option value="all_agents">允许子 Agent 按任务申请写入</option>
+                  </select>
+                </label>
+                <label className="grid gap-1 text-sm">
+                  <span className="font-medium text-[var(--text)]">任务超时（秒）</span>
+                  <input
+                    aria-label="任务超时（秒）"
+                    type="number"
+                    min={60}
+                    max={3600}
+                    value={clusterConfig.defaultTimeoutSeconds}
+                    disabled={!canConfigureBot || clusterSaving}
+                    onChange={(event) => void saveCluster({ defaultTimeoutSeconds: Number(event.target.value) })}
+                    className="h-9 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 text-sm"
+                  />
                 </label>
               </div>
             </section>
@@ -795,15 +907,17 @@ function EditPanel({
               onReasoningChange={(reasoningEfforts) => void saveCluster({ reasoningEfforts })}
             />
           ) : null}
-          <ClusterTemplatePanel
-            botAlias={bot.alias}
-            client={manager.client}
-            canManage={canConfigureBot && !clusterSaving}
-            onApplied={() => {
-              void manager.loadBots();
-              void manager.client.getClusterStatus(bot.alias).then(setClusterStatus).catch(() => undefined);
-            }}
-          />
+          {!clusterConfig.enabled ? (
+            <ClusterTemplatePanel
+              botAlias={bot.alias}
+              client={manager.client}
+              canManage={canConfigureBot && !clusterSaving}
+              onApplied={() => {
+                void manager.loadBots();
+                void manager.client.getClusterStatus(bot.alias).then(setClusterStatus).catch(() => undefined);
+              }}
+            />
+          ) : null}
           <ClusterSetupPanel botAlias={bot.alias} client={manager.client} canManage={canConfigureBot} />
       </div>
 
@@ -1257,7 +1371,7 @@ export function DesktopBotManagerScreen({
     const tabs: Array<{ id: InspectorTab; label: string }> = [
       { id: "overview", label: "概览" },
       { id: "config", label: "配置" },
-      { id: "agents", label: "Agent" },
+      ...(!focusedBot?.cluster?.enabled ? [{ id: "agents" as const, label: "Agent" }] : []),
     ];
 
     return (
@@ -1611,9 +1725,10 @@ export function DesktopBotManagerScreen({
                     setFocusedAlias(alias);
                     setInspectorTab("overview");
                   }}
+                  onOpenConversation={onSelect}
                   onDirtyChange={setDirty}
                 />
-              ) : inspectorTab === "agents" ? (
+              ) : inspectorTab === "agents" && !focusedBot.cluster?.enabled ? (
                 <AgentSettingsPanel
                   botAlias={focusedBot.alias}
                   client={client}

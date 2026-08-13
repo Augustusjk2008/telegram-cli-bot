@@ -14,6 +14,7 @@ from threading import Lock
 from typing import Any
 import threading
 
+from bot.cluster.team import ClusterTeamChangedError, ConversationTeam
 from bot.native_agent.legacy_migration import migrate_native_session_meta
 from bot.runtime_paths import (
     get_chat_history_db_path,
@@ -431,6 +432,10 @@ class ChatStore:
                 pinned INTEGER NOT NULL DEFAULT 0,
                 archived_at TEXT,
                 revision INTEGER NOT NULL DEFAULT 0,
+                cluster_team_json TEXT,
+                cluster_team_revision INTEGER NOT NULL DEFAULT 0,
+                cluster_parent_conversation_id TEXT,
+                cluster_assignment_revision INTEGER,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -535,11 +540,25 @@ class ChatStore:
             "pinned": "INTEGER NOT NULL DEFAULT 0",
             "archived_at": "TEXT",
             "revision": "INTEGER NOT NULL DEFAULT 0",
+            "cluster_team_json": "TEXT",
+            "cluster_team_revision": "INTEGER NOT NULL DEFAULT 0",
+            "cluster_parent_conversation_id": "TEXT",
+            "cluster_assignment_revision": "INTEGER",
             "created_at": "TEXT NOT NULL DEFAULT ''",
             "updated_at": "TEXT NOT NULL DEFAULT ''",
         }
         for column_name, column_type in conversation_columns.items():
             self._ensure_column(conn, "conversations", column_name, column_type)
+        conn.execute(
+            """
+            UPDATE conversations
+            SET cluster_team_json = ?
+            WHERE agent_id = 'main'
+              AND COALESCE(cluster_parent_conversation_id, '') = ''
+              AND COALESCE(TRIM(cluster_team_json), '') = ''
+            """,
+            (ConversationTeam().to_json(),),
+        )
         self._ensure_column(conn, "turns", "trace_recovery_attempted_at", "TEXT")
         self._ensure_column(conn, "turns", "trace_recovery_status", "TEXT")
         self._ensure_column(conn, "turns", "context_usage_json", "TEXT")
@@ -558,6 +577,12 @@ class ChatStore:
             """
             CREATE INDEX IF NOT EXISTS idx_conversations_agent_scope_updated
             ON conversations(bot_id, user_id, agent_id, working_dir, archived_at, pinned, updated_at)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_conversations_cluster_parent
+            ON conversations(cluster_parent_conversation_id, agent_id, cluster_assignment_revision, archived_at)
             """
         )
 
@@ -805,9 +830,13 @@ class ChatStore:
                 message_count,
                 pinned,
                 archived_at,
+                cluster_team_json,
+                cluster_team_revision,
+                cluster_parent_conversation_id,
+                cluster_assignment_revision,
                 created_at,
                 updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 conversation_id,
@@ -828,6 +857,10 @@ class ChatStore:
                 0,
                 0,
                 None,
+                ConversationTeam().to_json(),
+                0,
+                None,
+                None,
                 now,
                 now,
             ),
@@ -836,6 +869,8 @@ class ChatStore:
 
     def _conversation_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
         native_session_meta = migrate_native_session_meta(_parse_json_dict(row["native_session_meta_json"]))
+        cluster_team = ConversationTeam.from_json(row["cluster_team_json"])
+        assignment_revision = row["cluster_assignment_revision"]
         return {
             "id": str(row["id"]),
             "bot_id": int(row["bot_id"]),
@@ -855,6 +890,12 @@ class ChatStore:
             "message_count": int(row["message_count"] or 0),
             "pinned": bool(row["pinned"]),
             "archived_at": str(row["archived_at"] or ""),
+            "cluster_team": cluster_team.to_dict(),
+            "cluster_team_revision": int(row["cluster_team_revision"] or 0),
+            "cluster_parent_conversation_id": str(row["cluster_parent_conversation_id"] or ""),
+            "cluster_assignment_revision": (
+                int(assignment_revision) if assignment_revision is not None else None
+            ),
             "created_at": str(row["created_at"] or ""),
             "updated_at": str(row["updated_at"] or ""),
         }
@@ -872,10 +913,19 @@ class ChatStore:
         native_provider: str,
         title: str = "",
         agent_prompt_hash: str | None = None,
+        cluster_parent_conversation_id: str | None = None,
+        cluster_assignment_revision: int | None = None,
     ) -> str:
         now = _utc_now()
         conversation_id = f"conv_{uuid.uuid4().hex}"
         normalized_title = str(title or "").strip()
+        normalized_parent_id = str(cluster_parent_conversation_id or "").strip() or None
+        normalized_assignment_revision: int | None = None
+        if cluster_assignment_revision is not None:
+            normalized_assignment_revision = int(cluster_assignment_revision)
+            if normalized_assignment_revision < 1:
+                raise ValueError("cluster_assignment_revision 必须是正整数")
+        cluster_team_json = None if normalized_parent_id else ConversationTeam().to_json()
         with self._connect_for_write() as conn:
             conn.execute(
                 """
@@ -898,9 +948,13 @@ class ChatStore:
                     message_count,
                     pinned,
                     archived_at,
+                    cluster_team_json,
+                    cluster_team_revision,
+                    cluster_parent_conversation_id,
+                    cluster_assignment_revision,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     conversation_id,
@@ -921,6 +975,10 @@ class ChatStore:
                     0,
                     0,
                     None,
+                    cluster_team_json,
+                    0,
+                    normalized_parent_id,
+                    normalized_assignment_revision,
                     now,
                     now,
                 ),
@@ -940,6 +998,201 @@ class ChatStore:
                 if row is None:
                     raise KeyError(conversation_id)
                 return self._conversation_from_row(row)
+
+    @staticmethod
+    def _cluster_team_state(conversation: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "cluster_team": conversation["cluster_team"],
+            "cluster_team_revision": conversation["cluster_team_revision"],
+        }
+
+    def get_conversation_team(self, conversation_id: str) -> dict[str, Any]:
+        return self._cluster_team_state(self.get_conversation(conversation_id))
+
+    def update_conversation_team(
+        self,
+        conversation_id: str,
+        team: ConversationTeam | dict[str, Any] | None,
+        *,
+        expected_revision: int,
+    ) -> dict[str, Any]:
+        normalized_id = str(conversation_id or "").strip()
+        normalized_expected_revision = int(expected_revision)
+        if normalized_expected_revision < 0:
+            raise ValueError("expected_revision 不能为负数")
+        normalized_team = ConversationTeam.from_value(team)
+        now = _utc_now()
+        with self._connect_for_write() as conn:
+            result = conn.execute(
+                """
+                UPDATE conversations
+                SET cluster_team_json = ?,
+                    cluster_team_revision = cluster_team_revision + 1,
+                    updated_at = ?
+                WHERE id = ?
+                  AND COALESCE(cluster_parent_conversation_id, '') = ''
+                  AND cluster_team_revision = ?
+                """,
+                (
+                    normalized_team.to_json(),
+                    now,
+                    normalized_id,
+                    normalized_expected_revision,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM conversations WHERE id = ?",
+                (normalized_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(normalized_id)
+            conversation = self._conversation_from_row(row)
+            if result.rowcount == 0:
+                if conversation["cluster_parent_conversation_id"]:
+                    raise ValueError("子会话不能保存主会话编组")
+                current_state = self._cluster_team_state(conversation)
+                raise ClusterTeamChangedError(
+                    normalized_id,
+                    normalized_expected_revision,
+                    current_state,
+                )
+            return self._cluster_team_state(conversation)
+
+    def find_active_cluster_child_conversation(
+        self,
+        *,
+        parent_conversation_id: str,
+        agent_id: str,
+        assignment_revision: int,
+        execution_mode: str,
+    ) -> dict[str, Any] | None:
+        conn = self._connect(create=False)
+        if conn is None:
+            return None
+        normalized_parent_id = str(parent_conversation_id or "").strip()
+        normalized_agent_id = str(agent_id or "").strip()
+        normalized_assignment_revision = int(assignment_revision)
+        normalized_mode = str(execution_mode or "").strip().lower()
+        if normalized_assignment_revision < 1:
+            raise ValueError("assignment_revision 必须是正整数")
+        provider_clause = "AND native_provider = ?"
+        provider_params: list[Any] = [normalized_mode]
+        if normalized_mode == "cli":
+            provider_clause = "AND COALESCE(native_provider, '') != 'native_agent'"
+            provider_params = []
+        with closing(conn):
+            with conn:
+                row = conn.execute(
+                    f"""
+                    SELECT *
+                    FROM conversations
+                    WHERE cluster_parent_conversation_id = ?
+                      AND agent_id = ?
+                      AND cluster_assignment_revision = ?
+                      AND archived_at IS NULL
+                      AND status = 'active'
+                      {provider_clause}
+                    ORDER BY updated_at DESC, created_at DESC, id DESC
+                    LIMIT 1
+                    """,
+                    [
+                        normalized_parent_id,
+                        normalized_agent_id,
+                        normalized_assignment_revision,
+                        *provider_params,
+                    ],
+                ).fetchone()
+        return self._conversation_from_row(row) if row is not None else None
+
+    def deactivate_cluster_child_conversations(self, parent_conversation_id: str) -> int:
+        normalized_parent_id = str(parent_conversation_id or "").strip()
+        if not normalized_parent_id:
+            return 0
+        now = _utc_now()
+        with self._connect_for_write() as conn:
+            result = conn.execute(
+                """
+                UPDATE conversations
+                SET status = 'inactive',
+                    native_session_id = NULL,
+                    native_session_meta_json = NULL,
+                    updated_at = ?
+                WHERE cluster_parent_conversation_id = ?
+                  AND archived_at IS NULL
+                  AND status = 'active'
+                """,
+                (now, normalized_parent_id),
+            )
+        return max(0, int(result.rowcount or 0))
+
+    def list_cluster_resize_blockers(
+        self,
+        *,
+        bot_id: int,
+        slot_agent_ids: list[str] | tuple[str, ...],
+        target_size: int,
+    ) -> list[dict[str, Any]]:
+        conn = self._connect(create=False)
+        if conn is None:
+            return []
+        normalized_slot_ids = list(
+            dict.fromkeys(
+                agent_id
+                for agent_id in (str(value or "").strip() for value in slot_agent_ids)
+                if agent_id
+            )
+        )
+        normalized_target_size = max(0, min(int(target_size), len(normalized_slot_ids)))
+        active_agent_ids = set(normalized_slot_ids[:normalized_target_size])
+        slot_positions = {
+            agent_id: ordinal
+            for ordinal, agent_id in enumerate(normalized_slot_ids, start=1)
+        }
+        with closing(conn):
+            with conn:
+                rows = conn.execute(
+                    """
+                    SELECT *
+                    FROM conversations
+                    WHERE bot_id = ?
+                      AND agent_id = 'main'
+                      AND COALESCE(cluster_parent_conversation_id, '') = ''
+                      AND archived_at IS NULL
+                    ORDER BY updated_at DESC, created_at DESC, id DESC
+                    """,
+                    (int(bot_id),),
+                ).fetchall()
+
+        blockers: list[dict[str, Any]] = []
+        for row in rows:
+            conversation = self._conversation_from_row(row)
+            assignments = conversation["cluster_team"]["assignments"]
+            outside_agent_ids = [
+                str(assignment["agent_id"])
+                for assignment in assignments
+                if str(assignment["agent_id"]) not in active_agent_ids
+            ]
+            if not outside_agent_ids:
+                continue
+            minimum_size = max(
+                slot_positions.get(agent_id, len(normalized_slot_ids) + 1)
+                for agent_id in outside_agent_ids
+            )
+            blockers.append(
+                {
+                    "conversation_id": conversation["id"],
+                    "title": conversation["title"],
+                    "execution_mode": (
+                        "native_agent"
+                        if conversation["native_provider"] == "native_agent"
+                        else "cli"
+                    ),
+                    "role_count": len(assignments),
+                    "outside_agent_ids": outside_agent_ids,
+                    "minimum_size": minimum_size,
+                }
+            )
+        return blockers
 
     def get_conversation_native_provider(self, conversation_id: str) -> str:
         conn = self._connect(create=False)
@@ -3174,6 +3427,28 @@ class ChatStore:
         with closing(conn):
             with conn:
                 conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+
+    def archive_conversation_by_id(self, conversation_id: str) -> bool:
+        normalized_id = str(conversation_id or "").strip()
+        if not normalized_id:
+            return False
+        conn = self._connect(create=False)
+        if conn is None:
+            return False
+        now = _utc_now()
+        with closing(conn):
+            with conn:
+                result = conn.execute(
+                    """
+                    UPDATE conversations
+                    SET archived_at = COALESCE(archived_at, ?),
+                        status = 'archived',
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (now, now, normalized_id),
+                )
+        return bool(result.rowcount)
 
     def archive_bot_conversations(
         self,

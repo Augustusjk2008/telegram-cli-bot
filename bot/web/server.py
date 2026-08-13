@@ -189,6 +189,7 @@ from .api_service import (
     change_working_directory,
     create_agent,
     create_conversation,
+    archive_conversation,
     delete_all_conversations,
     delete_conversation,
     delete_favorite_answer,
@@ -3609,15 +3610,13 @@ class WebApiServer:
         agent_id = self._request_agent_id(request, body)
         execution_mode = self._request_execution_mode(request, body, include_query=False)
         chat_user_id = self._chat_user_id(auth)
-        data = await run_chat_store_io(
-            create_conversation,
+        data = await create_conversation(
             self.manager,
             alias,
             chat_user_id,
             str(body.get("title") or ""),
             agent_id=agent_id,
             execution_mode=execution_mode,
-            write_key=f"{alias}:{chat_user_id}:{agent_id}",
         )
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
@@ -3646,7 +3645,7 @@ class WebApiServer:
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         agent_id = self._request_agent_id(request, body)
-        data = execute_plan(
+        data = await execute_plan(
             self.manager,
             alias,
             self._chat_user_id(auth),
@@ -3665,15 +3664,13 @@ class WebApiServer:
         agent_id = self._request_agent_id(request, body)
         execution_mode = self._request_execution_mode(request, body, include_query=False)
         chat_user_id = self._chat_user_id(auth)
-        data = await run_chat_store_io(
-            select_conversation,
+        data = await select_conversation(
             self.manager,
             alias,
             chat_user_id,
             conversation_id,
             agent_id=agent_id,
             execution_mode=execution_mode,
-            write_key=f"{alias}:{chat_user_id}:{agent_id}",
         )
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
@@ -3685,8 +3682,7 @@ class WebApiServer:
         delete_native = str(request.query.get("delete_native_session", "")).lower() in {"1", "true", "yes", "on"}
         execution_mode = self._request_execution_mode(request, include_body=False)
         chat_user_id = self._chat_user_id(auth)
-        data = await run_chat_store_io(
-            delete_conversation,
+        data = await delete_conversation(
             self.manager,
             alias,
             chat_user_id,
@@ -3694,7 +3690,24 @@ class WebApiServer:
             agent_id=agent_id,
             delete_native_session=delete_native,
             execution_mode=execution_mode,
-            write_key=f"{alias}:{chat_user_id}:{agent_id}",
+        )
+        return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
+
+    async def post_conversation_archive_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_CHAT_SEND)
+        alias = self._manager_alias(request)
+        conversation_id = request.match_info.get("conversation_id", "")
+        body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
+        agent_id = self._request_agent_id(request, body)
+        execution_mode = self._request_execution_mode(request, body, include_query=False)
+        chat_user_id = self._chat_user_id(auth)
+        data = await archive_conversation(
+            self.manager,
+            alias,
+            chat_user_id,
+            conversation_id,
+            agent_id=agent_id,
+            execution_mode=execution_mode,
         )
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 

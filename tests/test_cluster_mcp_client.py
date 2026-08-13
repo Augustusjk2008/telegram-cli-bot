@@ -2,6 +2,8 @@ import io
 import json
 import urllib.error
 
+import pytest
+
 from bot.cluster.mcp_client import McpBridgeConfig, post_mcp_tool
 
 
@@ -23,7 +25,11 @@ def _http_error(url: str, status: int, body: bytes = b"") -> urllib.error.HTTPEr
     return urllib.error.HTTPError(url, status, "Bad Gateway", {}, io.BytesIO(body))
 
 
-def test_post_mcp_tool_retries_transient_bad_gateway(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "tool_name",
+    ["cluster_status", "list_agents", "poll_agent_tasks", "wait_agent_messages"],
+)
+def test_post_mcp_tool_retries_read_only_tools_after_transient_bad_gateway(monkeypatch, tool_name: str) -> None:
     config = McpBridgeConfig(bridge_url="http://bridge.test", token="token")
     attempts: list[str] = []
 
@@ -34,8 +40,9 @@ def test_post_mcp_tool_retries_transient_bad_gateway(monkeypatch) -> None:
         return _Response({"ok": True, "data": {"status": "ok"}})
 
     monkeypatch.setattr("bot.cluster.mcp_client.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("bot.cluster.mcp_client.time.sleep", lambda _seconds: None)
 
-    result = post_mcp_tool(config, "poll_agent_tasks", {"task_ids": ["clt_1"]}, run_id="clr_1")
+    result = post_mcp_tool(config, tool_name, {}, run_id="clr_1")
 
     assert result == {"ok": True, "data": {"status": "ok"}}
     assert len(attempts) == 2
@@ -55,3 +62,21 @@ def test_post_mcp_tool_reports_context_when_bad_gateway_persists(monkeypatch) ->
     assert result["status"] == 502
     assert "HTTP 502" in str(result["error"])
     assert "poll_agent_tasks" in str(result["error"])
+
+
+@pytest.mark.parametrize("tool_name", ["configure_team", "ask_agent", "new_agent_session"])
+def test_post_mcp_tool_does_not_retry_side_effecting_tools(monkeypatch, tool_name: str) -> None:
+    config = McpBridgeConfig(bridge_url="http://bridge.test", token="token")
+    attempts: list[str] = []
+
+    def fake_urlopen(request, timeout):
+        attempts.append(request.full_url)
+        raise _http_error(request.full_url, 502)
+
+    monkeypatch.setattr("bot.cluster.mcp_client.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("bot.cluster.mcp_client.time.sleep", lambda _seconds: None)
+
+    result = post_mcp_tool(config, tool_name, {}, run_id="clr_1")
+
+    assert result["ok"] is False
+    assert len(attempts) == 1

@@ -154,6 +154,151 @@ test("binds stream metadata to the placeholder before a deferred final and repla
   expect(document.querySelectorAll('[data-message-id="assistant-stream-bound"]')).toHaveLength(1);
 });
 
+test("cluster chat stays on the main Agent, preserves @ text, and sends no dispatch fields", async () => {
+  const user = userEvent.setup();
+  const cluster = {
+    enabled: true,
+    writePolicy: "main_only" as const,
+    conflictPolicy: "snapshot_diff" as const,
+    maxParallelAgents: 3,
+    defaultTimeoutSeconds: 600,
+    modelTiers: { low: "", medium: "", high: "" },
+    reasoningEfforts: { low: "", medium: "", high: "" },
+  };
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async () => ({
+    id: "assistant-cluster-main",
+    role: "assistant",
+    text: "已由主 Agent 处理",
+    createdAt: "2026-08-12T00:00:00Z",
+    state: "done",
+  }));
+  const client = createClient({
+    getBotOverview: vi.fn(async (): Promise<BotOverview> => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+      cluster,
+      agents: [
+        { id: "main", name: "主 Agent", systemPrompt: "", enabled: true, isMain: true },
+        { id: "cluster-slot-1", name: "旧静态角色", systemPrompt: "", enabled: true, isMain: false },
+      ],
+    })),
+    listAgents: vi.fn(async () => ({ items: [
+      { id: "main", name: "主 Agent", systemPrompt: "", enabled: true, isMain: true },
+      { id: "cluster-slot-1", name: "旧静态角色", systemPrompt: "", enabled: true, isMain: false },
+    ] })),
+    listConversations: vi.fn<WebBotClient["listConversations"]>(async (): Promise<ConversationListResult> => ({
+      activeConversationId: "conv-main",
+      items: [{
+        id: "conv-main",
+        title: "当前会话",
+        lastMessagePreview: "",
+        messageCount: 0,
+        pinned: false,
+        active: true,
+        status: "active",
+        botAlias: "main",
+        cliType: "codex",
+        agentId: "main",
+        workingDir: "C:\\workspace",
+        clusterTeam: { version: 1, assignments: [] },
+        clusterTeamRevision: 0,
+        createdAt: "2026-08-12T00:00:00Z",
+        updatedAt: "2026-08-12T00:00:00Z",
+      }],
+    })),
+    sendMessage,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  await screen.findByText("暂无消息，开始聊天吧");
+  expect(screen.queryByTestId("cluster-team-panel")).not.toBeInTheDocument();
+  expect(screen.queryByRole("combobox", { name: "当前 agent" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "关闭集群模式" })).toHaveAttribute("aria-pressed", "true");
+
+  await user.type(screen.getByPlaceholderText("输入消息"), "@reviewer 请审查");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+  await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+
+  expect(sendMessage.mock.calls[0][1]).toBe("@reviewer 请审查");
+  const sendOptions = sendMessage.mock.calls[0][5] as unknown as Record<string, unknown>;
+  expect(sendOptions).not.toHaveProperty("cluster");
+  expect(sendOptions).not.toHaveProperty("mentions");
+});
+
+test("toggles the Bot cluster config from chat and only shows an assigned enabled team", async () => {
+  const user = userEvent.setup();
+  const cluster = {
+    enabled: false,
+    writePolicy: "all_agents" as const,
+    conflictPolicy: "block_same_file" as const,
+    maxParallelAgents: 2,
+    defaultTimeoutSeconds: 900,
+    modelTiers: { low: "fast-model", medium: "", high: "strong-model" },
+    reasoningEfforts: { low: "low", medium: "medium", high: "high" },
+  };
+  const client = createClient({
+    getBotOverview: vi.fn(async (): Promise<BotOverview> => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+      canOperate: true,
+      cluster,
+    })),
+    listConversations: vi.fn<WebBotClient["listConversations"]>(async (): Promise<ConversationListResult> => ({
+      activeConversationId: "conv-main",
+      items: [{
+        id: "conv-main",
+        title: "当前会话",
+        lastMessagePreview: "",
+        messageCount: 0,
+        pinned: false,
+        active: true,
+        status: "active",
+        botAlias: "main",
+        cliType: "codex",
+        agentId: "main",
+        workingDir: "C:\\workspace",
+        clusterTeam: {
+          version: 1,
+          assignments: [{
+            agentId: "cluster-slot-1",
+            name: "前端审查",
+            responsibility: "检查界面状态",
+            assignmentRevision: 1,
+          }],
+        },
+        clusterTeamRevision: 1,
+        createdAt: "2026-08-12T00:00:00Z",
+        updatedAt: "2026-08-12T00:00:00Z",
+      }],
+    })),
+  });
+  const updateClusterConfig = vi.spyOn(client, "updateClusterConfig");
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  const toggle = await screen.findByRole("button", { name: "开启集群模式" });
+  expect(toggle).toHaveAttribute("aria-pressed", "false");
+  expect(screen.queryByTestId("cluster-team-panel")).not.toBeInTheDocument();
+
+  await user.click(toggle);
+
+  await waitFor(() => expect(updateClusterConfig).toHaveBeenCalledWith("main", {
+    ...cluster,
+    enabled: true,
+  }));
+  expect(await screen.findByRole("button", { name: "关闭集群模式" })).toHaveAttribute("aria-pressed", "true");
+  const teamPanel = screen.getByTestId("cluster-team-panel");
+  await user.click(within(teamPanel).getByRole("button", { name: "展开集群编组" }));
+  expect(screen.getByText("前端审查")).toBeInTheDocument();
+});
+
 test("pauses auxiliary sync while hidden and reconciles once after returning", async () => {
   let visibilityState: DocumentVisibilityState = "visible";
   vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibilityState);
@@ -162,6 +307,9 @@ test("pauses auxiliary sync while hidden and reconciles once after returning", a
       {
         taskId: "task-running",
         agentId: "worker-running",
+        assignmentRevision: 1,
+        roleName: "动态审查员",
+        responsibility: "检查前端状态",
         status: "running",
         modelTier: "medium",
         allowWrite: false,
@@ -172,7 +320,10 @@ test("pauses auxiliary sync while hidden and reconciles once after returning", a
       },
       {
         taskId: "task-completed",
-        agentId: "worker-completed",
+        agentId: "worker-running",
+        assignmentRevision: 1,
+        roleName: "动态测试员",
+        responsibility: "执行回归测试",
         status: "completed",
         modelTier: "medium",
         allowWrite: false,
@@ -184,6 +335,8 @@ test("pauses auxiliary sync while hidden and reconciles once after returning", a
       {
         taskId: "task-failed",
         agentId: "worker-failed",
+        roleName: "动态构建员",
+        responsibility: "验证构建产物",
         status: "failed",
         modelTier: "medium",
         allowWrite: false,
@@ -206,7 +359,31 @@ test("pauses auxiliary sync while hidden and reconciles once after returning", a
     workingDir: "C:\\workspace",
     isProcessing: true,
     historyCount: 1,
-    activeClusterRun: { runId: "cluster-foreground", status: "running", tasks: clusterStatus },
+    cluster: {
+      enabled: true,
+      writePolicy: "main_only",
+      conflictPolicy: "snapshot_diff",
+      maxParallelAgents: 3,
+      defaultTimeoutSeconds: 600,
+      modelTiers: { low: "", medium: "", high: "" },
+      reasoningEfforts: { low: "", medium: "", high: "" },
+    },
+    activeClusterRun: {
+      runId: "cluster-foreground",
+      status: "running",
+      capacity: 3,
+      teamRevision: 1,
+      team: {
+        version: 1,
+        assignments: [{
+          agentId: "worker-running",
+          name: "动态审查员",
+          responsibility: "检查前端状态",
+          assignmentRevision: 1,
+        }],
+      },
+      tasks: clusterStatus,
+    },
   }));
   const listMessageDelta = vi.fn<WebBotClient["listMessageDelta"]>(async () => ({
     reset: false,
@@ -238,11 +415,17 @@ test("pauses auxiliary sync while hidden and reconciles once after returning", a
     "cluster-foreground",
     { includeOutput: false },
   );
-  expect(await screen.findByText("智能体集群任务")).toBeInTheDocument();
-  expect(screen.getByText("1 项进行中")).toBeInTheDocument();
+  expect(await screen.findByText("已分配 1 / 集群规模 3")).toBeInTheDocument();
+  expect(screen.queryByText("动态审查员")).not.toBeInTheDocument();
+  fireEvent.click(within(screen.getByTestId("cluster-team-panel")).getByRole("button", { name: "展开集群编组" }));
+  expect(screen.getByText("动态审查员")).toBeInTheDocument();
+  expect(screen.getByText("模型档位：medium")).toBeInTheDocument();
+  expect(screen.queryByText("检查前端状态")).not.toBeInTheDocument();
   expect(screen.getByText("已完成")).toBeInTheDocument();
-  expect(screen.getByText("失败")).toBeInTheDocument();
-  expect(screen.getByText("子任务失败")).toBeInTheDocument();
+  expect(screen.getByText("处理中")).toBeInTheDocument();
+  expect(screen.queryByText("智能体集群任务")).not.toBeInTheDocument();
+  expect(screen.queryByText("动态测试员")).not.toBeInTheDocument();
+  expect(screen.queryByText("子任务失败")).not.toBeInTheDocument();
 
   visibilityState = "hidden";
   await act(async () => {
@@ -736,12 +919,13 @@ test("renders native AG-UI only in NativeAgentTranscript", async () => {
   });
 });
 
-test("chat screen switches agent and scopes history requests", async () => {
+test("opens child conversations from the dynamic cluster team and returns to main", async () => {
   const user = userEvent.setup();
   const listAgents = vi.fn(async () => ({
     items: [
       { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true },
-      { id: "reviewer", name: "代码审查", systemPrompt: "先列风险", enabled: true, isMain: false },
+      { id: "reviewer", name: "旧固定角色", systemPrompt: "先列风险", enabled: true, isMain: false },
+      { id: "tester", name: "旧测试角色", systemPrompt: "", enabled: true, isMain: false },
     ],
   }));
   const listMessages = vi.fn<WebBotClient["listMessages"]>(async (_botAlias, options) => {
@@ -756,25 +940,111 @@ test("chat screen switches agent and scopes history requests", async () => {
     }
     return { items: [] };
   });
-  const listConversations = vi.fn(async (): Promise<ConversationListResult> => ({
-    activeConversationId: "",
-    items: [],
+  const cluster = {
+    enabled: true,
+    writePolicy: "main_only" as const,
+    conflictPolicy: "snapshot_diff" as const,
+    maxParallelAgents: 3,
+    defaultTimeoutSeconds: 600,
+    modelTiers: { low: "", medium: "", high: "" },
+    reasoningEfforts: { low: "", medium: "", high: "" },
+  };
+  const getBotOverview = vi.fn<WebBotClient["getBotOverview"]>(async (): Promise<BotOverview> => ({
+    alias: "main",
+    cliType: "codex",
+    status: "running",
+    workingDir: "C:\\workspace",
+    isProcessing: false,
+    cluster,
+    agents: (await listAgents()).items,
   }));
-  const client = createClient({ listAgents, listMessages, listConversations });
+  const listConversations = vi.fn<WebBotClient["listConversations"]>(async (_botAlias, _query, options): Promise<ConversationListResult> => ({
+    activeConversationId: options?.agentId ? "conv-reviewer" : "conv-main",
+    items: options?.agentId ? [{
+      id: "conv-reviewer",
+      title: "子 Agent 会话",
+      lastMessagePreview: "reviewer-history",
+      messageCount: 1,
+      pinned: false,
+      active: true,
+      status: "active",
+      botAlias: "main",
+      cliType: "codex",
+      agentId: "reviewer",
+      workingDir: "C:\\workspace",
+      clusterTeam: { version: 1, assignments: [] },
+      clusterTeamRevision: 0,
+      createdAt: "2026-08-12T00:00:00Z",
+      updatedAt: "2026-08-12T00:00:00Z",
+    }] : [{
+      id: "conv-main",
+      title: "当前会话",
+      lastMessagePreview: "",
+      messageCount: 0,
+      pinned: false,
+      active: true,
+      status: "active",
+      botAlias: "main",
+      cliType: "codex",
+      agentId: "main",
+      workingDir: "C:\\workspace",
+      clusterTeam: {
+        version: 1,
+        assignments: [
+          {
+            agentId: "reviewer",
+            name: "动态审查员",
+            responsibility: "审查本轮改动",
+            assignmentRevision: 2,
+          },
+          {
+            agentId: "tester",
+            name: "动态测试员",
+            responsibility: "验证本轮改动",
+            assignmentRevision: 1,
+          },
+        ],
+      },
+      clusterTeamRevision: 2,
+      createdAt: "2026-08-12T00:00:00Z",
+      updatedAt: "2026-08-12T00:00:00Z",
+    }],
+  }));
+  const client = createClient({ getBotOverview, listAgents, listMessages, listConversations });
+  const sendMessage = vi.spyOn(client, "sendMessage");
 
   render(<ChatScreen botAlias="main" client={client} />);
 
-  await user.selectOptions(await screen.findByRole("combobox", { name: "当前 agent" }), "reviewer");
+  const teamPanel = await screen.findByTestId("cluster-team-panel");
+  await user.click(within(teamPanel).getByRole("button", { name: "展开集群编组" }));
+  expect(screen.getByText("动态审查员")).toBeInTheDocument();
+  expect(screen.queryByRole("combobox", { name: "当前 agent" })).not.toBeInTheDocument();
+  expect(screen.queryByText("旧固定角色")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "查看动态审查员对话" }));
 
   await waitFor(() => {
     expect(listMessages).toHaveBeenLastCalledWith("main", { agentId: "reviewer" });
   });
   expect(await screen.findByText("reviewer-history")).toBeInTheDocument();
+  const childTeamDock = screen.getByTestId("cluster-team-dock");
+  const childTeamPanel = within(childTeamDock).getByTestId("cluster-team-panel");
+  expect(within(childTeamPanel).getByText("动态审查员")).toBeInTheDocument();
+  expect(within(childTeamPanel).queryByText("动态测试员")).not.toBeInTheDocument();
+  expect(within(childTeamPanel).queryByText("审查本轮改动")).not.toBeInTheDocument();
+  expect(screen.getByPlaceholderText("不能直接给子 Agent 发消息")).toBeDisabled();
+  expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
+  await user.click(screen.getByRole("button", { name: "发送" }));
+  expect(sendMessage).not.toHaveBeenCalled();
+  expect(within(screen.getByTestId("chat-scroll-container")).queryByRole("button", { name: "返回主 Agent" })).not.toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "历史会话" }));
   await waitFor(() => {
     expect(listConversations).toHaveBeenLastCalledWith("main", "", { agentId: "reviewer" });
   });
+  await user.click(screen.getByRole("button", { name: "返回主 Agent" }));
+  await waitFor(() => expect(listMessages).toHaveBeenLastCalledWith("main"));
+  await user.click(within(screen.getByTestId("cluster-team-panel")).getByRole("button", { name: "展开集群编组" }));
+  expect(await screen.findByText("动态测试员")).toBeInTheDocument();
 });
 
 test("execution mode switch reloads scoped history", async () => {
