@@ -133,6 +133,8 @@ test("cluster settings expose one cluster size and hide fixed-role editors when 
   expect(await screen.findByLabelText("集群规模")).toHaveValue("4");
   expect(screen.getAllByLabelText("集群规模")).toHaveLength(1);
   expect(screen.getByLabelText("子 Agent 写入策略")).toHaveValue("all_agents");
+  expect(screen.getByRole("option", { name: "允许子 Agent 写入" })).toBeInTheDocument();
+  expect(screen.queryByRole("option", { name: "允许子 Agent 按任务申请写入" })).not.toBeInTheDocument();
   expect(screen.getByLabelText("任务超时（秒）")).toHaveValue(1800);
   expect(screen.getByLabelText("任务超时（秒）")).toHaveAttribute("min", "60");
   expect(screen.getByLabelText("任务超时（秒）")).toHaveAttribute("max", "3600");

@@ -3369,16 +3369,28 @@ async def _run_cluster_agent_task(
             await _CLUSTER_RUNTIME.notify_agent_task_message(run_id)
 
 
-def _build_cluster_prompt(mentions: list[dict[str, Any]] | None, run_id: str = "") -> str:
+def _build_cluster_prompt(
+    mentions: list[dict[str, Any]] | None,
+    run_id: str = "",
+    *,
+    allow_child_write: bool = False,
+) -> str:
     mentioned = ", ".join(
         str(item.get("agent_id") or item.get("agentId") or "").strip()
         for item in (mentions or [])
         if str(item.get("agent_id") or item.get("agentId") or "").strip()
     )
+    write_guidance = (
+        "本轮允许子 agent 写入。委派实现、修复等需要修改文件的任务时，应为负责实现的子 agent "
+        "设置 allow_write=true；分析、调研、审查任务保持只读。"
+        if allow_child_write
+        else "本轮仅主 agent 可写。所有子 agent 任务保持只读，不要设置 allow_write=true。"
+    )
     return render_prompt(
         "cluster_mode",
         run_id=run_id or "无",
         mentioned_agents=mentioned or "无",
+        write_guidance=write_guidance,
     )
 
 
@@ -3398,7 +3410,11 @@ def _apply_cluster_prompt(
     cluster_mentions: list[dict[str, Any]] | None = None,
 ) -> str:
     if cluster_run_id:
-        return _build_cluster_prompt(cluster_mentions, cluster_run_id) + prompt_text
+        return _build_cluster_prompt(
+            cluster_mentions,
+            cluster_run_id,
+            allow_child_write=profile.cluster.write_policy == "all_agents",
+        ) + prompt_text
     if not profile.cluster.enabled and _has_cluster_child_agents(profile):
         return _build_cluster_disabled_prompt() + prompt_text
     return prompt_text

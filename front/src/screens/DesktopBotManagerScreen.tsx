@@ -877,7 +877,7 @@ function EditPanel({
                     className="h-9 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 text-sm"
                   >
                     <option value="main_only">仅主 Agent 可写</option>
-                    <option value="all_agents">允许子 Agent 按任务申请写入</option>
+                    <option value="all_agents">允许子 Agent 写入</option>
                   </select>
                 </label>
                 <label className="grid gap-1 text-sm">
