@@ -85,10 +85,10 @@ const INSPECTOR_DEFAULT_WIDTH = 400;
 const DELETE_WORKSPACE_CONFIRM_TEXT = "永久删除";
 const DEFAULT_CLUSTER_CONFIG: BotClusterConfig = {
   enabled: false,
-  writePolicy: "main_only",
+  writePolicy: "all_agents",
   conflictPolicy: "snapshot_diff",
-  maxParallelAgents: 2,
-  defaultTimeoutSeconds: 600,
+  maxParallelAgents: 3,
+  defaultTimeoutSeconds: 1800,
   modelTiers: { low: "", medium: "", high: "" },
   reasoningEfforts: { low: "", medium: "", high: "" },
 };

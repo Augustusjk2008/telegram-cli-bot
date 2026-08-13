@@ -1750,13 +1750,13 @@ function mapClusterReasoningEfforts(raw: unknown): ClusterReasoningEfforts {
 
 function mapBotClusterConfig(raw: unknown): BotClusterConfig {
   const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
-  const rawWritePolicy = String(value.write_policy ?? value.writePolicy ?? "main_only");
+  const rawWritePolicy = String(value.write_policy ?? value.writePolicy ?? "all_agents");
   return {
     enabled: Boolean(value.enabled),
     writePolicy: rawWritePolicy === "all_agents" ? "all_agents" : "main_only",
     conflictPolicy: String(value.conflict_policy ?? value.conflictPolicy ?? "snapshot_diff") as BotClusterConfig["conflictPolicy"],
-    maxParallelAgents: Number(value.max_parallel_agents ?? value.maxParallelAgents ?? 2),
-    defaultTimeoutSeconds: Number(value.default_timeout_seconds ?? value.defaultTimeoutSeconds ?? 600),
+    maxParallelAgents: Number(value.max_parallel_agents ?? value.maxParallelAgents ?? 3),
+    defaultTimeoutSeconds: Number(value.default_timeout_seconds ?? value.defaultTimeoutSeconds ?? 1800),
     modelTiers: mapClusterModelTiers(value.model_tiers ?? value.modelTiers),
     reasoningEfforts: mapClusterReasoningEfforts(value.reasoning_efforts ?? value.reasoningEfforts),
   };

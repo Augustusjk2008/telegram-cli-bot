@@ -293,6 +293,12 @@ describe("RealWebBotClient", () => {
       clusterTeamRevision: 3,
       clusterTeam: { assignments: [{ agentId: "cluster-slot-1", name: "前端审查", assignmentRevision: 2 }] },
     });
+    expect(overview.cluster).toMatchObject({
+      enabled: true,
+      writePolicy: "all_agents",
+      maxParallelAgents: 4,
+      defaultTimeoutSeconds: 1800,
+    });
     expect(overview.activeClusterRun).toMatchObject({
       runId: "run-team",
       teamRevision: 3,

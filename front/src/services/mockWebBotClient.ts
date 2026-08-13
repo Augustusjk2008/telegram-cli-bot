@@ -278,10 +278,10 @@ const MOCK_CLI_MODEL_OPTIONS = [
 ];
 const DEFAULT_CLUSTER = {
   enabled: false,
-  writePolicy: "main_only" as const,
+  writePolicy: "all_agents" as const,
   conflictPolicy: "snapshot_diff" as const,
-  maxParallelAgents: 2,
-  defaultTimeoutSeconds: 600,
+  maxParallelAgents: 3,
+  defaultTimeoutSeconds: 1800,
   modelTiers: { low: "", medium: "", high: "" },
   reasoningEfforts: { low: "", medium: "", high: "" },
 };
