@@ -140,6 +140,68 @@ def usage_manager(tmp_path: Path) -> MultiBotManager:
         str(storage),
     )
 
+
+@pytest.mark.asyncio
+async def test_run_cli_chat_consumes_stream_until_done(
+    usage_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    observed: dict[str, object] = {}
+    done_event = {
+        "type": "done",
+        "turn_id": "turn-1",
+        "assistant_message_id": "message-1",
+        "output": "done",
+        "message": {"id": "message-1", "content": "done"},
+        "elapsed_seconds": 3,
+        "returncode": 0,
+        "session": {"is_processing": False},
+    }
+
+    async def fake_stream(*args, **kwargs):
+        observed["args"] = args
+        observed["kwargs"] = kwargs
+        try:
+            yield {"type": "meta"}
+            yield {"type": "status", "preview_text": "working"}
+            yield done_event
+            pytest.fail("run_cli_chat 不应继续消费 done 后的事件")
+        finally:
+            observed["closed"] = True
+
+    monkeypatch.setattr(api_service, "_stream_cli_chat", fake_stream)
+    monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: None)
+
+    result = await api_service.run_cli_chat(
+        usage_manager,
+        "main",
+        1001,
+        "hello",
+        allow_unsafe_cli=True,
+        cluster_run_id="clr_test",
+        cluster_mentions=[{"agent_id": "worker"}],
+    )
+
+    assert observed["args"] == (usage_manager, "main", 1001, "hello")
+    assert observed["kwargs"] == {
+        "request": None,
+        "agent_id": "main",
+        "cli_params_override": None,
+        "allow_unsafe_cli": True,
+        "cluster_run_id": "clr_test",
+        "cluster_mentions": [{"agent_id": "worker"}],
+        "include_trace": False,
+    }
+    assert observed["closed"] is True
+    assert result == {
+        "output": "done",
+        "message": {"id": "message-1", "content": "done"},
+        "elapsed_seconds": 3,
+        "returncode": 0,
+        "session": {"is_processing": False},
+    }
+
+
 def test_stdout_reader_blocks_on_bounded_queue_without_losing_eof():
     process = _ReaderProcess(["one\n", "two\n", "three\n"])
     output_queue: queue.Queue[object] = queue.Queue(maxsize=1)
