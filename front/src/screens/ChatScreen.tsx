@@ -4802,8 +4802,6 @@ export function ChatScreen({
   const chatMutationsDisabled = readOnly || childAgentReadOnly;
   const chatDisabledReason = nativePermissionPending
     ? "等待权限处理"
-    : childAgentReadOnly
-    ? "不能直接给子 Agent 发消息"
     : disabledReason || readOnlyReason || (readOnly ? "主机已关闭聊天，当前无法发送消息" : "");
   const killTaskDisabled = readOnly || !isStreaming || actionLoading === "kill";
   const showActionBar = !isImmersive;
@@ -4841,6 +4839,31 @@ export function ChatScreen({
   const selectedReasoningEffort = nativeExecutionMode
     ? nativeSelectedReasoningEffort
     : cliSelectedReasoningEffort;
+  const clusterTasks = clusterTaskStatus?.tasks.length
+    ? clusterTaskStatus.tasks
+    : clusterTeamView?.tasks || [];
+  const activeClusterTask = [...clusterTasks].reverse().find((task) => (
+    task.agentId === activeAgentId
+    && (
+      typeof task.assignmentRevision !== "number"
+      || task.assignmentRevision === activeClusterAssignment?.assignmentRevision
+    )
+  ));
+  const activeTaskModelTier = activeClusterTask?.modelTier;
+  const childModelTier = activeTaskModelTier === "low" || activeTaskModelTier === "high"
+    ? activeTaskModelTier
+    : "medium";
+  const childSessionModel = nativeExecutionMode
+    ? nativeSelectedModel
+    : botOverview?.cluster?.modelTiers[childModelTier] || selectedModel;
+  const childSessionReasoningEffort = nativeExecutionMode
+    ? nativeSelectedReasoningEffort
+    : botOverview?.cluster?.reasoningEfforts[childModelTier] || selectedReasoningEffort;
+  const childReadOnlyStatus = [
+    "会话只读",
+    `模型：${childSessionModel && childSessionModel !== MODEL_OPTION_NONE ? childSessionModel : "默认"}`,
+    `思考深度：${childSessionReasoningEffort || "默认"}`,
+  ].join(" · ");
   const visibleModelOptions = useMemo<ChatComposerModelOption[]>(() => {
     if (nativeExecutionMode) {
       const options = nativeModelOptions.map((model) => ({
@@ -5075,7 +5098,7 @@ export function ChatScreen({
           killTaskBusy={actionLoading === "kill"}
         />
       ) : null}
-      {chatDisabledReason ? (
+      {chatDisabledReason && !childAgentReadOnly ? (
         <section className="border-b border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] px-3 py-2 text-sm font-medium text-[var(--status-warning)] shadow-[var(--shadow-surface)]">
           {chatDisabledReason}
         </section>
@@ -5209,7 +5232,9 @@ export function ChatScreen({
         />
       ) : null}
       <div className="border-t border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)]">
-        {chatMutationsDisabled || nativePermissionPending ? (
+        {childAgentReadOnly ? (
+          <p className="px-4 py-3 text-xs font-medium text-[var(--muted)]">{childReadOnlyStatus}</p>
+        ) : chatMutationsDisabled || nativePermissionPending ? (
           <p className="px-4 pt-3 text-xs font-medium text-[var(--status-warning)]">{chatDisabledReason || "只读模式"}</p>
         ) : null}
         {queuedMessage ? (
@@ -5229,32 +5254,34 @@ export function ChatScreen({
             </button>
           </div>
         ) : null}
-        <ChatComposer
-          key={`composer-${composerPulseKey}`}
-          onSend={handleSend}
-          onAttachFiles={handleAttachFiles}
-          onRemoveAttachment={handleRemoveAttachment}
-          attachments={pendingAttachments}
-          pulse={composerPulseKey > 0}
-          disabled={chatMutationsDisabled || nativePermissionPending || loading}
-          compact={isImmersive || embedded}
-          enterToSend={enterToSend}
-          uploadingAttachments={uploadingAttachments}
-          placeholder={composerPlaceholder}
-          modelOptions={visibleModelOptions}
-          selectedModel={selectedModel}
-          modelDisabled={modelSaving || readOnly || visibleModelOptions.length === 0 || (!nativeExecutionMode && !cliParams)}
-          onModelChange={(model) => void handleModelChange(model)}
-          reasoningEffortOptions={visibleReasoningEffortOptions}
-          selectedReasoningEffort={selectedReasoningEffort}
-          reasoningEffortDisabled={modelSaving || readOnly || visibleReasoningEffortOptions.length === 0 || (!nativeExecutionMode && !cliParams)}
-          onReasoningEffortChange={(effort) => void handleReasoningEffortChange(effort)}
-          globalPromptPresets={botOverview?.globalPromptPresets || []}
-          botPromptPresets={botOverview?.promptPresets || []}
-          canManagePromptPresets={canManagePromptPresets}
-          onSaveGlobalPromptPresets={handleSaveGlobalPromptPresets}
-          onSaveBotPromptPresets={handleSaveBotPromptPresets}
-        />
+        {!childAgentReadOnly ? (
+          <ChatComposer
+            key={`composer-${composerPulseKey}`}
+            onSend={handleSend}
+            onAttachFiles={handleAttachFiles}
+            onRemoveAttachment={handleRemoveAttachment}
+            attachments={pendingAttachments}
+            pulse={composerPulseKey > 0}
+            disabled={chatMutationsDisabled || nativePermissionPending || loading}
+            compact={isImmersive || embedded}
+            enterToSend={enterToSend}
+            uploadingAttachments={uploadingAttachments}
+            placeholder={composerPlaceholder}
+            modelOptions={visibleModelOptions}
+            selectedModel={selectedModel}
+            modelDisabled={modelSaving || readOnly || visibleModelOptions.length === 0 || (!nativeExecutionMode && !cliParams)}
+            onModelChange={(model) => void handleModelChange(model)}
+            reasoningEffortOptions={visibleReasoningEffortOptions}
+            selectedReasoningEffort={selectedReasoningEffort}
+            reasoningEffortDisabled={modelSaving || readOnly || visibleReasoningEffortOptions.length === 0 || (!nativeExecutionMode && !cliParams)}
+            onReasoningEffortChange={(effort) => void handleReasoningEffortChange(effort)}
+            globalPromptPresets={botOverview?.globalPromptPresets || []}
+            botPromptPresets={botOverview?.promptPresets || []}
+            canManagePromptPresets={canManagePromptPresets}
+            onSaveGlobalPromptPresets={handleSaveGlobalPromptPresets}
+            onSaveBotPromptPresets={handleSaveBotPromptPresets}
+          />
+        ) : null}
       </div>
 
       {soloRollbackDialog && typeof document !== "undefined" ? createPortal(soloRollbackDialog, document.body) : soloRollbackDialog}
