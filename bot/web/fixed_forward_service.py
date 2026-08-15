@@ -6,8 +6,10 @@ import asyncio
 import copy
 import json
 import logging
+import os
 import platform
 import socket
+import ssl
 import subprocess
 import threading
 import time
@@ -15,7 +17,7 @@ from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPSHandler, ProxyHandler, Request, build_opener
 
 from bot.platform.processes import build_subprocess_group_kwargs, terminate_process_tree_sync
 from bot.version import APP_VERSION
@@ -36,6 +38,22 @@ def _utc_timestamp() -> str:
 
 def _toml_string(value: str) -> str:
     return json.dumps(str(value), ensure_ascii=False)
+
+
+def _frpc_spawn_env() -> dict[str, str]:
+    """frpc 必须直连 frps：剔除继承的代理变量，否则隧道会绕行海外代理出口（首字节延迟约 6 倍）。"""
+    return {key: value for key, value in os.environ.items() if "proxy" not in key.lower()}
+
+
+# 公网健康探测必须直连：urlopen 默认尊重 http(s)_proxy 环境变量，绕代理会导致延迟失真/假失败。
+# 入口是自签证书（IP SAN，无 CA 可链），必须跳过证书校验，否则探测恒失败、verified 永远为 false。
+_UNVERIFIED_SSL_CONTEXT = ssl.create_default_context()
+_UNVERIFIED_SSL_CONTEXT.check_hostname = False
+_UNVERIFIED_SSL_CONTEXT.verify_mode = ssl.CERT_NONE
+_DIRECT_OPENER = build_opener(
+    ProxyHandler({}),
+    HTTPSHandler(context=_UNVERIFIED_SSL_CONTEXT),
+)
 
 
 def _format_http_host(host: str) -> str:
@@ -204,7 +222,7 @@ class FixedForwardService:
             method="POST",
         )
         try:
-            with urlopen(request, timeout=self._heartbeat_timeout) as response:
+            with _DIRECT_OPENER.open(request, timeout=self._heartbeat_timeout) as response:
                 status_code = int(getattr(response, "status", response.getcode()) or 0)
                 result = {
                     **self._probe_result(200 <= status_code < 300, "", "", started_at),
@@ -327,6 +345,7 @@ class FixedForwardService:
                 errors="replace",
                 bufsize=1,
                 creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+                env=_frpc_spawn_env(),
                 **build_subprocess_group_kwargs(),
             )
         except FileNotFoundError:
@@ -526,6 +545,9 @@ class FixedForwardService:
                 'auth.method = "token"',
                 f"auth.token = {_toml_string(self._frps_token)}",
                 "transport.tls.enable = true",
+                # 预建数据连接；注意仅对 tcp 类型 proxy 生效（本项目是 http 类型，
+                # 见 docs/ecs-frp-public-access.md 踩坑 #14，保留以待未来切换 tcp）
+                "transport.poolCount = 5",
                 "",
                 "[[proxies]]",
                 f"name = {_toml_string(self._node_id)}",
@@ -607,7 +629,7 @@ class FixedForwardService:
             return result
         request = Request(url, headers={"Accept": "application/json"}, method="GET")
         try:
-            with urlopen(request, timeout=self._connect_timeout) as response:
+            with _DIRECT_OPENER.open(request, timeout=self._connect_timeout) as response:
                 status_code = int(getattr(response, "status", response.getcode()) or 0)
                 raw_body = response.read().decode("utf-8", errors="replace")
             try:
