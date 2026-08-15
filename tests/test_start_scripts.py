@@ -133,6 +133,29 @@ def test_frontend_precompression_script_is_part_of_build_and_startup_hashes() ->
     assert shell.count("front/scripts/precompress-assets.mjs") == 2
 
 
+def test_startup_frontend_build_is_quiet_on_success_and_replays_failures() -> None:
+    powershell = Path("start.ps1").read_text(encoding="utf-8")
+    shell = Path("start.sh").read_text(encoding="utf-8")
+
+    powershell_sync = _between(
+        powershell,
+        "function Sync-FrontendAssets {",
+        "\nfunction Show-TunnelHint {",
+    )
+    assert "$buildOutput = @(& $npmCommand run build 2>&1)" in powershell_sync
+    assert "$buildOutput | Out-Host" in powershell_sync
+    assert 'Write-Info "前端构建完成。"' in powershell_sync
+
+    shell_sync = _between(
+        shell,
+        "sync_frontend_assets() {",
+        '\nif is_truthy "${TCB_STARTUP_FORCE_DEP_INSTALL:-}"; then',
+    )
+    assert 'npm run build) >"$build_log" 2>&1' in shell_sync
+    assert 'cat "$build_log" >&2' in shell_sync
+    assert 'info "前端构建完成。"' in shell_sync
+
+
 def test_start_bat_retries_after_windows_service_failure_instead_of_exiting() -> None:
     content = Path("start.bat").read_text(encoding="utf-8")
 
@@ -146,4 +169,3 @@ def test_start_bat_retries_after_windows_service_failure_instead_of_exiting() ->
     assert start_label_index < launch_index < failure_index < pause_index < retry_index < success_exit_index
     assert "exit /b %EXIT_CODE%" not in content[failure_index:]
     assert content.index('set "ERRORLEVEL="') < start_label_index
-

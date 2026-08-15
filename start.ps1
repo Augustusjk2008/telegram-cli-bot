@@ -418,22 +418,28 @@ function Sync-FrontendAssets {
     Write-Info "检测到前端源码变化，正在构建前端..."
     $buildScript = Join-Path $RootDir "scripts\build_web_frontend.bat"
     if (($env:OS -eq "Windows_NT") -and (Test-Path -LiteralPath $buildScript)) {
-        & $buildScript
-        if ($LASTEXITCODE -ne 0) {
+        $buildOutput = @(& $buildScript 2>&1)
+        $buildExitCode = $LASTEXITCODE
+        if ($buildExitCode -ne 0) {
+            $buildOutput | Out-Host
             throw "前端构建失败。"
         }
     } else {
         Push-Location (Join-Path $RootDir "front")
         try {
-            & $npmCommand run build
-            if ($LASTEXITCODE -ne 0) {
+            $buildOutput = @(& $npmCommand run build 2>&1)
+            $buildExitCode = $LASTEXITCODE
+            if ($buildExitCode -ne 0) {
+                $buildOutput | Out-Host
                 Write-Warn "前端构建失败，正在安装依赖后重试一次..."
                 & $npmCommand install
                 if ($LASTEXITCODE -ne 0) {
                     throw "安装前端依赖失败。"
                 }
-                & $npmCommand run build
-                if ($LASTEXITCODE -ne 0) {
+                $buildOutput = @(& $npmCommand run build 2>&1)
+                $buildExitCode = $LASTEXITCODE
+                if ($buildExitCode -ne 0) {
+                    $buildOutput | Out-Host
                     throw "前端构建失败。"
                 }
             }
@@ -441,6 +447,7 @@ function Sync-FrontendAssets {
             Pop-Location
         }
     }
+    Write-Info "前端构建完成。"
 
     $frontendHash = Get-StartupPathsHash -PythonRuntime $PythonRuntime -RootDir $RootDir -RelativePaths $frontendInputs
     Write-StartupStamp -StampPath $stampPath -Value $frontendHash
@@ -532,9 +539,6 @@ try {
     $env:CLI_BRIDGE_SUPERVISOR = "1"
     $env:WEB_ENABLED = "true"
 
-    Write-Info ("启动目录: {0}" -f $scriptDir)
-    Write-Info ("启动模式: {0}" -f $Mode)
-
     $script:pythonRuntime = $pythonRuntime
     if (Test-Truthy $env:TCB_STARTUP_FORCE_DEP_INSTALL) {
         $script:pythonDependencyRepairAttempted = $true
@@ -556,7 +560,6 @@ try {
         exit $script:lastPythonExitCode
     }
 
-    Write-Info "正在检查并应用待更新版本..."
     & $script:pythonRuntime.Command @($script:pythonRuntime.Arguments + @("-m", "bot.updater", "apply-pending", "--repo-root", $scriptDir))
     if ($LASTEXITCODE -ne 0) {
         Write-Fail "应用待更新版本失败，请检查 .web_admin_settings.json 和更新包缓存。"
@@ -572,7 +575,6 @@ try {
 
     Sync-FrontendAssets -PythonRuntime $script:pythonRuntime -RootDir $scriptDir
 
-    Write-Info "正在检查运行数据迁移..."
     Invoke-PythonStartupStep -Arguments @("-m", "bot.migrations", "run", "--repo-root", $scriptDir)
     if ($script:lastPythonExitCode -ne 0) {
         Write-Fail "运行数据迁移失败。"
