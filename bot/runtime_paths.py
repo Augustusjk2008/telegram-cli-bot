@@ -9,7 +9,7 @@ from typing import Final
 try:
     from dotenv import dotenv_values, load_dotenv
 
-    load_dotenv(Path.cwd() / ".env")
+    load_dotenv()
 except ImportError:
     dotenv_values = None  # type: ignore[assignment]
 
@@ -26,10 +26,15 @@ def get_tcb_home_root() -> Path:
     return Path.home() / ".tcb"
 
 
+def _repo_env_path() -> Path:
+    """仓库根的 .env。锚定到本文件而非 CWD，仓库外启动时与 bot.config 读到同一份配置。"""
+    return Path(__file__).resolve().parent.parent / ".env"
+
+
 def _get_app_data_override() -> str:
     override = os.environ.get(TCB_DATA_DIR_ENV, "").strip()
     if not override and dotenv_values is not None:
-        override = str(dotenv_values(Path.cwd() / ".env").get(TCB_DATA_DIR_ENV) or "").strip()
+        override = str(dotenv_values(_repo_env_path()).get(TCB_DATA_DIR_ENV) or "").strip()
     return override
 
 

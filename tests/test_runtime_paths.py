@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import importlib
 from pathlib import Path
 
 import bot.runtime_paths as runtime_paths
@@ -48,19 +47,21 @@ def test_legacy_project_chat_db_path_matches_chat_store_workspace_path(tmp_path:
     assert ChatStore(workspace).legacy_db_path == runtime_paths.get_legacy_project_chat_db_path(workspace)
 
 
-def test_runtime_paths_loads_tcb_data_dir_from_dotenv(tmp_path, monkeypatch):
+def test_runtime_paths_loads_tcb_data_dir_from_dotenv_cwd_independently(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     data = tmp_path / "data"
+    elsewhere = tmp_path / "elsewhere"
     repo.mkdir()
+    elsewhere.mkdir()
     (repo / ".env").write_text(f"TCB_DATA_DIR={data}\n", encoding="utf-8")
-    monkeypatch.chdir(repo)
+    # 模拟从仓库外启动：CWD 在别处，.env 锚定在仓库根（不依赖 importlib.reload）
+    monkeypatch.chdir(elsewhere)
     monkeypatch.delenv("TCB_DATA_DIR", raising=False)
+    monkeypatch.setattr(runtime_paths, "_repo_env_path", lambda: repo / ".env")
 
-    import bot.runtime_paths as runtime_paths
-
-    reloaded = importlib.reload(runtime_paths)
-
-    assert reloaded.get_app_data_root() == data
+    assert runtime_paths.get_app_data_root() == data
+    workspace_key = runtime_paths.get_chat_workspace_key(repo)
+    assert runtime_paths.get_chat_workspace_dir(repo) == data / "chat-history" / "workspaces" / workspace_key
 
 
 def test_native_agent_paths_use_app_data_root(monkeypatch, tmp_path: Path):
