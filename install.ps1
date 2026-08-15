@@ -390,13 +390,13 @@ function Get-PythonInstallerUrl {
 }
 
 function Get-NodeInstallerUrl {
-    $checksums = Invoke-WebRequest -UseBasicParsing -Uri "https://nodejs.org/dist/latest-v20.x/SHASUMS256.txt"
+    $checksums = Invoke-WebRequest -UseBasicParsing -Uri "https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt"
     $match = [regex]::Match($checksums.Content, "(?m)^[0-9a-f]+\s+(node-v[0-9]+\.[0-9]+\.[0-9]+-x64\.msi)$")
     if (-not $match.Success) {
         throw "无法解析 Node.js 官方安装包地址。"
     }
 
-    return "https://nodejs.org/dist/latest-v20.x/{0}" -f $match.Groups[1].Value
+    return "https://nodejs.org/dist/latest-v22.x/{0}" -f $match.Groups[1].Value
 }
 
 function Install-PythonFallback {

@@ -597,8 +597,12 @@ def _login_throttle_client(request: web.Request) -> str:
     direct = str(request.remote or "unknown").strip() or "unknown"
     if not WEB_TRUST_PROXY_HEADERS or not _is_loopback_value(direct):
         return direct
-    forwarded = str(request.headers.get("X-Forwarded-For") or request.headers.get("X-Real-IP") or "")
-    candidate = forwarded.split(",", 1)[0].strip()
+    # 可信代理链解析：优先 X-Real-IP（示例 nginx 用 $remote_addr 覆盖式设置，客户端无法预置伪造，
+    # 且经 frp 等中间层原样透传）；无 X-Real-IP 时取 X-Forwarded-For 最右条目（追加语义下最右
+    # 是可信代理写入的真实来源，最左可被客户端预置伪造，用于轮换绕过限流）。
+    real_ip = str(request.headers.get("X-Real-IP") or "").strip()
+    forwarded = str(request.headers.get("X-Forwarded-For") or "").strip()
+    candidate = real_ip or (forwarded.rsplit(",", 1)[-1].strip() if forwarded else "")
     try:
         return str(ipaddress.ip_address(candidate)) if candidate else direct
     except ValueError:

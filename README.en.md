@@ -285,6 +285,8 @@ server {
 
 Allow inbound traffic on `18088` and `7000`. `WEB_BASE_PATH` must match the reverse-proxy path exactly. Rebuild the frontend and restart the web service after changing the path.
 
+When the web service only listens on loopback behind a trusted reverse proxy, set `WEB_TRUST_PROXY_HEADERS=true` in `.env`: login throttling then resolves the real client IP from proxy headers (`X-Real-IP` first, otherwise the rightmost `X-Forwarded-For` entry) instead of the proxy's own address. Forwarded headers are ignored for non-loopback direct connections, preventing spoofed-header throttling bypasses.
+
 </details>
 
 <details>

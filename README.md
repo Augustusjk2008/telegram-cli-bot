@@ -285,6 +285,8 @@ server {
 
 公网服务器需放通 `18088`、`7000`。`WEB_BASE_PATH` 必须与反代路径完全一致；修改路径后重新构建前端并重启 Web。
 
+Web 服务仅监听本机、由可信反向代理转发时，在 `.env` 设置 `WEB_TRUST_PROXY_HEADERS=true`，登录限流会按代理头解析真实客户端 IP（优先 `X-Real-IP`，其次取 `X-Forwarded-For` 最右条目）而不是代理本机地址。直连非本机地址时转发头一律忽略，防止伪造绕过限流。
+
 </details>
 
 <details>

@@ -75,13 +75,20 @@ def test_login_throttle_drops_failures_outside_observation_window() -> None:
 def test_login_client_only_trusts_forwarded_ip_from_loopback_proxy(monkeypatch) -> None:
     monkeypatch.setattr(server, "WEB_TRUST_PROXY_HEADERS", True)
 
-    proxied = SimpleNamespace(remote="127.0.0.1", headers={"X-Forwarded-For": "203.0.113.7, 127.0.0.1"})
+    # X-Real-IP 优先（nginx $remote_addr 覆盖式设置，客户端预置的最左伪造值不生效）
+    real_ip = SimpleNamespace(
+        remote="127.0.0.1",
+        headers={"X-Real-IP": "203.0.113.7", "X-Forwarded-For": "9.9.9.9, 203.0.113.7"},
+    )
+    # 无 X-Real-IP 时取 XFF 最右（追加语义下最右=可信代理写入的真实来源）
+    rightmost = SimpleNamespace(remote="127.0.0.1", headers={"X-Forwarded-For": "9.9.9.9, 198.51.100.9"})
     direct = SimpleNamespace(remote="198.51.100.9", headers={"X-Forwarded-For": "203.0.113.8"})
-    malformed = SimpleNamespace(remote="127.0.0.1", headers={"X-Forwarded-For": "not-an-ip"})
+    malformed = SimpleNamespace(remote="127.0.0.1", headers={"X-Real-IP": "not-an-ip", "X-Forwarded-For": "also-bad"})
 
-    assert server._login_throttle_client(proxied) == "203.0.113.7"
-    assert server._login_throttle_client(direct) == "198.51.100.9"
-    assert server._login_throttle_client(malformed) == "127.0.0.1"
+    assert server._login_throttle_client(real_ip) == "203.0.113.7"
+    assert server._login_throttle_client(rightmost) == "198.51.100.9"
+    assert server._login_throttle_client(direct) == "198.51.100.9"  # 非 loopback 直连，取 remote
+    assert server._login_throttle_client(malformed) == "127.0.0.1"  # 解析失败回退
 
 
 @pytest.mark.asyncio
