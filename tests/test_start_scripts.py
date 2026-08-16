@@ -122,6 +122,43 @@ def test_start_ps1_prefers_existing_project_venv_before_system_python() -> None:
     assert venv_lookup_index < system_lookup_index < runtime_assignment_index
 
 
+def test_start_ps1_uses_the_existing_entry_as_the_windows_tray_supervisor() -> None:
+    content = Path("start.ps1").read_text(encoding="utf-8")
+
+    param_block = content[: content.index("$ErrorActionPreference")]
+    tray = _between(
+        content,
+        "function Invoke-TraySupervisor {",
+        "\nif (-not $ServiceProcess)",
+    )
+
+    assert "[switch]$ServiceProcess" in param_block
+    assert "[long]$LauncherWindowHandle" in param_block
+    assert "System.Windows.Forms.NotifyIcon" in tray
+    assert '"front\\public\\assets\\app-logo.ico"' in tray
+    assert '"-ServiceProcess"' in tray
+    assert "add_DoubleClick" in tray
+    assert '"显示控制台"' in tray
+    assert '"隐藏控制台"' in tray
+    assert '"退出"' in tray
+    assert "PostMessage" in content
+
+    tray_gate_index = content.index("if (-not $ServiceProcess)")
+    service_start_index = content.index("try {\n    Set-Location $scriptDir")
+    assert tray_gate_index < service_start_index
+
+
+def test_start_bat_passes_its_console_window_to_the_tray_supervisor() -> None:
+    content = Path("start.bat").read_text(encoding="utf-8")
+
+    assert "GetConsoleWindow" in content
+    assert "-LauncherWindowHandle" in content
+
+
+def test_start_ps1_keeps_utf8_bom_for_windows_powershell_compatibility() -> None:
+    assert Path("start.ps1").read_bytes().startswith(b"\xef\xbb\xbf")
+
+
 def test_frontend_precompression_script_is_part_of_build_and_startup_hashes() -> None:
     package = Path("front/package.json").read_text(encoding="utf-8")
     powershell = Path("start.ps1").read_text(encoding="utf-8")
