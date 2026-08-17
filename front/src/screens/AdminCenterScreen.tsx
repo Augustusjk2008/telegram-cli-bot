@@ -1512,7 +1512,6 @@ export function AdminCenterScreen({
         <header className="mb-3 flex flex-wrap items-start justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-3">
           <div className="space-y-1">
             <h1 className="text-2xl font-bold text-[var(--text)]">管理中心</h1>
-            <p className="text-sm text-[var(--muted)]">用户权限、邀请码和升级入口集中到这里。</p>
           </div>
           <button
             type="button"
@@ -1777,7 +1776,6 @@ export function AdminCenterScreen({
                 <Globe className="mt-0.5 h-5 w-5 text-[var(--accent)]" />
                 <div>
                   <h2 className="text-base font-semibold text-[var(--text)]">网络访问</h2>
-                  <p className="text-sm text-[var(--muted)]">Git 代理、Tunnel 和公网访问集中在这里维护。</p>
                 </div>
               </div>
 
@@ -1969,7 +1967,6 @@ export function AdminCenterScreen({
               <Bell className="mt-0.5 h-5 w-5 text-[var(--accent)]" />
               <div>
                 <h2 className="text-base font-semibold text-[var(--text)]">通知</h2>
-                <p className="text-sm text-[var(--muted)]">PushPlus 服务端推送和相关环境配置入口。</p>
               </div>
             </div>
 
@@ -2080,7 +2077,6 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h2 id="transfer-bridge-title" className="text-base font-semibold text-[var(--text)]">LiteLLM 网关</h2>
-                <p className="text-sm text-[var(--muted)]">本层仅反代；Responses / Chat Completions bridge 由 LiteLLM 原生配置处理。</p>
               </div>
               <span className={`rounded-full border px-3 py-1 text-sm font-medium ${transferStatusClass(transferStatus)}`}>
                 {transferStatusLabel(transferStatus)}
@@ -2366,7 +2362,6 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
           <section className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
             <div>
               <h2 className="text-base font-semibold text-[var(--text)]">联机聊天</h2>
-              <p className="text-sm text-[var(--muted)]">一台实例作为主机，其它实例填主机地址和房间密钥加入。</p>
             </div>
 
             <div className="grid gap-3 sm:grid-cols-3">
@@ -2814,7 +2809,6 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             <section className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
               <div>
                 <h2 className="text-base font-semibold text-[var(--text)]">发布公告</h2>
-                <p className="text-sm text-[var(--muted)]">发布后系统自动生成编号和时间，用户下次登录会自动看到。</p>
               </div>
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -3025,7 +3019,6 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             <div className="flex flex-wrap items-end justify-between gap-3">
               <div>
                 <h2 id="cli-error-stats-title" className="text-base font-semibold text-[var(--text)]">CLI 错误统计</h2>
-                <p className="text-sm text-[var(--muted)]">最近错误、类别和高频文本。</p>
               </div>
               <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
                 时间范围

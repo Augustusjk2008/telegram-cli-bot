@@ -570,7 +570,6 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
       <div className="codex-usage-heading">
         <div>
           <h2 id="codex-usage-title">Codex 用量</h2>
-          <p>按服务端本地自然日、Provider 和模型汇总，不区分 Bot、用户或 Agent。</p>
         </div>
         <span className="codex-usage-time-basis">
           服务端本地时间 {config?.timeBasis.utcOffset || stats?.timeBasis.utcOffset || "—"}
@@ -588,7 +587,6 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
             <div className="codex-usage-section-heading">
               <div>
                 <h3 id="codex-usage-settings-title">采集设置</h3>
-                <p>仅统计开启后新启动的 Codex 调用；关闭不会删除历史记录。</p>
               </div>
               <label className="codex-usage-switch">
                 <span>启用 Codex 用量采集</span>
@@ -601,7 +599,6 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
                 />
               </label>
             </div>
-            <p className="codex-usage-helper">Provider 按根 config.toml 的 base URL 归因；不会显示认证参数。</p>
             {!config.enabled && hasHistoricalData ? (
               <p className="codex-usage-disabled-history">统计采集已关闭，历史数据仍可查询。</p>
             ) : null}
@@ -639,7 +636,6 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
             <div className="codex-usage-section-heading">
               <div>
                 <h3>筛选条件</h3>
-                <p>日期按服务端本地自然日计算。</p>
               </div>
               <div className="codex-usage-quick-actions" aria-label="日期快捷范围">
                 <button type="button" disabled={querying} onClick={() => applyQuickRange(1)}>今天</button>
@@ -762,7 +758,6 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
                   <div className="codex-usage-section-heading">
                     <div>
                       <h3 id="codex-usage-daily-title">每日明细</h3>
-                      {dailyPagination ? <p>当前仅显示服务端返回的明细行。</p> : null}
                     </div>
                   </div>
                   <div className="codex-usage-table-wrap">
