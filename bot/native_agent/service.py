@@ -605,6 +605,7 @@ class NativeAgentService:
         session: UserSession,
         user_text: str,
         prompt_text: str,
+        fresh_session_prompt_text: str = "",
         history_service: ChatHistoryService,
         actor: dict[str, Any] | None = None,
         protocol: str = "",
@@ -841,6 +842,7 @@ class NativeAgentService:
                 logger.warning("Pi session 失效，清绑定后重试: %s", exc)
                 native_session_id = ""
                 requested_session_id = ""
+                prompt_text = str(fresh_session_prompt_text or prompt_text)
                 with session._lock:
                     session.native_agent_session_id = None
                 session.persist()

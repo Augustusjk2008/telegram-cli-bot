@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -848,6 +849,48 @@ async def test_stream_cli_chat_normalizes_slash_and_preserves_ids_on_legacy_sse_
         trace = next(event for event in events if event["type"] == "trace")
         assert trace["turn_id"] == meta["turn_id"]
         assert trace["assistant_message_id"] == meta["assistant_message_id"]
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_reuses_cluster_guidance_but_refreshes_run_id(
+    usage_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    usage_manager.main_profile.cluster = replace(usage_manager.main_profile.cluster, enabled=True)
+    prompts: list[str] = []
+    processes = iter([_UsageProcess(), _UsageProcess()])
+
+    async def start_capture(*, env, command):
+        return _UsageCapture()
+
+    def build_command(**kwargs):
+        prompts.append(str(kwargs["user_text"]))
+        return ["codex"], False
+
+    monkeypatch.setattr(api_service, "_start_codex_usage_capture", start_capture, raising=False)
+    monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
+    monkeypatch.setattr(api_service, "build_cli_command", build_command)
+    monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(api_service.subprocess, "Popen", lambda *_args, **_kwargs: next(processes))
+
+    for run_id in ("run-1", "run-2"):
+        events = [
+            event
+            async for event in api_service._stream_cli_chat(
+                usage_manager,
+                "main",
+                1001,
+                "hello",
+                cluster_run_id=run_id,
+            )
+        ]
+        assert any(event["type"] == "done" for event in events)
+
+    assert "简单、不可并行或委派成本更高" in prompts[0]
+    assert "当前 run_id: run-1" in prompts[0]
+    assert "简单、不可并行或委派成本更高" not in prompts[1]
+    assert "沿用本会话此前的集群规则" in prompts[1]
+    assert "当前 run_id: run-2" in prompts[1]
 
 
 @pytest.mark.asyncio

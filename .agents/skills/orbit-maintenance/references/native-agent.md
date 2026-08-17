@@ -33,7 +33,7 @@
 - Codex、Claude 在集群轮次中由 `bot/web/api_service.py` 动态注入 `bot/cluster/mcp_stdio.py` launcher；管理页也可生成对应的 `mcp add/get/remove` 命令。
 - Pi 不使用 stdio launcher 注册工具，而由 `bot/cluster/pi_extension/tcb-cluster.ts` 作为宿主适配层，直接调用同一 bridge API。
 - 两种适配层都暴露 `configure_team`、`cluster_status`、`list_agents`、`new_agent_session`、`ask_agent`、`poll_agent_tasks`、`wait_agent_messages`。
-- `bot/data/prompts/cluster_mode.md` 会在集群轮次拼到用户消息前，提供编组与委派规则；MCP tool description 只描述具体工具和参数。
+- `bot/data/prompts/cluster_mode.md` 在底层 agent 会话首轮或集群状态/写入策略变化时拼到用户消息前；连续启用轮次改用 `cluster_turn.md` 只刷新当前 `run_id`，连续关闭轮次不重复提示。MCP tool description 只描述具体工具和参数。
 - 每次工具调用必须显式传入当前 `run_id`；适配层通过 `X-TCB-Cluster-Run-Id` header 传给 bridge，不依赖 `TCB_CLUSTER_RUN_ID` 环境变量。
 - Pi runtime 仅通过 `TCB_CLUSTER_MCP_CONFIG` 定位 bridge 配置；Codex、Claude 的 stdio launcher 从命令行 `--config` 读取同一配置文件。
 - `profile.cluster.enabled` 是当前 Bot 级集群开关；请求体旧 `cluster` 字段仅为兼容输入，不决定是否启动 cluster run。

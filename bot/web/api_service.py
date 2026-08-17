@@ -388,6 +388,7 @@ def _clear_native_agent_session_locked(session: UserSession) -> bool:
     session.native_agent_session_id = None
     session.native_agent_run_id = None
     session.native_agent_server_key = None
+    session._cluster_prompt_state = None
     return changed
 
 
@@ -400,6 +401,7 @@ def _clear_all_native_sessions_locked(session: UserSession) -> bool:
     session.codex_session_id = None
     session.claude_session_id = None
     session.claude_session_initialized = False
+    session._cluster_prompt_state = None
     return _clear_native_agent_session_locked(session) or changed
 
 
@@ -3402,21 +3404,63 @@ def _build_cluster_disabled_prompt() -> str:
     return render_prompt("cluster_disabled")
 
 
+def _build_cluster_turn_prompt(run_id: str) -> str:
+    return render_prompt("cluster_turn", run_id=run_id or "无")
+
+
 def _apply_cluster_prompt(
     profile: BotProfile,
     prompt_text: str,
     *,
+    session: UserSession | None = None,
+    context_kind: str = "",
+    context_id: str = "",
     cluster_run_id: str = "",
     cluster_mentions: list[dict[str, Any]] | None = None,
+    force_full: bool = False,
 ) -> str:
+    prompt_fingerprint = ""
+    full_prompt = ""
     if cluster_run_id:
-        return _build_cluster_prompt(
+        write_policy = str(profile.cluster.write_policy or "").strip()
+        prompt_fingerprint = f"enabled:{write_policy}"
+        full_prompt = _build_cluster_prompt(
             cluster_mentions,
             cluster_run_id,
-            allow_child_write=profile.cluster.write_policy == "all_agents",
-        ) + prompt_text
-    if not profile.cluster.enabled and _has_cluster_child_agents(profile):
-        return _build_cluster_disabled_prompt() + prompt_text
+            allow_child_write=write_policy == "all_agents",
+        )
+    elif not profile.cluster.enabled and _has_cluster_child_agents(profile):
+        prompt_fingerprint = "disabled"
+        full_prompt = _build_cluster_disabled_prompt()
+    else:
+        return prompt_text
+
+    inject_full = True
+    normalized_context_kind = str(context_kind or "").strip().lower()
+    normalized_context_id = str(context_id or "").strip()
+    if session is not None and normalized_context_kind:
+        with session._lock:
+            seen = session._cluster_prompt_state
+            same_prompt = bool(seen and seen[0] == prompt_fingerprint and seen[1] == normalized_context_kind)
+            same_context = bool(
+                same_prompt
+                and (
+                    not seen[2]
+                    or not normalized_context_id
+                    or seen[2] == normalized_context_id
+                )
+            )
+            inject_full = bool(force_full or not normalized_context_id or not same_context)
+            session._cluster_prompt_state = (
+                prompt_fingerprint,
+                normalized_context_kind,
+                normalized_context_id,
+            )
+
+    if inject_full:
+        return full_prompt + prompt_text
+    if cluster_run_id:
+        return _build_cluster_turn_prompt(cluster_run_id) + prompt_text
     return prompt_text
 
 
@@ -3429,6 +3473,14 @@ def _current_native_session_id(session: UserSession, cli_type: str) -> str:
     if normalized == "claude":
         return str(session.claude_session_id or "").strip()
     return ""
+
+
+def _cluster_prompt_context_id(session: UserSession, provider: str) -> str:
+    normalized = str(provider or "").strip().lower()
+    with session._lock:
+        if normalized == "claude" and not session.claude_session_initialized:
+            return ""
+        return _current_native_session_id(session, normalized)
 
 
 def _status_context_session_id(
@@ -4708,15 +4760,30 @@ async def _stream_cli_chat(
         text = "/" + text[2:]
     is_plan_mode = _is_plan_request(request)
     base_prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run_id)) if is_plan_mode else text
-    prompt_text = _apply_cluster_prompt(
-        profile,
-        base_prompt_text,
-        cluster_run_id=cluster_run_id,
-        cluster_mentions=cluster_mentions,
-    )
     stage_durations = _new_stage_durations()
 
     cli_type = normalize_cli_type(profile.cli_type)
+
+    def prepare_prompt(*, force_full_cluster_prompt: bool = False):
+        prepared = _apply_cluster_prompt(
+            profile,
+            base_prompt_text,
+            session=session,
+            context_kind=f"cli:{cli_type}",
+            context_id=_cluster_prompt_context_id(session, cli_type),
+            cluster_run_id=cluster_run_id,
+            cluster_mentions=cluster_mentions,
+            force_full=force_full_cluster_prompt,
+        )
+        if agent.id != "main" and not suppress_agent_prompt:
+            prepared = _apply_agent_prompt_if_needed(prepared, agent, session, cli_type)
+        prepared_done_session = None
+        if cli_type == "claude":
+            prepared_done_session = build_claude_done_session(prepared, cli_type=cli_type)
+            prepared = prepared_done_session.prompt_text
+        return prepared, prepared_done_session
+
+    prompt_text, done_session = prepare_prompt()
     env = _build_cli_env(cli_type)
     if cluster_run_id:
         env["TCB_CLUSTER_ACTIVE"] = "1"
@@ -4725,14 +4792,6 @@ async def _stream_cli_chat(
     resolved_cli = resolve_cli_executable(profile.cli_path, session.working_dir)
     if resolved_cli is None:
         _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
-
-    if agent.id != "main" and not suppress_agent_prompt:
-        prompt_text = _apply_agent_prompt_if_needed(prompt_text, agent, session, cli_type)
-
-    done_session = None
-    if cli_type == "claude":
-        done_session = build_claude_done_session(prompt_text, cli_type=cli_type)
-        prompt_text = done_session.prompt_text
 
     with session._lock:
         if session.is_processing:
@@ -5208,6 +5267,7 @@ async def _stream_cli_chat(
             ):
                 if _clear_invalid_cli_session(session, cli_type):
                     session_id_changed = True
+                prompt_text, done_session = prepare_prompt(force_full_cluster_prompt=True)
                 continue
 
             if cli_type == "codex":
@@ -5521,18 +5581,33 @@ async def _run_native_agent_chat(
     )
     run_status = "completed"
     try:
-        prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run)) if is_plan_mode else text
+        base_prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run)) if is_plan_mode else text
+        context_id = _cluster_prompt_context_id(session, NATIVE_AGENT_PROVIDER)
         prompt_text = _apply_cluster_prompt(
             profile,
-            prompt_text,
+            base_prompt_text,
+            session=session,
+            context_kind=NATIVE_AGENT_PROVIDER,
+            context_id=context_id,
             cluster_run_id=cluster_run.run_id if cluster_run else "",
             cluster_mentions=list(mentions or []),
+        )
+        fresh_session_prompt_text = _apply_cluster_prompt(
+            profile,
+            base_prompt_text,
+            session=session,
+            context_kind=NATIVE_AGENT_PROVIDER,
+            context_id=context_id,
+            cluster_run_id=cluster_run.run_id if cluster_run else "",
+            cluster_mentions=list(mentions or []),
+            force_full=True,
         )
         result = await get_native_agent_service().run_chat(
             profile=profile,
             session=session,
             user_text=text,
             prompt_text=prompt_text,
+            fresh_session_prompt_text=fresh_session_prompt_text,
             history_service=_history_service_for_execution_mode(session, NATIVE_AGENT_PROVIDER),
             actor=_actor_from_request(request_obj),
             cluster_run_id=cluster_run.run_id if cluster_run else "",
@@ -5660,18 +5735,33 @@ async def _stream_native_agent_chat(
     async def produce() -> AsyncIterator[dict[str, Any]]:
         run_status = "completed"
         try:
-            prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run)) if is_plan_mode else text
+            base_prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run)) if is_plan_mode else text
+            context_id = _cluster_prompt_context_id(session, NATIVE_AGENT_PROVIDER)
             prompt_text = _apply_cluster_prompt(
                 profile,
-                prompt_text,
+                base_prompt_text,
+                session=session,
+                context_kind=NATIVE_AGENT_PROVIDER,
+                context_id=context_id,
                 cluster_run_id=cluster_run.run_id if cluster_run else "",
                 cluster_mentions=list(mentions or []),
+            )
+            fresh_session_prompt_text = _apply_cluster_prompt(
+                profile,
+                base_prompt_text,
+                session=session,
+                context_kind=NATIVE_AGENT_PROVIDER,
+                context_id=context_id,
+                cluster_run_id=cluster_run.run_id if cluster_run else "",
+                cluster_mentions=list(mentions or []),
+                force_full=True,
             )
             async for event in service.stream_chat(
                 profile=profile,
                 session=session,
                 user_text=text,
                 prompt_text=prompt_text,
+                fresh_session_prompt_text=fresh_session_prompt_text,
                 history_service=_history_service_for_execution_mode(session, NATIVE_AGENT_PROVIDER),
                 actor=_actor_from_request(request_obj),
                 protocol=protocol,
