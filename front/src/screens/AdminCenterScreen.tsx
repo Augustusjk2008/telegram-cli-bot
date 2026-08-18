@@ -1210,6 +1210,7 @@ export function AdminCenterScreen({
   };
 
   const runTunnelAction = async (action: "start" | "stop" | "restart") => {
+    const fixedPublicForward = tunnel ? isFixedPublicForward(tunnel) : false;
     setTunnelAction(action);
     setError("");
     setNotice("");
@@ -1220,7 +1221,15 @@ export function AdminCenterScreen({
           ? await client.stopTunnel()
           : await client.restartTunnel();
       setTunnel(next);
-      setNotice(action === "restart" ? "Tunnel 已重启" : action === "start" ? "Tunnel 已启动" : "Tunnel 已停止");
+      if (fixedPublicForward && next.status === "error") {
+        setError(next.frpcLastError || next.lastError || "固定公网转发恢复失败");
+      } else {
+        setNotice(
+          action === "restart"
+            ? fixedPublicForward ? "固定公网转发已恢复" : "Tunnel 已重启"
+            : action === "start" ? "Tunnel 已启动" : "Tunnel 已停止",
+        );
+      }
     } catch (nextError) {
       setError(getErrorMessage(nextError, "Tunnel 操作失败"));
     } finally {
@@ -1935,11 +1944,24 @@ export function AdminCenterScreen({
                               重启 Tunnel
                             </button>
                           </>
+                        ) : isFixedPublicForward(tunnel) ? (
+                          <>
+                            <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--muted)]">
+                              固定公网转发通过环境配置维护
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => void runTunnelAction("restart")}
+                              disabled={tunnelAction !== ""}
+                              className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                            >
+                              <RefreshCw className="h-4 w-4" />
+                              {tunnelAction === "restart" ? "恢复中..." : "尝试恢复"}
+                            </button>
+                          </>
                         ) : (
                           <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--muted)]">
-                            {tunnel.source === "fixed_public_forward"
-                              ? "固定公网转发通过环境配置维护"
-                              : "当前使用 WEB_PUBLIC_URL 手工配置地址"}
+                            当前使用 WEB_PUBLIC_URL 手工配置地址
                           </div>
                         )}
 
