@@ -1,4 +1,4 @@
-import { WebApiClientError } from "./types";
+import { DEFAULT_CODEX_USAGE_MODEL, WebApiClientError } from "./types";
 import type {
   AdminUser,
   AdminUserUpdateInput,
@@ -1917,6 +1917,7 @@ export class MockWebBotClient implements WebBotClient {
     },
     rateLimitSamples: [
       {
+        model: DEFAULT_CODEX_USAGE_MODEL,
         sampledAt: "2026-07-20T09:15:00+08:00",
         usedPercent: 18,
         windowMinutes: 10080,
@@ -1924,6 +1925,7 @@ export class MockWebBotClient implements WebBotClient {
         planType: "pro",
       },
       {
+        model: DEFAULT_CODEX_USAGE_MODEL,
         sampledAt: "2026-07-23T14:30:00+08:00",
         usedPercent: 36,
         windowMinutes: 10080,
@@ -1931,6 +1933,7 @@ export class MockWebBotClient implements WebBotClient {
         planType: "pro",
       },
       {
+        model: DEFAULT_CODEX_USAGE_MODEL,
         sampledAt: "2026-07-26T18:45:00+08:00",
         usedPercent: 8,
         windowMinutes: 10080,

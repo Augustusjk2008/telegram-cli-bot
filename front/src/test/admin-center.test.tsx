@@ -174,7 +174,7 @@ test("Transfer Admin Center rejects advanced params that could override the upst
   expect(await screen.findByText("高级 LiteLLM params 不能包含 api_key")).toBeInTheDocument();
 });
 
-test("Codex 用量趋势展示双曲线、不绘制数据点并支持仅限额样本状态", async () => {
+test("Codex 用量趋势按模型分组展示双曲线、不绘制数据点并支持仅限额样本状态", async () => {
   const user = userEvent.setup();
   const client = createAdminClient();
   const stats = await client.getCodexUsageStats();
@@ -199,12 +199,33 @@ test("Codex 用量趋势展示双曲线、不绘制数据点并支持仅限额�
   stats.rateLimitSamples[1].resetsAt = "2026-07-25T06:45:00+08:00";
   stats.rateLimitSamples[2].sampledAt = "2026-07-26T18:45:00+08:00";
   stats.rateLimitSamples[2].resetsAt = "2026-08-02T18:45:00+08:00";
+  stats.rateLimitSamples.push(
+    {
+      model: "gpt-5.3-codex-spark",
+      sampledAt: "2026-07-25T18:45:00+08:00",
+      usedPercent: 40,
+      windowMinutes: 300,
+      resetsAt: "2026-07-25T20:45:00+08:00",
+      planType: "pro",
+    },
+    {
+      model: "gpt-5.3-codex-spark",
+      sampledAt: "2026-07-26T18:45:00+08:00",
+      usedPercent: 50,
+      windowMinutes: 300,
+      resetsAt: "2026-07-26T19:45:00+08:00",
+      planType: "pro",
+    },
+  );
   vi.spyOn(client, "getCodexUsageStats").mockResolvedValue(stats);
 
   const { container } = render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
   await openCodexUsageTab(user);
 
-  const chart = await screen.findByRole("img", { name: /共 3 个样本，当前剩余 92%/ });
+  const chart = await screen.findByRole("img", { name: /gpt-5\.6-sol.*共 3 个样本，当前剩余 92%/ });
+  expect(screen.getByRole("img", { name: /gpt-5\.3-codex-spark.*共 2 个样本/ })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "gpt-5.6-sol", level: 4 })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "gpt-5.3-codex-spark", level: 4 })).toBeInTheDocument();
   expect(screen.getByText("当前剩余 92%")).toBeInTheDocument();
   expect(screen.getByText("剩余时长 7 天")).toBeInTheDocument();
   expect(screen.getByText("已用 8%")).toBeInTheDocument();
@@ -212,7 +233,7 @@ test("Codex 用量趋势展示双曲线、不绘制数据点并支持仅限额�
   expect(screen.queryByText("纵轴为剩余额度，固定显示 0% 至 100%。")).not.toBeInTheDocument();
   expect(screen.queryByText("暂无符合筛选条件的 Codex 用量数据。")).not.toBeInTheDocument();
   expect(screen.queryByRole("table", { name: "Codex 用量 Provider 汇总" })).not.toBeInTheDocument();
-  expect(chart.querySelector("title")?.textContent).toBe("通用 Codex 剩余额度与剩余时长趋势");
+  expect(chart.querySelector("title")?.textContent).toBe("gpt-5.6-sol Codex 剩余额度与剩余时长趋势");
   expect(chart.querySelector("desc")?.textContent).toContain("剩余时长");
   const quotaAxisTitle = chart.querySelector(".codex-usage-rate-limit-quota-axis-title");
   const durationAxisTitle = chart.querySelector(".codex-usage-rate-limit-duration-axis-title");
@@ -270,9 +291,9 @@ test("Codex 用量趋势在没有官方限额样本时显示中文空状态", as
   await openCodexUsageTab(user);
 
   expect(await screen.findByText(
-    "暂无通用 Codex 限额样本；开启采集并完成一次 OpenAI 官方 Codex turn 后显示。",
+    "暂无 Codex 限额样本；开启采集并完成一次 OpenAI 官方 Codex turn 后显示。",
   )).toBeInTheDocument();
-  expect(screen.queryByRole("img", { name: /通用 Codex 剩余额度与剩余时长趋势/ })).not.toBeInTheDocument();
+  expect(screen.queryByRole("img", { name: /Codex 剩余额度与剩余时长趋势/ })).not.toBeInTheDocument();
 });
 
 test("Codex 用量 Provider 筛选排除 OpenAI 官方时清空趋势", async () => {
@@ -282,7 +303,7 @@ test("Codex 用量 Provider 筛选排除 OpenAI 官方时清空趋势", async ()
 
   render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
   await openCodexUsageTab(user);
-  await screen.findByRole("img", { name: /通用 Codex 剩余额度与剩余时长趋势/ });
+  await screen.findByRole("img", { name: /Codex 剩余额度与剩余时长趋势/ });
 
   await user.click(screen.getByLabelText("筛选 Provider：OpenAI 官方"));
   await user.click(screen.getByRole("button", { name: "查询" }));
@@ -291,7 +312,7 @@ test("Codex 用量 Provider 筛选排除 OpenAI 官方时清空趋势", async ()
     providerKeys: ["base_url:https://api.example.test/v1"],
   })));
   expect(await screen.findByText(
-    "暂无通用 Codex 限额样本；开启采集并完成一次 OpenAI 官方 Codex turn 后显示。",
+    "暂无 Codex 限额样本；开启采集并完成一次 OpenAI 官方 Codex turn 后显示。",
   )).toBeInTheDocument();
   expect(screen.queryByText("当前剩余 92%")).not.toBeInTheDocument();
 });

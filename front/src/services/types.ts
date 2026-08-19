@@ -416,6 +416,7 @@ export type CodexUsageMetrics = {
 };
 
 export type CodexRateLimitSample = {
+  model: string;
   sampledAt: string;
   usedPercent: number;
   windowMinutes: number;

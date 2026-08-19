@@ -267,6 +267,16 @@
   gap: 1rem;
 }
 
+.codex-usage-rate-limit-groups {
+  display: grid;
+  gap: 1rem;
+  margin-top: 0.75rem;
+}
+
+.codex-usage-rate-limit-group {
+  min-width: 0;
+}
+
 .codex-usage-rate-limit-summary {
   display: flex;
   flex: 0 1 auto;

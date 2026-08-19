@@ -80,11 +80,11 @@ def test_store_migrates_v1_provider_totals_to_default_model_without_changing_the
     assert result.daily_pagination is not None
     assert result.daily_pagination.total_items == 1
     assert result.rate_limit_samples == ()
-    assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 4
     store.close()
 
 
-def test_store_migrates_v2_to_v3_without_changing_token_totals(tmp_path: Path) -> None:
+def test_store_migrates_v2_to_current_without_changing_token_totals(tmp_path: Path) -> None:
     models, store_module, _ = _core_modules()
     db_path = tmp_path / "usage.sqlite3"
     provider = models.ProviderInfo(
@@ -111,10 +111,46 @@ def test_store_migrates_v2_to_v3_without_changing_token_totals(tmp_path: Path) -
     assert result.totals.total_tokens == 15
     assert result.rate_limit_samples == ()
     assert store._connection is not None
-    assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 4
     assert store._connection.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='rate_limit_samples'"
     ).fetchone() is not None
+    store.close()
+
+
+def test_store_migrates_v3_rate_limits_to_default_model(tmp_path: Path) -> None:
+    _, store_module, _ = _core_modules()
+    db_path = tmp_path / "usage.sqlite3"
+    with sqlite3.connect(db_path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE rate_limit_samples (
+                sample_id INTEGER PRIMARY KEY,
+                day INTEGER NOT NULL,
+                sampled_at_ms INTEGER NOT NULL,
+                used_percent REAL NOT NULL,
+                window_minutes INTEGER NOT NULL,
+                resets_at INTEGER NOT NULL,
+                plan_type TEXT
+            );
+            INSERT INTO rate_limit_samples(
+                day, sampled_at_ms, used_percent,
+                window_minutes, resets_at, plan_type
+            ) VALUES (20260811, 1786413473123, 8, 10080, 1787011285, 'pro');
+            PRAGMA user_version=3;
+            """
+        )
+
+    store = store_module.CodexUsageStore(db_path)
+    result = store.query(date(2026, 8, 11), date(2026, 8, 11))
+
+    assert len(result.rate_limit_samples) == 1
+    assert result.rate_limit_samples[0].model == "gpt-5.6-sol"
+    assert store._connection is not None
+    assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert store._connection.execute(
+        "SELECT model_key FROM rate_limit_samples"
+    ).fetchone()[0] == "gpt-5.6-sol"
     store.close()
 
 
@@ -127,6 +163,7 @@ def test_store_queries_rate_limit_samples_by_date_and_time(tmp_path: Path) -> No
         window_minutes=10_080,
         resets_at=datetime(2026, 8, 18, 8, 1, 25, tzinfo=timezone.utc),
         plan_type="pro",
+        model="gpt-5.3-codex-spark",
     )
     earlier = models.CodexRateLimitSample(
         sampled_at=datetime(2026, 8, 11, 8, 0, 0, 123_000, tzinfo=timezone.utc),
@@ -150,6 +187,10 @@ def test_store_queries_rate_limit_samples_by_date_and_time(tmp_path: Path) -> No
 
     assert result.totals.request_count == 0
     assert result.rate_limit_samples == (earlier, later)
+    assert [sample.model for sample in result.rate_limit_samples] == [
+        "gpt-5.6-sol",
+        "gpt-5.3-codex-spark",
+    ]
     store.close()
 
 

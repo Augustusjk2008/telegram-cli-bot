@@ -153,6 +153,7 @@ describe("RealWebBotClient", () => {
     fetchMock.mockResolvedValue(jsonOk({
       rate_limit_samples: [
         {
+          model: "gpt-5.3-codex-spark",
           sampled_at: "2026-08-11T12:57:53+08:00",
           used_percent: 8,
           window_minutes: 10080,
@@ -181,6 +182,7 @@ describe("RealWebBotClient", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/codex-usage/stats", expect.objectContaining({ cache: "no-store" }));
     expect(stats.rateLimitSamples).toEqual([
       {
+        model: "gpt-5.3-codex-spark",
         sampledAt: "2026-08-11T12:57:53+08:00",
         usedPercent: 8,
         windowMinutes: 10080,
@@ -188,6 +190,7 @@ describe("RealWebBotClient", () => {
         planType: "pro",
       },
       {
+        model: "gpt-5.6-sol",
         sampledAt: "2026-08-11T13:00:00+08:00",
         usedPercent: 100,
         windowMinutes: 60,

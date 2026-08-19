@@ -27,7 +27,7 @@ from .models import (
 )
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 _SETTING_ENABLED = "enabled"
 
 _SCHEMA_SQL = """
@@ -82,6 +82,7 @@ ON daily_model_usage(provider_id, day);
 CREATE TABLE IF NOT EXISTS rate_limit_samples (
     sample_id INTEGER PRIMARY KEY,
     day INTEGER NOT NULL,
+    model_key TEXT NOT NULL CHECK (trim(model_key) <> ''),
     sampled_at_ms INTEGER NOT NULL,
     used_percent REAL NOT NULL
         CHECK (used_percent >= 0 AND used_percent <= 100),
@@ -138,7 +139,7 @@ class CodexUsageStore:
     @staticmethod
     def _ensure_schema(connection: sqlite3.Connection) -> None:
         version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if version not in {0, 1, 2, SCHEMA_VERSION}:
+        if version not in {0, 1, 2, 3, SCHEMA_VERSION}:
             raise RuntimeError(f"不支持的 Codex usage schema 版本: {version}")
         connection.executescript(_SCHEMA_SQL)
         if version == 1:
@@ -156,8 +157,17 @@ class CodexUsageStore:
                     """,
                     (DEFAULT_CODEX_MODEL,),
                 )
-                connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
-        elif version in {0, 2}:
+        if version == 3:
+            with connection:
+                connection.execute(
+                    f"""
+                    ALTER TABLE rate_limit_samples
+                    ADD COLUMN model_key TEXT NOT NULL
+                    DEFAULT '{DEFAULT_CODEX_MODEL}'
+                    CHECK (trim(model_key) <> '')
+                    """
+                )
+        if version != SCHEMA_VERSION:
             connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     @staticmethod
@@ -188,6 +198,7 @@ class CodexUsageStore:
             window_minutes=int(row["window_minutes"]),
             resets_at=epoch + timedelta(seconds=int(row["resets_at"])),
             plan_type=row["plan_type"],
+            model=str(row["model_key"]),
         )
 
     @staticmethod
@@ -372,12 +383,13 @@ class CodexUsageStore:
                 connection.execute(
                     """
                     INSERT INTO rate_limit_samples(
-                        day, sampled_at_ms, used_percent,
+                        day, model_key, sampled_at_ms, used_percent,
                         window_minutes, resets_at, plan_type
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         sample_day,
+                        sample.model,
                         sampled_at_ms,
                         sample.used_percent,
                         sample.window_minutes,
@@ -436,7 +448,7 @@ class CodexUsageStore:
             if selected_keys is None or "openai_official" in selected_keys:
                 rate_limit_rows = connection.execute(
                     """
-                    SELECT sampled_at_ms, used_percent, window_minutes, resets_at, plan_type
+                    SELECT model_key, sampled_at_ms, used_percent, window_minutes, resets_at, plan_type
                     FROM rate_limit_samples
                     WHERE day >= ? AND day <= ?
                     ORDER BY sampled_at_ms ASC, sample_id ASC

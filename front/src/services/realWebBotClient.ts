@@ -1475,6 +1475,7 @@ type RawCodexUsageMetrics = {
 };
 
 type RawCodexRateLimitSample = {
+  model?: unknown;
   sampled_at?: unknown;
   used_percent?: unknown;
   window_minutes?: unknown;
@@ -3704,7 +3705,14 @@ function mapCodexRateLimitSample(raw: RawCodexRateLimitSample): CodexRateLimitSa
   const planType = typeof raw.plan_type === "string" && raw.plan_type.trim()
     ? raw.plan_type.trim()
     : null;
-  return { sampledAt, usedPercent, windowMinutes, resetsAt, planType };
+  return {
+    model: mapCodexUsageModel(raw.model),
+    sampledAt,
+    usedPercent,
+    windowMinutes,
+    resetsAt,
+    planType,
+  };
 }
 
 function positiveInteger(value: unknown, fallback: number) {

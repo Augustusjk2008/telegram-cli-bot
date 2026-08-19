@@ -113,7 +113,7 @@ async def test_official_capture_records_one_rate_limit_sample(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_spark_capture_excludes_general_rate_limit(tmp_path: Path) -> None:
+async def test_spark_capture_records_secondary_rate_limit(tmp_path: Path) -> None:
     rate_limit_resolver = _RateLimitResolver(
         TurnRateLimitResolution(sample=None, refresh_general=True)
     )
@@ -140,9 +140,11 @@ async def test_spark_capture_excludes_general_rate_limit(tmp_path: Path) -> None
     assert capture.model == "gpt-5.3-codex-spark"
     assert recorded is True
     assert [item.model for item in result.by_provider_model] == ["gpt-5.3-codex-spark"]
-    assert rate_limit_resolver.calls == []
-    assert account_rate_limit_resolver.calls == []
-    assert result.rate_limit_samples == ()
+    assert len(rate_limit_resolver.calls) == 1
+    assert len(account_rate_limit_resolver.calls) == 1
+    assert account_rate_limit_resolver.calls[0]["limit_id"] == "codex_bengalfox"
+    assert len(result.rate_limit_samples) == 1
+    assert result.rate_limit_samples[0].model == "gpt-5.3-codex-spark"
 
 
 @pytest.mark.asyncio
@@ -435,6 +437,7 @@ async def test_query_stats_returns_local_rate_limit_payload(tmp_path: Path) -> N
 
     assert payload["rate_limit_samples"] == [
         {
+            "model": "gpt-5.6-sol",
             "sampled_at": _sample().sampled_at.astimezone().isoformat(),
             "used_percent": 8.0,
             "window_minutes": 10_080,

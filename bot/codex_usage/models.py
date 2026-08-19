@@ -84,6 +84,7 @@ class CodexRateLimitSample:
     window_minutes: int
     resets_at: datetime
     plan_type: str | None = None
+    model: str = DEFAULT_CODEX_MODEL
 
     def __post_init__(self) -> None:
         for field_name in ("sampled_at", "resets_at"):
@@ -120,6 +121,7 @@ class CodexRateLimitSample:
             raise ValueError("window_minutes 必须是 SQLite 有符号 64 位正整数")
         if self.plan_type is not None and not isinstance(self.plan_type, str):
             raise ValueError("plan_type 必须是字符串或空值")
+        object.__setattr__(self, "model", normalize_model_key(self.model))
 
 
 @dataclass(frozen=True, slots=True)
