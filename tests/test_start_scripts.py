@@ -152,6 +152,43 @@ def test_start_scripts_guard_python_version_consistently() -> None:
         assert "3.10" in text and "3.14" in text
 
 
+def test_start_ps1_uses_the_existing_entry_as_the_windows_tray_supervisor() -> None:
+    content = Path("start.ps1").read_text(encoding="utf-8")
+
+    param_block = content[: content.index("$ErrorActionPreference")]
+    tray = _between(
+        content,
+        "function Invoke-TraySupervisor {",
+        "\nif (-not $ServiceProcess)",
+    )
+
+    assert "[switch]$ServiceProcess" in param_block
+    assert "[long]$LauncherWindowHandle" in param_block
+    assert "System.Windows.Forms.NotifyIcon" in tray
+    assert '"front\\public\\assets\\app-logo.ico"' in tray
+    assert '"-ServiceProcess"' in tray
+    assert "add_DoubleClick" in tray
+    assert '"显示控制台"' in tray
+    assert '"隐藏控制台"' in tray
+    assert '"退出"' in tray
+    assert "PostMessage" in content
+
+    tray_gate_index = content.index("if (-not $ServiceProcess)")
+    service_start_index = content.index("try {\n    Set-Location $scriptDir")
+    assert tray_gate_index < service_start_index
+
+
+def test_start_bat_passes_its_console_window_to_the_tray_supervisor() -> None:
+    content = Path("start.bat").read_text(encoding="utf-8")
+
+    assert "GetConsoleWindow" in content
+    assert "-LauncherWindowHandle" in content
+
+
+def test_start_ps1_keeps_utf8_bom_for_windows_powershell_compatibility() -> None:
+    assert Path("start.ps1").read_bytes().startswith(b"\xef\xbb\xbf")
+
+
 def test_frontend_precompression_script_is_part_of_build_and_startup_hashes() -> None:
     package = Path("front/package.json").read_text(encoding="utf-8")
     powershell = Path("start.ps1").read_text(encoding="utf-8")
@@ -161,6 +198,29 @@ def test_frontend_precompression_script_is_part_of_build_and_startup_hashes() ->
     assert build_command in package
     assert powershell.count('"front\\scripts\\precompress-assets.mjs"') == 1
     assert shell.count("front/scripts/precompress-assets.mjs") == 2
+
+
+def test_startup_frontend_build_is_quiet_on_success_and_replays_failures() -> None:
+    powershell = Path("start.ps1").read_text(encoding="utf-8")
+    shell = Path("start.sh").read_text(encoding="utf-8")
+
+    powershell_sync = _between(
+        powershell,
+        "function Sync-FrontendAssets {",
+        "\nfunction Show-TunnelHint {",
+    )
+    assert "$buildOutput = @(& $npmCommand run build 2>&1)" in powershell_sync
+    assert "$buildOutput | Out-Host" in powershell_sync
+    assert 'Write-Info "前端构建完成。"' in powershell_sync
+
+    shell_sync = _between(
+        shell,
+        "sync_frontend_assets() {",
+        '\nif is_truthy "${TCB_STARTUP_FORCE_DEP_INSTALL:-}"; then',
+    )
+    assert 'npm run build) >"$build_log" 2>&1' in shell_sync
+    assert 'cat "$build_log" >&2' in shell_sync
+    assert 'info "前端构建完成。"' in shell_sync
 
 
 def test_start_bat_retries_after_windows_service_failure_instead_of_exiting() -> None:
@@ -176,4 +236,3 @@ def test_start_bat_retries_after_windows_service_failure_instead_of_exiting() ->
     assert start_label_index < launch_index < failure_index < pause_index < retry_index < success_exit_index
     assert "exit /b %EXIT_CODE%" not in content[failure_index:]
     assert content.index('set "ERRORLEVEL="') < start_label_index
-

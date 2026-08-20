@@ -1210,6 +1210,7 @@ export function AdminCenterScreen({
   };
 
   const runTunnelAction = async (action: "start" | "stop" | "restart") => {
+    const fixedPublicForward = tunnel ? isFixedPublicForward(tunnel) : false;
     setTunnelAction(action);
     setError("");
     setNotice("");
@@ -1220,7 +1221,15 @@ export function AdminCenterScreen({
           ? await client.stopTunnel()
           : await client.restartTunnel();
       setTunnel(next);
-      setNotice(action === "restart" ? "Tunnel 已重启" : action === "start" ? "Tunnel 已启动" : "Tunnel 已停止");
+      if (fixedPublicForward && next.status === "error") {
+        setError(next.frpcLastError || next.lastError || "固定公网转发恢复失败");
+      } else {
+        setNotice(
+          action === "restart"
+            ? fixedPublicForward ? "固定公网转发已恢复" : "Tunnel 已重启"
+            : action === "start" ? "Tunnel 已启动" : "Tunnel 已停止",
+        );
+      }
     } catch (nextError) {
       setError(getErrorMessage(nextError, "Tunnel 操作失败"));
     } finally {
@@ -1512,7 +1521,6 @@ export function AdminCenterScreen({
         <header className="mb-3 flex flex-wrap items-start justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-3">
           <div className="space-y-1">
             <h1 className="text-2xl font-bold text-[var(--text)]">管理中心</h1>
-            <p className="text-sm text-[var(--muted)]">用户权限、邀请码和升级入口集中到这里。</p>
           </div>
           <button
             type="button"
@@ -1777,7 +1785,6 @@ export function AdminCenterScreen({
                 <Globe className="mt-0.5 h-5 w-5 text-[var(--accent)]" />
                 <div>
                   <h2 className="text-base font-semibold text-[var(--text)]">网络访问</h2>
-                  <p className="text-sm text-[var(--muted)]">Git 代理、Tunnel 和公网访问集中在这里维护。</p>
                 </div>
               </div>
 
@@ -1937,11 +1944,24 @@ export function AdminCenterScreen({
                               重启 Tunnel
                             </button>
                           </>
+                        ) : isFixedPublicForward(tunnel) ? (
+                          <>
+                            <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--muted)]">
+                              固定公网转发通过环境配置维护
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => void runTunnelAction("restart")}
+                              disabled={tunnelAction !== ""}
+                              className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                            >
+                              <RefreshCw className="h-4 w-4" />
+                              {tunnelAction === "restart" ? "恢复中..." : "尝试恢复"}
+                            </button>
+                          </>
                         ) : (
                           <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--muted)]">
-                            {tunnel.source === "fixed_public_forward"
-                              ? "固定公网转发通过环境配置维护"
-                              : "当前使用 WEB_PUBLIC_URL 手工配置地址"}
+                            当前使用 WEB_PUBLIC_URL 手工配置地址
                           </div>
                         )}
 
@@ -1969,7 +1989,6 @@ export function AdminCenterScreen({
               <Bell className="mt-0.5 h-5 w-5 text-[var(--accent)]" />
               <div>
                 <h2 className="text-base font-semibold text-[var(--text)]">通知</h2>
-                <p className="text-sm text-[var(--muted)]">PushPlus 服务端推送和相关环境配置入口。</p>
               </div>
             </div>
 
@@ -2080,7 +2099,6 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h2 id="transfer-bridge-title" className="text-base font-semibold text-[var(--text)]">LiteLLM 网关</h2>
-                <p className="text-sm text-[var(--muted)]">本层仅反代；Responses / Chat Completions bridge 由 LiteLLM 原生配置处理。</p>
               </div>
               <span className={`rounded-full border px-3 py-1 text-sm font-medium ${transferStatusClass(transferStatus)}`}>
                 {transferStatusLabel(transferStatus)}
@@ -2366,7 +2384,6 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
           <section className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
             <div>
               <h2 className="text-base font-semibold text-[var(--text)]">联机聊天</h2>
-              <p className="text-sm text-[var(--muted)]">一台实例作为主机，其它实例填主机地址和房间密钥加入。</p>
             </div>
 
             <div className="grid gap-3 sm:grid-cols-3">
@@ -2814,7 +2831,6 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             <section className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
               <div>
                 <h2 className="text-base font-semibold text-[var(--text)]">发布公告</h2>
-                <p className="text-sm text-[var(--muted)]">发布后系统自动生成编号和时间，用户下次登录会自动看到。</p>
               </div>
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -3025,7 +3041,6 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             <div className="flex flex-wrap items-end justify-between gap-3">
               <div>
                 <h2 id="cli-error-stats-title" className="text-base font-semibold text-[var(--text)]">CLI 错误统计</h2>
-                <p className="text-sm text-[var(--muted)]">最近错误、类别和高频文本。</p>
               </div>
               <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
                 时间范围

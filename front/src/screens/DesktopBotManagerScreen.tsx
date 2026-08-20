@@ -85,10 +85,10 @@ const INSPECTOR_DEFAULT_WIDTH = 400;
 const DELETE_WORKSPACE_CONFIRM_TEXT = "永久删除";
 const DEFAULT_CLUSTER_CONFIG: BotClusterConfig = {
   enabled: false,
-  writePolicy: "main_only",
+  writePolicy: "all_agents",
   conflictPolicy: "snapshot_diff",
-  maxParallelAgents: 2,
-  defaultTimeoutSeconds: 600,
+  maxParallelAgents: 3,
+  defaultTimeoutSeconds: 1800,
   modelTiers: { low: "", medium: "", high: "" },
   reasoningEfforts: { low: "", medium: "", high: "" },
 };
@@ -877,7 +877,7 @@ function EditPanel({
                     className="h-9 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 text-sm"
                   >
                     <option value="main_only">仅主 Agent 可写</option>
-                    <option value="all_agents">允许子 Agent 按任务申请写入</option>
+                    <option value="all_agents">允许子 Agent 写入</option>
                   </select>
                 </label>
                 <label className="grid gap-1 text-sm">

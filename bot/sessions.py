@@ -292,7 +292,7 @@ def _build_session_from_store(
             or native_agent_session_id
             or working_dir != default_working_dir
         ):
-            logger.info(
+            logger.debug(
                 f"已恢复会话: bot={bot_id}, user={user_id}, "
                 f"codex={codex_session_id is not None}, "
                 f"claude={claude_session_id is not None}, "
@@ -521,4 +521,4 @@ def save_all_sessions():
 
     for session in targets:
         session.persist()
-    logger.info("已保存所有会话到持久化存储")
+    logger.debug("已保存所有会话到持久化存储")

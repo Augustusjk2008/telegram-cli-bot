@@ -16,7 +16,9 @@ def test_cluster_config_migrates_write_policy_and_serializes_version_two() -> No
     selected = normalize_bot_cluster_config({"write_policy": "selected_agents"})
     writable = normalize_bot_cluster_config({"write_policy": "all_agents"})
 
-    assert missing.write_policy == "main_only"
+    assert missing.write_policy == "all_agents"
+    assert missing.max_parallel_agents == 3
+    assert missing.default_timeout_seconds == 1800
     assert selected.write_policy == "main_only"
     assert writable.write_policy == "all_agents"
     assert missing.to_dict()["orchestration_version"] == 2

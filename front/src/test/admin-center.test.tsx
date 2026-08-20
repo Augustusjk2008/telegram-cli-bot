@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { AdminCenterScreen } from "../screens/AdminCenterScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { TransferBridgeConfigInput, TransferBridgeStatus } from "../services/types";
+import type { TransferBridgeConfigInput, TransferBridgeStatus, TunnelSnapshot } from "../services/types";
 
 function transferStatus(overrides: Partial<TransferBridgeStatus> = {}): TransferBridgeStatus {
   return {
@@ -59,6 +59,57 @@ async function openCodexUsageTab(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("tab", { name: "Codex 用量" }));
   await screen.findByRole("heading", { name: "Codex 用量" });
 }
+
+async function openNetworkTab(user: ReturnType<typeof userEvent.setup>) {
+  await screen.findByText("用户权限");
+  await user.click(screen.getByRole("tab", { name: "网络访问" }));
+  await screen.findByRole("heading", { name: "公网访问" });
+}
+
+function fixedForwardSnapshot(overrides: Partial<TunnelSnapshot> = {}): TunnelSnapshot {
+  return {
+    mode: "fixed_public_forward",
+    status: "error",
+    source: "fixed_public_forward",
+    publicUrl: "http://hub.example.test/node/node-a/",
+    localUrl: "http://127.0.0.1:8765",
+    lastError: "frps 端口不通/安全组未放通",
+    verified: false,
+    fixedPublicForwardEnabled: true,
+    nodeId: "node-a",
+    basePath: "/node/node-a",
+    frpcStatus: "error",
+    frpcPid: null,
+    frpcLastError: "frps 端口不通/安全组未放通",
+    heartbeatStatus: "error",
+    heartbeatLastAt: "2026-08-18T01:52:39Z",
+    heartbeatLastError: "Hub 心跳失败",
+    ...overrides,
+  };
+}
+
+test("固定公网转发异常时可以手动尝试恢复", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  vi.spyOn(client, "getTunnelStatus").mockResolvedValue(fixedForwardSnapshot());
+  const restartTunnel = vi.spyOn(client, "restartTunnel").mockResolvedValue(fixedForwardSnapshot({
+    status: "running",
+    lastError: "",
+    verified: true,
+    frpcStatus: "running",
+    frpcPid: 4321,
+    frpcLastError: "",
+    heartbeatStatus: "online",
+    heartbeatLastError: "",
+  }));
+
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+  await openNetworkTab(user);
+  await user.click(screen.getByRole("button", { name: "尝试恢复" }));
+
+  await waitFor(() => expect(restartTunnel).toHaveBeenCalledTimes(1));
+  expect(await screen.findByText("固定公网转发已恢复")).toBeInTheDocument();
+});
 
 test("Transfer Admin Center exposes only providerApiKeySet, never an upstream key returned by status", async () => {
   const user = userEvent.setup();

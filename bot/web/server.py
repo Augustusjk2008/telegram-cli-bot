@@ -1631,7 +1631,7 @@ class WebApiServer:
 
         copied = self._copy_text_to_clipboard(public_url)
         if copied:
-            logger.info("已复制 Web 公网地址到剪贴板 reason=%s url=%s", reason, public_url)
+            logger.debug("已复制 Web 公网地址到剪贴板 reason=%s url=%s", reason, public_url)
         qr_printed = self._print_public_url_qr(public_url)
         return copied or qr_printed
 
@@ -2336,7 +2336,7 @@ class WebApiServer:
                         await response.write(encoded)
                     except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
                         client_disconnected = True
-                        logger.info(
+                        logger.debug(
                             "Web SSE 客户端已断开，继续在后台完成任务: alias=%s user_id=%s",
                             alias,
                             auth.user_id,
@@ -2371,7 +2371,7 @@ class WebApiServer:
                         await response.write(encoded_event)
                 except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
                     client_disconnected = True
-                    logger.info(
+                    logger.debug(
                         "Web SSE 客户端已断开，继续在后台完成任务: alias=%s user_id=%s",
                         alias,
                         auth.user_id,
@@ -2386,7 +2386,7 @@ class WebApiServer:
             try:
                 await response.write_eof()
             except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
-                logger.info(
+                logger.debug(
                     "Web SSE 客户端在结束前断开: alias=%s user_id=%s",
                     alias,
                     auth.user_id,
@@ -2455,7 +2455,7 @@ class WebApiServer:
             "forwarded_proto": request.headers.get("X-Forwarded-Proto", ""),
             "upgrade_hint": upgrade_hint,
         }
-        logger.info(
+        logger.debug(
             "终端 WebSocket 探针 path=%s auth=%s origin_allowed=%s host=%s origin=%s forwarded_host=%s forwarded_proto=%s",
             data["path"],
             auth_status,
@@ -2514,7 +2514,7 @@ class WebApiServer:
         from_seq = int(request.query.get("from_seq") or 0)
         protocol_version = 2 if str(request.query.get("protocol") or request.query.get("version") or "1") == "2" else 1
         request_path = self._request_log_path(request)
-        logger.info(
+        logger.debug(
             "终端 HTTP stream attach 开始 path=%s user_id=%s owner=%s from_seq=%s",
             request_path,
             auth.user_id,
@@ -2563,7 +2563,7 @@ class WebApiServer:
                     },
                 )
             )
-            logger.info(
+            logger.debug(
                 "终端 HTTP stream attach 成功 user_id=%s owner=%s pty=%s last_seq=%s",
                 auth.user_id,
                 owner_id,
@@ -2610,7 +2610,7 @@ class WebApiServer:
                 )
         except _CLIENT_DISCONNECT_ERRORS:
             client_disconnected = True
-            logger.info("终端 HTTP stream 客户端已断开，停止转发输出: owner=%s", owner_id)
+            logger.debug("终端 HTTP stream 客户端已断开，停止转发输出: owner=%s", owner_id)
         except Exception as exc:
             logger.exception("终端 HTTP stream 转发失败: owner=%s", owner_id)
             try:
@@ -2716,7 +2716,7 @@ class WebApiServer:
         )
 
     async def terminal_ws(self, request: web.Request) -> web.WebSocketResponse:
-        logger.info(
+        logger.debug(
             "终端 WebSocket 请求到达 path=%s host=%s origin=%s forwarded_host=%s forwarded_proto=%s upgrade=%s has_token=%s remote=%s",
             self._request_log_path(request),
             request.headers.get("Host", ""),
@@ -2729,7 +2729,7 @@ class WebApiServer:
         )
         auth = await self._with_websocket_capability(request, CAP_TERMINAL_EXEC)
         request_path = self._request_log_path(request)
-        logger.info(
+        logger.debug(
             "终端 WebSocket 鉴权通过 path=%s user_id=%s account=%s capability=%s",
             request_path,
             auth.user_id,
@@ -2758,7 +2758,7 @@ class WebApiServer:
                 await ws.close(code=WSCloseCode.POLICY_VIOLATION, message=b"terminal init timeout")
                 return ws
             if init_message.type in {WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR}:
-                logger.info(
+                logger.debug(
                     "终端 WebSocket 初始化前关闭 path=%s user_id=%s type=%s",
                     request_path,
                     auth.user_id,
@@ -2776,7 +2776,7 @@ class WebApiServer:
             owner_id = self._resolve_terminal_owner_id(init_data.get("owner_id") or request.query.get("owner_id"))
             from_seq = int(init_data.get("from_seq") or request.query.get("from_seq") or 0)
             protocol_version = 2 if int(init_data.get("protocol_version") or init_data.get("version") or 1) >= 2 else 1
-            logger.info(
+            logger.debug(
                 "终端 WebSocket attach 开始 path=%s user_id=%s owner=%s from_seq=%s",
                 request_path,
                 auth.user_id,
@@ -2798,9 +2798,9 @@ class WebApiServer:
                     "protocol_version": protocol_version,
                 })
             except _CLIENT_DISCONNECT_ERRORS:
-                logger.info("终端 WebSocket 客户端在初始化完成前断开: owner=%s", owner_id)
+                logger.debug("终端 WebSocket 客户端在初始化完成前断开: owner=%s", owner_id)
                 return ws
-            logger.info(
+            logger.debug(
                 "终端 WebSocket attach 成功 user_id=%s owner=%s pty=%s last_seq=%s",
                 auth.user_id,
                 owner_id,
@@ -2832,7 +2832,7 @@ class WebApiServer:
                         elif isinstance(data, bytes):
                             await ws.send_bytes(data)
                     except _CLIENT_DISCONNECT_ERRORS:
-                        logger.info("终端 WebSocket 客户端已断开，停止转发输出: owner=%s", owner_id)
+                        logger.debug("终端 WebSocket 客户端已断开，停止转发输出: owner=%s", owner_id)
                         break
 
             async def forward_input() -> None:
@@ -4613,13 +4613,13 @@ class WebApiServer:
                 await response.write(_format_sse(event["type"], event))
             except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
                 client_disconnected = True
-                logger.info("更新下载 SSE 客户端已断开，继续在后台下载")
+                logger.debug("更新下载 SSE 客户端已断开，继续在后台下载")
 
         if not client_disconnected:
             try:
                 await response.write_eof()
             except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
-                logger.info("更新下载 SSE 客户端在结束前断开")
+                logger.debug("更新下载 SSE 客户端在结束前断开")
         return response
 
     async def admin_update_offline_packages(self, request: web.Request) -> web.Response:
@@ -5055,13 +5055,13 @@ class WebApiServer:
             self._update_task = asyncio.create_task(self._auto_refresh_update_status())
         if self._fixed_forward_service.should_autostart():
             fixed_snapshot = await self._fixed_forward_service.start()
-            logger.info("固定公网转发状态: %s %s", fixed_snapshot.get("status"), fixed_snapshot.get("public_url") or "")
+            logger.debug("固定公网转发状态: %s %s", fixed_snapshot.get("status"), fixed_snapshot.get("public_url") or "")
         if self._tunnel_service.should_autostart():
             tunnel_snapshot = await self._tunnel_service.start()
             await self._notify_or_schedule_tunnel_public_url(tunnel_snapshot, reason="web_server_start")
-            logger.info("Web tunnel 状态: %s %s", tunnel_snapshot.get("status"), tunnel_snapshot.get("public_url") or "")
+            logger.debug("Web tunnel 状态: %s %s", tunnel_snapshot.get("status"), tunnel_snapshot.get("public_url") or "")
         local_url = TunnelService._build_local_url(self._host, self._port)
-        logger.info(
+        logger.debug(
             "Web API 已启动: %s (token=%s, allowed_origins=%s, node_id=%s, base_path=%s, public_url=%s, fixed_public_url=%s)",
             local_url,
             "已配置" if WEB_API_TOKEN else "未配置",
@@ -5209,4 +5209,4 @@ class WebApiServer:
         await asyncio.to_thread(close_session_store)
         self._runner = None
         self._site = None
-        logger.info("Web API 已停止")
+        logger.debug("Web API 已停止")

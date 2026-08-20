@@ -946,10 +946,49 @@ test("opens child conversations from the dynamic cluster team and returns to mai
     conflictPolicy: "snapshot_diff" as const,
     maxParallelAgents: 3,
     defaultTimeoutSeconds: 600,
-    modelTiers: { low: "", medium: "", high: "" },
-    reasoningEfforts: { low: "", medium: "", high: "" },
+    modelTiers: { low: "gpt-5.6-mini", medium: "gpt-5.6-codex", high: "gpt-5.6-pro" },
+    reasoningEfforts: { low: "low", medium: "medium", high: "xhigh" },
   };
-  const getBotOverview = vi.fn<WebBotClient["getBotOverview"]>(async (): Promise<BotOverview> => ({
+  const clusterTeam = {
+    version: 1 as const,
+    assignments: [
+      {
+        agentId: "reviewer",
+        name: "动态审查员",
+        responsibility: "审查本轮改动",
+        assignmentRevision: 2,
+      },
+      {
+        agentId: "tester",
+        name: "动态测试员",
+        responsibility: "验证本轮改动",
+        assignmentRevision: 1,
+      },
+    ],
+  };
+  const clusterTaskStatus = {
+    tasks: [{
+      taskId: "task-reviewer-high",
+      agentId: "reviewer",
+      roleName: "动态审查员",
+      responsibility: "审查本轮改动",
+      teamRevision: 2,
+      assignmentRevision: 2,
+      status: "completed",
+      modelTier: "high",
+      allowWrite: false,
+      createdAt: "2026-08-12T00:00:00Z",
+      startedAt: "2026-08-12T00:00:01Z",
+      completedAt: "2026-08-12T00:00:02Z",
+      error: "",
+    }],
+    queuedCount: 0,
+    runningCount: 0,
+    completedCount: 1,
+    failedCount: 0,
+    pendingCount: 0,
+  };
+  const getBotOverview = vi.fn<WebBotClient["getBotOverview"]>(async (_botAlias, options): Promise<BotOverview> => ({
     alias: "main",
     cliType: "codex",
     status: "running",
@@ -957,6 +996,17 @@ test("opens child conversations from the dynamic cluster team and returns to mai
     isProcessing: false,
     cluster,
     agents: (await listAgents()).items,
+    ...(!options?.agentId ? {
+      activeClusterRun: {
+        runId: "run-readonly-child",
+        status: "running",
+        team: clusterTeam,
+        teamRevision: 2,
+        capacity: 3,
+        freeSlots: 1,
+        tasks: clusterTaskStatus,
+      },
+    } : {}),
   }));
   const listConversations = vi.fn<WebBotClient["listConversations"]>(async (_botAlias, _query, options): Promise<ConversationListResult> => ({
     activeConversationId: options?.agentId ? "conv-reviewer" : "conv-main",
@@ -988,29 +1038,14 @@ test("opens child conversations from the dynamic cluster team and returns to mai
       cliType: "codex",
       agentId: "main",
       workingDir: "C:\\workspace",
-      clusterTeam: {
-        version: 1,
-        assignments: [
-          {
-            agentId: "reviewer",
-            name: "动态审查员",
-            responsibility: "审查本轮改动",
-            assignmentRevision: 2,
-          },
-          {
-            agentId: "tester",
-            name: "动态测试员",
-            responsibility: "验证本轮改动",
-            assignmentRevision: 1,
-          },
-        ],
-      },
+      clusterTeam,
       clusterTeamRevision: 2,
       createdAt: "2026-08-12T00:00:00Z",
       updatedAt: "2026-08-12T00:00:00Z",
     }],
   }));
-  const client = createClient({ getBotOverview, listAgents, listMessages, listConversations });
+  const getClusterTaskStatus = vi.fn<WebBotClient["getClusterTaskStatus"]>(async () => clusterTaskStatus);
+  const client = createClient({ getBotOverview, listAgents, listMessages, listConversations, getClusterTaskStatus });
   const sendMessage = vi.spyOn(client, "sendMessage");
 
   render(<ChatScreen botAlias="main" client={client} />);
@@ -1031,9 +1066,10 @@ test("opens child conversations from the dynamic cluster team and returns to mai
   expect(within(childTeamPanel).getByText("动态审查员")).toBeInTheDocument();
   expect(within(childTeamPanel).queryByText("动态测试员")).not.toBeInTheDocument();
   expect(within(childTeamPanel).queryByText("审查本轮改动")).not.toBeInTheDocument();
-  expect(screen.getByPlaceholderText("不能直接给子 Agent 发消息")).toBeDisabled();
-  expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
-  await user.click(screen.getByRole("button", { name: "发送" }));
+  const readOnlyStatus = "会话只读 · 模型：gpt-5.6-pro · 思考深度：xhigh";
+  expect(screen.getAllByText(readOnlyStatus)).toHaveLength(1);
+  expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "发送" })).not.toBeInTheDocument();
   expect(sendMessage).not.toHaveBeenCalled();
   expect(within(screen.getByTestId("chat-scroll-container")).queryByRole("button", { name: "返回主 Agent" })).not.toBeInTheDocument();
 

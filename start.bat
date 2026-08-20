@@ -57,10 +57,14 @@ echo [INFO] Starting service with %PS_EXE%...
   "$hostExe = $env:CLI_BRIDGE_PS_EXE;" ^
   "$scriptPath = $env:SCRIPT_PATH;" ^
   "$mode = $env:CLI_BRIDGE_START_MODE;" ^
+  "$nativeMember = '[System.Runtime.InteropServices.DllImport(' + [char]34 + 'kernel32.dll' + [char]34 + ')] public static extern System.IntPtr GetConsoleWindow();';" ^
+  "Add-Type -Name NativeMethods -Namespace TcbLauncher -MemberDefinition $nativeMember;" ^
+  "$launcherWindowHandle = [TcbLauncher.NativeMethods]::GetConsoleWindow().ToInt64();" ^
   "$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent());" ^
   "$isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator);" ^
   "$argumentList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath);" ^
-  "if ($mode) { $argumentList += @('-Mode', $mode) }" ^
+  "if ($mode) { $argumentList += @('-Mode', $mode) };" ^
+  "$argumentList += @('-LauncherWindowHandle', [string]$launcherWindowHandle);" ^
   "if ($isAdmin) { & $hostExe @argumentList; exit $LASTEXITCODE }" ^
   "Write-Host '[INFO] Requesting administrator privileges...';" ^
   "$proc = Start-Process -FilePath $hostExe -Verb RunAs -WorkingDirectory (Split-Path -Parent $scriptPath) -ArgumentList $argumentList -Wait -PassThru;" ^

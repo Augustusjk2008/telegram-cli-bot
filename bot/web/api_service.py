@@ -389,6 +389,7 @@ def _clear_native_agent_session_locked(session: UserSession) -> bool:
     session.native_agent_session_id = None
     session.native_agent_run_id = None
     session.native_agent_server_key = None
+    session._cluster_prompt_state = None
     return changed
 
 
@@ -401,6 +402,7 @@ def _clear_all_native_sessions_locked(session: UserSession) -> bool:
     session.codex_session_id = None
     session.claude_session_id = None
     session.claude_session_initialized = False
+    session._cluster_prompt_state = None
     return _clear_native_agent_session_locked(session) or changed
 
 
@@ -3461,16 +3463,28 @@ async def _run_cluster_agent_task(
             await _CLUSTER_RUNTIME.notify_agent_task_message(run_id)
 
 
-def _build_cluster_prompt(mentions: list[dict[str, Any]] | None, run_id: str = "") -> str:
+def _build_cluster_prompt(
+    mentions: list[dict[str, Any]] | None,
+    run_id: str = "",
+    *,
+    allow_child_write: bool = False,
+) -> str:
     mentioned = ", ".join(
         str(item.get("agent_id") or item.get("agentId") or "").strip()
         for item in (mentions or [])
         if str(item.get("agent_id") or item.get("agentId") or "").strip()
     )
+    write_guidance = (
+        "本轮允许子 agent 写入。委派实现、修复等需要修改文件的任务时，应为负责实现的子 agent "
+        "设置 allow_write=true；分析、调研、审查任务保持只读。"
+        if allow_child_write
+        else "本轮仅主 agent 可写。所有子 agent 任务保持只读，不要设置 allow_write=true。"
+    )
     return render_prompt(
         "cluster_mode",
         run_id=run_id or "无",
         mentioned_agents=mentioned or "无",
+        write_guidance=write_guidance,
     )
 
 
@@ -3482,17 +3496,63 @@ def _build_cluster_disabled_prompt() -> str:
     return render_prompt("cluster_disabled")
 
 
+def _build_cluster_turn_prompt(run_id: str) -> str:
+    return render_prompt("cluster_turn", run_id=run_id or "无")
+
+
 def _apply_cluster_prompt(
     profile: BotProfile,
     prompt_text: str,
     *,
+    session: UserSession | None = None,
+    context_kind: str = "",
+    context_id: str = "",
     cluster_run_id: str = "",
     cluster_mentions: list[dict[str, Any]] | None = None,
+    force_full: bool = False,
 ) -> str:
+    prompt_fingerprint = ""
+    full_prompt = ""
     if cluster_run_id:
-        return _build_cluster_prompt(cluster_mentions, cluster_run_id) + prompt_text
-    if not profile.cluster.enabled and _has_cluster_child_agents(profile):
-        return _build_cluster_disabled_prompt() + prompt_text
+        write_policy = str(profile.cluster.write_policy or "").strip()
+        prompt_fingerprint = f"enabled:{write_policy}"
+        full_prompt = _build_cluster_prompt(
+            cluster_mentions,
+            cluster_run_id,
+            allow_child_write=write_policy == "all_agents",
+        )
+    elif not profile.cluster.enabled and _has_cluster_child_agents(profile):
+        prompt_fingerprint = "disabled"
+        full_prompt = _build_cluster_disabled_prompt()
+    else:
+        return prompt_text
+
+    inject_full = True
+    normalized_context_kind = str(context_kind or "").strip().lower()
+    normalized_context_id = str(context_id or "").strip()
+    if session is not None and normalized_context_kind:
+        with session._lock:
+            seen = session._cluster_prompt_state
+            same_prompt = bool(seen and seen[0] == prompt_fingerprint and seen[1] == normalized_context_kind)
+            same_context = bool(
+                same_prompt
+                and (
+                    not seen[2]
+                    or not normalized_context_id
+                    or seen[2] == normalized_context_id
+                )
+            )
+            inject_full = bool(force_full or not normalized_context_id or not same_context)
+            session._cluster_prompt_state = (
+                prompt_fingerprint,
+                normalized_context_kind,
+                normalized_context_id,
+            )
+
+    if inject_full:
+        return full_prompt + prompt_text
+    if cluster_run_id:
+        return _build_cluster_turn_prompt(cluster_run_id) + prompt_text
     return prompt_text
 
 
@@ -3505,6 +3565,14 @@ def _current_native_session_id(session: UserSession, cli_type: str) -> str:
     if normalized == "claude":
         return str(session.claude_session_id or "").strip()
     return ""
+
+
+def _cluster_prompt_context_id(session: UserSession, provider: str) -> str:
+    normalized = str(provider or "").strip().lower()
+    with session._lock:
+        if normalized == "claude" and not session.claude_session_initialized:
+            return ""
+        return _current_native_session_id(session, normalized)
 
 
 def _status_context_session_id(
@@ -4784,15 +4852,30 @@ async def _stream_cli_chat(
         text = "/" + text[2:]
     is_plan_mode = _is_plan_request(request)
     base_prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run_id)) if is_plan_mode else text
-    prompt_text = _apply_cluster_prompt(
-        profile,
-        base_prompt_text,
-        cluster_run_id=cluster_run_id,
-        cluster_mentions=cluster_mentions,
-    )
     stage_durations = _new_stage_durations()
 
     cli_type = normalize_cli_type(profile.cli_type)
+
+    def prepare_prompt(*, force_full_cluster_prompt: bool = False):
+        prepared = _apply_cluster_prompt(
+            profile,
+            base_prompt_text,
+            session=session,
+            context_kind=f"cli:{cli_type}",
+            context_id=_cluster_prompt_context_id(session, cli_type),
+            cluster_run_id=cluster_run_id,
+            cluster_mentions=cluster_mentions,
+            force_full=force_full_cluster_prompt,
+        )
+        if agent.id != "main" and not suppress_agent_prompt:
+            prepared = _apply_agent_prompt_if_needed(prepared, agent, session, cli_type)
+        prepared_done_session = None
+        if cli_type == "claude":
+            prepared_done_session = build_claude_done_session(prepared, cli_type=cli_type)
+            prepared = prepared_done_session.prompt_text
+        return prepared, prepared_done_session
+
+    prompt_text, done_session = prepare_prompt()
     env = _build_cli_env(cli_type)
     if cluster_run_id:
         env["TCB_CLUSTER_ACTIVE"] = "1"
@@ -4801,14 +4884,6 @@ async def _stream_cli_chat(
     resolved_cli = resolve_cli_executable(profile.cli_path, session.working_dir)
     if resolved_cli is None:
         _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
-
-    if agent.id != "main" and not suppress_agent_prompt:
-        prompt_text = _apply_agent_prompt_if_needed(prompt_text, agent, session, cli_type)
-
-    done_session = None
-    if cli_type == "claude":
-        done_session = build_claude_done_session(prompt_text, cli_type=cli_type)
-        prompt_text = done_session.prompt_text
 
     with session._lock:
         if session.is_processing:
@@ -5284,6 +5359,7 @@ async def _stream_cli_chat(
             ):
                 if _clear_invalid_cli_session(session, cli_type):
                     session_id_changed = True
+                prompt_text, done_session = prepare_prompt(force_full_cluster_prompt=True)
                 continue
 
             if cli_type == "codex":
@@ -5488,379 +5564,40 @@ async def run_cli_chat(
     cluster_run_id: str = "",
     cluster_mentions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    total_started_at = time.perf_counter()
-    user_id = chat_session_user_id(user_id)
-    profile, agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
-
-    visible_input = request.visible_text if request is not None and request.visible_text is not None else user_text
-    text = (visible_input or "").strip()
-    if not text:
-        _raise(400, "empty_message", "消息不能为空")
-    if text.startswith("//"):
-        text = "/" + text[2:]
-    is_plan_mode = _is_plan_request(request)
-    base_prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run_id)) if is_plan_mode else text
-    prompt_text = _apply_cluster_prompt(
-        profile,
-        base_prompt_text,
+    last_event: dict[str, Any] | None = None
+    events = _stream_cli_chat(
+        manager,
+        alias,
+        user_id,
+        user_text,
+        request=request,
+        agent_id=agent_id,
+        cli_params_override=cli_params_override,
+        allow_unsafe_cli=allow_unsafe_cli,
         cluster_run_id=cluster_run_id,
         cluster_mentions=cluster_mentions,
+        include_trace=False,
     )
-    stage_durations = _new_stage_durations()
-
-    cli_type = normalize_cli_type(profile.cli_type)
-    env = _build_cli_env(cli_type)
-    if cluster_run_id:
-        env["TCB_CLUSTER_ACTIVE"] = "1"
-        env["TCB_CLUSTER_BOT_ALIAS"] = alias
-        env["TCB_CLUSTER_USER_ID"] = str(user_id)
-    resolved_cli = resolve_cli_executable(profile.cli_path, session.working_dir)
-    if resolved_cli is None:
-        _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
-
-    if agent.id != "main":
-        prompt_text = _apply_agent_prompt_if_needed(prompt_text, agent, session, cli_type)
-
-    done_session = None
-    if cli_type == "claude":
-        done_session = build_claude_done_session(prompt_text, cli_type=cli_type)
-        prompt_text = done_session.prompt_text
-
-    with session._lock:
-        if session.is_processing:
-            _raise(409, "session_busy", msg("chat", "busy"))
-        session.stop_requested = False
-        session.is_processing = True
-
-    process_pid = 0
-    output_bytes = 0
-    final_trace_count = 0
-    completion_state_for_diag = ""
-    normal_return_for_diag = False
-    active_lifecycle: _CliProcessLifecycle | None = None
     try:
-        session.touch()
-        loop = asyncio.get_running_loop()
-        started_at = loop.time()
-        session_id_changed = False
-        max_attempts = 2 if cli_type == "claude" else 1
-        service = _get_chat_history_service(session)
-        persist_started_at = time.perf_counter()
-        turn_handle = service.start_turn(
-            profile=profile,
-            session=session,
-            user_text=text,
-            native_provider=cli_type,
-            actor=_actor_from_request(request),
-        )
-        stage_durations["db_ms"] += max(
-            0,
-            int(round((time.perf_counter() - persist_started_at) * 1000)),
-        )
-
-        for attempt_index in range(max_attempts):
-            attempt = _prepare_cli_attempt_state(session, cli_type)
-            params_for_attempt = _effective_cli_params(
-                profile,
-                cli_params_override or profile.cli_params,
-                cluster_run_id,
-                allow_unsafe_cli=allow_unsafe_cli,
-            )
-            try:
-                cmd, use_stdin = build_cli_command(
-                    cli_type=cli_type,
-                    resolved_cli=resolved_cli,
-                    user_text=prompt_text,
-                    env=env,
-                    session_id=attempt.cli_session_id,
-                    resume_session=attempt.resume_session,
-                    json_output=(cli_type in ("codex", "claude")),
-                    params_config=params_for_attempt,
-                    working_dir=session.working_dir,
-                    task_mode=request.task_mode if request is not None else "standard",
-                )
-            except ValueError as exc:
-                _raise(400, "invalid_cli_command", str(exc))
-
-            usage_capture = None
-            if cli_type == "codex":
-                usage_capture = await _start_codex_usage_capture(env=env, command=cmd)
-
-            try:
-                spawn_started_at = time.perf_counter()
-                process = subprocess.Popen(
-                    cmd,
-                    stdin=subprocess.PIPE if use_stdin else None,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                    cwd=session.working_dir,
-                    env=env,
-                    encoding="utf-8",
-                    errors="replace",
-                    **build_chat_cli_process_kwargs(suspended=True),
-                )
-                process_lifecycle = _create_cli_process_lifecycle(process)
-                active_lifecycle = process_lifecycle
-                try:
-                    await asyncio.to_thread(
-                        resume_suspended_process,
-                        process,
-                        process_lifecycle.process_tree,
-                    )
-                except Exception as exc:
-                    await _cleanup_cli_process_lifecycle(process_lifecycle, abort=True)
-                    active_lifecycle = None
-                    _raise(500, "cli_process_isolation_failed", f"CLI 进程隔离初始化失败: {exc}")
-                process_pid = int(getattr(process, "pid", 0) or 0)
-                diag_log_event(
-                    logger,
-                    "cli_run_start",
-                    alias=alias,
-                    agent=session.agent_id,
-                    cli_type=cli_type,
-                    pid=process_pid,
-                    cluster_run_id=cluster_run_id,
-                    resume_session=attempt.resume_session,
-                    attempt=attempt_index + 1,
-                )
-                diag_log_slow(
-                    logger,
-                    "cli_spawn",
-                    int(round((time.perf_counter() - spawn_started_at) * 1000)),
-                    alias=alias,
-                    agent=session.agent_id,
-                    cli_type=cli_type,
-                    pid=process_pid,
-                    cluster_run_id=cluster_run_id,
-                )
-            except FileNotFoundError:
-                _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
-
-            if use_stdin:
-                try:
-                    assert process.stdin is not None
-                    process.stdin.write(prompt_text + "\n")
-                    process.stdin.flush()
-                    process.stdin.close()
-                except (BrokenPipeError, OSError) as exc:
-                    _raise(500, "cli_write_failed", msg("chat", "cli_failed") + f": {exc}")
-
-            with session._lock:
-                session.process = process
-
-            cli_started_at = time.perf_counter()
-            cleanup_abort = False
-            try:
-                if cli_type == "codex":
-                    codex_result = await _communicate_codex_process(
-                        process,
-                        usage_capture=usage_capture,
-                        lifecycle=process_lifecycle,
-                    )
-                    response = codex_result.text
-                    thread_id = codex_result.session_id
-                    returncode = codex_result.returncode
-                elif cli_type == "claude":
-                    response, _, returncode = await _communicate_claude_process(
-                        process,
-                        done_session=done_session,
-                        lifecycle=process_lifecycle,
-                    )
-                else:
-                    response, returncode = await _communicate_process(
-                        process,
-                        lifecycle=process_lifecycle,
-                    )
-                    response = response.strip() or msg("chat", "no_output")
-                output_bytes = len(str(response or "").encode("utf-8", errors="replace"))
-            except Exception:
-                cleanup_abort = True
-                raise
-            finally:
-                try:
-                    await _cleanup_cli_process_lifecycle(process_lifecycle, abort=cleanup_abort)
-                finally:
-                    with session._lock:
-                        session.process = None
-                    active_lifecycle = None
-            stage_durations["cli_ms"] += max(0, int(round((time.perf_counter() - cli_started_at) * 1000)))
-            should_force_error_output = False
-
-            if (
-                cli_type == "claude"
-                and attempt.resume_session
-                and should_reset_claude_session(response, returncode)
-                and attempt_index + 1 < max_attempts
-            ):
-                if _clear_invalid_cli_session(session, cli_type):
-                    session_id_changed = True
-                continue
-
-            if cli_type == "codex":
-                with session._lock:
-                    if thread_id:
-                        if session.codex_session_id != thread_id:
-                            session.codex_session_id = thread_id
-                            session_id_changed = True
-                    elif should_reset_codex_session(attempt.codex_session_id, response, returncode):
-                        if session.codex_session_id is not None:
-                            session.codex_session_id = None
-                            session_id_changed = True
-            elif cli_type == "claude":
-                with session._lock:
-                    if should_mark_claude_session_initialized(response, returncode):
-                        if not session.claude_session_initialized:
-                            session.claude_session_initialized = True
-                            session_id_changed = True
-                    elif should_reset_claude_session(response, returncode):
-                        if session.claude_session_id is not None or session.claude_session_initialized:
-                            session.claude_session_id = None
-                            session.claude_session_initialized = False
-                            session_id_changed = True
-            if cli_type == "codex":
-                response, should_force_error_output = _decorate_codex_resume_error(
-                    response,
-                    session_id=attempt.codex_session_id,
-                    returncode=returncode,
-                )
-
-            if session_id_changed:
-                session.persist()
-
-            elapsed_seconds = _calculate_elapsed_seconds(loop, started_at)
-            completion_state = _resolve_completion_state(
-                session,
-                returncode=returncode,
-                response_text=response,
-            )
-            display_response = _format_cli_error_display(
-                response,
-                returncode=returncode,
-                completion_state=completion_state,
-            )
-            error_detail = response if completion_state == "error" else ""
-            with session._lock:
-                stop_requested = bool(session.stop_requested)
-            terminal_trace = _build_terminal_trace(
-                live_trace=[],
-                stop_requested=stop_requested,
-                returncode=returncode,
-                error_detail=error_detail,
-            )
-            final_trace_count = len(terminal_trace)
-            for trace_event in terminal_trace:
-                service.append_trace_event(turn_handle, trace_event)
-            native_session_id = _current_native_session_id(session, cli_type)
-            trace_started_at = time.perf_counter()
-            await _reconcile_native_trace_before_completion(
-                service,
-                turn_handle,
-                profile=profile,
-                session=session,
-                user_text=text,
-                assistant_text=display_response,
-                completion_state=completion_state,
-                native_session_id=native_session_id,
-            )
-            stage_durations["trace_ms"] += max(0, int(round((time.perf_counter() - trace_started_at) * 1000)))
-            context_usage = await _resolve_cli_context_usage_bounded(
-                cli_type,
-                native_session_id,
-                cwd_hint=session.working_dir,
-            )
-            complete_started_at = time.perf_counter()
-            done_message = service.complete_turn(
-                turn_handle,
-                content=(
-                    display_response
-                    if completion_state == "completed" or should_force_error_output
-                    else (display_response or msg("chat", "no_output"))
-                ),
-                completion_state=completion_state,
-                native_session_id=native_session_id,
-                error_code=None if completion_state == "completed" else completion_state,
-                error_message=None if completion_state == "completed" else response,
-                context_usage=context_usage,
-            )
-            stage_durations["db_ms"] += max(
-                0,
-                int(round((time.perf_counter() - complete_started_at) * 1000)),
-            )
-            completion_state_for_diag = completion_state
-            with session._lock:
-                session.is_processing = False
-            response_payload = {
-                "output": str(done_message.get("content") or response),
-                "message": done_message,
-                "elapsed_seconds": elapsed_seconds,
-                "returncode": returncode,
-                "session": build_session_snapshot(profile, session),
-            }
-            elapsed_ms = int(round((time.perf_counter() - total_started_at) * 1000))
-            diag_log_event(
-                logger,
-                "cli_run_done",
-                alias=alias,
-                agent=session.agent_id,
-                cli_type=cli_type,
-                pid=process_pid,
-                cluster_run_id=cluster_run_id,
-                completion_state=completion_state,
-                returncode=returncode,
-                elapsed_ms=elapsed_ms,
-                output_bytes=output_bytes,
-                trace_count=final_trace_count,
-                cli_ms=stage_durations.get("cli_ms", 0),
-                trace_ms=stage_durations.get("trace_ms", 0),
-                db_ms=stage_durations.get("db_ms", 0),
-            )
-            diag_log_slow(
-                logger,
-                "cli_run_total",
-                elapsed_ms,
-                alias=alias,
-                agent=session.agent_id,
-                cli_type=cli_type,
-                pid=process_pid,
-                cluster_run_id=cluster_run_id,
-                completion_state=completion_state,
-                output_bytes=output_bytes,
-                trace_count=final_trace_count,
-            )
-            normal_return_for_diag = True
-            return response_payload
+        async for event in events:
+            event_type = str(event.get("type") or "")
+            if event_type == "done":
+                last_event = event
+                break
+            if event_type == "error":
+                raise RuntimeError(str(event.get("message") or msg("chat", "cli_failed")))
     finally:
-        if not normal_return_for_diag:
-            elapsed_ms = int(round((time.perf_counter() - total_started_at) * 1000))
-            diag_log_slow(
-                logger,
-                "cli_run_total",
-                elapsed_ms,
-                alias=alias,
-                agent=getattr(session, "agent_id", agent_id),
-                cli_type=cli_type,
-                pid=process_pid,
-                cluster_run_id=cluster_run_id,
-                completion_state=completion_state_for_diag or "incomplete",
-                output_bytes=output_bytes,
-                trace_count=final_trace_count,
-            )
-        with session._lock:
-            lingering_process = session.process
-        lingering_lifecycle = _get_cli_process_lifecycle(lingering_process) or active_lifecycle
-        try:
-            if lingering_lifecycle is not None:
-                await _cleanup_cli_process_lifecycle(lingering_lifecycle, abort=True)
-            elif lingering_process is not None:
-                await asyncio.to_thread(_terminate_process_sync, lingering_process)
-                await asyncio.to_thread(close_process_streams, lingering_process)
-        finally:
-            with session._lock:
-                _reset_session_runtime_flags(session)
-        if not normal_return_for_diag:
-            await _reconcile_idle_cli_turns(session)
+        await events.aclose()
+
+    if last_event is None:
+        raise RuntimeError("CLI 未返回结果")
+    return {
+        "output": str(last_event.get("output") or ""),
+        "message": last_event.get("message"),
+        "elapsed_seconds": last_event.get("elapsed_seconds", 0),
+        "returncode": last_event.get("returncode", 0),
+        "session": last_event.get("session"),
+    }
 
 
 def _normalized_chat_text(
@@ -5936,18 +5673,33 @@ async def _run_native_agent_chat(
     )
     run_status = "completed"
     try:
-        prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run)) if is_plan_mode else text
+        base_prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run)) if is_plan_mode else text
+        context_id = _cluster_prompt_context_id(session, NATIVE_AGENT_PROVIDER)
         prompt_text = _apply_cluster_prompt(
             profile,
-            prompt_text,
+            base_prompt_text,
+            session=session,
+            context_kind=NATIVE_AGENT_PROVIDER,
+            context_id=context_id,
             cluster_run_id=cluster_run.run_id if cluster_run else "",
             cluster_mentions=list(mentions or []),
+        )
+        fresh_session_prompt_text = _apply_cluster_prompt(
+            profile,
+            base_prompt_text,
+            session=session,
+            context_kind=NATIVE_AGENT_PROVIDER,
+            context_id=context_id,
+            cluster_run_id=cluster_run.run_id if cluster_run else "",
+            cluster_mentions=list(mentions or []),
+            force_full=True,
         )
         result = await get_native_agent_service().run_chat(
             profile=profile,
             session=session,
             user_text=text,
             prompt_text=prompt_text,
+            fresh_session_prompt_text=fresh_session_prompt_text,
             history_service=_history_service_for_execution_mode(session, NATIVE_AGENT_PROVIDER),
             actor=_actor_from_request(request_obj),
             cluster_run_id=cluster_run.run_id if cluster_run else "",
@@ -6075,18 +5827,33 @@ async def _stream_native_agent_chat(
     async def produce() -> AsyncIterator[dict[str, Any]]:
         run_status = "completed"
         try:
-            prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run)) if is_plan_mode else text
+            base_prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run)) if is_plan_mode else text
+            context_id = _cluster_prompt_context_id(session, NATIVE_AGENT_PROVIDER)
             prompt_text = _apply_cluster_prompt(
                 profile,
-                prompt_text,
+                base_prompt_text,
+                session=session,
+                context_kind=NATIVE_AGENT_PROVIDER,
+                context_id=context_id,
                 cluster_run_id=cluster_run.run_id if cluster_run else "",
                 cluster_mentions=list(mentions or []),
+            )
+            fresh_session_prompt_text = _apply_cluster_prompt(
+                profile,
+                base_prompt_text,
+                session=session,
+                context_kind=NATIVE_AGENT_PROVIDER,
+                context_id=context_id,
+                cluster_run_id=cluster_run.run_id if cluster_run else "",
+                cluster_mentions=list(mentions or []),
+                force_full=True,
             )
             async for event in service.stream_chat(
                 profile=profile,
                 session=session,
                 user_text=text,
                 prompt_text=prompt_text,
+                fresh_session_prompt_text=fresh_session_prompt_text,
                 history_service=_history_service_for_execution_mode(session, NATIVE_AGENT_PROVIDER),
                 actor=_actor_from_request(request_obj),
                 protocol=protocol,

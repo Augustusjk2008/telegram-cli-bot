@@ -1,11 +1,18 @@
-param(
+﻿param(
     [ValidateSet("default", "web")]
-    [string]$Mode = "default"
+    [string]$Mode = "default",
+
+    [Parameter(DontShow = $true)]
+    [switch]$ServiceProcess,
+
+    [Parameter(DontShow = $true)]
+    [long]$LauncherWindowHandle = 0
 )
 
 $ErrorActionPreference = "Stop"
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+$scriptPath = $MyInvocation.MyCommand.Definition
 $envPath = Join-Path $scriptDir ".env"
 $restartExitCode = 75
 $startupStateDir = Join-Path $scriptDir ".tcb\startup"
@@ -439,22 +446,28 @@ function Sync-FrontendAssets {
     Write-Info "检测到前端源码变化，正在构建前端..."
     $buildScript = Join-Path $RootDir "scripts\build_web_frontend.bat"
     if (($env:OS -eq "Windows_NT") -and (Test-Path -LiteralPath $buildScript)) {
-        & $buildScript
-        if ($LASTEXITCODE -ne 0) {
+        $buildOutput = @(& $buildScript 2>&1)
+        $buildExitCode = $LASTEXITCODE
+        if ($buildExitCode -ne 0) {
+            $buildOutput | Out-Host
             throw "前端构建失败。"
         }
     } else {
         Push-Location (Join-Path $RootDir "front")
         try {
-            & $npmCommand run build
-            if ($LASTEXITCODE -ne 0) {
+            $buildOutput = @(& $npmCommand run build 2>&1)
+            $buildExitCode = $LASTEXITCODE
+            if ($buildExitCode -ne 0) {
+                $buildOutput | Out-Host
                 Write-Warn "前端构建失败，正在安装依赖后重试一次..."
                 & $npmCommand install
                 if ($LASTEXITCODE -ne 0) {
                     throw "安装前端依赖失败。"
                 }
-                & $npmCommand run build
-                if ($LASTEXITCODE -ne 0) {
+                $buildOutput = @(& $npmCommand run build 2>&1)
+                $buildExitCode = $LASTEXITCODE
+                if ($buildExitCode -ne 0) {
+                    $buildOutput | Out-Host
                     throw "前端构建失败。"
                 }
             }
@@ -462,6 +475,7 @@ function Sync-FrontendAssets {
             Pop-Location
         }
     }
+    Write-Info "前端构建完成。"
 
     $frontendHash = Get-StartupPathsHash -PythonRuntime $PythonRuntime -RootDir $RootDir -RelativePaths $frontendInputs
     Write-StartupStamp -StampPath $stampPath -Value $frontendHash
@@ -534,6 +548,271 @@ function Ensure-EnvFile {
     }
 }
 
+function Initialize-TraySupport {
+    if ($env:OS -ne "Windows_NT") {
+        throw "托盘模式仅支持 Windows。"
+    }
+
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+
+    if (-not ("TcbTrayNativeMethods" -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class TcbTrayNativeMethods
+{
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr GetConsoleWindow();
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool PostMessage(IntPtr hWnd, uint message, IntPtr wParam, IntPtr lParam);
+}
+'@ | Out-Null
+    }
+}
+
+function Hide-TrayConsoleWindow {
+    param([IntPtr]$WindowHandle)
+
+    if ($WindowHandle -ne [IntPtr]::Zero) {
+        [TcbTrayNativeMethods]::ShowWindow($WindowHandle, 0) | Out-Null
+    }
+}
+
+function Show-TrayConsoleWindow {
+    param([IntPtr]$WindowHandle)
+
+    if ($WindowHandle -eq [IntPtr]::Zero) {
+        return
+    }
+
+    [TcbTrayNativeMethods]::ShowWindow($WindowHandle, 9) | Out-Null
+    [TcbTrayNativeMethods]::SetForegroundWindow($WindowHandle) | Out-Null
+}
+
+function Wait-TrayServiceWindow {
+    param(
+        [System.Diagnostics.Process]$Process,
+        [int]$TimeoutSeconds = 15
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        if ($Process.HasExited) {
+            return [IntPtr]::Zero
+        }
+
+        $Process.Refresh()
+        $windowHandle = $Process.MainWindowHandle
+        if ($windowHandle -ne [IntPtr]::Zero) {
+            return $windowHandle
+        }
+
+        [System.Windows.Forms.Application]::DoEvents()
+        Start-Sleep -Milliseconds 50
+    } while ((Get-Date) -lt $deadline)
+
+    return [IntPtr]::Zero
+}
+
+function Stop-TrayServiceProcess {
+    param(
+        [System.Diagnostics.Process]$Process,
+        [IntPtr]$WindowHandle
+    )
+
+    if ($null -eq $Process -or $Process.HasExited) {
+        return
+    }
+
+    if ($WindowHandle -ne [IntPtr]::Zero) {
+        [TcbTrayNativeMethods]::PostMessage(
+            $WindowHandle,
+            0x0010,
+            [IntPtr]::Zero,
+            [IntPtr]::Zero
+        ) | Out-Null
+        $Process.WaitForExit(5000) | Out-Null
+    }
+
+    if (-not $Process.HasExited) {
+        $taskkillPath = Join-Path $env:SystemRoot "System32\taskkill.exe"
+        & $taskkillPath /PID $Process.Id /T /F *> $null
+        $Process.WaitForExit(5000) | Out-Null
+    }
+}
+
+function Invoke-TraySupervisor {
+    param(
+        [string]$SelectedMode,
+        [long]$ParentWindowHandle
+    )
+
+    $exitCode = 1
+    $serviceProcess = $null
+    $serviceWindowHandle = [IntPtr]::Zero
+    $notifyIcon = $null
+    $trayIconImage = $null
+    $contextMenu = $null
+    $trayHostWindow = [IntPtr]::Zero
+
+    try {
+        Initialize-TraySupport
+
+        $trayHostWindow = [TcbTrayNativeMethods]::GetConsoleWindow()
+        $launcherWindow = [IntPtr]::new($ParentWindowHandle)
+        $iconPath = Join-Path $scriptDir "front\public\assets\app-logo.ico"
+        if (-not (Test-Path -LiteralPath $iconPath)) {
+            throw "未找到托盘图标：$iconPath"
+        }
+
+        $trayIconImage = [System.Drawing.Icon]::new($iconPath)
+        $notifyIcon = [System.Windows.Forms.NotifyIcon]::new()
+        $contextMenu = [System.Windows.Forms.ContextMenuStrip]::new()
+        $toggleMenuItem = [System.Windows.Forms.ToolStripMenuItem]::new("显示控制台")
+        $exitMenuItem = [System.Windows.Forms.ToolStripMenuItem]::new("退出")
+
+        $contextMenu.Items.Add($toggleMenuItem) | Out-Null
+        $contextMenu.Items.Add($exitMenuItem) | Out-Null
+        $notifyIcon.ContextMenuStrip = $contextMenu
+        $notifyIcon.Icon = $trayIconImage
+        $notifyIcon.Text = "Orbit Safe Claw"
+
+        $script:trayExitRequested = $false
+        $script:trayServiceWindowHandle = [IntPtr]::Zero
+        $script:trayToggleMenuItem = $toggleMenuItem
+
+        $toggleMenuItem.add_Click({
+            if ([TcbTrayNativeMethods]::IsWindowVisible($script:trayServiceWindowHandle)) {
+                Hide-TrayConsoleWindow -WindowHandle $script:trayServiceWindowHandle
+                $script:trayToggleMenuItem.Text = "显示控制台"
+            } else {
+                Show-TrayConsoleWindow -WindowHandle $script:trayServiceWindowHandle
+                $script:trayToggleMenuItem.Text = "隐藏控制台"
+            }
+        })
+        $notifyIcon.add_DoubleClick({
+            Show-TrayConsoleWindow -WindowHandle $script:trayServiceWindowHandle
+            $script:trayToggleMenuItem.Text = "隐藏控制台"
+        })
+        $exitMenuItem.add_Click({
+            $script:trayExitRequested = $true
+        })
+
+        $notifyIcon.Visible = $true
+
+        $powerShellPath = (Get-Process -Id $PID).Path
+        if ([string]::IsNullOrWhiteSpace($powerShellPath)) {
+            throw "无法确定当前 PowerShell 路径。"
+        }
+
+        $quotedScriptPath = '"{0}"' -f $scriptPath.Replace('"', '\"')
+        $serviceArguments = @(
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            $quotedScriptPath,
+            "-Mode",
+            $SelectedMode,
+            "-ServiceProcess"
+        )
+        $serviceProcess = Start-Process `
+            -FilePath $powerShellPath `
+            -ArgumentList $serviceArguments `
+            -WorkingDirectory $scriptDir `
+            -WindowStyle Minimized `
+            -PassThru
+
+        $serviceWindowHandle = Wait-TrayServiceWindow -Process $serviceProcess
+        if ($serviceWindowHandle -eq [IntPtr]::Zero) {
+            if ($serviceProcess.HasExited) {
+                $exitCode = $serviceProcess.ExitCode
+                return $exitCode
+            }
+            throw "等待服务控制台窗口超时。"
+        }
+
+        $script:trayServiceWindowHandle = $serviceWindowHandle
+        Hide-TrayConsoleWindow -WindowHandle $serviceWindowHandle
+        Hide-TrayConsoleWindow -WindowHandle $trayHostWindow
+        Hide-TrayConsoleWindow -WindowHandle $launcherWindow
+
+        $notifyIcon.ShowBalloonTip(
+            3000,
+            "Orbit Safe Claw",
+            "程序已在系统托盘运行，双击图标可显示控制台。",
+            [System.Windows.Forms.ToolTipIcon]::Info
+        )
+
+        while (-not $serviceProcess.HasExited -and -not $script:trayExitRequested) {
+            [System.Windows.Forms.Application]::DoEvents()
+            Start-Sleep -Milliseconds 100
+        }
+
+        if ($script:trayExitRequested) {
+            Stop-TrayServiceProcess -Process $serviceProcess -WindowHandle $serviceWindowHandle
+            $exitCode = 0
+        } else {
+            $exitCode = $serviceProcess.ExitCode
+            if ($exitCode -eq -1073741510) {
+                $exitCode = 0
+            }
+        }
+    } catch {
+        Write-Fail ("托盘启动失败：{0}" -f $_.Exception.Message)
+        $exitCode = 1
+    } finally {
+        if ($null -ne $serviceProcess -and -not $serviceProcess.HasExited) {
+            Stop-TrayServiceProcess -Process $serviceProcess -WindowHandle $serviceWindowHandle
+        }
+
+        if ($null -ne $notifyIcon) {
+            $notifyIcon.Visible = $false
+            $notifyIcon.Dispose()
+        }
+        if ($null -ne $contextMenu) {
+            $contextMenu.Dispose()
+        }
+        if ($null -ne $trayIconImage) {
+            $trayIconImage.Dispose()
+        }
+
+        $script:trayExitRequested = $false
+        $script:trayServiceWindowHandle = [IntPtr]::Zero
+        $script:trayToggleMenuItem = $null
+
+        if ($ParentWindowHandle -eq 0 -or $exitCode -ne 0) {
+            Show-TrayConsoleWindow -WindowHandle $trayHostWindow
+            Show-TrayConsoleWindow -WindowHandle ([IntPtr]::new($ParentWindowHandle))
+        }
+    }
+
+    return $exitCode
+}
+
+if (-not $ServiceProcess) {
+    $trayExitCode = Invoke-TraySupervisor `
+        -SelectedMode $Mode `
+        -ParentWindowHandle $LauncherWindowHandle
+    exit $trayExitCode
+}
+
 try {
     Set-Location $scriptDir
 
@@ -552,9 +831,6 @@ try {
 
     $env:CLI_BRIDGE_SUPERVISOR = "1"
     $env:WEB_ENABLED = "true"
-
-    Write-Info ("启动目录: {0}" -f $scriptDir)
-    Write-Info ("启动模式: {0}" -f $Mode)
 
     $script:pythonRuntime = $pythonRuntime
     if (Test-Truthy $env:TCB_STARTUP_FORCE_DEP_INSTALL) {
@@ -577,7 +853,6 @@ try {
         exit $script:lastPythonExitCode
     }
 
-    Write-Info "正在检查并应用待更新版本..."
     & $script:pythonRuntime.Command @($script:pythonRuntime.Arguments + @("-m", "bot.updater", "apply-pending", "--repo-root", $scriptDir))
     if ($LASTEXITCODE -ne 0) {
         Write-Fail "应用待更新版本失败，请检查 .web_admin_settings.json 和更新包缓存。"
@@ -593,7 +868,6 @@ try {
 
     Sync-FrontendAssets -PythonRuntime $script:pythonRuntime -RootDir $scriptDir
 
-    Write-Info "正在检查运行数据迁移..."
     Invoke-PythonStartupStep -Arguments @("-m", "bot.migrations", "run", "--repo-root", $scriptDir)
     if ($script:lastPythonExitCode -ne 0) {
         Write-Fail "运行数据迁移失败。"

@@ -86,6 +86,14 @@ def safe_print(text: str = ""):
         stream.write(f"{sanitized}\n")
 
 
+def _startup_summary_lines(msgs) -> tuple[str, str]:
+    title = str(msgs.get("startup", "title") or "CLI Bridge Bot").strip()
+    return (
+        f"{title} · {APP_VERSION} · {CLI_TYPE}",
+        f"工作目录: {WORKING_DIR}",
+    )
+
+
 def _detect_lan_ipv4():
     """探测当前主机最适合展示给局域网访问的 IPv4 地址。"""
     try:
@@ -288,12 +296,12 @@ def _clear_web_runtime_state() -> None:
 async def _open_local_browser(bind: RuntimeWebBind):
     url = _get_local_browser_url(bind)
     if not _should_open_local_browser():
-        logger.info("当前环境未检测到图形浏览器，跳过自动打开: %s", url)
+        logger.debug("当前环境未检测到图形浏览器，跳过自动打开: %s", url)
         return
     try:
         opened = await asyncio.to_thread(_open_local_browser_sync, url)
         if opened:
-            logger.info("已用默认浏览器打开: %s", url)
+            logger.debug("已用默认浏览器打开: %s", url)
         else:
             logger.warning("默认浏览器打开失败: %s", url)
     except Exception as exc:
@@ -314,7 +322,7 @@ def disable_console_quick_edit():
             # 禁用插入模式 (ENABLE_INSERT_MODE = 0x0020)
             new_mode = mode.value & ~0x0040 & ~0x0020
             kernel32.SetConsoleMode(stdin_handle, new_mode)
-            logger.info("已禁用控制台快速编辑模式")
+            logger.debug("已禁用控制台快速编辑模式")
         except Exception as e:
             logger.warning(f"禁用快速编辑模式失败: {e}")
 
@@ -333,7 +341,7 @@ def suppress_windows_error_dialogs():
         current_mode = int(get_error_mode()) if callable(get_error_mode) else 0
         desired_mode = current_mode | SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX
         set_error_mode(desired_mode)
-        logger.info("已禁用 Windows 崩溃弹窗和打开文件错误弹窗")
+        logger.debug("已禁用 Windows 崩溃弹窗和打开文件错误弹窗")
     except Exception as e:
         logger.warning(f"禁用 Windows 错误弹窗失败: {e}")
 
@@ -383,7 +391,7 @@ def prevent_system_sleep():
         # ES_CONTINUOUS | ES_SYSTEM_REQUIRED: 持续阻止系统睡眠
         result = ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
         if result:
-            logger.info("已阻止系统进入睡眠状态")
+            logger.debug("已阻止系统进入睡眠状态")
         else:
             logger.warning("阻止系统睡眠失败")
 
@@ -394,7 +402,7 @@ def restore_system_sleep():
         # ES_CONTINUOUS: 清除之前的设置，恢复默认行为
         result = ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
         if result:
-            logger.info("已恢复系统睡眠功能")
+            logger.debug("已恢复系统睡眠功能")
         else:
             logger.warning("恢复系统睡眠失败")
 
@@ -424,7 +432,7 @@ async def run_all_bots():
     web_server = WebApiServer(manager, host=runtime_bind.host, port=runtime_bind.actual_port)
     try:
         await web_server.start()
-        logger.info("Web API 已附加到主进程")
+        logger.debug("Web API 已附加到主进程")
         _print_web_access_lines(runtime_bind)
         await _open_local_browser(runtime_bind)
         await config.RESTART_EVENT.wait()
@@ -451,17 +459,8 @@ def main():
         safe_print(f"错误: {e}")
         sys.exit(1)
 
-    safe_print(msgs.get("startup", "banner"))
-    safe_print(msgs.get("startup", "title"))
-    safe_print(f"  版本: {APP_VERSION}")
-    safe_print(msgs.get("startup", "banner"))
-    safe_print()
-    safe_print(msgs.get("startup", "loading_config"))
-    safe_print(f"   CLI类型: {CLI_TYPE}")
-    safe_print(f"   工作目录: {WORKING_DIR}")
-    safe_print(f"   托管配置: {MANAGED_BOTS_FILE}")
-    safe_print(f"   Web API: {'开启' if config.WEB_ENABLED else '关闭'}")
-    safe_print(msgs.get("startup", "loaded"))
+    for line in _startup_summary_lines(msgs):
+        safe_print(line)
 
     # 禁用控制台快速编辑模式，避免点击控制台导致程序暂停
     disable_console_quick_edit()

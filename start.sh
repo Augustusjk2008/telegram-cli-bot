@@ -349,7 +349,7 @@ sync_frontend_assets() {
     return 0
   fi
 
-  local frontend_hash stamp_path build_script dist_index
+  local frontend_hash stamp_path build_script dist_index build_log
   frontend_hash="$(
     hash_startup_paths \
       front/package.json \
@@ -376,14 +376,26 @@ sync_frontend_assets() {
 
   info "检测到前端源码变化，正在构建前端..."
   build_script="$SCRIPT_DIR/scripts/build_web_frontend.sh"
+  build_log="$(mktemp "${TMPDIR:-/tmp}/tcb-frontend-build.XXXXXX")"
   if [[ -f "$build_script" ]]; then
-    bash "$build_script"
+    if ! bash "$build_script" >"$build_log" 2>&1; then
+      cat "$build_log" >&2
+      rm -f "$build_log"
+      return 1
+    fi
   else
-    if ! (cd "$SCRIPT_DIR/front" && npm run build); then
+    if ! (cd "$SCRIPT_DIR/front" && npm run build) >"$build_log" 2>&1; then
+      cat "$build_log" >&2
       warn "前端构建失败，正在安装依赖后重试一次..."
-      (cd "$SCRIPT_DIR/front" && npm install && npm run build)
+      if ! (cd "$SCRIPT_DIR/front" && npm install && npm run build) >"$build_log" 2>&1; then
+        cat "$build_log" >&2
+        rm -f "$build_log"
+        return 1
+      fi
     fi
   fi
+  rm -f "$build_log"
+  info "前端构建完成。"
   frontend_hash="$(
     hash_startup_paths \
       front/package.json \
@@ -418,7 +430,6 @@ if is_truthy "${TCB_STARTUP_FORCE_DEP_INSTALL:-}"; then
   sync_python_dependencies 1
 fi
 sync_frontend_assets
-info "正在检查运行数据迁移..."
 if ! run_python_startup_step -m bot.migrations run --repo-root "$SCRIPT_DIR"; then
   echo "[错误] 运行数据迁移失败。" >&2
   exit "$last_python_exit_code"

@@ -41,10 +41,10 @@ def _reasoning_efforts(value: Any) -> dict[str, str]:
 @dataclass(frozen=True)
 class BotClusterConfig:
     enabled: bool = False
-    write_policy: str = "main_only"
+    write_policy: str = "all_agents"
     conflict_policy: str = "snapshot_diff"
-    max_parallel_agents: int = 2
-    default_timeout_seconds: int = 600
+    max_parallel_agents: int = 3
+    default_timeout_seconds: int = 1800
     model_tiers: dict[str, str] = field(default_factory=lambda: _model_tiers({}))
     reasoning_efforts: dict[str, str] = field(default_factory=lambda: _reasoning_efforts({}))
     orchestration_version: int = 2
@@ -81,12 +81,17 @@ class AgentClusterConfig:
 def normalize_bot_cluster_config(value: Any) -> BotClusterConfig:
     if not isinstance(value, dict):
         value = {}
+    raw_write_policy = value.get("write_policy")
     return BotClusterConfig(
         enabled=_as_bool(value.get("enabled"), False),
-        write_policy=_choice(value.get("write_policy"), BOT_WRITE_POLICIES, "main_only"),
+        write_policy=(
+            "all_agents"
+            if raw_write_policy is None
+            else _choice(raw_write_policy, BOT_WRITE_POLICIES, "main_only")
+        ),
         conflict_policy=_choice(value.get("conflict_policy"), BOT_CONFLICT_POLICIES, "snapshot_diff"),
-        max_parallel_agents=_as_int(value.get("max_parallel_agents"), 2, minimum=1, maximum=8),
-        default_timeout_seconds=_as_int(value.get("default_timeout_seconds"), 600, minimum=60, maximum=3600),
+        max_parallel_agents=_as_int(value.get("max_parallel_agents"), 3, minimum=1, maximum=8),
+        default_timeout_seconds=_as_int(value.get("default_timeout_seconds"), 1800, minimum=60, maximum=3600),
         model_tiers=_model_tiers(value.get("model_tiers")),
         reasoning_efforts=_reasoning_efforts(value.get("reasoning_efforts", value.get("reasoningEfforts"))),
         orchestration_version=2,

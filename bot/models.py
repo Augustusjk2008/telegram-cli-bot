@@ -627,6 +627,7 @@ class UserSession:
     last_activity: datetime = field(default_factory=datetime.now)
     message_count: int = 0
     agent_prompt_hash_seen: Optional[str] = None
+    _cluster_prompt_state: Optional[tuple[str, str, str]] = field(default=None, repr=False, compare=False)
     local_history_backend: str = "local_v1"
     session_epoch: int = 0
     active_conversation_id: Optional[str] = None
@@ -780,5 +781,6 @@ class UserSession:
             self.native_agent_server_key = None
             self.claude_session_initialized = False
             self.active_conversation_id = None
+            self._cluster_prompt_state = None
         self.persist()
         logger.info(f"已清除会话ID: bot={self.bot_id}, user={self.user_id}")
