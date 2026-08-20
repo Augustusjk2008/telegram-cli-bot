@@ -1,4 +1,9 @@
-import { DEFAULT_CODEX_USAGE_MODEL, WebApiClientError } from "./types";
+import {
+  DEFAULT_CODEX_USAGE_MODEL,
+  GENERAL_CODEX_RATE_LIMIT_ID,
+  SECONDARY_CODEX_RATE_LIMIT_ID,
+  WebApiClientError,
+} from "./types";
 import { buildWsUrl, withApiBase } from "../utils/publicBase";
 import { ChatStreamIncompleteError } from "./chatStreamError";
 import type {
@@ -1475,6 +1480,7 @@ type RawCodexUsageMetrics = {
 };
 
 type RawCodexRateLimitSample = {
+  limit_id?: unknown;
   model?: unknown;
   sampled_at?: unknown;
   used_percent?: unknown;
@@ -3705,8 +3711,14 @@ function mapCodexRateLimitSample(raw: RawCodexRateLimitSample): CodexRateLimitSa
   const planType = typeof raw.plan_type === "string" && raw.plan_type.trim()
     ? raw.plan_type.trim()
     : null;
+  const rawLimitId = typeof raw.limit_id === "string" ? raw.limit_id.trim() : "";
+  const limitId = rawLimitId || (
+    mapCodexUsageModel(raw.model).toLowerCase() === "gpt-5.3-codex-spark"
+      ? SECONDARY_CODEX_RATE_LIMIT_ID
+      : GENERAL_CODEX_RATE_LIMIT_ID
+  );
   return {
-    model: mapCodexUsageModel(raw.model),
+    limitId,
     sampledAt,
     usedPercent,
     windowMinutes,

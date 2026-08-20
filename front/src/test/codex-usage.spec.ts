@@ -20,7 +20,7 @@ test("Codex 用量趋势在桌面和移动视口可见且页面不横向溢出",
   await page.getByRole("tab", { name: "Codex 用量", exact: true }).click();
 
   await expect(page.getByRole("heading", { name: "Codex 用量", exact: true })).toBeVisible();
-  const chart = page.getByRole("img", { name: /gpt-5\.6-sol Codex 剩余额度与剩余时长趋势/ });
+  const chart = page.getByRole("img", { name: /通用 Codex 剩余额度与剩余时长趋势/ });
   await expect(chart).toBeVisible();
   await expect(page.getByText("当前剩余 92%", { exact: true })).toBeVisible();
   await expect(page.getByRole("table", { name: "Codex 用量每日明细" })).toBeVisible();

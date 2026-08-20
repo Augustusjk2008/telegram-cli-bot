@@ -10,6 +10,8 @@ from .models import (
     CodexRateLimitSample,
     CodexTokenUsage,
     DEFAULT_CODEX_MODEL,
+    GENERAL_CODEX_RATE_LIMIT_ID,
+    SECONDARY_CODEX_RATE_LIMIT_ID,
     DailyProviderModelUsage,
     DailyProviderUsage,
     DailyUsagePagination,
@@ -27,8 +29,9 @@ from .models import (
 )
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 _SETTING_ENABLED = "enabled"
+_WEEKLY_LIMIT_WINDOW_MINUTES = 7 * 24 * 60
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS settings (
@@ -82,7 +85,7 @@ ON daily_model_usage(provider_id, day);
 CREATE TABLE IF NOT EXISTS rate_limit_samples (
     sample_id INTEGER PRIMARY KEY,
     day INTEGER NOT NULL,
-    model_key TEXT NOT NULL CHECK (trim(model_key) <> ''),
+    limit_id TEXT NOT NULL CHECK (trim(limit_id) <> ''),
     sampled_at_ms INTEGER NOT NULL,
     used_percent REAL NOT NULL
         CHECK (used_percent >= 0 AND used_percent <= 100),
@@ -139,7 +142,7 @@ class CodexUsageStore:
     @staticmethod
     def _ensure_schema(connection: sqlite3.Connection) -> None:
         version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if version not in {0, 1, 2, 3, SCHEMA_VERSION}:
+        if version not in {0, 1, 2, 3, 4, SCHEMA_VERSION}:
             raise RuntimeError(f"不支持的 Codex usage schema 版本: {version}")
         connection.executescript(_SCHEMA_SQL)
         if version == 1:
@@ -162,10 +165,25 @@ class CodexUsageStore:
                 connection.execute(
                     f"""
                     ALTER TABLE rate_limit_samples
-                    ADD COLUMN model_key TEXT NOT NULL
-                    DEFAULT '{DEFAULT_CODEX_MODEL}'
-                    CHECK (trim(model_key) <> '')
+                    ADD COLUMN limit_id TEXT NOT NULL
+                    DEFAULT '{GENERAL_CODEX_RATE_LIMIT_ID}'
+                    CHECK (trim(limit_id) <> '')
                     """
+                )
+        if version == 4:
+            with connection:
+                connection.execute(
+                    "ALTER TABLE rate_limit_samples RENAME COLUMN model_key TO limit_id"
+                )
+                connection.execute(
+                    """
+                    UPDATE rate_limit_samples
+                    SET limit_id = CASE
+                        WHEN lower(trim(limit_id)) = 'gpt-5.3-codex-spark' THEN ?
+                        ELSE ?
+                    END
+                    """,
+                    (SECONDARY_CODEX_RATE_LIMIT_ID, GENERAL_CODEX_RATE_LIMIT_ID),
                 )
         if version != SCHEMA_VERSION:
             connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
@@ -198,7 +216,7 @@ class CodexUsageStore:
             window_minutes=int(row["window_minutes"]),
             resets_at=epoch + timedelta(seconds=int(row["resets_at"])),
             plan_type=row["plan_type"],
-            model=str(row["model_key"]),
+            limit_id=str(row["limit_id"]),
         )
 
     @staticmethod
@@ -383,13 +401,13 @@ class CodexUsageStore:
                 connection.execute(
                     """
                     INSERT INTO rate_limit_samples(
-                        day, model_key, sampled_at_ms, used_percent,
+                        day, limit_id, sampled_at_ms, used_percent,
                         window_minutes, resets_at, plan_type
                     ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         sample_day,
-                        sample.model,
+                        sample.limit_id,
                         sampled_at_ms,
                         sample.used_percent,
                         sample.window_minutes,
@@ -448,12 +466,18 @@ class CodexUsageStore:
             if selected_keys is None or "openai_official" in selected_keys:
                 rate_limit_rows = connection.execute(
                     """
-                    SELECT model_key, sampled_at_ms, used_percent, window_minutes, resets_at, plan_type
+                    SELECT limit_id, sampled_at_ms, used_percent, window_minutes, resets_at, plan_type
                     FROM rate_limit_samples
                     WHERE day >= ? AND day <= ?
+                      AND (limit_id <> ? OR window_minutes = ?)
                     ORDER BY sampled_at_ms ASC, sample_id ASC
                     """,
-                    (start, end),
+                    (
+                        start,
+                        end,
+                        SECONDARY_CODEX_RATE_LIMIT_ID,
+                        _WEEKLY_LIMIT_WINDOW_MINUTES,
+                    ),
                 ).fetchall()
                 rate_limit_samples = tuple(
                     self._rate_limit_from_row(row) for row in rate_limit_rows

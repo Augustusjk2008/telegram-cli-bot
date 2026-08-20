@@ -1,10 +1,11 @@
 import json
 import io
 
+from bot.codex_usage import app_server_rate_limits
 from bot.codex_usage.app_server_rate_limits import resolve_account_rate_limit
 
 
-def test_resolve_account_rate_limit_selects_codex_bucket(monkeypatch) -> None:
+def test_resolve_account_rate_limits_reads_general_and_secondary_in_one_process(monkeypatch) -> None:
     stdout = "\n".join(
         [
             json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}}),
@@ -25,6 +26,20 @@ def test_resolve_account_rate_limit_selects_codex_bucket(monkeypatch) -> None:
                                     "usedPercent": 17,
                                     "windowDurationMins": 10_080,
                                     "resetsAt": 1_787_011_285,
+                                },
+                            },
+                            "codex_bengalfox": {
+                                "limitId": "codex_bengalfox",
+                                "planType": "pro",
+                                "primary": {
+                                    "usedPercent": 42,
+                                    "windowDurationMins": 300,
+                                    "resetsAt": 1_787_011_285,
+                                },
+                                "secondary": {
+                                    "usedPercent": 64,
+                                    "windowDurationMins": 10_080,
+                                    "resetsAt": 1_787_615_285,
                                 },
                             },
                         },
@@ -65,20 +80,19 @@ def test_resolve_account_rate_limit_selects_codex_bucket(monkeypatch) -> None:
         fake_popen,
     )
 
-    sample = resolve_account_rate_limit(
+    samples = app_server_rate_limits.resolve_account_rate_limits(
         executable="codex",
         env={"CODEX_HOME": "C:\\temp\\codex"},
-        limit_id="codex",
     )
 
-    assert sample is not None
-    assert sample.used_percent == 17
-    assert sample.window_minutes == 10_080
-    assert sample.plan_type == "pro"
+    assert [sample.limit_id for sample in samples] == ["codex", "codex_bengalfox"]
+    assert [sample.used_percent for sample in samples] == [17, 64]
+    assert [sample.window_minutes for sample in samples] == [10_080, 10_080]
     request_text = process.stdin.getvalue()
     assert '"method":"account/rateLimits/read"' in request_text
     assert '"params":null' in request_text
     assert calls[0]["args"][0] == ["codex", "app-server", "--stdio"]
+    assert len(calls) == 1
 
 
 def test_resolve_account_rate_limit_returns_none_for_missing_codex_bucket(monkeypatch) -> None:

@@ -8,6 +8,12 @@ from typing import Any, Literal, Mapping
 
 ProviderKind = Literal["openai_official", "base_url", "unknown"]
 DEFAULT_CODEX_MODEL = "gpt-5.6-sol"
+GENERAL_CODEX_RATE_LIMIT_ID = "codex"
+SECONDARY_CODEX_RATE_LIMIT_ID = "codex_bengalfox"
+KNOWN_CODEX_RATE_LIMIT_IDS = (
+    GENERAL_CODEX_RATE_LIMIT_ID,
+    SECONDARY_CODEX_RATE_LIMIT_ID,
+)
 SQLITE_INT64_MAX = 2**63 - 1
 
 
@@ -84,7 +90,7 @@ class CodexRateLimitSample:
     window_minutes: int
     resets_at: datetime
     plan_type: str | None = None
-    model: str = DEFAULT_CODEX_MODEL
+    limit_id: str = GENERAL_CODEX_RATE_LIMIT_ID
 
     def __post_init__(self) -> None:
         for field_name in ("sampled_at", "resets_at"):
@@ -121,7 +127,10 @@ class CodexRateLimitSample:
             raise ValueError("window_minutes 必须是 SQLite 有符号 64 位正整数")
         if self.plan_type is not None and not isinstance(self.plan_type, str):
             raise ValueError("plan_type 必须是字符串或空值")
-        object.__setattr__(self, "model", normalize_model_key(self.model))
+        normalized_limit_id = str(self.limit_id or "").strip()
+        if not normalized_limit_id:
+            raise ValueError("limit_id 不能为空")
+        object.__setattr__(self, "limit_id", normalized_limit_id)
 
 
 @dataclass(frozen=True, slots=True)

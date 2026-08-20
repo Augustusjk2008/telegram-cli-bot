@@ -11,21 +11,31 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
-from .models import CodexRateLimitSample, SQLITE_INT64_MAX
+from .models import (
+    KNOWN_CODEX_RATE_LIMIT_IDS,
+    SECONDARY_CODEX_RATE_LIMIT_ID,
+    CodexRateLimitSample,
+    SQLITE_INT64_MAX,
+)
 
 
 _APP_SERVER_TIMEOUT_SECONDS = 5.0
 
 
-def _sample_from_snapshot(snapshot: object) -> CodexRateLimitSample | None:
+def _sample_from_snapshot(
+    snapshot: object,
+    *,
+    limit_id: str,
+) -> CodexRateLimitSample | None:
     if not isinstance(snapshot, Mapping):
         return None
-    primary = snapshot.get("primary")
-    if not isinstance(primary, Mapping):
+    window_name = "secondary" if limit_id == SECONDARY_CODEX_RATE_LIMIT_ID else "primary"
+    window = snapshot.get(window_name)
+    if not isinstance(window, Mapping):
         return None
-    used_percent = primary.get("usedPercent")
-    window_minutes = primary.get("windowDurationMins")
-    resets_at = primary.get("resetsAt")
+    used_percent = window.get("usedPercent")
+    window_minutes = window.get("windowDurationMins")
+    resets_at = window.get("resetsAt")
     if (
         isinstance(used_percent, bool)
         or not isinstance(used_percent, (int, float))
@@ -52,6 +62,7 @@ def _sample_from_snapshot(snapshot: object) -> CodexRateLimitSample | None:
             window_minutes=window_minutes,
             resets_at=datetime.fromtimestamp(resets_at, timezone.utc),
             plan_type=plan_type,
+            limit_id=limit_id,
         )
     except (OSError, OverflowError, ValueError):
         return None
@@ -96,18 +107,16 @@ def _write_payload(stream: Any, payload: Mapping[str, Any]) -> None:
     stream.flush()
 
 
-def resolve_account_rate_limit(
+def resolve_account_rate_limits(
     *,
     executable: str,
     env: Mapping[str, str] | None,
-    limit_id: str = "codex",
-) -> CodexRateLimitSample | None:
-    """Read one account bucket through a short-lived Codex app-server process."""
+) -> tuple[CodexRateLimitSample, ...]:
+    """Read known account buckets through one short-lived Codex app-server process."""
 
     executable_text = str(executable or "").strip()
-    limit_id_text = str(limit_id or "").strip()
-    if not executable_text or not limit_id_text:
-        return None
+    if not executable_text:
+        return ()
     process = None
     reader: threading.Thread | None = None
     lines: queue.Queue[object] = queue.Queue()
@@ -126,7 +135,7 @@ def resolve_account_rate_limit(
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         if process.stdin is None or process.stdout is None:
-            return None
+            return ()
         reader = threading.Thread(
             target=_read_stdout,
             args=(process.stdout, lines),
@@ -153,7 +162,7 @@ def resolve_account_rate_limit(
         )
         _write_payload(process.stdin, payloads[0])
         if _response_for_request(lines, 1, deadline) is None:
-            return None
+            return ()
         _write_payload(process.stdin, payloads[1])
         _write_payload(process.stdin, payloads[2])
         result = _response_for_request(lines, 2, deadline)
@@ -176,11 +185,34 @@ def resolve_account_rate_limit(
                 except (OSError, subprocess.SubprocessError):
                     pass
     if result is None:
-        return None
+        return ()
     buckets = result.get("rateLimitsByLimitId")
     if not isinstance(buckets, Mapping):
-        return None
-    return _sample_from_snapshot(buckets.get(limit_id_text))
+        return ()
+    samples = (
+        _sample_from_snapshot(buckets.get(limit_id), limit_id=limit_id)
+        for limit_id in KNOWN_CODEX_RATE_LIMIT_IDS
+    )
+    return tuple(sample for sample in samples if sample is not None)
 
 
-__all__ = ["resolve_account_rate_limit"]
+def resolve_account_rate_limit(
+    *,
+    executable: str,
+    env: Mapping[str, str] | None,
+    limit_id: str = "codex",
+) -> CodexRateLimitSample | None:
+    """Compatibility wrapper returning one requested account bucket."""
+
+    normalized_limit_id = str(limit_id or "").strip()
+    return next(
+        (
+            sample
+            for sample in resolve_account_rate_limits(executable=executable, env=env)
+            if sample.limit_id == normalized_limit_id
+        ),
+        None,
+    )
+
+
+__all__ = ["resolve_account_rate_limit", "resolve_account_rate_limits"]

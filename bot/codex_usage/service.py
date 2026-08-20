@@ -5,7 +5,6 @@ import logging
 import os
 import shlex
 import threading
-from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -19,7 +18,7 @@ from .models import (
     UsageQueryResult,
     normalize_model_key,
 )
-from .app_server_rate_limits import resolve_account_rate_limit
+from .app_server_rate_limits import resolve_account_rate_limits
 from .provider import CodexProviderResolver
 from .rollout import (
     TurnRateLimitResolution,
@@ -181,7 +180,6 @@ class CodexUsageCapture:
             )
         if self.provider.kind == "openai_official" and normalized_session_id:
             await self._service._record_rate_limit_capture(
-                model=self.model,
                 session_id=normalized_session_id,
                 started_at=self.started_at,
                 codex_home=self.codex_home,
@@ -210,7 +208,7 @@ class CodexUsageService:
         self._resolver = resolver or CodexProviderResolver()
         self._failed_usage_resolver = failed_usage_resolver or resolve_failed_turn_usage
         self._rate_limit_resolver = rate_limit_resolver or resolve_turn_rate_limit_resolution
-        self._account_rate_limit_resolver = account_rate_limit_resolver or resolve_account_rate_limit
+        self._account_rate_limit_resolver = account_rate_limit_resolver or resolve_account_rate_limits
         self._diagnostics_lock = threading.RLock()
         self._enabled_snapshot = False
         self._write_count = 0
@@ -364,7 +362,6 @@ class CodexUsageService:
     async def _record_rate_limit_capture(
         self,
         *,
-        model: str,
         session_id: str,
         started_at: datetime,
         codex_home: Path,
@@ -380,37 +377,39 @@ class CodexUsageService:
             )
         except Exception as exc:
             logger.warning("Codex 限额解析失败，已跳过: %s", type(exc).__name__)
-            return
+            resolution = None
         sample: CodexRateLimitSample | None = None
-        refresh_general = False
         if isinstance(resolution, TurnRateLimitResolution):
             sample = resolution.sample
-            refresh_general = resolution.refresh_general
         elif isinstance(resolution, CodexRateLimitSample):
             # Keep compatibility with injected legacy resolvers.
             sample = resolution
-        if refresh_general:
+        samples_by_limit_id = {sample.limit_id: sample} if sample is not None else {}
+        try:
+            account_result = await asyncio.to_thread(
+                self._account_rate_limit_resolver,
+                executable=executable,
+                env=environment,
+            )
+        except Exception as exc:
+            logger.warning("Codex 限额主动查询失败，已跳过: %s", type(exc).__name__)
+            account_result = ()
+        account_samples = (
+            (account_result,)
+            if isinstance(account_result, CodexRateLimitSample)
+            else tuple(account_result or ())
+        )
+        for account_sample in account_samples:
+            if isinstance(account_sample, CodexRateLimitSample):
+                samples_by_limit_id[account_sample.limit_id] = account_sample
+        for rate_limit_sample in samples_by_limit_id.values():
             try:
-                sample = await asyncio.to_thread(
-                    self._account_rate_limit_resolver,
-                    executable=executable,
-                    env=environment,
-                    limit_id=(
-                        "codex_bengalfox"
-                        if model.casefold() == "gpt-5.3-codex-spark"
-                        else "codex"
-                    ),
+                await asyncio.to_thread(
+                    self._store.record_rate_limit_sample,
+                    rate_limit_sample,
                 )
             except Exception as exc:
-                logger.warning("Codex 限额主动查询失败，已跳过: %s", type(exc).__name__)
-                sample = None
-        if sample is None:
-            return
-        sample = replace(sample, model=model)
-        try:
-            await asyncio.to_thread(self._store.record_rate_limit_sample, sample)
-        except Exception as exc:
-            logger.warning("Codex 限额写入失败，已忽略: %s", type(exc).__name__)
+                logger.warning("Codex 限额写入失败，已忽略: %s", type(exc).__name__)
 
     async def query(
         self,
@@ -687,7 +686,7 @@ def _totals_payload(totals: Any) -> dict[str, int | float | None]:
 
 def _rate_limit_payload(sample: CodexRateLimitSample) -> dict[str, Any]:
     return {
-        "model": sample.model,
+        "limit_id": sample.limit_id,
         "sampled_at": sample.sampled_at.astimezone().isoformat(),
         "used_percent": sample.used_percent,
         "window_minutes": sample.window_minutes,

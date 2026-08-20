@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { DEFAULT_CODEX_USAGE_MODEL } from "../../services/types";
+import {
+  DEFAULT_CODEX_USAGE_MODEL,
+  GENERAL_CODEX_RATE_LIMIT_ID,
+  SECONDARY_CODEX_RATE_LIMIT_ID,
+} from "../../services/types";
 import type {
   CodexRateLimitSample,
   CodexUsageConfig,
@@ -182,11 +186,11 @@ function formatWindow(minutes: number) {
   return `${numberFormat.format(minutes)} 分钟`;
 }
 
-function CodexRateLimitModelChart({
-  model,
+function CodexRateLimitBucketChart({
+  label,
   samples,
 }: {
-  model: string;
+  label: string;
   samples: CodexRateLimitSample[];
 }) {
   const orderedSamples = useMemo(
@@ -194,7 +198,16 @@ function CodexRateLimitModelChart({
     [samples],
   );
   const latest = orderedSamples.at(-1);
-  if (!latest) return null;
+  if (!latest) {
+    return (
+      <article className="codex-usage-rate-limit-group">
+        <h4>{label}</h4>
+        <p className="codex-usage-empty-state">
+          {label === "通用 Codex" ? "暂无通用 Codex 限额样本。" : `暂无 ${label} 限额样本。`}
+        </p>
+      </article>
+    );
+  }
 
   const width = 640;
   const height = 250;
@@ -222,13 +235,13 @@ function CodexRateLimitModelChart({
   }));
   const latestRemaining = remainingPercent(latest);
   const latestDuration = formatRemainingDuration(remainingDurationMs(latest));
-  const accessibleLabel = `${model} Codex 剩余额度与剩余时长趋势，共 ${orderedSamples.length} 个样本，当前剩余 ${formatPercentValue(latestRemaining)}，剩余时长 ${latestDuration}`;
+  const accessibleLabel = `${label} 剩余额度与剩余时长趋势，共 ${orderedSamples.length} 个样本，当前剩余 ${formatPercentValue(latestRemaining)}，剩余时长 ${latestDuration}`;
 
   return (
     <article className="codex-usage-rate-limit-group">
       <div className="codex-usage-section-heading codex-usage-rate-limit-heading">
         <div>
-          <h4>{model}</h4>
+          <h4>{label}</h4>
         </div>
         <div className="codex-usage-rate-limit-summary" aria-label="最新限额样本摘要">
           <strong>当前剩余 {formatPercentValue(latestRemaining)}</strong>
@@ -240,8 +253,8 @@ function CodexRateLimitModelChart({
       </div>
       <div className="codex-usage-rate-limit-chart">
         <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={accessibleLabel}>
-          <title>{model} Codex 剩余额度与剩余时长趋势</title>
-          <desc>按采样时间展示该模型的 Codex 剩余额度与剩余时长；左纵轴为百分之零到百分之一百，右纵轴为零天到七天。</desc>
+          <title>{label} 剩余额度与剩余时长趋势</title>
+          <desc>按采样时间展示该额度桶的剩余额度与剩余时长；左纵轴为百分之零到百分之一百，右纵轴为零天到七天。</desc>
           <line
             className="codex-usage-rate-limit-quota-axis"
             x1={left}
@@ -323,33 +336,35 @@ function CodexRateLimitModelChart({
 }
 
 function CodexRateLimitChart({ samples }: { samples: CodexRateLimitSample[] }) {
-  const modelGroups = useMemo(() => {
-    const grouped = new Map<string, CodexRateLimitSample[]>();
+  const limitGroups = useMemo(() => {
+    const grouped = new Map<string, CodexRateLimitSample[]>([
+      [GENERAL_CODEX_RATE_LIMIT_ID, []],
+      [SECONDARY_CODEX_RATE_LIMIT_ID, []],
+    ]);
     for (const sample of samples) {
-      grouped.set(sample.model, [...(grouped.get(sample.model) || []), sample]);
+      grouped.set(sample.limitId, [...(grouped.get(sample.limitId) || []), sample]);
     }
-    return Array.from(grouped.entries()).sort(([left], [right]) => {
-      if (left === right) return 0;
-      if (left === DEFAULT_CODEX_USAGE_MODEL) return -1;
-      if (right === DEFAULT_CODEX_USAGE_MODEL) return 1;
-      return left.localeCompare(right);
-    });
+    return Array.from(grouped.entries());
   }, [samples]);
+
+  const limitLabel = (limitId: string) => {
+    if (limitId === GENERAL_CODEX_RATE_LIMIT_ID) return "通用 Codex";
+    if (limitId === SECONDARY_CODEX_RATE_LIMIT_ID) return "gpt-5.3-codex-spark";
+    return limitId;
+  };
 
   return (
     <section className="codex-usage-section" aria-labelledby="codex-rate-limit-title">
       <h3 id="codex-rate-limit-title">Codex 剩余额度趋势</h3>
-      {modelGroups.length ? (
-        <div className="codex-usage-rate-limit-groups">
-          {modelGroups.map(([model, modelSamples]) => (
-            <CodexRateLimitModelChart key={model} model={model} samples={modelSamples} />
-          ))}
-        </div>
-      ) : (
-        <p className="codex-usage-empty-state">
-          暂无 Codex 限额样本；开启采集并完成一次 OpenAI 官方 Codex turn 后显示。
-        </p>
-      )}
+      <div className="codex-usage-rate-limit-groups">
+        {limitGroups.map(([limitId, limitSamples]) => (
+          <CodexRateLimitBucketChart
+            key={limitId}
+            label={limitLabel(limitId)}
+            samples={limitSamples}
+          />
+        ))}
+      </div>
     </section>
   );
 }

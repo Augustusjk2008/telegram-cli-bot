@@ -43,15 +43,25 @@ def _rate_limit(
     resets_at: object = 1_787_011_285,
     plan_type: object = "pro",
 ) -> dict[str, object]:
+    selected_window = {
+        "used_percent": used_percent,
+        "window_minutes": window_minutes,
+        "resets_at": resets_at,
+    }
     return {
         "type": "token_count",
         "rate_limits": {
             "limit_id": limit_id,
-            "primary": {
-                "used_percent": used_percent,
-                "window_minutes": window_minutes,
-                "resets_at": resets_at,
-            },
+            "primary": (
+                {
+                    "used_percent": 42,
+                    "window_minutes": 300,
+                    "resets_at": 1_787_011_285,
+                }
+                if limit_id == "codex_bengalfox"
+                else selected_window
+            ),
+            **({"secondary": selected_window} if limit_id == "codex_bengalfox" else {}),
             "plan_type": plan_type,
         },
     }
@@ -162,6 +172,7 @@ def test_turn_rate_limit_uses_last_valid_codex_sample_inside_target_turn(
     assert sample.window_minutes == 10_080
     assert sample.resets_at == datetime.fromtimestamp(1_787_011_285, timezone.utc)
     assert sample.plan_type == "pro"
+    assert sample.limit_id == "codex"
 
 
 def test_turn_rate_limit_resolution_flags_bengalfox_for_general_refresh(
@@ -183,7 +194,10 @@ def test_turn_rate_limit_resolution_flags_bengalfox_for_general_refresh(
         started_at=datetime(2026, 8, 11, 2, 0, 0, tzinfo=timezone.utc),
     )
 
-    assert resolution.sample is None
+    assert resolution.sample is not None
+    assert resolution.sample.limit_id == "codex_bengalfox"
+    assert resolution.sample.used_percent == 8
+    assert resolution.sample.window_minutes == 10_080
     assert resolution.refresh_general is True
 
 
@@ -207,7 +221,8 @@ def test_turn_rate_limit_resolution_uses_last_relevant_bucket(
         started_at=datetime(2026, 8, 11, 2, 0, 0, tzinfo=timezone.utc),
     )
 
-    assert resolution.sample is None
+    assert resolution.sample is not None
+    assert resolution.sample.limit_id == "codex_bengalfox"
     assert resolution.refresh_general is True
 
 
@@ -224,7 +239,6 @@ def test_turn_rate_limit_resolution_uses_last_relevant_bucket(
         ("2026-08-11T02:00:02Z", _rate_limit(window_minutes=10**400)),
         ("2026-08-11T02:00:02Z", _rate_limit(resets_at=-1)),
         ("2026-08-11T02:00:02Z", _rate_limit(resets_at="soon")),
-        ("2026-08-11T02:00:02Z", _rate_limit(limit_id="codex_bengalfox")),
         ("2026-08-11T02:00:02Z", _rate_limit(limit_id="other")),
         (
             "2026-08-11T02:00:02Z",

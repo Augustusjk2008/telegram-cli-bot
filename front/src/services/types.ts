@@ -392,6 +392,8 @@ export type CodexUsageProvider = {
 };
 
 export const DEFAULT_CODEX_USAGE_MODEL = "gpt-5.6-sol";
+export const GENERAL_CODEX_RATE_LIMIT_ID = "codex";
+export const SECONDARY_CODEX_RATE_LIMIT_ID = "codex_bengalfox";
 
 export type CodexUsageTimeBasis = {
   mode: "server_local" | string;
@@ -416,7 +418,7 @@ export type CodexUsageMetrics = {
 };
 
 export type CodexRateLimitSample = {
-  model: string;
+  limitId: string;
   sampledAt: string;
   usedPercent: number;
   windowMinutes: number;

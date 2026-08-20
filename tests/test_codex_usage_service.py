@@ -57,6 +57,17 @@ def _sample() -> object:
     )
 
 
+def _sample_for_limit(limit_id: str, *, used_percent: float = 8) -> object:
+    return models.CodexRateLimitSample(
+        sampled_at=datetime(2026, 8, 11, 4, 57, 53, 123_000, tzinfo=timezone.utc),
+        used_percent=used_percent,
+        window_minutes=10_080,
+        resets_at=datetime(2026, 8, 18, 0, 1, 25, tzinfo=timezone.utc),
+        plan_type="pro",
+        limit_id=limit_id,
+    )
+
+
 @pytest.mark.asyncio
 async def test_disabled_capture_does_not_resolve_or_record_rate_limit(tmp_path: Path) -> None:
     provider_resolver = _ProviderResolver(_provider())
@@ -80,9 +91,16 @@ async def test_disabled_capture_does_not_resolve_or_record_rate_limit(tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_official_capture_records_one_rate_limit_sample(tmp_path: Path) -> None:
+async def test_official_capture_records_general_and_secondary_account_buckets(
+    tmp_path: Path,
+) -> None:
     rate_limit_resolver = _RateLimitResolver(_sample())
-    account_rate_limit_resolver = _AccountRateLimitResolver(None)
+    account_rate_limit_resolver = _AccountRateLimitResolver(
+        (
+            _sample_for_limit("codex"),
+            _sample_for_limit("codex_bengalfox", used_percent=42),
+        )
+    )
     service = CodexUsageService(
         tmp_path / "usage.sqlite3",
         resolver=_ProviderResolver(_provider()),
@@ -106,14 +124,17 @@ async def test_official_capture_records_one_rate_limit_sample(tmp_path: Path) ->
     assert first is True
     assert second is False
     assert len(rate_limit_resolver.calls) == 1
-    assert account_rate_limit_resolver.calls == []
+    assert len(account_rate_limit_resolver.calls) == 1
     assert rate_limit_resolver.calls[0]["session_id"] == "session-1"
     assert result.totals.request_count == 1
-    assert result.rate_limit_samples == (_sample(),)
+    assert [sample.limit_id for sample in result.rate_limit_samples] == [
+        "codex",
+        "codex_bengalfox",
+    ]
 
 
 @pytest.mark.asyncio
-async def test_spark_capture_records_secondary_rate_limit(tmp_path: Path) -> None:
+async def test_spark_capture_does_not_relabel_general_rate_limit(tmp_path: Path) -> None:
     rate_limit_resolver = _RateLimitResolver(
         TurnRateLimitResolution(sample=None, refresh_general=True)
     )
@@ -142,13 +163,12 @@ async def test_spark_capture_records_secondary_rate_limit(tmp_path: Path) -> Non
     assert [item.model for item in result.by_provider_model] == ["gpt-5.3-codex-spark"]
     assert len(rate_limit_resolver.calls) == 1
     assert len(account_rate_limit_resolver.calls) == 1
-    assert account_rate_limit_resolver.calls[0]["limit_id"] == "codex_bengalfox"
     assert len(result.rate_limit_samples) == 1
-    assert result.rate_limit_samples[0].model == "gpt-5.3-codex-spark"
+    assert result.rate_limit_samples[0].limit_id == "codex"
 
 
 @pytest.mark.asyncio
-async def test_bengalfox_turn_queries_general_rate_limit_once(tmp_path: Path) -> None:
+async def test_bengalfox_turn_queries_account_rate_limits_once(tmp_path: Path) -> None:
     rate_limit_resolver = _RateLimitResolver(
         TurnRateLimitResolution(sample=None, refresh_general=True)
     )
@@ -179,7 +199,6 @@ async def test_bengalfox_turn_queries_general_rate_limit_once(tmp_path: Path) ->
     assert second is False
     assert len(rate_limit_resolver.calls) == 1
     assert len(account_rate_limit_resolver.calls) == 1
-    assert account_rate_limit_resolver.calls[0]["limit_id"] == "codex"
     assert account_rate_limit_resolver.calls[0]["executable"] == "codex"
     assert result.rate_limit_samples == (_sample(),)
 
@@ -228,7 +247,7 @@ async def test_official_capture_records_rate_limit_without_token_usage(tmp_path:
 
 
 @pytest.mark.asyncio
-async def test_spark_only_rate_limit_result_is_not_recorded(
+async def test_spark_only_rate_limit_result_is_recorded_as_secondary_fallback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -252,6 +271,11 @@ async def test_spark_only_rate_limit_result_is_not_recorded(
                         "used_percent": 10,
                         "window_minutes": 300,
                         "resets_at": 1_787_011_285,
+                    },
+                    "secondary": {
+                        "used_percent": 64,
+                        "window_minutes": 10_080,
+                        "resets_at": 1_787_615_285,
                     },
                     "plan_type": "pro",
                 },
@@ -284,7 +308,10 @@ async def test_spark_only_rate_limit_result_is_not_recorded(
     result = await service.query(rollout_day, rollout_day)
 
     assert recorded is True
-    assert result.rate_limit_samples == ()
+    assert len(result.rate_limit_samples) == 1
+    assert result.rate_limit_samples[0].limit_id == "codex_bengalfox"
+    assert result.rate_limit_samples[0].used_percent == 64
+    assert result.rate_limit_samples[0].window_minutes == 10_080
 
 
 @pytest.mark.asyncio
@@ -437,7 +464,7 @@ async def test_query_stats_returns_local_rate_limit_payload(tmp_path: Path) -> N
 
     assert payload["rate_limit_samples"] == [
         {
-            "model": "gpt-5.6-sol",
+            "limit_id": "codex",
             "sampled_at": _sample().sampled_at.astimezone().isoformat(),
             "used_percent": 8.0,
             "window_minutes": 10_080,

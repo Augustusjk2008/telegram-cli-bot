@@ -99,6 +99,17 @@
       "cwd": ".",
       "confirm": false,
       "enabled": true
+    },
+    {
+      "id": "stop_browser",
+      "label": "关闭浏览器",
+      "icon": "Terminal",
+      "windowsCommand": "Stop-Process -Name msedge,chrome,chromium,firefox,brave,vivaldi,opera,opera_gx,Arc,DuckDuckGo -Force -ErrorAction SilentlyContinue",
+      "linuxCommand": "",
+      "macosCommand": "",
+      "cwd": ".",
+      "confirm": false,
+      "enabled": true
     }
   ]
 }
