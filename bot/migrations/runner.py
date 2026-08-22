@@ -19,6 +19,7 @@ import secrets
 
 from bot.plugins.paths import default_plugins_root
 from bot.runtime_paths import (
+    _get_app_data_override,
     get_announcements_content_path,
     get_announcements_reads_path,
     get_app_data_root,
@@ -35,13 +36,15 @@ from bot.runtime_paths import (
     get_permissions_accounts_dir,
     get_permissions_bots_path,
     get_session_store_path,
+    get_tcb_home_root,
     get_tunnel_state_path,
 )
 from bot.web.auth_store import WebAuthStore
 
 MIGRATION_REPO_STATE_TO_USER_HOME = "001_repo_state_to_user_home"
 MIGRATION_PLUGIN_MANIFEST_V2 = "002_plugin_manifest_v2"
-MIGRATION_IDS = (MIGRATION_REPO_STATE_TO_USER_HOME, MIGRATION_PLUGIN_MANIFEST_V2)
+MIGRATION_LEGACY_CHAT_DATA = "003_legacy_chat_data_to_data_root"
+MIGRATION_IDS = (MIGRATION_REPO_STATE_TO_USER_HOME, MIGRATION_PLUGIN_MANIFEST_V2, MIGRATION_LEGACY_CHAT_DATA)
 _LEGACY_APP_SETTING_KEYS = (
     "git_proxy_address",
     "git_proxy_port",
@@ -651,6 +654,34 @@ def _run_plugin_manifest_v2_migration() -> dict[str, Any]:
     }
 
 
+def _run_legacy_chat_data_migration() -> dict[str, Any]:
+    """Move legacy top-level chat data under an explicit TCB_DATA_DIR override.
+
+    chat-history/chat-attachments roots honor TCB_DATA_DIR only when the
+    override is set; migrate existing ~/.tcb data once so existing
+    installations keep their history after enabling the override.
+    """
+    override = _get_app_data_override()
+    if not override:
+        return {"skipped_reason": "no_data_dir_override"}
+    data_root = Path(override).expanduser().resolve()
+    moved: list[str] = []
+    kept_existing: list[str] = []
+    for name in ("chat-history", "chat-attachments"):
+        legacy_dir = get_tcb_home_root() / name
+        if not legacy_dir.is_dir():
+            continue
+        target_dir = data_root / name
+        if target_dir.exists():
+            # 目标已有数据时保守跳过，避免覆盖；detail 中记录便于排查。
+            kept_existing.append(name)
+            continue
+        target_dir.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(legacy_dir), str(target_dir))
+        moved.append(name)
+    return {"data_root": str(data_root), "moved": moved, "kept_existing": kept_existing}
+
+
 def _completed_repair_targets(state: dict[str, Any]) -> set[str]:
     completed: set[str] = set()
     repairs = state.get("completed_repairs")
@@ -766,6 +797,8 @@ def _run_pending_migrations_locked(root: Path, data_root: Path, state_path: Path
                 detail = _run_repo_state_migration(root)
             elif migration_id == MIGRATION_PLUGIN_MANIFEST_V2:
                 detail = _run_plugin_manifest_v2_migration()
+            elif migration_id == MIGRATION_LEGACY_CHAT_DATA:
+                detail = _run_legacy_chat_data_migration()
             else:
                 detail = {}
             state.setdefault("completed", []).append(

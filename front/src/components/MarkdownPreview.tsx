@@ -1,4 +1,4 @@
-import { Children, isValidElement, type ComponentPropsWithoutRef, type ReactNode, useEffect, useRef, useState } from "react";
+import { Children, isValidElement, type ComponentPropsWithoutRef, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCheck, Copy } from "lucide-react";
 import "katex/dist/katex.min.css";
 import rehypeKatex from "rehype-katex";
@@ -8,6 +8,7 @@ import remarkMath from "remark-math";
 import { copyText } from "../utils/clipboard";
 import { isExternalHref, isLikelyLocalFileHref, isSafeMarkdownHref } from "../utils/fileLinks";
 import { getCachedMermaidRender, renderMermaidSingleFlight } from "../markdown/mermaidRenderer";
+import { normalizeLatexMath } from "../markdown/normalizeLatexMath";
 
 type Props = {
   content: string;
@@ -245,12 +246,16 @@ function MarkdownPre({
 export function MarkdownContent({ content, variant = "preview", onFileLinkClick, resolveImageSrc }: MarkdownContentProps) {
   const isChat = variant === "chat";
   const isDesktopPreview = variant === "desktop-preview";
+  const renderedContent = useMemo(
+    () => (isChat ? content : normalizeLatexMath(content)),
+    [content, isChat],
+  );
   const lastLocalLinkActivationRef = useRef<{ href: string; at: number } | null>(null);
   const containerClassName = isChat
     ? "chat-body-content chat-markdown-content min-w-0 w-full text-[var(--text)]"
     : isDesktopPreview
-      ? "h-full overflow-auto rounded-xl bg-[var(--surface-strong)] px-5 py-4 text-[15px] leading-7 text-[var(--text)]"
-      : "max-h-[50vh] overflow-auto rounded-xl bg-[var(--surface-strong)] px-5 py-4 text-[15px] leading-7 text-[var(--text)]";
+      ? "h-full min-w-0 w-full overflow-auto rounded-xl bg-[var(--surface-strong)] px-5 py-4 text-[15px] leading-7 text-[var(--text)] [&_.katex-display]:max-w-full [&_.katex-display]:overflow-x-auto [&_.katex-display]:overflow-y-hidden"
+      : "max-h-[50vh] min-w-0 w-full overflow-auto rounded-xl bg-[var(--surface-strong)] px-5 py-4 text-[15px] leading-7 text-[var(--text)] [&_.katex-display]:max-w-full [&_.katex-display]:overflow-x-auto [&_.katex-display]:overflow-y-hidden";
 
   function activateLocalLink(
     event: { preventDefault: () => void; stopPropagation: () => void },
@@ -371,7 +376,7 @@ export function MarkdownContent({ content, variant = "preview", onFileLinkClick,
           },
         }}
       >
-        {content}
+        {renderedContent}
       </ReactMarkdown>
     </div>
   );

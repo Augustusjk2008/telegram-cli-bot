@@ -2351,11 +2351,25 @@ export type CliParamField = {
   integer?: boolean;
 };
 
+export type CliModelCatalogItem = {
+  id: string;
+  label: string;
+  reasoningEfforts: string[];
+  defaultReasoningEffort?: string;
+};
+
+export type CliModelCatalog = {
+  source: "codex_cli" | "config" | string;
+  items: CliModelCatalogItem[];
+  error?: string;
+};
+
 export type CliParamsPayload = {
   cliType: CliType;
   params: Record<string, unknown>;
   defaults: Record<string, unknown>;
   schema: Record<string, CliParamField>;
+  modelCatalog?: CliModelCatalog;
 };
 
 export type CreateBotInput = {

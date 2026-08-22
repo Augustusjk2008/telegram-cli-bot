@@ -195,6 +195,14 @@ WEB_PORT = int(_get_project_config("WEB_PORT", "8765"))
 WEB_PUBLIC_URL = os.environ.get("WEB_PUBLIC_URL", "").strip()
 WEB_API_TOKEN = os.environ.get("WEB_API_TOKEN", "").strip()
 WEB_ALLOWED_ORIGINS = _split_csv_env(os.environ.get("WEB_ALLOWED_ORIGINS", ""))
+WEB_LOGIN_MAX_ATTEMPTS = max(2, _get_project_int("WEB_LOGIN_MAX_ATTEMPTS", 5))
+WEB_LOGIN_WINDOW_SECONDS = max(10, _get_project_int("WEB_LOGIN_WINDOW_SECONDS", 300))
+WEB_LOGIN_BASE_LOCK_SECONDS = max(1, _get_project_int("WEB_LOGIN_BASE_LOCK_SECONDS", 2))
+WEB_LOGIN_MAX_LOCK_SECONDS = max(
+    WEB_LOGIN_BASE_LOCK_SECONDS,
+    _get_project_int("WEB_LOGIN_MAX_LOCK_SECONDS", 60),
+)
+WEB_TRUST_PROXY_HEADERS = _get_project_bool("WEB_TRUST_PROXY_HEADERS", False)
 WEB_DEFAULT_USER_ID = ALLOWED_USER_IDS[0] if ALLOWED_USER_IDS else 1
 WEB_TERMINAL_SHELL_PATH = _get_project_config("WEB_TERMINAL_SHELL_PATH", "").strip()
 TCB_NODE_ID = _normalize_node_id(_get_project_config("TCB_NODE_ID", ""))

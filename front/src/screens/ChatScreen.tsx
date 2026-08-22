@@ -506,7 +506,10 @@ function modelLimitTitle(contextWindow?: number, outputLimit?: number) {
   ].filter(Boolean).join(", ");
 }
 
-function resolveNativeReasoningEffort(model: NativeAgentModelOption | undefined, selected?: string) {
+function resolveReasoningEffort(
+  model: { reasoningEfforts?: string[]; defaultReasoningEffort?: string } | undefined,
+  selected?: string,
+) {
   const efforts = model?.reasoningEfforts || [];
   if (efforts.length === 0) {
     return "";
@@ -4591,7 +4594,7 @@ export function ChatScreen({
     try {
       if (nativeExecutionMode) {
         const nextModelItem = nativeModelOptions.find((model) => model.id === nextModel);
-        const nextReasoningEffort = resolveNativeReasoningEffort(nextModelItem, nativeSelectedReasoningEffort);
+        const nextReasoningEffort = resolveReasoningEffort(nextModelItem, nativeSelectedReasoningEffort);
         const next = await client.updateNativeAgentModel(botAlias, nextModel, { reasoningEffort: nextReasoningEffort });
         setNativeAgentModels({
           items: next.items,
@@ -4810,7 +4813,10 @@ export function ChatScreen({
   const canManagePromptPresets = !readOnly && (botOverview?.effectiveCapabilities
     ? botOverview.effectiveCapabilities.includes("admin_ops")
     : true);
-  const cliModelOptions = cliParams?.schema.model?.enum ?? [];
+  const cliModelCatalogItems = cliParams?.modelCatalog?.items ?? [];
+  const cliModelOptions = cliModelCatalogItems.length > 0
+    ? cliModelCatalogItems.map((item) => item.id)
+    : cliParams?.schema.model?.enum ?? [];
   const nativeModelOptions = nativeAgentModels?.items ?? [];
   const nativeSelectedModel = nativeAgentModels?.selectedModel
     || botOverview?.nativeAgent?.model
@@ -4818,7 +4824,7 @@ export function ChatScreen({
     || "";
   const nativeSelectedModelItem = nativeModelOptions.find((model) => model.id === nativeSelectedModel);
   const nativeReasoningEffortOptions = nativeSelectedModelItem?.reasoningEfforts || [];
-  const nativeSelectedReasoningEffort = resolveNativeReasoningEffort(
+  const nativeSelectedReasoningEffort = resolveReasoningEffort(
     nativeSelectedModelItem,
     nativeAgentModels?.selectedReasoningEffort || botOverview?.nativeAgent?.reasoningEffort,
   );
@@ -4826,13 +4832,20 @@ export function ChatScreen({
     ? nativeSelectedModel
     : toModelOptionValue(cliParams?.params.model, cliModelOptions);
   const cliReasoningParamKey = cliParams?.cliType === "claude" ? "effort" : "reasoning_effort";
-  const cliReasoningEffortOptions = cliParams?.schema[cliReasoningParamKey]?.enum ?? [];
-  const cliSelectedReasoningEffort = String(
+  const selectedCliModelItem = cliModelCatalogItems.find((item) => item.id === selectedModel);
+  const fallbackCliReasoningEffortOptions = cliParams?.schema[cliReasoningParamKey]?.enum ?? [];
+  const cliReasoningEffortOptions = selectedCliModelItem?.reasoningEfforts?.length
+    ? selectedCliModelItem.reasoningEfforts
+    : fallbackCliReasoningEffortOptions;
+  const rawCliSelectedReasoningEffort = String(
     cliParams?.params[cliReasoningParamKey]
       ?? cliParams?.defaults[cliReasoningParamKey]
       ?? cliReasoningEffortOptions[0]
       ?? "",
   );
+  const cliSelectedReasoningEffort = selectedCliModelItem
+    ? resolveReasoningEffort(selectedCliModelItem, rawCliSelectedReasoningEffort)
+    : rawCliSelectedReasoningEffort;
   const visibleReasoningEffortOptions = nativeExecutionMode
     ? nativeReasoningEffortOptions
     : cliReasoningEffortOptions;
@@ -4876,12 +4889,20 @@ export function ChatScreen({
       }
       return options;
     }
-    const options = cliModelOptions.map((model) => ({ value: model, label: model }));
+    const options = cliModelOptions.map((model) => {
+      const item = cliModelCatalogItems.find((candidate) => candidate.id === model);
+      return { value: model, label: item?.label || model };
+    });
     if (selectedModel && !cliModelOptions.includes(selectedModel)) {
-      return [{ value: selectedModel, label: selectedModel }, ...options];
+      const unavailable = cliParams?.modelCatalog?.source === "codex_cli";
+      return [{
+        value: selectedModel,
+        label: unavailable ? `${selectedModel}（当前账号不可用）` : selectedModel,
+        disabled: unavailable,
+      }, ...options];
     }
     return options;
-  }, [cliModelOptions, nativeExecutionMode, nativeModelOptions, nativeSelectedModel, selectedModel]);
+  }, [cliModelCatalogItems, cliModelOptions, cliParams?.modelCatalog?.source, nativeExecutionMode, nativeModelOptions, nativeSelectedModel, selectedModel]);
   const messageContentWidthClass = embedded ? "mx-auto w-full max-w-5xl space-y-3" : "w-full space-y-3";
   const composerPlaceholder = chatDisabledReason
     || (activeAgentId !== "main" ? `发给 ${assistantName}...` : "输入消息");

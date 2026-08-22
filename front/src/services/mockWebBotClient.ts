@@ -344,6 +344,18 @@ function buildMockCliParams(cliType: string): CliParamsPayload {
         description: "额外参数",
       },
     },
+    ...(cliType === "claude"
+      ? {}
+      : {
+          modelCatalog: {
+            source: "codex_cli",
+            items: [
+              { id: "gpt-5.4", label: "GPT-5.4", reasoningEfforts: ["low", "medium", "high", "xhigh"], defaultReasoningEffort: "medium" },
+              { id: "gpt-5.5", label: "GPT-5.5", reasoningEfforts: ["low", "medium", "high", "xhigh"], defaultReasoningEffort: "medium" },
+              { id: "none", label: "自动（Codex 默认）", reasoningEfforts: ["ultra", "max", "xhigh", "high", "medium", "low"] },
+            ],
+          },
+        }),
   };
 }
 
@@ -361,6 +373,17 @@ function cloneCliParamsPayload(payload: CliParamsPayload): CliParamsPayload {
         },
       ]),
     ),
+    ...(payload.modelCatalog
+      ? {
+          modelCatalog: {
+            ...payload.modelCatalog,
+            items: payload.modelCatalog.items.map((item) => ({
+              ...item,
+              reasoningEfforts: [...item.reasoningEfforts],
+            })),
+          },
+        }
+      : {}),
   };
 }
 

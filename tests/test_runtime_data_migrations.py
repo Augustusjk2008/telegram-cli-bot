@@ -19,6 +19,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 def _configure_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, data_root: Path) -> None:
     monkeypatch.setenv("TCB_DATA_DIR", str(data_root))
+    # 隔离 HOME：迁移 003 会搬迁 ~/.tcb 下的 legacy 目录，测试不得触碰真实用户目录
+    isolated_home = tmp_path / "home"
+    isolated_home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("HOME", str(isolated_home))
+    monkeypatch.setenv("USERPROFILE", str(isolated_home))
     monkeypatch.setattr(runner, "default_plugins_root", lambda: tmp_path / "plugins")
 
 
@@ -390,3 +395,68 @@ def test_lock_is_released_when_holding_process_exits(monkeypatch: pytest.MonkeyP
     result = runner.run_pending_migrations(repo_root)
 
     assert result.completed == list(runner.MIGRATION_IDS)
+
+
+def _isolate_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    return home
+
+
+def test_legacy_chat_data_migration_moves_dirs_into_data_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    data_root, repo_root = _configured_repo(monkeypatch, tmp_path)
+    home = _isolate_home(monkeypatch, tmp_path)
+    legacy_workspace = home / ".tcb" / "chat-history" / "workspaces" / "ws-key"
+    legacy_workspace.mkdir(parents=True)
+    (legacy_workspace / "chat.sqlite").write_bytes(b"chat-db")
+    (home / ".tcb" / "chat-attachments" / "main" / "7").mkdir(parents=True)
+
+    result = runner.run_pending_migrations(repo_root)
+
+    assert runner.MIGRATION_LEGACY_CHAT_DATA in result.completed
+    assert (data_root / "chat-history" / "workspaces" / "ws-key" / "chat.sqlite").read_bytes() == b"chat-db"
+    assert (data_root / "chat-attachments" / "main" / "7").is_dir()
+    assert not (home / ".tcb" / "chat-history").exists()
+    assert not (home / ".tcb" / "chat-attachments").exists()
+
+    # 幂等：状态已记录，重跑不搬也不报错
+    repeated = runner.run_pending_migrations(repo_root)
+    assert repeated.completed == []
+    assert runner.MIGRATION_LEGACY_CHAT_DATA in repeated.skipped
+    assert (data_root / "chat-history" / "workspaces" / "ws-key" / "chat.sqlite").exists()
+
+
+def test_legacy_chat_data_migration_keeps_existing_target(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    data_root, repo_root = _configured_repo(monkeypatch, tmp_path)
+    home = _isolate_home(monkeypatch, tmp_path)
+    legacy = home / ".tcb" / "chat-history" / "workspaces" / "legacy-key"
+    legacy.mkdir(parents=True)
+    (legacy / "chat.sqlite").write_bytes(b"legacy-db")
+    existing_target = data_root / "chat-history" / "workspaces" / "existing-key"
+    existing_target.mkdir(parents=True)
+    (existing_target / "chat.sqlite").write_bytes(b"new-db")
+
+    result = runner.run_pending_migrations(repo_root)
+
+    assert runner.MIGRATION_LEGACY_CHAT_DATA in result.completed
+    # 目标已存在 → 保守跳过，legacy 原地保留
+    assert (legacy / "chat.sqlite").read_bytes() == b"legacy-db"
+    assert (existing_target / "chat.sqlite").read_bytes() == b"new-db"
+    detail = [item for item in json.loads((data_root / "migrations" / "state.json").read_text(encoding="utf-8"))["completed"] if item["id"] == runner.MIGRATION_LEGACY_CHAT_DATA][0]["detail"]
+    assert detail["kept_existing"] == ["chat-history"]
+    assert detail["moved"] == []
+
+
+def test_legacy_chat_data_migration_noop_without_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    home = _isolate_home(monkeypatch, tmp_path)
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    monkeypatch.delenv("TCB_DATA_DIR", raising=False)
+    monkeypatch.setattr(runner, "_get_app_data_override", lambda: "")
+
+    detail = runner._run_legacy_chat_data_migration()
+
+    assert detail == {"skipped_reason": "no_data_dir_override"}
+    assert not (home / ".tcb" / "chat-history").exists()

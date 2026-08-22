@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+import weakref
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -58,11 +59,12 @@ GIT_STDOUT_MAX_BYTES = max(1024, int(os.environ.get("TCB_GIT_STDOUT_MAX_BYTES", 
 GIT_STDERR_MAX_BYTES = max(1024, int(os.environ.get("TCB_GIT_STDERR_MAX_BYTES", str(64 * 1024))))
 GIT_UNTRACKED_TIMEOUT_SECONDS = max(0.1, float(os.environ.get("TCB_GIT_UNTRACKED_TIMEOUT_SECONDS", "5")))
 GIT_UNTRACKED_MAX_BYTES = max(1024, int(os.environ.get("TCB_GIT_UNTRACKED_MAX_BYTES", str(2 * 1024 * 1024))))
+GIT_CACHE_MAX_REPOSITORIES = max(8, int(os.environ.get("TCB_GIT_CACHE_MAX_REPOSITORIES", "128")))
 _GIT_STATUS_CACHE_TTL_SECONDS = 0.75
 _GIT_STATUS_RETRY_DELAY_SECONDS = 0.15
 _GIT_STATUS_CACHE_LOCK = threading.Lock()
 _GIT_STATUS_CACHE: dict[str, dict[str, Any]] = {}
-_GIT_REPO_LOCKS: dict[str, Any] = {}
+_GIT_REPO_LOCKS: weakref.WeakValueDictionary[str, Any] = weakref.WeakValueDictionary()
 _GIT_RECENT_COMMITS_CACHE: dict[tuple[str, int], dict[str, Any]] = {}
 _GIT_DIAGNOSTICS_LOCK = threading.Lock()
 _GIT_DIAGNOSTICS = {
@@ -74,6 +76,7 @@ _GIT_DIAGNOSTICS = {
     "stderr_bytes": 0,
     "cache_hits": 0,
     "cache_misses": 0,
+    "reader_error_count": 0,
     "stale_index_lock_cleanup_count": 0,
     "stale_index_lock_cleanup_failure_count": 0,
 }
@@ -129,7 +132,16 @@ _GIT_UNTRACKED_PROFILE = _GitCommandProfile(
 
 def git_service_diagnostics() -> dict[str, int]:
     with _GIT_DIAGNOSTICS_LOCK:
-        return dict(_GIT_DIAGNOSTICS)
+        diagnostics = dict(_GIT_DIAGNOSTICS)
+    with _GIT_STATUS_CACHE_LOCK:
+        diagnostics.update(
+            {
+                "status_cache_entries": len(_GIT_STATUS_CACHE),
+                "recent_commits_cache_entries": len(_GIT_RECENT_COMMITS_CACHE),
+                "repo_lock_entries": len(_GIT_REPO_LOCKS),
+            }
+        )
+    return diagnostics
 
 
 def _git_diag_add(**values: int) -> None:
@@ -164,6 +176,7 @@ def _run_bounded_process(
     closing = threading.Event()
     exceeded_name = [""]
     deadline = time.monotonic() + profile.timeout_seconds
+    termination_thread: threading.Thread | None = None
 
     def reader(name: str, stream) -> None:
         try:
@@ -179,8 +192,10 @@ def _run_bounded_process(
                     exceeded.set()
                     return
         except (OSError, ValueError):
-            if not closing.is_set():
-                raise
+            # A forced cleanup may close a pipe while a daemon reader is
+            # blocked in read(). Keep that expected race out of stderr and
+            # expose it through runtime diagnostics instead.
+            _git_diag_add(reader_error_count=1)
 
     stdout_thread = threading.Thread(target=reader, args=("stdout", process.stdout), daemon=True)
     stderr_thread = threading.Thread(target=reader, args=("stderr", process.stderr), daemon=True)
@@ -199,9 +214,11 @@ def _run_bounded_process(
         stdin_thread.start()
 
     budget_reason = ""
-    while process.poll() is None:
+    while True:
         if exceeded.is_set():
             budget_reason = f"{exceeded_name[0]}_bytes"
+            break
+        if process.poll() is not None:
             break
         if time.monotonic() >= deadline:
             budget_reason = "timeout"
@@ -217,15 +234,24 @@ def _run_bounded_process(
         if process_job is not None:
             process_job.terminate()
         else:
-            terminate_process_tree_sync(process)
+            termination_thread = threading.Thread(
+                target=terminate_process_tree_sync,
+                args=(process,),
+                daemon=True,
+            )
+            termination_thread.start()
+
+    cleanup_deadline = time.monotonic() + (0.15 if budget_reason else 2.0)
+    if termination_thread is not None and termination_thread.is_alive():
+        termination_thread.join(timeout=max(0.0, cleanup_deadline - time.monotonic()))
 
     if process.poll() is None:
         try:
-            process.wait(timeout=2)
+            process.wait(timeout=max(0.0, cleanup_deadline - time.monotonic()))
         except subprocess.TimeoutExpired:
             try:
                 process.kill()
-                process.wait(timeout=2)
+                process.wait(timeout=max(0.0, cleanup_deadline - time.monotonic()))
             except (OSError, subprocess.TimeoutExpired):
                 pass
     else:
@@ -236,12 +262,16 @@ def _run_bounded_process(
     drain_deadline = time.monotonic() + 1.0
     for thread in (stdout_thread, stderr_thread):
         thread.join(timeout=max(0.0, drain_deadline - time.monotonic()))
+    if not budget_reason and exceeded.is_set():
+        budget_reason = f"{exceeded_name[0]}_bytes"
     closing.set()
     close_process_streams(process)
     close_deadline = time.monotonic() + 0.2
     for thread in (stdout_thread, stderr_thread, stdin_thread):
         if thread is not None:
             thread.join(timeout=max(0.0, close_deadline - time.monotonic()))
+    if termination_thread is not None and termination_thread.is_alive():
+        termination_thread.join(timeout=0.01)
     stdout = bytes(buffers["stdout"]).decode("utf-8", errors="replace")
     stderr = bytes(buffers["stderr"]).decode("utf-8", errors="replace")
     _git_diag_add(
@@ -905,6 +935,10 @@ def _read_git_status_cache(repo_root: str) -> dict[str, Any] | None:
         _git_diag_add(cache_misses=1)
         return None
     if now - float(entry.get("created_at") or 0.0) > _GIT_STATUS_CACHE_TTL_SECONDS:
+        with _GIT_STATUS_CACHE_LOCK:
+            current = _GIT_STATUS_CACHE.get(cache_key)
+            if current is not None and float(current.get("created_at") or 0.0) == float(entry.get("created_at") or 0.0):
+                _GIT_STATUS_CACHE.pop(cache_key, None)
         _git_diag_add(cache_misses=1)
         return None
     _git_diag_add(cache_hits=1)
@@ -914,7 +948,13 @@ def _read_git_status_cache(repo_root: str) -> dict[str, Any] | None:
 def _write_git_status_cache(repo_root: str, entry: dict[str, Any]) -> None:
     cache_key = _git_status_cache_key(repo_root)
     with _GIT_STATUS_CACHE_LOCK:
+        _GIT_STATUS_CACHE.pop(cache_key, None)
         _GIT_STATUS_CACHE[cache_key] = dict(entry)
+        while len(_GIT_STATUS_CACHE) > GIT_CACHE_MAX_REPOSITORIES:
+            evicted_key = next(iter(_GIT_STATUS_CACHE))
+            _GIT_STATUS_CACHE.pop(evicted_key, None)
+            for recent_key in [key for key in _GIT_RECENT_COMMITS_CACHE if key[0] == evicted_key]:
+                _GIT_RECENT_COMMITS_CACHE.pop(recent_key, None)
 
 
 def _invalidate_git_status_cache(repo_root: str) -> None:
@@ -1139,10 +1179,14 @@ def _list_recent_commits(repo_root: str, limit: int = 8) -> list[dict[str, str]]
             }
         )
     with _GIT_STATUS_CACHE_LOCK:
+        _GIT_RECENT_COMMITS_CACHE.pop(cache_key, None)
         _GIT_RECENT_COMMITS_CACHE[cache_key] = {
             "head_token": head_token,
             "items": [dict(item) for item in items],
         }
+        recent_limit = GIT_CACHE_MAX_REPOSITORIES * 4
+        while len(_GIT_RECENT_COMMITS_CACHE) > recent_limit:
+            _GIT_RECENT_COMMITS_CACHE.pop(next(iter(_GIT_RECENT_COMMITS_CACHE)), None)
     return items
 
 

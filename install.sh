@@ -117,6 +117,11 @@ version_ge() {
   return 0
 }
 
+python_version_supported() {
+  local version="$1"
+  version_ge "$version" "3.10" && ! version_ge "$version" "3.14"
+}
+
 generate_token() {
   if command -v python3 >/dev/null 2>&1; then
     python3 - <<'PY'
@@ -271,18 +276,23 @@ ensure_tailwind_oxide_binding() {
 }
 
 detect_python() {
-  if [[ -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
-    printf '%s\n' "$SCRIPT_DIR/.venv/bin/python"
-    return 0
-  fi
-  if command -v python3 >/dev/null 2>&1; then
-    command -v python3
-    return 0
-  fi
-  if command -v python >/dev/null 2>&1; then
-    command -v python
-    return 0
-  fi
+  local candidate resolved version
+  for candidate in \
+    "$SCRIPT_DIR/.venv/bin/python" \
+    python3.12 python3.13 python3.11 python3.10 python3 python; do
+    if [[ "$candidate" == /* ]]; then
+      [[ -x "$candidate" ]] || continue
+      resolved="$candidate"
+    else
+      resolved="$(command -v "$candidate" 2>/dev/null || true)"
+      [[ -n "$resolved" ]] || continue
+    fi
+    version="$("$resolved" --version 2>&1 | awk '{print $2}')"
+    if python_version_supported "$version"; then
+      printf '%s\n' "$resolved"
+      return 0
+    fi
+  done
   return 1
 }
 
@@ -394,9 +404,9 @@ install_linux_system_dependencies() {
   $SUDO apt-get update
   $SUDO apt-get install -y python3 python3-pip python3-venv git curl ca-certificates
 
-  if ! command -v node >/dev/null 2>&1 || ! node --version | grep -Eq '^v(18|[2-9][0-9])\.'; then
-    step "安装 Node.js LTS"
-    curl -fsSL https://deb.nodesource.com/setup_lts.x | $SUDO -E bash -
+  if ! command -v node >/dev/null 2>&1 || ! version_ge "$(node --version | sed 's/^v//')" "22"; then
+    step "安装 Node.js 22"
+    curl -fsSL https://deb.nodesource.com/setup_22.x | $SUDO -E bash -
     $SUDO apt-get install -y nodejs
   fi
 }
@@ -405,14 +415,12 @@ install_macos_system_dependencies() {
   local packages=()
 
   step "检查 macOS 依赖"
-  if ! command -v python3 >/dev/null 2>&1; then
-    packages+=("python")
-  elif ! version_ge "$(python3 --version 2>&1 | awk '{print $2}')" "3.10"; then
-    packages+=("python")
+  if ! detect_python >/dev/null 2>&1; then
+    packages+=("python@3.12")
   fi
   if ! command -v node >/dev/null 2>&1; then
     packages+=("node")
-  elif ! version_ge "$(node --version | sed 's/^v//')" "18"; then
+  elif ! version_ge "$(node --version | sed 's/^v//')" "22"; then
     packages+=("node")
   fi
   if ! command -v git >/dev/null 2>&1; then
@@ -433,26 +441,26 @@ install_macos_system_dependencies() {
   brew install "${packages[@]}"
 }
 
-step "检查 Python 3.10+"
+step "检查 Python 3.10-3.13（推荐 3.12）"
 python_bin=""
 if python_bin="$(detect_python)"; then
   python_version="$("$python_bin" --version 2>&1 | awk '{print $2}')"
-  if version_ge "$python_version" "3.10"; then
+  if python_version_supported "$python_version"; then
     info "已检测到 Python ${python_version}"
   else
-    warn "Python 版本过低: ${python_version}，需要 3.10+"
+    warn "Python 版本不受支持: ${python_version}，需要 3.10-3.13（推荐 3.12）"
   fi
 else
-  warn "未检测到 Python"
+  warn "未检测到受支持的 Python 3.10-3.13（推荐 3.12）"
 fi
 
-step "检查 Node.js 18+"
+step "检查 Node.js 22+"
 if command -v node >/dev/null 2>&1; then
   node_version="$(node --version | sed 's/^v//')"
-  if version_ge "$node_version" "18"; then
+  if version_ge "$node_version" "22"; then
     info "已检测到 Node.js ${node_version}"
   else
-    warn "Node.js 版本过低: ${node_version}，需要 18+"
+    warn "Node.js 版本过低: ${node_version}，需要 22+"
   fi
 else
   warn "未检测到 Node.js"
@@ -508,15 +516,22 @@ fi
 
 step "准备 Python 虚拟环境"
 if ! python_bin="$(detect_python)"; then
-  fail "未检测到 Python 3.10+，请先安装 Python"
+  fail "未检测到 Python 3.10-3.13。请安装 Python 3.12，或执行 uv venv --python 3.12 --seed .venv"
   exit 1
 fi
 python_version="$("$python_bin" --version 2>&1 | awk '{print $2}')"
-if ! version_ge "$python_version" "3.10"; then
-  fail "Python 版本过低: ${python_version}，需要 3.10+"
+if ! python_version_supported "$python_version"; then
+  fail "Python 版本不受支持: ${python_version}，需要 3.10-3.13（推荐 3.12）"
   exit 1
 fi
-"${python_bin:-python3}" -m venv .venv
+if [[ "$python_bin" == "$SCRIPT_DIR/.venv/bin/python" ]]; then
+  info "复用现有 Python ${python_version} 虚拟环境"
+elif [[ -d "$SCRIPT_DIR/.venv" ]]; then
+  info "使用 Python ${python_version} 重建现有虚拟环境"
+  "$python_bin" -m venv --clear .venv
+else
+  "$python_bin" -m venv .venv
+fi
 PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
 PIP_BIN="$SCRIPT_DIR/.venv/bin/pip"
 
@@ -525,7 +540,7 @@ step "安装后端依赖"
 "$PIP_BIN" install -r requirements.txt
 
 step "安装前端依赖"
-(cd front && npm install)
+(cd front && npm ci)
 ensure_tailwind_oxide_binding
 
 step "构建前端"

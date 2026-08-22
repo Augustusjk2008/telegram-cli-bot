@@ -57,9 +57,14 @@ from bot.config import (
     WEB_FIXED_PUBLIC_FORWARD_ENABLED,
     WEB_FIXED_PUBLIC_FORWARD_URL,
     WEB_HOST,
+    WEB_LOGIN_BASE_LOCK_SECONDS,
+    WEB_LOGIN_MAX_ATTEMPTS,
+    WEB_LOGIN_MAX_LOCK_SECONDS,
+    WEB_LOGIN_WINDOW_SECONDS,
     WEB_PORT,
     WEB_PUBLIC_URL,
     WEB_TERMINAL_SHELL_PATH,
+    WEB_TRUST_PROXY_HEADERS,
     WEB_TUNNEL_AUTOSTART,
     WEB_TUNNEL_CLOUDFLARED_PATH,
     WEB_TUNNEL_MODE,
@@ -109,6 +114,7 @@ from .async_chat_store import ChatStoreOverloadedError, chat_store_executor_diag
 from .cli_error_stats import collect_cli_error_stats
 from .diagnostics import diag_enabled, diag_log_event, diag_log_slow, diag_loop_lag_ms
 from .runtime_diagnostics import EventLoopStallWatchdog, LoopLagTracker, RuntimeDiagnosticsRegistry
+from .login_throttle import LoginThrottle
 from .env_service import EnvConfigService, EnvValidationError
 from .exposure_service import WebExposureService
 from .fixed_forward_service import FixedForwardService
@@ -585,6 +591,22 @@ def _is_loopback_request(request: web.Request) -> bool:
     if isinstance(peername, tuple) and peername:
         return _is_loopback_value(peername[0])
     return _is_loopback_value(peername)
+
+
+def _login_throttle_client(request: web.Request) -> str:
+    direct = str(request.remote or "unknown").strip() or "unknown"
+    if not WEB_TRUST_PROXY_HEADERS or not _is_loopback_value(direct):
+        return direct
+    # 可信代理链解析：优先 X-Real-IP（示例 nginx 用 $remote_addr 覆盖式设置，客户端无法预置伪造，
+    # 且经 frp 等中间层原样透传）；无 X-Real-IP 时取 X-Forwarded-For 最右条目（追加语义下最右
+    # 是可信代理写入的真实来源，最左可被客户端预置伪造，用于轮换绕过限流）。
+    real_ip = str(request.headers.get("X-Real-IP") or "").strip()
+    forwarded = str(request.headers.get("X-Forwarded-For") or "").strip()
+    candidate = real_ip or (forwarded.rsplit(",", 1)[-1].strip() if forwarded else "")
+    try:
+        return str(ipaddress.ip_address(candidate)) if candidate else direct
+    except ValueError:
+        return direct
 
 
 def _serialize_auth_context(auth: AuthContext, *, token: str = "") -> dict[str, Any]:
@@ -1123,6 +1145,12 @@ class WebApiServer:
             on_stall=self._log_loop_stall,
             enabled=diag_enabled,
         )
+        self._login_throttle = LoginThrottle(
+            max_attempts=WEB_LOGIN_MAX_ATTEMPTS,
+            window_seconds=WEB_LOGIN_WINDOW_SECONDS,
+            base_lock_seconds=WEB_LOGIN_BASE_LOCK_SECONDS,
+            max_lock_seconds=WEB_LOGIN_MAX_LOCK_SECONDS,
+        )
         self._runtime_diagnostics = RuntimeDiagnosticsRegistry()
         self._runtime_diagnostics.register("loop_lag", self._loop_lag_tracker.diagnostics)
         self._runtime_diagnostics.register("loop_stall_watchdog", self._loop_stall_watchdog.diagnostics)
@@ -1130,6 +1158,7 @@ class WebApiServer:
         self._runtime_diagnostics.register("native_agent", get_native_agent_service().diagnostics)
         self._runtime_diagnostics.register("workspace_search", workspace_search_diagnostics)
         self._runtime_diagnostics.register("git", git_service_diagnostics)
+        self._runtime_diagnostics.register("login_throttle", self._login_throttle.diagnostics)
         self._runtime_diagnostics.register("chat_store", chat_store_executor_diagnostics)
         self._runtime_diagnostics.register(
             "session_store",
@@ -1665,13 +1694,39 @@ class WebApiServer:
         if _is_loopback_auto_auth_allowed(request):
             return _json({"ok": True, "data": _serialize_auth_context(self._local_admin_auth_context())})
         body = await self._parse_json(request)
+        username = str(body.get("username", ""))
+        throttle_client = _login_throttle_client(request)
+        retry_after = self._login_throttle.check(throttle_client, username)
+        if retry_after > 0:
+            raise WebApiError(
+                429,
+                "login_throttled",
+                "登录尝试过于频繁，请稍后再试",
+                data={"retry_after": retry_after},
+            )
         try:
             session = _WEB_AUTH_STORE.login_member(
-                str(body.get("username", "")),
+                username,
                 str(body.get("password", "")),
             )
         except AuthStoreError as exc:
+            retry_after = self._login_throttle.record_failure(throttle_client, username)
+            logger.warning(
+                "Web 登录失败 client=%s throttled=%s",
+                throttle_client,
+                bool(retry_after),
+            )
+            if retry_after > 0:
+                raise WebApiError(
+                    429,
+                    "login_throttled",
+                    "登录尝试过于频繁，请稍后再试",
+                    data={"retry_after": retry_after},
+                ) from exc
+            if exc.status < 500:
+                raise WebApiError(401, "invalid_credentials", "用户名或密码错误") from exc
             raise _auth_error(exc) from exc
+        self._login_throttle.record_success(throttle_client, username)
         response = _json({"ok": True, "data": _serialize_auth_session(session)})
         _set_auth_cookie(request, response, session.token, remember=bool(body.get("remember")))
         return response
@@ -3401,7 +3456,8 @@ class WebApiServer:
         await self._with_bot_config_access(request)
         alias = self._manager_alias(request)
         cli_type = request.query.get("cli_type") or None
-        return _json({"ok": True, "data": get_cli_params_payload(self.manager, alias, cli_type)})
+        data = await get_cli_params_payload(self.manager, alias, cli_type)
+        return _json({"ok": True, "data": data})
 
     async def get_native_agent_models(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_VIEW_BOTS)

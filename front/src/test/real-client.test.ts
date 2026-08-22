@@ -699,4 +699,39 @@ describe("RealWebBotClient", () => {
     expect(snapshot.items).toEqual([]);
     expect(snapshot.revision).toBe(revision);
   });
+  test("getCliParams maps the account-aware Codex model catalog", async () => {
+    fetchMock.mockResolvedValue(jsonOk({
+      cli_type: "codex",
+      params: { model: "gpt-5.6-sol", reasoning_effort: "ultra" },
+      defaults: { model: "none", reasoning_effort: "medium" },
+      schema: {
+        model: { type: "string", enum: ["gpt-5.6-sol", "none"] },
+        reasoning_effort: { type: "string", enum: ["medium", "ultra"] },
+      },
+      model_catalog: {
+        source: "codex_cli",
+        error: "",
+        items: [{
+          id: "gpt-5.6-sol",
+          label: "GPT-5.6-Sol",
+          reasoning_efforts: ["medium", "ultra"],
+          default_reasoning_effort: "medium",
+        }],
+      },
+    }));
+
+    const result = await new RealWebBotClient().getCliParams("main");
+
+    expect(result.modelCatalog).toEqual({
+      source: "codex_cli",
+      items: [{
+        id: "gpt-5.6-sol",
+        label: "GPT-5.6-Sol",
+        reasoningEfforts: ["medium", "ultra"],
+        defaultReasoningEffort: "medium",
+      }],
+      error: undefined,
+    });
+  });
+
 });

@@ -28,7 +28,7 @@
 <p align="center">
   <a href="https://github.com/Augustusjk2008/telegram-cli-bot/releases/latest"><img src="https://img.shields.io/github/v/release/Augustusjk2008/telegram-cli-bot?display_name=tag&amp;sort=semver&amp;style=flat-square&amp;color=5865f2" alt="Latest Release"></a>
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-20b8cd?style=flat-square" alt="Supported Platforms">
-  <img src="https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&amp;logo=python&amp;logoColor=white" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/Python-3.10--3.13-3776ab?style=flat-square&amp;logo=python&amp;logoColor=white" alt="Python 3.10-3.13">
   <img src="https://img.shields.io/badge/self--hosted-local--first-16a085?style=flat-square" alt="Self-hosted and local-first">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-3b82f6?style=flat-square" alt="Apache License 2.0"></a>
 </p>
@@ -101,7 +101,7 @@ bash install.sh
 bash start.sh
 ```
 
-Linux/macOS 需要 Python 3.10+、Node.js 18+ 和 Git；Pi 原生 Agent 需要 Node.js 22+ 和 bash。
+Linux/macOS 需要 Python 3.10-3.13（推荐 3.12；暂不支持 3.14）、Node.js 22+ 和 Git；Pi 原生 Agent 还需要 bash。AI CLI 不内置，需自行安装 `codex` / `claude`。
 
 <details>
 <summary><strong>从源码快照安装</strong></summary>
@@ -284,6 +284,8 @@ server {
 ```
 
 公网服务器需放通 `18088`、`7000`。`WEB_BASE_PATH` 必须与反代路径完全一致；修改路径后重新构建前端并重启 Web。
+
+Web 服务仅监听本机、由可信反向代理转发时，在 `.env` 设置 `WEB_TRUST_PROXY_HEADERS=true`，登录限流会按代理头解析真实客户端 IP（优先 `X-Real-IP`，其次取 `X-Forwarded-For` 最右条目）而不是代理本机地址。直连非本机地址时转发头一律忽略，防止伪造绕过限流。
 
 </details>
 

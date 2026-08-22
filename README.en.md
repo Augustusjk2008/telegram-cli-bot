@@ -28,7 +28,7 @@
 <p align="center">
   <a href="https://github.com/Augustusjk2008/telegram-cli-bot/releases/latest"><img src="https://img.shields.io/github/v/release/Augustusjk2008/telegram-cli-bot?display_name=tag&amp;sort=semver&amp;style=flat-square&amp;color=5865f2" alt="Latest Release"></a>
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-20b8cd?style=flat-square" alt="Supported Platforms">
-  <img src="https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&amp;logo=python&amp;logoColor=white" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/Python-3.10--3.13-3776ab?style=flat-square&amp;logo=python&amp;logoColor=white" alt="Python 3.10-3.13">
   <img src="https://img.shields.io/badge/self--hosted-local--first-16a085?style=flat-square" alt="Self-hosted and local-first">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-3b82f6?style=flat-square" alt="Apache License 2.0"></a>
 </p>
@@ -101,7 +101,7 @@ bash install.sh
 bash start.sh
 ```
 
-Linux and macOS require Python 3.10+, Node.js 18+, and Git. The native Pi agent requires Node.js 22+ and bash.
+Linux and macOS require Python 3.10-3.13 (3.12 recommended; 3.14 is not yet supported), Node.js 22+, and Git. The native Pi agent also requires bash. Codex and Claude CLIs are not bundled.
 
 <details>
 <summary><strong>Install from a source snapshot</strong></summary>
@@ -284,6 +284,8 @@ server {
 ```
 
 Allow inbound traffic on `18088` and `7000`. `WEB_BASE_PATH` must match the reverse-proxy path exactly. Rebuild the frontend and restart the web service after changing the path.
+
+When the web service only listens on loopback behind a trusted reverse proxy, set `WEB_TRUST_PROXY_HEADERS=true` in `.env`: login throttling then resolves the real client IP from proxy headers (`X-Real-IP` first, otherwise the rightmost `X-Forwarded-For` entry) instead of the proxy's own address. Forwarded headers are ignored for non-loopback direct connections, preventing spoofed-header throttling bypasses.
 
 </details>
 
