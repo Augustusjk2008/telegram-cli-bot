@@ -19,9 +19,7 @@ import type {
   AppUpdatePackageKind,
   AppUpdateStatus,
   Capability,
-  AgentInput,
   AgentListResult,
-  AgentMutationResult,
   AgentScopedOptions,
   AgentSummary,
   GitActionResult,
@@ -1829,23 +1827,6 @@ function mapAgentSummary(raw: RawAgentSummary): AgentSummary {
     createdAt: String(raw.created_at ?? raw.createdAt ?? ""),
     updatedAt: String(raw.updated_at ?? raw.updatedAt ?? ""),
     cluster: mapAgentClusterConfig(raw.cluster),
-  };
-}
-
-function mapAgentInput(input: AgentInput): Record<string, unknown> {
-  return {
-    ...(typeof input.id !== "undefined" ? { id: input.id } : {}),
-    ...(typeof input.name !== "undefined" ? { name: input.name } : {}),
-    ...(typeof input.systemPrompt !== "undefined" ? { system_prompt: input.systemPrompt } : {}),
-    ...(typeof input.enabled !== "undefined" ? { enabled: input.enabled } : {}),
-    ...(input.cluster ? {
-      cluster: {
-        ...(typeof input.cluster.allowCluster !== "undefined" ? { allow_cluster: input.cluster.allowCluster } : {}),
-        ...(typeof input.cluster.allowWrite !== "undefined" ? { allow_write: input.cluster.allowWrite } : {}),
-        ...(input.cluster.sessionPolicy ? { session_policy: input.cluster.sessionPolicy } : {}),
-        ...(typeof input.cluster.timeoutSeconds !== "undefined" ? { timeout_seconds: input.cluster.timeoutSeconds } : {}),
-      },
-    } : {}),
   };
 }
 
@@ -4765,40 +4746,6 @@ export class RealWebBotClient implements WebBotClient {
       `/api/bots/${encodeURIComponent(botAlias)}/agents`,
     );
     return { items: (data.items || []).map(mapAgentSummary) };
-  }
-
-  async createAgent(botAlias: string, input: AgentInput): Promise<AgentMutationResult> {
-    const data = await this.requestJson<{ agent: RawAgentSummary }>(
-      `/api/admin/bots/${encodeURIComponent(botAlias)}/agents`,
-      {
-        method: "POST",
-        headers: this.headers({ "Content-Type": "application/json" }),
-        body: JSON.stringify(mapAgentInput(input)),
-      },
-    );
-    return { agent: mapAgentSummary(data.agent) };
-  }
-
-  async updateAgent(botAlias: string, agentId: string, input: AgentInput): Promise<AgentMutationResult> {
-    const data = await this.requestJson<{ agent: RawAgentSummary }>(
-      `/api/admin/bots/${encodeURIComponent(botAlias)}/agents/${encodeURIComponent(agentId)}`,
-      {
-        method: "PATCH",
-        headers: this.headers({ "Content-Type": "application/json" }),
-        body: JSON.stringify(mapAgentInput(input)),
-      },
-    );
-    return { agent: mapAgentSummary(data.agent) };
-  }
-
-  async deleteAgent(botAlias: string, agentId: string): Promise<void> {
-    await this.requestJson(
-      `/api/admin/bots/${encodeURIComponent(botAlias)}/agents/${encodeURIComponent(agentId)}`,
-      {
-        method: "DELETE",
-        headers: this.headers(),
-      },
-    );
   }
 
   async getClusterStatus(botAlias: string): Promise<ClusterStatus> {

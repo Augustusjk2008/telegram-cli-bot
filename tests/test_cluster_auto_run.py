@@ -101,21 +101,6 @@ def test_ask_agent_rejects_slot_occupied_by_another_run() -> None:
     assert exc_info.value.code == "cluster_agent_busy"
 
 
-@pytest.mark.asyncio
-async def test_enabled_cluster_legacy_agent_mutation_is_reported_as_conflict() -> None:
-    import bot.web.api_service as api_service
-
-    class RejectingManager:
-        async def create_bot_agent(self, _alias, _data):
-            raise ValueError("集群已启用，物理槽位由集群规模管理")
-
-    with pytest.raises(WebApiError) as exc_info:
-        await api_service.create_agent(RejectingManager(), "main", {"id": "worker", "name": "Worker"})
-
-    assert exc_info.value.status == 409
-    assert exc_info.value.code == "cluster_slots_managed"
-
-
 def test_cluster_run_keeps_immutable_profile_snapshot() -> None:
     profile = BotProfile(
         alias="main",

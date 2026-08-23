@@ -181,7 +181,6 @@ from .api_service import (
     add_managed_bot,
     build_bot_summary,
     change_working_directory,
-    create_agent,
     create_conversation,
     archive_conversation,
     delete_all_conversations,
@@ -193,7 +192,6 @@ from .api_service import (
     create_text_file,
     copy_path,
     delete_path,
-    delete_agent,
     dispose_plugin_view,
     execute_shell_command,
     get_plugin_artifact,
@@ -256,7 +254,6 @@ from .api_service import (
     delete_chat_attachment,
     update_cli_params,
     update_cluster_config,
-    update_agent,
     update_bot_cli,
     update_bot_execution_config,
     update_global_prompt_presets,
@@ -2007,25 +2004,6 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_VIEW_BOT_STATUS)
         alias = self._manager_alias(request)
         return _json({"ok": True, "data": list_agents(self.manager, alias, auth.user_id)})
-
-    async def post_agent_view(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
-        alias = self._manager_alias(request)
-        body = await self._parse_json(request)
-        return _json({"ok": True, "data": await create_agent(self.manager, alias, dict(body or {}))})
-
-    async def patch_agent_view(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
-        alias = self._manager_alias(request)
-        agent_id = request.match_info.get("agent_id", "")
-        body = await self._parse_json(request)
-        return _json({"ok": True, "data": await update_agent(self.manager, alias, agent_id, dict(body or {}))})
-
-    async def delete_agent_view(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
-        alias = self._manager_alias(request)
-        agent_id = request.match_info.get("agent_id", "")
-        return _json({"ok": True, "data": await delete_agent(self.manager, alias, agent_id)})
 
     async def get_cluster_status_view(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_VIEW_BOT_STATUS)

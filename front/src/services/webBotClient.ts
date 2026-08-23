@@ -7,9 +7,7 @@ import type {
   BotOverview,
   BotWorkdirOpenResult,
   BotSummary,
-  AgentInput,
   AgentListResult,
-  AgentMutationResult,
   AgentScopedOptions,
   ChatMessage,
   ChatStatusUpdate,
@@ -203,9 +201,6 @@ export interface WebBotClient {
   uninstallPlugin(pluginId: string): Promise<void>;
   updatePlugin(pluginId: string, input: PluginUpdateInput): Promise<PluginSummary>;
   listAgents(botAlias: string): Promise<AgentListResult>;
-  createAgent(botAlias: string, input: AgentInput): Promise<AgentMutationResult>;
-  updateAgent(botAlias: string, agentId: string, input: AgentInput): Promise<AgentMutationResult>;
-  deleteAgent(botAlias: string, agentId: string): Promise<void>;
   getClusterStatus(botAlias: string): Promise<ClusterStatus>;
   getClusterTaskStatus(
     botAlias: string,

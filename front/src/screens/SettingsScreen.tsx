@@ -1,7 +1,6 @@
 import { clsx } from "clsx";
 import { useEffect, useState } from "react";
 import { AlertTriangle, Bell, LogOut, Save, SlidersHorizontal, Square } from "lucide-react";
-import { AgentSettingsPanel } from "../components/AgentSettingsPanel";
 import { BotCliParamsPanel } from "../components/BotCliParamsPanel";
 import { ClusterSetupPanel } from "../components/ClusterSetupPanel";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
@@ -862,14 +861,6 @@ export function SettingsScreen({
             botAlias={botAlias}
             client={client}
             canManage={canConfigureBot}
-          />
-        ) : null}
-
-        {overview && showBotRuntimeSettings && !overview.cluster?.enabled ? (
-          <AgentSettingsPanel
-            botAlias={botAlias}
-            client={client}
-            canManage={canManageBotRuntime}
           />
         ) : null}
 

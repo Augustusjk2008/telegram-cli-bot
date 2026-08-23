@@ -642,14 +642,6 @@ export type AgentListResult = {
   items: AgentSummary[];
 };
 
-export type AgentInput = {
-  id?: string;
-  name?: string;
-  systemPrompt?: string;
-  enabled?: boolean;
-  cluster?: Partial<AgentClusterConfig>;
-};
-
 export type ClusterModelTier = "low" | "medium" | "high";
 
 export type ClusterTierValues = {
@@ -892,10 +884,6 @@ export type ClusterBundleSchemaResult = {
   version: number;
   schema: Record<string, unknown>;
   instructions: string;
-};
-
-export type AgentMutationResult = {
-  agent: AgentSummary;
 };
 
 export type AgentScopedOptions = {

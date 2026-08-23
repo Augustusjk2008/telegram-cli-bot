@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from aiohttp import web
 
 from bot import app_settings
 from bot.cluster.config import normalize_bot_cluster_config
 from bot.manager import MultiBotManager
 from bot.models import BotProfile
+from bot.web.routes.cluster_routes import register as register_cluster_routes
 
 
 def test_cluster_config_migrates_write_policy_and_serializes_version_two() -> None:
@@ -22,6 +25,40 @@ def test_cluster_config_migrates_write_policy_and_serializes_version_two() -> No
     assert selected.write_policy == "main_only"
     assert writable.write_policy == "all_agents"
     assert missing.to_dict()["orchestration_version"] == 2
+
+
+def test_manual_agent_mutation_routes_are_not_registered() -> None:
+    async def handler(_request):
+        return web.Response()
+
+    handler_names = (
+        "cluster_mcp_ping",
+        "cluster_mcp_tool",
+        "get_agents_view",
+        "get_cluster_status_view",
+        "get_cluster_run_tasks_view",
+        "post_agent_view",
+        "patch_agent_view",
+        "delete_agent_view",
+        "post_cluster_setup_prepare",
+        "post_cluster_config",
+        "get_cluster_templates_view",
+        "get_bot_cluster_schema_view",
+        "get_cluster_schema_view",
+        "post_cluster_template_preview",
+        "post_cluster_template_apply",
+        "post_cluster_bundle_preview",
+        "post_cluster_bundle_apply",
+    )
+    app = web.Application()
+    register_cluster_routes(app, SimpleNamespace(**{name: handler for name in handler_names}))
+
+    routes = {(route.method, route.resource.canonical) for route in app.router.routes()}
+
+    assert ("GET", "/api/bots/{alias}/agents") in routes
+    assert ("POST", "/api/admin/bots/{alias}/agents") not in routes
+    assert ("PATCH", "/api/admin/bots/{alias}/agents/{agent_id}") not in routes
+    assert ("DELETE", "/api/admin/bots/{alias}/agents/{agent_id}") not in routes
 
 
 def test_enabled_cluster_profile_normalizes_slots_idempotently() -> None:
@@ -78,7 +115,7 @@ async def test_cluster_resize_keeps_tail_slots_and_restores_ids(
 
 
 @pytest.mark.asyncio
-async def test_enabled_cluster_rejects_legacy_agent_and_bundle_mutations(
+async def test_enabled_cluster_rejects_bundle_mutation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -95,12 +132,6 @@ async def test_enabled_cluster_rejects_legacy_agent_and_bundle_mutations(
     )
     manager = MultiBotManager(profile, str(storage))
 
-    with pytest.raises(ValueError, match="集群已启用"):
-        await manager.create_bot_agent("main", {"id": "new", "name": "新"})
-    with pytest.raises(ValueError, match="集群已启用"):
-        await manager.update_bot_agent("main", "slot", {"name": "变化"})
-    with pytest.raises(ValueError, match="集群已启用"):
-        await manager.delete_bot_agent("main", "slot")
     with pytest.raises(ValueError, match="集群已启用"):
         await manager.replace_bot_cluster_bundle(
             "main",

@@ -438,7 +438,7 @@ class GitCommitMessageCliConfig:
 
 @dataclass
 class AgentProfile:
-    """Bot 内部的 CLI 子 agent 配置。"""
+    """Bot 内部的子 agent 槽位状态。"""
 
     id: str
     name: str

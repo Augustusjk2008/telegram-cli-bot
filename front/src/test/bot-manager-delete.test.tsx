@@ -142,6 +142,16 @@ test("cluster settings expose one cluster size and hide fixed-role editors when 
   expect(screen.queryByRole("button", { name: "Agent" })).not.toBeInTheDocument();
 });
 
+test("desktop manager does not expose manual Agent settings when cluster is disabled", async () => {
+  const client = new MockWebBotClient();
+
+  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} />);
+
+  expect(await screen.findByRole("button", { name: "配置" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Agent" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "新增 agent" })).not.toBeInTheDocument();
+});
+
 test("cluster resize blockers can open or archive the blocking conversation", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();

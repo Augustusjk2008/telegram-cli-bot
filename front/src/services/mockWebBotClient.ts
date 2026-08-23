@@ -9,9 +9,7 @@ import type {
   AppUpdateDownloadProgress,
   AppUpdatePackageKind,
   AppUpdateStatus,
-  AgentInput,
   AgentListResult,
-  AgentMutationResult,
   AgentScopedOptions,
   AgentSummary,
   ChatSendOptions,
@@ -3666,75 +3664,6 @@ export class MockWebBotClient implements WebBotClient {
   async listAgents(botAlias: string): Promise<AgentListResult> {
     this.getBotSummary(botAlias);
     return { items: this.ensureAgents(botAlias).map((agent) => this.cloneAgent(agent)) };
-  }
-
-  async createAgent(botAlias: string, input: AgentInput): Promise<AgentMutationResult> {
-    const bot = this.getBotSummary(botAlias);
-    const id = (input.id || "").trim().toLowerCase();
-    const name = (input.name || "").trim();
-    if (!id || id === "main" || !/^[a-z][a-z0-9_-]{1,31}$/.test(id)) {
-      throw new WebApiClientError("agent id 无效", { status: 400, code: "invalid_agent" });
-    }
-    if (!name) {
-      throw new WebApiClientError("agent 名称不能为空", { status: 400, code: "invalid_agent" });
-    }
-    const agents = this.ensureAgents(botAlias);
-    if (agents.some((agent) => agent.id === id)) {
-      throw new WebApiClientError("agent id 已存在", { status: 400, code: "invalid_agent" });
-    }
-    const now = new Date().toISOString();
-    const agent: AgentSummary = {
-      id,
-      name,
-      systemPrompt: input.systemPrompt || "",
-      enabled: input.enabled !== false,
-      isMain: false,
-      createdAt: now,
-      updatedAt: now,
-      cluster: {
-        ...DEFAULT_AGENT_CLUSTER,
-        ...(input.cluster || {}),
-      },
-    };
-    this.agentsByBot.set(botAlias, [...agents, agent]);
-    return { agent: this.cloneAgent(agent) };
-  }
-
-  async updateAgent(botAlias: string, agentId: string, input: AgentInput): Promise<AgentMutationResult> {
-    const agents = this.ensureAgents(botAlias);
-    const id = agentId.trim().toLowerCase();
-    if (id === "main") {
-      throw new WebApiClientError("主 agent 不支持编辑", { status: 400, code: "invalid_agent" });
-    }
-    const index = agents.findIndex((agent) => agent.id === id);
-    if (index < 0) {
-      throw new WebApiClientError("未找到 agent", { status: 404, code: "agent_not_found" });
-    }
-    const current = agents[index];
-    const updated: AgentSummary = {
-      ...current,
-      name: typeof input.name === "string" ? input.name.trim() : current.name,
-      systemPrompt: typeof input.systemPrompt === "string" ? input.systemPrompt : current.systemPrompt,
-      enabled: typeof input.enabled === "boolean" ? input.enabled : current.enabled,
-      cluster: input.cluster ? { ...(current.cluster || DEFAULT_AGENT_CLUSTER), ...input.cluster } : current.cluster,
-      updatedAt: new Date().toISOString(),
-    };
-    const next = [...agents];
-    next[index] = updated;
-    this.agentsByBot.set(botAlias, next);
-    return { agent: this.cloneAgent(updated) };
-  }
-
-  async deleteAgent(botAlias: string, agentId: string): Promise<void> {
-    const id = agentId.trim().toLowerCase();
-    if (id === "main") {
-      throw new WebApiClientError("主 agent 不能删除", { status: 400, code: "invalid_agent" });
-    }
-    const agents = this.ensureAgents(botAlias);
-    if (!agents.some((agent) => agent.id === id)) {
-      throw new WebApiClientError("未找到 agent", { status: 404, code: "agent_not_found" });
-    }
-    this.agentsByBot.set(botAlias, agents.filter((agent) => agent.id !== id));
   }
 
   setClusterStatus(botAlias: string, input: Partial<ClusterStatus>): void {

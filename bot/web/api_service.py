@@ -1201,41 +1201,6 @@ async def handle_cluster_mcp_tool(
         _raise(409 if exc.code in conflict_codes else 400, exc.code, exc.message)
 
 
-async def create_agent(manager: MultiBotManager, alias: str, data: dict[str, Any]) -> dict[str, Any]:
-    try:
-        agent = await manager.create_bot_agent(alias, data)
-    except ValueError as exc:
-        if "集群已启用" in str(exc):
-            _raise(409, "cluster_slots_managed", str(exc))
-        _raise(400, "invalid_agent", str(exc))
-    return {"agent": agent}
-
-
-async def update_agent(manager: MultiBotManager, alias: str, agent_id: str, data: dict[str, Any]) -> dict[str, Any]:
-    try:
-        agent = await manager.update_bot_agent(alias, agent_id, data)
-    except KeyError:
-        _raise(404, "agent_not_found", "未找到 agent")
-    except ValueError as exc:
-        if "集群已启用" in str(exc):
-            _raise(409, "cluster_slots_managed", str(exc))
-        _raise(400, "invalid_agent", str(exc))
-    return {"agent": agent}
-
-
-async def delete_agent(manager: MultiBotManager, alias: str, agent_id: str) -> dict[str, Any]:
-    try:
-        await manager.delete_bot_agent(alias, agent_id)
-    except KeyError:
-        _raise(404, "agent_not_found", "未找到 agent")
-    except ValueError as exc:
-        if "集群已启用" in str(exc):
-            _raise(409, "cluster_slots_managed", str(exc))
-        _raise(400, "invalid_agent", str(exc))
-    return {"deleted": True}
-
-
-
 def _apply_cli_model_options(schema: dict[str, Any]) -> dict[str, Any]:
     next_schema = copy.deepcopy(schema)
     model_field = next_schema.get("model")

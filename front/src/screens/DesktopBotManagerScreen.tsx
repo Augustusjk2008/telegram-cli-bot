@@ -14,7 +14,6 @@ import {
   Trash2,
   Undo2,
 } from "lucide-react";
-import { AgentSettingsPanel } from "../components/AgentSettingsPanel";
 import { BotCliParamsPanel } from "../components/BotCliParamsPanel";
 import { BotActivitySummary } from "../components/BotActivitySummary";
 import { ClusterModelTiersPanel } from "../components/ClusterModelTiersPanel";
@@ -75,7 +74,7 @@ type Props = {
 };
 
 type Mode = "inspect" | "create";
-type InspectorTab = "overview" | "config" | "agents";
+type InspectorTab = "overview" | "config";
 
 const LIST_MIN_WIDTH = 520;
 const RESIZER_WIDTH = 8;
@@ -1371,7 +1370,6 @@ export function DesktopBotManagerScreen({
     const tabs: Array<{ id: InspectorTab; label: string }> = [
       { id: "overview", label: "概览" },
       { id: "config", label: "配置" },
-      ...(!focusedBot?.cluster?.enabled ? [{ id: "agents" as const, label: "Agent" }] : []),
     ];
 
     return (
@@ -1727,12 +1725,6 @@ export function DesktopBotManagerScreen({
                   }}
                   onOpenConversation={onSelect}
                   onDirtyChange={setDirty}
-                />
-              ) : inspectorTab === "agents" && !focusedBot.cluster?.enabled ? (
-                <AgentSettingsPanel
-                  botAlias={focusedBot.alias}
-                  client={client}
-                  canManage={canManage}
                 />
               ) : (
                 <div className="space-y-4">
