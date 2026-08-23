@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
 import { expect, test, vi } from "vitest";
@@ -140,6 +140,35 @@ test("cluster settings expose one cluster size and hide fixed-role editors when 
   expect(screen.getByLabelText("任务超时（秒）")).toHaveAttribute("max", "3600");
   expect(screen.queryByText("集群模板")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Agent" })).not.toBeInTheDocument();
+});
+
+test("cluster timeout saves on blur without reloading the bot list", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const listBots = vi.spyOn(client, "listBots");
+  const updateClusterConfig = vi.spyOn(client, "updateClusterConfig");
+
+  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} />);
+  await user.click(await screen.findByRole("button", { name: "配置" }));
+
+  const timeoutInput = await screen.findByLabelText("任务超时（秒）");
+  fireEvent.change(timeoutInput, { target: { value: "2400" } });
+
+  expect(timeoutInput).toHaveValue(2400);
+  expect(updateClusterConfig).not.toHaveBeenCalled();
+  expect(listBots).toHaveBeenCalledTimes(1);
+
+  fireEvent.blur(timeoutInput);
+
+  await waitFor(() => expect(updateClusterConfig).toHaveBeenCalledTimes(1));
+  expect(updateClusterConfig).toHaveBeenCalledWith("main", expect.objectContaining({
+    defaultTimeoutSeconds: 2400,
+  }));
+  expect(listBots).toHaveBeenCalledTimes(1);
+
+  await user.click(screen.getByRole("button", { name: "概览" }));
+  await user.click(screen.getByRole("button", { name: "配置" }));
+  expect(await screen.findByLabelText("任务超时（秒）")).toHaveValue(2400);
 });
 
 test("desktop manager does not expose manual Agent settings when cluster is disabled", async () => {

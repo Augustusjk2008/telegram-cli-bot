@@ -507,6 +507,7 @@ function EditPanel({
   const [pendingWorkdirConflict, setPendingWorkdirConflict] = useState<WorkdirChangeConflict | null>(null);
   const [clusterStatus, setClusterStatus] = useState<ClusterStatus | null>(null);
   const [clusterConfig, setClusterConfig] = useState<BotClusterConfig>(() => clusterConfigFromBot(bot));
+  const [clusterTimeoutDraft, setClusterTimeoutDraft] = useState(() => String(clusterConfigFromBot(bot).defaultTimeoutSeconds));
   const [cliParams, setCliParams] = useState<CliParamsPayload | null>(null);
   const [clusterSaving, setClusterSaving] = useState(false);
   const [clusterError, setClusterError] = useState("");
@@ -518,10 +519,15 @@ function EditPanel({
 
   useEffect(() => {
     setDraft(draftFromBot(bot));
-    setClusterConfig(clusterConfigFromBot(bot));
     setPendingWorkdirConflict(null);
     setClusterResizeBlocked(null);
-  }, [bot]);
+  }, [bot.alias]);
+
+  useEffect(() => {
+    const nextClusterConfig = clusterConfigFromBot(bot);
+    setClusterConfig(nextClusterConfig);
+    setClusterTimeoutDraft(String(nextClusterConfig.defaultTimeoutSeconds));
+  }, [bot.cluster]);
 
   useEffect(() => {
     onDirtyChange(dirty);
@@ -600,9 +606,10 @@ function EditPanel({
         reasoningEfforts: next.reasoningEfforts,
       });
       setClusterConfig(result.cluster);
+      setClusterTimeoutDraft(String(result.cluster.defaultTimeoutSeconds));
       setClusterStatus(result.status);
       setClusterResizeBlocked(null);
-      await manager.loadBots();
+      manager.updateBotCluster(bot.alias, result.cluster);
     } catch (err) {
       if (
         err instanceof WebApiClientError
@@ -614,6 +621,19 @@ function EditPanel({
     } finally {
       setClusterSaving(false);
     }
+  }
+
+  async function commitClusterTimeout() {
+    const timeoutSeconds = Number(clusterTimeoutDraft);
+    if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 60 || timeoutSeconds > 3600) {
+      setClusterTimeoutDraft(String(clusterConfig.defaultTimeoutSeconds));
+      setClusterError("任务超时必须是 60 到 3600 之间的整数");
+      return;
+    }
+    if (timeoutSeconds === clusterConfig.defaultTimeoutSeconds) {
+      return;
+    }
+    await saveCluster({ defaultTimeoutSeconds: timeoutSeconds });
   }
 
   async function openBlockingConversation(blocker: ClusterResizeBlocker) {
@@ -886,9 +906,15 @@ function EditPanel({
                     type="number"
                     min={60}
                     max={3600}
-                    value={clusterConfig.defaultTimeoutSeconds}
+                    value={clusterTimeoutDraft}
                     disabled={!canConfigureBot || clusterSaving}
-                    onChange={(event) => void saveCluster({ defaultTimeoutSeconds: Number(event.target.value) })}
+                    onChange={(event) => setClusterTimeoutDraft(event.target.value)}
+                    onBlur={() => void commitClusterTimeout()}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.currentTarget.blur();
+                      }
+                    }}
                     className="h-9 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 text-sm"
                   />
                 </label>

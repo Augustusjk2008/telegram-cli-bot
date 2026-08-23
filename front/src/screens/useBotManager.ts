@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { WebApiClientError } from "../services/types";
 import type {
+  BotClusterConfig,
   BotSummary,
   ChatExecutionMode,
   CliType,
@@ -113,14 +114,20 @@ export function useBotManager({
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [savingAction, setSavingAction] = useState("");
+  const botsRef = useRef<BotSummary[]>([]);
+
+  function replaceBots(next: BotSummary[]) {
+    botsRef.current = next;
+    setBots(next);
+    onBotsChange?.(next);
+  }
 
   async function loadBots() {
     setLoading(true);
     setError("");
     try {
       const data = await client.listBots();
-      setBots(data);
-      onBotsChange?.(data);
+      replaceBots(data);
       return data;
     } catch (err) {
       setError(getErrorMessage(err, "加载智能体失败"));
@@ -128,6 +135,13 @@ export function useBotManager({
     } finally {
       setLoading(false);
     }
+  }
+
+  function updateBotCluster(botAlias: string, cluster: BotClusterConfig) {
+    const next = botsRef.current.map((bot) => (
+      bot.alias === botAlias ? { ...bot, cluster } : bot
+    ));
+    replaceBots(next);
   }
 
   useEffect(() => {
@@ -379,6 +393,7 @@ export function useBotManager({
     setError,
     setNotice,
     loadBots,
+    updateBotCluster,
     createBot,
     toggleBot,
     renameBot,
