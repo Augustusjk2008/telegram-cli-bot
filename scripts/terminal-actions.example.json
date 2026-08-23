@@ -2,40 +2,37 @@
   "schemaVersion": 1,
   "actions": [
     {
-      "id": "install",
-      "label": "安装依赖",
-      "icon": "Download",
-      "command": "npm install",
-      "cwd": "front",
+      "id": "git.status",
+      "label": "Git 状态",
+      "icon": "GitBranch",
+      "windowsCommand": "git status --short",
+      "linuxCommand": "git status --short",
+      "macosCommand": "git status --short",
+      "cwd": ".",
+      "confirm": false,
+      "enabled": true
+    },
+    {
+      "id": "test.backend",
+      "label": "后端测试",
+      "icon": "TestTube2",
+      "windowsCommand": "python -m pytest tests -q",
+      "linuxCommand": "python -m pytest tests -q",
+      "macosCommand": "python -m pytest tests -q",
+      "cwd": ".",
       "confirm": false,
       "enabled": true
     },
     {
       "id": "test.front",
-      "label": "前端测试",
+      "label": "前端门禁",
       "icon": "TestTube2",
-      "command": "npm test -- --run",
+      "windowsCommand": "npm run test:gate",
+      "linuxCommand": "npm run test:gate",
+      "macosCommand": "npm run test:gate",
       "cwd": "front",
       "confirm": false,
       "enabled": true
-    },
-    {
-      "id": "build.front",
-      "label": "构建前端",
-      "icon": "Hammer",
-      "command": "npm run build",
-      "cwd": "front",
-      "confirm": false,
-      "enabled": true
-    },
-    {
-      "id": "clean",
-      "label": "清理临时文件",
-      "icon": "Trash2",
-      "command": ".\\scripts\\clean_temp.bat",
-      "cwd": ".",
-      "confirm": true,
-      "enabled": false
     }
   ]
 }

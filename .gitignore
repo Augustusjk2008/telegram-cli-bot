@@ -2,6 +2,8 @@ __pycache__/
 *.pyc
 *.pyo
 .session_store.json
+/.migrated-to-tcb.json
+/scripts/terminal-actions.json
 .web_admin_settings.json
 .web_announcement_reads.json
 .web_lan_chat.json

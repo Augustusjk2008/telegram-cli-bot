@@ -54,7 +54,7 @@ flowchart LR
 
 <table>
   <tr>
-    <td width="33%" valign="top"><strong>🤖 Multiple Bots and Sessions</strong><br><br>Each bot can use its own CLI, working directory, execution mode, and sessions, while user and agent scopes remain isolated.</td>
+    <td width="33%" valign="top"><strong>🤖 Multiple Bots and Sessions</strong><br><br>Each bot can use its own CLI, working directory, execution mode, and sessions. Agent scopes remain isolated, while web accounts authorized for the same bot share conversations.</td>
     <td width="33%" valign="top"><strong>🧰 Integrated Development Workbench</strong><br><br>Chat, edit files, inspect Git, use terminals, debug, and preview plugin content without constantly switching windows or context.</td>
     <td width="33%" valign="top"><strong>🧭 Sub-agents and Clusters</strong><br><br>Split review, implementation, and verification across sub-agents, routing rules, and cluster workflows, then collect results centrally.</td>
   </tr>
@@ -132,7 +132,7 @@ bash install.sh
 ### Multi-workspace Agent Control
 
 - Bind the primary bot and managed bots to different repositories, CLIs, and working directories.
-- Web sessions are isolated by user, bot, and agent to prevent cross-workspace session leakage.
+- Web sessions are isolated by bot, shared user domain, and agent; web accounts authorized for the same bot share the corresponding agent conversation.
 - Regular Codex and Claude CLI sessions retain streaming text, status events, traces, and completion events.
 - The native Pi agent retains sessions, tool calls, permission requests, context usage, and execution details.
 
@@ -410,6 +410,6 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting changes. Unless explic
 - Downloads and versions: [GitHub Releases](https://github.com/Augustusjk2008/telegram-cli-bot/releases)
 - Bugs and feature requests: [GitHub Issues](https://github.com/Augustusjk2008/telegram-cli-bot/issues)
 - Configuration examples: `.env.example` and `managed_bots.example.json`
-- Testing policy: `docs/testing-policy.md`
+- Testing policy: [CONTRIBUTING.md](CONTRIBUTING.md)
 
 If Orbit Safe Claw helps you, consider leaving a Star or sharing your use case through an Issue.

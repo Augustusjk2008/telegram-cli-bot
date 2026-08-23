@@ -134,10 +134,6 @@ def register(app: web.Application, server) -> None:
     )
     app.router.add_get("/api/bots/{alias}/workspace/inline-completion/config", server.get_workspace_inline_completion_config)
     app.router.add_post(
-        "/api/bots/{alias}/workspace/resolve-definition",
-        server.post_workspace_resolve_definition,
-    )
-    app.router.add_post(
         "/api/bots/{alias}/workspace/code-navigation/resolve",
         server.post_workspace_code_navigation_resolve,
     )

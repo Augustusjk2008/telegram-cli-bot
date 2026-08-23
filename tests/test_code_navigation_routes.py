@@ -143,9 +143,14 @@ async def test_code_navigation_route_uses_new_contract_and_requires_read_capabil
             )
             allowed = await client.post("/api/bots/main/workspace/code-navigation/resolve", json=body)
             payload = await allowed.json()
+            removed = await client.post(
+                "/api/bots/main/workspace/resolve-definition",
+                json={"path": "main.py", "line": 4, "column": 2},
+            )
 
     assert forbidden.status == 403
     assert allowed.status == 200, payload
+    assert removed.status == 405
     assert payload["data"]["request_id"] == "route-nav-1"
     assert payload["data"]["items"][0]["selection_range"]["start"] == {"line": 1, "column": 5}
 

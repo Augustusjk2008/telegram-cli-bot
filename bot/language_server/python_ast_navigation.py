@@ -1,4 +1,4 @@
-"""Semantic workspace code-navigation helpers and legacy adapters."""
+"""Python AST fallback for workspace code navigation."""
 
 from __future__ import annotations
 
@@ -7,7 +7,11 @@ import re
 from pathlib import Path
 from typing import Any, Mapping
 
-from .workspace_search_service import _relative_path, _resolve_workspace_file, _workspace_root
+from bot.web.workspace_search_service import (
+    _relative_path,
+    _resolve_workspace_file,
+    _workspace_root,
+)
 
 _PYTHON_LANGUAGE_IDS = {"python", "py"}
 _NAVIGATION_KINDS = {"definition", "implementation"}
@@ -19,8 +23,6 @@ def resolve_code_navigation(
     *,
     cursor_symbol: str = "",
 ) -> dict[str, object]:
-    """Resolve one semantic navigation request using the temporary Python AST provider."""
-
     root = _workspace_root(workspace)
     kind = str(request.get("kind") or "").strip().lower()
     if kind not in _NAVIGATION_KINDS:
@@ -70,85 +72,6 @@ def resolve_code_navigation(
         "items": locations,
         "message": "" if locations else empty_message,
     }
-
-
-def resolve_workspace_definition(
-    workspace: Path | str,
-    path: str,
-    *,
-    line: int,
-    column: int,
-    symbol: str = "",
-) -> dict[str, object]:
-    """Adapt the deprecated definition contract to semantic code navigation."""
-
-    navigation_request = build_legacy_code_navigation_request(
-        workspace,
-        path,
-        line=line,
-        column=column,
-    )
-    result = resolve_code_navigation(
-        workspace,
-        navigation_request,
-        cursor_symbol=symbol,
-    )
-    document = navigation_request["document"]
-    source_path = str(document["path"]) if isinstance(document, Mapping) else path
-    return adapt_code_navigation_to_legacy(result, source_path=source_path)
-
-
-def build_legacy_code_navigation_request(
-    workspace: Path | str,
-    path: str,
-    *,
-    line: int,
-    column: int,
-) -> dict[str, object]:
-    """Read the legacy target safely and produce the unified navigation request."""
-
-    root = _workspace_root(workspace)
-    target = _resolve_workspace_file(root, path)
-    content = target.read_text(encoding="utf-8", errors="ignore")
-    return {
-        "kind": "definition",
-        "requestId": "legacy-definition",
-        "document": {
-            "path": _relative_path(root, target),
-            "languageId": "python" if target.suffix.lower() in {".py", ".pyi"} else "",
-            "version": 0,
-            "content": content,
-        },
-        "position": {"line": line, "column": column},
-    }
-
-
-def adapt_code_navigation_to_legacy(
-    result: Mapping[str, object],
-    *,
-    source_path: str,
-) -> dict[str, object]:
-    """Convert normalized CodeLocation items to the deprecated response shape."""
-
-    legacy_items: list[dict[str, object]] = []
-    for item in result.get("items", []):
-        if not isinstance(item, Mapping):
-            continue
-        selection = item.get("selection_range")
-        start = selection.get("start") if isinstance(selection, Mapping) else None
-        if not isinstance(start, Mapping):
-            continue
-        item_path = str(item.get("path") or "")
-        legacy_items.append(
-            {
-                "path": item_path,
-                "line": _positive_int(start.get("line"), default=1),
-                "column": _positive_int(start.get("column"), default=1),
-                "match_kind": "same_file" if item_path == source_path else "import",
-                "confidence": 1.0,
-            }
-        )
-    return {"items": legacy_items}
 
 
 def _resolve_python_import_target(
@@ -225,10 +148,9 @@ def _find_python_symbol_location(content: str, symbol: str) -> dict[str, object]
                 targets = [node.target]
             for target in targets:
                 if isinstance(target, ast.Name) and target.id == symbol:
-                    selection = _ast_node_range(target)
                     return {
                         "range": _ast_node_range(node),
-                        "selection_range": selection,
+                        "selection_range": _ast_node_range(target),
                     }
     return None
 

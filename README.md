@@ -54,7 +54,7 @@ flowchart LR
 
 <table>
   <tr>
-    <td width="33%" valign="top"><strong>🤖 多 Bot 与多会话</strong><br><br>每个 Bot 绑定自己的 CLI、工作目录、执行模式和会话；不同用户与 Agent 作用域相互隔离。</td>
+    <td width="33%" valign="top"><strong>🤖 多 Bot 与多会话</strong><br><br>每个 Bot 绑定自己的 CLI、工作目录、执行模式和会话；Agent 作用域相互隔离，获准访问同一 Bot 的 Web 账号共享对话。</td>
     <td width="33%" valign="top"><strong>🧰 一体化开发工作台</strong><br><br>在同一页面完成聊天、文件编辑、Git、终端、调试和插件预览，减少窗口与上下文切换。</td>
     <td width="33%" valign="top"><strong>🧭 子 Agent 与集群</strong><br><br>通过子 Agent、路由和集群模式拆分审查、实现与验证任务，并统一回收结果。</td>
   </tr>
@@ -132,7 +132,7 @@ bash install.sh
 ### 多工作区 Agent 控制
 
 - 主 Bot 与托管 Bot 可绑定不同仓库、CLI 和工作目录。
-- Web session 按用户、Bot 和 Agent 隔离，避免多工作区会话串线。
+- Web session 按 Bot、共享用户域和 Agent 隔离；获准访问同一 Bot 的 Web 账号共享对应 Agent 对话。
 - Codex 与 Claude 普通 CLI 保留流式正文、状态、trace 和完成态。
 - Pi 原生 Agent 保留 session、工具调用、权限请求、上下文用量和过程详情。
 
@@ -410,6 +410,6 @@ npm run build
 - 下载与版本：[GitHub Releases](https://github.com/Augustusjk2008/telegram-cli-bot/releases)
 - Bug 与功能建议：[GitHub Issues](https://github.com/Augustusjk2008/telegram-cli-bot/issues)
 - 配置示例：`.env.example`、`managed_bots.example.json`
-- 测试约定：`docs/testing-policy.md`
+- 测试约定：[CONTRIBUTING.md](CONTRIBUTING.md)
 
 如果这个项目对你有帮助，欢迎点一个 Star，或通过 Issue 分享你的使用场景。

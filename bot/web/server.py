@@ -76,6 +76,7 @@ from bot.language_server import (
     LanguageServerRuntimeManager,
     LanguageServerUnavailableError,
 )
+from bot.language_server.python_ast_navigation import resolve_code_navigation
 from bot.manager import MultiBotManager
 from bot.models import session_persistence_diagnostics
 from bot.native_agent import get_native_agent_service
@@ -315,12 +316,6 @@ from .workspace_search_service import (
     quick_open_files,
     search_workspace_text,
     workspace_search_diagnostics,
-)
-from .workspace_definition_service import (
-    adapt_code_navigation_to_legacy,
-    build_legacy_code_navigation_request,
-    resolve_code_navigation,
-    resolve_workspace_definition,
 )
 
 logger = logging.getLogger(__name__)
@@ -3150,53 +3145,6 @@ class WebApiServer:
     async def refresh_language_server_catalog(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_READ_FILE_CONTENT)
         data = await asyncio.to_thread(self.language_server_catalog.api_snapshot)
-        return _json({"ok": True, "data": data})
-
-    async def post_workspace_resolve_definition(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
-        alias = self._manager_alias(request)
-        body = await self._parse_json(request)
-        workspace = self._workspace_file_root(alias, auth)
-        try:
-            path = str(body.get("path", ""))
-            line = int(body.get("line") or 1)
-            column = int(body.get("column") or 1)
-            navigation_request = await asyncio.to_thread(
-                build_legacy_code_navigation_request,
-                workspace,
-                path,
-                line=line,
-                column=column,
-            )
-            try:
-                navigation_result = await self.language_server_manager.resolve_code_navigation(
-                    bot_alias=alias,
-                    user_id=self._chat_user_id(auth),
-                    workspace_root=workspace,
-                    request=navigation_request,
-                )
-            except LanguageServerUnavailableError:
-                data = await asyncio.to_thread(
-                    resolve_workspace_definition,
-                    workspace,
-                    path,
-                    line=line,
-                    column=column,
-                    symbol=str(body.get("symbol", "")),
-                )
-            else:
-                document = navigation_request.get("document")
-                source_path = str(document.get("path") or path) if isinstance(document, dict) else path
-                data = adapt_code_navigation_to_legacy(navigation_result, source_path=source_path)
-        except ValueError as exc:
-            raise WebApiError(400, "invalid_code_navigation_request", str(exc)) from exc
-        except Exception as exc:
-            logger.exception("旧版语言服务定义跳转失败: bot=%s", alias)
-            raise WebApiError(
-                503,
-                "language_server_failed",
-                "语言服务请求失败，请稍后重试",
-            ) from exc
         return _json({"ok": True, "data": data})
 
     async def post_workspace_code_navigation_resolve(self, request: web.Request) -> web.Response:
