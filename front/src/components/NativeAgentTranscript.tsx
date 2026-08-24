@@ -5,7 +5,6 @@ import { ChatPlainTextMessage } from "./ChatPlainTextMessage";
 import type { ChatMessage, ChatMessageContextUsage } from "../services/types";
 import type { AgUiPermissionRequest, NativeAgentPermissionReply, NativeAgentTranscriptEntry } from "../utils/agUiRunReducer";
 import { ChatFinalAnswerActions } from "./ChatFinalAnswerActions";
-import { DynamicVirtualList } from "./virtual/DynamicVirtualList";
 
 type Props = {
   entries: NativeAgentTranscriptEntry[];
@@ -220,8 +219,6 @@ function shouldWrapTranscriptGroup(entries: NativeAgentTranscriptEntry[]) {
   }
   return entries.some((entry) => entry.kind === "tool" || isToolResultEntry(entry));
 }
-
-const LARGE_TRANSCRIPT_GROUP_THRESHOLD = 100;
 
 function groupTranscriptEntries(entries: NativeAgentTranscriptEntry[]): TranscriptRenderItem[] {
   const grouped: TranscriptRenderItem[] = [];
@@ -467,7 +464,6 @@ const TranscriptGroupRow = memo(function TranscriptGroupRow({
   onReplyPermission?: (reply: NativeAgentPermissionReply) => Promise<void>;
   onFileLinkClick?: (href: string) => void;
 }) {
-  const virtualizeContents = item.entries.length > LARGE_TRANSCRIPT_GROUP_THRESHOLD;
   const [expanded, setExpanded] = useState(false);
   const renderGroupEntry = useCallback((entry: NativeAgentTranscriptEntry) => (
     <TranscriptEntryRow
@@ -494,23 +490,11 @@ const TranscriptGroupRow = memo(function TranscriptGroupRow({
       </summary>
       {expanded ? (
         <div className="border-l-2 border-[var(--accent-outline)] pl-3">
-          {virtualizeContents ? (
-            <DynamicVirtualList
-              items={item.entries}
-              getKey={(entry) => entry.id}
-              renderItem={renderGroupEntry}
-              estimateHeight={56}
-              overscan={3}
-              dataTestId="virtualized-native-agent-group"
-              className="max-h-[50vh] min-h-[240px] overflow-auto"
-            />
-          ) : (
-            <div className="divide-y divide-[var(--workbench-hairline)]">
-              {item.entries.map((entry) => (
-                <div key={entry.id}>{renderGroupEntry(entry)}</div>
-              ))}
-            </div>
-          )}
+          <div className="divide-y divide-[var(--workbench-hairline)]">
+            {item.entries.map((entry) => (
+              <div key={entry.id}>{renderGroupEntry(entry)}</div>
+            ))}
+          </div>
         </div>
       ) : null}
     </details>
@@ -615,19 +599,7 @@ export function NativeAgentTranscript({
   ), [allowPermissionReply, onFileLinkClick, replyPermission, replyingPermissionId]);
 
   const renderTranscriptItems = (items: TranscriptRenderItem[]) => (
-    items.length > 100 ? (
-      <DynamicVirtualList
-        items={items}
-        getKey={(item) => item.kind === "entry"
-          ? item.entry.id
-          : `group-${item.groupIndex}-${item.entries[0]?.id || "empty"}`}
-        renderItem={renderTranscriptItem}
-        estimateHeight={72}
-        overscan={1}
-        dataTestId="virtualized-native-agent-transcript"
-        className="max-h-[60vh] min-h-[240px] overflow-auto"
-      />
-    ) : items.map((item) => (
+    items.map((item) => (
       <div key={item.kind === "entry" ? item.entry.id : `group-${item.groupIndex}-${item.entries[0]?.id || "empty"}`}>
         {renderTranscriptItem(item)}
       </div>
