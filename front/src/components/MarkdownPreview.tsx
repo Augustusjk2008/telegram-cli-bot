@@ -7,6 +7,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { copyText } from "../utils/clipboard";
 import { isExternalHref, isLikelyLocalFileHref, isSafeMarkdownHref } from "../utils/fileLinks";
+import { normalizeLatexMathDelimiters } from "../markdown/latexDelimiters";
 import { getCachedMermaidRender, renderMermaidSingleFlight } from "../markdown/mermaidRenderer";
 
 type Props = {
@@ -245,6 +246,7 @@ function MarkdownPre({
 export function MarkdownContent({ content, variant = "preview", onFileLinkClick, resolveImageSrc }: MarkdownContentProps) {
   const isChat = variant === "chat";
   const isDesktopPreview = variant === "desktop-preview";
+  const normalizedContent = isChat ? normalizeLatexMathDelimiters(content) : content;
   const lastLocalLinkActivationRef = useRef<{ href: string; at: number } | null>(null);
   const containerClassName = isChat
     ? "chat-body-content chat-markdown-content min-w-0 w-full text-[var(--text)]"
@@ -371,7 +373,7 @@ export function MarkdownContent({ content, variant = "preview", onFileLinkClick,
           },
         }}
       >
-        {content}
+        {normalizedContent}
       </ReactMarkdown>
     </div>
   );
