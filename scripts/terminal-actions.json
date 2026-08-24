@@ -1,0 +1,115 @@
+{
+  "schemaVersion": 1,
+  "actions": [
+    {
+      "id": "codex",
+      "label": "Codex",
+      "icon": "SquareTerminal",
+      "windowsCommand": "codex",
+      "linuxCommand": "codex",
+      "macosCommand": "",
+      "cwd": ".",
+      "confirm": false,
+      "enabled": true
+    },
+    {
+      "id": "Rebuild",
+      "label": "重建前端",
+      "icon": "Server",
+      "windowsCommand": "cd front; npm run build",
+      "linuxCommand": "cd front && npm run build",
+      "macosCommand": "",
+      "cwd": ".",
+      "confirm": false,
+      "enabled": true
+    },
+    {
+      "id": "ChangeSourceCodex",
+      "label": "Codex换源",
+      "icon": "Rocket",
+      "windowsCommand": ".\\scripts\\codex_switch_source.bat",
+      "linuxCommand": "bash ./scripts/codex_switch_source.sh",
+      "macosCommand": "",
+      "cwd": ".",
+      "confirm": false,
+      "enabled": true
+    },
+    {
+      "id": "Shutdown",
+      "label": "关机",
+      "icon": "Terminal",
+      "windowsCommand": "",
+      "linuxCommand": "sudo shutdown now",
+      "macosCommand": "",
+      "cwd": ".",
+      "confirm": true,
+      "enabled": false
+    },
+    {
+      "id": "todesk",
+      "label": "远程操控",
+      "icon": "Terminal",
+      "windowsCommand": ".\\scripts\\start_todesk_admin.bat",
+      "linuxCommand": "",
+      "macosCommand": "",
+      "cwd": ".",
+      "confirm": false,
+      "enabled": true
+    },
+    {
+      "id": "SyncSourceCodex",
+      "label": "Codex同步",
+      "icon": "RefreshCw",
+      "windowsCommand": ".\\scripts\\codex_sync_current_source_to_backup.bat",
+      "linuxCommand": "",
+      "macosCommand": "",
+      "cwd": ".",
+      "confirm": false,
+      "enabled": true
+    },
+    {
+      "id": "restart",
+      "label": "重启程序",
+      "icon": "Terminal",
+      "windowsCommand": "$dataDir = if ($env:TCB_DATA_DIR) { $env:TCB_DATA_DIR } else { Join-Path ([Environment]::GetFolderPath('UserProfile')) '.tcb\\orbit-safe-claw' }; $statePath = Join-Path $dataDir 'web\\runtime_state.json'; $port = if (Test-Path $statePath) { (Get-Content $statePath -Raw | ConvertFrom-Json).actual_port } elseif ($env:WEB_PORT) { $env:WEB_PORT } else { '8765' }; Start-Process -WindowStyle Hidden powershell -ArgumentList @('-NoProfile','-Command',\"try { Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:$port/api/admin/restart' -TimeoutSec 3 | Out-Null } catch { Write-Error $_ }\")",
+      "linuxCommand": "cd /home/ubuntu/telegram-cli-bot-master && TOKEN=$(awk -F= '$1==\"WEB_API_TOKEN\"{print $2}' .env | tr -d '\"'\\'\"'\"' ') && curl -fsS -X POST \"http://127.0.0.1:8765/api/admin/restart\" -H \"Authorization: Bearer $TOKEN\"",
+      "macosCommand": "",
+      "cwd": ".",
+      "confirm": true,
+      "enabled": true
+    },
+    {
+      "id": "codegraph",
+      "label": "代码同步",
+      "icon": "Upload",
+      "windowsCommand": "codegraph sync .",
+      "linuxCommand": "codegraph sync .",
+      "macosCommand": "",
+      "cwd": ".",
+      "confirm": false,
+      "enabled": true
+    },
+    {
+      "id": "memory",
+      "label": "内存占用",
+      "icon": "Terminal",
+      "windowsCommand": "$os = Get-CimInstance Win32_OperatingSystem; $totalGB = $os.TotalVisibleMemorySize / 1048576; $freeGB = $os.FreePhysicalMemory / 1048576; $usedGB = $totalGB - $freeGB; Write-Host \"当前物理内存占用率: $([math]::Round(($usedGB / $totalGB) * 100, 2))%，已用: $([math]::Round($usedGB, 2)) GB，总计: $([math]::Round($totalGB, 2)) GB\"",
+      "linuxCommand": "",
+      "macosCommand": "",
+      "cwd": ".",
+      "confirm": false,
+      "enabled": true
+    },
+    {
+      "id": "stop_browser",
+      "label": "关闭浏览器",
+      "icon": "Terminal",
+      "windowsCommand": "Stop-Process -Name msedge,chrome,chromium,firefox,brave,vivaldi,opera,opera_gx,Arc,DuckDuckGo -Force -ErrorAction SilentlyContinue",
+      "linuxCommand": "",
+      "macosCommand": "",
+      "cwd": ".",
+      "confirm": false,
+      "enabled": true
+    }
+  ]
+}
