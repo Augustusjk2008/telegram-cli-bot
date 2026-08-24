@@ -1,7 +1,7 @@
 .codex-usage-panel {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 1rem;
+  gap: 0.75rem;
   min-width: 0;
 }
 
@@ -15,7 +15,7 @@
 .codex-usage-daily-page-controls {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.5rem;
 }
 
 .codex-usage-heading,
@@ -31,8 +31,13 @@
 }
 
 .codex-usage-heading h2 {
-  font-size: 1.125rem;
+  font-size: 1.05rem;
   font-weight: 700;
+}
+
+.codex-usage-section h3 {
+  font-size: 0.95rem;
+  font-weight: 650;
 }
 
 .codex-usage-heading p,
@@ -42,16 +47,16 @@
 .codex-usage-empty-state,
 .codex-usage-empty,
 .codex-usage-loading {
-  margin: 0.35rem 0 0;
+  margin: 0.2rem 0 0;
   color: var(--muted);
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
 }
 
 .codex-usage-time-basis {
   flex: 0 0 auto;
   border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 0.35rem 0.65rem;
+  border-radius: 0.35rem;
+  padding: 0.25rem 0.5rem;
   color: var(--muted);
   font-size: 0.75rem;
 }
@@ -61,15 +66,15 @@
 .codex-usage-empty {
   min-width: 0;
   border: 1px solid var(--border);
-  border-radius: 0.75rem;
+  border-radius: 0.4rem;
   background: var(--surface);
-  padding: 1rem;
+  padding: 0.75rem;
 }
 
 .codex-usage-alert {
-  border-radius: 0.75rem;
-  padding: 0.75rem 1rem;
-  font-size: 0.875rem;
+  border-radius: 0.4rem;
+  padding: 0.55rem 0.75rem;
+  font-size: 0.8125rem;
 }
 
 .codex-usage-alert-error {
@@ -81,47 +86,49 @@
 .codex-usage-alert-success,
 .codex-usage-disabled-history {
   border: 1px solid #a7f3d0;
-  border-radius: 0.5rem;
+  border-radius: 0.35rem;
   background: #ecfdf5;
   color: #047857;
 }
 
 .codex-usage-disabled-history {
-  margin: 0.75rem 0 0;
-  padding: 0.65rem 0.75rem;
-  font-size: 0.875rem;
+  margin: 0.5rem 0 0;
+  padding: 0.5rem 0.625rem;
+  font-size: 0.8125rem;
 }
 
 .codex-usage-switch {
   cursor: pointer;
   color: var(--text);
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
   font-weight: 600;
 }
 
 .codex-usage-switch input {
-  width: 1.15rem;
-  height: 1.15rem;
+  width: 1rem;
+  height: 1rem;
 }
 
 .codex-usage-provider-details,
 .codex-usage-metric-grid {
   display: grid;
-  gap: 0.75rem;
-  margin: 0.8rem 0 0;
+  gap: 1px;
+  margin: 0.55rem 0 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  background: var(--border);
 }
 
 .codex-usage-provider-details {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
 }
 
 .codex-usage-provider-details > div,
 .codex-usage-metric-card {
   min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: 0.6rem;
   background: var(--bg);
-  padding: 0.75rem;
+  padding: 0.5rem 0.6rem;
 }
 
 .codex-usage-provider-details dt,
@@ -132,9 +139,9 @@
 
 .codex-usage-provider-details dd,
 .codex-usage-metric-card dd {
-  margin: 0.25rem 0 0;
+  margin: 0.15rem 0 0;
   color: var(--text);
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   font-weight: 600;
 }
 
@@ -145,33 +152,33 @@
 .codex-usage-date-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.75rem;
-  margin-top: 1rem;
+  gap: 0.5rem;
+  margin-top: 0.65rem;
 }
 
 .codex-usage-date-fields label,
 .codex-usage-provider-option {
   display: grid;
-  gap: 0.35rem;
+  gap: 0.25rem;
   color: var(--text);
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
 }
 
 .codex-usage-date-fields input {
   min-width: 0;
   border: 1px solid var(--border);
-  border-radius: 0.5rem;
+  border-radius: 0.3rem;
   background: var(--bg);
   color: var(--text);
-  padding: 0.5rem 0.65rem;
+  padding: 0.4rem 0.5rem;
 }
 
 .codex-usage-provider-filters {
   min-width: 0;
-  margin: 1rem 0 0;
+  margin: 0.65rem 0 0;
   border: 1px solid var(--border);
-  border-radius: 0.6rem;
-  padding: 0.75rem;
+  border-radius: 0.3rem;
+  padding: 0.5rem;
 }
 
 .codex-usage-provider-filters legend {
@@ -194,17 +201,21 @@
 .codex-usage-provider-options {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
-  gap: 0.5rem;
-  margin-top: 0.6rem;
+  gap: 1px;
+  margin-top: 0.4rem;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  background: var(--border);
 }
 
 .codex-usage-provider-option {
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
+  border: 0;
+  border-radius: 0;
   background: var(--bg);
-  padding: 0.55rem 0.65rem;
+  padding: 0.4rem 0.5rem;
 }
 
 .codex-usage-provider-option small {
@@ -214,15 +225,20 @@
   font-size: 0.72rem;
 }
 
+.codex-usage-provider-options > p {
+  padding: 0.5rem;
+  background: var(--bg);
+}
+
 .codex-usage-filter-form button,
 .codex-usage-form-actions button,
 .codex-usage-daily-pagination button {
   border: 1px solid var(--border);
-  border-radius: 0.5rem;
+  border-radius: 0.3rem;
   background: var(--surface);
   color: var(--text);
-  padding: 0.45rem 0.7rem;
-  font-size: 0.875rem;
+  padding: 0.35rem 0.55rem;
+  font-size: 0.8125rem;
 }
 
 .codex-usage-filter-form button:hover:not(:disabled),
@@ -241,7 +257,7 @@
 }
 
 .codex-usage-form-actions {
-  margin-top: 1rem;
+  margin-top: 0.65rem;
 }
 
 .codex-usage-form-actions .codex-usage-primary {
@@ -260,7 +276,7 @@
 }
 
 .codex-usage-metric-card dd {
-  font-size: 1.05rem;
+  font-size: 1rem;
 }
 
 .codex-usage-rate-limit-heading {
@@ -269,12 +285,19 @@
 
 .codex-usage-rate-limit-groups {
   display: grid;
-  gap: 1rem;
-  margin-top: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(32rem, 100%), 1fr));
+  gap: 0.75rem;
+  margin-top: 0.55rem;
 }
 
 .codex-usage-rate-limit-group {
   min-width: 0;
+}
+
+.codex-usage-rate-limit-group h4 {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.875rem;
 }
 
 .codex-usage-rate-limit-summary {
@@ -282,10 +305,10 @@
   flex: 0 1 auto;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 0.35rem 0.75rem;
+  gap: 0.2rem 0.5rem;
   max-width: 32rem;
   color: var(--muted);
-  font-size: 0.8rem;
+  font-size: 0.75rem;
 }
 
 .codex-usage-rate-limit-summary strong {
@@ -296,10 +319,10 @@
   width: 100%;
   max-width: 100%;
   min-width: 0;
-  margin-top: 0.75rem;
+  margin-top: 0.5rem;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 0.6rem;
+  border-radius: 0.3rem;
   background: var(--bg);
 }
 
@@ -360,7 +383,7 @@
   stroke: var(--accent);
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 3;
+  stroke-width: 2;
   vector-effect: non-scaling-stroke;
 }
 
@@ -370,25 +393,25 @@
   stroke-dasharray: 7 5;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 3;
+  stroke-width: 2;
   vector-effect: non-scaling-stroke;
 }
 
 .codex-usage-table-wrap {
   max-width: 100%;
   min-width: 0;
-  margin-top: 0.75rem;
+  margin-top: 0.5rem;
   overflow-x: auto;
   border: 1px solid var(--border);
-  border-radius: 0.6rem;
+  border-radius: 0.3rem;
 }
 
 .codex-usage-table-wrap table {
   width: 100%;
-  min-width: 1080px;
+  min-width: 1000px;
   border-collapse: collapse;
   color: var(--text);
-  font-size: 0.8rem;
+  font-size: 0.75rem;
 }
 
 .codex-usage-table-wrap caption {
@@ -403,7 +426,7 @@
 .codex-usage-table-wrap th,
 .codex-usage-table-wrap td {
   border-top: 1px solid var(--border);
-  padding: 0.55rem 0.65rem;
+  padding: 0.4rem 0.5rem;
   text-align: right;
   white-space: nowrap;
 }
@@ -434,7 +457,7 @@
 
 .codex-usage-table-wrap tbody small {
   display: block;
-  margin-top: 0.25rem;
+  margin-top: 0.15rem;
   color: var(--muted);
   font-size: 0.7rem;
   font-weight: 400;
@@ -443,7 +466,7 @@
 .codex-usage-daily-pagination {
   justify-content: space-between;
   flex-wrap: wrap;
-  margin-top: 0.75rem;
+  margin-top: 0.5rem;
 }
 
 .codex-usage-daily-page-controls {
@@ -454,10 +477,6 @@
 }
 
 @media (max-width: 900px) {
-  .codex-usage-provider-details {
-    grid-template-columns: 1fr;
-  }
-
   .codex-usage-metric-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -492,7 +511,7 @@
 
   .codex-usage-date-fields,
   .codex-usage-metric-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .codex-usage-quick-actions button,
