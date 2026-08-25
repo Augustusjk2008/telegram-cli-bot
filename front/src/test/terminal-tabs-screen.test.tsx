@@ -145,6 +145,41 @@ test("嵌入式终端把预设和聚焦按钮合并到终端标签栏", async ()
   expect(screen.queryByText("未启动", { exact: true })).not.toBeInTheDocument();
 });
 
+test("手机终端使用可移动的圆形沉浸按钮", async () => {
+  const onToggleImmersive = vi.fn();
+  const client = {
+    getTerminalSession: vi.fn(async () => snapshot()),
+    getTerminalActionsConfig: vi.fn(async () => actionsConfig),
+    createTerminalSession: vi.fn(async () => snapshot()),
+    closeTerminalSession: vi.fn(async () => ({ ...snapshot(), closed: true, connectionText: "终端已关闭" })),
+  } as unknown as WebBotClient;
+
+  render(
+    <PersistentTerminalProvider client={client}>
+      <TerminalTabsScreen
+        authToken="token"
+        botAlias="repo"
+        client={client}
+        isVisible
+        preferredWorkingDir="C:/workspace"
+        onToggleImmersive={onToggleImmersive}
+      />
+    </PersistentTerminalProvider>,
+  );
+
+  const button = await screen.findByRole("button", { name: "进入沉浸模式" });
+  expect(button).toHaveClass("rounded-full", "touch-none");
+  expect(button).toHaveAttribute("title", "拖动调整位置");
+
+  fireEvent.pointerDown(button, { pointerId: 1, pointerType: "touch", clientX: 200, clientY: 200 });
+  fireEvent.pointerMove(button, { pointerId: 1, pointerType: "touch", clientX: 150, clientY: 150 });
+  fireEvent.pointerUp(button, { pointerId: 1, pointerType: "touch", clientX: 150, clientY: 150 });
+
+  expect(localStorage.getItem("tcb.terminalImmersiveButton.repo")).not.toBeNull();
+  fireEvent.click(button);
+  expect(onToggleImmersive).not.toHaveBeenCalled();
+});
+
 test("手机终端在两行内提供常用控制键", async () => {
   const sendControl = vi.fn();
   terminalSessionMock.create.mockImplementation((_container: HTMLElement, options: { onOpen?: () => void }) => ({

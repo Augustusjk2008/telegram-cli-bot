@@ -12,6 +12,7 @@ import type {
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { toolbarButtonClass } from "../components/ToolbarButton";
+import { ImmersiveToggleButton } from "../components/ImmersiveToggleButton";
 import { TerminalActionsBar } from "../terminal/TerminalActionsBar";
 import { TerminalActionsConfigDialog } from "../terminal/TerminalActionsConfigDialog";
 import { isTerminalActionVisible, resolveTerminalActionCommand } from "../terminal/terminalActionPlatform";
@@ -129,6 +130,7 @@ export function TerminalScreen({
   const listenerDisposersRef = useRef<Disposable[]>([]);
   const launchPendingRef = useRef(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const terminalRootRef = useRef<HTMLElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const lastThemeRef = useRef(themeName);
   const isFollowingRef = useRef(true);
@@ -607,7 +609,7 @@ export function TerminalScreen({
   ) : null;
 
   return (
-    <main data-testid="terminal-screen-root" className="flex h-full flex-col bg-[var(--workbench-panel-bg)]">
+    <main ref={terminalRootRef} data-testid="terminal-screen-root" className="relative flex h-full flex-col bg-[var(--workbench-panel-bg)]">
       {embeddedToolbar}
       {!embedded ? (
         <header className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-3 py-2">
@@ -709,14 +711,12 @@ export function TerminalScreen({
       ) : null}
 
       {!embedded && isVisible && onToggleImmersive ? (
-        <button
-          type="button"
-          onClick={onToggleImmersive}
-          aria-label={isImmersive ? "退出沉浸模式" : "进入沉浸模式"}
-          className="absolute bottom-24 right-4 z-20 inline-flex h-12 w-12 items-center justify-center rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] text-[var(--text)] shadow-[var(--shadow-card)] backdrop-blur hover:bg-[var(--workbench-hover-bg)]"
-        >
-          {isImmersive ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
-        </button>
+        <ImmersiveToggleButton
+          containerRef={terminalRootRef}
+          isImmersive={isImmersive}
+          storageKey={`tcb.terminalImmersiveButton.${botAlias}`}
+          onToggle={onToggleImmersive}
+        />
       ) : null}
 
       {!embedded ? (
