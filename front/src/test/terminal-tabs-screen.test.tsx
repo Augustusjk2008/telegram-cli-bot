@@ -145,6 +145,60 @@ test("嵌入式终端把预设和聚焦按钮合并到终端标签栏", async ()
   expect(screen.queryByText("未启动", { exact: true })).not.toBeInTheDocument();
 });
 
+test("手机终端在两行内提供常用控制键", async () => {
+  const sendControl = vi.fn();
+  terminalSessionMock.create.mockImplementation((_container: HTMLElement, options: { onOpen?: () => void }) => ({
+    term: {
+      onWriteParsed: vi.fn(() => ({ dispose: vi.fn() })),
+      onScroll: vi.fn(() => ({ dispose: vi.fn() })),
+      scrollToBottom: vi.fn(),
+      textarea: document.createElement("textarea"),
+    },
+    connect: vi.fn(() => options.onOpen?.()),
+    dispose: vi.fn(),
+    fit: vi.fn(),
+    focus: vi.fn(),
+    getRecoveryState: vi.fn(),
+    sendControl,
+    sendText: vi.fn(),
+    setTheme: vi.fn(),
+  }));
+  const client = {
+    getTerminalSession: vi.fn(async () => ({
+      ...snapshot(),
+      started: true,
+      ptyMode: true,
+      connectionText: "运行中",
+    })),
+    getTerminalActionsConfig: vi.fn(async () => actionsConfig),
+    closeTerminalSession: vi.fn(),
+  } as unknown as WebBotClient;
+
+  render(
+    <PersistentTerminalProvider client={client}>
+      <TerminalTabsScreen
+        authToken="token"
+        botAlias="repo"
+        client={client}
+        isVisible
+        preferredWorkingDir="C:/workspace"
+      />
+    </PersistentTerminalProvider>,
+  );
+
+  await waitFor(() => expect(terminalSessionMock.create).toHaveBeenCalledTimes(1));
+  const shortcuts = screen.getByRole("group", { name: "终端快捷键" });
+  expect(within(shortcuts).getAllByRole("button")).toHaveLength(12);
+  expect(shortcuts).toHaveClass("grid-cols-6", "gap-1");
+
+  fireEvent.click(within(shortcuts).getByRole("button", { name: "Enter" }));
+  fireEvent.click(within(shortcuts).getByRole("button", { name: "Tab" }));
+  fireEvent.click(within(shortcuts).getByRole("button", { name: "Ctrl+D" }));
+  fireEvent.click(within(shortcuts).getByRole("button", { name: "Ctrl+L" }));
+
+  expect(sendControl.mock.calls.map(([value]) => value)).toEqual(["\r", "\t", "\u0004", "\u000c"]);
+});
+
 test("切回终端标签时把该标签上次已渲染的恢复位置交给新 xterm", async () => {
   localStorage.setItem("web-terminal-tabs:v1", JSON.stringify([
     { id: "tab-a", ownerId: "owner-a", title: "终端 A", cwd: "C:/a", shell: "auto" },

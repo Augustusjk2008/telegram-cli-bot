@@ -228,52 +228,9 @@ class MultiBotManager:
             self._save_profiles()
 
     @staticmethod
-    def _require_legacy_agent_mutation_allowed(profile: BotProfile) -> None:
+    def _require_cluster_bundle_mutation_allowed(profile: BotProfile) -> None:
         if profile.cluster.enabled:
             raise ClusterSlotsLockedError()
-
-    async def create_bot_agent(self, alias: str, data: dict[str, Any]) -> dict[str, Any]:
-        async with self._lock:
-            profile = self._get_profile_for_update(alias)
-            self._require_legacy_agent_mutation_allowed(profile)
-            agent_id = normalize_agent_id(data.get("id"), allow_main=False)
-            if any(agent.id == agent_id for agent in profile.normalized_agents()):
-                raise ValueError("agent id 已存在")
-            now = now_iso()
-            agent = AgentProfile(
-                id=agent_id,
-                name=normalize_agent_name(data.get("name")),
-                system_prompt=normalize_agent_prompt(data.get("system_prompt")),
-                enabled=bool(data.get("enabled", True)),
-                created_at=now,
-                updated_at=now,
-                cluster=normalize_agent_cluster_config(data.get("cluster")),
-            )
-            profile.agents.append(agent)
-            self._persist_profile_agents(profile)
-            return self._agent_to_summary(profile, agent)
-
-    async def update_bot_agent(self, alias: str, agent_id: str, data: dict[str, Any]) -> dict[str, Any]:
-        async with self._lock:
-            profile = self._get_profile_for_update(alias)
-            self._require_legacy_agent_mutation_allowed(profile)
-            normalized_agent_id = normalize_agent_id(agent_id, allow_main=True)
-            if normalized_agent_id == "main":
-                raise ValueError("主 agent 不支持编辑")
-            agent = next((item for item in profile.agents if item.id == normalized_agent_id), None)
-            if agent is None:
-                raise KeyError(normalized_agent_id)
-            if "name" in data:
-                agent.name = normalize_agent_name(data.get("name"))
-            if "system_prompt" in data or "systemPrompt" in data:
-                agent.system_prompt = normalize_agent_prompt(data.get("system_prompt", data.get("systemPrompt")))
-            if "enabled" in data:
-                agent.enabled = bool(data.get("enabled"))
-            if "cluster" in data and isinstance(data.get("cluster"), dict):
-                agent.cluster = normalize_agent_cluster_config(data.get("cluster"))
-            agent.updated_at = now_iso()
-            self._persist_profile_agents(profile)
-            return self._agent_to_summary(profile, agent)
 
     async def update_bot_cluster(self, alias: str, data: dict[str, Any]) -> dict[str, Any]:
         async with self._lock:
@@ -287,19 +244,6 @@ class MultiBotManager:
                 self._save_profiles()
             return profile.cluster.to_dict()
 
-    async def delete_bot_agent(self, alias: str, agent_id: str) -> None:
-        async with self._lock:
-            profile = self._get_profile_for_update(alias)
-            self._require_legacy_agent_mutation_allowed(profile)
-            normalized_agent_id = normalize_agent_id(agent_id, allow_main=True)
-            if normalized_agent_id == "main":
-                raise ValueError("主 agent 不能删除")
-            before = len(profile.agents)
-            profile.agents = [item for item in profile.agents if item.id != normalized_agent_id]
-            if len(profile.agents) == before:
-                raise KeyError(normalized_agent_id)
-            self._persist_profile_agents(profile)
-
     async def replace_bot_cluster_bundle(
         self,
         alias: str,
@@ -308,7 +252,7 @@ class MultiBotManager:
     ) -> dict[str, Any]:
         async with self._lock:
             profile = self._get_profile_for_update(alias)
-            self._require_legacy_agent_mutation_allowed(profile)
+            self._require_cluster_bundle_mutation_allowed(profile)
             profile.cluster = normalize_bot_cluster_config(cluster)
             now = now_iso()
             replaced_agents: list[AgentProfile] = []

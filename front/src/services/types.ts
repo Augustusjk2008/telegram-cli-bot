@@ -392,6 +392,8 @@ export type CodexUsageProvider = {
 };
 
 export const DEFAULT_CODEX_USAGE_MODEL = "gpt-5.6-sol";
+export const GENERAL_CODEX_RATE_LIMIT_ID = "codex";
+export const SECONDARY_CODEX_RATE_LIMIT_ID = "codex_bengalfox";
 
 export type CodexUsageTimeBasis = {
   mode: "server_local" | string;
@@ -416,6 +418,7 @@ export type CodexUsageMetrics = {
 };
 
 export type CodexRateLimitSample = {
+  limitId: string;
   sampledAt: string;
   usedPercent: number;
   windowMinutes: number;
@@ -637,14 +640,6 @@ export type AgentSummary = {
 
 export type AgentListResult = {
   items: AgentSummary[];
-};
-
-export type AgentInput = {
-  id?: string;
-  name?: string;
-  systemPrompt?: string;
-  enabled?: boolean;
-  cluster?: Partial<AgentClusterConfig>;
 };
 
 export type ClusterModelTier = "low" | "medium" | "high";
@@ -889,10 +884,6 @@ export type ClusterBundleSchemaResult = {
   version: number;
   schema: Record<string, unknown>;
   instructions: string;
-};
-
-export type AgentMutationResult = {
-  agent: AgentSummary;
 };
 
 export type AgentScopedOptions = {

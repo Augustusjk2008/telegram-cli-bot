@@ -1,4 +1,9 @@
-import { DEFAULT_CODEX_USAGE_MODEL, WebApiClientError } from "./types";
+import {
+  DEFAULT_CODEX_USAGE_MODEL,
+  GENERAL_CODEX_RATE_LIMIT_ID,
+  SECONDARY_CODEX_RATE_LIMIT_ID,
+  WebApiClientError,
+} from "./types";
 import { buildWsUrl, withApiBase } from "../utils/publicBase";
 import { ChatStreamIncompleteError } from "./chatStreamError";
 import type {
@@ -14,9 +19,7 @@ import type {
   AppUpdatePackageKind,
   AppUpdateStatus,
   Capability,
-  AgentInput,
   AgentListResult,
-  AgentMutationResult,
   AgentScopedOptions,
   AgentSummary,
   GitActionResult,
@@ -1485,6 +1488,8 @@ type RawCodexUsageMetrics = {
 };
 
 type RawCodexRateLimitSample = {
+  limit_id?: unknown;
+  model?: unknown;
   sampled_at?: unknown;
   used_percent?: unknown;
   window_minutes?: unknown;
@@ -1832,23 +1837,6 @@ function mapAgentSummary(raw: RawAgentSummary): AgentSummary {
     createdAt: String(raw.created_at ?? raw.createdAt ?? ""),
     updatedAt: String(raw.updated_at ?? raw.updatedAt ?? ""),
     cluster: mapAgentClusterConfig(raw.cluster),
-  };
-}
-
-function mapAgentInput(input: AgentInput): Record<string, unknown> {
-  return {
-    ...(typeof input.id !== "undefined" ? { id: input.id } : {}),
-    ...(typeof input.name !== "undefined" ? { name: input.name } : {}),
-    ...(typeof input.systemPrompt !== "undefined" ? { system_prompt: input.systemPrompt } : {}),
-    ...(typeof input.enabled !== "undefined" ? { enabled: input.enabled } : {}),
-    ...(input.cluster ? {
-      cluster: {
-        ...(typeof input.cluster.allowCluster !== "undefined" ? { allow_cluster: input.cluster.allowCluster } : {}),
-        ...(typeof input.cluster.allowWrite !== "undefined" ? { allow_write: input.cluster.allowWrite } : {}),
-        ...(input.cluster.sessionPolicy ? { session_policy: input.cluster.sessionPolicy } : {}),
-        ...(typeof input.cluster.timeoutSeconds !== "undefined" ? { timeout_seconds: input.cluster.timeoutSeconds } : {}),
-      },
-    } : {}),
   };
 }
 
@@ -3731,7 +3719,20 @@ function mapCodexRateLimitSample(raw: RawCodexRateLimitSample): CodexRateLimitSa
   const planType = typeof raw.plan_type === "string" && raw.plan_type.trim()
     ? raw.plan_type.trim()
     : null;
-  return { sampledAt, usedPercent, windowMinutes, resetsAt, planType };
+  const rawLimitId = typeof raw.limit_id === "string" ? raw.limit_id.trim() : "";
+  const limitId = rawLimitId || (
+    mapCodexUsageModel(raw.model).toLowerCase() === "gpt-5.3-codex-spark"
+      ? SECONDARY_CODEX_RATE_LIMIT_ID
+      : GENERAL_CODEX_RATE_LIMIT_ID
+  );
+  return {
+    limitId,
+    sampledAt,
+    usedPercent,
+    windowMinutes,
+    resetsAt,
+    planType,
+  };
 }
 
 function positiveInteger(value: unknown, fallback: number) {
@@ -4772,40 +4773,6 @@ export class RealWebBotClient implements WebBotClient {
       `/api/bots/${encodeURIComponent(botAlias)}/agents`,
     );
     return { items: (data.items || []).map(mapAgentSummary) };
-  }
-
-  async createAgent(botAlias: string, input: AgentInput): Promise<AgentMutationResult> {
-    const data = await this.requestJson<{ agent: RawAgentSummary }>(
-      `/api/admin/bots/${encodeURIComponent(botAlias)}/agents`,
-      {
-        method: "POST",
-        headers: this.headers({ "Content-Type": "application/json" }),
-        body: JSON.stringify(mapAgentInput(input)),
-      },
-    );
-    return { agent: mapAgentSummary(data.agent) };
-  }
-
-  async updateAgent(botAlias: string, agentId: string, input: AgentInput): Promise<AgentMutationResult> {
-    const data = await this.requestJson<{ agent: RawAgentSummary }>(
-      `/api/admin/bots/${encodeURIComponent(botAlias)}/agents/${encodeURIComponent(agentId)}`,
-      {
-        method: "PATCH",
-        headers: this.headers({ "Content-Type": "application/json" }),
-        body: JSON.stringify(mapAgentInput(input)),
-      },
-    );
-    return { agent: mapAgentSummary(data.agent) };
-  }
-
-  async deleteAgent(botAlias: string, agentId: string): Promise<void> {
-    await this.requestJson(
-      `/api/admin/bots/${encodeURIComponent(botAlias)}/agents/${encodeURIComponent(agentId)}`,
-      {
-        method: "DELETE",
-        headers: this.headers(),
-      },
-    );
   }
 
   async getClusterStatus(botAlias: string): Promise<ClusterStatus> {

@@ -7,7 +7,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from .models import SQLITE_INT64_MAX, CodexRateLimitSample, CodexTokenUsage
+from .models import (
+    GENERAL_CODEX_RATE_LIMIT_ID,
+    SECONDARY_CODEX_RATE_LIMIT_ID,
+    SQLITE_INT64_MAX,
+    CodexRateLimitSample,
+    CodexTokenUsage,
+)
 
 
 _USAGE_FIELDS = (
@@ -130,15 +136,18 @@ def _scan_turn(
 def _codex_rate_limit_sample(
     event_time: datetime | None,
     rate_limits: Mapping[str, Any],
+    *,
+    limit_id: str = GENERAL_CODEX_RATE_LIMIT_ID,
 ) -> CodexRateLimitSample | None:
     if event_time is None:
         return None
-    primary = rate_limits.get("primary")
-    if not isinstance(primary, Mapping):
+    window_name = "secondary" if limit_id == SECONDARY_CODEX_RATE_LIMIT_ID else "primary"
+    window = rate_limits.get(window_name)
+    if not isinstance(window, Mapping):
         return None
-    used_percent = primary.get("used_percent")
-    window_minutes = primary.get("window_minutes")
-    resets_at = primary.get("resets_at")
+    used_percent = window.get("used_percent")
+    window_minutes = window.get("window_minutes")
+    resets_at = window.get("resets_at")
     if (
         isinstance(used_percent, bool)
         or not isinstance(used_percent, (int, float))
@@ -163,6 +172,7 @@ def _codex_rate_limit_sample(
             window_minutes=window_minutes,
             resets_at=reset_time,
             plan_type=rate_limits.get("plan_type"),
+            limit_id=limit_id,
         )
     except (OSError, OverflowError, ValueError):
         return None
@@ -178,12 +188,15 @@ def _rate_limit_resolution(
     if not isinstance(rate_limits, Mapping):
         return None
     limit_id = rate_limits.get("limit_id")
-    if limit_id == "codex_bengalfox":
-        return TurnRateLimitResolution(refresh_general=True)
-    if limit_id != "codex":
+    if limit_id not in {GENERAL_CODEX_RATE_LIMIT_ID, SECONDARY_CODEX_RATE_LIMIT_ID}:
         return None
-    sample = _codex_rate_limit_sample(event_time, rate_limits)
-    return TurnRateLimitResolution(sample=sample) if sample is not None else None
+    sample = _codex_rate_limit_sample(event_time, rate_limits, limit_id=limit_id)
+    if sample is None:
+        return None
+    return TurnRateLimitResolution(
+        sample=sample,
+        refresh_general=limit_id == SECONDARY_CODEX_RATE_LIMIT_ID,
+    )
 
 
 def read_failed_turn_usage(

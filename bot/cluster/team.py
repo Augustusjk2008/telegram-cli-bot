@@ -152,7 +152,7 @@ class ClusterSlotsLockedError(ValueError):
     code = "cluster_slots_locked"
 
     def __init__(self) -> None:
-        super().__init__("集群已启用，不能通过旧 Agent 或模板接口修改物理槽位")
+        super().__init__("集群已启用，不能通过模板接口修改物理槽位")
 
 
 __all__ = [

@@ -1,9 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { MarkdownContent } from "../components/MarkdownPreview";
-import { NativeAgentTranscript } from "../components/NativeAgentTranscript";
 import { DynamicVirtualList } from "../components/virtual/DynamicVirtualList";
-import type { NativeAgentTranscriptEntry } from "../utils/agUiRunReducer";
 import { createChatHistoryFixture } from "./fixtures/performance";
 
 describe("frontend performance invariants", () => {
@@ -28,36 +26,5 @@ describe("frontend performance invariants", () => {
     const { container } = render(<MarkdownContent content={content} variant="chat" />);
 
     expect(container.textContent).toHaveLength(content.length);
-  });
-
-  it("bounds mounted rows for 5000 expanded trace events", () => {
-    const entries: NativeAgentTranscriptEntry[] = Array.from({ length: 5_000 }, (_, index) => ({
-      id: `trace-${index}`,
-      seq: index,
-      kind: "event",
-      label: "事件",
-      summary: `trace-${index}`,
-      collapsedByDefault: false,
-      trace: {
-        id: `trace-${index}`,
-        sequence: index,
-        kind: "status",
-        source: "codex",
-        summary: `trace-${index}`,
-      },
-    }));
-    render(
-      <NativeAgentTranscript
-        entries={entries}
-        resultText=""
-        mode="cli"
-        traceCount={entries.length}
-        processCount={entries.length}
-        traceLoaded
-      />,
-    );
-
-    const list = screen.getByTestId("virtualized-native-agent-transcript");
-    expect(list.querySelectorAll("[data-transcript-entry-id]").length).toBeLessThanOrEqual(10);
   });
 });

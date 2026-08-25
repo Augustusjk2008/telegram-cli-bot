@@ -44,6 +44,29 @@ type Disposable = {
 
 const FOLLOW_THRESHOLD_PX = 24;
 
+type MobileTerminalButton = {
+  label: string;
+  ariaLabel: string;
+} & (
+  | { control: string }
+  | { focus: true }
+);
+
+const MOBILE_TERMINAL_BUTTONS: MobileTerminalButton[] = [
+  { label: "Ctrl+C", ariaLabel: "Ctrl+C", control: "\u0003" },
+  { label: "Ctrl+D", ariaLabel: "Ctrl+D", control: "\u0004" },
+  { label: "Ctrl+L", ariaLabel: "Ctrl+L", control: "\u000c" },
+  { label: "Esc", ariaLabel: "Escape", control: "\u001b" },
+  { label: "Tab", ariaLabel: "Tab", control: "\t" },
+  { label: "⇧Tab", ariaLabel: "Shift+Tab", control: "\u001b[Z" },
+  { label: "Enter", ariaLabel: "Enter", control: "\r" },
+  { label: "键盘", ariaLabel: "唤起键盘", focus: true },
+  { label: "↑", ariaLabel: "上方向键", control: "\u001b[A" },
+  { label: "↓", ariaLabel: "下方向键", control: "\u001b[B" },
+  { label: "←", ariaLabel: "左方向键", control: "\u001b[D" },
+  { label: "→", ariaLabel: "右方向键", control: "\u001b[C" },
+];
+
 function scheduleLayout(callback: () => void) {
   if (typeof window.requestAnimationFrame === "function") {
     return window.requestAnimationFrame(() => callback());
@@ -697,87 +720,33 @@ export function TerminalScreen({
       ) : null}
 
       {!embedded ? (
-        <div className="grid grid-cols-4 gap-2 border-t border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] p-3 pb-safe">
-          <button
-            type="button"
-            onClick={() => {
-              if (!terminalDisabled) sessionRef.current?.sendControl("\u0003");
-            }}
-            disabled={terminalDisabled}
-            className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-3 py-3 text-sm font-medium hover:bg-[var(--workbench-hover-bg)] disabled:opacity-60"
-          >
-            Ctrl+C
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              if (!terminalDisabled) sessionRef.current?.sendControl("\u001b[Z");
-            }}
-            disabled={terminalDisabled}
-            className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-3 py-3 text-sm font-medium hover:bg-[var(--workbench-hover-bg)] disabled:opacity-60"
-          >
-            Shift+Tab
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              if (!terminalDisabled) sessionRef.current?.sendControl("\u001b");
-            }}
-            disabled={terminalDisabled}
-            className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-3 py-3 text-sm font-medium hover:bg-[var(--workbench-hover-bg)] disabled:opacity-60"
-          >
-            Esc
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              if (!terminalDisabled) sessionRef.current?.focus();
-            }}
-            disabled={terminalDisabled}
-            className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-3 py-3 text-sm font-medium hover:bg-[var(--workbench-hover-bg)] disabled:opacity-60"
-          >
-            键盘
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              if (!terminalDisabled) sessionRef.current?.sendControl("\u001b[A");
-            }}
-            disabled={terminalDisabled}
-            className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-3 py-3 text-sm font-medium hover:bg-[var(--workbench-hover-bg)] disabled:opacity-60"
-          >
-            ↑
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              if (!terminalDisabled) sessionRef.current?.sendControl("\u001b[B");
-            }}
-            disabled={terminalDisabled}
-            className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-3 py-3 text-sm font-medium hover:bg-[var(--workbench-hover-bg)] disabled:opacity-60"
-          >
-            ↓
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              if (!terminalDisabled) sessionRef.current?.sendControl("\u001b[D");
-            }}
-            disabled={terminalDisabled}
-            className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-3 py-3 text-sm font-medium hover:bg-[var(--workbench-hover-bg)] disabled:opacity-60"
-          >
-            ←
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              if (!terminalDisabled) sessionRef.current?.sendControl("\u001b[C");
-            }}
-            disabled={terminalDisabled}
-            className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-3 py-3 text-sm font-medium hover:bg-[var(--workbench-hover-bg)] disabled:opacity-60"
-          >
-            →
-          </button>
+        <div
+          role="group"
+          aria-label="终端快捷键"
+          className="grid shrink-0 grid-cols-6 gap-1 border-t border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2 py-1.5 pb-[calc(env(safe-area-inset-bottom)+0.375rem)]"
+        >
+          {MOBILE_TERMINAL_BUTTONS.map((button) => (
+            <button
+              key={button.ariaLabel}
+              type="button"
+              aria-label={button.ariaLabel}
+              title={button.ariaLabel}
+              onClick={() => {
+                if (terminalDisabled) {
+                  return;
+                }
+                if ("control" in button) {
+                  sessionRef.current?.sendControl(button.control);
+                } else {
+                  sessionRef.current?.focus();
+                }
+              }}
+              disabled={terminalDisabled}
+              className="h-9 min-w-0 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-0.5 text-xs font-medium hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:opacity-60"
+            >
+              {button.label}
+            </button>
+          ))}
         </div>
       ) : null}
       {showActionsConfig && actionsConfig && !terminalDisabled ? (

@@ -272,6 +272,16 @@ select:disabled {
   margin-top: var(--chat-body-paragraph-spacing);
 }
 
+.chat-markdown-content .katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.chat-markdown-content .katex-display > .katex {
+  min-width: max-content;
+}
+
 .terminal-shell {
   width: 100%;
   min-width: 0;

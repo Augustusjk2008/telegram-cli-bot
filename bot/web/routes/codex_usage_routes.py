@@ -11,6 +11,7 @@ from aiohttp import web
 
 from bot.web.api_common import WebApiError
 from bot.web.auth_store import CAP_ADMIN_OPS
+from bot.web.routes.app_keys import SERVER_APP_KEY
 
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -29,7 +30,7 @@ def _json(data: dict[str, Any], status: int = 200) -> web.Response:
 
 
 def _server(request: web.Request):
-    return request.app["server"]
+    return request.app[SERVER_APP_KEY]
 
 
 async def _json_object(request: web.Request) -> dict[str, Any]:
@@ -136,7 +137,7 @@ async def get_stats(request: web.Request) -> web.Response:
 
 
 def register(app: web.Application, server) -> None:
-    app["server"] = server
+    app[SERVER_APP_KEY] = server
     app.router.add_get("/api/admin/codex-usage/config", get_config)
     app.router.add_patch("/api/admin/codex-usage/config", patch_config)
     app.router.add_get("/api/admin/codex-usage/stats", get_stats)

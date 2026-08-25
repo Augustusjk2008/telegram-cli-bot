@@ -116,3 +116,17 @@ test("updates the local Enter-to-send preference", async () => {
 
   expect(onChatEnterToSendChange).toHaveBeenCalledWith(true);
 });
+
+test("settings do not expose manual child agent configuration", async () => {
+  render(
+    <SettingsScreen
+      botAlias="main"
+      client={new MockWebBotClient()}
+      onLogout={() => undefined}
+    />,
+  );
+
+  expect(await screen.findByLabelText("运行后端")).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "子 agent" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "新增 agent" })).not.toBeInTheDocument();
+});
