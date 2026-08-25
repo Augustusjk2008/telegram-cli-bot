@@ -2,6 +2,8 @@ import { Children, isValidElement, type ComponentPropsWithoutRef, type ReactNode
 import { CheckCheck, Copy } from "lucide-react";
 import "katex/dist/katex.min.css";
 import rehypeKatex from "rehype-katex";
+import rehypeRaw from "rehype-raw";
+import rehypeSanitize from "rehype-sanitize";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -30,6 +32,14 @@ function safeUrlTransform(url: string) {
 
 const MARKDOWN_REMARK_PLUGINS = [remarkGfm, remarkMath];
 const MARKDOWN_REHYPE_PLUGINS = [rehypeKatex];
+const MARKDOWN_PREVIEW_REHYPE_PLUGINS = [rehypeRaw, rehypeSanitize, rehypeKatex];
+
+function markdownTextAlign(node: unknown) {
+  const align = (node as { properties?: { align?: unknown } } | undefined)?.properties?.align;
+  return align === "left" || align === "center" || align === "right" || align === "justify"
+    ? align
+    : undefined;
+}
 
 function stringifyCodeChildren(children: ReactNode) {
   if (Array.isArray(children)) {
@@ -278,14 +288,14 @@ export function MarkdownContent({ content, variant = "preview", onFileLinkClick,
     <div className={containerClassName}>
       <ReactMarkdown
         remarkPlugins={MARKDOWN_REMARK_PLUGINS}
-        rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
+        rehypePlugins={isChat ? MARKDOWN_REHYPE_PLUGINS : MARKDOWN_PREVIEW_REHYPE_PLUGINS}
         urlTransform={safeUrlTransform}
         components={{
-          h1: ({ children }) => <h1 className={isChat ? "break-words text-3xl font-semibold tracking-tight [overflow-wrap:anywhere]" : "mb-4 break-words text-3xl font-semibold tracking-tight [overflow-wrap:anywhere]"}>{children}</h1>,
-          h2: ({ children }) => <h2 className={isChat ? "break-words text-2xl font-semibold tracking-tight [overflow-wrap:anywhere]" : "mb-3 mt-8 break-words text-2xl font-semibold tracking-tight [overflow-wrap:anywhere]"}>{children}</h2>,
-          h3: ({ children }) => <h3 className={isChat ? "break-words text-xl font-semibold [overflow-wrap:anywhere]" : "mb-3 mt-6 break-words text-xl font-semibold [overflow-wrap:anywhere]"}>{children}</h3>,
-          h4: ({ children }) => <h4 className={isChat ? "break-words text-lg font-semibold [overflow-wrap:anywhere]" : "mb-2 mt-5 break-words text-lg font-semibold [overflow-wrap:anywhere]"}>{children}</h4>,
-          p: ({ children }) => <p className={isChat ? "break-words [overflow-wrap:anywhere]" : "my-3 break-words [overflow-wrap:anywhere]"}>{children}</p>,
+          h1: ({ children, node }) => <h1 style={{ textAlign: markdownTextAlign(node) }} className={isChat ? "break-words text-3xl font-semibold tracking-tight [overflow-wrap:anywhere]" : "mb-4 break-words text-3xl font-semibold tracking-tight [overflow-wrap:anywhere]"}>{children}</h1>,
+          h2: ({ children, node }) => <h2 style={{ textAlign: markdownTextAlign(node) }} className={isChat ? "break-words text-2xl font-semibold tracking-tight [overflow-wrap:anywhere]" : "mb-3 mt-8 break-words text-2xl font-semibold tracking-tight [overflow-wrap:anywhere]"}>{children}</h2>,
+          h3: ({ children, node }) => <h3 style={{ textAlign: markdownTextAlign(node) }} className={isChat ? "break-words text-xl font-semibold [overflow-wrap:anywhere]" : "mb-3 mt-6 break-words text-xl font-semibold [overflow-wrap:anywhere]"}>{children}</h3>,
+          h4: ({ children, node }) => <h4 style={{ textAlign: markdownTextAlign(node) }} className={isChat ? "break-words text-lg font-semibold [overflow-wrap:anywhere]" : "mb-2 mt-5 break-words text-lg font-semibold [overflow-wrap:anywhere]"}>{children}</h4>,
+          p: ({ children, node }) => <p style={{ textAlign: markdownTextAlign(node) }} className={isChat ? "break-words [overflow-wrap:anywhere]" : "my-3 break-words [overflow-wrap:anywhere]"}>{children}</p>,
           ul: ({ children }) => <ul className={isChat ? "list-disc space-y-2 pl-6" : "my-4 list-disc space-y-2 pl-6"}>{children}</ul>,
           ol: ({ children, node: _node, ...props }) => <ol {...props} className={isChat ? "list-decimal space-y-2 pl-6" : "my-4 list-decimal space-y-2 pl-6"}>{children}</ol>,
           li: ({ children }) => <li className="break-words pl-1 [overflow-wrap:anywhere]">{children}</li>,
@@ -338,7 +348,7 @@ export function MarkdownContent({ content, variant = "preview", onFileLinkClick,
           th: ({ children }) => <th className="break-words px-3 py-2 text-left text-sm font-semibold [overflow-wrap:anywhere]">{children}</th>,
           td: ({ children }) => <td className="break-words px-3 py-2 align-top text-sm [overflow-wrap:anywhere]">{children}</td>,
           hr: () => <hr className={isChat ? "border-0 border-t border-[var(--border)]" : "my-6 border-0 border-t border-[var(--border)]"} />,
-          img: ({ src, alt }) => {
+          img: ({ src, alt, width, height }) => {
             const rawSrc = src || "";
             const resolvedSrc = rawSrc
               ? resolveImageSrc?.(rawSrc) || (isSafeMarkdownHref(rawSrc) && isExternalHref(rawSrc) ? rawSrc : "")
@@ -350,9 +360,11 @@ export function MarkdownContent({ content, variant = "preview", onFileLinkClick,
                   <img
                     src={resolvedSrc}
                     alt={alt || rawSrc || "Markdown 图片"}
+                    width={width}
+                    height={height}
                     loading="lazy"
                     decoding="async"
-                    className="block h-auto max-w-full rounded-lg border border-[var(--border)] bg-[var(--surface)]"
+                    className="inline-block h-auto max-w-full rounded-lg border border-[var(--border)] bg-[var(--surface)]"
                   />
                   {alt ? (
                     <span className="mt-2 block text-xs leading-5 text-[var(--muted)]">{alt}</span>

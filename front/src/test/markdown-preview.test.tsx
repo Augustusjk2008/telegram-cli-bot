@@ -1,12 +1,63 @@
 import { readFileSync } from "node:fs";
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MarkdownContent } from "../components/MarkdownPreview";
 import { normalizeLatexMathDelimiters } from "../markdown/latexDelimiters";
 
 const GLOBAL_STYLES = readFileSync("src/styles/global.css", "utf8");
 
 describe("MarkdownContent", () => {
+  it("renders embedded README HTML in file previews", () => {
+    const resolveImageSrc = vi.fn((src: string) => `/resolved/${src}`);
+    const { container } = render(
+      <MarkdownContent
+        content={[
+          '<p align="center">',
+          '  <img src="front/public/assets/app-logo.svg" width="112" alt="Orbit Safe Claw Logo">',
+          "</p>",
+          '<h1 align="center">Orbit Safe Claw</h1>',
+          "<details>",
+          "<summary><strong>从源码安装</strong></summary>",
+          "安装说明",
+          "</details>",
+        ].join("\n")}
+        variant="preview"
+        resolveImageSrc={resolveImageSrc}
+      />,
+    );
+
+    expect(container.querySelector("p")).toHaveStyle({ textAlign: "center" });
+    expect(screen.getByRole("heading", { level: 1 })).toHaveStyle({ textAlign: "center" });
+    expect(screen.getByRole("img", { name: "Orbit Safe Claw Logo" })).toHaveAttribute("width", "112");
+    expect(screen.getByRole("img", { name: "Orbit Safe Claw Logo" })).toHaveAttribute(
+      "src",
+      "/resolved/front/public/assets/app-logo.svg",
+    );
+    expect(container.querySelector("details summary")).toHaveTextContent("从源码安装");
+  });
+
+  it("sanitizes dangerous embedded HTML in file previews", () => {
+    const { container } = render(
+      <MarkdownContent
+        content={'<img src="https://example.com/logo.png" alt="logo" onerror="alert(1)"><script>alert(2)</script>'}
+        variant="preview"
+      />,
+    );
+
+    expect(screen.getByRole("img", { name: "logo" })).not.toHaveAttribute("onerror");
+    expect(container.querySelector("script")).toBeNull();
+    expect(container).not.toHaveTextContent("alert(2)");
+  });
+
+  it("keeps embedded HTML disabled in chat messages", () => {
+    const { container } = render(
+      <MarkdownContent content={"消息中的 <strong>HTML</strong>"} variant="chat" />,
+    );
+
+    expect(container.querySelector("strong")).toBeNull();
+    expect(container).toHaveTextContent("<strong>HTML</strong>");
+  });
+
   it("renders parenthesized and bracketed LaTeX delimiters", () => {
     const { container } = render(
       <MarkdownContent
