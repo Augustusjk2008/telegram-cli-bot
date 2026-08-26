@@ -6,7 +6,6 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from .models import (
-    SECONDARY_CODEX_RATE_LIMIT_ID,
     CodexRateLimitSample,
     DayLike,
     day_from_number,
@@ -219,13 +218,12 @@ class CodexUsageStore:
                        resets_at, plan_type
                 FROM rate_limit_samples
                 WHERE day >= ? AND day <= ?
-                  AND (limit_id <> ? OR window_minutes = ?)
+                  AND window_minutes = ?
                 ORDER BY sampled_at_ms ASC, sample_id ASC
                 """,
                 (
                     start,
                     end,
-                    SECONDARY_CODEX_RATE_LIMIT_ID,
                     _WEEKLY_LIMIT_WINDOW_MINUTES,
                 ),
             ).fetchall()

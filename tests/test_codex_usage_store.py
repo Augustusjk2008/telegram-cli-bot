@@ -116,14 +116,18 @@ def test_store_records_and_queries_only_supported_quota_samples(tmp_path: Path) 
         sampled_at=datetime(2026, 8, 10, 9, tzinfo=timezone.utc),
         limit_id=SECONDARY_CODEX_RATE_LIMIT_ID,
     )
-    short_secondary = _sample(
+    short_general = _sample(
         sampled_at=datetime(2026, 8, 10, 10, tzinfo=timezone.utc),
+        window_minutes=300,
+    )
+    short_secondary = _sample(
+        sampled_at=datetime(2026, 8, 10, 11, tzinfo=timezone.utc),
         limit_id=SECONDARY_CODEX_RATE_LIMIT_ID,
         window_minutes=300,
     )
     outside = _sample(sampled_at=datetime(2026, 8, 11, 8, tzinfo=timezone.utc))
 
-    for sample in (weekly, general, short_secondary, outside):
+    for sample in (weekly, general, short_general, short_secondary, outside):
         store.record_rate_limit_sample(sample)
 
     assert store.query(date(2026, 8, 10), date(2026, 8, 10)) == (general, weekly)
