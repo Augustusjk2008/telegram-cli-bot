@@ -58,6 +58,8 @@ function providerLabel(provider: CodexUsageProvider) {
 const percentValueFormat = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 1 });
 const durationDaysFormat = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 });
 const MAX_RATE_LIMIT_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
+const RATE_LIMIT_AXIS_STEP_PERCENT = 10;
+const RATE_LIMIT_AXIS_INTERVALS = 4;
 
 function formatPercentValue(value: number) {
   return `${percentValueFormat.format(value)}%`;
@@ -76,6 +78,20 @@ function remainingDurationMs(sample: CodexRateLimitSample) {
 
 function remainingDurationPercent(sample: CodexRateLimitSample) {
   return (remainingDurationMs(sample) / MAX_RATE_LIMIT_DURATION_MS) * 100;
+}
+
+function rateLimitAxisBounds(samples: CodexRateLimitSample[]) {
+  const values = samples.flatMap((sample) => [
+    remainingPercent(sample),
+    remainingDurationPercent(sample),
+  ]);
+  let min = Math.floor(Math.min(...values) / RATE_LIMIT_AXIS_STEP_PERCENT) * RATE_LIMIT_AXIS_STEP_PERCENT;
+  let max = Math.ceil(Math.max(...values) / RATE_LIMIT_AXIS_STEP_PERCENT) * RATE_LIMIT_AXIS_STEP_PERCENT;
+  if (min === max) {
+    if (max < 100) max += RATE_LIMIT_AXIS_STEP_PERCENT;
+    else min -= RATE_LIMIT_AXIS_STEP_PERCENT;
+  }
+  return { min, max };
 }
 
 function formatRemainingDuration(durationMs: number) {
@@ -143,6 +159,15 @@ function CodexRateLimitBucketChart({
   const minTimestamp = hasValidTimestamps ? timestamps[0] : 0;
   const maxTimestamp = hasValidTimestamps ? timestamps[timestamps.length - 1] : 0;
   const timestampRange = maxTimestamp - minTimestamp;
+  const axisBounds = rateLimitAxisBounds(orderedSamples);
+  const axisRange = axisBounds.max - axisBounds.min;
+  const axisTicks = Array.from(
+    { length: RATE_LIMIT_AXIS_INTERVALS + 1 },
+    (_, index) => axisBounds.min + (axisRange * index) / RATE_LIMIT_AXIS_INTERVALS,
+  );
+  const yForPercent = (value: number) => (
+    top + ((axisBounds.max - value) / axisRange) * plotHeight
+  );
   const points = orderedSamples.map((sample, index) => ({
     x: left + Math.min(1, Math.max(0, (
       orderedSamples.length === 1
@@ -151,8 +176,8 @@ function CodexRateLimitBucketChart({
           ? (timestamps[index] - minTimestamp) / timestampRange
           : index / (orderedSamples.length - 1)
     ))) * plotWidth,
-    quotaY: top + ((100 - remainingPercent(sample)) / 100) * plotHeight,
-    durationY: top + ((100 - remainingDurationPercent(sample)) / 100) * plotHeight,
+    quotaY: yForPercent(remainingPercent(sample)),
+    durationY: yForPercent(remainingDurationPercent(sample)),
   }));
   const latestRemaining = remainingPercent(latest);
   const latestDuration = formatRemainingDuration(remainingDurationMs(latest));
@@ -175,7 +200,11 @@ function CodexRateLimitBucketChart({
       <div className="codex-usage-rate-limit-chart">
         <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={accessibleLabel}>
           <title>{label} 剩余额度与剩余时长趋势</title>
-          <desc>按采样时间展示该额度桶的剩余额度与剩余时长；左纵轴为百分之零到百分之一百，右纵轴为零天到七天。</desc>
+          <desc>
+            按采样时间展示该额度桶的剩余额度与剩余时长；左右纵轴按当前数据范围同步缩放，
+            左轴为{formatPercentValue(axisBounds.min)}到{formatPercentValue(axisBounds.max)}，
+            右轴为{durationDaysFormat.format(axisBounds.min * 0.07)}天到{durationDaysFormat.format(axisBounds.max * 0.07)}天。
+          </desc>
           <line
             className="codex-usage-rate-limit-quota-axis"
             x1={left}
@@ -206,8 +235,8 @@ function CodexRateLimitBucketChart({
           >
             剩余时长
           </text>
-          {[0, 25, 50, 75, 100].map((remaining) => {
-            const y = top + ((100 - remaining) / 100) * plotHeight;
+          {axisTicks.map((remaining) => {
+            const y = yForPercent(remaining);
             return (
               <g key={remaining} className="codex-usage-rate-limit-grid">
                 <line x1={left} x2={width - right} y1={y} y2={y} />

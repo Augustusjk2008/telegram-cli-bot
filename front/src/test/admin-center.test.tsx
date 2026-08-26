@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { AdminCenterScreen } from "../screens/AdminCenterScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
+import { GENERAL_CODEX_RATE_LIMIT_ID } from "../services/types";
 import type { TransferBridgeConfigInput, TransferBridgeStatus, TunnelSnapshot } from "../services/types";
 
 function transferStatus(overrides: Partial<TransferBridgeStatus> = {}): TransferBridgeStatus {
@@ -263,6 +264,46 @@ test("Codex 额度趋势仅有一个样本时不绘制折线或数据点", async
   expect(container.querySelector(".codex-usage-rate-limit-chart circle")).not.toBeInTheDocument();
   expect(container.querySelector(".codex-usage-rate-limit-line")).not.toBeInTheDocument();
   expect(container.querySelector(".codex-usage-rate-limit-duration-line")).not.toBeInTheDocument();
+});
+
+test("Codex 额度趋势纵轴按额度和时长的查询范围同步缩放", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  const stats = await client.getCodexUsageStats();
+  stats.rateLimitSamples = [
+    {
+      limitId: GENERAL_CODEX_RATE_LIMIT_ID,
+      sampledAt: "2026-07-20T00:00:00+08:00",
+      usedPercent: 90,
+      windowMinutes: 10080,
+      resetsAt: "2026-07-22T02:24:00+08:00",
+      planType: "pro",
+    },
+    {
+      limitId: GENERAL_CODEX_RATE_LIMIT_ID,
+      sampledAt: "2026-07-21T00:00:00+08:00",
+      usedPercent: 40,
+      windowMinutes: 10080,
+      resetsAt: "2026-07-25T21:36:00+08:00",
+      planType: "pro",
+    },
+  ];
+  vi.spyOn(client, "getCodexUsageStats").mockResolvedValue(stats);
+
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+  await openCodexUsageTab(user);
+
+  const chart = await screen.findByRole("img", { name: /通用 Codex.*共 2 个样本/ });
+  const quotaTicks = Array.from(chart.querySelectorAll(".codex-usage-rate-limit-quota-tick"));
+  const durationTicks = Array.from(chart.querySelectorAll(".codex-usage-rate-limit-duration-tick"));
+  expect(quotaTicks.map((tick) => tick.textContent?.trim())).toEqual([
+    "10%", "25%", "40%", "55%", "70%",
+  ]);
+  expect(durationTicks.map((tick) => tick.textContent?.trim())).toEqual([
+    "0.7 天", "1.75 天", "2.8 天", "3.85 天", "4.9 天",
+  ]);
+  expect(chart.querySelector("desc")?.textContent).toContain("左轴为10%到70%");
+  expect(chart.querySelector("desc")?.textContent).toContain("右轴为0.7天到4.9天");
 });
 
 test("Codex 额度趋势没有样本时仍显示通用和次要额度入口", async () => {
