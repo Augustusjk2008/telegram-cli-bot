@@ -161,6 +161,7 @@ describe("RealWebBotClient", () => {
           plan_type: "pro",
         },
         {
+          limit_id: "codex",
           sampled_at: "2026-08-11T13:00:00+08:00",
           used_percent: 100,
           window_minutes: 60,

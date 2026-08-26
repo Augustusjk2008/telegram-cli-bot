@@ -623,8 +623,8 @@ def rename_path(manager: MultiBotManager, alias: str, user_id: int, path: str, n
     source_path = resolve_safe_write_path(browser_dir, source_rel)
     target_name = validate_text_filename(new_name)
 
-    if not os.path.isfile(source_path):
-        _raise(404, "file_not_found", "文件不存在")
+    if not os.path.exists(source_path):
+        _raise(404, "file_not_found", "文件或文件夹不存在")
 
     target_path = os.path.abspath(os.path.join(os.path.dirname(source_path), target_name))
     if os.path.exists(target_path):

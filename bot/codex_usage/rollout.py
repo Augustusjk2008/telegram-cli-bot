@@ -12,15 +12,6 @@ from .models import (
     SECONDARY_CODEX_RATE_LIMIT_ID,
     SQLITE_INT64_MAX,
     CodexRateLimitSample,
-    CodexTokenUsage,
-)
-
-
-_USAGE_FIELDS = (
-    "input_tokens",
-    "cached_input_tokens",
-    "output_tokens",
-    "reasoning_output_tokens",
 )
 
 
@@ -60,47 +51,19 @@ def _payload(line: str) -> tuple[datetime | None, Mapping[str, Any]] | None:
     return _timestamp(event.get("timestamp")), payload
 
 
-def _total_usage(payload: Mapping[str, Any]) -> dict[str, int] | None:
-    if payload.get("type") != "token_count":
-        return None
-    info = payload.get("info")
-    if not isinstance(info, Mapping):
-        return None
-    raw_usage = info.get("total_token_usage")
-    if not isinstance(raw_usage, Mapping):
-        return None
-    values: dict[str, int] = {}
-    for field in _USAGE_FIELDS:
-        value = raw_usage.get(field, 0)
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            return None
-        values[field] = value
-    if values["cached_input_tokens"] > values["input_tokens"]:
-        return None
-    if values["reasoning_output_tokens"] > values["output_tokens"]:
-        return None
-    return values
-
-
 def _capture_started_at(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
 
 
-def _scan_turn(
+def _scan_turn_rate_limit(
     rollout_path: Path | str,
     *,
     started_at: datetime,
-) -> tuple[
-    dict[str, int],
-    dict[str, int] | None,
-    TurnRateLimitResolution | None,
-] | None:
+) -> TurnRateLimitResolution | None:
     capture_started_at = _capture_started_at(started_at)
-    baseline = {field: 0 for field in _USAGE_FIELDS}
-    latest_usage: dict[str, int] | None = None
-    latest_rate_limit: TurnRateLimitResolution | None = None
+    latest: TurnRateLimitResolution | None = None
     target_started = False
     try:
         with Path(rollout_path).open("r", encoding="utf-8", errors="replace") as handle:
@@ -116,21 +79,12 @@ def _scan_turn(
                         target_started = True
                     continue
                 if target_started:
-                    usage = _total_usage(payload)
-                    if usage is not None:
-                        latest_usage = usage
-                    rate_limit = _rate_limit_resolution(event_time, payload)
-                    if rate_limit is not None:
-                        latest_rate_limit = rate_limit
-                    continue
-                usage = _total_usage(payload)
-                if usage is not None:
-                    baseline = usage
+                    resolution = _rate_limit_resolution(event_time, payload)
+                    if resolution is not None:
+                        latest = resolution
     except OSError:
         return None
-    if not target_started:
-        return None
-    return baseline, latest_usage, latest_rate_limit
+    return latest if target_started else None
 
 
 def _codex_rate_limit_sample(
@@ -199,37 +153,13 @@ def _rate_limit_resolution(
     )
 
 
-def read_failed_turn_usage(
-    rollout_path: Path | str,
-    *,
-    started_at: datetime,
-) -> CodexTokenUsage | None:
-    """Return the current turn's usage as a cumulative rollout delta."""
-
-    scanned = _scan_turn(rollout_path, started_at=started_at)
-    if scanned is None:
-        return None
-    baseline, latest, _rate_limit = scanned
-    if latest is None:
-        return None
-    delta = {field: latest[field] - baseline[field] for field in _USAGE_FIELDS}
-    if any(value < 0 for value in delta.values()) or not any(delta.values()):
-        return None
-    try:
-        return CodexTokenUsage(**delta)
-    except ValueError:
-        return None
-
-
 def read_turn_rate_limit(
     rollout_path: Path | str,
     *,
     started_at: datetime,
 ) -> CodexRateLimitSample | None:
-    scanned = _scan_turn(rollout_path, started_at=started_at)
-    if scanned is None:
-        return None
-    return scanned[2].sample if scanned[2] is not None else None
+    resolution = _scan_turn_rate_limit(rollout_path, started_at=started_at)
+    return resolution.sample if resolution is not None else None
 
 
 def read_turn_rate_limit_resolution(
@@ -237,24 +167,7 @@ def read_turn_rate_limit_resolution(
     *,
     started_at: datetime,
 ) -> TurnRateLimitResolution | None:
-    scanned = _scan_turn(rollout_path, started_at=started_at)
-    if scanned is None:
-        return None
-    return scanned[2]
-
-
-def resolve_failed_turn_usage(
-    *,
-    session_id: str,
-    started_at: datetime,
-    codex_home: Path,
-) -> CodexTokenUsage | None:
-    from bot.web.native_history_locator import locate_codex_transcript
-
-    located = locate_codex_transcript(session_id, codex_home=codex_home)
-    if located is None:
-        return None
-    return read_failed_turn_usage(located.path, started_at=started_at)
+    return _scan_turn_rate_limit(rollout_path, started_at=started_at)
 
 
 def resolve_turn_rate_limit(
@@ -263,8 +176,6 @@ def resolve_turn_rate_limit(
     started_at: datetime,
     codex_home: Path,
 ) -> CodexRateLimitSample | None:
-    from bot.web.native_history_locator import locate_codex_transcript
-
     resolution = resolve_turn_rate_limit_resolution(
         session_id=session_id,
         started_at=started_at,
@@ -289,10 +200,8 @@ def resolve_turn_rate_limit_resolution(
 
 __all__ = [
     "TurnRateLimitResolution",
-    "read_failed_turn_usage",
     "read_turn_rate_limit",
     "read_turn_rate_limit_resolution",
-    "resolve_failed_turn_usage",
     "resolve_turn_rate_limit",
     "resolve_turn_rate_limit_resolution",
 ]

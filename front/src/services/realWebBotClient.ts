@@ -1,7 +1,4 @@
 import {
-  DEFAULT_CODEX_USAGE_MODEL,
-  GENERAL_CODEX_RATE_LIMIT_ID,
-  SECONDARY_CODEX_RATE_LIMIT_ID,
   WebApiClientError,
 } from "./types";
 import { buildWsUrl, withApiBase } from "../utils/publicBase";
@@ -78,15 +75,9 @@ import type {
   CodexUsageAvailableRange,
   CodexUsageConfig,
   CodexRateLimitSample,
-  CodexUsageDailyProviderStats,
-  CodexUsageDailyProviderModelStats,
-  CodexUsageDailyStats,
-  CodexUsageMetrics,
   CodexUsageProvider,
   CodexUsageProviderKind,
   CodexUsageProviderResolution,
-  CodexUsageProviderStats,
-  CodexUsageProviderModelStats,
   CodexUsageStats,
   CodexUsageStatsQuery,
   CodexUsageTimeBasis,
@@ -1466,20 +1457,8 @@ type RawCodexUsageAvailableRange = {
   last_date?: string | null;
 };
 
-type RawCodexUsageMetrics = {
-  request_count?: number;
-  input_tokens?: number;
-  cached_input_tokens?: number;
-  uncached_input_tokens?: number;
-  output_tokens?: number;
-  reasoning_output_tokens?: number;
-  total_tokens?: number;
-  cache_hit_rate?: number | null;
-};
-
 type RawCodexRateLimitSample = {
   limit_id?: unknown;
-  model?: unknown;
   sampled_at?: unknown;
   used_percent?: unknown;
   window_minutes?: unknown;
@@ -1494,39 +1473,6 @@ type RawCodexUsageConfig = {
   available_range?: RawCodexUsageAvailableRange;
 };
 
-type RawCodexUsageProviderStats = RawCodexUsageMetrics & {
-  provider?: RawCodexUsageProvider;
-  provider_key?: string;
-  provider_kind?: string;
-  provider_label?: string;
-  base_url?: string | null;
-  resolution?: string;
-};
-
-type RawCodexUsageDailyStats = RawCodexUsageMetrics & {
-  date?: string;
-  day?: string;
-};
-
-type RawCodexUsageDailyProviderStats = RawCodexUsageDailyStats & RawCodexUsageProviderStats;
-
-type RawCodexUsageProviderModelStats = RawCodexUsageProviderStats & {
-  model?: string;
-};
-
-type RawCodexUsageDailyProviderModelStats = RawCodexUsageDailyProviderStats & {
-  model?: string;
-};
-
-type RawCodexUsageDailyPagination = {
-  page?: number;
-  page_size?: number;
-  total_items?: number;
-  total_pages?: number;
-  has_previous?: boolean;
-  has_next?: boolean;
-};
-
 type RawCodexUsageStats = {
   range?: {
     start_date?: string;
@@ -1535,15 +1481,6 @@ type RawCodexUsageStats = {
   enabled?: boolean;
   time_basis?: RawCodexUsageTimeBasis;
   available_range?: RawCodexUsageAvailableRange;
-  available_providers?: RawCodexUsageProvider[];
-  selected_provider_keys?: string[];
-  totals?: RawCodexUsageMetrics;
-  by_provider?: RawCodexUsageProviderStats[];
-  by_provider_model?: RawCodexUsageProviderModelStats[];
-  by_day?: RawCodexUsageDailyStats[];
-  daily_by_provider?: RawCodexUsageDailyProviderStats[];
-  daily_by_provider_model?: RawCodexUsageDailyProviderModelStats[];
-  daily_pagination?: RawCodexUsageDailyPagination;
   rate_limit_samples?: RawCodexRateLimitSample[];
 };
 
@@ -3621,42 +3558,6 @@ function mapCodexUsageAvailableRange(raw: RawCodexUsageAvailableRange | undefine
   };
 }
 
-function mapCodexUsageMetrics(raw: RawCodexUsageMetrics | undefined): CodexUsageMetrics {
-  const inputTokens = numberOrZero(raw?.input_tokens);
-  const cachedInputTokens = numberOrZero(raw?.cached_input_tokens);
-  const outputTokens = numberOrZero(raw?.output_tokens);
-  const cacheHitRate = raw?.cache_hit_rate;
-  return {
-    requestCount: numberOrZero(raw?.request_count),
-    inputTokens,
-    cachedInputTokens,
-    uncachedInputTokens: raw?.uncached_input_tokens === undefined
-      ? Math.max(0, inputTokens - cachedInputTokens)
-      : numberOrZero(raw.uncached_input_tokens),
-    outputTokens,
-    reasoningOutputTokens: numberOrZero(raw?.reasoning_output_tokens),
-    totalTokens: raw?.total_tokens === undefined
-      ? inputTokens + outputTokens
-      : numberOrZero(raw.total_tokens),
-    cacheHitRate: typeof cacheHitRate === "number" && Number.isFinite(cacheHitRate) ? cacheHitRate : null,
-  };
-}
-
-function mapCodexUsageProviderFromStats(raw: RawCodexUsageProviderStats): CodexUsageProvider {
-  return mapCodexUsageProvider(raw.provider || {
-    key: raw.provider_key,
-    kind: raw.provider_kind,
-    label: raw.provider_label,
-    base_url: raw.base_url,
-    resolution: raw.resolution,
-  });
-}
-
-function mapCodexUsageModel(value: unknown): string {
-  const model = String(value || "").trim();
-  return !model || model.toLowerCase() === "unknown" ? DEFAULT_CODEX_USAGE_MODEL : model;
-}
-
 function mapCodexUsageConfig(raw: RawCodexUsageConfig): CodexUsageConfig {
   return {
     enabled: Boolean(raw.enabled),
@@ -3692,12 +3593,10 @@ function mapCodexRateLimitSample(raw: RawCodexRateLimitSample): CodexRateLimitSa
   const planType = typeof raw.plan_type === "string" && raw.plan_type.trim()
     ? raw.plan_type.trim()
     : null;
-  const rawLimitId = typeof raw.limit_id === "string" ? raw.limit_id.trim() : "";
-  const limitId = rawLimitId || (
-    mapCodexUsageModel(raw.model).toLowerCase() === "gpt-5.3-codex-spark"
-      ? SECONDARY_CODEX_RATE_LIMIT_ID
-      : GENERAL_CODEX_RATE_LIMIT_ID
-  );
+  const limitId = typeof raw.limit_id === "string" ? raw.limit_id.trim() : "";
+  if (!limitId) {
+    return null;
+  }
   return {
     limitId,
     sampledAt,
@@ -3708,71 +3607,7 @@ function mapCodexRateLimitSample(raw: RawCodexRateLimitSample): CodexRateLimitSa
   };
 }
 
-function positiveInteger(value: unknown, fallback: number) {
-  const parsed = Math.floor(numberOrZero(value));
-  return parsed > 0 ? parsed : fallback;
-}
-
-function mapCodexUsageDailyPagination(raw: RawCodexUsageDailyPagination | undefined, returnedItemCount: number) {
-  if (!raw) {
-    const totalItems = Math.max(0, returnedItemCount);
-    return {
-      page: 1,
-      pageSize: totalItems > 0 ? totalItems : 10,
-      totalItems,
-      totalPages: totalItems > 0 ? 1 : 0,
-      hasPrevious: false,
-      hasNext: false,
-    };
-  }
-  const pageSize = positiveInteger(raw.page_size, Math.max(1, returnedItemCount));
-  const totalItems = Math.max(0, Math.floor(numberOrZero(raw.total_items)));
-  const derivedTotalPages = Math.ceil(totalItems / pageSize);
-  const rawTotalPages = Number(raw.total_pages);
-  const totalPages = Number.isFinite(rawTotalPages) && rawTotalPages >= 0
-    ? Math.floor(rawTotalPages)
-    : derivedTotalPages;
-  const page = positiveInteger(raw.page, 1);
-  return {
-    page,
-    pageSize,
-    totalItems,
-    totalPages,
-    hasPrevious: typeof raw.has_previous === "boolean" ? raw.has_previous : page > 1,
-    hasNext: typeof raw.has_next === "boolean" ? raw.has_next : page < totalPages,
-  };
-}
-
 function mapCodexUsageStats(raw: RawCodexUsageStats): CodexUsageStats {
-  const byProvider: CodexUsageProviderStats[] = (raw.by_provider || []).map((item) => ({
-    provider: mapCodexUsageProviderFromStats(item),
-    ...mapCodexUsageMetrics(item),
-  }));
-  const byDay: CodexUsageDailyStats[] = (raw.by_day || []).map((item) => ({
-    date: String(item.date || item.day || ""),
-    ...mapCodexUsageMetrics(item),
-  }));
-  const dailyByProvider: CodexUsageDailyProviderStats[] = (raw.daily_by_provider || []).map((item) => ({
-    date: String(item.date || item.day || ""),
-    provider: mapCodexUsageProviderFromStats(item),
-    ...mapCodexUsageMetrics(item),
-  }));
-  const byProviderModel: CodexUsageProviderModelStats[] = raw.by_provider_model === undefined
-    ? byProvider.map((item) => ({ ...item, model: DEFAULT_CODEX_USAGE_MODEL }))
-    : raw.by_provider_model.map((item) => ({
-        provider: mapCodexUsageProviderFromStats(item),
-        model: mapCodexUsageModel(item.model),
-        ...mapCodexUsageMetrics(item),
-      }));
-  const dailyByProviderModel: CodexUsageDailyProviderModelStats[] = raw.daily_by_provider_model === undefined
-    ? dailyByProvider.map((item) => ({ ...item, model: DEFAULT_CODEX_USAGE_MODEL }))
-    : raw.daily_by_provider_model.map((item) => ({
-        date: String(item.date || item.day || ""),
-        provider: mapCodexUsageProviderFromStats(item),
-        model: mapCodexUsageModel(item.model),
-        ...mapCodexUsageMetrics(item),
-      }));
-  const dailyItemCount = dailyByProviderModel.length || dailyByProvider.length;
   return {
     range: {
       startDate: String(raw.range?.start_date || ""),
@@ -3781,17 +3616,6 @@ function mapCodexUsageStats(raw: RawCodexUsageStats): CodexUsageStats {
     enabled: Boolean(raw.enabled),
     timeBasis: mapCodexUsageTimeBasis(raw.time_basis),
     availableRange: mapCodexUsageAvailableRange(raw.available_range),
-    availableProviders: (raw.available_providers || []).map(mapCodexUsageProvider),
-    selectedProviderKeys: Array.isArray(raw.selected_provider_keys)
-      ? raw.selected_provider_keys.map((item) => String(item))
-      : [],
-    totals: mapCodexUsageMetrics(raw.totals),
-    byProvider,
-    byProviderModel,
-    byDay,
-    dailyByProvider,
-    dailyByProviderModel,
-    dailyPagination: mapCodexUsageDailyPagination(raw.daily_pagination, dailyItemCount),
     rateLimitSamples: (raw.rate_limit_samples || [])
       .map(mapCodexRateLimitSample)
       .filter((sample): sample is CodexRateLimitSample => sample !== null),
@@ -4677,16 +4501,6 @@ export class RealWebBotClient implements WebBotClient {
     const params = new URLSearchParams();
     if (queryInput.startDate) params.set("start_date", queryInput.startDate);
     if (queryInput.endDate) params.set("end_date", queryInput.endDate);
-    for (const providerKey of queryInput.providerKeys || []) {
-      const key = providerKey.trim();
-      if (key) params.append("provider", key);
-    }
-    if (Number.isFinite(queryInput.dailyPage) && (queryInput.dailyPage || 0) > 0) {
-      params.set("daily_page", String(Math.floor(queryInput.dailyPage!)));
-    }
-    if (Number.isFinite(queryInput.dailyPageSize) && (queryInput.dailyPageSize || 0) > 0) {
-      params.set("daily_page_size", String(Math.floor(queryInput.dailyPageSize!)));
-    }
     const query = params.toString();
     const data = await this.requestJson<RawCodexUsageStats>(
       `/api/admin/codex-usage/stats${query ? `?${query}` : ""}`,

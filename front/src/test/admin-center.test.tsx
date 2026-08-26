@@ -56,8 +56,8 @@ async function openTransferTab(user: ReturnType<typeof userEvent.setup>) {
 
 async function openCodexUsageTab(user: ReturnType<typeof userEvent.setup>) {
   await screen.findByText("用户权限");
-  await user.click(screen.getByRole("tab", { name: "Codex 用量" }));
-  await screen.findByRole("heading", { name: "Codex 用量" });
+  await user.click(screen.getByRole("tab", { name: "Codex 额度" }));
+  await screen.findByRole("heading", { name: "Codex 额度" });
 }
 
 async function openNetworkTab(user: ReturnType<typeof userEvent.setup>) {
@@ -174,25 +174,10 @@ test("Transfer Admin Center rejects advanced params that could override the upst
   expect(await screen.findByText("高级 LiteLLM params 不能包含 api_key")).toBeInTheDocument();
 });
 
-test("Codex 用量趋势按额度桶分组且通用额度不标注模型", async () => {
+test("Codex 额度趋势按额度桶分组", async () => {
   const user = userEvent.setup();
   const client = createAdminClient();
   const stats = await client.getCodexUsageStats();
-  stats.totals = {
-    requestCount: 0,
-    inputTokens: 0,
-    cachedInputTokens: 0,
-    uncachedInputTokens: 0,
-    outputTokens: 0,
-    reasoningOutputTokens: 0,
-    totalTokens: 0,
-    cacheHitRate: null,
-  };
-  stats.byProvider = [];
-  stats.byProviderModel = [];
-  stats.byDay = [];
-  stats.dailyByProvider = [];
-  stats.dailyByProviderModel = [];
   stats.rateLimitSamples[0].sampledAt = "2026-07-20T18:45:00+08:00";
   stats.rateLimitSamples[0].resetsAt = "2026-07-20T18:45:00+08:00";
   stats.rateLimitSamples[1].sampledAt = "2026-07-21T18:45:00+08:00";
@@ -231,8 +216,8 @@ test("Codex 用量趋势按额度桶分组且通用额度不标注模型", async
   expect(screen.getByText("已用 8%")).toBeInTheDocument();
   expect(screen.getByText("7 天窗口")).toBeInTheDocument();
   expect(screen.queryByText("纵轴为剩余额度，固定显示 0% 至 100%。")).not.toBeInTheDocument();
-  expect(screen.queryByText("暂无符合筛选条件的 Codex 用量数据。")).not.toBeInTheDocument();
-  expect(screen.queryByRole("table", { name: "Codex 用量 Provider 汇总" })).not.toBeInTheDocument();
+  expect(screen.queryByText("暂无符合筛选条件的 Codex 额度数据。")).not.toBeInTheDocument();
+  expect(screen.queryByText("总 token")).not.toBeInTheDocument();
   expect(chart.querySelector("title")?.textContent).toBe("通用 Codex 剩余额度与剩余时长趋势");
   expect(chart.querySelector("desc")?.textContent).toContain("剩余时长");
   const quotaAxisTitle = chart.querySelector(".codex-usage-rate-limit-quota-axis-title");
@@ -262,7 +247,7 @@ test("Codex 用量趋势按额度桶分组且通用额度不标注模型", async
   expect(secondGap).toBeCloseTo(firstGap * 5);
 });
 
-test("Codex 用量趋势仅有一个样本时不绘制折线或数据点", async () => {
+test("Codex 额度趋势仅有一个样本时不绘制折线或数据点", async () => {
   const user = userEvent.setup();
   const client = createAdminClient();
   const stats = await client.getCodexUsageStats();
@@ -280,7 +265,7 @@ test("Codex 用量趋势仅有一个样本时不绘制折线或数据点", async
   expect(container.querySelector(".codex-usage-rate-limit-duration-line")).not.toBeInTheDocument();
 });
 
-test("Codex 用量趋势没有样本时仍显示通用和次要额度入口", async () => {
+test("Codex 额度趋势没有样本时仍显示通用和次要额度入口", async () => {
   const user = userEvent.setup();
   const client = createAdminClient();
   const stats = await client.getCodexUsageStats();
@@ -295,24 +280,4 @@ test("Codex 用量趋势没有样本时仍显示通用和次要额度入口", as
   expect(screen.getByRole("heading", { name: "通用 Codex", level: 4 })).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "gpt-5.3-codex-spark", level: 4 })).toBeInTheDocument();
   expect(screen.queryByRole("img", { name: /Codex 剩余额度与剩余时长趋势/ })).not.toBeInTheDocument();
-});
-
-test("Codex 用量 Provider 筛选排除 OpenAI 官方时清空趋势", async () => {
-  const user = userEvent.setup();
-  const client = createAdminClient();
-  const getCodexUsageStats = vi.spyOn(client, "getCodexUsageStats");
-
-  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
-  await openCodexUsageTab(user);
-  await screen.findByRole("img", { name: /Codex 剩余额度与剩余时长趋势/ });
-
-  await user.click(screen.getByLabelText("筛选 Provider：OpenAI 官方"));
-  await user.click(screen.getByRole("button", { name: "查询" }));
-
-  await waitFor(() => expect(getCodexUsageStats).toHaveBeenLastCalledWith(expect.objectContaining({
-    providerKeys: ["base_url:https://api.example.test/v1"],
-  })));
-  expect(await screen.findByText("暂无通用 Codex 限额样本。")).toBeInTheDocument();
-  expect(screen.getByText("暂无 gpt-5.3-codex-spark 限额样本。")).toBeInTheDocument();
-  expect(screen.queryByText("当前剩余 92%")).not.toBeInTheDocument();
 });

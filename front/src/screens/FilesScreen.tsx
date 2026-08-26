@@ -260,6 +260,7 @@ export function FilesScreen({
   const [createFileError, setCreateFileError] = useState("");
   const [showRenameDialog, setShowRenameDialog] = useState(false);
   const [renameTargetPath, setRenameTargetPath] = useState("");
+  const [renameTargetIsDir, setRenameTargetIsDir] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [renameBusy, setRenameBusy] = useState(false);
   const [renameError, setRenameError] = useState("");
@@ -954,13 +955,14 @@ export function FilesScreen({
     }
   };
 
-  const handleOpenRenameDialog = (path: string) => {
+  const handleOpenRenameDialog = (path: string, isDir: boolean) => {
     if (!canMutateFiles) {
       setError("无文件写入权限");
       setStatusText("");
       return;
     }
     setRenameTargetPath(path);
+    setRenameTargetIsDir(isDir);
     setRenameValue(path);
     setRenameError("");
     setShowRenameDialog(true);
@@ -972,6 +974,7 @@ export function FilesScreen({
     }
     setShowRenameDialog(false);
     setRenameTargetPath("");
+    setRenameTargetIsDir(false);
     setRenameValue("");
     setRenameError("");
   };
@@ -1010,6 +1013,7 @@ export function FilesScreen({
       }
       setShowRenameDialog(false);
       setRenameTargetPath("");
+      setRenameTargetIsDir(false);
       setRenameValue("");
       if (previewName === result.oldPath) {
         setPreviewName(result.path);
@@ -1132,7 +1136,7 @@ export function FilesScreen({
           onClose={handleCloseEditor}
         />
       ) : (
-        <section className="flex-1 overflow-y-auto p-4">
+        <section className="flex-1 overflow-y-auto p-3">
           {error ? (
             <SurfacePanel className="mb-4 border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-none">
               {error}
@@ -1188,7 +1192,7 @@ export function FilesScreen({
               onDirClick={(name) => void handleDirClick(name)}
               onFileClick={(name) => void handleFileClick(name)}
               onEdit={canMutateFiles ? (file) => void handleOpenEditor(file.name) : undefined}
-              onRename={canMutateFiles ? (file) => void handleOpenRenameDialog(file.name) : undefined}
+              onRename={canMutateFiles ? (file) => void handleOpenRenameDialog(file.name, file.isDir) : undefined}
               onDownload={canPreviewFiles ? (file) => void handleDownloadEntry(file) : undefined}
               onDelete={canMutateFiles ? (file) => void handleDeleteEntry(file) : undefined}
               allowDelete={canMutateFiles && !isVirtualRoot}
@@ -1289,8 +1293,8 @@ export function FilesScreen({
       ) : null}
       {canMutateFiles && showRenameDialog ? (
         <FileNameDialog
-          title="重命名文件"
-          label="文件名"
+          title={renameTargetIsDir ? "重命名文件夹" : "重命名文件"}
+          label={renameTargetIsDir ? "文件夹名" : "文件名"}
           value={renameValue}
           confirmText="重命名"
           busy={renameBusy}

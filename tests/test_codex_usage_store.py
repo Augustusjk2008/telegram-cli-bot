@@ -1,353 +1,222 @@
 from __future__ import annotations
 
-import asyncio
-
-import importlib
-
-import re
-
 import sqlite3
-
-import threading
-
-from concurrent.futures import ThreadPoolExecutor
-
-from datetime import date, datetime, timezone
-
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-import pytest
-
-def _core_modules():
-    try:
-        return (
-            importlib.import_module("bot.codex_usage.models"),
-            importlib.import_module("bot.codex_usage.store"),
-            importlib.import_module("bot.codex_usage.service"),
-        )
-    except ModuleNotFoundError as exc:
-        pytest.fail(f"Codex usage store/service 核心包尚未实现: {exc}")
-
-def test_store_migrates_v1_provider_totals_to_default_model_without_changing_them(
-    tmp_path: Path,
-) -> None:
-    _, store_module, _ = _core_modules()
-    db_path = tmp_path / "usage.sqlite3"
-    with sqlite3.connect(db_path) as connection:
-        connection.executescript(
-            """
-            CREATE TABLE providers (
-                provider_id INTEGER PRIMARY KEY,
-                provider_key TEXT NOT NULL UNIQUE,
-                kind TEXT NOT NULL,
-                base_url TEXT
-            );
-            CREATE TABLE daily_usage (
-                day INTEGER NOT NULL,
-                provider_id INTEGER NOT NULL,
-                request_count INTEGER NOT NULL,
-                input_tokens INTEGER NOT NULL,
-                cached_input_tokens INTEGER NOT NULL,
-                output_tokens INTEGER NOT NULL,
-                reasoning_output_tokens INTEGER NOT NULL,
-                PRIMARY KEY (day, provider_id)
-            ) WITHOUT ROWID;
-            INSERT INTO providers(provider_id, provider_key, kind, base_url)
-            VALUES (1, 'openai_official', 'openai_official', NULL);
-            INSERT INTO daily_usage(
-                day, provider_id, request_count, input_tokens,
-                cached_input_tokens, output_tokens, reasoning_output_tokens
-            ) VALUES (20260726, 1, 3, 1200000, 200000, 50000, 10000);
-            PRAGMA user_version=1;
-            """
-        )
-
-    store = store_module.CodexUsageStore(db_path)
-    result = store.query(
-        date(2026, 7, 26),
-        date(2026, 7, 26),
-        daily_page=1,
-        daily_page_size=10,
-    )
-
-    assert result.totals.request_count == 3
-    assert result.totals.total_tokens == 1_250_000
-    assert len(result.by_provider_model) == 1
-    assert result.by_provider_model[0].model == "gpt-5.6-sol"
-    assert result.by_provider_model[0].totals == result.totals
-    assert len(result.daily_by_provider_model) == 1
-    assert result.daily_by_provider_model[0].model == "gpt-5.6-sol"
-    assert result.daily_pagination is not None
-    assert result.daily_pagination.total_items == 1
-    assert result.rate_limit_samples == ()
-    assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 5
-    store.close()
-
-
-def test_store_migrates_v2_to_current_without_changing_token_totals(tmp_path: Path) -> None:
-    models, store_module, _ = _core_modules()
-    db_path = tmp_path / "usage.sqlite3"
-    provider = models.ProviderInfo(
-        key="openai_official",
-        kind="openai_official",
-        base_url=None,
-    )
-    old_store = store_module.CodexUsageStore(db_path)
-    old_store.record(
-        provider,
-        models.CodexTokenUsage(input_tokens=12, output_tokens=3),
-        terminal_at=date(2026, 8, 10),
-    )
-    assert old_store._connection is not None
-    old_store._connection.execute("DROP TABLE IF EXISTS rate_limit_samples")
-    old_store._connection.execute("PRAGMA user_version=2")
-    old_store._connection.commit()
-    old_store.close()
-
-    store = store_module.CodexUsageStore(db_path)
-    result = store.query(date(2026, 8, 10), date(2026, 8, 10))
-
-    assert result.totals.request_count == 1
-    assert result.totals.total_tokens == 15
-    assert result.rate_limit_samples == ()
-    assert store._connection is not None
-    assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 5
-    assert store._connection.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='rate_limit_samples'"
-    ).fetchone() is not None
-    store.close()
-
-
-def test_store_migrates_v3_rate_limits_to_general_bucket(tmp_path: Path) -> None:
-    _, store_module, _ = _core_modules()
-    db_path = tmp_path / "usage.sqlite3"
-    with sqlite3.connect(db_path) as connection:
-        connection.executescript(
-            """
-            CREATE TABLE rate_limit_samples (
-                sample_id INTEGER PRIMARY KEY,
-                day INTEGER NOT NULL,
-                sampled_at_ms INTEGER NOT NULL,
-                used_percent REAL NOT NULL,
-                window_minutes INTEGER NOT NULL,
-                resets_at INTEGER NOT NULL,
-                plan_type TEXT
-            );
-            INSERT INTO rate_limit_samples(
-                day, sampled_at_ms, used_percent,
-                window_minutes, resets_at, plan_type
-            ) VALUES (20260811, 1786413473123, 8, 10080, 1787011285, 'pro');
-            PRAGMA user_version=3;
-            """
-        )
-
-    store = store_module.CodexUsageStore(db_path)
-    result = store.query(date(2026, 8, 11), date(2026, 8, 11))
-
-    assert len(result.rate_limit_samples) == 1
-    assert result.rate_limit_samples[0].limit_id == "codex"
-    assert store._connection is not None
-    assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 5
-    assert store._connection.execute(
-        "SELECT limit_id FROM rate_limit_samples"
-    ).fetchone()[0] == "codex"
-    store.close()
-
-
-def test_store_migrates_v4_model_labels_to_limit_ids(tmp_path: Path) -> None:
-    _, store_module, _ = _core_modules()
-    db_path = tmp_path / "usage.sqlite3"
-    with sqlite3.connect(db_path) as connection:
-        connection.executescript(
-            """
-            CREATE TABLE rate_limit_samples (
-                sample_id INTEGER PRIMARY KEY,
-                day INTEGER NOT NULL,
-                model_key TEXT NOT NULL,
-                sampled_at_ms INTEGER NOT NULL,
-                used_percent REAL NOT NULL,
-                window_minutes INTEGER NOT NULL,
-                resets_at INTEGER NOT NULL,
-                plan_type TEXT
-            );
-            INSERT INTO rate_limit_samples(
-                day, model_key, sampled_at_ms, used_percent,
-                window_minutes, resets_at, plan_type
-            ) VALUES
-                (20260811, 'gpt-5.6-sol', 1786413473123, 8, 10080, 1787011285, 'pro'),
-                (20260811, 'gpt-5.3-codex-spark', 1786413533123, 42, 300, 1787011285, 'pro');
-            PRAGMA user_version=4;
-            """
-        )
-
-    store = store_module.CodexUsageStore(db_path)
-    result = store.query(date(2026, 8, 11), date(2026, 8, 11))
-
-    assert [sample.limit_id for sample in result.rate_limit_samples] == ["codex"]
-    assert store._connection is not None
-    assert store._connection.execute("PRAGMA user_version").fetchone()[0] == 5
-    stored_limit_ids = store._connection.execute(
-        "SELECT limit_id FROM rate_limit_samples ORDER BY sample_id"
-    ).fetchall()
-    assert [row[0] for row in stored_limit_ids] == ["codex", "codex_bengalfox"]
-    store.close()
-
-
-def test_store_queries_rate_limit_samples_by_date_and_time(tmp_path: Path) -> None:
-    models, store_module, _ = _core_modules()
-    store = store_module.CodexUsageStore(tmp_path / "usage.sqlite3")
-    later = models.CodexRateLimitSample(
-        sampled_at=datetime(2026, 8, 11, 9, 0, 0, 456_000, tzinfo=timezone.utc),
-        used_percent=9.5,
-        window_minutes=10_080,
-        resets_at=datetime(2026, 8, 18, 8, 1, 25, tzinfo=timezone.utc),
-        plan_type="pro",
-        limit_id="codex_bengalfox",
-    )
-    earlier = models.CodexRateLimitSample(
-        sampled_at=datetime(2026, 8, 11, 8, 0, 0, 123_000, tzinfo=timezone.utc),
-        used_percent=8,
-        window_minutes=300,
-        resets_at=datetime(2026, 8, 11, 13, 0, 0, tzinfo=timezone.utc),
-        plan_type=None,
-    )
-    outside = models.CodexRateLimitSample(
-        sampled_at=datetime(2026, 8, 12, 8, 0, tzinfo=timezone.utc),
-        used_percent=10,
-        window_minutes=300,
-        resets_at=datetime(2026, 8, 12, 13, 0, tzinfo=timezone.utc),
-        plan_type="pro",
-    )
-    store.record_rate_limit_sample(later)
-    store.record_rate_limit_sample(earlier)
-    store.record_rate_limit_sample(outside)
-
-    result = store.query(date(2026, 8, 11), date(2026, 8, 11))
-
-    assert result.totals.request_count == 0
-    assert result.rate_limit_samples == (earlier, later)
-    assert [sample.limit_id for sample in result.rate_limit_samples] == [
-        "codex",
-        "codex_bengalfox",
-    ]
-    store.close()
-
-
-def test_store_hides_secondary_model_five_hour_samples(tmp_path: Path) -> None:
-    models, store_module, _ = _core_modules()
-    store = store_module.CodexUsageStore(tmp_path / "usage.sqlite3")
-    five_hour = models.CodexRateLimitSample(
-        sampled_at=datetime(2026, 8, 11, 8, 0, tzinfo=timezone.utc),
-        used_percent=42,
-        window_minutes=300,
-        resets_at=datetime(2026, 8, 11, 13, 0, tzinfo=timezone.utc),
-        plan_type="pro",
-        limit_id="codex_bengalfox",
-    )
-    weekly = models.CodexRateLimitSample(
-        sampled_at=datetime(2026, 8, 11, 9, 0, tzinfo=timezone.utc),
-        used_percent=64,
-        window_minutes=10_080,
-        resets_at=datetime(2026, 8, 18, 9, 0, tzinfo=timezone.utc),
-        plan_type="pro",
-        limit_id="codex_bengalfox",
-    )
-    store.record_rate_limit_sample(five_hour)
-    store.record_rate_limit_sample(weekly)
-
-    result = store.query(date(2026, 8, 11), date(2026, 8, 11))
-
-    assert result.rate_limit_samples == (weekly,)
-    store.close()
-
-
-@pytest.mark.parametrize(
-    "provider_keys,expected_count",
-    [
-        (None, 1),
-        (["openai_official"], 1),
-        (["openai_official", "custom:https://example.test"], 1),
-        (["custom:https://example.test"], 0),
-        (["unknown"], 0),
-    ],
+from bot.codex_usage.models import (
+    GENERAL_CODEX_RATE_LIMIT_ID,
+    SECONDARY_CODEX_RATE_LIMIT_ID,
+    CodexRateLimitSample,
 )
-def test_store_rate_limit_provider_filter_semantics(
-    tmp_path: Path,
-    provider_keys: list[str] | None,
-    expected_count: int,
-) -> None:
-    models, store_module, _ = _core_modules()
-    store = store_module.CodexUsageStore(tmp_path / "usage.sqlite3")
-    store.record_rate_limit_sample(
-        models.CodexRateLimitSample(
-            sampled_at=datetime(2026, 8, 11, 8, 0, tzinfo=timezone.utc),
-            used_percent=8,
-            window_minutes=10_080,
-            resets_at=datetime(2026, 8, 18, 8, 0, tzinfo=timezone.utc),
-            plan_type="pro",
+from bot.codex_usage.store import SCHEMA_VERSION, CodexUsageStore
+
+
+def _sample(
+    *,
+    sampled_at: datetime | None = None,
+    limit_id: str = GENERAL_CODEX_RATE_LIMIT_ID,
+    window_minutes: int = 10_080,
+    used_percent: float = 35,
+) -> CodexRateLimitSample:
+    sampled = sampled_at or datetime(2026, 8, 10, 8, tzinfo=timezone.utc)
+    return CodexRateLimitSample(
+        sampled_at=sampled,
+        used_percent=used_percent,
+        window_minutes=window_minutes,
+        resets_at=sampled + timedelta(days=3),
+        plan_type="pro",
+        limit_id=limit_id,
+    )
+
+
+def test_schema_6_removes_usage_tables_and_preserves_quota_data(tmp_path: Path) -> None:
+    db_path = tmp_path / "usage.sqlite3"
+    connection = sqlite3.connect(db_path)
+    connection.executescript(
+        """
+        CREATE TABLE settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        ) WITHOUT ROWID;
+        CREATE TABLE providers (
+            provider_id INTEGER PRIMARY KEY,
+            provider_key TEXT NOT NULL UNIQUE,
+            kind TEXT NOT NULL,
+            base_url TEXT
+        );
+        CREATE TABLE daily_usage (
+            day INTEGER NOT NULL,
+            provider_id INTEGER NOT NULL,
+            request_count INTEGER NOT NULL,
+            input_tokens INTEGER NOT NULL,
+            cached_input_tokens INTEGER NOT NULL,
+            output_tokens INTEGER NOT NULL,
+            reasoning_output_tokens INTEGER NOT NULL,
+            PRIMARY KEY (day, provider_id)
+        ) WITHOUT ROWID;
+        CREATE TABLE daily_model_usage (
+            day INTEGER NOT NULL,
+            provider_id INTEGER NOT NULL,
+            model_key TEXT NOT NULL,
+            request_count INTEGER NOT NULL,
+            input_tokens INTEGER NOT NULL,
+            cached_input_tokens INTEGER NOT NULL,
+            output_tokens INTEGER NOT NULL,
+            reasoning_output_tokens INTEGER NOT NULL,
+            PRIMARY KEY (day, provider_id, model_key)
+        ) WITHOUT ROWID;
+        CREATE TABLE rate_limit_samples (
+            sample_id INTEGER PRIMARY KEY,
+            day INTEGER NOT NULL,
+            limit_id TEXT NOT NULL,
+            sampled_at_ms INTEGER NOT NULL,
+            used_percent REAL NOT NULL,
+            window_minutes INTEGER NOT NULL,
+            resets_at INTEGER NOT NULL,
+            plan_type TEXT
+        );
+        INSERT INTO providers(provider_id, provider_key, kind)
+        VALUES (1, 'openai_official', 'openai_official');
+        INSERT INTO daily_usage
+        VALUES (20260810, 1, 2, 100, 20, 30, 10);
+        INSERT INTO daily_model_usage
+        VALUES (20260810, 1, 'gpt-5.6-sol', 2, 100, 20, 30, 10);
+        INSERT INTO rate_limit_samples(
+            day, limit_id, sampled_at_ms, used_percent,
+            window_minutes, resets_at, plan_type
+        ) VALUES (20260810, 'codex', 1786348800000, 35, 10080, 1786608000, 'pro');
+        PRAGMA user_version=5;
+        """
+    )
+    connection.close()
+
+    store = CodexUsageStore(db_path)
+    samples = store.query(date(2026, 8, 10), date(2026, 8, 10))
+
+    assert len(samples) == 1
+    assert samples[0].used_percent == 35
+    schema_connection = sqlite3.connect(db_path)
+    table_names = {
+        row[0]
+        for row in schema_connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
         )
+    }
+    assert table_names == {"settings", "rate_limit_samples"}
+    assert schema_connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    schema_connection.close()
+
+
+def test_store_records_and_queries_only_supported_quota_samples(tmp_path: Path) -> None:
+    store = CodexUsageStore(tmp_path / "usage.sqlite3")
+    general = _sample(sampled_at=datetime(2026, 8, 10, 8, tzinfo=timezone.utc))
+    weekly = _sample(
+        sampled_at=datetime(2026, 8, 10, 9, tzinfo=timezone.utc),
+        limit_id=SECONDARY_CODEX_RATE_LIMIT_ID,
     )
-
-    result = store.query(
-        date(2026, 8, 11),
-        date(2026, 8, 11),
-        provider_keys=provider_keys,
-        daily_page=2,
-        daily_page_size=10,
+    short_secondary = _sample(
+        sampled_at=datetime(2026, 8, 10, 10, tzinfo=timezone.utc),
+        limit_id=SECONDARY_CODEX_RATE_LIMIT_ID,
+        window_minutes=300,
     )
+    outside = _sample(sampled_at=datetime(2026, 8, 11, 8, tzinfo=timezone.utc))
 
-    assert len(result.rate_limit_samples) == expected_count
-    assert result.daily_pagination is not None
-    assert result.daily_pagination.total_items == 0
-    store.close()
+    for sample in (weekly, general, short_secondary, outside):
+        store.record_rate_limit_sample(sample)
+
+    assert store.query(date(2026, 8, 10), date(2026, 8, 10)) == (general, weekly)
+    assert store.available_range() == (date(2026, 8, 10), date(2026, 8, 11))
 
 
-def test_store_available_range_unions_token_and_rate_limit_days(tmp_path: Path) -> None:
-    models, store_module, _ = _core_modules()
-    store = store_module.CodexUsageStore(tmp_path / "usage.sqlite3")
-    store.record(
-        models.ProviderInfo(
-            key="openai_official",
-            kind="openai_official",
-            base_url=None,
-        ),
-        models.CodexTokenUsage(input_tokens=1, output_tokens=1),
-        terminal_at=date(2026, 8, 11),
+def test_schema_6_preserves_v3_general_quota_sample(tmp_path: Path) -> None:
+    db_path = tmp_path / "usage.sqlite3"
+    connection = sqlite3.connect(db_path)
+    connection.executescript(
+        """
+        CREATE TABLE rate_limit_samples (
+            sample_id INTEGER PRIMARY KEY,
+            day INTEGER NOT NULL,
+            sampled_at_ms INTEGER NOT NULL,
+            used_percent REAL NOT NULL,
+            window_minutes INTEGER NOT NULL,
+            resets_at INTEGER NOT NULL,
+            plan_type TEXT
+        );
+        INSERT INTO rate_limit_samples(
+            day, sampled_at_ms, used_percent, window_minutes, resets_at, plan_type
+        ) VALUES (20260810, 1786348800000, 35, 10080, 1786608000, 'pro');
+        PRAGMA user_version=3;
+        """
     )
-    store.record_rate_limit_sample(
-        models.CodexRateLimitSample(
-            sampled_at=datetime(2026, 8, 9, 8, 0, tzinfo=timezone.utc),
-            used_percent=8,
-            window_minutes=10_080,
-            resets_at=datetime(2026, 8, 16, 8, 0, tzinfo=timezone.utc),
-            plan_type="pro",
-        )
+    connection.close()
+
+    samples = CodexUsageStore(db_path).query(date(2026, 8, 10), date(2026, 8, 10))
+
+    assert len(samples) == 1
+    assert samples[0].limit_id == GENERAL_CODEX_RATE_LIMIT_ID
+
+
+def test_schema_6_normalizes_v4_quota_bucket_names(tmp_path: Path) -> None:
+    db_path = tmp_path / "usage.sqlite3"
+    connection = sqlite3.connect(db_path)
+    connection.executescript(
+        """
+        CREATE TABLE rate_limit_samples (
+            sample_id INTEGER PRIMARY KEY,
+            day INTEGER NOT NULL,
+            model_key TEXT NOT NULL,
+            sampled_at_ms INTEGER NOT NULL,
+            used_percent REAL NOT NULL,
+            window_minutes INTEGER NOT NULL,
+            resets_at INTEGER NOT NULL,
+            plan_type TEXT
+        );
+        INSERT INTO rate_limit_samples(
+            day, model_key, sampled_at_ms, used_percent,
+            window_minutes, resets_at, plan_type
+        ) VALUES
+            (20260810, 'gpt-5.6-sol', 1786348800000, 35, 10080, 1786608000, 'pro'),
+            (20260810, 'gpt-5.3-codex-spark', 1786348860000, 64, 10080, 1786608000, 'pro');
+        PRAGMA user_version=4;
+        """
     )
+    connection.close()
 
-    assert store.available_range() == (date(2026, 8, 9), date(2026, 8, 11))
-    store.close()
+    samples = CodexUsageStore(db_path).query(date(2026, 8, 10), date(2026, 8, 10))
+
+    assert [sample.limit_id for sample in samples] == [
+        GENERAL_CODEX_RATE_LIMIT_ID,
+        SECONDARY_CODEX_RATE_LIMIT_ID,
+    ]
 
 
-def test_usage_query_result_preserves_daily_pagination_as_seventh_position() -> None:
-    models, _, _ = _core_modules()
-    pagination = models.DailyUsagePagination(
-        page=1,
-        page_size=10,
-        total_items=0,
-        total_pages=0,
-        has_previous=False,
-        has_next=False,
-    )
+def test_reading_missing_store_does_not_create_database(tmp_path: Path) -> None:
+    db_path = tmp_path / "missing.sqlite3"
+    store = CodexUsageStore(db_path)
 
-    result = models.UsageQueryResult(
-        models.UsageTotals(),
-        (),
-        (),
-        (),
-        (),
-        (),
-        pagination,
-    )
+    assert store.get_enabled() is False
+    assert store.query(date(2026, 8, 1), date(2026, 8, 2)) == ()
+    assert store.available_range() == (None, None)
+    assert not db_path.exists()
 
-    assert result.daily_pagination is pagination
-    assert result.rate_limit_samples == ()
+
+def test_store_persists_quota_collection_setting(tmp_path: Path) -> None:
+    store = CodexUsageStore(tmp_path / "usage.sqlite3")
+
+    store.set_enabled(True)
+    assert store.get_enabled() is True
+    store.set_enabled(False)
+    assert store.get_enabled() is False
+
+
+def test_store_rejects_reversed_date_range(tmp_path: Path) -> None:
+    store = CodexUsageStore(tmp_path / "usage.sqlite3")
+
+    try:
+        store.query(date(2026, 8, 2), date(2026, 8, 1))
+    except ValueError as exc:
+        assert "起始日期" in str(exc)
+    else:  # pragma: no cover - assertion guard
+        raise AssertionError("expected ValueError")

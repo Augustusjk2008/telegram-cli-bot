@@ -64,7 +64,6 @@ from bot.config import CLI_MODEL_OPTIONS, WEB_PORT
 from bot.cli import (
     ClaudeJsonStreamParser,
     CodexJsonStreamParser,
-    CodexUsageSample,
     build_cli_command,
     normalize_cli_type,
     resolve_cli_executable,
@@ -74,8 +73,8 @@ from bot.cli import (
     should_suggest_reset_codex_session,
 )
 from bot.codex_usage import (
-    record_codex_usage_capture as _record_codex_usage_capture,
-    start_codex_usage_capture as _start_codex_usage_capture,
+    record_codex_rate_limit_capture as _record_codex_rate_limit_capture,
+    start_codex_rate_limit_capture as _start_codex_rate_limit_capture,
 )
 from bot.manager import MultiBotManager
 from bot.messages import msg
@@ -3789,9 +3788,6 @@ class CodexProcessResult:
     text: str
     session_id: Optional[str]
     returncode: int
-    token_usage: Optional[CodexUsageSample]
-    invalid_usage_count: int = 0
-    duplicate_terminal_count: int = 0
 
 
 def _load_codex_json_event(line: str) -> dict[str, Any]:
@@ -4456,7 +4452,7 @@ async def _communicate_process(
 async def _communicate_codex_process(
     process: subprocess.Popen,
     *,
-    usage_capture: Any = None,
+    quota_capture: Any = None,
     lifecycle: _CliProcessLifecycle | None = None,
 ) -> CodexProcessResult:
     lifecycle = _ensure_cli_process_lifecycle(process, lifecycle)
@@ -4481,9 +4477,6 @@ async def _communicate_codex_process(
                 text=final_text,
                 session_id=parsed_result.session_id,
                 returncode=returncode,
-                token_usage=parsed_result.token_usage,
-                invalid_usage_count=parsed_result.invalid_usage_count,
-                duplicate_terminal_count=parsed_result.duplicate_terminal_count,
             )
 
         loop = asyncio.get_running_loop()
@@ -4567,9 +4560,6 @@ async def _communicate_codex_process(
                 text=final_text,
                 session_id=thread_id or parsed_result.session_id,
                 returncode=returncode,
-                token_usage=parsed_result.token_usage,
-                invalid_usage_count=parsed_result.invalid_usage_count,
-                duplicate_terminal_count=parsed_result.duplicate_terminal_count,
             )
         except Exception:
             cleanup_abort = True
@@ -4580,7 +4570,7 @@ async def _communicate_codex_process(
     finally:
         try:
             if parser is not None:
-                await _record_codex_usage_capture(usage_capture, parser.result())
+                await _record_codex_rate_limit_capture(quota_capture, parser.result())
         finally:
             await _cleanup_cli_process_lifecycle(lifecycle, abort=cleanup_abort)
 
@@ -4833,9 +4823,9 @@ async def _stream_cli_chat(
             except ValueError as exc:
                 _raise(400, "invalid_cli_command", str(exc))
 
-            usage_capture = None
+            quota_capture = None
             if cli_type == "codex":
-                usage_capture = await _start_codex_usage_capture(env=env, command=cmd)
+                quota_capture = await _start_codex_rate_limit_capture(env=env, command=cmd)
 
             try:
                 spawn_started_at = time.perf_counter()
@@ -5186,7 +5176,7 @@ async def _stream_cli_chat(
                 parsed_result = preview_state.result()
                 try:
                     if cli_type == "codex":
-                        await _record_codex_usage_capture(usage_capture, parsed_result)
+                        await _record_codex_rate_limit_capture(quota_capture, parsed_result)
                 finally:
                     try:
                         await _cleanup_cli_process_lifecycle(process_lifecycle, abort=cleanup_abort)

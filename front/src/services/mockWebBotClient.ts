@@ -49,12 +49,6 @@ import type {
   CliErrorStatsFilters,
   CliErrorStatsResult,
   CodexUsageConfig,
-  CodexUsageDailyProviderModelStats,
-  CodexUsageDailyProviderStats,
-  CodexUsageDailyStats,
-  CodexUsageMetrics,
-  CodexUsageProviderStats,
-  CodexUsageProviderModelStats,
   CodexUsageStats,
   CodexUsageStatsQuery,
   CliType,
@@ -377,41 +371,7 @@ function cloneCodexUsageStats(stats: CodexUsageStats): CodexUsageStats {
     range: { ...stats.range },
     timeBasis: { ...stats.timeBasis },
     availableRange: { ...stats.availableRange },
-    availableProviders: stats.availableProviders.map((provider) => ({ ...provider })),
-    selectedProviderKeys: [...stats.selectedProviderKeys],
-    totals: { ...stats.totals },
-    dailyPagination: { ...stats.dailyPagination },
-    byProvider: stats.byProvider.map((item) => ({ ...item, provider: { ...item.provider } })),
-    byProviderModel: stats.byProviderModel.map((item) => ({ ...item, provider: { ...item.provider } })),
-    byDay: stats.byDay.map((item) => ({ ...item })),
-    dailyByProvider: stats.dailyByProvider.map((item) => ({ ...item, provider: { ...item.provider } })),
-    dailyByProviderModel: stats.dailyByProviderModel.map((item) => ({ ...item, provider: { ...item.provider } })),
     rateLimitSamples: stats.rateLimitSamples.map((sample) => ({ ...sample })),
-  };
-}
-
-function sumCodexUsageMetrics(items: CodexUsageMetrics[]): CodexUsageMetrics {
-  const totals = items.reduce(
-    (current, item) => ({
-      requestCount: current.requestCount + item.requestCount,
-      inputTokens: current.inputTokens + item.inputTokens,
-      cachedInputTokens: current.cachedInputTokens + item.cachedInputTokens,
-      outputTokens: current.outputTokens + item.outputTokens,
-      reasoningOutputTokens: current.reasoningOutputTokens + item.reasoningOutputTokens,
-    }),
-    {
-      requestCount: 0,
-      inputTokens: 0,
-      cachedInputTokens: 0,
-      outputTokens: 0,
-      reasoningOutputTokens: 0,
-    },
-  );
-  return {
-    ...totals,
-    uncachedInputTokens: totals.inputTokens - totals.cachedInputTokens,
-    totalTokens: totals.inputTokens + totals.outputTokens,
-    cacheHitRate: totals.inputTokens > 0 ? totals.cachedInputTokens / totals.inputTokens : null,
   };
 }
 
@@ -1794,124 +1754,6 @@ export class MockWebBotClient implements WebBotClient {
     availableRange: {
       firstDate: "2026-07-20",
       lastDate: "2026-07-26",
-    },
-    availableProviders: [
-      {
-        key: "openai_official",
-        kind: "openai_official",
-        label: "OpenAI 官方",
-        baseUrl: null,
-        resolution: "resolved",
-      },
-      {
-        key: "base_url:https://api.example.test/v1",
-        kind: "base_url",
-        label: "自定义 Provider",
-        baseUrl: "https://api.example.test/v1",
-        resolution: "resolved",
-      },
-    ],
-    selectedProviderKeys: [],
-    totals: {
-      requestCount: 12,
-      inputTokens: 18800,
-      cachedInputTokens: 6800,
-      uncachedInputTokens: 12000,
-      outputTokens: 4200,
-      reasoningOutputTokens: 950,
-      totalTokens: 23000,
-      cacheHitRate: 6800 / 18800,
-    },
-    byProvider: [{
-      provider: {
-        key: "openai_official",
-        kind: "openai_official",
-        label: "OpenAI 官方",
-        baseUrl: null,
-        resolution: "resolved",
-      },
-      requestCount: 12,
-      inputTokens: 18800,
-      cachedInputTokens: 6800,
-      uncachedInputTokens: 12000,
-      outputTokens: 4200,
-      reasoningOutputTokens: 950,
-      totalTokens: 23000,
-      cacheHitRate: 6800 / 18800,
-    }],
-    byProviderModel: [{
-      provider: {
-        key: "openai_official",
-        kind: "openai_official",
-        label: "OpenAI 官方",
-        baseUrl: null,
-        resolution: "resolved",
-      },
-      model: "gpt-5.6-sol",
-      requestCount: 12,
-      inputTokens: 18800,
-      cachedInputTokens: 6800,
-      uncachedInputTokens: 12000,
-      outputTokens: 4200,
-      reasoningOutputTokens: 950,
-      totalTokens: 23000,
-      cacheHitRate: 6800 / 18800,
-    }],
-    byDay: [{
-      date: "2026-07-26",
-      requestCount: 12,
-      inputTokens: 18800,
-      cachedInputTokens: 6800,
-      uncachedInputTokens: 12000,
-      outputTokens: 4200,
-      reasoningOutputTokens: 950,
-      totalTokens: 23000,
-      cacheHitRate: 6800 / 18800,
-    }],
-    dailyByProvider: [{
-      date: "2026-07-26",
-      provider: {
-        key: "openai_official",
-        kind: "openai_official",
-        label: "OpenAI 官方",
-        baseUrl: null,
-        resolution: "resolved",
-      },
-      requestCount: 12,
-      inputTokens: 18800,
-      cachedInputTokens: 6800,
-      uncachedInputTokens: 12000,
-      outputTokens: 4200,
-      reasoningOutputTokens: 950,
-      totalTokens: 23000,
-      cacheHitRate: 6800 / 18800,
-    }],
-    dailyByProviderModel: [{
-      date: "2026-07-26",
-      provider: {
-        key: "openai_official",
-        kind: "openai_official",
-        label: "OpenAI 官方",
-        baseUrl: null,
-        resolution: "resolved",
-      },
-      model: "gpt-5.6-sol",
-      requestCount: 12,
-      inputTokens: 18800,
-      cachedInputTokens: 6800,
-      uncachedInputTokens: 12000,
-      outputTokens: 4200,
-      reasoningOutputTokens: 950,
-      totalTokens: 23000,
-      cacheHitRate: 6800 / 18800,
-    }],
-    dailyPagination: {
-      page: 1,
-      pageSize: 10,
-      totalItems: 1,
-      totalPages: 1,
-      hasPrevious: false,
-      hasNext: false,
     },
     rateLimitSamples: [
       {
@@ -5323,8 +5165,8 @@ export class MockWebBotClient implements WebBotClient {
     }
 
     const source = currentEntries.find((entry) => entry.name === path);
-    if (!source || source.isDir) {
-      throw new Error("文件不存在");
+    if (!source) {
+      throw new Error("文件或文件夹不存在");
     }
 
     botFiles[browserPath] = currentEntries.map((entry) =>
@@ -5337,12 +5179,29 @@ export class MockWebBotClient implements WebBotClient {
         : entry,
     );
 
-    const content = this.getFileContent(botAlias, browserPath, path);
-    const version = this.getFileVersion(botAlias, browserPath, path);
-    this.fileContents.delete(this.fileKey(botAlias, browserPath, path));
-    this.fileVersions.delete(this.fileKey(botAlias, browserPath, path));
-    this.fileContents.set(this.fileKey(botAlias, browserPath, nextName), content);
-    this.fileVersions.set(this.fileKey(botAlias, browserPath, nextName), version);
+    if (source.isDir) {
+      const normalizedBrowserPath = this.normalizeMockPath(browserPath);
+      const sourcePath = normalizedBrowserPath === "/" ? `/${path}` : `${normalizedBrowserPath}/${path}`;
+      const targetPath = normalizedBrowserPath === "/" ? `/${nextName}` : `${normalizedBrowserPath}/${nextName}`;
+      const renamedDirectories = Object.entries(botFiles)
+        .filter(([candidate]) => candidate === sourcePath || candidate.startsWith(`${sourcePath}/`))
+        .map(([candidate, entries]) => [`${targetPath}${candidate.slice(sourcePath.length)}`, entries] as const);
+      for (const candidate of Object.keys(botFiles)) {
+        if (candidate === sourcePath || candidate.startsWith(`${sourcePath}/`)) {
+          delete botFiles[candidate];
+        }
+      }
+      for (const [candidate, entries] of renamedDirectories) {
+        botFiles[candidate] = entries;
+      }
+    } else {
+      const content = this.getFileContent(botAlias, browserPath, path);
+      const version = this.getFileVersion(botAlias, browserPath, path);
+      this.fileContents.delete(this.fileKey(botAlias, browserPath, path));
+      this.fileVersions.delete(this.fileKey(botAlias, browserPath, path));
+      this.fileContents.set(this.fileKey(botAlias, browserPath, nextName), content);
+      this.fileVersions.set(this.fileKey(botAlias, browserPath, nextName), version);
+    }
 
     return {
       oldPath: path,
@@ -5655,14 +5514,14 @@ export class MockWebBotClient implements WebBotClient {
 
   async getCodexUsageConfig(): Promise<CodexUsageConfig> {
     if (!this.hasAdminOps()) {
-      throw new WebApiClientError("无权查看 Codex 用量", { status: 403, code: "forbidden" });
+      throw new WebApiClientError("无权查看 Codex 额度", { status: 403, code: "forbidden" });
     }
     return cloneCodexUsageConfig(this.codexUsageConfig);
   }
 
   async updateCodexUsageConfig(input: { enabled: boolean }): Promise<CodexUsageConfig> {
     if (!this.hasAdminOps()) {
-      throw new WebApiClientError("无权修改 Codex 用量采集设置", { status: 403, code: "forbidden" });
+      throw new WebApiClientError("无权修改 Codex 额度采集设置", { status: 403, code: "forbidden" });
     }
     this.codexUsageConfig = {
       ...this.codexUsageConfig,
@@ -5677,87 +5536,21 @@ export class MockWebBotClient implements WebBotClient {
 
   async getCodexUsageStats(query: CodexUsageStatsQuery = {}): Promise<CodexUsageStats> {
     if (!this.hasAdminOps()) {
-      throw new WebApiClientError("无权查看 Codex 用量", { status: 403, code: "forbidden" });
+      throw new WebApiClientError("无权查看 Codex 额度", { status: 403, code: "forbidden" });
     }
-    const selectedProviderKeys = Array.from(new Set(
-      (query.providerKeys || []).map((item) => item.trim()).filter(Boolean),
-    ));
     const result = cloneCodexUsageStats(this.codexUsageStats);
     result.enabled = this.codexUsageConfig.enabled;
     result.range = {
       startDate: query.startDate || result.range.startDate,
       endDate: query.endDate || result.range.endDate,
     };
-    result.selectedProviderKeys = selectedProviderKeys;
-    if (selectedProviderKeys.length && !selectedProviderKeys.includes("openai_official")) {
-      result.rateLimitSamples = [];
-    }
-    if (selectedProviderKeys.length) {
-      const selected = new Set(selectedProviderKeys);
-      result.byProvider = result.byProvider.filter((item) => selected.has(item.provider.key));
-      result.byProviderModel = result.byProviderModel.filter((item) => selected.has(item.provider.key));
-      result.dailyByProvider = result.dailyByProvider.filter((item) => selected.has(item.provider.key));
-      result.dailyByProviderModel = result.dailyByProviderModel.filter((item) => selected.has(item.provider.key));
-    }
     if (query.startDate || query.endDate) {
       const inRange = (date: string) => (
         (!query.startDate || date >= query.startDate)
         && (!query.endDate || date <= query.endDate)
       );
-      result.dailyByProvider = result.dailyByProvider.filter((item) => inRange(item.date));
-      result.dailyByProviderModel = result.dailyByProviderModel.filter((item) => inRange(item.date));
       result.rateLimitSamples = result.rateLimitSamples.filter((sample) => inRange(sample.sampledAt.slice(0, 10)));
     }
-    const fullDailyByProvider = result.dailyByProvider;
-    const fullDailyByProviderModel = result.dailyByProviderModel;
-    const providerGroups = new Map<string, CodexUsageDailyProviderStats[]>();
-    const dayGroups = new Map<string, CodexUsageDailyProviderStats[]>();
-    const providerModelGroups = new Map<string, CodexUsageDailyProviderModelStats[]>();
-    for (const item of fullDailyByProvider) {
-      providerGroups.set(item.provider.key, [...(providerGroups.get(item.provider.key) || []), item]);
-      dayGroups.set(item.date, [...(dayGroups.get(item.date) || []), item]);
-    }
-    for (const item of fullDailyByProviderModel) {
-      const key = `${item.provider.key}\u0000${item.model}`;
-      providerModelGroups.set(key, [...(providerModelGroups.get(key) || []), item]);
-    }
-    result.byProvider = Array.from(providerGroups.values()).map<CodexUsageProviderStats>((items) => ({
-      provider: { ...items[0].provider },
-      ...sumCodexUsageMetrics(items),
-    }));
-    result.byDay = Array.from(dayGroups.entries()).map<CodexUsageDailyStats>(([date, items]) => ({
-      date,
-      ...sumCodexUsageMetrics(items),
-    }));
-    result.byProviderModel = Array.from(providerModelGroups.values()).map<CodexUsageProviderModelStats>((items) => ({
-      provider: { ...items[0].provider },
-      model: items[0].model,
-      ...sumCodexUsageMetrics(items),
-    }));
-    result.totals = sumCodexUsageMetrics(fullDailyByProvider);
-    const requestedPage = Number.isFinite(query.dailyPage)
-      ? Math.max(1, Math.floor(query.dailyPage!))
-      : 1;
-    const requestedPageSize = Number.isFinite(query.dailyPageSize)
-      ? Math.max(1, Math.floor(query.dailyPageSize!))
-      : 10;
-    const pageSize = Math.min(100, requestedPageSize);
-    const totalItems = fullDailyByProviderModel.length || fullDailyByProvider.length;
-    const totalPages = Math.ceil(totalItems / pageSize);
-    const page = requestedPage;
-    const startIndex = (page - 1) * pageSize;
-    result.dailyByProvider = fullDailyByProviderModel.length
-      ? []
-      : fullDailyByProvider.slice(startIndex, startIndex + pageSize);
-    result.dailyByProviderModel = fullDailyByProviderModel.slice(startIndex, startIndex + pageSize);
-    result.dailyPagination = {
-      page,
-      pageSize,
-      totalItems,
-      totalPages,
-      hasPrevious: page > 1,
-      hasNext: page < totalPages,
-    };
     return result;
   }
 

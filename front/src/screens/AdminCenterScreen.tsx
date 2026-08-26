@@ -1553,7 +1553,7 @@ export function AdminCenterScreen({
                     : tab === "cli-errors"
                       ? "CLI 错误"
                     : tab === "codex-usage"
-                      ? "Codex 用量"
+                      ? "Codex 额度"
                     : tab === "announcements"
                       ? "公告"
                     : tab === "network"
@@ -2067,14 +2067,14 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
           loadedTabs["codex-usage"] ? (
             <Suspense fallback={(
               <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-sm text-[var(--muted)]">
-                正在加载 Codex 用量面板…
+                正在加载 Codex 额度面板…
               </section>
             )}>
               <CodexUsagePanel key={codexUsagePanelKey} client={client} refreshKey={codexUsagePanelKey} />
             </Suspense>
           ) : (
             <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-sm text-[var(--muted)]">
-              正在加载 Codex 用量面板…
+              正在加载 Codex 额度面板…
             </section>
           )
         ) : null}

@@ -391,7 +391,6 @@ export type CodexUsageProvider = {
   resolution?: CodexUsageProviderResolution;
 };
 
-export const DEFAULT_CODEX_USAGE_MODEL = "gpt-5.6-sol";
 export const GENERAL_CODEX_RATE_LIMIT_ID = "codex";
 export const SECONDARY_CODEX_RATE_LIMIT_ID = "codex_bengalfox";
 
@@ -404,17 +403,6 @@ export type CodexUsageTimeBasis = {
 export type CodexUsageAvailableRange = {
   firstDate: string | null;
   lastDate: string | null;
-};
-
-export type CodexUsageMetrics = {
-  requestCount: number;
-  inputTokens: number;
-  cachedInputTokens: number;
-  uncachedInputTokens: number;
-  outputTokens: number;
-  reasoningOutputTokens: number;
-  totalTokens: number;
-  cacheHitRate: number | null;
 };
 
 export type CodexRateLimitSample = {
@@ -436,9 +424,6 @@ export type CodexUsageConfig = {
 export type CodexUsageStatsQuery = {
   startDate?: string;
   endDate?: string;
-  providerKeys?: string[];
-  dailyPage?: number;
-  dailyPageSize?: number;
 };
 
 export type CodexUsageStatsRange = {
@@ -446,49 +431,11 @@ export type CodexUsageStatsRange = {
   endDate: string;
 };
 
-export type CodexUsageProviderStats = CodexUsageMetrics & {
-  provider: CodexUsageProvider;
-};
-
-export type CodexUsageProviderModelStats = CodexUsageProviderStats & {
-  model: string;
-};
-
-export type CodexUsageDailyStats = CodexUsageMetrics & {
-  date: string;
-};
-
-export type CodexUsageDailyProviderStats = CodexUsageDailyStats & {
-  provider: CodexUsageProvider;
-};
-
-export type CodexUsageDailyProviderModelStats = CodexUsageDailyProviderStats & {
-  model: string;
-};
-
-export type CodexUsageDailyPagination = {
-  page: number;
-  pageSize: number;
-  totalItems: number;
-  totalPages: number;
-  hasPrevious: boolean;
-  hasNext: boolean;
-};
-
 export type CodexUsageStats = {
   range: CodexUsageStatsRange;
   enabled: boolean;
   timeBasis: CodexUsageTimeBasis;
   availableRange: CodexUsageAvailableRange;
-  availableProviders: CodexUsageProvider[];
-  selectedProviderKeys: string[];
-  totals: CodexUsageMetrics;
-  byProvider: CodexUsageProviderStats[];
-  byProviderModel: CodexUsageProviderModelStats[];
-  byDay: CodexUsageDailyStats[];
-  dailyByProvider: CodexUsageDailyProviderStats[];
-  dailyByProviderModel: CodexUsageDailyProviderModelStats[];
-  dailyPagination: CodexUsageDailyPagination;
   rateLimitSamples: CodexRateLimitSample[];
 };
 

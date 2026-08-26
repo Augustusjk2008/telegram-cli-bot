@@ -9,10 +9,7 @@
 .codex-usage-section-heading,
 .codex-usage-switch,
 .codex-usage-form-actions,
-.codex-usage-quick-actions,
-.codex-usage-provider-actions,
-.codex-usage-daily-pagination,
-.codex-usage-daily-page-controls {
+.codex-usage-quick-actions {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -40,10 +37,6 @@
   font-weight: 650;
 }
 
-.codex-usage-heading p,
-.codex-usage-section-heading p,
-.codex-usage-helper,
-.codex-usage-provider-options > p,
 .codex-usage-empty-state,
 .codex-usage-empty,
 .codex-usage-loading {
@@ -109,9 +102,9 @@
   height: 1rem;
 }
 
-.codex-usage-provider-details,
-.codex-usage-metric-grid {
+.codex-usage-provider-details {
   display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
   gap: 1px;
   margin: 0.55rem 0 0;
   overflow: hidden;
@@ -120,25 +113,18 @@
   background: var(--border);
 }
 
-.codex-usage-provider-details {
-  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
-}
-
-.codex-usage-provider-details > div,
-.codex-usage-metric-card {
+.codex-usage-provider-details > div {
   min-width: 0;
   background: var(--bg);
   padding: 0.5rem 0.6rem;
 }
 
-.codex-usage-provider-details dt,
-.codex-usage-metric-card dt {
+.codex-usage-provider-details dt {
   color: var(--muted);
   font-size: 0.75rem;
 }
 
-.codex-usage-provider-details dd,
-.codex-usage-metric-card dd {
+.codex-usage-provider-details dd {
   margin: 0.15rem 0 0;
   color: var(--text);
   font-size: 0.85rem;
@@ -156,8 +142,7 @@
   margin-top: 0.65rem;
 }
 
-.codex-usage-date-fields label,
-.codex-usage-provider-option {
+.codex-usage-date-fields label {
   display: grid;
   gap: 0.25rem;
   color: var(--text);
@@ -173,66 +158,13 @@
   padding: 0.4rem 0.5rem;
 }
 
-.codex-usage-provider-filters {
-  min-width: 0;
-  margin: 0.65rem 0 0;
-  border: 1px solid var(--border);
-  border-radius: 0.3rem;
-  padding: 0.5rem;
-}
-
-.codex-usage-provider-filters legend {
-  padding: 0 0.25rem;
-  color: var(--text);
-  font-size: 0.875rem;
-  font-weight: 600;
-}
-
-.codex-usage-provider-actions,
 .codex-usage-quick-actions,
 .codex-usage-form-actions {
   flex-wrap: wrap;
 }
 
-.codex-usage-provider-actions {
-  justify-content: flex-end;
-}
-
-.codex-usage-provider-options {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
-  gap: 1px;
-  margin-top: 0.4rem;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 0.25rem;
-  background: var(--border);
-}
-
-.codex-usage-provider-option {
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  border: 0;
-  border-radius: 0;
-  background: var(--bg);
-  padding: 0.4rem 0.5rem;
-}
-
-.codex-usage-provider-option small {
-  grid-column: 2;
-  overflow-wrap: anywhere;
-  color: var(--muted);
-  font-size: 0.72rem;
-}
-
-.codex-usage-provider-options > p {
-  padding: 0.5rem;
-  background: var(--bg);
-}
-
 .codex-usage-filter-form button,
-.codex-usage-form-actions button,
-.codex-usage-daily-pagination button {
+.codex-usage-form-actions button {
   border: 1px solid var(--border);
   border-radius: 0.3rem;
   background: var(--surface);
@@ -242,16 +174,13 @@
 }
 
 .codex-usage-filter-form button:hover:not(:disabled),
-.codex-usage-form-actions button:hover:not(:disabled),
-.codex-usage-daily-pagination button:hover:not(:disabled) {
+.codex-usage-form-actions button:hover:not(:disabled) {
   background: var(--surface-strong);
 }
 
 .codex-usage-filter-form button:focus-visible,
-.codex-usage-daily-pagination button:focus-visible,
 .codex-usage-switch input:focus-visible,
-.codex-usage-date-fields input:focus-visible,
-.codex-usage-provider-option input:focus-visible {
+.codex-usage-date-fields input:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -265,18 +194,9 @@
 }
 
 .codex-usage-filter-form button:disabled,
-.codex-usage-daily-pagination button:disabled,
 .codex-usage-switch input:disabled {
   cursor: not-allowed;
   opacity: 0.6;
-}
-
-.codex-usage-metric-grid {
-  grid-template-columns: repeat(7, minmax(0, 1fr));
-}
-
-.codex-usage-metric-card dd {
-  font-size: 1rem;
 }
 
 .codex-usage-rate-limit-heading {
@@ -397,91 +317,6 @@
   vector-effect: non-scaling-stroke;
 }
 
-.codex-usage-table-wrap {
-  max-width: 100%;
-  min-width: 0;
-  margin-top: 0.5rem;
-  overflow-x: auto;
-  border: 1px solid var(--border);
-  border-radius: 0.3rem;
-}
-
-.codex-usage-table-wrap table {
-  width: 100%;
-  min-width: 1000px;
-  border-collapse: collapse;
-  color: var(--text);
-  font-size: 0.75rem;
-}
-
-.codex-usage-table-wrap caption {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-}
-
-.codex-usage-table-wrap th,
-.codex-usage-table-wrap td {
-  border-top: 1px solid var(--border);
-  padding: 0.4rem 0.5rem;
-  text-align: right;
-  white-space: nowrap;
-}
-
-.codex-usage-table-wrap thead th {
-  border-top: 0;
-  background: var(--bg);
-  color: var(--muted);
-  font-weight: 600;
-}
-
-.codex-usage-table-wrap th:first-child,
-.codex-usage-table-wrap td:first-child,
-.codex-usage-table-wrap .codex-usage-provider-cell,
-.codex-usage-table-wrap .codex-usage-model-cell {
-  text-align: left;
-}
-
-.codex-usage-number {
-  font-variant-numeric: tabular-nums;
-}
-
-.codex-usage-table-wrap tbody th {
-  max-width: 18rem;
-  overflow-wrap: anywhere;
-  white-space: normal;
-}
-
-.codex-usage-table-wrap tbody small {
-  display: block;
-  margin-top: 0.15rem;
-  color: var(--muted);
-  font-size: 0.7rem;
-  font-weight: 400;
-}
-
-.codex-usage-daily-pagination {
-  justify-content: space-between;
-  flex-wrap: wrap;
-  margin-top: 0.5rem;
-}
-
-.codex-usage-daily-page-controls {
-  flex-wrap: wrap;
-  margin-left: auto;
-  color: var(--muted);
-  font-size: 0.8rem;
-}
-
-@media (max-width: 900px) {
-  .codex-usage-metric-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-
 @media (max-width: 640px) {
   .codex-usage-heading,
   .codex-usage-section-heading {
@@ -509,8 +344,7 @@
     justify-content: space-between;
   }
 
-  .codex-usage-date-fields,
-  .codex-usage-metric-grid {
+  .codex-usage-date-fields {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 

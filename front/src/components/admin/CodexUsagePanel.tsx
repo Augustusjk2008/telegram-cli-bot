@@ -1,16 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  DEFAULT_CODEX_USAGE_MODEL,
   GENERAL_CODEX_RATE_LIMIT_ID,
   SECONDARY_CODEX_RATE_LIMIT_ID,
 } from "../../services/types";
 import type {
   CodexRateLimitSample,
   CodexUsageConfig,
-  CodexUsageDailyProviderModelStats,
-  CodexUsageMetrics,
   CodexUsageProvider,
-  CodexUsageProviderModelStats,
   CodexUsageStats,
 } from "../../services/types";
 import type { WebBotClient } from "../../services/webBotClient";
@@ -23,16 +19,6 @@ type Props = {
 };
 
 const numberFormat = new Intl.NumberFormat("zh-CN");
-const percentFormat = new Intl.NumberFormat("zh-CN", {
-  style: "percent",
-  maximumFractionDigits: 1,
-});
-
-const providerKindOrder: Record<CodexUsageProvider["kind"], number> = {
-  openai_official: 0,
-  base_url: 1,
-  unknown: 2,
-};
 
 const providerResolutionLabels: Record<NonNullable<CodexUsageProvider["resolution"]>, string> = {
   resolved: "已解析",
@@ -42,32 +28,6 @@ const providerResolutionLabels: Record<NonNullable<CodexUsageProvider["resolutio
   invalid_base_url: "base URL 无效",
   unsupported_override: "检测到不支持的运行时覆盖",
 };
-
-const COLLAPSED_DAILY_PAGE_SIZE = 10;
-const EXPANDED_DAILY_PAGE_SIZE = 100;
-
-function compactNumber(value: number) {
-  const exact = numberFormat.format(value);
-  const magnitude = Math.abs(value);
-  const units = [
-    { threshold: 1_000_000_000_000, suffix: "T" },
-    { threshold: 1_000_000_000, suffix: "B" },
-    { threshold: 1_000_000, suffix: "M" },
-    { threshold: 1_000, suffix: "K" },
-  ];
-  const unit = units.find((candidate) => magnitude >= candidate.threshold);
-  if (!unit) return { display: exact, exact };
-  const scaled = value / unit.threshold;
-  const display = new Intl.NumberFormat("en-US", {
-    maximumFractionDigits: 2,
-    minimumFractionDigits: 0,
-  }).format(scaled);
-  return { display: `${display}${unit.suffix}`, exact };
-}
-
-function formatRate(value: number | null) {
-  return value === null ? "—" : percentFormat.format(value);
-}
 
 function formatDateValue(date: Date) {
   const year = date.getUTCFullYear();
@@ -93,45 +53,6 @@ function defaultRange(today: string) {
 
 function providerLabel(provider: CodexUsageProvider) {
   return provider.label || (provider.kind === "openai_official" ? "OpenAI 官方" : "无法识别");
-}
-
-function sortProviders(left: CodexUsageProvider, right: CodexUsageProvider) {
-  const kindDifference = providerKindOrder[left.kind] - providerKindOrder[right.kind];
-  if (kindDifference) return kindDifference;
-  return providerLabel(left).localeCompare(providerLabel(right), "zh-CN");
-}
-
-function CompactNumber({ value }: { value: number }) {
-  const formatted = compactNumber(value);
-  return (
-    <span className="codex-usage-number" title={formatted.exact} aria-label={formatted.exact}>
-      {formatted.display}
-    </span>
-  );
-}
-
-function MetricCard({ label, value }: { label: string; value: number | string }) {
-  return (
-    <div className="codex-usage-metric-card">
-      <dt>{label}</dt>
-      <dd>{typeof value === "number" ? <CompactNumber value={value} /> : value}</dd>
-    </div>
-  );
-}
-
-function MetricCells({ metrics }: { metrics: CodexUsageMetrics }) {
-  return (
-    <>
-      <td><CompactNumber value={metrics.requestCount} /></td>
-      <td><CompactNumber value={metrics.inputTokens} /></td>
-      <td><CompactNumber value={metrics.cachedInputTokens} /></td>
-      <td><CompactNumber value={metrics.uncachedInputTokens} /></td>
-      <td><CompactNumber value={metrics.outputTokens} /></td>
-      <td><CompactNumber value={metrics.reasoningOutputTokens} /></td>
-      <td><CompactNumber value={metrics.totalTokens} /></td>
-      <td>{formatRate(metrics.cacheHitRate)}</td>
-    </>
-  );
 }
 
 const percentValueFormat = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 1 });
@@ -374,10 +295,6 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
   const [stats, setStats] = useState<CodexUsageStats | null>(null);
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
-  // null 表示全部 Provider；空数组表示用户明确清空了全部选择。
-  const [selectedProviderKeys, setSelectedProviderKeys] = useState<string[] | null>(null);
-  const [dailyPage, setDailyPage] = useState(1);
-  const [dailyPageSize, setDailyPageSize] = useState(COLLAPSED_DAILY_PAGE_SIZE);
   const [loading, setLoading] = useState(true);
   const [querying, setQuerying] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -393,9 +310,6 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
       setLoading(true);
       setError("");
       setNotice("");
-      setSelectedProviderKeys(null);
-      setDailyPage(1);
-      setDailyPageSize(COLLAPSED_DAILY_PAGE_SIZE);
       try {
         const nextConfig = await client.getCodexUsageConfig();
         if (cancelled || requestId !== queryRequestIdRef.current) return;
@@ -404,16 +318,12 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
         setStartDate(range.startDate);
         setEndDate(range.endDate);
 
-        const nextStats = await client.getCodexUsageStats({
-          ...range,
-          dailyPage: 1,
-          dailyPageSize: COLLAPSED_DAILY_PAGE_SIZE,
-        });
+        const nextStats = await client.getCodexUsageStats(range);
         if (cancelled || requestId !== queryRequestIdRef.current) return;
         setStats(nextStats);
       } catch (nextError) {
         if (!cancelled && requestId === queryRequestIdRef.current) {
-          setError(getErrorMessage(nextError, "加载 Codex 用量失败"));
+          setError(getErrorMessage(nextError, "加载 Codex 额度失败"));
         }
       } finally {
         if (!cancelled && requestId === queryRequestIdRef.current) setLoading(false);
@@ -426,47 +336,9 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
     };
   }, [client, refreshKey]);
 
-  const providers = useMemo(() => {
-    const byKey = new Map<string, CodexUsageProvider>();
-    for (const provider of stats?.availableProviders || []) {
-      byKey.set(provider.key, provider);
-    }
-    if (config?.currentProvider) {
-      byKey.set(config.currentProvider.key, config.currentProvider);
-    }
-    return Array.from(byKey.values()).sort(sortProviders);
-  }, [config, stats]);
-
-  const providerRows = useMemo<CodexUsageProviderModelStats[]>(
-    () => {
-      const detailedRows = stats?.byProviderModel || [];
-      const rows = detailedRows.length
-        ? detailedRows
-        : (stats?.byProvider || []).map((item) => ({ ...item, model: DEFAULT_CODEX_USAGE_MODEL }));
-      return [...rows].sort((left, right) => (
-        sortProviders(left.provider, right.provider) || left.model.localeCompare(right.model)
-      ));
-    },
-    [stats],
-  );
-
-  const dailyRows = useMemo<CodexUsageDailyProviderModelStats[]>(() => {
-    const detailedRows = stats?.dailyByProviderModel || [];
-    const rows = detailedRows.length
-      ? detailedRows
-      : (stats?.dailyByProvider || []).map((item) => ({
-          ...item,
-          model: DEFAULT_CODEX_USAGE_MODEL,
-        }));
-    return rows;
-  }, [stats]);
-
   const runStatsQuery = async (
     nextStartDate = startDate,
     nextEndDate = endDate,
-    nextSelectedProviderKeys = selectedProviderKeys,
-    nextDailyPage = 1,
-    nextDailyPageSize = COLLAPSED_DAILY_PAGE_SIZE,
   ) => {
     const normalizedStartDate = nextStartDate.trim();
     const normalizedEndDate = nextEndDate.trim();
@@ -478,17 +350,7 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
       setError("起始日期不能晚于结束日期。");
       return;
     }
-    if (nextSelectedProviderKeys !== null && nextSelectedProviderKeys.length === 0) {
-      setError("请至少选择一个 Provider 后再查询。");
-      return;
-    }
-
     const requestId = ++queryRequestIdRef.current;
-    const requestedDailyPage = Math.max(1, Math.floor(nextDailyPage));
-    const requestedDailyPageSize = Math.min(
-      EXPANDED_DAILY_PAGE_SIZE,
-      Math.max(1, Math.floor(nextDailyPageSize)),
-    );
     setQuerying(true);
     setError("");
     setNotice("");
@@ -496,18 +358,13 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
       const nextStats = await client.getCodexUsageStats({
         startDate: normalizedStartDate,
         endDate: normalizedEndDate,
-        ...(nextSelectedProviderKeys === null ? {} : { providerKeys: nextSelectedProviderKeys }),
-        dailyPage: requestedDailyPage,
-        dailyPageSize: requestedDailyPageSize,
       });
       if (requestId === queryRequestIdRef.current) {
         setStats(nextStats);
-        setDailyPage(requestedDailyPage);
-        setDailyPageSize(requestedDailyPageSize);
       }
     } catch (nextError) {
       if (requestId === queryRequestIdRef.current) {
-        setError(getErrorMessage(nextError, "查询 Codex 用量失败"));
+        setError(getErrorMessage(nextError, "查询 Codex 额度失败"));
       }
     } finally {
       if (requestId === queryRequestIdRef.current) {
@@ -524,9 +381,9 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
       const nextConfig = await client.updateCodexUsageConfig({ enabled });
       setConfig(nextConfig);
       setStats((current) => current ? { ...current, enabled: nextConfig.enabled } : current);
-      setNotice(enabled ? "Codex 用量采集已开启。" : "Codex 用量采集已关闭，历史数据仍可查询。");
+      setNotice(enabled ? "Codex 额度采集已开启。" : "Codex 额度采集已关闭，历史额度仍可查询。");
     } catch (nextError) {
-      setError(`保存 Codex 用量采集设置失败：${getErrorMessage(nextError, "请稍后重试")}`);
+      setError(`保存 Codex 额度采集设置失败：${getErrorMessage(nextError, "请稍后重试")}`);
     } finally {
       setSaving(false);
     }
@@ -546,74 +403,23 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
     };
     setStartDate(range.startDate);
     setEndDate(range.endDate);
-    void runStatsQuery(
-      range.startDate,
-      range.endDate,
-      selectedProviderKeys,
-      1,
-      COLLAPSED_DAILY_PAGE_SIZE,
-    );
+    void runStatsQuery(range.startDate, range.endDate);
   };
 
   const resetFilters = () => {
     const range = defaultRange(config?.timeBasis.today || stats?.timeBasis.today || "");
     setStartDate(range.startDate);
     setEndDate(range.endDate);
-    setSelectedProviderKeys(null);
-    void runStatsQuery(range.startDate, range.endDate, null, 1, COLLAPSED_DAILY_PAGE_SIZE);
-  };
-
-  const toggleProvider = (providerKey: string) => {
-    setSelectedProviderKeys((current) => {
-      const currentKeys = current === null ? providers.map((provider) => provider.key) : current;
-      return currentKeys.includes(providerKey)
-        ? currentKeys.filter((key) => key !== providerKey)
-        : [...currentKeys, providerKey];
-    });
-  };
-
-  const expandDailyRows = () => {
-    void runStatsQuery(
-      startDate,
-      endDate,
-      selectedProviderKeys,
-      1,
-      EXPANDED_DAILY_PAGE_SIZE,
-    );
-  };
-
-  const collapseDailyRows = () => {
-    void runStatsQuery(
-      startDate,
-      endDate,
-      selectedProviderKeys,
-      1,
-      COLLAPSED_DAILY_PAGE_SIZE,
-    );
-  };
-
-  const changeDailyPage = (nextPage: number) => {
-    void runStatsQuery(
-      startDate,
-      endDate,
-      selectedProviderKeys,
-      nextPage,
-      EXPANDED_DAILY_PAGE_SIZE,
-    );
+    void runStatsQuery(range.startDate, range.endDate);
   };
 
   const hasRateLimitSamples = Boolean(stats?.rateLimitSamples.length);
-  const hasHistoricalData = Boolean(stats && (stats.totals.requestCount > 0 || hasRateLimitSamples));
-  const hasUsageRows = Boolean(providerRows.length || dailyRows.length);
-  const noResults = Boolean(stats && !hasUsageRows && !hasRateLimitSamples);
-  const dailyPagination = stats?.dailyPagination;
-  const dailyExpanded = dailyPageSize > COLLAPSED_DAILY_PAGE_SIZE;
 
   return (
     <section aria-labelledby="codex-usage-title" className="codex-usage-panel">
       <div className="codex-usage-heading">
         <div>
-          <h2 id="codex-usage-title">Codex 用量</h2>
+          <h2 id="codex-usage-title">Codex 额度</h2>
         </div>
         <span className="codex-usage-time-basis">
           服务端本地时间 {config?.timeBasis.utcOffset || stats?.timeBasis.utcOffset || "—"}
@@ -623,7 +429,7 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
       {error ? <div role="alert" className="codex-usage-alert codex-usage-alert-error">{error}</div> : null}
       {notice ? <div role="status" className="codex-usage-alert codex-usage-alert-success">{notice}</div> : null}
 
-      {loading ? <p role="status" className="codex-usage-loading">正在加载 Codex 用量…</p> : null}
+      {loading ? <p role="status" className="codex-usage-loading">正在加载 Codex 额度…</p> : null}
 
       {!loading && config ? (
         <>
@@ -633,9 +439,9 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
                 <h3 id="codex-usage-settings-title">采集设置</h3>
               </div>
               <label className="codex-usage-switch">
-                <span>启用 Codex 用量采集</span>
+                <span>启用 Codex 额度采集</span>
                 <input
-                  aria-label="启用 Codex 用量采集"
+                  aria-label="启用 Codex 额度采集"
                   type="checkbox"
                   checked={config.enabled}
                   disabled={saving}
@@ -643,8 +449,8 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
                 />
               </label>
             </div>
-            {!config.enabled && hasHistoricalData ? (
-              <p className="codex-usage-disabled-history">统计采集已关闭，历史数据仍可查询。</p>
+            {!config.enabled && hasRateLimitSamples ? (
+              <p className="codex-usage-disabled-history">额度采集已关闭，历史额度仍可查询。</p>
             ) : null}
           </section>
 
@@ -701,33 +507,6 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
               </label>
             </div>
 
-            <fieldset className="codex-usage-provider-filters">
-              <legend>Provider</legend>
-              <div className="codex-usage-provider-actions">
-                <button type="button" disabled={querying} onClick={() => setSelectedProviderKeys(null)}>全选</button>
-                <button type="button" disabled={querying} onClick={() => setSelectedProviderKeys([])}>清空</button>
-              </div>
-              <div className="codex-usage-provider-options">
-                {providers.map((provider) => {
-                  const checked = selectedProviderKeys === null || selectedProviderKeys.includes(provider.key);
-                  return (
-                    <label key={provider.key} className="codex-usage-provider-option">
-                      <input
-                        aria-label={`筛选 Provider：${providerLabel(provider)}`}
-                        type="checkbox"
-                        checked={checked}
-                        disabled={querying}
-                        onChange={() => toggleProvider(provider.key)}
-                      />
-                      <span>{providerLabel(provider)}</span>
-                      {provider.baseUrl ? <small>{provider.baseUrl}</small> : null}
-                    </label>
-                  );
-                })}
-                {!providers.length ? <p>暂无可筛选的 Provider。</p> : null}
-              </div>
-            </fieldset>
-
             <div className="codex-usage-form-actions">
               <button type="submit" className="codex-usage-primary" disabled={querying}>
                 {querying ? "查询中…" : "查询"}
@@ -738,135 +517,8 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
 
           {stats ? (
             <>
-              <section className="codex-usage-section" aria-labelledby="codex-usage-summary-title">
-                <div className="codex-usage-section-heading">
-                  <div>
-                    <h3 id="codex-usage-summary-title">汇总</h3>
-                    <p>{stats.range.startDate} 至 {stats.range.endDate}</p>
-                  </div>
-                </div>
-                <dl className="codex-usage-metric-grid">
-                  <MetricCard label="请求次数" value={stats.totals.requestCount} />
-                  <MetricCard label="输入 token" value={stats.totals.inputTokens} />
-                  <MetricCard label="缓存命中 token" value={stats.totals.cachedInputTokens} />
-                  <MetricCard label="非缓存输入" value={stats.totals.uncachedInputTokens} />
-                  <MetricCard label="输出 token" value={stats.totals.outputTokens} />
-                  <MetricCard label="总 token" value={stats.totals.totalTokens} />
-                  <MetricCard label="缓存命中率" value={formatRate(stats.totals.cacheHitRate)} />
-                </dl>
-              </section>
-
               <CodexRateLimitChart samples={stats.rateLimitSamples} />
-
-              {noResults ? <p className="codex-usage-empty">暂无符合筛选条件的 Codex 用量数据。</p> : null}
-
-              {hasUsageRows ? (
-                <section className="codex-usage-section" aria-labelledby="codex-usage-by-provider-title">
-                  <h3 id="codex-usage-by-provider-title">按 Provider / 模型汇总</h3>
-                  <div className="codex-usage-table-wrap">
-                    <table aria-label="Codex 用量 Provider 汇总">
-                      <caption>按 Provider 和模型汇总</caption>
-                      <thead>
-                        <tr>
-                          <th scope="col">Provider</th>
-                          <th scope="col">模型</th>
-                          <th scope="col">请求</th>
-                          <th scope="col">输入</th>
-                          <th scope="col">缓存输入</th>
-                          <th scope="col">非缓存输入</th>
-                          <th scope="col">输出</th>
-                          <th scope="col">推理输出</th>
-                          <th scope="col">总 token</th>
-                          <th scope="col">缓存命中率</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {providerRows.map((item) => (
-                          <tr key={`${item.provider.key}:${item.model}`}>
-                            <th scope="row">
-                              <span>{providerLabel(item.provider)}</span>
-                              {item.provider.baseUrl ? <small>{item.provider.baseUrl}</small> : null}
-                            </th>
-                            <td className="codex-usage-model-cell">{item.model}</td>
-                            <MetricCells metrics={item} />
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </section>
-              ) : null}
-
-              {hasUsageRows ? (
-                <section className="codex-usage-section" aria-labelledby="codex-usage-daily-title">
-                  <div className="codex-usage-section-heading">
-                    <div>
-                      <h3 id="codex-usage-daily-title">每日明细</h3>
-                    </div>
-                  </div>
-                  <div className="codex-usage-table-wrap">
-                    <table aria-label="Codex 用量每日明细">
-                      <caption>按日期、Provider 和模型的每日明细</caption>
-                      <thead>
-                        <tr>
-                          <th scope="col">日期</th>
-                          <th scope="col">Provider</th>
-                          <th scope="col">模型</th>
-                          <th scope="col">请求</th>
-                          <th scope="col">输入</th>
-                          <th scope="col">缓存输入</th>
-                          <th scope="col">非缓存输入</th>
-                          <th scope="col">输出</th>
-                          <th scope="col">推理输出</th>
-                          <th scope="col">总 token</th>
-                          <th scope="col">缓存命中率</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {dailyRows.map((item) => (
-                          <tr key={`${item.date}:${item.provider.key}:${item.model}`}>
-                            <th scope="row">{item.date}</th>
-                            <td className="codex-usage-provider-cell">{providerLabel(item.provider)}</td>
-                            <td className="codex-usage-model-cell">{item.model}</td>
-                            <MetricCells metrics={item} />
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  {dailyPagination ? (
-                    <div className="codex-usage-daily-pagination">
-                      {!dailyExpanded && dailyPagination.totalItems > COLLAPSED_DAILY_PAGE_SIZE ? (
-                        <button type="button" disabled={querying} onClick={expandDailyRows}>展开更多</button>
-                      ) : null}
-                      {dailyExpanded ? (
-                        <>
-                          <button type="button" disabled={querying} onClick={collapseDailyRows}>收起</button>
-                          {dailyPagination.totalPages > 1 ? (
-                            <div className="codex-usage-daily-page-controls">
-                              <button
-                                type="button"
-                                disabled={querying || !dailyPagination.hasPrevious}
-                                onClick={() => changeDailyPage(dailyPagination.page - 1)}
-                              >
-                                上一页
-                              </button>
-                              <span>第 {dailyPagination.page} / {dailyPagination.totalPages} 页，共 {dailyPagination.totalItems} 条</span>
-                              <button
-                                type="button"
-                                disabled={querying || !dailyPagination.hasNext}
-                                onClick={() => changeDailyPage(dailyPagination.page + 1)}
-                              >
-                                下一页
-                              </button>
-                            </div>
-                          ) : null}
-                        </>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </section>
-              ) : null}
+              {!hasRateLimitSamples ? <p className="codex-usage-empty">暂无符合筛选条件的 Codex 额度数据。</p> : null}
             </>
           ) : null}
         </>

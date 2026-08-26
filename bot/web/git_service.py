@@ -27,7 +27,10 @@ from bot.cli import (
 )
 from bot import config
 from bot.cli_params import CliParamsConfig, coerce_param_value, with_global_extra_args
-from bot.codex_usage import record_codex_usage_capture, start_codex_usage_capture
+from bot.codex_usage import (
+    record_codex_rate_limit_capture,
+    start_codex_rate_limit_capture,
+)
 from bot.app_settings import get_git_proxy_config_args
 from bot.git_runtime import apply_git_fsmonitor_disabled_env
 from bot.manager import MultiBotManager
@@ -1765,9 +1768,9 @@ async def _generate_git_commit_message_from_context(
     except ValueError as exc:
         _raise(400, "invalid_git_commit_cli_command", str(exc))
 
-    usage_capture = None
+    quota_capture = None
     if cli_type == "codex":
-        usage_capture = await start_codex_usage_capture(env=env, command=cmd)
+        quota_capture = await start_codex_rate_limit_capture(env=env, command=cmd)
 
     try:
         process = _start_cli_process(
@@ -1795,8 +1798,8 @@ async def _generate_git_commit_message_from_context(
         close_process_streams(process)
 
     if cli_type == "codex":
-        await record_codex_usage_capture(
-            usage_capture,
+        await record_codex_rate_limit_capture(
+            quota_capture,
             parse_codex_json_output_result(raw_output),
         )
         response_text, _ = parse_codex_json_output(raw_output)
