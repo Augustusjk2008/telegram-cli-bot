@@ -44,7 +44,7 @@ flowchart LR
     Orbit --> Agents["🤖 Codex · Claude · Pi"]
     Orbit --> Workbench["💻 Chat · Files · Git · Terminal · Debug"]
     Orbit --> Cluster["🧭 Sub-agents · Cluster"]
-    Orbit --> Extend["🧩 Plugins · LiteLLM · Admin"]
+    Orbit --> Extend["🧩 Plugins · Admin"]
 
     classDef orbit fill:#11162c,stroke:#49d8ff,color:#ffffff,stroke-width:2px;
     classDef node fill:#f5f8ff,stroke:#6a79ff,color:#172033;
@@ -154,7 +154,6 @@ bash install.sh
 ### Administration and Extensions
 
 - Admin Center manages user permissions, invite codes, announcements, updates, and runtime status.
-- An optional LiteLLM gateway provides model aliases, multi-upstream routing, and OpenAI-compatible endpoints.
 - Codex CLI usage can be aggregated by local calendar day, provider, and model.
 - Cloudflare quick tunnels and fixed public forwarding support controlled mobile access.
 
@@ -311,20 +310,9 @@ Pi runtimes and persisted sessions are currently scoped primarily by the bot/use
 </details>
 
 <details>
-<summary><strong>Optional LiteLLM gateway</strong></summary>
-
-The LiteLLM gateway is not required by regular CLI execution. When it is disabled, Codex and Claude continue to connect directly to their own providers.
-
-Each route can define a model alias, LiteLLM model, upstream URL, secret, extra parameters, and one of three endpoint modes: `auto`, `chat_completions`, or `responses`. Saved changes are applied without restarting the main web service, and status APIs never echo upstream secrets.
-
-Configuration and logs are stored under `~/.tcb/orbit-safe-claw/transfer` by default.
-
-</details>
-
-<details>
 <summary><strong>Codex CLI usage statistics</strong></summary>
 
-Collection can be enabled or disabled immediately in Admin Center. It is disabled by default and only measures regular Codex CLI processes launched by Orbit after collection is enabled. It does not backfill history or include Claude, Pi, native agents, LiteLLM Transfer, inline completion, or manually launched terminal processes.
+Collection can be enabled or disabled immediately in Admin Center. It is disabled by default and only measures regular Codex CLI processes launched by Orbit after collection is enabled. It does not backfill history or include Claude, Pi, native agents, inline completion, or manually launched terminal processes.
 
 Usage is aggregated by date, provider, and model. Data is stored in `~/.tcb/orbit-safe-claw/codex-usage/usage.sqlite3` by default and does not store per-turn prompts, authentication headers, or API keys.
 

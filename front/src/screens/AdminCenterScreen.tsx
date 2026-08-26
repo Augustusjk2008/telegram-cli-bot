@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, ArrowLeft, Bell, Copy, Eye, EyeOff, Globe, Plus, RefreshCw, RotateCcw, Save, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Bell, Copy, Eye, EyeOff, Globe, RefreshCw, RotateCcw, Save, Trash2 } from "lucide-react";
 import { AiInlineCompletionSettingsPanel } from "../components/AiInlineCompletionSettingsPanel";
 import { StateBadge } from "../components/StateBadge";
 import { MockWebBotClient } from "../services/mockWebBotClient";
@@ -28,9 +28,6 @@ import type {
   RegisterCodeCreateResult,
   RegisterCodeItem,
   NotificationSettingsStatus,
-  TransferBridgeStatus,
-  TransferEndpointMode,
-  TransferRouteConfig,
   TunnelSnapshot,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
@@ -59,31 +56,9 @@ type AdminCenterTab =
   | "network"
   | "notifications"
   | "inline-completion"
-  | "transfer"
   | "lan-chat"
   | "native-agent"
   | "env";
-
-type TransferRouteDraft = Required<Pick<
-  TransferRouteConfig,
-  "id"
-  | "endpointMode"
-  | "litellmModel"
-  | "modelAlias"
-  | "providerBaseUrl"
-  | "providerApiKey"
-  | "clearProviderApiKey"
->> & {
-  name: string;
-  providerApiKeySet: boolean;
-  extraLitellmParamsJson: string;
-};
-
-type TransferDraft = {
-  enabled: boolean;
-  routes: TransferRouteDraft[];
-  dropParams: boolean;
-};
 
 const ENV_CATEGORY_LABELS: Record<string, string> = {
   basic: "基础",
@@ -194,24 +169,6 @@ function shortErrorText(value: string) {
   const text = (value || "").trim();
   if (!text) return "-";
   return text.length > 120 ? `${text.slice(0, 117).trim()}...` : text;
-}
-
-function transferStatusLabel(status: TransferBridgeStatus | null) {
-  if (!status) return "未知";
-  if (status.status === "running") return "运行中";
-  if (status.status === "disabled") return "未启用";
-  if (status.status === "not_configured") return "未配置";
-  if (status.status === "error") return "错误";
-  if (status.status === "stopped") return "已停止";
-  return "未知";
-}
-
-function transferStatusClass(status: TransferBridgeStatus | null) {
-  if (status?.status === "running") return "border-emerald-200 bg-emerald-50 text-emerald-700";
-  if (status?.status === "error") return "border-red-200 bg-red-50 text-red-700";
-  if (status?.status === "not_configured") return "border-amber-200 bg-amber-50 text-amber-700";
-  if (status?.status === "disabled") return "border-[var(--border)] bg-[var(--bg)] text-[var(--muted)]";
-  return "border-[var(--border)] bg-[var(--bg)] text-[var(--muted)]";
 }
 
 function isValidGitProxyAddress(value: string) {
@@ -326,112 +283,6 @@ function pushPlusStatusText(status: NotificationSettingsStatus | null) {
   return status.pushPlusConfigured ? "已配置" : "未配置 token";
 }
 
-const TRANSFER_RESERVED_EXTRA_PARAMS = new Set(["model", "api_key", "api_base"]);
-
-function transferEndpointModeLabel(type: TransferEndpointMode | undefined) {
-  if (type === "chat_completions") return "Chat Completions";
-  if (type === "responses") return "Responses";
-  return "auto";
-}
-
-function formatTransferExtraParams(value: Record<string, unknown> | undefined) {
-  if (!value || Object.keys(value).length === 0) return "{}";
-  return JSON.stringify(value, null, 2);
-}
-
-function parseTransferExtraParams(text: string): Record<string, unknown> {
-  const trimmed = text.trim();
-  if (!trimmed) return {};
-  const parsed = JSON.parse(trimmed) as unknown;
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("高级 LiteLLM params 必须是 JSON 对象");
-  }
-  const value = parsed as Record<string, unknown>;
-  const reserved = Object.keys(value).filter((key) => TRANSFER_RESERVED_EXTRA_PARAMS.has(key));
-  if (reserved.length) {
-    throw new Error(`高级 LiteLLM params 不能包含 ${reserved.join(", ")}`);
-  }
-  return value;
-}
-
-function createBlankTransferRoute(index: number): TransferRouteDraft {
-  return {
-    id: `route-${Date.now()}-${index}`,
-    name: "",
-    endpointMode: "auto",
-    litellmModel: "",
-    modelAlias: "",
-    providerBaseUrl: "",
-    extraLitellmParamsJson: "{}",
-    providerApiKey: "",
-    clearProviderApiKey: false,
-    providerApiKeySet: false,
-  };
-}
-
-function transferRouteDraftFromRoute(route: TransferRouteConfig | undefined, index: number): TransferRouteDraft {
-  if (!route) return createBlankTransferRoute(index);
-  return {
-    id: route.id || `route-${index + 1}`,
-    name: route.name || "",
-    endpointMode: route.endpointMode || "auto",
-    litellmModel: route.litellmModel || "",
-    modelAlias: route.modelAlias || "",
-    providerBaseUrl: route.providerBaseUrl || "",
-    extraLitellmParamsJson: formatTransferExtraParams(route.extraLitellmParams),
-    providerApiKey: "",
-    clearProviderApiKey: false,
-    providerApiKeySet: Boolean(route.providerApiKeySet),
-  };
-}
-
-function transferDraftFromStatus(status: TransferBridgeStatus | null): TransferDraft {
-  const routes = status?.routes?.length
-    ? status.routes.map((route, index) => transferRouteDraftFromRoute(route, index))
-    : [transferRouteDraftFromRoute(status ? {
-        id: "route-1",
-        endpointMode: status.endpointMode || "auto",
-        litellmModel: status.litellmModel || "",
-        modelAlias: status.modelAlias || "",
-        providerBaseUrl: status.providerBaseUrl || "",
-        extraLitellmParams: status.extraLitellmParams || {},
-        providerApiKeySet: status.providerApiKeySet,
-      } : undefined, 0)];
-  return {
-    enabled: Boolean(status?.enabled),
-    routes,
-    dropParams: status?.dropParams ?? true,
-  };
-}
-
-function transferRoutesFromStatus(status: TransferBridgeStatus | null): TransferRouteConfig[] {
-  if (!status) return [];
-  if (status.routes?.length) return status.routes;
-  if (!status.litellmModel && !status.modelAlias && !status.providerBaseUrl && !status.providerApiKeySet) return [];
-  return [
-    {
-      id: "route-1",
-      endpointMode: status.endpointMode || "auto",
-      litellmModel: status.litellmModel || "",
-      modelAlias: status.modelAlias || "",
-      providerBaseUrl: status.providerBaseUrl || "",
-      extraLitellmParams: status.extraLitellmParams || {},
-      providerApiKeySet: status.providerApiKeySet,
-      configured: status.configured,
-    },
-  ];
-}
-
-function formatDurationSeconds(seconds?: number) {
-  const total = Math.max(0, Number(seconds || 0));
-  const hours = Math.floor(total / 3600);
-  const mins = Math.floor((total % 3600) / 60);
-  const secs = Math.floor(total % 60);
-  if (hours) return `${hours}h ${mins}m ${secs}s`;
-  if (mins) return `${mins}m ${secs}s`;
-  return `${secs}s`;
-}
-
 function envValueEquals(left: EnvConfigValue | undefined, right: EnvConfigValue | undefined) {
   return formatEnvValue(left) === formatEnvValue(right);
 }
@@ -474,10 +325,6 @@ export function AdminCenterScreen({
   const [announcementDraft, setAnnouncementDraft] = useState<CreateAnnouncementInput>(DEFAULT_ANNOUNCEMENT_DRAFT);
   const [announcementSaving, setAnnouncementSaving] = useState(false);
   const [announcementDeletingId, setAnnouncementDeletingId] = useState("");
-  const [transferStatus, setTransferStatus] = useState<TransferBridgeStatus | null>(null);
-  const [transferDraft, setTransferDraft] = useState<TransferDraft>(() => transferDraftFromStatus(null));
-  const [transferSaving, setTransferSaving] = useState(false);
-  const [transferResetting, setTransferResetting] = useState(false);
   const [gitProxySettings, setGitProxySettings] = useState<GitProxySettings | null>(null);
   const [gitProxyAddressDraft, setGitProxyAddressDraft] = useState("");
   const [savingGitProxy, setSavingGitProxy] = useState(false);
@@ -514,7 +361,6 @@ export function AdminCenterScreen({
     network: false,
     notifications: false,
     "inline-completion": false,
-    transfer: false,
     "lan-chat": false,
     "native-agent": false,
     env: false,
@@ -531,7 +377,6 @@ export function AdminCenterScreen({
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
-  const transferRoutes = useMemo(() => transferRoutesFromStatus(transferStatus), [transferStatus]);
   const totalOwnedBots = useMemo(() => users.reduce((sum, user) => sum + user.ownedBotCount, 0), [users]);
   const visibleTabs = useMemo<AdminCenterTab[]>(
     () => [
@@ -544,7 +389,6 @@ export function AdminCenterScreen({
       "network",
       "notifications",
       "inline-completion",
-      "transfer",
       "lan-chat",
       "native-agent",
       ...(canManageEnvConfig ? (["env"] as AdminCenterTab[]) : []),
@@ -799,32 +643,6 @@ export function AdminCenterScreen({
     setRefreshing(false);
   }
 
-  async function loadTransferStatus(nextNotice = "", refresh = false) {
-    if (refresh) {
-      setRefreshing(true);
-    } else {
-      setLoading(true);
-    }
-    setError("");
-    if (!nextNotice) {
-      setNotice("");
-    }
-    try {
-      const status = await client.getTransferAdminStatus();
-      setTransferStatus(status);
-      setTransferDraft(transferDraftFromStatus(status));
-      setLoadedTabs((prev) => ({ ...prev, transfer: true }));
-      if (nextNotice) {
-        setNotice(nextNotice);
-      }
-    } catch (nextError) {
-      setError(getErrorMessage(nextError, "加载 LiteLLM 网关状态失败"));
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }
-
   async function loadLanChat(nextNotice = "", refresh = false) {
     if (refresh) {
       setRefreshing(true);
@@ -940,8 +758,6 @@ export function AdminCenterScreen({
       await loadNotificationSettings(nextNotice, refresh);
     } else if (activeTab === "inline-completion") {
       await loadInlineCompletionSettings(nextNotice, refresh);
-    } else if (activeTab === "transfer") {
-      await loadTransferStatus(nextNotice, refresh);
     } else if (activeTab === "lan-chat") {
       await loadLanChat(nextNotice, refresh);
     } else if (activeTab === "native-agent") {
@@ -1282,81 +1098,6 @@ export function AdminCenterScreen({
     setLoadedTabs((prev) => ({ ...prev, env: false }));
   };
 
-  const updateTransferRouteDraft = (routeId: string, patch: Partial<TransferRouteDraft>) => {
-    setTransferDraft((prev) => ({
-      ...prev,
-      routes: prev.routes.map((route) => (route.id === routeId ? { ...route, ...patch } : route)),
-    }));
-  };
-
-  const addTransferRoute = () => {
-    setTransferDraft((prev) => ({
-      ...prev,
-      routes: [...prev.routes, createBlankTransferRoute(prev.routes.length)],
-    }));
-  };
-
-  const removeTransferRoute = (routeId: string) => {
-    setTransferDraft((prev) => {
-      const routes = prev.routes.filter((route) => route.id !== routeId);
-      return {
-        ...prev,
-        routes: routes.length ? routes : [createBlankTransferRoute(0)],
-      };
-    });
-  };
-
-  const saveTransferConfig = async () => {
-    setTransferSaving(true);
-    setError("");
-    setNotice("");
-    try {
-      const routes = transferDraft.routes.map((route) => ({
-        id: route.id,
-        name: route.name.trim(),
-        endpointMode: route.endpointMode,
-        litellmModel: route.litellmModel.trim(),
-        modelAlias: route.modelAlias.trim(),
-        providerBaseUrl: route.providerBaseUrl.trim(),
-        extraLitellmParams: parseTransferExtraParams(route.extraLitellmParamsJson),
-        providerApiKeySet: route.providerApiKeySet,
-        ...(route.providerApiKey ? { providerApiKey: route.providerApiKey } : {}),
-        clearProviderApiKey: route.clearProviderApiKey,
-      }));
-      const saved = await client.updateTransferBridgeConfig({
-        enabled: transferDraft.enabled,
-        routes,
-        dropParams: transferDraft.dropParams,
-      });
-      setTransferStatus(saved);
-      setTransferDraft(transferDraftFromStatus(saved));
-      setNotice(saved.restartRequired ? "网关配置已保存，重启服务后本地端点变更生效" : "网关配置已保存");
-    } catch (nextError) {
-      setError(getErrorMessage(nextError, "保存 LiteLLM 网关配置失败"));
-    } finally {
-      setTransferSaving(false);
-    }
-  };
-
-  const resetTransferStats = async () => {
-    setTransferResetting(true);
-    setError("");
-    setNotice("");
-    try {
-      const nextStatus = await client.resetTransferBridgeStats();
-      setTransferStatus(nextStatus);
-      setTransferDraft((prev) => ({
-        ...prev,
-        ...transferDraftFromStatus(nextStatus),
-      }));
-      setNotice("网关统计已重置");
-    } catch (nextError) {
-      setError(getErrorMessage(nextError, "重置 LiteLLM 网关统计失败"));
-    } finally {
-      setTransferResetting(false);
-    }
-  };
-
   const saveLanChatConfig = async () => {
     setLanChatSaving(true);
     setError("");
@@ -1562,8 +1303,6 @@ export function AdminCenterScreen({
                       ? "通知"
                     : tab === "inline-completion"
                       ? "AI 补全"
-                    : tab === "transfer"
-                      ? "LiteLLM 网关"
                     : tab === "native-agent"
                       ? "原生 Agent"
                       : tab === "env"
@@ -2092,292 +1831,6 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
               setError(message);
             }}
           />
-        ) : null}
-
-        {!loading && activeTab === "transfer" ? (
-          <section aria-labelledby="transfer-bridge-title" className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h2 id="transfer-bridge-title" className="text-base font-semibold text-[var(--text)]">LiteLLM 网关</h2>
-              </div>
-              <span className={`rounded-full border px-3 py-1 text-sm font-medium ${transferStatusClass(transferStatus)}`}>
-                {transferStatusLabel(transferStatus)}
-              </span>
-            </div>
-
-            {transferStatus?.status === "not_configured" ? (
-              <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
-                LiteLLM 网关尚未配置模型或上游 API key。
-              </p>
-            ) : null}
-            {transferStatus?.lastError ? (
-              <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                最近错误: {transferStatus.lastError}
-              </p>
-            ) : null}
-
-            <div className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3">
-              <label className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] px-3 py-2 text-sm">
-                <span className="font-medium text-[var(--text)]">启用 LiteLLM 网关</span>
-                <input
-                  aria-label="启用 LiteLLM 网关"
-                  type="checkbox"
-                  checked={transferDraft.enabled}
-                  onChange={(event) => setTransferDraft((prev) => ({ ...prev, enabled: event.target.checked }))}
-                />
-              </label>
-
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <h3 className="text-sm font-semibold text-[var(--text)]">路由配置</h3>
-                <button
-                  type="button"
-                  onClick={addTransferRoute}
-                  className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--text)] hover:bg-[var(--surface)]"
-                >
-                  <Plus className="h-4 w-4" />
-                  添加路由
-                </button>
-              </div>
-
-              <div className="space-y-3">
-                {transferDraft.routes.map((route, index) => {
-                  const labelSuffix = index === 0 ? "" : ` ${index + 1}`;
-                  return (
-                    <div key={route.id} className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
-                      <div className="flex flex-wrap items-start justify-between gap-2">
-                        <div>
-                          <p className="text-sm font-medium text-[var(--text)]">路由 {index + 1}</p>
-                          <p className="text-xs text-[var(--muted)]">{route.modelAlias || "本地模型"} -&gt; {route.litellmModel || "LiteLLM/provider 模型"}</p>
-                        </div>
-                        {transferDraft.routes.length > 1 ? (
-                          <button
-                            type="button"
-                            aria-label={`删除路由 ${index + 1}`}
-                            onClick={() => removeTransferRoute(route.id)}
-                            className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                            删除
-                          </button>
-                        ) : null}
-                      </div>
-
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <label className="space-y-1">
-                          <span className="text-sm text-[var(--text)]">LiteLLM endpoint mode</span>
-                          <select
-                            aria-label={`LiteLLM endpoint mode${labelSuffix}`}
-                            value={route.endpointMode}
-                            onChange={(event) => updateTransferRouteDraft(route.id, { endpointMode: event.target.value as TransferEndpointMode })}
-                            className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
-                          >
-                            <option value="auto">auto</option>
-                            <option value="chat_completions">chat_completions</option>
-                            <option value="responses">responses</option>
-                          </select>
-                        </label>
-                        <label className="space-y-1">
-                          <span className="text-sm text-[var(--text)]">路由名称</span>
-                          <input
-                            aria-label={`路由名称${labelSuffix}`}
-                            value={route.name}
-                            onChange={(event) => updateTransferRouteDraft(route.id, { name: event.target.value })}
-                            placeholder={`路由 ${index + 1}`}
-                            className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
-                          />
-                        </label>
-                        <label className="space-y-1">
-                          <span className="text-sm text-[var(--text)]">LiteLLM model</span>
-                          <input
-                            aria-label={`LiteLLM model${labelSuffix}`}
-                            value={route.litellmModel}
-                            onChange={(event) => updateTransferRouteDraft(route.id, { litellmModel: event.target.value })}
-                            placeholder="openai/gpt-5"
-                            className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
-                          />
-                        </label>
-                        <label className="space-y-1">
-                          <span className="text-sm text-[var(--text)]">模型别名</span>
-                          <input
-                            aria-label={`模型别名${labelSuffix}`}
-                            value={route.modelAlias}
-                            onChange={(event) => updateTransferRouteDraft(route.id, { modelAlias: event.target.value })}
-                            placeholder="gpt-5"
-                            className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
-                          />
-                        </label>
-                        <label className="space-y-1">
-                          <span className="text-sm text-[var(--text)]">上游 base URL</span>
-                          <input
-                            aria-label={`上游 base URL${labelSuffix}`}
-                            value={route.providerBaseUrl}
-                            onChange={(event) => updateTransferRouteDraft(route.id, { providerBaseUrl: event.target.value })}
-                            placeholder="https://api.openai.com/v1"
-                            className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
-                          />
-                        </label>
-                        <label className="space-y-1">
-                          <span className="text-sm text-[var(--text)]">上游 API key</span>
-                          <input
-                            aria-label={`上游 API key${labelSuffix}`}
-                            type="password"
-                            value={route.providerApiKey}
-                            onChange={(event) => updateTransferRouteDraft(route.id, { providerApiKey: event.target.value, clearProviderApiKey: false })}
-                            placeholder={route.providerApiKeySet ? "留空表示不修改现有 Key" : "填写上游 API Key"}
-                            className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
-                          />
-                        </label>
-                        <label className="space-y-1 sm:col-span-2">
-                          <span className="text-sm text-[var(--text)]">高级 LiteLLM params JSON</span>
-                          <textarea
-                            aria-label={`高级 LiteLLM params JSON${labelSuffix}`}
-                            value={route.extraLitellmParamsJson}
-                            onChange={(event) => updateTransferRouteDraft(route.id, { extraLitellmParamsJson: event.target.value })}
-                            rows={4}
-                            spellCheck={false}
-                            placeholder='{"rpm": 120}'
-                            className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 font-mono text-sm text-[var(--text)]"
-                          />
-                        </label>
-                      </div>
-
-                      <div className="grid gap-2 text-sm sm:grid-cols-2">
-                        <label className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2">
-                          <input
-                            type="checkbox"
-                            checked={route.clearProviderApiKey}
-                            onChange={(event) => updateTransferRouteDraft(route.id, { clearProviderApiKey: event.target.checked, providerApiKey: event.target.checked ? "" : route.providerApiKey })}
-                          />
-                          清除上游 API key
-                        </label>
-                        <p className="rounded-lg border border-[var(--border)] px-3 py-2 text-[var(--muted)]">
-                          Key 状态: {route.providerApiKeySet ? "已设置" : "未设置"}
-                        </p>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              <label className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={transferDraft.dropParams}
-                  onChange={(event) => setTransferDraft((prev) => ({ ...prev, dropParams: event.target.checked }))}
-                />
-                LiteLLM drop params
-              </label>
-
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => void saveTransferConfig()}
-                  disabled={transferSaving}
-                  className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm tcb-solid-accent hover:opacity-90 disabled:opacity-60"
-                >
-                  <Save className="h-4 w-4" />
-                  {transferSaving ? "保存中..." : "保存网关配置"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void resetTransferStats()}
-                  disabled={transferResetting}
-                  className="rounded-lg border border-red-200 px-3 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
-                >
-                  {transferResetting ? "重置中..." : "重置统计"}
-                </button>
-              </div>
-            </div>
-
-            <div className="grid gap-3 text-sm sm:grid-cols-2">
-              <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                <p className="text-xs text-[var(--muted)]">Responses base URL</p>
-                <p className="mt-1 break-all font-mono text-[var(--text)]">{transferStatus?.responsesBaseUrl || "-"}</p>
-              </div>
-              <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                <p className="text-xs text-[var(--muted)]">Chat Completions base URL</p>
-                <p className="mt-1 break-all font-mono text-[var(--text)]">chat = {transferStatus?.chatCompletionsBaseUrl || "-"}</p>
-              </div>
-              <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                <p className="text-xs text-[var(--muted)]">路由数</p>
-                <p className="mt-1 text-[var(--text)]">{transferStatus?.configuredRouteCount ?? transferRoutes.filter((route) => route.configured).length} / {transferStatus?.routeCount ?? transferRoutes.length}</p>
-              </div>
-              <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                <p className="text-xs text-[var(--muted)]">第一路 key</p>
-                <p className="mt-1 text-[var(--text)]">{transferStatus?.providerApiKeySet ? "已设置" : "未设置"}</p>
-              </div>
-              <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                <p className="text-xs text-[var(--muted)]">第一路 endpoint mode</p>
-                <p className="mt-1 text-[var(--text)]">{transferEndpointModeLabel(transferStatus?.endpointMode)}</p>
-              </div>
-              <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                <p className="text-xs text-[var(--muted)]">LiteLLM PID</p>
-                <p className="mt-1 text-[var(--text)]">{transferStatus?.litellmPid ?? "-"}</p>
-              </div>
-            </div>
-
-            <div className="space-y-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3 text-sm">
-              <h3 className="text-sm font-semibold text-[var(--text)]">路由映射</h3>
-              {transferRoutes.length ? (
-                <div className="space-y-2">
-                  {transferRoutes.map((route, index) => (
-                    <div key={route.id || index} className="grid gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 sm:grid-cols-[1fr_1fr_auto_auto]">
-                      <span className="break-all text-[var(--text)]">{route.modelAlias || "-"}</span>
-                      <span className="break-all text-[var(--text)]">{route.litellmModel || "-"}</span>
-                      <span className="text-[var(--muted)]">{transferEndpointModeLabel(route.endpointMode)}</span>
-                      <span className={route.configured ? "text-emerald-600" : "text-amber-600"}>{route.configured ? "已配置" : "未完成"}</span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-[var(--muted)]">暂无路由。</p>
-              )}
-            </div>
-
-            <div className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
-              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 font-mono">
-                request_count = {transferStatus?.requestCount ?? 0}
-              </p>
-              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                input tokens: {transferStatus?.totalInputTokens ?? 0}
-              </p>
-              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                output tokens: {transferStatus?.totalOutputTokens ?? 0}
-              </p>
-              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                bytes: {transferStatus?.totalBytesIn ?? 0} / {transferStatus?.totalBytesOut ?? 0}
-              </p>
-              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                uptime: {formatDurationSeconds(transferStatus?.uptimeSeconds)}
-              </p>
-              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                recent traffic: {transferStatus?.recentTraffic?.length ?? 0}
-              </p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <a
-                href={transferStatus?.bridgePageUrl || "/api/transfer/page"}
-                target="_blank"
-                rel="noreferrer"
-                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
-              >
-                打开网关调试页面
-              </a>
-              <span className="text-xs text-[var(--muted)]">
-                {transferStatus?.startedAt ? `启动: ${formatShortTime(transferStatus.startedAt)}` : "启动: -"}
-              </span>
-              <span className="text-xs text-[var(--muted)]">
-                {transferStatus?.lastRequestAt ? `最近请求: ${formatShortTime(transferStatus.lastRequestAt)}` : "最近请求: -"}
-              </span>
-            </div>
-
-            <pre className="overflow-x-auto rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3 text-xs text-[var(--text)]">
-              <code className="block">[model_providers.OpenAI]</code>
-              <code className="block">base_url = "{transferStatus?.responsesBaseUrl || "http://127.0.0.1:<WEB_PORT>/v1"}"</code>
-              <code className="block">wire_api = "responses"</code>
-            </pre>
-          </section>
         ) : null}
 
         {!loading && activeTab === "lan-chat" ? (

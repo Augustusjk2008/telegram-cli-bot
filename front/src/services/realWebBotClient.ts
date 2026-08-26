@@ -180,10 +180,6 @@ import type {
   TerminalActionRunResult,
   TerminalActionsConfig,
   TerminalActionsEditableConfig,
-  TransferBridgeConfigInput,
-  TransferBridgeStatus,
-  TransferEndpointMode,
-  TransferRouteConfig,
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
   UserBotPermissions,
@@ -427,70 +423,6 @@ type RawHealthResponse = {
   host?: string;
   port?: number;
   host_info?: RawPublicHostInfo;
-};
-
-type RawTransferBridgeStatus = {
-  enabled?: boolean;
-  configured?: boolean;
-  running?: boolean;
-  is_running?: boolean;
-  status?: string;
-  local_url?: string;
-  local_endpoint?: string;
-  local_host?: string;
-  local_port?: number;
-  bridge_page_url?: string;
-  responses_base_url?: string;
-  chat_completions_base_url?: string;
-  litellm_running?: boolean;
-  litellm_pid?: number | null;
-  litellm_model?: string;
-  model_alias?: string;
-  endpoint_mode?: string;
-  extra_litellm_params?: Record<string, unknown>;
-  provider_base_url?: string;
-  provider_api_key_set?: boolean;
-  routes?: RawTransferRouteConfig[];
-  route_count?: number;
-  configured_route_count?: number;
-  drop_params?: boolean;
-  litellm_proxy_base_url?: string;
-  litellm_log_tail?: string[];
-  request_count?: number;
-  total_input_tokens?: number;
-  total_output_tokens?: number;
-  total_bytes_in?: number;
-  total_bytes_out?: number;
-  uptime_seconds?: number;
-  recent_traffic?: Array<{
-    id?: string;
-    timestamp?: string;
-    method?: string;
-    endpoint?: string;
-    status?: number;
-    bytes_in?: number;
-    bytes_out?: number;
-    duration_ms?: number;
-    model?: string;
-    error?: string;
-  }>;
-  started_at?: string;
-  last_request_at?: string;
-  last_error?: string;
-  restart_required?: boolean;
-  restart_required_reason?: string;
-};
-
-type RawTransferRouteConfig = {
-  id?: string;
-  name?: string;
-  endpoint_mode?: string;
-  litellm_model?: string;
-  model_alias?: string;
-  provider_base_url?: string;
-  extra_litellm_params?: Record<string, unknown>;
-  provider_api_key_set?: boolean;
-  configured?: boolean;
 };
 
 type RawInlineCompletionConfig = {
@@ -3215,117 +3147,6 @@ function mapAppUpdateDownloadProgress(raw: RawAppUpdateDownloadProgress): AppUpd
   };
 }
 
-function mapTransferBridgeStatus(raw: RawTransferBridgeStatus): TransferBridgeStatus {
-  const status = String(raw.status || "unknown") as TransferBridgeStatus["status"];
-  const routes = Array.isArray(raw.routes) ? raw.routes.map(mapTransferRouteConfig) : undefined;
-  return {
-    enabled: Boolean(raw.enabled),
-    configured: Boolean(raw.configured),
-    running: Boolean(raw.running),
-    status,
-    localUrl: String(raw.local_url || ""),
-    localEndpoint: raw.local_endpoint ? String(raw.local_endpoint) : undefined,
-    localHost: raw.local_host ? String(raw.local_host) : undefined,
-    localPort: typeof raw.local_port === "number" ? raw.local_port : undefined,
-    bridgePageUrl: String(raw.bridge_page_url || ""),
-    responsesBaseUrl: String(raw.responses_base_url || ""),
-    chatCompletionsBaseUrl: String(raw.chat_completions_base_url || ""),
-    litellmRunning: typeof raw.litellm_running === "boolean" ? raw.litellm_running : undefined,
-    litellmPid: typeof raw.litellm_pid === "number" ? raw.litellm_pid : raw.litellm_pid === null ? null : undefined,
-    litellmModel: raw.litellm_model ? String(raw.litellm_model) : undefined,
-    modelAlias: raw.model_alias ? String(raw.model_alias) : undefined,
-    providerBaseUrl: raw.provider_base_url ? String(raw.provider_base_url) : undefined,
-    providerApiKeySet: Boolean(raw.provider_api_key_set),
-    ...(raw.endpoint_mode !== undefined ? { endpointMode: normalizeTransferEndpointMode(raw.endpoint_mode) } : {}),
-    ...(raw.extra_litellm_params !== undefined ? { extraLitellmParams: normalizeRecord(raw.extra_litellm_params) } : {}),
-    ...(routes !== undefined ? { routes } : {}),
-    ...(typeof raw.route_count === "number" ? { routeCount: raw.route_count } : {}),
-    ...(typeof raw.configured_route_count === "number" ? { configuredRouteCount: raw.configured_route_count } : {}),
-    dropParams: typeof raw.drop_params === "boolean" ? raw.drop_params : undefined,
-    litellmProxyBaseUrl: raw.litellm_proxy_base_url ? String(raw.litellm_proxy_base_url) : undefined,
-    litellmLogTail: Array.isArray(raw.litellm_log_tail) ? raw.litellm_log_tail.map((line) => String(line)) : undefined,
-    requestCount: Number(raw.request_count || 0),
-    totalInputTokens: Number(raw.total_input_tokens || 0),
-    totalOutputTokens: Number(raw.total_output_tokens || 0),
-    totalBytesIn: Number(raw.total_bytes_in || 0),
-    totalBytesOut: Number(raw.total_bytes_out || 0),
-    uptimeSeconds: typeof raw.uptime_seconds === "number" ? raw.uptime_seconds : undefined,
-    recentTraffic: Array.isArray(raw.recent_traffic)
-      ? raw.recent_traffic.map((record) => ({
-          id: String(record.id || ""),
-          timestamp: String(record.timestamp || ""),
-          method: String(record.method || ""),
-          endpoint: String(record.endpoint || ""),
-          status: Number(record.status || 0),
-          bytesIn: Number(record.bytes_in || 0),
-          bytesOut: Number(record.bytes_out || 0),
-          durationMs: Number(record.duration_ms || 0),
-          model: String(record.model || ""),
-          error: String(record.error || ""),
-        }))
-      : undefined,
-    startedAt: raw.started_at ? String(raw.started_at) : undefined,
-    lastRequestAt: raw.last_request_at ? String(raw.last_request_at) : undefined,
-    lastError: raw.last_error !== undefined ? String(raw.last_error) : undefined,
-    ...(typeof raw.restart_required === "boolean" ? { restartRequired: raw.restart_required } : {}),
-    ...(raw.restart_required_reason ? { restartRequiredReason: String(raw.restart_required_reason) } : {}),
-  };
-}
-
-function normalizeTransferEndpointMode(value: unknown): TransferEndpointMode {
-  const text = String(value || "").trim();
-  if (text === "chat_completions") return "chat_completions";
-  if (text === "responses") return "responses";
-  return "auto";
-}
-
-function normalizeRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? { ...(value as Record<string, unknown>) } : {};
-}
-
-function mapTransferRouteConfig(raw: RawTransferRouteConfig): TransferRouteConfig {
-  return {
-    id: String(raw.id || ""),
-    name: raw.name ? String(raw.name) : "",
-    endpointMode: normalizeTransferEndpointMode(raw.endpoint_mode),
-    litellmModel: String(raw.litellm_model || ""),
-    modelAlias: String(raw.model_alias || ""),
-    providerBaseUrl: String(raw.provider_base_url || ""),
-    extraLitellmParams: normalizeRecord(raw.extra_litellm_params),
-    providerApiKeySet: Boolean(raw.provider_api_key_set),
-    configured: typeof raw.configured === "boolean" ? raw.configured : undefined,
-  };
-}
-
-function mapTransferBridgeConfigInput(input: TransferBridgeConfigInput) {
-  return {
-    ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
-    ...(input.litellmModel !== undefined ? { litellm_model: input.litellmModel } : {}),
-    ...(input.modelAlias !== undefined ? { model_alias: input.modelAlias } : {}),
-    ...(input.endpointMode !== undefined ? { endpoint_mode: input.endpointMode } : {}),
-    ...(input.extraLitellmParams !== undefined ? { extra_litellm_params: input.extraLitellmParams } : {}),
-    ...(input.providerBaseUrl !== undefined ? { provider_base_url: input.providerBaseUrl } : {}),
-    ...(input.providerApiKey ? { provider_api_key: input.providerApiKey } : {}),
-    ...(input.clearProviderApiKey !== undefined ? { clear_provider_api_key: input.clearProviderApiKey } : {}),
-    ...(input.routes !== undefined ? { routes: input.routes.map(mapTransferRouteConfigInput) } : {}),
-    ...(input.dropParams !== undefined ? { drop_params: input.dropParams } : {}),
-  };
-}
-
-function mapTransferRouteConfigInput(route: TransferRouteConfig) {
-  return {
-    id: route.id,
-    ...(route.name !== undefined ? { name: route.name } : {}),
-    endpoint_mode: route.endpointMode,
-    litellm_model: route.litellmModel,
-    model_alias: route.modelAlias,
-    provider_base_url: route.providerBaseUrl,
-    extra_litellm_params: route.extraLitellmParams || {},
-    ...(route.providerApiKey ? { provider_api_key: route.providerApiKey } : {}),
-    ...(route.clearProviderApiKey !== undefined ? { clear_provider_api_key: route.clearProviderApiKey } : {}),
-  };
-}
-
 function mapInlineCompletionConfig(raw: RawInlineCompletionConfig): InlineCompletionConfig {
   return {
     enabled: Boolean(raw.enabled),
@@ -4326,34 +4147,6 @@ export class RealWebBotClient implements WebBotClient {
       },
     );
     return mapUserBotPermissions(data);
-  }
-
-  async getTransferBridgeStatus(): Promise<TransferBridgeStatus> {
-    const data = await this.requestJson<RawTransferBridgeStatus>("/api/transfer/status");
-    return mapTransferBridgeStatus(data);
-  }
-
-  async getTransferAdminStatus(): Promise<TransferBridgeStatus> {
-    const data = await this.requestJson<RawTransferBridgeStatus>("/api/admin/transfer/status");
-    return mapTransferBridgeStatus(data);
-  }
-
-  async updateTransferBridgeConfig(input: TransferBridgeConfigInput): Promise<TransferBridgeStatus> {
-    const data = await this.requestJson<RawTransferBridgeStatus>("/api/admin/transfer/config", {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(mapTransferBridgeConfigInput(input)),
-    });
-    return mapTransferBridgeStatus(data);
-  }
-
-  async resetTransferBridgeStats(): Promise<TransferBridgeStatus> {
-    const data = await this.requestJson<RawTransferBridgeStatus>("/api/admin/transfer/reset", {
-      method: "POST",
-    });
-    return mapTransferBridgeStatus(data);
   }
 
   async getInlineCompletionConfig(): Promise<InlineCompletionConfig> {

@@ -157,7 +157,6 @@ from .terminal_manager import (
     TerminalSessionManager,
     encode_terminal_ws_v2,
 )
-from .transfer_service import TransferService
 from .tunnel_service import TunnelService
 from .routes import (
     admin_routes,
@@ -173,7 +172,6 @@ from .routes import (
     lan_chat_routes,
     plugin_routes,
     terminal_routes,
-    transfer_routes,
 )
 from .api_service import (
     AuthContext,
@@ -1099,7 +1097,6 @@ class WebApiServer:
             node_id=TCB_NODE_ID,
             base_path=WEB_BASE_PATH,
         )
-        self.transfer_service = TransferService(host=self._host, port=self._port)
         self.inline_completion_config_store = InlineCompletionConfigStore()
         self.inline_completion_service = InlineCompletionService(config_store=self.inline_completion_config_store)
         self.codex_usage_service = get_codex_usage_service()
@@ -1127,7 +1124,6 @@ class WebApiServer:
             "session_store",
             lambda: {**session_store_diagnostics(), **session_persistence_diagnostics()},
         )
-        self._runtime_diagnostics.register("litellm", self.transfer_service.diagnostics)
         self._runtime_diagnostics.register("language_servers", self.language_server_manager.diagnostics)
         self._runtime_diagnostics.register("codex_usage", self.codex_usage_service.diagnostics)
         plugin_service = getattr(self.manager, "plugin_service", None)
@@ -4765,7 +4761,6 @@ class WebApiServer:
             admin_routes,
             bot_settings_routes,
             lan_chat_routes,
-            transfer_routes,
         ):
             module.register(app, self)
         app.router.add_get("/api/notifications/settings", self.get_notification_settings)
@@ -4914,7 +4909,6 @@ class WebApiServer:
         if self._runner is not None:
             return
         app = self._build_app()
-        await self.transfer_service.start()
         self._runner = web.AppRunner(app)
         await self._runner.setup()
         self._site = web.TCPSite(self._runner, host=self._host, port=self._port)
@@ -5073,7 +5067,6 @@ class WebApiServer:
         else:
             await self._tunnel_service.stop()
         await self._fixed_forward_service.stop()
-        await self.transfer_service.close()
         await self._runner.cleanup()
         await asyncio.to_thread(close_codex_usage_service_sync)
         await asyncio.to_thread(close_session_store)

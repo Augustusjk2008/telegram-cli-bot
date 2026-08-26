@@ -50,7 +50,7 @@ cd front && npm run lint
 - 已知实现差距：当前 Pi runtime/session 复用路径尚未完整比较并失效上述 fingerprint；修改该链路时应补齐实现与回归测试，不得把现状固化为较弱契约。
 - Web 终端会话按 `(user_id, owner_id)` 隔离；每个新标签必须使用独立 `owner_id`，关闭标签必须终止对应 shell；旧客户端的 `rebuild` 端点作为创建会话的兼容别名保留。
 
-修改 native agent/Pi/cluster、LiteLLM Transfer、Plugin 或安装/发布链路时，使用仓库级 `orbit-maintenance` skill，并只读取与当前子系统对应的 reference。
+修改 native agent/Pi/cluster、Plugin 或安装/发布链路时，使用仓库级 `orbit-maintenance` skill，并只读取与当前子系统对应的 reference。
 
 ## CodeGraph
 

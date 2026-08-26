@@ -99,22 +99,6 @@ def get_lan_chat_messages_path() -> Path:
     return get_app_data_root() / "lan_chat" / "messages.json"
 
 
-def get_transfer_config_path() -> Path:
-    return get_app_data_root() / "transfer" / "config.json"
-
-
-def get_transfer_trace_path() -> Path:
-    return get_app_data_root() / "transfer" / "trace.jsonl"
-
-
-def get_transfer_litellm_config_path() -> Path:
-    return get_app_data_root() / "transfer" / "litellm-config.yaml"
-
-
-def get_transfer_litellm_log_path() -> Path:
-    return get_app_data_root() / "transfer" / "litellm.log"
-
-
 def get_inline_completion_config_path() -> Path:
     return get_app_data_root() / "inline-completion" / "config.json"
 

@@ -24,7 +24,6 @@ pwsh -ExecutionPolicy Bypass -File .release-local/publish-release.ps1 -Version <
 - 固定公网转发由公网服务器的 `frps` 和内网机器的内置 `frpc` 配合；配置 `TCB_NODE_ID`、`WEB_BASE_PATH`、`WEB_FIXED_PUBLIC_FORWARD_*`、`TCB_HUB_FRPS_*`，反向代理必须保留 `/node/<节点 ID>/` 前缀并支持 WebSocket。最小配置见 `README.md` 的“固定公网地址和反向代理”。
 - 公告内容通过 `get_announcements_content_path()` 获取，默认位于 `~/.tcb/orbit-safe-claw/announcements/content.json`，可由 `TCB_DATA_DIR` 覆盖。
 - 仓库根 `.web_announcements.json` 只用于旧数据迁移，不是当前维护位置。
-- Transfer 配置和日志通过 `get_transfer_litellm_config_path()`、`get_transfer_litellm_log_path()` 获取，默认位于 `~/.tcb/orbit-safe-claw/transfer`。
 - 不要把用户运行态数据写回仓库。
 
 ## 验证

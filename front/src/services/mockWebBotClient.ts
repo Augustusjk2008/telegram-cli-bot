@@ -145,9 +145,6 @@ import type {
   TerminalActionsConfig,
   TerminalActionsEditableConfig,
   TerminalRuntimePlatform,
-  TransferBridgeConfigInput,
-  TransferBridgeStatus,
-  TransferRouteConfig,
   TreeViewPayload,
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
@@ -1323,27 +1320,6 @@ function buildMockZipTreePayload(sourcePath: string): TreeViewPayload {
   };
 }
 
-function normalizeTransferRouteDraft(route: TransferRouteConfig, existing?: TransferRouteConfig): TransferRouteConfig {
-  const providerApiKeySet = route.clearProviderApiKey
-    ? false
-    : route.providerApiKey
-      ? true
-      : Boolean(existing?.providerApiKeySet ?? route.providerApiKeySet);
-  const litellmModel = route.litellmModel.trim();
-  const modelAlias = route.modelAlias.trim();
-  return {
-    id: route.id || existing?.id || "route-1",
-    name: route.name !== undefined ? route.name.trim() : existing?.name || "",
-    endpointMode: route.endpointMode || existing?.endpointMode || "auto",
-    litellmModel,
-    modelAlias,
-    providerBaseUrl: route.providerBaseUrl.trim(),
-    extraLitellmParams: { ...(route.extraLitellmParams || existing?.extraLitellmParams || {}) },
-    providerApiKeySet,
-    configured: Boolean(litellmModel && modelAlias && providerApiKeySet),
-  };
-}
-
 export class MockWebBotClient implements WebBotClient {
   private bots = new Map<string, BotSummary>(
     mockBots.map((item) => [
@@ -1393,65 +1369,6 @@ export class MockWebBotClient implements WebBotClient {
       defaultReasoningEffort: "medium",
     },
   ];
-  private transferBridgeStatus: TransferBridgeStatus = {
-    enabled: false,
-    configured: true,
-    running: false,
-    status: "disabled",
-    localUrl: "http://127.0.0.1:8080",
-    localEndpoint: "http://127.0.0.1:8080",
-    localHost: "127.0.0.1",
-    localPort: 8080,
-    bridgePageUrl: "/api/transfer/page",
-    responsesBaseUrl: "http://127.0.0.1:8080/v1",
-    chatCompletionsBaseUrl: "http://127.0.0.1:8080/v1",
-    litellmRunning: false,
-    litellmPid: null,
-    litellmModel: "openai/gpt-5",
-    modelAlias: "gpt-5",
-    endpointMode: "auto",
-    extraLitellmParams: {},
-    providerBaseUrl: "https://max.jojocode.com/v1",
-    providerApiKeySet: true,
-    routes: [
-      {
-        id: "route-1",
-        endpointMode: "auto",
-        litellmModel: "openai/gpt-5",
-        modelAlias: "gpt-5",
-        providerBaseUrl: "https://max.jojocode.com/v1",
-        extraLitellmParams: {},
-        providerApiKeySet: true,
-        configured: true,
-      },
-    ],
-    routeCount: 1,
-    configuredRouteCount: 1,
-    dropParams: true,
-    litellmProxyBaseUrl: "http://127.0.0.1:49152/v1",
-    requestCount: 1,
-    totalInputTokens: 15381,
-    totalOutputTokens: 30,
-    totalBytesIn: 75420,
-    totalBytesOut: 3400,
-    uptimeSeconds: 61,
-    recentTraffic: [
-      {
-        id: "mock",
-        timestamp: "12:01:00.000",
-        method: "POST",
-        endpoint: "/v1/responses",
-        status: 200,
-        bytesIn: 100,
-        bytesOut: 200,
-        durationMs: 15,
-        model: "gpt-5.5",
-        error: "",
-      },
-    ],
-    startedAt: "2026-06-29T12:00:00Z",
-    lastRequestAt: "2026-06-29T12:01:00Z",
-  };
   private currentPaths = new Map<string, string>();
   private cliParamsByBot = new Map<string, CliParamsPayload>();
   private pluginSessions = new Map<
@@ -3096,75 +3013,6 @@ export class MockWebBotClient implements WebBotClient {
       accountId,
       allowedBots: [...normalized],
     };
-  }
-
-  async getTransferBridgeStatus(): Promise<TransferBridgeStatus> {
-    return {
-      ...this.transferBridgeStatus,
-      routes: this.transferBridgeStatus.routes?.map((item) => ({ ...item })),
-      recentTraffic: this.transferBridgeStatus.recentTraffic?.map((item) => ({ ...item })),
-    };
-  }
-
-  async getTransferAdminStatus(): Promise<TransferBridgeStatus> {
-    return this.getTransferBridgeStatus();
-  }
-
-  async updateTransferBridgeConfig(input: TransferBridgeConfigInput): Promise<TransferBridgeStatus> {
-    const existingRoutes = this.transferBridgeStatus.routes || [];
-    const nextRoutes = input.routes
-      ? input.routes.map((route, index) => normalizeTransferRouteDraft(route, existingRoutes[index]))
-      : [normalizeTransferRouteDraft({
-          id: "route-1",
-          endpointMode: input.endpointMode || this.transferBridgeStatus.endpointMode || "auto",
-          litellmModel: input.litellmModel !== undefined ? input.litellmModel : this.transferBridgeStatus.litellmModel || "",
-          modelAlias: input.modelAlias !== undefined ? input.modelAlias : this.transferBridgeStatus.modelAlias || "",
-          providerBaseUrl: input.providerBaseUrl !== undefined ? input.providerBaseUrl : this.transferBridgeStatus.providerBaseUrl || "",
-          extraLitellmParams: input.extraLitellmParams || this.transferBridgeStatus.extraLitellmParams || {},
-          providerApiKey: input.providerApiKey,
-          clearProviderApiKey: input.clearProviderApiKey,
-          providerApiKeySet: this.transferBridgeStatus.providerApiKeySet,
-        }, existingRoutes[0])];
-    const firstRoute = nextRoutes[0];
-    const configured = nextRoutes.some((route) => route.configured);
-    const enabled = input.enabled ?? this.transferBridgeStatus.enabled;
-    const running = Boolean(enabled && configured);
-    this.transferBridgeStatus = {
-      ...this.transferBridgeStatus,
-      routes: nextRoutes,
-      routeCount: nextRoutes.length,
-      configuredRouteCount: nextRoutes.filter((route) => route.configured).length,
-      configured,
-      providerBaseUrl: firstRoute?.providerBaseUrl || "",
-      litellmModel: firstRoute?.litellmModel || "",
-      modelAlias: firstRoute?.modelAlias || "",
-      endpointMode: firstRoute?.endpointMode || "auto",
-      extraLitellmParams: { ...(firstRoute?.extraLitellmParams || {}) },
-      providerApiKeySet: Boolean(firstRoute?.providerApiKeySet),
-      dropParams: input.dropParams ?? this.transferBridgeStatus.dropParams,
-      enabled,
-      running,
-      litellmRunning: running,
-      status: configured ? (enabled ? "running" : "disabled") : "not_configured",
-      restartRequired: false,
-      restartRequiredReason: "",
-    };
-    return this.getTransferBridgeStatus();
-  }
-
-  async resetTransferBridgeStats(): Promise<TransferBridgeStatus> {
-    this.transferBridgeStatus = {
-      ...this.transferBridgeStatus,
-      requestCount: 0,
-      totalInputTokens: 0,
-      totalOutputTokens: 0,
-      totalBytesIn: 0,
-      totalBytesOut: 0,
-      recentTraffic: [],
-      lastRequestAt: "",
-      lastError: "",
-    };
-    return this.getTransferBridgeStatus();
   }
 
   async getInlineCompletionConfig(): Promise<InlineCompletionConfig> {

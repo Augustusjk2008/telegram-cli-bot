@@ -909,7 +909,7 @@ function Test-PortableBundle {
 
     Invoke-CheckedCommand -FilePath $pythonExe -Arguments @(
         "-c",
-        "import aiohttp, dotenv, yaml, qrcode, psutil, pypdf; import bot.main; print('portable-python-ok')"
+        "import aiohttp, dotenv, qrcode, psutil, pypdf; import bot.main; print('portable-python-ok')"
     ) -FailureMessage "包内 Python import 校验失败" -WorkingDirectory $PackageRoot
 
     Invoke-CheckedCommand -FilePath $pythonExe -Arguments @(

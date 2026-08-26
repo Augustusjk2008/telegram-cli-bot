@@ -44,7 +44,7 @@ flowchart LR
     Orbit --> Agents["🤖 Codex · Claude · Pi"]
     Orbit --> Workbench["💻 Chat · Files · Git · Terminal · Debug"]
     Orbit --> Cluster["🧭 子 Agent · Cluster"]
-    Orbit --> Extend["🧩 Plugins · LiteLLM · Admin"]
+    Orbit --> Extend["🧩 Plugins · Admin"]
 
     classDef orbit fill:#11162c,stroke:#49d8ff,color:#ffffff,stroke-width:2px;
     classDef node fill:#f5f8ff,stroke:#6a79ff,color:#172033;
@@ -154,7 +154,6 @@ bash install.sh
 ### 管理与扩展
 
 - Admin Center 管理用户权限、邀请码、公告、更新和运行状态。
-- 可选 LiteLLM 网关提供模型别名、多上游路由和 OpenAI 兼容接口。
 - Codex CLI 用量统计可按本地自然日、Provider 和模型聚合展示。
 - Cloudflare quick tunnel 和固定公网转发可用于受控的移动端访问。
 
@@ -311,20 +310,9 @@ Pi runtime 和持久化 session 当前以 Bot/用户/Agent 的 conversation 与�
 </details>
 
 <details>
-<summary><strong>可选 LiteLLM 网关</strong></summary>
-
-LiteLLM 网关不是普通 CLI 的必经链路；关闭时，Codex 和 Claude 继续直连自己的 Provider。
-
-每条路由可设置模型别名、LiteLLM model、上游地址、密钥、额外参数，以及 `auto`、`chat_completions`、`responses` 三种 endpoint 模式。保存后会热切换，不需要重启主 Web 服务；状态接口不会回显上游密钥。
-
-配置与日志默认位于 `~/.tcb/orbit-safe-claw/transfer`。
-
-</details>
-
-<details>
 <summary><strong>Codex CLI 用量统计</strong></summary>
 
-管理中心可即时开启或关闭采集。功能默认关闭，只统计启用后由 Orbit 启动的普通 Codex CLI 进程，不回填历史，也不统计 Claude、Pi、原生 Agent、LiteLLM Transfer、行内补全或手工终端进程。
+管理中心可即时开启或关闭采集。功能默认关闭，只统计启用后由 Orbit 启动的普通 Codex CLI 进程，不回填历史，也不统计 Claude、Pi、原生 Agent、行内补全或手工终端进程。
 
 统计按日期、Provider 和模型聚合，数据默认保存在 `~/.tcb/orbit-safe-claw/codex-usage/usage.sqlite3`，不会保存逐轮提示词、认证头或 API 密钥。
 
