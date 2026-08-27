@@ -4158,6 +4158,7 @@ export function ChatScreen({
     if (!planContent) {
       return;
     }
+    setPlanMode(false);
     setExecutingPlanMessageId(messageId);
     setPlanExecuteError("");
     setConversationLoading(true);
@@ -4184,7 +4185,6 @@ export function ChatScreen({
       setVisibleTurnCount(CHAT_INITIAL_VISIBLE_TURNS);
       setConversations((prev) => [result.conversation, ...prev.map((item) => ({ ...item, active: false }))]);
       setHistoryPanelOpen(false);
-      setPlanMode(false);
       await sendMessageInternal(result.executionMessage, {
         sendOptions: nativeSend
           ? {
@@ -4202,7 +4202,7 @@ export function ChatScreen({
       setExecutingPlanMessageId("");
       setConversationLoading(false);
     }
-  }, [botAlias, botOverview, client, sendMessageInternal, soloMode, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch, setQueuedMessageState]);
+  }, [botAlias, botOverview, client, sendMessageInternal, setPlanMode, soloMode, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch, setQueuedMessageState]);
 
   const handleSend = useCallback(async (text: string) => {
     if (activeAgentIdRef.current !== "main") {
