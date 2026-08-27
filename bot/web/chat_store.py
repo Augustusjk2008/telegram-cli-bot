@@ -1382,13 +1382,13 @@ class ChatStore:
             if str(row["id"] or "").strip()
         ]
 
-    def get_latest_completed_turn_at(self, *, bot_id: int, user_id: int | None = None) -> str:
-        """Return the latest completed answer time for a bot in this workspace."""
+    def get_latest_answer_times(self, *, bot_id: int, user_id: int | None = None) -> tuple[str, str]:
+        """Return the latest successful and non-cancelled terminal answer times."""
         conn = self._connect(create=False)
         if conn is None:
-            return ""
+            return "", ""
 
-        clauses = ["conversations.bot_id = ?", "turns.completion_state = 'completed'", "turns.completed_at IS NOT NULL"]
+        clauses = ["conversations.bot_id = ?", "turns.completed_at IS NOT NULL"]
         params: list[Any] = [bot_id]
         if user_id is not None:
             clauses.append("conversations.user_id = ?")
@@ -1397,16 +1397,30 @@ class ChatStore:
         with closing(conn):
             row = conn.execute(
                 f"""
-                SELECT turns.completed_at
+                SELECT
+                    MAX(CASE WHEN turns.completion_state = 'completed' THEN turns.completed_at END) AS completed_at,
+                    MAX(
+                        CASE
+                            WHEN turns.completion_state NOT IN ('streaming', 'cancelled') THEN turns.completed_at
+                        END
+                    ) AS terminal_at
                 FROM turns
                 JOIN conversations ON conversations.id = turns.conversation_id
                 WHERE {' AND '.join(clauses)}
-                ORDER BY turns.completed_at DESC, turns.updated_at DESC, turns.rowid DESC
-                LIMIT 1
                 """,
                 params,
             ).fetchone()
-        return str(row["completed_at"] or "") if row is not None else ""
+        if row is None:
+            return "", ""
+        return str(row["completed_at"] or ""), str(row["terminal_at"] or "")
+
+    def get_latest_completed_turn_at(self, *, bot_id: int, user_id: int | None = None) -> str:
+        """Return the latest completed answer time for a bot in this workspace."""
+        return self.get_latest_answer_times(bot_id=bot_id, user_id=user_id)[0]
+
+    def get_latest_notifiable_turn_at(self, *, bot_id: int, user_id: int | None = None) -> str:
+        """Return the latest non-cancelled terminal answer time for unread recovery."""
+        return self.get_latest_answer_times(bot_id=bot_id, user_id=user_id)[1]
 
     def delete_conversations_by_ids(self, conversation_ids: list[str] | set[str] | tuple[str, ...]) -> int:
         normalized_ids = [str(conversation_id or "").strip() for conversation_id in conversation_ids]

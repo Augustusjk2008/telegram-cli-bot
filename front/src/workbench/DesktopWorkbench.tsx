@@ -182,7 +182,7 @@ type Props = {
   chatStatus?: ChatWorkbenchStatus;
   productMode?: WorkbenchProductMode;
   soloAvailable?: boolean;
-  onUnreadResult?: (botAlias: string) => void;
+  onUnreadResult?: (botAlias: string, completedAt?: string, unread?: boolean) => void;
   onProductModeChange?: (mode: WorkbenchProductMode) => void;
   onViewModeChange?: (viewMode: ViewMode) => void;
   onOpenBotSwitcher?: (anchorRect?: DOMRect) => void;

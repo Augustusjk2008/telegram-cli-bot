@@ -1923,6 +1923,15 @@ class WebApiServer:
         ).strip()
         if completion_state == "cancelled":
             status = "cancelled"
+        terminal_at = str(
+            message.get("updated_at")
+            or message.get("updatedAt")
+            or data.get("terminal_at")
+            or data.get("terminalAt")
+            or data.get("completed_at")
+            or data.get("completedAt")
+            or ""
+        ).strip()
         return {
             "bot_alias": alias,
             "agent_id": agent_id,
@@ -1932,6 +1941,7 @@ class WebApiServer:
             "preview": preview,
             "elapsed_seconds": data.get("elapsed_seconds"),
             "url": self._chat_notification_url(alias, conversation_id),
+            "terminal_at": terminal_at,
         }
 
     async def _safe_notify_chat_terminal_event(

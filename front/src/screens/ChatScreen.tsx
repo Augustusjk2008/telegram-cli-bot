@@ -119,7 +119,7 @@ type Props = {
   focused?: boolean;
   onToggleFocus?: () => void;
   onToggleImmersive?: () => void;
-  onUnreadResult?: (botAlias: string) => void;
+  onUnreadResult?: (botAlias: string, completedAt?: string, unread?: boolean) => void;
   onBotActivityChange?: (botAlias: string, activity: BotActivityChange) => void;
   onWorkbenchStatusChange?: (status: ChatWorkbenchStatus) => void;
   onRequestDesktopPreview?: (path: string) => void;
@@ -518,6 +518,27 @@ function normalizeResolvedFinalMessage(message: ChatMessage): ChatMessage {
     ...message,
     state: "done",
   };
+}
+
+function isCancelledChatCompletion(message: ChatMessage) {
+  const completionState = String(message.meta?.completionState || "").trim().toLowerCase();
+  return completionState === "cancelled" || completionState === "canceled";
+}
+
+function findNewNotifiableTerminalMessage(previousItems: ChatMessage[], nextItems: ChatMessage[]) {
+  const previousById = new Map(previousItems.map((item) => [item.id, item]));
+  return [...nextItems].reverse().find((item) => {
+    if (
+      item.role !== "assistant"
+      || item.state === "streaming"
+      || isCancelledChatCompletion(item)
+      || String(item.meta?.completionState || "").trim().toLowerCase() === "streaming"
+    ) {
+      return false;
+    }
+    const previous = previousById.get(item.id);
+    return !previous || previous.state === "streaming";
+  });
 }
 
 function countPersistedHistoryItems(items: ChatMessage[]) {
@@ -1768,6 +1789,7 @@ export function ChatScreen({
   const shouldStickToBottomRef = useRef(true);
   const forceAutoScrollRef = useRef(true);
   const isVisibleRef = useRef(isVisible);
+  isVisibleRef.current = isVisible;
   const isForegroundRef = useRef(isForeground);
   isForegroundRef.current = isForeground;
   const loadingRef = useRef(loading);
@@ -1911,10 +1933,6 @@ export function ChatScreen({
   useEffect(() => {
     setClusterSaving(false);
   }, [botAlias, client]);
-
-  useEffect(() => {
-    isVisibleRef.current = isVisible;
-  }, [isVisible]);
 
   useEffect(() => {
     setHistoryPanelOpen(false);
@@ -2414,8 +2432,9 @@ export function ChatScreen({
       }
 
       const { nextItems, shouldPoll } = applyHistoryView(messages, overview, { keepStreamingRowsActive: overview.isProcessing });
-      if (!isVisibleRef.current && !shouldPoll && nextItems.length > previousCount) {
-        onUnreadResult?.(botAlias);
+      const newTerminalMessage = findNewNotifiableTerminalMessage(previousItems, nextItems);
+      if (!isVisibleRef.current && !shouldPoll && newTerminalMessage) {
+        onUnreadResult?.(botAlias, newTerminalMessage.updatedAt || "", true);
       }
       if (!shouldPoll) {
         emitBotActivityForActiveAgent("idle");
@@ -4031,8 +4050,12 @@ export function ChatScreen({
         },
       ));
       options.onSuccess?.(callbackMessage);
-      if (!isVisibleRef.current) {
-        onUnreadResult?.(botAlias);
+      if (!isCancelledChatCompletion(finalizedMessage)) {
+        onUnreadResult?.(
+          botAlias,
+          finalizedMessage.updatedAt || "",
+          !isVisibleRef.current || document.visibilityState === "hidden",
+        );
       }
       if (clusterRunIdRef.current) {
         void pollClusterTasks();

@@ -67,6 +67,24 @@ def test_latest_completed_turn_at_ignores_incomplete_turns(tmp_path: Path) -> No
     assert latest != store.get_latest_completed_turn_at(bot_id=1, user_id=3)
 
 
+def test_latest_notifiable_turn_at_includes_errors_but_ignores_cancelled_turns(tmp_path: Path) -> None:
+    store = ChatStore(tmp_path)
+    completed = _begin(store, text="completed")
+    store.complete_turn(completed, content="answer", completion_state="completed")
+    first_latest = store.get_latest_notifiable_turn_at(bot_id=1, user_id=2)
+
+    failed = _begin(store, conversation_id=completed.conversation_id, text="failed")
+    store.complete_turn(failed, content="error", completion_state="error")
+    failed_latest = store.get_latest_notifiable_turn_at(bot_id=1, user_id=2)
+
+    cancelled = _begin(store, conversation_id=completed.conversation_id, text="cancelled")
+    store.complete_turn(cancelled, content="stopped", completion_state="cancelled")
+
+    assert first_latest
+    assert failed_latest > first_latest
+    assert store.get_latest_notifiable_turn_at(bot_id=1, user_id=2) == failed_latest
+
+
 def test_history_revision_delta_emits_tombstones_for_discarded_turns(tmp_path: Path) -> None:
     store = ChatStore(tmp_path)
     first = _begin(store, text="first")

@@ -39,6 +39,24 @@ describe("RealWebBotClient", () => {
     vi.unstubAllGlobals();
   });
 
+  test("maps the latest notifiable answer timestamp from bot summaries", async () => {
+    fetchMock.mockResolvedValue(jsonOk([{
+      alias: "main",
+      cli_type: "codex",
+      status: "running",
+      working_dir: "C:\\repo",
+      last_answer_completed_at: "2026-08-27T01:00:00Z",
+      last_answer_terminal_at: "2026-08-27T01:10:00Z",
+    }]));
+
+    const bots = await new RealWebBotClient().listBots();
+
+    expect(bots[0]).toMatchObject({
+      lastAnswerCompletedAt: "2026-08-27T01:00:00Z",
+      lastAnswerTerminalAt: "2026-08-27T01:10:00Z",
+    });
+  });
+
   test("uses the active public base path for auth requests and download links", async () => {
     window.history.replaceState(null, "", "/node/nanjing-laptop/");
     vi.stubGlobal("__PUBLIC_ENV__", { VITE_API_BASE_URL: "/node/nanjing-laptop" });

@@ -571,7 +571,7 @@ def build_bot_summary(
     latest_answer_user_id = chat_session_user_id(user_id) if user_id is not None else None
     if latest_answer_user_id is not None:
         latest_answer_store.migrate_conversations_to_shared(bot_id, latest_answer_user_id)
-    latest_answer_completed_at = latest_answer_store.get_latest_completed_turn_at(
+    latest_answer_completed_at, latest_answer_terminal_at = latest_answer_store.get_latest_answer_times(
         bot_id=bot_id,
         user_id=latest_answer_user_id,
     )
@@ -592,6 +592,7 @@ def build_bot_summary(
         "service_status": service_status,
         "cluster": profile.cluster.to_dict(),
         "last_answer_completed_at": latest_answer_completed_at,
+        "last_answer_terminal_at": latest_answer_terminal_at,
         **activity,
         "capabilities": _build_capabilities(alias == manager.main_profile.alias),
     }

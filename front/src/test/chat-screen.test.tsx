@@ -71,6 +71,33 @@ test("binds direct done assistant message to backend id from stream meta", async
   expect(screen.getAllByTestId("chat-message-row")).toHaveLength(2);
 });
 
+test("does not report a hidden cancelled reply as unread", async () => {
+  const user = userEvent.setup();
+  const onUnreadResult = vi.fn();
+  const client = createClient({
+    sendMessage: vi.fn<WebBotClient["sendMessage"]>(async () => ({
+      id: "assistant-cancelled",
+      role: "assistant",
+      text: "已停止",
+      createdAt: "2026-08-27T01:10:00Z",
+      updatedAt: "2026-08-27T01:10:01Z",
+      state: "error",
+      meta: { completionState: "cancelled" },
+    })),
+  });
+  let visibilityState: DocumentVisibilityState = "visible";
+  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibilityState);
+  render(<ChatScreen botAlias="main" client={client} onUnreadResult={onUnreadResult} />);
+  await screen.findByText("暂无消息，开始聊天吧");
+
+  await user.type(screen.getByPlaceholderText("输入消息"), "停止这个任务");
+  visibilityState = "hidden";
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(await screen.findByText("已停止")).toBeInTheDocument();
+  expect(onUnreadResult).not.toHaveBeenCalled();
+});
+
 test("binds stream metadata to the placeholder before a deferred final and replaces it in place", async () => {
   const user = userEvent.setup();
   const final = deferred<ChatMessage>();

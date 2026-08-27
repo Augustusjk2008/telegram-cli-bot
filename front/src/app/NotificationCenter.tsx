@@ -15,7 +15,8 @@ type Props = {
   enabled: boolean;
   currentBotAlias?: string | null;
   visibleChatBotAlias?: string | null;
-  onUnreadBot?: (alias: string) => void;
+  onUnreadBot?: (alias: string, completedAt: string) => void;
+  onReadBot?: (alias: string, completedAt: string) => void;
 };
 
 type ToastState = {
@@ -53,7 +54,14 @@ function showBrowserNotification(event: ChatCompletedNotificationEvent) {
   }
 }
 
-export function NotificationCenter({ client, enabled, currentBotAlias, visibleChatBotAlias, onUnreadBot }: Props) {
+export function NotificationCenter({
+  client,
+  enabled,
+  currentBotAlias,
+  visibleChatBotAlias,
+  onUnreadBot,
+  onReadBot,
+}: Props) {
   const [toast, setToast] = useState<ToastState | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
 
@@ -67,8 +75,10 @@ export function NotificationCenter({ client, enabled, currentBotAlias, visibleCh
 
     const chatVisibleForEvent = pageIsVisible() && visibleChatBotAlias === event.botAlias;
     if (!chatVisibleForEvent) {
-      onUnreadBot?.(event.botAlias);
+      onUnreadBot?.(event.botAlias, event.terminalAt || "");
       setUnreadCount((count) => count + 1);
+    } else {
+      onReadBot?.(event.botAlias, event.terminalAt || "");
     }
 
     if (pageIsVisible()) {
@@ -84,7 +94,7 @@ export function NotificationCenter({ client, enabled, currentBotAlias, visibleCh
     if (browserNotificationsEnabled(permission)) {
       showBrowserNotification(event);
     }
-  }, [onUnreadBot, visibleChatBotAlias]);
+  }, [onReadBot, onUnreadBot, visibleChatBotAlias]);
 
   useNotificationPresence({
     client,

@@ -460,6 +460,7 @@ export type BotSummary = {
   workingDir: string;
   lastActiveText: string;
   lastAnswerCompletedAt?: string;
+  lastAnswerTerminalAt?: string;
   serviceStatus?: BotServiceStatus;
   activityStatus?: BotActivityStatus;
   busyAgentIds?: string[];
@@ -1196,6 +1197,7 @@ export type ChatCompletedNotificationEvent = {
   preview: string;
   elapsedSeconds?: number;
   completedAt: string;
+  terminalAt?: string;
   url?: string;
 };
 
