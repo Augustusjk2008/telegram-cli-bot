@@ -13,13 +13,15 @@ import {
   PanelLeftDashed,
   PanelRight,
   PanelRightDashed,
+  PanelTop,
+  PanelTopDashed,
 } from "lucide-react";
 import type { ViewMode } from "../app/layoutMode";
 import { premiumMotion, resolveMotionProps } from "../motion/premiumMotion";
 import { AppLogo } from "../components/AppLogo";
 import type { WorkbenchProductMode } from "./workbenchTypes";
 
-type LayoutControlId = "sidebar" | "terminal" | "chat";
+type LayoutControlId = "sidebar" | "editor" | "terminal" | "chat";
 
 const VIEW_MODE_OPTIONS: Array<{ value: ViewMode; label: string; shortLabel: string }> = [
   { value: "auto", label: "自动", shortLabel: "Auto" },
@@ -35,6 +37,7 @@ type Props = {
   hasUnreadOtherBots?: boolean;
   announcementAction?: ReactNode;
   sidebarVisible: boolean;
+  editorVisible: boolean;
   terminalVisible: boolean;
   chatVisible: boolean;
   availableLayoutControls?: LayoutControlId[];
@@ -42,6 +45,7 @@ type Props = {
   soloAvailable?: boolean;
   onProductModeChange?: (mode: WorkbenchProductMode) => void;
   onToggleSidebar: () => void;
+  onToggleEditor: () => void;
   onToggleTerminal: () => void;
   onToggleChat: () => void;
   onViewModeChange: (viewMode: ViewMode) => void;
@@ -57,6 +61,7 @@ export function WorkbenchHeader({
   hasUnreadOtherBots = false,
   announcementAction,
   sidebarVisible,
+  editorVisible,
   terminalVisible,
   chatVisible,
   availableLayoutControls,
@@ -64,6 +69,7 @@ export function WorkbenchHeader({
   soloAvailable = false,
   onProductModeChange,
   onToggleSidebar,
+  onToggleEditor,
   onToggleTerminal,
   onToggleChat,
   onViewModeChange,
@@ -85,6 +91,13 @@ export function WorkbenchHeader({
       Icon: sidebarVisible ? PanelLeft : PanelLeftDashed,
       label: sidebarVisible ? "隐藏左侧栏" : "显示左侧栏",
       onToggle: onToggleSidebar,
+    },
+    {
+      id: "editor" as const,
+      visible: editorVisible,
+      Icon: editorVisible ? PanelTop : PanelTopDashed,
+      label: editorVisible ? "隐藏编辑/预览区" : "显示编辑/预览区",
+      onToggle: onToggleEditor,
     },
     {
       id: "terminal" as const,

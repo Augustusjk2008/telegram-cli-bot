@@ -24,6 +24,9 @@ function normalizeStoredPaneState(raw: unknown): DesktopPaneState {
       : typeof candidate.filesCollapsed === "boolean"
         ? candidate.filesCollapsed
         : DEFAULT_DESKTOP_PANE_STATE.sidebarCollapsed,
+    editorCollapsed: typeof candidate.editorCollapsed === "boolean"
+      ? candidate.editorCollapsed
+      : DEFAULT_DESKTOP_PANE_STATE.editorCollapsed,
     terminalCollapsed: typeof candidate.terminalCollapsed === "boolean"
       ? candidate.terminalCollapsed
       : DEFAULT_DESKTOP_PANE_STATE.terminalCollapsed,
@@ -75,6 +78,13 @@ export function useWorkbenchState() {
     }));
   }
 
+  function toggleEditor() {
+    setPaneState((current) => ({
+      ...current,
+      editorCollapsed: !current.editorCollapsed,
+    }));
+  }
+
   function toggleChat() {
     setPaneState((current) => ({
       ...current,
@@ -116,6 +126,7 @@ export function useWorkbenchState() {
   return {
     paneState,
     toggleSidebar,
+    toggleEditor,
     toggleTerminal,
     toggleChat,
     setSidebarView,

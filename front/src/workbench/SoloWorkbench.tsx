@@ -215,6 +215,7 @@ export function SoloWorkbench({
         hasUnreadOtherBots={hasUnreadOtherBots}
         announcementAction={announcementAction}
         sidebarVisible
+        editorVisible={false}
         terminalVisible={false}
         chatVisible
         availableLayoutControls={[]}
@@ -222,6 +223,7 @@ export function SoloWorkbench({
         soloAvailable={soloAvailable}
         onProductModeChange={onProductModeChange}
         onToggleSidebar={() => {}}
+        onToggleEditor={() => {}}
         onToggleTerminal={() => {}}
         onToggleChat={() => {}}
         onViewModeChange={onViewModeChange}
