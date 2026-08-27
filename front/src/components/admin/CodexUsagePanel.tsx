@@ -57,7 +57,6 @@ function providerLabel(provider: CodexUsageProvider) {
 
 const percentValueFormat = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 1 });
 const durationDaysFormat = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 });
-const MAX_RATE_LIMIT_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
 const RATE_LIMIT_AXIS_STEP_PERCENT = 10;
 const RATE_LIMIT_AXIS_INTERVALS = 4;
 
@@ -73,11 +72,11 @@ function remainingDurationMs(sample: CodexRateLimitSample) {
   const sampledAt = Date.parse(sample.sampledAt);
   const resetsAt = Date.parse(sample.resetsAt);
   if (!Number.isFinite(sampledAt) || !Number.isFinite(resetsAt)) return 0;
-  return Math.min(MAX_RATE_LIMIT_DURATION_MS, Math.max(0, resetsAt - sampledAt));
+  return Math.min(sample.windowMinutes * 60 * 1000, Math.max(0, resetsAt - sampledAt));
 }
 
 function remainingDurationPercent(sample: CodexRateLimitSample) {
-  return (remainingDurationMs(sample) / MAX_RATE_LIMIT_DURATION_MS) * 100;
+  return (remainingDurationMs(sample) / (sample.windowMinutes * 60 * 1000)) * 100;
 }
 
 function rateLimitAxisBounds(samples: CodexRateLimitSample[]) {
@@ -121,6 +120,14 @@ function formatWindow(minutes: number) {
   if (minutes % 1440 === 0) return `${numberFormat.format(minutes / 1440)} 天`;
   if (minutes % 60 === 0) return `${numberFormat.format(minutes / 60)} 小时`;
   return `${numberFormat.format(minutes)} 分钟`;
+}
+
+function formatPlanType(planType: string | null) {
+  const normalized = planType?.trim().toLowerCase();
+  if (!normalized) return "套餐未知";
+  if (normalized === "free") return "Free";
+  if (normalized === "pro") return "Pro";
+  return planType?.trim() || "套餐未知";
 }
 
 function CodexRateLimitBucketChart({
@@ -181,6 +188,10 @@ function CodexRateLimitBucketChart({
   }));
   const latestRemaining = remainingPercent(latest);
   const latestDuration = formatRemainingDuration(remainingDurationMs(latest));
+  const durationWindowDays = latest.windowMinutes / 1440;
+  const durationDaysForPercent = (remaining: number) => (
+    durationDaysFormat.format((remaining / 100) * durationWindowDays)
+  );
   const accessibleLabel = `${label} 剩余额度与剩余时长趋势，共 ${orderedSamples.length} 个样本，当前剩余 ${formatPercentValue(latestRemaining)}，剩余时长 ${latestDuration}`;
 
   return (
@@ -203,7 +214,7 @@ function CodexRateLimitBucketChart({
           <desc>
             按采样时间展示该额度桶的剩余额度与剩余时长；左右纵轴按当前数据范围同步缩放，
             左轴为{formatPercentValue(axisBounds.min)}到{formatPercentValue(axisBounds.max)}，
-            右轴为{durationDaysFormat.format(axisBounds.min * 0.07)}天到{durationDaysFormat.format(axisBounds.max * 0.07)}天。
+            右轴为{durationDaysForPercent(axisBounds.min)}天到{durationDaysForPercent(axisBounds.max)}天。
           </desc>
           <line
             className="codex-usage-rate-limit-quota-axis"
@@ -254,7 +265,7 @@ function CodexRateLimitBucketChart({
                   y={y + 4}
                   textAnchor="start"
                 >
-                  {durationDaysFormat.format(remaining * 0.07)} 天
+                  {durationDaysForPercent(remaining)} 天
                 </text>
               </g>
             );
@@ -287,14 +298,33 @@ function CodexRateLimitBucketChart({
 
 function CodexRateLimitChart({ samples }: { samples: CodexRateLimitSample[] }) {
   const limitGroups = useMemo(() => {
-    const grouped = new Map<string, CodexRateLimitSample[]>([
-      [GENERAL_CODEX_RATE_LIMIT_ID, []],
-      [SECONDARY_CODEX_RATE_LIMIT_ID, []],
-    ]);
+    const grouped = new Map<string, {
+      limitId: string;
+      planType: string | null;
+      samples: CodexRateLimitSample[];
+    }>();
     for (const sample of samples) {
-      grouped.set(sample.limitId, [...(grouped.get(sample.limitId) || []), sample]);
+      const planType = sample.planType?.trim().toLowerCase() || null;
+      const key = `${sample.limitId}\u0000${planType || ""}`;
+      const group = grouped.get(key) || { limitId: sample.limitId, planType, samples: [] };
+      group.samples.push(sample);
+      grouped.set(key, group);
     }
-    return Array.from(grouped.entries());
+    const groups = Array.from(grouped.values());
+    const limitIds = [
+      GENERAL_CODEX_RATE_LIMIT_ID,
+      SECONDARY_CODEX_RATE_LIMIT_ID,
+      ...samples
+        .map((sample) => sample.limitId)
+        .filter((limitId) => (
+          limitId !== GENERAL_CODEX_RATE_LIMIT_ID
+          && limitId !== SECONDARY_CODEX_RATE_LIMIT_ID
+        )),
+    ];
+    return [...new Set(limitIds)].flatMap((limitId) => {
+      const matches = groups.filter((group) => group.limitId === limitId);
+      return matches.length ? matches : [{ limitId, planType: null, samples: [] }];
+    });
   }, [samples]);
 
   const limitLabel = (limitId: string) => {
@@ -307,10 +337,10 @@ function CodexRateLimitChart({ samples }: { samples: CodexRateLimitSample[] }) {
     <section className="codex-usage-section" aria-labelledby="codex-rate-limit-title">
       <h3 id="codex-rate-limit-title">Codex 剩余额度趋势</h3>
       <div className="codex-usage-rate-limit-groups">
-        {limitGroups.map(([limitId, limitSamples]) => (
+        {limitGroups.map(({ limitId, planType, samples: limitSamples }) => (
           <CodexRateLimitBucketChart
-            key={limitId}
-            label={limitLabel(limitId)}
+            key={`${limitId}:${planType || "empty"}`}
+            label={limitSamples.length ? `${limitLabel(limitId)} · ${formatPlanType(planType)}` : limitLabel(limitId)}
             samples={limitSamples}
           />
         ))}

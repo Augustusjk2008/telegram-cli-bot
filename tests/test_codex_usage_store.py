@@ -18,6 +18,7 @@ def _sample(
     limit_id: str = GENERAL_CODEX_RATE_LIMIT_ID,
     window_minutes: int = 10_080,
     used_percent: float = 35,
+    plan_type: str = "pro",
 ) -> CodexRateLimitSample:
     sampled = sampled_at or datetime(2026, 8, 10, 8, tzinfo=timezone.utc)
     return CodexRateLimitSample(
@@ -25,7 +26,7 @@ def _sample(
         used_percent=used_percent,
         window_minutes=window_minutes,
         resets_at=sampled + timedelta(days=3),
-        plan_type="pro",
+        plan_type=plan_type,
         limit_id=limit_id,
     )
 
@@ -109,7 +110,7 @@ def test_schema_6_removes_usage_tables_and_preserves_quota_data(tmp_path: Path) 
     schema_connection.close()
 
 
-def test_store_records_and_queries_only_supported_quota_samples(tmp_path: Path) -> None:
+def test_store_records_and_queries_only_supported_long_term_quota_samples(tmp_path: Path) -> None:
     store = CodexUsageStore(tmp_path / "usage.sqlite3")
     general = _sample(sampled_at=datetime(2026, 8, 10, 8, tzinfo=timezone.utc))
     weekly = _sample(
@@ -125,12 +126,21 @@ def test_store_records_and_queries_only_supported_quota_samples(tmp_path: Path) 
         limit_id=SECONDARY_CODEX_RATE_LIMIT_ID,
         window_minutes=300,
     )
+    monthly_free = _sample(
+        sampled_at=datetime(2026, 8, 10, 12, tzinfo=timezone.utc),
+        window_minutes=43_200,
+        plan_type="free",
+    )
     outside = _sample(sampled_at=datetime(2026, 8, 11, 8, tzinfo=timezone.utc))
 
-    for sample in (weekly, general, short_general, short_secondary, outside):
+    for sample in (weekly, general, short_general, short_secondary, monthly_free, outside):
         store.record_rate_limit_sample(sample)
 
-    assert store.query(date(2026, 8, 10), date(2026, 8, 10)) == (general, weekly)
+    assert store.query(date(2026, 8, 10), date(2026, 8, 10)) == (
+        general,
+        weekly,
+        monthly_free,
+    )
     assert store.available_range() == (date(2026, 8, 10), date(2026, 8, 11))
 
 

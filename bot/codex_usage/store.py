@@ -15,7 +15,7 @@ from .models import (
 
 SCHEMA_VERSION = 6
 _SETTING_ENABLED = "enabled"
-_WEEKLY_LIMIT_WINDOW_MINUTES = 7 * 24 * 60
+_LONG_TERM_LIMIT_WINDOW_MINUTES = 7 * 24 * 60
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS settings (
@@ -218,13 +218,13 @@ class CodexUsageStore:
                        resets_at, plan_type
                 FROM rate_limit_samples
                 WHERE day >= ? AND day <= ?
-                  AND window_minutes = ?
+                  AND window_minutes >= ?
                 ORDER BY sampled_at_ms ASC, sample_id ASC
                 """,
                 (
                     start,
                     end,
-                    _WEEKLY_LIMIT_WINDOW_MINUTES,
+                    _LONG_TERM_LIMIT_WINDOW_MINUTES,
                 ),
             ).fetchall()
             return tuple(self._rate_limit_from_row(row) for row in rows)
