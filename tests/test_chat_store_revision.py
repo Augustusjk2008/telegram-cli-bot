@@ -7,12 +7,19 @@ from bot.web.chat_store import ChatStore
 from bot.web import api_service
 
 
-def _begin(store: ChatStore, *, conversation_id: str | None = None, text: str = "hello", user_id: int = 2):
+def _begin(
+    store: ChatStore,
+    *,
+    conversation_id: str | None = None,
+    text: str = "hello",
+    user_id: int = 2,
+    agent_id: str = "main",
+):
     return store.begin_turn(
         bot_id=1,
         bot_alias="main",
         user_id=user_id,
-        agent_id="main",
+        agent_id=agent_id,
         cli_type="codex",
         working_dir=str(store.workspace_dir),
         session_epoch=0,
@@ -83,6 +90,28 @@ def test_latest_notifiable_turn_at_includes_errors_but_ignores_cancelled_turns(t
     assert first_latest
     assert failed_latest > first_latest
     assert store.get_latest_notifiable_turn_at(bot_id=1, user_id=2) == failed_latest
+
+
+def test_latest_answer_times_ignore_child_agent_turns(tmp_path: Path) -> None:
+    store = ChatStore(tmp_path)
+    main = _begin(store, text="main")
+    store.complete_turn(main, content="main answer", completion_state="completed")
+    main_times = store.get_latest_answer_times(bot_id=1, user_id=2)
+
+    child = _begin(store, text="child", agent_id="cluster-slot-1")
+    store.complete_turn(child, content="child answer", completion_state="completed")
+    conn = store._connect(create=False)
+    assert conn is not None
+    try:
+        with conn:
+            conn.execute(
+                "UPDATE turns SET completed_at = ? WHERE id = ?",
+                ("2099-01-01T00:00:00+00:00", child.turn_id),
+            )
+    finally:
+        conn.close()
+
+    assert store.get_latest_answer_times(bot_id=1, user_id=2) == main_times
 
 
 def test_history_revision_delta_emits_tombstones_for_discarded_turns(tmp_path: Path) -> None:

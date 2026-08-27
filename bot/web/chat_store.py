@@ -1383,12 +1383,16 @@ class ChatStore:
         ]
 
     def get_latest_answer_times(self, *, bot_id: int, user_id: int | None = None) -> tuple[str, str]:
-        """Return the latest successful and non-cancelled terminal answer times."""
+        """Return the main agent's latest successful and non-cancelled terminal answer times."""
         conn = self._connect(create=False)
         if conn is None:
             return "", ""
 
-        clauses = ["conversations.bot_id = ?", "turns.completed_at IS NOT NULL"]
+        clauses = [
+            "conversations.bot_id = ?",
+            "conversations.agent_id = 'main'",
+            "turns.completed_at IS NOT NULL",
+        ]
         params: list[Any] = [bot_id]
         if user_id is not None:
             clauses.append("conversations.user_id = ?")

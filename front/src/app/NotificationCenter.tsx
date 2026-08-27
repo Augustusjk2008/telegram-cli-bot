@@ -73,12 +73,15 @@ export function NotificationCenter({
       return;
     }
 
-    const chatVisibleForEvent = pageIsVisible() && visibleChatBotAlias === event.botAlias;
-    if (!chatVisibleForEvent) {
-      onUnreadBot?.(event.botAlias, event.terminalAt || "");
-      setUnreadCount((count) => count + 1);
-    } else {
-      onReadBot?.(event.botAlias, event.terminalAt || "");
+    const isMainAgentCompletion = String(event.agentId || "main").trim().toLowerCase() === "main";
+    if (isMainAgentCompletion) {
+      const chatVisibleForEvent = pageIsVisible() && visibleChatBotAlias === event.botAlias;
+      if (!chatVisibleForEvent) {
+        onUnreadBot?.(event.botAlias, event.terminalAt || "");
+        setUnreadCount((count) => count + 1);
+      } else {
+        onReadBot?.(event.botAlias, event.terminalAt || "");
+      }
     }
 
     if (pageIsVisible()) {

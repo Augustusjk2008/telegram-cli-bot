@@ -28,13 +28,13 @@ class NotificationClient extends MockWebBotClient {
   }
 }
 
-function completedEvent(botAlias: string, dedupeKey: string): WebNotificationEvent {
+function completedEvent(botAlias: string, dedupeKey: string, agentId = "main"): WebNotificationEvent {
   return {
     type: "chat_completed",
     id: `event-${dedupeKey}`,
     dedupeKey,
     botAlias,
-    agentId: "main",
+    agentId,
     conversationId: "conversation-1",
     status: "success",
     title: "聊天已完成",
@@ -94,5 +94,27 @@ test("marks a completion for another bot unread", async () => {
   act(() => client.emit(completedEvent("worker", "hidden-worker")));
 
   expect(onUnreadBot).toHaveBeenCalledWith("worker", "2026-08-27T01:10:00Z");
+  expect(onReadBot).not.toHaveBeenCalled();
+});
+
+test("does not mark a child agent completion unread", async () => {
+  const client = new NotificationClient();
+  const onUnreadBot = vi.fn();
+  const onReadBot = vi.fn();
+  render(
+    <NotificationCenter
+      client={client}
+      enabled
+      currentBotAlias="worker"
+      visibleChatBotAlias="worker"
+      onUnreadBot={onUnreadBot}
+      onReadBot={onReadBot}
+    />,
+  );
+  await waitFor(() => expect(client.onEvent).toBeTruthy());
+
+  act(() => client.emit(completedEvent("main", "hidden-child", "cluster-slot-1")));
+
+  expect(onUnreadBot).not.toHaveBeenCalled();
   expect(onReadBot).not.toHaveBeenCalled();
 });
