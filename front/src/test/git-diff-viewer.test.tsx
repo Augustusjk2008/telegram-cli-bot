@@ -1,6 +1,28 @@
 import { render, screen, within } from "@testing-library/react";
 import { expect, test } from "vitest";
-import { GitDiffViewer } from "../components/GitDiffViewer";
+import { GitDiffViewer, visibleGitDiffLines } from "../components/GitDiffViewer";
+
+test("maps changed rows to their old and new source line numbers", () => {
+  const lines = visibleGitDiffLines([
+    "@@ -10,2 +20,3 @@",
+    " context",
+    "-old line",
+    "\\ No newline at end of file",
+    "+new line",
+    "+another new line",
+    "@@ -30 +40 @@",
+    "-old line in next hunk",
+    "+new line in next hunk",
+  ].join("\n"));
+
+  expect(lines.map(({ kind, lineNumber }) => ({ kind, lineNumber }))).toEqual([
+    { kind: "delete", lineNumber: 11 },
+    { kind: "add", lineNumber: 21 },
+    { kind: "add", lineNumber: 22 },
+    { kind: "delete", lineNumber: 30 },
+    { kind: "add", lineNumber: 40 },
+  ]);
+});
 
 test("renders only added and deleted diff lines", () => {
   render(

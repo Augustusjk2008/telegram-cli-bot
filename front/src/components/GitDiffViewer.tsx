@@ -42,10 +42,30 @@ export function parseGitDiffLineKind(line: string): GitDiffLineKind {
 }
 
 export function visibleGitDiffLines(content: string): VisibleGitDiffLine[] {
-  return (content || "")
-    .split(/\r?\n/)
-    .map((line, index) => ({ line, lineNumber: index + 1, kind: parseGitDiffLineKind(line) }))
-    .filter((item): item is VisibleGitDiffLine => item.kind === "add" || item.kind === "delete");
+  const visibleLines: VisibleGitDiffLine[] = [];
+  let oldLineNumber: number | null = null;
+  let newLineNumber: number | null = null;
+
+  for (const line of (content || "").split(/\r?\n/)) {
+    const kind = parseGitDiffLineKind(line);
+
+    if (kind === "hunk") {
+      const match = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+      oldLineNumber = match ? Number(match[1]) : null;
+      newLineNumber = match ? Number(match[2]) : null;
+    } else if (kind === "delete" && oldLineNumber !== null) {
+      visibleLines.push({ line, lineNumber: oldLineNumber, kind });
+      oldLineNumber += 1;
+    } else if (kind === "add" && newLineNumber !== null) {
+      visibleLines.push({ line, lineNumber: newLineNumber, kind });
+      newLineNumber += 1;
+    } else if (kind === "context" && line.startsWith(" ")) {
+      if (oldLineNumber !== null) oldLineNumber += 1;
+      if (newLineNumber !== null) newLineNumber += 1;
+    }
+  }
+
+  return visibleLines;
 }
 
 function gitDiffLineClass(kind: VisibleGitDiffLineKind) {
@@ -71,9 +91,9 @@ export function GitDiffViewer({
       aria-label={ariaLabel}
     >
       {lines.length > 0 ? (
-        lines.map((item) => (
+        lines.map((item, index) => (
           <div
-            key={`${item.lineNumber}-${item.line}`}
+            key={`${index}-${item.lineNumber}-${item.line}`}
             data-testid="git-diff-line"
             data-diff-kind={item.kind}
             className={clsx("flex gap-3 rounded px-3 py-0.5", gitDiffLineClass(item.kind))}
