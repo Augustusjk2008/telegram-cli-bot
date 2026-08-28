@@ -1,8 +1,28 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from bot.web import git_service
+
+
+def test_get_git_diff_requests_full_file_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, list[str]]] = []
+    monkeypatch.setattr(git_service, "_require_repo_root", lambda *_args: ("C:/repo", "C:/repo"))
+
+    def run_git(repo_root: str, args: list[str]) -> SimpleNamespace:
+        calls.append((repo_root, args))
+        return SimpleNamespace(stdout="@@ -1 +1 @@\n-old\n+new\n")
+
+    monkeypatch.setattr(git_service, "_run_git", run_git)
+
+    result = git_service.get_git_diff(object(), "main", 123, "src/app.py")
+
+    assert calls == [
+        ("C:/repo", ["diff", "--no-color", "--unified=2147483647", "--", "src/app.py"]),
+    ]
+    assert result["diff"] == "@@ -1 +1 @@\n-old\n+new\n"
 
 
 def test_changed_file_stats_fall_back_when_numstat_exceeds_budget(

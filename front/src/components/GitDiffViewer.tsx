@@ -1,7 +1,7 @@
 import { clsx } from "clsx";
 
 export type GitDiffLineKind = "meta" | "hunk" | "add" | "delete" | "context";
-type VisibleGitDiffLineKind = "add" | "delete";
+type VisibleGitDiffLineKind = "add" | "delete" | "context";
 
 type VisibleGitDiffLine = {
   line: string;
@@ -60,6 +60,10 @@ export function visibleGitDiffLines(content: string): VisibleGitDiffLine[] {
       visibleLines.push({ line, lineNumber: newLineNumber, kind });
       newLineNumber += 1;
     } else if (kind === "context" && line.startsWith(" ")) {
+      const lineNumber = newLineNumber ?? oldLineNumber;
+      if (lineNumber !== null) {
+        visibleLines.push({ line, lineNumber, kind });
+      }
       if (oldLineNumber !== null) oldLineNumber += 1;
       if (newLineNumber !== null) newLineNumber += 1;
     }
@@ -69,9 +73,9 @@ export function visibleGitDiffLines(content: string): VisibleGitDiffLine[] {
 }
 
 function gitDiffLineClass(kind: VisibleGitDiffLineKind) {
-  return kind === "add"
-    ? "bg-emerald-50 text-emerald-700"
-    : "bg-red-50 text-red-700";
+  if (kind === "add") return "bg-emerald-50 text-emerald-700";
+  if (kind === "delete") return "bg-red-50 text-red-700";
+  return "text-[var(--text)]";
 }
 
 export function GitDiffViewer({
@@ -79,7 +83,7 @@ export function GitDiffViewer({
   testId = "git-diff-content",
   className = "h-full min-h-0 p-3 text-xs leading-6",
   ariaLabel = "Git Diff 内容",
-  emptyLabel = "无新增或删除内容",
+  emptyLabel = "无可显示的内容",
 }: GitDiffViewerProps) {
   const lines = visibleGitDiffLines(content);
 

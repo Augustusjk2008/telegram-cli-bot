@@ -2161,7 +2161,7 @@ def _discard_status_entries(repo_root: str, entries: list[dict[str, Any]], *, er
 def get_git_diff(manager: MultiBotManager, alias: str, user_id: int, path: str, staged: bool = False) -> dict[str, Any]:
     _, repo_root = _require_repo_root(manager, alias, user_id)
     relative_path = _normalize_repo_relative_path(path)
-    args = ["diff"]
+    args = ["diff", "--no-color", "--unified=2147483647"]
     if staged:
         args.append("--cached")
     args.extend(["--", relative_path])

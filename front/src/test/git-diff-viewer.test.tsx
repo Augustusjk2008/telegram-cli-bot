@@ -2,7 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import { expect, test } from "vitest";
 import { GitDiffViewer, visibleGitDiffLines } from "../components/GitDiffViewer";
 
-test("maps changed rows to their old and new source line numbers", () => {
+test("maps changed and unchanged rows to source line numbers", () => {
   const lines = visibleGitDiffLines([
     "@@ -10,2 +20,3 @@",
     " context",
@@ -16,6 +16,7 @@ test("maps changed rows to their old and new source line numbers", () => {
   ].join("\n"));
 
   expect(lines.map(({ kind, lineNumber }) => ({ kind, lineNumber }))).toEqual([
+    { kind: "context", lineNumber: 20 },
     { kind: "delete", lineNumber: 11 },
     { kind: "add", lineNumber: 21 },
     { kind: "add", lineNumber: 22 },
@@ -24,7 +25,7 @@ test("maps changed rows to their old and new source line numbers", () => {
   ]);
 });
 
-test("renders only added and deleted diff lines", () => {
+test("renders unchanged lines without add or delete colors", () => {
   render(
     <GitDiffViewer
       testId="viewer"
@@ -44,20 +45,23 @@ test("renders only added and deleted diff lines", () => {
   const viewer = screen.getByTestId("viewer");
   expect(within(viewer).queryByText(/diff --git/)).not.toBeInTheDocument();
   expect(within(viewer).queryByText(/@@/)).not.toBeInTheDocument();
-  expect(within(viewer).queryByText(" unchanged line")).not.toBeInTheDocument();
+  const contextRow = within(viewer).getByText("unchanged line").closest("[data-diff-kind]");
+  expect(contextRow).toHaveAttribute("data-diff-kind", "context");
+  expect(contextRow).not.toHaveClass("bg-red-50", "text-red-700");
+  expect(contextRow).not.toHaveClass("bg-emerald-50", "text-emerald-700");
 
   const rows = within(viewer).getAllByTestId("git-diff-line");
-  expect(rows).toHaveLength(2);
-  expect(rows[0]).toHaveAttribute("data-diff-kind", "delete");
-  expect(rows[0]).toHaveClass("bg-red-50", "text-red-700");
-  expect(rows[0]).toHaveTextContent("-old line");
-  expect(rows[1]).toHaveAttribute("data-diff-kind", "add");
-  expect(rows[1]).toHaveClass("bg-emerald-50", "text-emerald-700");
-  expect(rows[1]).toHaveTextContent("+new line");
+  expect(rows).toHaveLength(3);
+  expect(rows[1]).toHaveAttribute("data-diff-kind", "delete");
+  expect(rows[1]).toHaveClass("bg-red-50", "text-red-700");
+  expect(rows[1]).toHaveTextContent("-old line");
+  expect(rows[2]).toHaveAttribute("data-diff-kind", "add");
+  expect(rows[2]).toHaveClass("bg-emerald-50", "text-emerald-700");
+  expect(rows[2]).toHaveTextContent("+new line");
 });
 
-test("shows a neutral empty state when diff has no add or delete lines", () => {
-  render(<GitDiffViewer testId="viewer" content={"@@ -1 +1 @@\n unchanged"} />);
-  expect(screen.getByText("无新增或删除内容")).toBeInTheDocument();
+test("shows a neutral empty state when diff has no file lines", () => {
+  render(<GitDiffViewer testId="viewer" content="" />);
+  expect(screen.getByText("无可显示的内容")).toBeInTheDocument();
   expect(screen.queryByTestId("git-diff-line")).not.toBeInTheDocument();
 });
