@@ -1917,7 +1917,7 @@ export class MockWebBotClient implements WebBotClient {
       ],
     },
   ];
-  private announcementReads = new Map<string, string>();
+  private announcementLastSeenId = "";
   private adminUsers = new Map<string, Omit<AdminUser, "ownedBots" | "ownedBotCount">>([
     ["demo", {
       accountId: "demo",
@@ -2336,7 +2336,7 @@ export class MockWebBotClient implements WebBotClient {
   private buildAnnouncementList(): AnnouncementListResult {
     const items = this.sortedAnnouncements();
     const latestId = items[0]?.id || "";
-    const lastSeenId = this.announcementReads.get(this.currentAccountId()) || "";
+    const lastSeenId = this.announcementLastSeenId;
     return {
       items: items.map((item) => this.cloneAnnouncement(item)),
       latestId,
@@ -2904,7 +2904,12 @@ export class MockWebBotClient implements WebBotClient {
     if (latestId && !this.announcements.some((item) => item.id === latestId)) {
       throw new WebApiClientError("公告不存在", { status: 400, code: "invalid_announcement" });
     }
-    this.announcementReads.set(this.currentAccountId(), latestId);
+    const items = this.sortedAnnouncements();
+    const currentIndex = items.findIndex((item) => item.id === this.announcementLastSeenId);
+    const nextIndex = items.findIndex((item) => item.id === latestId);
+    if (currentIndex < 0 || (nextIndex >= 0 && nextIndex < currentIndex)) {
+      this.announcementLastSeenId = latestId;
+    }
     return this.buildAnnouncementList();
   }
 
