@@ -9,6 +9,7 @@ from typing import Any, Mapping
 
 from .models import (
     GENERAL_CODEX_RATE_LIMIT_ID,
+    KNOWN_CODEX_RATE_LIMIT_IDS,
     SECONDARY_CODEX_RATE_LIMIT_ID,
     SQLITE_INT64_MAX,
     CodexRateLimitSample,
@@ -142,7 +143,7 @@ def _rate_limit_resolution(
     if not isinstance(rate_limits, Mapping):
         return None
     limit_id = rate_limits.get("limit_id")
-    if limit_id not in {GENERAL_CODEX_RATE_LIMIT_ID, SECONDARY_CODEX_RATE_LIMIT_ID}:
+    if limit_id not in KNOWN_CODEX_RATE_LIMIT_IDS:
         return None
     sample = _codex_rate_limit_sample(event_time, rate_limits, limit_id=limit_id)
     if sample is None:

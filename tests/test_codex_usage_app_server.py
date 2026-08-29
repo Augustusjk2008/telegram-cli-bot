@@ -5,7 +5,7 @@ from bot.codex_usage import app_server_rate_limits
 from bot.codex_usage.app_server_rate_limits import resolve_account_rate_limit
 
 
-def test_resolve_account_rate_limits_reads_general_and_secondary_in_one_process(monkeypatch) -> None:
+def test_resolve_account_rate_limits_reads_known_buckets_in_one_process(monkeypatch) -> None:
     stdout = "\n".join(
         [
             json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}}),
@@ -38,6 +38,15 @@ def test_resolve_account_rate_limits_reads_general_and_secondary_in_one_process(
                                 },
                                 "secondary": {
                                     "usedPercent": 64,
+                                    "windowDurationMins": 10_080,
+                                    "resetsAt": 1_787_615_285,
+                                },
+                            },
+                            "base_model_inference": {
+                                "limitId": "base_model_inference",
+                                "planType": "pro",
+                                "primary": {
+                                    "usedPercent": 23,
                                     "windowDurationMins": 10_080,
                                     "resetsAt": 1_787_615_285,
                                 },
@@ -85,9 +94,13 @@ def test_resolve_account_rate_limits_reads_general_and_secondary_in_one_process(
         env={"CODEX_HOME": "C:\\temp\\codex"},
     )
 
-    assert [sample.limit_id for sample in samples] == ["codex", "codex_bengalfox"]
-    assert [sample.used_percent for sample in samples] == [17, 64]
-    assert [sample.window_minutes for sample in samples] == [10_080, 10_080]
+    assert [sample.limit_id for sample in samples] == [
+        "codex",
+        "codex_bengalfox",
+        "base_model_inference",
+    ]
+    assert [sample.used_percent for sample in samples] == [17, 64, 23]
+    assert [sample.window_minutes for sample in samples] == [10_080, 10_080, 10_080]
     request_text = process.stdin.getvalue()
     assert '"method":"account/rateLimits/read"' in request_text
     assert '"params":null' in request_text

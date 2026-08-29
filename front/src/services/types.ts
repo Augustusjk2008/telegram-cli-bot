@@ -311,6 +311,7 @@ export type CodexUsageProvider = {
 
 export const GENERAL_CODEX_RATE_LIMIT_ID = "codex";
 export const SECONDARY_CODEX_RATE_LIMIT_ID = "codex_bengalfox";
+export const GPT_RESERVE_RATE_LIMIT_ID = "base_model_inference";
 
 export type CodexUsageTimeBasis = {
   mode: "server_local" | string;

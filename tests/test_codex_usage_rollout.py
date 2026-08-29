@@ -6,6 +6,7 @@ from pathlib import Path
 
 from bot.codex_usage.models import (
     GENERAL_CODEX_RATE_LIMIT_ID,
+    GPT_RESERVE_RATE_LIMIT_ID,
     SECONDARY_CODEX_RATE_LIMIT_ID,
 )
 from bot.codex_usage.rollout import (
@@ -97,6 +98,36 @@ def test_secondary_bucket_uses_secondary_window_and_requests_general_refresh(
     assert resolution.sample is not None
     assert resolution.sample.limit_id == SECONDARY_CODEX_RATE_LIMIT_ID
     assert resolution.sample.used_percent == 64
+
+
+def test_gpt_reserve_bucket_uses_primary_window(tmp_path: Path) -> None:
+    rollout = tmp_path / "rollout.jsonl"
+    rollout.write_text(
+        "\n".join(
+            [
+                _event("2026-08-10T08:00:01Z", {"type": "task_started"}),
+                _event(
+                    "2026-08-10T08:00:02Z",
+                    _rate_limit_payload(
+                        limit_id=GPT_RESERVE_RATE_LIMIT_ID,
+                        used_percent=23,
+                    ),
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    resolution = read_turn_rate_limit_resolution(
+        rollout,
+        started_at=datetime(2026, 8, 10, 8, tzinfo=timezone.utc),
+    )
+
+    assert resolution is not None
+    assert resolution.refresh_general is False
+    assert resolution.sample is not None
+    assert resolution.sample.limit_id == GPT_RESERVE_RATE_LIMIT_ID
+    assert resolution.sample.used_percent == 23
 
 
 def test_invalid_quota_values_are_ignored(tmp_path: Path) -> None:

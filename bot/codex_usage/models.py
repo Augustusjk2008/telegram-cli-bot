@@ -9,9 +9,11 @@ from typing import Literal
 ProviderKind = Literal["openai_official", "base_url", "unknown"]
 GENERAL_CODEX_RATE_LIMIT_ID = "codex"
 SECONDARY_CODEX_RATE_LIMIT_ID = "codex_bengalfox"
+GPT_RESERVE_RATE_LIMIT_ID = "base_model_inference"
 KNOWN_CODEX_RATE_LIMIT_IDS = (
     GENERAL_CODEX_RATE_LIMIT_ID,
     SECONDARY_CODEX_RATE_LIMIT_ID,
+    GPT_RESERVE_RATE_LIMIT_ID,
 )
 SQLITE_INT64_MAX = 2**63 - 1
 
