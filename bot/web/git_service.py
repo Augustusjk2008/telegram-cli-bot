@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
 import json
 import os
 import re
@@ -38,6 +39,7 @@ from bot.platform.processes import attach_process_tree_job, build_hidden_process
 from bot.platform.subprocess_streams import close_process_streams
 from .api_common import WebApiError, get_profile_or_raise
 from .git_commit_message import (
+    DIFF_CHAR_LIMIT,
     build_commit_message_prompt,
     build_git_commit_cli_config,
     extract_commit_message,
@@ -45,6 +47,7 @@ from .git_commit_message import (
 )
 
 GIT_COMMIT_MESSAGE_TIMEOUT_SECONDS = 30 * 60
+GIT_COMMIT_MESSAGE_DIFF_SAMPLE_MAX_FILES = 32
 GIT_SMART_COMMIT_UNTRACKED_PREVIEW_LIMIT = 4096
 GIT_DIFF_OUTPUT_CHAR_LIMIT = 128 * 1024
 GIT_OVERVIEW_UNTRACKED_STATS_MAX_BYTES = 512 * 1024
@@ -149,6 +152,7 @@ def _run_bounded_process(
     profile: _GitCommandProfile,
     input_text: str | None = None,
     on_budget_exceeded: Callable[[], None] | None = None,
+    digest_stdout: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     process = subprocess.Popen(
         command,
@@ -163,9 +167,12 @@ def _run_bounded_process(
     _git_diag_add(active_processes=1, command_count=1)
     buffers = {"stdout": bytearray(), "stderr": bytearray()}
     limits = {"stdout": profile.stdout_max_bytes, "stderr": profile.stderr_max_bytes}
+    stdout_digest = hashlib.sha256() if digest_stdout else None
+    stdout_byte_count = [0]
     exceeded = threading.Event()
+    exceeded_lock = threading.Lock()
+    exceeded_streams: set[str] = set()
     closing = threading.Event()
-    exceeded_name = [""]
     deadline = time.monotonic() + profile.timeout_seconds
 
     def reader(name: str, stream) -> None:
@@ -174,11 +181,16 @@ def _run_bounded_process(
                 chunk = stream.read(65536)
                 if not chunk:
                     return
+                if name == "stdout" and stdout_digest is not None:
+                    stdout_digest.update(chunk)
+                    stdout_byte_count[0] += len(chunk)
+                    continue
                 remaining = max(0, limits[name] - len(buffers[name]))
                 if remaining:
                     buffers[name].extend(chunk[:remaining])
                 if len(chunk) > remaining:
-                    exceeded_name[0] = name
+                    with exceeded_lock:
+                        exceeded_streams.add(name)
                     exceeded.set()
                     return
         except (OSError, ValueError):
@@ -202,9 +214,21 @@ def _run_bounded_process(
         stdin_thread.start()
 
     budget_reason = ""
+
+    def output_budget_reason() -> str:
+        with exceeded_lock:
+            if "stderr" in exceeded_streams:
+                return "stderr_bytes"
+            if "stdout" in exceeded_streams:
+                return "stdout_bytes"
+        return ""
+
     while process.poll() is None:
         if exceeded.is_set():
-            budget_reason = f"{exceeded_name[0]}_bytes"
+            budget_reason = output_budget_reason()
+            if budget_reason == "stdout_bytes":
+                stderr_thread.join(timeout=0.05)
+                budget_reason = output_budget_reason()
             break
         if time.monotonic() >= deadline:
             budget_reason = "timeout"
@@ -247,16 +271,30 @@ def _run_bounded_process(
             thread.join(timeout=max(0.0, close_deadline - time.monotonic()))
     stdout = bytes(buffers["stdout"]).decode("utf-8", errors="replace")
     stderr = bytes(buffers["stderr"]).decode("utf-8", errors="replace")
+    with exceeded_lock:
+        final_exceeded_streams = tuple(
+            name for name in ("stdout", "stderr") if name in exceeded_streams
+        )
+    if "stderr" in final_exceeded_streams:
+        budget_reason = "stderr_bytes"
+    elif not budget_reason and "stdout" in final_exceeded_streams:
+        budget_reason = "stdout_bytes"
     _git_diag_add(
         active_processes=-1,
         timeout_count=int(budget_reason == "timeout"),
         output_budget_count=int(bool(budget_reason and budget_reason != "timeout")),
-        stdout_bytes=len(buffers["stdout"]),
+        stdout_bytes=(
+            stdout_byte_count[0] if stdout_digest is not None else len(buffers["stdout"])
+        ),
         stderr_bytes=len(buffers["stderr"]),
     )
     returncode = process.returncode if isinstance(process.returncode, int) else -1
     result = subprocess.CompletedProcess(command, returncode, stdout, stderr)
     result.budget_reason = budget_reason  # type: ignore[attr-defined]
+    result.budget_exceeded_streams = final_exceeded_streams  # type: ignore[attr-defined]
+    result.stdout_digest = (  # type: ignore[attr-defined]
+        stdout_digest.hexdigest() if stdout_digest is not None else ""
+    )
     return result
 
 
@@ -413,6 +451,7 @@ def _run_git_process(
     env: dict[str, str] | None,
     remote: bool,
     input_text: str | None = None,
+    digest_stdout: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     writes_index = _git_command_writes_index(args)
     index_lock_path = _git_index_lock_path(repo_root) if writes_index else None
@@ -433,6 +472,7 @@ def _run_git_process(
             env=_git_command_env(args, env),
             profile=_git_command_profile(args, remote=remote),
             on_budget_exceeded=capture_created_lock if writes_index else None,
+            digest_stdout=digest_stdout,
         )
         if str(getattr(result, "budget_reason", "") or "") and index_lock_path is not None:
             _remove_command_index_lock(index_lock_path, created_lock_identity)
@@ -446,6 +486,8 @@ def _run_git(
     check: bool = True,
     env: dict[str, str] | None = None,
     remote: bool = False,
+    allow_stdout_truncation: bool = False,
+    digest_stdout: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     try:
         result = _run_git_process(
@@ -453,18 +495,39 @@ def _run_git(
             args,
             env=env,
             remote=remote,
+            digest_stdout=digest_stdout,
         )
     except FileNotFoundError as exc:
         _raise(500, "git_not_found", "未找到 git 可执行文件")
         raise exc  # pragma: no cover
 
-    budget_reason = str(getattr(result, "budget_reason", "") or "")
-    if budget_reason and args and args[0] != "ls-files":
+    budget_reason = _git_result_budget_reason(result)
+    if (
+        budget_reason
+        and args
+        and args[0] != "ls-files"
+        and not (allow_stdout_truncation and budget_reason == "stdout_bytes")
+    ):
         raise GitCommandError(f"Git 命令超过资源预算: {budget_reason}")
     if check and result.returncode != 0 and not budget_reason:
         output = (result.stderr or result.stdout or "").strip() or "Git 命令执行失败"
         raise GitCommandError(output)
     return result
+
+
+def _git_result_budget_reason(result: subprocess.CompletedProcess[str]) -> str:
+    exceeded_streams = set(getattr(result, "budget_exceeded_streams", ()) or ())
+    if "stderr" in exceeded_streams:
+        return "stderr_bytes"
+    budget_reason = str(getattr(result, "budget_reason", "") or "")
+    if budget_reason:
+        return budget_reason
+    return "stdout_bytes" if "stdout" in exceeded_streams else ""
+
+
+def _run_git_stdout_digest(repo_root: str, args: list[str]) -> str:
+    result = _run_git(repo_root, args, check=False, digest_stdout=True)
+    return str(getattr(result, "stdout_digest", "") or "")
 
 
 def _get_configured_git_ssh_command(repo_root: str) -> str:
@@ -518,7 +581,7 @@ def _run_git_with_input(
         _raise(500, "git_not_found", "未找到 git 可执行文件")
         raise exc  # pragma: no cover
 
-    budget_reason = str(getattr(result, "budget_reason", "") or "")
+    budget_reason = _git_result_budget_reason(result)
     if budget_reason:
         raise GitCommandError(f"Git 命令超过资源预算: {budget_reason}")
     if check and result.returncode != 0:
@@ -1622,24 +1685,224 @@ def _require_repo_root(manager: MultiBotManager, alias: str, user_id: int) -> tu
     return working_dir, repo_root
 
 
-def _read_git_commit_message_context(repo_root: str) -> dict[str, Any]:
-    staged_stat = _run_git(repo_root, ["diff", "--cached", "--stat"], check=False).stdout or ""
-    staged_diff = _run_git(repo_root, ["diff", "--cached", "--find-renames"], check=False).stdout or ""
-    unstaged_stat = _run_git(repo_root, ["diff", "--stat"], check=False).stdout or ""
-    unstaged_diff = _run_git(repo_root, ["diff", "--find-renames"], check=False).stdout or ""
-    status_text = _read_git_status_text_with_retry(repo_root, ["status", "--short"])
-
-    use_staged_diff = bool(staged_diff.strip())
-    selected_diff = staged_diff if use_staged_diff else "\n".join(
-        part for part in [unstaged_stat.strip(), unstaged_diff.strip()] if part
+def _read_git_commit_message_diff(repo_root: str, args: list[str]) -> tuple[str, bool]:
+    result = _run_git(
+        repo_root,
+        args,
+        check=False,
+        allow_stdout_truncation=True,
     )
+    return (
+        result.stdout or "",
+        str(getattr(result, "budget_reason", "") or "") == "stdout_bytes",
+    )
+
+
+@dataclass(frozen=True)
+class _GitCommitDiffEntry:
+    path: str
+    pathspecs: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _GitCommitDiffMetadata:
+    cached: bool
+    stat_text: str
+    entries: list[_GitCommitDiffEntry]
+    truncated: bool
+
+
+@dataclass(frozen=True)
+class _GitCommitDiffGroup:
+    stat_text: str
+    file_sections: list[str]
+    truncated: bool
+    has_changes: bool
+
+
+def _sample_git_diff_items(items: list[Any], limit: int) -> list[Any]:
+    if limit <= 0:
+        return []
+    if len(items) <= limit:
+        return items
+    last_index = len(items) - 1
+    sample_last_index = limit - 1
+    if sample_last_index == 0:
+        return [items[0]]
+    return [
+        items[index * last_index // sample_last_index]
+        for index in range(limit)
+    ]
+
+
+def _allocate_git_diff_sample_limits(counts: list[int]) -> list[int]:
+    limits = [0] * len(counts)
+    remaining = GIT_COMMIT_MESSAGE_DIFF_SAMPLE_MAX_FILES
+    active = [index for index, count in enumerate(counts) if count > 0]
+    while remaining > 0 and active:
+        share = max(1, remaining // len(active))
+        next_active: list[int] = []
+        for position, index in enumerate(active):
+            available = counts[index] - limits[index]
+            take = min(available, share, remaining)
+            limits[index] += take
+            remaining -= take
+            if limits[index] < counts[index]:
+                next_active.append(index)
+            if remaining == 0:
+                next_active.extend(active[position + 1 :])
+                break
+        active = next_active
+    return limits
+
+
+def _parse_git_name_status_z(text: str) -> list[_GitCommitDiffEntry]:
+    tokens = str(text or "").split("\0")
+    entries: list[_GitCommitDiffEntry] = []
+    index = 0
+    while index < len(tokens):
+        status = tokens[index]
+        index += 1
+        if not status:
+            continue
+        path_count = 2 if status[:1] in {"R", "C"} else 1
+        if index + path_count > len(tokens):
+            break
+        pathspecs = tuple(tokens[index : index + path_count])
+        index += path_count
+        if not pathspecs or not pathspecs[-1]:
+            continue
+        entries.append(_GitCommitDiffEntry(path=pathspecs[-1], pathspecs=pathspecs))
+    return list(dict.fromkeys(entries))
+
+
+def _label_git_diff_section(text: str, *, scope: str, path: str) -> str:
+    cleaned = str(text or "").strip()
+    if not cleaned:
+        return f"diff --git a/{path} b/{path}\nchange scope: {scope}\n[no textual diff]"
+    first_line, separator, remainder = cleaned.partition("\n")
+    return f"{first_line}\nchange scope: {scope}\n{remainder}" if separator else cleaned
+
+
+def _read_git_commit_message_diff_metadata(
+    repo_root: str,
+    *,
+    cached: bool,
+) -> _GitCommitDiffMetadata:
+    base_args = ["diff", *(["--cached"] if cached else [])]
+    stat_text, stat_truncated = _read_git_commit_message_diff(
+        repo_root,
+        [*base_args, "--stat"],
+    )
+    paths_text, paths_truncated = _read_git_commit_message_diff(
+        repo_root,
+        [*base_args, "--find-renames", "--name-status", "-z"],
+    )
+    if paths_truncated and paths_text and not paths_text.endswith("\0"):
+        paths_text = paths_text.rsplit("\0", 1)[0] if "\0" in paths_text else ""
+    entries = _parse_git_name_status_z(paths_text)
+    return _GitCommitDiffMetadata(
+        cached=cached,
+        stat_text=stat_text.strip(),
+        entries=entries,
+        truncated=stat_truncated or paths_truncated,
+    )
+
+
+def _read_git_commit_message_diff_group(
+    repo_root: str,
+    metadata: _GitCommitDiffMetadata,
+    *,
+    sample_limit: int,
+) -> _GitCommitDiffGroup:
+    base_args = ["diff", *(["--cached"] if metadata.cached else [])]
+    sampled_entries = _sample_git_diff_items(metadata.entries, sample_limit)
+    output_truncated = metadata.truncated or len(sampled_entries) < len(metadata.entries)
+    file_sections: list[str] = []
+    scope = "staged" if metadata.cached else "unstaged"
+
+    for entry in sampled_entries:
+        file_diff, file_truncated = _read_git_commit_message_diff(
+            repo_root,
+            [
+                *base_args,
+                "--find-renames",
+                "--unified=1",
+                "--",
+                *[f":(literal){pathspec}" for pathspec in entry.pathspecs],
+            ],
+        )
+        if len(file_diff) > DIFF_CHAR_LIMIT:
+            file_diff = file_diff[:DIFF_CHAR_LIMIT]
+            file_truncated = True
+        file_sections.append(
+            _label_git_diff_section(file_diff, scope=scope, path=entry.path)
+        )
+        output_truncated = output_truncated or file_truncated
+
+    return _GitCommitDiffGroup(
+        stat_text=metadata.stat_text,
+        file_sections=file_sections,
+        truncated=output_truncated,
+        has_changes=bool(metadata.entries),
+    )
+
+
+def _read_git_commit_message_context(repo_root: str) -> dict[str, Any]:
+    status_text = _read_git_status_text_with_retry(repo_root, ["status", "--short"])
+    staged_metadata = _read_git_commit_message_diff_metadata(
+        repo_root,
+        cached=True,
+    )
+
+    use_staged_diff = bool(staged_metadata.entries)
+    if use_staged_diff:
+        staged = _read_git_commit_message_diff_group(
+            repo_root,
+            staged_metadata,
+            sample_limit=GIT_COMMIT_MESSAGE_DIFF_SAMPLE_MAX_FILES,
+        )
+        summary_parts = [f"=== STAGED FILE STATS ===\n{staged.stat_text or '(empty)'}"]
+        file_sections = staged.file_sections
+        git_output_truncated = staged.truncated
+    else:
+        unstaged_metadata = _read_git_commit_message_diff_metadata(
+            repo_root,
+            cached=False,
+        )
+        untracked_paths = _extract_untracked_paths(status_text)
+        unstaged_limit, untracked_limit = _allocate_git_diff_sample_limits(
+            [len(unstaged_metadata.entries), len(untracked_paths)]
+        )
+        unstaged = _read_git_commit_message_diff_group(
+            repo_root,
+            unstaged_metadata,
+            sample_limit=unstaged_limit,
+        )
+        untracked_summary, untracked_sections, untracked_truncated = (
+            _read_git_commit_message_untracked(
+                repo_root,
+                untracked_paths,
+                sample_limit=untracked_limit,
+            )
+        )
+        summary_parts = []
+        if unstaged.has_changes:
+            summary_parts.append(
+                f"=== UNSTAGED FILE STATS ===\n{unstaged.stat_text or '(empty)'}"
+            )
+        if untracked_summary:
+            summary_parts.append(f"=== UNTRACKED FILES ===\n{untracked_summary}")
+        file_sections = [*unstaged.file_sections, *untracked_sections]
+        git_output_truncated = unstaged.truncated or untracked_truncated
+    selected_diff = "\n\n".join([*summary_parts, *file_sections])
     truncated_diff, diff_truncated = truncate_diff_text(selected_diff)
 
     return {
         "status_text": status_text,
         "diff_text": truncated_diff,
         "use_staged_diff": use_staged_diff,
-        "diff_truncated": diff_truncated,
+        "diff_truncated": git_output_truncated or diff_truncated,
     }
 
 
@@ -1671,67 +1934,107 @@ def _read_untracked_file_preview(repo_root: str, relative_path: str) -> str:
     return f"--- {relative_path} ---\n{preview or '[empty file]'}"
 
 
+def _read_git_commit_message_untracked(
+    repo_root: str,
+    paths: list[str],
+    *,
+    sample_limit: int,
+) -> tuple[str, list[str], bool]:
+    sampled_paths = _sample_git_diff_items(paths, sample_limit)
+    sections = [
+        (
+            f"diff --git /dev/null b/{path}\n"
+            f"change scope: untracked\n"
+            f"{_read_untracked_file_preview(repo_root, path)}"
+        )
+        for path in sampled_paths
+    ]
+    return "\n".join(f"?? {path}" for path in paths), sections, len(sampled_paths) < len(paths)
+
+
 def _read_git_smart_commit_message_context(repo_root: str) -> dict[str, Any]:
     status_text = _read_git_status_text_with_retry(repo_root, ["status", "--short", "--untracked-files=all"])
-    staged_stat = _run_git(repo_root, ["diff", "--cached", "--stat"], check=False).stdout or ""
-    staged_diff = _run_git(repo_root, ["diff", "--cached", "--find-renames"], check=False).stdout or ""
-    unstaged_stat = _run_git(repo_root, ["diff", "--stat"], check=False).stdout or ""
-    unstaged_diff = _run_git(repo_root, ["diff", "--find-renames"], check=False).stdout or ""
-
-    sections: list[str] = []
-    if staged_stat.strip() or staged_diff.strip():
-        sections.append(
-            "\n".join(
-                part
-                for part in [
-                    "=== STAGED CHANGES ===",
-                    staged_stat.strip(),
-                    staged_diff.strip(),
-                ]
-                if part
-            )
-        )
-    if unstaged_stat.strip() or unstaged_diff.strip():
-        sections.append(
-            "\n".join(
-                part
-                for part in [
-                    "=== UNSTAGED CHANGES ===",
-                    unstaged_stat.strip(),
-                    unstaged_diff.strip(),
-                ]
-                if part
-            )
-        )
-
+    staged_metadata = _read_git_commit_message_diff_metadata(
+        repo_root,
+        cached=True,
+    )
+    unstaged_metadata = _read_git_commit_message_diff_metadata(
+        repo_root,
+        cached=False,
+    )
     untracked_paths = _extract_untracked_paths(status_text)
-    if untracked_paths:
-        previews = [_read_untracked_file_preview(repo_root, path) for path in untracked_paths]
-        sections.append("=== UNTRACKED FILES ===\n" + "\n\n".join(previews))
+    staged_limit, unstaged_limit, untracked_limit = _allocate_git_diff_sample_limits(
+        [
+            len(staged_metadata.entries),
+            len(unstaged_metadata.entries),
+            len(untracked_paths),
+        ]
+    )
+    staged = _read_git_commit_message_diff_group(
+        repo_root,
+        staged_metadata,
+        sample_limit=staged_limit,
+    )
+    unstaged = _read_git_commit_message_diff_group(
+        repo_root,
+        unstaged_metadata,
+        sample_limit=unstaged_limit,
+    )
+    untracked_summary, untracked_sections, untracked_truncated = (
+        _read_git_commit_message_untracked(
+            repo_root,
+            untracked_paths,
+            sample_limit=untracked_limit,
+        )
+    )
+
+    summary_parts: list[str] = []
+    if staged.has_changes:
+        summary_parts.append(f"=== STAGED FILE STATS ===\n{staged.stat_text or '(empty)'}")
+    if unstaged.has_changes:
+        summary_parts.append(f"=== UNSTAGED FILE STATS ===\n{unstaged.stat_text or '(empty)'}")
+    if untracked_summary:
+        summary_parts.append(f"=== UNTRACKED FILES ===\n{untracked_summary}")
+    sections = [
+        *summary_parts,
+        *staged.file_sections,
+        *unstaged.file_sections,
+        *untracked_sections,
+    ]
 
     diff_text, diff_truncated = truncate_diff_text("\n\n".join(part for part in sections if part))
     return {
         "status_text": status_text,
         "diff_text": diff_text,
         "use_staged_diff": True,
-        "diff_truncated": diff_truncated,
+        "diff_truncated": (
+            diff_truncated
+            or staged.truncated
+            or unstaged.truncated
+            or untracked_truncated
+        ),
     }
 
 
 def _build_git_worktree_snapshot(repo_root: str) -> str:
     status_text = _read_git_status_text_with_retry(repo_root, ["status", "--porcelain=1", "--untracked-files=all"])
-    staged_diff = _run_git(repo_root, ["diff", "--cached", "--find-renames"], check=False).stdout or ""
-    unstaged_diff = _run_git(repo_root, ["diff", "--find-renames"], check=False).stdout or ""
+    staged_diff_digest = _run_git_stdout_digest(repo_root, ["diff", "--cached", "--find-renames"])
+    unstaged_diff_digest = _run_git_stdout_digest(repo_root, ["diff", "--find-renames"])
     untracked_paths = _extract_untracked_paths(status_text)
-    untracked_preview = "\n\n".join(_read_untracked_file_preview(repo_root, path) for path in untracked_paths)
-    return "\n<<STATUS>>\n".join(
-        [
-            status_text,
-            "<<STAGED>>\n" + staged_diff,
-            "<<UNSTAGED>>\n" + unstaged_diff,
-            "<<UNTRACKED>>\n" + untracked_preview,
-        ]
-    )
+    snapshot = hashlib.sha256()
+
+    def update(value: str) -> None:
+        encoded = value.encode("utf-8", errors="replace")
+        snapshot.update(len(encoded).to_bytes(8, "big"))
+        snapshot.update(encoded)
+
+    update(status_text)
+    update(staged_diff_digest)
+    update(unstaged_diff_digest)
+    for path in untracked_paths:
+        update(path)
+        update(_read_untracked_file_preview(repo_root, path))
+    return snapshot.hexdigest()
 
 
 async def _generate_git_commit_message_from_context(

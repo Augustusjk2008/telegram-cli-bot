@@ -13,6 +13,8 @@ from bot.prompts import render_prompt
 
 DIFF_CHAR_LIMIT = 40 * 1024
 COMMIT_MESSAGE_RE = re.compile(r"<COMMIT_MESSAGE>\s*(.*?)\s*</COMMIT_MESSAGE>", re.S)
+DIFF_SECTION_RE = re.compile(r"(?m)^diff --git ")
+DIFF_SECTION_MIN_CHARS = 160
 
 
 def build_git_commit_cli_config(profile: BotProfile, config: GitCommitMessageCliConfig) -> dict[str, Any]:
@@ -49,7 +51,56 @@ def truncate_diff_text(text: str, *, limit: int = DIFF_CHAR_LIMIT) -> tuple[str,
     cleaned = str(text or "")
     if len(cleaned) <= limit:
         return cleaned, False
-    return cleaned[:limit].rstrip() + "\n\n...[truncated]", True
+
+    matches = list(DIFF_SECTION_RE.finditer(cleaned))
+    if len(matches) < 2:
+        return cleaned[:limit].rstrip() + "\n\n...[truncated]", True
+
+    preamble = cleaned[: matches[0].start()]
+    sections = [
+        cleaned[match.start() : matches[index + 1].start() if index + 1 < len(matches) else None]
+        for index, match in enumerate(matches)
+    ]
+    max_sections = max(1, limit // DIFF_SECTION_MIN_CHARS)
+    if len(sections) > max_sections:
+        last_index = len(sections) - 1
+        if max_sections == 1:
+            sections = [sections[0]]
+        else:
+            sections = [
+                sections[round(index * last_index / (max_sections - 1))]
+                for index in range(max_sections)
+            ]
+
+    separator_chars = len(sections)
+    preamble_budget = max(
+        0,
+        limit - len(sections) * DIFF_SECTION_MIN_CHARS - separator_chars,
+    )
+    preamble_part = preamble[:preamble_budget].rstrip()
+    remaining = max(0, limit - len(preamble_part) - separator_chars)
+    section_budgets = [0] * len(sections)
+    active = list(range(len(sections)))
+    while remaining > 0 and active:
+        share = max(1, remaining // len(active))
+        next_active: list[int] = []
+        for position, index in enumerate(active):
+            available = len(sections[index]) - section_budgets[index]
+            take = min(available, share, remaining)
+            section_budgets[index] += take
+            remaining -= take
+            if section_budgets[index] < len(sections[index]):
+                next_active.append(index)
+            if remaining == 0:
+                next_active.extend(active[position + 1 :])
+                break
+        active = next_active
+    section_parts = [
+        section[:section_budgets[index]].rstrip()
+        for index, section in enumerate(sections)
+    ]
+    result = "\n".join(part for part in [preamble_part, *section_parts] if part)
+    return result[:limit].rstrip() + "\n\n...[truncated]", True
 
 
 def extract_commit_message(text: str) -> str:
