@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -58,6 +59,9 @@ class ClusterAgentTask:
     responsibility: str
     team_revision: int
     assignment_revision: int
+    execution_mode: str
+    allow_unsafe_cli: bool
+    profile: BotProfile
     status: str
     created_at: str
     started_at: str = ""
@@ -90,10 +94,21 @@ class ClusterRun:
 
 
 class ClusterToolError(RuntimeError):
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, data: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+        self.data = dict(data or {})
+        self.current_run_id = str(self.data.get("run_id") or "").strip()
+
+
+def derive_cluster_run_id(main_conversation_id: str, team_revision: int) -> str:
+    conversation_id = str(main_conversation_id or "").strip()
+    if not conversation_id:
+        raise ValueError("main_conversation_id 不能为空")
+    revision = max(0, int(team_revision or 0))
+    digest = hashlib.sha256(f"{conversation_id}\0{revision}".encode("utf-8")).hexdigest()
+    return f"clr_{digest[:12]}"
 
 
 def _bool(value: Any) -> bool:
@@ -123,9 +138,44 @@ class ClusterRuntime:
 
     def start_run(self, request: ClusterRunRequest) -> ClusterRun:
         self.cleanup_finished_runs()
+        return self._create_run(request, f"clr_{uuid.uuid4().hex[:12]}")
+
+    def ensure_run(self, request: ClusterRunRequest, run_id: str) -> ClusterRun:
+        normalized_run_id = str(run_id or "").strip()
+        if not normalized_run_id:
+            raise ValueError("run_id 不能为空")
+        self.cleanup_finished_runs()
+        run = self._runs.get(normalized_run_id)
+        if run is None:
+            return self._create_run(request, normalized_run_id)
+        expected_identity = (
+            str(request.bot_alias or "").strip().lower(),
+            int(request.user_id),
+            str(request.main_conversation_id or "").strip(),
+            max(0, int(request.team_revision or 0)),
+        )
+        actual_identity = (
+            str(run.bot_alias or "").strip().lower(),
+            int(run.user_id),
+            str(run.main_conversation_id or "").strip(),
+            max(0, int(run.team_revision or 0)),
+        )
+        if actual_identity != expected_identity:
+            raise ClusterToolError("cluster_run_conflict", "run_id 与当前主会话或编组版本不匹配")
+
+        run.execution_mode = str(request.execution_mode or "cli").strip().lower() or "cli"
+        run.profile = copy.deepcopy(request.profile)
+        run.mentions = [dict(item) for item in request.mentions]
+        run.allow_unsafe_cli = bool(request.allow_unsafe_cli)
+        run.team = copy.deepcopy(request.team) if isinstance(request.team, dict) else {"version": 1, "assignments": []}
+        run.status = "running"
+        run.updated_at = self._now_iso()
+        return run
+
+    def _create_run(self, request: ClusterRunRequest, run_id: str) -> ClusterRun:
         now = self._now_iso()
         run = ClusterRun(
-            run_id=f"clr_{uuid.uuid4().hex[:12]}",
+            run_id=run_id,
             bot_alias=request.bot_alias,
             user_id=request.user_id,
             execution_mode=str(request.execution_mode or "cli").strip().lower() or "cli",
@@ -145,6 +195,18 @@ class ClusterRuntime:
 
     def get_run(self, run_id: str) -> ClusterRun | None:
         return self._runs.get(str(run_id or "").strip())
+
+    def rename_bot_alias(self, old_alias: str, new_alias: str) -> None:
+        previous = str(old_alias or "").strip().lower()
+        current = str(new_alias or "").strip().lower()
+        if not previous or not current or previous == current:
+            return
+        for run in self._runs.values():
+            if str(run.bot_alias or "").strip().lower() != previous:
+                continue
+            run.bot_alias = current
+            run.profile.alias = current
+            run.updated_at = self._now_iso()
 
     def get_team_assignment(self, run_id: str, agent_id: str) -> dict[str, Any] | None:
         run = self._runs[str(run_id)]
@@ -176,14 +238,21 @@ class ClusterRuntime:
             for task in run.tasks.values()
         )
 
-    def find_active_run(self, bot_alias: str, user_id: int) -> ClusterRun | None:
+    def find_active_run(
+        self,
+        bot_alias: str,
+        user_id: int,
+        main_conversation_id: str = "",
+    ) -> ClusterRun | None:
         self.cleanup_finished_runs()
         alias = str(bot_alias or "").strip()
+        conversation_id = str(main_conversation_id or "").strip()
         active_runs = [
             run
             for run in self._runs.values()
             if run.bot_alias == alias
             and run.user_id == user_id
+            and (not conversation_id or run.main_conversation_id == conversation_id)
             and (
                 run.status == "running"
                 or any(task.status in {"queued", "running"} for task in run.tasks.values())
@@ -208,6 +277,9 @@ class ClusterRuntime:
         run.status = status
         run.updated_at = now
         run.events.append({"kind": "run_finished", "status": status, "created_at": now})
+
+    def retire_run(self, run_id: str, status: str = "completed") -> None:
+        self.finish_run(run_id, status)
 
     def cleanup_finished_runs(self, *, keep_latest: int = 50) -> None:
         finished = [
@@ -234,6 +306,9 @@ class ClusterRuntime:
             responsibility=request.responsibility,
             team_revision=request.team_revision,
             assignment_revision=request.assignment_revision,
+            execution_mode=run.execution_mode,
+            allow_unsafe_cli=run.allow_unsafe_cli,
+            profile=copy.deepcopy(run.profile),
             status="queued",
             created_at=now,
         )

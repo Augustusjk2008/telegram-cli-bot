@@ -33,8 +33,12 @@
 - Codex、Claude 在集群轮次中由 `bot/web/api_service.py` 动态注入 `bot/cluster/mcp_stdio.py` launcher；管理页也可生成对应的 `mcp add/get/remove` 命令。
 - Pi 不使用 stdio launcher 注册工具，而由 `bot/cluster/pi_extension/tcb-cluster.ts` 作为宿主适配层，直接调用同一 bridge API。
 - 两种适配层都暴露 `configure_team`、`cluster_status`、`list_agents`、`new_agent_session`、`ask_agent`、`poll_agent_tasks`、`wait_agent_messages`。
-- `bot/data/prompts/cluster_mode.md` 在底层 agent 会话首轮或集群状态/写入策略变化时拼到用户消息前；连续启用轮次改用 `cluster_turn.md` 只刷新当前 `run_id`，连续关闭轮次不重复提示。MCP tool description 只描述具体工具和参数。
-- 每次工具调用必须显式传入当前 `run_id`；适配层通过 `X-TCB-Cluster-Run-Id` header 传给 bridge，不依赖 `TCB_CLUSTER_RUN_ID` 环境变量。
+- `bot/data/prompts/cluster_mode.md` 在底层 agent 会话首轮或集群状态/写入策略变化时拼到用户消息前；连续启用轮次改用 `cluster_turn.md` 提醒继续使用当前 `run_id`，连续关闭轮次不重复提示。MCP tool description 只描述具体工具和参数。
+- `run_id` 由主会话 `conversation_id + cluster_team_revision` 稳定推导；同一主会话与编组在普通轮次和宿主重启后得到同一个 ID，不新增数据库 ID 字段。
+- 只有 `configure_team` 实际新增、删除、修改或重新分配角色时才递增编组版本并轮换 `run_id`。无变化请求返回 `changed=false` 和原 ID；普通轮次结束、异常、停止、集群开关切换及宿主重启均不轮换。
+- `configure_team` 成功后主 agent 必须查看 `changed`：`changed=true` 时同一轮所有后续工具立即使用响应中的新 `run_id`，`changed=false` 时继续使用原 ID。
+- 每次工具调用必须显式传入当前 `run_id`；stdio MCP 和 Pi 适配层不缓存或自动切换 ID，只把本次工具参数通过 `X-TCB-Cluster-Run-Id` header 传给 bridge，也不依赖 `TCB_CLUSTER_RUN_ID` 环境变量。
+- Cluster task、进度消息和后台任务仍是内存态，不跨宿主重启持久化。
 - Pi runtime 仅通过 `TCB_CLUSTER_MCP_CONFIG` 定位 bridge 配置；Codex、Claude 的 stdio launcher 从命令行 `--config` 读取同一配置文件。
 - `profile.cluster.enabled` 是当前 Bot 级集群开关；请求体旧 `cluster` 字段仅为兼容输入，不决定是否启动 cluster run。
 

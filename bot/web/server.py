@@ -182,7 +182,7 @@ from .api_service import (
     change_working_directory,
     create_conversation,
     archive_conversation,
-    delete_all_conversations,
+    delete_all_conversations_async,
     delete_conversation,
     delete_favorite_answer,
     execute_plan,
@@ -3289,7 +3289,15 @@ class WebApiServer:
         alias = self._manager_alias(request)
         body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
         agent_id = self._request_agent_id(request, body)
-        return _json({"ok": True, "data": reset_user_session(self.manager, alias, self._chat_user_id(auth), agent_id=agent_id)})
+        return _json({
+            "ok": True,
+            "data": await reset_user_session(
+                self.manager,
+                alias,
+                self._chat_user_id(auth),
+                agent_id=agent_id,
+            ),
+        })
 
     async def post_kill(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_CHAT_SEND)
@@ -3508,15 +3516,13 @@ class WebApiServer:
         delete_native = str(request.query.get("delete_native_session", "")).lower() in {"1", "true", "yes", "on"}
         execution_mode = self._request_execution_mode(request, body)
         chat_user_id = self._chat_user_id(auth)
-        data = await run_chat_store_io(
-            delete_all_conversations,
+        data = await delete_all_conversations_async(
             self.manager,
             alias,
             chat_user_id,
             agent_id=agent_id,
             execution_mode=execution_mode,
             delete_native_session=delete_native,
-            write_key=f"{alias}:{chat_user_id}:{agent_id}",
         )
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 

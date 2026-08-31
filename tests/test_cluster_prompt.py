@@ -46,6 +46,13 @@ def test_cluster_prompt_requires_self_contained_delegation_context() -> None:
     assert "重复工作" in prompt
     assert "同一文件" in prompt
     assert "当前 run_id: run-123" in prompt
+    assert "普通轮次继续使用当前 run_id" in prompt
+    assert "configure_team 成功后必须查看响应中的 changed" in prompt
+    assert "changed=true" in prompt
+    assert "立即改用响应中的新 run_id" in prompt
+    assert "changed=false" in prompt
+    assert "继续使用原 run_id" in prompt
+    assert "适配层不会缓存或自动切换 run_id" in prompt
     assert "显式提及" not in prompt
     assert "wait_agent_messages" in prompt
     assert "poll_agent_tasks" in prompt
@@ -71,7 +78,7 @@ def test_cluster_prompt_keeps_child_tasks_read_only_when_write_is_disallowed() -
     assert "不要设置 allow_write=true" in prompt
 
 
-def test_cluster_prompt_only_refreshes_run_id_after_full_session_prompt() -> None:
+def test_cluster_prompt_keeps_same_run_id_after_full_session_prompt() -> None:
     profile = _profile()
     session = _session()
 
@@ -89,15 +96,18 @@ def test_cluster_prompt_only_refreshes_run_id_after_full_session_prompt() -> Non
         session=session,
         context_kind="cli:codex",
         context_id="session-1",
-        cluster_run_id="run-2",
+        cluster_run_id="run-1",
     )
 
     assert "简单、不可并行或委派成本更高" in first
     assert "当前 run_id: run-1" in first
     assert "简单、不可并行或委派成本更高" not in second
     assert "沿用本会话此前的集群规则" in second
-    assert "当前 run_id: run-2" in second
-    assert "run-1" not in second
+    assert "当前 run_id: run-1" in second
+    assert "普通轮次继续使用当前 run_id" in second
+    assert "changed=true" in second
+    assert "changed=false" in second
+    assert "run-2" not in second
 
 
 def test_cluster_disabled_prompt_is_not_repeated_in_same_session() -> None:
@@ -150,7 +160,7 @@ def test_cluster_prompt_is_reinjected_when_mode_or_write_policy_changes() -> Non
         session=session,
         context_kind="cli:codex",
         context_id="session-1",
-        cluster_run_id="run-2",
+        cluster_run_id="run-1",
     )
     profile.cluster.enabled = False
     disabled = _apply_cluster_prompt(
@@ -185,7 +195,7 @@ def test_cluster_prompt_is_reinjected_for_a_new_or_reset_model_session() -> None
         session=session,
         context_kind="cli:codex",
         context_id="session-1",
-        cluster_run_id="run-2",
+        cluster_run_id="run-1",
     )
     changed_session = _apply_cluster_prompt(
         profile,
@@ -193,7 +203,7 @@ def test_cluster_prompt_is_reinjected_for_a_new_or_reset_model_session() -> None
         session=session,
         context_kind="cli:codex",
         context_id="session-2",
-        cluster_run_id="run-3",
+        cluster_run_id="run-1",
     )
     reset_session = _apply_cluster_prompt(
         profile,
@@ -201,12 +211,15 @@ def test_cluster_prompt_is_reinjected_for_a_new_or_reset_model_session() -> None
         session=session,
         context_kind="cli:codex",
         context_id="",
-        cluster_run_id="run-4",
+        cluster_run_id="run-1",
     )
 
     assert "简单、不可并行或委派成本更高" not in same_session
     assert "简单、不可并行或委派成本更高" in changed_session
     assert "简单、不可并行或委派成本更高" in reset_session
+    assert "当前 run_id: run-1" in same_session
+    assert "当前 run_id: run-1" in changed_session
+    assert "当前 run_id: run-1" in reset_session
 
 
 def test_cluster_prompt_can_force_full_guidance_for_same_turn_session_retry() -> None:
@@ -227,12 +240,12 @@ def test_cluster_prompt_can_force_full_guidance_for_same_turn_session_retry() ->
         session=session,
         context_kind="cli:claude",
         context_id="",
-        cluster_run_id="run-2",
+        cluster_run_id="run-1",
         force_full=True,
     )
 
     assert "简单、不可并行或委派成本更高" in retry
-    assert "当前 run_id: run-2" in retry
+    assert "当前 run_id: run-1" in retry
 
 
 @pytest.mark.asyncio
@@ -243,7 +256,7 @@ async def test_native_chat_keeps_full_cluster_prompt_as_new_session_fallback(mon
     session = _session()
     session.native_agent_session_id = "pi-session-1"
     calls: list[dict[str, object]] = []
-    run_ids = iter(["run-1", "run-2"])
+    run_ids = iter(["run-1", "run-1"])
 
     class FakeService:
         async def run_chat(self, **kwargs):
@@ -274,6 +287,6 @@ async def test_native_chat_keeps_full_cluster_prompt_as_new_session_fallback(mon
 
     assert "简单、不可并行或委派成本更高" in str(calls[0]["prompt_text"])
     assert "简单、不可并行或委派成本更高" not in str(calls[1]["prompt_text"])
-    assert "当前 run_id: run-2" in str(calls[1]["prompt_text"])
+    assert "当前 run_id: run-1" in str(calls[1]["prompt_text"])
     assert "简单、不可并行或委派成本更高" in str(calls[1]["fresh_session_prompt_text"])
-    assert "当前 run_id: run-2" in str(calls[1]["fresh_session_prompt_text"])
+    assert "当前 run_id: run-1" in str(calls[1]["fresh_session_prompt_text"])

@@ -45,7 +45,12 @@ from bot.cluster.bundles import (
     list_cluster_templates,
     normalize_cluster_bundle,
 )
-from bot.cluster.runtime import ClusterRuntime, ClusterRunRequest, ClusterToolError
+from bot.cluster.runtime import (
+    ClusterRuntime,
+    ClusterRunRequest,
+    ClusterToolError,
+    derive_cluster_run_id,
+)
 from bot.cluster.team_service import ClusterTeamService
 from bot.cluster.setup import (
     CLUSTER_MCP_SERVER_NAME,
@@ -1074,7 +1079,17 @@ def _require_current_cluster_team(manager: MultiBotManager, run: Any) -> None:
         raise ClusterToolError("cluster_team_changed", "主会话已切换，请在当前会话重新委派")
     state = _chat_store_for_cluster_run(manager, run).get_conversation_team(parent_conversation_id)
     if int(state.get("cluster_team_revision") or 0) != int(run.team_revision or 0):
-        raise ClusterToolError("cluster_team_changed", "编组已被另一轮更新，请重新读取后重试")
+        _raise(
+            409,
+            "cluster_run_changed",
+            "编组已更新，请改用当前 run_id 后重试",
+            {
+                "run_id": derive_cluster_run_id(
+                    parent_conversation_id,
+                    max(0, int(state.get("cluster_team_revision") or 0)),
+                ),
+            },
+        )
 
 
 async def handle_cluster_mcp_tool(
@@ -1102,23 +1117,38 @@ async def handle_cluster_mcp_tool(
                 run_id=run_id,
                 payload=payload,
                 current_profile=current_profile,
+                current_conversation_id=lambda: _active_main_conversation_for_cluster_run(manager, run),
             )
             return {"ok": True, "data": configured}
         if tool_name == "new_agent_session":
-            _require_current_cluster_team(manager, run)
-            agent_id = _CLUSTER_RUNTIME.validate_new_agent_session(run_id, payload)
-            assignment = _CLUSTER_RUNTIME.get_team_assignment(run_id, agent_id)
-            if assignment is None:
-                raise ClusterToolError("cluster_agent_not_assigned", "该槽位不在当前编组中")
-            conversation_id = _ensure_cluster_child_conversation(
-                manager,
-                run,
-                SimpleNamespace(
-                    agent_id=agent_id,
-                    assignment_revision=int(assignment.get("assignment_revision") or 0),
-                ),
-                force_new=True,
-            )
+            def create_child_session() -> tuple[str, str]:
+                _require_cluster_run_control_ready(run_id)
+                _require_current_cluster_team(manager, run)
+                agent_id = _CLUSTER_RUNTIME.validate_new_agent_session(run_id, payload)
+                assignment = _CLUSTER_RUNTIME.get_team_assignment(run_id, agent_id)
+                if assignment is None:
+                    raise ClusterToolError("cluster_agent_not_assigned", "该槽位不在当前编组中")
+                conversation_id = _ensure_cluster_child_conversation(
+                    manager,
+                    run,
+                    SimpleNamespace(
+                        agent_id=agent_id,
+                        assignment_revision=int(assignment.get("assignment_revision") or 0),
+                    ),
+                    force_new=True,
+                )
+                return agent_id, conversation_id
+
+            parent_conversation_id = str(run.main_conversation_id or "").strip()
+            if parent_conversation_id:
+                async with _CLUSTER_TEAM_SERVICE.conversation_lock(
+                    run.bot_alias,
+                    run.user_id,
+                    parent_conversation_id,
+                ):
+                    agent_id, conversation_id = create_child_session()
+            else:
+                agent_id, conversation_id = create_child_session()
             return {
                 "ok": True,
                 "data": {
@@ -1166,10 +1196,12 @@ async def handle_cluster_mcp_tool(
                 run.user_id,
                 parent_conversation_id,
             ):
+                _require_cluster_run_control_ready(run_id)
                 _require_current_cluster_team(manager, run)
                 request = _CLUSTER_RUNTIME.validate_ask_agent(run_id, payload)
                 task = _CLUSTER_RUNTIME.create_agent_task(run_id, request)
         else:
+            _require_cluster_run_control_ready(run_id)
             _require_current_cluster_team(manager, run)
             request = _CLUSTER_RUNTIME.validate_ask_agent(run_id, payload)
             task = _CLUSTER_RUNTIME.create_agent_task(run_id, request)
@@ -1194,11 +1226,12 @@ async def handle_cluster_mcp_tool(
     except ClusterToolError as exc:
         conflict_codes = {
             "cluster_agent_busy",
+            "cluster_run_changed",
             "cluster_team_busy",
             "cluster_team_changed",
             "cluster_team_sync_failed",
         }
-        _raise(409 if exc.code in conflict_codes else 400, exc.code, exc.message)
+        _raise(409 if exc.code in conflict_codes else 400, exc.code, exc.message, exc.data)
 
 
 def _apply_cli_model_options(schema: dict[str, Any]) -> dict[str, Any]:
@@ -1731,6 +1764,36 @@ def _retire_cluster_child_conversations(
     return _get_chat_store(main_session).deactivate_cluster_child_conversations(normalized_parent_id)
 
 
+def _conversation_cluster_team_revision(store: Any, conversation_id: str) -> int:
+    getter = getattr(store, "get_conversation_team", None)
+    if not callable(getter):
+        return 0
+    try:
+        state = getter(conversation_id)
+    except KeyError:
+        return 0
+    return max(0, int(state.get("cluster_team_revision") or 0))
+
+
+def _retire_cluster_run_for_conversation(
+    alias: str,
+    user_id: int,
+    conversation_id: str,
+    team_revision: int,
+) -> None:
+    normalized_conversation_id = str(conversation_id or "").strip()
+    if not normalized_conversation_id:
+        return
+    run_id = derive_cluster_run_id(normalized_conversation_id, max(0, int(team_revision or 0)))
+    run = _CLUSTER_RUNTIME.get_run(run_id)
+    if run is None:
+        return
+    if run.bot_alias != alias or run.user_id != chat_session_user_id(user_id):
+        return
+    _CLUSTER_RUNTIME.retire_run(run_id)
+    _cleanup_cluster_run_control_if_idle(run_id)
+
+
 @asynccontextmanager
 async def _cluster_parent_lock_scope(
     alias: str,
@@ -2044,6 +2107,11 @@ def _delete_conversation_locked(
         main_conversation_id=str(conversation_id or "").strip(),
     ):
         _raise(409, "cluster_team_busy", "该主会话仍有子任务运行，暂不能删除")
+    cluster_team_revision = (
+        _conversation_cluster_team_revision(store, conversation_id)
+        if session.agent_id == "main"
+        else 0
+    )
     native_session_id = str(conversation.get("native_session_id") or "").strip()
     pi_record_deleted = False
     if delete_native_session and native_provider == NATIVE_AGENT_PROVIDER:
@@ -2084,6 +2152,7 @@ def _delete_conversation_locked(
             profile,
             conversation_id,
         )
+        _retire_cluster_run_for_conversation(alias, user_id, conversation_id, cluster_team_revision)
     deleted_favorite_count = ChatFavoriteStore(session.working_dir).delete_favorites_for_conversations(
         [conversation_id],
         _favorite_scope_for_session(session, requested_execution_mode),
@@ -2166,6 +2235,11 @@ def _archive_conversation_locked(
         main_conversation_id=str(conversation_id or "").strip(),
     ):
         _raise(409, "cluster_team_busy", "该主会话仍有子任务运行，暂不能归档")
+    cluster_team_revision = (
+        _conversation_cluster_team_revision(store, conversation_id)
+        if session.agent_id == "main"
+        else 0
+    )
 
     store.archive_conversation_by_id(conversation_id)
     if session.agent_id == "main":
@@ -2177,6 +2251,7 @@ def _archive_conversation_locked(
             profile,
             conversation_id,
         )
+        _retire_cluster_run_for_conversation(alias, user_id, conversation_id, cluster_team_revision)
     if is_active:
         with session._lock:
             session.active_conversation_id = None
@@ -2377,6 +2452,22 @@ def delete_all_conversations(
         native_provider_exclude=NATIVE_AGENT_PROVIDER if resolved_execution_mode != NATIVE_AGENT_PROVIDER else None,
         limit=100,
     )
+    cluster_conversations = (
+        [str(item.get("id") or "").strip() for item in conversations_to_delete]
+        if session.agent_id == "main"
+        else []
+    )
+    for conversation_id in cluster_conversations:
+        if _CLUSTER_RUNTIME.has_pending_tasks(
+            bot_alias=alias,
+            user_id=chat_session_user_id(user_id),
+            main_conversation_id=conversation_id,
+        ):
+            _raise(409, "cluster_team_busy", "仍有主会话子任务运行，暂不能全部删除")
+    cluster_team_revisions = {
+        conversation_id: _conversation_cluster_team_revision(store, conversation_id)
+        for conversation_id in cluster_conversations
+    }
     deleted_count = store.archive_bot_conversations(
         bot_id=session.bot_id,
         user_id=session.user_id,
@@ -2422,6 +2513,22 @@ def delete_all_conversations(
                     native_cleared = True
     session.persist()
 
+    for conversation_id in cluster_conversations:
+        _retire_cluster_child_conversations(manager, alias, user_id, conversation_id)
+        _clear_cluster_child_session_bindings(
+            manager,
+            alias,
+            user_id,
+            profile,
+            conversation_id,
+        )
+        _retire_cluster_run_for_conversation(
+            alias,
+            user_id,
+            conversation_id,
+            cluster_team_revisions[conversation_id],
+        )
+
     return {
         "deleted_count": deleted_count,
         "deleted_favorite_count": deleted_favorite_count,
@@ -2430,6 +2537,54 @@ def delete_all_conversations(
         "items": [],
         "messages": [],
     }
+
+
+async def delete_all_conversations_async(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    *,
+    agent_id: str = "main",
+    execution_mode: str = "",
+    delete_native_session: bool = False,
+) -> dict[str, Any]:
+    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    normalized_agent_id = str(session.agent_id or "main").strip().lower() or "main"
+    write_key = f"{alias}:{chat_session_user_id(user_id)}:{normalized_agent_id}"
+    if normalized_agent_id != "main":
+        return await run_chat_store_io(
+            delete_all_conversations,
+            manager,
+            alias,
+            user_id,
+            agent_id=normalized_agent_id,
+            execution_mode=execution_mode,
+            delete_native_session=delete_native_session,
+            write_key=write_key,
+        )
+    resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
+    conversations = _get_chat_store(session).list_conversations(
+        bot_id=session.bot_id,
+        user_id=session.user_id,
+        working_dir=session.working_dir,
+        agent_id=session.agent_id,
+        native_provider=NATIVE_AGENT_PROVIDER if resolved_execution_mode == NATIVE_AGENT_PROVIDER else None,
+        native_provider_exclude=NATIVE_AGENT_PROVIDER if resolved_execution_mode != NATIVE_AGENT_PROVIDER else None,
+        limit=100,
+    )
+    conversation_ids = [str(item.get("id") or "").strip() for item in conversations]
+    async with _cluster_parent_lock_scope(alias, user_id, *conversation_ids):
+        io = run_chat_store_io(
+            delete_all_conversations,
+            manager,
+            alias,
+            user_id,
+            agent_id=normalized_agent_id,
+            execution_mode=resolved_execution_mode,
+            delete_native_session=delete_native_session,
+            write_key=write_key,
+        )
+        return await _await_cancel_safe_lifecycle_io(io)
 
 
 def get_history_delta(
@@ -2707,7 +2862,7 @@ async def rollback_native_agent_history(
     }
 
 
-def reset_user_session(manager: MultiBotManager, alias: str, user_id: int, agent_id: str = "main") -> dict[str, Any]:
+def _reset_user_session_locked(manager: MultiBotManager, alias: str, user_id: int, agent_id: str = "main") -> dict[str, Any]:
     user_id = chat_session_user_id(user_id)
     profile = get_profile_or_raise(manager, alias)
     bot_id = resolve_session_bot_id(manager, alias)
@@ -2727,40 +2882,72 @@ def reset_user_session(manager: MultiBotManager, alias: str, user_id: int, agent
     with session._lock:
         if bool(session.is_processing):
             _raise(409, "conversation_switch_blocked", "当前任务运行中，先终止或等待完成")
+        active_conversation_id = str(session.active_conversation_id or "").strip()
 
+    if (
+        normalized_agent_id == "main"
+        and active_conversation_id
+        and _CLUSTER_RUNTIME.has_pending_tasks(
+            bot_alias=alias,
+            user_id=user_id,
+            main_conversation_id=active_conversation_id,
+        )
+    ):
+        _raise(409, "cluster_team_busy", "该主会话仍有子任务运行，暂不能重置")
+
+    store = _get_chat_store(session)
+    team_revision = _conversation_cluster_team_revision(store, active_conversation_id)
     _get_chat_history_service(session).reset_active_conversation(session)
+    if normalized_agent_id == "main" and active_conversation_id:
+        _retire_cluster_child_conversations(manager, alias, user_id, active_conversation_id)
+        _clear_cluster_child_session_bindings(
+            manager,
+            alias,
+            user_id,
+            profile,
+            active_conversation_id,
+        )
+        _retire_cluster_run_for_conversation(alias, user_id, active_conversation_id, team_revision)
     removed = reset_session(bot_id, user_id, agent_id=normalized_agent_id)
     return {"reset": removed}
 
 
-def _is_session_processing(session: UserSession) -> bool:
-    with session._lock:
-        return bool(session.is_processing)
+async def reset_user_session(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    agent_id: str = "main",
+) -> dict[str, Any]:
+    normalized_agent_id = str(agent_id or "main").strip().lower() or "main"
+    if normalized_agent_id != "main":
+        return _reset_user_session_locked(manager, alias, user_id, normalized_agent_id)
+    _profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, "main")
+    while True:
+        parent_conversation_id = str(session.active_conversation_id or "").strip()
+        async with _cluster_parent_lock_scope(alias, user_id, parent_conversation_id):
+            if str(session.active_conversation_id or "").strip() != parent_conversation_id:
+                continue
+            return _reset_user_session_locked(manager, alias, user_id, "main")
 
 
 def _find_active_cluster_run_for_session(alias: str, user_id: int, session: UserSession) -> Any | None:
     user_id = chat_session_user_id(user_id)
-    for _ in range(100):
-        active_run = _CLUSTER_RUNTIME.find_active_run(alias, user_id)
-        if active_run is None:
-            return None
-        status = _CLUSTER_RUNTIME.build_task_status(active_run.run_id, include_output=False)
-        if int(status.get("pending_count") or 0) > 0 or _is_session_processing(session):
-            return active_run
-        _CLUSTER_RUNTIME.finish_run(active_run.run_id, "completed")
-    return _CLUSTER_RUNTIME.find_active_run(alias, user_id)
-
-
-def _finish_stale_cluster_run_if_idle(alias: str, user_id: int) -> str | None:
-    user_id = chat_session_user_id(user_id)
-    active_run = _CLUSTER_RUNTIME.find_active_run(alias, user_id)
-    if active_run is None:
+    conversation_id = str(session.active_conversation_id or "").strip()
+    if not conversation_id:
         return None
-    status = _CLUSTER_RUNTIME.build_task_status(active_run.run_id, include_output=False)
-    if int(status.get("pending_count") or 0) > 0:
+    try:
+        state = _get_chat_store(session).get_conversation_team(conversation_id)
+    except KeyError:
         return None
-    _CLUSTER_RUNTIME.finish_run(active_run.run_id, "completed")
-    return active_run.run_id
+    run = _CLUSTER_RUNTIME.get_run(
+        derive_cluster_run_id(
+            conversation_id,
+            max(0, int(state.get("cluster_team_revision") or 0)),
+        )
+    )
+    if run is None or run.bot_alias != alias or run.user_id != user_id:
+        return None
+    return run
 
 
 async def kill_user_process(
@@ -2786,8 +2973,8 @@ async def kill_user_process(
         native_agent_session_id = str(session.native_agent_session_id or "").strip()
         native_agent_server_key = str(session.native_agent_server_key or "").strip()
         if not is_processing:
-            return {"killed": False, "message": msg("kill", "no_task")}
-        if process is None and (native_agent_session_id or native_agent_server_key):
+            stale_cleared = False
+        elif process is None and (native_agent_session_id or native_agent_server_key):
             session.stop_requested = True
             stale_cleared = False
         elif process is None:
@@ -2803,12 +2990,24 @@ async def kill_user_process(
             stale_cleared = False
             session.stop_requested = True
 
+    if not is_processing:
+        if normalized_agent_id == "main":
+            cluster_run = _find_active_cluster_run_for_session(alias, user_id, session)
+            if cluster_run is not None:
+                status = _CLUSTER_RUNTIME.build_task_status(cluster_run.run_id, include_output=False)
+                if int(status.get("pending_count") or 0) > 0:
+                    await _cancel_cluster_run(cluster_run.run_id, "主 agent 已停止")
+                    return {
+                        "killed": False,
+                        "message": "已取消子 agent 任务",
+                        "cluster_run_cancelled": cluster_run.run_id,
+                    }
+        return {"killed": False, "message": msg("kill", "no_task")}
+
     if stale_cleared:
         _get_chat_history_service(session).reconcile_idle_streaming_turns(session)
         session.persist()
         result = {"killed": False, "message": msg("kill", "already_done"), "stale_cleared": True}
-        if cluster_run_id := _finish_stale_cluster_run_if_idle(alias, user_id):
-            result["cluster_run_finished"] = cluster_run_id
         return result
 
     try:
@@ -2843,8 +3042,6 @@ async def kill_user_process(
         _get_chat_history_service(session).reconcile_idle_streaming_turns(session)
         session.persist()
         result = {"killed": False, "message": msg("kill", "already_done"), "stale_cleared": True}
-        if cluster_run_id := _finish_stale_cluster_run_if_idle(alias, user_id):
-            result["cluster_run_finished"] = cluster_run_id
         return result
     except Exception as exc:
         _raise(500, "kill_failed", msg("kill", "error", error=str(exc)))
@@ -2984,16 +3181,23 @@ def _cluster_run_control(run_id: str, max_parallel_agents: int) -> _ClusterRunCo
     return control
 
 
+def _require_cluster_run_control_ready(run_id: str) -> None:
+    control = _CLUSTER_RUN_CONTROLS.get(run_id)
+    if control is None or not control.cancel_requested:
+        return
+    if any(not task.done() for task in control.tasks):
+        raise ClusterToolError("cluster_agent_busy", "子 agent 正在停止，请等待完成后重试")
+    _cleanup_cluster_run_control_if_idle(run_id)
+
+
 def _cleanup_cluster_run_control_if_idle(run_id: str) -> None:
     control = _CLUSTER_RUN_CONTROLS.get(run_id)
     run = _CLUSTER_RUNTIME.get_run(run_id)
-    if control is None or run is None:
+    if control is None:
         return
-    if control.tasks:
+    if any(not task.done() for task in control.tasks):
         return
-    if run.status not in {"completed", "failed", "error", "cancelled"}:
-        return
-    if any(task.status in {"queued", "running"} for task in run.tasks.values()):
+    if run is not None and any(task.status in {"queued", "running"} for task in run.tasks.values()):
         return
     _CLUSTER_RUN_CONTROLS.pop(run_id, None)
 
@@ -3020,7 +3224,6 @@ async def _cancel_cluster_run(run_id: str, message: str = "已取消") -> None:
     if control is not None:
         control.cancel_requested = True
     _CLUSTER_RUNTIME.cancel_run_tasks(normalized_run_id, message)
-    _CLUSTER_RUNTIME.finish_run(normalized_run_id, "cancelled")
     await _CLUSTER_RUNTIME.notify_agent_task_message(normalized_run_id)
     running_tasks = [
         task
@@ -3031,6 +3234,7 @@ async def _cancel_cluster_run(run_id: str, message: str = "已取消") -> None:
         task.cancel()
     if running_tasks:
         await asyncio.wait(running_tasks, timeout=0.2)
+    _cleanup_cluster_run_control_if_idle(normalized_run_id)
 
 
 def _start_cluster_run_if_requested(
@@ -3054,22 +3258,24 @@ def _start_cluster_run_if_requested(
     if str(agent_id or "main").strip().lower() != "main" or solo_mode or internal_continuation:
         return None
     saved_team_state = team_state if isinstance(team_state, dict) else {}
-    return _CLUSTER_RUNTIME.start_run(
-        ClusterRunRequest(
-            bot_alias=alias,
-            user_id=shared_user_id,
-            profile=profile,
-            execution_mode=execution_mode,
-            mentions=list(mentions or []),
-            allow_unsafe_cli=allow_unsafe_cli,
-            main_conversation_id=str(main_conversation_id or "").strip(),
-            team_revision=max(0, int(saved_team_state.get("cluster_team_revision") or 0)),
-            team=(
-                dict(saved_team_state.get("cluster_team"))
-                if isinstance(saved_team_state.get("cluster_team"), dict)
-                else {"version": 1, "assignments": []}
-            ),
-        )
+    request = ClusterRunRequest(
+        bot_alias=alias,
+        user_id=shared_user_id,
+        profile=profile,
+        execution_mode=execution_mode,
+        mentions=list(mentions or []),
+        allow_unsafe_cli=allow_unsafe_cli,
+        main_conversation_id=str(main_conversation_id or "").strip(),
+        team_revision=max(0, int(saved_team_state.get("cluster_team_revision") or 0)),
+        team=(
+            dict(saved_team_state.get("cluster_team"))
+            if isinstance(saved_team_state.get("cluster_team"), dict)
+            else {"version": 1, "assignments": []}
+        ),
+    )
+    return _CLUSTER_RUNTIME.ensure_run(
+        request,
+        derive_cluster_run_id(request.main_conversation_id, request.team_revision),
     )
 
 
@@ -3202,13 +3408,14 @@ def _ensure_cluster_child_conversation(
         if child_session.is_processing:
             raise ClusterToolError("cluster_agent_busy", "子 agent 正在运行，请等待完成后重试")
     store = _get_chat_store(child_session)
+    task_execution_mode = str(getattr(task, "execution_mode", "") or run.execution_mode)
     existing = None
     if not force_new:
         existing = store.find_active_cluster_child_conversation(
             parent_conversation_id=run.main_conversation_id,
             agent_id=task.agent_id,
             assignment_revision=task.assignment_revision,
-            execution_mode=run.execution_mode,
+            execution_mode=task_execution_mode,
         )
     if existing is not None:
         _select_conversation_locked(
@@ -3217,13 +3424,13 @@ def _ensure_cluster_child_conversation(
             run.user_id,
             str(existing["id"]),
             agent_id=task.agent_id,
-            execution_mode=run.execution_mode,
+            execution_mode=task_execution_mode,
         )
         return str(existing["id"])
     _store, conversation_id = _create_agent_conversation(
         profile,
         child_session,
-        execution_mode=run.execution_mode,
+        execution_mode=task_execution_mode,
         cluster_parent_conversation_id=run.main_conversation_id,
         cluster_assignment_revision=task.assignment_revision,
     )
@@ -3275,18 +3482,18 @@ async def _run_cluster_agent_task(
                         delegated_prompt,
                         agent_id=live_task.agent_id,
                         solo_mode=True,
-                        allow_unsafe_cli=live_run.allow_unsafe_cli,
+                        allow_unsafe_cli=live_task.allow_unsafe_cli,
                         suppress_agent_prompt=dynamic_cluster_task,
                     )
-                    if live_run.execution_mode == NATIVE_AGENT_PROVIDER
+                    if live_task.execution_mode == NATIVE_AGENT_PROVIDER
                     else _stream_cli_chat(
                         manager,
                         live_run.bot_alias,
                         live_run.user_id,
                         delegated_prompt,
                         agent_id=live_task.agent_id,
-                        cli_params_override=build_cluster_cli_params_override(live_run.profile, live_task.model_tier),
-                        allow_unsafe_cli=live_run.allow_unsafe_cli,
+                        cli_params_override=build_cluster_cli_params_override(live_task.profile, live_task.model_tier),
+                        allow_unsafe_cli=live_task.allow_unsafe_cli,
                         suppress_agent_prompt=dynamic_cluster_task,
                     )
                 )
@@ -5535,7 +5742,6 @@ async def _run_native_agent_chat(
         main_conversation_id=main_conversation_id,
         team_state=cluster_team_state,
     )
-    run_status = "completed"
     try:
         base_prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run)) if is_plan_mode else text
         context_id = _cluster_prompt_context_id(session, NATIVE_AGENT_PROVIDER)
@@ -5570,12 +5776,8 @@ async def _run_native_agent_chat(
             solo_mode=solo_mode,
         )
         return result
-    except Exception:
-        run_status = "error"
-        raise
     finally:
         if cluster_run:
-            _CLUSTER_RUNTIME.finish_run(cluster_run.run_id, run_status)
             _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
 
 
@@ -5689,7 +5891,6 @@ async def _stream_native_agent_chat(
         team_state=cluster_team_state,
     )
     async def produce() -> AsyncIterator[dict[str, Any]]:
-        run_status = "completed"
         try:
             base_prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run)) if is_plan_mode else text
             context_id = _cluster_prompt_context_id(session, NATIVE_AGENT_PROVIDER)
@@ -5725,15 +5926,9 @@ async def _stream_native_agent_chat(
                 solo_mode=solo_mode,
                 suppress_agent_prompt=suppress_agent_prompt,
             ):
-                if event.get("type") == "error":
-                    run_status = "error"
                 yield event
-        except Exception:
-            run_status = "error"
-            raise
         finally:
             if cluster_run:
-                _CLUSTER_RUNTIME.finish_run(cluster_run.run_id, run_status)
                 _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
 
     if enable_reconnect or pi_turn_reconnect_enabled():
@@ -5825,7 +6020,6 @@ async def run_chat(
         main_conversation_id=main_conversation_id,
         team_state=cluster_team_state,
     )
-    run_status = "completed"
     request = _build_chat_run_request(
         alias,
         shared_user_id,
@@ -5847,12 +6041,8 @@ async def run_chat(
             cluster_mentions=list(mentions or []),
             allow_unsafe_cli=allow_unsafe_cli,
         )
-    except Exception:
-        run_status = "error"
-        raise
     finally:
         if cluster_run:
-            _CLUSTER_RUNTIME.finish_run(cluster_run.run_id, run_status)
             _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
 
 
@@ -5934,7 +6124,6 @@ async def stream_chat(
             main_conversation_id=main_conversation_id,
             team_state=cluster_team_state,
         )
-        run_status = "completed"
         request = _build_chat_run_request(
             alias,
             shared_user_id,
@@ -5958,15 +6147,9 @@ async def stream_chat(
                 include_trace=include_trace,
                 stream_protocol_version=normalized_stream_protocol_version,
             ):
-                if event.get("type") == "error":
-                    run_status = "error"
                 yield event
-        except Exception:
-            run_status = "error"
-            raise
         finally:
             if cluster_run:
-                _CLUSTER_RUNTIME.finish_run(cluster_run.run_id, run_status)
                 _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
     except WebApiError as exc:
         yield {"type": "error", "code": exc.code, "message": exc.message}
@@ -6305,6 +6488,7 @@ async def rename_managed_bot(manager: MultiBotManager, alias: str, new_alias: st
         old_alias=old_alias,
         new_alias=profile.alias,
     )
+    _CLUSTER_RUNTIME.rename_bot_alias(old_alias, profile.alias)
     return {"bot": build_bot_summary(manager, profile.alias)}
 
 
