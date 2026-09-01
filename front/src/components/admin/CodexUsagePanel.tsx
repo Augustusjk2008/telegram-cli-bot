@@ -131,6 +131,36 @@ function formatPlanType(planType: string | null) {
   return planType?.trim() || "套餐未知";
 }
 
+type ChartPoint = {
+  x: number;
+  y: number;
+};
+
+function smoothPath(points: ChartPoint[]) {
+  if (!points.length) return "";
+  if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
+  if (points.length === 2) {
+    return `M ${points[0].x} ${points[0].y} L ${points[1].x} ${points[1].y}`;
+  }
+
+  const commands = [`M ${points[0].x} ${points[0].y}`];
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const current = points[index];
+    const next = points[index + 1];
+    const endY = index === points.length - 2
+      ? next.y
+      : (current.y + next.y) / 2;
+    const controlPoint = {
+      x: current.x + (next.x - current.x) / 2,
+      y: current.y,
+    };
+    commands.push(
+      `Q ${controlPoint.x} ${controlPoint.y} ${next.x} ${endY}`,
+    );
+  }
+  return commands.join(" ");
+}
+
 function CodexRateLimitBucketChart({
   label,
   samples,
@@ -187,6 +217,8 @@ function CodexRateLimitBucketChart({
     quotaY: yForPercent(remainingPercent(sample)),
     durationY: yForPercent(remainingDurationPercent(sample)),
   }));
+  const quotaPath = smoothPath(points.map(({ x, quotaY }) => ({ x, y: quotaY })));
+  const durationPath = smoothPath(points.map(({ x, durationY }) => ({ x, y: durationY })));
   const latestRemaining = remainingPercent(latest);
   const latestDuration = formatRemainingDuration(remainingDurationMs(latest));
   const durationWindowDays = latest.windowMinutes / 1440;
@@ -273,14 +305,8 @@ function CodexRateLimitBucketChart({
           })}
           {points.length > 1 ? (
             <>
-              <polyline
-                className="codex-usage-rate-limit-line"
-                points={points.map((point) => `${point.x},${point.quotaY}`).join(" ")}
-              />
-              <polyline
-                className="codex-usage-rate-limit-duration-line"
-                points={points.map((point) => `${point.x},${point.durationY}`).join(" ")}
-              />
+              <path className="codex-usage-rate-limit-line" d={quotaPath} />
+              <path className="codex-usage-rate-limit-duration-line" d={durationPath} />
             </>
           ) : null}
           <text className="codex-usage-rate-limit-axis-label" x={left} y={height - 12} textAnchor="start">
