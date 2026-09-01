@@ -136,28 +136,110 @@ type ChartPoint = {
   y: number;
 };
 
-function smoothPath(points: ChartPoint[]) {
+type TimedChartPoint = ChartPoint & {
+  timestamp: number;
+};
+
+const SMOOTHING_BUCKET_COUNT = 48;
+
+function linearPath(points: ChartPoint[]) {
+  if (!points.length) return "";
+  return [
+    `M ${points[0].x} ${points[0].y}`,
+    ...points.slice(1).map((point) => `L ${point.x} ${point.y}`),
+  ].join(" ");
+}
+
+function averageChartPoints(points: TimedChartPoint[]): TimedChartPoint {
+  const total = points.reduce(
+    (sum, point) => ({
+      x: sum.x + point.x,
+      y: sum.y + point.y,
+      timestamp: sum.timestamp + point.timestamp,
+    }),
+    { x: 0, y: 0, timestamp: 0 },
+  );
+  return {
+    x: total.x / points.length,
+    y: total.y / points.length,
+    timestamp: total.timestamp / points.length,
+  };
+}
+
+/**
+ * Reduce dense samples using elapsed time rather than a fixed number of points.
+ * The bucket width is derived from the visible sample time range, so the
+ * amount of detail adapts when the x-axis span changes.
+ */
+function temporalSmoothSegment(
+  points: TimedChartPoint[],
+  timestampRange: number,
+  domainStart: number,
+) {
+  if (
+    points.length <= 2
+    || !Number.isFinite(timestampRange)
+    || timestampRange <= 0
+    || !Number.isFinite(domainStart)
+  ) return points;
+  const bucketWidth = timestampRange / SMOOTHING_BUCKET_COUNT;
+  if (bucketWidth <= 0) return points;
+
+  const first = points[0];
+  const last = points[points.length - 1];
+  const buckets = new Map<number, TimedChartPoint[]>();
+  for (const point of points.slice(1, -1)) {
+    const bucketIndex = Math.floor((point.timestamp - domainStart) / bucketWidth);
+    const bucket = buckets.get(bucketIndex);
+    if (bucket) bucket.push(point);
+    else buckets.set(bucketIndex, [point]);
+  }
+  return [
+    first,
+    ...Array.from(buckets.values(), averageChartPoints),
+    last,
+  ];
+}
+
+function appendSmoothSegment(
+  commands: string[],
+  points: TimedChartPoint[],
+  timestampRange: number,
+  domainStart: number,
+) {
+  const reduced = temporalSmoothSegment(points, timestampRange, domainStart);
+  for (let index = 1; index < reduced.length; index += 1) {
+    const current = reduced[index - 1];
+    const next = reduced[index];
+    commands.push(
+      `Q ${current.x + (next.x - current.x) / 2} ${current.y} ${next.x} ${next.y}`,
+    );
+  }
+}
+
+function smoothQuotaPath(
+  points: TimedChartPoint[],
+  resetBoundaryPairs: Set<string>,
+  timestampRange: number,
+  domainStart: number,
+) {
   if (!points.length) return "";
   if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
-  if (points.length === 2) {
-    return `M ${points[0].x} ${points[0].y} L ${points[1].x} ${points[1].y}`;
+  if (points.length === 2 && !resetBoundaryPairs.size) {
+    return linearPath(points);
   }
 
   const commands = [`M ${points[0].x} ${points[0].y}`];
-  for (let index = 0; index < points.length - 1; index += 1) {
-    const current = points[index];
-    const next = points[index + 1];
-    const endY = index === points.length - 2
-      ? next.y
-      : (current.y + next.y) / 2;
-    const controlPoint = {
-      x: current.x + (next.x - current.x) / 2,
-      y: current.y,
-    };
-    commands.push(
-      `Q ${controlPoint.x} ${controlPoint.y} ${next.x} ${endY}`,
-    );
+  let segmentStart = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    const isBoundary = resetBoundaryPairs.has(`${index - 1}:${index}`);
+    if (!isBoundary) continue;
+
+    appendSmoothSegment(commands, points.slice(segmentStart, index), timestampRange, domainStart);
+    commands.push(`L ${points[index].x} ${points[index].y}`);
+    segmentStart = index;
   }
+  appendSmoothSegment(commands, points.slice(segmentStart), timestampRange, domainStart);
   return commands.join(" ");
 }
 
@@ -214,11 +296,40 @@ function CodexRateLimitBucketChart({
           ? (timestamps[index] - minTimestamp) / timestampRange
           : index / (orderedSamples.length - 1)
     ))) * plotWidth,
+    timestamp: hasValidTimestamps ? timestamps[index] : index,
     quotaY: yForPercent(remainingPercent(sample)),
     durationY: yForPercent(remainingDurationPercent(sample)),
   }));
-  const quotaPath = smoothPath(points.map(({ x, quotaY }) => ({ x, y: quotaY })));
-  const durationPath = smoothPath(points.map(({ x, durationY }) => ({ x, y: durationY })));
+  const resetBoundaryPairs = new Set<string>();
+  for (let index = 1; index < orderedSamples.length; index += 1) {
+    const previousResetAt = Date.parse(orderedSamples[index - 1].resetsAt);
+    const currentResetAt = Date.parse(orderedSamples[index].resetsAt);
+    const previousSampledAt = Date.parse(orderedSamples[index - 1].sampledAt);
+    const currentSampledAt = Date.parse(orderedSamples[index].sampledAt);
+    // A reset is either observed between two samples or accompanied by a
+    // changed deadline and a quota refill.  The crossing check also handles
+    // immediate post-reset usage, where no refill is visible in the sample.
+    const resetTimestampChanged = previousResetAt !== currentResetAt;
+    const quotaJumped = remainingPercent(orderedSamples[index]) > remainingPercent(orderedSamples[index - 1]);
+    const resetOccurredBetweenSamples = Number.isFinite(previousSampledAt)
+      && Number.isFinite(currentSampledAt)
+      && previousResetAt > previousSampledAt
+      && previousResetAt <= currentSampledAt;
+    if (
+      Number.isFinite(previousResetAt)
+      && Number.isFinite(currentResetAt)
+      && (resetOccurredBetweenSamples || (resetTimestampChanged && quotaJumped))
+    ) {
+      resetBoundaryPairs.add(`${index - 1}:${index}`);
+    }
+  }
+  const quotaPath = smoothQuotaPath(
+    points.map(({ x, timestamp, quotaY }) => ({ x, y: quotaY, timestamp })),
+    resetBoundaryPairs,
+    timestampRange,
+    minTimestamp,
+  );
+  const durationPath = linearPath(points.map(({ x, durationY }) => ({ x, y: durationY })));
   const latestRemaining = remainingPercent(latest);
   const latestDuration = formatRemainingDuration(remainingDurationMs(latest));
   const durationWindowDays = latest.windowMinutes / 1440;

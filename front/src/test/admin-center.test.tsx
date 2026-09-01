@@ -155,13 +155,14 @@ test("Codex 额度趋势按额度桶分组", async () => {
   expect(quotaLine?.tagName).toBe("path");
   expect(durationLine?.tagName).toBe("path");
   expect(quotaLine?.getAttribute("d")).toContain("Q ");
-  expect(durationLine?.getAttribute("d")).toContain("Q ");
+  expect(durationLine?.getAttribute("d")).not.toContain("Q ");
+  expect(durationLine?.getAttribute("d")?.match(/L /g)).toHaveLength(2);
   expect(chart.querySelector("circle")).not.toBeInTheDocument();
   expect(durationLine?.getAttribute("d")).toMatch(/^M 64 208 /);
   expect(durationLine?.getAttribute("d")).toMatch(/ 576 32$/);
 });
 
-test("Codex 额度趋势平滑曲线不横向回摆且不越过绘图区", async () => {
+test("Codex 额度趋势保留 reset 前后局部极值并使用直线连接", async () => {
   const user = userEvent.setup();
   const client = createAdminClient();
   const stats = await client.getCodexUsageStats();
@@ -169,33 +170,33 @@ test("Codex 额度趋势平滑曲线不横向回摆且不越过绘图区", async
     {
       limitId: GENERAL_CODEX_RATE_LIMIT_ID,
       sampledAt: "2026-08-01T00:00:00+08:00",
-      usedPercent: 0,
-      windowMinutes: 10080,
-      resetsAt: "2026-08-01T00:00:00+08:00",
+      usedPercent: 10,
+      windowMinutes: 1440,
+      resetsAt: "2026-08-02T00:00:00+08:00",
       planType: "pro",
     },
     {
       limitId: GENERAL_CODEX_RATE_LIMIT_ID,
-      sampledAt: "2026-08-01T01:00:00+08:00",
-      usedPercent: 100,
-      windowMinutes: 10080,
-      resetsAt: "2026-08-01T01:00:00+08:00",
-      planType: "pro",
-    },
-    {
-      limitId: GENERAL_CODEX_RATE_LIMIT_ID,
-      sampledAt: "2026-08-05T05:00:00+08:00",
+      sampledAt: "2026-08-01T06:00:00+08:00",
       usedPercent: 80,
-      windowMinutes: 10080,
-      resetsAt: "2026-08-05T05:00:00+08:00",
+      windowMinutes: 1440,
+      resetsAt: "2026-08-02T00:00:00+08:00",
       planType: "pro",
     },
     {
       limitId: GENERAL_CODEX_RATE_LIMIT_ID,
-      sampledAt: "2026-08-09T09:00:00+08:00",
-      usedPercent: 90,
-      windowMinutes: 10080,
-      resetsAt: "2026-08-09T09:00:00+08:00",
+      sampledAt: "2026-08-01T07:00:00+08:00",
+      usedPercent: 0,
+      windowMinutes: 1440,
+      resetsAt: "2026-08-08T00:00:00+08:00",
+      planType: "pro",
+    },
+    {
+      limitId: GENERAL_CODEX_RATE_LIMIT_ID,
+      sampledAt: "2026-08-01T12:00:00+08:00",
+      usedPercent: 20,
+      windowMinutes: 1440,
+      resetsAt: "2026-08-08T00:00:00+08:00",
       planType: "pro",
     },
   ];
@@ -206,27 +207,16 @@ test("Codex 额度趋势平滑曲线不横向回摆且不越过绘图区", async
 
   const chart = await screen.findByRole("img", { name: /通用 Codex · Pro.*共 4 个样本/ });
   const pathData = chart.querySelector(".codex-usage-rate-limit-line")?.getAttribute("d") || "";
-  const quadraticCommands = Array.from(pathData.matchAll(/Q ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+)/g));
-  expect(quadraticCommands).toHaveLength(3);
-  expect(Number(quadraticCommands[0][3])).toBeCloseTo(64 + (512 * 1) / 201);
-  expect(Number(quadraticCommands[1][3])).toBeCloseTo(64 + (512 * 101) / 201);
-  expect(Number(quadraticCommands[2][3])).toBe(576);
-
-  let segmentStartX = 64;
-  const yCoordinates = [32];
-  for (const [, controlX, controlY, endX, endY] of quadraticCommands) {
-    const segmentEndX = Number(endX);
-    expect(Number(controlX)).toBeGreaterThanOrEqual(segmentStartX);
-    expect(Number(controlX)).toBeLessThanOrEqual(segmentEndX);
-    yCoordinates.push(Number(controlY), Number(endY));
-    segmentStartX = segmentEndX;
-  }
-  expect(segmentStartX).toBe(576);
-  expect(Math.min(...yCoordinates)).toBeGreaterThanOrEqual(32);
-  expect(Math.max(...yCoordinates)).toBeLessThanOrEqual(208);
+  const resetConnection = /Q [^ ]+ [^ ]+ ([^ ]+) ([^ ]+) L ([^ ]+) ([^ ]+)/.exec(pathData);
+  expect(resetConnection).not.toBeNull();
+  expect(Number(resetConnection?.[1])).toBe(320);
+  expect(Number(resetConnection?.[2])).toBe(208);
+  expect(Number(resetConnection?.[3])).toBeCloseTo(64 + (512 * 7) / 12);
+  expect(Number(resetConnection?.[4])).toBe(32);
+  expect(pathData).toMatch(/Q [^ ]+ [^ ]+ 576 76$/);
 });
 
-test("Codex 额度趋势只做相邻样本平滑并保留最新点", async () => {
+test("Codex 额度趋势即使 reset 后立即消耗也保留 reset 直连", async () => {
   const user = userEvent.setup();
   const client = createAdminClient();
   const stats = await client.getCodexUsageStats();
@@ -234,41 +224,25 @@ test("Codex 额度趋势只做相邻样本平滑并保留最新点", async () =>
     {
       limitId: GENERAL_CODEX_RATE_LIMIT_ID,
       sampledAt: "2026-08-01T00:00:00+08:00",
-      usedPercent: 0,
-      windowMinutes: 10080,
-      resetsAt: "2026-08-01T00:00:00+08:00",
+      usedPercent: 60,
+      windowMinutes: 1440,
+      resetsAt: "2026-08-02T00:00:00+08:00",
       planType: "pro",
     },
     {
       limitId: GENERAL_CODEX_RATE_LIMIT_ID,
-      sampledAt: "2026-08-01T01:00:00+08:00",
-      usedPercent: 100,
-      windowMinutes: 10080,
-      resetsAt: "2026-08-01T01:00:00+08:00",
+      sampledAt: "2026-08-01T12:00:00+08:00",
+      usedPercent: 60,
+      windowMinutes: 1440,
+      resetsAt: "2026-08-02T00:00:00+08:00",
       planType: "pro",
     },
     {
       limitId: GENERAL_CODEX_RATE_LIMIT_ID,
-      sampledAt: "2026-08-01T02:00:00+08:00",
-      usedPercent: 0,
-      windowMinutes: 10080,
-      resetsAt: "2026-08-01T02:00:00+08:00",
-      planType: "pro",
-    },
-    {
-      limitId: GENERAL_CODEX_RATE_LIMIT_ID,
-      sampledAt: "2026-08-01T03:00:00+08:00",
-      usedPercent: 100,
-      windowMinutes: 10080,
-      resetsAt: "2026-08-01T03:00:00+08:00",
-      planType: "pro",
-    },
-    {
-      limitId: GENERAL_CODEX_RATE_LIMIT_ID,
-      sampledAt: "2026-08-01T04:00:00+08:00",
-      usedPercent: 0,
-      windowMinutes: 10080,
-      resetsAt: "2026-08-01T04:00:00+08:00",
+      sampledAt: "2026-08-02T01:00:00+08:00",
+      usedPercent: 60,
+      windowMinutes: 1440,
+      resetsAt: "2026-08-03T01:00:00+08:00",
       planType: "pro",
     },
   ];
@@ -277,12 +251,49 @@ test("Codex 额度趋势只做相邻样本平滑并保留最新点", async () =>
   render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
   await openCodexUsageTab(user);
 
-  const chart = await screen.findByRole("img", { name: /通用 Codex · Pro.*共 5 个样本/ });
+  const chart = await screen.findByRole("img", { name: /通用 Codex · Pro.*共 3 个样本/ });
   const pathData = chart.querySelector(".codex-usage-rate-limit-line")?.getAttribute("d") || "";
-  const quadraticCommands = Array.from(pathData.matchAll(/Q ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+)/g));
-  expect(quadraticCommands).toHaveLength(4);
-  expect(Number(quadraticCommands[1][2])).toBe(208);
-  expect(pathData).toMatch(/ 576 32$/);
+  expect(pathData).toMatch(/ L 576 /);
+});
+
+test("Codex 额度趋势平滑粒度按横轴时间范围变化", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  const stats = await client.getCodexUsageStats();
+  const denseSamples = (limitId: string, finalHour: number) => [
+    ...Array.from({ length: 50 }, (_, index) => ({
+      limitId,
+      sampledAt: `2026-08-01T00:${String(index).padStart(2, "0")}:00+08:00`,
+      usedPercent: 10 + index / 10,
+      windowMinutes: 10080,
+      resetsAt: "2026-08-08T00:00:00+08:00",
+      planType: "pro",
+    })),
+    {
+      limitId,
+      sampledAt: `2026-08-${String(1 + Math.floor(finalHour / 24)).padStart(2, "0")}T${String(finalHour % 24).padStart(2, "0")}:00:00+08:00`,
+      usedPercent: 20,
+      windowMinutes: 10080,
+      resetsAt: "2026-08-08T00:00:00+08:00",
+      planType: "pro",
+    },
+  ];
+  stats.rateLimitSamples = [
+    ...denseSamples(GENERAL_CODEX_RATE_LIMIT_ID, 2),
+    ...denseSamples(GPT_RESERVE_RATE_LIMIT_ID, 48),
+  ];
+  vi.spyOn(client, "getCodexUsageStats").mockResolvedValue(stats);
+
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+  await openCodexUsageTab(user);
+
+  const narrowChart = await screen.findByRole("img", { name: /通用 Codex · Pro.*共 51 个样本/ });
+  const wideChart = screen.getByRole("img", { name: /gpt-reserve · Pro.*共 51 个样本/ });
+  const narrowCommands = narrowChart.querySelector(".codex-usage-rate-limit-line")?.getAttribute("d")?.match(/Q /g) || [];
+  const wideCommands = wideChart.querySelector(".codex-usage-rate-limit-line")?.getAttribute("d")?.match(/Q /g) || [];
+  expect(narrowCommands.length).toBeGreaterThan(wideCommands.length);
+  expect(wideCommands).toHaveLength(2);
+  expect(narrowCommands.length).toBeLessThan(50);
 });
 
 test("Codex 额度趋势按套餐拆分相同额度桶", async () => {
