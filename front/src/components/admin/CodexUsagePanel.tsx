@@ -672,7 +672,8 @@ function CodexRateLimitChart({ samples }: { samples: CodexRateLimitSample[] }) {
       planType: string | null;
       samples: CodexRateLimitSample[];
     }>();
-    for (const sample of samples) {
+    const visibleSamples = samples.filter((sample) => sample.limitId !== GPT_RESERVE_RATE_LIMIT_ID);
+    for (const sample of visibleSamples) {
       const planType = sample.planType?.trim().toLowerCase() || null;
       const key = `${sample.limitId}\u0000${planType || ""}`;
       const group = grouped.get(key) || { limitId: sample.limitId, planType, samples: [] };
@@ -683,13 +684,11 @@ function CodexRateLimitChart({ samples }: { samples: CodexRateLimitSample[] }) {
     const limitIds = [
       GENERAL_CODEX_RATE_LIMIT_ID,
       SECONDARY_CODEX_RATE_LIMIT_ID,
-      GPT_RESERVE_RATE_LIMIT_ID,
-      ...samples
+      ...visibleSamples
         .map((sample) => sample.limitId)
         .filter((limitId) => (
           limitId !== GENERAL_CODEX_RATE_LIMIT_ID
           && limitId !== SECONDARY_CODEX_RATE_LIMIT_ID
-          && limitId !== GPT_RESERVE_RATE_LIMIT_ID
         )),
     ];
     return [...new Set(limitIds)].flatMap((limitId) => {
@@ -701,7 +700,6 @@ function CodexRateLimitChart({ samples }: { samples: CodexRateLimitSample[] }) {
   const limitLabel = (limitId: string) => {
     if (limitId === GENERAL_CODEX_RATE_LIMIT_ID) return "通用 Codex";
     if (limitId === SECONDARY_CODEX_RATE_LIMIT_ID) return "gpt-5.3-codex-spark";
-    if (limitId === GPT_RESERVE_RATE_LIMIT_ID) return "gpt-reserve";
     return limitId;
   };
 

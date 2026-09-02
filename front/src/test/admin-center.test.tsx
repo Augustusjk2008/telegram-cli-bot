@@ -125,10 +125,10 @@ test("Codex 额度趋势按额度桶分组", async () => {
 
   const chart = await screen.findByRole("img", { name: /通用 Codex.*共 3 个样本，当前剩余 92%/ });
   expect(screen.getByRole("img", { name: /gpt-5\.3-codex-spark.*共 2 个样本/ })).toBeInTheDocument();
-  expect(screen.getByRole("img", { name: /gpt-reserve.*共 2 个样本，当前剩余 77%/ })).toBeInTheDocument();
+  expect(screen.queryByRole("img", { name: /gpt-reserve.*共 2 个样本，当前剩余 77%/ })).not.toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "通用 Codex · Pro", level: 4 })).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "gpt-5.3-codex-spark · Pro", level: 4 })).toBeInTheDocument();
-  expect(screen.getByRole("heading", { name: "gpt-reserve · Pro", level: 4 })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "gpt-reserve · Pro", level: 4 })).not.toBeInTheDocument();
   expect(screen.getByText("当前剩余 92%")).toBeInTheDocument();
   expect(screen.getByText("剩余时长 7 天")).toBeInTheDocument();
   expect(screen.getByText("已用 8%")).toBeInTheDocument();
@@ -280,7 +280,7 @@ test("Codex 额度趋势平滑粒度按横轴时间范围变化", async () => {
   ];
   stats.rateLimitSamples = [
     ...denseSamples(GENERAL_CODEX_RATE_LIMIT_ID, 2),
-    ...denseSamples(GPT_RESERVE_RATE_LIMIT_ID, 48),
+    ...denseSamples("codex_bengalfox", 48),
   ];
   vi.spyOn(client, "getCodexUsageStats").mockResolvedValue(stats);
 
@@ -288,7 +288,7 @@ test("Codex 额度趋势平滑粒度按横轴时间范围变化", async () => {
   await openCodexUsageTab(user);
 
   const narrowChart = await screen.findByRole("img", { name: /通用 Codex · Pro.*共 51 个样本/ });
-  const wideChart = screen.getByRole("img", { name: /gpt-reserve · Pro.*共 51 个样本/ });
+  const wideChart = screen.getByRole("img", { name: /gpt-5\.3-codex-spark · Pro.*共 51 个样本/ });
   const narrowCommands = narrowChart.querySelector(".codex-usage-rate-limit-line")?.getAttribute("d")?.match(/C /g) || [];
   const wideCommands = wideChart.querySelector(".codex-usage-rate-limit-line")?.getAttribute("d")?.match(/C /g) || [];
   expect(narrowCommands.length).toBeGreaterThan(wideCommands.length);
@@ -488,9 +488,9 @@ test("Codex 额度趋势没有样本时仍显示已知额度入口", async () =>
 
   expect(await screen.findByText("暂无通用 Codex 限额样本。")).toBeInTheDocument();
   expect(screen.getByText("暂无 gpt-5.3-codex-spark 限额样本。")).toBeInTheDocument();
-  expect(screen.getByText("暂无 gpt-reserve 限额样本。")).toBeInTheDocument();
+  expect(screen.queryByText("暂无 gpt-reserve 限额样本。")).not.toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "通用 Codex", level: 4 })).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "gpt-5.3-codex-spark", level: 4 })).toBeInTheDocument();
-  expect(screen.getByRole("heading", { name: "gpt-reserve", level: 4 })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "gpt-reserve", level: 4 })).not.toBeInTheDocument();
   expect(screen.queryByRole("img", { name: /Codex 剩余额度与剩余时长趋势/ })).not.toBeInTheDocument();
 });
