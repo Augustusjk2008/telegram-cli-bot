@@ -131,6 +131,17 @@ function formatPlanType(planType: string | null) {
   return planType?.trim() || "套餐未知";
 }
 
+function compareSampledAt(left: CodexRateLimitSample, right: CodexRateLimitSample) {
+  const leftTimestamp = Date.parse(left.sampledAt);
+  const rightTimestamp = Date.parse(right.sampledAt);
+  if (Number.isFinite(leftTimestamp) && Number.isFinite(rightTimestamp)) {
+    return leftTimestamp - rightTimestamp;
+  }
+  if (Number.isFinite(leftTimestamp)) return -1;
+  if (Number.isFinite(rightTimestamp)) return 1;
+  return 0;
+}
+
 type ChartPoint = {
   x: number;
   y: number;
@@ -140,7 +151,10 @@ type TimedChartPoint = ChartPoint & {
   timestamp: number;
 };
 
-const SMOOTHING_BUCKET_COUNT = 48;
+// Keep roughly one curve knot per 12 viewBox units.  The resulting bucket
+// width is always derived from elapsed time, so the amount of smoothing tracks
+// the visible x-axis span instead of the number of collected samples.
+const SMOOTHING_KNOT_SPACING = 12;
 
 function linearPath(points: ChartPoint[]) {
   if (!points.length) return "";
@@ -150,20 +164,122 @@ function linearPath(points: ChartPoint[]) {
   ].join(" ");
 }
 
-function averageChartPoints(points: TimedChartPoint[]): TimedChartPoint {
-  const total = points.reduce(
-    (sum, point) => ({
-      x: sum.x + point.x,
-      y: sum.y + point.y,
-      timestamp: sum.timestamp + point.timestamp,
-    }),
-    { x: 0, y: 0, timestamp: 0 },
-  );
+type TemporalCurve = {
+  points: TimedChartPoint[];
+  cumulativeAreas: number[];
+};
+
+function buildTemporalCurve(points: TimedChartPoint[]): TemporalCurve {
+  const cumulativeAreas = [0];
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1];
+    const next = points[index];
+    const elapsed = next.timestamp - previous.timestamp;
+    const area = elapsed > 0 ? ((previous.y + next.y) / 2) * elapsed : 0;
+    cumulativeAreas.push(cumulativeAreas[index - 1] + area);
+  }
+  return { points, cumulativeAreas };
+}
+
+function temporalSegmentIndex(points: TimedChartPoint[], timestamp: number) {
+  let low = 1;
+  let high = points.length - 1;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (points[middle].timestamp < timestamp) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
+function temporalPointAt(curve: TemporalCurve, timestamp: number): TimedChartPoint {
+  const { points } = curve;
+  const first = points[0];
+  const last = points[points.length - 1];
+  if (timestamp <= first.timestamp) return { ...first, timestamp };
+  if (timestamp >= last.timestamp) return { ...last, timestamp };
+  const index = temporalSegmentIndex(points, timestamp);
+  const previous = points[index - 1];
+  const next = points[index];
+  const width = next.timestamp - previous.timestamp;
+  if (width <= 0) return { ...next, timestamp };
+  const ratio = (timestamp - previous.timestamp) / width;
   return {
-    x: total.x / points.length,
-    y: total.y / points.length,
-    timestamp: total.timestamp / points.length,
+    timestamp,
+    x: previous.x + (next.x - previous.x) * ratio,
+    y: previous.y + (next.y - previous.y) * ratio,
   };
+}
+
+function temporalAreaAt(curve: TemporalCurve, timestamp: number) {
+  const { points, cumulativeAreas } = curve;
+  const first = points[0];
+  const lastIndex = points.length - 1;
+  if (timestamp <= first.timestamp) return 0;
+  if (timestamp >= points[lastIndex].timestamp) return cumulativeAreas[lastIndex];
+  const index = temporalSegmentIndex(points, timestamp);
+  const previous = points[index - 1];
+  const next = points[index];
+  const elapsed = timestamp - previous.timestamp;
+  const width = next.timestamp - previous.timestamp;
+  if (width <= 0) return cumulativeAreas[index - 1];
+  const ratio = elapsed / width;
+  const value = previous.y + (next.y - previous.y) * ratio;
+  return cumulativeAreas[index - 1] + ((previous.y + value) / 2) * elapsed;
+}
+
+/**
+ * Average the piecewise-linear source curve over a time interval.  Weighting
+ * by elapsed time keeps a burst of samples from changing the result merely by
+ * increasing its sample count.
+ */
+function averageTimedPoint(
+  curve: TemporalCurve,
+  start: number,
+  end: number,
+) {
+  const { points } = curve;
+  const first = points[0];
+  const last = points[points.length - 1];
+  const intervalStart = Math.max(start, first.timestamp);
+  const intervalEnd = Math.min(end, last.timestamp);
+  if (!(intervalEnd > intervalStart)) return null;
+
+  const elapsed = intervalEnd - intervalStart;
+  const weightedY = temporalAreaAt(curve, intervalEnd) - temporalAreaAt(curve, intervalStart);
+  if (!(elapsed > 0) || !Number.isFinite(weightedY)) return null;
+  const averageY = weightedY / elapsed;
+  if (!Number.isFinite(averageY)) return null;
+  const timestamp = (intervalStart + intervalEnd) / 2;
+  const midpoint = temporalPointAt(curve, timestamp);
+  return {
+    ...midpoint,
+    timestamp,
+    y: averageY,
+  };
+}
+
+function collapseDuplicateTimedPoints(points: TimedChartPoint[]) {
+  if (points.length <= 2) return points;
+  const first = points[0];
+  const last = points[points.length - 1];
+  const interior: TimedChartPoint[] = [];
+  for (const point of points.slice(1, -1)) {
+    // Segment endpoints are reset anchors, so never replace them with a
+    // duplicate sample at the same instant.
+    if (point.timestamp === first.timestamp || point.timestamp === last.timestamp) continue;
+    const previous = interior.at(-1);
+    if (previous?.timestamp === point.timestamp) {
+      interior[interior.length - 1] = {
+        ...previous,
+        x: (previous.x + point.x) / 2,
+        y: (previous.y + point.y) / 2,
+      };
+    } else {
+      interior.push(point);
+    }
+  }
+  return [first, ...interior, last];
 }
 
 /**
@@ -175,30 +291,115 @@ function temporalSmoothSegment(
   points: TimedChartPoint[],
   timestampRange: number,
   domainStart: number,
+  plotWidth: number,
 ) {
   if (
-    points.length <= 2
-    || !Number.isFinite(timestampRange)
+    !Number.isFinite(timestampRange)
     || timestampRange <= 0
     || !Number.isFinite(domainStart)
+    || !Number.isFinite(plotWidth)
+    || plotWidth <= 0
   ) return points;
-  const bucketWidth = timestampRange / SMOOTHING_BUCKET_COUNT;
+  const bucketCount = Math.max(1, Math.floor(plotWidth / SMOOTHING_KNOT_SPACING));
+  const bucketWidth = timestampRange / bucketCount;
   if (bucketWidth <= 0) return points;
 
-  const first = points[0];
-  const last = points[points.length - 1];
-  const buckets = new Map<number, TimedChartPoint[]>();
-  for (const point of points.slice(1, -1)) {
-    const bucketIndex = Math.floor((point.timestamp - domainStart) / bucketWidth);
-    const bucket = buckets.get(bucketIndex);
-    if (bucket) bucket.push(point);
-    else buckets.set(bucketIndex, [point]);
+  const normalizedPoints = collapseDuplicateTimedPoints(points);
+  if (normalizedPoints.length <= 2) return normalizedPoints;
+  if (normalizedPoints.some((point, index) => (
+    index > 0 && point.timestamp <= normalizedPoints[index - 1].timestamp
+  ))) {
+    return normalizedPoints;
   }
+  const first = normalizedPoints[0];
+  const last = normalizedPoints[normalizedPoints.length - 1];
+  const curve = buildTemporalCurve(normalizedPoints);
+  const bucketIndexes = new Set<number>();
+  for (const point of normalizedPoints.slice(1, -1)) {
+    if (!Number.isFinite(point.timestamp)) continue;
+    const bucketIndex = Math.floor((point.timestamp - domainStart) / bucketWidth);
+    bucketIndexes.add(bucketIndex);
+  }
+  const representatives = [...bucketIndexes]
+    .sort((left, right) => left - right)
+    .map((bucketIndex) => averageTimedPoint(
+      curve,
+      domainStart + bucketIndex * bucketWidth,
+      domainStart + (bucketIndex + 1) * bucketWidth,
+    ))
+    .filter((point): point is TimedChartPoint => Boolean(point)
+      && point.timestamp > first.timestamp
+      && point.timestamp < last.timestamp);
   return [
     first,
-    ...Array.from(buckets.values(), averageChartPoints),
+    ...representatives,
     last,
   ];
+}
+
+function monotoneTangents(points: ChartPoint[]) {
+  const slopes = points.slice(1).map((point, index) => {
+    const previous = points[index];
+    return (point.y - previous.y) / (point.x - previous.x);
+  });
+  if (slopes.some((slope) => !Number.isFinite(slope))) return null;
+
+  const tangents = Array.from({ length: points.length }, () => 0);
+  if (slopes.length === 1) {
+    tangents[0] = slopes[0];
+    tangents[1] = slopes[0];
+    return tangents;
+  }
+
+  const endpointTangent = (atEnd: boolean) => {
+    const last = points.length - 1;
+    const firstSlope = atEnd ? slopes[last - 1] : slopes[0];
+    const secondSlope = atEnd ? slopes[last - 2] : slopes[1];
+    const firstWidth = atEnd
+      ? points[last].x - points[last - 1].x
+      : points[1].x - points[0].x;
+    const secondWidth = atEnd
+      ? points[last - 1].x - points[last - 2].x
+      : points[2].x - points[1].x;
+    if (firstWidth <= 0 || secondWidth <= 0) return null;
+    let tangent = ((2 * firstWidth + secondWidth) * firstSlope - firstWidth * secondSlope)
+      / (firstWidth + secondWidth);
+    // The one-sided estimate must not introduce an extremum that is absent
+    // from the source points, nor overshoot a neighbouring slope reversal.
+    if (!Number.isFinite(tangent) || tangent * firstSlope <= 0) tangent = 0;
+    else if (firstSlope * secondSlope < 0 && Math.abs(tangent) > Math.abs(3 * firstSlope)) {
+      tangent = 3 * firstSlope;
+    }
+    return tangent;
+  };
+
+  const firstTangent = endpointTangent(false);
+  const lastTangent = endpointTangent(true);
+  if (firstTangent === null || lastTangent === null) return null;
+  tangents[0] = firstTangent;
+  tangents[tangents.length - 1] = lastTangent;
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const previousSlope = slopes[index - 1];
+    const nextSlope = slopes[index];
+    if (previousSlope * nextSlope <= 0) {
+      tangents[index] = 0;
+      continue;
+    }
+    const previousWidth = points[index].x - points[index - 1].x;
+    const nextWidth = points[index + 1].x - points[index].x;
+    const firstWeight = 2 * nextWidth + previousWidth;
+    const secondWeight = nextWidth + 2 * previousWidth;
+    tangents[index] = (firstWeight + secondWeight)
+      / (firstWeight / previousSlope + secondWeight / nextSlope);
+  }
+  if (tangents.some((tangent) => !Number.isFinite(tangent))) return null;
+  return tangents;
+}
+
+function appendLinearCommands(commands: string[], points: ChartPoint[]) {
+  for (let index = 1; index < points.length; index += 1) {
+    commands.push(`L ${points[index].x} ${points[index].y}`);
+  }
 }
 
 function appendSmoothSegment(
@@ -206,13 +407,36 @@ function appendSmoothSegment(
   points: TimedChartPoint[],
   timestampRange: number,
   domainStart: number,
+  plotWidth: number,
 ) {
-  const reduced = temporalSmoothSegment(points, timestampRange, domainStart);
+  if (!Number.isFinite(timestampRange) || timestampRange <= 0) {
+    appendLinearCommands(commands, points);
+    return;
+  }
+  const reduced = temporalSmoothSegment(points, timestampRange, domainStart, plotWidth);
+  if (reduced.length <= 1) return;
+  if (
+    reduced.length === 2
+    || reduced.some((point, index) => index > 0 && point.x <= reduced[index - 1].x)
+  ) {
+    appendLinearCommands(commands, reduced);
+    return;
+  }
+
+  const tangents = monotoneTangents(reduced);
+  if (!tangents) {
+    appendLinearCommands(commands, reduced);
+    return;
+  }
+
   for (let index = 1; index < reduced.length; index += 1) {
     const current = reduced[index - 1];
     const next = reduced[index];
+    const width = next.x - current.x;
     commands.push(
-      `Q ${current.x + (next.x - current.x) / 2} ${current.y} ${next.x} ${next.y}`,
+      `C ${current.x + width / 3} ${current.y + (tangents[index - 1] * width) / 3}`
+      + ` ${next.x - width / 3} ${next.y - (tangents[index] * width) / 3}`
+      + ` ${next.x} ${next.y}`,
     );
   }
 }
@@ -222,6 +446,7 @@ function smoothQuotaPath(
   resetBoundaryPairs: Set<string>,
   timestampRange: number,
   domainStart: number,
+  plotWidth: number,
 ) {
   if (!points.length) return "";
   if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
@@ -235,11 +460,11 @@ function smoothQuotaPath(
     const isBoundary = resetBoundaryPairs.has(`${index - 1}:${index}`);
     if (!isBoundary) continue;
 
-    appendSmoothSegment(commands, points.slice(segmentStart, index), timestampRange, domainStart);
+    appendSmoothSegment(commands, points.slice(segmentStart, index), timestampRange, domainStart, plotWidth);
     commands.push(`L ${points[index].x} ${points[index].y}`);
     segmentStart = index;
   }
-  appendSmoothSegment(commands, points.slice(segmentStart), timestampRange, domainStart);
+  appendSmoothSegment(commands, points.slice(segmentStart), timestampRange, domainStart, plotWidth);
   return commands.join(" ");
 }
 
@@ -251,7 +476,7 @@ function CodexRateLimitBucketChart({
   samples: CodexRateLimitSample[];
 }) {
   const orderedSamples = useMemo(
-    () => [...samples].sort((left, right) => Date.parse(left.sampledAt) - Date.parse(right.sampledAt)),
+    () => [...samples].sort(compareSampledAt),
     [samples],
   );
   const latest = orderedSamples.at(-1);
@@ -301,6 +526,8 @@ function CodexRateLimitBucketChart({
     durationY: yForPercent(remainingDurationPercent(sample)),
   }));
   const resetBoundaryPairs = new Set<string>();
+  // The exact reset instant is not sampled.  The nearest observations on its
+  // two sides are therefore the stable extrema anchors to keep verbatim.
   for (let index = 1; index < orderedSamples.length; index += 1) {
     const previousResetAt = Date.parse(orderedSamples[index - 1].resetsAt);
     const currentResetAt = Date.parse(orderedSamples[index].resetsAt);
@@ -310,15 +537,18 @@ function CodexRateLimitBucketChart({
     // changed deadline and a quota refill.  The crossing check also handles
     // immediate post-reset usage, where no refill is visible in the sample.
     const resetTimestampChanged = previousResetAt !== currentResetAt;
-    const quotaJumped = remainingPercent(orderedSamples[index]) > remainingPercent(orderedSamples[index - 1]);
+    const quotaJumped = remainingPercent(orderedSamples[index])
+      > remainingPercent(orderedSamples[index - 1]);
     const resetOccurredBetweenSamples = Number.isFinite(previousSampledAt)
       && Number.isFinite(currentSampledAt)
       && previousResetAt > previousSampledAt
       && previousResetAt <= currentSampledAt;
     if (
       Number.isFinite(previousResetAt)
-      && Number.isFinite(currentResetAt)
-      && (resetOccurredBetweenSamples || (resetTimestampChanged && quotaJumped))
+      && (
+        resetOccurredBetweenSamples
+        || (Number.isFinite(currentResetAt) && resetTimestampChanged && quotaJumped)
+      )
     ) {
       resetBoundaryPairs.add(`${index - 1}:${index}`);
     }
@@ -328,6 +558,7 @@ function CodexRateLimitBucketChart({
     resetBoundaryPairs,
     timestampRange,
     minTimestamp,
+    plotWidth,
   );
   const durationPath = linearPath(points.map(({ x, durationY }) => ({ x, y: durationY })));
   const latestRemaining = remainingPercent(latest);
