@@ -1,3 +1,4 @@
+import userEvent from "@testing-library/user-event";
 import { render, screen, within } from "@testing-library/react";
 import { expect, test } from "vitest";
 import { GitDiffViewer, visibleGitDiffLines } from "../components/GitDiffViewer";
@@ -58,6 +59,39 @@ test("renders unchanged lines without add or delete colors", () => {
   expect(rows[2]).toHaveAttribute("data-diff-kind", "add");
   expect(rows[2]).toHaveClass("bg-emerald-50", "text-emerald-700");
   expect(rows[2]).toHaveTextContent("+new line");
+});
+
+test("switches between full and changed-lines-only modes", async () => {
+  const user = userEvent.setup();
+  render(
+    <GitDiffViewer
+      testId="viewer"
+      content={[
+        "@@ -1,3 +1,3 @@",
+        " unchanged line",
+        "-old line",
+        "+new line",
+      ].join("\n")}
+    />,
+  );
+
+  const viewer = screen.getByTestId("viewer");
+  const fullButton = within(viewer).getByRole("button", { name: "全文" });
+  const diffButton = within(viewer).getByRole("button", { name: "仅差异" });
+
+  expect(viewer).toHaveAttribute("data-diff-view-mode", "full");
+  expect(fullButton).toHaveAttribute("aria-pressed", "true");
+  expect(within(viewer).getByText("unchanged line")).toBeInTheDocument();
+
+  await user.click(diffButton);
+  expect(viewer).toHaveAttribute("data-diff-view-mode", "diff");
+  expect(diffButton).toHaveAttribute("aria-pressed", "true");
+  expect(within(viewer).queryByText("unchanged line")).not.toBeInTheDocument();
+  expect(within(viewer).getAllByTestId("git-diff-line")).toHaveLength(2);
+
+  await user.click(fullButton);
+  expect(viewer).toHaveAttribute("data-diff-view-mode", "full");
+  expect(within(viewer).getByText("unchanged line")).toBeInTheDocument();
 });
 
 test("shows a neutral empty state when diff has no file lines", () => {

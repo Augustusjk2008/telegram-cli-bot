@@ -1,6 +1,8 @@
 import { clsx } from "clsx";
+import { useState } from "react";
 
 export type GitDiffLineKind = "meta" | "hunk" | "add" | "delete" | "context";
+export type GitDiffViewMode = "full" | "diff";
 type VisibleGitDiffLineKind = "add" | "delete" | "context";
 
 type VisibleGitDiffLine = {
@@ -41,7 +43,7 @@ export function parseGitDiffLineKind(line: string): GitDiffLineKind {
   return "context";
 }
 
-export function visibleGitDiffLines(content: string): VisibleGitDiffLine[] {
+export function visibleGitDiffLines(content: string, viewMode: GitDiffViewMode = "full"): VisibleGitDiffLine[] {
   const visibleLines: VisibleGitDiffLine[] = [];
   let oldLineNumber: number | null = null;
   let newLineNumber: number | null = null;
@@ -69,7 +71,9 @@ export function visibleGitDiffLines(content: string): VisibleGitDiffLine[] {
     }
   }
 
-  return visibleLines;
+  return viewMode === "diff"
+    ? visibleLines.filter((item) => item.kind !== "context")
+    : visibleLines;
 }
 
 function gitDiffLineClass(kind: VisibleGitDiffLineKind) {
@@ -85,15 +89,44 @@ export function GitDiffViewer({
   ariaLabel = "Git Diff 内容",
   emptyLabel = "无可显示的内容",
 }: GitDiffViewerProps) {
-  const lines = visibleGitDiffLines(content);
+  const [viewMode, setViewMode] = useState<GitDiffViewMode>("full");
+  const lines = visibleGitDiffLines(content, viewMode);
 
   return (
     <div
       data-testid={testId}
+      data-diff-view-mode={viewMode}
       className={clsx("overflow-auto bg-[var(--editor-bg)] font-mono", className)}
       role="document"
       aria-label={ariaLabel}
     >
+      <div className="sticky top-0 z-10 flex justify-end pb-2">
+        <div
+          role="group"
+          aria-label="Diff 显示模式"
+          className="inline-flex rounded border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] p-0.5"
+        >
+          {([
+            ["full", "全文"],
+            ["diff", "仅差异"],
+          ] as const).map(([mode, label]) => (
+            <button
+              key={mode}
+              type="button"
+              aria-pressed={viewMode === mode}
+              onClick={() => setViewMode(mode)}
+              className={clsx(
+                "rounded px-2 py-0.5 text-[10px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)]",
+                viewMode === mode
+                  ? "bg-[var(--workbench-active-bg)] text-[var(--accent)]"
+                  : "text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)]",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
       {lines.length > 0 ? (
         lines.map((item, index) => (
           <div
