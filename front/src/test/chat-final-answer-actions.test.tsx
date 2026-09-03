@@ -37,6 +37,7 @@ describe("ChatFinalAnswerActions", () => {
 
     expect(screen.getByRole("tooltip")).toHaveTextContent("context left: 72%");
     expect(screen.getByRole("tooltip")).toHaveTextContent("context window: 128,000");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("model: gpt-test");
 
     fireEvent.pointerDown(document.body, { pointerType: "touch" });
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();

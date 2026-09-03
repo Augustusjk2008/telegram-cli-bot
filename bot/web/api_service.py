@@ -3739,6 +3739,18 @@ def _with_compaction_count(
     return next_usage, current_left_percent, next_count
 
 
+def _with_turn_model(
+    context_usage: dict[str, Any] | None,
+    model: str | None,
+) -> dict[str, Any] | None:
+    if not isinstance(context_usage, dict) or not context_usage:
+        return context_usage
+    normalized_model = str(model or "").strip()
+    if not normalized_model or str(context_usage.get("model") or "").strip():
+        return context_usage
+    return {**context_usage, "model": normalized_model}
+
+
 async def _resolve_cli_context_usage_bounded(
     cli_type: str,
     session_id: str | None,
@@ -5015,6 +5027,7 @@ async def _stream_cli_chat(
                 cluster_run_id,
                 allow_unsafe_cli=allow_unsafe_cli,
             )
+            turn_model = str(params_for_attempt.get_param(cli_type, "model") or "").strip()
             try:
                 cmd, use_stdin = build_cli_command(
                     cli_type=cli_type,
@@ -5319,6 +5332,7 @@ async def _stream_cli_chat(
                     elif status_session_id and status_session_id == last_context_usage_session_id:
                         status_context_usage = last_context_usage
                     if status_context_usage:
+                        status_context_usage = _with_turn_model(status_context_usage, turn_model)
                         await load_compaction_session(status_session_id)
                         (
                             status_context_usage,
@@ -5514,6 +5528,7 @@ async def _stream_cli_chat(
             )
             if context_usage is None and native_session_id == last_context_usage_session_id:
                 context_usage = last_context_usage
+            context_usage = _with_turn_model(context_usage, turn_model)
             await load_compaction_session(native_session_id)
             (
                 context_usage,

@@ -193,3 +193,4 @@ async def test_stream_cli_chat_switches_compaction_baseline_when_session_changes
     assert context_usage["session_id"] == "thread-2"
     assert context_usage["context_left_percent"] == 90
     assert context_usage["compaction_count"] == 1
+    assert context_usage["model"] == "gpt-5.4"

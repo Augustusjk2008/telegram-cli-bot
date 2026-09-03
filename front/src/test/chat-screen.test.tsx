@@ -116,6 +116,64 @@ test("binds direct done assistant message to backend id from stream meta", async
   expect(screen.getAllByTestId("chat-message-row")).toHaveLength(2);
 });
 
+test("hides completed assistant context usage from the message header but keeps the footer badge", async () => {
+  const client = createClient({
+    listMessages: async () => ({ items: [{
+      id: "assistant-context-done",
+      role: "assistant",
+      text: "上下文已记录",
+      createdAt: "2026-08-05T00:00:00Z",
+      state: "done",
+      meta: {
+        contextUsage: {
+          contextLeftPercent: 72,
+          contextWindow: 128_000,
+          contextUsed: 35_840,
+          model: "gpt-test",
+        },
+      },
+    }] }),
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  const row = await screen.findByTestId("chat-message-row");
+  expect(within(row).queryByTestId("chat-message-context-usage-text")).not.toBeInTheDocument();
+  expect(within(row).getByTestId("chat-message-context-usage-bottom")).toBeInTheDocument();
+});
+
+test("keeps assistant context usage in the message header while streaming", async () => {
+  const client = createClient({
+    getBotOverview: async () => ({
+      alias: "main",
+      cliType: "codex",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: true,
+    }),
+    listMessages: async () => ({ items: [{
+      id: "assistant-context-streaming",
+      role: "assistant",
+      text: "",
+      createdAt: "2026-08-05T00:00:00Z",
+      state: "streaming",
+      meta: {
+        contextUsage: {
+          contextLeftPercent: 72,
+          contextWindow: 128_000,
+          contextUsed: 35_840,
+          model: "gpt-test",
+        },
+      },
+    }] }),
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  const row = await screen.findByTestId("chat-message-row");
+  expect(within(row).getByTestId("chat-message-context-usage-text")).toBeInTheDocument();
+});
+
 test("does not report a hidden cancelled reply as unread", async () => {
   const user = userEvent.setup();
   const onUnreadResult = vi.fn();
