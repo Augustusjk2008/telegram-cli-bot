@@ -261,7 +261,9 @@ test("loads readonly diff panel when no external diff opener is provided", async
   const diffContent = await screen.findByTestId("git-diff-content");
   expect(within(diffContent).queryByText(/diff --git/)).not.toBeInTheDocument();
   expect(within(diffContent).queryByText(/@@/)).not.toBeInTheDocument();
-  expect(within(diffContent).queryByText(" unchanged line")).not.toBeInTheDocument();
+  const contextRow = within(diffContent).getByText("unchanged line").closest("[data-diff-kind]");
+  expect(contextRow).toHaveAttribute("data-diff-kind", "context");
+  expect(contextRow).not.toHaveClass("bg-red-50", "bg-emerald-50");
 
   const deleteRow = within(diffContent).getByText("-old line").closest("[data-diff-kind]");
   const addRow = within(diffContent).getByText("+new line").closest("[data-diff-kind]");

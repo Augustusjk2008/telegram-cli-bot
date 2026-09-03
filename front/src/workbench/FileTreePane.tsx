@@ -115,7 +115,7 @@ function joinAbsoluteTreePath(rootPath: string, path: string) {
 }
 
 function resolveContextMenuPosition(x: number, y: number, isDir: boolean) {
-  const estimatedHeight = isDir ? 128 : 224;
+  const estimatedHeight = isDir ? 164 : 224;
   return {
     x: clamp(x, TREE_CONTEXT_MENU_PADDING_PX, window.innerWidth - TREE_CONTEXT_MENU_WIDTH_PX - TREE_CONTEXT_MENU_PADDING_PX),
     y: clamp(y, TREE_CONTEXT_MENU_PADDING_PX, window.innerHeight - estimatedHeight - TREE_CONTEXT_MENU_PADDING_PX),
@@ -1843,6 +1843,18 @@ export function FileTreePane({
                     设为工作目录
                   </button>
                 ) : null}
+                {canMutateFiles ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      openRenameDialog(contextMenu.entry.path, contextMenu.entry.name);
+                      closeContextMenu();
+                    }}
+                    className="flex w-full rounded-sm px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                  >
+                    改名
+                  </button>
+                ) : null}
               </>
             ) : (
               <>
@@ -1966,8 +1978,8 @@ export function FileTreePane({
 
       {canMutateFiles && showRenameDialog ? (
         <FileNameDialog
-          title="重命名文件"
-          label="文件名"
+          title="重命名文件或文件夹"
+          label="名称"
           value={renameValue}
           confirmText="重命名"
           busy={renameBusy}

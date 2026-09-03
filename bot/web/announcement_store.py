@@ -44,12 +44,12 @@ class AnnouncementStore:
         self._lock = threading.RLock()
 
     def list_for_user(self, account_id: str) -> dict[str, Any]:
+        del account_id
         with self._lock:
             content = self._load_content()
-            reads = self._load_reads(content)
             items = self._sorted_items(content)
             latest_id = items[0]["id"] if items else ""
-            read = reads.get(str(account_id or "").strip(), {})
+            read = self._load_read_state(content, items)
             last_seen_id = str(read.get("last_seen_id") or "")
         return {
             "items": items,
@@ -65,15 +65,16 @@ class AnnouncementStore:
             raise ValueError("账号 ID 不能为空")
         with self._lock:
             content = self._load_content()
-            ids = {str(item.get("id") or "") for item in content.get("items", [])}
+            items = self._sorted_items(content)
+            ids = {str(item.get("id") or "") for item in items}
             if resolved_id and resolved_id not in ids:
                 raise ValueError("公告不存在")
-            reads = self._load_reads(content)
-            reads[account_key] = {
-                "last_seen_id": resolved_id,
-                "seen_at": _now_iso(),
-            }
-            self._save_reads(reads)
+            current = self._load_read_state(content, items)
+            current_id = str(current.get("last_seen_id") or "")
+            positions = {str(item.get("id") or ""): index for index, item in enumerate(items)}
+            if current_id in positions and (not resolved_id or positions[current_id] <= positions[resolved_id]):
+                resolved_id = current_id
+            self._save_read_state({"last_seen_id": resolved_id, "seen_at": _now_iso()})
         return self.list_for_user(account_key)
 
     def upsert_item(self, item: dict[str, Any]) -> dict[str, Any]:
@@ -129,7 +130,11 @@ class AnnouncementStore:
             "items": data["items"],
         }
 
-    def _load_reads(self, content_data: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _load_read_state(
+        self,
+        content_data: dict[str, Any] | None,
+        items: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         data: dict[str, Any] = {}
         if self.reads_path.exists():
             loaded = json.loads(self.reads_path.read_text(encoding="utf-8"))
@@ -143,8 +148,22 @@ class AnnouncementStore:
             if isinstance(legacy_data, dict):
                 data = {"reads": legacy_data.get("reads", {})}
 
+        if "last_seen_id" in data:
+            return {
+                "last_seen_id": str(data.get("last_seen_id") or ""),
+                "seen_at": str(data.get("seen_at") or ""),
+            }
+
         reads = data.get("reads", {})
-        return deepcopy(reads) if isinstance(reads, dict) else {}
+        if not isinstance(reads, dict):
+            return {}
+        candidates = [read for read in reads.values() if isinstance(read, dict) and read.get("last_seen_id")]
+        for item in items:
+            item_id = str(item.get("id") or "")
+            matching = [read for read in candidates if str(read.get("last_seen_id") or "") == item_id]
+            if matching:
+                return deepcopy(max(matching, key=lambda read: str(read.get("seen_at") or "")))
+        return deepcopy(max(candidates, key=lambda read: str(read.get("seen_at") or ""))) if candidates else {}
 
     def _save_content(self, data: dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -155,12 +174,13 @@ class AnnouncementStore:
         }
         self.path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
-    def _save_reads(self, reads: dict[str, Any]) -> None:
+    def _save_read_state(self, read: dict[str, Any]) -> None:
         self.reads_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "version": 1,
+            "version": 2,
             "updated_at": _now_iso(),
-            "reads": reads,
+            "last_seen_id": str(read.get("last_seen_id") or ""),
+            "seen_at": str(read.get("seen_at") or ""),
         }
         self.reads_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 

@@ -42,6 +42,13 @@ def test_python_mcp_registers_required_run_id_and_configure_team_schema() -> Non
 
     assert set(tools) == _CLUSTER_TOOL_NAMES
     assert tools["configure_team"]["inputSchema"] == _CONFIGURE_TEAM_SCHEMA
+    description = tools["configure_team"]["description"]
+    assert "必须查看响应中的 changed" in description
+    assert "changed=true" in description
+    assert "本轮所有后续工具立即改用响应中的新 run_id" in description
+    assert "changed=false" in description
+    assert "继续使用原 run_id" in description
+    assert "stdio MCP 不缓存或自动切换 run_id" in description
     for tool in tools.values():
         assert "run_id" in tool["inputSchema"]["required"]
 
@@ -62,6 +69,43 @@ def test_pi_extension_matches_configure_team_schema_and_requires_run_id() -> Non
     assert '"configure_team", "Configure Team"' in compact
     assert 'mode: Type.String({ enum: ["extend", "replace"] })' in compact
     assert "roles: Type.Array(Type.Object({ name: Type.String(), responsibility: Type.String(), }))" in compact
+    assert "必须查看响应中的 changed" in source
+    assert "changed=true" in source
+    assert "本轮所有后续工具立即改用响应中的新 run_id" in source
+    assert "changed=false" in source
+    assert "继续使用原 run_id" in source
+    assert "Pi 适配层不缓存或自动切换 run_id" in source
+    assert "const runId = clusterRunId(params.run_id);" in source
+
+
+def test_python_mcp_forwards_each_call_run_id_without_caching(monkeypatch, tmp_path: Path) -> None:
+    seen_run_ids: list[str] = []
+
+    monkeypatch.setattr(mcp_stdio, "load_mcp_bridge_config", lambda _path: object())
+
+    def record_call(_config, _name, _arguments, *, run_id: str):
+        seen_run_ids.append(run_id)
+        return {"ok": True}
+
+    monkeypatch.setattr(mcp_stdio, "post_mcp_tool", record_call)
+
+    for request_id, run_id in enumerate(("run-1", "run-2"), start=1):
+        response = mcp_stdio.handle_request(
+            tmp_path / "bridge.json",
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": "tools/call",
+                "params": {
+                    "name": "cluster_status",
+                    "arguments": {"run_id": run_id},
+                },
+            },
+        )
+        assert response is not None
+        assert response["result"].get("isError") is not True
+
+    assert seen_run_ids == ["run-1", "run-2"]
 
 
 def test_python_mcp_rejects_missing_run_id_before_loading_bridge_config(monkeypatch, tmp_path: Path) -> None:

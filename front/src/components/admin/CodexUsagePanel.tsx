@@ -1,16 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  DEFAULT_CODEX_USAGE_MODEL,
   GENERAL_CODEX_RATE_LIMIT_ID,
+  GPT_RESERVE_RATE_LIMIT_ID,
   SECONDARY_CODEX_RATE_LIMIT_ID,
 } from "../../services/types";
 import type {
   CodexRateLimitSample,
   CodexUsageConfig,
-  CodexUsageDailyProviderModelStats,
-  CodexUsageMetrics,
   CodexUsageProvider,
-  CodexUsageProviderModelStats,
   CodexUsageStats,
 } from "../../services/types";
 import type { WebBotClient } from "../../services/webBotClient";
@@ -23,16 +20,6 @@ type Props = {
 };
 
 const numberFormat = new Intl.NumberFormat("zh-CN");
-const percentFormat = new Intl.NumberFormat("zh-CN", {
-  style: "percent",
-  maximumFractionDigits: 1,
-});
-
-const providerKindOrder: Record<CodexUsageProvider["kind"], number> = {
-  openai_official: 0,
-  base_url: 1,
-  unknown: 2,
-};
 
 const providerResolutionLabels: Record<NonNullable<CodexUsageProvider["resolution"]>, string> = {
   resolved: "已解析",
@@ -42,32 +29,6 @@ const providerResolutionLabels: Record<NonNullable<CodexUsageProvider["resolutio
   invalid_base_url: "base URL 无效",
   unsupported_override: "检测到不支持的运行时覆盖",
 };
-
-const COLLAPSED_DAILY_PAGE_SIZE = 10;
-const EXPANDED_DAILY_PAGE_SIZE = 100;
-
-function compactNumber(value: number) {
-  const exact = numberFormat.format(value);
-  const magnitude = Math.abs(value);
-  const units = [
-    { threshold: 1_000_000_000_000, suffix: "T" },
-    { threshold: 1_000_000_000, suffix: "B" },
-    { threshold: 1_000_000, suffix: "M" },
-    { threshold: 1_000, suffix: "K" },
-  ];
-  const unit = units.find((candidate) => magnitude >= candidate.threshold);
-  if (!unit) return { display: exact, exact };
-  const scaled = value / unit.threshold;
-  const display = new Intl.NumberFormat("en-US", {
-    maximumFractionDigits: 2,
-    minimumFractionDigits: 0,
-  }).format(scaled);
-  return { display: `${display}${unit.suffix}`, exact };
-}
-
-function formatRate(value: number | null) {
-  return value === null ? "—" : percentFormat.format(value);
-}
 
 function formatDateValue(date: Date) {
   const year = date.getUTCFullYear();
@@ -95,48 +56,10 @@ function providerLabel(provider: CodexUsageProvider) {
   return provider.label || (provider.kind === "openai_official" ? "OpenAI 官方" : "无法识别");
 }
 
-function sortProviders(left: CodexUsageProvider, right: CodexUsageProvider) {
-  const kindDifference = providerKindOrder[left.kind] - providerKindOrder[right.kind];
-  if (kindDifference) return kindDifference;
-  return providerLabel(left).localeCompare(providerLabel(right), "zh-CN");
-}
-
-function CompactNumber({ value }: { value: number }) {
-  const formatted = compactNumber(value);
-  return (
-    <span className="codex-usage-number" title={formatted.exact} aria-label={formatted.exact}>
-      {formatted.display}
-    </span>
-  );
-}
-
-function MetricCard({ label, value }: { label: string; value: number | string }) {
-  return (
-    <div className="codex-usage-metric-card">
-      <dt>{label}</dt>
-      <dd>{typeof value === "number" ? <CompactNumber value={value} /> : value}</dd>
-    </div>
-  );
-}
-
-function MetricCells({ metrics }: { metrics: CodexUsageMetrics }) {
-  return (
-    <>
-      <td><CompactNumber value={metrics.requestCount} /></td>
-      <td><CompactNumber value={metrics.inputTokens} /></td>
-      <td><CompactNumber value={metrics.cachedInputTokens} /></td>
-      <td><CompactNumber value={metrics.uncachedInputTokens} /></td>
-      <td><CompactNumber value={metrics.outputTokens} /></td>
-      <td><CompactNumber value={metrics.reasoningOutputTokens} /></td>
-      <td><CompactNumber value={metrics.totalTokens} /></td>
-      <td>{formatRate(metrics.cacheHitRate)}</td>
-    </>
-  );
-}
-
 const percentValueFormat = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 1 });
 const durationDaysFormat = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 });
-const MAX_RATE_LIMIT_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
+const RATE_LIMIT_AXIS_STEP_PERCENT = 10;
+const RATE_LIMIT_AXIS_INTERVALS = 4;
 
 function formatPercentValue(value: number) {
   return `${percentValueFormat.format(value)}%`;
@@ -150,11 +73,25 @@ function remainingDurationMs(sample: CodexRateLimitSample) {
   const sampledAt = Date.parse(sample.sampledAt);
   const resetsAt = Date.parse(sample.resetsAt);
   if (!Number.isFinite(sampledAt) || !Number.isFinite(resetsAt)) return 0;
-  return Math.min(MAX_RATE_LIMIT_DURATION_MS, Math.max(0, resetsAt - sampledAt));
+  return Math.min(sample.windowMinutes * 60 * 1000, Math.max(0, resetsAt - sampledAt));
 }
 
 function remainingDurationPercent(sample: CodexRateLimitSample) {
-  return (remainingDurationMs(sample) / MAX_RATE_LIMIT_DURATION_MS) * 100;
+  return (remainingDurationMs(sample) / (sample.windowMinutes * 60 * 1000)) * 100;
+}
+
+function rateLimitAxisBounds(samples: CodexRateLimitSample[]) {
+  const values = samples.flatMap((sample) => [
+    remainingPercent(sample),
+    remainingDurationPercent(sample),
+  ]);
+  let min = Math.floor(Math.min(...values) / RATE_LIMIT_AXIS_STEP_PERCENT) * RATE_LIMIT_AXIS_STEP_PERCENT;
+  let max = Math.ceil(Math.max(...values) / RATE_LIMIT_AXIS_STEP_PERCENT) * RATE_LIMIT_AXIS_STEP_PERCENT;
+  if (min === max) {
+    if (max < 100) max += RATE_LIMIT_AXIS_STEP_PERCENT;
+    else min -= RATE_LIMIT_AXIS_STEP_PERCENT;
+  }
+  return { min, max };
 }
 
 function formatRemainingDuration(durationMs: number) {
@@ -186,6 +123,351 @@ function formatWindow(minutes: number) {
   return `${numberFormat.format(minutes)} 分钟`;
 }
 
+function formatPlanType(planType: string | null) {
+  const normalized = planType?.trim().toLowerCase();
+  if (!normalized) return "套餐未知";
+  if (normalized === "free") return "Free";
+  if (normalized === "pro") return "Pro";
+  return planType?.trim() || "套餐未知";
+}
+
+function compareSampledAt(left: CodexRateLimitSample, right: CodexRateLimitSample) {
+  const leftTimestamp = Date.parse(left.sampledAt);
+  const rightTimestamp = Date.parse(right.sampledAt);
+  if (Number.isFinite(leftTimestamp) && Number.isFinite(rightTimestamp)) {
+    return leftTimestamp - rightTimestamp;
+  }
+  if (Number.isFinite(leftTimestamp)) return -1;
+  if (Number.isFinite(rightTimestamp)) return 1;
+  return 0;
+}
+
+type ChartPoint = {
+  x: number;
+  y: number;
+};
+
+type TimedChartPoint = ChartPoint & {
+  timestamp: number;
+};
+
+// Keep roughly one curve knot per 12 viewBox units.  The resulting bucket
+// width is always derived from elapsed time, so the amount of smoothing tracks
+// the visible x-axis span instead of the number of collected samples.
+const SMOOTHING_KNOT_SPACING = 12;
+
+function linearPath(points: ChartPoint[]) {
+  if (!points.length) return "";
+  return [
+    `M ${points[0].x} ${points[0].y}`,
+    ...points.slice(1).map((point) => `L ${point.x} ${point.y}`),
+  ].join(" ");
+}
+
+type TemporalCurve = {
+  points: TimedChartPoint[];
+  cumulativeAreas: number[];
+};
+
+function buildTemporalCurve(points: TimedChartPoint[]): TemporalCurve {
+  const cumulativeAreas = [0];
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1];
+    const next = points[index];
+    const elapsed = next.timestamp - previous.timestamp;
+    const area = elapsed > 0 ? ((previous.y + next.y) / 2) * elapsed : 0;
+    cumulativeAreas.push(cumulativeAreas[index - 1] + area);
+  }
+  return { points, cumulativeAreas };
+}
+
+function temporalSegmentIndex(points: TimedChartPoint[], timestamp: number) {
+  let low = 1;
+  let high = points.length - 1;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (points[middle].timestamp < timestamp) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
+function temporalPointAt(curve: TemporalCurve, timestamp: number): TimedChartPoint {
+  const { points } = curve;
+  const first = points[0];
+  const last = points[points.length - 1];
+  if (timestamp <= first.timestamp) return { ...first, timestamp };
+  if (timestamp >= last.timestamp) return { ...last, timestamp };
+  const index = temporalSegmentIndex(points, timestamp);
+  const previous = points[index - 1];
+  const next = points[index];
+  const width = next.timestamp - previous.timestamp;
+  if (width <= 0) return { ...next, timestamp };
+  const ratio = (timestamp - previous.timestamp) / width;
+  return {
+    timestamp,
+    x: previous.x + (next.x - previous.x) * ratio,
+    y: previous.y + (next.y - previous.y) * ratio,
+  };
+}
+
+function temporalAreaAt(curve: TemporalCurve, timestamp: number) {
+  const { points, cumulativeAreas } = curve;
+  const first = points[0];
+  const lastIndex = points.length - 1;
+  if (timestamp <= first.timestamp) return 0;
+  if (timestamp >= points[lastIndex].timestamp) return cumulativeAreas[lastIndex];
+  const index = temporalSegmentIndex(points, timestamp);
+  const previous = points[index - 1];
+  const next = points[index];
+  const elapsed = timestamp - previous.timestamp;
+  const width = next.timestamp - previous.timestamp;
+  if (width <= 0) return cumulativeAreas[index - 1];
+  const ratio = elapsed / width;
+  const value = previous.y + (next.y - previous.y) * ratio;
+  return cumulativeAreas[index - 1] + ((previous.y + value) / 2) * elapsed;
+}
+
+/**
+ * Average the piecewise-linear source curve over a time interval.  Weighting
+ * by elapsed time keeps a burst of samples from changing the result merely by
+ * increasing its sample count.
+ */
+function averageTimedPoint(
+  curve: TemporalCurve,
+  start: number,
+  end: number,
+) {
+  const { points } = curve;
+  const first = points[0];
+  const last = points[points.length - 1];
+  const intervalStart = Math.max(start, first.timestamp);
+  const intervalEnd = Math.min(end, last.timestamp);
+  if (!(intervalEnd > intervalStart)) return null;
+
+  const elapsed = intervalEnd - intervalStart;
+  const weightedY = temporalAreaAt(curve, intervalEnd) - temporalAreaAt(curve, intervalStart);
+  if (!(elapsed > 0) || !Number.isFinite(weightedY)) return null;
+  const averageY = weightedY / elapsed;
+  if (!Number.isFinite(averageY)) return null;
+  const timestamp = (intervalStart + intervalEnd) / 2;
+  const midpoint = temporalPointAt(curve, timestamp);
+  return {
+    ...midpoint,
+    timestamp,
+    y: averageY,
+  };
+}
+
+function collapseDuplicateTimedPoints(points: TimedChartPoint[]) {
+  if (points.length <= 2) return points;
+  const first = points[0];
+  const last = points[points.length - 1];
+  const interior: TimedChartPoint[] = [];
+  for (const point of points.slice(1, -1)) {
+    // Segment endpoints are reset anchors, so never replace them with a
+    // duplicate sample at the same instant.
+    if (point.timestamp === first.timestamp || point.timestamp === last.timestamp) continue;
+    const previous = interior.at(-1);
+    if (previous?.timestamp === point.timestamp) {
+      interior[interior.length - 1] = {
+        ...previous,
+        x: (previous.x + point.x) / 2,
+        y: (previous.y + point.y) / 2,
+      };
+    } else {
+      interior.push(point);
+    }
+  }
+  return [first, ...interior, last];
+}
+
+/**
+ * Reduce dense samples using elapsed time rather than a fixed number of points.
+ * The bucket width is derived from the visible sample time range, so the
+ * amount of detail adapts when the x-axis span changes.
+ */
+function temporalSmoothSegment(
+  points: TimedChartPoint[],
+  timestampRange: number,
+  domainStart: number,
+  plotWidth: number,
+) {
+  if (
+    !Number.isFinite(timestampRange)
+    || timestampRange <= 0
+    || !Number.isFinite(domainStart)
+    || !Number.isFinite(plotWidth)
+    || plotWidth <= 0
+  ) return points;
+  const bucketCount = Math.max(1, Math.floor(plotWidth / SMOOTHING_KNOT_SPACING));
+  const bucketWidth = timestampRange / bucketCount;
+  if (bucketWidth <= 0) return points;
+
+  const normalizedPoints = collapseDuplicateTimedPoints(points);
+  if (normalizedPoints.length <= 2) return normalizedPoints;
+  if (normalizedPoints.some((point, index) => (
+    index > 0 && point.timestamp <= normalizedPoints[index - 1].timestamp
+  ))) {
+    return normalizedPoints;
+  }
+  const first = normalizedPoints[0];
+  const last = normalizedPoints[normalizedPoints.length - 1];
+  const curve = buildTemporalCurve(normalizedPoints);
+  const bucketIndexes = new Set<number>();
+  for (const point of normalizedPoints.slice(1, -1)) {
+    if (!Number.isFinite(point.timestamp)) continue;
+    const bucketIndex = Math.floor((point.timestamp - domainStart) / bucketWidth);
+    bucketIndexes.add(bucketIndex);
+  }
+  const representatives = [...bucketIndexes]
+    .sort((left, right) => left - right)
+    .map((bucketIndex) => averageTimedPoint(
+      curve,
+      domainStart + bucketIndex * bucketWidth,
+      domainStart + (bucketIndex + 1) * bucketWidth,
+    ))
+    .filter((point): point is TimedChartPoint => Boolean(point)
+      && point.timestamp > first.timestamp
+      && point.timestamp < last.timestamp);
+  return [
+    first,
+    ...representatives,
+    last,
+  ];
+}
+
+function monotoneTangents(points: ChartPoint[]) {
+  const slopes = points.slice(1).map((point, index) => {
+    const previous = points[index];
+    return (point.y - previous.y) / (point.x - previous.x);
+  });
+  if (slopes.some((slope) => !Number.isFinite(slope))) return null;
+
+  const tangents = Array.from({ length: points.length }, () => 0);
+  if (slopes.length === 1) {
+    tangents[0] = slopes[0];
+    tangents[1] = slopes[0];
+    return tangents;
+  }
+
+  const endpointTangent = (atEnd: boolean) => {
+    const last = points.length - 1;
+    const firstSlope = atEnd ? slopes[last - 1] : slopes[0];
+    const secondSlope = atEnd ? slopes[last - 2] : slopes[1];
+    const firstWidth = atEnd
+      ? points[last].x - points[last - 1].x
+      : points[1].x - points[0].x;
+    const secondWidth = atEnd
+      ? points[last - 1].x - points[last - 2].x
+      : points[2].x - points[1].x;
+    if (firstWidth <= 0 || secondWidth <= 0) return null;
+    let tangent = ((2 * firstWidth + secondWidth) * firstSlope - firstWidth * secondSlope)
+      / (firstWidth + secondWidth);
+    // The one-sided estimate must not introduce an extremum that is absent
+    // from the source points, nor overshoot a neighbouring slope reversal.
+    if (!Number.isFinite(tangent) || tangent * firstSlope <= 0) tangent = 0;
+    else if (firstSlope * secondSlope < 0 && Math.abs(tangent) > Math.abs(3 * firstSlope)) {
+      tangent = 3 * firstSlope;
+    }
+    return tangent;
+  };
+
+  const firstTangent = endpointTangent(false);
+  const lastTangent = endpointTangent(true);
+  if (firstTangent === null || lastTangent === null) return null;
+  tangents[0] = firstTangent;
+  tangents[tangents.length - 1] = lastTangent;
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const previousSlope = slopes[index - 1];
+    const nextSlope = slopes[index];
+    if (previousSlope * nextSlope <= 0) {
+      tangents[index] = 0;
+      continue;
+    }
+    const previousWidth = points[index].x - points[index - 1].x;
+    const nextWidth = points[index + 1].x - points[index].x;
+    const firstWeight = 2 * nextWidth + previousWidth;
+    const secondWeight = nextWidth + 2 * previousWidth;
+    tangents[index] = (firstWeight + secondWeight)
+      / (firstWeight / previousSlope + secondWeight / nextSlope);
+  }
+  if (tangents.some((tangent) => !Number.isFinite(tangent))) return null;
+  return tangents;
+}
+
+function appendLinearCommands(commands: string[], points: ChartPoint[]) {
+  for (let index = 1; index < points.length; index += 1) {
+    commands.push(`L ${points[index].x} ${points[index].y}`);
+  }
+}
+
+function appendSmoothSegment(
+  commands: string[],
+  points: TimedChartPoint[],
+  timestampRange: number,
+  domainStart: number,
+  plotWidth: number,
+) {
+  if (!Number.isFinite(timestampRange) || timestampRange <= 0) {
+    appendLinearCommands(commands, points);
+    return;
+  }
+  const reduced = temporalSmoothSegment(points, timestampRange, domainStart, plotWidth);
+  if (reduced.length <= 1) return;
+  if (
+    reduced.length === 2
+    || reduced.some((point, index) => index > 0 && point.x <= reduced[index - 1].x)
+  ) {
+    appendLinearCommands(commands, reduced);
+    return;
+  }
+
+  const tangents = monotoneTangents(reduced);
+  if (!tangents) {
+    appendLinearCommands(commands, reduced);
+    return;
+  }
+
+  for (let index = 1; index < reduced.length; index += 1) {
+    const current = reduced[index - 1];
+    const next = reduced[index];
+    const width = next.x - current.x;
+    commands.push(
+      `C ${current.x + width / 3} ${current.y + (tangents[index - 1] * width) / 3}`
+      + ` ${next.x - width / 3} ${next.y - (tangents[index] * width) / 3}`
+      + ` ${next.x} ${next.y}`,
+    );
+  }
+}
+
+function smoothQuotaPath(
+  points: TimedChartPoint[],
+  resetBoundaryPairs: Set<string>,
+  timestampRange: number,
+  domainStart: number,
+  plotWidth: number,
+) {
+  if (!points.length) return "";
+  if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
+  if (points.length === 2 && !resetBoundaryPairs.size) {
+    return linearPath(points);
+  }
+
+  const commands = [`M ${points[0].x} ${points[0].y}`];
+  let segmentStart = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    const isBoundary = resetBoundaryPairs.has(`${index - 1}:${index}`);
+    if (!isBoundary) continue;
+
+    appendSmoothSegment(commands, points.slice(segmentStart, index), timestampRange, domainStart, plotWidth);
+    commands.push(`L ${points[index].x} ${points[index].y}`);
+    segmentStart = index;
+  }
+  appendSmoothSegment(commands, points.slice(segmentStart), timestampRange, domainStart, plotWidth);
+  return commands.join(" ");
+}
+
 function CodexRateLimitBucketChart({
   label,
   samples,
@@ -194,7 +476,7 @@ function CodexRateLimitBucketChart({
   samples: CodexRateLimitSample[];
 }) {
   const orderedSamples = useMemo(
-    () => [...samples].sort((left, right) => Date.parse(left.sampledAt) - Date.parse(right.sampledAt)),
+    () => [...samples].sort(compareSampledAt),
     [samples],
   );
   const latest = orderedSamples.at(-1);
@@ -222,6 +504,15 @@ function CodexRateLimitBucketChart({
   const minTimestamp = hasValidTimestamps ? timestamps[0] : 0;
   const maxTimestamp = hasValidTimestamps ? timestamps[timestamps.length - 1] : 0;
   const timestampRange = maxTimestamp - minTimestamp;
+  const axisBounds = rateLimitAxisBounds(orderedSamples);
+  const axisRange = axisBounds.max - axisBounds.min;
+  const axisTicks = Array.from(
+    { length: RATE_LIMIT_AXIS_INTERVALS + 1 },
+    (_, index) => axisBounds.min + (axisRange * index) / RATE_LIMIT_AXIS_INTERVALS,
+  );
+  const yForPercent = (value: number) => (
+    top + ((axisBounds.max - value) / axisRange) * plotHeight
+  );
   const points = orderedSamples.map((sample, index) => ({
     x: left + Math.min(1, Math.max(0, (
       orderedSamples.length === 1
@@ -230,11 +521,52 @@ function CodexRateLimitBucketChart({
           ? (timestamps[index] - minTimestamp) / timestampRange
           : index / (orderedSamples.length - 1)
     ))) * plotWidth,
-    quotaY: top + ((100 - remainingPercent(sample)) / 100) * plotHeight,
-    durationY: top + ((100 - remainingDurationPercent(sample)) / 100) * plotHeight,
+    timestamp: hasValidTimestamps ? timestamps[index] : index,
+    quotaY: yForPercent(remainingPercent(sample)),
+    durationY: yForPercent(remainingDurationPercent(sample)),
   }));
+  const resetBoundaryPairs = new Set<string>();
+  // The exact reset instant is not sampled.  The nearest observations on its
+  // two sides are therefore the stable extrema anchors to keep verbatim.
+  for (let index = 1; index < orderedSamples.length; index += 1) {
+    const previousResetAt = Date.parse(orderedSamples[index - 1].resetsAt);
+    const currentResetAt = Date.parse(orderedSamples[index].resetsAt);
+    const previousSampledAt = Date.parse(orderedSamples[index - 1].sampledAt);
+    const currentSampledAt = Date.parse(orderedSamples[index].sampledAt);
+    // A reset is either observed between two samples or accompanied by a
+    // changed deadline and a quota refill.  The crossing check also handles
+    // immediate post-reset usage, where no refill is visible in the sample.
+    const resetTimestampChanged = previousResetAt !== currentResetAt;
+    const quotaJumped = remainingPercent(orderedSamples[index])
+      > remainingPercent(orderedSamples[index - 1]);
+    const resetOccurredBetweenSamples = Number.isFinite(previousSampledAt)
+      && Number.isFinite(currentSampledAt)
+      && previousResetAt > previousSampledAt
+      && previousResetAt <= currentSampledAt;
+    if (
+      Number.isFinite(previousResetAt)
+      && (
+        resetOccurredBetweenSamples
+        || (Number.isFinite(currentResetAt) && resetTimestampChanged && quotaJumped)
+      )
+    ) {
+      resetBoundaryPairs.add(`${index - 1}:${index}`);
+    }
+  }
+  const quotaPath = smoothQuotaPath(
+    points.map(({ x, timestamp, quotaY }) => ({ x, y: quotaY, timestamp })),
+    resetBoundaryPairs,
+    timestampRange,
+    minTimestamp,
+    plotWidth,
+  );
+  const durationPath = linearPath(points.map(({ x, durationY }) => ({ x, y: durationY })));
   const latestRemaining = remainingPercent(latest);
   const latestDuration = formatRemainingDuration(remainingDurationMs(latest));
+  const durationWindowDays = latest.windowMinutes / 1440;
+  const durationDaysForPercent = (remaining: number) => (
+    durationDaysFormat.format((remaining / 100) * durationWindowDays)
+  );
   const accessibleLabel = `${label} 剩余额度与剩余时长趋势，共 ${orderedSamples.length} 个样本，当前剩余 ${formatPercentValue(latestRemaining)}，剩余时长 ${latestDuration}`;
 
   return (
@@ -254,7 +586,11 @@ function CodexRateLimitBucketChart({
       <div className="codex-usage-rate-limit-chart">
         <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={accessibleLabel}>
           <title>{label} 剩余额度与剩余时长趋势</title>
-          <desc>按采样时间展示该额度桶的剩余额度与剩余时长；左纵轴为百分之零到百分之一百，右纵轴为零天到七天。</desc>
+          <desc>
+            按采样时间展示该额度桶的剩余额度与剩余时长；左右纵轴按当前数据范围同步缩放，
+            左轴为{formatPercentValue(axisBounds.min)}到{formatPercentValue(axisBounds.max)}，
+            右轴为{durationDaysForPercent(axisBounds.min)}天到{durationDaysForPercent(axisBounds.max)}天。
+          </desc>
           <line
             className="codex-usage-rate-limit-quota-axis"
             x1={left}
@@ -285,8 +621,8 @@ function CodexRateLimitBucketChart({
           >
             剩余时长
           </text>
-          {[0, 25, 50, 75, 100].map((remaining) => {
-            const y = top + ((100 - remaining) / 100) * plotHeight;
+          {axisTicks.map((remaining) => {
+            const y = yForPercent(remaining);
             return (
               <g key={remaining} className="codex-usage-rate-limit-grid">
                 <line x1={left} x2={width - right} y1={y} y2={y} />
@@ -304,21 +640,15 @@ function CodexRateLimitBucketChart({
                   y={y + 4}
                   textAnchor="start"
                 >
-                  {durationDaysFormat.format(remaining * 0.07)} 天
+                  {durationDaysForPercent(remaining)} 天
                 </text>
               </g>
             );
           })}
           {points.length > 1 ? (
             <>
-              <polyline
-                className="codex-usage-rate-limit-line"
-                points={points.map((point) => `${point.x},${point.quotaY}`).join(" ")}
-              />
-              <polyline
-                className="codex-usage-rate-limit-duration-line"
-                points={points.map((point) => `${point.x},${point.durationY}`).join(" ")}
-              />
+              <path className="codex-usage-rate-limit-line" d={quotaPath} />
+              <path className="codex-usage-rate-limit-duration-line" d={durationPath} />
             </>
           ) : null}
           <text className="codex-usage-rate-limit-axis-label" x={left} y={height - 12} textAnchor="start">
@@ -337,14 +667,34 @@ function CodexRateLimitBucketChart({
 
 function CodexRateLimitChart({ samples }: { samples: CodexRateLimitSample[] }) {
   const limitGroups = useMemo(() => {
-    const grouped = new Map<string, CodexRateLimitSample[]>([
-      [GENERAL_CODEX_RATE_LIMIT_ID, []],
-      [SECONDARY_CODEX_RATE_LIMIT_ID, []],
-    ]);
-    for (const sample of samples) {
-      grouped.set(sample.limitId, [...(grouped.get(sample.limitId) || []), sample]);
+    const grouped = new Map<string, {
+      limitId: string;
+      planType: string | null;
+      samples: CodexRateLimitSample[];
+    }>();
+    const visibleSamples = samples.filter((sample) => sample.limitId !== GPT_RESERVE_RATE_LIMIT_ID);
+    for (const sample of visibleSamples) {
+      const planType = sample.planType?.trim().toLowerCase() || null;
+      const key = `${sample.limitId}\u0000${planType || ""}`;
+      const group = grouped.get(key) || { limitId: sample.limitId, planType, samples: [] };
+      group.samples.push(sample);
+      grouped.set(key, group);
     }
-    return Array.from(grouped.entries());
+    const groups = Array.from(grouped.values());
+    const limitIds = [
+      GENERAL_CODEX_RATE_LIMIT_ID,
+      SECONDARY_CODEX_RATE_LIMIT_ID,
+      ...visibleSamples
+        .map((sample) => sample.limitId)
+        .filter((limitId) => (
+          limitId !== GENERAL_CODEX_RATE_LIMIT_ID
+          && limitId !== SECONDARY_CODEX_RATE_LIMIT_ID
+        )),
+    ];
+    return [...new Set(limitIds)].flatMap((limitId) => {
+      const matches = groups.filter((group) => group.limitId === limitId);
+      return matches.length ? matches : [{ limitId, planType: null, samples: [] }];
+    });
   }, [samples]);
 
   const limitLabel = (limitId: string) => {
@@ -357,10 +707,10 @@ function CodexRateLimitChart({ samples }: { samples: CodexRateLimitSample[] }) {
     <section className="codex-usage-section" aria-labelledby="codex-rate-limit-title">
       <h3 id="codex-rate-limit-title">Codex 剩余额度趋势</h3>
       <div className="codex-usage-rate-limit-groups">
-        {limitGroups.map(([limitId, limitSamples]) => (
+        {limitGroups.map(({ limitId, planType, samples: limitSamples }) => (
           <CodexRateLimitBucketChart
-            key={limitId}
-            label={limitLabel(limitId)}
+            key={`${limitId}:${planType || "empty"}`}
+            label={limitSamples.length ? `${limitLabel(limitId)} · ${formatPlanType(planType)}` : limitLabel(limitId)}
             samples={limitSamples}
           />
         ))}
@@ -374,10 +724,6 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
   const [stats, setStats] = useState<CodexUsageStats | null>(null);
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
-  // null 表示全部 Provider；空数组表示用户明确清空了全部选择。
-  const [selectedProviderKeys, setSelectedProviderKeys] = useState<string[] | null>(null);
-  const [dailyPage, setDailyPage] = useState(1);
-  const [dailyPageSize, setDailyPageSize] = useState(COLLAPSED_DAILY_PAGE_SIZE);
   const [loading, setLoading] = useState(true);
   const [querying, setQuerying] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -393,9 +739,6 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
       setLoading(true);
       setError("");
       setNotice("");
-      setSelectedProviderKeys(null);
-      setDailyPage(1);
-      setDailyPageSize(COLLAPSED_DAILY_PAGE_SIZE);
       try {
         const nextConfig = await client.getCodexUsageConfig();
         if (cancelled || requestId !== queryRequestIdRef.current) return;
@@ -404,16 +747,12 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
         setStartDate(range.startDate);
         setEndDate(range.endDate);
 
-        const nextStats = await client.getCodexUsageStats({
-          ...range,
-          dailyPage: 1,
-          dailyPageSize: COLLAPSED_DAILY_PAGE_SIZE,
-        });
+        const nextStats = await client.getCodexUsageStats(range);
         if (cancelled || requestId !== queryRequestIdRef.current) return;
         setStats(nextStats);
       } catch (nextError) {
         if (!cancelled && requestId === queryRequestIdRef.current) {
-          setError(getErrorMessage(nextError, "加载 Codex 用量失败"));
+          setError(getErrorMessage(nextError, "加载 Codex 额度失败"));
         }
       } finally {
         if (!cancelled && requestId === queryRequestIdRef.current) setLoading(false);
@@ -426,47 +765,9 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
     };
   }, [client, refreshKey]);
 
-  const providers = useMemo(() => {
-    const byKey = new Map<string, CodexUsageProvider>();
-    for (const provider of stats?.availableProviders || []) {
-      byKey.set(provider.key, provider);
-    }
-    if (config?.currentProvider) {
-      byKey.set(config.currentProvider.key, config.currentProvider);
-    }
-    return Array.from(byKey.values()).sort(sortProviders);
-  }, [config, stats]);
-
-  const providerRows = useMemo<CodexUsageProviderModelStats[]>(
-    () => {
-      const detailedRows = stats?.byProviderModel || [];
-      const rows = detailedRows.length
-        ? detailedRows
-        : (stats?.byProvider || []).map((item) => ({ ...item, model: DEFAULT_CODEX_USAGE_MODEL }));
-      return [...rows].sort((left, right) => (
-        sortProviders(left.provider, right.provider) || left.model.localeCompare(right.model)
-      ));
-    },
-    [stats],
-  );
-
-  const dailyRows = useMemo<CodexUsageDailyProviderModelStats[]>(() => {
-    const detailedRows = stats?.dailyByProviderModel || [];
-    const rows = detailedRows.length
-      ? detailedRows
-      : (stats?.dailyByProvider || []).map((item) => ({
-          ...item,
-          model: DEFAULT_CODEX_USAGE_MODEL,
-        }));
-    return rows;
-  }, [stats]);
-
   const runStatsQuery = async (
     nextStartDate = startDate,
     nextEndDate = endDate,
-    nextSelectedProviderKeys = selectedProviderKeys,
-    nextDailyPage = 1,
-    nextDailyPageSize = COLLAPSED_DAILY_PAGE_SIZE,
   ) => {
     const normalizedStartDate = nextStartDate.trim();
     const normalizedEndDate = nextEndDate.trim();
@@ -478,17 +779,7 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
       setError("起始日期不能晚于结束日期。");
       return;
     }
-    if (nextSelectedProviderKeys !== null && nextSelectedProviderKeys.length === 0) {
-      setError("请至少选择一个 Provider 后再查询。");
-      return;
-    }
-
     const requestId = ++queryRequestIdRef.current;
-    const requestedDailyPage = Math.max(1, Math.floor(nextDailyPage));
-    const requestedDailyPageSize = Math.min(
-      EXPANDED_DAILY_PAGE_SIZE,
-      Math.max(1, Math.floor(nextDailyPageSize)),
-    );
     setQuerying(true);
     setError("");
     setNotice("");
@@ -496,18 +787,13 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
       const nextStats = await client.getCodexUsageStats({
         startDate: normalizedStartDate,
         endDate: normalizedEndDate,
-        ...(nextSelectedProviderKeys === null ? {} : { providerKeys: nextSelectedProviderKeys }),
-        dailyPage: requestedDailyPage,
-        dailyPageSize: requestedDailyPageSize,
       });
       if (requestId === queryRequestIdRef.current) {
         setStats(nextStats);
-        setDailyPage(requestedDailyPage);
-        setDailyPageSize(requestedDailyPageSize);
       }
     } catch (nextError) {
       if (requestId === queryRequestIdRef.current) {
-        setError(getErrorMessage(nextError, "查询 Codex 用量失败"));
+        setError(getErrorMessage(nextError, "查询 Codex 额度失败"));
       }
     } finally {
       if (requestId === queryRequestIdRef.current) {
@@ -524,9 +810,9 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
       const nextConfig = await client.updateCodexUsageConfig({ enabled });
       setConfig(nextConfig);
       setStats((current) => current ? { ...current, enabled: nextConfig.enabled } : current);
-      setNotice(enabled ? "Codex 用量采集已开启。" : "Codex 用量采集已关闭，历史数据仍可查询。");
+      setNotice(enabled ? "Codex 额度采集已开启。" : "Codex 额度采集已关闭，历史额度仍可查询。");
     } catch (nextError) {
-      setError(`保存 Codex 用量采集设置失败：${getErrorMessage(nextError, "请稍后重试")}`);
+      setError(`保存 Codex 额度采集设置失败：${getErrorMessage(nextError, "请稍后重试")}`);
     } finally {
       setSaving(false);
     }
@@ -546,74 +832,23 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
     };
     setStartDate(range.startDate);
     setEndDate(range.endDate);
-    void runStatsQuery(
-      range.startDate,
-      range.endDate,
-      selectedProviderKeys,
-      1,
-      COLLAPSED_DAILY_PAGE_SIZE,
-    );
+    void runStatsQuery(range.startDate, range.endDate);
   };
 
   const resetFilters = () => {
     const range = defaultRange(config?.timeBasis.today || stats?.timeBasis.today || "");
     setStartDate(range.startDate);
     setEndDate(range.endDate);
-    setSelectedProviderKeys(null);
-    void runStatsQuery(range.startDate, range.endDate, null, 1, COLLAPSED_DAILY_PAGE_SIZE);
-  };
-
-  const toggleProvider = (providerKey: string) => {
-    setSelectedProviderKeys((current) => {
-      const currentKeys = current === null ? providers.map((provider) => provider.key) : current;
-      return currentKeys.includes(providerKey)
-        ? currentKeys.filter((key) => key !== providerKey)
-        : [...currentKeys, providerKey];
-    });
-  };
-
-  const expandDailyRows = () => {
-    void runStatsQuery(
-      startDate,
-      endDate,
-      selectedProviderKeys,
-      1,
-      EXPANDED_DAILY_PAGE_SIZE,
-    );
-  };
-
-  const collapseDailyRows = () => {
-    void runStatsQuery(
-      startDate,
-      endDate,
-      selectedProviderKeys,
-      1,
-      COLLAPSED_DAILY_PAGE_SIZE,
-    );
-  };
-
-  const changeDailyPage = (nextPage: number) => {
-    void runStatsQuery(
-      startDate,
-      endDate,
-      selectedProviderKeys,
-      nextPage,
-      EXPANDED_DAILY_PAGE_SIZE,
-    );
+    void runStatsQuery(range.startDate, range.endDate);
   };
 
   const hasRateLimitSamples = Boolean(stats?.rateLimitSamples.length);
-  const hasHistoricalData = Boolean(stats && (stats.totals.requestCount > 0 || hasRateLimitSamples));
-  const hasUsageRows = Boolean(providerRows.length || dailyRows.length);
-  const noResults = Boolean(stats && !hasUsageRows && !hasRateLimitSamples);
-  const dailyPagination = stats?.dailyPagination;
-  const dailyExpanded = dailyPageSize > COLLAPSED_DAILY_PAGE_SIZE;
 
   return (
     <section aria-labelledby="codex-usage-title" className="codex-usage-panel">
       <div className="codex-usage-heading">
         <div>
-          <h2 id="codex-usage-title">Codex 用量</h2>
+          <h2 id="codex-usage-title">Codex 额度</h2>
         </div>
         <span className="codex-usage-time-basis">
           服务端本地时间 {config?.timeBasis.utcOffset || stats?.timeBasis.utcOffset || "—"}
@@ -623,7 +858,7 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
       {error ? <div role="alert" className="codex-usage-alert codex-usage-alert-error">{error}</div> : null}
       {notice ? <div role="status" className="codex-usage-alert codex-usage-alert-success">{notice}</div> : null}
 
-      {loading ? <p role="status" className="codex-usage-loading">正在加载 Codex 用量…</p> : null}
+      {loading ? <p role="status" className="codex-usage-loading">正在加载 Codex 额度…</p> : null}
 
       {!loading && config ? (
         <>
@@ -633,9 +868,9 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
                 <h3 id="codex-usage-settings-title">采集设置</h3>
               </div>
               <label className="codex-usage-switch">
-                <span>启用 Codex 用量采集</span>
+                <span>启用 Codex 额度采集</span>
                 <input
-                  aria-label="启用 Codex 用量采集"
+                  aria-label="启用 Codex 额度采集"
                   type="checkbox"
                   checked={config.enabled}
                   disabled={saving}
@@ -643,8 +878,8 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
                 />
               </label>
             </div>
-            {!config.enabled && hasHistoricalData ? (
-              <p className="codex-usage-disabled-history">统计采集已关闭，历史数据仍可查询。</p>
+            {!config.enabled && hasRateLimitSamples ? (
+              <p className="codex-usage-disabled-history">额度采集已关闭，历史额度仍可查询。</p>
             ) : null}
           </section>
 
@@ -701,33 +936,6 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
               </label>
             </div>
 
-            <fieldset className="codex-usage-provider-filters">
-              <legend>Provider</legend>
-              <div className="codex-usage-provider-actions">
-                <button type="button" disabled={querying} onClick={() => setSelectedProviderKeys(null)}>全选</button>
-                <button type="button" disabled={querying} onClick={() => setSelectedProviderKeys([])}>清空</button>
-              </div>
-              <div className="codex-usage-provider-options">
-                {providers.map((provider) => {
-                  const checked = selectedProviderKeys === null || selectedProviderKeys.includes(provider.key);
-                  return (
-                    <label key={provider.key} className="codex-usage-provider-option">
-                      <input
-                        aria-label={`筛选 Provider：${providerLabel(provider)}`}
-                        type="checkbox"
-                        checked={checked}
-                        disabled={querying}
-                        onChange={() => toggleProvider(provider.key)}
-                      />
-                      <span>{providerLabel(provider)}</span>
-                      {provider.baseUrl ? <small>{provider.baseUrl}</small> : null}
-                    </label>
-                  );
-                })}
-                {!providers.length ? <p>暂无可筛选的 Provider。</p> : null}
-              </div>
-            </fieldset>
-
             <div className="codex-usage-form-actions">
               <button type="submit" className="codex-usage-primary" disabled={querying}>
                 {querying ? "查询中…" : "查询"}
@@ -738,135 +946,8 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
 
           {stats ? (
             <>
-              <section className="codex-usage-section" aria-labelledby="codex-usage-summary-title">
-                <div className="codex-usage-section-heading">
-                  <div>
-                    <h3 id="codex-usage-summary-title">汇总</h3>
-                    <p>{stats.range.startDate} 至 {stats.range.endDate}</p>
-                  </div>
-                </div>
-                <dl className="codex-usage-metric-grid">
-                  <MetricCard label="请求次数" value={stats.totals.requestCount} />
-                  <MetricCard label="输入 token" value={stats.totals.inputTokens} />
-                  <MetricCard label="缓存命中 token" value={stats.totals.cachedInputTokens} />
-                  <MetricCard label="非缓存输入" value={stats.totals.uncachedInputTokens} />
-                  <MetricCard label="输出 token" value={stats.totals.outputTokens} />
-                  <MetricCard label="总 token" value={stats.totals.totalTokens} />
-                  <MetricCard label="缓存命中率" value={formatRate(stats.totals.cacheHitRate)} />
-                </dl>
-              </section>
-
               <CodexRateLimitChart samples={stats.rateLimitSamples} />
-
-              {noResults ? <p className="codex-usage-empty">暂无符合筛选条件的 Codex 用量数据。</p> : null}
-
-              {hasUsageRows ? (
-                <section className="codex-usage-section" aria-labelledby="codex-usage-by-provider-title">
-                  <h3 id="codex-usage-by-provider-title">按 Provider / 模型汇总</h3>
-                  <div className="codex-usage-table-wrap">
-                    <table aria-label="Codex 用量 Provider 汇总">
-                      <caption>按 Provider 和模型汇总</caption>
-                      <thead>
-                        <tr>
-                          <th scope="col">Provider</th>
-                          <th scope="col">模型</th>
-                          <th scope="col">请求</th>
-                          <th scope="col">输入</th>
-                          <th scope="col">缓存输入</th>
-                          <th scope="col">非缓存输入</th>
-                          <th scope="col">输出</th>
-                          <th scope="col">推理输出</th>
-                          <th scope="col">总 token</th>
-                          <th scope="col">缓存命中率</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {providerRows.map((item) => (
-                          <tr key={`${item.provider.key}:${item.model}`}>
-                            <th scope="row">
-                              <span>{providerLabel(item.provider)}</span>
-                              {item.provider.baseUrl ? <small>{item.provider.baseUrl}</small> : null}
-                            </th>
-                            <td className="codex-usage-model-cell">{item.model}</td>
-                            <MetricCells metrics={item} />
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </section>
-              ) : null}
-
-              {hasUsageRows ? (
-                <section className="codex-usage-section" aria-labelledby="codex-usage-daily-title">
-                  <div className="codex-usage-section-heading">
-                    <div>
-                      <h3 id="codex-usage-daily-title">每日明细</h3>
-                    </div>
-                  </div>
-                  <div className="codex-usage-table-wrap">
-                    <table aria-label="Codex 用量每日明细">
-                      <caption>按日期、Provider 和模型的每日明细</caption>
-                      <thead>
-                        <tr>
-                          <th scope="col">日期</th>
-                          <th scope="col">Provider</th>
-                          <th scope="col">模型</th>
-                          <th scope="col">请求</th>
-                          <th scope="col">输入</th>
-                          <th scope="col">缓存输入</th>
-                          <th scope="col">非缓存输入</th>
-                          <th scope="col">输出</th>
-                          <th scope="col">推理输出</th>
-                          <th scope="col">总 token</th>
-                          <th scope="col">缓存命中率</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {dailyRows.map((item) => (
-                          <tr key={`${item.date}:${item.provider.key}:${item.model}`}>
-                            <th scope="row">{item.date}</th>
-                            <td className="codex-usage-provider-cell">{providerLabel(item.provider)}</td>
-                            <td className="codex-usage-model-cell">{item.model}</td>
-                            <MetricCells metrics={item} />
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  {dailyPagination ? (
-                    <div className="codex-usage-daily-pagination">
-                      {!dailyExpanded && dailyPagination.totalItems > COLLAPSED_DAILY_PAGE_SIZE ? (
-                        <button type="button" disabled={querying} onClick={expandDailyRows}>展开更多</button>
-                      ) : null}
-                      {dailyExpanded ? (
-                        <>
-                          <button type="button" disabled={querying} onClick={collapseDailyRows}>收起</button>
-                          {dailyPagination.totalPages > 1 ? (
-                            <div className="codex-usage-daily-page-controls">
-                              <button
-                                type="button"
-                                disabled={querying || !dailyPagination.hasPrevious}
-                                onClick={() => changeDailyPage(dailyPagination.page - 1)}
-                              >
-                                上一页
-                              </button>
-                              <span>第 {dailyPagination.page} / {dailyPagination.totalPages} 页，共 {dailyPagination.totalItems} 条</span>
-                              <button
-                                type="button"
-                                disabled={querying || !dailyPagination.hasNext}
-                                onClick={() => changeDailyPage(dailyPagination.page + 1)}
-                              >
-                                下一页
-                              </button>
-                            </div>
-                          ) : null}
-                        </>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </section>
-              ) : null}
+              {!hasRateLimitSamples ? <p className="codex-usage-empty">暂无符合筛选条件的 Codex 额度数据。</p> : null}
             </>
           ) : null}
         </>

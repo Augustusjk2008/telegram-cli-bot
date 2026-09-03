@@ -26,6 +26,7 @@ function getNodeModulePackageName(id: string) {
 function isMarkdownVendor(packageName: string) {
   return (
     packageName === 'katex'
+    || packageName === '@ungap/structured-clone'
     || packageName === 'react-markdown'
     || packageName === 'unified'
     || packageName === 'vfile'
@@ -57,6 +58,23 @@ function isMarkdownVendor(packageName: string) {
     || packageName.startsWith('hast-')
     || packageName.startsWith('unist-')
     || packageName.startsWith('character-entities')
+  );
+}
+
+function isMarkdownHtmlVendor(packageName: string) {
+  return (
+    packageName === 'rehype-raw'
+    || packageName === 'rehype-sanitize'
+    || packageName === 'rehype-katex'
+    || packageName === 'hast-util-from-dom'
+    || packageName === 'hast-util-from-html'
+    || packageName === 'hast-util-from-html-isomorphic'
+    || packageName === 'hast-util-raw'
+    || packageName === 'hast-util-sanitize'
+    || packageName === 'hast-util-from-parse5'
+    || packageName === 'hast-util-to-parse5'
+    || packageName === 'parse5'
+    || packageName === 'web-namespaces'
   );
 }
 
@@ -154,6 +172,10 @@ function resolveVendorChunk(id: string) {
 
   if (packageName.startsWith('@xterm/')) {
     return 'terminal-vendor';
+  }
+
+  if (isMarkdownHtmlVendor(packageName)) {
+    return 'markdown-html-vendor';
   }
 
   if (isMarkdownVendor(packageName)) {

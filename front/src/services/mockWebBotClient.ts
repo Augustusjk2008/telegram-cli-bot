@@ -49,12 +49,6 @@ import type {
   CliErrorStatsFilters,
   CliErrorStatsResult,
   CodexUsageConfig,
-  CodexUsageDailyProviderModelStats,
-  CodexUsageDailyProviderStats,
-  CodexUsageDailyStats,
-  CodexUsageMetrics,
-  CodexUsageProviderStats,
-  CodexUsageProviderModelStats,
   CodexUsageStats,
   CodexUsageStatsQuery,
   CliType,
@@ -151,9 +145,6 @@ import type {
   TerminalActionsConfig,
   TerminalActionsEditableConfig,
   TerminalRuntimePlatform,
-  TransferBridgeConfigInput,
-  TransferBridgeStatus,
-  TransferRouteConfig,
   TreeViewPayload,
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
@@ -400,41 +391,7 @@ function cloneCodexUsageStats(stats: CodexUsageStats): CodexUsageStats {
     range: { ...stats.range },
     timeBasis: { ...stats.timeBasis },
     availableRange: { ...stats.availableRange },
-    availableProviders: stats.availableProviders.map((provider) => ({ ...provider })),
-    selectedProviderKeys: [...stats.selectedProviderKeys],
-    totals: { ...stats.totals },
-    dailyPagination: { ...stats.dailyPagination },
-    byProvider: stats.byProvider.map((item) => ({ ...item, provider: { ...item.provider } })),
-    byProviderModel: stats.byProviderModel.map((item) => ({ ...item, provider: { ...item.provider } })),
-    byDay: stats.byDay.map((item) => ({ ...item })),
-    dailyByProvider: stats.dailyByProvider.map((item) => ({ ...item, provider: { ...item.provider } })),
-    dailyByProviderModel: stats.dailyByProviderModel.map((item) => ({ ...item, provider: { ...item.provider } })),
     rateLimitSamples: stats.rateLimitSamples.map((sample) => ({ ...sample })),
-  };
-}
-
-function sumCodexUsageMetrics(items: CodexUsageMetrics[]): CodexUsageMetrics {
-  const totals = items.reduce(
-    (current, item) => ({
-      requestCount: current.requestCount + item.requestCount,
-      inputTokens: current.inputTokens + item.inputTokens,
-      cachedInputTokens: current.cachedInputTokens + item.cachedInputTokens,
-      outputTokens: current.outputTokens + item.outputTokens,
-      reasoningOutputTokens: current.reasoningOutputTokens + item.reasoningOutputTokens,
-    }),
-    {
-      requestCount: 0,
-      inputTokens: 0,
-      cachedInputTokens: 0,
-      outputTokens: 0,
-      reasoningOutputTokens: 0,
-    },
-  );
-  return {
-    ...totals,
-    uncachedInputTokens: totals.inputTokens - totals.cachedInputTokens,
-    totalTokens: totals.inputTokens + totals.outputTokens,
-    cacheHitRate: totals.inputTokens > 0 ? totals.cachedInputTokens / totals.inputTokens : null,
   };
 }
 
@@ -1386,27 +1343,6 @@ function buildMockZipTreePayload(sourcePath: string): TreeViewPayload {
   };
 }
 
-function normalizeTransferRouteDraft(route: TransferRouteConfig, existing?: TransferRouteConfig): TransferRouteConfig {
-  const providerApiKeySet = route.clearProviderApiKey
-    ? false
-    : route.providerApiKey
-      ? true
-      : Boolean(existing?.providerApiKeySet ?? route.providerApiKeySet);
-  const litellmModel = route.litellmModel.trim();
-  const modelAlias = route.modelAlias.trim();
-  return {
-    id: route.id || existing?.id || "route-1",
-    name: route.name !== undefined ? route.name.trim() : existing?.name || "",
-    endpointMode: route.endpointMode || existing?.endpointMode || "auto",
-    litellmModel,
-    modelAlias,
-    providerBaseUrl: route.providerBaseUrl.trim(),
-    extraLitellmParams: { ...(route.extraLitellmParams || existing?.extraLitellmParams || {}) },
-    providerApiKeySet,
-    configured: Boolean(litellmModel && modelAlias && providerApiKeySet),
-  };
-}
-
 export class MockWebBotClient implements WebBotClient {
   private bots = new Map<string, BotSummary>(
     mockBots.map((item) => [
@@ -1456,65 +1392,6 @@ export class MockWebBotClient implements WebBotClient {
       defaultReasoningEffort: "medium",
     },
   ];
-  private transferBridgeStatus: TransferBridgeStatus = {
-    enabled: false,
-    configured: true,
-    running: false,
-    status: "disabled",
-    localUrl: "http://127.0.0.1:8080",
-    localEndpoint: "http://127.0.0.1:8080",
-    localHost: "127.0.0.1",
-    localPort: 8080,
-    bridgePageUrl: "/api/transfer/page",
-    responsesBaseUrl: "http://127.0.0.1:8080/v1",
-    chatCompletionsBaseUrl: "http://127.0.0.1:8080/v1",
-    litellmRunning: false,
-    litellmPid: null,
-    litellmModel: "openai/gpt-5",
-    modelAlias: "gpt-5",
-    endpointMode: "auto",
-    extraLitellmParams: {},
-    providerBaseUrl: "https://max.jojocode.com/v1",
-    providerApiKeySet: true,
-    routes: [
-      {
-        id: "route-1",
-        endpointMode: "auto",
-        litellmModel: "openai/gpt-5",
-        modelAlias: "gpt-5",
-        providerBaseUrl: "https://max.jojocode.com/v1",
-        extraLitellmParams: {},
-        providerApiKeySet: true,
-        configured: true,
-      },
-    ],
-    routeCount: 1,
-    configuredRouteCount: 1,
-    dropParams: true,
-    litellmProxyBaseUrl: "http://127.0.0.1:49152/v1",
-    requestCount: 1,
-    totalInputTokens: 15381,
-    totalOutputTokens: 30,
-    totalBytesIn: 75420,
-    totalBytesOut: 3400,
-    uptimeSeconds: 61,
-    recentTraffic: [
-      {
-        id: "mock",
-        timestamp: "12:01:00.000",
-        method: "POST",
-        endpoint: "/v1/responses",
-        status: 200,
-        bytesIn: 100,
-        bytesOut: 200,
-        durationMs: 15,
-        model: "gpt-5.5",
-        error: "",
-      },
-    ],
-    startedAt: "2026-06-29T12:00:00Z",
-    lastRequestAt: "2026-06-29T12:01:00Z",
-  };
   private currentPaths = new Map<string, string>();
   private cliParamsByBot = new Map<string, CliParamsPayload>();
   private pluginSessions = new Map<
@@ -1818,124 +1695,6 @@ export class MockWebBotClient implements WebBotClient {
       firstDate: "2026-07-20",
       lastDate: "2026-07-26",
     },
-    availableProviders: [
-      {
-        key: "openai_official",
-        kind: "openai_official",
-        label: "OpenAI 官方",
-        baseUrl: null,
-        resolution: "resolved",
-      },
-      {
-        key: "base_url:https://api.example.test/v1",
-        kind: "base_url",
-        label: "自定义 Provider",
-        baseUrl: "https://api.example.test/v1",
-        resolution: "resolved",
-      },
-    ],
-    selectedProviderKeys: [],
-    totals: {
-      requestCount: 12,
-      inputTokens: 18800,
-      cachedInputTokens: 6800,
-      uncachedInputTokens: 12000,
-      outputTokens: 4200,
-      reasoningOutputTokens: 950,
-      totalTokens: 23000,
-      cacheHitRate: 6800 / 18800,
-    },
-    byProvider: [{
-      provider: {
-        key: "openai_official",
-        kind: "openai_official",
-        label: "OpenAI 官方",
-        baseUrl: null,
-        resolution: "resolved",
-      },
-      requestCount: 12,
-      inputTokens: 18800,
-      cachedInputTokens: 6800,
-      uncachedInputTokens: 12000,
-      outputTokens: 4200,
-      reasoningOutputTokens: 950,
-      totalTokens: 23000,
-      cacheHitRate: 6800 / 18800,
-    }],
-    byProviderModel: [{
-      provider: {
-        key: "openai_official",
-        kind: "openai_official",
-        label: "OpenAI 官方",
-        baseUrl: null,
-        resolution: "resolved",
-      },
-      model: "gpt-5.6-sol",
-      requestCount: 12,
-      inputTokens: 18800,
-      cachedInputTokens: 6800,
-      uncachedInputTokens: 12000,
-      outputTokens: 4200,
-      reasoningOutputTokens: 950,
-      totalTokens: 23000,
-      cacheHitRate: 6800 / 18800,
-    }],
-    byDay: [{
-      date: "2026-07-26",
-      requestCount: 12,
-      inputTokens: 18800,
-      cachedInputTokens: 6800,
-      uncachedInputTokens: 12000,
-      outputTokens: 4200,
-      reasoningOutputTokens: 950,
-      totalTokens: 23000,
-      cacheHitRate: 6800 / 18800,
-    }],
-    dailyByProvider: [{
-      date: "2026-07-26",
-      provider: {
-        key: "openai_official",
-        kind: "openai_official",
-        label: "OpenAI 官方",
-        baseUrl: null,
-        resolution: "resolved",
-      },
-      requestCount: 12,
-      inputTokens: 18800,
-      cachedInputTokens: 6800,
-      uncachedInputTokens: 12000,
-      outputTokens: 4200,
-      reasoningOutputTokens: 950,
-      totalTokens: 23000,
-      cacheHitRate: 6800 / 18800,
-    }],
-    dailyByProviderModel: [{
-      date: "2026-07-26",
-      provider: {
-        key: "openai_official",
-        kind: "openai_official",
-        label: "OpenAI 官方",
-        baseUrl: null,
-        resolution: "resolved",
-      },
-      model: "gpt-5.6-sol",
-      requestCount: 12,
-      inputTokens: 18800,
-      cachedInputTokens: 6800,
-      uncachedInputTokens: 12000,
-      outputTokens: 4200,
-      reasoningOutputTokens: 950,
-      totalTokens: 23000,
-      cacheHitRate: 6800 / 18800,
-    }],
-    dailyPagination: {
-      page: 1,
-      pageSize: 10,
-      totalItems: 1,
-      totalPages: 1,
-      hasPrevious: false,
-      hasNext: false,
-    },
     rateLimitSamples: [
       {
         limitId: GENERAL_CODEX_RATE_LIMIT_ID,
@@ -2181,7 +1940,7 @@ export class MockWebBotClient implements WebBotClient {
       ],
     },
   ];
-  private announcementReads = new Map<string, string>();
+  private announcementLastSeenId = "";
   private adminUsers = new Map<string, Omit<AdminUser, "ownedBots" | "ownedBotCount">>([
     ["demo", {
       accountId: "demo",
@@ -2600,7 +2359,7 @@ export class MockWebBotClient implements WebBotClient {
   private buildAnnouncementList(): AnnouncementListResult {
     const items = this.sortedAnnouncements();
     const latestId = items[0]?.id || "";
-    const lastSeenId = this.announcementReads.get(this.currentAccountId()) || "";
+    const lastSeenId = this.announcementLastSeenId;
     return {
       items: items.map((item) => this.cloneAnnouncement(item)),
       latestId,
@@ -3168,7 +2927,12 @@ export class MockWebBotClient implements WebBotClient {
     if (latestId && !this.announcements.some((item) => item.id === latestId)) {
       throw new WebApiClientError("公告不存在", { status: 400, code: "invalid_announcement" });
     }
-    this.announcementReads.set(this.currentAccountId(), latestId);
+    const items = this.sortedAnnouncements();
+    const currentIndex = items.findIndex((item) => item.id === this.announcementLastSeenId);
+    const nextIndex = items.findIndex((item) => item.id === latestId);
+    if (currentIndex < 0 || (nextIndex >= 0 && nextIndex < currentIndex)) {
+      this.announcementLastSeenId = latestId;
+    }
     return this.buildAnnouncementList();
   }
 
@@ -3277,75 +3041,6 @@ export class MockWebBotClient implements WebBotClient {
       accountId,
       allowedBots: [...normalized],
     };
-  }
-
-  async getTransferBridgeStatus(): Promise<TransferBridgeStatus> {
-    return {
-      ...this.transferBridgeStatus,
-      routes: this.transferBridgeStatus.routes?.map((item) => ({ ...item })),
-      recentTraffic: this.transferBridgeStatus.recentTraffic?.map((item) => ({ ...item })),
-    };
-  }
-
-  async getTransferAdminStatus(): Promise<TransferBridgeStatus> {
-    return this.getTransferBridgeStatus();
-  }
-
-  async updateTransferBridgeConfig(input: TransferBridgeConfigInput): Promise<TransferBridgeStatus> {
-    const existingRoutes = this.transferBridgeStatus.routes || [];
-    const nextRoutes = input.routes
-      ? input.routes.map((route, index) => normalizeTransferRouteDraft(route, existingRoutes[index]))
-      : [normalizeTransferRouteDraft({
-          id: "route-1",
-          endpointMode: input.endpointMode || this.transferBridgeStatus.endpointMode || "auto",
-          litellmModel: input.litellmModel !== undefined ? input.litellmModel : this.transferBridgeStatus.litellmModel || "",
-          modelAlias: input.modelAlias !== undefined ? input.modelAlias : this.transferBridgeStatus.modelAlias || "",
-          providerBaseUrl: input.providerBaseUrl !== undefined ? input.providerBaseUrl : this.transferBridgeStatus.providerBaseUrl || "",
-          extraLitellmParams: input.extraLitellmParams || this.transferBridgeStatus.extraLitellmParams || {},
-          providerApiKey: input.providerApiKey,
-          clearProviderApiKey: input.clearProviderApiKey,
-          providerApiKeySet: this.transferBridgeStatus.providerApiKeySet,
-        }, existingRoutes[0])];
-    const firstRoute = nextRoutes[0];
-    const configured = nextRoutes.some((route) => route.configured);
-    const enabled = input.enabled ?? this.transferBridgeStatus.enabled;
-    const running = Boolean(enabled && configured);
-    this.transferBridgeStatus = {
-      ...this.transferBridgeStatus,
-      routes: nextRoutes,
-      routeCount: nextRoutes.length,
-      configuredRouteCount: nextRoutes.filter((route) => route.configured).length,
-      configured,
-      providerBaseUrl: firstRoute?.providerBaseUrl || "",
-      litellmModel: firstRoute?.litellmModel || "",
-      modelAlias: firstRoute?.modelAlias || "",
-      endpointMode: firstRoute?.endpointMode || "auto",
-      extraLitellmParams: { ...(firstRoute?.extraLitellmParams || {}) },
-      providerApiKeySet: Boolean(firstRoute?.providerApiKeySet),
-      dropParams: input.dropParams ?? this.transferBridgeStatus.dropParams,
-      enabled,
-      running,
-      litellmRunning: running,
-      status: configured ? (enabled ? "running" : "disabled") : "not_configured",
-      restartRequired: false,
-      restartRequiredReason: "",
-    };
-    return this.getTransferBridgeStatus();
-  }
-
-  async resetTransferBridgeStats(): Promise<TransferBridgeStatus> {
-    this.transferBridgeStatus = {
-      ...this.transferBridgeStatus,
-      requestCount: 0,
-      totalInputTokens: 0,
-      totalOutputTokens: 0,
-      totalBytesIn: 0,
-      totalBytesOut: 0,
-      recentTraffic: [],
-      lastRequestAt: "",
-      lastError: "",
-    };
-    return this.getTransferBridgeStatus();
   }
 
   async getInlineCompletionConfig(): Promise<InlineCompletionConfig> {
@@ -5346,8 +5041,8 @@ export class MockWebBotClient implements WebBotClient {
     }
 
     const source = currentEntries.find((entry) => entry.name === path);
-    if (!source || source.isDir) {
-      throw new Error("文件不存在");
+    if (!source) {
+      throw new Error("文件或文件夹不存在");
     }
 
     botFiles[browserPath] = currentEntries.map((entry) =>
@@ -5360,12 +5055,29 @@ export class MockWebBotClient implements WebBotClient {
         : entry,
     );
 
-    const content = this.getFileContent(botAlias, browserPath, path);
-    const version = this.getFileVersion(botAlias, browserPath, path);
-    this.fileContents.delete(this.fileKey(botAlias, browserPath, path));
-    this.fileVersions.delete(this.fileKey(botAlias, browserPath, path));
-    this.fileContents.set(this.fileKey(botAlias, browserPath, nextName), content);
-    this.fileVersions.set(this.fileKey(botAlias, browserPath, nextName), version);
+    if (source.isDir) {
+      const normalizedBrowserPath = this.normalizeMockPath(browserPath);
+      const sourcePath = normalizedBrowserPath === "/" ? `/${path}` : `${normalizedBrowserPath}/${path}`;
+      const targetPath = normalizedBrowserPath === "/" ? `/${nextName}` : `${normalizedBrowserPath}/${nextName}`;
+      const renamedDirectories = Object.entries(botFiles)
+        .filter(([candidate]) => candidate === sourcePath || candidate.startsWith(`${sourcePath}/`))
+        .map(([candidate, entries]) => [`${targetPath}${candidate.slice(sourcePath.length)}`, entries] as const);
+      for (const candidate of Object.keys(botFiles)) {
+        if (candidate === sourcePath || candidate.startsWith(`${sourcePath}/`)) {
+          delete botFiles[candidate];
+        }
+      }
+      for (const [candidate, entries] of renamedDirectories) {
+        botFiles[candidate] = entries;
+      }
+    } else {
+      const content = this.getFileContent(botAlias, browserPath, path);
+      const version = this.getFileVersion(botAlias, browserPath, path);
+      this.fileContents.delete(this.fileKey(botAlias, browserPath, path));
+      this.fileVersions.delete(this.fileKey(botAlias, browserPath, path));
+      this.fileContents.set(this.fileKey(botAlias, browserPath, nextName), content);
+      this.fileVersions.set(this.fileKey(botAlias, browserPath, nextName), version);
+    }
 
     return {
       oldPath: path,
@@ -5678,14 +5390,14 @@ export class MockWebBotClient implements WebBotClient {
 
   async getCodexUsageConfig(): Promise<CodexUsageConfig> {
     if (!this.hasAdminOps()) {
-      throw new WebApiClientError("无权查看 Codex 用量", { status: 403, code: "forbidden" });
+      throw new WebApiClientError("无权查看 Codex 额度", { status: 403, code: "forbidden" });
     }
     return cloneCodexUsageConfig(this.codexUsageConfig);
   }
 
   async updateCodexUsageConfig(input: { enabled: boolean }): Promise<CodexUsageConfig> {
     if (!this.hasAdminOps()) {
-      throw new WebApiClientError("无权修改 Codex 用量采集设置", { status: 403, code: "forbidden" });
+      throw new WebApiClientError("无权修改 Codex 额度采集设置", { status: 403, code: "forbidden" });
     }
     this.codexUsageConfig = {
       ...this.codexUsageConfig,
@@ -5700,87 +5412,21 @@ export class MockWebBotClient implements WebBotClient {
 
   async getCodexUsageStats(query: CodexUsageStatsQuery = {}): Promise<CodexUsageStats> {
     if (!this.hasAdminOps()) {
-      throw new WebApiClientError("无权查看 Codex 用量", { status: 403, code: "forbidden" });
+      throw new WebApiClientError("无权查看 Codex 额度", { status: 403, code: "forbidden" });
     }
-    const selectedProviderKeys = Array.from(new Set(
-      (query.providerKeys || []).map((item) => item.trim()).filter(Boolean),
-    ));
     const result = cloneCodexUsageStats(this.codexUsageStats);
     result.enabled = this.codexUsageConfig.enabled;
     result.range = {
       startDate: query.startDate || result.range.startDate,
       endDate: query.endDate || result.range.endDate,
     };
-    result.selectedProviderKeys = selectedProviderKeys;
-    if (selectedProviderKeys.length && !selectedProviderKeys.includes("openai_official")) {
-      result.rateLimitSamples = [];
-    }
-    if (selectedProviderKeys.length) {
-      const selected = new Set(selectedProviderKeys);
-      result.byProvider = result.byProvider.filter((item) => selected.has(item.provider.key));
-      result.byProviderModel = result.byProviderModel.filter((item) => selected.has(item.provider.key));
-      result.dailyByProvider = result.dailyByProvider.filter((item) => selected.has(item.provider.key));
-      result.dailyByProviderModel = result.dailyByProviderModel.filter((item) => selected.has(item.provider.key));
-    }
     if (query.startDate || query.endDate) {
       const inRange = (date: string) => (
         (!query.startDate || date >= query.startDate)
         && (!query.endDate || date <= query.endDate)
       );
-      result.dailyByProvider = result.dailyByProvider.filter((item) => inRange(item.date));
-      result.dailyByProviderModel = result.dailyByProviderModel.filter((item) => inRange(item.date));
       result.rateLimitSamples = result.rateLimitSamples.filter((sample) => inRange(sample.sampledAt.slice(0, 10)));
     }
-    const fullDailyByProvider = result.dailyByProvider;
-    const fullDailyByProviderModel = result.dailyByProviderModel;
-    const providerGroups = new Map<string, CodexUsageDailyProviderStats[]>();
-    const dayGroups = new Map<string, CodexUsageDailyProviderStats[]>();
-    const providerModelGroups = new Map<string, CodexUsageDailyProviderModelStats[]>();
-    for (const item of fullDailyByProvider) {
-      providerGroups.set(item.provider.key, [...(providerGroups.get(item.provider.key) || []), item]);
-      dayGroups.set(item.date, [...(dayGroups.get(item.date) || []), item]);
-    }
-    for (const item of fullDailyByProviderModel) {
-      const key = `${item.provider.key}\u0000${item.model}`;
-      providerModelGroups.set(key, [...(providerModelGroups.get(key) || []), item]);
-    }
-    result.byProvider = Array.from(providerGroups.values()).map<CodexUsageProviderStats>((items) => ({
-      provider: { ...items[0].provider },
-      ...sumCodexUsageMetrics(items),
-    }));
-    result.byDay = Array.from(dayGroups.entries()).map<CodexUsageDailyStats>(([date, items]) => ({
-      date,
-      ...sumCodexUsageMetrics(items),
-    }));
-    result.byProviderModel = Array.from(providerModelGroups.values()).map<CodexUsageProviderModelStats>((items) => ({
-      provider: { ...items[0].provider },
-      model: items[0].model,
-      ...sumCodexUsageMetrics(items),
-    }));
-    result.totals = sumCodexUsageMetrics(fullDailyByProvider);
-    const requestedPage = Number.isFinite(query.dailyPage)
-      ? Math.max(1, Math.floor(query.dailyPage!))
-      : 1;
-    const requestedPageSize = Number.isFinite(query.dailyPageSize)
-      ? Math.max(1, Math.floor(query.dailyPageSize!))
-      : 10;
-    const pageSize = Math.min(100, requestedPageSize);
-    const totalItems = fullDailyByProviderModel.length || fullDailyByProvider.length;
-    const totalPages = Math.ceil(totalItems / pageSize);
-    const page = requestedPage;
-    const startIndex = (page - 1) * pageSize;
-    result.dailyByProvider = fullDailyByProviderModel.length
-      ? []
-      : fullDailyByProvider.slice(startIndex, startIndex + pageSize);
-    result.dailyByProviderModel = fullDailyByProviderModel.slice(startIndex, startIndex + pageSize);
-    result.dailyPagination = {
-      page,
-      pageSize,
-      totalItems,
-      totalPages,
-      hasPrevious: page > 1,
-      hasNext: page < totalPages,
-    };
     return result;
   }
 

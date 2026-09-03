@@ -100,88 +100,6 @@ export type UserBotPermissions = {
   allowedBots: string[];
 };
 
-export type TransferTrafficRecord = {
-  id: string;
-  timestamp: string;
-  method: string;
-  endpoint: string;
-  status: number;
-  bytesIn: number;
-  bytesOut: number;
-  durationMs: number;
-  model: string;
-  error: string;
-};
-
-export type TransferEndpointMode = "auto" | "chat_completions" | "responses";
-
-export type TransferRouteConfig = {
-  id: string;
-  name?: string;
-  endpointMode: TransferEndpointMode;
-  litellmModel: string;
-  modelAlias: string;
-  providerBaseUrl: string;
-  extraLitellmParams: Record<string, unknown>;
-  providerApiKeySet: boolean;
-  providerApiKey?: string;
-  clearProviderApiKey?: boolean;
-  configured?: boolean;
-};
-
-export type TransferBridgeStatus = {
-  enabled: boolean;
-  configured: boolean;
-  running: boolean;
-  status: "running" | "stopped" | "disabled" | "not_configured" | "error" | "unknown";
-  localUrl: string;
-  localEndpoint?: string;
-  localHost?: string;
-  localPort?: number;
-  bridgePageUrl: string;
-  responsesBaseUrl: string;
-  chatCompletionsBaseUrl: string;
-  litellmRunning?: boolean;
-  litellmPid?: number | null;
-  litellmModel?: string;
-  modelAlias?: string;
-  endpointMode?: TransferEndpointMode;
-  extraLitellmParams?: Record<string, unknown>;
-  providerBaseUrl?: string;
-  providerApiKeySet: boolean;
-  routes?: TransferRouteConfig[];
-  routeCount?: number;
-  configuredRouteCount?: number;
-  dropParams?: boolean;
-  litellmProxyBaseUrl?: string;
-  litellmLogTail?: string[];
-  requestCount: number;
-  totalInputTokens: number;
-  totalOutputTokens: number;
-  totalBytesIn: number;
-  totalBytesOut: number;
-  uptimeSeconds?: number;
-  recentTraffic?: TransferTrafficRecord[];
-  startedAt?: string;
-  lastRequestAt?: string;
-  lastError?: string;
-  restartRequired?: boolean;
-  restartRequiredReason?: string;
-};
-
-export type TransferBridgeConfigInput = {
-  enabled?: boolean;
-  litellmModel?: string;
-  modelAlias?: string;
-  endpointMode?: TransferEndpointMode;
-  extraLitellmParams?: Record<string, unknown>;
-  providerBaseUrl?: string;
-  providerApiKey?: string;
-  clearProviderApiKey?: boolean;
-  routes?: TransferRouteConfig[];
-  dropParams?: boolean;
-};
-
 export type InlineCompletionConfig = {
   enabled: boolean;
   providerType: "openai_compatible" | string;
@@ -391,9 +309,9 @@ export type CodexUsageProvider = {
   resolution?: CodexUsageProviderResolution;
 };
 
-export const DEFAULT_CODEX_USAGE_MODEL = "gpt-5.6-sol";
 export const GENERAL_CODEX_RATE_LIMIT_ID = "codex";
 export const SECONDARY_CODEX_RATE_LIMIT_ID = "codex_bengalfox";
+export const GPT_RESERVE_RATE_LIMIT_ID = "base_model_inference";
 
 export type CodexUsageTimeBasis = {
   mode: "server_local" | string;
@@ -404,17 +322,6 @@ export type CodexUsageTimeBasis = {
 export type CodexUsageAvailableRange = {
   firstDate: string | null;
   lastDate: string | null;
-};
-
-export type CodexUsageMetrics = {
-  requestCount: number;
-  inputTokens: number;
-  cachedInputTokens: number;
-  uncachedInputTokens: number;
-  outputTokens: number;
-  reasoningOutputTokens: number;
-  totalTokens: number;
-  cacheHitRate: number | null;
 };
 
 export type CodexRateLimitSample = {
@@ -436,9 +343,6 @@ export type CodexUsageConfig = {
 export type CodexUsageStatsQuery = {
   startDate?: string;
   endDate?: string;
-  providerKeys?: string[];
-  dailyPage?: number;
-  dailyPageSize?: number;
 };
 
 export type CodexUsageStatsRange = {
@@ -446,49 +350,11 @@ export type CodexUsageStatsRange = {
   endDate: string;
 };
 
-export type CodexUsageProviderStats = CodexUsageMetrics & {
-  provider: CodexUsageProvider;
-};
-
-export type CodexUsageProviderModelStats = CodexUsageProviderStats & {
-  model: string;
-};
-
-export type CodexUsageDailyStats = CodexUsageMetrics & {
-  date: string;
-};
-
-export type CodexUsageDailyProviderStats = CodexUsageDailyStats & {
-  provider: CodexUsageProvider;
-};
-
-export type CodexUsageDailyProviderModelStats = CodexUsageDailyProviderStats & {
-  model: string;
-};
-
-export type CodexUsageDailyPagination = {
-  page: number;
-  pageSize: number;
-  totalItems: number;
-  totalPages: number;
-  hasPrevious: boolean;
-  hasNext: boolean;
-};
-
 export type CodexUsageStats = {
   range: CodexUsageStatsRange;
   enabled: boolean;
   timeBasis: CodexUsageTimeBasis;
   availableRange: CodexUsageAvailableRange;
-  availableProviders: CodexUsageProvider[];
-  selectedProviderKeys: string[];
-  totals: CodexUsageMetrics;
-  byProvider: CodexUsageProviderStats[];
-  byProviderModel: CodexUsageProviderModelStats[];
-  byDay: CodexUsageDailyStats[];
-  dailyByProvider: CodexUsageDailyProviderStats[];
-  dailyByProviderModel: CodexUsageDailyProviderModelStats[];
-  dailyPagination: CodexUsageDailyPagination;
   rateLimitSamples: CodexRateLimitSample[];
 };
 
@@ -595,6 +461,7 @@ export type BotSummary = {
   workingDir: string;
   lastActiveText: string;
   lastAnswerCompletedAt?: string;
+  lastAnswerTerminalAt?: string;
   serviceStatus?: BotServiceStatus;
   activityStatus?: BotActivityStatus;
   busyAgentIds?: string[];
@@ -1331,6 +1198,7 @@ export type ChatCompletedNotificationEvent = {
   preview: string;
   elapsedSeconds?: number;
   completedAt: string;
+  terminalAt?: string;
   url?: string;
 };
 

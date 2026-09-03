@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Callable
 
-from bot.cluster.runtime import ClusterRuntime, ClusterToolError
+from bot.cluster.runtime import (
+    ClusterRunRequest,
+    ClusterRuntime,
+    ClusterToolError,
+    derive_cluster_run_id,
+)
 from bot.models import BotProfile
 
 
@@ -26,6 +31,37 @@ def _normalize_roles(value: Any) -> list[dict[str, str]]:
         names.add(name)
         roles.append({"name": name, "responsibility": responsibility})
     return roles
+
+
+def _normalized_assignments(assignments: list[dict[str, Any]]) -> list[tuple[str, str, str]]:
+    return sorted(
+        (
+            str(item.get("agent_id") or "").strip().lower(),
+            str(item.get("name") or "").strip(),
+            str(item.get("responsibility") or "").strip(),
+        )
+        for item in assignments
+    )
+
+
+def _run_request(
+    run: Any,
+    *,
+    profile: BotProfile,
+    team: dict[str, Any],
+    team_revision: int,
+) -> ClusterRunRequest:
+    return ClusterRunRequest(
+        bot_alias=run.bot_alias,
+        user_id=run.user_id,
+        profile=profile,
+        execution_mode=run.execution_mode,
+        mentions=list(run.mentions),
+        allow_unsafe_cli=run.allow_unsafe_cli,
+        main_conversation_id=run.main_conversation_id,
+        team_revision=team_revision,
+        team=team,
+    )
 
 
 class ClusterTeamService:
@@ -60,6 +96,7 @@ class ClusterTeamService:
         run_id: str,
         payload: dict[str, Any],
         current_profile: BotProfile | None = None,
+        current_conversation_id: Callable[[], str] | None = None,
     ) -> dict[str, Any]:
         run = runtime.get_run(run_id)
         if run is None or not run.main_conversation_id:
@@ -73,10 +110,20 @@ class ClusterTeamService:
             live_run = runtime.get_run(run_id)
             if live_run is None:
                 raise ClusterToolError("cluster_run_not_found", "未找到集群任务")
+            if (
+                current_conversation_id is not None
+                and str(current_conversation_id() or "").strip() != live_run.main_conversation_id
+            ):
+                raise ClusterToolError("cluster_team_changed", "主会话已切换，请在当前会话重新编组")
             state = store.get_conversation_team(live_run.main_conversation_id)
             current_revision = max(0, int(state.get("cluster_team_revision") or 0))
             if current_revision != live_run.team_revision:
-                raise ClusterToolError("cluster_team_changed", "编组已被另一轮更新，请重新读取后重试")
+                current_run_id = derive_cluster_run_id(live_run.main_conversation_id, current_revision)
+                raise ClusterToolError(
+                    "cluster_team_changed",
+                    "编组已被另一轮更新，请重新读取后重试",
+                    {"run_id": current_run_id},
+                )
             current_team = state.get("cluster_team") if isinstance(state.get("cluster_team"), dict) else {}
             current_assignments = [
                 dict(item)
@@ -85,6 +132,12 @@ class ClusterTeamService:
             ]
             capacity_profile = current_profile or live_run.profile
             capacity = max(1, int(capacity_profile.cluster.max_parallel_agents or 1))
+            if runtime.has_pending_tasks(
+                bot_alias=live_run.bot_alias,
+                user_id=live_run.user_id,
+                main_conversation_id=live_run.main_conversation_id,
+            ):
+                raise ClusterToolError("cluster_team_busy", "当前主会话仍有子任务运行，暂不能重新编组")
             active_slot_ids = [
                 agent.id
                 for agent in capacity_profile.normalized_agents()
@@ -109,12 +162,6 @@ class ClusterTeamService:
                         "assignment_revision": current_revision + 1,
                     })
             else:
-                if runtime.has_pending_tasks(
-                    bot_alias=live_run.bot_alias,
-                    user_id=live_run.user_id,
-                    main_conversation_id=live_run.main_conversation_id,
-                ):
-                    raise ClusterToolError("cluster_team_busy", "当前主会话仍有子任务运行，暂不能重新编组")
                 if len(roles) > capacity:
                     raise ClusterToolError("cluster_team_full", "角色数量超过集群规模")
                 current_by_slot = {
@@ -139,6 +186,24 @@ class ClusterTeamService:
                     })
 
             next_team = {"version": 1, "assignments": next_assignments}
+            if _normalized_assignments(next_assignments) == _normalized_assignments(current_assignments):
+                runtime.ensure_run(
+                    _run_request(
+                        live_run,
+                        profile=capacity_profile,
+                        team=current_team,
+                        team_revision=current_revision,
+                    ),
+                    run_id,
+                )
+                return {
+                    "changed": False,
+                    "run_id": run_id,
+                    "team_revision": current_revision,
+                    "capacity": capacity,
+                    "assignments": current_assignments,
+                    "free_slots": max(0, capacity - len(current_assignments)),
+                }
             try:
                 updated = store.update_conversation_team(
                     live_run.main_conversation_id,
@@ -147,31 +212,47 @@ class ClusterTeamService:
                 )
             except Exception as exc:
                 if getattr(exc, "code", "") == "cluster_team_changed":
-                    raise ClusterToolError("cluster_team_changed", "编组已被另一轮更新，请重新读取后重试") from exc
+                    reloaded = store.get_conversation_team(live_run.main_conversation_id)
+                    reloaded_revision = max(0, int(reloaded.get("cluster_team_revision") or 0))
+                    raise ClusterToolError(
+                        "cluster_team_changed",
+                        "编组已被另一轮更新，请重新读取后重试",
+                        {"run_id": derive_cluster_run_id(live_run.main_conversation_id, reloaded_revision)},
+                    ) from exc
                 raise
             updated_team = updated.get("cluster_team") if isinstance(updated.get("cluster_team"), dict) else next_team
             updated_revision = max(0, int(updated.get("cluster_team_revision") or current_revision + 1))
+            next_run_id = derive_cluster_run_id(live_run.main_conversation_id, updated_revision)
             try:
-                runtime.update_run_team(run_id, updated_team, updated_revision)
-            except Exception as exc:  # pragma: no cover - defensive recovery
-                reloaded = store.get_conversation_team(live_run.main_conversation_id)
-                runtime.update_run_team(
-                    run_id,
-                    reloaded.get("cluster_team") or {"version": 1, "assignments": []},
-                    int(reloaded.get("cluster_team_revision") or 0),
+                runtime.retire_run(run_id)
+                runtime.ensure_run(
+                    _run_request(
+                        live_run,
+                        profile=capacity_profile,
+                        team=updated_team,
+                        team_revision=updated_revision,
+                    ),
+                    next_run_id,
                 )
-                raise ClusterToolError("cluster_team_sync_failed", "编组已保存，但运行态同步失败，请重试") from exc
-            runtime.append_event(
-                run_id,
-                {
-                    "kind": "team_configured",
-                    "mode": mode,
-                    "team_revision": updated_revision,
-                    "role_count": len(updated_team.get("assignments") or []),
-                },
-            )
+                runtime.append_event(
+                    next_run_id,
+                    {
+                        "kind": "team_configured",
+                        "mode": mode,
+                        "team_revision": updated_revision,
+                        "role_count": len(updated_team.get("assignments") or []),
+                    },
+                )
+            except Exception as exc:  # pragma: no cover - defensive recovery
+                raise ClusterToolError(
+                    "cluster_team_sync_failed",
+                    "编组已保存，但运行态同步失败，请重试",
+                    {"run_id": next_run_id},
+                ) from exc
             assignments = [dict(item) for item in list(updated_team.get("assignments") or []) if isinstance(item, dict)]
             return {
+                "changed": True,
+                "run_id": next_run_id,
                 "team_revision": updated_revision,
                 "capacity": capacity,
                 "assignments": assignments,

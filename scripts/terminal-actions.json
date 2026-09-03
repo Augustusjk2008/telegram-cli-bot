@@ -24,11 +24,33 @@
       "enabled": true
     },
     {
+      "id": "disk",
+      "label": "磁盘使用",
+      "icon": "Server",
+      "windowsCommand": "Write-Host \"┌──────┬────────────┬────────────┬────────────┬─────────┐\" -ForegroundColor Cyan; Write-Host \"│ Name │ FreeGB     │ UsedGB     │ TotalGB    │ Used%   │\" -ForegroundColor Cyan; Write-Host \"├──────┼────────────┼────────────┼────────────┼─────────┤\" -ForegroundColor Cyan; 'C','D','H' | % { $d=Get-PSDrive $_; $f=[math]::Round($d.Free/1GB,2); $u=[math]::Round($d.Used/1GB,2); $t=[math]::Round(($d.Free+$d.Used)/1GB,2); $p=[math]::Round(($d.Used/($d.Free+$d.Used))*100,2); Write-Host (\"│ {0,-4} │ {1,10} │ {2,10} │ {3,10} │ {4,6}% │\" -f $d.Name, \"$f GB\", \"$u GB\", \"$t GB\", $p) -ForegroundColor $(if($p -gt 75){'Red'}elseif($p -gt 60){'Yellow'}else{'Green'}) }; Write-Host \"└──────┴────────────┴────────────┴────────────┴─────────┘\" -ForegroundColor Cyan",
+      "linuxCommand": "",
+      "macosCommand": "",
+      "cwd": ".",
+      "confirm": false,
+      "enabled": true
+    },
+    {
       "id": "ChangeSourceCodex",
       "label": "Codex换源",
       "icon": "Rocket",
       "windowsCommand": ".\\scripts\\codex_switch_source.bat",
       "linuxCommand": "bash ./scripts/codex_switch_source.sh",
+      "macosCommand": "",
+      "cwd": ".",
+      "confirm": false,
+      "enabled": true
+    },
+    {
+      "id": "stop_browser",
+      "label": "关闭浏览器",
+      "icon": "Terminal",
+      "windowsCommand": "Stop-Process -Name msedge,chrome,chromium,firefox,brave,vivaldi,opera,opera_gx,Arc,DuckDuckGo -Force -ErrorAction SilentlyContinue",
+      "linuxCommand": "",
       "macosCommand": "",
       "cwd": ".",
       "confirm": false,
@@ -101,12 +123,12 @@
       "enabled": true
     },
     {
-      "id": "stop_browser",
-      "label": "关闭浏览器",
-      "icon": "Terminal",
-      "windowsCommand": "Stop-Process -Name msedge,chrome,chromium,firefox,brave,vivaldi,opera,opera_gx,Arc,DuckDuckGo -Force -ErrorAction SilentlyContinue",
-      "linuxCommand": "",
-      "macosCommand": "",
+      "id": "ccusage",
+      "label": "Codex统计",
+      "icon": "Bug",
+      "windowsCommand": "npx ccusage@latest codex monthly",
+      "linuxCommand": "npx ccusage@latest codex monthly",
+      "macosCommand": "npx ccusage@latest codex monthly",
       "cwd": ".",
       "confirm": false,
       "enabled": true

@@ -90,6 +90,35 @@ def test_parser_reports_clear_errors_for_invalid_sources() -> None:
         parse_flowchart("flowchart TD\n")
 
 
+def test_parser_accepts_direction_inside_subgraph() -> None:
+    ir = parse_flowchart(
+        "\n".join(
+            [
+                "flowchart TB",
+                "subgraph APP[任务应用层]",
+                "direction LR",
+                "SEEK[导引头应用]",
+                "FC[飞控应用]",
+                "end",
+                "SEEK --> FC",
+            ]
+        )
+    )
+
+    assert ir.groups["APP"].node_ids == ["SEEK", "FC"]
+    assert [(edge.source, edge.target) for edge in ir.edges] == [("SEEK", "FC")]
+
+
+def test_parser_expands_chained_edges() -> None:
+    ir = parse_flowchart("flowchart TB\nL1[第一层] --> L2[第二层] --> L3[第三层]\n")
+
+    assert list(ir.nodes) == ["L1", "L2", "L3"]
+    assert [(edge.id, edge.source, edge.target) for edge in ir.edges] == [
+        ("e1", "L1", "L2"),
+        ("e2", "L2", "L3"),
+    ]
+
+
 @pytest.mark.asyncio
 async def test_plugin_runtime_export_one_writes_valid_vsdx_artifact(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"

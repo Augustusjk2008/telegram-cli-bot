@@ -86,6 +86,51 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
+test("leaves plan mode as soon as plan execution starts", async () => {
+  const user = userEvent.setup();
+  const executionGate = deferred<void>();
+  const backingClient = new MockWebBotClient();
+  const executePlan = vi.fn<WebBotClient["executePlan"]>(async (...args) => {
+    await executionGate.promise;
+    return backingClient.executePlan(...args);
+  });
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async () => ({
+    id: "assistant-plan-executed",
+    role: "assistant",
+    text: "方案执行完成",
+    createdAt: "2026-08-27T02:00:00Z",
+    state: "done",
+  }));
+  const client = createClient({
+    listMessages: async () => ({
+      items: [{
+        id: "assistant-plan-draft",
+        role: "assistant",
+        text: "<PLAN_DRAFT>\n# 执行这个方案\n\n完成目标改动。\n</PLAN_DRAFT>",
+        createdAt: "2026-08-27T01:59:00Z",
+        state: "done",
+      }],
+    }),
+    executePlan,
+    sendMessage,
+  });
+  window.localStorage.setItem("tcb.planMode.main", "1");
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  const planModeButton = await screen.findByRole("button", { name: "计划模式" });
+  expect(planModeButton).toHaveAttribute("aria-pressed", "true");
+  await user.click(await screen.findByRole("button", { name: "执行方案" }));
+  await waitFor(() => expect(executePlan).toHaveBeenCalledTimes(1));
+
+  expect(planModeButton).toHaveAttribute("aria-pressed", "false");
+  expect(window.localStorage.getItem("tcb.planMode.main")).toBeNull();
+
+  await act(async () => executionGate.resolve());
+  await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+  expect(screen.getByRole("button", { name: "计划模式" })).toHaveAttribute("aria-pressed", "false");
+});
+
 test("binds direct done assistant message to backend id from stream meta", async () => {
   const user = userEvent.setup();
   const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
@@ -114,6 +159,33 @@ test("binds direct done assistant message to backend id from stream meta", async
   expect(await screen.findByText("直接完成")).toBeInTheDocument();
   expect(screen.getAllByText("直接完成")).toHaveLength(1);
   expect(screen.getAllByTestId("chat-message-row")).toHaveLength(2);
+});
+
+test("does not report a hidden cancelled reply as unread", async () => {
+  const user = userEvent.setup();
+  const onUnreadResult = vi.fn();
+  const client = createClient({
+    sendMessage: vi.fn<WebBotClient["sendMessage"]>(async () => ({
+      id: "assistant-cancelled",
+      role: "assistant",
+      text: "已停止",
+      createdAt: "2026-08-27T01:10:00Z",
+      updatedAt: "2026-08-27T01:10:01Z",
+      state: "error",
+      meta: { completionState: "cancelled" },
+    })),
+  });
+  let visibilityState: DocumentVisibilityState = "visible";
+  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibilityState);
+  render(<ChatScreen botAlias="main" client={client} onUnreadResult={onUnreadResult} />);
+  await screen.findByText("暂无消息，开始聊天吧");
+
+  await user.type(screen.getByPlaceholderText("输入消息"), "停止这个任务");
+  visibilityState = "hidden";
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(await screen.findByText("已停止")).toBeInTheDocument();
+  expect(onUnreadResult).not.toHaveBeenCalled();
 });
 
 test("binds stream metadata to the placeholder before a deferred final and replaces it in place", async () => {

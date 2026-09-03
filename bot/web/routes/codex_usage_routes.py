@@ -1,4 +1,4 @@
-"""Codex provider daily usage administration routes."""
+"""Codex quota administration routes."""
 
 from __future__ import annotations
 
@@ -15,12 +15,6 @@ from bot.web.routes.app_keys import SERVER_APP_KEY
 
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_POSITIVE_INTEGER_RE = re.compile(r"^[1-9]\d*$")
-_MAX_PROVIDER_KEYS = 100
-_MAX_PROVIDER_KEY_LENGTH = 256
-_DEFAULT_DAILY_PAGE = 1
-_DEFAULT_DAILY_PAGE_SIZE = 10
-_MAX_DAILY_PAGE_SIZE = 100
 
 
 def _json(data: dict[str, Any], status: int = 200) -> web.Response:
@@ -62,45 +56,6 @@ def _date_range(request: web.Request) -> tuple[date | None, date | None]:
     return start, end
 
 
-def _provider_keys(request: web.Request) -> list[str]:
-    values = [str(item or "").strip() for item in request.query.getall("provider", [])]
-    if len(values) > _MAX_PROVIDER_KEYS:
-        raise WebApiError(400, "invalid_provider", "provider 数量不能超过 100")
-    if any(not item or len(item) > _MAX_PROVIDER_KEY_LENGTH for item in values):
-        raise WebApiError(400, "invalid_provider", "provider 参数无效")
-    return list(dict.fromkeys(values))
-
-
-def _daily_pagination(request: web.Request) -> tuple[int, int]:
-    def _positive_integer(name: str, *, default: int, maximum: int | None = None) -> int:
-        raw_value = request.query.get(name)
-        if raw_value is None:
-            return default
-        value = str(raw_value).strip()
-        if not _POSITIVE_INTEGER_RE.fullmatch(value):
-            raise WebApiError(400, "invalid_daily_pagination", f"{name} 必须是正整数")
-        try:
-            parsed = int(value)
-        except ValueError as exc:
-            raise WebApiError(400, "invalid_daily_pagination", f"{name} 必须是正整数") from exc
-        if maximum is not None and parsed > maximum:
-            raise WebApiError(
-                400,
-                "invalid_daily_pagination",
-                f"{name} 不能超过 {maximum}",
-            )
-        return parsed
-
-    return (
-        _positive_integer("daily_page", default=_DEFAULT_DAILY_PAGE),
-        _positive_integer(
-            "daily_page_size",
-            default=_DEFAULT_DAILY_PAGE_SIZE,
-            maximum=_MAX_DAILY_PAGE_SIZE,
-        ),
-    )
-
-
 async def get_config(request: web.Request) -> web.Response:
     server = _server(request)
     await server._with_capability(request, CAP_ADMIN_OPS)
@@ -121,18 +76,10 @@ async def get_stats(request: web.Request) -> web.Response:
     server = _server(request)
     await server._with_capability(request, CAP_ADMIN_OPS)
     start_date, end_date = _date_range(request)
-    provider_keys = _provider_keys(request)
-    daily_page, daily_page_size = _daily_pagination(request)
-    try:
-        data = await server.codex_usage_service.query_stats(
-            start_date=start_date,
-            end_date=end_date,
-            provider_keys=provider_keys,
-            daily_page=daily_page,
-            daily_page_size=daily_page_size,
-        )
-    except ValueError as exc:
-        raise WebApiError(400, "invalid_provider", str(exc)) from exc
+    data = await server.codex_usage_service.query_stats(
+        start_date=start_date,
+        end_date=end_date,
+    )
     return _json({"ok": True, "data": data})
 
 

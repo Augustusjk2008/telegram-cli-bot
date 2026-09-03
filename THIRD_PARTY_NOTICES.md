@@ -66,8 +66,6 @@ distribution metadata. Other installation methods resolve the constraints in
 | `python-dotenv` 1.2.2 | BSD-3-Clause; Saurabh Kumar, Ted Tieken, and Jacob Kaplan-Moss. |
 | `tomli` | MIT; conditional dependency for Python versions below 3.11 and not installed in the audited Python 3.13 portable runtime. |
 | `aiohttp` 3.14.3 | Apache-2.0 AND MIT. Its vendored `llhttp` is MIT, Copyright 2018 Fedor Indutny. Preserve both license files. |
-| `PyYAML` 6.0.3 | MIT. |
-| `litellm[proxy]` 1.94.0 | MIT; Copyright 2023 Berri AI. |
 | `qrcode` 8.2 | BSD-3-Clause, with additional historical MIT attributions and an upstream QR Code trademark notice in its license file. |
 | `pygdbmi` 0.11.0.0 | MIT. |
 | `pypdf` 6.14.2 | BSD-3-Clause. |
@@ -77,11 +75,6 @@ distribution metadata. Other installation methods resolve the constraints in
 | `psutil` 7.2.2 | BSD-3-Clause. |
 | `pytest` 9.1.1 | MIT; test dependency currently installed in the portable runtime. |
 | `pytest-asyncio` 1.4.0 | Apache-2.0; test dependency currently installed in the portable runtime. |
-
-The portable Python runtime contains transitive distributions in addition to
-this direct list. In particular, the audited artifact includes MPL-2.0-covered
-material in `certifi`, `orjson`, and `tqdm`. Installed license material is kept
-under `runtime/python/Lib/site-packages/*dist-info/`.
 
 ## Windows portable bundle
 

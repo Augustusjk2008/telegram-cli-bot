@@ -9,73 +9,14 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from .models import (
-    DEFAULT_CODEX_MODEL,
-    CodexRateLimitSample,
-    CodexTokenUsage,
-    DayLike,
-    ProviderInfo,
-    UsageQueryResult,
-    normalize_model_key,
-)
 from .app_server_rate_limits import resolve_account_rate_limits
+from .models import CodexRateLimitSample, DayLike, ProviderInfo
 from .provider import CodexProviderResolver
-from .rollout import (
-    TurnRateLimitResolution,
-    resolve_failed_turn_usage,
-    resolve_turn_rate_limit_resolution,
-)
+from .rollout import TurnRateLimitResolution, resolve_turn_rate_limit_resolution
 from .store import CodexUsageStore
-
-try:
-    import tomllib
-except ImportError:  # pragma: no cover - exercised on Python 3.10 only
-    import tomli as tomllib  # type: ignore[no-redef]
 
 
 logger = logging.getLogger(__name__)
-
-
-def _model_from_config_override(value: str) -> str | None:
-    try:
-        parsed = tomllib.loads(value)
-    except (TypeError, tomllib.TOMLDecodeError):
-        return None
-    model = parsed.get("model") if isinstance(parsed, Mapping) else None
-    return model if isinstance(model, str) else None
-
-
-def resolve_codex_model(argv: Sequence[str] | str | None) -> str:
-    if argv is None:
-        return DEFAULT_CODEX_MODEL
-    arguments = shlex.split(argv) if isinstance(argv, str) else [str(item) for item in argv]
-    selected: str | None = None
-    index = 0
-    while index < len(arguments):
-        argument = arguments[index]
-        config_override: str | None = None
-        if argument in {"--model", "-m"}:
-            if index + 1 < len(arguments):
-                index += 1
-                selected = arguments[index]
-        elif argument.startswith("--model="):
-            selected = argument.split("=", 1)[1]
-        elif argument.startswith("-m") and not argument.startswith("--") and len(argument) > 2:
-            selected = argument[2:]
-        elif argument in {"-c", "--config"}:
-            if index + 1 < len(arguments):
-                index += 1
-                config_override = arguments[index]
-        elif argument.startswith("--config="):
-            config_override = argument.split("=", 1)[1]
-        elif argument.startswith("-c") and len(argument) > 2:
-            config_override = argument[2:]
-        if config_override is not None:
-            configured_model = _model_from_config_override(config_override)
-            if configured_model is not None:
-                selected = configured_model
-        index += 1
-    return normalize_model_key(selected)
 
 
 def _command_executable(argv: Sequence[str] | str | None) -> str:
@@ -95,16 +36,12 @@ def _codex_home(env: Mapping[str, str] | None) -> Path:
 
 
 def _default_db_path() -> Path:
-    """Resolve the runtime path only when a default service is actually needed."""
-
     from bot.runtime_paths import get_codex_usage_db_path
 
     return get_codex_usage_db_path()
 
 
 class _AwaitableDiagnostics(dict[str, int | bool | str | None]):
-    """A mapping that also preserves compatibility with ``await diagnostics()``."""
-
     def __await__(self):
         async def _result() -> _AwaitableDiagnostics:
             return self
@@ -112,8 +49,8 @@ class _AwaitableDiagnostics(dict[str, int | bool | str | None]):
         return _result().__await__()
 
 
-class CodexUsageCapture:
-    """One process-start snapshot with an idempotent terminal usage recorder."""
+class CodexQuotaCapture:
+    """One process-start snapshot with idempotent quota recording."""
 
     def __init__(
         self,
@@ -121,7 +58,6 @@ class CodexUsageCapture:
         *,
         enabled: bool,
         provider: ProviderInfo,
-        model: str,
         started_at: datetime,
         codex_home: Path,
         executable: str,
@@ -130,67 +66,29 @@ class CodexUsageCapture:
         self._service = service
         self.enabled = enabled
         self.provider = provider
-        self.model = normalize_model_key(model)
         self.started_at = started_at
         self.codex_home = codex_home
         self.executable = executable
         self.environment = dict(environment) if environment is not None else None
         self._attempted = False
 
-    async def record_once(
-        self,
-        usage: CodexTokenUsage | Mapping[str, Any] | None,
-        *,
-        terminal_at: datetime | date | None = None,
-        terminal_time: datetime | date | None = None,
-        invalid_usage_count: int = 0,
-        duplicate_terminal_count: int = 0,
-        failed: bool = False,
-        session_id: str | None = None,
-    ) -> bool:
-        """Best-effort record that never lets usage accounting fail chat execution."""
-
-        self._service.note_invalid_usage(invalid_usage_count)
-        self._service.note_duplicate_terminal(duplicate_terminal_count)
+    async def record_once(self, *, session_id: str | None = None) -> bool:
         if self._attempted:
-            self._service.note_duplicate_terminal()
             return False
         self._attempted = True
-        if not self.enabled:
+        if not self.enabled or self.provider.kind != "openai_official":
             return False
-        normalized_session_id = str(session_id or "").strip()
-        if usage is None and normalized_session_id:
-            usage = await self._service._resolve_failed_capture_usage(
-                session_id=normalized_session_id,
-                started_at=self.started_at,
-                codex_home=self.codex_home,
-            )
-        token_recorded = False
-        if usage is not None:
-            timestamp = terminal_at if terminal_at is not None else terminal_time
-            if timestamp is None:
-                sample_time = getattr(usage, "completed_at", None)
-                if isinstance(sample_time, (datetime, date)):
-                    timestamp = sample_time
-            token_recorded = await self._service._record_capture(
-                self.provider,
-                self.model,
-                usage,
-                timestamp,
-            )
-        if self.provider.kind == "openai_official" and normalized_session_id:
-            await self._service._record_rate_limit_capture(
-                session_id=normalized_session_id,
-                started_at=self.started_at,
-                codex_home=self.codex_home,
-                executable=self.executable,
-                environment=self.environment,
-            )
-        return token_recorded
+        return await self._service._record_rate_limit_capture(
+            session_id=str(session_id or "").strip(),
+            started_at=self.started_at,
+            codex_home=self.codex_home,
+            executable=self.executable,
+            environment=self.environment,
+        )
 
 
 class CodexUsageService:
-    """Async facade that keeps all SQLite and TOML I/O off the event loop."""
+    """Async facade for Codex quota collection and persistence."""
 
     def __init__(
         self,
@@ -198,7 +96,6 @@ class CodexUsageService:
         *,
         store: CodexUsageStore | None = None,
         resolver: CodexProviderResolver | Any | None = None,
-        failed_usage_resolver: Any | None = None,
         rate_limit_resolver: Any | None = None,
         account_rate_limit_resolver: Any | None = None,
     ) -> None:
@@ -206,15 +103,12 @@ class CodexUsageService:
             store = CodexUsageStore(_default_db_path() if db_path is None else db_path)
         self._store = store
         self._resolver = resolver or CodexProviderResolver()
-        self._failed_usage_resolver = failed_usage_resolver or resolve_failed_turn_usage
         self._rate_limit_resolver = rate_limit_resolver or resolve_turn_rate_limit_resolution
         self._account_rate_limit_resolver = account_rate_limit_resolver or resolve_account_rate_limits
         self._diagnostics_lock = threading.RLock()
         self._enabled_snapshot = False
         self._write_count = 0
         self._write_failure_count = 0
-        self._invalid_usage_count = 0
-        self._duplicate_terminal_count = 0
         self._provider_resolution_failure_count = 0
         self._last_write_at: str | None = None
         self._last_error_code: str | None = None
@@ -254,16 +148,12 @@ class CodexUsageService:
         env: Mapping[str, str] | None = None,
         argv: Sequence[str] | str | None = None,
         command: Sequence[str] | str | None = None,
-    ) -> CodexUsageCapture:
+    ) -> CodexQuotaCapture:
         effective_argv = argv if argv is not None else command
         started_at = datetime.now(timezone.utc)
-        model = resolve_codex_model(effective_argv)
-        codex_home = _codex_home(env)
-        executable = _command_executable(effective_argv)
-        environment = dict(env) if env is not None else None
         enabled = await self.get_enabled()
         if not enabled:
-            return CodexUsageCapture(
+            return CodexQuotaCapture(
                 self,
                 enabled=False,
                 provider=ProviderInfo(
@@ -272,11 +162,10 @@ class CodexUsageService:
                     base_url=None,
                     resolution="disabled",
                 ),
-                model=model,
                 started_at=started_at,
-                codex_home=codex_home,
-                executable=executable,
-                environment=environment,
+                codex_home=_codex_home(env),
+                executable=_command_executable(effective_argv),
+                environment=env,
             )
         try:
             provider = await self.resolve_current_provider(
@@ -284,7 +173,7 @@ class CodexUsageService:
                 argv=argv,
                 command=command,
             )
-        except Exception as exc:  # Provider parsing must never block a CLI call.
+        except Exception as exc:
             self._mark_provider_resolution_failure(exc)
             provider = ProviderInfo(
                 key="unknown",
@@ -295,69 +184,18 @@ class CodexUsageService:
         else:
             if provider.kind == "unknown":
                 self._mark_provider_resolution_failure(None)
-        return CodexUsageCapture(
+        return CodexQuotaCapture(
             self,
             enabled=True,
             provider=provider,
-            model=model,
             started_at=started_at,
-            codex_home=codex_home,
-            executable=executable,
-            environment=environment,
+            codex_home=_codex_home(env),
+            executable=_command_executable(effective_argv),
+            environment=env,
         )
 
     capture_for_process = create_capture
     start_capture = create_capture
-
-    async def _record_capture(
-        self,
-        provider: ProviderInfo,
-        model: str,
-        usage: CodexTokenUsage | Mapping[str, Any],
-        terminal_at: datetime | date | None,
-    ) -> bool:
-        try:
-            await asyncio.to_thread(
-                self._store.record,
-                provider,
-                usage,
-                model_key=model,
-                terminal_at=terminal_at,
-            )
-        except ValueError as exc:
-            with self._diagnostics_lock:
-                self._invalid_usage_count += 1
-                self._last_error_code = "invalid_usage"
-            logger.warning("Codex 用量样本无效，已跳过: %s", type(exc).__name__)
-            return False
-        except Exception as exc:  # Accounting failures are intentionally isolated.
-            with self._diagnostics_lock:
-                self._write_failure_count += 1
-                self._last_error_code = "write_failed"
-            logger.warning("Codex 用量写入失败，已忽略: %s", type(exc).__name__)
-            return False
-        with self._diagnostics_lock:
-            self._write_count += 1
-            self._last_write_at = datetime.now(timezone.utc).isoformat()
-        return True
-
-    async def _resolve_failed_capture_usage(
-        self,
-        *,
-        session_id: str,
-        started_at: datetime,
-        codex_home: Path,
-    ) -> CodexTokenUsage | Mapping[str, Any] | None:
-        try:
-            return await asyncio.to_thread(
-                self._failed_usage_resolver,
-                session_id=session_id,
-                started_at=started_at,
-                codex_home=codex_home,
-            )
-        except Exception as exc:
-            logger.warning("Codex 未完整终态用量恢复失败，已跳过: %s", type(exc).__name__)
-            return None
 
     async def _record_rate_limit_capture(
         self,
@@ -367,24 +205,27 @@ class CodexUsageService:
         codex_home: Path,
         executable: str,
         environment: Mapping[str, str] | None,
-    ) -> None:
-        try:
-            resolution = await asyncio.to_thread(
-                self._rate_limit_resolver,
-                session_id=session_id,
-                started_at=started_at,
-                codex_home=codex_home,
-            )
-        except Exception as exc:
-            logger.warning("Codex 限额解析失败，已跳过: %s", type(exc).__name__)
-            resolution = None
-        sample: CodexRateLimitSample | None = None
-        if isinstance(resolution, TurnRateLimitResolution):
-            sample = resolution.sample
-        elif isinstance(resolution, CodexRateLimitSample):
-            # Keep compatibility with injected legacy resolvers.
-            sample = resolution
-        samples_by_limit_id = {sample.limit_id: sample} if sample is not None else {}
+    ) -> bool:
+        samples_by_limit_id: dict[str, CodexRateLimitSample] = {}
+        if session_id:
+            try:
+                resolution = await asyncio.to_thread(
+                    self._rate_limit_resolver,
+                    session_id=session_id,
+                    started_at=started_at,
+                    codex_home=codex_home,
+                )
+            except Exception as exc:
+                logger.warning("Codex 限额解析失败，已跳过: %s", type(exc).__name__)
+            else:
+                if isinstance(resolution, TurnRateLimitResolution):
+                    sample = resolution.sample
+                elif isinstance(resolution, CodexRateLimitSample):
+                    sample = resolution
+                else:
+                    sample = None
+                if sample is not None:
+                    samples_by_limit_id[sample.limit_id] = sample
         try:
             account_result = await asyncio.to_thread(
                 self._account_rate_limit_resolver,
@@ -399,40 +240,28 @@ class CodexUsageService:
             if isinstance(account_result, CodexRateLimitSample)
             else tuple(account_result or ())
         )
-        for account_sample in account_samples:
-            if isinstance(account_sample, CodexRateLimitSample):
-                samples_by_limit_id[account_sample.limit_id] = account_sample
-        for rate_limit_sample in samples_by_limit_id.values():
+        for sample in account_samples:
+            if isinstance(sample, CodexRateLimitSample):
+                samples_by_limit_id[sample.limit_id] = sample
+
+        recorded = False
+        for sample in samples_by_limit_id.values():
             try:
-                await asyncio.to_thread(
-                    self._store.record_rate_limit_sample,
-                    rate_limit_sample,
-                )
+                await asyncio.to_thread(self._store.record_rate_limit_sample, sample)
             except Exception as exc:
+                with self._diagnostics_lock:
+                    self._write_failure_count += 1
+                    self._last_error_code = "write_failed"
                 logger.warning("Codex 限额写入失败，已忽略: %s", type(exc).__name__)
+                continue
+            recorded = True
+            with self._diagnostics_lock:
+                self._write_count += 1
+                self._last_write_at = datetime.now(timezone.utc).isoformat()
+        return recorded
 
-    async def query(
-        self,
-        start_day: DayLike,
-        end_day: DayLike,
-        *,
-        provider_keys: Sequence[str] | None = None,
-        daily_page: int | None = None,
-        daily_page_size: int | None = None,
-    ) -> UsageQueryResult:
-        return await asyncio.to_thread(
-            self._store.query,
-            start_day,
-            end_day,
-            provider_keys=provider_keys,
-            daily_page=daily_page,
-            daily_page_size=daily_page_size,
-        )
-
-    query_usage = query
-
-    async def list_providers(self) -> tuple[ProviderInfo, ...]:
-        return await asyncio.to_thread(self._store.list_providers)
+    async def query(self, start_day: DayLike, end_day: DayLike) -> tuple[CodexRateLimitSample, ...]:
+        return await asyncio.to_thread(self._store.query, start_day, end_day)
 
     async def available_range(self) -> tuple[date | None, date | None]:
         return await asyncio.to_thread(self._store.available_range)
@@ -462,87 +291,16 @@ class CodexUsageService:
         *,
         start_date: date | None,
         end_date: date | None,
-        provider_keys: Sequence[str] | None = None,
-        daily_page: int = 1,
-        daily_page_size: int = 10,
     ) -> dict[str, Any]:
         start, end = _resolve_query_dates(start_date, end_date)
-        selected_keys = list(
-            dict.fromkeys(
-                str(item).strip() for item in (provider_keys or ()) if str(item).strip()
-            )
-        )
-        enabled = await self.get_enabled()
-        current_provider = await self._safe_current_provider()
-        historical_providers = await self.list_providers()
-        available_providers = _merge_providers(historical_providers, current_provider)
-        known_keys = {provider.key for provider in available_providers}
-        if any(key not in known_keys for key in selected_keys):
-            raise ValueError("存在未知的 provider")
-        result = await self.query(
-            start,
-            end,
-            provider_keys=selected_keys or None,
-            daily_page=daily_page,
-            daily_page_size=daily_page_size,
-        )
-        daily_pagination = result.daily_pagination
-        if daily_pagination is None:  # pragma: no cover - query_stats always requests a page
-            raise RuntimeError("Codex 用量分页结果缺失")
+        samples = await self.query(start, end)
         first_date, last_date = await self.available_range()
         return {
             "range": {"start_date": start.isoformat(), "end_date": end.isoformat()},
-            "enabled": enabled,
+            "enabled": await self.get_enabled(),
             "time_basis": _time_basis_payload(),
             "available_range": _available_range_payload(first_date, last_date),
-            "available_providers": [_provider_payload(provider) for provider in available_providers],
-            "selected_provider_keys": selected_keys,
-            "rate_limit_samples": [
-                _rate_limit_payload(sample) for sample in result.rate_limit_samples
-            ],
-            "totals": _totals_payload(result.totals),
-            "by_provider": [
-                {"provider": _provider_payload(item.provider), **_totals_payload(item.totals)}
-                for item in result.by_provider
-            ],
-            "by_day": [
-                {"date": item.day.isoformat(), **_totals_payload(item.totals)}
-                for item in sorted(result.by_day, key=lambda value: value.day, reverse=True)
-            ],
-            "daily_by_provider": [],
-            "by_provider_model": [
-                {
-                    "provider": _provider_payload(item.provider),
-                    "model": item.model,
-                    **_totals_payload(item.totals),
-                }
-                for item in result.by_provider_model
-            ],
-            "daily_by_provider_model": [
-                {
-                    "date": item.day.isoformat(),
-                    "provider": _provider_payload(item.provider),
-                    "model": item.model,
-                    **_totals_payload(item.totals),
-                }
-                for item in sorted(
-                    result.daily_by_provider_model,
-                    key=lambda value: (
-                        -value.day.toordinal(),
-                        _provider_order(value.provider),
-                        value.provider.key,
-                        value.model,
-                    ),
-                )
-            ],
-            "daily_pagination": {
-                "page": daily_pagination.page,
-                "page_size": daily_pagination.page_size,
-                "total_items": daily_pagination.total_items,
-                "total_pages": daily_pagination.total_pages,
-                "has_previous": daily_pagination.has_previous,
-                "has_next": daily_pagination.has_next,
-            },
+            "rate_limit_samples": [_rate_limit_payload(sample) for sample in samples],
         }
 
     async def _safe_current_provider(
@@ -565,27 +323,12 @@ class CodexUsageService:
             self._mark_provider_resolution_failure(None)
         return provider
 
-    def note_invalid_usage(self, count: int = 1) -> None:
-        normalized_count = _non_negative_counter(count)
-        if not normalized_count:
-            return
-        with self._diagnostics_lock:
-            self._invalid_usage_count += normalized_count
-            self._last_error_code = "invalid_usage"
-
-    def note_duplicate_terminal(self, count: int = 1) -> None:
-        normalized_count = _non_negative_counter(count)
-        if not normalized_count:
-            return
-        with self._diagnostics_lock:
-            self._duplicate_terminal_count += normalized_count
-
     def _mark_provider_resolution_failure(self, exc: Exception | None) -> None:
         with self._diagnostics_lock:
             self._provider_resolution_failure_count += 1
             self._last_error_code = "provider_resolution_failed"
         if exc is not None:
-            logger.warning("Codex provider 解析失败，按 unknown 归因: %s", type(exc).__name__)
+            logger.warning("Codex provider 解析失败，按 unknown 处理: %s", type(exc).__name__)
 
     def _diagnostics_payload(
         self,
@@ -599,11 +342,7 @@ class CodexUsageService:
                 **store_diagnostics,
                 "write_count": self._write_count,
                 "write_failure_count": self._write_failure_count,
-                "invalid_usage_count": self._invalid_usage_count,
-                "duplicate_terminal_count": self._duplicate_terminal_count,
-                "provider_resolution_failure_count": (
-                    self._provider_resolution_failure_count
-                ),
+                "provider_resolution_failure_count": self._provider_resolution_failure_count,
                 "last_write_at": self._last_write_at,
                 "last_error_code": self._last_error_code,
             }
@@ -611,18 +350,9 @@ class CodexUsageService:
     async def diagnostics_async(self) -> dict[str, int | bool | str | None]:
         enabled = await self.get_enabled()
         store_diagnostics = await asyncio.to_thread(self._store.diagnostics)
-        return self._diagnostics_payload(
-            enabled=enabled,
-            store_diagnostics=store_diagnostics,
-        )
+        return self._diagnostics_payload(enabled=enabled, store_diagnostics=store_diagnostics)
 
     def diagnostics(self) -> _AwaitableDiagnostics:
-        """Synchronous runtime-diagnostics callback with an awaitable result.
-
-        It uses only cached enabled state and file metadata; SQLite reads remain
-        available through :meth:`diagnostics_async` and always use ``to_thread``.
-        """
-
         with self._diagnostics_lock:
             enabled = self._enabled_snapshot
         return _AwaitableDiagnostics(
@@ -633,27 +363,13 @@ class CodexUsageService:
         )
 
     async def refresh_diagnostics(self) -> dict[str, int | bool | str | None]:
-        """Explicit async alias for callers that need fresh persisted state."""
-
         return await self.diagnostics_async()
 
     def close(self) -> None:
-        """Synchronous close for callers already dispatching shutdown I/O to a thread."""
-
         self._store.close()
 
     async def aclose(self) -> None:
         await asyncio.to_thread(self.close)
-
-
-def _non_negative_counter(value: object) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        return 0
-    return max(0, value)
-
-
-def _provider_order(provider: ProviderInfo) -> int:
-    return {"openai_official": 0, "base_url": 1, "unknown": 2}.get(provider.kind, 99)
 
 
 def _provider_payload(provider: ProviderInfo) -> dict[str, str | None]:
@@ -668,19 +384,6 @@ def _provider_payload(provider: ProviderInfo) -> dict[str, str | None]:
         "label": label,
         "base_url": provider.base_url,
         "resolution": provider.resolution,
-    }
-
-
-def _totals_payload(totals: Any) -> dict[str, int | float | None]:
-    return {
-        "request_count": totals.request_count,
-        "input_tokens": totals.input_tokens,
-        "cached_input_tokens": totals.cached_input_tokens,
-        "uncached_input_tokens": totals.uncached_input_tokens,
-        "output_tokens": totals.output_tokens,
-        "reasoning_output_tokens": totals.reasoning_output_tokens,
-        "total_tokens": totals.total_tokens,
-        "cache_hit_rate": totals.cache_hit_rate,
     }
 
 
@@ -731,20 +434,6 @@ def _resolve_query_dates(
     if start_date > end_date:
         raise ValueError("开始日期不能晚于结束日期")
     return start_date, end_date
-
-
-def _merge_providers(
-    historical: Sequence[ProviderInfo],
-    current: ProviderInfo,
-) -> tuple[ProviderInfo, ...]:
-    by_key = {provider.key: provider for provider in historical}
-    by_key[current.key] = current
-    return tuple(
-        sorted(
-            by_key.values(),
-            key=lambda provider: (_provider_order(provider), provider.key),
-        )
-    )
 
 
 UsageService = CodexUsageService

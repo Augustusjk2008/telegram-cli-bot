@@ -8,7 +8,6 @@ import re
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from bot.config import SUPPORTED_CLI_TYPES
@@ -58,40 +57,6 @@ class _BoundedText:
 
 
 @dataclass(frozen=True)
-class CodexTokenUsage:
-    input_tokens: int
-    cached_input_tokens: int
-    output_tokens: int
-    reasoning_output_tokens: int
-
-
-@dataclass(frozen=True)
-class CodexUsageSample:
-    token_usage: CodexTokenUsage
-    completed_at: datetime
-
-    @property
-    def usage(self) -> CodexTokenUsage:
-        return self.token_usage
-
-    @property
-    def input_tokens(self) -> int:
-        return self.token_usage.input_tokens
-
-    @property
-    def cached_input_tokens(self) -> int:
-        return self.token_usage.cached_input_tokens
-
-    @property
-    def output_tokens(self) -> int:
-        return self.token_usage.output_tokens
-
-    @property
-    def reasoning_output_tokens(self) -> int:
-        return self.token_usage.reasoning_output_tokens
-
-
-@dataclass(frozen=True)
 class CliStreamParseResult:
     final_text: str
     session_id: Optional[str]
@@ -99,10 +64,6 @@ class CliStreamParseResult:
     raw_tail: str
     total_bytes: int
     truncated: bool
-    token_usage: Optional[CodexUsageSample] = None
-    invalid_usage_count: int = 0
-    duplicate_terminal_count: int = 0
-    turn_failed: bool = False
 
 
 class CodexJsonStreamParser:
@@ -119,12 +80,6 @@ class CodexJsonStreamParser:
         self._plain = _BoundedText(raw_tail_max_bytes)
         self.session_id: Optional[str] = None
         self.total_bytes = 0
-        self._token_usage: Optional[CodexUsageSample] = None
-        self._terminal_usage_event_count = 0
-        self.invalid_usage_count = 0
-        self.duplicate_terminal_count = 0
-        self._turn_failed = False
-        self._turn_aborted = False
 
     def consume_line(self, line: str) -> Dict[str, Optional[str]]:
         value = str(line or "")
@@ -139,27 +94,6 @@ class CodexJsonStreamParser:
                 "error_text": None,
             }
         parsed = parse_codex_json_line(stripped)
-        try:
-            raw_event = json.loads(stripped)
-        except json.JSONDecodeError:
-            raw_event = None
-        if isinstance(raw_event, dict) and raw_event.get("type") == "turn.failed":
-            self._turn_failed = True
-        if isinstance(raw_event, dict):
-            payload = raw_event.get("payload")
-            if raw_event.get("type") == "turn_aborted" or (
-                isinstance(payload, dict) and payload.get("type") == "turn_aborted"
-            ):
-                self._turn_aborted = True
-        terminal_usage_seen, token_usage = _parse_codex_terminal_usage(stripped)
-        if terminal_usage_seen:
-            if self._terminal_usage_event_count:
-                self.duplicate_terminal_count += 1
-            self._terminal_usage_event_count += 1
-            if token_usage is None:
-                self.invalid_usage_count += 1
-            else:
-                self._token_usage = token_usage
         if parsed["thread_id"]:
             self.session_id = parsed["thread_id"]
         if parsed["completed_text"]:
@@ -202,10 +136,6 @@ class CodexJsonStreamParser:
                 item.truncated
                 for item in (self._raw_tail, self._completed, self._delta, self._errors, self._plain)
             ),
-            token_usage=self._token_usage,
-            invalid_usage_count=self.invalid_usage_count,
-            duplicate_terminal_count=self.duplicate_terminal_count,
-            turn_failed=self._turn_failed and not self._turn_aborted,
         )
 
 
@@ -412,51 +342,6 @@ def _extract_codex_content_text(content: Any) -> Optional[str]:
     if not text_parts:
         return None
     return "\n".join(text_parts).strip()
-
-
-def _parse_codex_terminal_usage(line: str) -> tuple[bool, Optional[CodexUsageSample]]:
-    try:
-        event: Any = json.loads(line)
-    except json.JSONDecodeError:
-        return False, None
-    if not isinstance(event, dict):
-        return False, None
-    event_type = str(event.get("type") or "").strip()
-    if event_type not in {"turn.completed", "turn.failed"}:
-        return False, None
-
-    usage = event.get("usage")
-    if not isinstance(usage, dict):
-        return event_type == "turn.completed" or "usage" in event, None
-
-    def token_value(key: str, *, required: bool) -> Optional[int]:
-        value = usage.get(key) if required or key in usage else 0
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            return None
-        return value
-
-    input_tokens = token_value("input_tokens", required=True)
-    output_tokens = token_value("output_tokens", required=True)
-    cached_input_tokens = token_value("cached_input_tokens", required=False)
-    reasoning_output_tokens = token_value("reasoning_output_tokens", required=False)
-    if None in (input_tokens, output_tokens, cached_input_tokens, reasoning_output_tokens):
-        return True, None
-    assert input_tokens is not None
-    assert output_tokens is not None
-    assert cached_input_tokens is not None
-    assert reasoning_output_tokens is not None
-    if cached_input_tokens > input_tokens or reasoning_output_tokens > output_tokens:
-        return True, None
-
-    return True, CodexUsageSample(
-        token_usage=CodexTokenUsage(
-            input_tokens=input_tokens,
-            cached_input_tokens=cached_input_tokens,
-            output_tokens=output_tokens,
-            reasoning_output_tokens=reasoning_output_tokens,
-        ),
-        completed_at=datetime.now().astimezone(),
-    )
 
 
 def parse_codex_json_line(line: str) -> Dict[str, Optional[str]]:

@@ -120,7 +120,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool(clusterTool(
 		"configure_team",
 		"Configure Team",
-		"配置当前主会话编组。extend 可由主 agent 自主在空闲槽位扩编；replace 仅在用户明确要求重新编组、缩编或清空时使用。",
+		"配置当前主会话编组。extend 可由主 agent 自主在空闲槽位扩编；replace 仅在用户明确要求重新编组、缩编或清空时使用。成功后必须查看响应中的 changed：changed=true 时，本轮所有后续工具立即改用响应中的新 run_id；changed=false 时继续使用原 run_id。Pi 适配层不缓存或自动切换 run_id。",
 		configureTeamParams,
 		(params) => withoutRunId(params),
 	));

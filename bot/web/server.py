@@ -163,7 +163,6 @@ from .terminal_manager import (
     TerminalSessionManager,
     encode_terminal_ws_v2,
 )
-from .transfer_service import TransferService
 from .tunnel_service import TunnelService
 from .routes import (
     admin_routes,
@@ -179,7 +178,6 @@ from .routes import (
     lan_chat_routes,
     plugin_routes,
     terminal_routes,
-    transfer_routes,
 )
 from .api_service import (
     AuthContext,
@@ -190,7 +188,7 @@ from .api_service import (
     change_working_directory,
     create_conversation,
     archive_conversation,
-    delete_all_conversations,
+    delete_all_conversations_async,
     delete_conversation,
     delete_favorite_answer,
     execute_plan,
@@ -1121,7 +1119,6 @@ class WebApiServer:
             node_id=TCB_NODE_ID,
             base_path=WEB_BASE_PATH,
         )
-        self.transfer_service = TransferService(host=self._host, port=self._port)
         self.inline_completion_config_store = InlineCompletionConfigStore()
         self.inline_completion_service = InlineCompletionService(config_store=self.inline_completion_config_store)
         self.codex_usage_service = get_codex_usage_service()
@@ -1156,7 +1153,6 @@ class WebApiServer:
             "session_store",
             lambda: {**session_store_diagnostics(), **session_persistence_diagnostics()},
         )
-        self._runtime_diagnostics.register("litellm", self.transfer_service.diagnostics)
         self._runtime_diagnostics.register("language_servers", self.language_server_manager.diagnostics)
         self._runtime_diagnostics.register("codex_usage", self.codex_usage_service.diagnostics)
         plugin_service = getattr(self.manager, "plugin_service", None)
@@ -1982,6 +1978,15 @@ class WebApiServer:
         ).strip()
         if completion_state == "cancelled":
             status = "cancelled"
+        terminal_at = str(
+            message.get("updated_at")
+            or message.get("updatedAt")
+            or data.get("terminal_at")
+            or data.get("terminalAt")
+            or data.get("completed_at")
+            or data.get("completedAt")
+            or ""
+        ).strip()
         return {
             "bot_alias": alias,
             "agent_id": agent_id,
@@ -1991,6 +1996,7 @@ class WebApiServer:
             "preview": preview,
             "elapsed_seconds": data.get("elapsed_seconds"),
             "url": self._chat_notification_url(alias, conversation_id),
+            "terminal_at": terminal_at,
         }
 
     async def _safe_notify_chat_terminal_event(
@@ -3338,7 +3344,15 @@ class WebApiServer:
         alias = self._manager_alias(request)
         body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
         agent_id = self._request_agent_id(request, body)
-        return _json({"ok": True, "data": reset_user_session(self.manager, alias, self._chat_user_id(auth), agent_id=agent_id)})
+        return _json({
+            "ok": True,
+            "data": await reset_user_session(
+                self.manager,
+                alias,
+                self._chat_user_id(auth),
+                agent_id=agent_id,
+            ),
+        })
 
     async def post_kill(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_CHAT_SEND)
@@ -3558,15 +3572,13 @@ class WebApiServer:
         delete_native = str(request.query.get("delete_native_session", "")).lower() in {"1", "true", "yes", "on"}
         execution_mode = self._request_execution_mode(request, body)
         chat_user_id = self._chat_user_id(auth)
-        data = await run_chat_store_io(
-            delete_all_conversations,
+        data = await delete_all_conversations_async(
             self.manager,
             alias,
             chat_user_id,
             agent_id=agent_id,
             execution_mode=execution_mode,
             delete_native_session=delete_native,
-            write_key=f"{alias}:{chat_user_id}:{agent_id}",
         )
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
@@ -4821,7 +4833,6 @@ class WebApiServer:
             admin_routes,
             bot_settings_routes,
             lan_chat_routes,
-            transfer_routes,
         ):
             module.register(app, self)
         app.router.add_get("/api/notifications/settings", self.get_notification_settings)
@@ -4970,7 +4981,6 @@ class WebApiServer:
         if self._runner is not None:
             return
         app = self._build_app()
-        await self.transfer_service.start()
         self._runner = web.AppRunner(app)
         await self._runner.setup()
         self._site = web.TCPSite(self._runner, host=self._host, port=self._port)
@@ -5129,7 +5139,6 @@ class WebApiServer:
         else:
             await self._tunnel_service.stop()
         await self._fixed_forward_service.stop()
-        await self.transfer_service.close()
         await self._runner.cleanup()
         await asyncio.to_thread(close_codex_usage_service_sync)
         await asyncio.to_thread(close_session_store)

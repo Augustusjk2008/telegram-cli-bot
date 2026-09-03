@@ -5,11 +5,12 @@ import re
 from .models import FlowEdge, FlowGroup, FlowNode, FlowchartIR
 
 DIRECTION_RE = re.compile(r"^\s*(flowchart|graph)\s+(TD|TB|BT|LR|RL)\s*;?\s*$", re.IGNORECASE)
+SUBGRAPH_DIRECTION_RE = re.compile(r"^\s*direction\s+(TD|TB|BT|LR|RL)\s*;?\s*$", re.IGNORECASE)
 NODE_ID_RE = re.compile(r"^[A-Za-z_][\w:.-]*$")
 STYLE_RE = re.compile(r"^\s*style\s+([A-Za-z_][\w:.-]*)\s+(.+?)\s*;?\s*$", re.IGNORECASE)
 SUBGRAPH_RE = re.compile(r"^\s*subgraph\s+([A-Za-z_][\w:.-]*)(?:\[(.*?)\])?\s*;?\s*$", re.IGNORECASE)
-EDGE_LINE_RE = re.compile(r"^(.+?)\s*(-\.->|==>|-->|---)\s*(?:\|(.*?)\|)?\s*(.+?)\s*;?\s*$")
 TEXT_LABEL_EDGE_RE = re.compile(r"^(.+?)\s+--\s+(.+?)\s+-->\s+(.+?)\s*;?\s*$")
+EDGE_OPERATORS = ("-.->", "==>", "-->", "---")
 
 
 class FlowchartParseError(ValueError):
@@ -69,6 +70,11 @@ def parse_flowchart(code: str) -> FlowchartIR:
                 raise FlowchartParseError(line_no, "end 没有匹配的 subgraph")
             group_stack.pop()
             continue
+        subgraph_direction = SUBGRAPH_DIRECTION_RE.match(line)
+        if subgraph_direction:
+            if not group_stack:
+                raise FlowchartParseError(line_no, "direction 只能在 subgraph 内使用")
+            continue
         style_match = STYLE_RE.match(line)
         if style_match:
             node_id = style_match.group(1)
@@ -81,16 +87,16 @@ def parse_flowchart(code: str) -> FlowchartIR:
             continue
         parsed = _parse_edge_line(line, edge_index)
         if parsed is not None:
-            source_node, edge, target_node = parsed
-            edge_index += 1
-            for node in (source_node, target_node):
-                existing = ir.nodes.get(node.id)
-                if existing is None or existing.label == existing.id:
-                    node.group_id = group_stack[-1] if group_stack else ""
-                    ir.nodes[node.id] = node
-                if node.group_id and node.id not in ir.groups[node.group_id].node_ids:
-                    ir.groups[node.group_id].node_ids.append(node.id)
-            ir.edges.append(edge)
+            edge_index += len(parsed)
+            for source_node, edge, target_node in parsed:
+                for node in (source_node, target_node):
+                    existing = ir.nodes.get(node.id)
+                    if existing is None or existing.label == existing.id:
+                        node.group_id = group_stack[-1] if group_stack else ""
+                        ir.nodes[node.id] = node
+                    if node.group_id and node.id not in ir.groups[node.group_id].node_ids:
+                        ir.groups[node.group_id].node_ids.append(node.id)
+                ir.edges.append(edge)
             continue
         try:
             node = parse_node_expr(line)
@@ -107,7 +113,7 @@ def parse_flowchart(code: str) -> FlowchartIR:
     return ir
 
 
-def _parse_edge_line(line: str, edge_index: int) -> tuple[FlowNode, FlowEdge, FlowNode] | None:
+def _parse_edge_line(line: str, edge_index: int) -> list[tuple[FlowNode, FlowEdge, FlowNode]] | None:
     text_label = TEXT_LABEL_EDGE_RE.match(line)
     if text_label:
         source = parse_node_expr(text_label.group(1))
@@ -118,22 +124,67 @@ def _parse_edge_line(line: str, edge_index: int) -> tuple[FlowNode, FlowEdge, Fl
             target=target.id,
             label=text_label.group(2).strip(),
         )
-        return source, edge, target
+        return [(source, edge, target)]
 
-    normal = EDGE_LINE_RE.match(line)
-    if not normal:
+    chain = _split_edge_chain(line)
+    if chain is None:
         return None
-    left, operator, label, right = normal.groups()
-    source = parse_node_expr(left)
-    target = parse_node_expr(right)
-    kind = "dotted" if operator == "-.->" else "thick" if operator == "==>" else "solid"
-    arrow = "none" if operator == "---" else "end"
-    edge = FlowEdge(
-        id=f"e{edge_index + 1}",
-        source=source.id,
-        target=target.id,
-        label=(label or "").strip(),
-        kind=kind,
-        arrow=arrow,
-    )
-    return source, edge, target
+    node_expressions, operators = chain
+    nodes = [parse_node_expr(expr) for expr in node_expressions]
+    parsed: list[tuple[FlowNode, FlowEdge, FlowNode]] = []
+    for index, (operator, label) in enumerate(operators):
+        source = nodes[index]
+        target = nodes[index + 1]
+        kind = "dotted" if operator == "-.->" else "thick" if operator == "==>" else "solid"
+        arrow = "none" if operator == "---" else "end"
+        edge = FlowEdge(
+            id=f"e{edge_index + index + 1}",
+            source=source.id,
+            target=target.id,
+            label=label,
+            kind=kind,
+            arrow=arrow,
+        )
+        parsed.append((source, edge, target))
+    return parsed
+
+
+def _split_edge_chain(line: str) -> tuple[list[str], list[tuple[str, str]]] | None:
+    text = line.strip().rstrip(";").strip()
+    expressions: list[str] = []
+    operators: list[tuple[str, str]] = []
+    stack: list[str] = []
+    start = 0
+    index = 0
+    closing = {"[": "]", "(": ")", "{": "}"}
+    while index < len(text):
+        char = text[index]
+        if char in closing:
+            stack.append(closing[char])
+            index += 1
+            continue
+        if stack and char == stack[-1]:
+            stack.pop()
+            index += 1
+            continue
+        operator = next((candidate for candidate in EDGE_OPERATORS if not stack and text.startswith(candidate, index)), "")
+        if not operator:
+            index += 1
+            continue
+        expressions.append(text[start:index].strip())
+        index += len(operator)
+        while index < len(text) and text[index].isspace():
+            index += 1
+        label = ""
+        if index < len(text) and text[index] == "|":
+            label_end = text.find("|", index + 1)
+            if label_end < 0:
+                raise ValueError("连线标签缺少结束分隔符 |")
+            label = text[index + 1:label_end].strip()
+            index = label_end + 1
+        operators.append((operator, label))
+        start = index
+    if not operators:
+        return None
+    expressions.append(text[start:].strip())
+    return expressions, operators

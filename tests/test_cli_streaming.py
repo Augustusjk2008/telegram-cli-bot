@@ -55,20 +55,14 @@ class _ReaderProcess:
 
 class _UsageCapture:
     def __init__(self) -> None:
-        self.calls: list[tuple[object, int, int]] = []
-        self.failure_contexts: list[tuple[bool, str | None]] = []
+        self.calls: list[str | None] = []
 
     async def record_once(
         self,
-        sample,
         *,
-        invalid_usage_count: int = 0,
-        duplicate_terminal_count: int = 0,
-        failed: bool = False,
         session_id: str | None = None,
     ) -> None:
-        self.calls.append((sample, invalid_usage_count, duplicate_terminal_count))
-        self.failure_contexts.append((failed, session_id))
+        self.calls.append(session_id)
 
 
 class _UsageProcess(_ReaderProcess):
@@ -77,8 +71,7 @@ class _UsageProcess(_ReaderProcess):
             [
                 '{"type":"thread.started","thread_id":"usage-thread"}\n',
                 '{"type":"item.completed","item":{"type":"assistant_message","text":"done"}}\n',
-                '{"type":"turn.completed","usage":{"input_tokens":11,'
-                '"cached_input_tokens":5,"output_tokens":4,"reasoning_output_tokens":2}}\n',
+                '{"type":"turn.completed"}\n',
             ]
         )
         self.stdin = None
@@ -389,7 +382,7 @@ async def test_stream_cli_chat_resets_session_after_repeated_cancellation(
     async def start_capture(*, env, command):
         return _UsageCapture()
 
-    monkeypatch.setattr(api_service, "_start_codex_usage_capture", start_capture, raising=False)
+    monkeypatch.setattr(api_service, "_start_codex_rate_limit_capture", start_capture)
     monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
     monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: (["codex"], False))
     monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
@@ -442,7 +435,7 @@ async def test_cli_chat_reconciles_history_when_process_isolation_fails(
     async def start_capture(*, env, command):
         return _UsageCapture()
 
-    monkeypatch.setattr(api_service, "_start_codex_usage_capture", start_capture, raising=False)
+    monkeypatch.setattr(api_service, "_start_codex_rate_limit_capture", start_capture)
     monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
     monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: (["codex"], False))
     monkeypatch.setattr(api_service.subprocess, "Popen", lambda *_args, **_kwargs: process)
@@ -565,7 +558,7 @@ async def test_cli_stream_cleanup_keeps_event_loop_responsive_with_inherited_std
         return _UsageCapture()
 
     monkeypatch.setattr(api_service, "CODEX_DONE_QUIET_SECONDS", 0.1)
-    monkeypatch.setattr(api_service, "_start_codex_usage_capture", start_capture, raising=False)
+    monkeypatch.setattr(api_service, "_start_codex_rate_limit_capture", start_capture)
     monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
     monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: (command, False))
     monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
@@ -650,31 +643,25 @@ async def test_codex_communicate_parses_jsonl_incrementally():
     assert result.text == "done"
     assert result.session_id == "thread-1"
     assert result.returncode == 0
-    assert result.token_usage is None
 
 
 @pytest.mark.asyncio
-async def test_codex_communicate_records_usage_once_during_cleanup():
+async def test_codex_communicate_records_quota_once_during_cleanup():
     capture = _UsageCapture()
     process = _ReaderProcess(
         [
-            '{"type":"turn.completed","usage":{"input_tokens":2,"output_tokens":1}}\n',
-            '{"type":"turn.completed","usage":{"input_tokens":3,"output_tokens":1}}\n',
+            '{"type":"thread.started","thread_id":"quota-thread"}\n',
+            '{"type":"turn.completed"}\n',
         ]
     )
 
-    await _communicate_codex_process(process, usage_capture=capture)
+    await _communicate_codex_process(process, quota_capture=capture)
 
-    assert len(capture.calls) == 1
-    sample, invalid_count, duplicate_count = capture.calls[0]
-    assert sample is not None
-    assert sample.input_tokens == 3
-    assert invalid_count == 0
-    assert duplicate_count == 1
+    assert capture.calls == ["quota-thread"]
 
 
 @pytest.mark.asyncio
-async def test_codex_communicate_requests_rollout_usage_when_terminal_usage_is_missing():
+async def test_codex_communicate_records_quota_after_failed_turn():
     failed_capture = _UsageCapture()
 
     await _communicate_codex_process(
@@ -684,11 +671,10 @@ async def test_codex_communicate_requests_rollout_usage_when_terminal_usage_is_m
                 '{"type":"turn.failed","error":{"message":"boom"}}\n',
             ]
         ),
-        usage_capture=failed_capture,
+        quota_capture=failed_capture,
     )
 
-    assert failed_capture.calls == [(None, 0, 0)]
-    assert failed_capture.failure_contexts == [(True, "failed-thread")]
+    assert failed_capture.calls == ["failed-thread"]
 
 
 @pytest.mark.asyncio
@@ -713,7 +699,7 @@ async def test_stream_cli_chat_starts_capture_before_spawn_and_records_once(
         spawned = True
         return _UsageProcess()
 
-    monkeypatch.setattr(api_service, "_start_codex_usage_capture", start_capture, raising=False)
+    monkeypatch.setattr(api_service, "_start_codex_rate_limit_capture", start_capture)
     monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
     monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: (["codex"], False))
     monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
@@ -740,8 +726,7 @@ async def test_stream_cli_chat_starts_capture_before_spawn_and_records_once(
     assert isinstance(done["elapsed_seconds"], int)
     assert done["returncode"] == 0
     assert isinstance(done["session"], dict)
-    assert len(capture.calls) == 1
-    assert capture.calls[0][0].input_tokens == 11
+    assert capture.calls == ["usage-thread"]
 
 
 @pytest.mark.parametrize(
@@ -819,7 +804,7 @@ async def test_stream_cli_chat_normalizes_slash_and_preserves_ids_on_legacy_sse_
         persisted_trace.append(event)
         return original_queue_trace(buffer, event)
 
-    monkeypatch.setattr(api_service, "_start_codex_usage_capture", start_capture, raising=False)
+    monkeypatch.setattr(api_service, "_start_codex_rate_limit_capture", start_capture)
     monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
     monkeypatch.setattr(api_service, "build_cli_command", build_command)
     monkeypatch.setattr(api_service.StreamingPersistenceBuffer, "queue_trace", queue_trace)
@@ -867,7 +852,7 @@ async def test_stream_cli_chat_reuses_cluster_guidance_but_refreshes_run_id(
         prompts.append(str(kwargs["user_text"]))
         return ["codex"], False
 
-    monkeypatch.setattr(api_service, "_start_codex_usage_capture", start_capture, raising=False)
+    monkeypatch.setattr(api_service, "_start_codex_rate_limit_capture", start_capture)
     monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
     monkeypatch.setattr(api_service, "build_cli_command", build_command)
     monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
@@ -916,7 +901,7 @@ async def test_stream_cli_chat_coalesces_status_and_flushes_latest_before_done(
 
     monkeypatch.setattr(api_service, "CLI_STATUS_MIN_INTERVAL_SECONDS", 5.0)
     monkeypatch.setattr(api_service, "_CLI_STREAM_DRAIN_BATCH_SIZE", 1)
-    monkeypatch.setattr(api_service, "_start_codex_usage_capture", start_capture, raising=False)
+    monkeypatch.setattr(api_service, "_start_codex_rate_limit_capture", start_capture)
     monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
     monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: (["codex"], False))
     monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
@@ -960,7 +945,7 @@ async def test_stream_cli_chat_flushes_pending_status_before_error(
 
     monkeypatch.setattr(api_service, "CLI_STATUS_MIN_INTERVAL_SECONDS", 5.0)
     monkeypatch.setattr(api_service, "_CLI_STREAM_DRAIN_BATCH_SIZE", 1)
-    monkeypatch.setattr(api_service, "_start_codex_usage_capture", start_capture, raising=False)
+    monkeypatch.setattr(api_service, "_start_codex_rate_limit_capture", start_capture)
     monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
     monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: (["codex"], False))
     monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
@@ -994,7 +979,7 @@ async def test_stream_cli_chat_yields_when_stdout_queue_stays_nonempty(
     async def start_capture(*, env, command):
         return _UsageCapture()
 
-    monkeypatch.setattr(api_service, "_start_codex_usage_capture", start_capture, raising=False)
+    monkeypatch.setattr(api_service, "_start_codex_rate_limit_capture", start_capture)
     monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
     monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: (["codex"], False))
     monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
@@ -1041,7 +1026,7 @@ async def test_stream_cli_chat_waits_for_queued_tail_before_quiet_finish_termina
         process.returncode = 0
 
     monkeypatch.setattr(api_service, "CODEX_DONE_QUIET_SECONDS", 0)
-    monkeypatch.setattr(api_service, "_start_codex_usage_capture", start_capture, raising=False)
+    monkeypatch.setattr(api_service, "_start_codex_rate_limit_capture", start_capture)
     monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
     monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: (["codex"], False))
     monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
@@ -1098,7 +1083,7 @@ async def test_stream_cli_chat_drains_tail_enqueued_while_terminating(
         reader.done.set()
 
     monkeypatch.setattr(api_service, "CODEX_DONE_QUIET_SECONDS", 0)
-    monkeypatch.setattr(api_service, "_start_codex_usage_capture", start_capture, raising=False)
+    monkeypatch.setattr(api_service, "_start_codex_rate_limit_capture", start_capture)
     monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
     monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: (["codex"], False))
     monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
@@ -1112,9 +1097,7 @@ async def test_stream_cli_chat_drains_tail_enqueued_while_terminating(
         async for event in api_service._stream_cli_chat(usage_manager, "main", 1001, "hello")
     ]
 
-    usage_sample = capture.calls[0][0]
-    assert usage_sample is not None
-    assert usage_sample.input_tokens == 9
+    assert capture.calls == ["tail-thread"]
     assert any(event["type"] == "done" for event in events)
 
 
@@ -1128,7 +1111,7 @@ async def test_non_stream_cli_chat_records_before_chat_store_completion_failure(
     async def start_capture(*, env, command):
         return capture
 
-    monkeypatch.setattr(api_service, "_start_codex_usage_capture", start_capture, raising=False)
+    monkeypatch.setattr(api_service, "_start_codex_rate_limit_capture", start_capture)
     monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
     monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: (["codex"], False))
     monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
@@ -1142,8 +1125,7 @@ async def test_non_stream_cli_chat_records_before_chat_store_completion_failure(
     with pytest.raises(RuntimeError, match="chat store failed"):
         await api_service.run_cli_chat(usage_manager, "main", 1001, "hello")
 
-    assert len(capture.calls) == 1
-    assert capture.calls[0][0].input_tokens == 11
+    assert capture.calls == ["usage-thread"]
 
 
 @pytest.mark.asyncio

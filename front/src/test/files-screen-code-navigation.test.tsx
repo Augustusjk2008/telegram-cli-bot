@@ -23,7 +23,8 @@ function navigationItem(path: string, line: number, column: number) {
 async function openMobileEditor(user: ReturnType<typeof userEvent.setup>, client: MockWebBotClient) {
   render(<FilesScreen botAlias="main" client={client} />);
   await user.click(await screen.findByRole("button", { name: "进入 src" }));
-  await user.click(await screen.findByRole("button", { name: "编辑 server.ts" }));
+  await user.click(await screen.findByRole("button", { name: "更多操作 server.ts" }));
+  await user.click(await screen.findByRole("menuitem", { name: "编辑 server.ts" }));
   const editor = await screen.findByRole("textbox", { name: "文件内容" }) as HTMLTextAreaElement;
   editor.focus();
   editor.setSelectionRange(2, 2);

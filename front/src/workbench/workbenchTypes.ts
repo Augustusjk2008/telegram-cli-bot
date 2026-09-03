@@ -64,6 +64,7 @@ export type PersistedWorkbenchSession = {
 
 export type DesktopPaneState = {
   sidebarCollapsed: boolean;
+  editorCollapsed: boolean;
   terminalCollapsed: boolean;
   chatCollapsed: boolean;
   sidebarView: DesktopSidebarView;
@@ -84,6 +85,7 @@ export const WORKBENCH_HORIZONTAL_PADDING_PX = 4;
 
 export const DEFAULT_DESKTOP_PANE_STATE: DesktopPaneState = {
   sidebarCollapsed: false,
+  editorCollapsed: false,
   terminalCollapsed: false,
   chatCollapsed: false,
   sidebarView: "files",

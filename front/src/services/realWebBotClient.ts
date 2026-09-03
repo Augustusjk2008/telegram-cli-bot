@@ -1,7 +1,4 @@
 import {
-  DEFAULT_CODEX_USAGE_MODEL,
-  GENERAL_CODEX_RATE_LIMIT_ID,
-  SECONDARY_CODEX_RATE_LIMIT_ID,
   WebApiClientError,
 } from "./types";
 import { buildWsUrl, withApiBase } from "../utils/publicBase";
@@ -78,15 +75,9 @@ import type {
   CodexUsageAvailableRange,
   CodexUsageConfig,
   CodexRateLimitSample,
-  CodexUsageDailyProviderStats,
-  CodexUsageDailyProviderModelStats,
-  CodexUsageDailyStats,
-  CodexUsageMetrics,
   CodexUsageProvider,
   CodexUsageProviderKind,
   CodexUsageProviderResolution,
-  CodexUsageProviderStats,
-  CodexUsageProviderModelStats,
   CodexUsageStats,
   CodexUsageStatsQuery,
   CodexUsageTimeBasis,
@@ -189,10 +180,6 @@ import type {
   TerminalActionRunResult,
   TerminalActionsConfig,
   TerminalActionsEditableConfig,
-  TransferBridgeConfigInput,
-  TransferBridgeStatus,
-  TransferEndpointMode,
-  TransferRouteConfig,
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
   UserBotPermissions,
@@ -368,6 +355,8 @@ type RawBotSummary = {
   working_dir: string;
   last_answer_completed_at?: string;
   lastAnswerCompletedAt?: string;
+  last_answer_terminal_at?: string;
+  lastAnswerTerminalAt?: string;
   enabled?: boolean;
   is_main?: boolean;
   can_operate?: boolean;
@@ -436,70 +425,6 @@ type RawHealthResponse = {
   host?: string;
   port?: number;
   host_info?: RawPublicHostInfo;
-};
-
-type RawTransferBridgeStatus = {
-  enabled?: boolean;
-  configured?: boolean;
-  running?: boolean;
-  is_running?: boolean;
-  status?: string;
-  local_url?: string;
-  local_endpoint?: string;
-  local_host?: string;
-  local_port?: number;
-  bridge_page_url?: string;
-  responses_base_url?: string;
-  chat_completions_base_url?: string;
-  litellm_running?: boolean;
-  litellm_pid?: number | null;
-  litellm_model?: string;
-  model_alias?: string;
-  endpoint_mode?: string;
-  extra_litellm_params?: Record<string, unknown>;
-  provider_base_url?: string;
-  provider_api_key_set?: boolean;
-  routes?: RawTransferRouteConfig[];
-  route_count?: number;
-  configured_route_count?: number;
-  drop_params?: boolean;
-  litellm_proxy_base_url?: string;
-  litellm_log_tail?: string[];
-  request_count?: number;
-  total_input_tokens?: number;
-  total_output_tokens?: number;
-  total_bytes_in?: number;
-  total_bytes_out?: number;
-  uptime_seconds?: number;
-  recent_traffic?: Array<{
-    id?: string;
-    timestamp?: string;
-    method?: string;
-    endpoint?: string;
-    status?: number;
-    bytes_in?: number;
-    bytes_out?: number;
-    duration_ms?: number;
-    model?: string;
-    error?: string;
-  }>;
-  started_at?: string;
-  last_request_at?: string;
-  last_error?: string;
-  restart_required?: boolean;
-  restart_required_reason?: string;
-};
-
-type RawTransferRouteConfig = {
-  id?: string;
-  name?: string;
-  endpoint_mode?: string;
-  litellm_model?: string;
-  model_alias?: string;
-  provider_base_url?: string;
-  extra_litellm_params?: Record<string, unknown>;
-  provider_api_key_set?: boolean;
-  configured?: boolean;
 };
 
 type RawInlineCompletionConfig = {
@@ -1476,20 +1401,8 @@ type RawCodexUsageAvailableRange = {
   last_date?: string | null;
 };
 
-type RawCodexUsageMetrics = {
-  request_count?: number;
-  input_tokens?: number;
-  cached_input_tokens?: number;
-  uncached_input_tokens?: number;
-  output_tokens?: number;
-  reasoning_output_tokens?: number;
-  total_tokens?: number;
-  cache_hit_rate?: number | null;
-};
-
 type RawCodexRateLimitSample = {
   limit_id?: unknown;
-  model?: unknown;
   sampled_at?: unknown;
   used_percent?: unknown;
   window_minutes?: unknown;
@@ -1504,39 +1417,6 @@ type RawCodexUsageConfig = {
   available_range?: RawCodexUsageAvailableRange;
 };
 
-type RawCodexUsageProviderStats = RawCodexUsageMetrics & {
-  provider?: RawCodexUsageProvider;
-  provider_key?: string;
-  provider_kind?: string;
-  provider_label?: string;
-  base_url?: string | null;
-  resolution?: string;
-};
-
-type RawCodexUsageDailyStats = RawCodexUsageMetrics & {
-  date?: string;
-  day?: string;
-};
-
-type RawCodexUsageDailyProviderStats = RawCodexUsageDailyStats & RawCodexUsageProviderStats;
-
-type RawCodexUsageProviderModelStats = RawCodexUsageProviderStats & {
-  model?: string;
-};
-
-type RawCodexUsageDailyProviderModelStats = RawCodexUsageDailyProviderStats & {
-  model?: string;
-};
-
-type RawCodexUsageDailyPagination = {
-  page?: number;
-  page_size?: number;
-  total_items?: number;
-  total_pages?: number;
-  has_previous?: boolean;
-  has_next?: boolean;
-};
-
 type RawCodexUsageStats = {
   range?: {
     start_date?: string;
@@ -1545,15 +1425,6 @@ type RawCodexUsageStats = {
   enabled?: boolean;
   time_basis?: RawCodexUsageTimeBasis;
   available_range?: RawCodexUsageAvailableRange;
-  available_providers?: RawCodexUsageProvider[];
-  selected_provider_keys?: string[];
-  totals?: RawCodexUsageMetrics;
-  by_provider?: RawCodexUsageProviderStats[];
-  by_provider_model?: RawCodexUsageProviderModelStats[];
-  by_day?: RawCodexUsageDailyStats[];
-  daily_by_provider?: RawCodexUsageDailyProviderStats[];
-  daily_by_provider_model?: RawCodexUsageDailyProviderModelStats[];
-  daily_pagination?: RawCodexUsageDailyPagination;
   rate_limit_samples?: RawCodexRateLimitSample[];
 };
 
@@ -1692,6 +1563,10 @@ function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
   const latestAnswerCompletedAt = raw.last_answer_completed_at ?? raw.lastAnswerCompletedAt;
   if (typeof latestAnswerCompletedAt === "string" && latestAnswerCompletedAt.trim()) {
     summary.lastAnswerCompletedAt = latestAnswerCompletedAt;
+  }
+  const latestAnswerTerminalAt = raw.last_answer_terminal_at ?? raw.lastAnswerTerminalAt;
+  if (typeof latestAnswerTerminalAt === "string" && latestAnswerTerminalAt.trim()) {
+    summary.lastAnswerTerminalAt = latestAnswerTerminalAt;
   }
   if (Array.isArray(raw.agents)) {
     summary.agents = raw.agents.map(mapAgentSummary);
@@ -3305,117 +3180,6 @@ function mapAppUpdateDownloadProgress(raw: RawAppUpdateDownloadProgress): AppUpd
   };
 }
 
-function mapTransferBridgeStatus(raw: RawTransferBridgeStatus): TransferBridgeStatus {
-  const status = String(raw.status || "unknown") as TransferBridgeStatus["status"];
-  const routes = Array.isArray(raw.routes) ? raw.routes.map(mapTransferRouteConfig) : undefined;
-  return {
-    enabled: Boolean(raw.enabled),
-    configured: Boolean(raw.configured),
-    running: Boolean(raw.running),
-    status,
-    localUrl: String(raw.local_url || ""),
-    localEndpoint: raw.local_endpoint ? String(raw.local_endpoint) : undefined,
-    localHost: raw.local_host ? String(raw.local_host) : undefined,
-    localPort: typeof raw.local_port === "number" ? raw.local_port : undefined,
-    bridgePageUrl: String(raw.bridge_page_url || ""),
-    responsesBaseUrl: String(raw.responses_base_url || ""),
-    chatCompletionsBaseUrl: String(raw.chat_completions_base_url || ""),
-    litellmRunning: typeof raw.litellm_running === "boolean" ? raw.litellm_running : undefined,
-    litellmPid: typeof raw.litellm_pid === "number" ? raw.litellm_pid : raw.litellm_pid === null ? null : undefined,
-    litellmModel: raw.litellm_model ? String(raw.litellm_model) : undefined,
-    modelAlias: raw.model_alias ? String(raw.model_alias) : undefined,
-    providerBaseUrl: raw.provider_base_url ? String(raw.provider_base_url) : undefined,
-    providerApiKeySet: Boolean(raw.provider_api_key_set),
-    ...(raw.endpoint_mode !== undefined ? { endpointMode: normalizeTransferEndpointMode(raw.endpoint_mode) } : {}),
-    ...(raw.extra_litellm_params !== undefined ? { extraLitellmParams: normalizeRecord(raw.extra_litellm_params) } : {}),
-    ...(routes !== undefined ? { routes } : {}),
-    ...(typeof raw.route_count === "number" ? { routeCount: raw.route_count } : {}),
-    ...(typeof raw.configured_route_count === "number" ? { configuredRouteCount: raw.configured_route_count } : {}),
-    dropParams: typeof raw.drop_params === "boolean" ? raw.drop_params : undefined,
-    litellmProxyBaseUrl: raw.litellm_proxy_base_url ? String(raw.litellm_proxy_base_url) : undefined,
-    litellmLogTail: Array.isArray(raw.litellm_log_tail) ? raw.litellm_log_tail.map((line) => String(line)) : undefined,
-    requestCount: Number(raw.request_count || 0),
-    totalInputTokens: Number(raw.total_input_tokens || 0),
-    totalOutputTokens: Number(raw.total_output_tokens || 0),
-    totalBytesIn: Number(raw.total_bytes_in || 0),
-    totalBytesOut: Number(raw.total_bytes_out || 0),
-    uptimeSeconds: typeof raw.uptime_seconds === "number" ? raw.uptime_seconds : undefined,
-    recentTraffic: Array.isArray(raw.recent_traffic)
-      ? raw.recent_traffic.map((record) => ({
-          id: String(record.id || ""),
-          timestamp: String(record.timestamp || ""),
-          method: String(record.method || ""),
-          endpoint: String(record.endpoint || ""),
-          status: Number(record.status || 0),
-          bytesIn: Number(record.bytes_in || 0),
-          bytesOut: Number(record.bytes_out || 0),
-          durationMs: Number(record.duration_ms || 0),
-          model: String(record.model || ""),
-          error: String(record.error || ""),
-        }))
-      : undefined,
-    startedAt: raw.started_at ? String(raw.started_at) : undefined,
-    lastRequestAt: raw.last_request_at ? String(raw.last_request_at) : undefined,
-    lastError: raw.last_error !== undefined ? String(raw.last_error) : undefined,
-    ...(typeof raw.restart_required === "boolean" ? { restartRequired: raw.restart_required } : {}),
-    ...(raw.restart_required_reason ? { restartRequiredReason: String(raw.restart_required_reason) } : {}),
-  };
-}
-
-function normalizeTransferEndpointMode(value: unknown): TransferEndpointMode {
-  const text = String(value || "").trim();
-  if (text === "chat_completions") return "chat_completions";
-  if (text === "responses") return "responses";
-  return "auto";
-}
-
-function normalizeRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? { ...(value as Record<string, unknown>) } : {};
-}
-
-function mapTransferRouteConfig(raw: RawTransferRouteConfig): TransferRouteConfig {
-  return {
-    id: String(raw.id || ""),
-    name: raw.name ? String(raw.name) : "",
-    endpointMode: normalizeTransferEndpointMode(raw.endpoint_mode),
-    litellmModel: String(raw.litellm_model || ""),
-    modelAlias: String(raw.model_alias || ""),
-    providerBaseUrl: String(raw.provider_base_url || ""),
-    extraLitellmParams: normalizeRecord(raw.extra_litellm_params),
-    providerApiKeySet: Boolean(raw.provider_api_key_set),
-    configured: typeof raw.configured === "boolean" ? raw.configured : undefined,
-  };
-}
-
-function mapTransferBridgeConfigInput(input: TransferBridgeConfigInput) {
-  return {
-    ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
-    ...(input.litellmModel !== undefined ? { litellm_model: input.litellmModel } : {}),
-    ...(input.modelAlias !== undefined ? { model_alias: input.modelAlias } : {}),
-    ...(input.endpointMode !== undefined ? { endpoint_mode: input.endpointMode } : {}),
-    ...(input.extraLitellmParams !== undefined ? { extra_litellm_params: input.extraLitellmParams } : {}),
-    ...(input.providerBaseUrl !== undefined ? { provider_base_url: input.providerBaseUrl } : {}),
-    ...(input.providerApiKey ? { provider_api_key: input.providerApiKey } : {}),
-    ...(input.clearProviderApiKey !== undefined ? { clear_provider_api_key: input.clearProviderApiKey } : {}),
-    ...(input.routes !== undefined ? { routes: input.routes.map(mapTransferRouteConfigInput) } : {}),
-    ...(input.dropParams !== undefined ? { drop_params: input.dropParams } : {}),
-  };
-}
-
-function mapTransferRouteConfigInput(route: TransferRouteConfig) {
-  return {
-    id: route.id,
-    ...(route.name !== undefined ? { name: route.name } : {}),
-    endpoint_mode: route.endpointMode,
-    litellm_model: route.litellmModel,
-    model_alias: route.modelAlias,
-    provider_base_url: route.providerBaseUrl,
-    extra_litellm_params: route.extraLitellmParams || {},
-    ...(route.providerApiKey ? { provider_api_key: route.providerApiKey } : {}),
-    ...(route.clearProviderApiKey !== undefined ? { clear_provider_api_key: route.clearProviderApiKey } : {}),
-  };
-}
-
 function mapInlineCompletionConfig(raw: RawInlineCompletionConfig): InlineCompletionConfig {
   return {
     enabled: Boolean(raw.enabled),
@@ -3648,42 +3412,6 @@ function mapCodexUsageAvailableRange(raw: RawCodexUsageAvailableRange | undefine
   };
 }
 
-function mapCodexUsageMetrics(raw: RawCodexUsageMetrics | undefined): CodexUsageMetrics {
-  const inputTokens = numberOrZero(raw?.input_tokens);
-  const cachedInputTokens = numberOrZero(raw?.cached_input_tokens);
-  const outputTokens = numberOrZero(raw?.output_tokens);
-  const cacheHitRate = raw?.cache_hit_rate;
-  return {
-    requestCount: numberOrZero(raw?.request_count),
-    inputTokens,
-    cachedInputTokens,
-    uncachedInputTokens: raw?.uncached_input_tokens === undefined
-      ? Math.max(0, inputTokens - cachedInputTokens)
-      : numberOrZero(raw.uncached_input_tokens),
-    outputTokens,
-    reasoningOutputTokens: numberOrZero(raw?.reasoning_output_tokens),
-    totalTokens: raw?.total_tokens === undefined
-      ? inputTokens + outputTokens
-      : numberOrZero(raw.total_tokens),
-    cacheHitRate: typeof cacheHitRate === "number" && Number.isFinite(cacheHitRate) ? cacheHitRate : null,
-  };
-}
-
-function mapCodexUsageProviderFromStats(raw: RawCodexUsageProviderStats): CodexUsageProvider {
-  return mapCodexUsageProvider(raw.provider || {
-    key: raw.provider_key,
-    kind: raw.provider_kind,
-    label: raw.provider_label,
-    base_url: raw.base_url,
-    resolution: raw.resolution,
-  });
-}
-
-function mapCodexUsageModel(value: unknown): string {
-  const model = String(value || "").trim();
-  return !model || model.toLowerCase() === "unknown" ? DEFAULT_CODEX_USAGE_MODEL : model;
-}
-
 function mapCodexUsageConfig(raw: RawCodexUsageConfig): CodexUsageConfig {
   return {
     enabled: Boolean(raw.enabled),
@@ -3719,12 +3447,10 @@ function mapCodexRateLimitSample(raw: RawCodexRateLimitSample): CodexRateLimitSa
   const planType = typeof raw.plan_type === "string" && raw.plan_type.trim()
     ? raw.plan_type.trim()
     : null;
-  const rawLimitId = typeof raw.limit_id === "string" ? raw.limit_id.trim() : "";
-  const limitId = rawLimitId || (
-    mapCodexUsageModel(raw.model).toLowerCase() === "gpt-5.3-codex-spark"
-      ? SECONDARY_CODEX_RATE_LIMIT_ID
-      : GENERAL_CODEX_RATE_LIMIT_ID
-  );
+  const limitId = typeof raw.limit_id === "string" ? raw.limit_id.trim() : "";
+  if (!limitId) {
+    return null;
+  }
   return {
     limitId,
     sampledAt,
@@ -3735,71 +3461,7 @@ function mapCodexRateLimitSample(raw: RawCodexRateLimitSample): CodexRateLimitSa
   };
 }
 
-function positiveInteger(value: unknown, fallback: number) {
-  const parsed = Math.floor(numberOrZero(value));
-  return parsed > 0 ? parsed : fallback;
-}
-
-function mapCodexUsageDailyPagination(raw: RawCodexUsageDailyPagination | undefined, returnedItemCount: number) {
-  if (!raw) {
-    const totalItems = Math.max(0, returnedItemCount);
-    return {
-      page: 1,
-      pageSize: totalItems > 0 ? totalItems : 10,
-      totalItems,
-      totalPages: totalItems > 0 ? 1 : 0,
-      hasPrevious: false,
-      hasNext: false,
-    };
-  }
-  const pageSize = positiveInteger(raw.page_size, Math.max(1, returnedItemCount));
-  const totalItems = Math.max(0, Math.floor(numberOrZero(raw.total_items)));
-  const derivedTotalPages = Math.ceil(totalItems / pageSize);
-  const rawTotalPages = Number(raw.total_pages);
-  const totalPages = Number.isFinite(rawTotalPages) && rawTotalPages >= 0
-    ? Math.floor(rawTotalPages)
-    : derivedTotalPages;
-  const page = positiveInteger(raw.page, 1);
-  return {
-    page,
-    pageSize,
-    totalItems,
-    totalPages,
-    hasPrevious: typeof raw.has_previous === "boolean" ? raw.has_previous : page > 1,
-    hasNext: typeof raw.has_next === "boolean" ? raw.has_next : page < totalPages,
-  };
-}
-
 function mapCodexUsageStats(raw: RawCodexUsageStats): CodexUsageStats {
-  const byProvider: CodexUsageProviderStats[] = (raw.by_provider || []).map((item) => ({
-    provider: mapCodexUsageProviderFromStats(item),
-    ...mapCodexUsageMetrics(item),
-  }));
-  const byDay: CodexUsageDailyStats[] = (raw.by_day || []).map((item) => ({
-    date: String(item.date || item.day || ""),
-    ...mapCodexUsageMetrics(item),
-  }));
-  const dailyByProvider: CodexUsageDailyProviderStats[] = (raw.daily_by_provider || []).map((item) => ({
-    date: String(item.date || item.day || ""),
-    provider: mapCodexUsageProviderFromStats(item),
-    ...mapCodexUsageMetrics(item),
-  }));
-  const byProviderModel: CodexUsageProviderModelStats[] = raw.by_provider_model === undefined
-    ? byProvider.map((item) => ({ ...item, model: DEFAULT_CODEX_USAGE_MODEL }))
-    : raw.by_provider_model.map((item) => ({
-        provider: mapCodexUsageProviderFromStats(item),
-        model: mapCodexUsageModel(item.model),
-        ...mapCodexUsageMetrics(item),
-      }));
-  const dailyByProviderModel: CodexUsageDailyProviderModelStats[] = raw.daily_by_provider_model === undefined
-    ? dailyByProvider.map((item) => ({ ...item, model: DEFAULT_CODEX_USAGE_MODEL }))
-    : raw.daily_by_provider_model.map((item) => ({
-        date: String(item.date || item.day || ""),
-        provider: mapCodexUsageProviderFromStats(item),
-        model: mapCodexUsageModel(item.model),
-        ...mapCodexUsageMetrics(item),
-      }));
-  const dailyItemCount = dailyByProviderModel.length || dailyByProvider.length;
   return {
     range: {
       startDate: String(raw.range?.start_date || ""),
@@ -3808,17 +3470,6 @@ function mapCodexUsageStats(raw: RawCodexUsageStats): CodexUsageStats {
     enabled: Boolean(raw.enabled),
     timeBasis: mapCodexUsageTimeBasis(raw.time_basis),
     availableRange: mapCodexUsageAvailableRange(raw.available_range),
-    availableProviders: (raw.available_providers || []).map(mapCodexUsageProvider),
-    selectedProviderKeys: Array.isArray(raw.selected_provider_keys)
-      ? raw.selected_provider_keys.map((item) => String(item))
-      : [],
-    totals: mapCodexUsageMetrics(raw.totals),
-    byProvider,
-    byProviderModel,
-    byDay,
-    dailyByProvider,
-    dailyByProviderModel,
-    dailyPagination: mapCodexUsageDailyPagination(raw.daily_pagination, dailyItemCount),
     rateLimitSamples: (raw.rate_limit_samples || [])
       .map(mapCodexRateLimitSample)
       .filter((sample): sample is CodexRateLimitSample => sample !== null),
@@ -4531,34 +4182,6 @@ export class RealWebBotClient implements WebBotClient {
     return mapUserBotPermissions(data);
   }
 
-  async getTransferBridgeStatus(): Promise<TransferBridgeStatus> {
-    const data = await this.requestJson<RawTransferBridgeStatus>("/api/transfer/status");
-    return mapTransferBridgeStatus(data);
-  }
-
-  async getTransferAdminStatus(): Promise<TransferBridgeStatus> {
-    const data = await this.requestJson<RawTransferBridgeStatus>("/api/admin/transfer/status");
-    return mapTransferBridgeStatus(data);
-  }
-
-  async updateTransferBridgeConfig(input: TransferBridgeConfigInput): Promise<TransferBridgeStatus> {
-    const data = await this.requestJson<RawTransferBridgeStatus>("/api/admin/transfer/config", {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(mapTransferBridgeConfigInput(input)),
-    });
-    return mapTransferBridgeStatus(data);
-  }
-
-  async resetTransferBridgeStats(): Promise<TransferBridgeStatus> {
-    const data = await this.requestJson<RawTransferBridgeStatus>("/api/admin/transfer/reset", {
-      method: "POST",
-    });
-    return mapTransferBridgeStatus(data);
-  }
-
   async getInlineCompletionConfig(): Promise<InlineCompletionConfig> {
     const data = await this.requestJson<RawInlineCompletionConfig>("/api/admin/inline-completion/config");
     return mapInlineCompletionConfig(data);
@@ -4704,16 +4327,6 @@ export class RealWebBotClient implements WebBotClient {
     const params = new URLSearchParams();
     if (queryInput.startDate) params.set("start_date", queryInput.startDate);
     if (queryInput.endDate) params.set("end_date", queryInput.endDate);
-    for (const providerKey of queryInput.providerKeys || []) {
-      const key = providerKey.trim();
-      if (key) params.append("provider", key);
-    }
-    if (Number.isFinite(queryInput.dailyPage) && (queryInput.dailyPage || 0) > 0) {
-      params.set("daily_page", String(Math.floor(queryInput.dailyPage!)));
-    }
-    if (Number.isFinite(queryInput.dailyPageSize) && (queryInput.dailyPageSize || 0) > 0) {
-      params.set("daily_page_size", String(Math.floor(queryInput.dailyPageSize!)));
-    }
     const query = params.toString();
     const data = await this.requestJson<RawCodexUsageStats>(
       `/api/admin/codex-usage/stats${query ? `?${query}` : ""}`,

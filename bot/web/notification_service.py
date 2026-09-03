@@ -142,6 +142,7 @@ class ChatNotificationService:
         elapsed_seconds: int | float | None,
         url: str,
         dedupe_key: str,
+        terminal_at: str,
     ) -> dict[str, Any]:
         normalized_status = "error" if str(status or "").lower() == "error" else "success"
         title = "聊天失败" if normalized_status == "error" else "聊天已完成"
@@ -164,6 +165,8 @@ class ChatNotificationService:
                 event["elapsedSeconds"] = round(float(elapsed_seconds), 1)
             except (TypeError, ValueError):
                 pass
+        if str(terminal_at or "").strip():
+            event["terminalAt"] = str(terminal_at).strip()
         return event
 
     def _build_push_title(self, event: dict[str, Any]) -> str:
@@ -225,6 +228,7 @@ class ChatNotificationService:
         elapsed_seconds: int | float | None = None,
         url: str = "",
         dedupe_key: str = "",
+        terminal_at: str = "",
     ) -> dict[str, Any] | None:
         if not self.enabled:
             return None
@@ -251,6 +255,7 @@ class ChatNotificationService:
             elapsed_seconds=elapsed_seconds,
             url=url,
             dedupe_key=key,
+            terminal_at=terminal_at,
         )
         delivered = 0
         failed: list[NotificationConnection] = []

@@ -8,6 +8,14 @@ import { clsx } from "clsx";
 import { MobileShell, type AppTab } from "./MobileShell";
 import { NotificationCenter } from "./NotificationCenter";
 import {
+  chatUnreadStoragePrefix,
+  markStoredChatRead,
+  markStoredChatUnread,
+  reconcileStoredChatUnread,
+  recordStoredChatCompletion,
+  type ChatUnreadState,
+} from "./chatUnreadState";
+import {
   readStoredViewMode,
   readViewportWidth,
   resolveEffectiveLayoutMode,
@@ -121,6 +129,18 @@ function clearStoredToken() {
 
 function sessionAccountKey(session: SessionState | null) {
   return (session?.accountId || session?.username || "").trim();
+}
+
+function updateUnreadBotsState(
+  setUnreadBots: (update: (current: string[]) => string[]) => void,
+  state: ChatUnreadState,
+) {
+  setUnreadBots((current) => (
+    current.length === state.unreadBots.length
+    && current.every((alias, index) => alias === state.unreadBots[index])
+      ? current
+      : state.unreadBots
+  ));
 }
 
 function applyUnreadStatus(bots: BotSummary[], unreadBots: string[]) {
@@ -268,6 +288,9 @@ export function App() {
   const [announcementState, setAnnouncementState] = useState<AnnouncementListResult>(EMPTY_ANNOUNCEMENT_STATE);
   const [announcementOpen, setAnnouncementOpen] = useState(false);
   const announcementAutoOpenedRef = useRef(false);
+  const visibleChatBotAliasRef = useRef<string | null>(null);
+  const desktopChatPaneVisibleRef = useRef(desktopChatPaneVisible);
+  desktopChatPaneVisibleRef.current = desktopChatPaneVisible;
   const isLoggedIn = Boolean(session?.isLoggedIn);
   const chatReadOnly = !hasCapability(session, "chat_send");
   const allowTrace = hasCapability(session, "view_chat_trace");
@@ -290,8 +313,8 @@ export function App() {
       return false;
     }
     const knownAliases = new Set(bots.map((bot) => bot.alias));
-    return unreadBots.some((alias) => alias !== currentBot && knownAliases.has(alias));
-  }, [bots, currentBot, unreadBots]);
+    return unreadBots.some((alias) => knownAliases.has(alias));
+  }, [bots, unreadBots]);
   const effectiveLayoutMode = resolveEffectiveLayoutMode(viewMode, viewportWidth);
   const currentBotSummary = useMemo(() => {
     if (!currentBot) {
@@ -352,8 +375,12 @@ export function App() {
     )
     ? currentBot
     : null;
+  visibleChatBotAliasRef.current = visibleChatBotAlias;
 
   function handleSelectBot(alias: string | null) {
+    if (alias) {
+      markBotRead(alias);
+    }
     setCurrentBot(alias);
     setShowBotManager(false);
     setShowAdminCenter(false);
@@ -775,14 +802,80 @@ export function App() {
   }, [accountKey, currentBot]);
 
   useEffect(() => {
-    if (currentTab !== "chat" || !currentBot) {
+    if (!isLoggedIn || !accountKey) {
       return;
     }
-    setUnreadBots((prev) => prev.filter((alias) => alias !== currentBot));
-  }, [currentBot, currentTab]);
+    const syncUnreadState = (acknowledgeVisibleBot = false) => {
+      const readableAlias = acknowledgeVisibleBot
+        && document.visibilityState !== "hidden"
+        ? visibleChatBotAliasRef.current
+        : null;
+      updateUnreadBotsState(
+        setUnreadBots,
+        reconcileStoredChatUnread(
+          accountKey,
+          bots,
+          readableAlias,
+        ),
+      );
+    };
+    syncUnreadState();
+    const storagePrefix = chatUnreadStoragePrefix(accountKey);
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === null || event.key.startsWith(storagePrefix)) {
+        syncUnreadState(true);
+      }
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "hidden") {
+        syncUnreadState(true);
+      }
+    };
+    window.addEventListener("storage", handleStorage);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [accountKey, bots, isLoggedIn]);
 
-  function markBotUnread(alias: string) {
-    setUnreadBots((prev) => (prev.includes(alias) ? prev : [...prev, alias]));
+  function markBotUnread(alias: string, completedAt = "") {
+    if (!accountKey) {
+      setUnreadBots((prev) => (prev.includes(alias) ? prev : [...prev, alias]));
+      return;
+    }
+    const state = completedAt
+      ? recordStoredChatCompletion(accountKey, alias, completedAt, true)
+      : markStoredChatUnread(accountKey, alias);
+    updateUnreadBotsState(setUnreadBots, state);
+  }
+
+  function markBotRead(alias: string, completedAt = "") {
+    if (!accountKey) {
+      setUnreadBots((prev) => prev.filter((item) => item !== alias));
+      return;
+    }
+    const state = completedAt
+      ? recordStoredChatCompletion(accountKey, alias, completedAt, false)
+      : markStoredChatRead(accountKey, alias);
+    updateUnreadBotsState(setUnreadBots, state);
+  }
+
+  function recordBotCompletion(alias: string, completedAt = "", unread = true) {
+    if (unread) {
+      markBotUnread(alias, completedAt);
+    } else {
+      markBotRead(alias, completedAt);
+    }
+  }
+
+  function handleDesktopChatPaneVisibilityChange(visible: boolean) {
+    const wasVisible = desktopChatPaneVisibleRef.current;
+    desktopChatPaneVisibleRef.current = visible;
+    setDesktopChatPaneVisible(visible);
+    if (visible && !wasVisible && currentBot) {
+      markBotRead(currentBot);
+    }
   }
 
   function handleBotActivityChange(alias: string, activity: BotActivityChange) {
@@ -813,6 +906,7 @@ export function App() {
       currentBotAlias={currentBot}
       visibleChatBotAlias={visibleChatBotAlias}
       onUnreadBot={markBotUnread}
+      onReadBot={markBotRead}
     />
   );
 
@@ -924,7 +1018,7 @@ export function App() {
                 onSoloSessionInfoChange={instanceKey === chatInstanceKey ? options.onSoloSessionInfoChange : undefined}
                 onSoloHistoryRollback={instanceKey === chatInstanceKey ? options.onSoloHistoryRollback : undefined}
                 onRequestDesktopPreview={options.requestPreview}
-                onUnreadResult={markBotUnread}
+                onUnreadResult={recordBotCompletion}
                 onBotActivityChange={handleBotActivityChange}
                 onWorkbenchStatusChange={(status) => {
                   setDesktopChatStatusByBot((prev) => {
@@ -971,7 +1065,7 @@ export function App() {
               onToggleImmersive={instanceKey === chatInstanceKey
                 ? () => setIsChatImmersive((prev) => !prev)
                 : undefined}
-              onUnreadResult={markBotUnread}
+              onUnreadResult={recordBotCompletion}
               onBotActivityChange={handleBotActivityChange}
             />
           </div>
@@ -1213,7 +1307,7 @@ export function App() {
                 : undefined}
               onLogout={handleLogout}
               onDirtyTabsChange={setDesktopHasDirtyTabs}
-              onChatPaneVisibilityChange={setDesktopChatPaneVisible}
+              onChatPaneVisibilityChange={handleDesktopChatPaneVisibilityChange}
             />
           )}
           </Suspense>
@@ -1244,6 +1338,9 @@ export function App() {
           onViewModeChange={setViewMode}
           onTabChange={(tab) => {
             setCurrentTab(tab);
+            if (tab === "chat" && currentBot) {
+              markBotRead(currentBot);
+            }
             if (tab !== "chat") {
               setIsChatImmersive(false);
             }

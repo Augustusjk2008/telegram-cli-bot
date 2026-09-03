@@ -13,7 +13,7 @@ type Props = {
   visible?: boolean;
   focused?: boolean;
   onToggleFocus?: () => void;
-  onUnreadResult?: (botAlias: string) => void;
+  onUnreadResult?: (botAlias: string, completedAt?: string, unread?: boolean) => void;
   onWorkbenchStatusChange?: (status: ChatWorkbenchStatus) => void;
   onRequestDesktopPreview?: (path: string) => void;
 };

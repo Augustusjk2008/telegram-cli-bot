@@ -22,7 +22,7 @@ def _tools_for_environment() -> list[dict[str, Any]]:
     return [
         {
             "name": "configure_team",
-            "description": "配置当前主会话编组。extend 可由主 agent 自主在空闲槽位扩编；replace 仅在用户明确要求重新编组、缩编或清空时使用。必须传 run_id。",
+            "description": "配置当前主会话编组。extend 可由主 agent 自主在空闲槽位扩编；replace 仅在用户明确要求重新编组、缩编或清空时使用。必须传 run_id。成功后必须查看响应中的 changed：changed=true 时，本轮所有后续工具立即改用响应中的新 run_id；changed=false 时继续使用原 run_id。stdio MCP 不缓存或自动切换 run_id。",
             "inputSchema": {
                 "type": "object",
                 "required": ["run_id", "mode", "roles"],

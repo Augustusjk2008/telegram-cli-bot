@@ -39,6 +39,24 @@ describe("RealWebBotClient", () => {
     vi.unstubAllGlobals();
   });
 
+  test("maps the latest notifiable answer timestamp from bot summaries", async () => {
+    fetchMock.mockResolvedValue(jsonOk([{
+      alias: "main",
+      cli_type: "codex",
+      status: "running",
+      working_dir: "C:\\repo",
+      last_answer_completed_at: "2026-08-27T01:00:00Z",
+      last_answer_terminal_at: "2026-08-27T01:10:00Z",
+    }]));
+
+    const bots = await new RealWebBotClient().listBots();
+
+    expect(bots[0]).toMatchObject({
+      lastAnswerCompletedAt: "2026-08-27T01:00:00Z",
+      lastAnswerTerminalAt: "2026-08-27T01:10:00Z",
+    });
+  });
+
   test("uses the active public base path for auth requests and download links", async () => {
     window.history.replaceState(null, "", "/node/nanjing-laptop/");
     vi.stubGlobal("__PUBLIC_ENV__", { VITE_API_BASE_URL: "/node/nanjing-laptop" });
@@ -68,87 +86,6 @@ describe("RealWebBotClient", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/auth/me", expect.any(Object));
   });
 
-  test("maps Transfer Admin routes but never re-exposes provider keys from status", async () => {
-    const status = {
-      enabled: true,
-      configured: true,
-      running: true,
-      status: "running",
-      local_url: "http://127.0.0.1:8080",
-      bridge_page_url: "/api/transfer/page",
-      responses_base_url: "http://127.0.0.1:8080/v1",
-      chat_completions_base_url: "http://127.0.0.1:8080/v1",
-      provider_api_key: "sk-leaked-top-level",
-      provider_api_key_set: true,
-      routes: [{
-        id: "route-1",
-        name: "默认",
-        endpoint_mode: "responses",
-        litellm_model: "openai/gpt-5",
-        model_alias: "gpt-5",
-        provider_base_url: "https://provider.example/v1",
-        provider_api_key: "sk-leaked-route",
-        provider_api_key_set: true,
-        configured: true,
-      }],
-      request_count: 0,
-      total_input_tokens: 0,
-      total_output_tokens: 0,
-      total_bytes_in: 0,
-      total_bytes_out: 0,
-    };
-    fetchMock
-      .mockResolvedValueOnce(jsonOk(status))
-      .mockResolvedValueOnce(jsonOk(status));
-
-    const client = new RealWebBotClient();
-    const loaded = await client.getTransferAdminStatus();
-    await client.updateTransferBridgeConfig({
-      enabled: true,
-      routes: [{
-        id: "route-1",
-        name: "默认",
-        endpointMode: "responses",
-        litellmModel: "openai/gpt-5",
-        modelAlias: "gpt-5",
-        providerBaseUrl: "https://provider.example/v1",
-        extraLitellmParams: { rpm: 60 },
-        providerApiKeySet: true,
-        providerApiKey: "sk-new-route-key",
-      }],
-    });
-
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
-      "/api/admin/transfer/status",
-      expect.objectContaining({ cache: "no-store" }),
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
-      "/api/admin/transfer/config",
-      expect.objectContaining({
-        method: "PATCH",
-        body: JSON.stringify({
-          enabled: true,
-          routes: [{
-            id: "route-1",
-            name: "默认",
-            endpoint_mode: "responses",
-            litellm_model: "openai/gpt-5",
-            model_alias: "gpt-5",
-            provider_base_url: "https://provider.example/v1",
-            extra_litellm_params: { rpm: 60 },
-            provider_api_key: "sk-new-route-key",
-          }],
-        }),
-      }),
-    );
-    expect(loaded).toMatchObject({ providerApiKeySet: true, routes: [{ providerApiKeySet: true }] });
-    expect(loaded).not.toHaveProperty("providerApiKey");
-    expect(loaded.routes?.[0]).not.toHaveProperty("providerApiKey");
-    expect(JSON.stringify(loaded)).not.toContain("sk-leaked");
-  });
-
   test("maps valid Codex rate limit samples and filters invalid samples", async () => {
     fetchMock.mockResolvedValue(jsonOk({
       rate_limit_samples: [
@@ -161,6 +98,7 @@ describe("RealWebBotClient", () => {
           plan_type: "pro",
         },
         {
+          limit_id: "codex",
           sampled_at: "2026-08-11T13:00:00+08:00",
           used_percent: 100,
           window_minutes: 60,

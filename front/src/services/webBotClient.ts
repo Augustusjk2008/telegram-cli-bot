@@ -124,8 +124,6 @@ import type {
   TerminalActionRunResult,
   TerminalActionsConfig,
   TerminalActionsEditableConfig,
-  TransferBridgeConfigInput,
-  TransferBridgeStatus,
   InlineCompletionConfig,
   InlineCompletionConfigInput,
   InlineCompletionRequest,
@@ -167,10 +165,6 @@ export interface WebBotClient {
   listAdminUsers(): Promise<AdminUser[]>;
   updateUser(accountId: string, input: AdminUserUpdateInput): Promise<AdminUser>;
   updateUserBotPermissions(accountId: string, allowedBots: string[]): Promise<UserBotPermissions>;
-  getTransferBridgeStatus(): Promise<TransferBridgeStatus>;
-  getTransferAdminStatus(): Promise<TransferBridgeStatus>;
-  updateTransferBridgeConfig(input: TransferBridgeConfigInput): Promise<TransferBridgeStatus>;
-  resetTransferBridgeStats(): Promise<TransferBridgeStatus>;
   getInlineCompletionConfig(): Promise<InlineCompletionConfig>;
   updateInlineCompletionConfig(input: InlineCompletionConfigInput): Promise<InlineCompletionConfig>;
   getInlineCompletionRuntimeConfig(botAlias: string): Promise<InlineCompletionConfig>;
