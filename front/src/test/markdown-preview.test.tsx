@@ -184,12 +184,25 @@ describe("MarkdownContent", () => {
     expect(performance.now() - startedAt).toBeLessThan(500);
   });
 
-  it("limits LaTeX delimiter compatibility to chat content", () => {
+  it("renders parenthesized and bracketed LaTeX delimiters in file previews", () => {
     const { container } = render(
-      <MarkdownContent content={"预览 \\(x=1\\)。"} variant="preview" />,
+      <MarkdownContent
+        content={[
+          "每个 seed 固定生成 \\(\\phi_x,\\phi_y,\\phi_t\\sim U(0,2\\pi)\\)。",
+          "",
+          "\\[",
+          "C_{SCM}=B+A\\exp(-z)",
+          "\\]",
+        ].join("\n")}
+        variant="desktop-preview"
+      />,
     );
 
-    expect(container.querySelector(".katex")).toBeNull();
+    expect(container.querySelectorAll(".katex-display")).toHaveLength(1);
+    expect(Array.from(container.querySelectorAll("annotation")).map((node) => node.textContent)).toEqual([
+      "\\phi_x,\\phi_y,\\phi_t\\sim U(0,2\\pi)",
+      "C_{SCM}=B+A\\exp(-z)",
+    ]);
   });
 
   it("keeps chat display formulas horizontally scrollable", () => {

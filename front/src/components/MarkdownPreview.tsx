@@ -256,7 +256,7 @@ function MarkdownPre({
 export function MarkdownContent({ content, variant = "preview", onFileLinkClick, resolveImageSrc }: MarkdownContentProps) {
   const isChat = variant === "chat";
   const isDesktopPreview = variant === "desktop-preview";
-  const normalizedContent = isChat ? normalizeLatexMathDelimiters(content) : content;
+  const normalizedContent = normalizeLatexMathDelimiters(content);
   const lastLocalLinkActivationRef = useRef<{ href: string; at: number } | null>(null);
   const containerClassName = isChat
     ? "chat-body-content chat-markdown-content min-w-0 w-full text-[var(--text)]"
