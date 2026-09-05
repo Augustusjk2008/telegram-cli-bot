@@ -8,7 +8,6 @@ import type {
   CodeLocation,
   CodeNavigationIntent,
   CodeNavigationKind,
-  FileReadResult,
   GitTreeStatus,
   HostEffect,
   LanguageServerProviderId,
@@ -26,8 +25,8 @@ import type {
 } from "../theme";
 import {
   isHtmlPreviewPath,
-  isFilePreviewFullyLoaded,
-  shouldAutoLoadFullHtmlPreview,
+  getFilePreviewStatusText,
+  shouldAutoLoadFullPreview,
   withDetectedPreviewKind,
 } from "../utils/filePreview";
 import { getErrorMessage } from "../utils/errorMessage";
@@ -134,16 +133,6 @@ function formatDownloadProgress(downloadedBytes: number, totalBytes?: number) {
     return `${formatBytes(downloadedBytes)} / ${formatBytes(totalBytes)}`;
   }
   return formatBytes(downloadedBytes);
-}
-
-function filePreviewStatusText(result: FileReadResult) {
-  if (result.previewKind === "image") {
-    return "已加载图片预览";
-  }
-  if (result.previewKind === "html") {
-    return "已加载 HTML 预览";
-  }
-  return isFilePreviewFullyLoaded(result) ? "已加载全文" : "";
 }
 
 type Props = {
@@ -770,7 +759,7 @@ export function DesktopWorkbench({
       let result = mode === "full"
         ? await client.readFileFull(botAlias, path)
         : await client.readFile(botAlias, path);
-      if (mode === "preview" && shouldAutoLoadFullHtmlPreview(path, result)) {
+      if (mode === "preview" && shouldAutoLoadFullPreview(path, result)) {
         result = await client.readFileFull(botAlias, path);
       }
       if (
@@ -780,14 +769,11 @@ export function DesktopWorkbench({
         return;
       }
       result = withDetectedPreviewKind(path, result);
-      if (result.previewKind !== "image" && !result.content) {
-        result = { ...result, content: "文件为空" };
-      }
       tabs.openFilePreview({
         path,
         result,
         loading: false,
-        statusText: filePreviewStatusText(result),
+        statusText: getFilePreviewStatusText(result),
         activate: false,
       });
     } catch (error) {

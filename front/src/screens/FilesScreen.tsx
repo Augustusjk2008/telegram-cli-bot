@@ -21,7 +21,7 @@ import {
   getFilePreviewStatusText,
   isFilePreviewFullyLoaded,
   isFilePreviewTooLarge,
-  shouldAutoLoadFullHtmlPreview,
+  shouldAutoLoadFullPreview,
   withDetectedPreviewKind,
 } from "../utils/filePreview";
 import { inferFileEditorLanguageId } from "../utils/fileEditorLanguage";
@@ -237,8 +237,6 @@ export function FilesScreen({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [previewName, setPreviewName] = useState("");
-  const [previewContent, setPreviewContent] = useState("");
-  const [previewMode, setPreviewMode] = useState<"preview" | "full">("preview");
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewResult, setPreviewResult] = useState<FileReadResult | null>(null);
   const [editorPath, setEditorPath] = useState("");
@@ -561,7 +559,6 @@ export function FilesScreen({
       await client.deletePath(botAlias, file.name);
       if (previewName === file.name) {
         setPreviewName("");
-        setPreviewContent("");
         setPreviewResult(null);
       }
       await loadListing();
@@ -627,7 +624,7 @@ export function FilesScreen({
       let result = mode === "full"
         ? await client.readFileFull(botAlias, name)
         : await client.readFile(botAlias, name);
-      if (mode === "preview" && shouldAutoLoadFullHtmlPreview(name, result)) {
+      if (mode === "preview" && shouldAutoLoadFullPreview(name, result)) {
         result = await client.readFileFull(botAlias, name);
       }
       if (requestSeq !== previewRequestSeqRef.current) {
@@ -635,9 +632,7 @@ export function FilesScreen({
       }
       result = withDetectedPreviewKind(name, result);
       setPreviewName(name);
-      setPreviewMode(result.mode === "cat" ? "full" : "preview");
       setPreviewResult(result);
-      setPreviewContent(result.previewKind === "image" ? "" : result.content || "文件为空");
     } catch (err) {
       if (requestSeq === previewRequestSeqRef.current) {
         setError(err instanceof Error ? err.message : mode === "full" ? "读取全文失败" : "预览文件失败");
@@ -724,7 +719,6 @@ export function FilesScreen({
       }
       const content = result.content || "";
       setPreviewName("");
-      setPreviewContent("");
       setPreviewResult(null);
       syncCurrentEditorDocumentSnapshot(name, content, binding);
       setEditorPath(name);
@@ -741,7 +735,6 @@ export function FilesScreen({
       setStatusText("");
       if (previewName === name) {
         setPreviewName("");
-        setPreviewContent("");
         setPreviewResult(null);
       }
       return false;
@@ -889,7 +882,6 @@ export function FilesScreen({
       setEditorEncoding(result.encoding || editorEncoding);
       setEditorStatusText("已保存");
       if (previewName === editorPath) {
-        setPreviewContent(editorContent || "文件为空");
         setPreviewResult((current) => current
           ? {
               ...current,
@@ -1257,20 +1249,15 @@ export function FilesScreen({
       {canPreviewFiles && previewName ? (
         <FilePreviewDialog
           title={previewName}
-          content={previewContent}
-          mode={previewMode}
+          result={previewResult}
           botAlias={botAlias}
-          previewKind={previewResult?.previewKind}
-          contentType={previewResult?.contentType}
-          contentBase64={previewResult?.contentBase64}
           loading={previewLoading}
           onClose={() => {
             setPreviewName("");
-            setPreviewContent("");
             setPreviewResult(null);
           }}
           statusText={previewStatusText}
-          onLoadFull={previewMode !== "full" && canLoadFull ? () => void loadPreview(previewName, "full") : undefined}
+          onLoadFull={canLoadFull ? () => void loadPreview(previewName, "full") : undefined}
           onEdit={canEditPreview ? () => void handleOpenEditor(previewName) : undefined}
           onDownload={canPreviewFiles ? () => void handleDownloadEntry({ name: previewName, isDir: false }) : undefined}
           onCancelDownload={previewDownloadProgress ? handleCancelDownload : undefined}

@@ -8,7 +8,7 @@ import { PluginViewSurface } from "../components/plugin-renderers/PluginViewSurf
 import type { CodeNavigationIntent, HostEffect, InlineCompletionConfig, PluginOpenTarget } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { inferFileEditorLanguageId } from "../utils/fileEditorLanguage";
-import { isFilePreviewFullyLoaded } from "../utils/filePreview";
+import { isFilePreviewFullyLoaded, isFilePreviewTooLarge } from "../utils/filePreview";
 import type { EditorRevealLocation, EditorTab } from "./workbenchTypes";
 
 type Props = {
@@ -542,6 +542,7 @@ export function EditorPane({
               activePreviewPath
               && activePreviewResult
               && !isFilePreviewFullyLoaded(activePreviewResult)
+              && !isFilePreviewTooLarge(activePreviewResult)
               && onLoadFullPreview
                 ? () => void onLoadFullPreview(activePreviewPath)
                 : undefined

@@ -66,7 +66,7 @@ import {
   getFilePreviewStatusText,
   isFilePreviewFullyLoaded,
   isFilePreviewTooLarge,
-  shouldAutoLoadFullHtmlPreview,
+  shouldAutoLoadFullPreview,
   withDetectedPreviewKind,
 } from "../utils/filePreview";
 import type { BotActivityChange } from "../app/botActivity";
@@ -1730,8 +1730,6 @@ export function ChatScreen({
   const [queuedMessage, setQueuedMessage] = useState<QueuedChatMessage | null>(null);
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
   const [previewName, setPreviewName] = useState("");
-  const [previewContent, setPreviewContent] = useState("");
-  const [previewMode, setPreviewMode] = useState<"preview" | "full">("preview");
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewResult, setPreviewResult] = useState<FileReadResult | null>(null);
   const [previewDownloadProgress, setPreviewDownloadProgress] = useState<FileDownloadProgress | null>(null);
@@ -2508,7 +2506,6 @@ export function ChatScreen({
     setStreamMode("");
     setStreamStartedAtMs(null);
     setPreviewName("");
-    setPreviewContent("");
     setPreviewResult(null);
     setBotOverview(null);
     setPendingAttachments([]);
@@ -2968,7 +2965,7 @@ export function ChatScreen({
       let result = mode === "full"
         ? await client.readFileFull(botAlias, name)
         : await client.readFile(botAlias, name);
-      if (mode === "preview" && shouldAutoLoadFullHtmlPreview(name, result)) {
+      if (mode === "preview" && shouldAutoLoadFullPreview(name, result)) {
         result = await client.readFileFull(botAlias, name);
       }
       if (requestSeq !== previewRequestSeqRef.current) {
@@ -2976,9 +2973,7 @@ export function ChatScreen({
       }
       result = withDetectedPreviewKind(name, result);
       setPreviewName(name);
-      setPreviewMode(result.mode === "cat" ? "full" : "preview");
       setPreviewResult(result);
-      setPreviewContent(result.previewKind === "image" ? "" : result.content || "文件为空");
     } catch (err) {
       if (requestSeq === previewRequestSeqRef.current) {
         setError(err instanceof Error ? err.message : mode === "full" ? "读取全文失败" : "预览文件失败");
@@ -5056,21 +5051,16 @@ export function ChatScreen({
       {shouldUseInlinePreview && previewName ? (
         <FilePreviewDialog
           title={previewName}
-          content={previewContent}
-          mode={previewMode}
+          result={previewResult}
           botAlias={botAlias}
-          previewKind={previewResult?.previewKind}
-          contentType={previewResult?.contentType}
-          contentBase64={previewResult?.contentBase64}
           loading={previewLoading}
           statusText={previewStatusText}
           onClose={() => {
             cancelPreviewDownload();
             setPreviewName("");
-            setPreviewContent("");
             setPreviewResult(null);
           }}
-          onLoadFull={previewMode !== "full" && canLoadFull ? () => void loadPreview(previewName, "full") : undefined}
+          onLoadFull={canLoadFull ? () => void loadPreview(previewName, "full") : undefined}
           onDownload={() => void downloadPreview()}
           onCancelDownload={previewDownloadProgress ? cancelPreviewDownload : undefined}
           downloadProgressText={previewDownloadProgress ? formatDownloadProgress(previewDownloadProgress) : ""}

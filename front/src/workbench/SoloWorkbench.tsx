@@ -10,7 +10,7 @@ import {
   getFilePreviewStatusText,
   isFilePreviewFullyLoaded,
   isFilePreviewTooLarge,
-  shouldAutoLoadFullHtmlPreview,
+  shouldAutoLoadFullPreview,
   withDetectedPreviewKind,
 } from "../utils/filePreview";
 import { PaneResizer } from "./PaneResizer";
@@ -106,7 +106,7 @@ export function SoloWorkbench({
       let result = mode === "full"
         ? await client.readFileFull(botAlias, nextPath)
         : await client.readFile(botAlias, nextPath);
-      if (mode === "preview" && shouldAutoLoadFullHtmlPreview(nextPath, result)) {
+      if (mode === "preview" && shouldAutoLoadFullPreview(nextPath, result)) {
         result = await client.readFileFull(botAlias, nextPath);
       }
       if (previewRequestSeqRef.current[nextPath] !== requestId) return;
