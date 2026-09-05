@@ -13,7 +13,13 @@ function formatCompactionCount(count?: number) {
   if (value <= 0) {
     return "";
   }
-  return `compacted ${value} ${value === 1 ? "time" : "times"}`;
+  if (value === 1) {
+    return "compacted once";
+  }
+  if (value === 2) {
+    return "compacted twice";
+  }
+  return `compacted ${value} times`;
 }
 
 function formatTokenNumber(value?: number) {
