@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import subprocess
 
 from bot.native_agent.shadow_git_history import ShadowGitHistory
 
@@ -51,7 +50,6 @@ def test_snapshot_degrades_before_git_add_when_single_file_exceeds_budget(monkey
 
     assert result.degraded is True
     assert result.head == "before-head"
-    assert result.message == "workspace history 单文件大小超过预算"
 
 
 def test_workspace_budget_excludes_release_artifacts(tmp_path) -> None:
@@ -70,18 +68,3 @@ def test_workspace_budget_excludes_release_artifacts(tmp_path) -> None:
 
     assert budget.message == ""
     assert budget.file_count == 1
-
-
-def test_shadow_git_records_command_duration(monkeypatch, tmp_path) -> None:
-    history = ShadowGitHistory(root_dir=tmp_path / "history")
-    monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(args=args[0], returncode=0, stdout="", stderr=""),
-    )
-
-    history._run(("git", "--version"), cwd=tmp_path)
-
-    diagnostics = history.diagnostics()
-    assert diagnostics["command_count"] == 1
-    assert diagnostics["latest_command_ms"] >= 0

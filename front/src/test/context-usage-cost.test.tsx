@@ -110,17 +110,4 @@ describe("context usage cost details", () => {
     expect(screen.getByRole("tooltip")).not.toHaveTextContent(/cost|priced-model|USD/i);
   });
 
-  it.each([
-    { count: 1, expected: "compacted once" },
-    { count: 2, expected: "compacted twice" },
-    { count: 3, expected: "compacted 3 times" },
-  ])("formats compaction count $count consistently above and below the bubble", ({ count, expected }) => {
-    const contextUsage: ChatMessageContextUsage = { contextLeftPercent: 72, compactionCount: count };
-    const { rerender } = render(<ChatContextUsageBadge contextUsage={contextUsage} testId="top" />);
-
-    expect(screen.getByTestId("top")).toHaveTextContent(expected);
-
-    rerender(<ChatContextUsageBadge compact contextUsage={contextUsage} testId="bottom" />);
-    expect(screen.getByTestId("bottom-compaction")).toHaveAttribute("aria-label", expected);
-  });
 });

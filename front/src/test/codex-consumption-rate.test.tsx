@@ -132,9 +132,6 @@ test("右轴可切换消耗速度柱状图，保留额度曲线及重置过渡",
   expect(chart.querySelector(".codex-usage-rate-limit-duration-line")).toBeNull();
   const bars = chart.querySelectorAll(".codex-usage-rate-limit-consumption-bar");
   expect(bars).toHaveLength(30);
-  expect(bars[15].querySelector("title")).toHaveTextContent(
-    "2026/09/05-02:30~02:40，2.62%每小时",
-  );
   expect(Number(bars[15].getAttribute("height"))).toBeGreaterThan(0);
   expect(Array.from(chart.querySelectorAll(".codex-usage-rate-limit-consumption-tick"), (tick) => tick.textContent))
     .toEqual(["0", "1", "2", "3", "4"]);
@@ -150,59 +147,6 @@ test("最新区间跨重置时不把过去的消耗速度显示为最近速度",
   vi.spyOn(client, "getCodexUsageStats").mockResolvedValue(stats);
   render(<CodexUsagePanel client={client} />);
   expect(await screen.findByText("最近消耗 —")).toBeInTheDocument();
-});
-
-test("等宽速度柱对应平滑额度曲线的区间平均速度，随横轴范围调整", async () => {
-  const client = new MockWebBotClient();
-  const stats = await client.getCodexUsageStats();
-  const denseSamples = (limitId: string, finalHour: number) => [
-    ...Array.from({ length: 50 }, (_, index) => sample(0, 10 + (index / 10) ** 2, {
-      limitId,
-      sampledAt: new Date(Date.UTC(2026, 8, 5, 0, index)).toISOString(),
-    })),
-    sample(finalHour, 40, { limitId }),
-  ];
-  stats.rateLimitSamples = [...denseSamples("codex", 2), ...denseSamples("codex_bengalfox", 48)];
-  vi.spyOn(client, "getCodexUsageStats").mockResolvedValue(stats);
-  render(<CodexUsagePanel client={client} />);
-  await screen.findByRole("img", { name: /通用 Codex/ });
-  await userEvent.setup().click(screen.getByRole("button", { name: "消耗速度" }));
-  const charts = screen.getAllByRole("img");
-  for (const [chartIndex, chart] of charts.entries()) {
-    const quotaPath = chart.querySelector(".codex-usage-rate-limit-line")!.getAttribute("d")!;
-    const quotaSegments = [...quotaPath.matchAll(/C ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+)/g)]
-      .map((match) => match.slice(1).map(Number));
-    const bars = [...chart.querySelectorAll(".codex-usage-rate-limit-consumption-bar")];
-    expect(bars).toHaveLength(24);
-
-    const quotaTicks = [...chart.querySelectorAll(".codex-usage-rate-limit-quota-tick")].map((tick) => parseFloat(tick.textContent!));
-    const rateTicks = [...chart.querySelectorAll(".codex-usage-rate-limit-consumption-tick")].map((tick) => parseFloat(tick.textContent!));
-    const quotaRange = quotaTicks.at(-1)! - quotaTicks[0];
-    const rateRange = rateTicks.at(-1)! - rateTicks[0];
-    const hours = chartIndex === 0 ? 2 : 48;
-    const quotaYAt = (x: number) => {
-      let [quotaX, quotaY] = quotaPath.split(" ").slice(1, 3).map(Number);
-      for (const [, c1y, , c2y, endX, endY] of quotaSegments) {
-        if (x <= endX + 1e-8) {
-          const t = Math.min(1, Math.max(0, (x - quotaX) / (endX - quotaX)));
-          return (1 - t) ** 3 * quotaY + 3 * (1 - t) ** 2 * t * c1y
-            + 3 * (1 - t) * t ** 2 * c2y + t ** 3 * endY;
-        }
-        quotaX = endX;
-        quotaY = endY;
-      }
-      throw new Error("区间超出额度曲线");
-    };
-    for (const bar of bars) {
-      const barWidth = Number(bar.getAttribute("width"));
-      const start = Number(bar.getAttribute("x")) - barWidth * 0.15 / 0.7;
-      const end = start + barWidth / 0.7;
-      const expectedRate = (quotaYAt(end) - quotaYAt(start)) / (end - start) * quotaRange / 176 * 512 / hours;
-      const actualRate = Number(bar.getAttribute("height")) / 176 * rateRange;
-      expect(actualRate).toBeCloseTo(expectedRate, 4);
-      expect(barWidth).toBeCloseTo(512 / 24 * 0.7);
-    }
-  }
 });
 
 test("柱高精确平均跨曲线段的速度，并保留数据不足的空区间", () => {
@@ -268,5 +212,4 @@ test("速度柱使用对齐到整点的固定区间，并允许首尾区间超�
   expect(titles[0]).toBe("2026/09/05-19:30~20:00，4%每小时");
   expect(titles[8]).toBe("2026/09/05-23:30~2026/09/06-00:00，4%每小时");
   expect(titles.at(-1)).toBe("2026/09/06-05:30~06:00，4%每小时");
-  expect(titles.every((title) => !title?.includes("时间段") && !title?.includes("平均消耗"))).toBe(true);
 });

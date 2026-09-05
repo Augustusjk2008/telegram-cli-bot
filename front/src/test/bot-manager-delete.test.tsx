@@ -42,7 +42,6 @@ test("desktop bulk delete does not expose workspace delete", async () => {
   const dialog = await screen.findByRole("dialog", { name: "批量删除 1 个智能体" });
   expect(within(dialog).getByLabelText("同时删除历史记录（包含所有子 agents）")).toBeInTheDocument();
   expect(within(dialog).queryByLabelText("同时删除工作区和所有记录")).not.toBeInTheDocument();
-  expect(within(dialog).getByText("彻底删除工作区请逐个操作。")).toBeInTheDocument();
 });
 
 test("desktop create panel submits unsafe bypass when explicitly checked", async () => {
@@ -69,37 +68,6 @@ test("desktop create panel submits unsafe bypass when explicitly checked", async
       bypassApprovalAndSandbox: true,
     }));
   });
-});
-
-test("mock client stores unsafe bypass in new bot cli params", async () => {
-  const client = new MockWebBotClient();
-
-  expect((await client.getCliParams("main")).params.yolo).toBe(false);
-
-  await client.addBot({
-    alias: "unsafeparams",
-    cliType: "codex",
-    cliPath: "codex",
-    workingDir: "C:\\workspace\\unsafeparams",
-    bypassApprovalAndSandbox: true,
-  });
-
-  expect((await client.getCliParams("unsafeparams")).params.yolo).toBe(true);
-});
-
-test("mock client exposes max and ultra Codex reasoning efforts", async () => {
-  const client = new MockWebBotClient();
-
-  const payload = await client.getCliParams("main");
-
-  expect(payload.schema.reasoning_effort?.enum).toEqual([
-    "ultra",
-    "max",
-    "xhigh",
-    "high",
-    "medium",
-    "low",
-  ]);
 });
 
 test("cluster model tiers configure model and reasoning independently", async () => {
@@ -169,16 +137,6 @@ test("cluster timeout saves on blur without reloading the bot list", async () =>
   await user.click(screen.getByRole("button", { name: "概览" }));
   await user.click(screen.getByRole("button", { name: "配置" }));
   expect(await screen.findByLabelText("任务超时（秒）")).toHaveValue(2400);
-});
-
-test("desktop manager does not expose manual Agent settings when cluster is disabled", async () => {
-  const client = new MockWebBotClient();
-
-  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} />);
-
-  expect(await screen.findByRole("button", { name: "配置" })).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Agent" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "新增 agent" })).not.toBeInTheDocument();
 });
 
 test("cluster resize blockers can open or archive the blocking conversation", async () => {

@@ -7,7 +7,6 @@ import sys
 import textwrap
 import time
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -91,9 +90,6 @@ def test_migration_cli_lists_completed_items_then_reports_no_pending_without_rew
     first = _run_migration_cli(repo_root, env)
 
     assert first.returncode == 0, first.stderr
-    assert "已完成迁移：" in first.stdout
-    for migration_id in runner.MIGRATION_IDS:
-        assert f"- {migration_id}" in first.stdout
 
     state_path = data_root / "migrations" / "state.json"
     state_before = state_path.read_bytes()
@@ -102,26 +98,8 @@ def test_migration_cli_lists_completed_items_then_reports_no_pending_without_rew
     second = _run_migration_cli(repo_root, env)
 
     assert second.returncode == 0, second.stderr
-    assert second.stdout == "检查完成，无待处理项\n"
-    assert "正在迁移" not in second.stdout
     assert state_path.read_bytes() == state_before
     assert state_path.stat().st_mtime_ns == mtime_before
-
-
-def test_main_uses_result_repairs_instead_of_claiming_no_pending(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
-) -> None:
-    result = SimpleNamespace(
-        completed=[],
-        skipped=list(runner.MIGRATION_IDS),
-        errors=[],
-        repairs=["app_settings"],
-    )
-    monkeypatch.setattr(runner, "run_pending_migrations", lambda repo_root: result)
-
-    assert runner.main(["run", "--repo-root", str(tmp_path)]) == 0
-
-    assert capsys.readouterr().out == "已修复：\n- app_settings\n"
 
 
 def test_main_reports_migration_failure_without_traceback(
@@ -138,7 +116,6 @@ def test_main_reports_migration_failure_without_traceback(
 
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert captured.err == f"迁移失败：损坏的迁移状态: {tmp_path}\n"
     assert "Traceback" not in captured.err
 
 

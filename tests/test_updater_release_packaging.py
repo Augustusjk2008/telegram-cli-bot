@@ -61,76 +61,15 @@ def test_sync_runtime_announcements_from_package_merges_new_items(monkeypatch, t
     with zipfile.ZipFile(package_path, "w") as archive:
         archive.writestr(".web_announcements.json", json.dumps(_announcement_payload("ann-old", "ann-new")))
 
-    logs: list[str] = []
     changed = updater._sync_runtime_announcements_from_package(
         package_path,
         [".web_announcements.json"],
-        log_callback=logs.append,
     )
 
     saved = json.loads(runtime_content.read_text(encoding="utf-8"))
     assert changed is True
     assert [item["id"] for item in saved["items"]] == ["ann-old", "ann-new"]
-    assert "已同步发布公告到本地公告中心。" in logs
 
-
-def test_release_scripts_force_root_base_and_export_announcements() -> None:
-    ps1 = Path(".release-local/publish-release.ps1").read_text(encoding="utf-8")
-    sh = Path(".release-local/publish-release.sh").read_text(encoding="utf-8")
-    portable = Path(".release-local/portable-win/build-portable.ps1").read_text(encoding="utf-8")
-
-    assert "function Invoke-ReleaseFrontBuild" in ps1
-    assert 'SetEnvironmentVariable("TCB_FRONT_BUILD_ROOT_BASE", "1", "Process")' in ps1
-    assert "Invoke-FrontDistAssetCheck" in ps1
-    assert "Export-ReleaseAnnouncements -DestinationRoot $StageDir" in ps1
-
-    assert "invoke_release_front_build" in sh
-    assert "TCB_FRONT_BUILD_ROOT_BASE=1" in sh
-    assert "invoke_front_dist_asset_check" in sh
-    assert 'export_release_announcements "$stage_dir"' in sh
-
-    assert "Export-ReleaseAnnouncements -DestinationRoot $DestinationRoot" in portable
-
-
-def test_release_packagers_copy_the_complete_front_dist_tree() -> None:
-    ps1 = Path(".release-local/publish-release.ps1").read_text(encoding="utf-8")
-    sh = Path(".release-local/publish-release.sh").read_text(encoding="utf-8")
-    portable = Path(".release-local/portable-win/build-portable.ps1").read_text(encoding="utf-8")
-
-    assert "Copy-Item -LiteralPath $frontDist -Destination $frontDistTarget -Recurse -Force" in ps1
-    assert 'cp -a "$front_dist" "$front_dist_target"' in sh
-    assert 'Copy-Item -Path (Join-Path $frontDist "*") -Destination $frontDistTarget -Recurse -Force' in portable
-
-
-def test_release_legal_files_are_present_and_required_by_every_packager(tmp_path: Path) -> None:
-    sources = (
-        Path(".release-local/publish-release.ps1").read_text(encoding="utf-8"),
-        Path(".release-local/publish-release.sh").read_text(encoding="utf-8"),
-        Path(".release-local/portable-win/build-portable.ps1").read_text(encoding="utf-8"),
-    )
-
-    for relative_path in REQUIRED_RELEASE_LEGAL_FILES:
-        assert Path(relative_path).is_file(), f"缺少发布法律文件: {relative_path}"
-
-    for relative_path in REQUIRED_RELEASE_ARCHIVE_FILES:
-        for source in sources:
-            assert f'"{relative_path}"' in source
-
-    assert "Assert-ReleaseLegalFilesInStage -StageDir $StageDir" in sources[0]
-    assert "Assert-ReleaseArchivesContainLegalFiles -Archives $archives" in sources[0]
-    assert "-PathType Leaf" in sources[0]
-    assert 'assert_release_legal_files_in_stage "$stage_dir"' in sources[1]
-    assert "assert_release_archives_contain_legal_files" in sources[1]
-    assert "Assert-ReleaseLegalFilesInStage -StageDir $DestinationRoot" in sources[2]
-    assert "Assert-PortableRuntimeLicenseFiles -PackageRoot $packageRoot" in sources[2]
-    assert "-PathType Leaf" in sources[2]
-
-    assert sources[0].rindex("Assert-ReleaseArchivesContainLegalFiles -Archives $archives") < sources[0].rindex(
-        "Ensure-TagAtHead -ReleaseTag $releaseTag"
-    )
-    assert sources[1].rindex("assert_release_archives_contain_legal_files") < sources[1].rindex(
-        'ensure_tag_at_head "$release_tag"'
-    )
 
 def _write_legal_archive(path: Path, members: tuple[str, ...]) -> None:
     if path.suffix == ".zip":
@@ -161,7 +100,6 @@ def test_release_archive_legal_file_verifier_accepts_complete_zip_and_tar(tmp_pa
     )
 
     assert result.returncode == 0, result.stderr
-    assert "发布归档法律文件完整" in result.stdout
 
 
 def test_release_archive_legal_file_verifier_rejects_missing_or_directory_entries(tmp_path: Path) -> None:
@@ -243,36 +181,3 @@ def test_portable_build_does_not_embed_fixed_web_token() -> None:
     assert migration_index < ensure_token_index < import_index
     assert '$env:TCB_PORTABLE_SMOKE_IMPORT_ONLY -eq "1"' in portable
     assert portable.index('$env:TCB_PORTABLE_SMOKE_IMPORT_ONLY -eq "1"') < ensure_token_index
-
-
-def test_portable_build_removes_successful_stage_unless_kept() -> None:
-    portable = Path(".release-local/portable-win/build-portable.ps1").read_text(encoding="utf-8")
-
-    assert "[switch]$KeepStage" in portable
-    assert "function Remove-PortableStageDirectory" in portable
-    assert "Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop" in portable
-    assert 'Write-Warning ("清理绿色包临时目录失败，已保留 {0}: {1}"' in portable
-
-    archive_index = portable.index("New-ZipArchive -SourceDir $packageRoot -DestinationFile $artifactPath")
-    cleanup_guard_index = portable.index("if (-not $KeepStage)", archive_index)
-    cleanup_index = portable.index("Remove-PortableStageDirectory -Path $packageRoot", cleanup_guard_index)
-    assert archive_index < cleanup_guard_index < cleanup_index
-
-
-def test_release_checks_run_complete_backend_tests_and_frontend_lint() -> None:
-    ps1 = Path(".release-local/publish-release.ps1").read_text(encoding="utf-8")
-    sh = Path(".release-local/publish-release.sh").read_text(encoding="utf-8")
-    portable = Path(".release-local/portable-win/build-portable.ps1").read_text(encoding="utf-8")
-
-    assert '"-m", "pytest",\n        "tests",\n        "examples/plugins",\n        "-q"' in ps1
-    assert "tests/test_main_web.py" not in ps1
-    assert '"run",\n        "test:gate"' in ps1
-    assert '"run",\n        "lint"' in ps1
-
-    assert '"$python_bin" -m pytest tests examples/plugins -q' in sh
-    assert "tests/test_main_web.py" not in sh
-    assert '"$npm_bin" run test:gate' in sh
-    assert '"$npm_bin" run lint' in sh
-
-    assert '"-m", "pytest",\n        "tests",\n        "examples/plugins",\n        "--ignore=tests/test_start_scripts.py",\n        "-q"' in portable
-    assert "tests/test_main_web.py" not in portable

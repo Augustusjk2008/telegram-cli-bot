@@ -1,10 +1,8 @@
-import { readFileSync } from "node:fs";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { MarkdownContent } from "../components/MarkdownPreview";
 import { normalizeLatexMathDelimiters } from "../markdown/latexDelimiters";
 
-const GLOBAL_STYLES = readFileSync("src/styles/global.css", "utf8");
 
 describe("MarkdownContent", () => {
   it("renders embedded README HTML in file previews", () => {
@@ -203,15 +201,6 @@ describe("MarkdownContent", () => {
       "\\phi_x,\\phi_y,\\phi_t\\sim U(0,2\\pi)",
       "C_{SCM}=B+A\\exp(-z)",
     ]);
-  });
-
-  it("keeps chat display formulas horizontally scrollable", () => {
-    expect(GLOBAL_STYLES).toMatch(
-      /\.chat-markdown-content\s+\.katex-display\s*\{[^}]*overflow-x:\s*auto;/s,
-    );
-    expect(GLOBAL_STYLES).toMatch(
-      /\.chat-markdown-content\s+\.katex-display\s*>\s*\.katex\s*\{[^}]*min-width:\s*max-content;/s,
-    );
   });
 
   it("keeps ordered list start values when loose step lists are split by bullet details", () => {

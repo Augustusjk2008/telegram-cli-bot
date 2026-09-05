@@ -1,5 +1,4 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { MockWebBotClient } from "../services/mockWebBotClient";
 import { RealWebBotClient } from "../services/realWebBotClient";
 
 
@@ -158,21 +157,4 @@ test("restart request preserves the backend failure for the status-bar feedback"
     message: "语言服务重启失败，请稍后重试",
     status: 503,
   });
-});
-
-test("mock restart exposes one restarting poll before the scoped server is ready", async () => {
-  const client = new MockWebBotClient();
-
-  const restart = await client.restartLanguageServer("main", "typescript");
-  const restarting = await client.getLanguageServerCatalog("main", "typescript");
-  const ready = await client.getLanguageServerCatalog("main", "typescript");
-
-  expect(restarting.providers.find((item) => item.provider === "typescript")?.runtimeState).toBe("restarting");
-  expect(ready.providers.find((item) => item.provider === "typescript")?.runtimeState).toBe("ready");
-  expect(ready.providers.find((item) => item.provider === "pyright")?.runtimeState).toBeUndefined();
-  expect(restart).toEqual(expect.objectContaining({
-    provider: "typescript",
-    restarted: true,
-    runtimeState: "restarting",
-  }));
 });

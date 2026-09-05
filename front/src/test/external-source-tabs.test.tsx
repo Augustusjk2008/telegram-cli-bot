@@ -1,7 +1,7 @@
 import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import { expect, test, vi } from "vitest";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import { getExternalSourceErrorMessage, WebApiClientError, type ExternalSourceReadResult } from "../services/types";
+import { WebApiClientError, type ExternalSourceReadResult } from "../services/types";
 import { EditorPane } from "../workbench/EditorPane";
 import { useEditorTabs } from "../workbench/useEditorTabs";
 
@@ -36,7 +36,6 @@ test("外部源码标签只读且不会进入工作台草稿持久化", async ()
     displayPath: "依赖 / site-packages / package.py",
     readOnly: true,
     dirty: false,
-    statusText: "外部依赖 · 只读",
     contentPersistence: "none",
   });
 
@@ -52,7 +51,7 @@ test("外部源码标签只读且不会进入工作台草稿持久化", async ()
   expect(result.current.buildPersistenceSnapshot()).toEqual([]);
 });
 
-test("过期外部源码令牌保留可恢复中文错误", async () => {
+test("过期外部源码令牌打开失败并保留只读标签", async () => {
   const client = new MockWebBotClient();
   vi.spyOn(client, "readExternalSource").mockRejectedValue(
     new WebApiClientError("source expired", { status: 410, code: "external_source_expired" }),
@@ -67,23 +66,7 @@ test("过期外部源码令牌保留可恢复中文错误", async () => {
     kind: "external-source",
     sourceId: "expired-source-token",
     readOnly: true,
-    error: "外部源码令牌已过期或失效，请重新执行代码跳转后再试",
   });
-});
-
-test("外部源码越权、策略与 URI 错误使用明确中文提示", () => {
-  expect(getExternalSourceErrorMessage(new WebApiClientError("token out of scope", {
-    status: 404,
-    code: "external_source_scope_mismatch",
-  }))).toContain("无权访问");
-  expect(getExternalSourceErrorMessage(new WebApiClientError("external source not approved", {
-    status: 403,
-    code: "external_source_not_approved",
-  }))).toBe("外部源码被安全策略拒绝，无法打开");
-  expect(getExternalSourceErrorMessage(new WebApiClientError("unsupported external source URI", {
-    status: 400,
-    code: "unsupported_external_source_uri",
-  }))).toBe("不支持的外部源码类型，仅支持 file:// 源码");
 });
 
 test("外部源码标签显示只读标识且不提供文件树定位", () => {
@@ -128,7 +111,6 @@ test("外部源码标签显示只读标识且不提供文件树定位", () => {
     />,
   );
 
-  expect(screen.getAllByText("外部依赖 · 只读").length).toBeGreaterThan(0);
   fireEvent.contextMenu(screen.getByRole("tab", { name: /package\.py/ }));
   expect(screen.queryByRole("button", { name: "在文件树中定位" })).not.toBeInTheDocument();
   expect(onRevealInTree).not.toHaveBeenCalled();

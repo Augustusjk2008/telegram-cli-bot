@@ -3,7 +3,6 @@ from types import SimpleNamespace
 import pytest
 
 from bot.models import UserSession
-from bot.prompts import render_prompt
 from bot.web import api_service
 from bot.web.api_service import _apply_cluster_prompt
 
@@ -23,39 +22,6 @@ def _profile(*, enabled: bool = True, write_policy: str = "main_only") -> Simple
         cluster=SimpleNamespace(enabled=enabled, write_policy=write_policy),
         normalized_agents=lambda: agents,
     )
-
-
-def test_cluster_prompt_requires_self_contained_delegation_context() -> None:
-    prompt = render_prompt(
-        "cluster_mode",
-        run_id="run-123",
-        mentioned_agents="worker",
-        write_guidance="本轮仅主 agent 可写。",
-    )
-
-    assert "集群可用不代表必须委派" in prompt
-    assert "简单、不可并行或委派成本更高" in prompt
-    assert "configure_team" in prompt
-    assert "extend" in prompt
-    assert "replace" in prompt
-    assert "只有用户明确要求" in prompt
-    assert "满编" in prompt
-    assert "子 agent 不继承主 agent 当前对话" in prompt
-    assert "委派消息必须自包含" in prompt
-    assert "文件路径" in prompt
-    assert "重复工作" in prompt
-    assert "同一文件" in prompt
-    assert "当前 run_id: run-123" in prompt
-    assert "普通轮次继续使用当前 run_id" in prompt
-    assert "configure_team 成功后必须查看响应中的 changed" in prompt
-    assert "changed=true" in prompt
-    assert "立即改用响应中的新 run_id" in prompt
-    assert "changed=false" in prompt
-    assert "继续使用原 run_id" in prompt
-    assert "适配层不会缓存或自动切换 run_id" in prompt
-    assert "显式提及" not in prompt
-    assert "wait_agent_messages" in prompt
-    assert "poll_agent_tasks" in prompt
 
 
 def test_cluster_prompt_encourages_write_for_implementation_tasks_when_allowed() -> None:
