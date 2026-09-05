@@ -109,6 +109,9 @@ export function codexConsumptionBars(
     ...curve.segments.filter((segment): segment is ConsumptionCurveSegment => segment !== null),
     ...curve.resetBridges.values(),
   ];
+  if (!segments.length) return bars;
+  const dataStart = Math.min(...segments.map((segment) => segment.start.x));
+  const dataEnd = Math.max(...segments.map((segment) => segment.end.x));
   const valueAt = (segment: ConsumptionCurveSegment | ConsumptionResetBridge, x: number) => {
     const t = (x - segment.start.x) / (segment.end.x - segment.start.x);
     const u = 1 - t;
@@ -132,8 +135,9 @@ export function codexConsumptionBars(
         + 4 * valueAt(segment, (left + right) / 2) + valueAt(segment, right));
       covered += right - left;
     }
-    if (covered >= width * (1 - 1e-9) && Number.isFinite(area)) {
-      bars.push({ start, end, rate: area / width });
+    const availableWidth = Math.max(0, Math.min(end, dataEnd) - Math.max(start, dataStart));
+    if (availableWidth > 0 && covered >= availableWidth * (1 - 1e-9) && Number.isFinite(area)) {
+      bars.push({ start, end, rate: Math.max(0, area / covered) });
     }
   }
   return bars;

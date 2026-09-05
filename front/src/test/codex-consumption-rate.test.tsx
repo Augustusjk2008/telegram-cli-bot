@@ -131,9 +131,9 @@ test("右轴可切换消耗速度柱状图，保留额度曲线及重置过渡",
   expect(chart.querySelector(".codex-usage-rate-limit-line")?.getAttribute("d")).toBe(quotaPath);
   expect(chart.querySelector(".codex-usage-rate-limit-duration-line")).toBeNull();
   const bars = chart.querySelectorAll(".codex-usage-rate-limit-consumption-bar");
-  expect(bars).toHaveLength(32);
+  expect(bars).toHaveLength(30);
   expect(bars[15].querySelector("title")).toHaveTextContent(
-    "时间段 2026-09-05 02:20:38 至 02:30:00 平均消耗 2.38 百分点/小时",
+    "2026/09/05-02:30~02:40，2.62%每小时",
   );
   expect(Number(bars[15].getAttribute("height"))).toBeGreaterThan(0);
   expect(Array.from(chart.querySelectorAll(".codex-usage-rate-limit-consumption-tick"), (tick) => tick.textContent))
@@ -173,7 +173,7 @@ test("等宽速度柱对应平滑额度曲线的区间平均速度，随横轴�
     const quotaSegments = [...quotaPath.matchAll(/C ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+)/g)]
       .map((match) => match.slice(1).map(Number));
     const bars = [...chart.querySelectorAll(".codex-usage-rate-limit-consumption-bar")];
-    expect(bars).toHaveLength(32);
+    expect(bars).toHaveLength(24);
 
     const quotaTicks = [...chart.querySelectorAll(".codex-usage-rate-limit-quota-tick")].map((tick) => parseFloat(tick.textContent!));
     const rateTicks = [...chart.querySelectorAll(".codex-usage-rate-limit-consumption-tick")].map((tick) => parseFloat(tick.textContent!));
@@ -200,7 +200,7 @@ test("等宽速度柱对应平滑额度曲线的区间平均速度，随横轴�
       const expectedRate = (quotaYAt(end) - quotaYAt(start)) / (end - start) * quotaRange / 176 * 512 / hours;
       const actualRate = Number(bar.getAttribute("height")) / 176 * rateRange;
       expect(actualRate).toBeCloseTo(expectedRate, 4);
-      expect(barWidth).toBeCloseTo(512 / 32 * 0.7);
+      expect(barWidth).toBeCloseTo(512 / 24 * 0.7);
     }
   }
 });
@@ -220,4 +220,53 @@ test("柱高精确平均跨曲线段的速度，并保留数据不足的空区�
   expect(codexConsumptionBars(split, 0, 1, 1)[0].rate).toBe(3.5);
   expect(codexConsumptionBars(curve, 0, 3, 3)).toHaveLength(2);
   expect(codexConsumptionBars(curve, 0, 2, 1)[0].rate).toBe(4);
+});
+
+test("消耗速度柱和坐标轴以 0 为下限", async () => {
+  const falling = codexConsumptionCurve([{
+    start: { x: 0, y: 8 }, end: { x: 2, y: 0 }, controls: [8, 8],
+  }], 1);
+  expect(codexConsumptionBars(falling, 0, 2, 2).map((bar) => bar.rate)).toEqual([0, 0]);
+
+  const client = new MockWebBotClient();
+  const stats = await client.getCodexUsageStats();
+  stats.rateLimitSamples = [sample(0, 20), sample(1, 10), sample(2, 5)];
+  vi.spyOn(client, "getCodexUsageStats").mockResolvedValue(stats);
+  render(<CodexUsagePanel client={client} />);
+  await screen.findByRole("img", { name: /通用 Codex/ });
+  await userEvent.setup().click(screen.getByRole("button", { name: "消耗速度" }));
+  const chart = screen.getByRole("img", { name: /通用 Codex.*消耗速度趋势/ });
+  const ticks = Array.from(
+    chart.querySelectorAll(".codex-usage-rate-limit-consumption-tick"),
+    (tick) => Number(tick.textContent),
+  );
+  expect(ticks[0]).toBe(0);
+  expect(ticks.every((tick) => tick >= 0)).toBe(true);
+  expect(screen.getByText("最近消耗 0 百分点/小时")).toBeInTheDocument();
+  expect(Array.from(
+    chart.querySelectorAll(".codex-usage-rate-limit-consumption-bar title"),
+    (title) => title.textContent,
+  ).every((title) => title?.endsWith("，0%每小时"))).toBe(true);
+});
+
+test("速度柱使用对齐到整点的固定区间，并允许首尾区间超出采样点", async () => {
+  const client = new MockWebBotClient();
+  const stats = await client.getCodexUsageStats();
+  stats.rateLimitSamples = [
+    sample(0, 10, { sampledAt: "2026-09-05T19:32:00+08:00" }),
+    sample(10, 50, { sampledAt: "2026-09-06T05:32:00+08:00" }),
+  ];
+  vi.spyOn(client, "getCodexUsageStats").mockResolvedValue(stats);
+  render(<CodexUsagePanel client={client} />);
+  await screen.findByRole("img", { name: /通用 Codex/ });
+  await userEvent.setup().click(screen.getByRole("button", { name: "消耗速度" }));
+  const chart = screen.getByRole("img", { name: /通用 Codex.*消耗速度趋势/ });
+  const titles = Array.from(
+    chart.querySelectorAll(".codex-usage-rate-limit-consumption-bar title"),
+    (title) => title.textContent,
+  );
+  expect(titles[0]).toBe("2026/09/05-19:30~20:00，4%每小时");
+  expect(titles[8]).toBe("2026/09/05-23:30~2026/09/06-00:00，4%每小时");
+  expect(titles.at(-1)).toBe("2026/09/06-05:30~06:00，4%每小时");
+  expect(titles.every((title) => !title?.includes("时间段") && !title?.includes("平均消耗"))).toBe(true);
 });
