@@ -1,0 +1,14 @@
+model,currency,input_per_million,cache_read_per_million,cache_write_per_million,output_per_million,cache_write_1h_per_million,source_url
+gpt-6-astra,USD,10,1,12.5,50,,https://developers.openai.com/api/docs/models/gpt-6-astra
+gpt-5.6-sol,USD,4,0.4,5,20,,https://developers.openai.com/api/docs/models/gpt-5.6-sol
+gpt-5.6-terra,USD,2,0.2,2.5,12,,https://developers.openai.com/api/docs/models/gpt-5.6-terra
+gpt-5.6-luna,USD,0.2,0.02,0.25,1.2,,https://developers.openai.com/api/docs/models/gpt-5.6-luna
+gpt-5.5,USD,5,0.5,5,30,,https://developers.openai.com/api/docs/models/gpt-5.5
+gpt-5.4,USD,2.5,0.25,2.5,15,,https://developers.openai.com/api/docs/models/gpt-5.4
+gpt-5.4-mini,USD,0.75,0.075,0.75,4.5,,https://developers.openai.com/api/docs/models/gpt-5.4-mini
+gpt-5.3-codex,USD,1.75,0.175,1.75,14,,https://developers.openai.com/api/docs/models/gpt-5.3-codex
+claude-opus-4-7,USD,5,0.5,6.25,25,10,https://platform.claude.com/docs/en/about-claude/pricing
+claude-opus-4-6,USD,5,0.5,6.25,25,10,https://platform.claude.com/docs/en/about-claude/pricing
+claude-sonnet-5,USD,2,0.2,2.5,10,4,https://platform.claude.com/docs/en/about-claude/pricing
+claude-sonnet-4-6,USD,3,0.3,3.75,15,6,https://platform.claude.com/docs/en/about-claude/pricing
+claude-haiku-4-5,USD,1,0.1,1.25,5,2,https://platform.claude.com/docs/en/about-claude/pricing

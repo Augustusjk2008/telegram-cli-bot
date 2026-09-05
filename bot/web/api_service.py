@@ -83,6 +83,7 @@ from bot.codex_usage import (
 )
 from bot.manager import MultiBotManager
 from bot.messages import msg
+from bot.model_pricing import estimate_usage_cost
 from bot.models import AgentProfile, BotProfile, EXECUTION_MODE_CLI, UserSession, public_native_agent_config
 from bot.native_agent import (
     NATIVE_AGENT_PROVIDER,
@@ -5539,6 +5540,23 @@ async def _stream_cli_chat(
                 previous_left_percent=session_context_left_percent,
                 compaction_count=session_compaction_count,
             )
+            cost_model = str((context_usage or {}).get("model") or turn_model).strip()
+            if cost_model and parsed_result.terminal_usage is not None:
+                estimated_cost = estimate_usage_cost(
+                    cost_model,
+                    parsed_result.terminal_usage,
+                    protocol=cli_type,
+                    scope="session" if cli_type == "codex" else "turn",
+                )
+                if estimated_cost is not None:
+                    context_usage = {
+                        **(context_usage or {
+                            "provider": cli_type,
+                            "model": cost_model,
+                            "session_id": native_session_id or parsed_result.session_id,
+                        }),
+                        "estimated_cost": estimated_cost,
+                    }
             complete_started_at = time.perf_counter()
             done_message = await asyncio.to_thread(
                 service.complete_turn,

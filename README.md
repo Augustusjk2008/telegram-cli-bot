@@ -226,6 +226,16 @@ WEB_API_TOKEN=<高强度随机口令>
 
 ## 高级配置
 
+### 模型费用估算
+
+上下文详情弹窗显示按 `bot/data/model_prices.csv` 计算的费用。CSV 单价单位为每百万 token，`currency` 为币种代码（默认表使用 USD）；普通输入、缓存读取、缓存写入和输出分别计价，reasoning 不重复计入输出。Claude 的 `cache_write_per_million` 对应 5 分钟缓存写入，可选 `cache_write_1h_per_million` 对应 1 小时；上游未区分缓存时长时使用普通缓存写入单价。
+
+模型按 CSV 的 `model` 精确匹配；Pi 的 `provider/model` 优先匹配完整 ID，再匹配模型名。新模型、别名或带日期的模型 ID 可直接新增一行。未匹配、价格表无效或用量不完整时不显示费用。也可通过 `.env` 的 `MODEL_PRICES_FILE` 指定自己的 CSV 路径；修改 CSV 后下一次计价自动读取，已保存消息保留当时的费用快照。
+
+Codex 显示上游报告的**会话累计估算费用**，统一按当前计价模型的单价计算，不做跨轮差分，各轮快照不可再相加。Claude 显示本次 CLI 调用的主模型用量费用，Pi 汇总本轮已完成的模型调用；集群子 agent 的费用保存在各自回复里，不额外汇入主回复。
+
+默认表按 2026-09-05 核对的常用模型官方标准单价填写，来源保存在 `source_url` 列。这里是按固定单价估算的 token 费用，不代表订阅套餐实际扣款；长上下文、加速模式、地区和工具调用等额外计费规则不自动套用，使用渠道价格时请自行调整 CSV。
+
 <details>
 <summary><strong>固定公网地址与 frp 反向代理</strong></summary>
 

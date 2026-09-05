@@ -75,6 +75,7 @@ class PiSessionRuntime:
         self._reader_error: BaseException | None = None
         self._stream_closed = False
         self._active_consumers = 0
+        self._dropped_usage_events = 0
         self.last_used_at = time.monotonic()
 
     @property
@@ -84,6 +85,10 @@ class PiSessionRuntime:
     @property
     def workspace_history_head(self) -> str:
         return self.state.workspace_history_head
+
+    @property
+    def dropped_usage_events(self) -> int:
+        return self._dropped_usage_events
 
     def is_running(self) -> bool:
         process = getattr(self.client, "process", None)
@@ -251,6 +256,7 @@ class PiSessionRuntime:
                 if not removed:
                     removed = self._discard_queued_item(_is_ordinary_stream_item)
                 if not removed:
+                    self._dropped_usage_events += int(_is_usage_stream_item(item))
                     return
             self._stream_queue.put_nowait(item)
             return
@@ -260,6 +266,8 @@ class PiSessionRuntime:
             return
         if not _is_low_priority_stream_item(item) and self._discard_queued_item(_is_low_priority_stream_item):
             self._stream_queue.put_nowait(item)
+            return
+        self._dropped_usage_events += int(_is_usage_stream_item(item))
 
     def _discard_queued_item(self, predicate: Callable[[_StreamItem], bool]) -> bool:
         retained: list[_StreamItem] = []
@@ -272,6 +280,7 @@ class PiSessionRuntime:
             self._stream_queue.task_done()
             if not removed and predicate(queued):
                 removed = True
+                self._dropped_usage_events += int(_is_usage_stream_item(queued))
                 continue
             retained.append(queued)
         for queued in retained:
@@ -691,6 +700,13 @@ def _is_terminal_stream_item(item: _StreamItem) -> bool:
     }:
         return True
     return _stream_item_has_error(item)
+
+
+def _is_usage_stream_item(item: _StreamItem) -> bool:
+    if _stream_event_type(item) != "message_end":
+        return False
+    message = item.get("message")
+    return isinstance(message, dict) and message.get("role") == "assistant"
 
 
 def _is_low_priority_stream_item(item: _StreamItem) -> bool:

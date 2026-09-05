@@ -1,5 +1,6 @@
 import { ChevronsDownUp } from "lucide-react";
 import type { ChatMessageContextUsage } from "../services/types";
+import { mapEstimatedCost } from "../utils/contextUsage";
 import { TouchHint } from "./TouchHint";
 
 function normalizedCompactionCount(count?: number) {
@@ -86,6 +87,26 @@ export function formatContextUsageDetails(contextUsage?: ChatMessageContextUsage
     contextUsage.sessionId ? `session: ${contextUsage.sessionId}` : "",
     formatCompactionCount(contextUsage.compactionCount),
   ].filter(Boolean);
+  const cost = mapEstimatedCost(contextUsage.estimatedCost);
+  if (cost) {
+    const scopeLabel = {
+      session: "会话累计估算费用",
+      turn: "本轮估算费用",
+      request: "最近一次调用估算费用",
+    }[cost.scope];
+    const amount = (value: number) => `${cost.currency} ${value.toLocaleString("en-US", {
+      useGrouping: false,
+      maximumSignificantDigits: 15,
+    })}`;
+    rows.push(
+      `${scopeLabel}：${amount(cost.total)}`,
+      `输入费用：${amount(cost.input)}`,
+      `缓存读费用：${amount(cost.cacheRead)}`,
+      `缓存写费用：${amount(cost.cacheWrite)}`,
+      `输出费用：${amount(cost.output)}`,
+      `计价模型：${cost.model}`,
+    );
+  }
   return rows.join("\n");
 }
 
@@ -102,9 +123,10 @@ export function formatTextContextUsage(
       ? `ctx ${formatPercent(leftPercent)}%`
       : `${formatPercent(leftPercent)}% left`
     : "";
+  const costText = mapEstimatedCost(contextUsage.estimatedCost) ? "费用详情" : "";
   if (options.compact) {
     const statusText = (contextUsage.statusText || "").replace(/\bcontext left\b/g, "left");
-    const baseText = percent || statusText;
+    const baseText = percent || statusText || costText;
     if (!baseText) {
       return null;
     }
@@ -120,8 +142,8 @@ export function formatTextContextUsage(
     : "";
   const statusText = (contextUsage.statusText || "").replace(/\bcontext left\b/g, "left");
   const baseText = options.preferLeft
-    ? [percent, usage].filter(Boolean).join(" · ") || statusText
-    : statusText || [percent, usage].filter(Boolean).join(" · ");
+    ? [percent, usage].filter(Boolean).join(" · ") || statusText || costText
+    : statusText || [percent, usage].filter(Boolean).join(" · ") || costText;
   if (!baseText) {
     return null;
   }

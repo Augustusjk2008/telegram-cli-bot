@@ -9,6 +9,7 @@ import threading
 import time
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 
@@ -727,6 +728,110 @@ async def test_stream_cli_chat_starts_capture_before_spawn_and_records_once(
     assert done["returncode"] == 0
     assert isinstance(done["session"], dict)
     assert capture.calls == ["usage-thread"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("cli_type", "has_context", "turn_model", "has_usage", "has_price"),
+    [
+        ("codex", True, "configured-model", True, True),
+        ("codex", False, "configured-model", True, True),
+        ("claude", True, "configured-model", True, True),
+        ("claude", False, "configured-model", True, True),
+        ("codex", False, "", True, True),
+        ("codex", True, "configured-model", True, False),
+        ("claude", False, "configured-model", True, False),
+        ("codex", True, "configured-model", False, True),
+    ],
+)
+async def test_stream_cli_chat_persists_terminal_estimated_cost_once_per_turn(
+    usage_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    cli_type: str,
+    has_context: bool,
+    turn_model: str,
+    has_usage: bool,
+    has_price: bool,
+):
+    profile = usage_manager.main_profile
+    profile.cli_type = cli_type
+    profile.cli_params.set_param(cli_type, "model", turn_model)
+    _, _, session = api_service.get_chat_session_for_alias(usage_manager, "main", 1001)
+    if cli_type == "claude":
+        session.claude_session_id = "cost-session"
+    context_usage = {
+        "provider": cli_type,
+        "model": "actual-model",
+        "session_id": "cost-session",
+        "context_window": 1000,
+        "context_left_percent": 80,
+    } if has_context else None
+    scope = "session" if cli_type == "codex" else "turn"
+    cost_model = "actual-model" if has_context else turn_model
+    cost = {
+        "model": cost_model,
+        "currency": "USD",
+        "scope": scope,
+        "total": 0.04,
+        "input": 0.01,
+        "cache_read": 0.01,
+        "cache_write": 0.0,
+        "output": 0.02,
+    }
+    estimate = Mock(return_value=cost if has_price else None)
+    monkeypatch.setattr(api_service, "estimate_usage_cost", estimate)
+    monkeypatch.setattr(api_service, "_start_codex_rate_limit_capture", AsyncMock(return_value=None))
+    monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: cli_type)
+    monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: ([cli_type], False))
+    monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: context_usage)
+    monkeypatch.setattr(api_service, "_reconcile_native_trace_before_completion", AsyncMock())
+    expected_calls = []
+
+    for index in range(2):
+        # Codex 第二轮依然传累计数值，不减掉上一轮。
+        usage = {"input_tokens": 100 * (index + 1), "output_tokens": 20 * (index + 1)}
+        if cli_type == "codex":
+            usage["cached_input_tokens"] = 40 * (index + 1)
+            prefix = [
+                {"type": "thread.started", "thread_id": "cost-session"},
+                {"type": "item.completed", "item": {"type": "assistant_message", "text": "done"}},
+            ]
+            terminal = {"type": "turn.completed"}
+        else:
+            usage.update(cache_read_input_tokens=40, cache_creation_input_tokens=10)
+            prefix = [{"type": "system", "subtype": "init", "session_id": "cost-session"}]
+            terminal = {"type": "result", "result": "done", "session_id": "cost-session"}
+        if has_usage:
+            terminal["usage"] = usage
+        process = _UsageProcess()
+        process.stdout = _StreamingStdout([
+            json.dumps(event) + "\n" for event in [*prefix, terminal, terminal]
+        ])
+        monkeypatch.setattr(api_service.subprocess, "Popen", lambda *_args, **_kwargs: process)
+
+        events = [
+            event async for event in api_service._stream_cli_chat(usage_manager, "main", 1001, "hello")
+        ]
+        done = next(event for event in events if event["type"] == "done")
+        if has_usage and cost_model:
+            expected_calls.append(call(cost_model, usage, protocol=cli_type, scope=scope))
+        expected_usage = context_usage
+        if has_usage and cost_model and has_price:
+            expected_usage = {
+                **(context_usage or {
+                    "provider": cli_type, "model": cost_model, "session_id": "cost-session",
+                }),
+                "estimated_cost": cost,
+            }
+        assert done["message"]["meta"].get("context_usage") == expected_usage
+        for event in events:
+            if event["type"] == "status":
+                assert "estimated_cost" not in (event.get("context_usage") or {})
+        saved_usage = await api_service._get_chat_history_service(session).get_latest_native_session_context_usage_async(
+            native_provider=cli_type, native_session_id="cost-session",
+        )
+        assert saved_usage == expected_usage
+        assert estimate.call_args_list == expected_calls
 
 
 @pytest.mark.parametrize(

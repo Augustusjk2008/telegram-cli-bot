@@ -4,13 +4,20 @@ CLI 模块测试
 直接导入 bot.cli 中的真实函数进行测试
 """
 
+import json
 import os
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from bot.cli import CodexJsonStreamParser, build_cli_command, parse_codex_json_line
+from bot.cli import (
+    ClaudeJsonStreamParser,
+    CliStreamParseResult,
+    CodexJsonStreamParser,
+    build_cli_command,
+    parse_codex_json_line,
+)
 from bot.cli_params import (
     CliParamsConfig,
     clamp_unsafe_cli_params,
@@ -128,6 +135,58 @@ class TestParseCodexJsonLine:
 
 
 class TestIncrementalCliParsers:
+    @pytest.mark.parametrize(
+        ("parser_type", "terminal_type", "last_terminal_type", "cache_usage"),
+        [
+            (CodexJsonStreamParser, "turn.completed", "turn.failed", {
+                "cached_input_tokens": 8,
+                "cache_write_input_tokens": 2,
+            }),
+            (ClaudeJsonStreamParser, "result", "result", {
+                "cache_read_input_tokens": 8,
+                "cache_creation_input_tokens": 4,
+                "cache_creation": {"ephemeral_5m_input_tokens": 1, "ephemeral_1h_input_tokens": 3},
+            }),
+        ],
+    )
+    def test_terminal_usage_keeps_last_valid_snapshot_only(
+        self, parser_type, terminal_type, last_terminal_type, cache_usage,
+    ):
+        parser = parser_type(raw_tail_max_bytes=96, final_text_max_bytes=1024)
+        usage = {"input_tokens": 100, "output_tokens": 20, **cache_usage}
+        parser.consume_line(json.dumps({"type": "assistant", "usage": usage}))
+        assert parser.result().terminal_usage is None
+
+        parser.consume_line(json.dumps({"type": terminal_type, "usage": usage}))
+        first_result = parser.result()
+        final_usage = {**usage, "input_tokens": 200, "output_tokens": 0}
+        terminal = json.dumps({
+            "type": last_terminal_type,
+            "usage": {**final_usage, "unrelated": {"large": "x" * 1000}},
+            "modelUsage": {"another-model": {"inputTokens": 9000}},
+        })
+        parser.consume_line(terminal)
+        parser.consume_line(terminal)
+        for invalid_usage in (
+            None, [], {}, {"input_tokens": 7},
+            {"input_tokens": True, "output_tokens": 1},
+            {"input_tokens": -1, "output_tokens": 1},
+            {"input_tokens": "7", "output_tokens": 1},
+            {**final_usage, next(iter(cache_usage)): "invalid"},
+        ):
+            parser.consume_line(json.dumps({"type": terminal_type, "usage": invalid_usage}))
+        parser.consume_line('{"type":')
+        parser.consume_line('[]')
+
+        assert first_result.terminal_usage == usage
+        assert parser.result().terminal_usage == final_usage
+        assert len(parser.result().raw_tail.encode("utf-8")) <= 96
+
+    def test_parse_result_terminal_usage_is_optional(self):
+        result = CliStreamParseResult("done", None, None, "", 0, False)
+
+        assert result.terminal_usage is None
+
     def test_codex_parser_keeps_final_text_and_bounded_raw_tail(self):
         parser = CodexJsonStreamParser(raw_tail_max_bytes=96, final_text_max_bytes=1024)
 
