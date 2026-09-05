@@ -16,8 +16,12 @@ const estimatedCost: ChatMessageEstimatedCost = {
 };
 
 describe("context usage cost mapping", () => {
-  it("passes snake_case costs through the shared mapper and accepts mapped camelCase data", () => {
+  it.each([
+    { provider: "codex", scope: "turn" },
+    { provider: "claude", scope: "session" },
+  ])("maps $provider costs without changing amounts and accepts mapped camelCase data", ({ provider, scope }) => {
     const mapped = mapChatMessageContextUsage({
+      provider,
       context_left_percent: 72,
       estimated_cost: {
         model: estimatedCost.model,
@@ -31,8 +35,10 @@ describe("context usage cost mapping", () => {
       },
     });
 
-    expect(mapped).toEqual({ contextLeftPercent: 72, estimatedCost });
+    expect(mapped).toEqual({ provider, contextLeftPercent: 72, estimatedCost: { ...estimatedCost, scope } });
+    expect(mapChatMessageContextUsage({ provider, contextLeftPercent: 72, estimatedCost })).toEqual(mapped);
     expect(mapChatMessageContextUsage(mapped)).toEqual(mapped);
+    expect(estimatedCost.scope).toBe("session");
   });
 
   it("drops incomplete or invalid costs while preserving existing context details", () => {
@@ -56,27 +62,26 @@ describe("context usage cost mapping", () => {
 
 describe("context usage cost details", () => {
   it.each([
-    { scope: "session", label: "会话累计估算费用", currency: "USD", compact: true, contextLeftPercent: 72 },
-    { scope: "turn", label: "本轮估算费用", currency: "CNY", compact: true, contextLeftPercent: undefined },
-    { scope: "request", label: "最近一次调用估算费用", currency: "USD", compact: false, contextLeftPercent: undefined },
-  ] as const)("shows $scope costs with small decimal amounts on click", ({ scope, label, currency, compact, contextLeftPercent }) => {
+    { scope: "session", currency: "USD", compact: true, contextLeftPercent: 72 },
+    { scope: "turn", currency: "CNY", compact: true, contextLeftPercent: undefined },
+    { scope: "request", currency: "USD", compact: false, contextLeftPercent: undefined },
+  ] as const)("shows a single estimate for $scope with small decimal amounts on click", ({ scope, currency, compact, contextLeftPercent }) => {
     render(<ChatContextUsageBadge compact={compact} contextUsage={{
       contextLeftPercent,
+      model: "gpt-test",
       estimatedCost: { ...estimatedCost, scope, currency },
     }} />);
 
     const badge = screen.getByRole("button");
-    expect(badge).toHaveTextContent(contextLeftPercent === undefined ? "费用详情" : "ctx 72%");
+    expect(badge).toHaveTextContent(contextLeftPercent === undefined ? "Estimated cost" : "ctx 72%");
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
     fireEvent.click(badge);
 
     const tooltip = screen.getByRole("tooltip");
-    expect(tooltip).toHaveTextContent(`${label}：${currency} 0.000000014`);
-    expect(tooltip).toHaveTextContent(`输入费用：${currency} 0.00000001`);
-    expect(tooltip).toHaveTextContent(`缓存读费用：${currency} 0.000000002`);
-    expect(tooltip).toHaveTextContent(`缓存写费用：${currency} 0`);
-    expect(tooltip).toHaveTextContent(`输出费用：${currency} 0.000000002`);
-    expect(tooltip).toHaveTextContent("计价模型：priced-model");
+    const costRows = tooltip.textContent!.split("\n").filter((row) => /cost/i.test(row));
+    expect(costRows).toEqual([`Estimated cost: ${currency} 0.000000014`]);
+    expect(tooltip).toHaveTextContent("model: gpt-test");
+    expect(tooltip).not.toHaveTextContent(/pricing model|priced-model/i);
     if (contextLeftPercent !== undefined) {
       expect(tooltip).toHaveTextContent("context left: 72%");
     }
@@ -87,8 +92,8 @@ describe("context usage cost details", () => {
       ...estimatedCost, total: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0,
     } })} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /费用详情/ }));
-    expect(screen.getByRole("tooltip")).toHaveTextContent("会话累计估算费用：USD 0");
+    fireEvent.click(screen.getByRole("button", { name: /Estimated cost/ }));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Estimated cost: USD 0");
   });
 
   it("keeps unknown costs hidden even for unvalidated component data", () => {
@@ -102,6 +107,6 @@ describe("context usage cost details", () => {
     rerender(<ChatContextUsageBadge contextUsage={{ ...contextUsage, contextLeftPercent: 72 }} />);
     fireEvent.click(screen.getByRole("button"));
     expect(screen.getByRole("tooltip")).toHaveTextContent("context left: 72%");
-    expect(screen.getByRole("tooltip")).not.toHaveTextContent(/费用|计价模型|USD/);
+    expect(screen.getByRole("tooltip")).not.toHaveTextContent(/cost|priced-model|USD/i);
   });
 });

@@ -5546,7 +5546,7 @@ async def _stream_cli_chat(
                     cost_model,
                     parsed_result.terminal_usage,
                     protocol=cli_type,
-                    scope="session" if cli_type == "codex" else "turn",
+                    scope="turn",
                 )
                 if estimated_cost is not None:
                     context_usage = {

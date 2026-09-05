@@ -13,20 +13,14 @@ function formatCompactionCount(count?: number) {
   if (value <= 0) {
     return "";
   }
-  if (value === 1) {
-    return "compacted once";
-  }
-  if (value === 2) {
-    return "compacted twice";
-  }
-  return `compacted ${value} times`;
+  return `compacted ${value} ${value === 1 ? "time" : "times"}`;
 }
 
 function formatTokenNumber(value?: number) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "";
   }
-  return Math.max(0, Math.floor(value)).toLocaleString("zh-CN");
+  return Math.max(0, Math.floor(value)).toLocaleString("en-US");
 }
 
 function clampPercent(value: number) {
@@ -72,6 +66,8 @@ export function formatContextUsageDetails(contextUsage?: ChatMessageContextUsage
     ? contextUsage.contextUsed
     : contextUsage.usedTokens;
   const leftPercent = contextLeftPercent(contextUsage);
+  const cost = mapEstimatedCost(contextUsage.estimatedCost, contextUsage.provider);
+  const model = contextUsage.model || cost?.model;
   const rows = [
     typeof leftPercent === "number" ? `context left: ${formatPercent(leftPercent)}%` : "",
     typeof contextUsage.contextWindow === "number" ? `context window: ${formatTokenNumber(contextUsage.contextWindow)}` : "",
@@ -82,30 +78,17 @@ export function formatContextUsageDetails(contextUsage?: ChatMessageContextUsage
     typeof contextUsage.outputTokens === "number" ? `output: ${formatTokenNumber(contextUsage.outputTokens)}` : "",
     typeof contextUsage.reasoningTokens === "number" ? `reasoning: ${formatTokenNumber(contextUsage.reasoningTokens)}` : "",
     contextUsage.usedDisplay && contextUsage.windowDisplay ? `display: ${contextUsage.usedDisplay} / ${contextUsage.windowDisplay}` : "",
-    contextUsage.model ? `model: ${contextUsage.model}` : "",
-    contextUsage.provider ? `provider: ${contextUsage.provider}` : "",
+    model ? `model: ${model}` : "",
+    contextUsage.provider ? `provider: ${contextUsage.provider.replace(/原生 (?:agent|智能体)/gi, "native agent")}` : "",
     contextUsage.sessionId ? `session: ${contextUsage.sessionId}` : "",
     formatCompactionCount(contextUsage.compactionCount),
   ].filter(Boolean);
-  const cost = mapEstimatedCost(contextUsage.estimatedCost);
   if (cost) {
-    const scopeLabel = {
-      session: "会话累计估算费用",
-      turn: "本轮估算费用",
-      request: "最近一次调用估算费用",
-    }[cost.scope];
-    const amount = (value: number) => `${cost.currency} ${value.toLocaleString("en-US", {
+    const amount = cost.total.toLocaleString("en-US", {
       useGrouping: false,
       maximumSignificantDigits: 15,
-    })}`;
-    rows.push(
-      `${scopeLabel}：${amount(cost.total)}`,
-      `输入费用：${amount(cost.input)}`,
-      `缓存读费用：${amount(cost.cacheRead)}`,
-      `缓存写费用：${amount(cost.cacheWrite)}`,
-      `输出费用：${amount(cost.output)}`,
-      `计价模型：${cost.model}`,
-    );
+    });
+    rows.push(`Estimated cost: ${cost.currency} ${amount}`);
   }
   return rows.join("\n");
 }
@@ -119,13 +102,11 @@ export function formatTextContextUsage(
   }
   const leftPercent = contextLeftPercent(contextUsage);
   const percent = typeof leftPercent === "number"
-    ? options.compact
-      ? `ctx ${formatPercent(leftPercent)}%`
-      : `${formatPercent(leftPercent)}% left`
+    ? options.compact ? `ctx ${formatPercent(leftPercent)}%` : `${formatPercent(leftPercent)}% left`
     : "";
-  const costText = mapEstimatedCost(contextUsage.estimatedCost) ? "费用详情" : "";
+  const costText = mapEstimatedCost(contextUsage.estimatedCost, contextUsage.provider) ? "Estimated cost" : "";
+  const statusText = (contextUsage.statusText || "").replace(/\bcontext left\b/gi, "left");
   if (options.compact) {
-    const statusText = (contextUsage.statusText || "").replace(/\bcontext left\b/g, "left");
     const baseText = percent || statusText || costText;
     if (!baseText) {
       return null;
@@ -140,7 +121,6 @@ export function formatTextContextUsage(
   const usage = contextUsage.usedDisplay && contextUsage.windowDisplay
     ? `${contextUsage.usedDisplay} / ${contextUsage.windowDisplay}`
     : "";
-  const statusText = (contextUsage.statusText || "").replace(/\bcontext left\b/g, "left");
   const baseText = options.preferLeft
     ? [percent, usage].filter(Boolean).join(" · ") || statusText || costText
     : statusText || [percent, usage].filter(Boolean).join(" · ") || costText;
@@ -183,7 +163,7 @@ export function ChatContextUsageBadge({ contextUsage, className = "", compact = 
     <TouchHint content={textContext.title}>
       <button
         type="button"
-        aria-label={`查看上下文详情：${textContext.text}`}
+        aria-label={`View context details: ${textContext.text}`}
         data-testid={testId}
         className={[baseClassName, className, "cursor-help text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)]"].filter(Boolean).join(" ")}
       >
@@ -192,7 +172,7 @@ export function ChatContextUsageBadge({ contextUsage, className = "", compact = 
             <>
               <span className="min-w-0 truncate pr-1">{textContext.text}</span>
               <span
-                aria-label={`已 compact ${compactionCount} 次`}
+                aria-label={formatCompactionCount(compactionCount)}
                 className="inline-flex shrink-0 items-center gap-0.5 border-l border-current/20 pl-1"
                 data-testid={testId ? `${testId}-compaction` : undefined}
               >

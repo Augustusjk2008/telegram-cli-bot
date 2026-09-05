@@ -766,7 +766,7 @@ async def test_stream_cli_chat_persists_terminal_estimated_cost_once_per_turn(
         "context_window": 1000,
         "context_left_percent": 80,
     } if has_context else None
-    scope = "session" if cli_type == "codex" else "turn"
+    scope = "turn"
     cost_model = "actual-model" if has_context else turn_model
     cost = {
         "model": cost_model,
@@ -788,10 +788,10 @@ async def test_stream_cli_chat_persists_terminal_estimated_cost_once_per_turn(
     expected_calls = []
 
     for index in range(2):
-        # Codex 第二轮依然传累计数值，不减掉上一轮。
-        usage = {"input_tokens": 100 * (index + 1), "output_tokens": 20 * (index + 1)}
+        # 同一会话后续轮次用量可以下降，各轮直接计价。
+        usage = {"input_tokens": 100 * (2 - index), "output_tokens": 20 * (2 - index)}
         if cli_type == "codex":
-            usage["cached_input_tokens"] = 40 * (index + 1)
+            usage["cached_input_tokens"] = 40 * (2 - index)
             prefix = [
                 {"type": "thread.started", "thread_id": "cost-session"},
                 {"type": "item.completed", "item": {"type": "assistant_message", "text": "done"}},

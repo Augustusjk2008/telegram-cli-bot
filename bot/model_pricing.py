@@ -71,7 +71,7 @@ def estimate_usage_cost(
     protocol: str,
     scope: str,
 ) -> dict[str, Any] | None:
-    """用上游报告的范围直接计价；不对会话累计快照做跨轮差分。"""
+    """按传入用量直接计价并标明范围，不跨轮累加或差分。"""
     if not isinstance(model, str) or not model.strip() or not isinstance(usage, Mapping):
         return None
     if scope not in {"session", "turn", "request"}:

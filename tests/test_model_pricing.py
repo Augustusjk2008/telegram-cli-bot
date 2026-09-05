@@ -21,14 +21,16 @@ def price_file(tmp_path, monkeypatch):
     return path
 
 
-def test_codex_prices_cumulative_snapshot_without_double_charging_cache_or_reasoning(price_file):
+def test_codex_prices_each_turn_without_double_charging_cache_or_reasoning(price_file):
     usage = dict(input_tokens=1_000_000, cached_input_tokens=600_000, cache_write_input_tokens=100_000,
                  output_tokens=100_000, reasoning_output_tokens=80_000)
-    cost = estimate_usage_cost("test-model", usage, protocol="codex", scope="session")
-    assert cost == dict(model="test-model", currency="USD", scope="session",
+    cost = estimate_usage_cost("test-model", usage, protocol="codex", scope="turn")
+    assert cost == dict(model="test-model", currency="USD", scope="turn",
                         input=0.6, cache_read=0.12, cache_write=0.25, output=1.0, total=1.97)
-    # 连续保存同一累计快照不产生计价器自身的累计或差分。
-    assert estimate_usage_cost("test-model", usage, protocol="codex", scope="session") == cost
+    # 相同用量重复计价不产生额外累计，下一轮用量下降仍独立计算。
+    assert estimate_usage_cost("test-model", usage, protocol="codex", scope="turn") == cost
+    next_usage = {key: value // 2 for key, value in usage.items()}
+    assert estimate_usage_cost("test-model", next_usage, protocol="codex", scope="turn")["total"] == 0.985
 
 
 def test_claude_prices_disjoint_cache_and_both_write_lifetimes(price_file):
@@ -50,20 +52,20 @@ def test_claude_prices_disjoint_cache_and_both_write_lifetimes(price_file):
     {"input_tokens": 3, "output_tokens": 1, "cached_input_tokens": 4},
 ])
 def test_incomplete_or_invalid_usage_has_no_estimate(price_file, usage):
-    assert estimate_usage_cost("test-model", usage, protocol="codex", scope="session") is None
+    assert estimate_usage_cost("test-model", usage, protocol="codex", scope="turn") is None
 
 
 def test_price_edits_apply_to_new_snapshots_only_and_missing_models_are_skipped(price_file):
     usage = {"input_tokens": 1_000_000, "output_tokens": 0}
-    before = estimate_usage_cost("test-model", usage, protocol="codex", scope="session")
+    before = estimate_usage_cost("test-model", usage, protocol="codex", scope="turn")
     old_stat = price_file.stat()
     price_file.write_text(price_file.read_text(encoding="utf-8-sig").replace(",USD,2,", ",USD,3,"), encoding="utf-8")
     os.utime(price_file, ns=(old_stat.st_atime_ns, old_stat.st_mtime_ns + 1_000_000))
-    assert estimate_usage_cost("test-model", usage, protocol="codex", scope="session")["total"] == 3
+    assert estimate_usage_cost("test-model", usage, protocol="codex", scope="turn")["total"] == 3
     assert before["total"] == 2
-    assert estimate_usage_cost("missing", usage, protocol="codex", scope="session") is None
+    assert estimate_usage_cost("missing", usage, protocol="codex", scope="turn") is None
     price_file.unlink()
-    assert estimate_usage_cost("test-model", usage, protocol="codex", scope="session") is None
+    assert estimate_usage_cost("test-model", usage, protocol="codex", scope="turn") is None
 
 
 @pytest.mark.parametrize("row", [
@@ -76,7 +78,7 @@ def test_bad_price_table_does_not_break_chat(price_file, row):
     header = price_file.read_text(encoding="utf-8-sig").splitlines()[0]
     price_file.write_text(header + "\n" + row, encoding="utf-8")
     assert estimate_usage_cost("test-model", {"input_tokens": 1000, "output_tokens": 1},
-                               protocol="codex", scope="session") is None
+                               protocol="codex", scope="turn") is None
 
 
 def test_pi_counts_finished_calls_once_and_skips_incomplete_turns(price_file):
@@ -113,6 +115,6 @@ def test_pi_prefers_provider_specific_price(price_file, provider):
 def test_default_csv_is_usable_and_small_charges_remain_visible(monkeypatch):
     monkeypatch.setattr(config, "MODEL_PRICES_FILE", str(DEFAULT_PRICES_PATH))
     cost = estimate_usage_cost("gpt-5.4", {"input_tokens": 1, "output_tokens": 0},
-                               protocol="codex", scope="session")
+                               protocol="codex", scope="turn")
     assert cost["currency"] == "USD"
     assert 0 < cost["total"] < 0.00001
