@@ -12,6 +12,7 @@ import type {
 } from "../../services/types";
 import type { WebBotClient } from "../../services/webBotClient";
 import { getErrorMessage } from "../../utils/errorMessage";
+import { codexConsumptionRates } from "../../utils/codexConsumptionRate";
 import "./CodexUsagePanel.css";
 
 type Props = {
@@ -58,8 +59,10 @@ function providerLabel(provider: CodexUsageProvider) {
 
 const percentValueFormat = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 1 });
 const durationDaysFormat = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 });
+const consumptionRateFormat = new Intl.NumberFormat("zh-CN", { maximumSignificantDigits: 3 });
 const RATE_LIMIT_AXIS_STEP_PERCENT = 10;
 const RATE_LIMIT_AXIS_INTERVALS = 4;
+type RateLimitSecondaryMetric = "duration" | "consumption";
 
 function formatPercentValue(value: number) {
   return `${percentValueFormat.format(value)}%`;
@@ -471,9 +474,11 @@ function smoothQuotaPath(
 function CodexRateLimitBucketChart({
   label,
   samples,
+  secondaryMetric,
 }: {
   label: string;
   samples: CodexRateLimitSample[];
+  secondaryMetric: RateLimitSecondaryMetric;
 }) {
   const orderedSamples = useMemo(
     () => [...samples].sort(compareSampledAt),
@@ -561,13 +566,34 @@ function CodexRateLimitBucketChart({
     plotWidth,
   );
   const durationPath = linearPath(points.map(({ x, durationY }) => ({ x, y: durationY })));
+  const consumptionRates = codexConsumptionRates(orderedSamples);
+  const latestRate = consumptionRates.at(-1) ?? null;
+  const latestRateText = latestRate === null ? "—" : `${consumptionRateFormat.format(latestRate)} 百分点/小时`;
+  const maxRate = consumptionRates.reduce<number>((max, rate) => Math.max(max, rate ?? 0), 0);
+  const rateStepBase = 10 ** Math.floor(Math.log10((maxRate || 1) / RATE_LIMIT_AXIS_INTERVALS));
+  const rateStep = ([1, 2, 5, 10].find((step) => step * rateStepBase * RATE_LIMIT_AXIS_INTERVALS >= maxRate) ?? 10) * rateStepBase;
+  const rateAxisMax = rateStep * RATE_LIMIT_AXIS_INTERVALS;
+  const consumptionCommands: string[] = [];
+  consumptionRates.forEach((rate, index) => {
+    if (rate === null) return;
+    const y = top + (1 - rate / rateAxisMax) * plotHeight;
+    // Each horizontal segment is the average over that observed interval.
+    // Start a new subpath after a reset or an unusable sample pair.
+    consumptionCommands.push(
+      `${consumptionRates[index - 1] === null ? "M" : "L"} ${points[index - 1].x} ${y}`,
+      `L ${points[index].x} ${y}`,
+    );
+  });
+  const showConsumption = secondaryMetric === "consumption";
+  const secondaryClass = showConsumption ? "consumption" : "duration";
+  const secondaryLabel = showConsumption ? "消耗速度" : "剩余时长";
   const latestRemaining = remainingPercent(latest);
   const latestDuration = formatRemainingDuration(remainingDurationMs(latest));
   const durationWindowDays = latest.windowMinutes / 1440;
   const durationDaysForPercent = (remaining: number) => (
     durationDaysFormat.format((remaining / 100) * durationWindowDays)
   );
-  const accessibleLabel = `${label} 剩余额度与剩余时长趋势，共 ${orderedSamples.length} 个样本，当前剩余 ${formatPercentValue(latestRemaining)}，剩余时长 ${latestDuration}`;
+  const accessibleLabel = `${label} 剩余额度与${secondaryLabel}趋势，共 ${orderedSamples.length} 个样本，当前剩余 ${formatPercentValue(latestRemaining)}，剩余时长 ${latestDuration}，最近消耗 ${latestRateText}`;
 
   return (
     <article className="codex-usage-rate-limit-group">
@@ -577,6 +603,11 @@ function CodexRateLimitBucketChart({
         </div>
         <div className="codex-usage-rate-limit-summary" aria-label="最新限额样本摘要">
           <strong>当前剩余 {formatPercentValue(latestRemaining)}</strong>
+          <span title={latestRate === null
+            ? "最近采样区间不足以计算消耗速度"
+            : `${formatServerLocalTime(orderedSamples[orderedSamples.length - 2].sampledAt)} 至 ${formatServerLocalTime(latest.sampledAt)} 的平均消耗速度`}>
+            最近消耗 {latestRateText}
+          </span>
           <span>剩余时长 {latestDuration}</span>
           <span>已用 {formatPercentValue(latest.usedPercent)}</span>
           <span>{formatWindow(latest.windowMinutes)}窗口</span>
@@ -585,11 +616,11 @@ function CodexRateLimitBucketChart({
       </div>
       <div className="codex-usage-rate-limit-chart">
         <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={accessibleLabel}>
-          <title>{label} 剩余额度与剩余时长趋势</title>
+          <title>{label} 剩余额度与{secondaryLabel}趋势</title>
           <desc>
-            按采样时间展示该额度桶的剩余额度与剩余时长；左右纵轴按当前数据范围同步缩放，
-            左轴为{formatPercentValue(axisBounds.min)}到{formatPercentValue(axisBounds.max)}，
-            右轴为{durationDaysForPercent(axisBounds.min)}天到{durationDaysForPercent(axisBounds.max)}天。
+            {showConsumption
+              ? `左轴为剩余额度，右轴为消耗速度（百分点/小时），从 0 到 ${consumptionRateFormat.format(rateAxisMax)}；虚线表示相邻采样间的平均速度，重置或数据不足处留空。`
+              : `按采样时间展示该额度桶的剩余额度与剩余时长；左右纵轴按当前数据范围同步缩放，左轴为${formatPercentValue(axisBounds.min)}到${formatPercentValue(axisBounds.max)}，右轴为${durationDaysForPercent(axisBounds.min)}天到${durationDaysForPercent(axisBounds.max)}天。`}
           </desc>
           <line
             className="codex-usage-rate-limit-quota-axis"
@@ -599,7 +630,7 @@ function CodexRateLimitBucketChart({
             y2={top + plotHeight}
           />
           <line
-            className="codex-usage-rate-limit-duration-axis"
+            className={`codex-usage-rate-limit-${secondaryClass}-axis`}
             x1={width - right}
             x2={width - right}
             y1={top}
@@ -614,14 +645,14 @@ function CodexRateLimitBucketChart({
             剩余额度
           </text>
           <text
-            className="codex-usage-rate-limit-duration-axis-title"
+            className={`codex-usage-rate-limit-${secondaryClass}-axis-title`}
             x={width - right}
             y={18}
             textAnchor="end"
           >
-            剩余时长
+            {showConsumption ? "消耗速度（百分点/小时）" : "剩余时长"}
           </text>
-          {axisTicks.map((remaining) => {
+          {axisTicks.map((remaining, index) => {
             const y = yForPercent(remaining);
             return (
               <g key={remaining} className="codex-usage-rate-limit-grid">
@@ -635,12 +666,14 @@ function CodexRateLimitBucketChart({
                   {remaining}%
                 </text>
                 <text
-                  className="codex-usage-rate-limit-duration-tick"
+                  className={`codex-usage-rate-limit-${secondaryClass}-tick`}
                   x={width - right + 10}
                   y={y + 4}
                   textAnchor="start"
                 >
-                  {durationDaysForPercent(remaining)} 天
+                  {showConsumption
+                    ? consumptionRateFormat.format(index * rateStep)
+                    : `${durationDaysForPercent(remaining)} 天`}
                 </text>
               </g>
             );
@@ -648,7 +681,11 @@ function CodexRateLimitBucketChart({
           {points.length > 1 ? (
             <>
               <path className="codex-usage-rate-limit-line" d={quotaPath} />
-              <path className="codex-usage-rate-limit-duration-line" d={durationPath} />
+              {showConsumption ? (
+                consumptionCommands.length > 0
+                  ? <path className="codex-usage-rate-limit-consumption-line" d={consumptionCommands.join(" ")} />
+                  : null
+              ) : <path className="codex-usage-rate-limit-duration-line" d={durationPath} />}
             </>
           ) : null}
           <text className="codex-usage-rate-limit-axis-label" x={left} y={height - 12} textAnchor="start">
@@ -661,11 +698,19 @@ function CodexRateLimitBucketChart({
           ) : null}
         </svg>
       </div>
+      {showConsumption ? (
+        <p className="codex-usage-rate-limit-note">
+          {consumptionCommands.length
+            ? "虚线为相邻采样间的平均速度；1 百分点/小时表示每小时消耗总额度的 1%。"
+            : "暂无可计算的消耗速度，需要同一额度周期内至少两个有效时间点。"}
+        </p>
+      ) : null}
     </article>
   );
 }
 
 function CodexRateLimitChart({ samples }: { samples: CodexRateLimitSample[] }) {
+  const [secondaryMetric, setSecondaryMetric] = useState<RateLimitSecondaryMetric>("duration");
   const limitGroups = useMemo(() => {
     const grouped = new Map<string, {
       limitId: string;
@@ -705,13 +750,31 @@ function CodexRateLimitChart({ samples }: { samples: CodexRateLimitSample[] }) {
 
   return (
     <section className="codex-usage-section" aria-labelledby="codex-rate-limit-title">
-      <h3 id="codex-rate-limit-title">Codex 剩余额度趋势</h3>
+      <div className="codex-usage-section-heading">
+        <h3 id="codex-rate-limit-title">Codex 剩余额度趋势</h3>
+        <div className="codex-usage-chart-controls" role="group" aria-label="图表右轴">
+          <span>右轴</span>
+          <div className="codex-usage-chart-toggle">
+            {(["duration", "consumption"] as const).map((metric) => (
+              <button
+                key={metric}
+                type="button"
+                aria-pressed={secondaryMetric === metric}
+                onClick={() => setSecondaryMetric(metric)}
+              >
+                {metric === "duration" ? "剩余时长" : "消耗速度"}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
       <div className="codex-usage-rate-limit-groups">
         {limitGroups.map(({ limitId, planType, samples: limitSamples }) => (
           <CodexRateLimitBucketChart
             key={`${limitId}:${planType || "empty"}`}
             label={limitSamples.length ? `${limitLabel(limitId)} · ${formatPlanType(planType)}` : limitLabel(limitId)}
             samples={limitSamples}
+            secondaryMetric={secondaryMetric}
           />
         ))}
       </div>

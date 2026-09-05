@@ -200,7 +200,54 @@
 }
 
 .codex-usage-rate-limit-heading {
-  gap: 1rem;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.codex-usage-chart-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.codex-usage-chart-toggle {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  background: var(--bg);
+}
+
+.codex-usage-chart-toggle button {
+  min-height: 1.75rem;
+  padding: 0.2rem 0.55rem;
+  border: 0;
+  border-radius: 0.2rem;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.codex-usage-chart-toggle button:hover,
+.codex-usage-chart-toggle button[aria-pressed="true"] {
+  background: var(--surface-strong);
+  color: var(--text);
+}
+
+.codex-usage-chart-toggle button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.codex-usage-rate-limit-note {
+  margin: 0.4rem 0 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
 }
 
 .codex-usage-rate-limit-groups {
@@ -224,9 +271,9 @@
   display: flex;
   flex: 0 1 auto;
   flex-wrap: wrap;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 0.2rem 0.5rem;
-  max-width: 32rem;
+  max-width: 100%;
   color: var(--muted);
   font-size: 0.75rem;
 }
@@ -264,6 +311,7 @@
 }
 
 .codex-usage-rate-limit-quota-axis-title,
+.codex-usage-rate-limit-consumption-axis-title,
 .codex-usage-rate-limit-duration-axis-title {
   font-size: 12px;
   font-weight: 700;
@@ -279,21 +327,26 @@
 }
 
 .codex-usage-rate-limit-duration-axis-title,
-.codex-usage-rate-limit-duration-tick {
+.codex-usage-rate-limit-duration-tick,
+.codex-usage-rate-limit-consumption-axis-title,
+.codex-usage-rate-limit-consumption-tick {
   fill: var(--accent-strong);
 }
 
-.codex-usage-rate-limit-duration-axis {
+.codex-usage-rate-limit-duration-axis,
+.codex-usage-rate-limit-consumption-axis {
   stroke: var(--accent-strong);
 }
 
 .codex-usage-rate-limit-quota-axis,
+.codex-usage-rate-limit-consumption-axis,
 .codex-usage-rate-limit-duration-axis {
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
 }
 
 .codex-usage-rate-limit-quota-tick,
+.codex-usage-rate-limit-consumption-tick,
 .codex-usage-rate-limit-duration-tick {
   font-size: 11px;
 }
@@ -307,7 +360,8 @@
   vector-effect: non-scaling-stroke;
 }
 
-.codex-usage-rate-limit-duration-line {
+.codex-usage-rate-limit-duration-line,
+.codex-usage-rate-limit-consumption-line {
   fill: none;
   stroke: var(--accent-strong);
   stroke-dasharray: 7 5;
