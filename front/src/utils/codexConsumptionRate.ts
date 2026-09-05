@@ -1,45 +1,47 @@
-import type { CodexRateLimitSample } from "../services/types";
+type CurvePoint = { x: number; y: number };
 
-const HOUR_MS = 60 * 60 * 1000;
+export type QuotaCurveSegment = {
+  start: CurvePoint;
+  end: CurvePoint;
+  // Cubic y controls; x controls are at one third and two thirds of the span.
+  controls?: [number, number];
+  reset?: boolean;
+};
 
-/** Percentage points per hour over each adjacent, chronologically ordered pair. */
-export function codexConsumptionRates(samples: CodexRateLimitSample[]): (number | null)[] {
-  const conflictingTimes = new Set<number>();
-  samples.forEach((current, index) => {
-    const next = samples[index + 1];
-    const timestamp = Date.parse(current.sampledAt);
-    if (next && timestamp === Date.parse(next.sampledAt) && (
-      current.usedPercent !== next.usedPercent
-      || Date.parse(current.resetsAt) !== Date.parse(next.resetsAt)
-      || current.windowMinutes !== next.windowMinutes
-    )) conflictingTimes.add(timestamp);
+type ConsumptionCurveSegment = {
+  start: CurvePoint;
+  control: CurvePoint;
+  end: CurvePoint;
+};
+
+/** Differentiate the displayed quota geometry, converting screen slope to percentage points/hour. */
+export function codexConsumptionCurve(quota: QuotaCurveSegment[], unitsPerSlope: number) {
+  let minRate = 0;
+  let maxRate = 0;
+  const segments = quota.map((segment): ConsumptionCurveSegment | null => {
+    const { start, end, controls, reset } = segment;
+    const width = end.x - start.x;
+    if (reset || width <= 0 || !Number.isFinite(unitsPerSlope) || unitsPerSlope <= 0) return null;
+    const slope = (end.y - start.y) / width;
+    const rates = controls
+      ? [controls[0] - start.y, controls[1] - controls[0], end.y - controls[1]]
+        .map((delta) => 3 * delta / width * unitsPerSlope)
+      : [slope, slope, slope].map((value) => value * unitsPerSlope);
+    if (![start.x, end.x, ...rates].every(Number.isFinite)) return null;
+    const [first, control, last] = rates;
+    const extrema = [first, last];
+    const denominator = first - 2 * control + last;
+    const t = denominator === 0 ? -1 : (first - control) / denominator;
+    if (t > 0 && t < 1) {
+      extrema.push((1 - t) ** 2 * first + 2 * (1 - t) * t * control + t ** 2 * last);
+    }
+    minRate = Math.min(minRate, ...extrema);
+    maxRate = Math.max(maxRate, ...extrema);
+    return {
+      start: { x: start.x, y: first },
+      control: { x: (start.x + end.x) / 2, y: control },
+      end: { x: end.x, y: last },
+    };
   });
-
-  return samples.map((current, index) => {
-    const previous = samples[index - 1];
-    if (!previous) return null;
-    const start = Date.parse(previous.sampledAt);
-    const end = Date.parse(current.sampledAt);
-    const previousReset = Date.parse(previous.resetsAt);
-    const currentReset = Date.parse(current.resetsAt);
-    if (
-      ![start, end, previousReset, currentReset].every(Number.isFinite)
-      || end <= start
-      || conflictingTimes.has(start)
-      || conflictingTimes.has(end)
-      || previousReset !== currentReset
-      || start >= previousReset
-      || end >= currentReset
-      || previous.windowMinutes !== current.windowMinutes
-      || previous.limitId !== current.limitId
-      || previous.planType?.trim().toLowerCase() !== current.planType?.trim().toLowerCase()
-      || ![previous.usedPercent, current.usedPercent].every((value) => (
-        Number.isFinite(value) && value >= 0 && value <= 100
-      ))
-      || current.usedPercent < previous.usedPercent
-    ) return null;
-
-    const rate = (current.usedPercent - previous.usedPercent) * HOUR_MS / (end - start);
-    return Number.isFinite(rate) ? rate : null;
-  });
+  return { segments, minRate, maxRate, latestRate: segments.at(-1)?.end.y ?? null };
 }
