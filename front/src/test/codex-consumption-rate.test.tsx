@@ -4,7 +4,7 @@ import { expect, test, vi } from "vitest";
 import { CodexUsagePanel } from "../components/admin/CodexUsagePanel";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { GENERAL_CODEX_RATE_LIMIT_ID, type CodexRateLimitSample } from "../services/types";
-import { codexConsumptionCurve, type QuotaCurveSegment } from "../utils/codexConsumptionRate";
+import { codexConsumptionBars, codexConsumptionCurve, type QuotaCurveSegment } from "../utils/codexConsumptionRate";
 
 function sample(hour: number, usedPercent: number, overrides: Partial<CodexRateLimitSample> = {}): CodexRateLimitSample {
   return {
@@ -65,16 +65,60 @@ test("重置连接、重复横坐标和无效时间范围不求导，正常平�
   ], 1);
   expect(curve.segments.slice(1)).toEqual([null, null]);
   expect(curve.latestRate).toBeNull();
+  expect(curve.resetBridges.size).toBe(0);
 });
 
-test("右轴可切换消耗速度，保留额度曲线且不跨重置连接速率", async () => {
+test("reset 过渡连续且不越过两侧速度，普通导数和摘要保持原值", () => {
+  const left: QuotaCurveSegment = { start: { x: 0, y: 0 }, end: { x: 1, y: 1 }, controls: [0, 0] };
+  const reset: QuotaCurveSegment = { start: left.end, end: { x: 2, y: -100 }, reset: true };
+  const right: QuotaCurveSegment = { start: reset.end, end: { x: 3, y: -91 }, controls: [-98, -95] };
+  const curve = codexConsumptionCurve([left, reset, right], 1);
+  const bridge = curve.resetBridges.get(2)!;
+  expect(bridge.start).toEqual(curve.segments[0]!.end);
+  expect(bridge.end).toEqual(curve.segments[2]!.start);
+  expect(3 * (bridge.controls[0].y - bridge.start.y) / (bridge.end.x - bridge.start.x)).toBe(6);
+  expect(3 * (bridge.end.y - bridge.controls[1].y) / (bridge.end.x - bridge.start.x)).toBe(6);
+  const values = Array.from({ length: 21 }, (_, index) => {
+    const t = index / 20;
+    return (1 - t) ** 3 * bridge.start.y + 3 * (1 - t) ** 2 * t * bridge.controls[0].y
+      + 3 * (1 - t) * t ** 2 * bridge.controls[1].y + t ** 3 * bridge.end.y;
+  });
+  expect(values[0]).toBe(3);
+  expect(values.at(-1)).toBe(6);
+  expect(values.every((value, index) => value >= 3 && value <= 6 && (!index || value >= values[index - 1]))).toBe(true);
+  expect(curve.segments[0]).toEqual(codexConsumptionCurve([left], 1).segments[0]);
+  expect(curve.segments[2]).toEqual(codexConsumptionCurve([right], 1).segments[0]);
+  expect(curve.latestRate).toBe(12);
+  expect(curve.maxRate).toBe(12);
+});
+
+test("连续 reset 可整体衔接，非 reset 无效间隔和单侧数据不外推", () => {
+  const left: QuotaCurveSegment = { start: { x: 0, y: 0 }, end: { x: 1, y: 3 } };
+  const resets: QuotaCurveSegment[] = [
+    { start: left.end, end: { x: 2, y: -10 }, reset: true },
+    { start: { x: 2, y: -10 }, end: { x: 3, y: -20 }, reset: true },
+  ];
+  const right: QuotaCurveSegment = { start: resets[1].end, end: { x: 4, y: -19 } };
+  const curve = codexConsumptionCurve([left, ...resets, right], 1);
+  const bridge = curve.resetBridges.get(3)!;
+  expect(bridge.controls.map((point) => point.y)).toEqual([3, 1]);
+  expect(bridge.start.x).toBe(1);
+  expect(bridge.end.x).toBe(3);
+  expect(codexConsumptionCurve([left, ...resets], 1).resetBridges.size).toBe(0);
+  expect(codexConsumptionCurve([...resets, right], 1).resetBridges.size).toBe(0);
+  expect(codexConsumptionCurve([left, { ...resets[0], reset: false, controls: [NaN, 0] }, resets[1], right], 1).resetBridges.size).toBe(0);
+  expect(codexConsumptionCurve([left, { ...resets[0], end: left.end }, resets[1], right], 1).resetBridges.size).toBe(0);
+  expect(codexConsumptionCurve([left, { ...resets[0], start: { x: 1.5, y: 3 } }, resets[1], right], 1).resetBridges.size).toBe(0);
+});
+
+test("右轴可切换消耗速度柱状图，保留额度曲线及重置过渡", async () => {
   const client = new MockWebBotClient();
   const stats = await client.getCodexUsageStats();
   stats.rateLimitSamples = [
     sample(0, 10), sample(2, 14),
     sample(3, 2, { resetsAt: "2026-09-17T00:00:00Z" }),
     sample(5, 8, { resetsAt: "2026-09-17T00:00:00Z" }),
-  ];
+  ].map((item) => ({ ...item, sampledAt: item.sampledAt.replace("Z", "+08:00") }));
   vi.spyOn(client, "getCodexUsageStats").mockResolvedValue(stats);
   render(<CodexUsagePanel client={client} />);
   const chart = await screen.findByRole("img", { name: /通用 Codex.*剩余额度与剩余时长趋势/ });
@@ -86,14 +130,17 @@ test("右轴可切换消耗速度，保留额度曲线且不跨重置连接速�
   expect(chart).toHaveAccessibleName(/剩余额度与消耗速度趋势/);
   expect(chart.querySelector(".codex-usage-rate-limit-line")?.getAttribute("d")).toBe(quotaPath);
   expect(chart.querySelector(".codex-usage-rate-limit-duration-line")).toBeNull();
-  const ratePath = chart.querySelector(".codex-usage-rate-limit-consumption-line")?.getAttribute("d");
-  expect(ratePath?.match(/M /g)).toHaveLength(2);
-  expect(ratePath).not.toMatch(/NaN|Infinity/);
+  const bars = chart.querySelectorAll(".codex-usage-rate-limit-consumption-bar");
+  expect(bars).toHaveLength(32);
+  expect(bars[15].querySelector("title")).toHaveTextContent(
+    "时间段 2026-09-05 02:20:38 至 02:30:00 平均消耗 2.38 百分点/小时",
+  );
+  expect(Number(bars[15].getAttribute("height"))).toBeGreaterThan(0);
   expect(Array.from(chart.querySelectorAll(".codex-usage-rate-limit-consumption-tick"), (tick) => tick.textContent))
     .toEqual(["0", "1", "2", "3", "4"]);
   await user.click(screen.getByRole("button", { name: "剩余时长" }));
   expect(chart.querySelector(".codex-usage-rate-limit-duration-line")).toBeInTheDocument();
-  expect(chart.querySelector(".codex-usage-rate-limit-consumption-line")).toBeNull();
+  expect(chart.querySelector(".codex-usage-rate-limit-consumption-bar")).toBeNull();
 });
 
 test("最新区间跨重置时不把过去的消耗速度显示为最近速度", async () => {
@@ -105,7 +152,7 @@ test("最新区间跨重置时不把过去的消耗速度显示为最近速度",
   expect(await screen.findByText("最近消耗 —")).toBeInTheDocument();
 });
 
-test("速度曲线逐段对应平滑额度的导数，并随横轴范围一起调整", async () => {
+test("等宽速度柱对应平滑额度曲线的区间平均速度，随横轴范围调整", async () => {
   const client = new MockWebBotClient();
   const stats = await client.getCodexUsageStats();
   const denseSamples = (limitId: string, finalHour: number) => [
@@ -121,45 +168,56 @@ test("速度曲线逐段对应平滑额度的导数，并随横轴范围一起�
   await screen.findByRole("img", { name: /通用 Codex/ });
   await userEvent.setup().click(screen.getByRole("button", { name: "消耗速度" }));
   const charts = screen.getAllByRole("img");
-  const segmentCounts: number[] = [];
   for (const [chartIndex, chart] of charts.entries()) {
     const quotaPath = chart.querySelector(".codex-usage-rate-limit-line")!.getAttribute("d")!;
-    const ratePath = chart.querySelector(".codex-usage-rate-limit-consumption-line")!.getAttribute("d")!;
     const quotaSegments = [...quotaPath.matchAll(/C ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+)/g)]
       .map((match) => match.slice(1).map(Number));
-    const rateSegments = [...ratePath.matchAll(/Q ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+)/g)]
-      .map((match) => match.slice(1).map(Number));
-    expect(rateSegments).toHaveLength(quotaSegments.length);
-    expect(ratePath.match(/M /g)).toHaveLength(1);
-    segmentCounts.push(rateSegments.length);
+    const bars = [...chart.querySelectorAll(".codex-usage-rate-limit-consumption-bar")];
+    expect(bars).toHaveLength(32);
 
     const quotaTicks = [...chart.querySelectorAll(".codex-usage-rate-limit-quota-tick")].map((tick) => parseFloat(tick.textContent!));
     const rateTicks = [...chart.querySelectorAll(".codex-usage-rate-limit-consumption-tick")].map((tick) => parseFloat(tick.textContent!));
     const quotaRange = quotaTicks.at(-1)! - quotaTicks[0];
     const rateRange = rateTicks.at(-1)! - rateTicks[0];
     const hours = chartIndex === 0 ? 2 : 48;
-    let [quotaX, quotaY] = quotaPath.split(" ").slice(1, 3).map(Number);
-    let rateY = Number(ratePath.split(" ")[2]);
-    for (const [index, [c1x, c1y, c2x, c2y, endX, endY]] of quotaSegments.entries()) {
-      const [controlX, controlY, rateEndX, rateEndY] = rateSegments[index];
-      expect(controlX).toBeCloseTo((quotaX + endX) / 2);
-      expect(rateEndX).toBe(endX);
-      // Compare the rendered derivative with a finite difference of the rendered quota cubic.
-      const yAt = (t: number) => (1 - t) ** 3 * quotaY + 3 * (1 - t) ** 2 * t * c1y
-        + 3 * (1 - t) * t ** 2 * c2y + t ** 3 * endY;
-      expect(c1x).toBeCloseTo(quotaX + (endX - quotaX) / 3);
-      expect(c2x).toBeCloseTo(quotaX + 2 * (endX - quotaX) / 3);
-      for (const t of [0.2, 0.5, 0.8]) {
-        const screenSlope = (yAt(t + 1e-5) - yAt(t - 1e-5)) / (2e-5 * (endX - quotaX));
-        const expectedRate = screenSlope * quotaRange / 176 * 512 / hours;
-        const renderedY = (1 - t) ** 2 * rateY + 2 * (1 - t) * t * controlY + t ** 2 * rateEndY;
-        const actualRate = rateTicks.at(-1)! - (renderedY - 32) / 176 * rateRange;
-        expect(actualRate).toBeCloseTo(expectedRate, 4);
+    const quotaYAt = (x: number) => {
+      let [quotaX, quotaY] = quotaPath.split(" ").slice(1, 3).map(Number);
+      for (const [, c1y, , c2y, endX, endY] of quotaSegments) {
+        if (x <= endX + 1e-8) {
+          const t = Math.min(1, Math.max(0, (x - quotaX) / (endX - quotaX)));
+          return (1 - t) ** 3 * quotaY + 3 * (1 - t) ** 2 * t * c1y
+            + 3 * (1 - t) * t ** 2 * c2y + t ** 3 * endY;
+        }
+        quotaX = endX;
+        quotaY = endY;
       }
-      quotaX = endX;
-      quotaY = endY;
-      rateY = rateEndY;
+      throw new Error("区间超出额度曲线");
+    };
+    for (const bar of bars) {
+      const barWidth = Number(bar.getAttribute("width"));
+      const start = Number(bar.getAttribute("x")) - barWidth * 0.15 / 0.7;
+      const end = start + barWidth / 0.7;
+      const expectedRate = (quotaYAt(end) - quotaYAt(start)) / (end - start) * quotaRange / 176 * 512 / hours;
+      const actualRate = Number(bar.getAttribute("height")) / 176 * rateRange;
+      expect(actualRate).toBeCloseTo(expectedRate, 4);
+      expect(barWidth).toBeCloseTo(512 / 32 * 0.7);
     }
   }
-  expect(segmentCounts[0]).toBeGreaterThan(segmentCounts[1]);
+});
+
+test("柱高精确平均跨曲线段的速度，并保留数据不足的空区间", () => {
+  // dy/dx = 12t² over x=2t: the two one-unit bins average to 1 and 7.
+  const curve = codexConsumptionCurve([{
+    start: { x: 0, y: 0 }, end: { x: 2, y: 8 }, controls: [0, 0],
+  }], 1);
+  expect(codexConsumptionBars(curve, 0, 2, 2)).toEqual([
+    { start: 0, end: 1, rate: 1 }, { start: 1, end: 2, rate: 7 },
+  ]);
+  const split = codexConsumptionCurve([
+    { start: { x: 0, y: 0 }, end: { x: 0.25, y: 0.5 } },
+    { start: { x: 0.25, y: 0.5 }, end: { x: 1, y: 3.5 } },
+  ], 1);
+  expect(codexConsumptionBars(split, 0, 1, 1)[0].rate).toBe(3.5);
+  expect(codexConsumptionBars(curve, 0, 3, 3)).toHaveLength(2);
+  expect(codexConsumptionBars(curve, 0, 2, 1)[0].rate).toBe(4);
 });

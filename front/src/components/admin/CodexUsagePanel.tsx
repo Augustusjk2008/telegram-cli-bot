@@ -12,7 +12,7 @@ import type {
 } from "../../services/types";
 import type { WebBotClient } from "../../services/webBotClient";
 import { getErrorMessage } from "../../utils/errorMessage";
-import { codexConsumptionCurve, type QuotaCurveSegment } from "../../utils/codexConsumptionRate";
+import { codexConsumptionBars, codexConsumptionCurve, type QuotaCurveSegment } from "../../utils/codexConsumptionRate";
 import "./CodexUsagePanel.css";
 
 type Props = {
@@ -118,6 +118,65 @@ function formatServerLocalTime(value: string) {
 function formatAxisTime(value: string) {
   const match = /^\d{4}-(\d{2}-\d{2})T(\d{2}:\d{2})/.exec(value);
   return match ? `${match[1]} ${match[2]}` : value;
+}
+
+function sampledAtOffsetMinutes(value: string) {
+  if (value.endsWith("Z")) return 0;
+  const match = /([+-])(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return null;
+  const minutes = Number(match[2]) * 60 + Number(match[3]);
+  return match[1] === "-" ? -minutes : minutes;
+}
+
+function formatSampleTimestamp(timestamp: number, samples: CodexRateLimitSample[], withSeconds: boolean) {
+  const closest = samples.reduce<{ distance: number; value: string } | null>((best, sample) => {
+    const sampleTimestamp = Date.parse(sample.sampledAt);
+    const distance = Math.abs(sampleTimestamp - timestamp);
+    return Number.isFinite(distance) && (!best || distance < best.distance)
+      ? { distance, value: sample.sampledAt }
+      : best;
+  }, null);
+  const offsetMinutes = closest ? sampledAtOffsetMinutes(closest.value) : null;
+  const date = new Date(timestamp + (offsetMinutes ?? 0) * 60 * 1000);
+  const read = (part: "year" | "month" | "day" | "hour" | "minute" | "second") => {
+    if (offsetMinutes !== null) {
+      if (part === "year") return date.getUTCFullYear();
+      if (part === "month") return date.getUTCMonth() + 1;
+      if (part === "day") return date.getUTCDate();
+      if (part === "hour") return date.getUTCHours();
+      if (part === "minute") return date.getUTCMinutes();
+      return date.getUTCSeconds();
+    }
+    if (part === "year") return date.getFullYear();
+    if (part === "month") return date.getMonth() + 1;
+    if (part === "day") return date.getDate();
+    if (part === "hour") return date.getHours();
+    if (part === "minute") return date.getMinutes();
+    return date.getSeconds();
+  };
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const day = `${read("year")}-${pad(read("month"))}-${pad(read("day"))}`;
+  const time = `${pad(read("hour"))}:${pad(read("minute"))}${withSeconds ? `:${pad(read("second"))}` : ""}`;
+  return { day, time };
+}
+
+function formatConsumptionPeriod(
+  startX: number,
+  endX: number,
+  minTimestamp: number,
+  timestampRange: number,
+  plotLeft: number,
+  plotWidth: number,
+  samples: CodexRateLimitSample[],
+) {
+  const timestampForX = (x: number) => minTimestamp + ((x - plotLeft) / plotWidth) * timestampRange;
+  const startTimestamp = timestampForX(startX);
+  const endTimestamp = timestampForX(endX);
+  const withSeconds = Math.round(startTimestamp / 60000) * 60000 !== Math.round(startTimestamp)
+    || Math.round(endTimestamp / 60000) * 60000 !== Math.round(endTimestamp);
+  const start = formatSampleTimestamp(Math.round(startTimestamp / 1000) * 1000, samples, withSeconds);
+  const end = formatSampleTimestamp(Math.round(endTimestamp / 1000) * 1000, samples, withSeconds);
+  return `${start.day} ${start.time} 至 ${start.day === end.day ? end.time : `${end.day} ${end.time}`}`;
 }
 
 function formatWindow(minutes: number) {
@@ -583,7 +642,10 @@ function CodexRateLimitBucketChart({
       ? (axisRange / plotHeight) * (plotWidth / timestampRange) * 3600000
       : 0,
   );
-  const { latestRate, minRate, maxRate } = consumptionCurve;
+  const consumptionBars = codexConsumptionBars(consumptionCurve, left, width - right);
+  const { latestRate } = consumptionCurve;
+  const minRate = Math.min(0, ...consumptionBars.map((bar) => bar.rate));
+  const maxRate = Math.max(0, ...consumptionBars.map((bar) => bar.rate));
   const latestRateText = latestRate === null ? "—" : `${consumptionRateFormat.format(latestRate)} 百分点/小时`;
   const rateRange = maxRate - minRate || 1;
   const rateStepBase = 10 ** Math.floor(Math.log10(rateRange / RATE_LIMIT_AXIS_INTERVALS));
@@ -591,18 +653,6 @@ function CodexRateLimitBucketChart({
   const rateAxisMin = Math.floor(minRate / rateStep) * rateStep;
   const rateAxisMax = Math.max(rateAxisMin + rateStep * RATE_LIMIT_AXIS_INTERVALS, Math.ceil(maxRate / rateStep) * rateStep);
   const yForRate = (rate: number) => top + (rateAxisMax - rate) / (rateAxisMax - rateAxisMin) * plotHeight;
-  const consumptionCommands: string[] = [];
-  consumptionCurve.segments.forEach((segment, index) => {
-    if (!segment) return;
-    const { start, control, end } = segment;
-    const previous = consumptionCurve.segments[index - 1];
-    if (!previous || previous.end.x !== start.x || Math.abs(previous.end.y - start.y) > rateRange * 1e-9) {
-      consumptionCommands.push(`M ${start.x} ${yForRate(start.y)}`);
-    }
-    consumptionCommands.push(
-      `Q ${control.x} ${yForRate(control.y)} ${end.x} ${yForRate(end.y)}`,
-    );
-  });
   const showConsumption = secondaryMetric === "consumption";
   const secondaryClass = showConsumption ? "consumption" : "duration";
   const secondaryLabel = showConsumption ? "消耗速度" : "剩余时长";
@@ -638,7 +688,7 @@ function CodexRateLimitBucketChart({
           <title>{label} 剩余额度与{secondaryLabel}趋势</title>
           <desc>
             {showConsumption
-              ? `左轴为剩余额度，右轴为消耗速度（百分点/小时），从 ${consumptionRateFormat.format(rateAxisMin)} 到 ${consumptionRateFormat.format(rateAxisMax)}；虚线为平滑额度曲线对时间的负导数，随横轴范围变化，重置或数据不足处留空。`
+              ? `左轴为剩余额度，右轴为消耗速度（百分点/小时），从 ${consumptionRateFormat.format(rateAxisMin)} 到 ${consumptionRateFormat.format(rateAxisMax)}；柱高为等时间区间内平滑额度曲线负导数的平均值，随横轴范围变化；重置间隔为过渡估计，数据不足处留空。`
               : `按采样时间展示该额度桶的剩余额度与剩余时长；左右纵轴按当前数据范围同步缩放，左轴为${formatPercentValue(axisBounds.min)}到${formatPercentValue(axisBounds.max)}，右轴为${durationDaysForPercent(axisBounds.min)}天到${durationDaysForPercent(axisBounds.max)}天。`}
           </desc>
           <line
@@ -699,12 +749,28 @@ function CodexRateLimitBucketChart({
           })}
           {points.length > 1 ? (
             <>
+              {showConsumption ? consumptionBars.map((bar) => (
+                <rect
+                  key={bar.start}
+                  className="codex-usage-rate-limit-consumption-bar"
+                  x={bar.start + (bar.end - bar.start) * 0.15}
+                  y={Math.min(yForRate(0), yForRate(bar.rate))}
+                  width={(bar.end - bar.start) * 0.7}
+                  height={Math.abs(yForRate(0) - yForRate(bar.rate))}
+                  rx={1.5}
+                >
+                  <title>{`时间段 ${formatConsumptionPeriod(
+                    bar.start,
+                    bar.end,
+                    minTimestamp,
+                    timestampRange,
+                    left,
+                    plotWidth,
+                    orderedSamples,
+                  )}\n平均消耗 ${consumptionRateFormat.format(bar.rate)} 百分点/小时`}</title>
+                </rect>
+              )) : <path className="codex-usage-rate-limit-duration-line" d={durationPath} />}
               <path className="codex-usage-rate-limit-line" d={quotaPath} />
-              {showConsumption ? (
-                consumptionCommands.length > 0
-                  ? <path className="codex-usage-rate-limit-consumption-line" d={consumptionCommands.join(" ")} />
-                  : null
-              ) : <path className="codex-usage-rate-limit-duration-line" d={durationPath} />}
             </>
           ) : null}
           <text className="codex-usage-rate-limit-axis-label" x={left} y={height - 12} textAnchor="start">
@@ -719,8 +785,8 @@ function CodexRateLimitBucketChart({
       </div>
       {showConsumption ? (
         <p className="codex-usage-rate-limit-note">
-          {consumptionCommands.length
-            ? "速度取平滑额度曲线的负导数，随横轴范围变化；额度重置处留空。"
+          {consumptionBars.length
+            ? "柱高表示等时间区间的平均消耗速度；重置间隔为过渡估计。"
             : "暂无可计算的消耗速度，需要有效时间范围内的连续额度曲线。"}
         </p>
       ) : null}

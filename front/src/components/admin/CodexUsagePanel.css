@@ -360,15 +360,23 @@
   vector-effect: non-scaling-stroke;
 }
 
-.codex-usage-rate-limit-duration-line,
-.codex-usage-rate-limit-consumption-line {
+.codex-usage-rate-limit-duration-line {
   fill: none;
   stroke: var(--accent-strong);
-  stroke-dasharray: 7 5;
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 2;
   vector-effect: non-scaling-stroke;
+  stroke-dasharray: 7 5;
+}
+
+.codex-usage-rate-limit-consumption-bar {
+  fill: var(--accent-strong);
+  fill-opacity: 0.45;
+}
+
+.codex-usage-rate-limit-consumption-bar:hover {
+  fill-opacity: 0.7;
 }
 
 @media (max-width: 640px) {
