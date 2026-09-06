@@ -1542,6 +1542,13 @@ export function DesktopWorkbench({
                       setSidebarView("files");
                       void fileTree.revealPath(path);
                     }}
+                    onSwitchFileView={(path, view) => {
+                      if (view === "preview") {
+                        void loadPreview(path, "preview");
+                        return;
+                      }
+                      void tabs.openFile(path);
+                    }}
                     onApplyHostEffects={runPluginHostEffects}
                     onClosePluginTab={(path) => {
                       tabs.closePath(path);

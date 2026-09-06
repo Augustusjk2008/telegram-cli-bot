@@ -1,5 +1,5 @@
 import { clsx } from "clsx";
-import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Maximize2, Minimize2, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Code2, Eye, Maximize2, Minimize2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FileEditorSurface } from "../components/FileEditorSurface";
 import { FilePreviewPane } from "../components/FilePreviewPane";
@@ -39,6 +39,7 @@ type Props = {
   onCloseTabsToRight: (path: string) => void;
   onReopenLastClosed: () => void | Promise<void>;
   onRevealInTree: (path: string) => void | Promise<void>;
+  onSwitchFileView?: (path: string, view: "preview" | "edit") => void | Promise<void>;
   onApplyHostEffects?: (effects: HostEffect[]) => Promise<void> | void;
   onClosePluginTab?: (path: string) => void | Promise<void>;
   onReopenPluginView?: (target: PluginOpenTarget) => Promise<void> | void;
@@ -122,6 +123,7 @@ export function EditorPane({
   onCloseTabsToRight,
   onReopenLastClosed,
   onRevealInTree,
+  onSwitchFileView,
   onApplyHostEffects,
   onClosePluginTab,
   onReopenPluginView,
@@ -271,6 +273,16 @@ export function EditorPane({
   const breadcrumbParts = buildEditorBreadcrumb(activeTab);
   const activePreviewPath = activeTab.kind === "file-preview" ? activeTab.sourcePath || "" : "";
   const activePreviewResult = activeTab.kind === "file-preview" ? activeTab.filePreview || null : null;
+  const activeFileViewPath = activeTab.kind === "file-preview"
+    ? activePreviewPath
+    : activeTab.kind === "file"
+      ? activeTab.path
+      : "";
+  const activeFileView = activeTab.kind === "file-preview"
+    ? "preview"
+    : activeTab.kind === "file"
+      ? "edit"
+      : null;
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -432,6 +444,21 @@ export function EditorPane({
               className="inline-flex h-7 w-7 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--workbench-focus-ring)]"
             >
               <X className="h-4 w-4" />
+            </button>
+          ) : null}
+          {activeFileView && activeFileViewPath && onSwitchFileView ? (
+            <button
+              type="button"
+              aria-label={activeFileView === "preview" ? "切换到编辑" : "切换到预览"}
+              title={activeFileView === "preview" ? "切换到编辑" : "切换到预览"}
+              onClick={() => void onSwitchFileView(
+                activeFileViewPath,
+                activeFileView === "preview" ? "edit" : "preview",
+              )}
+              className="inline-flex h-7 items-center gap-1 rounded border border-[var(--border)] px-2 text-[12px] text-[var(--text)] hover:bg-[var(--workbench-hover-bg)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--workbench-focus-ring)]"
+            >
+              {activeFileView === "preview" ? <Code2 className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+              {activeFileView === "preview" ? "编辑" : "预览"}
             </button>
           ) : null}
           {singlePluginTarget ? (
