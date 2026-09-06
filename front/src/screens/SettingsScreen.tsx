@@ -499,7 +499,6 @@ export function SettingsScreen({
           <h2 className="text-base font-semibold text-[var(--text)]">界面与阅读</h2>
 
           <div className="space-y-2">
-            <div className="text-sm font-medium text-[var(--text)]">界面主题</div>
             <ThemeDropdown value={themeName} onChange={handleThemeChange} />
           </div>
 

@@ -1146,7 +1146,7 @@ export function GitScreen({
                         </div>
                         {items.length === 0 ? (
                           <div className={emptyStateClass()}>
-                            当前分组暂无文件
+                            无
                           </div>
                         ) : (
                           <div className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)]">

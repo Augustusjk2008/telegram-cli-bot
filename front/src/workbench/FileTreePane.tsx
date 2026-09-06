@@ -1790,7 +1790,7 @@ export function FileTreePane({
             aria-label="跳转到绝对目录"
             value={externalPath}
             onChange={(event) => setExternalPath(event.target.value)}
-            placeholder="输入绝对目录路径"
+            placeholder="直接跳转到路径"
             className="min-w-0 flex-1 rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-[12px] text-[var(--text)] outline-none focus:border-[var(--accent)]"
           />
           <button

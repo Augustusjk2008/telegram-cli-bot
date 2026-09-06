@@ -676,7 +676,6 @@ function EditPanel({
     <div className="space-y-4">
       <div>
         <h2 className="text-base font-semibold">编辑 {bot.alias}</h2>
-        <p className="mt-1 text-sm text-[var(--muted)]">横屏版支持在右侧直接编辑和保存。</p>
       </div>
       {pendingWorkdirConflict ? (
         <WorkdirConflictNotice
