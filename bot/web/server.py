@@ -4045,7 +4045,14 @@ class WebApiServer:
         if field is None or field.name != "file":
             raise WebApiError(400, "missing_file", "请使用 multipart/form-data 并提供 file 字段")
         filename = field.filename or ""
-        result = await save_uploaded_file_from_chunks(self.manager, alias, self._chat_user_id(auth), filename, _iter_field_chunks(field))
+        result = await save_uploaded_file_from_chunks(
+            self.manager,
+            alias,
+            self._chat_user_id(auth),
+            filename,
+            _iter_field_chunks(field),
+            allow_external_paths=CAP_ADMIN_OPS in auth.capabilities,
+        )
         return _json({"ok": True, "data": result})
 
     async def upload_chat_attachment(self, request: web.Request) -> web.Response:
@@ -4076,6 +4083,7 @@ class WebApiServer:
             self._chat_user_id(auth),
             body.get("name", ""),
             parent_path=body.get("parent_path"),
+            allow_external_paths=CAP_ADMIN_OPS in auth.capabilities,
         )
         return _json({"ok": True, "data": data})
 
@@ -4114,7 +4122,16 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_VIEW_FILE_TREE)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        return _json({"ok": True, "data": reveal_directory_tree(self.manager, alias, self._chat_user_id(auth), str(body.get("path", "")))})
+        return _json({
+            "ok": True,
+            "data": reveal_directory_tree(
+                self.manager,
+                alias,
+                self._chat_user_id(auth),
+                str(body.get("path", "")),
+                allow_external_paths=CAP_ADMIN_OPS in auth.capabilities,
+            ),
+        })
 
     async def write_file_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_WRITE_FILES)
@@ -4128,6 +4145,7 @@ class WebApiServer:
             body.get("content", ""),
             expected_mtime_ns=body.get("expected_mtime_ns"),
             encoding=body.get("encoding"),
+            allow_external_paths=CAP_ADMIN_OPS in auth.capabilities,
         )
         return _json({"ok": True, "data": _serialize_file_version_fields(data)})
 
@@ -4142,6 +4160,7 @@ class WebApiServer:
             body.get("filename", ""),
             body.get("content", ""),
             parent_path=body.get("parent_path"),
+            allow_external_paths=CAP_ADMIN_OPS in auth.capabilities,
         )
         return _json({"ok": True, "data": _serialize_file_version_fields(data)})
 
@@ -4149,35 +4168,67 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_WRITE_FILES)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        data = rename_path(self.manager, alias, self._chat_user_id(auth), body.get("path", ""), body.get("new_name", ""))
+        data = rename_path(
+            self.manager,
+            alias,
+            self._chat_user_id(auth),
+            body.get("path", ""),
+            body.get("new_name", ""),
+            allow_external_paths=CAP_ADMIN_OPS in auth.capabilities,
+        )
         return _json({"ok": True, "data": data})
 
     async def copy_path_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_WRITE_FILES)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        data = copy_path(self.manager, alias, self._chat_user_id(auth), body.get("path", ""))
+        data = copy_path(
+            self.manager,
+            alias,
+            self._chat_user_id(auth),
+            body.get("path", ""),
+            allow_external_paths=CAP_ADMIN_OPS in auth.capabilities,
+        )
         return _json({"ok": True, "data": _serialize_file_version_fields(data)})
 
     async def move_path_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_WRITE_FILES)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        data = move_path(self.manager, alias, self._chat_user_id(auth), body.get("path", ""), body.get("target_parent_path", ""))
+        data = move_path(
+            self.manager,
+            alias,
+            self._chat_user_id(auth),
+            body.get("path", ""),
+            body.get("target_parent_path", ""),
+            allow_external_paths=CAP_ADMIN_OPS in auth.capabilities,
+        )
         return _json({"ok": True, "data": data})
 
     async def delete_path_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_WRITE_FILES)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        data = delete_path(self.manager, alias, self._chat_user_id(auth), body.get("path", ""))
+        data = delete_path(
+            self.manager,
+            alias,
+            self._chat_user_id(auth),
+            body.get("path", ""),
+            allow_external_paths=CAP_ADMIN_OPS in auth.capabilities,
+        )
         return _json({"ok": True, "data": data})
 
     async def download_file(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
         alias = self._manager_alias(request)
         filename = request.query.get("filename", "")
-        metadata = get_file_metadata(self.manager, alias, self._chat_user_id(auth), filename)
+        metadata = get_file_metadata(
+            self.manager,
+            alias,
+            self._chat_user_id(auth),
+            filename,
+            allow_external_paths=CAP_ADMIN_OPS in auth.capabilities,
+        )
         return web.FileResponse(
             path=metadata["path"],
             headers={"Content-Disposition": f'attachment; filename="{metadata["filename"]}"'},
@@ -4189,7 +4240,16 @@ class WebApiServer:
         filename = request.query.get("filename", "")
         mode = request.query.get("mode", "cat")
         lines = int(request.query.get("lines", "20"))
-        data = await asyncio.to_thread(read_file_content, self.manager, alias, self._chat_user_id(auth), filename, mode=mode, lines=lines)
+        data = await asyncio.to_thread(
+            read_file_content,
+            self.manager,
+            alias,
+            self._chat_user_id(auth),
+            filename,
+            mode=mode,
+            lines=lines,
+            allow_external_paths=CAP_ADMIN_OPS in auth.capabilities,
+        )
         return _json({"ok": True, "data": _serialize_file_version_fields(data)})
 
     async def resolve_file_plugin_target(self, request: web.Request) -> web.Response:

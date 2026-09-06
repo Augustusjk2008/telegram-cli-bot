@@ -26,6 +26,7 @@ import {
 } from "../utils/filePreview";
 import { inferFileEditorLanguageId } from "../utils/fileEditorLanguage";
 import { isAbortError } from "../utils/errorMessage";
+import { isAbsolutePathInput } from "../utils/pathInput";
 import { useLanguageServerStatus } from "../workbench/useLanguageServerStatus";
 
 type Props = {
@@ -33,6 +34,7 @@ type Props = {
   client?: WebBotClient;
   structureOnly?: boolean;
   canWriteFiles?: boolean;
+  canBrowseExternalPaths?: boolean;
   canOpenSystemFolder?: boolean;
   canUseInlineCompletion?: boolean;
 };
@@ -228,10 +230,12 @@ export function FilesScreen({
   client = new MockWebBotClient(),
   structureOnly = false,
   canWriteFiles = true,
+  canBrowseExternalPaths = false,
   canOpenSystemFolder = false,
   canUseInlineCompletion = false,
 }: Props) {
   const [currentPath, setCurrentPath] = useState("");
+  const [externalPath, setExternalPath] = useState("");
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [isVirtualRoot, setIsVirtualRoot] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -514,6 +518,32 @@ export function FilesScreen({
       await loadListing();
     } catch (err) {
       setError(err instanceof Error ? err.message : "返回工作目录失败");
+      setStatusText("");
+    }
+  };
+
+  const handleNavigateExternalPath = async () => {
+    const path = externalPath.trim();
+    if (!path || !isAbsolutePathInput(path)) {
+      setError("请输入绝对目录路径");
+      setStatusText("");
+      return;
+    }
+    try {
+      setError("");
+      setStatusText("");
+      if (!await closeCurrentEditorDocumentScope("切换目录")) {
+        return;
+      }
+      if (structureOnly) {
+        await loadListing(path);
+      } else {
+        await client.changeDirectory(botAlias, path);
+        await loadListing();
+      }
+      setExternalPath("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "跳转目录失败");
       setStatusText("");
     }
   };
@@ -1107,6 +1137,30 @@ export function FilesScreen({
           </div>
         ) : null}
       </header>
+
+      {canBrowseExternalPaths && !structureOnly && !isEditorOpen ? (
+        <form
+          className="flex items-center gap-2 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-4 py-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void handleNavigateExternalPath();
+          }}
+        >
+          <input
+            aria-label="跳转到绝对目录"
+            value={externalPath}
+            onChange={(event) => setExternalPath(event.target.value)}
+            placeholder="输入绝对目录路径"
+            className="min-w-0 flex-1 rounded border border-[var(--workbench-hairline)] bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--text)] outline-none focus:border-[var(--accent)]"
+          />
+          <button
+            type="submit"
+            className="rounded border border-[var(--workbench-hairline)] px-3 py-1.5 text-sm text-[var(--text)] hover:bg-[var(--workbench-hover-bg)]"
+          >
+            跳转
+          </button>
+        </form>
+      ) : null}
 
       {isEditorOpen ? (
         <FileEditorSurface

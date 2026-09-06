@@ -1082,6 +1082,7 @@ export function App() {
           client={client}
           structureOnly={structureOnly}
           canWriteFiles={canWriteCurrentBotFiles}
+          canBrowseExternalPaths={hasCapability(session, "admin_ops") && canOperateCurrentBot}
           canOpenSystemFolder={Boolean(session?.isLocalAdmin) && hasCapability(session, "admin_ops") && canOperateCurrentBot}
           canUseInlineCompletion={canOperateCurrentBot && canUseInlineCompletion}
         />
@@ -1261,6 +1262,7 @@ export function App() {
               client={client}
               structureOnly={structureOnly}
               canWriteFiles={canWriteCurrentBotFiles}
+              canBrowseExternalPaths={hasCapability(session, "admin_ops") && canOperateCurrentBot}
               canOpenSystemFolder={Boolean(session?.isLocalAdmin) && hasCapability(session, "admin_ops") && canOperateCurrentBot}
               canUseInlineCompletion={canOperateCurrentBot && canUseInlineCompletion}
               chatReadOnly={chatReadOnly || !canOperateCurrentBot}

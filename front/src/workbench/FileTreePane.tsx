@@ -18,6 +18,7 @@ import { createPortal } from "react-dom";
 import { FileNameDialog } from "../components/FileNameDialog";
 import { VirtualList } from "../components/virtual/VirtualList";
 import type { GitTreeDecorationKind } from "../services/types";
+import { isAbsolutePathInput } from "../utils/pathInput";
 import { type FileTreeNode, type UseFileTreeResult } from "./useFileTree";
 
 type Props = {
@@ -30,12 +31,14 @@ type Props = {
   onRequestDiff?: (path: string, absolutePath: string) => void | Promise<void>;
   onRequestUpload: (files: File[]) => Promise<void>;
   onRequestHome: () => Promise<void>;
+  onRequestNavigatePath?: (path: string) => Promise<void>;
   onRequestOpenSystemFolder?: () => Promise<void>;
   gitDecorations: Record<string, GitTreeDecorationKind>;
   onRefreshGitDecorations: () => Promise<void>;
   onRequestSetWorkdir: (path: string) => void;
   structureOnly?: boolean;
   canWriteFiles?: boolean;
+  canBrowseExternalPaths?: boolean;
   focused: boolean;
   onToggleFocus: () => void;
 };
@@ -924,12 +927,14 @@ export function FileTreePane({
   onRequestDiff,
   onRequestUpload,
   onRequestHome,
+  onRequestNavigatePath,
   onRequestOpenSystemFolder,
   gitDecorations,
   onRefreshGitDecorations,
   onRequestSetWorkdir,
   structureOnly = false,
   canWriteFiles = true,
+  canBrowseExternalPaths = false,
   focused,
   onToggleFocus,
 }: Props) {
@@ -949,6 +954,7 @@ export function FileTreePane({
   const [actionError, setActionError] = useState("");
   const [showEntryMetadata, setShowEntryMetadata] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [externalPath, setExternalPath] = useState("");
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const moreMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const moreMenuRef = useRef<HTMLDivElement | null>(null);
@@ -1385,6 +1391,28 @@ export function FileTreePane({
     }
   }
 
+  async function handleNavigateExternalPath() {
+    const path = externalPath.trim();
+    if (!path) {
+      setActionError("请输入绝对目录路径");
+      return;
+    }
+    if (!isAbsolutePathInput(path)) {
+      setActionError("请输入绝对目录路径");
+      return;
+    }
+    if (!onRequestNavigatePath) {
+      return;
+    }
+    setActionError("");
+    try {
+      await onRequestNavigatePath(path);
+      setExternalPath("");
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "跳转目录失败");
+    }
+  }
+
   async function handleOpenSystemFolder() {
     if (!onRequestOpenSystemFolder) {
       return;
@@ -1749,6 +1777,30 @@ export function FileTreePane({
           </div>
         ) : null}
       </div>
+
+      {canBrowseExternalPaths && !structureOnly ? (
+        <form
+          className="flex shrink-0 items-center gap-1 border-b border-[var(--border)] px-1.5 py-1"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void handleNavigateExternalPath();
+          }}
+        >
+          <input
+            aria-label="跳转到绝对目录"
+            value={externalPath}
+            onChange={(event) => setExternalPath(event.target.value)}
+            placeholder="输入绝对目录路径"
+            className="min-w-0 flex-1 rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-[12px] text-[var(--text)] outline-none focus:border-[var(--accent)]"
+          />
+          <button
+            type="submit"
+            className="shrink-0 rounded border border-[var(--border)] px-2 py-1 text-[12px] text-[var(--text)] hover:bg-[var(--workbench-hover-bg)]"
+          >
+            跳转
+          </button>
+        </form>
+      ) : null}
 
       <div
         data-testid="desktop-file-tree-scroll"

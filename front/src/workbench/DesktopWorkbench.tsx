@@ -142,6 +142,7 @@ type Props = {
   client?: WebBotClient;
   structureOnly?: boolean;
   canWriteFiles?: boolean;
+  canBrowseExternalPaths?: boolean;
   canOpenSystemFolder?: boolean;
   canUseInlineCompletion?: boolean;
   chatReadOnly?: boolean;
@@ -188,6 +189,7 @@ export function DesktopWorkbench({
   botAlias,
   structureOnly = false,
   canWriteFiles = true,
+  canBrowseExternalPaths = false,
   canOpenSystemFolder = false,
   canUseInlineCompletion = false,
   chatReadOnly = false,
@@ -1173,6 +1175,13 @@ export function DesktopWorkbench({
     await refreshWorkspaceChrome({ rootPath: workingDir });
   }
 
+  async function handleNavigateExternalPath(path: string) {
+    if (!structureOnly) {
+      await client.changeDirectory(botAlias, path);
+    }
+    await refreshWorkspaceChrome({ rootPath: path });
+  }
+
   async function handleOpenSystemFolder() {
     await client.openBotWorkdir(botAlias);
   }
@@ -1215,6 +1224,7 @@ export function DesktopWorkbench({
           }}
           onRequestUpload={handleUpload}
           onRequestHome={handleFileTreeHome}
+          onRequestNavigatePath={handleNavigateExternalPath}
           onRequestOpenSystemFolder={canOpenSystemFolder ? handleOpenSystemFolder : undefined}
           gitDecorations={gitDecorations}
           onRefreshGitDecorations={refreshGitDecorations}
@@ -1224,6 +1234,7 @@ export function DesktopWorkbench({
           }}
           structureOnly={structureOnly}
           canWriteFiles={canWriteFiles}
+          canBrowseExternalPaths={canBrowseExternalPaths}
           focused={focusedPane === "sidebar"}
           onToggleFocus={() => toggleFocusedPane("sidebar")}
         />
