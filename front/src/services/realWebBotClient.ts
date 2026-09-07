@@ -358,6 +358,9 @@ type RawBotSummary = {
   last_answer_terminal_at?: string;
   lastAnswerTerminalAt?: string;
   enabled?: boolean;
+  archived?: boolean;
+  is_archived?: boolean;
+  isArchived?: boolean;
   is_main?: boolean;
   can_operate?: boolean;
   canOperate?: boolean;
@@ -1549,6 +1552,7 @@ function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
     busyAgentCount: hasExplicitBusyAgentCount || resolvedBusyAgentIds.length > 0 ? busyAgentCount : 0,
     workingDir: raw.working_dir,
     lastActiveText: mapStatusText(status),
+    archived: Boolean(raw.archived ?? raw.is_archived ?? raw.isArchived),
   };
   const latestAnswerCompletedAt = raw.last_answer_completed_at ?? raw.lastAnswerCompletedAt;
   if (typeof latestAnswerCompletedAt === "string" && latestAnswerCompletedAt.trim()) {
@@ -6557,6 +6561,20 @@ export class RealWebBotClient implements WebBotClient {
 
   async stopBot(botAlias: string): Promise<BotSummary> {
     const data = await this.requestJson<{ bot: RawBotSummary }>(`/api/admin/bots/${encodeURIComponent(botAlias)}/stop`, {
+      method: "POST",
+    });
+    return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
+  }
+
+  async archiveBot(botAlias: string): Promise<BotSummary> {
+    const data = await this.requestJson<{ bot: RawBotSummary }>(`/api/admin/bots/${encodeURIComponent(botAlias)}/archive`, {
+      method: "POST",
+    });
+    return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
+  }
+
+  async unarchiveBot(botAlias: string): Promise<BotSummary> {
+    const data = await this.requestJson<{ bot: RawBotSummary }>(`/api/admin/bots/${encodeURIComponent(botAlias)}/unarchive`, {
       method: "POST",
     });
     return mapBotSummary(data.bot, Boolean(data.bot.is_processing));

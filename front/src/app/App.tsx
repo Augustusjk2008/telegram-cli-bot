@@ -201,12 +201,13 @@ export function sortBotsForSwitcher(bots: BotSummary[]) {
   });
 }
 
-function buildDisplayBots(
+export function buildDisplayBots(
   bots: BotSummary[],
   unreadBots: string[],
   botActivityOverrides: BotAgentActivityOverrides,
 ) {
-  return sortBotsForSwitcher(applyUnreadStatus(applyBotActivityOverrides(bots, botActivityOverrides), unreadBots));
+  const activeBots = bots.filter((bot) => isMainBot(bot) || bot.archived !== true);
+  return sortBotsForSwitcher(applyUnreadStatus(applyBotActivityOverrides(activeBots, botActivityOverrides), unreadBots));
 }
 
 function chatInstanceKeyFor(accountKey: string, alias: string | null) {
@@ -244,6 +245,7 @@ async function resolveVisibleBotSelection(
   } catch {
     return { bots: [], alias: null };
   }
+  visibleBots = visibleBots.filter((bot) => isMainBot(bot) || bot.archived !== true);
   const aliases = new Set(visibleBots.map((bot) => bot.alias));
   const preferredAlias = session.currentBotAlias || "";
   const alias = preferredAlias && aliases.has(preferredAlias)
@@ -312,9 +314,9 @@ export function App() {
     if (unreadBots.length === 0) {
       return false;
     }
-    const knownAliases = new Set(bots.map((bot) => bot.alias));
+    const knownAliases = new Set(displayBots.map((bot) => bot.alias));
     return unreadBots.some((alias) => knownAliases.has(alias));
-  }, [bots, unreadBots]);
+  }, [displayBots, unreadBots]);
   const effectiveLayoutMode = resolveEffectiveLayoutMode(viewMode, viewportWidth);
   const currentBotSummary = useMemo(() => {
     if (!currentBot) {
@@ -628,10 +630,11 @@ export function App() {
       return;
     }
 
-    if (currentBot && bots.some((bot) => bot.alias === currentBot)) {
+    const activeBots = bots.filter((bot) => isMainBot(bot) || bot.archived !== true);
+    if (currentBot && activeBots.some((bot) => bot.alias === currentBot)) {
       return;
     }
-    setCurrentBot(bots[0]?.alias || null);
+    setCurrentBot(activeBots[0]?.alias || null);
   }, [accountKey, bots, currentBot, isLoggedIn, showAdminCenter, showBotManager]);
 
   useEffect(() => {

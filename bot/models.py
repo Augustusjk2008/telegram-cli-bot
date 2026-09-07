@@ -490,6 +490,7 @@ class BotProfile:
     supported_execution_modes: List[str] = field(default_factory=lambda: ["cli"])
     default_execution_mode: str = "cli"
     native_agent: Dict[str, Any] = field(default_factory=dict)
+    archived: bool = False
 
     def ensure_cluster_slots(self) -> list[ClusterSlotStatus]:
         child_agents = [agent for agent in self.agents if agent.id != "main"]
@@ -526,6 +527,7 @@ class BotProfile:
             "cli_path": self.cli_path,
             "working_dir": self.working_dir,
             "enabled": self.enabled,
+            "archived": self.archived,
             "supported_execution_modes": supported_execution_modes,
             "default_execution_mode": default_execution_mode,
             "native_agent": normalize_native_agent_config(self.native_agent),
@@ -579,13 +581,15 @@ class BotProfile:
             data.get("supported_execution_modes", data.get("supportedExecutionModes")),
             data.get("default_execution_mode", data.get("defaultExecutionMode", "cli")),
         )
+        archived = bool(data.get("archived", False))
         
         profile = cls(
             alias=data["alias"],
             cli_type=normalize_cli_type_config(data.get("cli_type", CLI_TYPE)),
             cli_path=data.get("cli_path", CLI_PATH),
             working_dir=data.get("working_dir", WORKING_DIR),
-            enabled=data.get("enabled", True),
+            enabled=bool(data.get("enabled", True)) and not archived,
+            archived=archived,
             cli_params=cli_params,
             agents=agents,
             cluster=normalize_bot_cluster_config(data.get("cluster")),

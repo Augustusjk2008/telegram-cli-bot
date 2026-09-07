@@ -490,7 +490,7 @@ def _build_capabilities(is_main: bool) -> list[str]:
 def _build_run_status(manager: MultiBotManager, alias: str, profile: BotProfile) -> str:
     if alias == manager.main_profile.alias:
         return "configured"
-    return "configured" if profile.enabled else "stopped"
+    return "configured" if profile.enabled and not profile.archived else "stopped"
 
 
 def _build_agent_runtime_map(bot_id: int, user_id: int | None) -> dict[str, dict[str, Any]]:
@@ -591,6 +591,7 @@ def build_bot_summary(
         "default_execution_mode": profile.default_execution_mode,
         "native_agent": public_native_agent_config(effective_native_agent_config(profile.native_agent)),
         "working_dir": working_dir,
+        "archived": profile.archived,
         "prompt_presets": [dict(item) for item in profile.prompt_presets],
         "global_prompt_presets": app_settings.get_global_prompt_presets(manager.app_settings_file),
         "is_main": alias == manager.main_profile.alias,
@@ -6490,6 +6491,22 @@ async def start_managed_bot(manager: MultiBotManager, alias: str) -> dict[str, A
 
 async def stop_managed_bot(manager: MultiBotManager, alias: str) -> dict[str, Any]:
     await manager.stop_bot(alias)
+    return {"bot": build_bot_summary(manager, alias)}
+
+
+async def archive_managed_bot(manager: MultiBotManager, alias: str) -> dict[str, Any]:
+    try:
+        await manager.archive_bot(alias)
+    except ValueError as exc:
+        _raise(400, "invalid_bot_config", str(exc))
+    return {"bot": build_bot_summary(manager, alias)}
+
+
+async def unarchive_managed_bot(manager: MultiBotManager, alias: str) -> dict[str, Any]:
+    try:
+        await manager.unarchive_bot(alias)
+    except ValueError as exc:
+        _raise(400, "invalid_bot_config", str(exc))
     return {"bot": build_bot_summary(manager, alias)}
 
 

@@ -186,7 +186,7 @@ export function useBotManager({
   }
 
   async function toggleBot(bot: BotSummary) {
-    if (isMainBot(bot)) {
+    if (isMainBot(bot) || bot.archived) {
       return null;
     }
 
@@ -202,6 +202,48 @@ export function useBotManager({
       return nextBot;
     } catch (err) {
       setError(getErrorMessage(err, "更新智能体状态失败"));
+      return null;
+    } finally {
+      setSavingAction("");
+    }
+  }
+
+  async function archiveBot(bot: BotSummary) {
+    if (isMainBot(bot) || bot.archived) {
+      return null;
+    }
+
+    setSavingAction(`${bot.alias}:archive`);
+    setError("");
+    setNotice("");
+    try {
+      const archived = await client.archiveBot(bot.alias);
+      setNotice(`已归档 ${bot.alias}`);
+      await loadBots();
+      return archived;
+    } catch (err) {
+      setError(getErrorMessage(err, "归档智能体失败"));
+      return null;
+    } finally {
+      setSavingAction("");
+    }
+  }
+
+  async function unarchiveBot(bot: BotSummary) {
+    if (isMainBot(bot) || !bot.archived) {
+      return null;
+    }
+
+    setSavingAction(`${bot.alias}:archive`);
+    setError("");
+    setNotice("");
+    try {
+      const unarchived = await client.unarchiveBot(bot.alias);
+      setNotice(`已取消归档 ${bot.alias}`);
+      await loadBots();
+      return unarchived;
+    } catch (err) {
+      setError(getErrorMessage(err, "取消归档智能体失败"));
       return null;
     } finally {
       setSavingAction("");
@@ -396,6 +438,8 @@ export function useBotManager({
     updateBotCluster,
     createBot,
     toggleBot,
+    archiveBot,
+    unarchiveBot,
     renameBot,
     deleteBot,
     updateBotCli,

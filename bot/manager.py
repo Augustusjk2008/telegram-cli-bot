@@ -376,6 +376,7 @@ class MultiBotManager:
                 raise ValueError(f"不存在 alias `{normalized_alias}`")
             profile = self.managed_profiles[normalized_alias]
             profile.enabled = True
+            profile.archived = False
             self._save_profiles()
 
     async def stop_bot(self, alias: str) -> None:
@@ -388,6 +389,31 @@ class MultiBotManager:
                 raise ValueError(f"不存在 alias `{normalized_alias}`")
             profile = self.managed_profiles[normalized_alias]
             profile.enabled = False
+            self._save_profiles()
+
+    async def archive_bot(self, alias: str) -> None:
+        normalized_alias = str(alias or "").strip().lower()
+        if normalized_alias == self.main_profile.alias:
+            raise ValueError(f"主 Bot `{normalized_alias}` 无法归档")
+
+        async with self._lock:
+            if normalized_alias not in self.managed_profiles:
+                raise ValueError(f"不存在 alias `{normalized_alias}`")
+            profile = self.managed_profiles[normalized_alias]
+            profile.archived = True
+            profile.enabled = False
+            self._save_profiles()
+
+    async def unarchive_bot(self, alias: str) -> None:
+        normalized_alias = str(alias or "").strip().lower()
+        if normalized_alias == self.main_profile.alias:
+            raise ValueError(f"主 Bot `{normalized_alias}` 无法取消归档")
+
+        async with self._lock:
+            if normalized_alias not in self.managed_profiles:
+                raise ValueError(f"不存在 alias `{normalized_alias}`")
+            profile = self.managed_profiles[normalized_alias]
+            profile.archived = False
             self._save_profiles()
 
     async def set_bot_cli(self, alias: str, cli_type: str, cli_path: str) -> None:

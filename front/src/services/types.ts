@@ -470,6 +470,7 @@ export type BotSummary = {
   agents?: AgentSummary[];
   cliPath?: string;
   enabled?: boolean;
+  archived?: boolean;
   isMain?: boolean;
   canOperate?: boolean;
   effectiveCapabilities?: Capability[];

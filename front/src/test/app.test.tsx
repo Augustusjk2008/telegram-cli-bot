@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { App, sortBotsForSwitcher } from "../app/App";
+import { App, buildDisplayBots, sortBotsForSwitcher } from "../app/App";
 import {
   chatUnreadStoragePrefix,
   markStoredChatRead,
@@ -51,6 +51,22 @@ test("bot switcher keeps main first and sorts idle running bots by latest answer
     bot("main", "2026-07-19T08:00:00Z"),
     bot("alpha", "2026-07-20T09:00:00Z"),
   ]).map(({ alias }) => alias)).toEqual(["main", "alpha", "zeta"]);
+});
+
+test("main bot switcher hides archived non-main bots but keeps the main bot", () => {
+  const bot = (alias: string, archived = false): BotSummary => ({
+    alias,
+    cliType: "codex",
+    status: "offline",
+    workingDir: `C:\\workspace\\${alias}`,
+    lastActiveText: "离线",
+    archived,
+  });
+
+  expect(
+    buildDisplayBots([bot("main", true), bot("team2", true), bot("team3")], [], {})
+      .map(({ alias }) => alias),
+  ).toEqual(["main", "team3"]);
 });
 
 test("restores the current bot unread after login until it is explicitly opened", async () => {

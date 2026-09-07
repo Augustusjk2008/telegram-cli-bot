@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerE
 import { clsx } from "clsx";
 import {
   CheckSquare,
+  Archive,
+  ArchiveRestore,
   FolderOpen,
   LogIn,
   Pencil,
@@ -49,6 +51,7 @@ import {
   getBotManagerStatus,
   getVisibleManagedBots,
   isBotOffline,
+  isBotArchived,
   isMainBot,
   isNativeAgentGloballyEnabled,
   type BulkAction,
@@ -98,6 +101,7 @@ const STATUS_FILTERS: Array<{ id: ManagerViewFilter; label: string }> = [
   { id: "running", label: "运行中" },
   { id: "busy", label: "处理中" },
   { id: "offline", label: "离线" },
+  { id: "archived", label: "已归档" },
   { id: "attention", label: "需处理" },
 ];
 
@@ -1626,6 +1630,7 @@ export function DesktopBotManagerScreen({
                             <span className="flex min-w-0 flex-wrap items-center gap-1.5">
                               <span className="min-w-0 max-w-full truncate text-sm font-semibold text-[var(--text)]">{bot.alias}</span>
                               {isMainBot(bot) ? <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">主</span> : null}
+                              {isBotArchived(bot) ? <span className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] leading-none text-amber-700">已归档</span> : null}
                               {current ? <span className="rounded border border-transparent px-1.5 py-0.5 text-[10px] leading-none tcb-selected-accent">当前</span> : null}
                               {bot.canOperate === false ? (
                                 <span className="rounded border border-zinc-500 bg-white px-1.5 py-0.5 text-[10px] font-semibold leading-none text-zinc-900">无权限 · 只读</span>
@@ -1761,6 +1766,7 @@ export function DesktopBotManagerScreen({
                       <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                         <h2 className="min-w-0 max-w-full truncate text-lg font-semibold">{focusedBot.alias}</h2>
                         {isMainBot(focusedBot) ? <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">主</span> : null}
+                        {isBotArchived(focusedBot) ? <span className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] leading-none text-amber-700">已归档</span> : null}
                         {focusedBot.alias === currentAlias ? (
                           <span className="rounded border border-transparent px-1.5 py-0.5 text-[10px] leading-none tcb-selected-accent">当前</span>
                         ) : null}
@@ -1844,13 +1850,29 @@ export function DesktopBotManagerScreen({
                     {canManage && !isMainBot(focusedBot) ? (
                       <button
                         type="button"
-                        aria-label={isBotOffline(focusedBot) ? `启动 ${focusedBot.alias}` : `停止 ${focusedBot.alias}`}
-                        onClick={() => void manager.toggleBot(focusedBot)}
+                        aria-label={isBotArchived(focusedBot)
+                          ? `取消归档 ${focusedBot.alias}`
+                          : isBotOffline(focusedBot) ? `启动 ${focusedBot.alias}` : `停止 ${focusedBot.alias}`}
+                        onClick={() => void (isBotArchived(focusedBot) ? manager.unarchiveBot(focusedBot) : manager.toggleBot(focusedBot))}
                         disabled={manager.savingAction !== ""}
                         className="inline-flex h-9 items-center gap-1.5 rounded-md border border-[var(--border)] px-3 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
                       >
-                        {isBotOffline(focusedBot) ? <Play className="h-4 w-4" /> : <Square className="h-4 w-4" />}
-                        {isBotOffline(focusedBot) ? "启动" : "停止"}
+                        {isBotArchived(focusedBot)
+                          ? <ArchiveRestore className="h-4 w-4" />
+                          : isBotOffline(focusedBot) ? <Play className="h-4 w-4" /> : <Square className="h-4 w-4" />}
+                        {isBotArchived(focusedBot) ? "取消归档" : isBotOffline(focusedBot) ? "启动" : "停止"}
+                      </button>
+                    ) : null}
+                    {canManage && !isMainBot(focusedBot) && !isBotArchived(focusedBot) ? (
+                      <button
+                        type="button"
+                        aria-label={`归档 ${focusedBot.alias}`}
+                        onClick={() => void manager.archiveBot(focusedBot)}
+                        disabled={manager.savingAction !== ""}
+                        className="inline-flex h-9 items-center gap-1.5 rounded-md border border-amber-200 px-3 text-sm text-amber-700 hover:bg-amber-50 disabled:opacity-60"
+                      >
+                        <Archive className="h-4 w-4" />
+                        归档
                       </button>
                     ) : null}
                     {canManage && !isMainBot(focusedBot) ? (

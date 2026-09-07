@@ -1328,6 +1328,7 @@ export class MockWebBotClient implements WebBotClient {
         ...item,
         cliPath: defaultCliPathForType(item.cliType),
         enabled: true,
+        archived: Boolean(item.archived),
         isMain: item.alias === "main",
         serviceStatus: item.status === "offline" ? "offline" : "online",
         activityStatus: item.status === "busy" ? "busy" : "idle",
@@ -6363,6 +6364,7 @@ export class MockWebBotClient implements WebBotClient {
       workingDir: input.workingDir.trim(),
       lastActiveText: "运行中",
       enabled: true,
+      archived: false,
       isMain: false,
       serviceStatus: "online",
       activityStatus: "idle",
@@ -6519,6 +6521,37 @@ export class MockWebBotClient implements WebBotClient {
       busyAgentIds: [],
       busyAgentNames: [],
       busyAgentCount: 0,
+    });
+    return this.getBotSummary(botAlias);
+  }
+
+  async archiveBot(botAlias: string): Promise<BotSummary> {
+    const current = this.getBotSummary(botAlias);
+    this.bots.set(botAlias, {
+      ...current,
+      archived: true,
+      status: "offline",
+      lastActiveText: "已归档",
+      enabled: false,
+      serviceStatus: "offline",
+      activityStatus: "idle",
+      busyAgentIds: [],
+      busyAgentNames: [],
+      busyAgentCount: 0,
+    });
+    return this.getBotSummary(botAlias);
+  }
+
+  async unarchiveBot(botAlias: string): Promise<BotSummary> {
+    const current = this.getBotSummary(botAlias);
+    this.bots.set(botAlias, {
+      ...current,
+      archived: false,
+      status: "offline",
+      lastActiveText: "离线",
+      enabled: false,
+      serviceStatus: "offline",
+      activityStatus: "idle",
     });
     return this.getBotSummary(botAlias);
   }

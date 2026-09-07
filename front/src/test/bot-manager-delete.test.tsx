@@ -30,6 +30,39 @@ test("bot list requires strong confirmation before deleting workspace", async ()
   expect(removeBot).toHaveBeenCalledWith("team2", { deleteHistory: true, deleteWorkspace: true });
 });
 
+test("bot list archives and restores a non-main bot", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const archiveBot = vi.spyOn(client, "archiveBot");
+  const unarchiveBot = vi.spyOn(client, "unarchiveBot");
+
+  render(<BotListScreen client={client} onSelect={vi.fn()} />);
+
+  await user.click(await screen.findByRole("button", { name: "归档 team2" }));
+  await waitFor(() => expect(archiveBot).toHaveBeenCalledWith("team2"));
+  expect(await screen.findByText("已归档")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "取消归档 team2" }));
+  await waitFor(() => expect(unarchiveBot).toHaveBeenCalledWith("team2"));
+});
+
+test("desktop manager exposes archive lifecycle actions", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const archiveBot = vi.spyOn(client, "archiveBot");
+  const unarchiveBot = vi.spyOn(client, "unarchiveBot");
+
+  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} />);
+
+  await user.click(await screen.findByRole("button", { name: "聚焦 team2" }));
+  await user.click(screen.getByRole("button", { name: "归档 team2" }));
+  await waitFor(() => expect(archiveBot).toHaveBeenCalledWith("team2"));
+  expect(await screen.findByRole("button", { name: "取消归档 team2" })).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "取消归档 team2" }));
+  await waitFor(() => expect(unarchiveBot).toHaveBeenCalledWith("team2"));
+});
+
 test("desktop bulk delete does not expose workspace delete", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();

@@ -12,6 +12,8 @@ def register(app: web.Application, server) -> None:
     app.router.add_delete("/api/admin/bots/{alias}", server.admin_remove_bot)
     app.router.add_post("/api/admin/bots/{alias}/start", server.admin_start_bot)
     app.router.add_post("/api/admin/bots/{alias}/stop", server.admin_stop_bot)
+    app.router.add_post("/api/admin/bots/{alias}/archive", server.admin_archive_bot)
+    app.router.add_post("/api/admin/bots/{alias}/unarchive", server.admin_unarchive_bot)
     app.router.add_patch("/api/admin/bots/{alias}/cli", server.admin_update_cli)
     app.router.add_patch("/api/admin/bots/{alias}/execution", server.admin_update_execution)
     app.router.add_patch("/api/admin/bots/{alias}/alias", server.admin_rename_bot)

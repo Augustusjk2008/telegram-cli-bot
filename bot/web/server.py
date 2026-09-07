@@ -178,6 +178,7 @@ from .api_service import (
     _require_capability,
     WebApiError,
     add_managed_bot,
+    archive_managed_bot,
     build_bot_summary,
     change_working_directory,
     create_conversation,
@@ -247,6 +248,7 @@ from .api_service import (
     save_terminal_actions_config_for_bot,
     start_managed_bot,
     stop_managed_bot,
+    unarchive_managed_bot,
     stream_update_download,
     stream_chat,
     select_conversation,
@@ -4406,6 +4408,18 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
         data = await stop_managed_bot(self.manager, alias)
+        return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})
+
+    async def admin_archive_bot(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_ADMIN_OPS)
+        alias = self._manager_alias(request)
+        data = await archive_managed_bot(self.manager, alias)
+        return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})
+
+    async def admin_unarchive_bot(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_ADMIN_OPS)
+        alias = self._manager_alias(request)
+        data = await unarchive_managed_bot(self.manager, alias)
         return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})
 
     async def admin_update_cli(self, request: web.Request) -> web.Response:
