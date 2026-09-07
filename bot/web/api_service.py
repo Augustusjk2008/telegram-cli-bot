@@ -534,10 +534,33 @@ def _build_agent_status_items(
     ]
 
 
-def _build_activity_summary(agent_items: list[dict[str, Any]]) -> dict[str, Any]:
+def _cluster_role_names(run: Any | None) -> dict[str, str]:
+    if run is None:
+        return {}
+    team = getattr(run, "team", None)
+    assignments = team.get("assignments") if isinstance(team, dict) else []
+    if not isinstance(assignments, list):
+        return {}
+    return {
+        str(item.get("agent_id") or "").strip().lower(): str(item.get("name") or "").strip()
+        for item in assignments
+        if isinstance(item, dict)
+        and str(item.get("agent_id") or "").strip()
+        and str(item.get("name") or "").strip()
+    }
+
+
+def _build_activity_summary(
+    agent_items: list[dict[str, Any]],
+    cluster_role_names: dict[str, str] | None = None,
+) -> dict[str, Any]:
     busy_agents = [item for item in agent_items if item.get("is_processing")]
     busy_agent_ids = [str(item.get("id") or "main") for item in busy_agents]
-    busy_agent_names = [str(item.get("name") or item.get("id") or "agent") for item in busy_agents]
+    busy_agent_names = [
+        (cluster_role_names or {}).get(agent_id)
+        or str(item.get("name") or agent_id or "agent")
+        for item, agent_id in zip(busy_agents, busy_agent_ids)
+    ]
     return {
         "activity_status": "busy" if busy_agents else "idle",
         "busy_agent_ids": busy_agent_ids,
@@ -562,6 +585,7 @@ def build_bot_summary(
 
     # 优先使用共享聊天 session 的工作目录（如果已建立）
     working_dir = profile.working_dir
+    current_session = session
     if user_id is not None:
         try:
             current_session = session or get_session_for_alias(manager, alias, chat_session_user_id(user_id))
@@ -571,7 +595,14 @@ def build_bot_summary(
             # 如果获取 session 失败，使用 profile 的工作目录
             pass
     agent_items = _build_agent_status_items(profile, _build_agent_runtime_map(bot_id, user_id))
-    activity = _build_activity_summary(agent_items)
+    active_cluster_run = None
+    if user_id is not None and current_session is not None and profile.cluster.enabled:
+        try:
+            active_cluster_run = _find_active_cluster_run_for_session(alias, user_id, current_session)
+        except Exception:
+            # 集群状态只用于展示，读取失败时仍返回普通 agent 活动状态。
+            pass
+    activity = _build_activity_summary(agent_items, _cluster_role_names(active_cluster_run))
     latest_answer_completed_at = ""
     latest_answer_store = ChatStore(Path(working_dir))
     latest_answer_user_id = chat_session_user_id(user_id) if user_id is not None else None

@@ -363,6 +363,7 @@ def test_cluster_status_reports_team_capacity_and_free_slots() -> None:
     assert status["capacity"] == 2
     assert status["free_slots"] == 1
     assert status["team_revision"] == 2
+    assert [agent["name"] for agent in status["agents"]] == ["分析", "Two"]
     assert status["slots"] == [
         {
             "agent_id": "one",
@@ -381,6 +382,50 @@ def test_cluster_status_reports_team_capacity_and_free_slots() -> None:
             "status": "idle",
         },
     ]
+
+
+def test_bot_activity_uses_current_cluster_role_name(monkeypatch, tmp_path) -> None:
+    import bot.web.api_service as api_service
+
+    profile = BotProfile(
+        alias="main",
+        working_dir=str(tmp_path),
+        agents=[AgentProfile(id="worker", name="旧配置名称")],
+        cluster=BotClusterConfig(enabled=True),
+    )
+    manager = SimpleNamespace(
+        main_profile=profile,
+        app_settings_file=tmp_path / "app_settings.json",
+    )
+    session = SimpleNamespace(active_conversation_id="conv_main", working_dir=str(tmp_path))
+    run = SimpleNamespace(
+        team={
+            "version": 1,
+            "assignments": [{
+                "agent_id": "worker",
+                "name": "动态审查员",
+                "responsibility": "审查实现",
+                "assignment_revision": 1,
+            }],
+        },
+    )
+    monkeypatch.setattr(
+        api_service,
+        "_build_agent_runtime_map",
+        lambda *_args: {"worker": {"is_processing": True}},
+    )
+    monkeypatch.setattr(api_service, "_find_active_cluster_run_for_session", lambda *_args: run)
+
+    summary = api_service.build_bot_summary(
+        manager,
+        "main",
+        1,
+        profile=profile,
+        session=session,
+    )
+
+    assert summary["busy_agent_ids"] == ["worker"]
+    assert summary["busy_agent_names"] == ["动态审查员"]
 
 
 @pytest.mark.asyncio
