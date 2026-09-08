@@ -834,6 +834,87 @@ async def test_stream_cli_chat_persists_terminal_estimated_cost_once_per_turn(
         assert estimate.call_args_list == expected_calls
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cli_type", ["codex", "claude"])
+@pytest.mark.parametrize("exit_kind", ["error", "cancelled", "reader_error"])
+async def test_stream_cli_chat_preserves_partial_cost_on_abnormal_exit(
+    usage_manager, monkeypatch, tmp_path, cli_type, exit_kind,
+):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    from bot import config
+    from bot.web import cli_turn_cost
+
+    price_path = tmp_path / "prices.csv"
+    price_path.write_text(
+        "model,currency,input_per_million,cache_read_per_million,cache_write_per_million,output_per_million\n"
+        "test-model,USD,2,0.2,2.5,10\n", encoding="utf-8",
+    )
+    monkeypatch.setattr(config, "MODEL_PRICES_FILE", str(price_path))
+    profile = usage_manager.main_profile
+    profile.cli_type = cli_type
+    profile.cli_params.set_param(cli_type, "model", "test-model")
+    _, _, session = api_service.get_chat_session_for_alias(usage_manager, "main", 1001)
+    session.claude_session_id = "partial-cost-session"
+    usage = {"input_tokens": 1000, "output_tokens": 100}
+    events = [
+        {"type": "thread.started", "thread_id": "partial-cost-session"},
+        {"type": "item.delta", "item": {"type": "assistant_message", "delta": "working"}},
+    ] if cli_type == "codex" else [
+        {"type": "assistant", "session_id": "partial-cost-session", "message": {
+            "id": "response-1", "model": "test-model", "role": "assistant", "usage": usage,
+            "content": [{"type": "text", "text": "working"}],
+        }},
+    ]
+
+    class Output(_StreamingStdout):
+        def readline(self, _size=-1):
+            value = super().readline(_size)
+            if not value and not self.closed and exit_kind == "reader_error":
+                raise OSError("read failed")
+            return value
+
+    process = _UsageProcess()
+    process.stdout = Output([json.dumps(event) + "\n" for event in events])
+    process.returncode = 1
+    path = tmp_path / "rollout.jsonl"
+
+    def spawn(*_args, **_kwargs):
+        if exit_kind == "cancelled":
+            session.stop_requested = True
+        timestamp = datetime.now(timezone.utc).isoformat()
+        path.write_text("\n".join(json.dumps({
+            "timestamp": timestamp, "type": "event_msg", "payload": payload,
+        }) for payload in [
+            {"type": "task_started"},
+            {"type": "token_count", "info": {"total_token_usage": usage}},
+        ]), encoding="utf-8")
+        return process
+
+    monkeypatch.setattr(cli_turn_cost, "locate_codex_transcript", lambda _session: SimpleNamespace(path=path))
+    monkeypatch.setattr(api_service, "_start_codex_rate_limit_capture", AsyncMock(return_value=None))
+    monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: cli_type)
+    monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: ([cli_type], False))
+    monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(api_service, "_reconcile_native_trace_before_completion", AsyncMock())
+    monkeypatch.setattr(api_service.subprocess, "Popen", spawn)
+    stream = api_service._stream_cli_chat(usage_manager, "main", 1001, "hello")
+    if exit_kind == "reader_error":
+        with pytest.raises(OSError, match="read failed"):
+            await _collect_stream_events(stream)
+    else:
+        result = await _collect_stream_events(stream)
+        done = next(event for event in result if event["type"] == "done")
+        assert done["message"]["meta"]["completion_state"] == exit_kind
+        assert done["message"]["meta"]["context_usage"]["estimated_cost"]["total"] == 0.003
+
+    history = api_service._get_chat_history_service(session).list_history(profile, session)
+    cost = history[-1]["meta"]["context_usage"]["estimated_cost"]
+    assert cost["total"] == 0.003
+    assert cost["is_partial"] is True
+
+
 @pytest.mark.parametrize(
     ("stream_protocol_version", "output", "message_content", "expects_output"),
     [

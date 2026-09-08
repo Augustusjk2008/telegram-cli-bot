@@ -81,7 +81,7 @@ def test_bad_price_table_does_not_break_chat(price_file, row):
                                protocol="codex", scope="turn") is None
 
 
-def test_pi_counts_finished_calls_once_and_skips_incomplete_turns(price_file):
+def test_pi_counts_finished_calls_once_and_retains_partial_turn_cost(price_file):
     turn = PiTurnCost("provider/test-model")
     message = {"role": "assistant", "id": "first", "usage": {
         "input": 100_000, "cacheRead": 300_000, "cacheWrite": 0, "output": 10_000,
@@ -94,9 +94,32 @@ def test_pi_counts_finished_calls_once_and_skips_incomplete_turns(price_file):
     turn.observe({"type": "message_end", "message": {**message, "id": "second"}})
     assert turn.estimate()["total"] == 0.72
     assert turn.estimate()["scope"] == "turn"
-    assert turn.estimate(usage_complete=False) is None
+    assert "is_partial" not in turn.estimate()
+    assert turn.estimate(usage_complete=False) == {**turn.estimate(), "is_partial": True}
     turn.observe({"type": "message_end", "message": {"role": "assistant", "id": "third"}})
+    assert turn.estimate()["total"] == 0.72
+    assert turn.estimate()["is_partial"] is True
+
+
+@pytest.mark.parametrize("usage", [None, {}, {"input": 3}, {"input": 3, "output": -1}])
+def test_pi_missing_or_invalid_usage_does_not_create_zero_cost(price_file, usage):
+    turn = PiTurnCost("provider/test-model")
+    turn.observe({"type": "message_end", "message": {
+        "role": "assistant", "usage": usage,
+    }})
     assert turn.estimate() is None
+    assert turn.estimate(usage_complete=False) is None
+
+
+def test_pi_unpriced_call_does_not_erase_known_cost_or_invent_a_price(price_file):
+    turn = PiTurnCost("missing-model")
+    message = {"role": "assistant", "id": "unpriced", "usage": {"input": 1_000_000, "output": 0}}
+    turn.observe({"type": "message_end", "message": message})
+    assert turn.estimate(usage_complete=False) is None
+    turn.observe({"type": "message_end", "message": {**message, "model": "test-model", "id": "priced"}})
+    assert turn.estimate()["total"] == 2
+    assert turn.estimate()["model"] == "test-model"
+    assert turn.estimate()["is_partial"] is True
 
 
 @pytest.mark.parametrize("provider", ["custom", None])

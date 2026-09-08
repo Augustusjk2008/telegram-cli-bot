@@ -60,7 +60,10 @@ export function mapEstimatedCost(value: unknown, provider?: string): ChatMessage
     return undefined;
   }
   const normalizedScope = scope === "session" && provider?.trim().toLowerCase() === "codex" ? "turn" : scope;
-  return { model, currency, scope: normalizedScope, total, input, cacheRead, cacheWrite, output };
+  return {
+    model, currency, scope: normalizedScope, total, input, cacheRead, cacheWrite, output,
+    ...((raw.isPartial ?? raw.is_partial) === true ? { isPartial: true } : {}),
+  };
 }
 
 export function mapChatMessageContextUsage(value: unknown): ChatMessageContextUsage | undefined {

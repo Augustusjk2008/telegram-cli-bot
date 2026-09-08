@@ -139,6 +139,7 @@ from bot.web.chat_favorite_store import ChatFavoriteStore, FavoriteScope, build_
 from bot.web.async_chat_store import run_chat_store_io
 from bot.web.chat_store import ChatStore
 from bot.web.cli_context_usage import resolve_cli_context_usage
+from bot.web.cli_turn_cost import CliTurnCost
 from bot.web.diagnostics import diag_log_event, diag_log_slow
 from bot.web.git_commit_message import truncate_diff_text
 from bot.web.native_history_adapter import (
@@ -5081,6 +5082,7 @@ async def _stream_cli_chat(
             if cli_type == "codex":
                 quota_capture = await _start_codex_rate_limit_capture(env=env, command=cmd)
 
+            turn_cost = CliTurnCost(cli_type, turn_model)
             try:
                 spawn_started_at = time.perf_counter()
                 process = subprocess.Popen(
@@ -5196,6 +5198,34 @@ async def _stream_cli_chat(
             latest_preview_text = ""
             last_context_usage_resolved_at = 0.0
 
+            async def with_estimated_cost(context_usage: dict[str, Any] | None) -> dict[str, Any] | None:
+                parsed = preview_state.result()
+                cost_model = str((context_usage or {}).get("model") or turn_model).strip()
+                cost_session_id = parsed.session_id or _current_native_session_id(session, cli_type)
+                estimated_cost = None
+                if cost_model and parsed.terminal_usage is not None:
+                    estimated_cost = estimate_usage_cost(
+                        cost_model, parsed.terminal_usage, protocol=cli_type, scope="turn",
+                    )
+                elif parsed.terminal_usage is None:
+                    try:
+                        estimated_cost = await asyncio.wait_for(
+                            asyncio.to_thread(turn_cost.estimate_partial, cost_session_id),
+                            timeout=3.0,
+                        )
+                    except Exception:
+                        logger.debug("读取本轮 CLI 部分费用失败", exc_info=True)
+                if estimated_cost is None:
+                    return context_usage
+                return {
+                    **(context_usage or {
+                        "provider": cli_type,
+                        "model": cost_model or estimated_cost["model"],
+                        "session_id": cost_session_id,
+                    }),
+                    "estimated_cost": estimated_cost,
+                }
+
             def take_pending_status(*, force: bool = False) -> dict[str, Any] | None:
                 nonlocal pending_status_event, last_status_sent_at
                 if pending_status_event is None:
@@ -5261,6 +5291,7 @@ async def _stream_cli_chat(
                         text_chunk = str(item)
                         output_bytes += len(text_chunk.encode("utf-8", errors="replace"))
                         preview_state.consume(text_chunk)
+                        turn_cost.observe(text_chunk)
                         for trace_event in consume_stream_trace_chunk(cli_type, text_chunk, trace_state):
                             appended_trace = append_live_trace_event(trace_event)
                             if appended_trace is not None and include_trace:
@@ -5439,6 +5470,10 @@ async def _stream_cli_chat(
                         with session._lock:
                             session.process = None
                         active_lifecycle = None
+                if cleanup_abort:
+                    interrupted_usage = await with_estimated_cost(last_context_usage)
+                    if interrupted_usage is not None:
+                        await service.update_context_usage_async(turn_handle, interrupted_usage)
             final_status = take_pending_status(force=True)
             if final_status is not None:
                 yield final_status
@@ -5572,23 +5607,7 @@ async def _stream_cli_chat(
                 previous_left_percent=session_context_left_percent,
                 compaction_count=session_compaction_count,
             )
-            cost_model = str((context_usage or {}).get("model") or turn_model).strip()
-            if cost_model and parsed_result.terminal_usage is not None:
-                estimated_cost = estimate_usage_cost(
-                    cost_model,
-                    parsed_result.terminal_usage,
-                    protocol=cli_type,
-                    scope="turn",
-                )
-                if estimated_cost is not None:
-                    context_usage = {
-                        **(context_usage or {
-                            "provider": cli_type,
-                            "model": cost_model,
-                            "session_id": native_session_id or parsed_result.session_id,
-                        }),
-                        "estimated_cost": estimated_cost,
-                    }
+            context_usage = await with_estimated_cost(context_usage)
             complete_started_at = time.perf_counter()
             done_message = await asyncio.to_thread(
                 service.complete_turn,

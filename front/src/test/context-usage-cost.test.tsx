@@ -61,6 +61,18 @@ describe("context usage cost mapping", () => {
 });
 
 describe("context usage cost details", () => {
+  it("preserves partial costs through mapping and explains their coverage", () => {
+    const mapped = mapChatMessageContextUsage({
+      estimated_cost: { ...estimatedCost, scope: "turn", is_partial: true },
+    });
+    expect(mapped?.estimatedCost?.isPartial).toBe(true);
+    expect(mapChatMessageContextUsage(mapped)).toEqual(mapped);
+    render(<ChatContextUsageBadge contextUsage={mapped} />);
+    fireEvent.click(screen.getByRole("button", { name: /已知部分估算费用/ }));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("已知部分估算费用: USD 0.000000014");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("仅包含已上报用量，实际费用可能更高");
+  });
+
   it.each([
     { scope: "session", currency: "USD", compact: true, contextLeftPercent: 72 },
     { scope: "turn", currency: "CNY", compact: true, contextLeftPercent: undefined },

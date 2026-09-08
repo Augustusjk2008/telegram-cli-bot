@@ -921,6 +921,7 @@ export type ChatMessageEstimatedCost = {
   cacheRead: number;
   cacheWrite: number;
   output: number;
+  isPartial?: boolean;
 };
 
 export type ChatMessageContextUsage = {

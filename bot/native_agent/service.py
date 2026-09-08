@@ -641,13 +641,35 @@ class NativeAgentService:
         normalized_cluster_run_id = str(cluster_run_id or "").strip()
         pi_runtime_env = self._pi_runtime_env(normalized_cluster_run_id)
         native_session_id = ""
+        model_id = ""
         context_run_usage: dict[str, Any] = {}
+        turn_cost: PiTurnCost | None = None
+        persistence_buffer: StreamingPersistenceBuffer | None = None
+        ag_ui_state: AgUiTurnState | None = None
         active_runtime: PiSessionRuntime | None = None
         pi_record_key = ""
         pi_record: PiSessionRecord | None = None
         workspace_history_enabled = False
         workspace_history_before_head = ""
         startup_trace_events: list[dict[str, Any]] = []
+
+        def resolve_turn_usage(*, usage_complete: bool) -> dict[str, Any] | None:
+            context_usage = resolve_native_agent_context_usage(
+                session_id=native_session_id,
+                model_id=model_id,
+                messages=[],
+                run_usage=context_run_usage,
+            )
+            estimated_cost = turn_cost.estimate(usage_complete=usage_complete) if turn_cost is not None else None
+            if estimated_cost is not None:
+                context_usage = {
+                    "provider": "native_agent",
+                    "model": model_id,
+                    "session_id": native_session_id,
+                    **(context_usage or {}),
+                    "estimated_cost": estimated_cost,
+                }
+            return context_usage
 
         try:
             if not config.NATIVE_AGENT_ENABLED:
@@ -1088,7 +1110,6 @@ class NativeAgentService:
                 except Exception:
                     pass
 
-            messages = []
             final_text = final_text or aggregator.text()
             if completion_state == "completed" and aggregator.saw_tool_failure:
                 completion_state = "error"
@@ -1106,25 +1127,12 @@ class NativeAgentService:
             for trace_event in live_trace:
                 if trace_event.get("kind") == "cancelled":
                     history_service.append_trace_event(turn_handle, trace_event)
-            final_session_payload = None
-            context_usage = resolve_native_agent_context_usage(
-                session_id=native_session_id,
-                model_id=model_id,
-                messages=messages,
-                session_payload=final_session_payload,
-                run_usage=context_run_usage,
+            context_usage = resolve_turn_usage(
+                usage_complete=(
+                    completion_state == "completed"
+                    and active_runtime.dropped_usage_events == dropped_usage_before
+                ),
             )
-            estimated_cost = turn_cost.estimate(
-                usage_complete=active_runtime.dropped_usage_events == dropped_usage_before,
-            )
-            if estimated_cost is not None:
-                context_usage = {
-                    "provider": "native_agent",
-                    "model": model_id,
-                    "session_id": native_session_id,
-                    **(context_usage or {}),
-                    "estimated_cost": estimated_cost,
-                }
             done_message = history_service.complete_turn(
                 turn_handle,
                 content=final_text,
@@ -1216,6 +1224,18 @@ class NativeAgentService:
         except asyncio.CancelledError:
             with session._lock:
                 session.stop_requested = True
+            if persistence_buffer is not None:
+                await persistence_buffer.close()
+            if turn_handle is not None:
+                history_service.complete_turn(
+                    turn_handle,
+                    content=final_text,
+                    completion_state="cancelled",
+                    native_session_id=native_session_id,
+                    error_code="cancelled",
+                    error_message="用户终止输出",
+                    context_usage=resolve_turn_usage(usage_complete=False),
+                )
             if active_runtime is not None:
                 await active_runtime.kill()
             raise
@@ -1224,18 +1244,49 @@ class NativeAgentService:
                 await self._evict_runtime(active_runtime)
                 active_runtime = None
             error_message = str(exc) or "原生 agent 执行失败"
+            if persistence_buffer is not None:
+                await persistence_buffer.close()
+            context_usage = resolve_turn_usage(usage_complete=False)
+            done_message = None
             if turn_handle is not None:
-                history_service.complete_turn(
+                done_message = history_service.complete_turn(
                     turn_handle,
                     content=error_message,
                     completion_state="error",
-                    native_session_id=locals().get("native_session_id", ""),
+                    native_session_id=native_session_id,
                     error_code="native_agent_error",
                     error_message=error_message,
+                    context_usage=context_usage,
                 )
             if wants_ag_ui:
+                if ag_ui_state is not None:
+                    text_end = build_text_end_event(state=ag_ui_state)
+                    if text_end is not None:
+                        yield {"type": "ag_ui", "event": text_end}
                 yield {"type": "ag_ui", "event": build_run_error_event(error_message)}
-            yield {"type": "error", "code": "native_agent_error", "message": f"原生 agent 执行失败: {error_message}"}
+                if ag_ui_state is not None and turn_handle is not None:
+                    yield {
+                        "type": "ag_ui",
+                        "event": build_run_finished_event(
+                            state=ag_ui_state,
+                            completion_state="error",
+                            content=error_message,
+                            context_usage=context_usage,
+                            message=done_message,
+                            turn_id=turn_handle.turn_id,
+                            assistant_message_id=turn_handle.assistant_message_id,
+                        ),
+                    }
+            yield {
+                "type": "error",
+                "code": "native_agent_error",
+                "message": f"原生 agent 执行失败: {error_message}",
+                "context_usage": context_usage,
+                **({
+                    "turn_id": turn_handle.turn_id,
+                    "assistant_message_id": turn_handle.assistant_message_id,
+                } if turn_handle is not None else {}),
+            }
         finally:
             with session._lock:
                 session.native_agent_run_id = None
