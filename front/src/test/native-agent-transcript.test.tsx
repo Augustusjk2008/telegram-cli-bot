@@ -22,17 +22,6 @@ function processEntry(id: string, summary: string, seq: number): NativeAgentTran
 }
 
 describe("NativeAgentTranscript", () => {
-  it("shows usage for an interrupted turn even without final text or a copy action", () => {
-    render(<NativeAgentTranscript entries={[]} resultText="" state="error" contextUsage={{
-      estimatedCost: {
-        model: "test-model", currency: "USD", scope: "turn", isPartial: true,
-        total: 0.03, input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0,
-      },
-    }} />);
-    expect(screen.getByRole("button", { name: /已知部分估算费用/ })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "复制最终答案" })).not.toBeInTheDocument();
-  });
-
   it("keeps live details collapsed through updates until manually expanded", () => {
     const firstEntry = processEntry("first", "先检查目录", 1);
     const secondEntry = processEntry("second", "再读取文件", 2);

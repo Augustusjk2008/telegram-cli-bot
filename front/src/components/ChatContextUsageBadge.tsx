@@ -94,10 +94,7 @@ export function formatContextUsageDetails(contextUsage?: ChatMessageContextUsage
       useGrouping: false,
       maximumSignificantDigits: 15,
     });
-    rows.push(`${cost.isPartial ? "已知部分估算费用" : "Estimated cost"}: ${cost.currency} ${amount}`);
-    if (cost.isPartial) {
-      rows.push("仅包含已上报用量，实际费用可能更高");
-    }
+    rows.push(`${cost.isPartial ? "estimated cost" : "cost"}: ${cost.currency} ${amount}`);
   }
   return rows.join("\n");
 }
@@ -114,7 +111,7 @@ export function formatTextContextUsage(
     ? options.compact ? `ctx ${formatPercent(leftPercent)}%` : `${formatPercent(leftPercent)}% left`
     : "";
   const cost = mapEstimatedCost(contextUsage.estimatedCost, contextUsage.provider);
-  const costText = cost ? cost.isPartial ? "已知部分估算费用" : "Estimated cost" : "";
+  const costText = cost ? cost.isPartial ? "estimated cost" : "cost" : "";
   const statusText = (contextUsage.statusText || "").replace(/\bcontext left\b/gi, "left");
   if (options.compact) {
     const baseText = percent || statusText || costText;
