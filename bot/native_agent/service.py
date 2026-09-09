@@ -34,7 +34,7 @@ from bot.native_agent.ag_ui_mapper import (
     should_filter_event,
 )
 from bot.native_agent.aggregator import NativeAgentAggregator
-from bot.native_agent.context_usage import resolve_native_agent_context_usage
+from bot.native_agent.context_usage import PiTurnCost, resolve_native_agent_context_usage
 from bot.native_agent.events import is_relevant_event, unwrap_event
 from bot.native_agent.legacy_migration import migrate_native_session_meta
 from bot.native_agent.pi_rpc_preflight import PiWindowsPreflightRequest, run_pi_windows_preflight
@@ -945,6 +945,8 @@ class NativeAgentService:
                     await active_runtime.kill()
                 return True
 
+            turn_cost = PiTurnCost(model_id)
+            dropped_usage_before = active_runtime.dropped_usage_events
             await active_runtime.prompt(prompt_text, conversation_id=native_session_id)
             stream = active_runtime.events()
             iterator = stream.__aiter__()
@@ -1004,6 +1006,7 @@ class NativeAgentService:
                             "runtime_provider": "pi",
                         }
                     usage = extract_native_context_usage(raw_event, provider="pi")
+                    turn_cost.observe(raw_event)
                     if usage:
                         context_run_usage = usage
                     for mapped_raw in native_json_to_events(
@@ -1111,6 +1114,17 @@ class NativeAgentService:
                 session_payload=final_session_payload,
                 run_usage=context_run_usage,
             )
+            estimated_cost = turn_cost.estimate(
+                usage_complete=active_runtime.dropped_usage_events == dropped_usage_before,
+            )
+            if estimated_cost is not None:
+                context_usage = {
+                    "provider": "native_agent",
+                    "model": model_id,
+                    "session_id": native_session_id,
+                    **(context_usage or {}),
+                    "estimated_cost": estimated_cost,
+                }
             done_message = history_service.complete_turn(
                 turn_handle,
                 content=final_text,

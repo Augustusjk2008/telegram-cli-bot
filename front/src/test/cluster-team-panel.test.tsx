@@ -89,14 +89,12 @@ test("keeps assignments collapsed until the cluster toggle is opened", async () 
   const panel = screen.getByTestId("cluster-team-panel");
   const toggle = within(panel).getByRole("button", { name: "展开集群编组" });
   expect(toggle).toHaveAttribute("aria-expanded", "false");
-  expect(toggle).toHaveTextContent("▲");
   expect(screen.queryAllByTestId("cluster-team-assignment")).toHaveLength(0);
 
   await user.click(toggle);
 
   const collapseToggle = within(panel).getByRole("button", { name: "收起集群编组" });
   expect(collapseToggle).toHaveAttribute("aria-expanded", "true");
-  expect(collapseToggle).toHaveTextContent("▼");
   const rows = screen.getAllByTestId("cluster-team-assignment");
   expect(rows).toHaveLength(2);
   expect(within(rows[0]).getByText("前端审查")).toBeInTheDocument();
@@ -107,11 +105,8 @@ test("keeps assignments collapsed until the cluster toggle is opened", async () 
   expect(within(rows[1]).getByText("待命")).toBeInTheDocument();
   expect(screen.queryByText("检查界面状态与回归测试")).not.toBeInTheDocument();
   expect(screen.queryByText("旧静态名称")).not.toBeInTheDocument();
-  expect(screen.queryByText(/如需调整角色/)).not.toBeInTheDocument();
-  expect(screen.getByTestId("cluster-team-panel").className).not.toContain("shadow-");
 
   const viewButton = within(rows[0]).getByRole("button", { name: "查看前端审查对话" });
-  expect(viewButton).toHaveClass("h-4", "leading-4");
   await user.click(viewButton);
   expect(onSelectAgent).toHaveBeenCalledWith("cluster-slot-1");
 

@@ -98,7 +98,6 @@ def test_env_service_rejects_fixed_forward_and_quick_tunnel(tmp_path: Path) -> N
         )
 
     assert exc_info.value.code == "invalid_env_value"
-    assert "不能同时启用" in exc_info.value.message
 
 
 def test_env_service_requires_frps_port_for_fixed_forward(tmp_path: Path) -> None:

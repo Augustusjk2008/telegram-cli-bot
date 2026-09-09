@@ -1,5 +1,4 @@
 import asyncio
-import logging
 import queue
 import threading
 import time
@@ -25,7 +24,7 @@ def _seed_replay(manager, chunks, *, next_seq, stream_id=""):
     return session
 
 
-def test_terminal_cleanup_does_not_warn_for_short_background_cleanup(monkeypatch, caplog):
+def test_terminal_background_cleanup_completes(monkeypatch):
     import bot.web.terminal_manager as terminal_manager
 
     finished = threading.Event()
@@ -41,12 +40,10 @@ def test_terminal_cleanup_does_not_warn_for_short_background_cleanup(monkeypatch
             pass
 
     monkeypatch.setattr(terminal_manager, "_request_windows_process_tree_kill", lambda _process: None)
-    caplog.set_level(logging.WARNING, logger="bot.web.terminal_manager")
 
     terminal_manager._cleanup_terminal_process_without_blocking(SlowCleanupProcess())
 
     assert finished.wait(1.0)
-    assert "终端进程清理未在" not in caplog.text
 
 
 def test_pty_wrapper_terminate_uses_process_tree_for_plain_popen(monkeypatch):

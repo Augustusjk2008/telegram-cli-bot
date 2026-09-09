@@ -1,11 +1,8 @@
-import { readFileSync } from "node:fs";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { MarkdownContent } from "../components/MarkdownPreview";
 import { normalizeLatexMathDelimiters } from "../markdown/latexDelimiters";
-import { normalizeLatexMath } from "../markdown/normalizeLatexMath";
 
-const GLOBAL_STYLES = readFileSync("src/styles/global.css", "utf8");
 
 describe("MarkdownContent", () => {
   it("renders embedded README HTML in file previews", () => {
@@ -185,21 +182,25 @@ describe("MarkdownContent", () => {
     expect(performance.now() - startedAt).toBeLessThan(500);
   });
 
-  it("normalizes LaTeX delimiters in preview content as well", () => {
+  it("renders parenthesized and bracketed LaTeX delimiters in file previews", () => {
     const { container } = render(
-      <MarkdownContent content={"预览 \\(x=1\\)。"} variant="preview" />,
+      <MarkdownContent
+        content={[
+          "每个 seed 固定生成 \\(\\phi_x,\\phi_y,\\phi_t\\sim U(0,2\\pi)\\)。",
+          "",
+          "\\[",
+          "C_{SCM}=B+A\\exp(-z)",
+          "\\]",
+        ].join("\n")}
+        variant="desktop-preview"
+      />,
     );
 
-    expect(container.querySelector(".katex")).not.toBeNull();
-  });
-
-  it("keeps chat display formulas horizontally scrollable", () => {
-    expect(GLOBAL_STYLES).toMatch(
-      /\.chat-markdown-content\s+\.katex-display\s*\{[^}]*overflow-x:\s*auto;/s,
-    );
-    expect(GLOBAL_STYLES).toMatch(
-      /\.chat-markdown-content\s+\.katex-display\s*>\s*\.katex\s*\{[^}]*min-width:\s*max-content;/s,
-    );
+    expect(container.querySelectorAll(".katex-display")).toHaveLength(1);
+    expect(Array.from(container.querySelectorAll("annotation")).map((node) => node.textContent)).toEqual([
+      "\\phi_x,\\phi_y,\\phi_t\\sim U(0,2\\pi)",
+      "C_{SCM}=B+A\\exp(-z)",
+    ]);
   });
 
   it("keeps ordered list start values when loose step lists are split by bullet details", () => {
@@ -237,191 +238,4 @@ describe("MarkdownContent", () => {
     expect(orderedLists[3]).toHaveTextContent("网络链接支持");
   });
 
-  it("continues rendering Markdown dollar-delimited inline and display math", () => {
-    const { container } = render(
-      <MarkdownContent
-        content={["Inline $E = mc^2$.", "", "$$", "\\int_0^1 x^2\\,dx", "$$"].join("\n")}
-      />,
-    );
-
-    expect(container.querySelectorAll(".katex")).toHaveLength(2);
-    expect(container.querySelectorAll(".katex-display")).toHaveLength(1);
-  });
-
-  it.each(["preview", "desktop-preview"] as const)(
-    "renders standard LaTeX delimiters in the %s variant",
-    (variant) => {
-      const { container } = render(
-        <MarkdownContent
-          content={String.raw`Inline \(E = mc^2\).
-
-\[
-\int_0^1 x^2\,dx
-\]`}
-          variant={variant}
-        />,
-      );
-
-      expect(container.querySelectorAll(".katex")).toHaveLength(2);
-      expect(container.querySelectorAll(".katex-display")).toHaveLength(1);
-      const previewRoot = container.firstElementChild;
-      expect(previewRoot?.className).toContain("[&_.katex-display]:max-w-full");
-      expect(previewRoot?.className).toContain("[&_.katex-display]:overflow-x-auto");
-      expect(previewRoot?.className).toContain("[&_.katex-display]:overflow-y-hidden");
-    },
-  );
-
-  it("keeps code, raw HTML, links, and existing math byte-for-byte intact", () => {
-    const source = [
-      String.raw`Outside \(x + 1\).`,
-      "",
-      "Inline code: `\\(code\\)`.",
-      "",
-      "~~~latex",
-      String.raw`\[`,
-      "fenced code",
-      String.raw`\]`,
-      "~~~",
-      "",
-      String.raw`    \(indented code\)`,
-      "",
-      "<div>",
-      String.raw`\(raw HTML\)`,
-      "</div>",
-      "",
-      String.raw`[docs](https://example.test/\(target\) "\(title\)")`,
-      "",
-      String.raw`https://example.test/\(bare-target\)`,
-      "",
-      String.raw`Existing $\text{\(already math\)}$.`,
-    ].join("\n");
-    const expected = source.replace(String.raw`Outside \(x + 1\).`, "Outside $x + 1$.");
-
-    expect(normalizeLatexMath(source)).toBe(expected);
-  });
-
-  it("keeps matched inline HTML elements and their bodies unchanged", () => {
-    const source = [
-      String.raw`Before \(outside\).`,
-      "",
-      String.raw`<span data-value="\(attribute\)"><em>\(raw body\)</em></span>`,
-      "",
-      String.raw`After \(outside too\).`,
-    ].join("\n");
-
-    expect(normalizeLatexMath(source)).toBe([
-      "Before $outside$.",
-      "",
-      String.raw`<span data-value="\(attribute\)"><em>\(raw body\)</em></span>`,
-      "",
-      "After $outside too$.",
-    ].join("\n"));
-  });
-
-  it("keeps raw HTML element bodies unchanged across Markdown blocks", () => {
-    const source = [
-      "<details>",
-      "<summary>Title</summary>",
-      "",
-      String.raw`\(inside details\)`,
-      "",
-      "</details>",
-      "",
-      "<span>",
-      "",
-      String.raw`\(inside span\)`,
-      "",
-      "</span>",
-      "",
-      String.raw`Outside \(math\).`,
-    ].join("\n");
-
-    expect(normalizeLatexMath(source)).toBe(
-      source.replace(String.raw`Outside \(math\).`, "Outside $math$."),
-    );
-  });
-
-  it("does not treat tags inside CDATA or processing instructions as HTML containers", () => {
-    const source = [
-      "<![CDATA[",
-      ">",
-      "<fake>",
-      "]]>",
-      "",
-      "<?target",
-      ">",
-      "<fake>",
-      "?>",
-      "",
-      String.raw`Outside \(math\).`,
-    ].join("\n");
-
-    expect(normalizeLatexMath(source)).toBe(
-      source.replace(String.raw`Outside \(math\).`, "Outside $math$."),
-    );
-  });
-
-  it("normalizes explicit link labels without changing link destinations", () => {
-    const source = String.raw`[\(label math\)](https://example.test/\(target\) "\(title\)")`;
-
-    expect(normalizeLatexMath(source)).toBe(
-      String.raw`[$label math$](https://example.test/\(target\) "\(title\)")`,
-    );
-  });
-
-  it("normalizes standalone display delimiters and preserves line endings", () => {
-    expect(normalizeLatexMath(String.raw`\[ E = mc^2 \]`)).toBe("$$\n E = mc^2 \n$$");
-    expect(normalizeLatexMath("\\[\r\nE = mc^2\r\n\\]")).toBe("$$\r\nE = mc^2\r\n$$");
-    expect(normalizeLatexMath("head\r\n\r\n\\[ E = mc^2 \\]\nlast")).toBe(
-      "head\r\n\r\n$$\n E = mc^2 \n$$\nlast",
-    );
-    expect(normalizeLatexMath("\\[ E = mc^2 \\]\rnext")).toBe("$$\r E = mc^2 \r$$\rnext");
-    expect(normalizeLatexMath(String.raw`Prefix \[E = mc^2\] suffix`)).toBe(
-      String.raw`Prefix \[E = mc^2\] suffix`,
-    );
-  });
-
-  it("pairs across Markdown emphasis without crossing protected regions", () => {
-    const source = [
-      String.raw`Unicode 🙂 \(a **b** c\).`,
-      "",
-      "Broken \\(before `code` after\\).",
-    ].join("\n");
-
-    expect(normalizeLatexMath(source)).toBe([
-      "Unicode 🙂 $a **b** c$.",
-      "",
-      "Broken \\(before `code` after\\).",
-    ].join("\n"));
-  });
-
-  it("leaves escaped, unmatched, currency, and dollar-containing formulas unchanged", () => {
-    const source = [
-      String.raw`Orphan close \).`,
-      String.raw`Escaped \\(literal\\).`,
-      "Price is $5.00.",
-      String.raw`Price formula \(\text{cost: \$5}\).`,
-      String.raw`Unclosed \(x + 1`,
-    ].join("\n");
-
-    expect(normalizeLatexMath(source)).toBe(source);
-    expect(normalizeLatexMath(String.raw`Broken \(outer; valid \(x\).`)).toBe(
-      String.raw`Broken \(outer; valid $x$.`,
-    );
-  });
-
-  it("handles many unmatched delimiters without consuming later content", () => {
-    const unmatched = Array.from({ length: 5_000 }, () => String.raw`\(`).join(" ");
-    expect(normalizeLatexMath(unmatched)).toBe(unmatched);
-  });
-
-  it("keeps unsupported KaTeX commands visible without crashing the preview", () => {
-    const { container } = render(
-      <MarkdownContent content={String.raw`Unsupported \(\begin{notreal}x\end{notreal}\).`} />,
-    );
-
-    const error = container.querySelector(".katex-error");
-    expect(error).not.toBeNull();
-    expect(error).toHaveTextContent(String.raw`\begin{notreal}x\end{notreal}`);
-  });
 });

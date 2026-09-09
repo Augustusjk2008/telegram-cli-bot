@@ -133,6 +133,23 @@ async def _collect_events(runtime: PiSessionRuntime) -> list[dict[str, Any]]:
     return [event async for event in runtime.events()]
 
 
+def test_queue_pressure_tracks_lost_usage_for_cost_completeness(monkeypatch, tmp_path):
+    monkeypatch.setattr("bot.native_agent.pi_session_runtime.PI_RUNTIME_STREAM_QUEUE_MAX_EVENTS", 4)
+    runtime = _runtime(0, tmp_path)
+    usage_event = {"type": "message_end", "message": {"role": "assistant"}}
+    runtime._enqueue_stream_item(usage_event)
+    assert runtime.dropped_usage_events == 0
+    # 普通队列满后，新回复可能被丢弃。
+    runtime._enqueue_stream_item(usage_event)
+    assert runtime.dropped_usage_events == 1
+    runtime._enqueue_stream_item({"type": "extension_ui_request"})
+    runtime._enqueue_stream_item({"type": "session_state"})
+    runtime._enqueue_stream_item({"type": "agent_end"})
+    # 终态保留空间耗尽时，已入队的回复也可能被移除。
+    runtime._enqueue_stream_item({"type": "error"})
+    assert runtime.dropped_usage_events == 2
+
+
 @pytest.mark.asyncio
 async def test_reader_finishes_when_slow_consumer_fills_queue_and_keeps_terminal_event(
     monkeypatch: pytest.MonkeyPatch,

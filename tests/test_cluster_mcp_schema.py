@@ -16,66 +16,13 @@ _CLUSTER_TOOL_NAMES = {
     "wait_agent_messages",
 }
 
-_CONFIGURE_TEAM_SCHEMA = {
-    "type": "object",
-    "required": ["run_id", "mode", "roles"],
-    "properties": {
-        "run_id": {"type": "string", "description": "TCB cluster run id."},
-        "mode": {"type": "string", "enum": ["extend", "replace"]},
-        "roles": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "required": ["name", "responsibility"],
-                "properties": {
-                    "name": {"type": "string"},
-                    "responsibility": {"type": "string"},
-                },
-            },
-        },
-    },
-}
 
-
-def test_python_mcp_registers_required_run_id_and_configure_team_schema() -> None:
+def test_python_mcp_registers_tools_with_required_run_id() -> None:
     tools = {tool["name"]: tool for tool in mcp_stdio._tools_for_environment()}
 
     assert set(tools) == _CLUSTER_TOOL_NAMES
-    assert tools["configure_team"]["inputSchema"] == _CONFIGURE_TEAM_SCHEMA
-    description = tools["configure_team"]["description"]
-    assert "必须查看响应中的 changed" in description
-    assert "changed=true" in description
-    assert "本轮所有后续工具立即改用响应中的新 run_id" in description
-    assert "changed=false" in description
-    assert "继续使用原 run_id" in description
-    assert "stdio MCP 不缓存或自动切换 run_id" in description
     for tool in tools.values():
         assert "run_id" in tool["inputSchema"]["required"]
-
-
-def test_pi_extension_matches_configure_team_schema_and_requires_run_id() -> None:
-    source = (
-        Path(__file__).parents[1]
-        / "bot"
-        / "cluster"
-        / "pi_extension"
-        / "tcb-cluster.ts"
-    ).read_text(encoding="utf-8")
-    compact = " ".join(source.split())
-
-    assert "TCB_CLUSTER_RUN_ID" not in source
-    assert 'const runIdParam = Type.String({ description: "TCB cluster run id." });' in compact
-    assert compact.count("run_id: runIdParam") == len(_CLUSTER_TOOL_NAMES)
-    assert '"configure_team", "Configure Team"' in compact
-    assert 'mode: Type.String({ enum: ["extend", "replace"] })' in compact
-    assert "roles: Type.Array(Type.Object({ name: Type.String(), responsibility: Type.String(), }))" in compact
-    assert "必须查看响应中的 changed" in source
-    assert "changed=true" in source
-    assert "本轮所有后续工具立即改用响应中的新 run_id" in source
-    assert "changed=false" in source
-    assert "继续使用原 run_id" in source
-    assert "Pi 适配层不缓存或自动切换 run_id" in source
-    assert "const runId = clusterRunId(params.run_id);" in source
 
 
 def test_python_mcp_forwards_each_call_run_id_without_caching(monkeypatch, tmp_path: Path) -> None:

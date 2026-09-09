@@ -1415,7 +1415,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
           name={messageName}
           createdAt={chatMessageDisplayTime(item)}
           align={messageAlign}
-          contextUsage={!isUser ? item.meta?.contextUsage : undefined}
+          contextUsage={isStreamingAssistant ? item.meta?.contextUsage : undefined}
         />
         <div className={showSoloRollback ? "flex items-start justify-end gap-1.5" : undefined}>
           {showSoloRollback ? (

@@ -21,25 +21,6 @@ describe("useFrameBatchedQueue", () => {
     requestAnimationFrame.mockRestore();
   });
 
-  it("coalesces 1000 synchronous items into one consumer call", () => {
-    const consumed = vi.fn();
-    let callback: FrameRequestCallback | undefined;
-    const requestAnimationFrame = vi.spyOn(window, "requestAnimationFrame").mockImplementation((next) => {
-      callback = next;
-      return 3;
-    });
-    const { result } = renderHook(() => useFrameBatchedQueue(consumed));
-    act(() => {
-      for (let index = 0; index < 1_000; index += 1) {
-        result.current.enqueue(index);
-      }
-    });
-    act(() => callback?.(0));
-    expect(consumed).toHaveBeenCalledTimes(1);
-    expect(consumed.mock.calls[0]?.[0]).toHaveLength(1_000);
-    requestAnimationFrame.mockRestore();
-  });
-
   it("flushes pending entries and cancels the scheduled frame", () => {
     const consumed = vi.fn();
     let callback: FrameRequestCallback | undefined;

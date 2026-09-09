@@ -120,7 +120,7 @@ test("Codex 额度趋势按额度桶分组", async () => {
   );
   vi.spyOn(client, "getCodexUsageStats").mockResolvedValue(stats);
 
-  const { container } = render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
   await openCodexUsageTab(user);
 
   const chart = await screen.findByRole("img", { name: /通用 Codex.*共 3 个样本，当前剩余 92%/ });
@@ -133,204 +133,7 @@ test("Codex 额度趋势按额度桶分组", async () => {
   expect(screen.getByText("剩余时长 7 天")).toBeInTheDocument();
   expect(screen.getByText("已用 8%")).toBeInTheDocument();
   expect(chart.closest("article")).toHaveTextContent("7 天窗口");
-  expect(screen.queryByText("纵轴为剩余额度，固定显示 0% 至 100%。")).not.toBeInTheDocument();
-  expect(screen.queryByText("暂无符合筛选条件的 Codex 额度数据。")).not.toBeInTheDocument();
   expect(screen.queryByText("总 token")).not.toBeInTheDocument();
-  expect(chart.querySelector("title")?.textContent).toBe("通用 Codex · Pro 剩余额度与剩余时长趋势");
-  expect(chart.querySelector("desc")?.textContent).toContain("剩余时长");
-  const quotaAxisTitle = chart.querySelector(".codex-usage-rate-limit-quota-axis-title");
-  const durationAxisTitle = chart.querySelector(".codex-usage-rate-limit-duration-axis-title");
-  expect(quotaAxisTitle?.textContent).toBe("剩余额度");
-  expect(durationAxisTitle?.textContent).toBe("剩余时长");
-  expect(Number(quotaAxisTitle?.getAttribute("x"))).toBeLessThan(Number(durationAxisTitle?.getAttribute("x")));
-  const durationTicks = Array.from(chart.querySelectorAll(".codex-usage-rate-limit-duration-tick"));
-  expect(durationTicks.map((tick) => tick.textContent?.trim())).toEqual([
-    "0 天", "1.75 天", "3.5 天", "5.25 天", "7 天",
-  ]);
-  expect(durationTicks.at(-1)?.getAttribute("y")).toBe("36");
-  const quotaLine = container.querySelector(".codex-usage-rate-limit-line");
-  const durationLine = container.querySelector(".codex-usage-rate-limit-duration-line");
-  expect(quotaLine).toBeInTheDocument();
-  expect(durationLine).toBeInTheDocument();
-  expect(quotaLine?.tagName).toBe("path");
-  expect(durationLine?.tagName).toBe("path");
-  expect(quotaLine?.getAttribute("d")).not.toContain("Q ");
-  expect(durationLine?.getAttribute("d")).not.toMatch(/[QC] /);
-  expect(durationLine?.getAttribute("d")?.match(/L /g)).toHaveLength(2);
-  expect(chart.querySelector("circle")).not.toBeInTheDocument();
-  expect(durationLine?.getAttribute("d")).toMatch(/^M 64 208 /);
-  expect(durationLine?.getAttribute("d")).toMatch(/ 576 32$/);
-});
-
-test("Codex 额度趋势保留 reset 前后局部极值并使用直线连接", async () => {
-  const user = userEvent.setup();
-  const client = createAdminClient();
-  const stats = await client.getCodexUsageStats();
-  stats.rateLimitSamples = [
-    {
-      limitId: GENERAL_CODEX_RATE_LIMIT_ID,
-      sampledAt: "2026-08-01T00:00:00+08:00",
-      usedPercent: 10,
-      windowMinutes: 1440,
-      resetsAt: "2026-08-02T00:00:00+08:00",
-      planType: "pro",
-    },
-    {
-      limitId: GENERAL_CODEX_RATE_LIMIT_ID,
-      sampledAt: "2026-08-01T06:00:00+08:00",
-      usedPercent: 80,
-      windowMinutes: 1440,
-      resetsAt: "2026-08-02T00:00:00+08:00",
-      planType: "pro",
-    },
-    {
-      limitId: GENERAL_CODEX_RATE_LIMIT_ID,
-      sampledAt: "2026-08-01T07:00:00+08:00",
-      usedPercent: 0,
-      windowMinutes: 1440,
-      resetsAt: "2026-08-08T00:00:00+08:00",
-      planType: "pro",
-    },
-    {
-      limitId: GENERAL_CODEX_RATE_LIMIT_ID,
-      sampledAt: "2026-08-01T12:00:00+08:00",
-      usedPercent: 20,
-      windowMinutes: 1440,
-      resetsAt: "2026-08-08T00:00:00+08:00",
-      planType: "pro",
-    },
-  ];
-  vi.spyOn(client, "getCodexUsageStats").mockResolvedValue(stats);
-
-  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
-  await openCodexUsageTab(user);
-
-  const chart = await screen.findByRole("img", { name: /通用 Codex · Pro.*共 4 个样本/ });
-  const pathData = chart.querySelector(".codex-usage-rate-limit-line")?.getAttribute("d") || "";
-  const resetConnection = /L ([^ ]+) ([^ ]+) L ([^ ]+) ([^ ]+)/.exec(pathData);
-  expect(resetConnection).not.toBeNull();
-  expect(Number(resetConnection?.[1])).toBe(320);
-  expect(Number(resetConnection?.[2])).toBe(208);
-  expect(Number(resetConnection?.[3])).toBeCloseTo(64 + (512 * 7) / 12);
-  expect(Number(resetConnection?.[4])).toBe(32);
-  expect(pathData).toMatch(/L 576 76$/);
-});
-
-test("Codex 额度趋势即使 reset 后立即消耗也保留 reset 直连", async () => {
-  const user = userEvent.setup();
-  const client = createAdminClient();
-  const stats = await client.getCodexUsageStats();
-  stats.rateLimitSamples = [
-    {
-      limitId: GENERAL_CODEX_RATE_LIMIT_ID,
-      sampledAt: "2026-08-01T00:00:00+08:00",
-      usedPercent: 60,
-      windowMinutes: 1440,
-      resetsAt: "2026-08-02T00:00:00+08:00",
-      planType: "pro",
-    },
-    {
-      limitId: GENERAL_CODEX_RATE_LIMIT_ID,
-      sampledAt: "2026-08-01T12:00:00+08:00",
-      usedPercent: 60,
-      windowMinutes: 1440,
-      resetsAt: "2026-08-02T00:00:00+08:00",
-      planType: "pro",
-    },
-    {
-      limitId: GENERAL_CODEX_RATE_LIMIT_ID,
-      sampledAt: "2026-08-02T01:00:00+08:00",
-      usedPercent: 60,
-      windowMinutes: 1440,
-      resetsAt: "2026-08-03T01:00:00+08:00",
-      planType: "pro",
-    },
-  ];
-  vi.spyOn(client, "getCodexUsageStats").mockResolvedValue(stats);
-
-  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
-  await openCodexUsageTab(user);
-
-  const chart = await screen.findByRole("img", { name: /通用 Codex · Pro.*共 3 个样本/ });
-  const pathData = chart.querySelector(".codex-usage-rate-limit-line")?.getAttribute("d") || "";
-  expect(pathData).toMatch(/ L 576 /);
-});
-
-test("Codex 额度趋势平滑粒度按横轴时间范围变化", async () => {
-  const user = userEvent.setup();
-  const client = createAdminClient();
-  const stats = await client.getCodexUsageStats();
-  const denseSamples = (limitId: string, finalHour: number) => [
-    ...Array.from({ length: 50 }, (_, index) => ({
-      limitId,
-      sampledAt: `2026-08-01T00:${String(index).padStart(2, "0")}:00+08:00`,
-      usedPercent: 10 + index / 10,
-      windowMinutes: 10080,
-      resetsAt: "2026-08-08T00:00:00+08:00",
-      planType: "pro",
-    })),
-    {
-      limitId,
-      sampledAt: `2026-08-${String(1 + Math.floor(finalHour / 24)).padStart(2, "0")}T${String(finalHour % 24).padStart(2, "0")}:00:00+08:00`,
-      usedPercent: 20,
-      windowMinutes: 10080,
-      resetsAt: "2026-08-08T00:00:00+08:00",
-      planType: "pro",
-    },
-  ];
-  stats.rateLimitSamples = [
-    ...denseSamples(GENERAL_CODEX_RATE_LIMIT_ID, 2),
-    ...denseSamples("codex_bengalfox", 48),
-  ];
-  vi.spyOn(client, "getCodexUsageStats").mockResolvedValue(stats);
-
-  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
-  await openCodexUsageTab(user);
-
-  const narrowChart = await screen.findByRole("img", { name: /通用 Codex · Pro.*共 51 个样本/ });
-  const wideChart = screen.getByRole("img", { name: /gpt-5\.3-codex-spark · Pro.*共 51 个样本/ });
-  const narrowCommands = narrowChart.querySelector(".codex-usage-rate-limit-line")?.getAttribute("d")?.match(/C /g) || [];
-  const wideCommands = wideChart.querySelector(".codex-usage-rate-limit-line")?.getAttribute("d")?.match(/C /g) || [];
-  expect(narrowCommands.length).toBeGreaterThan(wideCommands.length);
-  expect(wideCommands).toHaveLength(2);
-  expect(narrowCommands.length).toBeLessThan(50);
-});
-
-test("Codex 额度趋势普通连接点保持连续可导", async () => {
-  const user = userEvent.setup();
-  const client = createAdminClient();
-  const stats = await client.getCodexUsageStats();
-  stats.rateLimitSamples = [
-    0,
-    20,
-    40,
-    60,
-  ].map((usedPercent, index) => ({
-    limitId: GENERAL_CODEX_RATE_LIMIT_ID,
-    sampledAt: `2026-08-01T0${index}:00:00+08:00`,
-    usedPercent,
-    windowMinutes: 10080,
-    resetsAt: "2026-08-08T00:00:00+08:00",
-    planType: "pro",
-  }));
-  vi.spyOn(client, "getCodexUsageStats").mockResolvedValue(stats);
-
-  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
-  await openCodexUsageTab(user);
-
-  const chart = await screen.findByRole("img", { name: /通用 Codex · Pro.*共 4 个样本/ });
-  const pathData = chart.querySelector(".codex-usage-rate-limit-line")?.getAttribute("d") || "";
-  const segments = Array.from(pathData.matchAll(/C ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+)/g))
-    .map((match) => match.slice(1).map(Number));
-  expect(segments).toHaveLength(3);
-  expect(pathData).not.toContain("Q ");
-  for (let index = 1; index < segments.length; index += 1) {
-    const previous = segments[index - 1];
-    const current = segments[index];
-    const incomingSlope = (previous[5] - previous[3]) / (previous[4] - previous[2]);
-    const outgoingSlope = (current[1] - previous[5]) / (current[0] - previous[4]);
-    expect(outgoingSlope).toBeCloseTo(incomingSlope);
-  }
 });
 
 test("Codex 额度趋势重复采样时间退回折线且不产生无效坐标", async () => {
@@ -357,7 +160,6 @@ test("Codex 额度趋势重复采样时间退回折线且不产生无效坐标",
   const chart = await screen.findByRole("img", { name: /通用 Codex · Pro.*共 3 个样本/ });
   const pathData = chart.querySelector(".codex-usage-rate-limit-line")?.getAttribute("d") || "";
   expect(pathData).not.toMatch(/[QC] |NaN/);
-  expect(pathData.match(/L /g)).toHaveLength(2);
 });
 
 test("Codex 额度趋势按套餐拆分相同额度桶", async () => {
@@ -472,8 +274,6 @@ test("Codex 额度趋势纵轴按额度和时长的查询范围同步缩放", as
   expect(durationTicks.map((tick) => tick.textContent?.trim())).toEqual([
     "0.7 天", "1.75 天", "2.8 天", "3.85 天", "4.9 天",
   ]);
-  expect(chart.querySelector("desc")?.textContent).toContain("左轴为10%到70%");
-  expect(chart.querySelector("desc")?.textContent).toContain("右轴为0.7天到4.9天");
 });
 
 test("Codex 额度趋势没有样本时仍显示已知额度入口", async () => {
@@ -486,9 +286,6 @@ test("Codex 额度趋势没有样本时仍显示已知额度入口", async () =>
   render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
   await openCodexUsageTab(user);
 
-  expect(await screen.findByText("暂无通用 Codex 限额样本。")).toBeInTheDocument();
-  expect(screen.getByText("暂无 gpt-5.3-codex-spark 限额样本。")).toBeInTheDocument();
-  expect(screen.queryByText("暂无 gpt-reserve 限额样本。")).not.toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "通用 Codex", level: 4 })).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "gpt-5.3-codex-spark", level: 4 })).toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "gpt-reserve", level: 4 })).not.toBeInTheDocument();

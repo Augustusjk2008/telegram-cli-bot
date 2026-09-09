@@ -12,6 +12,7 @@ import type {
 } from "../../services/types";
 import type { WebBotClient } from "../../services/webBotClient";
 import { getErrorMessage } from "../../utils/errorMessage";
+import { codexConsumptionBars, codexConsumptionCurve, type QuotaCurveSegment } from "../../utils/codexConsumptionRate";
 import "./CodexUsagePanel.css";
 
 type Props = {
@@ -58,8 +59,32 @@ function providerLabel(provider: CodexUsageProvider) {
 
 const percentValueFormat = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 1 });
 const durationDaysFormat = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 });
+const consumptionRateFormat = new Intl.NumberFormat("zh-CN", { maximumSignificantDigits: 3 });
 const RATE_LIMIT_AXIS_STEP_PERCENT = 10;
 const RATE_LIMIT_AXIS_INTERVALS = 4;
+const CONSUMPTION_BAR_TARGET = 32;
+const MINUTE_MS = 60 * 1000;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
+const CONSUMPTION_INTERVALS_MS = [
+  MINUTE_MS,
+  2 * MINUTE_MS,
+  5 * MINUTE_MS,
+  10 * MINUTE_MS,
+  15 * MINUTE_MS,
+  30 * MINUTE_MS,
+  HOUR_MS,
+  2 * HOUR_MS,
+  3 * HOUR_MS,
+  6 * HOUR_MS,
+  12 * HOUR_MS,
+  DAY_MS,
+  2 * DAY_MS,
+  7 * DAY_MS,
+  14 * DAY_MS,
+  30 * DAY_MS,
+];
+type RateLimitSecondaryMetric = "duration" | "consumption";
 
 function formatPercentValue(value: number) {
   return `${percentValueFormat.format(value)}%`;
@@ -115,6 +140,88 @@ function formatServerLocalTime(value: string) {
 function formatAxisTime(value: string) {
   const match = /^\d{4}-(\d{2}-\d{2})T(\d{2}:\d{2})/.exec(value);
   return match ? `${match[1]} ${match[2]}` : value;
+}
+
+function sampledAtOffsetMinutes(value: string) {
+  if (value.endsWith("Z")) return 0;
+  const match = /([+-])(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return null;
+  const minutes = Number(match[2]) * 60 + Number(match[3]);
+  return match[1] === "-" ? -minutes : minutes;
+}
+
+function fixedConsumptionTimeDomain(
+  minTimestamp: number,
+  maxTimestamp: number,
+  samples: CodexRateLimitSample[],
+) {
+  const sampleRange = maxTimestamp - minTimestamp;
+  if (!Number.isFinite(sampleRange) || sampleRange <= 0) return null;
+  const targetInterval = sampleRange / CONSUMPTION_BAR_TARGET;
+  const interval = CONSUMPTION_INTERVALS_MS.find((candidate) => candidate >= targetInterval)
+    ?? Math.ceil(targetInterval / DAY_MS) * DAY_MS;
+  const explicitOffsetMinutes = sampledAtOffsetMinutes(samples[0]?.sampledAt || "");
+  const offsetMs = (explicitOffsetMinutes ?? -new Date(minTimestamp).getTimezoneOffset()) * MINUTE_MS;
+  const start = Math.floor((minTimestamp + offsetMs) / interval) * interval - offsetMs;
+  const alignedEnd = Math.ceil((maxTimestamp + offsetMs) / interval) * interval - offsetMs;
+  const end = Math.max(start + interval, alignedEnd);
+  return {
+    start,
+    end,
+    count: Math.max(1, Math.round((end - start) / interval)),
+  };
+}
+
+function formatSampleTimestamp(timestamp: number, samples: CodexRateLimitSample[]) {
+  const closest = samples.reduce<{ distance: number; value: string } | null>((best, sample) => {
+    const sampleTimestamp = Date.parse(sample.sampledAt);
+    const distance = Math.abs(sampleTimestamp - timestamp);
+    return Number.isFinite(distance) && (!best || distance < best.distance)
+      ? { distance, value: sample.sampledAt }
+      : best;
+  }, null);
+  const offsetMinutes = closest ? sampledAtOffsetMinutes(closest.value) : null;
+  const date = new Date(timestamp + (offsetMinutes ?? 0) * 60 * 1000);
+  const read = (part: "year" | "month" | "day" | "hour" | "minute") => {
+    if (offsetMinutes !== null) {
+      if (part === "year") return date.getUTCFullYear();
+      if (part === "month") return date.getUTCMonth() + 1;
+      if (part === "day") return date.getUTCDate();
+      if (part === "hour") return date.getUTCHours();
+      return date.getUTCMinutes();
+    }
+    if (part === "year") return date.getFullYear();
+    if (part === "month") return date.getMonth() + 1;
+    if (part === "day") return date.getDate();
+    if (part === "hour") return date.getHours();
+    return date.getMinutes();
+  };
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const month = pad(read("month"));
+  const day = pad(read("day"));
+  return {
+    date: `${read("year")}/${month}/${day}`,
+    time: `${pad(read("hour"))}:${pad(read("minute"))}`,
+  };
+}
+
+function formatConsumptionPeriod(
+  startX: number,
+  endX: number,
+  minTimestamp: number,
+  timestampRange: number,
+  plotLeft: number,
+  plotWidth: number,
+  samples: CodexRateLimitSample[],
+) {
+  const formatX = (x: number) => {
+    const timestamp = minTimestamp + ((x - plotLeft) / plotWidth) * timestampRange;
+    return formatSampleTimestamp(Math.round(timestamp / MINUTE_MS) * MINUTE_MS, samples);
+  };
+  const start = formatX(startX);
+  const end = formatX(endX);
+  const endText = start.date === end.date ? end.time : `${end.date}-${end.time}`;
+  return `${start.date}-${start.time}~${endText}`;
 }
 
 function formatWindow(minutes: number) {
@@ -396,21 +503,21 @@ function monotoneTangents(points: ChartPoint[]) {
   return tangents;
 }
 
-function appendLinearCommands(commands: string[], points: ChartPoint[]) {
+function appendLinearSegments(segments: QuotaCurveSegment[], points: ChartPoint[]) {
   for (let index = 1; index < points.length; index += 1) {
-    commands.push(`L ${points[index].x} ${points[index].y}`);
+    segments.push({ start: points[index - 1], end: points[index] });
   }
 }
 
 function appendSmoothSegment(
-  commands: string[],
+  segments: QuotaCurveSegment[],
   points: TimedChartPoint[],
   timestampRange: number,
   domainStart: number,
   plotWidth: number,
 ) {
   if (!Number.isFinite(timestampRange) || timestampRange <= 0) {
-    appendLinearCommands(commands, points);
+    appendLinearSegments(segments, points);
     return;
   }
   const reduced = temporalSmoothSegment(points, timestampRange, domainStart, plotWidth);
@@ -419,13 +526,13 @@ function appendSmoothSegment(
     reduced.length === 2
     || reduced.some((point, index) => index > 0 && point.x <= reduced[index - 1].x)
   ) {
-    appendLinearCommands(commands, reduced);
+    appendLinearSegments(segments, reduced);
     return;
   }
 
   const tangents = monotoneTangents(reduced);
   if (!tangents) {
-    appendLinearCommands(commands, reduced);
+    appendLinearSegments(segments, reduced);
     return;
   }
 
@@ -433,47 +540,58 @@ function appendSmoothSegment(
     const current = reduced[index - 1];
     const next = reduced[index];
     const width = next.x - current.x;
-    commands.push(
-      `C ${current.x + width / 3} ${current.y + (tangents[index - 1] * width) / 3}`
-      + ` ${next.x - width / 3} ${next.y - (tangents[index] * width) / 3}`
-      + ` ${next.x} ${next.y}`,
-    );
+    segments.push({
+      start: current,
+      end: next,
+      controls: [
+        current.y + (tangents[index - 1] * width) / 3,
+        next.y - (tangents[index] * width) / 3,
+      ],
+    });
   }
 }
 
-function smoothQuotaPath(
+function smoothQuotaCurve(
   points: TimedChartPoint[],
   resetBoundaryPairs: Set<string>,
   timestampRange: number,
   domainStart: number,
   plotWidth: number,
 ) {
-  if (!points.length) return "";
-  if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
-  if (points.length === 2 && !resetBoundaryPairs.size) {
-    return linearPath(points);
-  }
-
-  const commands = [`M ${points[0].x} ${points[0].y}`];
+  const segments: QuotaCurveSegment[] = [];
   let segmentStart = 0;
   for (let index = 1; index < points.length; index += 1) {
     const isBoundary = resetBoundaryPairs.has(`${index - 1}:${index}`);
     if (!isBoundary) continue;
 
-    appendSmoothSegment(commands, points.slice(segmentStart, index), timestampRange, domainStart, plotWidth);
-    commands.push(`L ${points[index].x} ${points[index].y}`);
+    appendSmoothSegment(segments, points.slice(segmentStart, index), timestampRange, domainStart, plotWidth);
+    segments.push({ start: points[index - 1], end: points[index], reset: true });
     segmentStart = index;
   }
-  appendSmoothSegment(commands, points.slice(segmentStart), timestampRange, domainStart, plotWidth);
+  appendSmoothSegment(segments, points.slice(segmentStart), timestampRange, domainStart, plotWidth);
+  return segments;
+}
+
+function quotaCurvePath(segments: QuotaCurveSegment[]) {
+  if (!segments.length) return "";
+  const commands = [`M ${segments[0].start.x} ${segments[0].start.y}`];
+  for (const { start, end, controls } of segments) {
+    const width = end.x - start.x;
+    commands.push(controls
+      ? `C ${start.x + width / 3} ${controls[0]} ${end.x - width / 3} ${controls[1]} ${end.x} ${end.y}`
+      : `L ${end.x} ${end.y}`);
+  }
   return commands.join(" ");
 }
 
 function CodexRateLimitBucketChart({
   label,
   samples,
+  secondaryMetric,
 }: {
   label: string;
   samples: CodexRateLimitSample[];
+  secondaryMetric: RateLimitSecondaryMetric;
 }) {
   const orderedSamples = useMemo(
     () => [...samples].sort(compareSampledAt),
@@ -503,6 +621,9 @@ function CodexRateLimitBucketChart({
   const hasValidTimestamps = timestamps.every(Number.isFinite);
   const minTimestamp = hasValidTimestamps ? timestamps[0] : 0;
   const maxTimestamp = hasValidTimestamps ? timestamps[timestamps.length - 1] : 0;
+  const consumptionTimeDomain = hasValidTimestamps
+    ? fixedConsumptionTimeDomain(minTimestamp, maxTimestamp, orderedSamples)
+    : null;
   const timestampRange = maxTimestamp - minTimestamp;
   const axisBounds = rateLimitAxisBounds(orderedSamples);
   const axisRange = axisBounds.max - axisBounds.min;
@@ -553,21 +674,52 @@ function CodexRateLimitBucketChart({
       resetBoundaryPairs.add(`${index - 1}:${index}`);
     }
   }
-  const quotaPath = smoothQuotaPath(
+  const quotaCurve = smoothQuotaCurve(
     points.map(({ x, timestamp, quotaY }) => ({ x, y: quotaY, timestamp })),
     resetBoundaryPairs,
     timestampRange,
     minTimestamp,
     plotWidth,
   );
+  const quotaPath = quotaCurvePath(quotaCurve);
   const durationPath = linearPath(points.map(({ x, durationY }) => ({ x, y: durationY })));
+  // Screen y grows as quota falls, so this is -d(remaining percent)/d(hours).
+  const consumptionCurve = codexConsumptionCurve(
+    quotaCurve,
+    hasValidTimestamps && timestampRange > 0
+      ? (axisRange / plotHeight) * (plotWidth / timestampRange) * 3600000
+      : 0,
+  );
+  const xForTimestamp = (timestamp: number) => (
+    left + ((timestamp - minTimestamp) / timestampRange) * plotWidth
+  );
+  const consumptionBars = codexConsumptionBars(
+    consumptionCurve,
+    consumptionTimeDomain ? xForTimestamp(consumptionTimeDomain.start) : left,
+    consumptionTimeDomain ? xForTimestamp(consumptionTimeDomain.end) : width - right,
+    consumptionTimeDomain?.count ?? CONSUMPTION_BAR_TARGET,
+  );
+  const latestRate = consumptionCurve.latestRate === null
+    ? null
+    : Math.max(0, consumptionCurve.latestRate);
+  const maxRate = Math.max(0, ...consumptionBars.map((bar) => bar.rate));
+  const latestRateText = latestRate === null ? "—" : `${consumptionRateFormat.format(latestRate)} 百分点/小时`;
+  const rateRange = maxRate || 1;
+  const rateStepBase = 10 ** Math.floor(Math.log10(rateRange / RATE_LIMIT_AXIS_INTERVALS));
+  const rateStep = ([1, 2, 5, 10].find((step) => step * rateStepBase * RATE_LIMIT_AXIS_INTERVALS >= rateRange) ?? 10) * rateStepBase;
+  const rateAxisMin = 0;
+  const rateAxisMax = Math.max(rateAxisMin + rateStep * RATE_LIMIT_AXIS_INTERVALS, Math.ceil(maxRate / rateStep) * rateStep);
+  const yForRate = (rate: number) => top + (rateAxisMax - rate) / (rateAxisMax - rateAxisMin) * plotHeight;
+  const showConsumption = secondaryMetric === "consumption";
+  const secondaryClass = showConsumption ? "consumption" : "duration";
+  const secondaryLabel = showConsumption ? "消耗速度" : "剩余时长";
   const latestRemaining = remainingPercent(latest);
   const latestDuration = formatRemainingDuration(remainingDurationMs(latest));
   const durationWindowDays = latest.windowMinutes / 1440;
   const durationDaysForPercent = (remaining: number) => (
     durationDaysFormat.format((remaining / 100) * durationWindowDays)
   );
-  const accessibleLabel = `${label} 剩余额度与剩余时长趋势，共 ${orderedSamples.length} 个样本，当前剩余 ${formatPercentValue(latestRemaining)}，剩余时长 ${latestDuration}`;
+  const accessibleLabel = `${label} 剩余额度与${secondaryLabel}趋势，共 ${orderedSamples.length} 个样本，当前剩余 ${formatPercentValue(latestRemaining)}，剩余时长 ${latestDuration}，最近消耗 ${latestRateText}`;
 
   return (
     <article className="codex-usage-rate-limit-group">
@@ -577,6 +729,11 @@ function CodexRateLimitBucketChart({
         </div>
         <div className="codex-usage-rate-limit-summary" aria-label="最新限额样本摘要">
           <strong>当前剩余 {formatPercentValue(latestRemaining)}</strong>
+          <span title={latestRate === null
+            ? "当前曲线末端无法计算消耗速度"
+            : `${formatServerLocalTime(latest.sampledAt)} 的平滑额度曲线消耗速度`}>
+            最近消耗 {latestRateText}
+          </span>
           <span>剩余时长 {latestDuration}</span>
           <span>已用 {formatPercentValue(latest.usedPercent)}</span>
           <span>{formatWindow(latest.windowMinutes)}窗口</span>
@@ -585,11 +742,11 @@ function CodexRateLimitBucketChart({
       </div>
       <div className="codex-usage-rate-limit-chart">
         <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={accessibleLabel}>
-          <title>{label} 剩余额度与剩余时长趋势</title>
+          <title>{label} 剩余额度与{secondaryLabel}趋势</title>
           <desc>
-            按采样时间展示该额度桶的剩余额度与剩余时长；左右纵轴按当前数据范围同步缩放，
-            左轴为{formatPercentValue(axisBounds.min)}到{formatPercentValue(axisBounds.max)}，
-            右轴为{durationDaysForPercent(axisBounds.min)}天到{durationDaysForPercent(axisBounds.max)}天。
+            {showConsumption
+              ? `左轴为剩余额度，右轴为消耗速度（百分点/小时），从 ${consumptionRateFormat.format(rateAxisMin)} 到 ${consumptionRateFormat.format(rateAxisMax)}；柱高为固定时间区间内平滑额度曲线负导数的平均值，随横轴范围变化；重置间隔为过渡估计，数据不足处留空。`
+              : `按采样时间展示该额度桶的剩余额度与剩余时长；左右纵轴按当前数据范围同步缩放，左轴为${formatPercentValue(axisBounds.min)}到${formatPercentValue(axisBounds.max)}，右轴为${durationDaysForPercent(axisBounds.min)}天到${durationDaysForPercent(axisBounds.max)}天。`}
           </desc>
           <line
             className="codex-usage-rate-limit-quota-axis"
@@ -599,7 +756,7 @@ function CodexRateLimitBucketChart({
             y2={top + plotHeight}
           />
           <line
-            className="codex-usage-rate-limit-duration-axis"
+            className={`codex-usage-rate-limit-${secondaryClass}-axis`}
             x1={width - right}
             x2={width - right}
             y1={top}
@@ -614,14 +771,14 @@ function CodexRateLimitBucketChart({
             剩余额度
           </text>
           <text
-            className="codex-usage-rate-limit-duration-axis-title"
+            className={`codex-usage-rate-limit-${secondaryClass}-axis-title`}
             x={width - right}
             y={18}
             textAnchor="end"
           >
-            剩余时长
+            {showConsumption ? "消耗速度（百分点/小时）" : "剩余时长"}
           </text>
-          {axisTicks.map((remaining) => {
+          {axisTicks.map((remaining, index) => {
             const y = yForPercent(remaining);
             return (
               <g key={remaining} className="codex-usage-rate-limit-grid">
@@ -635,20 +792,46 @@ function CodexRateLimitBucketChart({
                   {remaining}%
                 </text>
                 <text
-                  className="codex-usage-rate-limit-duration-tick"
+                  className={`codex-usage-rate-limit-${secondaryClass}-tick`}
                   x={width - right + 10}
                   y={y + 4}
                   textAnchor="start"
                 >
-                  {durationDaysForPercent(remaining)} 天
+                  {showConsumption
+                    ? consumptionRateFormat.format(rateAxisMin + index * (rateAxisMax - rateAxisMin) / RATE_LIMIT_AXIS_INTERVALS)
+                    : `${durationDaysForPercent(remaining)} 天`}
                 </text>
               </g>
             );
           })}
           {points.length > 1 ? (
             <>
+              {showConsumption ? consumptionBars.map((bar) => {
+                const visibleStart = Math.max(left, bar.start);
+                const visibleEnd = Math.min(width - right, bar.end);
+                return (
+                  <rect
+                    key={bar.start}
+                    className="codex-usage-rate-limit-consumption-bar"
+                    x={visibleStart + (visibleEnd - visibleStart) * 0.15}
+                    y={Math.min(yForRate(0), yForRate(bar.rate))}
+                    width={(visibleEnd - visibleStart) * 0.7}
+                    height={Math.abs(yForRate(0) - yForRate(bar.rate))}
+                    rx={1.5}
+                  >
+                    <title>{`${formatConsumptionPeriod(
+                      bar.start,
+                      bar.end,
+                      minTimestamp,
+                      timestampRange,
+                      left,
+                      plotWidth,
+                      orderedSamples,
+                    )}，${consumptionRateFormat.format(bar.rate)}%每小时`}</title>
+                  </rect>
+                );
+              }) : <path className="codex-usage-rate-limit-duration-line" d={durationPath} />}
               <path className="codex-usage-rate-limit-line" d={quotaPath} />
-              <path className="codex-usage-rate-limit-duration-line" d={durationPath} />
             </>
           ) : null}
           <text className="codex-usage-rate-limit-axis-label" x={left} y={height - 12} textAnchor="start">
@@ -661,11 +844,19 @@ function CodexRateLimitBucketChart({
           ) : null}
         </svg>
       </div>
+      {showConsumption ? (
+        <p className="codex-usage-rate-limit-note">
+          {consumptionBars.length
+            ? "柱高表示固定时间区间内的消耗速度；重置间隔为过渡估计。"
+            : "暂无可计算的消耗速度，需要有效时间范围内的连续额度曲线。"}
+        </p>
+      ) : null}
     </article>
   );
 }
 
 function CodexRateLimitChart({ samples }: { samples: CodexRateLimitSample[] }) {
+  const [secondaryMetric, setSecondaryMetric] = useState<RateLimitSecondaryMetric>("duration");
   const limitGroups = useMemo(() => {
     const grouped = new Map<string, {
       limitId: string;
@@ -705,13 +896,31 @@ function CodexRateLimitChart({ samples }: { samples: CodexRateLimitSample[] }) {
 
   return (
     <section className="codex-usage-section" aria-labelledby="codex-rate-limit-title">
-      <h3 id="codex-rate-limit-title">Codex 剩余额度趋势</h3>
+      <div className="codex-usage-section-heading">
+        <h3 id="codex-rate-limit-title">Codex 剩余额度趋势</h3>
+        <div className="codex-usage-chart-controls" role="group" aria-label="图表右轴">
+          <span>右轴</span>
+          <div className="codex-usage-chart-toggle">
+            {(["duration", "consumption"] as const).map((metric) => (
+              <button
+                key={metric}
+                type="button"
+                aria-pressed={secondaryMetric === metric}
+                onClick={() => setSecondaryMetric(metric)}
+              >
+                {metric === "duration" ? "剩余时长" : "消耗速度"}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
       <div className="codex-usage-rate-limit-groups">
         {limitGroups.map(({ limitId, planType, samples: limitSamples }) => (
           <CodexRateLimitBucketChart
             key={`${limitId}:${planType || "empty"}`}
             label={limitSamples.length ? `${limitLabel(limitId)} · ${formatPlanType(planType)}` : limitLabel(limitId)}
             samples={limitSamples}
+            secondaryMetric={secondaryMetric}
           />
         ))}
       </div>

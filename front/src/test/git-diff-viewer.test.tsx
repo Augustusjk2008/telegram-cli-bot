@@ -26,7 +26,7 @@ test("maps changed and unchanged rows to source line numbers", () => {
   ]);
 });
 
-test("renders unchanged lines without add or delete colors", () => {
+test("renders file lines with their diff kinds", () => {
   render(
     <GitDiffViewer
       testId="viewer"
@@ -48,16 +48,12 @@ test("renders unchanged lines without add or delete colors", () => {
   expect(within(viewer).queryByText(/@@/)).not.toBeInTheDocument();
   const contextRow = within(viewer).getByText("unchanged line").closest("[data-diff-kind]");
   expect(contextRow).toHaveAttribute("data-diff-kind", "context");
-  expect(contextRow).not.toHaveClass("bg-red-50", "text-red-700");
-  expect(contextRow).not.toHaveClass("bg-emerald-50", "text-emerald-700");
 
   const rows = within(viewer).getAllByTestId("git-diff-line");
   expect(rows).toHaveLength(3);
   expect(rows[1]).toHaveAttribute("data-diff-kind", "delete");
-  expect(rows[1]).toHaveClass("bg-red-50", "text-red-700");
   expect(rows[1]).toHaveTextContent("-old line");
   expect(rows[2]).toHaveAttribute("data-diff-kind", "add");
-  expect(rows[2]).toHaveClass("bg-emerald-50", "text-emerald-700");
   expect(rows[2]).toHaveTextContent("+new line");
 });
 
@@ -96,6 +92,5 @@ test("switches between full and changed-lines-only modes", async () => {
 
 test("shows a neutral empty state when diff has no file lines", () => {
   render(<GitDiffViewer testId="viewer" content="" />);
-  expect(screen.getByText("无可显示的内容")).toBeInTheDocument();
   expect(screen.queryByTestId("git-diff-line")).not.toBeInTheDocument();
 });

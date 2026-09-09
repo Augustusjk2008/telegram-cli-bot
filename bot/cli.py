@@ -64,6 +64,45 @@ class CliStreamParseResult:
     raw_tail: str
     total_bytes: int
     truncated: bool
+    terminal_usage: Optional[Dict[str, Any]] = None
+
+
+def _parse_terminal_usage(line: str, *, cli_type: str) -> Optional[Dict[str, Any]]:
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(event, dict):
+        return None
+    terminal_types = ("turn.completed", "turn.failed") if cli_type == "codex" else ("result",)
+    if event.get("type") not in terminal_types:
+        return None
+    usage = event.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    token_fields = ("input_tokens", "output_tokens") + (
+        ("cached_input_tokens", "cache_write_input_tokens")
+        if cli_type == "codex"
+        else ("cache_read_input_tokens", "cache_creation_input_tokens")
+    )
+    if any(key not in usage for key in ("input_tokens", "output_tokens")):
+        return None
+    selected = {key: usage[key] for key in token_fields if key in usage}
+    if any(type(value) is not int or value < 0 for value in selected.values()):
+        return None
+    if cli_type == "claude" and "cache_creation" in usage:
+        creation = usage["cache_creation"]
+        if not isinstance(creation, dict):
+            return None
+        lifetimes = {
+            key: creation[key]
+            for key in ("ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens")
+            if key in creation
+        }
+        if any(type(value) is not int or value < 0 for value in lifetimes.values()):
+            return None
+        selected["cache_creation"] = lifetimes
+    return selected
 
 
 class CodexJsonStreamParser:
@@ -79,6 +118,7 @@ class CodexJsonStreamParser:
         self._errors = _BoundedText(raw_tail_max_bytes)
         self._plain = _BoundedText(raw_tail_max_bytes)
         self.session_id: Optional[str] = None
+        self.terminal_usage: Optional[Dict[str, Any]] = None
         self.total_bytes = 0
 
     def consume_line(self, line: str) -> Dict[str, Optional[str]]:
@@ -94,6 +134,9 @@ class CodexJsonStreamParser:
                 "error_text": None,
             }
         parsed = parse_codex_json_line(stripped)
+        terminal_usage = _parse_terminal_usage(stripped, cli_type="codex")
+        if terminal_usage is not None:
+            self.terminal_usage = terminal_usage
         if parsed["thread_id"]:
             self.session_id = parsed["thread_id"]
         if parsed["completed_text"]:
@@ -132,6 +175,7 @@ class CodexJsonStreamParser:
             error_text=error_text,
             raw_tail=self._raw_tail.text,
             total_bytes=self.total_bytes,
+            terminal_usage=self.terminal_usage,
             truncated=any(
                 item.truncated
                 for item in (self._raw_tail, self._completed, self._delta, self._errors, self._plain)
@@ -152,6 +196,7 @@ class ClaudeJsonStreamParser:
         self._errors = _BoundedText(raw_tail_max_bytes)
         self._plain = _BoundedText(raw_tail_max_bytes)
         self.session_id: Optional[str] = None
+        self.terminal_usage: Optional[Dict[str, Any]] = None
         self.total_bytes = 0
 
     def consume_line(self, line: str) -> Dict[str, Optional[str]]:
@@ -167,6 +212,9 @@ class ClaudeJsonStreamParser:
                 "error_text": None,
             }
         parsed = parse_claude_stream_json_line(stripped)
+        terminal_usage = _parse_terminal_usage(stripped, cli_type="claude")
+        if terminal_usage is not None:
+            self.terminal_usage = terminal_usage
         if parsed["session_id"]:
             self.session_id = parsed["session_id"]
         if parsed["completed_text"]:
@@ -205,6 +253,7 @@ class ClaudeJsonStreamParser:
             error_text=error_text,
             raw_tail=self._raw_tail.text,
             total_bytes=self.total_bytes,
+            terminal_usage=self.terminal_usage,
             truncated=any(
                 item.truncated
                 for item in (self._raw_tail, self._completed, self._delta, self._errors, self._plain)

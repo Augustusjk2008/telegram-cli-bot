@@ -1,4 +1,4 @@
-import type { ChatMessageContextUsage } from "../services/types";
+import type { ChatMessageContextUsage, ChatMessageEstimatedCost } from "../services/types";
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -38,6 +38,31 @@ function displayContextProvider(provider: string) {
   return provider || undefined;
 }
 
+export function mapEstimatedCost(value: unknown, provider?: string): ChatMessageEstimatedCost | undefined {
+  const raw = asRecord(value);
+  const model = firstString(raw, "model");
+  const currency = firstString(raw, "currency");
+  const scope = firstString(raw, "scope");
+  const total = firstNumber(raw, "total");
+  const input = firstNumber(raw, "input");
+  const cacheRead = firstNumber(raw, "cacheRead", "cache_read");
+  const cacheWrite = firstNumber(raw, "cacheWrite", "cache_write");
+  const output = firstNumber(raw, "output");
+  if (
+    !model || !currency
+    || (scope !== "session" && scope !== "turn" && scope !== "request")
+    || total === undefined || total < 0
+    || input === undefined || input < 0
+    || cacheRead === undefined || cacheRead < 0
+    || cacheWrite === undefined || cacheWrite < 0
+    || output === undefined || output < 0
+  ) {
+    return undefined;
+  }
+  const normalizedScope = scope === "session" && provider?.trim().toLowerCase() === "codex" ? "turn" : scope;
+  return { model, currency, scope: normalizedScope, total, input, cacheRead, cacheWrite, output };
+}
+
 export function mapChatMessageContextUsage(value: unknown): ChatMessageContextUsage | undefined {
   const raw = asRecord(value);
   const provider = displayContextProvider(firstString(raw, "provider"));
@@ -58,6 +83,7 @@ export function mapChatMessageContextUsage(value: unknown): ChatMessageContextUs
   const windowDisplay = firstString(raw, "windowDisplay", "window_display");
   const statusText = firstString(raw, "statusText", "status_text");
   const compactionCount = firstNumber(raw, "compactionCount", "compaction_count");
+  const estimatedCost = mapEstimatedCost(raw.estimatedCost ?? raw.estimated_cost, provider);
 
   const contextUsage: ChatMessageContextUsage = {
     ...(provider ? { provider } : {}),
@@ -78,6 +104,7 @@ export function mapChatMessageContextUsage(value: unknown): ChatMessageContextUs
     ...(windowDisplay ? { windowDisplay } : {}),
     ...(statusText ? { statusText } : {}),
     ...(typeof compactionCount === "number" && compactionCount > 0 ? { compactionCount } : {}),
+    ...(estimatedCost ? { estimatedCost } : {}),
   };
 
   return Object.keys(contextUsage).length > 0 ? contextUsage : undefined;

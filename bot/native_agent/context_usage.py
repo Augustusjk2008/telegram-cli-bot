@@ -3,7 +3,64 @@ from __future__ import annotations
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
+from bot.model_pricing import estimate_usage_cost
 from bot.native_agent.config_store import find_configured_model
+
+
+class PiTurnCost:
+    """只收集当前轮已完成的模型回复，忽略流式中间 usage。"""
+
+    def __init__(self, model_id: str) -> None:
+        self.model_id = model_id
+        self._messages: dict[str, tuple[str, dict[str, Any]]] = {}
+
+    def observe(self, raw: dict[str, Any]) -> None:
+        if raw.get("type") != "message_end":
+            return
+        message = raw.get("message")
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            return
+        model = str(message.get("model") or self.model_id).strip()
+        provider = str(message.get("provider") or "").strip()
+        if "/" not in model:
+            if provider:
+                model = f"{provider}/{model}"
+            elif self.model_id.endswith(f"/{model}"):
+                model = self.model_id
+        message_id = message.get("id") or message.get("responseId") or message.get("timestamp")
+        key = f"{model}:{message_id}" if message_id is not None else f"anonymous:{len(self._messages)}"
+        usage = message.get("usage")
+        # 仅保留计价数字，不保留正文或工具参数。
+        tokens = {
+            name: usage[name]
+            for name in ("input", "output", "cacheRead", "cacheWrite")
+            if isinstance(usage, dict) and name in usage
+        }
+        self._messages[key] = (model, tokens)
+
+    def estimate(self, *, usage_complete: bool = True) -> dict[str, Any] | None:
+        if not usage_complete:
+            return None
+        costs = [
+            estimate_usage_cost(model, usage, protocol="pi", scope="turn")
+            for model, usage in self._messages.values()
+        ]
+        if not costs or any(cost is None for cost in costs):
+            return None
+        priced = [cost for cost in costs if cost is not None]
+        currencies = {cost["currency"] for cost in priced}
+        if len(currencies) != 1:
+            return None
+        values = {
+            key: float(sum(Decimal(str(cost[key])) for cost in priced))
+            for key in ("input", "cache_read", "cache_write", "output", "total")
+        }
+        return {
+            "model": ", ".join(dict.fromkeys(cost["model"] for cost in priced)),
+            "currency": priced[0]["currency"],
+            "scope": "turn",
+            **values,
+        }
 
 
 def resolve_native_agent_context_usage(

@@ -911,6 +911,17 @@ export type ChatMessageNativeSource = {
   sessionId?: string;
 };
 
+export type ChatMessageEstimatedCost = {
+  model: string;
+  currency: string;
+  scope: "session" | "turn" | "request";
+  total: number;
+  input: number;
+  cacheRead: number;
+  cacheWrite: number;
+  output: number;
+};
+
 export type ChatMessageContextUsage = {
   provider?: string;
   source?: string;
@@ -930,6 +941,7 @@ export type ChatMessageContextUsage = {
   outputTokens?: number;
   reasoningTokens?: number;
   model?: string;
+  estimatedCost?: ChatMessageEstimatedCost;
 };
 
 export type ChatMessageMetaInfo = {

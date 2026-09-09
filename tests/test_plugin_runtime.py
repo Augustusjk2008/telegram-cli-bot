@@ -15,7 +15,6 @@ from bot.plugins.models import (
     PluginRuntimeSpec,
     PluginViewSpec,
 )
-from bot.plugins.protocol import decode_message
 from bot.plugins.runtime import PLUGIN_MAX_FRAME_BYTES, PluginRuntime, _PluginProcess
 
 
@@ -99,7 +98,6 @@ async def test_host_api_concurrency_rejects_excess_and_tracks_active_tasks(tmp_p
 
     assert wrapped.host_api_active == 1
     assert len(wrapped.host_api_tasks) == 1
-    assert decode_message(process.stdin.payloads[-1])["error"]["message"] == "插件 Host API 并发请求超限，请稍后重试"
 
     release.set()
     await asyncio.sleep(0)

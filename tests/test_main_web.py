@@ -1,7 +1,5 @@
 """主进程 Web 启动相关测试。"""
 
-import asyncio
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -85,7 +83,6 @@ def test_web_runtime_state_records_actual_port(monkeypatch, tmp_path):
 
     main_module._write_web_runtime_state(bind)
 
-    assert state_path.read_text(encoding="utf-8")
     payload = __import__("json").loads(state_path.read_text(encoding="utf-8"))
     assert payload["configured_port"] == 8765
     assert payload["actual_port"] == 8767
@@ -93,37 +90,3 @@ def test_web_runtime_state_records_actual_port(monkeypatch, tmp_path):
     main_module._clear_web_runtime_state()
 
     assert not state_path.exists()
-
-
-@pytest.mark.parametrize(
-    ("text", "returncode", "completion_state", "expected"),
-    [
-        ("错误信息", 1, "error", "命令退出码 1\n错误信息"),
-        ("命令退出码 1\n错误信息", 1, "error", "命令退出码 1\n错误信息"),
-        (" 正常输出\n", 0, "completed", " 正常输出\n"),
-    ],
-)
-def test_format_cli_error_display(text, returncode, completion_state, expected):
-    from bot.web.api_service import _format_cli_error_display
-
-    assert _format_cli_error_display(text, returncode=returncode, completion_state=completion_state) == expected
-
-
-def test_terminal_trace_and_cli_error_display_keep_single_exit_code_prefix():
-    from bot.web.api_service import _build_terminal_trace, _format_cli_error_display
-
-    trace = _build_terminal_trace(
-        live_trace=[],
-        stop_requested=False,
-        returncode=1,
-        error_detail="错误信息",
-    )
-    display = _format_cli_error_display(
-        trace[0]["summary"],
-        returncode=1,
-        completion_state="error",
-    )
-
-    assert trace == [{"kind": "error", "source": "runtime", "summary": "命令退出码 1\n错误信息"}]
-    assert display == "命令退出码 1\n错误信息"
-

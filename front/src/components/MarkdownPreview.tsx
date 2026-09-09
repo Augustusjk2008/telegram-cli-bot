@@ -11,7 +11,6 @@ import { copyText } from "../utils/clipboard";
 import { isExternalHref, isLikelyLocalFileHref, isSafeMarkdownHref } from "../utils/fileLinks";
 import { normalizeLatexMathDelimiters } from "../markdown/latexDelimiters";
 import { getCachedMermaidRender, renderMermaidSingleFlight } from "../markdown/mermaidRenderer";
-import { normalizeLatexMath } from "../markdown/normalizeLatexMath";
 
 type Props = {
   content: string;
@@ -257,10 +256,7 @@ function MarkdownPre({
 export function MarkdownContent({ content, variant = "preview", onFileLinkClick, resolveImageSrc }: MarkdownContentProps) {
   const isChat = variant === "chat";
   const isDesktopPreview = variant === "desktop-preview";
-  const normalizedContent = useMemo(
-    () => (isChat ? normalizeLatexMathDelimiters(content) : normalizeLatexMath(content)),
-    [content, isChat],
-  );
+  const normalizedContent = normalizeLatexMathDelimiters(content);
   const lastLocalLinkActivationRef = useRef<{ href: string; at: number } | null>(null);
   const containerClassName = isChat
     ? "chat-body-content chat-markdown-content min-w-0 w-full text-[var(--text)]"
