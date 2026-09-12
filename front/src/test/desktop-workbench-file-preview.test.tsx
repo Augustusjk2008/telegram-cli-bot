@@ -16,6 +16,46 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+test.each([
+  { label: "complete", isFullContent: true, fileSizeBytes: 64, fullReads: 0 },
+  { label: "partial", isFullContent: false, fileSizeBytes: 64, fullReads: 1 },
+  { label: "oversized", isFullContent: false, fileSizeBytes: 1024 * 1024 + 1, fullReads: 0 },
+])("horizontal workbench formats $label JSON previews with the expected full reads", async ({ isFullContent, fileSizeBytes, fullReads }) => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const content = '{"id":9007199254740993,"id":2}';
+  vi.spyOn(client, "readFile").mockResolvedValue({ content, mode: "head", isFullContent, fileSizeBytes });
+  const readFull = vi.spyOn(client, "readFileFull").mockResolvedValue({ content, mode: "cat", isFullContent: true, fileSizeBytes });
+  render(
+    <PersistentTerminalProvider client={client}>
+      <DesktopWorkbench
+        botAlias="main"
+        client={client}
+        chatPaneContent={({ requestPreview }) => (
+          <button type="button" onClick={() => requestPreview("config.JSON")}>预览 JSON</button>
+        )}
+      />
+    </PersistentTerminalProvider>,
+  );
+
+  await user.click(await screen.findByRole("button", { name: "预览 JSON" }));
+  const preview = await screen.findByTestId("desktop-inline-file-preview");
+  if (fileSizeBytes > 1024 * 1024) {
+    expect(await within(preview).findByText("内容未完整读取，暂无法格式化")).toBeInTheDocument();
+    expect(within(preview).getByText("文件超过1MB，请下载后读取全文")).toBeInTheDocument();
+    expect(within(preview).queryByRole("button", { name: "全文读取" })).not.toBeInTheDocument();
+  } else {
+    await waitFor(() => expect(Array.from(preview.querySelectorAll(".cm-line"), (line) => line.textContent)).toEqual([
+      "{",
+      '  "id": 9007199254740993,',
+      '  "id": 2',
+      "}",
+    ]));
+  }
+  expect(readFull).toHaveBeenCalledTimes(fullReads);
+  expect(client.readFile).toHaveBeenCalledTimes(1);
+});
+
 test("horizontal workbench renders built-in file previews inside the editor pane", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
@@ -68,28 +108,33 @@ test("file previews and editable files coexist as switchable editor tabs", async
     </PersistentTerminalProvider>,
   );
 
-  await user.click(await screen.findByRole("button", { name: "展开 src" }));
-  await user.click(await screen.findByRole("button", { name: "打开 src/index.ts" }));
+  await user.click(await screen.findByRole("button", { name: "打开 README.md" }));
   expect(await screen.findByRole("textbox", { name: "文件内容" })).toBeInTheDocument();
 
   await user.click(await screen.findByRole("button", { name: "预览 README" }));
   await screen.findByTestId("desktop-inline-file-preview");
 
   const editorPane = screen.getByTestId("desktop-pane-editor");
-  const sourceTab = within(editorPane).getByRole("tab", { name: "index.ts" });
+  const sourceTab = within(editorPane).getByRole("tab", { name: "README.md" });
   const previewTab = within(editorPane).getByRole("tab", { name: "README.md 预览" });
 
   await user.click(sourceTab);
   expect(await screen.findByRole("textbox", { name: "文件内容" })).toBeInTheDocument();
   expect(screen.queryByTestId("desktop-inline-file-preview")).not.toBeInTheDocument();
 
+  await user.click(within(editorPane).getByRole("button", { name: "切换到预览" }));
+  expect(await screen.findByTestId("desktop-inline-file-preview")).toBeInTheDocument();
+  expect(await screen.findByText("Inline preview")).toBeInTheDocument();
+  expect(within(editorPane).getByRole("button", { name: "切换到编辑" })).toBeInTheDocument();
+
+  await user.click(within(editorPane).getByRole("button", { name: "切换到编辑" }));
+  expect(await screen.findByRole("textbox", { name: "文件内容" })).toBeInTheDocument();
+
   await user.click(previewTab);
   expect(await screen.findByTestId("desktop-inline-file-preview")).toBeInTheDocument();
-  expect(screen.getByText("Inline preview")).toBeInTheDocument();
-
   await user.click(within(editorPane).getByRole("button", { name: "关闭 README.md 预览" }));
   expect(within(editorPane).queryByRole("tab", { name: "README.md 预览" })).not.toBeInTheDocument();
-  expect(within(editorPane).getByRole("tab", { name: "index.ts" })).toBeInTheDocument();
+  expect(within(editorPane).getByRole("tab", { name: "README.md" })).toBeInTheDocument();
   expect(await screen.findByRole("textbox", { name: "文件内容" })).toBeInTheDocument();
 });
 

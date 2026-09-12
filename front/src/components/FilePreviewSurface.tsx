@@ -1,9 +1,12 @@
 import { clsx } from "clsx";
 import { LoaderCircle } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import type { FileReadResult } from "../services/types";
 import { buildFileDownloadUrl, isExternalHref, isSafeMarkdownHref, resolveMarkdownImagePath } from "../utils/fileLinks";
 import { MarkdownPreview } from "./MarkdownPreview";
+import { isFilePreviewFullyLoaded, isJsonPreviewPath } from "../utils/filePreview";
+
+const JsonPreview = lazy(() => import("./JsonPreview").then((module) => ({ default: module.JsonPreview })));
 
 export type FilePreviewSurfaceProps = {
   title: string;
@@ -84,6 +87,18 @@ export function FilePreviewSurface({
           选择聊天中的文件链接查看预览
         </div>
       );
+    }
+
+    if (isJsonPreviewPath(title)) {
+      return (
+        <Suspense fallback={<div className="p-4 text-sm text-[var(--muted)]">加载预览...</div>}>
+          <JsonPreview content={content} isFullContent={isFilePreviewFullyLoaded(result)} desktop={desktop} />
+        </Suspense>
+      );
+    }
+
+    if (!content && !isRasterPreview) {
+      return <div className="p-4 text-sm text-[var(--muted)]">文件为空</div>;
     }
 
     if (isMarkdownPreview) {

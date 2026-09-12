@@ -25,9 +25,13 @@ export function isFilePreviewFullyLoaded(result: FileReadResult | null) {
   return result.mode === "cat" || Boolean(result.isFullContent);
 }
 
-export function shouldAutoLoadFullHtmlPreview(path: string, result: FileReadResult | null) {
+export function isJsonPreviewPath(path: string) {
+  return /\.json$/i.test(String(path || "").trim());
+}
+
+export function shouldAutoLoadFullPreview(path: string, result: FileReadResult | null) {
   return Boolean(
-    isHtmlPreviewPath(path)
+    (isHtmlPreviewPath(path) || isJsonPreviewPath(path))
     && result
     && !isFilePreviewFullyLoaded(result)
     && !isFilePreviewTooLarge(result),

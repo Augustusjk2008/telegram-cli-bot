@@ -406,6 +406,8 @@ export interface WebBotClient {
   removeBot(botAlias: string, options?: RemoveBotOptions): Promise<RemoveBotResult>;
   startBot(botAlias: string): Promise<BotSummary>;
   stopBot(botAlias: string): Promise<BotSummary>;
+  archiveBot(botAlias: string): Promise<BotSummary>;
+  unarchiveBot(botAlias: string): Promise<BotSummary>;
   getCliParams(botAlias: string): Promise<CliParamsPayload>;
   updateCliParam(botAlias: string, key: string, value: unknown, cliType?: string): Promise<CliParamsPayload>;
   resetCliParams(botAlias: string, cliType?: string): Promise<CliParamsPayload>;

@@ -39,15 +39,13 @@ class PiTurnCost:
         self._messages[key] = (model, tokens)
 
     def estimate(self, *, usage_complete: bool = True) -> dict[str, Any] | None:
-        if not usage_complete:
-            return None
         costs = [
             estimate_usage_cost(model, usage, protocol="pi", scope="turn")
             for model, usage in self._messages.values()
         ]
-        if not costs or any(cost is None for cost in costs):
-            return None
         priced = [cost for cost in costs if cost is not None]
+        if not priced:
+            return None
         currencies = {cost["currency"] for cost in priced}
         if len(currencies) != 1:
             return None
@@ -60,6 +58,7 @@ class PiTurnCost:
             "currency": priced[0]["currency"],
             "scope": "turn",
             **values,
+            **({"is_partial": True} if not usage_complete or len(priced) != len(costs) else {}),
         }
 
 

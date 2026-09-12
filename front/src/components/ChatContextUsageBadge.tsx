@@ -94,7 +94,7 @@ export function formatContextUsageDetails(contextUsage?: ChatMessageContextUsage
       useGrouping: false,
       maximumSignificantDigits: 15,
     });
-    rows.push(`Estimated cost: ${cost.currency} ${amount}`);
+    rows.push(`${cost.isPartial ? "estimated cost" : "cost"}: ${cost.currency} ${amount}`);
   }
   return rows.join("\n");
 }
@@ -110,7 +110,8 @@ export function formatTextContextUsage(
   const percent = typeof leftPercent === "number"
     ? options.compact ? `ctx ${formatPercent(leftPercent)}%` : `${formatPercent(leftPercent)}% left`
     : "";
-  const costText = mapEstimatedCost(contextUsage.estimatedCost, contextUsage.provider) ? "Estimated cost" : "";
+  const cost = mapEstimatedCost(contextUsage.estimatedCost, contextUsage.provider);
+  const costText = cost ? cost.isPartial ? "estimated cost" : "cost" : "";
   const statusText = (contextUsage.statusText || "").replace(/\bcontext left\b/gi, "left");
   if (options.compact) {
     const baseText = percent || statusText || costText;

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import type { FilePreviewKind } from "../services/types";
+import type { FileReadResult } from "../services/types";
 import { FilePreviewSurface } from "./FilePreviewSurface";
+import { isFilePreviewFullyLoaded } from "../utils/filePreview";
 
 type DesktopAnchorRect = {
   left: number;
@@ -11,12 +12,8 @@ type DesktopAnchorRect = {
 
 type Props = {
   title: string;
-  content: string;
-  mode: "preview" | "full";
+  result: FileReadResult | null;
   botAlias?: string;
-  previewKind?: FilePreviewKind;
-  contentType?: string;
-  contentBase64?: string;
   variant?: "mobile" | "desktop";
   desktopAnchorRect?: DesktopAnchorRect | null;
   loading?: boolean;
@@ -45,12 +42,8 @@ function clamp(value: number, min: number, max: number) {
 
 export function FilePreviewDialog({
   title,
-  content,
-  mode,
+  result,
   botAlias = "",
-  previewKind,
-  contentType,
-  contentBase64,
   variant = "mobile",
   desktopAnchorRect = null,
   loading = false,
@@ -247,7 +240,7 @@ export function FilePreviewDialog({
           <div className="min-h-0 flex-1 overflow-hidden px-5 py-4">
             <FilePreviewSurface
               title={title}
-              result={{ content, mode: mode === "full" ? "cat" : "head", previewKind, contentType, contentBase64 }}
+              result={result}
               loading={loading}
               botAlias={botAlias}
               desktop
@@ -261,7 +254,7 @@ export function FilePreviewDialog({
             </div>
             <div className="flex justify-end gap-2">
               {renderDownloadProgress()}
-              {!readOnly && mode !== "full" && onLoadFull ? (
+              {!readOnly && !isFilePreviewFullyLoaded(result) && onLoadFull ? (
                 <button
                   type="button"
                   onClick={onLoadFull}
@@ -317,7 +310,7 @@ export function FilePreviewDialog({
         </div>
         <FilePreviewSurface
           title={title}
-          result={{ content, mode: mode === "full" ? "cat" : "head", previewKind, contentType, contentBase64 }}
+          result={result}
           loading={loading}
           botAlias={botAlias}
           onFileLinkClick={onFileLinkClick}
@@ -328,7 +321,7 @@ export function FilePreviewDialog({
           </div>
           <div className="flex justify-end gap-2">
             {renderDownloadProgress()}
-            {!readOnly && mode !== "full" && onLoadFull ? (
+            {!readOnly && !isFilePreviewFullyLoaded(result) && onLoadFull ? (
               <button
                 type="button"
                 onClick={onLoadFull}

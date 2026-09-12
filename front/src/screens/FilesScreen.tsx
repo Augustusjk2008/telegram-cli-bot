@@ -21,11 +21,12 @@ import {
   getFilePreviewStatusText,
   isFilePreviewFullyLoaded,
   isFilePreviewTooLarge,
-  shouldAutoLoadFullHtmlPreview,
+  shouldAutoLoadFullPreview,
   withDetectedPreviewKind,
 } from "../utils/filePreview";
 import { inferFileEditorLanguageId } from "../utils/fileEditorLanguage";
 import { isAbortError } from "../utils/errorMessage";
+import { isAbsolutePathInput } from "../utils/pathInput";
 import { useLanguageServerStatus } from "../workbench/useLanguageServerStatus";
 
 type Props = {
@@ -33,6 +34,7 @@ type Props = {
   client?: WebBotClient;
   structureOnly?: boolean;
   canWriteFiles?: boolean;
+  canBrowseExternalPaths?: boolean;
   canOpenSystemFolder?: boolean;
   canUseInlineCompletion?: boolean;
 };
@@ -228,17 +230,17 @@ export function FilesScreen({
   client = new MockWebBotClient(),
   structureOnly = false,
   canWriteFiles = true,
+  canBrowseExternalPaths = false,
   canOpenSystemFolder = false,
   canUseInlineCompletion = false,
 }: Props) {
   const [currentPath, setCurrentPath] = useState("");
+  const [externalPath, setExternalPath] = useState("");
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [isVirtualRoot, setIsVirtualRoot] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [previewName, setPreviewName] = useState("");
-  const [previewContent, setPreviewContent] = useState("");
-  const [previewMode, setPreviewMode] = useState<"preview" | "full">("preview");
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewResult, setPreviewResult] = useState<FileReadResult | null>(null);
   const [editorPath, setEditorPath] = useState("");
@@ -520,6 +522,32 @@ export function FilesScreen({
     }
   };
 
+  const handleNavigateExternalPath = async () => {
+    const path = externalPath.trim();
+    if (!path || !isAbsolutePathInput(path)) {
+      setError("请输入绝对目录路径");
+      setStatusText("");
+      return;
+    }
+    try {
+      setError("");
+      setStatusText("");
+      if (!await closeCurrentEditorDocumentScope("切换目录")) {
+        return;
+      }
+      if (structureOnly) {
+        await loadListing(path);
+      } else {
+        await client.changeDirectory(botAlias, path);
+        await loadListing();
+      }
+      setExternalPath("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "跳转目录失败");
+      setStatusText("");
+    }
+  };
+
   const handleCreateDirectory = async () => {
     if (!canMutateFiles) {
       setError("无文件写入权限");
@@ -561,7 +589,6 @@ export function FilesScreen({
       await client.deletePath(botAlias, file.name);
       if (previewName === file.name) {
         setPreviewName("");
-        setPreviewContent("");
         setPreviewResult(null);
       }
       await loadListing();
@@ -627,7 +654,7 @@ export function FilesScreen({
       let result = mode === "full"
         ? await client.readFileFull(botAlias, name)
         : await client.readFile(botAlias, name);
-      if (mode === "preview" && shouldAutoLoadFullHtmlPreview(name, result)) {
+      if (mode === "preview" && shouldAutoLoadFullPreview(name, result)) {
         result = await client.readFileFull(botAlias, name);
       }
       if (requestSeq !== previewRequestSeqRef.current) {
@@ -635,9 +662,7 @@ export function FilesScreen({
       }
       result = withDetectedPreviewKind(name, result);
       setPreviewName(name);
-      setPreviewMode(result.mode === "cat" ? "full" : "preview");
       setPreviewResult(result);
-      setPreviewContent(result.previewKind === "image" ? "" : result.content || "文件为空");
     } catch (err) {
       if (requestSeq === previewRequestSeqRef.current) {
         setError(err instanceof Error ? err.message : mode === "full" ? "读取全文失败" : "预览文件失败");
@@ -724,7 +749,6 @@ export function FilesScreen({
       }
       const content = result.content || "";
       setPreviewName("");
-      setPreviewContent("");
       setPreviewResult(null);
       syncCurrentEditorDocumentSnapshot(name, content, binding);
       setEditorPath(name);
@@ -741,7 +765,6 @@ export function FilesScreen({
       setStatusText("");
       if (previewName === name) {
         setPreviewName("");
-        setPreviewContent("");
         setPreviewResult(null);
       }
       return false;
@@ -889,7 +912,6 @@ export function FilesScreen({
       setEditorEncoding(result.encoding || editorEncoding);
       setEditorStatusText("已保存");
       if (previewName === editorPath) {
-        setPreviewContent(editorContent || "文件为空");
         setPreviewResult((current) => current
           ? {
               ...current,
@@ -1116,6 +1138,30 @@ export function FilesScreen({
         ) : null}
       </header>
 
+      {canBrowseExternalPaths && !structureOnly && !isEditorOpen ? (
+        <form
+          className="flex items-center gap-2 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-4 py-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void handleNavigateExternalPath();
+          }}
+        >
+          <input
+            aria-label="跳转到绝对目录"
+            value={externalPath}
+            onChange={(event) => setExternalPath(event.target.value)}
+            placeholder="输入绝对目录路径"
+            className="min-w-0 flex-1 rounded border border-[var(--workbench-hairline)] bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--text)] outline-none focus:border-[var(--accent)]"
+          />
+          <button
+            type="submit"
+            className="rounded border border-[var(--workbench-hairline)] px-3 py-1.5 text-sm text-[var(--text)] hover:bg-[var(--workbench-hover-bg)]"
+          >
+            跳转
+          </button>
+        </form>
+      ) : null}
+
       {isEditorOpen ? (
         <FileEditorSurface
           path={editorPath}
@@ -1257,20 +1303,15 @@ export function FilesScreen({
       {canPreviewFiles && previewName ? (
         <FilePreviewDialog
           title={previewName}
-          content={previewContent}
-          mode={previewMode}
+          result={previewResult}
           botAlias={botAlias}
-          previewKind={previewResult?.previewKind}
-          contentType={previewResult?.contentType}
-          contentBase64={previewResult?.contentBase64}
           loading={previewLoading}
           onClose={() => {
             setPreviewName("");
-            setPreviewContent("");
             setPreviewResult(null);
           }}
           statusText={previewStatusText}
-          onLoadFull={previewMode !== "full" && canLoadFull ? () => void loadPreview(previewName, "full") : undefined}
+          onLoadFull={canLoadFull ? () => void loadPreview(previewName, "full") : undefined}
           onEdit={canEditPreview ? () => void handleOpenEditor(previewName) : undefined}
           onDownload={canPreviewFiles ? () => void handleDownloadEntry({ name: previewName, isDir: false }) : undefined}
           onCancelDownload={previewDownloadProgress ? handleCancelDownload : undefined}

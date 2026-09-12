@@ -609,6 +609,7 @@ export function NativeAgentTranscript({
   const visibleResultText = stripThinkingBlocks(resultText);
   const showFinalResult = state !== "streaming" && Boolean(visibleResultText);
   const showCopyFinalAnswer = state !== "streaming" && Boolean(visibleResultText.trim()) && Boolean(onCopyFinalAnswer);
+  const showFinalActions = state !== "streaming" && (showCopyFinalAnswer || Boolean(contextUsage));
 
   return (
     <div data-testid="native-agent-transcript" className="min-w-0 text-sm text-[var(--text)]">
@@ -653,19 +654,19 @@ export function NativeAgentTranscript({
       ) : renderTranscriptItems(traceDetailRenderItems)}
       {alwaysVisibleRenderItems.length > 0 ? renderTranscriptItems(alwaysVisibleRenderItems) : null}
 
-      {showFinalResult ? (
+      {showFinalResult || showFinalActions ? (
         <div data-testid="native-agent-final-result" className="border-t border-[var(--workbench-hairline)] pt-2">
-          {state === "done" ? (
+          {showFinalResult && (state === "done" ? (
             <ChatMarkdownMessage content={visibleResultText} onFileLinkClick={onFileLinkClick} />
           ) : (
             <ChatPlainTextMessage content={visibleResultText} className={state === "error" ? "text-red-700" : "text-[var(--text)]"} />
-          )}
-          {showCopyFinalAnswer ? (
+          ))}
+          {showFinalActions ? (
             <ChatFinalAnswerActions
               canContinue={canContinue}
               contextUsage={contextUsage}
               favorite={favorite}
-              buildFullAnswerText={() => formatTranscriptFullAnswer(renderItems, resultText)}
+              buildFullAnswerText={showCopyFinalAnswer ? () => formatTranscriptFullAnswer(renderItems, resultText) : undefined}
               onContinue={onContinue}
               onCopyFinalAnswer={onCopyFinalAnswer}
               onToggleFavorite={onToggleFavorite}

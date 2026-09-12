@@ -13,7 +13,7 @@ export { getErrorMessage } from "../utils/errorMessage";
 export { fallbackAgents } from "../utils/defaultAgents";
 export { mergeMessageMeta, summarizeTrace } from "../utils/chatMessageMeta";
 
-export type ManagerViewFilter = "all" | BotStatus | "attention";
+export type ManagerViewFilter = "all" | BotStatus | "archived" | "attention";
 export type BulkAction = "start" | "stop" | "delete";
 
 export type EditDraft = {
@@ -131,7 +131,11 @@ function normalizeWorkdir(path: string | undefined) {
 }
 
 export function isBotOffline(bot: BotSummary) {
-  return bot.serviceStatus === "offline" || bot.status === "offline";
+  return bot.archived === true || bot.serviceStatus === "offline" || bot.status === "offline";
+}
+
+export function isBotArchived(bot: BotSummary) {
+  return bot.archived === true;
 }
 
 export function isMainBot(bot: BotSummary) {
@@ -283,6 +287,9 @@ export function getVisibleManagedBots({
     }
     if (filter === "attention") {
       return botNeedsAttention(bot, bots);
+    }
+    if (filter === "archived") {
+      return isBotArchived(bot);
     }
     return getBotManagerStatus(bot) === filter;
   });

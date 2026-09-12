@@ -13,7 +13,7 @@ import {
   useBotManager,
   type CreateDraft,
 } from "./useBotManager";
-import { DEFAULT_NATIVE_AGENT_DRAFT, getRuntimeBackend, isBotOffline, isMainBot, isNativeAgentGloballyEnabled } from "./botManagerModel";
+import { DEFAULT_NATIVE_AGENT_DRAFT, getRuntimeBackend, isBotArchived, isBotOffline, isMainBot, isNativeAgentGloballyEnabled } from "./botManagerModel";
 
 const DELETE_WORKSPACE_CONFIRM_TEXT = "永久删除";
 
@@ -145,6 +145,8 @@ export function BotListScreen({
     setError,
     createBot,
     toggleBot,
+    archiveBot,
+    unarchiveBot,
     renameBot,
     deleteBot,
   } = useBotManager({ client, onBotsChange });
@@ -397,6 +399,7 @@ export function BotListScreen({
           {bots.map((bot) => {
             const isMain = isMainBot(bot);
             const isRenaming = renamingAlias === bot.alias;
+            const isArchived = isBotArchived(bot);
             const isOffline = isBotOffline(bot);
             const servicePillStatus = isOffline ? "offline" : "online";
             return (
@@ -419,6 +422,9 @@ export function BotListScreen({
                       <h3 className="min-w-0 max-w-full truncate text-lg font-semibold text-[var(--text)]">{bot.alias}</h3>
                       {isMain ? (
                         <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">主</span>
+                      ) : null}
+                      {isArchived ? (
+                        <span className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] leading-none text-amber-700">已归档</span>
                       ) : null}
                       {bot.canOperate === false ? (
                         <span className="rounded border border-zinc-500 bg-white px-1.5 py-0.5 text-[10px] font-semibold leading-none text-zinc-900">无权限 · 只读</span>
@@ -462,13 +468,26 @@ export function BotListScreen({
                     <>
                       <button
                         type="button"
-                        aria-label={isOffline ? `启动 ${bot.alias}` : `停止 ${bot.alias}`}
-                        onClick={() => void toggleBot(bot)}
+                        aria-label={isArchived ? `取消归档 ${bot.alias}` : isOffline ? `启动 ${bot.alias}` : `停止 ${bot.alias}`}
+                        onClick={() => void (isArchived ? unarchiveBot(bot) : toggleBot(bot))}
                         disabled={savingAction !== ""}
                         className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
                       >
-                        {savingAction === `${bot.alias}:toggle` ? "处理中..." : isOffline ? "启动" : "停止"}
+                        {savingAction === `${bot.alias}:archive`
+                          ? "处理中..."
+                          : isArchived ? "取消归档" : savingAction === `${bot.alias}:toggle` ? "处理中..." : isOffline ? "启动" : "停止"}
                       </button>
+                      {!isArchived ? (
+                        <button
+                          type="button"
+                          aria-label={`归档 ${bot.alias}`}
+                          onClick={() => void archiveBot(bot)}
+                          disabled={savingAction !== ""}
+                          className="rounded-lg border border-amber-200 px-3 py-2 text-sm text-amber-700 hover:bg-amber-50 disabled:opacity-60"
+                        >
+                          归档
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         aria-label={`重命名 ${bot.alias}`}

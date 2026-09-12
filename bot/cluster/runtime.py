@@ -646,19 +646,6 @@ class ClusterRuntime:
 
     def build_status(self, run_id: str) -> dict[str, Any]:
         run = self._runs[str(run_id)]
-        agents = []
-        for agent in run.profile.normalized_agents():
-            if agent.id == "main":
-                continue
-            agents.append({
-                "id": agent.id,
-                "name": agent.name,
-                "enabled": agent.enabled,
-                "allow_cluster": agent.cluster.allow_cluster,
-                "allow_write": agent.cluster.allow_write,
-                "session_policy": agent.cluster.session_policy,
-                "timeout_seconds": agent.cluster.timeout_seconds,
-            })
         capacity = max(1, int(run.profile.cluster.max_parallel_agents or 1))
         active_agents = [agent for agent in run.profile.normalized_agents() if agent.id != "main"][:capacity]
         assignments = {
@@ -666,6 +653,20 @@ class ClusterRuntime:
             for item in list(run.team.get("assignments") or [])
             if isinstance(item, dict) and str(item.get("agent_id") or "").strip()
         }
+        agents = []
+        for agent in run.profile.normalized_agents():
+            if agent.id == "main":
+                continue
+            assignment = assignments.get(agent.id)
+            agents.append({
+                "id": agent.id,
+                "name": str((assignment or {}).get("name") or agent.name).strip(),
+                "enabled": agent.enabled,
+                "allow_cluster": agent.cluster.allow_cluster,
+                "allow_write": agent.cluster.allow_write,
+                "session_policy": agent.cluster.session_policy,
+                "timeout_seconds": agent.cluster.timeout_seconds,
+            })
         slots = []
         for agent in active_agents:
             assignment = assignments.get(agent.id)

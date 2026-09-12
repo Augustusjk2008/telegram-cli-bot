@@ -228,6 +228,8 @@ def reveal_directory_tree(
     alias: str,
     user_id: int,
     path: str,
+    *,
+    allow_external_paths: bool = False,
 ) -> dict[str, Any]:
     session = get_session_for_alias(manager, alias, user_id)
     root = Path(require_real_browser_directory(get_browser_directory(session))).expanduser().resolve()
@@ -235,10 +237,13 @@ def reveal_directory_tree(
     if not str(raw_path):
         _raise(400, "missing_path", "路径不能为空")
     target = (raw_path if raw_path.is_absolute() else root / raw_path).expanduser().resolve()
-    try:
-        target.relative_to(root)
-    except ValueError:
-        _raise(403, "forbidden_path", "当前账号无权访问该目录")
+    if not allow_external_paths:
+        try:
+            target.relative_to(root)
+        except ValueError:
+            _raise(403, "forbidden_path", "当前账号无权访问该目录")
+    elif not target.is_relative_to(root):
+        root = target.parent
     if not target.exists():
         _raise(404, "path_not_found", "文件或文件夹不存在")
 
@@ -292,12 +297,14 @@ def change_working_directory(manager: MultiBotManager, alias: str, user_id: int,
     }
 
 
-def resolve_safe_path(base_dir: str, filename: str) -> str:
+def resolve_safe_path(base_dir: str, filename: str, *, allow_external_paths: bool = False) -> str:
     candidate = str(filename or "").strip()
     if not candidate or candidate == "." or "\x00" in candidate:
         _raise(400, "unsafe_path", "文件路径不安全")
-    if os.path.isabs(candidate):
-        _raise(400, "unsafe_path", "不允许访问绝对路径")
+    if os.path.isabs(candidate) or ntpath.isabs(candidate):
+        if not allow_external_paths:
+            _raise(400, "unsafe_path", "不允许访问绝对路径")
+        return os.path.realpath(os.path.expanduser(candidate))
 
     resolved_base = os.path.realpath(base_dir)
     resolved_path = os.path.realpath(os.path.join(resolved_base, os.path.expanduser(candidate)))
@@ -311,12 +318,14 @@ def resolve_safe_path(base_dir: str, filename: str) -> str:
     return resolved_path
 
 
-def resolve_safe_write_path(base_dir: str, path: str) -> str:
+def resolve_safe_write_path(base_dir: str, path: str, *, allow_external_paths: bool = False) -> str:
     candidate = str(path or "").strip()
     if not candidate or candidate == "." or "\x00" in candidate:
         _raise(400, "unsafe_write_path", "文件路径不安全")
-    if os.path.isabs(candidate):
-        _raise(400, "unsafe_write_path", "不允许写入绝对路径")
+    if os.path.isabs(candidate) or ntpath.isabs(candidate):
+        if not allow_external_paths:
+            _raise(400, "unsafe_write_path", "不允许写入绝对路径")
+        return os.path.realpath(os.path.expanduser(candidate))
 
     resolved_base = os.path.realpath(base_dir)
     resolved_path = os.path.realpath(os.path.join(resolved_base, os.path.expanduser(candidate)))
@@ -429,23 +438,30 @@ def validate_text_filename(name: str) -> str:
     return candidate
 
 
-def resolve_action_parent_dir(session: UserSession, parent_path: str | None = None) -> str:
+def resolve_action_parent_dir(
+    session: UserSession,
+    parent_path: str | None = None,
+    *,
+    allow_external_paths: bool = False,
+) -> str:
     browser_dir = require_real_browser_directory(get_browser_directory(session))
     candidate = str(parent_path or "").strip()
     if not candidate:
         return browser_dir
 
     resolved_base = os.path.realpath(browser_dir)
-    if os.path.isabs(candidate):
+    is_absolute_candidate = os.path.isabs(candidate) or ntpath.isabs(candidate)
+    if is_absolute_candidate:
         resolved_path = os.path.realpath(os.path.expanduser(candidate))
     else:
         resolved_path = os.path.realpath(os.path.join(resolved_base, os.path.expanduser(candidate)))
 
-    try:
-        if os.path.commonpath([resolved_base, resolved_path]) != resolved_base:
+    if not (allow_external_paths and is_absolute_candidate):
+        try:
+            if os.path.commonpath([resolved_base, resolved_path]) != resolved_base:
+                _raise(400, "unsafe_write_path", "文件路径不安全")
+        except ValueError:
             _raise(400, "unsafe_write_path", "文件路径不安全")
-    except ValueError:
-        _raise(400, "unsafe_write_path", "文件路径不安全")
 
     if not os.path.isdir(resolved_path):
         _raise(404, "dir_not_found", f"目录不存在: {resolved_path}")
@@ -521,11 +537,13 @@ def create_directory(
     user_id: int,
     name: str,
     parent_path: str | None = None,
+    *,
+    allow_external_paths: bool = False,
 ) -> dict[str, Any]:
     ensure_file_browser_supported(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
     browser_dir = require_real_browser_directory(get_browser_directory(session))
-    parent_dir = resolve_action_parent_dir(session, parent_path)
+    parent_dir = resolve_action_parent_dir(session, parent_path, allow_external_paths=allow_external_paths)
     directory_name, target_path = resolve_new_directory_path(parent_dir, name)
 
     if os.path.exists(target_path):
@@ -585,11 +603,13 @@ def create_text_file(
     filename: str,
     content: str = "",
     parent_path: str | None = None,
+    *,
+    allow_external_paths: bool = False,
 ) -> dict[str, Any]:
     ensure_file_browser_supported(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
     browser_dir = require_real_browser_directory(get_browser_directory(session))
-    parent_dir = resolve_action_parent_dir(session, parent_path)
+    parent_dir = resolve_action_parent_dir(session, parent_path, allow_external_paths=allow_external_paths)
     file_name = validate_text_filename(filename)
     target_path = os.path.abspath(os.path.join(parent_dir, file_name))
 
@@ -612,7 +632,15 @@ def create_text_file(
     }
 
 
-def rename_path(manager: MultiBotManager, alias: str, user_id: int, path: str, new_name: str) -> dict[str, Any]:
+def rename_path(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    path: str,
+    new_name: str,
+    *,
+    allow_external_paths: bool = False,
+) -> dict[str, Any]:
     ensure_file_browser_supported(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
     browser_dir = require_real_browser_directory(get_browser_directory(session))
@@ -620,7 +648,7 @@ def rename_path(manager: MultiBotManager, alias: str, user_id: int, path: str, n
     if not source_rel:
         _raise(400, "invalid_rename_path", "缺少待重命名路径")
 
-    source_path = resolve_safe_write_path(browser_dir, source_rel)
+    source_path = resolve_safe_write_path(browser_dir, source_rel, allow_external_paths=allow_external_paths)
     target_name = validate_text_filename(new_name)
 
     if not os.path.exists(source_path):
@@ -655,7 +683,14 @@ def build_copy_filename(source_name: str, directory: str) -> str:
     return candidate
 
 
-def copy_path(manager: MultiBotManager, alias: str, user_id: int, path: str) -> dict[str, Any]:
+def copy_path(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    path: str,
+    *,
+    allow_external_paths: bool = False,
+) -> dict[str, Any]:
     ensure_file_browser_supported(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
     browser_dir = require_real_browser_directory(get_browser_directory(session))
@@ -663,7 +698,7 @@ def copy_path(manager: MultiBotManager, alias: str, user_id: int, path: str) -> 
     if not source_rel:
         _raise(400, "invalid_copy_path", "缺少待复制路径")
 
-    source_path = resolve_safe_write_path(browser_dir, source_rel)
+    source_path = resolve_safe_write_path(browser_dir, source_rel, allow_external_paths=allow_external_paths)
     if not os.path.isfile(source_path):
         _raise(404, "file_not_found", "文件不存在")
 
@@ -687,7 +722,15 @@ def copy_path(manager: MultiBotManager, alias: str, user_id: int, path: str) -> 
     }
 
 
-def move_path(manager: MultiBotManager, alias: str, user_id: int, path: str, target_parent_path: str) -> dict[str, Any]:
+def move_path(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    path: str,
+    target_parent_path: str,
+    *,
+    allow_external_paths: bool = False,
+) -> dict[str, Any]:
     ensure_file_browser_supported(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
     browser_dir = require_real_browser_directory(get_browser_directory(session))
@@ -695,11 +738,15 @@ def move_path(manager: MultiBotManager, alias: str, user_id: int, path: str, tar
     if not source_rel:
         _raise(400, "invalid_move_path", "缺少待移动路径")
 
-    source_path = resolve_safe_write_path(browser_dir, source_rel)
+    source_path = resolve_safe_write_path(browser_dir, source_rel, allow_external_paths=allow_external_paths)
     if not os.path.exists(source_path):
         _raise(404, "path_not_found", "路径不存在")
 
-    target_dir = resolve_action_parent_dir(session, target_parent_path)
+    target_dir = resolve_action_parent_dir(
+        session,
+        target_parent_path,
+        allow_external_paths=allow_external_paths,
+    )
     target_path = os.path.abspath(os.path.join(target_dir, os.path.basename(source_path)))
     source_abs = os.path.abspath(source_path)
 
@@ -730,11 +777,18 @@ def move_path(manager: MultiBotManager, alias: str, user_id: int, path: str, tar
     }
 
 
-def delete_path(manager: MultiBotManager, alias: str, user_id: int, path: str) -> dict[str, Any]:
+def delete_path(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    path: str,
+    *,
+    allow_external_paths: bool = False,
+) -> dict[str, Any]:
     ensure_file_browser_supported(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
     browser_dir = require_real_browser_directory(get_browser_directory(session))
-    target_path = resolve_safe_write_path(browser_dir, path)
+    target_path = resolve_safe_write_path(browser_dir, path, allow_external_paths=allow_external_paths)
 
     if os.path.normcase(os.path.abspath(target_path)) == os.path.normcase(os.path.abspath(browser_dir)):
         _raise(400, "cannot_delete_current_dir", "不能删除当前目录")
@@ -826,7 +880,15 @@ def delete_chat_attachment(
     }
 
 
-def save_uploaded_file(manager: MultiBotManager, alias: str, user_id: int, filename: str, data: bytes) -> dict[str, Any]:
+def save_uploaded_file(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    filename: str,
+    data: bytes,
+    *,
+    allow_external_paths: bool = False,
+) -> dict[str, Any]:
     ensure_file_browser_supported(manager, alias)
     if not data:
         _raise(400, "empty_file", "文件内容不能为空")
@@ -835,7 +897,7 @@ def save_uploaded_file(manager: MultiBotManager, alias: str, user_id: int, filen
 
     session = get_session_for_alias(manager, alias, user_id)
     browser_dir = require_real_browser_directory(get_browser_directory(session))
-    file_path = resolve_safe_write_path(browser_dir, filename)
+    file_path = resolve_safe_write_path(browser_dir, filename, allow_external_paths=allow_external_paths)
     with open(file_path, "wb") as handle:
         handle.write(data)
     invalidate_workspace_indexes(manager, alias, user_id, browser_dir)
@@ -852,11 +914,13 @@ async def save_uploaded_file_from_chunks(
     user_id: int,
     filename: str,
     chunks: AsyncIterator[bytes],
+    *,
+    allow_external_paths: bool = False,
 ) -> dict[str, Any]:
     ensure_file_browser_supported(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
     browser_dir = require_real_browser_directory(get_browser_directory(session))
-    file_path = resolve_safe_write_path(browser_dir, filename)
+    file_path = resolve_safe_write_path(browser_dir, filename, allow_external_paths=allow_external_paths)
     size = await _write_limited_chunks(file_path, chunks, replace_existing=True)
     invalidate_workspace_indexes(manager, alias, user_id, browser_dir)
     return {
@@ -875,11 +939,12 @@ def write_file_content(
     *,
     expected_mtime_ns: int | None = None,
     encoding: str | None = None,
+    allow_external_paths: bool = False,
 ) -> dict[str, Any]:
     ensure_file_browser_supported(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
     browser_dir = require_real_browser_directory(get_browser_directory(session))
-    file_path = resolve_safe_write_path(browser_dir, path)
+    file_path = resolve_safe_write_path(browser_dir, path, allow_external_paths=allow_external_paths)
     if not os.path.isfile(file_path):
         _raise(404, "file_not_found", "文件不存在")
 
@@ -906,10 +971,17 @@ def write_file_content(
     }
 
 
-def get_file_metadata(manager: MultiBotManager, alias: str, user_id: int, filename: str) -> dict[str, Any]:
+def get_file_metadata(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    filename: str,
+    *,
+    allow_external_paths: bool = False,
+) -> dict[str, Any]:
     session = get_session_for_alias(manager, alias, user_id)
     browser_dir = require_real_browser_directory(get_browser_directory(session))
-    file_path = resolve_safe_path(browser_dir, filename)
+    file_path = resolve_safe_path(browser_dir, filename, allow_external_paths=allow_external_paths)
     if not os.path.isfile(file_path):
         _raise(404, "file_not_found", "文件不存在")
     return {
@@ -927,10 +999,12 @@ def read_file_content(
     filename: str,
     mode: str = "cat",
     lines: int = 20,
+    *,
+    allow_external_paths: bool = False,
 ) -> dict[str, Any]:
     session = get_session_for_alias(manager, alias, user_id)
     browser_dir = require_real_browser_directory(get_browser_directory(session))
-    file_path = resolve_safe_path(browser_dir, filename)
+    file_path = resolve_safe_path(browser_dir, filename, allow_external_paths=allow_external_paths)
     if not os.path.isfile(file_path):
         _raise(404, "file_not_found", "文件不存在")
 

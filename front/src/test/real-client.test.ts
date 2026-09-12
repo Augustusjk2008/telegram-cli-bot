@@ -57,6 +57,41 @@ describe("RealWebBotClient", () => {
     });
   });
 
+  test("maps bot archive state and uses archive lifecycle endpoints", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonOk({ bot: {
+        alias: "team2",
+        cli_type: "codex",
+        status: "stopped",
+        working_dir: "C:\\repo",
+        is_archived: true,
+      } }))
+      .mockResolvedValueOnce(jsonOk({ bot: {
+        alias: "team2",
+        cli_type: "codex",
+        status: "stopped",
+        working_dir: "C:\\repo",
+        archived: false,
+      } }));
+
+    const client = new RealWebBotClient();
+    const archived = await client.archiveBot("team2");
+    const restored = await client.unarchiveBot("team2");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/admin/bots/team2/archive",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/admin/bots/team2/unarchive",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(archived.archived).toBe(true);
+    expect(restored.archived).toBe(false);
+  });
+
   test("uses the active public base path for auth requests and download links", async () => {
     window.history.replaceState(null, "", "/node/nanjing-laptop/");
     vi.stubGlobal("__PUBLIC_ENV__", { VITE_API_BASE_URL: "/node/nanjing-laptop" });

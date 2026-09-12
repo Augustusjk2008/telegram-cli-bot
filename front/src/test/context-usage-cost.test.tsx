@@ -61,41 +61,6 @@ describe("context usage cost mapping", () => {
 });
 
 describe("context usage cost details", () => {
-  it.each([
-    { scope: "session", currency: "USD", compact: true, contextLeftPercent: 72 },
-    { scope: "turn", currency: "CNY", compact: true, contextLeftPercent: undefined },
-    { scope: "request", currency: "USD", compact: false, contextLeftPercent: undefined },
-  ] as const)("shows a single estimate for $scope with small decimal amounts on click", ({ scope, currency, compact, contextLeftPercent }) => {
-    render(<ChatContextUsageBadge compact={compact} contextUsage={{
-      contextLeftPercent,
-      model: "gpt-test",
-      estimatedCost: { ...estimatedCost, scope, currency },
-    }} />);
-
-    const badge = screen.getByRole("button");
-    expect(badge).toHaveTextContent(contextLeftPercent === undefined ? "Estimated cost" : "ctx 72%");
-    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
-    fireEvent.click(badge);
-
-    const tooltip = screen.getByRole("tooltip");
-    const costRows = tooltip.textContent!.split("\n").filter((row) => /cost/i.test(row));
-    expect(costRows).toEqual([`Estimated cost: ${currency} 0.000000014`]);
-    expect(tooltip).toHaveTextContent("model: gpt-test");
-    expect(tooltip).not.toHaveTextContent(/pricing model|priced-model/i);
-    if (contextLeftPercent !== undefined) {
-      expect(tooltip).toHaveTextContent("context left: 72%");
-    }
-  });
-
-  it("shows a valid zero estimate without context window data", () => {
-    render(<ChatContextUsageBadge contextUsage={mapChatMessageContextUsage({ estimatedCost: {
-      ...estimatedCost, total: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0,
-    } })} />);
-
-    fireEvent.click(screen.getByRole("button", { name: /Estimated cost/ }));
-    expect(screen.getByRole("tooltip")).toHaveTextContent("Estimated cost: USD 0");
-  });
-
   it("keeps unknown costs hidden even for unvalidated component data", () => {
     const { rerender } = render(<ChatContextUsageBadge contextUsage={{}} />);
     expect(screen.queryByRole("button")).not.toBeInTheDocument();

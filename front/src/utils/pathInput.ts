@@ -13,3 +13,8 @@ export function normalizePathInput(value: string): string {
 
   return trimmed.replace(/\\+/g, (run) => "\\".repeat(run.length / 2));
 }
+
+export function isAbsolutePathInput(value: string): boolean {
+  const trimmed = value.trim();
+  return /^(?:[A-Za-z]:[\\/]|[\\/]{1,2})/.test(trimmed);
+}

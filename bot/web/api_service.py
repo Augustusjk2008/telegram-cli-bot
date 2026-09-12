@@ -140,6 +140,7 @@ from bot.web.chat_favorite_store import ChatFavoriteStore, FavoriteScope, build_
 from bot.web.async_chat_store import run_chat_store_io
 from bot.web.chat_store import ChatStore
 from bot.web.cli_context_usage import resolve_cli_context_usage
+from bot.web.cli_turn_cost import CliTurnCost
 from bot.web.diagnostics import diag_log_event, diag_log_slow
 from bot.web.git_commit_message import truncate_diff_text
 from bot.web.native_history_adapter import (
@@ -491,7 +492,7 @@ def _build_capabilities(is_main: bool) -> list[str]:
 def _build_run_status(manager: MultiBotManager, alias: str, profile: BotProfile) -> str:
     if alias == manager.main_profile.alias:
         return "configured"
-    return "configured" if profile.enabled else "stopped"
+    return "configured" if profile.enabled and not profile.archived else "stopped"
 
 
 def _build_agent_runtime_map(bot_id: int, user_id: int | None) -> dict[str, dict[str, Any]]:
@@ -535,10 +536,33 @@ def _build_agent_status_items(
     ]
 
 
-def _build_activity_summary(agent_items: list[dict[str, Any]]) -> dict[str, Any]:
+def _cluster_role_names(run: Any | None) -> dict[str, str]:
+    if run is None:
+        return {}
+    team = getattr(run, "team", None)
+    assignments = team.get("assignments") if isinstance(team, dict) else []
+    if not isinstance(assignments, list):
+        return {}
+    return {
+        str(item.get("agent_id") or "").strip().lower(): str(item.get("name") or "").strip()
+        for item in assignments
+        if isinstance(item, dict)
+        and str(item.get("agent_id") or "").strip()
+        and str(item.get("name") or "").strip()
+    }
+
+
+def _build_activity_summary(
+    agent_items: list[dict[str, Any]],
+    cluster_role_names: dict[str, str] | None = None,
+) -> dict[str, Any]:
     busy_agents = [item for item in agent_items if item.get("is_processing")]
     busy_agent_ids = [str(item.get("id") or "main") for item in busy_agents]
-    busy_agent_names = [str(item.get("name") or item.get("id") or "agent") for item in busy_agents]
+    busy_agent_names = [
+        (cluster_role_names or {}).get(agent_id)
+        or str(item.get("name") or agent_id or "agent")
+        for item, agent_id in zip(busy_agents, busy_agent_ids)
+    ]
     return {
         "activity_status": "busy" if busy_agents else "idle",
         "busy_agent_ids": busy_agent_ids,
@@ -563,6 +587,7 @@ def build_bot_summary(
 
     # 优先使用共享聊天 session 的工作目录（如果已建立）
     working_dir = profile.working_dir
+    current_session = session
     if user_id is not None:
         try:
             current_session = session or get_session_for_alias(manager, alias, chat_session_user_id(user_id))
@@ -572,7 +597,14 @@ def build_bot_summary(
             # 如果获取 session 失败，使用 profile 的工作目录
             pass
     agent_items = _build_agent_status_items(profile, _build_agent_runtime_map(bot_id, user_id))
-    activity = _build_activity_summary(agent_items)
+    active_cluster_run = None
+    if user_id is not None and current_session is not None and profile.cluster.enabled:
+        try:
+            active_cluster_run = _find_active_cluster_run_for_session(alias, user_id, current_session)
+        except Exception:
+            # 集群状态只用于展示，读取失败时仍返回普通 agent 活动状态。
+            pass
+    activity = _build_activity_summary(agent_items, _cluster_role_names(active_cluster_run))
     latest_answer_completed_at = ""
     latest_answer_store = ChatStore(Path(working_dir))
     latest_answer_user_id = chat_session_user_id(user_id) if user_id is not None else None
@@ -592,6 +624,7 @@ def build_bot_summary(
         "default_execution_mode": profile.default_execution_mode,
         "native_agent": public_native_agent_config(effective_native_agent_config(profile.native_agent)),
         "working_dir": working_dir,
+        "archived": profile.archived,
         "prompt_presets": [dict(item) for item in profile.prompt_presets],
         "global_prompt_presets": app_settings.get_global_prompt_presets(manager.app_settings_file),
         "is_main": alias == manager.main_profile.alias,
@@ -5141,6 +5174,7 @@ async def _stream_cli_chat(
             if cli_type == "codex":
                 quota_capture = await _start_codex_rate_limit_capture(env=env, command=cmd)
 
+            turn_cost = CliTurnCost(cli_type, turn_model)
             try:
                 spawn_started_at = time.perf_counter()
                 process = subprocess.Popen(
@@ -5256,6 +5290,34 @@ async def _stream_cli_chat(
             latest_preview_text = ""
             last_context_usage_resolved_at = 0.0
 
+            async def with_estimated_cost(context_usage: dict[str, Any] | None) -> dict[str, Any] | None:
+                parsed = preview_state.result()
+                cost_model = str((context_usage or {}).get("model") or turn_model).strip()
+                cost_session_id = parsed.session_id or _current_native_session_id(session, cli_type)
+                estimated_cost = None
+                if cost_model and parsed.terminal_usage is not None:
+                    estimated_cost = estimate_usage_cost(
+                        cost_model, parsed.terminal_usage, protocol=cli_type, scope="turn",
+                    )
+                elif parsed.terminal_usage is None:
+                    try:
+                        estimated_cost = await asyncio.wait_for(
+                            asyncio.to_thread(turn_cost.estimate_partial, cost_session_id),
+                            timeout=3.0,
+                        )
+                    except Exception:
+                        logger.debug("读取本轮 CLI 部分费用失败", exc_info=True)
+                if estimated_cost is None:
+                    return context_usage
+                return {
+                    **(context_usage or {
+                        "provider": cli_type,
+                        "model": cost_model or estimated_cost["model"],
+                        "session_id": cost_session_id,
+                    }),
+                    "estimated_cost": estimated_cost,
+                }
+
             def take_pending_status(*, force: bool = False) -> dict[str, Any] | None:
                 nonlocal pending_status_event, last_status_sent_at
                 if pending_status_event is None:
@@ -5321,6 +5383,7 @@ async def _stream_cli_chat(
                         text_chunk = str(item)
                         output_bytes += len(text_chunk.encode("utf-8", errors="replace"))
                         preview_state.consume(text_chunk)
+                        turn_cost.observe(text_chunk)
                         for trace_event in consume_stream_trace_chunk(cli_type, text_chunk, trace_state):
                             appended_trace = append_live_trace_event(trace_event)
                             if appended_trace is not None and include_trace:
@@ -5499,6 +5562,10 @@ async def _stream_cli_chat(
                         with session._lock:
                             session.process = None
                         active_lifecycle = None
+                if cleanup_abort:
+                    interrupted_usage = await with_estimated_cost(last_context_usage)
+                    if interrupted_usage is not None:
+                        await service.update_context_usage_async(turn_handle, interrupted_usage)
             final_status = take_pending_status(force=True)
             if final_status is not None:
                 yield final_status
@@ -5632,23 +5699,7 @@ async def _stream_cli_chat(
                 previous_left_percent=session_context_left_percent,
                 compaction_count=session_compaction_count,
             )
-            cost_model = str((context_usage or {}).get("model") or turn_model).strip()
-            if cost_model and parsed_result.terminal_usage is not None:
-                estimated_cost = estimate_usage_cost(
-                    cost_model,
-                    parsed_result.terminal_usage,
-                    protocol=cli_type,
-                    scope="turn",
-                )
-                if estimated_cost is not None:
-                    context_usage = {
-                        **(context_usage or {
-                            "provider": cli_type,
-                            "model": cost_model,
-                            "session_id": native_session_id or parsed_result.session_id,
-                        }),
-                        "estimated_cost": estimated_cost,
-                    }
+            context_usage = await with_estimated_cost(context_usage)
             complete_started_at = time.perf_counter()
             done_message = await asyncio.to_thread(
                 service.complete_turn,
@@ -6582,6 +6633,22 @@ async def start_managed_bot(manager: MultiBotManager, alias: str) -> dict[str, A
 
 async def stop_managed_bot(manager: MultiBotManager, alias: str) -> dict[str, Any]:
     await manager.stop_bot(alias)
+    return {"bot": build_bot_summary(manager, alias)}
+
+
+async def archive_managed_bot(manager: MultiBotManager, alias: str) -> dict[str, Any]:
+    try:
+        await manager.archive_bot(alias)
+    except ValueError as exc:
+        _raise(400, "invalid_bot_config", str(exc))
+    return {"bot": build_bot_summary(manager, alias)}
+
+
+async def unarchive_managed_bot(manager: MultiBotManager, alias: str) -> dict[str, Any]:
+    try:
+        await manager.unarchive_bot(alias)
+    except ValueError as exc:
+        _raise(400, "invalid_bot_config", str(exc))
     return {"bot": build_bot_summary(manager, alias)}
 
 

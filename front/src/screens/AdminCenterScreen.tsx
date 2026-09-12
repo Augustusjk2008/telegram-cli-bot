@@ -1604,9 +1604,6 @@ export function AdminCenterScreen({
                         {tunnel.publicUrl && tunnel.source === "quick_tunnel" && tunnel.status !== "running" && !tunnel.lastError ? (
                           <p className="break-all">公网地址已创建，正在验证</p>
                         ) : null}
-                        {fixedForward && tunnel.frpcNote ? (
-                          <p className="break-all"><span className="font-medium text-[var(--text)]">frpc 说明:</span> {tunnel.frpcNote}</p>
-                        ) : null}
                         {externalSameNameProxy && (tunnel.frpcLastError || tunnel.lastError) ? (
                           <p className="break-all"><span className="font-medium text-[var(--text)]">frpc:</span> 已复用外部 frpc</p>
                         ) : null}
@@ -2409,7 +2406,6 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
           <section aria-labelledby="update-center-title" className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
             <div>
               <h2 id="update-center-title" className="text-base font-semibold text-[var(--text)]">升级</h2>
-              <p className="text-sm text-[var(--muted)]">可联网下载，也可选离线包设为待应用。</p>
             </div>
 
             <div className="grid grid-cols-1 gap-3 text-sm text-[var(--muted)] sm:grid-cols-2">

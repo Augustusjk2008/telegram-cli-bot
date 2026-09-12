@@ -57,6 +57,7 @@ def load_managed_profiles(storage_file: Path) -> dict[str, BotProfile]:
                 os.path.expanduser(str(item.get("working_dir", WORKING_DIR)).strip() or WORKING_DIR)
             ),
             "enabled": bool(item.get("enabled", True)),
+            "archived": bool(item.get("archived", False)),
         }
         if "cli_params" in item:
             profile_data["cli_params"] = item["cli_params"]
