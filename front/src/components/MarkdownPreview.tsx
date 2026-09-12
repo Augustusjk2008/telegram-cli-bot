@@ -1,4 +1,4 @@
-import { Children, isValidElement, type ComponentPropsWithoutRef, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { Children, isValidElement, type ComponentPropsWithoutRef, type ReactNode, useEffect, useRef, useState } from "react";
 import { CheckCheck, Copy } from "lucide-react";
 import "katex/dist/katex.min.css";
 import rehypeKatex from "rehype-katex";
