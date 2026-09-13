@@ -83,35 +83,56 @@ function Get-DotEnvValue {
     return $null
 }
 
-function Get-PythonRuntime {
-    $pythonCommand = Get-Command python -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($pythonCommand) {
-        if ($pythonCommand.Path) {
-            return [pscustomobject]@{
-                Command   = $pythonCommand.Path
-                Arguments = @()
-            }
-        }
+function Test-PythonVersionSupported {
+    param([string]$Version)
 
-        return [pscustomobject]@{
-            Command   = $pythonCommand.Source
-            Arguments = @()
-        }
+    try {
+        $normalized = [Version]($Version -replace "^v?", "")
+        return $normalized -ge [Version]"3.10.0" -and $normalized -lt [Version]"3.14.0"
+    } catch {
+        return $false
+    }
+}
+
+function Get-PythonRuntimeCandidate {
+    param(
+        [object]$Command,
+        [string[]]$Arguments
+    )
+
+    $exe = if ($Command.Path) { $Command.Path } else { $Command.Source }
+    $output = & $exe @Arguments --version 2>&1
+    if ($LASTEXITCODE -ne 0 -or "$output" -notmatch "Python ([0-9]+\.[0-9]+\.[0-9]+)") {
+        return $null
+    }
+    if (-not (Test-PythonVersionSupported -Version $Matches[1])) {
+        return $null
     }
 
+    return [pscustomobject]@{
+        Command   = $exe
+        Arguments = $Arguments
+    }
+}
+
+function Get-PythonRuntime {
+    # 与 install.ps1 的选择顺序一致：优先 py -3.12，其次 PATH python/py -3；
+    # 候选必须通过 3.10-3.13 版本校验，避免 venv 重建时装时 3.12、跑时 3.14。
     $pyCommand = Get-Command py -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($pyCommand) {
-        if ($pyCommand.Path) {
-            return [pscustomobject]@{
-                Command   = $pyCommand.Path
-                Arguments = @("-3")
-            }
-        }
+        $candidate = Get-PythonRuntimeCandidate -Command $pyCommand -Arguments @("-3.12")
+        if ($candidate) { return $candidate }
+    }
 
-        return [pscustomobject]@{
-            Command   = $pyCommand.Source
-            Arguments = @("-3")
-        }
+    $pythonCommand = Get-Command python -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($pythonCommand) {
+        $candidate = Get-PythonRuntimeCandidate -Command $pythonCommand -Arguments @()
+        if ($candidate) { return $candidate }
+    }
+
+    if ($pyCommand) {
+        $candidate = Get-PythonRuntimeCandidate -Command $pyCommand -Arguments @("-3")
+        if ($candidate) { return $candidate }
     }
 
     return $null
@@ -804,7 +825,7 @@ try {
         $pythonRuntime = Get-PythonRuntime
     }
     if (-not $pythonRuntime) {
-        Write-Fail "未找到 python 或 py -3，请先安装 Python 并加入 PATH。"
+        Write-Fail "未找到受支持的 Python（3.10-3.13，推荐 3.12）。请先运行 install.ps1，或将受支持版本加入 PATH。"
         exit 127
     }
 

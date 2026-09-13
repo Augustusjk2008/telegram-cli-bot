@@ -5,7 +5,7 @@ import { ChatScreen } from "../screens/ChatScreen";
 import { EventType } from "../services/agUiProtocol";
 import { ChatStreamIncompleteError } from "../services/chatStreamError";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { BotOverview, ChatMessage, ConversationListResult } from "../services/types";
+import type { BotOverview, ChatMessage, CliParamsPayload, ConversationListResult } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
@@ -25,6 +25,51 @@ function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
     ...overrides,
   });
 }
+
+test("filters CLI reasoning efforts with the account-aware Codex model catalog", async () => {
+  const payload: CliParamsPayload = {
+    cliType: "codex",
+    params: { model: "gpt-5.5", reasoning_effort: "ultra" },
+    defaults: { model: "gpt-5.5", reasoning_effort: "medium" },
+    schema: {
+      model: { type: "string", enum: ["gpt-5.5", "gpt-5.6-sol", "none"] },
+      reasoning_effort: { type: "string", enum: ["ultra", "max", "xhigh", "high", "medium", "low"] },
+    },
+    modelCatalog: {
+      source: "codex_cli",
+      items: [
+        {
+          id: "gpt-5.5",
+          label: "GPT-5.5",
+          reasoningEfforts: ["low", "medium", "high", "xhigh"],
+          defaultReasoningEffort: "medium",
+        },
+        {
+          id: "gpt-5.6-sol",
+          label: "GPT-5.6-Sol",
+          reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+          defaultReasoningEffort: "medium",
+        },
+        {
+          id: "none",
+          label: "自动（Codex 默认）",
+          reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        },
+      ],
+    },
+  };
+  const client = createClient({ getCliParams: async () => payload });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  const composer = await screen.findByTestId("chat-composer-root");
+  const model = await within(composer).findByLabelText("模型");
+  const reasoning = within(composer).getByLabelText("思考深度") as HTMLSelectElement;
+
+  expect(within(model).getByRole("option", { name: "GPT-5.5" })).toBeInTheDocument();
+  expect(within(reasoning).queryByRole("option", { name: "ultra" })).not.toBeInTheDocument();
+  expect(reasoning.value).toBe("medium");
+});
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

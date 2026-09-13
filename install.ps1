@@ -112,6 +112,17 @@ function Test-MinimumVersion {
     }
 }
 
+function Test-PythonVersionSupported {
+    param([string]$CurrentVersion)
+
+    try {
+        $version = [Version](Normalize-Version $CurrentVersion)
+        return $version -ge [Version]"3.10.0" -and $version -lt [Version]"3.14.0"
+    } catch {
+        return $false
+    }
+}
+
 function Refresh-ProcessPath {
     $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -145,40 +156,53 @@ function Invoke-CheckedCommand {
     }
 }
 
-function Get-PythonInfo {
-    $pythonPath = Get-CommandPath -Name "python"
-    if ($pythonPath) {
-        $output = & $pythonPath --version 2>&1
-        if ($LASTEXITCODE -eq 0 -and $output -match "Python ([0-9]+\.[0-9]+\.[0-9]+)") {
-            return [pscustomobject]@{
-                Name         = "Python"
-                Version      = $Matches[1]
-                Path         = $pythonPath
-                Command      = $pythonPath
-                PrefixArgs   = @()
-                Minimum      = "3.10.0"
-                IsSufficient = (Test-MinimumVersion -CurrentVersion $Matches[1] -MinimumVersion "3.10.0")
-            }
-        }
+function Get-PythonCandidateInfo {
+    param(
+        [string]$Command,
+        [string[]]$PrefixArgs
+    )
+
+    $output = & $Command @PrefixArgs --version 2>&1
+    if ($LASTEXITCODE -ne 0 -or $output -notmatch "Python ([0-9]+\.[0-9]+\.[0-9]+)") {
+        return $null
     }
 
+    $version = $Matches[1]
+    return [pscustomobject]@{
+        Name         = "Python"
+        Version      = $version
+        Path         = $Command
+        Command      = $Command
+        PrefixArgs   = @($PrefixArgs)
+        Minimum      = "3.10.0"
+        Requirement  = "3.10-3.13（推荐 3.12）"
+        IsSufficient = (Test-PythonVersionSupported -CurrentVersion $version)
+    }
+}
+
+function Get-PythonInfo {
+    $fallback = $null
     $pyPath = Get-CommandPath -Name "py"
     if ($pyPath) {
-        $output = & $pyPath -3 --version 2>&1
-        if ($LASTEXITCODE -eq 0 -and $output -match "Python ([0-9]+\.[0-9]+\.[0-9]+)") {
-            return [pscustomobject]@{
-                Name         = "Python"
-                Version      = $Matches[1]
-                Path         = $pyPath
-                Command      = $pyPath
-                PrefixArgs   = @("-3")
-                Minimum      = "3.10.0"
-                IsSufficient = (Test-MinimumVersion -CurrentVersion $Matches[1] -MinimumVersion "3.10.0")
-            }
-        }
+        $candidate = Get-PythonCandidateInfo -Command $pyPath -PrefixArgs @("-3.12")
+        if ($candidate -and $candidate.IsSufficient) { return $candidate }
+        if ($candidate -and -not $fallback) { $fallback = $candidate }
     }
 
-    return $null
+    $pythonPath = Get-CommandPath -Name "python"
+    if ($pythonPath) {
+        $candidate = Get-PythonCandidateInfo -Command $pythonPath -PrefixArgs @()
+        if ($candidate -and $candidate.IsSufficient) { return $candidate }
+        if ($candidate -and -not $fallback) { $fallback = $candidate }
+    }
+
+    if ($pyPath) {
+        $candidate = Get-PythonCandidateInfo -Command $pyPath -PrefixArgs @("-3")
+        if ($candidate -and $candidate.IsSufficient) { return $candidate }
+        if ($candidate -and -not $fallback) { $fallback = $candidate }
+    }
+
+    return $fallback
 }
 
 function Get-NodeInfo {
@@ -198,8 +222,8 @@ function Get-NodeInfo {
         Path         = $nodePath
         Command      = $nodePath
         PrefixArgs   = @()
-        Minimum      = "18.0.0"
-        IsSufficient = (Test-MinimumVersion -CurrentVersion $Matches[1] -MinimumVersion "18.0.0")
+        Minimum      = "22.0.0"
+        IsSufficient = (Test-MinimumVersion -CurrentVersion $Matches[1] -MinimumVersion "22.0.0")
     }
 }
 
@@ -366,13 +390,13 @@ function Get-PythonInstallerUrl {
 }
 
 function Get-NodeInstallerUrl {
-    $checksums = Invoke-WebRequest -UseBasicParsing -Uri "https://nodejs.org/dist/latest-v20.x/SHASUMS256.txt"
+    $checksums = Invoke-WebRequest -UseBasicParsing -Uri "https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt"
     $match = [regex]::Match($checksums.Content, "(?m)^[0-9a-f]+\s+(node-v[0-9]+\.[0-9]+\.[0-9]+-x64\.msi)$")
     if (-not $match.Success) {
         throw "无法解析 Node.js 官方安装包地址。"
     }
 
-    return "https://nodejs.org/dist/latest-v20.x/{0}" -f $match.Groups[1].Value
+    return "https://nodejs.org/dist/latest-v22.x/{0}" -f $match.Groups[1].Value
 }
 
 function Install-PythonFallback {
@@ -432,7 +456,8 @@ function Ensure-Tool {
     }
 
     if ($status) {
-        Write-Warn ("{0} 版本过低: {1}，需要 {2}+" -f $DisplayName, $status.Version, $MinimumVersion)
+        $requirement = if ($status.Requirement) { $status.Requirement } else { "${MinimumVersion}+" }
+        Write-Warn ("{0} 版本不受支持: {1}，需要 {2}" -f $DisplayName, $status.Version, $requirement)
     } else {
         Write-Info ("未检测到 {0}" -f $DisplayName)
     }
@@ -848,14 +873,14 @@ try {
         Save-Summary -Key "winget" -Value "不可用"
     }
 
-    Write-Step "检查 Python 3.10+"
+    Write-Step "检查 Python 3.10-3.13（推荐 3.12）"
     $pythonInfo = Ensure-Tool -DisplayName "Python" -Detector ${function:Get-PythonInfo} -MinimumVersion "3.10.0" -WingetPackageId "Python.Python.3.12" -FallbackInstaller ${function:Install-PythonFallback}
     if ($pythonInfo -and $pythonInfo.Command -match "\\py(?:\.exe)?$" -and -not (Get-CommandPath -Name "python")) {
         Write-Warn "当前只检测到 py 启动器，start.ps1 默认使用 python 命令。若后续启动失败，请重新运行安装器或确认 Python 已加入 PATH。"
     }
 
-    Write-Step "检查 Node.js 18+"
-    $nodeInfo = Ensure-Tool -DisplayName "Node.js" -Detector ${function:Get-NodeInfo} -MinimumVersion "18.0.0" -WingetPackageId "OpenJS.NodeJS.LTS" -FallbackInstaller ${function:Install-NodeFallback}
+    Write-Step "检查 Node.js 22+"
+    $nodeInfo = Ensure-Tool -DisplayName "Node.js" -Detector ${function:Get-NodeInfo} -MinimumVersion "22.0.0" -WingetPackageId "OpenJS.NodeJS.LTS" -FallbackInstaller ${function:Install-NodeFallback}
 
     Write-Step "检查 Git"
     $gitInfo = Ensure-Tool -DisplayName "Git" -Detector ${function:Get-GitInfo} -MinimumVersion "2.0.0" -WingetPackageId "Git.Git" -FallbackInstaller ${function:Install-GitFallback}
@@ -898,7 +923,7 @@ try {
     if (-not $npmCommand) {
         throw "未找到 npm，请确认 Node.js 安装成功。"
     }
-    Invoke-CheckedCommand -FilePath $npmCommand -Arguments @("install") -FailureMessage "安装前端依赖失败" -WorkingDirectory (Join-Path $script:RootDir "front")
+    Invoke-CheckedCommand -FilePath $npmCommand -Arguments @("ci") -FailureMessage "安装前端依赖失败" -WorkingDirectory (Join-Path $script:RootDir "front")
     Save-Summary -Key "前端依赖" -Value "已安装"
 
     Write-Step "构建前端"

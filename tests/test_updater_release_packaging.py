@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import subprocess
 import sys
 import tarfile
@@ -181,3 +182,78 @@ def test_portable_build_does_not_embed_fixed_web_token() -> None:
     assert migration_index < ensure_token_index < import_index
     assert '$env:TCB_PORTABLE_SMOKE_IMPORT_ONLY -eq "1"' in portable
     assert portable.index('$env:TCB_PORTABLE_SMOKE_IMPORT_ONLY -eq "1"') < ensure_token_index
+
+
+def test_build_updated_frontend_falls_back_to_npm_without_build_script(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "front").mkdir()
+    calls: list[tuple[list[str], Path]] = []
+
+    def fake_run(command, cwd=None, **_kwargs):
+        calls.append((list(command), Path(cwd)))
+        return subprocess.CompletedProcess(command, 0, stdout="built", stderr="")
+
+    monkeypatch.setattr(updater.subprocess, "run", fake_run)
+    monkeypatch.setattr(updater.shutil, "which", lambda name: "/usr/bin/npm" if name == "npm" else None)
+
+    success, output = updater._build_updated_frontend(tmp_path)
+
+    assert success
+    assert "built" in output
+    assert len(calls) == 1
+    assert calls[0][0] == ["/usr/bin/npm", "run", "build"]
+    assert calls[0][1] == tmp_path / "front"
+
+
+def test_build_updated_frontend_retries_after_npm_install_when_build_fails(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "front").mkdir()
+    commands: list[list[str]] = []
+
+    def fake_run(command, cwd=None, **_kwargs):
+        commands.append(list(command))
+        if len(commands) == 1:
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="boom")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(updater.subprocess, "run", fake_run)
+    monkeypatch.setattr(updater.shutil, "which", lambda _name: "/usr/bin/npm")
+
+    success, _output = updater._build_updated_frontend(tmp_path)
+
+    assert success
+    assert len(commands) == 3
+    assert commands[0] == ["/usr/bin/npm", "run", "build"]
+    assert commands[1] == ["/usr/bin/npm", "install"]
+    assert commands[2] == ["/usr/bin/npm", "run", "build"]
+
+
+def test_build_updated_frontend_reports_missing_npm_and_script(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "front").mkdir()
+    monkeypatch.setattr(updater.shutil, "which", lambda _name: None)
+
+    success, message = updater._build_updated_frontend(tmp_path)
+
+    assert not success
+    assert "npm" in message
+
+
+def test_build_updated_frontend_prefers_legacy_build_script(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "front").mkdir()
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    script_name = "build_web_frontend.bat" if os.name == "nt" else "build_web_frontend.sh"
+    script_path = (scripts_dir / script_name).resolve()
+    script_path.write_text("# stub\n", encoding="utf-8")
+
+    commands: list[list[str]] = []
+
+    def fake_run(command, cwd=None, **_kwargs):
+        commands.append(list(command))
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(updater.subprocess, "run", fake_run)
+
+    success, _output = updater._build_updated_frontend(tmp_path)
+
+    assert success
+    expected = [str(script_path)] if os.name == "nt" else ["bash", str(script_path)]
+    assert commands == [expected]

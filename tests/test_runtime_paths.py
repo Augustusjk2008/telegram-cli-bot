@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import importlib
 from pathlib import Path
 
 import bot.runtime_paths as runtime_paths
@@ -13,6 +12,8 @@ def test_chat_history_paths_resolve_under_home_tcb_root(monkeypatch, tmp_path: P
     home.mkdir()
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    monkeypatch.delenv("TCB_DATA_DIR", raising=False)
+    monkeypatch.setattr(runtime_paths, "dotenv_values", lambda _path: {})
     monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
 
     workspace_key = runtime_paths.get_chat_workspace_key(workspace)
@@ -27,6 +28,17 @@ def test_chat_history_paths_resolve_under_home_tcb_root(monkeypatch, tmp_path: P
     assert favorites_path == workspace_dir / "favorites.json"
 
 
+def test_chat_history_and_attachments_honor_data_root_override(monkeypatch, tmp_path: Path):
+    data_root = tmp_path / "runtime-data"
+    workspace = tmp_path / "workspace"
+    monkeypatch.setenv("TCB_DATA_DIR", str(data_root))
+
+    workspace_key = runtime_paths.get_chat_workspace_key(workspace)
+
+    assert runtime_paths.get_chat_workspace_dir(workspace) == data_root / "chat-history" / "workspaces" / workspace_key
+    assert runtime_paths.get_chat_attachments_dir("main", 7) == data_root / "chat-attachments" / "main" / "7"
+
+
 def test_legacy_project_chat_db_path_matches_chat_store_workspace_path(tmp_path: Path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -35,19 +47,21 @@ def test_legacy_project_chat_db_path_matches_chat_store_workspace_path(tmp_path:
     assert ChatStore(workspace).legacy_db_path == runtime_paths.get_legacy_project_chat_db_path(workspace)
 
 
-def test_runtime_paths_loads_tcb_data_dir_from_dotenv(tmp_path, monkeypatch):
+def test_runtime_paths_loads_tcb_data_dir_from_dotenv_cwd_independently(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     data = tmp_path / "data"
+    elsewhere = tmp_path / "elsewhere"
     repo.mkdir()
+    elsewhere.mkdir()
     (repo / ".env").write_text(f"TCB_DATA_DIR={data}\n", encoding="utf-8")
-    monkeypatch.chdir(repo)
+    # 模拟从仓库外启动：CWD 在别处，.env 锚定在仓库根（不依赖 importlib.reload）
+    monkeypatch.chdir(elsewhere)
     monkeypatch.delenv("TCB_DATA_DIR", raising=False)
+    monkeypatch.setattr(runtime_paths, "_repo_env_path", lambda: repo / ".env")
 
-    import bot.runtime_paths as runtime_paths
-
-    reloaded = importlib.reload(runtime_paths)
-
-    assert reloaded.get_app_data_root() == data
+    assert runtime_paths.get_app_data_root() == data
+    workspace_key = runtime_paths.get_chat_workspace_key(repo)
+    assert runtime_paths.get_chat_workspace_dir(repo) == data / "chat-history" / "workspaces" / workspace_key
 
 
 def test_native_agent_paths_use_app_data_root(monkeypatch, tmp_path: Path):

@@ -128,6 +128,36 @@ show_tunnel_hint() {
   fi
 }
 
+version_ge() {
+  # 语义化版本比较（取各段数字逐段比较），与 install.sh 同名函数一致
+  local left right i l r
+  IFS='.' read -ra left <<< "${1#v}"
+  IFS='.' read -ra right <<< "${2#v}"
+  for i in 0 1 2; do
+    l="${left[$i]:-0}"
+    r="${right[$i]:-0}"
+    if (( l > r )); then return 0; fi
+    if (( l < r )); then return 1; fi
+  done
+  return 0
+}
+
+python_version_supported() {
+  local version="$1"
+  version_ge "$version" "3.10" && ! version_ge "$version" "3.14"
+}
+
+ensure_python_version_supported() {
+  # 与 install.sh 的支持区间一致（3.10-3.13）：venv 缺失重建时防止落到
+  # 不受支持的 PATH 解释器（如 3.14）。
+  local version
+  version="$("$PYTHON_BIN" --version 2>/dev/null | sed 's/^Python[[:space:]]*//;s/^v//')"
+  if ! python_version_supported "$version"; then
+    echo "错误: Python ${version:-未知} 不受支持（需要 3.10-3.13，推荐 3.12）。请先运行 install.sh。" >&2
+    exit 127
+  fi
+}
+
 if [[ -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
   PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
 elif command -v python3 >/dev/null 2>&1; then
@@ -138,6 +168,7 @@ else
   echo "错误: 未找到 python3 或 python，请先安装 Python 并加入 PATH" >&2
   exit 127
 fi
+ensure_python_version_supported
 
 STARTUP_STATE_DIR="$SCRIPT_DIR/.tcb/startup"
 

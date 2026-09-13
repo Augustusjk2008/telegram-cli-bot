@@ -261,8 +261,8 @@ export function MarkdownContent({ content, variant = "preview", onFileLinkClick,
   const containerClassName = isChat
     ? "chat-body-content chat-markdown-content min-w-0 w-full text-[var(--text)]"
     : isDesktopPreview
-      ? "h-full overflow-auto rounded-xl bg-[var(--surface-strong)] px-5 py-4 text-[15px] leading-7 text-[var(--text)]"
-      : "max-h-[50vh] overflow-auto rounded-xl bg-[var(--surface-strong)] px-5 py-4 text-[15px] leading-7 text-[var(--text)]";
+      ? "h-full min-w-0 w-full overflow-auto rounded-xl bg-[var(--surface-strong)] px-5 py-4 text-[15px] leading-7 text-[var(--text)] [&_.katex-display]:max-w-full [&_.katex-display]:overflow-x-auto [&_.katex-display]:overflow-y-hidden"
+      : "max-h-[50vh] min-w-0 w-full overflow-auto rounded-xl bg-[var(--surface-strong)] px-5 py-4 text-[15px] leading-7 text-[var(--text)] [&_.katex-display]:max-w-full [&_.katex-display]:overflow-x-auto [&_.katex-display]:overflow-y-hidden";
 
   function activateLocalLink(
     event: { preventDefault: () => void; stopPropagation: () => void },
