@@ -49,7 +49,6 @@ from .git_commit_message import (
 GIT_COMMIT_MESSAGE_TIMEOUT_SECONDS = 30 * 60
 GIT_COMMIT_MESSAGE_DIFF_SAMPLE_MAX_FILES = 32
 GIT_SMART_COMMIT_UNTRACKED_PREVIEW_LIMIT = 4096
-GIT_DIFF_OUTPUT_CHAR_LIMIT = 128 * 1024
 GIT_OVERVIEW_UNTRACKED_STATS_MAX_BYTES = 512 * 1024
 GIT_OVERVIEW_CHANGED_FILES_LIMIT = 2000
 GIT_COMMIT_GRAPH_DEFAULT_LIMIT = 100
@@ -153,6 +152,7 @@ def _run_bounded_process(
     input_text: str | None = None,
     on_budget_exceeded: Callable[[], None] | None = None,
     digest_stdout: bool = False,
+    capture_full_stdout: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     process = subprocess.Popen(
         command,
@@ -181,10 +181,14 @@ def _run_bounded_process(
                 chunk = stream.read(65536)
                 if not chunk:
                     return
-                if name == "stdout" and stdout_digest is not None:
-                    stdout_digest.update(chunk)
-                    stdout_byte_count[0] += len(chunk)
-                    continue
+                if name == "stdout":
+                    if stdout_digest is not None:
+                        stdout_digest.update(chunk)
+                        stdout_byte_count[0] += len(chunk)
+                        continue
+                    if capture_full_stdout:
+                        buffers[name].extend(chunk)
+                        continue
                 remaining = max(0, limits[name] - len(buffers[name]))
                 if remaining:
                     buffers[name].extend(chunk[:remaining])
@@ -452,6 +456,7 @@ def _run_git_process(
     remote: bool,
     input_text: str | None = None,
     digest_stdout: bool = False,
+    capture_full_stdout: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     writes_index = _git_command_writes_index(args)
     index_lock_path = _git_index_lock_path(repo_root) if writes_index else None
@@ -473,6 +478,7 @@ def _run_git_process(
             profile=_git_command_profile(args, remote=remote),
             on_budget_exceeded=capture_created_lock if writes_index else None,
             digest_stdout=digest_stdout,
+            capture_full_stdout=capture_full_stdout,
         )
         if str(getattr(result, "budget_reason", "") or "") and index_lock_path is not None:
             _remove_command_index_lock(index_lock_path, created_lock_identity)
@@ -488,6 +494,7 @@ def _run_git(
     remote: bool = False,
     allow_stdout_truncation: bool = False,
     digest_stdout: bool = False,
+    capture_full_stdout: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     try:
         result = _run_git_process(
@@ -496,6 +503,7 @@ def _run_git(
             env=env,
             remote=remote,
             digest_stdout=digest_stdout,
+            capture_full_stdout=capture_full_stdout,
         )
     except FileNotFoundError as exc:
         _raise(500, "git_not_found", "未找到 git 可执行文件")
@@ -2470,7 +2478,7 @@ def get_git_diff(manager: MultiBotManager, alias: str, user_id: int, path: str, 
     args.extend(["--", relative_path])
 
     try:
-        result = _run_git(repo_root, args)
+        result = _run_git(repo_root, args, capture_full_stdout=True)
     except GitCommandError as exc:
         _raise(400, "git_diff_failed", str(exc))
 
@@ -2494,12 +2502,14 @@ def get_git_diff(manager: MultiBotManager, alias: str, user_id: int, path: str, 
                         repo_root,
                         ["diff", "--no-index", "--no-color", "--unified=2147483647", "--", os.devnull, relative_path],
                         check=False,
+                        capture_full_stdout=True,
                     )
                     diff_output = untracked_diff.stdout or ""
             except GitCommandError:
                 pass
 
-    diff_text, truncated = truncate_diff_text(diff_output, limit=GIT_DIFF_OUTPUT_CHAR_LIMIT)
+    diff_text = diff_output
+    truncated = False
 
     return {
         "path": relative_path,

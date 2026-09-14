@@ -228,7 +228,7 @@ def test_get_git_diff_requests_full_file_context(monkeypatch: pytest.MonkeyPatch
     calls: list[tuple[str, list[str]]] = []
     monkeypatch.setattr(git_service, "_require_repo_root", lambda *_args: ("C:/repo", "C:/repo"))
 
-    def run_git(repo_root: str, args: list[str]) -> SimpleNamespace:
+    def run_git(repo_root: str, args: list[str], **_kwargs: object) -> SimpleNamespace:
         calls.append((repo_root, args))
         return SimpleNamespace(stdout="@@ -1 +1 @@\n-old\n+new\n")
 
@@ -268,6 +268,46 @@ def test_get_git_diff_includes_untracked_file(monkeypatch: pytest.MonkeyPatch, t
         ["ls-files", "--others", "--exclude-standard", "--", "new.txt"],
         ["diff", "--no-index", "--no-color", "--unified=2147483647", "--", os.devnull, "new.txt"],
     ]
+
+
+@pytest.mark.parametrize("scope", ["worktree", "staged", "untracked"])
+@pytest.mark.parametrize("line_count", [200, 2200], ids=["over-128k", "over-2mib"])
+def test_get_git_diff_returns_complete_large_patch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, scope: str, line_count: int,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args: str) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+    git("init")
+    git("config", "core.autocrlf", "false")
+    path = repo / "large.txt"
+    if scope != "untracked":
+        path.write_text("before\n", encoding="utf-8")
+        git("add", "--", path.name)
+        git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial")
+
+    path.write_text(("x" * 1024 + "\n") * line_count + "完整结尾  \n", encoding="utf-8")
+    if scope == "staged":
+        git("add", "--", path.name)
+
+    args = ["diff", "--no-color", "--unified=2147483647"]
+    if scope == "staged":
+        args.append("--cached")
+    elif scope == "untracked":
+        args.append("--no-index")
+    args.extend(["--", *([os.devnull] if scope == "untracked" else []), path.name])
+    expected = subprocess.run(["git", *args], cwd=repo, capture_output=True)
+    assert expected.returncode == (1 if scope == "untracked" else 0)
+    monkeypatch.setattr(git_service, "_require_repo_root", lambda *_args: (str(repo), str(repo)))
+
+    result = git_service.get_git_diff(object(), "main", 123, path.name, staged=scope == "staged")
+
+    assert result["diff"] == expected.stdout.decode("utf-8")
+    assert "+完整结尾  " in result["diff"]
+    assert result["truncated"] is False
 
 
 def test_changed_file_stats_fall_back_when_numstat_exceeds_budget(
