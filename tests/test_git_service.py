@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -239,6 +240,34 @@ def test_get_git_diff_requests_full_file_context(monkeypatch: pytest.MonkeyPatch
         ("C:/repo", ["diff", "--no-color", "--unified=2147483647", "--", "src/app.py"]),
     ]
     assert result["diff"] == "@@ -1 +1 @@\n-old\n+new\n"
+
+
+def test_get_git_diff_includes_untracked_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    untracked_path = repo / "new.txt"
+    untracked_path.write_text("new line\n", encoding="utf-8")
+    calls: list[list[str]] = []
+    monkeypatch.setattr(git_service, "_require_repo_root", lambda *_args: (str(repo), str(repo)))
+
+    def run_git(_repo_root: str, args: list[str], **_kwargs: object) -> SimpleNamespace:
+        calls.append(args)
+        if args[0] == "diff" and "--no-index" not in args:
+            return SimpleNamespace(stdout="")
+        if args[0] == "ls-files":
+            return SimpleNamespace(stdout="new.txt\n")
+        return SimpleNamespace(stdout="diff --git a/new.txt b/new.txt\n@@ -0,0 +1 @@\n+new line\n")
+
+    monkeypatch.setattr(git_service, "_run_git", run_git)
+
+    result = git_service.get_git_diff(object(), "main", 123, "new.txt")
+
+    assert result["diff"].startswith("diff --git a/new.txt b/new.txt")
+    assert calls == [
+        ["diff", "--no-color", "--unified=2147483647", "--", "new.txt"],
+        ["ls-files", "--others", "--exclude-standard", "--", "new.txt"],
+        ["diff", "--no-index", "--no-color", "--unified=2147483647", "--", os.devnull, "new.txt"],
+    ]
 
 
 def test_changed_file_stats_fall_back_when_numstat_exceeds_budget(

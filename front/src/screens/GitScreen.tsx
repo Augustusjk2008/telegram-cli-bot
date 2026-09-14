@@ -1206,7 +1206,7 @@ export function GitScreen({
                         <GitDiffViewer
                           content={selectedDiff.diff || ""}
                           testId="git-diff-content"
-                          className="max-h-80 px-2 py-2 text-[11px] leading-5"
+                          className="min-h-60 max-h-[min(70vh,720px)] px-2 py-2 text-[11px] leading-5"
                           ariaLabel={`Git Diff 内容：${selectedDiff.label}`}
                         />
                       </div>

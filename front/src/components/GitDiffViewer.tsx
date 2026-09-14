@@ -3,11 +3,11 @@ import { useState } from "react";
 
 export type GitDiffLineKind = "meta" | "hunk" | "add" | "delete" | "context";
 export type GitDiffViewMode = "full" | "diff";
-type VisibleGitDiffLineKind = "add" | "delete" | "context";
+type VisibleGitDiffLineKind = GitDiffLineKind;
 
 type VisibleGitDiffLine = {
   line: string;
-  lineNumber: number;
+  lineNumber: number | null;
   kind: VisibleGitDiffLineKind;
 };
 
@@ -26,8 +26,18 @@ export function parseGitDiffLineKind(line: string): GitDiffLineKind {
     || line.startsWith("--- ")
     || line.startsWith("+++ ")
     || line.startsWith("rename ")
+    || line.startsWith("copy ")
+    || line.startsWith("old mode ")
+    || line.startsWith("new mode ")
+    || line.startsWith("similarity index ")
+    || line.startsWith("dissimilarity index ")
     || line.startsWith("new file ")
     || line.startsWith("deleted file ")
+    || line.startsWith("Binary files ")
+    || line === "GIT binary patch"
+    || line.startsWith("literal ")
+    || line.startsWith("delta ")
+    || line.startsWith("\\ No newline at end of file")
   ) {
     return "meta";
   }
@@ -51,7 +61,12 @@ export function visibleGitDiffLines(content: string, viewMode: GitDiffViewMode =
   for (const line of (content || "").split(/\r?\n/)) {
     const kind = parseGitDiffLineKind(line);
 
-    if (kind === "hunk") {
+    if (kind === "meta") {
+      if (line) {
+        visibleLines.push({ line, lineNumber: null, kind });
+      }
+    } else if (kind === "hunk") {
+      visibleLines.push({ line, lineNumber: null, kind });
       const match = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
       oldLineNumber = match ? Number(match[1]) : null;
       newLineNumber = match ? Number(match[2]) : null;
@@ -61,6 +76,8 @@ export function visibleGitDiffLines(content: string, viewMode: GitDiffViewMode =
     } else if (kind === "add" && newLineNumber !== null) {
       visibleLines.push({ line, lineNumber: newLineNumber, kind });
       newLineNumber += 1;
+    } else if (kind === "delete" || kind === "add") {
+      visibleLines.push({ line, lineNumber: null, kind });
     } else if (kind === "context" && line.startsWith(" ")) {
       const lineNumber = newLineNumber ?? oldLineNumber;
       if (lineNumber !== null) {
@@ -72,13 +89,15 @@ export function visibleGitDiffLines(content: string, viewMode: GitDiffViewMode =
   }
 
   return viewMode === "diff"
-    ? visibleLines.filter((item) => item.kind !== "context")
+    ? visibleLines.filter((item) => item.kind === "add" || item.kind === "delete")
     : visibleLines;
 }
 
 function gitDiffLineClass(kind: VisibleGitDiffLineKind) {
   if (kind === "add") return "bg-emerald-50 text-emerald-700";
   if (kind === "delete") return "bg-red-50 text-red-700";
+  if (kind === "hunk") return "bg-blue-50 text-blue-700";
+  if (kind === "meta") return "text-[var(--muted)]";
   return "text-[var(--text)]";
 }
 
@@ -135,7 +154,7 @@ export function GitDiffViewer({
             data-diff-kind={item.kind}
             className={clsx("flex gap-3 rounded px-3 py-0.5", gitDiffLineClass(item.kind))}
           >
-            <span className="w-8 shrink-0 select-none text-right text-slate-400">{item.lineNumber}</span>
+            <span className="w-8 shrink-0 select-none text-right text-slate-400">{item.lineNumber ?? ""}</span>
             <span className="min-w-0 flex-1 whitespace-pre-wrap break-all">{item.line}</span>
           </div>
         ))

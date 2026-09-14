@@ -2474,7 +2474,32 @@ def get_git_diff(manager: MultiBotManager, alias: str, user_id: int, path: str, 
     except GitCommandError as exc:
         _raise(400, "git_diff_failed", str(exc))
 
-    diff_text, truncated = truncate_diff_text(result.stdout or "", limit=GIT_DIFF_OUTPUT_CHAR_LIMIT)
+    diff_output = result.stdout or ""
+    if not staged and not diff_output:
+        candidate = (Path(repo_root) / relative_path).resolve()
+        try:
+            candidate.relative_to(Path(repo_root).resolve())
+            is_file = candidate.is_file()
+        except (OSError, ValueError):
+            is_file = False
+        if is_file:
+            try:
+                untracked = _run_git(
+                    repo_root,
+                    ["ls-files", "--others", "--exclude-standard", "--", relative_path],
+                    check=False,
+                )
+                if (untracked.stdout or "").strip():
+                    untracked_diff = _run_git(
+                        repo_root,
+                        ["diff", "--no-index", "--no-color", "--unified=2147483647", "--", os.devnull, relative_path],
+                        check=False,
+                    )
+                    diff_output = untracked_diff.stdout or ""
+            except GitCommandError:
+                pass
+
+    diff_text, truncated = truncate_diff_text(diff_output, limit=GIT_DIFF_OUTPUT_CHAR_LIMIT)
 
     return {
         "path": relative_path,

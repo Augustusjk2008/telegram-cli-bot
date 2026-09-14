@@ -17,10 +17,13 @@ test("maps changed and unchanged rows to source line numbers", () => {
   ].join("\n"));
 
   expect(lines.map(({ kind, lineNumber }) => ({ kind, lineNumber }))).toEqual([
+    { kind: "hunk", lineNumber: null },
     { kind: "context", lineNumber: 20 },
     { kind: "delete", lineNumber: 11 },
+    { kind: "meta", lineNumber: null },
     { kind: "add", lineNumber: 21 },
     { kind: "add", lineNumber: 22 },
+    { kind: "hunk", lineNumber: null },
     { kind: "delete", lineNumber: 30 },
     { kind: "add", lineNumber: 40 },
   ]);
@@ -44,17 +47,19 @@ test("renders file lines with their diff kinds", () => {
   );
 
   const viewer = screen.getByTestId("viewer");
-  expect(within(viewer).queryByText(/diff --git/)).not.toBeInTheDocument();
-  expect(within(viewer).queryByText(/@@/)).not.toBeInTheDocument();
+  expect(within(viewer).getByText(/diff --git/)).toBeInTheDocument();
+  expect(within(viewer).getByText(/@@/)).toBeInTheDocument();
+  expect(within(viewer).getAllByTestId("git-diff-line")[0]).toHaveAttribute("data-diff-kind", "meta");
+  expect(within(viewer).getAllByTestId("git-diff-line")[4]).toHaveAttribute("data-diff-kind", "hunk");
   const contextRow = within(viewer).getByText("unchanged line").closest("[data-diff-kind]");
   expect(contextRow).toHaveAttribute("data-diff-kind", "context");
 
   const rows = within(viewer).getAllByTestId("git-diff-line");
-  expect(rows).toHaveLength(3);
-  expect(rows[1]).toHaveAttribute("data-diff-kind", "delete");
-  expect(rows[1]).toHaveTextContent("-old line");
-  expect(rows[2]).toHaveAttribute("data-diff-kind", "add");
-  expect(rows[2]).toHaveTextContent("+new line");
+  expect(rows).toHaveLength(8);
+  expect(rows[6]).toHaveAttribute("data-diff-kind", "delete");
+  expect(rows[6]).toHaveTextContent("-old line");
+  expect(rows[7]).toHaveAttribute("data-diff-kind", "add");
+  expect(rows[7]).toHaveTextContent("+new line");
 });
 
 test("switches between full and changed-lines-only modes", async () => {
