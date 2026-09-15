@@ -22,6 +22,7 @@ type Props = {
   attachments: ComposerAttachment[];
   disabled?: boolean;
   compact?: boolean;
+  mobileLayout?: boolean;
   enterToSend?: boolean;
   pulse?: boolean;
   uploadingAttachments?: boolean;
@@ -56,6 +57,7 @@ export function ChatComposer({
   attachments,
   disabled,
   compact = false,
+  mobileLayout = false,
   enterToSend = true,
   pulse = false,
   uploadingAttachments = false,
@@ -76,11 +78,15 @@ export function ChatComposer({
   onSaveBotPromptPresets,
   onSavePromptPresets,
 }: Props) {
-  const shellClassName = compact
+  const shellClassName = mobileLayout
+    ? "chat-composer-delight bg-[var(--workbench-titlebar-bg)] px-2 py-1"
+    : compact
     ? "chat-composer-delight border-t border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2 py-1.5"
     : "chat-composer-delight border-t border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-3 py-2";
   const formClassName = "relative";
-  const inputBarClassName = "relative flex min-w-0 flex-col p-1 transition-colors focus-within:bg-[var(--workbench-hover-bg)]";
+  const inputBarClassName = mobileLayout
+    ? "relative flex min-h-10 min-w-0 flex-row items-center gap-1 p-1 transition-colors focus-within:bg-[var(--workbench-hover-bg)]"
+    : "relative flex min-w-0 flex-col p-1 transition-colors focus-within:bg-[var(--workbench-hover-bg)]";
   const inputDisabled = disabled || uploadingAttachments;
   const [message, setMessage] = useState("");
   const [presetMenuOpen, setPresetMenuOpen] = useState(false);
@@ -103,7 +109,9 @@ export function ChatComposer({
   const editingPresetScopeLabel = editingPresetScope === "global" ? "全局" : "当前 Bot";
   const showPromptPresetControls = showAnyPromptPresets || canManagePromptPresets;
   const selectedModelOption = modelOptions.find((model) => model.value === selectedModel);
-  const composerTextareaBaseClassName = "max-h-72 min-h-8 w-full resize-none border border-transparent bg-transparent px-1.5 py-1.5 leading-5 text-[var(--text)] outline-none placeholder:text-[var(--muted)] disabled:opacity-60";
+  const composerTextareaBaseClassName = mobileLayout
+    ? "block max-h-72 min-h-8 w-full resize-none border-0 bg-transparent px-1.5 py-1.5 leading-5 text-[var(--text)] outline-none placeholder:text-[var(--muted)] disabled:opacity-60"
+    : "max-h-72 min-h-8 w-full resize-none border border-transparent bg-transparent px-1.5 py-1.5 leading-5 text-[var(--text)] outline-none placeholder:text-[var(--muted)] disabled:opacity-60";
   const inputTextareaClassName = composerTextareaBaseClassName;
   const measureTextareaClassName = `${composerTextareaBaseClassName} pointer-events-none absolute inset-0 h-auto overflow-hidden opacity-0`;
   const attachmentButtonClassName = "relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--accent)]";
@@ -111,6 +119,25 @@ export function ChatComposer({
   const actionButtonClassName = "inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50";
   const compactSelectClassName = "h-8 w-full appearance-none rounded-md border-0 bg-transparent py-0 pl-1.5 pr-4 text-xs font-medium text-[var(--text)] hover:bg-[var(--workbench-hover-bg)] focus:outline-none focus:ring-2 focus:ring-[var(--workbench-focus-ring)] disabled:cursor-not-allowed disabled:opacity-50";
   const presetMenuClassName = "absolute bottom-full right-10 z-40 mb-2 w-64 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-1 shadow-[var(--shadow-card)]";
+  const attachmentControl = (
+    <label className={attachmentButtonClassName} title="上传附件">
+      <Plus className="h-4 w-4" />
+      <span className="sr-only">上传附件</span>
+      <input
+        aria-label="上传附件"
+        data-testid="chat-attachment-input"
+        type="file"
+        multiple
+        disabled={inputDisabled}
+        className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
+        onChange={(event) => {
+          const nextFiles = Array.from(event.currentTarget.files || []);
+          if (nextFiles.length > 0) onAttachFiles(nextFiles);
+          event.currentTarget.value = "";
+        }}
+      />
+    </label>
+  );
 
   useEffect(() => {
     if (inputDisabled) {
@@ -123,16 +150,26 @@ export function ChatComposer({
     if (!textarea) {
       return;
     }
-    const measureTextarea = measureTextareaRef.current;
-    if (measureTextarea) {
-      measureTextarea.style.height = "auto";
-    }
-    textarea.style.height = "auto";
-    const measuredHeight = measureTextarea?.scrollHeight || textarea.scrollHeight;
-    const nextHeight = Math.max(32, Math.min(measuredHeight, 288));
-    textarea.style.height = `${nextHeight}px`;
-    textarea.style.overflowY = measuredHeight > 288 ? "auto" : "hidden";
-  }, [inputDisabled, message]);
+    const resizeTextarea = () => {
+      const measureTextarea = measureTextareaRef.current;
+      if (measureTextarea) measureTextarea.style.height = "auto";
+      textarea.style.height = "auto";
+      const measuredHeight = measureTextarea?.scrollHeight || textarea.scrollHeight;
+      const visibleHeight = window.visualViewport?.height || window.innerHeight;
+      const maxHeight = mobileLayout ? Math.min(288, Math.max(32, Math.floor(visibleHeight * 0.4))) : 288;
+      textarea.style.height = `${Math.max(32, Math.min(measuredHeight, maxHeight))}px`;
+      textarea.style.overflowY = measuredHeight > maxHeight ? "auto" : "hidden";
+    };
+    resizeTextarea();
+    if (!mobileLayout) return;
+    const viewport = window.visualViewport;
+    viewport?.addEventListener("resize", resizeTextarea);
+    window.addEventListener("resize", resizeTextarea);
+    return () => {
+      viewport?.removeEventListener("resize", resizeTextarea);
+      window.removeEventListener("resize", resizeTextarea);
+    };
+  }, [inputDisabled, message, mobileLayout]);
 
   function focusTextarea(cursor: number) {
     requestAnimationFrame(() => {
@@ -246,6 +283,7 @@ export function ChatComposer({
 
   const presetEditorDialog = presetEditorOpen ? (
     <div
+      data-layout={mobileLayout ? "mobile" : undefined}
       className="fixed inset-0 z-[1000] flex items-center justify-center bg-[var(--overlay-backdrop-40)] px-4 py-6"
       onPointerDown={(event) => event.stopPropagation()}
       onMouseDown={(event) => event.stopPropagation()}
@@ -412,14 +450,16 @@ export function ChatComposer({
         className={formClassName}
         onSubmit={(event) => {
           event.preventDefault();
+          if (inputDisabled) return;
           const text = message.trim();
           if (!text && attachments.length === 0) return;
           onSend(text);
           setMessage("");
         }}
       >
-        <div data-testid="chat-composer-input-surface" className={inputBarClassName}>
-          <div className="relative min-h-8 w-full min-w-0">
+          <div data-testid="chat-composer-input-surface" className={inputBarClassName}>
+          {mobileLayout ? attachmentControl : null}
+          <div className={mobileLayout ? "relative order-2 min-h-8 min-w-0 flex-1" : "relative min-h-8 w-full min-w-0"}>
             <textarea
               ref={measureTextareaRef}
               aria-hidden="true"
@@ -458,31 +498,10 @@ export function ChatComposer({
               className={inputTextareaClassName}
             />
           </div>
-          <div data-testid="chat-composer-toolbar" className="flex min-w-0 items-center gap-0.5">
-            <label
-              className={attachmentButtonClassName}
-              title="上传附件"
-            >
-              <Plus className="h-4 w-4" />
-              <span className="sr-only">上传附件</span>
-              <input
-                aria-label="上传附件"
-                data-testid="chat-attachment-input"
-                type="file"
-                multiple
-                disabled={inputDisabled}
-                className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
-                onChange={(event) => {
-                  const nextFiles = Array.from(event.currentTarget.files || []);
-                  if (nextFiles.length > 0) {
-                    onAttachFiles(nextFiles);
-                  }
-                  event.currentTarget.value = "";
-                }}
-              />
-            </label>
+          <div data-testid="chat-composer-toolbar" className={mobileLayout ? "order-3 flex shrink-0 items-center gap-0.5" : "flex min-w-0 items-center gap-0.5"}>
+            {!mobileLayout ? attachmentControl : null}
             {modelOptions.length > 0 ? (
-              <div className="relative min-w-[4.25rem] max-w-[8.5rem] flex-[0_1_8.5rem]">
+              <div className={mobileLayout ? "hidden" : "relative min-w-[4.25rem] max-w-[8.5rem] flex-[0_1_8.5rem]"}>
                 <select
                   aria-label="模型"
                   title={selectedModelOption?.title || selectedModelOption?.label || "模型"}
@@ -501,7 +520,7 @@ export function ChatComposer({
               </div>
             ) : null}
             {reasoningEffortOptions.length > 0 ? (
-              <div className="relative min-w-[3.75rem] max-w-[6.5rem] flex-[0_1_6.5rem]">
+              <div className={mobileLayout ? "hidden" : "relative min-w-[3.75rem] max-w-[6.5rem] flex-[0_1_6.5rem]"}>
                 <select
                   aria-label="思考深度"
                   title={selectedReasoningEffort || "思考深度"}

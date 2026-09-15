@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Bug,
   Folder,
@@ -54,6 +54,27 @@ export function MobileShell({
   onViewModeChange,
   onTabChange,
 }: Props) {
+  const [viewModeMenuOpen, setViewModeMenuOpen] = useState(false);
+  const viewModeRootRef = useRef<HTMLDivElement>(null);
+  const viewModeTriggerRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!viewModeMenuOpen) return;
+    const closeOnPointerDown = (event: PointerEvent) => {
+      if (!viewModeRootRef.current?.contains(event.target as Node)) setViewModeMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setViewModeMenuOpen(false);
+        viewModeTriggerRef.current?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", closeOnPointerDown);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnPointerDown);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [viewModeMenuOpen]);
   const fullNavItems: Array<{ tab: AppTab; label: string; Icon: LucideIcon }> = [
     { tab: "chat", label: "聊天", Icon: MessageSquare },
     { tab: "files", label: "文件", Icon: Folder },
@@ -72,13 +93,13 @@ export function MobileShell({
       ));
 
   return (
-    <div className="relative flex h-[100dvh] w-full min-w-0 flex-col overflow-hidden bg-[var(--workbench-shell-bg)] text-[var(--text)]">
+    <div data-layout="mobile" className="relative flex h-[100dvh] w-full min-w-0 flex-col overflow-hidden bg-[var(--workbench-shell-bg)] text-[var(--text)]">
       {!hideOuterChrome ? (
-        <header className="flex min-h-12 shrink-0 items-center justify-between gap-2 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2.5 py-1.5">
+        <header className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2">
           <button
             onClick={onOpenBotSwitcher}
             className={clsx(
-              "relative flex h-9 min-w-0 max-w-[48vw] items-center gap-1.5 rounded-md border border-[var(--border)] bg-transparent px-2 text-sm font-semibold transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)]",
+              "relative flex h-8 min-w-0 max-w-[48vw] items-center gap-1.5 rounded-md border border-[var(--border)] bg-transparent px-2 text-sm font-semibold transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)]",
               hasUnreadOtherBots ? "pr-5" : "",
             )}
           >
@@ -95,34 +116,44 @@ export function MobileShell({
             <span className="min-w-0 truncate">{currentBot}</span>
             <Menu className="h-4 w-4 shrink-0 text-[var(--muted)]" />
           </button>
-          <div className="flex min-w-0 items-center gap-1.5">
+          <div ref={viewModeRootRef} className="relative flex min-w-0 items-center gap-1">
             {announcementAction}
-            <div
+            <button
+              ref={viewModeTriggerRef}
+              type="button"
               aria-label="视图模式"
-              role="group"
-              className="inline-flex h-9 shrink-0 items-center overflow-hidden rounded-md border border-[var(--border)] bg-transparent p-0.5"
+              aria-haspopup="menu"
+              aria-expanded={viewModeMenuOpen}
+              title="视图模式"
+              onClick={() => setViewModeMenuOpen((value) => !value)}
+              className="inline-flex h-8 shrink-0 items-center gap-1 rounded-md border border-[var(--border)] px-1.5 text-[11px] font-medium text-[var(--text)] hover:bg-[var(--workbench-hover-bg)]"
             >
-              <span className="hidden h-7 items-center px-1 text-[var(--muted)] min-[380px]:inline-flex" aria-hidden="true">
-                <MonitorSmartphone className="h-3.5 w-3.5" />
-              </span>
-              {VIEW_MODE_OPTIONS.map(({ value: nextMode, label, shortLabel }) => (
-                <button
-                  key={nextMode}
-                  type="button"
-                  aria-label={label}
-                  title={label}
-                  onClick={() => onViewModeChange(nextMode)}
-                  className={clsx(
-                    "h-8 min-w-8 px-1.5 text-[11px] font-medium transition-colors",
-                    viewMode === nextMode
-                      ? "tcb-selected-accent"
-                      : "text-[var(--text)] hover:bg-[var(--workbench-hover-bg)]",
-                  )}
-                >
-                  {shortLabel}
-                </button>
-              ))}
-            </div>
+              <MonitorSmartphone className="h-3.5 w-3.5 text-[var(--muted)]" />
+              {VIEW_MODE_OPTIONS.find((option) => option.value === viewMode)?.shortLabel}
+            </button>
+            {viewModeMenuOpen ? (
+              <div role="menu" aria-label="视图模式" className="absolute right-0 top-full z-40 mt-1 w-24 rounded-md border border-[var(--border)] bg-[var(--workbench-panel-bg)] p-1 shadow-[var(--shadow-card)]">
+                {VIEW_MODE_OPTIONS.map(({ value: nextMode, label }) => (
+                  <button
+                    key={nextMode}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={viewMode === nextMode}
+                    onClick={() => {
+                      onViewModeChange(nextMode);
+                      setViewModeMenuOpen(false);
+                      viewModeTriggerRef.current?.focus();
+                    }}
+                    className={clsx(
+                      "flex h-7 w-full items-center rounded px-2 text-left text-xs",
+                      viewMode === nextMode ? "tcb-selected-accent" : "text-[var(--text)] hover:bg-[var(--workbench-hover-bg)]",
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
         </header>
       ) : null}
@@ -132,21 +163,21 @@ export function MobileShell({
       </div>
 
       {!hideOuterChrome ? (
-        <nav className="flex shrink-0 items-center justify-around gap-1 border-t border-[var(--workbench-hairline)] bg-[var(--workbench-statusbar-bg)] px-1.5 py-1.5 pb-[calc(env(safe-area-inset-bottom)+0.375rem)]">
+        <nav className="flex h-[calc(2.75rem+env(safe-area-inset-bottom))] shrink-0 items-center justify-around gap-0.5 border-t border-[var(--workbench-hairline)] bg-[var(--workbench-statusbar-bg)] px-1 pb-[env(safe-area-inset-bottom)]">
           {navItems.map(({ tab, label, Icon }) => (
             <button
               key={tab}
               onClick={() => onTabChange(tab)}
               aria-current={currentTab === tab ? "page" : undefined}
               className={clsx(
-                "flex min-w-0 flex-1 flex-col items-center rounded-md border border-transparent px-1 py-1.5 transition-colors",
+                "flex h-full min-w-0 flex-1 flex-col items-center justify-center rounded-md border border-transparent px-1 transition-colors",
                 currentTab === tab
                   ? "tcb-selected-accent"
                   : "text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)]",
               )}
             >
-              <Icon className="mb-0.5 h-5 w-5 shrink-0" />
-              <span className="max-w-full truncate text-[10px] font-medium leading-4">{label}</span>
+              <Icon className="mb-0 h-4 w-4 shrink-0" />
+              <span className="max-w-full truncate text-[10px] font-medium leading-3">{label}</span>
             </button>
           ))}
         </nav>

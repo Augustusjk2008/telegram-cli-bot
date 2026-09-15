@@ -113,4 +113,26 @@ describe("NativeAgentTranscript", () => {
     expect(transcript.querySelector('[data-transcript-entry-id="first"]')).toBe(firstRow);
     expect(within(transcript).getByText("再读取文件")).toBeInTheDocument();
   });
+
+  it("collapses CLI details on mobile while keeping the current progress visible", () => {
+    const entry = processEntry("cli-process", "正在检查文件", 1);
+    render(
+      <NativeAgentTranscript
+        entries={[entry]}
+        resultText=""
+        state="streaming"
+        mode="cli"
+        traceCount={1}
+        processCount={1}
+        traceLoaded
+        mobileLayout
+      />,
+    );
+
+    const transcript = screen.getByTestId("native-agent-transcript");
+    expect(within(transcript).getByRole("status")).toHaveTextContent("正在检查文件");
+    expect(transcript.querySelector('[data-transcript-entry-id="cli-process"]')).not.toBeInTheDocument();
+    fireEvent.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
+    expect(transcript.querySelector('[data-transcript-entry-id="cli-process"]')).toBeInTheDocument();
+  });
 });

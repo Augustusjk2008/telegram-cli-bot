@@ -1007,6 +1007,7 @@ export function App() {
             <div key={`desktop-chat-${instanceKey}`} className={clsx("h-full", instanceKey === chatInstanceKey ? "block" : "hidden")}>
               <ChatScreen
                 botAlias={alias}
+                mobileLayout={false}
                 accountId={accountKey}
                 client={client}
                 isVisible={instanceKey === chatInstanceKey && currentVisible}
@@ -1057,6 +1058,7 @@ export function App() {
           <div key={`chat-${instanceKey}`} className={clsx("h-full", instanceKey === chatInstanceKey ? "block" : "hidden")}>
             <ChatScreen
               botAlias={alias}
+              mobileLayout={true}
               accountId={accountKey}
               client={client}
               isVisible={instanceKey === chatInstanceKey}

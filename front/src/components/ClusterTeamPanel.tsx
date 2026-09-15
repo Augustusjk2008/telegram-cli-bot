@@ -15,6 +15,7 @@ type Props = {
   activeAgentId: string;
   navigationDisabled?: boolean;
   onSelectAgent: (agentId: string) => void;
+  mobileLayout?: boolean;
 };
 
 function tasksForAssignment(
@@ -38,6 +39,7 @@ export function ClusterTeamPanel({
   activeAgentId,
   navigationDisabled = false,
   onSelectAgent,
+  mobileLayout = false,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
   const assignmentsId = useId();
@@ -51,15 +53,24 @@ export function ClusterTeamPanel({
     ? assignments.filter((assignment) => assignment.agentId === activeAgentId)
     : assignments;
   const safeCapacity = Math.max(capacity, assignments.length);
+  const isProcessing = (assignment: ClusterTeamAssignment) => tasks !== undefined
+    ? tasksForAssignment(assignment, tasks).some((task) => task.status === "queued" || task.status === "running")
+    : slots.some((slot) => slot.agentId === assignment.agentId && (slot.status === "queued" || slot.status === "running"));
+  const runningCount = assignments.filter(isProcessing).length;
+  const activeAgentName = viewingChild
+    ? assignments.find((assignment) => assignment.agentId === activeAgentId)?.name || activeAgentId
+    : "主 Agent";
 
   return (
     <section
       data-testid="cluster-team-panel"
-      className="bg-[var(--workbench-panel-elevated-bg)] px-3 py-2 text-sm text-[var(--text)]"
+      className={`bg-[var(--workbench-panel-elevated-bg)] text-sm text-[var(--text)] ${mobileLayout ? "px-2 py-1" : "px-3 py-2"}`}
     >
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="font-medium">集群编组</span>
-        <div className="flex items-center gap-1">
+      <div className={mobileLayout ? "flex min-h-7 min-w-0 items-center justify-between gap-1" : "flex flex-wrap items-center justify-between gap-2"}>
+        <span className={mobileLayout ? "min-w-0 truncate text-xs font-medium" : "font-medium"}>
+          {mobileLayout ? `集群 ${assignments.length}/${safeCapacity} · ${runningCount ? `${runningCount} 个运行中` : "待命"} · ${activeAgentName}` : "集群编组"}
+        </span>
+        <div className="flex shrink-0 items-center gap-1">
           {viewingChild ? (
             <button
               type="button"
@@ -68,11 +79,11 @@ export function ClusterTeamPanel({
               onClick={() => onSelectAgent("main")}
               className={toolbarButtonClass("ghost", "sm", "h-7 rounded-md px-2")}
             >
-              返回主 Agent
+              {mobileLayout ? "主 Agent" : "返回主 Agent"}
             </button>
-          ) : (
+          ) : !mobileLayout ? (
             <span className="text-xs text-[var(--muted)]">已分配 {assignments.length} / 集群规模 {safeCapacity}</span>
-          )}
+          ) : null}
           <button
             type="button"
             aria-label={expanded ? "收起集群编组" : "展开集群编组"}
@@ -85,16 +96,11 @@ export function ClusterTeamPanel({
           </button>
         </div>
       </div>
-      {expanded ? <div id={assignmentsId} className="mt-1">
+      {expanded ? <div id={assignmentsId} className={`mt-1 ${mobileLayout ? "max-h-40 overflow-y-auto" : ""}`}>
         {visibleAssignments.map((assignment) => {
           const matchingTasks = tasksForAssignment(assignment, tasks || []);
           const completedCount = matchingTasks.filter((task) => task.status === "completed").length;
-          const processing = tasks !== undefined
-            ? matchingTasks.some((task) => task.status === "queued" || task.status === "running")
-            : slots.some((slot) => (
-              slot.agentId === assignment.agentId
-              && (slot.status === "queued" || slot.status === "running")
-            ));
+          const processing = isProcessing(assignment);
           const name = assignment.name || assignment.agentId;
           const modelTier = [...matchingTasks]
             .reverse()
@@ -103,7 +109,7 @@ export function ClusterTeamPanel({
             <div
               key={`${assignment.agentId}:${assignment.assignmentRevision}`}
               data-testid="cluster-team-assignment"
-              className="flex items-start gap-3 border-t border-[var(--workbench-hairline)] py-2"
+              className={`flex items-start gap-3 border-t border-[var(--workbench-hairline)] ${mobileLayout ? "py-1" : "py-2"}`}
             >
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1">

@@ -6,6 +6,7 @@ type Props = {
   createdAt: string;
   align?: "left" | "right";
   contextUsage?: ChatMessageContextUsage;
+  mobileLayout?: boolean;
 };
 
 function formatTime(createdAt: string) {
@@ -34,16 +35,16 @@ function formatTime(createdAt: string) {
   return `${dateText} ${timeText}`;
 }
 
-export function ChatMessageMeta({ name, createdAt, align = "left", contextUsage }: Props) {
+export function ChatMessageMeta({ name, createdAt, align = "left", contextUsage, mobileLayout = false }: Props) {
   return (
     <div
       className={align === "right"
-        ? "mb-1.5 flex min-w-0 items-center justify-end gap-2 text-xs"
-        : "mb-1.5 flex min-w-0 items-center gap-2 text-xs"}
+        ? `${mobileLayout ? "mb-0.5 gap-1 text-[11px]" : "mb-1.5 gap-2 text-xs"} flex min-w-0 items-center justify-end`
+        : `${mobileLayout ? "mb-0.5 gap-1 text-[11px]" : "mb-1.5 gap-2 text-xs"} flex min-w-0 items-center`}
     >
       <span
         className={align === "left"
-          ? "min-w-0 max-w-[12rem] truncate text-sm font-semibold text-[var(--text)]"
+          ? `${mobileLayout ? "text-xs" : "text-sm"} min-w-0 max-w-[12rem] truncate font-semibold text-[var(--text)]`
           : "min-w-0 max-w-[12rem] truncate font-medium text-[var(--text)]"}
       >
         {name}

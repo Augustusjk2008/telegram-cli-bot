@@ -26,6 +26,7 @@ type Props = {
   favorite?: boolean;
   canContinue?: boolean;
   contextUsage?: ChatMessageContextUsage;
+  mobileLayout?: boolean;
 };
 
 function compact(value: string, fallback: string) {
@@ -521,9 +522,11 @@ export function NativeAgentTranscript({
   favorite = false,
   canContinue = false,
   contextUsage,
+  mobileLayout = false,
 }: Props) {
   const [replyingPermissionId, setReplyingPermissionId] = useState("");
   const [traceExpanded, setTraceExpanded] = useState(false);
+  const collapseProcess = mode === "native" || mobileLayout;
   const totalTraceCount = typeof traceCount === "number" ? traceCount : entries.length;
   const hasCompleteTrace = totalTraceCount <= 0
     || traceLoaded === true
@@ -532,7 +535,8 @@ export function NativeAgentTranscript({
   const traceSummaryProcessCount = typeof processCount === "number"
     ? processCount
     : Math.max(totalTraceCount, entries.length);
-  const traceSummaryLabel = `${traceSummaryProcessCount} 条过程${toolCallCount && toolCallCount > 0 ? ` · ${toolCallCount} 次工具` : ""}`;
+  const traceToolCount = toolCallCount ?? entries.filter((entry) => entry.kind === "tool").length;
+  const traceSummaryLabel = `${traceSummaryProcessCount} 条过程${traceToolCount > 0 ? ` · ${traceToolCount} 次工具` : ""}`;
 
   useEffect(() => {
     if (!shouldLazyLoadTrace || !traceExpanded || isTraceLoading || traceLoadError || !onLoadTrace) {
@@ -549,23 +553,23 @@ export function NativeAgentTranscript({
       : renderItems
   ), [renderItems, resultText, shouldFilterDuplicateFinal]);
   const alwaysVisibleRenderItems = useMemo(() => (
-    mode === "native"
+    collapseProcess
       ? displayRenderItems.filter((item) => (
           item.kind === "entry"
           && ["permission", "error", "cancelled"].includes(item.entry.kind)
         ))
       : []
-  ), [displayRenderItems, mode]);
+  ), [displayRenderItems, collapseProcess]);
   const traceDetailRenderItems = useMemo(() => (
-    mode === "native"
+    collapseProcess
       ? displayRenderItems.filter((item) => !(
           item.kind === "entry"
           && ["permission", "error", "cancelled"].includes(item.entry.kind)
         ))
       : displayRenderItems
-  ), [displayRenderItems, mode]);
+  ), [displayRenderItems, collapseProcess]);
   const shouldShowTraceDisclosure = shouldLazyLoadTrace
-    || (mode === "native" && traceDetailRenderItems.length > 0);
+    || (collapseProcess && traceDetailRenderItems.length > 0);
   const allowPermissionReply = mode === "native";
 
   const replyPermission = useCallback(async (reply: NativeAgentPermissionReply) => {
@@ -607,21 +611,37 @@ export function NativeAgentTranscript({
   );
 
   const visibleResultText = stripThinkingBlocks(resultText);
+  const latestProgress = [...entries].reverse().find((entry) => (
+    ["process", "tool", "event"].includes(entry.kind) && stripThinkingBlocks(entry.summary).trim()
+  ));
+  const progressPreview = stripThinkingBlocks(latestProgress?.summary || visibleResultText).trim();
+  const progressStatus = entries.some((entry) => entry.kind === "permission" && entry.pending)
+    ? "等待授权"
+    : latestProgress?.kind === "tool" ? `执行工具：${latestProgress.label}` : "执行中";
   const showFinalResult = state !== "streaming" && Boolean(visibleResultText);
   const showCopyFinalAnswer = state !== "streaming" && Boolean(visibleResultText.trim()) && Boolean(onCopyFinalAnswer);
   const showFinalActions = state !== "streaming" && (showCopyFinalAnswer || Boolean(contextUsage));
 
   return (
     <div data-testid="native-agent-transcript" className="min-w-0 text-sm text-[var(--text)]">
+      {mobileLayout && state === "streaming" ? (
+        <div data-testid="native-agent-streaming-status" role="status" className="flex min-w-0 items-start gap-1.5 py-1 text-xs text-[var(--muted)]">
+          <LoaderCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-[var(--accent)]" />
+          <div className="min-w-0">
+            <div className="truncate font-medium">{progressStatus}</div>
+            {!traceExpanded && progressPreview ? <p className="line-clamp-2 break-words">{progressPreview}</p> : null}
+          </div>
+        </div>
+      ) : null}
       {shouldShowTraceDisclosure ? (
-        <section data-testid="native-agent-trace-summary" className="border-b border-[var(--workbench-hairline)] pb-2">
+        <section data-testid="native-agent-trace-summary" className={`border-b border-[var(--workbench-hairline)] ${mobileLayout ? "pb-1" : "pb-2"}`}>
           <button
             type="button"
             data-chat-scroll-lock-on-expand="true"
             aria-label={`${traceExpanded ? "收起" : "展开"}过程详情`}
             aria-expanded={traceExpanded}
             onClick={() => setTraceExpanded((value) => !value)}
-            className="flex w-full min-w-0 items-center gap-2 py-1 text-left text-[var(--muted)]"
+            className={`flex w-full min-w-0 items-center gap-2 text-left text-[var(--muted)] ${mobileLayout ? "py-0.5" : "py-1"}`}
           >
             <ChevronRight className={`h-3.5 w-3.5 shrink-0 transition-transform ${traceExpanded ? "rotate-90" : ""}`} />
             <span className="min-w-0 truncate text-xs font-medium text-[var(--text)]">过程详情</span>
@@ -655,7 +675,7 @@ export function NativeAgentTranscript({
       {alwaysVisibleRenderItems.length > 0 ? renderTranscriptItems(alwaysVisibleRenderItems) : null}
 
       {showFinalResult || showFinalActions ? (
-        <div data-testid="native-agent-final-result" className="border-t border-[var(--workbench-hairline)] pt-2">
+        <div data-testid="native-agent-final-result" className="chat-final-answer-compact border-t border-[var(--workbench-hairline)] pt-2">
           {showFinalResult && (state === "done" ? (
             <ChatMarkdownMessage content={visibleResultText} onFileLinkClick={onFileLinkClick} />
           ) : (
@@ -674,7 +694,7 @@ export function NativeAgentTranscript({
           ) : null}
         </div>
       ) : null}
-      {state === "streaming" ? (
+      {!mobileLayout && state === "streaming" ? (
         <div
           data-testid="native-agent-streaming-status"
           className="flex items-center gap-2 border-t border-[var(--workbench-hairline)] py-2 text-sm text-[var(--muted)]"

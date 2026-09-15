@@ -132,6 +132,17 @@
       "cwd": ".",
       "confirm": false,
       "enabled": true
+    },
+    {
+      "id": "battery",
+      "label": "电池状态",
+      "icon": "Server",
+      "windowsCommand": ".\\scripts\\battery_status.bat",
+      "linuxCommand": "",
+      "macosCommand": "",
+      "cwd": ".",
+      "confirm": false,
+      "enabled": true
     }
   ]
 }

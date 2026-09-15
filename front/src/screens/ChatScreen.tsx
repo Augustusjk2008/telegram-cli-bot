@@ -128,6 +128,7 @@ type Props = {
   soloHistoryRevision?: number;
   onSoloSessionInfoChange?: (snapshot: SoloSessionSnapshot) => void;
   onSoloHistoryRollback?: () => void;
+  mobileLayout?: boolean;
 };
 
 type ClusterTeamViewSnapshot = {
@@ -1330,6 +1331,7 @@ type ChatMessageRowProps = {
   soloRollbackTarget?: SoloRollbackTarget;
   onRequestSoloRollback?: (target: SoloRollbackTarget) => void;
   wideMessages: boolean;
+  mobileLayout: boolean;
 };
 
 const ChatMessageRow = memo(function ChatMessageRow({
@@ -1352,6 +1354,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   soloRollbackTarget,
   onRequestSoloRollback,
   wideMessages,
+  mobileLayout,
 }: ChatMessageRowProps) {
   const reduceMotion = useReducedMotion();
   const handleLoadMessageTrace = useCallback(() => {
@@ -1413,6 +1416,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
           createdAt={chatMessageDisplayTime(item)}
           align={messageAlign}
           contextUsage={isStreamingAssistant ? item.meta?.contextUsage : undefined}
+          mobileLayout={mobileLayout}
         />
         <div className={showSoloRollback ? "flex items-start justify-end gap-1.5" : undefined}>
           {showSoloRollback ? (
@@ -1443,7 +1447,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
           >
             {hasTranscript ? (
               <NativeAgentTranscript
-                key={`${messageClientStateKey}:${item.state || ""}`}
+                key={mobileLayout ? messageClientStateKey : `${messageClientStateKey}:${item.state || ""}`}
                 entries={nativeTranscriptEntries}
                 resultText={item.text}
                 state={item.state}
@@ -1463,13 +1467,14 @@ const ChatMessageRow = memo(function ChatMessageRow({
                 favorite={favorite}
                 canContinue={canContinue}
                 contextUsage={item.meta?.contextUsage}
+                mobileLayout={mobileLayout}
               />
             ) : item.role === "assistant" && item.state !== "streaming" ? (
               <>
                 {item.state === "error" ? (
-                  <ChatPlainTextMessage content={item.text} className="text-red-700" />
+                  <ChatPlainTextMessage content={item.text} className="chat-final-answer-compact text-red-700" />
                 ) : (
-                  <ChatMarkdownMessage content={item.text} onFileLinkClick={onFileLinkClick} />
+                  <ChatMarkdownMessage content={item.text} className="chat-final-answer-compact" onFileLinkClick={onFileLinkClick} />
                 )}
                 <ChatFinalAnswerActions
                   canContinue={canContinue}
@@ -1571,6 +1576,7 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
   planExecuteError: string;
   handleExecutePlan: (messageId: string, content: string) => void;
   wideMessages: boolean;
+  mobileLayout: boolean;
 }>(function ChatMessageList({
   rows,
   scrollContainerRef,
@@ -1589,10 +1595,11 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
   planExecuteError,
   handleExecutePlan,
   wideMessages,
+  mobileLayout,
 }, forwardedRef) {
   const virtualListRef = useRef<DynamicVirtualListHandle | null>(null);
   const renderRow = useCallback((row: ChatMessageRowModel) => (
-    <div key={row.messageClientStateKey} data-testid="chat-message-row" className="space-y-1">
+    <div key={row.messageClientStateKey} data-testid="chat-message-row" className={mobileLayout ? "space-y-0.5" : "space-y-1"}>
       <ChatMessageRow
         item={row.item}
         assistantName={assistantName}
@@ -1613,6 +1620,7 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
         soloRollbackTarget={row.soloRollbackTarget}
         onRequestSoloRollback={handleRequestSoloRollback}
         wideMessages={wideMessages}
+        mobileLayout={mobileLayout}
       />
       {row.planDraft ? (
         <div className="flex justify-start">
@@ -1643,6 +1651,7 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
     planExecuteError,
     traceLoadState,
     wideMessages,
+    mobileLayout,
   ]);
 
   useImperativeHandle(forwardedRef, () => ({
@@ -1708,6 +1717,7 @@ export function ChatScreen({
   soloHistoryRevision = 0,
   onSoloSessionInfoChange,
   onSoloHistoryRollback,
+  mobileLayout = false,
 }: Props) {
   const storageScope = accountId?.trim() || "";
   const documentVisible = useDocumentVisible();
@@ -4644,7 +4654,9 @@ export function ChatScreen({
     }
     return options;
   }, [cliModelOptions, nativeExecutionMode, nativeModelOptions, nativeSelectedModel, selectedModel]);
-  const messageContentWidthClass = embedded ? "mx-auto w-full max-w-5xl space-y-3" : "w-full space-y-3";
+  const messageContentWidthClass = embedded
+    ? `mx-auto w-full max-w-5xl ${mobileLayout ? "space-y-2" : "space-y-3"}`
+    : `w-full ${mobileLayout ? "space-y-2" : "space-y-3"}`;
   const composerPlaceholder = chatDisabledReason
     || (activeAgentId !== "main" ? `发给 ${assistantName}...` : "输入消息");
   const deletedAttachmentKeysByMessage = useMemo(() => {
@@ -4858,6 +4870,15 @@ export function ChatScreen({
           onKillTask={terminateVisible ? () => void handleKillTask() : undefined}
           killTaskDisabled={killTaskDisabled}
           killTaskBusy={actionLoading === "kill"}
+          mobileLayout={mobileLayout}
+          modelOptions={visibleModelOptions}
+          selectedModel={selectedModel}
+          modelDisabled={loading || uploadingAttachments || chatMutationsDisabled || nativePermissionPending || modelSaving || readOnly || visibleModelOptions.length === 0 || (!nativeExecutionMode && !cliParams)}
+          onModelChange={(model) => void handleModelChange(model)}
+          reasoningEffortOptions={visibleReasoningEffortOptions}
+          selectedReasoningEffort={selectedReasoningEffort}
+          reasoningEffortDisabled={loading || uploadingAttachments || chatMutationsDisabled || nativePermissionPending || modelSaving || readOnly || visibleReasoningEffortOptions.length === 0 || (!nativeExecutionMode && !cliParams)}
+          onReasoningEffortChange={(effort) => void handleReasoningEffortChange(effort)}
         />
       ) : null}
       {chatDisabledReason && !childAgentReadOnly ? (
@@ -4879,7 +4900,9 @@ export function ChatScreen({
         onTouchEnd={clearUserScrollIntent}
         onTouchCancel={clearUserScrollIntent}
         onKeyDown={handleScrollKeyDown}
-        className={isImmersive ? "flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] px-3 pb-24 pt-3" : "flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] p-3"}
+        className={isImmersive
+          ? `flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] ${mobileLayout ? "px-2 pb-24 pt-2" : "px-3 pb-24 pt-3"}`
+          : `flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] ${mobileLayout ? "p-2" : "p-3"}`}
       >
         <div ref={scrollContentRef} data-testid="chat-scroll-content" className={messageContentWidthClass}>
           {loading ? (
@@ -4914,6 +4937,7 @@ export function ChatScreen({
             planExecuteError={planExecuteError}
             handleExecutePlan={handleExecutePlan}
             wideMessages={!embedded}
+            mobileLayout={mobileLayout}
           />
           {clusterTaskError ? (
             <div className="rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger)] shadow-[var(--shadow-surface)]">
@@ -4945,6 +4969,7 @@ export function ChatScreen({
                 }
                 handleSelectAgent(agentId);
               }}
+              mobileLayout={mobileLayout}
             />
           </div>
         </div>
@@ -5000,17 +5025,30 @@ export function ChatScreen({
           <p className="px-4 pt-3 text-xs font-medium text-[var(--status-warning)]">{chatDisabledReason || "只读模式"}</p>
         ) : null}
         {queuedMessage ? (
-          <div className="relative mx-3 mt-2 rounded-lg border border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] px-3 py-2 pr-20 text-xs text-[var(--status-warning)] shadow-[var(--shadow-surface)]">
-            <div className="font-medium">排队中</div>
-            <div className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words">
-              {buildComposedMessageText(queuedMessage.text, queuedMessage.attachments)}
-            </div>
+          <div className={`relative rounded-lg border border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] pr-20 text-xs text-[var(--status-warning)] shadow-[var(--shadow-surface)] ${mobileLayout ? "mx-2 mt-1 px-2 py-2" : "mx-3 mt-2 px-3 py-2"}`}>
+            {mobileLayout ? (
+              <details>
+                <summary aria-label="排队消息" className="cursor-pointer truncate">
+                  排队中 · {queuedMessage.text || queuedMessage.attachments.map((attachment) => attachment.filename).join("、")}
+                </summary>
+                <div className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words">
+                  {buildComposedMessageText(queuedMessage.text, queuedMessage.attachments)}
+                </div>
+              </details>
+            ) : (
+              <>
+                <div className="font-medium">排队中</div>
+                <div className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words">
+                  {buildComposedMessageText(queuedMessage.text, queuedMessage.attachments)}
+                </div>
+              </>
+            )}
             <button
               type="button"
               aria-label="取消排队消息"
               title="取消排队消息"
               onClick={handleCancelQueuedMessage}
-              className="absolute right-2 top-2 rounded-md border border-[var(--status-warning-border)] px-2 py-1 font-medium transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)]"
+              className="absolute right-2 top-1.5 rounded-md border border-[var(--status-warning-border)] px-2 py-1 font-medium transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)]"
             >
               取消
             </button>
@@ -5026,14 +5064,15 @@ export function ChatScreen({
             pulse={composerPulseKey > 0}
             disabled={chatMutationsDisabled || nativePermissionPending || loading}
             compact={isImmersive || embedded}
+            mobileLayout={mobileLayout}
             enterToSend={enterToSend}
             uploadingAttachments={uploadingAttachments}
             placeholder={composerPlaceholder}
-            modelOptions={visibleModelOptions}
+            modelOptions={mobileLayout ? [] : visibleModelOptions}
             selectedModel={selectedModel}
             modelDisabled={modelSaving || readOnly || visibleModelOptions.length === 0 || (!nativeExecutionMode && !cliParams)}
             onModelChange={(model) => void handleModelChange(model)}
-            reasoningEffortOptions={visibleReasoningEffortOptions}
+            reasoningEffortOptions={mobileLayout ? [] : visibleReasoningEffortOptions}
             selectedReasoningEffort={selectedReasoningEffort}
             reasoningEffortDisabled={modelSaving || readOnly || visibleReasoningEffortOptions.length === 0 || (!nativeExecutionMode && !cliParams)}
             onReasoningEffortChange={(effort) => void handleReasoningEffortChange(effort)}

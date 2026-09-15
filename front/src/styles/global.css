@@ -254,6 +254,21 @@ select:disabled {
   line-height: var(--chat-body-line-height);
 }
 
+[data-layout="mobile"] .chat-message-bubble-delight {
+  padding-inline: 8px;
+  box-shadow: none;
+}
+
+.chat-final-answer-compact .chat-body-content {
+  line-height: 1.45;
+}
+
+.chat-final-answer-compact .chat-body-content > * + *,
+.chat-final-answer-compact .chat-body-content > ul > :not([hidden]) ~ :not([hidden]),
+.chat-final-answer-compact .chat-body-content > ol > :not([hidden]) ~ :not([hidden]) {
+  margin-top: 0.35em;
+}
+
 .chat-plain-text-content {
   display: flex;
   flex-direction: column;

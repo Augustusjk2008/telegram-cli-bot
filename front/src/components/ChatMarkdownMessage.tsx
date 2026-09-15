@@ -5,6 +5,7 @@ import { MarkdownContent } from "./MarkdownPreview";
 type Props = {
   content: string;
   onFileLinkClick?: (href: string) => void;
+  className?: string;
 };
 
 type State = {
@@ -37,15 +38,15 @@ class ChatMarkdownBoundary extends Component<Props, State> {
     }
 
     return (
-      <div data-testid="assistant-markdown-message" className="min-w-0 w-full overflow-hidden">
+        <div data-testid="assistant-markdown-message" className={`min-w-0 w-full overflow-hidden ${this.props.className || ""}`}>
         <MarkdownContent content={this.props.content} variant="chat" onFileLinkClick={this.props.onFileLinkClick} />
       </div>
     );
   }
 }
 
-function ChatMarkdownMessageInner({ content, onFileLinkClick }: Props) {
-  return <ChatMarkdownBoundary content={content} onFileLinkClick={onFileLinkClick} />;
+function ChatMarkdownMessageInner({ content, onFileLinkClick, className }: Props) {
+  return <ChatMarkdownBoundary content={content} onFileLinkClick={onFileLinkClick} className={className} />;
 }
 
 export const ChatMarkdownMessage = memo(ChatMarkdownMessageInner);
