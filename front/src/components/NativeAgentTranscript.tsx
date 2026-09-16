@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { Check, ChevronRight, LoaderCircle, X } from "lucide-react";
 import { ChatMarkdownMessage } from "./ChatMarkdownMessage";
@@ -9,6 +10,8 @@ import { ChatFinalAnswerActions } from "./ChatFinalAnswerActions";
 type Props = {
   entries: NativeAgentTranscriptEntry[];
   resultText: string;
+  originalResultText?: string;
+  resultHeader?: ReactNode;
   state?: ChatMessage["state"];
   mode?: "native" | "cli";
   traceCount?: number;
@@ -313,12 +316,13 @@ function isDuplicateFinalError(entry: NativeAgentTranscriptEntry, finalText: str
   return /^命令退出码\s+\d+\n/.test(summary) && normalizedDisplayText(summary.replace(/^命令退出码\s+\d+\n/, "")) === finalText;
 }
 
-function formatTranscriptFullAnswer(renderItems: TranscriptRenderItem[], resultText: string) {
+function formatTranscriptFullAnswer(renderItems: TranscriptRenderItem[], resultText: string, originalResultText = resultText) {
   const blocks: string[] = [];
   const finalText = normalizedCopyText(resultText);
+  const originalText = normalizedCopyText(originalResultText);
   for (const item of renderItems) {
     if (item.kind === "entry") {
-      if (isDuplicateFinalProcess(item.entry, finalText) || isDuplicateFinalError(item.entry, finalText)) {
+      if (isDuplicateFinalProcess(item.entry, originalText) || isDuplicateFinalError(item.entry, originalText)) {
         continue;
       }
       const text = formatTranscriptEntryForCopy(item.entry);
@@ -328,7 +332,7 @@ function formatTranscriptFullAnswer(renderItems: TranscriptRenderItem[], resultT
       continue;
     }
     const groupEntries = item.entries
-      .filter((entry) => !isDuplicateFinalProcess(entry, finalText) && !isDuplicateFinalError(entry, finalText))
+      .filter((entry) => !isDuplicateFinalProcess(entry, originalText) && !isDuplicateFinalError(entry, originalText))
       .map(formatTranscriptEntryForCopy)
       .filter(Boolean)
       .join("\n\n");
@@ -505,6 +509,8 @@ const TranscriptGroupRow = memo(function TranscriptGroupRow({
 export function NativeAgentTranscript({
   entries,
   resultText,
+  originalResultText = resultText,
+  resultHeader,
   state,
   mode = "native",
   traceCount,
@@ -546,12 +552,12 @@ export function NativeAgentTranscript({
   }, [isTraceLoading, onLoadTrace, shouldLazyLoadTrace, totalTraceCount, traceExpanded, traceLoadError]);
 
   const renderItems = useMemo(() => groupTranscriptEntries(entries), [entries]);
-  const shouldFilterDuplicateFinal = state !== "streaming" && Boolean(normalizedDisplayText(resultText));
+  const shouldFilterDuplicateFinal = state !== "streaming" && Boolean(normalizedDisplayText(originalResultText));
   const displayRenderItems = useMemo(() => (
     shouldFilterDuplicateFinal
-      ? filterDuplicateFinalErrorItems(filterDuplicateFinalProcessItems(renderItems, resultText), resultText)
+      ? filterDuplicateFinalErrorItems(filterDuplicateFinalProcessItems(renderItems, originalResultText), originalResultText)
       : renderItems
-  ), [renderItems, resultText, shouldFilterDuplicateFinal]);
+  ), [renderItems, originalResultText, shouldFilterDuplicateFinal]);
   const alwaysVisibleRenderItems = useMemo(() => (
     collapseProcess
       ? displayRenderItems.filter((item) => (
@@ -676,6 +682,7 @@ export function NativeAgentTranscript({
 
       {showFinalResult || showFinalActions ? (
         <div data-testid="native-agent-final-result" className="chat-final-answer-compact border-t border-[var(--workbench-hairline)] pt-2">
+          {resultHeader}
           {showFinalResult && (state === "done" ? (
             <ChatMarkdownMessage content={visibleResultText} onFileLinkClick={onFileLinkClick} />
           ) : (
@@ -686,7 +693,7 @@ export function NativeAgentTranscript({
               canContinue={canContinue}
               contextUsage={contextUsage}
               favorite={favorite}
-              buildFullAnswerText={showCopyFinalAnswer ? () => formatTranscriptFullAnswer(renderItems, resultText) : undefined}
+              buildFullAnswerText={showCopyFinalAnswer ? () => formatTranscriptFullAnswer(renderItems, resultText, originalResultText) : undefined}
               onContinue={onContinue}
               onCopyFinalAnswer={onCopyFinalAnswer}
               onToggleFavorite={onToggleFavorite}

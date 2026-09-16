@@ -5,19 +5,21 @@ type Options = {
   enabled: boolean;
   isStreaming: boolean;
   isSseHealthy: () => boolean;
-  sync: () => boolean | void | Promise<boolean | void>;
+  sync: (translationsOnly?: boolean) => boolean | void | Promise<boolean | void>;
+  pendingTranslationKeys?: string[];
   initialDelayMs?: number;
   idleIntervalMs?: number;
   maxBackoffMs?: number;
   incrementalEnabled?: boolean;
 };
 
-/** Schedules low-frequency delta sync without polling while healthy SSE is streaming. */
+/** Schedules idle delta sync and a bounded translation refresh window during SSE. */
 export function useChatHistorySync({
   enabled,
   isStreaming,
   isSseHealthy,
   sync,
+  pendingTranslationKeys = [],
   initialDelayMs = 5_000,
   idleIntervalMs = 10_000,
   maxBackoffMs = 60_000,
@@ -27,9 +29,17 @@ export function useChatHistorySync({
   syncRef.current = sync;
   const healthyRef = useRef(isSseHealthy);
   healthyRef.current = isSseHealthy;
+  const translationAttemptsRef = useRef(new Map<string, number>());
+  const pendingKey = JSON.stringify(pendingTranslationKeys);
 
   useEffect(() => {
-    if (!incrementalEnabled) {
+    const pendingKeys: string[] = JSON.parse(pendingKey);
+    const pendingSet = new Set(pendingKeys);
+    for (const key of translationAttemptsRef.current.keys()) {
+      if (!pendingSet.has(key)) translationAttemptsRef.current.delete(key);
+    }
+    const remainingTranslations = () => pendingKeys.filter((key) => (translationAttemptsRef.current.get(key) || 0) < 40);
+    if (!incrementalEnabled && pendingKeys.length === 0) {
       if (!enabled) {
         return;
       }
@@ -38,7 +48,7 @@ export function useChatHistorySync({
       }, idleIntervalMs);
       return () => window.clearInterval(timer);
     }
-    if (!enabled || (isStreaming && healthyRef.current())) {
+    if (!enabled) {
       return;
     }
     let disposed = false;
@@ -55,10 +65,16 @@ export function useChatHistorySync({
       if (disposed) {
         return;
       }
+      const translations = remainingTranslations();
+      if (translations.length === 0 && isStreaming && healthyRef.current()) return;
       timer = window.setTimeout(async () => {
         timer = null;
+        const translationsOnly = translations.length > 0;
+        for (const key of translations) {
+          translationAttemptsRef.current.set(key, (translationAttemptsRef.current.get(key) || 0) + 1);
+        }
         try {
-          const result = await syncRef.current();
+          const result = await syncRef.current(translationsOnly);
           if (result === false) {
             throw new Error("history sync failed");
           }
@@ -67,12 +83,12 @@ export function useChatHistorySync({
           delay = Math.min(maxBackoffMs, delay * 2);
         }
         schedule();
-      }, delay);
+      }, translations.length > 0 ? 1_500 : delay);
     };
     schedule();
     return () => {
       disposed = true;
       cancelTimer();
     };
-  }, [enabled, idleIntervalMs, incrementalEnabled, initialDelayMs, isStreaming, maxBackoffMs]);
+  }, [enabled, idleIntervalMs, incrementalEnabled, initialDelayMs, isStreaming, maxBackoffMs, pendingKey]);
 }

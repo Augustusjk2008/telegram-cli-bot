@@ -1,9 +1,12 @@
+import { mapChatTranslation, mapUserTranslationUpdate } from "../utils/chatTranslation";
 import {
   WebApiClientError,
 } from "./types";
 import { buildWsUrl, withApiBase } from "../utils/publicBase";
 import { ChatStreamIncompleteError } from "./chatStreamError";
 import type {
+  ChatTranslationConfig,
+  ChatTranslationConfigInput,
   AdminUser,
   AdminUserUpdateInput,
   AccountRole,
@@ -503,7 +506,19 @@ type RawNotificationSettings = {
   pushPlusTopicConfigured?: boolean;
 };
 
+type RawChatTranslationConfig = Omit<ChatTranslationConfig, "api_key_configured"> & {
+  api_key_configured?: boolean;
+  api_key_set?: boolean;
+};
+
+function mapChatTranslationConfig(raw: RawChatTranslationConfig): ChatTranslationConfig {
+  const { api_key_set, ...config } = raw;
+  return { ...config, api_key_configured: Boolean(raw.api_key_configured ?? api_key_set) };
+}
+
 type RawHistoryItem = {
+  translation?: unknown;
+  agent_input_text?: string | null;
   id?: string;
   turn_id?: string;
   turnId?: string;
@@ -2389,6 +2404,8 @@ function mapChatMessage(raw: RawHistoryItem, index: number, fallbackState: ChatM
     ...(typeof conversationId === "string" && conversationId ? { conversationId } : {}),
     role: raw.role,
     text: raw.content,
+    ...(raw.translation !== undefined ? { translation: mapChatTranslation(raw.translation) } : {}),
+    ...(raw.agent_input_text !== undefined ? { agentInputText: raw.agent_input_text } : {}),
     createdAt: raw.created_at || raw.timestamp || new Date().toISOString(),
     ...(raw.updated_at || raw.updatedAt ? { updatedAt: raw.updated_at || raw.updatedAt } : {}),
     state: raw.state || fallbackState,
@@ -4159,6 +4176,18 @@ export class RealWebBotClient implements WebBotClient {
     return mapUserBotPermissions(data);
   }
 
+  async getChatTranslationConfig(): Promise<ChatTranslationConfig> {
+    return mapChatTranslationConfig(await this.requestJson<RawChatTranslationConfig>("/api/admin/chat-translation/config"));
+  }
+
+  async updateChatTranslationConfig(input: ChatTranslationConfigInput): Promise<ChatTranslationConfig> {
+    return mapChatTranslationConfig(await this.requestJson<RawChatTranslationConfig>("/api/admin/chat-translation/config", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }));
+  }
+
   async getInlineCompletionConfig(): Promise<InlineCompletionConfig> {
     const data = await this.requestJson<RawInlineCompletionConfig>("/api/admin/inline-completion/config");
     return mapInlineCompletionConfig(data);
@@ -4913,6 +4942,7 @@ export class RealWebBotClient implements WebBotClient {
           seenStreamSequences.add(event.sequence);
         }
 
+        const { turnId, assistantMessageId } = captureStreamBinding(event);
         const shouldAdaptAgUiEvent = useAgUiProtocol || isAgUiEventType(event.type);
         const agUiEvents = shouldAdaptAgUiEvent ? agUiAdapter.adapt(event) : [];
         if (agUiEvents.length > 0) {
@@ -4982,8 +5012,6 @@ export class RealWebBotClient implements WebBotClient {
           continue;
         }
 
-        const { turnId, assistantMessageId } = captureStreamBinding(event);
-
         if (event.type === "delta" && event.text) {
           streamedText += event.text;
           onChunk(event.text);
@@ -4996,8 +5024,10 @@ export class RealWebBotClient implements WebBotClient {
           });
         } else if (event.type === "meta") {
           const clusterRunId = typeof event.cluster_run_id === "string" ? event.cluster_run_id : "";
-          if (clusterRunId || turnId || assistantMessageId) {
+          const translationUpdate = mapUserTranslationUpdate(event);
+          if (clusterRunId || turnId || assistantMessageId || Object.keys(translationUpdate).length) {
             onStatus?.({
+              ...translationUpdate,
               ...(clusterRunId ? { clusterRunId } : {}),
               ...(turnId ? { turnId } : {}),
               ...(assistantMessageId ? { assistantMessageId } : {}),
@@ -5012,6 +5042,7 @@ export class RealWebBotClient implements WebBotClient {
             streamedContextUsage = contextUsage;
           }
           const statusUpdate: ChatStatusUpdate = {
+            ...mapUserTranslationUpdate(event),
             elapsedSeconds: event.elapsed_seconds,
             previewText: event.preview_text,
             ...(turnId ? { turnId } : {}),

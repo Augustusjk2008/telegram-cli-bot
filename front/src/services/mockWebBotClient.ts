@@ -1,5 +1,8 @@
+import { DEFAULT_CHAT_TRANSLATION_CONFIG } from "../utils/chatTranslation";
 import { GENERAL_CODEX_RATE_LIMIT_ID, WebApiClientError } from "./types";
 import type {
+  ChatTranslationConfig,
+  ChatTranslationConfigInput,
   AdminUser,
   AdminUserUpdateInput,
   CreateAnnouncementInput,
@@ -1421,6 +1424,7 @@ export class MockWebBotClient implements WebBotClient {
       },
     ],
   };
+  private chatTranslationConfig = { ...DEFAULT_CHAT_TRANSLATION_CONFIG };
   private inlineCompletionConfig: InlineCompletionConfig = {
     enabled: false,
     providerType: "openai_compatible",
@@ -3019,6 +3023,22 @@ export class MockWebBotClient implements WebBotClient {
       accountId,
       allowedBots: [...normalized],
     };
+  }
+
+  async getChatTranslationConfig(): Promise<ChatTranslationConfig> {
+    if (!this.hasAdminOps()) throw new WebApiClientError("无权查看聊天翻译配置", { status: 403, code: "forbidden" });
+    return { ...this.chatTranslationConfig };
+  }
+
+  async updateChatTranslationConfig(input: ChatTranslationConfigInput): Promise<ChatTranslationConfig> {
+    if (!this.hasAdminOps()) throw new WebApiClientError("无权修改聊天翻译配置", { status: 403, code: "forbidden" });
+    const { api_key, clear_api_key, ...config } = input;
+    this.chatTranslationConfig = {
+      ...this.chatTranslationConfig,
+      ...config,
+      api_key_configured: clear_api_key ? false : Boolean(api_key?.trim() || this.chatTranslationConfig.api_key_configured),
+    };
+    return this.getChatTranslationConfig();
   }
 
   async getInlineCompletionConfig(): Promise<InlineCompletionConfig> {

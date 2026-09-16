@@ -21,7 +21,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, AsyncIterator, Coroutine, Optional
+from typing import Any, AsyncIterator, Callable, Coroutine, Optional
 
 from bot import app_settings
 from bot.claude_done import ClaudeDoneDetector, build_claude_done_session, strip_claude_done_sentinel
@@ -93,6 +93,10 @@ from bot.native_agent import (
 from bot.native_agent.configuration import effective_native_agent_config
 from bot.native_agent.ag_ui_mapper import compact_run_finished_event, is_ag_ui_trace_event
 from bot.native_agent.pi_turn_stream import pi_turn_reconnect_enabled
+from .chat_translation import (
+    ChatInputCancelled, cancel_input_preparation, check_chat_stopped,
+    input_is_preparing, input_translation_pending, prepare_chat_input, submit_answer_translation, translation_snapshot,
+)
 from bot.native_agent.config_store import (
     find_configured_model,
     get_pi_models_path,
@@ -3008,7 +3012,7 @@ async def kill_user_process(
         native_agent_server_key = str(session.native_agent_server_key or "").strip()
         if not is_processing:
             stale_cleared = False
-        elif process is None and (native_agent_session_id or native_agent_server_key):
+        elif process is None and (input_is_preparing(session) or session.running_user_text is not None or session.native_agent_run_id or native_agent_session_id or native_agent_server_key):
             session.stop_requested = True
             stale_cleared = False
         elif process is None:
@@ -3045,6 +3049,9 @@ async def kill_user_process(
         return result
 
     try:
+        if process is None and (input_is_preparing(session) or (not native_agent_server_key and (session.running_user_text is not None or session.native_agent_run_id))):
+            cancel_input_preparation(session)
+            return {"killed": True, "message": "已请求停止", "stop_requested": True}
         if process is None and (native_agent_session_id or native_agent_server_key):
             aborted = await get_native_agent_service().abort(session)
             session.persist()
@@ -3518,6 +3525,7 @@ async def _run_cluster_agent_task(
                         solo_mode=True,
                         allow_unsafe_cli=live_task.allow_unsafe_cli,
                         suppress_agent_prompt=dynamic_cluster_task,
+                        translate_chat=False,
                     )
                     if live_task.execution_mode == NATIVE_AGENT_PROVIDER
                     else _stream_cli_chat(
@@ -3529,6 +3537,7 @@ async def _run_cluster_agent_task(
                         cli_params_override=build_cluster_cli_params_override(live_task.profile, live_task.model_tier),
                         allow_unsafe_cli=live_task.allow_unsafe_cli,
                         suppress_agent_prompt=dynamic_cluster_task,
+                        translate_chat=False,
                     )
                 )
                 async for event in event_stream:
@@ -4956,6 +4965,7 @@ async def _stream_cli_chat(
     include_trace: bool = True,
     stream_protocol_version: int = 1,
     suppress_agent_prompt: bool = False,
+    translate_chat: bool = True,
 ) -> AsyncIterator[dict[str, Any]]:
     total_started_at = time.perf_counter()
     user_id = chat_session_user_id(user_id)
@@ -4965,10 +4975,7 @@ async def _stream_cli_chat(
     text = (visible_input or "").strip()
     if not text:
         _raise(400, "empty_message", "消息不能为空")
-    if text.startswith("//"):
-        text = "/" + text[2:]
     is_plan_mode = _is_plan_request(request)
-    base_prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run_id)) if is_plan_mode else text
     stage_durations = _new_stage_durations()
 
     cli_type = normalize_cli_type(profile.cli_type)
@@ -4992,7 +4999,6 @@ async def _stream_cli_chat(
             prepared = prepared_done_session.prompt_text
         return prepared, prepared_done_session
 
-    prompt_text, done_session = prepare_prompt()
     env = _build_cli_env(cli_type)
     if cluster_run_id:
         env["TCB_CLUSTER_ACTIVE"] = "1"
@@ -5007,6 +5013,7 @@ async def _stream_cli_chat(
             _raise(409, "session_busy", msg("chat", "busy"))
         session.stop_requested = False
         session.is_processing = True
+        session.running_user_text = text
 
     loop: asyncio.AbstractEventLoop | None = None
     process_pid = 0
@@ -5016,7 +5023,9 @@ async def _stream_cli_chat(
     completion_state_for_diag = ""
     normal_return_for_diag = False
     active_lifecycle: _CliProcessLifecycle | None = None
+    turn_handle = None
     try:
+        translation_config = translation_snapshot(enabled=translate_chat)
         session.touch()
         loop = asyncio.get_running_loop()
         started_at = loop.time()
@@ -5032,6 +5041,15 @@ async def _stream_cli_chat(
             native_provider=cli_type,
             actor=_actor_from_request(request),
         )
+        pending_translation = input_translation_pending(text, translation_config)
+        if pending_translation is not None:
+            yield {"type": "status", "turn_id": turn_handle.turn_id, "assistant_message_id": turn_handle.assistant_message_id,
+                   "user_message_id": turn_handle.user_message_id, "user_translation": pending_translation, "status": "正在翻译提问"}
+        execution_text, user_translation = await prepare_chat_input(
+            text=text, session=session, history=service, turn=turn_handle, config=translation_config,
+        )
+        base_prompt_text = build_plan_mode_prompt(execution_text, cluster_active=bool(cluster_run_id)) if is_plan_mode else execution_text
+        prompt_text, done_session = prepare_prompt()
         stage_durations["db_ms"] += max(
             0,
             int(round((time.perf_counter() - persist_started_at) * 1000)),
@@ -5054,6 +5072,7 @@ async def _stream_cli_chat(
             session_compaction_count = _context_compaction_count(previous_usage)
 
         for attempt_index in range(max_attempts):
+            check_chat_stopped(session)
             attempt = _prepare_cli_attempt_state(session, cli_type)
             params_for_attempt = _effective_cli_params(
                 profile,
@@ -5084,6 +5103,7 @@ async def _stream_cli_chat(
 
             turn_cost = CliTurnCost(cli_type, turn_model)
             try:
+                check_chat_stopped(session)
                 spawn_started_at = time.perf_counter()
                 process = subprocess.Popen(
                     cmd,
@@ -5100,6 +5120,8 @@ async def _stream_cli_chat(
                 )
                 process_lifecycle = _create_cli_process_lifecycle(process)
                 active_lifecycle = process_lifecycle
+                with session._lock:
+                    session.process = process
                 try:
                     await asyncio.to_thread(
                         resume_suspended_process,
@@ -5109,6 +5131,7 @@ async def _stream_cli_chat(
                 except Exception as exc:
                     await _cleanup_cli_process_lifecycle(process_lifecycle, abort=True)
                     active_lifecycle = None
+                    check_chat_stopped(session)
                     _raise(500, "cli_process_isolation_failed", f"CLI 进程隔离初始化失败: {exc}")
                 process_pid = int(getattr(process, "pid", 0) or 0)
                 diag_log_event(
@@ -5136,6 +5159,7 @@ async def _stream_cli_chat(
                 _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
 
             if use_stdin:
+                check_chat_stopped(session)
                 try:
                     assert process.stdin is not None
                     process.stdin.write(prompt_text + "\n")
@@ -5143,9 +5167,6 @@ async def _stream_cli_chat(
                     process.stdin.close()
                 except (BrokenPipeError, OSError) as exc:
                     _raise(500, "cli_write_failed", msg("chat", "cli_failed") + f": {exc}")
-
-            with session._lock:
-                session.process = process
 
             turn_event_ids = {
                 "turn_id": turn_handle.turn_id,
@@ -5156,6 +5177,9 @@ async def _stream_cli_chat(
                 yield {
                     "type": "meta",
                     **turn_event_ids,
+                    "user_message_id": turn_handle.user_message_id,
+                    "user_translation": user_translation,
+                    "agent_input_text": execution_text,
                     "alias": alias,
                     "cli_type": cli_type,
                     "working_dir": session.working_dir,
@@ -5578,7 +5602,7 @@ async def _stream_cli_chat(
                 turn_handle,
                 profile=profile,
                 session=session,
-                user_text=text,
+                user_text=execution_text,
                 assistant_text=display_response,
                 completion_state=completion_state,
                 native_session_id=native_session_id,
@@ -5624,6 +5648,7 @@ async def _stream_cli_chat(
                 int(round((time.perf_counter() - complete_started_at) * 1000)),
             )
             completion_state_for_diag = completion_state
+            submit_answer_translation(history=service, message=done_message, config=translation_config, completion_state=completion_state)
             with session._lock:
                 session.is_processing = False
             done_event = {
@@ -5672,6 +5697,15 @@ async def _stream_cli_chat(
             normal_return_for_diag = True
             yield done_event
             return
+    except ChatInputCancelled:
+        if turn_handle is not None:
+            done_message = service.complete_turn(turn_handle, content="", completion_state="cancelled", error_code="cancelled", error_message="用户终止输出")
+            with session._lock:
+                session.is_processing = False
+            normal_return_for_diag = True
+            yield {"type": "done", "turn_id": turn_handle.turn_id, "assistant_message_id": turn_handle.assistant_message_id,
+                   "output": "", "message": done_message, "returncode": -1, "elapsed_seconds": 0,
+                   "session": build_session_snapshot(profile, session)}
     finally:
         elapsed_ms = int(round((time.perf_counter() - total_started_at) * 1000))
         if not normal_return_for_diag:
@@ -5765,9 +5799,31 @@ def _normalized_chat_text(
     text = (visible_input if visible_input is not None else user_text or "").strip()
     if not text:
         _raise(400, "empty_message", "消息不能为空")
-    if text.startswith("//"):
-        text = "/" + text[2:]
     return text
+
+
+def _native_chat_prompt_factory(
+    profile: BotProfile,
+    session: UserSession,
+    *,
+    is_plan_mode: bool,
+    cluster_run: Any,
+    mentions: list[dict[str, Any]] | None,
+) -> Callable[[str], tuple[str, str]]:
+    def prepare(execution_text: str) -> tuple[str, str]:
+        base = build_plan_mode_prompt(execution_text, cluster_active=bool(cluster_run)) if is_plan_mode else execution_text
+        kwargs = dict(
+            session=session,
+            context_kind=NATIVE_AGENT_PROVIDER,
+            context_id=_cluster_prompt_context_id(session, NATIVE_AGENT_PROVIDER),
+            cluster_run_id=cluster_run.run_id if cluster_run else "",
+            cluster_mentions=list(mentions or []),
+        )
+        return (
+            _apply_cluster_prompt(profile, base, **kwargs),
+            _apply_cluster_prompt(profile, base, **kwargs, force_full=True),
+        )
+    return prepare
 
 
 async def _run_native_agent_chat(
@@ -5827,33 +5883,13 @@ async def _run_native_agent_chat(
         team_state=cluster_team_state,
     )
     try:
-        base_prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run)) if is_plan_mode else text
-        context_id = _cluster_prompt_context_id(session, NATIVE_AGENT_PROVIDER)
-        prompt_text = _apply_cluster_prompt(
-            profile,
-            base_prompt_text,
-            session=session,
-            context_kind=NATIVE_AGENT_PROVIDER,
-            context_id=context_id,
-            cluster_run_id=cluster_run.run_id if cluster_run else "",
-            cluster_mentions=list(mentions or []),
-        )
-        fresh_session_prompt_text = _apply_cluster_prompt(
-            profile,
-            base_prompt_text,
-            session=session,
-            context_kind=NATIVE_AGENT_PROVIDER,
-            context_id=context_id,
-            cluster_run_id=cluster_run.run_id if cluster_run else "",
-            cluster_mentions=list(mentions or []),
-            force_full=True,
-        )
         result = await get_native_agent_service().run_chat(
             profile=profile,
             session=session,
             user_text=text,
-            prompt_text=prompt_text,
-            fresh_session_prompt_text=fresh_session_prompt_text,
+            prompt_text=text,
+            prompt_factory=_native_chat_prompt_factory(profile, session, is_plan_mode=is_plan_mode, cluster_run=cluster_run, mentions=mentions),
+            translate_chat=True,
             history_service=_history_service_for_execution_mode(session, NATIVE_AGENT_PROVIDER),
             actor=_actor_from_request(request_obj),
             cluster_run_id=cluster_run.run_id if cluster_run else "",
@@ -5912,6 +5948,7 @@ async def _stream_native_agent_chat(
     include_trace: bool = True,
     stream_protocol_version: int = 1,
     suppress_agent_prompt: bool = False,
+    translate_chat: bool = True,
 ) -> AsyncIterator[dict[str, Any]]:
     shared_user_id = chat_session_user_id(user_id)
     profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, agent_id)
@@ -5976,33 +6013,13 @@ async def _stream_native_agent_chat(
     )
     async def produce() -> AsyncIterator[dict[str, Any]]:
         try:
-            base_prompt_text = build_plan_mode_prompt(text, cluster_active=bool(cluster_run)) if is_plan_mode else text
-            context_id = _cluster_prompt_context_id(session, NATIVE_AGENT_PROVIDER)
-            prompt_text = _apply_cluster_prompt(
-                profile,
-                base_prompt_text,
-                session=session,
-                context_kind=NATIVE_AGENT_PROVIDER,
-                context_id=context_id,
-                cluster_run_id=cluster_run.run_id if cluster_run else "",
-                cluster_mentions=list(mentions or []),
-            )
-            fresh_session_prompt_text = _apply_cluster_prompt(
-                profile,
-                base_prompt_text,
-                session=session,
-                context_kind=NATIVE_AGENT_PROVIDER,
-                context_id=context_id,
-                cluster_run_id=cluster_run.run_id if cluster_run else "",
-                cluster_mentions=list(mentions or []),
-                force_full=True,
-            )
             async for event in service.stream_chat(
                 profile=profile,
                 session=session,
                 user_text=text,
-                prompt_text=prompt_text,
-                fresh_session_prompt_text=fresh_session_prompt_text,
+                prompt_text=text,
+                prompt_factory=_native_chat_prompt_factory(profile, session, is_plan_mode=is_plan_mode, cluster_run=cluster_run, mentions=mentions),
+                translate_chat=translate_chat,
                 history_service=_history_service_for_execution_mode(session, NATIVE_AGENT_PROVIDER),
                 actor=_actor_from_request(request_obj),
                 protocol=protocol,

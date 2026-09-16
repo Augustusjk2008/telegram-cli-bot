@@ -8,6 +8,28 @@ afterEach(() => {
 });
 
 describe("useChatHistorySync", () => {
+  it("bounds translation polling across a following healthy stream and resumes normal sync afterward", async () => {
+    vi.useFakeTimers();
+    const sync = vi.fn(async () => true);
+    const { rerender } = renderHook(({ isStreaming, pending }) => useChatHistorySync({
+      enabled: true,
+      isStreaming,
+      isSseHealthy: () => true,
+      pendingTranslationKeys: pending ? ["scope/message/digest"] : [],
+      sync,
+    }), { initialProps: { isStreaming: false, pending: true } });
+    await act(async () => vi.advanceTimersByTimeAsync(3_000));
+    expect(sync).toHaveBeenCalledTimes(2);
+    expect(sync).toHaveBeenLastCalledWith(true);
+    rerender({ isStreaming: true, pending: true });
+    await act(async () => vi.advanceTimersByTimeAsync(120_000));
+    expect(sync).toHaveBeenCalledTimes(40);
+    rerender({ isStreaming: false, pending: false });
+    await act(async () => vi.advanceTimersByTimeAsync(5_000));
+    expect(sync).toHaveBeenCalledTimes(41);
+    expect(sync).toHaveBeenLastCalledWith(false);
+  });
+
   it("uses a short initial refresh then a lower-frequency idle interval", async () => {
     vi.useFakeTimers();
     const sync = vi.fn(async () => true);

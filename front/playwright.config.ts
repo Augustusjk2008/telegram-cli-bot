@@ -1,14 +1,15 @@
 import { defineConfig, devices } from '@playwright/test';
 
 const chromiumExecutablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
+const existingServerUrl = process.env.PLAYWRIGHT_BASE_URL;
 
 export default defineConfig({
   testDir: './src/test',
   testMatch: '**/*.spec.ts',
   use: {
-    baseURL: 'http://localhost:3000',
+    baseURL: existingServerUrl || 'http://localhost:3000',
   },
-  webServer: {
+  webServer: existingServerUrl ? undefined : {
     command: 'npm run dev',
     env: {
       ...process.env,

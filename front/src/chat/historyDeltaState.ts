@@ -1,3 +1,4 @@
+import { mergeMessageTranslation } from "../utils/chatTranslation";
 import type {
   ChatExecutionMode,
   ChatMessage,
@@ -61,7 +62,7 @@ export function applyHistoryDelta(
     }
     const index = indexes.get(item.id);
     if (typeof index === "number") {
-      next[index] = item;
+      next[index] = { ...item, ...mergeMessageTranslation(next[index], item) };
     } else {
       indexes.set(item.id, next.length);
       next.push(item);

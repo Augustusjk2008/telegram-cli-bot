@@ -1,3 +1,4 @@
+import { ChatTranslationSettingsPanel } from "../components/ChatTranslationSettingsPanel";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ArrowLeft, Bell, Copy, Eye, EyeOff, Globe, RefreshCw, RotateCcw, Save, Trash2 } from "lucide-react";
 import { AiInlineCompletionSettingsPanel } from "../components/AiInlineCompletionSettingsPanel";
@@ -55,6 +56,7 @@ type AdminCenterTab =
   | "announcements"
   | "network"
   | "notifications"
+  | "chat-translation"
   | "inline-completion"
   | "lan-chat"
   | "native-agent"
@@ -331,6 +333,7 @@ export function AdminCenterScreen({
   const [tunnel, setTunnel] = useState<TunnelSnapshot | null>(null);
   const [tunnelAction, setTunnelAction] = useState<"" | "start" | "stop" | "restart" | "copy">("");
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettingsStatus | null>(null);
+  const [chatTranslationPanelKey, setChatTranslationPanelKey] = useState(0);
   const [inlineCompletionPanelKey, setInlineCompletionPanelKey] = useState(0);
   const [testingPushPlus, setTestingPushPlus] = useState(false);
   const [showPushPlusGuide, setShowPushPlusGuide] = useState(false);
@@ -361,6 +364,7 @@ export function AdminCenterScreen({
     network: false,
     notifications: false,
     "inline-completion": false,
+    "chat-translation": false,
     "lan-chat": false,
     "native-agent": false,
     env: false,
@@ -389,6 +393,7 @@ export function AdminCenterScreen({
       "network",
       "notifications",
       "inline-completion",
+      "chat-translation",
       "lan-chat",
       "native-agent",
       ...(canManageEnvConfig ? (["env"] as AdminCenterTab[]) : []),
@@ -756,6 +761,10 @@ export function AdminCenterScreen({
       await loadNetworkAccess(nextNotice, refresh);
     } else if (activeTab === "notifications") {
       await loadNotificationSettings(nextNotice, refresh);
+    } else if (activeTab === "chat-translation") {
+      setLoadedTabs((prev) => ({ ...prev, "chat-translation": true }));
+      setChatTranslationPanelKey((prev) => prev + 1);
+      setLoading(false);
     } else if (activeTab === "inline-completion") {
       await loadInlineCompletionSettings(nextNotice, refresh);
     } else if (activeTab === "lan-chat") {
@@ -1301,6 +1310,8 @@ export function AdminCenterScreen({
                       ? "网络访问"
                     : tab === "notifications"
                       ? "通知"
+                    : tab === "chat-translation"
+                      ? "聊天翻译"
                     : tab === "inline-completion"
                       ? "AI 补全"
                     : tab === "native-agent"
@@ -1813,6 +1824,10 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
               正在加载 Codex 额度面板…
             </section>
           )
+        ) : null}
+
+        {!loading && activeTab === "chat-translation" ? (
+          <ChatTranslationSettingsPanel key={chatTranslationPanelKey} client={client} onSaved={() => setNotice("聊天翻译配置已保存")} />
         ) : null}
 
         {!loading && activeTab === "inline-completion" ? (

@@ -187,6 +187,22 @@ class AsyncChatStore:
     async def list_active_history(self, **kwargs: Any) -> list[dict[str, Any]]:
         return await self.run_read(self.store.list_active_history, **kwargs)
 
+    async def update_message_translation(
+        self,
+        message_id: str,
+        *,
+        source_digest: str,
+        translation: dict[str, Any] | None,
+        agent_input_text: str | None = None,
+    ) -> bool:
+        return await self.run_write(
+            self.store.update_message_translation,
+            message_id,
+            source_digest=source_digest,
+            translation=translation,
+            agent_input_text=agent_input_text,
+        )
+
     async def list_messages(
         self,
         conversation_id: str,

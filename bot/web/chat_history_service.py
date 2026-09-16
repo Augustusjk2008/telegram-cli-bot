@@ -357,6 +357,36 @@ class ChatHistoryService:
     def replace_message_content(self, message_id: str, content: str, *, state: str = "done") -> dict[str, Any]:
         return self.store.replace_message_content(message_id, content, state=state)
 
+    def update_message_translation(
+        self,
+        message_id: str,
+        *,
+        source_digest: str,
+        translation: dict[str, Any] | None,
+        agent_input_text: str | None = None,
+    ) -> bool:
+        return self.store.update_message_translation(
+            message_id,
+            source_digest=source_digest,
+            translation=translation,
+            agent_input_text=agent_input_text,
+        )
+
+    async def update_message_translation_async(
+        self,
+        message_id: str,
+        *,
+        source_digest: str,
+        translation: dict[str, Any] | None,
+        agent_input_text: str | None = None,
+    ) -> bool:
+        return await self.async_store.update_message_translation(
+            message_id,
+            source_digest=source_digest,
+            translation=translation,
+            agent_input_text=agent_input_text,
+        )
+
     def complete_turn(
         self,
         handle: ChatTurnHandle,
@@ -510,13 +540,15 @@ class ChatHistoryService:
 
         try:
             current_trace = self.store.get_message_trace(handle.assistant_message_id)
+            user_message = self.store.get_message(handle.user_message_id)
         except KeyError:
             return False
 
+        input_text = user_message.get("agent_input_text")
         recovered = resolve_native_trace_for_turn(
             provider,
             session_id,
-            user_text=user_text,
+            user_text=input_text if input_text is not None else user_message["content"],
             assistant_text=assistant_text,
             cwd_hint=session.working_dir,
         )

@@ -115,6 +115,7 @@ from .exposure_service import WebExposureService
 from .fixed_forward_service import FixedForwardService
 from .inline_completion_config import InlineCompletionConfigError, InlineCompletionConfigStore
 from .inline_completion_service import InlineCompletionService, InlineCompletionServiceError
+from .translation_service import get_translation_service
 from .lan_chat_service import LanChatService
 from .notification_service import ChatNotificationService
 from .os_open_service import DesktopOpenError, open_directory_in_desktop
@@ -172,6 +173,7 @@ from .routes import (
     lan_chat_routes,
     plugin_routes,
     terminal_routes,
+    translation_routes,
 )
 from .api_service import (
     AuthContext,
@@ -4851,6 +4853,7 @@ class WebApiServer:
             admin_routes,
             bot_settings_routes,
             lan_chat_routes,
+            translation_routes,
         ):
             module.register(app, self)
         app.router.add_get("/api/notifications/settings", self.get_notification_settings)
@@ -5150,6 +5153,7 @@ class WebApiServer:
             await plugin_service.shutdown()
         await self.lan_chat_service.close()
         await self.inline_completion_service.close()
+        await get_translation_service().close()
         await self.language_server_manager.shutdown()
         self.external_source_registry.clear()
         if preserve_tunnel:

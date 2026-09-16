@@ -64,12 +64,20 @@ def build_run_started_event(
     *,
     state: AgUiTurnState,
     user_text: str,
+    user_translation: dict[str, Any] | None = None,
+    agent_input_text: str | None = None,
+    turn_id: str = "",
 ) -> core.RunStartedEvent:
     state.started = True
     return core.RunStartedEvent(
         threadId=state.thread_id,
         runId=state.run_id,
         timestamp=_timestamp_ms(),
+        user_message_id=state.user_message_id,
+        user_translation=user_translation,
+        agent_input_text=agent_input_text,
+        turn_id=turn_id,
+        assistant_message_id=state.assistant_message_id,
         input=core.RunAgentInput(
             threadId=state.thread_id,
             runId=state.run_id,

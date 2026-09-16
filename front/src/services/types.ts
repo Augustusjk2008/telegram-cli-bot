@@ -981,6 +981,31 @@ export type ChatTraceDetails = {
   trace: ChatTraceEvent[];
 };
 
+export type ChatTranslationConfig = {
+  translate_user_enabled: boolean;
+  translate_assistant_enabled: boolean;
+  base_url: string;
+  api_key_configured: boolean;
+  model: string;
+  user_target_language: string;
+  assistant_target_language: string;
+  request_timeout_seconds: number;
+};
+
+export type ChatTranslationConfigInput = Partial<Omit<ChatTranslationConfig, "api_key_configured">> & {
+  api_key?: string;
+  clear_api_key?: boolean;
+};
+
+export type ChatTranslation = {
+  status: "pending" | "completed" | "failed";
+  text?: string;
+  target_language: string;
+  source_digest: string;
+  completed_at?: string;
+  error?: string;
+};
+
 export type ChatMessage = {
   id: string;
   turnId?: string;
@@ -993,6 +1018,9 @@ export type ChatMessage = {
   state?: "done" | "streaming" | "error";
   meta?: ChatMessageMetaInfo;
   author?: ChatMessageAuthor;
+  translation?: ChatTranslation | null;
+  agentInputText?: string | null;
+  translationView?: "original" | "translated";
 };
 
 export type HistorySnapshotResult = {
@@ -1148,6 +1176,9 @@ export type FavoriteAnswerInput = {
 };
 
 export type ChatStatusUpdate = {
+  userMessageId?: string;
+  userTranslation?: ChatTranslation | null;
+  agentInputText?: string | null;
   elapsedSeconds?: number;
   previewText?: string;
   replaceText?: string;

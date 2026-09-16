@@ -1,3 +1,5 @@
+import { ChatTranslationControl } from "../components/ChatTranslationControl";
+import { applyUserTranslationUpdate, mapUserTranslationUpdate, mergeMessageTranslation, translatedMessageText } from "../utils/chatTranslation";
 import {
   forwardRef,
   memo,
@@ -818,6 +820,7 @@ function mergeDuplicateMessage(previousItem: ChatMessage, item: ChatMessage) {
   const mergedItem = {
     ...previousItem,
     ...item,
+    ...mergeMessageTranslation(previousItem, item),
     ...(typeof nextState !== "undefined" ? { state: nextState } : {}),
     ...(typeof nextElapsedSeconds === "number" ? { elapsedSeconds: nextElapsedSeconds } : {}),
     ...(mergedMeta ? { meta: mergedMeta } : {}),
@@ -1130,12 +1133,7 @@ function applyChatStreamEvents(
     }
     if (event.kind === "status") {
       const { status } = event;
-      if (status.turnId) {
-        updateAtIndex(
-          nextItems.findIndex((item) => item.id === event.userMessageId),
-          (item) => ({ ...item, turnId: status.turnId }),
-        );
-      }
+      nextItems = applyUserTranslationUpdate(nextItems, event.userMessageId, status);
       if (status.turnId || status.assistantMessageId) {
         updateAssistant(event, (item) => ({
           ...item,
@@ -1193,6 +1191,8 @@ function applyChatStreamEvents(
       const completionState = nextMeta?.completionState || "";
       return {
         ...item,
+        ...(event.assistantMessageId ? { id: event.assistantMessageId } : {}),
+        ...(event.turnId ? { turnId: event.turnId } : {}),
         text: event.state.assistantText,
         state: event.state.error || (completionState && completionState !== "completed" && completionState !== "streaming")
           ? "error"
@@ -1246,7 +1246,16 @@ function areMessageValuesEqual(left: unknown, right: unknown): boolean {
   return leftKeys.every((key, index) => key === rightKeys[index] && areMessageValuesEqual(leftRecord[key], rightRecord[key]));
 }
 
-export function mergeMessagesPreservingClientState(previousItems: ChatMessage[], nextItems: ChatMessage[]) {
+export function mergeMessagesPreservingClientState(previousItems: ChatMessage[], nextItems: ChatMessage[], preserveStreaming = false) {
+  if (preserveStreaming) {
+    const incomingIds = new Set(nextItems.map((item) => item.id));
+    const incomingTurns = new Set(nextItems.map(getMessageTurnRoleKey).filter(Boolean));
+    const streamingTurns = new Set(previousItems.filter((item) => item.state === "streaming").map((item) => item.turnId).filter(Boolean));
+    nextItems = [...nextItems, ...previousItems.filter((item) => (
+      (item.state === "streaming" || (item.turnId && streamingTurns.has(item.turnId)) || /^user-\d+$/.test(item.id))
+      && !incomingIds.has(item.id) && !(item.turnId && incomingTurns.has(getMessageTurnRoleKey(item)))
+    ))];
+  }
   if (previousItems.length === 0 || nextItems.length === 0) {
     return nextItems;
   }
@@ -1274,10 +1283,14 @@ export function mergeMessagesPreservingClientState(previousItems: ChatMessage[],
 
     const mergedItem = {
       ...item,
+      ...mergeMessageTranslation(previousItem, item),
       ...(typeof nextState !== "undefined" ? { state: nextState } : {}),
       ...(typeof nextElapsedSeconds === "number" ? { elapsedSeconds: nextElapsedSeconds } : {}),
       ...(mergedMeta ? { meta: mergedMeta } : {}),
     };
+    if (preserveStreaming && (previousItem.state === "streaming" || item.state === "streaming")) {
+      return { ...mergedItem, text: previousItem.text, state: previousItem.state, meta: previousItem.meta };
+    }
     return areMessageValuesEqual(previousItem, mergedItem) ? previousItem : mergedItem;
   });
 
@@ -1321,6 +1334,7 @@ type ChatMessageRowProps = {
   deletingAttachmentKeys: Record<string, boolean>;
   onDeleteAttachment: (messageId: string, savedPath: string) => void;
   onFileLinkClick: (href: string) => void;
+  onTranslationViewChange: (id: string, view: "original" | "translated") => void;
   onCopyFinalAnswer: (text: string) => boolean | void | Promise<boolean | void>;
   onContinueFinalAnswer?: () => void;
   onToggleFavoriteAnswer?: (messageKey: string, item: ChatMessage) => void;
@@ -1345,6 +1359,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   onDeleteAttachment,
   onFileLinkClick,
   onCopyFinalAnswer,
+  onTranslationViewChange,
   onContinueFinalAnswer,
   onToggleFavoriteAnswer,
   onReplyNativePermission,
@@ -1357,6 +1372,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
   mobileLayout,
 }: ChatMessageRowProps) {
   const reduceMotion = useReducedMotion();
+  const displayText = translatedMessageText(item);
+  const translationControl = <ChatTranslationControl item={item} onChange={(view) => onTranslationViewChange(item.id, view)} />;
   const handleLoadMessageTrace = useCallback(() => {
     onLoadMessageTrace(item.id);
   }, [item.id, onLoadMessageTrace]);
@@ -1376,7 +1393,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const messageName = isUser ? item.author?.username || "你" : assistantName;
   const messageAlign = isUser && isCurrentUserMessage ? "right" : "left";
   const parsedUserMessage = isUser ? parseUserMessageDisplay(item.text) : null;
-  const visibleUserText = parsedUserMessage?.visibleText || "";
+  const visibleUserText = isUser ? parseUserMessageDisplay(displayText).visibleText : "";
   const userAttachments = parsedUserMessage?.attachments || [];
   const isStreamingAssistant = item.role === "assistant" && item.state === "streaming";
   const trace = item.meta?.trace;
@@ -1445,11 +1462,14 @@ const ChatMessageRow = memo(function ChatMessageRow({
                       : "min-w-0 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-3 py-2 text-[var(--text)] shadow-[var(--shadow-surface)]",
                 ].join(" ")}
           >
+            {!hasTranscript ? translationControl : null}
             {hasTranscript ? (
               <NativeAgentTranscript
                 key={mobileLayout ? messageClientStateKey : `${messageClientStateKey}:${item.state || ""}`}
                 entries={nativeTranscriptEntries}
-                resultText={item.text}
+                resultText={displayText}
+                originalResultText={item.text}
+                resultHeader={translationControl}
                 state={item.state}
                 mode={transcriptMode}
                 traceCount={traceCount}
@@ -1461,7 +1481,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
                 onLoadTrace={handleLoadMessageTrace}
                 onReplyPermission={isNativeAgentAssistant ? onReplyNativePermission : undefined}
                 onFileLinkClick={onFileLinkClick}
-                onCopyFinalAnswer={canCopyFinalAnswer ? () => onCopyFinalAnswer(item.text) : undefined}
+                onCopyFinalAnswer={canCopyFinalAnswer ? () => onCopyFinalAnswer(displayText) : undefined}
                 onContinue={canContinue ? onContinueFinalAnswer : undefined}
                 onToggleFavorite={canFavoriteFinalAnswer ? () => onToggleFavoriteAnswer?.(messageClientStateKey, item) : undefined}
                 favorite={favorite}
@@ -1472,17 +1492,17 @@ const ChatMessageRow = memo(function ChatMessageRow({
             ) : item.role === "assistant" && item.state !== "streaming" ? (
               <>
                 {item.state === "error" ? (
-                  <ChatPlainTextMessage content={item.text} className="chat-final-answer-compact text-red-700" />
+                  <ChatPlainTextMessage content={displayText} className="chat-final-answer-compact text-red-700" />
                 ) : (
-                  <ChatMarkdownMessage content={item.text} className="chat-final-answer-compact" onFileLinkClick={onFileLinkClick} />
+                  <ChatMarkdownMessage content={displayText} className="chat-final-answer-compact" onFileLinkClick={onFileLinkClick} />
                 )}
                 <ChatFinalAnswerActions
                   canContinue={canContinue}
                   contextUsage={item.meta?.contextUsage}
                   favorite={favorite}
-                  fullAnswerText={item.text}
+                  fullAnswerText={displayText}
                   onContinue={canContinue ? onContinueFinalAnswer : undefined}
-                  onCopyFinalAnswer={canCopyFinalAnswer ? () => onCopyFinalAnswer(item.text) : undefined}
+                  onCopyFinalAnswer={canCopyFinalAnswer ? () => onCopyFinalAnswer(displayText) : undefined}
                   onToggleFavorite={canFavoriteFinalAnswer ? () => onToggleFavoriteAnswer?.(messageClientStateKey, item) : undefined}
                 />
               </>
@@ -1493,6 +1513,9 @@ const ChatMessageRow = memo(function ChatMessageRow({
                     content={visibleUserText}
                     className={isCurrentUserMessage ? "text-[var(--accent-foreground)]" : undefined}
                   />
+                ) : null}
+                {item.translation?.status === "completed" ? (
+                  <button type="button" aria-label="复制当前提问" className="mt-1 text-xs underline" onClick={() => void onCopyFinalAnswer(displayText)}>复制</button>
                 ) : null}
                 {userAttachments.length > 0 ? (
                   <div className="flex flex-wrap gap-2">
@@ -1543,7 +1566,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
               </div>
             ) : (
               <ChatPlainTextMessage
-                content={item.text}
+                content={displayText}
                 className={isUser ? "text-[var(--accent-foreground)]" : item.state === "error" ? "text-red-700" : "text-[var(--text)]"}
               />
             )}
@@ -1567,6 +1590,7 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
   handleLoadMessageTrace: (messageId: string) => void;
   handleDeleteAttachment: (messageId: string, savedPath: string) => void;
   handleFileLinkClick: (href: string) => void;
+  handleTranslationViewChange: (id: string, view: "original" | "translated") => void;
   handleCopyFinalAnswer: (text: string) => boolean | void | Promise<boolean | void>;
   handleContinueFinalAnswer: () => void;
   handleToggleFavoriteAnswer: (messageKey: string, item: ChatMessage) => void;
@@ -1587,6 +1611,7 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
   handleDeleteAttachment,
   handleFileLinkClick,
   handleCopyFinalAnswer,
+  handleTranslationViewChange,
   handleContinueFinalAnswer,
   handleToggleFavoriteAnswer,
   handleReplyNativePermission,
@@ -1611,6 +1636,7 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
         onDeleteAttachment={handleDeleteAttachment}
         onFileLinkClick={handleFileLinkClick}
         onCopyFinalAnswer={handleCopyFinalAnswer}
+        onTranslationViewChange={handleTranslationViewChange}
         onContinueFinalAnswer={handleContinueFinalAnswer}
         onToggleFavoriteAnswer={handleToggleFavoriteAnswer}
         onReplyNativePermission={handleReplyNativePermission}
@@ -1641,6 +1667,7 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
     executingPlanMessageId,
     handleContinueFinalAnswer,
     handleCopyFinalAnswer,
+    handleTranslationViewChange,
     handleDeleteAttachment,
     handleExecutePlan,
     handleFileLinkClick,
@@ -2718,6 +2745,26 @@ export function ChatScreen({
     streamMode,
   ]);
 
+  const syncTranslations = async () => {
+    const sendVersion = assistantSendVersionRef.current;
+    const wasStreaming = isStreamingRef.current;
+    const agentId = activeAgentIdRef.current;
+    const currentExecutionMode = executionModeRef.current;
+    const previousItems = itemsRef.current;
+    const isCurrent = () => sendVersion === assistantSendVersionRef.current
+      && activeAgentIdRef.current === agentId && executionModeRef.current === currentExecutionMode
+      && isForegroundRef.current;
+    const applied = await historyRevisionStateRef.current.sync(
+      { botAlias, agentId, executionMode: currentExecutionMode, conversationId: resolveActiveConversationId(conversations, previousItems) },
+      previousItems,
+      (query) => listScopedMessageDelta(client, botAlias, query.afterId, 50, agentId, currentExecutionMode, query.revision, query.cursor),
+      { isCurrent },
+    );
+    if (!isCurrent() || applied.stale) return true;
+    setItems((current) => mergeMessagesPreservingClientState(current, applied.items, wasStreaming || isStreamingRef.current));
+    return true;
+  };
+
   useChatHistorySync({
     enabled: isForeground && !loading,
     isStreaming,
@@ -2725,7 +2772,10 @@ export function ChatScreen({
       streamModeRef.current === "sse"
       && Date.now() - (sseLastActivityAtRef.current || 0) < SSE_STALL_RECOVERY_DELAY_MS
     ),
-    sync: () => pollAssistantStateRef.current?.() ?? true,
+    sync: (translationsOnly) => translationsOnly ? syncTranslations() : pollAssistantStateRef.current?.() ?? true,
+    pendingTranslationKeys: items.filter((item) => item.translation?.status === "pending").map((item) => (
+      JSON.stringify([botAlias, storageScope, activeAgentId, executionMode, item.id, item.translation?.source_digest])
+    )),
     initialDelayMs: INITIAL_IDLE_CHAT_POLL_DELAY_MS,
     idleIntervalMs: IDLE_CHAT_POLL_INTERVAL_MS,
   });
@@ -3055,6 +3105,10 @@ export function ChatScreen({
     }
     void loadPreview(nextPath, "preview");
   }, [embedded, loadPreview, onRequestDesktopPreview]);
+
+  const handleTranslationViewChange = useCallback((id: string, view: "original" | "translated") => {
+    setItems((current) => updateMessageById(current, id, (item) => ({ ...item, translationView: view })));
+  }, []);
 
   const handleCopyFinalAnswer = useCallback(async (text: string) => {
     try {
@@ -3943,6 +3997,7 @@ export function ChatScreen({
         if (status.assistantMessageId) {
           streamAssistantMessageId = status.assistantMessageId;
         }
+        setItems((current) => applyUserTranslationUpdate(current, userMessage.id, status));
         if (sawAgUiEventRef.current) {
           return;
         }
@@ -3997,6 +4052,12 @@ export function ChatScreen({
           return;
         }
         markSseActivity();
+        if (event.type === EventType.RUN_STARTED || event.type === EventType.CUSTOM) {
+          const status = mapUserTranslationUpdate(event);
+          if (status.turnId) streamTurnId = status.turnId;
+          if (status.assistantMessageId) streamAssistantMessageId = status.assistantMessageId;
+          setItems((current) => applyUserTranslationUpdate(current, userMessage.id, status));
+        }
         sawAgUiEventRef.current = true;
         streamBatcher.enqueue({
           kind: "ag_ui",
@@ -4050,6 +4111,7 @@ export function ChatScreen({
           );
           return {
             ...final,
+            ...mergeMessageTranslation(item, final),
             meta: final.state === "done" ? compactCompletedMessageMeta(mergedMeta) : mergedMeta,
           };
         },
@@ -4929,6 +4991,7 @@ export function ChatScreen({
             handleDeleteAttachment={handleDeleteAttachment}
             handleFileLinkClick={handleFileLinkClick}
             handleCopyFinalAnswer={handleCopyFinalAnswer}
+            handleTranslationViewChange={handleTranslationViewChange}
             handleContinueFinalAnswer={handleContinueFinalAnswer}
             handleToggleFavoriteAnswer={handleToggleFavoriteAnswer}
             handleReplyNativePermission={handleReplyNativePermission}

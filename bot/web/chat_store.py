@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import sqlite3
@@ -387,6 +388,8 @@ class ChatStore:
                 return
             conn.execute("PRAGMA journal_mode=WAL")
             self._ensure_schema(conn)
+            self._fail_interrupted_translations(conn)
+            conn.commit()
             _SCHEMA_READY_STORES.add(self.db_path)
 
     def _table_columns(self, conn: sqlite3.Connection, table: str) -> set[str]:
@@ -476,6 +479,8 @@ class ChatStore:
                 turn_id TEXT NOT NULL,
                 role TEXT NOT NULL,
                 content TEXT NOT NULL,
+                translation_json TEXT,
+                agent_input_text TEXT,
                 content_format TEXT NOT NULL,
                 state TEXT NOT NULL,
                 updated_revision INTEGER NOT NULL DEFAULT 0,
@@ -569,6 +574,8 @@ class ChatStore:
         self._ensure_column(conn, "messages", "author_account_id", "TEXT")
         self._ensure_column(conn, "messages", "author_username", "TEXT")
         self._ensure_column(conn, "messages", "updated_revision", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column(conn, "messages", "translation_json", "TEXT")
+        self._ensure_column(conn, "messages", "agent_input_text", "TEXT")
         for column_name in ("bot_mode", "assistant_home", "managed_prompt_hash", "prompt_surface_version"):
             self._drop_column(conn, "conversations", column_name)
         self._drop_column(conn, "turns", "managed_prompt_hash")
@@ -585,6 +592,29 @@ class ChatStore:
             ON conversations(cluster_parent_conversation_id, agent_id, cluster_assignment_revision, archived_at)
             """
         )
+
+    def _fail_interrupted_translations(self, conn: sqlite3.Connection) -> None:
+        # Runs once per database per process, before any new translation can be saved.
+        rows = conn.execute(
+            """
+            SELECT m.id, m.conversation_id, m.translation_json
+            FROM messages AS m
+            JOIN turns AS t ON t.id = m.turn_id
+            WHERE t.workspace_history_discarded_at IS NULL
+              AND json_valid(m.translation_json)
+              AND json_extract(m.translation_json, '$.status') = 'pending'
+            """
+        ).fetchall()
+        for row in rows:
+            translation = _parse_json_dict(row["translation_json"])
+            translation.update(status="failed", error="interrupted")
+            conn.execute(
+                "UPDATE messages SET translation_json = ? WHERE id = ?",
+                (json.dumps(translation, ensure_ascii=False), row["id"]),
+            )
+            self._record_message_changes(
+                conn, row["conversation_id"], [row["id"]], operation="upsert",
+            )
 
     def _next_conversation_revision(self, conn: sqlite3.Connection, conversation_id: str) -> int:
         result = conn.execute(
@@ -1729,8 +1759,14 @@ class ChatStore:
         try:
             with self._connect_for_write() as conn:
                 conn.execute(
-                    "UPDATE messages SET content = ?, state = ?, updated_at = ? WHERE id = ?",
-                    (content, state, now, handle.assistant_message_id),
+                    """
+                    UPDATE messages
+                    SET translation_json = CASE WHEN content = ? THEN translation_json END,
+                        agent_input_text = CASE WHEN content = ? THEN agent_input_text END,
+                        content = ?, state = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (content, content, content, state, now, handle.assistant_message_id),
                 )
                 conn.execute(
                     "UPDATE turns SET assistant_state = ?, updated_at = ? WHERE id = ?",
@@ -1772,8 +1808,14 @@ class ChatStore:
                     raise KeyError(message_id)
 
                 conn.execute(
-                    "UPDATE messages SET content = ?, state = ?, updated_at = ? WHERE id = ?",
-                    (content, state, now, message_id),
+                    """
+                    UPDATE messages
+                    SET translation_json = CASE WHEN content = ? THEN translation_json END,
+                        agent_input_text = CASE WHEN content = ? THEN agent_input_text END,
+                        content = ?, state = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (content, content, content, state, now, message_id),
                 )
                 if str(row["role"] or "") == "assistant":
                     conn.execute(
@@ -1828,6 +1870,65 @@ class ChatStore:
                 state=state,
                 content_chars=len(str(content or "")),
             )
+
+    def update_message_translation(
+        self,
+        message_id: str,
+        *,
+        source_digest: str,
+        translation: dict[str, Any] | None,
+        agent_input_text: str | None = None,
+    ) -> bool:
+        if translation is not None:
+            if (
+                translation.get("status") not in {"pending", "completed", "failed"}
+                or translation.get("source_digest") != source_digest
+                or not str(translation.get("target_language") or "").strip()
+            ):
+                return False
+            if translation["status"] == "completed" and not str(translation.get("text") or "").strip():
+                return False
+            translation = {
+                key: translation[key]
+                for key in ("status", "text", "target_language", "source_digest", "completed_at", "error")
+                if key in translation
+            }
+        conn = self._connect(create=False)
+        if conn is None:
+            return False
+        with closing(conn), conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT m.conversation_id, m.content, m.translation_json, m.agent_input_text
+                FROM messages AS m
+                JOIN turns AS t ON t.id = m.turn_id
+                WHERE m.id = ? AND t.workspace_history_discarded_at IS NULL
+                """,
+                (message_id,),
+            ).fetchone()
+            if row is None or hashlib.sha256(row["content"].encode("utf-8")).hexdigest() != source_digest:
+                return False
+            previous = _parse_json_dict(row["translation_json"])
+            if translation is None:
+                translation = previous or None
+            if previous.get("status") == "completed" and (translation or {}).get("status") != "completed":
+                return False
+            if previous.get("status") == "failed" and (translation or {}).get("status") == "pending":
+                return False
+            input_text = row["agent_input_text"] if agent_input_text is None else agent_input_text
+            if (previous or None) == translation and input_text == row["agent_input_text"]:
+                return False
+            conn.execute(
+                "UPDATE messages SET translation_json = ?, agent_input_text = ? WHERE id = ?",
+                (
+                    json.dumps(translation, ensure_ascii=False) if translation is not None else None,
+                    input_text,
+                    message_id,
+                ),
+            )
+            self._record_message_changes(conn, row["conversation_id"], [message_id], operation="upsert")
+            return True
 
     def update_context_usage(self, turn_id: str, context_usage: dict[str, Any] | None) -> bool:
         if not isinstance(context_usage, dict) or not context_usage:
@@ -2399,8 +2500,14 @@ class ChatStore:
         context_usage_json = json.dumps(context_usage, ensure_ascii=False) if isinstance(context_usage, dict) else None
         with self._connect_for_write() as conn:
             conn.execute(
-                "UPDATE messages SET content = ?, state = ?, updated_at = ? WHERE id = ?",
-                (content, message_state, now, handle.assistant_message_id),
+                """
+                UPDATE messages
+                SET translation_json = CASE WHEN content = ? THEN translation_json END,
+                    agent_input_text = CASE WHEN content = ? THEN agent_input_text END,
+                    content = ?, state = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (content, content, content, message_state, now, handle.assistant_message_id),
             )
             conn.execute(
                 """
@@ -2668,6 +2775,8 @@ class ChatStore:
             "conversation_id": str(row["conversation_id"] or ""),
             "role": row["role"],
             "content": row["content"],
+            "translation": _parse_json_dict(row["translation_json"]) or None,
+            "agent_input_text": row["agent_input_text"],
             "state": row["state"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
@@ -2692,6 +2801,8 @@ class ChatStore:
                     m.conversation_id,
                     m.role,
                     m.content,
+                    m.translation_json,
+                    m.agent_input_text,
                     m.state,
                     m.author_user_id,
                     m.author_account_id,
@@ -2728,6 +2839,8 @@ class ChatStore:
                 recent.conversation_id,
                 recent.role,
                 recent.content,
+                recent.translation_json,
+                recent.agent_input_text,
                 recent.state,
                 recent.author_user_id,
                 recent.author_account_id,
@@ -2750,6 +2863,8 @@ class ChatStore:
                     m.conversation_id,
                     m.role,
                     m.content,
+                    m.translation_json,
+                    m.agent_input_text,
                     m.state,
                     m.author_user_id,
                     m.author_account_id,
@@ -2805,6 +2920,8 @@ class ChatStore:
                         m.conversation_id,
                         m.role,
                         m.content,
+                        m.translation_json,
+                        m.agent_input_text,
                         m.state,
                         m.author_user_id,
                         m.author_account_id,
@@ -2855,6 +2972,8 @@ class ChatStore:
                 m.conversation_id,
                 m.role,
                 m.content,
+                m.translation_json,
+                m.agent_input_text,
                 m.state,
                 m.author_user_id,
                 m.author_account_id,
@@ -3184,8 +3303,14 @@ class ChatStore:
                 for row in rows:
                     content = str(row["assistant_content"] or "").strip() or fallback_content
                     conn.execute(
-                        "UPDATE messages SET content = ?, state = ?, updated_at = ? WHERE id = ?",
-                        (content, "error", now, row["assistant_message_id"]),
+                        """
+                        UPDATE messages
+                        SET translation_json = CASE WHEN content = ? THEN translation_json END,
+                            agent_input_text = CASE WHEN content = ? THEN agent_input_text END,
+                            content = ?, state = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (content, content, content, "error", now, row["assistant_message_id"]),
                     )
                     conn.execute(
                         """
@@ -3602,7 +3727,7 @@ class ChatStore:
                         assistant.conversation_id AS conversation_id,
                         assistant.role AS role,
                         assistant.content AS assistant_text,
-                        user.content AS user_text,
+                        COALESCE(user.agent_input_text, user.content) AS user_text,
                         conversation.working_dir AS working_dir,
                         turn.native_provider AS native_provider,
                         turn.native_session_id AS native_session_id,

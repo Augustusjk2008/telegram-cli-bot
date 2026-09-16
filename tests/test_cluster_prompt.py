@@ -226,6 +226,7 @@ async def test_native_chat_keeps_full_cluster_prompt_as_new_session_fallback(mon
 
     class FakeService:
         async def run_chat(self, **kwargs):
+            kwargs["prompt_text"], kwargs["fresh_session_prompt_text"] = kwargs["prompt_factory"](kwargs["user_text"])
             calls.append(kwargs)
             return {"output": "done"}
 

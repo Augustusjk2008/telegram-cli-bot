@@ -6,8 +6,9 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
+from ag_ui import core
 
 from bot.chat_identity import chat_session_user_id
 from bot import config
@@ -53,6 +54,10 @@ from bot.native_agent.pi_workspace_history import PiWorkspaceHistory, WorkspaceH
 from bot.native_agent.run_events import extract_native_context_usage, extract_native_session_id, native_json_to_events
 from bot.native_agent.turn_state import NativeAgentTurnState
 from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenceBuffer
+from bot.web.chat_translation import (
+    ChatInputCancelled, cancel_input_preparation, check_chat_stopped,
+    input_is_preparing, input_translation_pending, prepare_chat_input, submit_answer_translation, translation_snapshot,
+)
 
 NATIVE_AGENT_PROVIDER = EXECUTION_MODE_NATIVE_AGENT
 NATIVE_AGENT_NO_PROGRESS_MESSAGE = "原生 agent 长时间无输出或进展"
@@ -572,6 +577,9 @@ class NativeAgentService:
             session.stop_requested = True
             runtime_id = str(session.native_agent_server_key or "").strip()
             process = session.process
+        if input_is_preparing(session):
+            cancel_input_preparation(session)
+            return True
         runtime = self._runtime_registry.get_by_runtime_id(runtime_id) if runtime_id else None
         if runtime is not None:
             return await runtime.abort()
@@ -612,6 +620,8 @@ class NativeAgentService:
         cluster_run_id: str = "",
         solo_mode: bool = False,
         suppress_agent_prompt: bool = False,
+        prompt_factory: Callable[[str], tuple[str, str]] | None = None,
+        translate_chat: bool = False,
     ) -> AsyncIterator[dict[str, Any]]:
         self._ensure_runtime_eviction_task()
         loop = asyncio.get_running_loop()
@@ -672,6 +682,7 @@ class NativeAgentService:
             return context_usage
 
         try:
+            translation_config = translation_snapshot(enabled=translate_chat)
             if not config.NATIVE_AGENT_ENABLED:
                 raise RuntimeError("原生 agent 未启用")
             turn_handle = history_service.start_turn(
@@ -681,6 +692,21 @@ class NativeAgentService:
                 native_provider=NATIVE_AGENT_PROVIDER,
                 actor=actor,
             )
+            pending_translation = input_translation_pending(user_text, translation_config)
+            if pending_translation is not None:
+                fields = {"turn_id": turn_handle.turn_id, "assistant_message_id": turn_handle.assistant_message_id,
+                          "user_message_id": turn_handle.user_message_id, "user_translation": pending_translation}
+                if wants_ag_ui:
+                    yield {"type": "ag_ui", **fields, "event": core.CustomEvent(name="TCB_CHAT_TRANSLATION", value=fields)}
+                else:
+                    yield {"type": "status", **fields, "status": "正在翻译提问"}
+            execution_text, user_translation = await prepare_chat_input(
+                text=user_text, session=session, history=history_service, turn=turn_handle, config=translation_config,
+            )
+            if prompt_factory is not None:
+                prompt_text, fresh_session_prompt_text = prompt_factory(execution_text)
+            elif translate_chat:
+                prompt_text = execution_text
             model_id, agent_id, reasoning_effort, system_prompt = self._prompt_options(profile)
             append_system_prompt, child_agent_prompt_hash = self._append_system_prompt(
                 profile,
@@ -929,6 +955,9 @@ class NativeAgentService:
                 "turn_id": turn_handle.turn_id,
                 "assistant_message_id": turn_handle.assistant_message_id,
                 "native_session_reused": bool(requested_session_id),
+                "user_message_id": turn_handle.user_message_id,
+                "user_translation": user_translation,
+                "agent_input_text": execution_text,
                 "native_session_reason": "conversation_bound" if requested_session_id else "created",
                 "working_dir": session.working_dir,
                 **({"cluster_run_id": normalized_cluster_run_id} if normalized_cluster_run_id else {}),
@@ -948,7 +977,7 @@ class NativeAgentService:
             if wants_ag_ui:
                 yield {
                     "type": "ag_ui",
-                    "event": build_run_started_event(state=ag_ui_state, user_text=user_text),
+                    "event": build_run_started_event(state=ag_ui_state, user_text=user_text, user_translation=user_translation, agent_input_text=execution_text, turn_id=turn_handle.turn_id),
                 }
 
             async def stop_if_no_progress(now: float) -> bool:
@@ -969,6 +998,7 @@ class NativeAgentService:
 
             turn_cost = PiTurnCost(model_id)
             dropped_usage_before = active_runtime.dropped_usage_events
+            check_chat_stopped(session)
             await active_runtime.prompt(prompt_text, conversation_id=native_session_id)
             stream = active_runtime.events()
             iterator = stream.__aiter__()
@@ -1180,6 +1210,7 @@ class NativeAgentService:
                     pi_record = self._pi_session_store.upsert(pi_record)
             if isinstance(done_message.get("meta"), dict):
                 done_message["meta"].update(self._workspace_meta(pi_record, active_runtime))
+            submit_answer_translation(history=history_service, message=done_message, config=translation_config, completion_state=completion_state)
             if wants_ag_ui:
                 if final_text and not ag_ui_state.text_started:
                     for ag_ui_event in build_text_message_events(state=ag_ui_state, content=final_text):
@@ -1221,6 +1252,18 @@ class NativeAgentService:
                     },
                 },
             }
+        except ChatInputCancelled:
+            if persistence_buffer is not None:
+                await persistence_buffer.close()
+            done_message = history_service.complete_turn(
+                turn_handle, content="", completion_state="cancelled", error_code="cancelled", error_message="用户终止输出",
+            )
+            if wants_ag_ui:
+                state = ag_ui_state or AgUiTurnState(thread_id=turn_handle.conversation_id, run_id=run_id,
+                    user_message_id=turn_handle.user_message_id, assistant_message_id=turn_handle.assistant_message_id)
+                yield {"type": "ag_ui", "event": build_run_finished_event(state=state, completion_state="cancelled", content="", message=done_message, turn_id=turn_handle.turn_id)}
+            yield {"type": "done", "turn_id": turn_handle.turn_id, "assistant_message_id": turn_handle.assistant_message_id,
+                   "output": "", "message": done_message, "returncode": -1, "elapsed_seconds": 0}
         except asyncio.CancelledError:
             with session._lock:
                 session.stop_requested = True
