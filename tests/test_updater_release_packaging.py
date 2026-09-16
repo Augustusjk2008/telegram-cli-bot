@@ -181,3 +181,16 @@ def test_portable_build_does_not_embed_fixed_web_token() -> None:
     assert migration_index < ensure_token_index < import_index
     assert '$env:TCB_PORTABLE_SMOKE_IMPORT_ONLY -eq "1"' in portable
     assert portable.index('$env:TCB_PORTABLE_SMOKE_IMPORT_ONLY -eq "1"') < ensure_token_index
+
+
+def test_portable_build_writes_windows_scripts_and_python_files_with_compatible_encodings() -> None:
+    portable = Path(".release-local/portable-win/build-portable.ps1").read_text(encoding="utf-8")
+
+    assert "$script:Utf8BomEncoding = New-Object System.Text.UTF8Encoding -ArgumentList $true" in portable
+    assert portable.count("$script:Utf8NoBomEncoding = New-Object System.Text.UTF8Encoding -ArgumentList $false") >= 2
+    assert "WriteAllText((Join-Path $PackageRoot \"start.ps1\"), $startPs1, $script:Utf8BomEncoding)" in portable
+    assert "WriteAllText((Join-Path $PackageRoot \"install.ps1\"), $installPs1, $script:Utf8BomEncoding)" in portable
+    assert "WriteAllText((Join-Path $PackageRoot \".env\"), $content, $script:Utf8NoBomEncoding)" in portable
+    assert "WriteAllLines($Path, [string[]]$lines, $script:Utf8NoBomEncoding)" in portable
+    assert 'print(f"{key}={value}")' not in portable
+    assert "print(f'{key}={value}')" in portable

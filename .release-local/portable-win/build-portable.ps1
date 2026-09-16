@@ -8,6 +8,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+$script:Utf8BomEncoding = New-Object System.Text.UTF8Encoding -ArgumentList $true
+$script:Utf8NoBomEncoding = New-Object System.Text.UTF8Encoding -ArgumentList $false
+
 $script:PortableRoot = $PSScriptRoot
 $script:ReleaseLocalRoot = Split-Path -Parent $script:PortableRoot
 $script:RepoRoot = Split-Path -Parent $script:ReleaseLocalRoot
@@ -453,7 +456,7 @@ function Initialize-PortablePiConfig {
             workspace_history_enabled = $true
             shellPath = ""
         } | ConvertTo-Json -Depth 5
-        Set-Content -LiteralPath $settingsPath -Value $settings -Encoding UTF8
+        [System.IO.File]::WriteAllText($settingsPath, [string]$settings, $script:Utf8NoBomEncoding)
     }
 
     $modelsPath = Join-Path $piAgentRoot "models.json"
@@ -461,7 +464,7 @@ function Initialize-PortablePiConfig {
         $models = [ordered]@{
             providers = [ordered]@{}
         } | ConvertTo-Json -Depth 5
-        Set-Content -LiteralPath $modelsPath -Value $models -Encoding UTF8
+        [System.IO.File]::WriteAllText($modelsPath, [string]$models, $script:Utf8NoBomEncoding)
     }
 }
 
@@ -487,7 +490,7 @@ CLI_EXEC_TIMEOUT=4000
 SESSION_TIMEOUT=3600
 MANAGED_BOTS_FILE=managed_bots.json
 "@
-    Set-Content -LiteralPath (Join-Path $PackageRoot ".env") -Value $content -Encoding UTF8
+    [System.IO.File]::WriteAllText((Join-Path $PackageRoot ".env"), $content, $script:Utf8NoBomEncoding)
 }
 
 function Write-PortableScripts {
@@ -501,6 +504,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$script:Utf8NoBomEncoding = New-Object System.Text.UTF8Encoding -ArgumentList $false
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $envPath = Join-Path $scriptDir ".env"
 $restartExitCode = 75
@@ -550,10 +554,10 @@ function Import-DotEnv {
         "",
         "from dotenv import dotenv_values",
         "",
-        'path = Path(os.environ["TCB_PORTABLE_DOTENV_PATH"])',
+        "path = Path(os.environ['TCB_PORTABLE_DOTENV_PATH'])",
         "for key, value in dotenv_values(path).items():",
         "    if value is not None:",
-        '        print(f"{key}={value}")'
+        "        print(f'{key}={value}')"
     ) -join "`n"
     try {
         $output = & $pythonExe -c $python
@@ -611,7 +615,7 @@ function Ensure-PortableWebToken {
     } else {
         $lines += "WEB_API_TOKEN=$token"
     }
-    Set-Content -LiteralPath $Path -Value $lines -Encoding UTF8
+    [System.IO.File]::WriteAllLines($Path, [string[]]$lines, $script:Utf8NoBomEncoding)
 }
 
 function Set-PortablePiShellPath {
@@ -631,11 +635,11 @@ function Set-PortablePiShellPath {
             '  "shellPath": ""',
             "}"
         ) -join "`n"
-        Set-Content -LiteralPath $settingsPath -Value $settingsContent -Encoding UTF8
+        [System.IO.File]::WriteAllText($settingsPath, $settingsContent, $script:Utf8NoBomEncoding)
     }
     $modelsPath = Join-Path $PackageRoot "data\pi-home\.pi\agent\models.json"
     if (-not (Test-Path -LiteralPath $modelsPath)) {
-        Set-Content -LiteralPath $modelsPath -Value '{"providers":{}}' -Encoding UTF8
+        [System.IO.File]::WriteAllText($modelsPath, '{"providers":{}}', $script:Utf8NoBomEncoding)
     }
     $gitBash = Join-Path $PackageRoot "tools\git\bin\bash.exe"
 
@@ -653,7 +657,8 @@ function Set-PortablePiShellPath {
     } else {
         Add-Member -InputObject $settings -NotePropertyName "shellPath" -NotePropertyValue $gitBash
     }
-    $settings | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $settingsPath -Encoding UTF8
+    $settingsJson = $settings | ConvertTo-Json -Depth 10
+    [System.IO.File]::WriteAllText($settingsPath, [string]$settingsJson, $script:Utf8NoBomEncoding)
 }
 
 function Set-PortableRuntimeEnv {
@@ -729,7 +734,8 @@ while ($true) {
     Start-Sleep -Seconds 1
 }
 '@
-    Set-Content -LiteralPath (Join-Path $PackageRoot "start.ps1") -Value $startPs1 -Encoding UTF8
+    $startPs1 = $startPs1 -replace "`r?`n", "`r`n"
+    [System.IO.File]::WriteAllText((Join-Path $PackageRoot "start.ps1"), $startPs1, $script:Utf8BomEncoding)
 
 $bootstrapPy = @'
 from __future__ import annotations
@@ -845,7 +851,8 @@ exit /b %EXIT_CODE%
 Write-Host "[信息] 这是绿色版，无需安装。直接运行 start.bat。"
 exit 0
 '@
-    Set-Content -LiteralPath (Join-Path $PackageRoot "install.ps1") -Value $installPs1 -Encoding UTF8
+    $installPs1 = $installPs1 -replace "`r?`n", "`r`n"
+    [System.IO.File]::WriteAllText((Join-Path $PackageRoot "install.ps1"), $installPs1, $script:Utf8BomEncoding)
 
     $installBat = @'
 @echo off

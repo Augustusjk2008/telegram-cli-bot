@@ -295,7 +295,7 @@ def _default_config() -> dict[str, Any]:
 
 def _read_json_object(path: Path, label: str, *, default: dict[str, Any]) -> dict[str, Any]:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
     except FileNotFoundError:
         return dict(default)
     except json.JSONDecodeError as exc:
