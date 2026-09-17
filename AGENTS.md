@@ -33,7 +33,6 @@ Do not assume that `venv/` in the repository is usable on all machines. Prefer t
 - `bot/` contains the backend, Web API, bot manager, native agent, and plugin implementations; `front/` is the React/Vite frontend; `tests/` is the backend pytest.
 - Do not commit or force-add `.env`, the real `managed_bots.json`, `docs/` runtime materials and release notes, or data under the user directory `.tcb/`.
 - `managed_bots.example.json` is for public examples only; the current runtime is Web-only, and there is no per-bot Telegram application lifecycle.
-- User-visible copy uses Chinese.
 - Brand/logo consistently uses `front/public/assets/app-logo*.svg`; login, favicon, mobile shell, and workbench header remain consistent.
 - Configuration is loaded from environment variables in `bot/config.py`; `.env` uses `python-dotenv`.
 - Fixed public forwarding must retain the `/node/<node ID>/` path prefix and support WebSocket; for configuration and minimal `frps`/`frpc` examples, see `README.md`.

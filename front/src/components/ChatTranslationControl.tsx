@@ -1,3 +1,4 @@
+import { Languages, LoaderCircle } from "lucide-react";
 import type { ChatMessage } from "../services/types";
 
 export function ChatTranslationControl({ item, onChange }: {
@@ -6,19 +7,26 @@ export function ChatTranslationControl({ item, onChange }: {
 }) {
   const translation = item.translation;
   if (!translation) return null;
-  if (translation.status !== "completed" || !translation.text?.trim()) {
-    return <div className="mb-1 text-xs opacity-70">{translation.status === "pending" ? "译文待更新，当前为原文" : "翻译未完成，显示原文"}</div>;
-  }
-  const view = item.translationView || "translated";
+  const available = translation.status === "completed" && Boolean(translation.text?.trim());
+  const translated = available && item.translationView !== "original";
+  const label = available
+    ? translated ? "显示原文" : "显示译文"
+    : translation.status === "pending" ? "译文待更新，当前为原文" : "翻译未完成，显示原文";
   return (
-    <div role="group" aria-label="消息语言版本" className="mb-1 flex flex-wrap items-center gap-1 text-xs">
-      {([ ["original", "原文"], ["translated", "译文"] ] as const).map(([value, label]) => (
-        <button key={value} type="button" aria-pressed={view === value} onClick={() => onChange(value)}
-          className={`rounded px-2 py-1 hover:opacity-80 ${view === value ? "bg-current/10 font-semibold underline underline-offset-4" : "opacity-70"}`}>
-          {label}
-        </button>
-      ))}
-      <span className="opacity-70">{translation.target_language}</span>
-    </div>
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      aria-pressed={translated}
+      disabled={!available}
+      onClick={() => onChange(translated ? "original" : "translated")}
+      className={`inline-flex h-6 w-6 items-center justify-center rounded-md border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:cursor-not-allowed disabled:opacity-50 ${translated
+        ? "border-[var(--accent-outline)] bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--workbench-hover-bg)]"
+        : "border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] text-[var(--muted)] hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)]"}`}
+    >
+      {translation.status === "pending"
+        ? <LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />
+        : <Languages aria-hidden="true" className="h-3.5 w-3.5" />}
+    </button>
   );
 }

@@ -62,7 +62,7 @@ test.each([false, true])("defaults to translated content and copies the selected
   if (native) expect(screen.getByTestId("native-agent-final-result")).toHaveTextContent("译文内容");
   fireEvent.click(screen.getByRole("button", { name: "复制最终回答" }));
   await waitFor(() => expect(copyText).toHaveBeenLastCalledWith("译文内容"));
-  fireEvent.click(screen.getByRole("button", { name: "原文" }));
+  fireEvent.click(screen.getByRole("button", { name: "显示原文" }));
   expect(screen.getByText("Original answer")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "复制完整回答" }));
   await waitFor(() => expect(copyText).toHaveBeenLastCalledWith(native ? "[最终回答]\nOriginal answer" : "Original answer"));
@@ -113,7 +113,7 @@ test.each(["cli", "native_agent"] as const)("binds accepted and later translated
   await act(async () => repeatPending());
   expect(screen.getByText("译文内容")).toBeInTheDocument();
   expect(screen.getAllByTestId("chat-message-row")).toHaveLength(2);
-  fireEvent.click(screen.getByRole("button", { name: "原文" }));
+  fireEvent.click(screen.getByRole("button", { name: "显示原文" }));
   await act(async () => update());
   expect(screen.getByText("原始提问")).toBeInTheDocument();
   await act(async () => finish({ ...original, id: "persisted-assistant" }));
@@ -154,7 +154,7 @@ test("translation delta updates the prior answer during a new stream without res
   await waitFor(() => expect(delta).toHaveBeenCalled(), { timeout: 3_000 });
   expect(screen.getByText("译文内容")).toBeInTheDocument();
   const answerRow = screen.getByText("译文内容").closest('[data-testid="chat-message-row"]') as HTMLElement;
-  fireEvent.click(within(answerRow).getByRole("button", { name: "原文" }));
+  fireEvent.click(within(answerRow).getByRole("button", { name: "显示原文" }));
   expect(screen.getByText("Original answer")).toBeInTheDocument();
   expect(document.querySelector('[data-message-id="active"] [data-streaming="true"]')).toBeInTheDocument();
   expect(screen.getAllByTestId("chat-message-row")).toHaveLength(3);

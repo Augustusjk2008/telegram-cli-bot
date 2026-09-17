@@ -11,7 +11,7 @@ type Props = {
   entries: NativeAgentTranscriptEntry[];
   resultText: string;
   originalResultText?: string;
-  resultHeader?: ReactNode;
+  translationControl?: ReactNode;
   state?: ChatMessage["state"];
   mode?: "native" | "cli";
   traceCount?: number;
@@ -510,7 +510,7 @@ export function NativeAgentTranscript({
   entries,
   resultText,
   originalResultText = resultText,
-  resultHeader,
+  translationControl,
   state,
   mode = "native",
   traceCount,
@@ -682,7 +682,6 @@ export function NativeAgentTranscript({
 
       {showFinalResult || showFinalActions ? (
         <div data-testid="native-agent-final-result" className="chat-final-answer-compact border-t border-[var(--workbench-hairline)] pt-2">
-          {resultHeader}
           {showFinalResult && (state === "done" ? (
             <ChatMarkdownMessage content={visibleResultText} onFileLinkClick={onFileLinkClick} />
           ) : (
@@ -690,6 +689,7 @@ export function NativeAgentTranscript({
           ))}
           {showFinalActions ? (
             <ChatFinalAnswerActions
+              translationControl={translationControl}
               canContinue={canContinue}
               contextUsage={contextUsage}
               favorite={favorite}

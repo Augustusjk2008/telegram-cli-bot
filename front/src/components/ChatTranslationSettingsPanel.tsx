@@ -68,8 +68,7 @@ export function ChatTranslationSettingsPanel({ client, onSaved }: { client: WebB
   const inputClass = "w-full min-w-0 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]";
   return (
     <section aria-label="聊天翻译配置" className="space-y-3 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-3">
-      <h2 className="text-base font-semibold">聊天翻译（全局）</h2>
-      <p className="text-sm text-[var(--muted)]">配置对所有用户和机器人生效。修改从下一轮开始生效，已有译文仍可查看。</p>
+      <h2 className="text-base font-semibold">聊天翻译（全局生效）</h2>
       {!loaded && !error ? <p className="text-sm text-[var(--muted)]">加载中...</p> : null}
       {error ? <p role="alert" className="text-sm text-[var(--status-danger)]">{error}</p> : null}
       <fieldset disabled={!loaded || saving} className="min-w-0 space-y-3 disabled:opacity-60">
@@ -108,7 +107,6 @@ export function ChatTranslationSettingsPanel({ client, onSaved }: { client: WebB
           <input type="checkbox" checked={clearApiKey} onChange={(event) => { setClearApiKey(event.target.checked); setApiKey(""); }} />
           清除已保存的翻译 API 密钥
         </label>
-        <p className="text-xs text-[var(--muted)]">提问翻译失败时发送原文；最终回答先显示原文，译文完成后自动显示。不会补译历史消息。</p>
         <button type="button" className={toolbarButtonClass("primary", "md")} onClick={() => void save()}>
           {saving ? "保存中..." : "保存聊天翻译配置"}
         </button>

@@ -30,11 +30,30 @@ test("聊天翻译配置、附件和原生最终回答适配桌面及移动布�
   await expect(page.getByText("source.txt", { exact: true })).toBeVisible();
   for (const width of [1280, 390]) {
     await page.setViewportSize({ width, height: 900 });
-    await final.getByRole("button", { name: "原文", exact: true }).click();
+    await final.getByRole("button", { name: "显示原文", exact: true }).click();
     await expect(final.getByRole("heading", { name: "Original final answer" })).toBeVisible();
-    await final.getByRole("button", { name: "译文", exact: true }).click();
+    await final.getByRole("button", { name: "显示译文", exact: true }).click();
     await expect(final.getByRole("heading", { name: "翻译后的最终回答" })).toBeVisible();
+    const user = page.locator('[data-message-id="user-qa"]');
+    const userToggle = user.getByRole("button", { name: "显示原文", exact: true });
+    const userCopy = user.getByRole("button", { name: "复制当前提问", exact: true });
+    await userToggle.click();
+    await expect(user.getByText("Explain the attachment", { exact: true })).toBeVisible();
+    await user.getByRole("button", { name: "显示译文", exact: true }).click();
+    await expect(user.getByText("请解释附件", { exact: true })).toBeVisible();
+    expect(await userCopy.evaluate((button) => {
+      const bubble = button.closest('[data-message-id]')!.querySelector('.chat-message-bubble-delight')!;
+      return !bubble.contains(button) && button.getBoundingClientRect().top >= bubble.getBoundingClientRect().bottom;
+    })).toBe(true);
+    expect(await userToggle.evaluate((button) => button.textContent)).toBe("");
+    expect(await userCopy.evaluate((button) => button.textContent)).toBe("");
+    expect(await final.getByRole("button", { name: "显示原文", exact: true }).evaluate((button) => (
+      button.parentElement!.querySelector('[aria-label="复制最终回答"]') !== null
+    ))).toBe(true);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    const screenshotPath = test.info().outputPath(`chat-translation-${width}.png`);
+    await page.screenshot({ path: screenshotPath });
+    await test.info().attach(`chat-translation-${width}`, { path: screenshotPath, contentType: "image/png" });
   }
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.getByRole("button", { name: "切换 Bot: main", exact: true }).click();

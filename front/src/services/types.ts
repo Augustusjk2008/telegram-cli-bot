@@ -803,7 +803,6 @@ export class WebApiClientError extends Error {
 }
 
 /**
- * Maps external-source API failures to stable Chinese copy for the editor.
  * Backend messages remain the fallback so newly introduced diagnostics are
  * still visible without leaking an opaque token or absolute path.
  */

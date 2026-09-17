@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { CheckCheck, ClipboardList, Copy, Gauge, Play, Star } from "lucide-react";
 import type { ChatMessageContextUsage } from "../services/types";
 import { copyText } from "../utils/clipboard";
 import { ChatContextUsageBadge, formatContextUsageDetails } from "./ChatContextUsageBadge";
 
 type Props = {
+  translationControl?: ReactNode;
   canContinue?: boolean;
   contextUsage?: ChatMessageContextUsage;
   favorite?: boolean;
@@ -16,6 +17,7 @@ type Props = {
 };
 
 export function ChatFinalAnswerActions({
+  translationControl,
   canContinue = false,
   contextUsage,
   favorite = false,
@@ -47,7 +49,7 @@ export function ChatFinalAnswerActions({
     }
   }, []);
 
-  if (!onCopyFinalAnswer && !contextDetails && !fullAnswer && !canBuildFullAnswer && !onToggleFavorite && !(canContinue && onContinue)) {
+  if (!translationControl && !onCopyFinalAnswer && !contextDetails && !fullAnswer && !canBuildFullAnswer && !onToggleFavorite && !(canContinue && onContinue)) {
     return null;
   }
 
@@ -118,6 +120,7 @@ export function ChatFinalAnswerActions({
         testId="chat-message-context-usage-bottom"
         className="max-w-full truncate text-[11px]"
       />
+      {translationControl}
       {onToggleFavorite ? (
         <button
           type="button"

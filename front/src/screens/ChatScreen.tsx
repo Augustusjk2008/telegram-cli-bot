@@ -17,7 +17,7 @@ import {
   type WheelEvent as ReactWheelEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import { LoaderCircle, Paperclip, RotateCcw, Trash2 } from "lucide-react";
+import { Copy, LoaderCircle, Paperclip, RotateCcw, Trash2 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { ChatActionBar } from "../components/ChatActionBar";
 import { ChatComposer, type ChatComposerModelOption } from "../components/ChatComposer";
@@ -1463,14 +1463,13 @@ const ChatMessageRow = memo(function ChatMessageRow({
                       : "min-w-0 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-3 py-2 text-[var(--text)] shadow-[var(--shadow-surface)]",
                 ].join(" ")}
           >
-            {!hasTranscript ? translationControl : null}
             {hasTranscript ? (
               <NativeAgentTranscript
                 key={mobileLayout ? messageClientStateKey : `${messageClientStateKey}:${item.state || ""}`}
                 entries={nativeTranscriptEntries}
                 resultText={displayText}
                 originalResultText={item.text}
-                resultHeader={translationControl}
+                translationControl={translationControl}
                 state={item.state}
                 mode={transcriptMode}
                 traceCount={traceCount}
@@ -1497,15 +1496,6 @@ const ChatMessageRow = memo(function ChatMessageRow({
                 ) : (
                   <ChatMarkdownMessage content={displayText} className="chat-final-answer-compact" onFileLinkClick={onFileLinkClick} />
                 )}
-                <ChatFinalAnswerActions
-                  canContinue={canContinue}
-                  contextUsage={item.meta?.contextUsage}
-                  favorite={favorite}
-                  fullAnswerText={displayText}
-                  onContinue={canContinue ? onContinueFinalAnswer : undefined}
-                  onCopyFinalAnswer={canCopyFinalAnswer ? () => onCopyFinalAnswer(displayText) : undefined}
-                  onToggleFavorite={canFavoriteFinalAnswer ? () => onToggleFavoriteAnswer?.(messageClientStateKey, item) : undefined}
-                />
               </>
             ) : isUser ? (
               <div className={userAttachments.length > 0 && visibleUserText ? "space-y-2" : undefined}>
@@ -1514,9 +1504,6 @@ const ChatMessageRow = memo(function ChatMessageRow({
                     content={visibleUserText}
                     className={isCurrentUserMessage ? "text-[var(--accent-foreground)]" : undefined}
                   />
-                ) : null}
-                {item.translation?.status === "completed" ? (
-                  <button type="button" aria-label="复制当前提问" className="mt-1 text-xs underline" onClick={() => void onCopyFinalAnswer(displayText)}>复制</button>
                 ) : null}
                 {userAttachments.length > 0 ? (
                   <div className="flex flex-wrap gap-2">
@@ -1573,6 +1560,31 @@ const ChatMessageRow = memo(function ChatMessageRow({
             )}
           </div>
         </div>
+        {isUser ? (
+          <div className={`mt-2 flex flex-wrap items-center gap-1.5 ${messageAlign === "right" ? "justify-end" : "justify-start"}`}>
+            {translationControl}
+            <button
+              type="button"
+              aria-label="复制当前提问"
+              title="复制当前提问"
+              className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] text-[var(--muted)] hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)]"
+              onClick={() => void onCopyFinalAnswer(displayText)}
+            >
+              <Copy aria-hidden="true" className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ) : !hasTranscript && !isStreamingAssistant ? (
+          <ChatFinalAnswerActions
+            translationControl={translationControl}
+            canContinue={canContinue}
+            contextUsage={item.meta?.contextUsage}
+            favorite={favorite}
+            fullAnswerText={displayText}
+            onContinue={canContinue ? onContinueFinalAnswer : undefined}
+            onCopyFinalAnswer={canCopyFinalAnswer ? () => onCopyFinalAnswer(displayText) : undefined}
+            onToggleFavorite={canFavoriteFinalAnswer ? () => onToggleFavoriteAnswer?.(messageClientStateKey, item) : undefined}
+          />
+        ) : null}
       </div>
     </motion.div>
   );
