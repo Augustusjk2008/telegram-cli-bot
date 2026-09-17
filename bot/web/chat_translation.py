@@ -5,7 +5,7 @@ import asyncio
 import hashlib
 from typing import Any
 
-from .translation_config import TranslationConfig
+from .translation_config import PROMPT_TARGET_LANGUAGE, TranslationConfig
 from .translation_service import get_translation_service
 
 
@@ -39,7 +39,7 @@ def translation_snapshot(*, enabled: bool = True) -> TranslationConfig | None:
 def input_translation_pending(text: str, config: TranslationConfig | None) -> dict[str, Any] | None:
     if config is None or not config.translate_user_enabled:
         return None
-    return {"status": "pending", "target_language": config.user_target_language,
+    return {"status": "pending", "target_language": PROMPT_TARGET_LANGUAGE,
             "source_digest": hashlib.sha256(text.encode("utf-8")).hexdigest()}
 
 
@@ -54,7 +54,7 @@ async def prepare_chat_input(
         async def translate() -> dict[str, Any]:
             pending = input_translation_pending(text, config)
             await asyncio.to_thread(history.update_message_translation, turn.user_message_id, source_digest=digest, translation=pending)
-            return await get_translation_service().translate(text, config=config, target_language=config.user_target_language)
+            return await get_translation_service().translate(text, config=config, direction="user")
 
         task = asyncio.create_task(translate(), name="chat-input-translation")
         _INPUT_TASKS[id(session)] = task
@@ -63,7 +63,7 @@ async def prepare_chat_input(
         except asyncio.CancelledError:
             if session.stop_requested:
                 await asyncio.to_thread(history.update_message_translation, turn.user_message_id, source_digest=digest,
-                                        translation={"status": "failed", "error": "cancelled", "target_language": config.user_target_language, "source_digest": digest})
+                                        translation={"status": "failed", "error": "cancelled", "target_language": PROMPT_TARGET_LANGUAGE, "source_digest": digest})
                 raise ChatInputCancelled() from None
             raise
         finally:
@@ -94,4 +94,4 @@ def submit_answer_translation(
         return await asyncio.to_thread(history.update_message_translation, message_id, source_digest=digest, translation=translation)
 
     if get_translation_service().submit_answer(text=text, config=config, message_id=message_id, update=update):
-        message["translation"] = {"status": "pending", "target_language": config.assistant_target_language, "source_digest": digest}
+        message["translation"] = {"status": "pending", "target_language": PROMPT_TARGET_LANGUAGE, "source_digest": digest}

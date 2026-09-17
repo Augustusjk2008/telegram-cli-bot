@@ -29,23 +29,23 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
-test("configuration validates the enabled direction, accepts free-form languages and explicitly clears the key", async () => {
+test("configuration saves independent complete prompts and explicitly clears the key", async () => {
   const config = { ...DEFAULT_CHAT_TRANSLATION_CONFIG, base_url: "https://example.test/v1", model: "translator", api_key_configured: true };
   const update = vi.fn(async (input) => ({ ...config, ...input, api_key_configured: !input.clear_api_key }));
   render(<ChatTranslationSettingsPanel client={clientWith({ getChatTranslationConfig: async () => config, updateChatTranslationConfig: update })} />);
   const save = screen.getByRole("button", { name: "保存聊天翻译配置" });
   await waitFor(() => expect(save).toBeEnabled());
   fireEvent.click(screen.getByRole("checkbox", { name: "翻译提问" }));
-  fireEvent.change(screen.getByLabelText("提问目标语言"), { target: { value: "" } });
-  fireEvent.click(save);
-  expect(screen.getByRole("alert")).toHaveTextContent("目标语言");
-  expect(update).not.toHaveBeenCalled();
-  fireEvent.change(screen.getByLabelText("提问目标语言"), { target: { value: "巴西葡萄牙语，保留术语" } });
-  fireEvent.change(screen.getByLabelText("回答目标语言"), { target: { value: "" } });
+  fireEvent.change(screen.getByLabelText("用户消息翻译提示词"), { target: { value: " Translate into English. For logs return <skip translation>. " } });
+  fireEvent.change(screen.getByLabelText("Bot 回答翻译提示词"), { target: { value: "Translate into Chinese. On failure return <translation failed>." } });
   fireEvent.click(save);
   await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
-  expect(update.mock.calls[0][0]).toMatchObject({ translate_user_enabled: true, translate_assistant_enabled: false, user_target_language: "巴西葡萄牙语，保留术语", api_key: "" });
+  expect(update.mock.calls[0][0]).toMatchObject({ translate_user_enabled: true, translate_assistant_enabled: false, api_key: "" });
   expect(update.mock.calls[0][0]).not.toHaveProperty("api_key_configured");
+  expect(update.mock.calls[0][0]).toMatchObject({
+    user_prompt: " Translate into English. For logs return <skip translation>. ",
+    assistant_prompt: "Translate into Chinese. On failure return <translation failed>.",
+  });
   await waitFor(() => expect(save).toBeEnabled());
   fireEvent.click(screen.getByRole("checkbox", { name: "翻译提问" }));
   fireEvent.click(screen.getByLabelText("清除已保存的翻译 API 密钥"));

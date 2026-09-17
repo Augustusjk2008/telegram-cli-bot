@@ -17,7 +17,7 @@ test("聊天翻译配置、附件和原生最终回答适配桌面及移动布�
     else if (path === "bots/main/history") data = { items: messages, revision: 1 };
     else if (path === "bots/main/history/delta") data = { items: [], revision: 1, reset: false };
     else if (path === "admin/users") data = [];
-    else if (path === "admin/chat-translation/config") data = { translate_user_enabled: true, translate_assistant_enabled: true, base_url: "https://example.test/v1", api_key_set: true, model: "translator", user_target_language: "巴西葡萄牙语", assistant_target_language: "简体中文", request_timeout_seconds: 15 };
+    else if (path === "admin/chat-translation/config") data = { translate_user_enabled: true, translate_assistant_enabled: true, base_url: "https://example.test/v1", api_key_set: true, model: "translator", user_prompt: "Translate into English.", assistant_prompt: "Translate into Simplified Chinese.", request_timeout_seconds: 15 };
     else if (path.endsWith("/conversations")) data = { items: [], active_conversation_id: "" };
     else if (path.endsWith("/agents")) data = { items: [{ id: "main", name: "main" }], active_agent_id: "main" };
     else if (path === "announcements" || path.endsWith("/favorites")) data = { items: [] };
@@ -60,7 +60,7 @@ test("聊天翻译配置、附件和原生最终回答适配桌面及移动布�
   await page.getByRole("button", { name: "管理中心", exact: true }).click();
   await page.getByRole("tab", { name: "聊天翻译", exact: true }).click();
   const panel = page.getByRole("region", { name: "聊天翻译配置" });
-  await expect(panel.getByLabel("提问目标语言")).toHaveValue("巴西葡萄牙语");
+  await expect(panel.getByLabel("用户消息翻译提示词")).toHaveValue("Translate into English.");
   for (const width of [1280, 390]) {
     await page.setViewportSize({ width, height: 900 });
     await expect(panel.getByRole("button", { name: "保存聊天翻译配置" })).toBeVisible();

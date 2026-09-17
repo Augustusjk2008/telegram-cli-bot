@@ -1,13 +1,13 @@
 import type { ChatMessage, ChatStatusUpdate, ChatTranslation, ChatTranslationConfig } from "../services/types";
 
 export const DEFAULT_CHAT_TRANSLATION_CONFIG: ChatTranslationConfig = {
+  user_prompt: "",
+  assistant_prompt: "",
   translate_user_enabled: false,
   translate_assistant_enabled: false,
   base_url: "",
   api_key_configured: false,
   model: "",
-  user_target_language: "英语",
-  assistant_target_language: "简体中文",
   request_timeout_seconds: 15,
 };
 

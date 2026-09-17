@@ -16,7 +16,7 @@ from bot.native_agent import service as native_module
 from bot.native_agent.service import NativeAgentService
 from bot.web import api_service, chat_translation
 from bot.web.plan_mode import build_plan_execution_prompt
-from bot.web.translation_config import TranslationConfig
+from bot.web.translation_config import PROMPT_TARGET_LANGUAGE, TranslationConfig
 from tests.test_cli_streaming import _UsageProcess, usage_manager  # noqa: F401
 
 
@@ -67,10 +67,11 @@ def chat(request, usage_manager, monkeypatch):
 
 
 def translator(monkeypatch, *, enabled=True, outcome="completed"):
-    settings = TranslationConfig(translate_user_enabled=enabled, user_target_language="任意语言")
+    settings = TranslationConfig(translate_user_enabled=enabled)
 
-    async def translate(text, *, config, target_language):
-        result = {"status": outcome, "target_language": target_language, "source_digest": hashlib.sha256(text.encode()).hexdigest()}
+    async def translate(text, *, config, direction):
+        assert direction == "user"
+        result = {"status": outcome, "target_language": PROMPT_TARGET_LANGUAGE, "source_digest": hashlib.sha256(text.encode()).hexdigest()}
         result.update({"text": "Explain this"} if outcome == "completed" else {"error": "timeout"})
         return result
 
@@ -186,14 +187,15 @@ async def test_plan_execution_exits_plan_mode_for_current_and_legacy_prompts(cha
 async def test_answer_translation_does_not_hold_turn_or_next_message(chat, monkeypatch):
     from bot.web.translation_service import TranslationService
 
-    settings = TranslationConfig(translate_assistant_enabled=True, assistant_target_language="简体中文", base_url="https://example.invalid/v1", api_key="test-key", model="test")
+    settings = TranslationConfig(translate_assistant_enabled=True, base_url="https://example.invalid/v1", api_key="test-key", model="test")
     service = TranslationService()
     service.config_store = SimpleNamespace(get_config=lambda: settings)
     release = asyncio.Event()
 
-    async def slow(text, *, config, target_language):
+    async def slow(text, *, config, direction):
+        assert direction == "assistant"
         await release.wait()
-        return {"status": "completed", "text": "完成", "target_language": target_language,
+        return {"status": "completed", "text": "完成", "target_language": PROMPT_TARGET_LANGUAGE,
                 "source_digest": hashlib.sha256(text.encode()).hexdigest()}
 
     service.translate = AsyncMock(side_effect=slow)

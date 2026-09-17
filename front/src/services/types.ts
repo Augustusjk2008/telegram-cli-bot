@@ -981,13 +981,13 @@ export type ChatTraceDetails = {
 };
 
 export type ChatTranslationConfig = {
+  user_prompt: string;
+  assistant_prompt: string;
   translate_user_enabled: boolean;
   translate_assistant_enabled: boolean;
   base_url: string;
   api_key_configured: boolean;
   model: string;
-  user_target_language: string;
-  assistant_target_language: string;
   request_timeout_seconds: number;
 };
 

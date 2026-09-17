@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from bot.web.translation_config import TranslationConfigError, TranslationConfigStore
+from bot.web.translation_config import DEFAULT_USER_TRANSLATION_PROMPT, DEFAULT_ASSISTANT_TRANSLATION_PROMPT, TranslationConfigError, TranslationConfigStore
 
 
 API_CONFIG = {
@@ -14,6 +14,26 @@ API_CONFIG = {
     "api_key": "sk-translation-secret",
     "model": "translator",
 }
+
+
+@pytest.mark.parametrize(("direction", "default"), [
+    ("user", DEFAULT_USER_TRANSLATION_PROMPT),
+    ("assistant", DEFAULT_ASSISTANT_TRANSLATION_PROMPT),
+])
+def test_prompt_defaults_persists_and_resets(tmp_path, direction, default):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(API_CONFIG), encoding="utf-8")
+    store = TranslationConfigStore(path)
+    snapshot = store.get_config()
+    field = f"{direction}_prompt"
+    other = "assistant_prompt" if direction == "user" else "user_prompt"
+    assert getattr(snapshot, field) == default
+    prompt = " Translate prose into Japanese.\nFor logs return <skip translation>. "
+    assert store.update({field: prompt})[field] == prompt
+    assert getattr(TranslationConfigStore(path).get_config(), field) == prompt
+    assert getattr(store.get_config(), other) == getattr(snapshot, other)
+    assert getattr(snapshot, field) == default
+    assert store.update({field: "  "})[field] == default
 
 
 def test_config_persists_outside_repo_with_frozen_redacted_snapshots(tmp_path, monkeypatch):
@@ -49,17 +69,13 @@ def test_config_persists_outside_repo_with_frozen_redacted_snapshots(tmp_path, m
 
 
 @pytest.mark.parametrize("direction", ["user", "assistant"])
-def test_each_direction_requires_only_its_language_and_api_config(tmp_path, direction):
+def test_each_direction_requires_api_config_and_defaults_blank_prompt(tmp_path, direction):
     store = TranslationConfigStore(tmp_path / "config.json")
     enabled = f"translate_{direction}_enabled"
-    language = f"{direction}_target_language"
-    other_language = "assistant_target_language" if direction == "user" else "user_target_language"
     with pytest.raises(TranslationConfigError):
         store.update({enabled: True})
-    with pytest.raises(TranslationConfigError):
-        store.update({**API_CONFIG, enabled: True, language: ""})
-    store.update({**API_CONFIG, enabled: True, language: "阿拉伯语（埃及口语）", other_language: ""})
-    assert getattr(store.get_config(), language) == "阿拉伯语（埃及口语）"
+    store.update({**API_CONFIG, enabled: True, f"{direction}_prompt": ""})
+    assert getattr(store.get_config(), f"{direction}_prompt").strip()
     for field in API_CONFIG:
         payload = {"clear_api_key": True} if field == "api_key" else {field: ""}
         with pytest.raises(TranslationConfigError):
@@ -79,6 +95,8 @@ def test_each_direction_requires_only_its_language_and_api_config(tmp_path, dire
     {"base_url": "https://name:secret@provider.test/v1"},
     {"base_url": "https://provider.test/v1?key=secret"},
     {"model": []},
+    {"user_prompt": None},
+    {"assistant_prompt": 1},
 ])
 def test_invalid_updates_leave_snapshot_and_file_unchanged(tmp_path, payload):
     store = TranslationConfigStore(tmp_path / "config.json")
@@ -86,7 +104,7 @@ def test_invalid_updates_leave_snapshot_and_file_unchanged(tmp_path, payload):
     original = store.get_config()
     persisted = store.path.read_bytes()
     with pytest.raises(TranslationConfigError):
-        store.update({"assistant_target_language": "日语", **payload})
+        store.update({"assistant_prompt": "Translate to Japanese.", **payload})
     assert store.get_config() is original
     assert store.path.read_bytes() == persisted
 

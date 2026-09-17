@@ -12,14 +12,13 @@ import pytest
 from aiohttp import ClientConnectionError
 
 from bot.web.openai_compatible_client import OpenAICompatibleClient, OpenAICompatibleClientError
-from bot.web.translation_config import TranslationConfig, TranslationConfigStore
+from bot.web.translation_config import PROMPT_TARGET_LANGUAGE, TranslationConfig, TranslationConfigStore
 from bot.web.translation_service import TranslationService
 
 
 CONFIG = TranslationConfig(
     translate_user_enabled=True, translate_assistant_enabled=True,
     base_url="https://provider.test/v1", api_key="sk-secret", model="translator",
-    user_target_language="葡萄牙语（巴西）", assistant_target_language="繁體中文（臺灣）",
     request_timeout_seconds=2,
 )
 
@@ -34,6 +33,46 @@ def build_service(tmp_path, **kwargs):
     return TranslationService(
         config_store=TranslationConfigStore(tmp_path / "config.json"), client=client, **kwargs,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("direction", ["user", "assistant"])
+async def test_sends_only_the_selected_complete_prompt(tmp_path, direction):
+    service = build_service(tmp_path)
+    config = replace(CONFIG, user_prompt=" Translate into English.\n", assistant_prompt="翻译为简体中文。\n")
+    await service.translate("源文本", config=config, direction=direction)
+    messages = service.client.post_chat_completion.call_args.kwargs["body"]["messages"]
+    assert messages[0] == {"role": "system", "content": getattr(config, f"{direction}_prompt")}
+    await service.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("marker", "error"), [
+    ("<skip translation>", "translation_skipped"),
+    ("<translation failed>", "translation_failed"),
+])
+async def test_control_markers_bypass_placeholder_restoration(tmp_path, marker, error):
+    service = build_service(tmp_path)
+    service.client.post_chat_completion.return_value = completion("\n " + marker + " \n")
+    config = replace(CONFIG, user_prompt="For logs return <skip translation>.")
+    result = await service.translate("说明 `code` /tmp/file", config=config, direction="user")
+    assert result["status"] == "failed"
+    assert result["error"] == error
+    assert "text" not in result
+    prompt = service.client.post_chat_completion.call_args.kwargs["body"]["messages"][0]["content"]
+    assert prompt == config.user_prompt
+    await service.close()
+
+
+@pytest.mark.asyncio
+async def test_marker_inside_translation_is_not_a_control_response(tmp_path):
+    service = build_service(tmp_path)
+    text = "The marker is <skip translation>."
+    service.client.post_chat_completion.return_value = completion(text)
+    result = await service.translate("源文本", config=CONFIG, direction="user")
+    assert result["status"] == "completed"
+    assert result["text"] == text
+    await service.close()
 
 
 @pytest.mark.asyncio
@@ -69,11 +108,11 @@ async def test_translation_uses_shared_http_client_and_restores_protected_conten
         config_store=TranslationConfigStore(tmp_path / "config.json"),
         client=OpenAICompatibleClient(session=session),
     )
-    result = await service.translate(source, config=CONFIG, target_language=CONFIG.user_target_language)
+    result = await service.translate(source, config=CONFIG, direction="user")
     assert result["status"] == "completed"
     assert result["text"] == source.replace("请翻译下面的说明", "Translated introduction")
     assert result["source_digest"] == hashlib.sha256(source.encode("utf-8")).hexdigest()
-    assert result["target_language"] == CONFIG.user_target_language
+    assert result["target_language"] == PROMPT_TARGET_LANGUAGE
     assert datetime.fromisoformat(result["completed_at"]).tzinfo is not None
     assert captured["url"] == "https://provider.test/v1/chat/completions"
     assert captured["headers"]["Authorization"] == "Bearer sk-secret"
@@ -81,7 +120,7 @@ async def test_translation_uses_shared_http_client_and_restores_protected_conten
     assert captured["json"]["stream"] is False
     messages = captured["json"]["messages"]
     assert len(messages) == 2
-    assert messages[0]["role"] == "system" and CONFIG.user_target_language in messages[0]["content"]
+    assert messages[0]["role"] == "system" and messages[0]["content"] == CONFIG.user_prompt
     protected = messages[1]["content"]
     for literal in ("Write-Host", "git status", attachment_prefix, "https://example.test", "C:\\My Project", "../docs/说明.md", "git diff", "<tcb_protocol>", "{{KEEP_ME}}"):
         assert literal not in protected
@@ -107,7 +146,7 @@ async def test_code_fences_inline_backticks_and_shell_commands_are_protected(tmp
         return completion(content.replace(prose, "回家做晚饭"))
 
     service.client.post_chat_completion.side_effect = respond
-    result = await service.translate(prose + "\n" + protected, config=CONFIG, target_language="中文")
+    result = await service.translate(prose + "\n" + protected, config=CONFIG, direction="user")
     assert result["status"] == "completed"
     assert result["text"] == "回家做晚饭\n" + protected
 
@@ -134,9 +173,9 @@ async def test_failures_are_classified_without_secrets_or_retries(tmp_path, capl
         service.client.post_chat_completion.side_effect = remote
     else:
         service.client.post_chat_completion.return_value = remote
-    result = await service.translate("源文本", config=CONFIG, target_language="任意语言")
+    result = await service.translate("源文本", config=CONFIG, direction="user")
     assert result == {
-        "status": "failed", "error": error, "target_language": "任意语言",
+        "status": "failed", "error": error, "target_language": PROMPT_TARGET_LANGUAGE,
         "source_digest": hashlib.sha256("源文本".encode("utf-8")).hexdigest(),
     }
     service.client.post_chat_completion.assert_awaited_once()
@@ -160,7 +199,7 @@ async def test_incomplete_placeholder_restoration_fails(tmp_path, damage):
         return completion(protected)
 
     service.client.post_chat_completion.side_effect = respond
-    result = await service.translate("说明：`git status`", config=CONFIG, target_language="日语")
+    result = await service.translate("说明：`git status`", config=CONFIG, direction="user")
     assert result["status"] == "failed"
     assert result["error"] == "protected_content_mismatch"
     assert "text" not in result
@@ -177,16 +216,16 @@ async def test_timeout_includes_concurrency_queue(tmp_path):
         return completion()
 
     service.client.post_chat_completion.side_effect = delayed
-    first = asyncio.create_task(service.translate("第一条", config=CONFIG, target_language="日语"))
+    first = asyncio.create_task(service.translate("第一条", config=CONFIG, direction="user"))
     await asyncio.wait_for(entered.wait(), 1)
     second = await service.translate(
-        "第二条", config=replace(CONFIG, request_timeout_seconds=0.03), target_language="日语",
+        "第二条", config=replace(CONFIG, request_timeout_seconds=0.03), direction="user",
     )
     assert second["error"] == "timeout"
     assert service.client.post_chat_completion.await_count == 1
     release.set()
     assert (await first)["status"] == "completed"
-    assert (await service.translate("第三条", config=CONFIG, target_language="日语"))["status"] == "completed"
+    assert (await service.translate("第三条", config=CONFIG, direction="user"))["status"] == "completed"
     assert service.client.post_chat_completion.await_count == 2
 
 
@@ -202,11 +241,11 @@ async def test_cancellation_propagates_and_releases_request_slots(tmp_path, queu
         return completion()
 
     service.client.post_chat_completion.side_effect = delayed
-    first = asyncio.create_task(service.translate("第一条", config=CONFIG, target_language="日语"))
+    first = asyncio.create_task(service.translate("第一条", config=CONFIG, direction="user"))
     await asyncio.wait_for(entered.wait(), 1)
     cancelled = first
     if queued:
-        cancelled = asyncio.create_task(service.translate("排队", config=CONFIG, target_language="日语"))
+        cancelled = asyncio.create_task(service.translate("排队", config=CONFIG, direction="user"))
         await asyncio.sleep(0)
     cancelled.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -215,7 +254,7 @@ async def test_cancellation_propagates_and_releases_request_slots(tmp_path, queu
     release.set()
     if queued:
         await first
-    assert (await service.translate("恢复", config=CONFIG, target_language="日语"))["status"] == "completed"
+    assert (await service.translate("恢复", config=CONFIG, direction="user"))["status"] == "completed"
     assert not service._requests
 
 
@@ -247,7 +286,8 @@ async def test_answer_submission_is_nonblocking_bounded_and_deduplicated(tmp_pat
     release.set()
     await asyncio.gather(*service._answer_tasks.values())
     assert [state["status"] for state in updates] == ["pending", "pending", "completed", "completed"]
-    assert all(state["target_language"] == CONFIG.assistant_target_language for state in updates)
+    assert all(state["target_language"] == PROMPT_TARGET_LANGUAGE for state in updates)
+    assert service.client.post_chat_completion.call_args.kwargs["body"]["messages"][0]["content"] == CONFIG.assistant_prompt
     assert not service._answer_tasks
     assert service.submit_answer(**args) is False
     assert service.submit_answer(**{**args, "text": "修改后的回答"}) is True
@@ -318,7 +358,7 @@ async def test_disabled_answers_stale_messages_and_close_do_not_schedule_work(tm
     assert not service._requests and not service._answer_tasks
     service.client.close.assert_awaited_once()
     assert service.submit_answer(**{**args, "message_id": "three"}) is False
-    result = await service.translate("提问", config=CONFIG, target_language="日语")
+    result = await service.translate("提问", config=CONFIG, direction="user")
     assert result["error"] == "service_closed"
 
 

@@ -32,22 +32,17 @@ export function ChatTranslationSettingsPanel({ client, onSaved }: { client: WebB
       setError("启用翻译时，请填写服务地址、模型和 API 密钥。");
       return;
     }
-    if ((config.translate_user_enabled && !config.user_target_language.trim())
-      || (config.translate_assistant_enabled && !config.assistant_target_language.trim())) {
-      setError("请填写已启用方向的目标语言。");
-      return;
-    }
     if (!Number.isFinite(config.request_timeout_seconds) || config.request_timeout_seconds <= 0) {
       setError("超时秒数必须大于 0。");
       return;
     }
     const input: ChatTranslationConfigInput = {
+      user_prompt: config.user_prompt,
+      assistant_prompt: config.assistant_prompt,
       translate_user_enabled: config.translate_user_enabled,
       translate_assistant_enabled: config.translate_assistant_enabled,
       base_url: config.base_url.trim(),
       model: config.model.trim(),
-      user_target_language: config.user_target_language.trim(),
-      assistant_target_language: config.assistant_target_language.trim(),
       request_timeout_seconds: config.request_timeout_seconds,
       api_key: clearApiKey ? "" : apiKey.trim(),
       ...(clearApiKey ? { clear_api_key: true } : {}),
@@ -84,8 +79,6 @@ export function ChatTranslationSettingsPanel({ client, onSaved }: { client: WebB
           {([
             ["base_url", "翻译服务地址", "https://api.example.com/v1"],
             ["model", "翻译模型", ""],
-            ["user_target_language", "提问目标语言", "例如：英语、日语"],
-            ["assistant_target_language", "回答目标语言", "例如：简体中文"],
           ] as const).map(([key, label, placeholder]) => (
             <label key={key} className="min-w-0 space-y-1 text-sm">
               <span>{label}</span>
@@ -103,6 +96,23 @@ export function ChatTranslationSettingsPanel({ client, onSaved }: { client: WebB
               onChange={(event) => setConfig({ ...config, request_timeout_seconds: Number(event.target.value) })} />
           </label>
         </div>
+        {([
+          ["user_prompt", "用户消息翻译提示词"],
+          ["assistant_prompt", "Bot 回答翻译提示词"],
+        ] as const).map(([key, label]) => (
+          <label key={key} className="block min-w-0 space-y-1 text-sm">
+            <span>{label}</span>
+            <textarea className={inputClass} rows={10} value={config[key] ?? ""}
+              placeholder="留空并保存可恢复此方向的初版提示词"
+              onChange={(event) => setConfig({ ...config, [key]: event.target.value })} />
+          </label>
+        ))}
+        <p className="text-sm text-[var(--muted)]">
+          两份提示词分别完整发送，请直接在提示词中设置目标语言和输出规则。
+          初版为用户消息译成英语、Bot 回答译成简体中文。模型仅返回
+          {" <skip translation>"} 或 {"<translation failed>"} 时使用原文。
+          留空并保存可恢复对应的初版提示词。
+        </p>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={clearApiKey} onChange={(event) => { setClearApiKey(event.target.checked); setApiKey(""); }} />
           清除已保存的翻译 API 密钥

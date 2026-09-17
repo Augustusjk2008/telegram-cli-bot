@@ -16,8 +16,8 @@ test("uses the global config GET/PATCH contract without changing key-preservatio
   const client = new RealWebBotClient();
   expect(await client.getChatTranslationConfig()).toEqual(config);
   expect(fetch.mock.calls[0][0]).toBe("/api/admin/chat-translation/config");
-  await client.updateChatTranslationConfig({ api_key: "", translate_assistant_enabled: true, assistant_target_language: "粤语" });
-  expect(fetch.mock.calls[1][1]).toMatchObject({ method: "PATCH", body: JSON.stringify({ api_key: "", translate_assistant_enabled: true, assistant_target_language: "粤语" }) });
+  await client.updateChatTranslationConfig({ api_key: "", translate_assistant_enabled: true, assistant_prompt: "Translate into Cantonese." });
+  expect(fetch.mock.calls[1][1]).toMatchObject({ method: "PATCH", body: JSON.stringify({ api_key: "", translate_assistant_enabled: true, assistant_prompt: "Translate into Cantonese." }) });
   await client.updateChatTranslationConfig({ clear_api_key: true });
   expect(fetch.mock.calls[2][1]).toMatchObject({ body: JSON.stringify({ clear_api_key: true }) });
 });
