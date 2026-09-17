@@ -1,4 +1,5 @@
 import { ChatTranslationControl } from "../components/ChatTranslationControl";
+import { buildDisplayContextUsage } from "../chat/displayContextUsage";
 import { applyUserTranslationUpdate, mapUserTranslationUpdate, mergeMessageTranslation, translatedMessageText } from "../utils/chatTranslation";
 import {
   forwardRef,
@@ -44,6 +45,7 @@ import type {
   ClusterTeam,
   ClusterTaskStatus,
   ChatMessage,
+  ChatMessageContextUsage,
   ChatMessageMetaInfo,
   ChatExecutionMode,
   ChatSendOptions,
@@ -157,6 +159,7 @@ type ParsedUserAttachment = {
 
 type ChatMessageRowModel = {
   item: ChatMessage;
+  displayContextUsage?: ChatMessageContextUsage;
   messageClientStateKey: string;
   planDraft: string;
   favorite: boolean;
@@ -1327,6 +1330,7 @@ export function mergeMessagesPreservingClientState(previousItems: ChatMessage[],
 
 type ChatMessageRowProps = {
   item: ChatMessage;
+  displayContextUsage?: ChatMessageContextUsage;
   assistantName: string;
   allowTrace: boolean;
   traceLoadState: Record<string, { loading: boolean; error?: string }>;
@@ -1351,6 +1355,7 @@ type ChatMessageRowProps = {
 
 const ChatMessageRow = memo(function ChatMessageRow({
   item,
+  displayContextUsage,
   assistantName,
   allowTrace,
   traceLoadState,
@@ -1453,7 +1458,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
           name={messageName}
           createdAt={chatMessageDisplayTime(item)}
           align={messageAlign}
-          contextUsage={isStreamingAssistant ? item.meta?.contextUsage : undefined}
+          contextUsage={isStreamingAssistant ? displayContextUsage : undefined}
           mobileLayout={mobileLayout}
         />
         <div className={showSoloRollback ? "flex items-start justify-end gap-1.5" : undefined}>
@@ -1506,7 +1511,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
                 onToggleFavorite={canFavoriteFinalAnswer ? () => onToggleFavoriteAnswer?.(messageClientStateKey, item) : undefined}
                 favorite={favorite}
                 canContinue={canContinue}
-                contextUsage={item.meta?.contextUsage}
+                contextUsage={displayContextUsage}
                 mobileLayout={mobileLayout}
               />
             ) : item.role === "assistant" && item.state !== "streaming" ? (
@@ -1602,7 +1607,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
           <ChatFinalAnswerActions
             translationControl={translationControl}
             canContinue={canContinue}
-            contextUsage={item.meta?.contextUsage}
+            contextUsage={displayContextUsage}
             favorite={favorite}
             fullAnswerText={displayText}
             onContinue={canContinue ? onContinueFinalAnswer : undefined}
@@ -1665,6 +1670,7 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
     <div key={row.messageClientStateKey} data-testid="chat-message-row" className={mobileLayout ? "space-y-0.5" : "space-y-1"}>
       <ChatMessageRow
         item={row.item}
+        displayContextUsage={row.displayContextUsage}
         assistantName={assistantName}
         allowTrace={allowTrace}
         traceLoadState={traceLoadState}
@@ -4825,6 +4831,7 @@ export function ChatScreen({
       ? buildSoloRollbackTargets(items)
       : new Map<string, SoloRollbackTarget>()
   ), [items, loading, nativeExecutionMode, readOnly, isStreaming]);
+  const displayContextUsage = useMemo(() => buildDisplayContextUsage(items), [items]);
   const messageRowModels = useMemo<ChatMessageRowModel[]>(() => visibleItems.map((item) => {
     const messageClientStateKey = getMessageClientStateKey(item);
     const planDraft = item.role === "assistant" && item.state === "done"
@@ -4833,6 +4840,7 @@ export function ChatScreen({
     const displayItem = planDraft ? { ...item, text: stripPlanDraftTags(item.text) } : item;
     return {
       item: displayItem,
+      displayContextUsage: displayContextUsage.get(item.id),
       messageClientStateKey,
       planDraft,
       favorite: favoriteAnswerByMessageKey.has(messageClientStateKey),
@@ -4841,7 +4849,7 @@ export function ChatScreen({
       deletingAttachmentKeys: deletingAttachmentKeysByMessage[item.id] || EMPTY_ATTACHMENT_STATE,
       soloRollbackTarget: soloRollbackTargets.get(item.id),
     };
-  }), [deletedAttachmentKeysByMessage, deletingAttachmentKeysByMessage, favoriteAnswerByMessageKey, latestContinuableAssistantKey, soloRollbackTargets, visibleItems]);
+  }), [deletedAttachmentKeysByMessage, deletingAttachmentKeysByMessage, displayContextUsage, favoriteAnswerByMessageKey, latestContinuableAssistantKey, soloRollbackTargets, visibleItems]);
 
   const soloConversationLoadKeyRef = useRef("");
 

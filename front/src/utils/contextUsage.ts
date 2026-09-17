@@ -38,7 +38,7 @@ function displayContextProvider(provider: string) {
   return provider || undefined;
 }
 
-export function mapEstimatedCost(value: unknown, provider?: string): ChatMessageEstimatedCost | undefined {
+export function mapEstimatedCost(value: unknown): ChatMessageEstimatedCost | undefined {
   const raw = asRecord(value);
   const model = firstString(raw, "model");
   const currency = firstString(raw, "currency");
@@ -59,9 +59,8 @@ export function mapEstimatedCost(value: unknown, provider?: string): ChatMessage
   ) {
     return undefined;
   }
-  const normalizedScope = scope === "session" && provider?.trim().toLowerCase() === "codex" ? "turn" : scope;
   return {
-    model, currency, scope: normalizedScope, total, input, cacheRead, cacheWrite, output,
+    model, currency, scope, total, input, cacheRead, cacheWrite, output,
     ...((raw.isPartial ?? raw.is_partial) === true ? { isPartial: true } : {}),
   };
 }
@@ -86,7 +85,7 @@ export function mapChatMessageContextUsage(value: unknown): ChatMessageContextUs
   const windowDisplay = firstString(raw, "windowDisplay", "window_display");
   const statusText = firstString(raw, "statusText", "status_text");
   const compactionCount = firstNumber(raw, "compactionCount", "compaction_count");
-  const estimatedCost = mapEstimatedCost(raw.estimatedCost ?? raw.estimated_cost, provider);
+  const estimatedCost = mapEstimatedCost(raw.estimatedCost ?? raw.estimated_cost);
 
   const contextUsage: ChatMessageContextUsage = {
     ...(provider ? { provider } : {}),

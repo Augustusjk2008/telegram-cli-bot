@@ -72,7 +72,7 @@ export function formatContextUsageDetails(contextUsage?: ChatMessageContextUsage
     ? contextUsage.contextUsed
     : contextUsage.usedTokens;
   const leftPercent = contextLeftPercent(contextUsage);
-  const cost = mapEstimatedCost(contextUsage.estimatedCost, contextUsage.provider);
+  const cost = mapEstimatedCost(contextUsage.estimatedCost);
   const model = contextUsage.model || cost?.model;
   const rows = [
     typeof leftPercent === "number" ? `context left: ${formatPercent(leftPercent)}%` : "",
@@ -110,7 +110,7 @@ export function formatTextContextUsage(
   const percent = typeof leftPercent === "number"
     ? options.compact ? `ctx ${formatPercent(leftPercent)}%` : `${formatPercent(leftPercent)}% left`
     : "";
-  const cost = mapEstimatedCost(contextUsage.estimatedCost, contextUsage.provider);
+  const cost = mapEstimatedCost(contextUsage.estimatedCost);
   const costText = cost ? cost.isPartial ? "estimated cost" : "cost" : "";
   const statusText = (contextUsage.statusText || "").replace(/\bcontext left\b/gi, "left");
   if (options.compact) {

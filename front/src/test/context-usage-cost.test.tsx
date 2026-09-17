@@ -1,7 +1,8 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { ChatContextUsageBadge } from "../components/ChatContextUsageBadge";
-import type { ChatMessageContextUsage, ChatMessageEstimatedCost } from "../services/types";
+import { buildDisplayContextUsage } from "../chat/displayContextUsage";
+import type { ChatMessage, ChatMessageContextUsage, ChatMessageEstimatedCost } from "../services/types";
 import { mapChatMessageContextUsage } from "../utils/contextUsage";
 
 const estimatedCost: ChatMessageEstimatedCost = {
@@ -15,9 +16,61 @@ const estimatedCost: ChatMessageEstimatedCost = {
   output: 0.000000002,
 };
 
+function costMessage(id: string, total?: number, provider = "codex", conversationId = "conversation"): ChatMessage {
+  return {
+    id, turnId: id, conversationId, role: "assistant", text: id, createdAt: "2026-09-17T00:00:00Z",
+    meta: { contextUsage: {
+      provider, contextLeftPercent: 72,
+      ...(total === undefined ? {} : { estimatedCost: { ...estimatedCost, total } }),
+    } },
+  };
+}
+
+describe("Codex display cost differences", () => {
+  it("uses raw preceding totals after growth, equality and resets without mutating messages", () => {
+    const totals = [10, 15, 19, 19, 3, 8, 0, 2];
+    const messages = totals.map((total, index) => costMessage(String(index), total));
+    messages.splice(1, 0, { ...costMessage("question"), role: "user" });
+    const snapshot = structuredClone(messages);
+    const displayed = buildDisplayContextUsage(messages);
+    expect(totals.map((_, index) => displayed.get(String(index))?.estimatedCost?.total))
+      .toEqual([10, 5, 4, 19, 3, 5, 0, 2]);
+    expect(messages).toEqual(snapshot);
+    expect(displayed.get("1")?.contextLeftPercent).toBe(72);
+  });
+
+  it("does not subtract across missing costs, providers, currencies or conversations", () => {
+    const messages = [
+      costMessage("first", 10), costMessage("missing"), costMessage("after-missing", 20),
+      costMessage("claude", 25, "claude"), costMessage("after-claude", 30),
+      costMessage("other-conversation", 40, "codex", "other"),
+      costMessage("same-conversation", 35),
+      costMessage("other-currency", 50),
+    ];
+    messages.at(-1)!.meta!.contextUsage!.estimatedCost!.currency = "CNY";
+    const displayed = buildDisplayContextUsage(messages);
+    expect(messages.map((message) => displayed.get(message.id)?.estimatedCost?.total))
+      .toEqual([10, undefined, 20, 25, 30, 40, 5, 50]);
+  });
+
+  it("recomputes partial and final values from history, including a changed native session", () => {
+    const previous = costMessage("previous", 10);
+    const current = costMessage("current", 13);
+    previous.meta!.contextUsage!.sessionId = "old-session";
+    current.meta!.contextUsage!.sessionId = "new-session";
+    current.meta!.contextUsage!.estimatedCost!.isPartial = true;
+    current.state = "error";
+    expect(buildDisplayContextUsage([current]).get("current")?.estimatedCost?.total).toBe(13);
+    expect(buildDisplayContextUsage([previous, current]).get("current")?.estimatedCost)
+      .toMatchObject({ total: 3, isPartial: true });
+    current.meta!.contextUsage!.estimatedCost!.total = 16;
+    expect(buildDisplayContextUsage([previous, current]).get("current")?.estimatedCost?.total).toBe(6);
+  });
+});
+
 describe("context usage cost mapping", () => {
   it.each([
-    { provider: "codex", scope: "turn" },
+    { provider: "codex", scope: "session" },
     { provider: "claude", scope: "session" },
   ])("maps $provider costs without changing amounts and accepts mapped camelCase data", ({ provider, scope }) => {
     const mapped = mapChatMessageContextUsage({

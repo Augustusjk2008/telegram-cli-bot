@@ -197,6 +197,23 @@ test("hides completed assistant context usage from the message header but keeps 
   expect(within(row).getByTestId("chat-message-context-usage-bottom")).toBeInTheDocument();
 });
 
+test("shows the Codex cost difference in message details while retaining raw history amounts", async () => {
+  const items: ChatMessage[] = [10, 15].map((total, index) => ({
+    id: `cost-${index}`, turnId: `turn-${index}`, conversationId: "cost-conversation",
+    role: "assistant", text: `Cost reply ${index}`, createdAt: "2026-09-17T00:00:00Z", state: "done",
+    meta: { contextUsage: {
+      provider: "codex", contextLeftPercent: 72,
+      estimatedCost: { model: "test-model", currency: "USD", scope: "turn", total,
+        input: total, cacheRead: 0, cacheWrite: 0, output: 0 },
+    } },
+  }));
+  render(<ChatScreen botAlias="main" client={createClient({ listMessages: async () => ({ items }) })} />);
+  const rows = await screen.findAllByTestId("chat-message-row");
+  fireEvent.click(within(rows[1]).getByTestId("chat-message-context-usage-bottom"));
+  expect(screen.getByRole("tooltip")).toHaveTextContent("cost: USD 5");
+  expect(items[1].meta?.contextUsage?.estimatedCost?.total).toBe(15);
+});
+
 test("keeps assistant context usage in the message header while streaming", async () => {
   const client = createClient({
     getBotOverview: async () => ({
