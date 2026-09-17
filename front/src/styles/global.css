@@ -282,6 +282,16 @@ select:disabled {
   margin-block: 0;
 }
 
+.chat-markdown-on-accent {
+  --chat-markdown-text: var(--accent-foreground);
+  --chat-markdown-muted: var(--accent-foreground);
+  --chat-markdown-accent: var(--accent-foreground);
+  --chat-markdown-accent-soft: color-mix(in srgb, var(--accent-foreground) 10%, transparent);
+  --chat-markdown-accent-outline: color-mix(in srgb, var(--accent-foreground) 45%, transparent);
+  --chat-markdown-border: color-mix(in srgb, var(--accent-foreground) 25%, transparent);
+  --chat-markdown-surface: transparent;
+}
+
 .chat-plain-text-content > p + p,
 .chat-markdown-content > * + * {
   margin-top: var(--chat-body-paragraph-spacing);

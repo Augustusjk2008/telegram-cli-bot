@@ -156,7 +156,7 @@ function MarkdownCode({ className, children, node: _node, isChat, ...props }: Ma
 
   return (
     <code
-      className="whitespace-pre-wrap break-all rounded-md bg-[var(--accent-soft)] px-1.5 py-0.5 font-mono text-[0.92em] text-[var(--accent)]"
+      className="whitespace-pre-wrap break-all rounded-md bg-[var(--chat-markdown-accent-soft,var(--accent-soft))] px-1.5 py-0.5 font-mono text-[0.92em] text-[var(--chat-markdown-accent,var(--accent))]"
       {...props}
     >
       {children}
@@ -259,10 +259,10 @@ export function MarkdownContent({ content, variant = "preview", onFileLinkClick,
   const normalizedContent = normalizeLatexMathDelimiters(content);
   const lastLocalLinkActivationRef = useRef<{ href: string; at: number } | null>(null);
   const containerClassName = isChat
-    ? "chat-body-content chat-markdown-content min-w-0 w-full text-[var(--text)]"
+    ? "chat-body-content chat-markdown-content min-w-0 w-full text-[var(--chat-markdown-text,var(--text))]"
     : isDesktopPreview
-      ? "h-full overflow-auto rounded-xl bg-[var(--surface-strong)] px-5 py-4 text-[15px] leading-7 text-[var(--text)]"
-      : "max-h-[50vh] overflow-auto rounded-xl bg-[var(--surface-strong)] px-5 py-4 text-[15px] leading-7 text-[var(--text)]";
+      ? "h-full overflow-auto rounded-xl bg-[var(--surface-strong)] px-5 py-4 text-[15px] leading-7 text-[var(--chat-markdown-text,var(--text))]"
+      : "max-h-[50vh] overflow-auto rounded-xl bg-[var(--surface-strong)] px-5 py-4 text-[15px] leading-7 text-[var(--chat-markdown-text,var(--text))]";
 
   function activateLocalLink(
     event: { preventDefault: () => void; stopPropagation: () => void },
@@ -301,8 +301,8 @@ export function MarkdownContent({ content, variant = "preview", onFileLinkClick,
           li: ({ children }) => <li className="break-words pl-1 [overflow-wrap:anywhere]">{children}</li>,
           blockquote: ({ children }) => (
             <blockquote className={isChat
-              ? "break-words border-l-4 border-[var(--accent-outline)] bg-[var(--accent-soft)] px-4 py-3 text-[var(--muted)] [overflow-wrap:anywhere]"
-              : "my-5 break-words border-l-4 border-[var(--accent-outline)] bg-[var(--accent-soft)] px-4 py-3 text-[var(--muted)] [overflow-wrap:anywhere]"}
+              ? "break-words border-l-4 border-[var(--chat-markdown-accent-outline,var(--accent-outline))] bg-[var(--chat-markdown-accent-soft,var(--accent-soft))] px-4 py-3 text-[var(--chat-markdown-muted,var(--muted))] [overflow-wrap:anywhere]"
+              : "my-5 break-words border-l-4 border-[var(--chat-markdown-accent-outline,var(--accent-outline))] bg-[var(--chat-markdown-accent-soft,var(--accent-soft))] px-4 py-3 text-[var(--chat-markdown-muted,var(--muted))] [overflow-wrap:anywhere]"}
             >
               {children}
             </blockquote>
@@ -313,7 +313,7 @@ export function MarkdownContent({ content, variant = "preview", onFileLinkClick,
 
             return (
               <a
-                className="break-all font-medium text-[var(--accent)] underline decoration-[var(--accent-outline)] underline-offset-4"
+                className="break-all font-medium text-[var(--chat-markdown-accent,var(--accent))] underline decoration-[var(--chat-markdown-accent-outline,var(--accent-outline))] underline-offset-4"
                 data-local-file-href={handleFileLink ? nextHref : undefined}
                 href={nextHref || undefined}
                 rel={handleFileLink ? undefined : "noreferrer"}
@@ -337,17 +337,17 @@ export function MarkdownContent({ content, variant = "preview", onFileLinkClick,
           ),
           table: ({ children }) => (
             <div className={isChat ? "overflow-x-auto" : "my-5 overflow-x-auto"}>
-              <table className="min-w-full border-collapse overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
+              <table className="min-w-full border-collapse overflow-hidden rounded-xl border border-[var(--chat-markdown-border,var(--border))] bg-[var(--chat-markdown-surface,var(--surface))] text-[var(--chat-markdown-text,var(--text))]">
                 {children}
               </table>
             </div>
           ),
-          thead: ({ children }) => <thead className="bg-[var(--accent-soft)]">{children}</thead>,
+          thead: ({ children }) => <thead className="bg-[var(--chat-markdown-accent-soft,var(--accent-soft))]">{children}</thead>,
           tbody: ({ children }) => <tbody>{children}</tbody>,
-          tr: ({ children }) => <tr className="border-b border-[var(--border)] last:border-b-0">{children}</tr>,
+          tr: ({ children }) => <tr className="border-b border-[var(--chat-markdown-border,var(--border))] last:border-b-0">{children}</tr>,
           th: ({ children }) => <th className="break-words px-3 py-2 text-left text-sm font-semibold [overflow-wrap:anywhere]">{children}</th>,
           td: ({ children }) => <td className="break-words px-3 py-2 align-top text-sm [overflow-wrap:anywhere]">{children}</td>,
-          hr: () => <hr className={isChat ? "border-0 border-t border-[var(--border)]" : "my-6 border-0 border-t border-[var(--border)]"} />,
+          hr: () => <hr className={isChat ? "border-0 border-t border-[var(--chat-markdown-border,var(--border))]" : "my-6 border-0 border-t border-[var(--chat-markdown-border,var(--border))]"} />,
           img: ({ src, alt, width, height }) => {
             const rawSrc = src || "";
             const resolvedSrc = rawSrc
@@ -364,10 +364,10 @@ export function MarkdownContent({ content, variant = "preview", onFileLinkClick,
                     height={height}
                     loading="lazy"
                     decoding="async"
-                    className="inline-block h-auto max-w-full rounded-lg border border-[var(--border)] bg-[var(--surface)]"
+                    className="inline-block h-auto max-w-full rounded-lg border border-[var(--chat-markdown-border,var(--border))] bg-[var(--chat-markdown-surface,var(--surface))]"
                   />
                   {alt ? (
-                    <span className="mt-2 block text-xs leading-5 text-[var(--muted)]">{alt}</span>
+                    <span className="mt-2 block text-xs leading-5 text-[var(--chat-markdown-muted,var(--muted))]">{alt}</span>
                   ) : null}
                 </span>
               );
@@ -375,10 +375,10 @@ export function MarkdownContent({ content, variant = "preview", onFileLinkClick,
 
             return (
               <span className={isChat
-                ? "block rounded-xl border border-dashed border-[var(--accent-outline)] bg-[var(--accent-soft)] px-4 py-3 text-sm text-[var(--muted)]"
-                : "my-4 block rounded-xl border border-dashed border-[var(--accent-outline)] bg-[var(--accent-soft)] px-4 py-3 text-sm text-[var(--muted)]"}
+                ? "block rounded-xl border border-dashed border-[var(--chat-markdown-accent-outline,var(--accent-outline))] bg-[var(--chat-markdown-accent-soft,var(--accent-soft))] px-4 py-3 text-sm text-[var(--chat-markdown-muted,var(--muted))]"
+                : "my-4 block rounded-xl border border-dashed border-[var(--chat-markdown-accent-outline,var(--accent-outline))] bg-[var(--chat-markdown-accent-soft,var(--accent-soft))] px-4 py-3 text-sm text-[var(--chat-markdown-muted,var(--muted))]"}
               >
-                <span className="mr-2 font-medium text-[var(--text)]">图片路径</span>
+                <span className="mr-2 font-medium text-[var(--chat-markdown-text,var(--text))]">图片路径</span>
                 <span className="break-all">{rawSrc || alt || "(未提供路径)"}</span>
               </span>
             );

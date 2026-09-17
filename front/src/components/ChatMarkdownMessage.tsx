@@ -4,6 +4,7 @@ import { MarkdownContent } from "./MarkdownPreview";
 
 type Props = {
   content: string;
+  role?: "assistant" | "user";
   onFileLinkClick?: (href: string) => void;
   className?: string;
 };
@@ -28,25 +29,25 @@ class ChatMarkdownBoundary extends Component<Props, State> {
   render(): ReactNode {
     if (this.state.hasError) {
       return (
-        <div data-testid="assistant-markdown-fallback">
+        <div data-testid={`${this.props.role || "assistant"}-markdown-fallback`} className={this.props.className}>
           <ChatPlainTextMessage
             content={this.props.content}
-            className="text-[var(--text)]"
+            className="text-[var(--chat-markdown-text,var(--text))]"
           />
         </div>
       );
     }
 
     return (
-        <div data-testid="assistant-markdown-message" className={`min-w-0 w-full overflow-hidden ${this.props.className || ""}`}>
+      <div data-testid={`${this.props.role || "assistant"}-markdown-message`} className={`min-w-0 w-full overflow-hidden ${this.props.className || ""}`}>
         <MarkdownContent content={this.props.content} variant="chat" onFileLinkClick={this.props.onFileLinkClick} />
       </div>
     );
   }
 }
 
-function ChatMarkdownMessageInner({ content, onFileLinkClick, className }: Props) {
-  return <ChatMarkdownBoundary content={content} onFileLinkClick={onFileLinkClick} className={className} />;
+function ChatMarkdownMessageInner(props: Props) {
+  return <ChatMarkdownBoundary {...props} />;
 }
 
 export const ChatMarkdownMessage = memo(ChatMarkdownMessageInner);

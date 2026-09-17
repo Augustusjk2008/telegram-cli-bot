@@ -1475,7 +1475,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
               : [
                   "chat-message-bubble-delight",
                   isUser && isCurrentUserMessage
-                    ? "rounded-lg bg-[var(--accent)] px-3 py-1.5 text-[var(--accent-foreground)] shadow-[var(--shadow-surface)]"
+                    ? "min-w-0 overflow-hidden rounded-lg bg-[var(--accent)] px-3 py-1.5 text-[var(--accent-foreground)] shadow-[var(--shadow-surface)]"
                     : isStreamingAssistant
                       ? "min-w-0 overflow-hidden rounded-lg border border-[var(--accent)]/45 bg-[var(--workbench-panel-elevated-bg)] px-3 py-2 text-[var(--text)] shadow-[var(--shadow-surface)]"
                     : item.state === "error"
@@ -1520,9 +1520,11 @@ const ChatMessageRow = memo(function ChatMessageRow({
             ) : isUser ? (
               <div className={userAttachments.length > 0 && visibleUserText ? "space-y-2" : undefined}>
                 {visibleUserText ? (
-                  <ChatPlainTextMessage
+                  <ChatMarkdownMessage
                     content={visibleUserText}
-                    className={isCurrentUserMessage ? "text-[var(--accent-foreground)]" : undefined}
+                    role="user"
+                    className={isCurrentUserMessage ? "chat-markdown-on-accent" : undefined}
+                    onFileLinkClick={onFileLinkClick}
                   />
                 ) : null}
                 {userAttachments.length > 0 ? (

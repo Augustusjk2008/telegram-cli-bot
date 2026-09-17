@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
+import * as mermaidRenderer from "../markdown/mermaidRenderer";
 import { EventType } from "../services/agUiProtocol";
 import { ChatStreamIncompleteError } from "../services/chatStreamError";
 import { MockWebBotClient } from "../services/mockWebBotClient";
@@ -39,6 +40,44 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   window.localStorage.clear();
+});
+
+test.each([true, false])("renders user Markdown, math and diagrams (current user: %s)", async (isCurrentUser) => {
+  vi.spyOn(mermaidRenderer, "renderMermaidSingleFlight").mockResolvedValue({
+    svg: '<svg xmlns="http://www.w3.org/2000/svg"><text>Start to End</text></svg>',
+    error: "",
+  });
+  const client = createClient({
+    listMessages: async () => ({ items: [{
+      id: "user-markdown",
+      role: "user",
+      author: { username: "Alice", isCurrentUser },
+      text: [
+        "## Formatted question",
+        "",
+        "**Bold** and \\(x^2\\) with `inline code`.",
+        "",
+        "| Input | Output |",
+        "| --- | --- |",
+        "| A | B |",
+        "",
+        "```mermaid",
+        "graph LR; A-->B",
+        "```",
+      ].join("\n"),
+      createdAt: "2026-09-17T00:00:00Z",
+      state: "done",
+    }] }),
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  const message = await screen.findByTestId("user-markdown-message");
+  expect(within(message).getByRole("heading", { level: 2 })).toHaveTextContent("Formatted question");
+  expect(message.querySelector("strong")).toHaveTextContent("Bold");
+  expect(message.querySelector(".katex annotation")).toHaveTextContent("x^2");
+  expect(within(message).getByRole("table")).toHaveTextContent("Input");
+  expect(await within(message).findByLabelText("Mermaid 图表")).toContainHTML("<text>Start to End</text>");
 });
 
 test("leaves plan mode as soon as plan execution starts", async () => {
