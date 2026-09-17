@@ -154,9 +154,9 @@ def build_cluster_bundle_schema() -> dict[str, Any]:
             }
         },
         "instructions": (
-            "只输出 JSON bundle。默认所有 agent 只读。只有用户明确要求并行写代码时，才设置某个 agent 的 cluster.allow_write=true。"
-            "不要创建 main agent。agent id 必须小写英文开头。system_prompt 必须说明职责、边界和输出格式。"
-            "cluster.reasoning_efforts 可按 low/medium/high 设置思考深度；留空表示继承主 agent。"
+            "Output only a JSON bundle. All agents are read-only by default. Set an agent's cluster.allow_write=true only when the user explicitly requests parallel code changes. "
+            "Do not create a main agent. Agent IDs must start with a lowercase English letter. system_prompt must state responsibilities, boundaries, and output format. "
+            "cluster.reasoning_efforts can set reasoning effort for low/medium/high; leave values blank to inherit from the main agent."
         ),
     }
 

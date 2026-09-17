@@ -37,12 +37,13 @@ def build_service(tmp_path, **kwargs):
 
 
 @pytest.mark.asyncio
-async def test_translation_uses_shared_http_client_and_restores_protected_content(tmp_path):
+@pytest.mark.parametrize("attachment_prefix", ["Attachment path: ", "附件路径为："])
+async def test_translation_uses_shared_http_client_and_restores_protected_content(tmp_path, attachment_prefix):
     source = (
         "请翻译下面的说明：\n\n"
         "```powershell\nWrite-Host '原样保留'\n```\n"
         "使用 `git status` 查看状态。\n"
-        "附件路径为：C:\\Users\\张三\\My Project\\报告.pdf\n"
+        f"{attachment_prefix}C:\\Users\\张三\\My Project\\报告.pdf\n"
         "[说明](https://example.test/a_(b)?q=中文) 和 [本地](../docs/说明.md)\n"
         "路径 \"C:\\My Project\\app.py\" 与 /tmp/app.py、bot/web/main.py\n"
         "链接 https://example.test/api?q=中文\n"
@@ -82,7 +83,7 @@ async def test_translation_uses_shared_http_client_and_restores_protected_conten
     assert len(messages) == 2
     assert messages[0]["role"] == "system" and CONFIG.user_target_language in messages[0]["content"]
     protected = messages[1]["content"]
-    for literal in ("Write-Host", "git status", "附件路径为", "https://example.test", "C:\\My Project", "../docs/说明.md", "git diff", "<tcb_protocol>", "{{KEEP_ME}}"):
+    for literal in ("Write-Host", "git status", attachment_prefix, "https://example.test", "C:\\My Project", "../docs/说明.md", "git diff", "<tcb_protocol>", "{{KEEP_ME}}"):
         assert literal not in protected
     assert CONFIG.api_key not in json.dumps(captured["json"])
     await service.close()

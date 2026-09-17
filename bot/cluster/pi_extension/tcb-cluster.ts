@@ -120,21 +120,21 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool(clusterTool(
 		"configure_team",
 		"Configure Team",
-		"配置当前主会话编组。extend 可由主 agent 自主在空闲槽位扩编；replace 仅在用户明确要求重新编组、缩编或清空时使用。成功后必须查看响应中的 changed：changed=true 时，本轮所有后续工具立即改用响应中的新 run_id；changed=false 时继续使用原 run_id。Pi 适配层不缓存或自动切换 run_id。",
+		"Configure the current main session's team. The main agent may autonomously use extend to add roles in free slots; use replace only when the user explicitly requests regrouping, reducing, or clearing the team. After success, check changed in the response: if changed=true, immediately use the new run_id from the response for all subsequent tool calls in this turn; if changed=false, keep using the original run_id. The Pi adapter does not cache or automatically switch run_id.",
 		configureTeamParams,
 		(params) => withoutRunId(params),
 	));
 	pi.registerTool(clusterTool(
 		"cluster_status",
 		"Cluster Status",
-		"查看当前编组、角色内部 agent ID、容量、空闲槽位和任务占用。",
+		"Inspect the current team, internal agent IDs for roles, capacity, free slots, and task occupancy.",
 		Type.Object({ run_id: runIdParam }),
 		(params) => withoutRunId(params),
 	));
 	pi.registerTool(clusterTool(
 		"list_agents",
 		"List Agents",
-		"列出当前编组、角色内部 agent ID、容量、空闲槽位和任务占用。",
+		"List the current team, internal agent IDs for roles, capacity, free slots, and task occupancy.",
 		Type.Object({
 			run_id: runIdParam,
 			include_disabled: Type.Optional(Type.Boolean()),
@@ -144,7 +144,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool(clusterTool(
 		"new_agent_session",
 		"New Agent Session",
-		"为没有 queued/running 集群任务且当前会话空闲的子 agent 新开会话；旧会话历史会保留。",
+		"Start a new session for a child agent whose current session is idle and has no queued/running cluster tasks; previous session history is preserved.",
 		Type.Object({
 			run_id: runIdParam,
 			agent_id: Type.String(),
@@ -154,7 +154,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool(clusterTool(
 		"ask_agent",
 		"Ask Agent",
-		"异步启动 TCB 子 agent 任务并立即返回 task_id；非后台任务随后应等待结果并汇总。",
+		"Start an asynchronous TCB child agent task and immediately return task_id; for tasks that are not running in the background, then wait for and summarize the results.",
 		Type.Object({
 			run_id: runIdParam,
 			agent_id: Type.String(),
@@ -168,7 +168,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool(clusterTool(
 		"poll_agent_tasks",
 		"Poll Agent Tasks",
-		"轮询当前 TCB 集群子 agent 异步任务状态、过程消息和结果。",
+		"Poll asynchronous child agent task status, progress messages, and results in the current TCB cluster.",
 		Type.Object({
 			run_id: runIdParam,
 			task_ids: Type.Optional(Type.Array(Type.String())),
@@ -182,7 +182,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool(clusterTool(
 		"wait_agent_messages",
 		"Wait Agent Messages",
-		"阻塞等待当前 TCB 集群任意子 agent 的下一条未读回告。",
+		"Block until the next unread message from any child agent in the current TCB cluster.",
 		Type.Object({
 			run_id: runIdParam,
 			after_sequence: Type.Optional(Type.Integer()),

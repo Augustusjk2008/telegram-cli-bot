@@ -3519,7 +3519,7 @@ export class MockWebBotClient implements WebBotClient {
           agents: { type: "array", maxItems: 8 },
         },
       },
-      instructions: "只输出 JSON bundle。默认所有 agent 只读。只有用户明确要求并行写代码时，才设置某个 agent 的 cluster.allow_write=true。",
+      instructions: "Output only a JSON bundle. All agents are read-only by default. Set an agent's cluster.allow_write=true only when the user explicitly requests parallel code changes.",
     };
   }
 

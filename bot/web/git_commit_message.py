@@ -36,8 +36,12 @@ def build_commit_message_prompt(
     use_staged_diff: bool,
     diff_truncated: bool,
 ) -> str:
-    draft_notice = "" if use_staged_diff else "注意：当前无 staged 改动，本次仅基于未暂存/未跟踪内容生成草稿。\n"
-    truncate_notice = "注意：Git diff 已截断。\n" if diff_truncated else ""
+    draft_notice = (
+        ""
+        if use_staged_diff
+        else "Note: There are no staged changes; this draft is based only on unstaged/untracked content.\n"
+    )
+    truncate_notice = "Note: The Git diff has been truncated.\n" if diff_truncated else ""
     return render_prompt(
         "git_commit_message",
         draft_notice=draft_notice,

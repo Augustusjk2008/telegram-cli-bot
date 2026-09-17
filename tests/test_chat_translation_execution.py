@@ -13,6 +13,7 @@ from bot import config
 from bot.native_agent import service as native_module
 from bot.native_agent.service import NativeAgentService
 from bot.web import api_service, chat_translation
+from bot.web.plan_mode import build_plan_execution_prompt
 from bot.web.translation_config import TranslationConfig
 from tests.test_cli_streaming import _UsageProcess, usage_manager  # noqa: F401
 
@@ -124,12 +125,31 @@ async def test_plan_and_slash_are_prepared_after_translation(chat, monkeypatch):
     events = await chat.run("请解释", task_mode="plan")
     assert service.translate.call_args.args == ("请解释",)
     assert "Explain this" in chat.sent[0]
+    assert "<PLAN_DRAFT>" in chat.sent[0]
     assert "请解释" not in chat.sent[0]
     assert len(chat.sent) == 1
     assert events[-1]["type"] == "done"
     service.config_store.get_config = lambda: TranslationConfig()
     await chat.run("//help")
     assert chat.sent[-1] == "/help"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        build_plan_execution_prompt("docs/plan/example.md"),
+        "  请按方案执行。方案文件：docs/plan/example.md\n\n要求：\n- 先阅读方案和相关代码",
+    ],
+    ids=["current", "legacy"],
+)
+async def test_plan_execution_exits_plan_mode_for_current_and_legacy_prompts(chat, monkeypatch, prompt):
+    translator(monkeypatch, enabled=False)
+
+    events = await chat.run(prompt, task_mode="plan")
+
+    assert chat.sent == [prompt.strip()]
+    assert events[-1]["type"] == "done"
 
 
 @pytest.mark.asyncio

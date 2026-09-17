@@ -68,10 +68,10 @@ test.each([false, true])("defaults to translated content and copies the selected
   await waitFor(() => expect(copyText).toHaveBeenLastCalledWith(native ? "[最终回答]\nOriginal answer" : "Original answer"));
 });
 
-test("pending and failed translations show originals, while attachments always come from the original message", async () => {
+test.each(["Attachment path: ", "附件路径为："])("pending and failed translations show originals, while attachments always come from the original message (%s)", async (attachmentPrefix) => {
   render(<ChatScreen botAlias="main" client={clientWith({ listMessages: async () => ({ items: [
     { ...original, id: "pending", translation: { ...translation, status: "pending", text: undefined } },
-    { ...original, id: "user", turnId: "turn-2", role: "user", text: "原始提问\n\n附件路径为：C:\\workspace\\source.txt", translation: { ...translation, text: "Translated question\n\n附件路径为：C:\\workspace\\wrong.txt" } },
+    { ...original, id: "user", turnId: "turn-2", role: "user", text: `原始提问\n\n${attachmentPrefix}C:\\workspace\\source.txt`, translation: { ...translation, text: `Translated question\n\n${attachmentPrefix}C:\\workspace\\wrong.txt` } },
     { ...original, id: "failed", turnId: "turn-2", text: "Failed original", translation: { ...translation, status: "failed" } },
   ] }) })} />);
   expect(await screen.findByText("Original answer")).toBeInTheDocument();

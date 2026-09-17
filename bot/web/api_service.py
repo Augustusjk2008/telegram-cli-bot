@@ -3420,9 +3420,9 @@ def _cluster_agent_result_error(result: dict[str, Any]) -> str:
 def _build_cluster_delegated_prompt(task: Any) -> str:
     return (
         "<tcb_team_role>\n"
-        f"名称：{str(task.role_name or '').strip()}\n"
-        f"职责：{str(task.responsibility or '').strip()}\n"
-        "边界：只完成委派任务，不扩展职责，不自行创建子代理。\n"
+        f"Name: {str(task.role_name or '').strip()}\n"
+        f"Responsibility: {str(task.responsibility or '').strip()}\n"
+        "Boundaries: Complete only the delegated task. Do not expand your responsibilities or create sub-agents.\n"
         "</tcb_team_role>\n\n"
         "<tcb_delegated_task>\n"
         f"{str(task.message or '').strip()}\n"
@@ -3598,15 +3598,15 @@ def _build_cluster_prompt(
         if str(item.get("agent_id") or item.get("agentId") or "").strip()
     )
     write_guidance = (
-        "本轮允许子 agent 写入。委派实现、修复等需要修改文件的任务时，应为负责实现的子 agent "
-        "设置 allow_write=true；分析、调研、审查任务保持只读。"
+        "Sub-agents may write files this turn. When delegating implementation, fixes, or other tasks that require file changes, "
+        "set allow_write=true for the implementing sub-agent. Keep analysis, research, and review tasks read-only."
         if allow_child_write
-        else "本轮仅主 agent 可写。所有子 agent 任务保持只读，不要设置 allow_write=true。"
+        else "Only the main agent may write files this turn. Keep all sub-agent tasks read-only; do not set allow_write=true."
     )
     return render_prompt(
         "cluster_mode",
-        run_id=run_id or "无",
-        mentioned_agents=mentioned or "无",
+        run_id=run_id or "none",
+        mentioned_agents=mentioned or "none",
         write_guidance=write_guidance,
     )
 
@@ -3620,7 +3620,7 @@ def _build_cluster_disabled_prompt() -> str:
 
 
 def _build_cluster_turn_prompt(run_id: str) -> str:
-    return render_prompt("cluster_turn", run_id=run_id or "无")
+    return render_prompt("cluster_turn", run_id=run_id or "none")
 
 
 def _apply_cluster_prompt(

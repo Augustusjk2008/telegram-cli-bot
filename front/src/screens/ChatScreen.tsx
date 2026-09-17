@@ -195,7 +195,7 @@ const INITIAL_IDLE_CHAT_POLL_DELAY_MS = 5000;
 const IDLE_CHAT_POLL_INTERVAL_MS = 10_000;
 const CLUSTER_TASK_POLL_INTERVAL_MS = 1200;
 const SSE_STALL_RECOVERY_DELAY_MS = 2500;
-const CHAT_ATTACHMENT_LINE_RE = /^附件路径为[:：]\s*(.+?)\s*$/;
+const CHAT_ATTACHMENT_LINE_RE = /^(?:Attachment path:|附件路径为[:：])\s*(.+?)\s*$/;
 const MODEL_OPTION_NONE = "none";
 const REVEAL_SCROLL_MAX_FRAMES = 6;
 const REVEAL_SCROLL_BOTTOM_THRESHOLD_PX = 8;
@@ -243,7 +243,8 @@ function favoriteAnswersStorageKey(botAlias: string, accountId?: string) {
 }
 
 function isPlanExecutionPrompt(text: string) {
-  return text.trimStart().startsWith("请按方案执行。方案文件：");
+  const value = text.trimStart();
+  return value.startsWith("Please execute the plan. Plan file:") || value.startsWith("请按方案执行。方案文件：");
 }
 
 function queuedMessageStorageKey(botAlias: string, agentId: string, accountId?: string) {
@@ -689,7 +690,7 @@ function markNativePermissionTraceReplied(
 function buildComposedMessageText(text: string, attachments: PendingChatAttachment[]) {
   const trimmedText = text.trim();
   const attachmentBlock = attachments
-    .map((attachment) => `附件路径为：${attachment.savedPath}`)
+    .map((attachment) => `Attachment path: ${attachment.savedPath}`)
     .join("\n");
 
   if (trimmedText && attachmentBlock) {
@@ -4338,7 +4339,7 @@ export function ChatScreen({
     }
     const currentExecutionMode = executionModeRef.current;
     const nativeSend = currentExecutionMode === "native_agent";
-    void sendMessageInternal("继续", {
+    void sendMessageInternal("Continue", {
       sendOptions: {
         taskMode: "standard",
         ...(nativeSend ? { executionMode: currentExecutionMode } : {}),

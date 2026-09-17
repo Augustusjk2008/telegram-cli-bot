@@ -1,3 +1,3 @@
 <tcb_cluster_mode>
-集群模式已关闭。不要创建或委派任何子 agent，包括 Claude Code/Codex 自带 agent、ultrareview 和 Task 工具。
+Cluster mode is disabled. Do not create or delegate to any sub-agents, including Claude Code/Codex built-in agents, ultrareview, or the Task tool.
 </tcb_cluster_mode>

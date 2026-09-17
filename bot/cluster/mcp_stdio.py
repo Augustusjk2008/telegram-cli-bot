@@ -22,7 +22,7 @@ def _tools_for_environment() -> list[dict[str, Any]]:
     return [
         {
             "name": "configure_team",
-            "description": "配置当前主会话编组。extend 可由主 agent 自主在空闲槽位扩编；replace 仅在用户明确要求重新编组、缩编或清空时使用。必须传 run_id。成功后必须查看响应中的 changed：changed=true 时，本轮所有后续工具立即改用响应中的新 run_id；changed=false 时继续使用原 run_id。stdio MCP 不缓存或自动切换 run_id。",
+            "description": "Configure the current main session's team. The main agent may autonomously use extend to add roles in free slots; use replace only when the user explicitly requests regrouping, reducing, or clearing the team. Always pass run_id. After success, check changed in the response: if changed=true, immediately use the new run_id from the response for all subsequent tool calls in this turn; if changed=false, keep using the original run_id. The stdio MCP adapter does not cache or automatically switch run_id.",
             "inputSchema": {
                 "type": "object",
                 "required": ["run_id", "mode", "roles"],
@@ -45,7 +45,7 @@ def _tools_for_environment() -> list[dict[str, Any]]:
         },
         {
             "name": "cluster_status",
-            "description": "查看当前编组、角色内部 agent ID、容量、空闲槽位和任务占用。必须传 run_id。",
+            "description": "Inspect the current team, internal agent IDs for roles, capacity, free slots, and task occupancy. Always pass run_id.",
             "inputSchema": {
                 "type": "object",
                 "required": ["run_id"],
@@ -54,7 +54,7 @@ def _tools_for_environment() -> list[dict[str, Any]]:
         },
         {
             "name": "list_agents",
-            "description": "列出当前编组、角色内部 agent ID、容量、空闲槽位和任务占用。必须传 run_id。",
+            "description": "List the current team, internal agent IDs for roles, capacity, free slots, and task occupancy. Always pass run_id.",
             "inputSchema": {
                 "type": "object",
                 "required": ["run_id"],
@@ -63,7 +63,7 @@ def _tools_for_environment() -> list[dict[str, Any]]:
         },
         {
             "name": "new_agent_session",
-            "description": "为没有 queued/running 集群任务且当前会话空闲的子 agent 新开会话。必须传 run_id；旧会话历史会保留。",
+            "description": "Start a new session for a child agent whose current session is idle and has no queued/running cluster tasks. Always pass run_id. Previous session history is preserved.",
             "inputSchema": {
                 "type": "object",
                 "required": ["run_id", "agent_id"],
@@ -75,7 +75,7 @@ def _tools_for_environment() -> list[dict[str, Any]]:
         },
         {
             "name": "ask_agent",
-            "description": "异步启动 TCB 子 agent 任务并立即返回 task_id。必须传 run_id。主 agent 可继续调用 poll_agent_tasks 等待/汇总，也可先结束让任务后台运行。timeout_seconds 是软期限，未传时使用 Bot 默认值，超时不强行中断子 agent；poll_agent_tasks 会返回 deadline_exceeded。model_tier 可选 low/medium/high，并使用该档配置的模型和思考深度；档位配置留空时继承主 agent。",
+            "description": "Start an asynchronous TCB child agent task and immediately return task_id. Always pass run_id. The main agent may continue calling poll_agent_tasks to wait for and summarize results, or end its turn while the task runs in the background. timeout_seconds is a soft deadline and defaults to the Bot setting when omitted; exceeding it does not forcibly interrupt the child agent, and poll_agent_tasks reports deadline_exceeded. model_tier accepts low/medium/high and uses the model and reasoning effort configured for that tier; blank tier settings inherit from the main agent.",
             "inputSchema": {
                 "type": "object",
                 "required": ["run_id", "agent_id", "message"],
@@ -91,7 +91,7 @@ def _tools_for_environment() -> list[dict[str, Any]]:
         },
         {
             "name": "poll_agent_tasks",
-            "description": "轮询当前 TCB 集群子 agent 异步任务状态、过程消息和结果。必须传 run_id。task_ids 为空时返回当前 run 全部任务。wait_seconds 可选，用于本次工具调用内等待任务完成；默认 0 立即返回。include_messages 默认 true；messages[].kind 为 progress 或 final，且不包含事件/工具调用。",
+            "description": "Poll asynchronous child agent task status, progress messages, and results in the current TCB cluster. Always pass run_id. Empty task_ids returns all tasks in the current run. Optional wait_seconds waits for task completion within this tool call; it defaults to 0 for an immediate return. include_messages defaults to true; messages[].kind is progress or final, and messages exclude events/tool calls.",
             "inputSchema": {
                 "type": "object",
                 "required": ["run_id"],
@@ -107,7 +107,7 @@ def _tools_for_environment() -> list[dict[str, Any]]:
         },
         {
             "name": "wait_agent_messages",
-            "description": "阻塞等待当前 TCB 集群任意子 agent 的下一条未读回告。必须传 run_id。默认使用服务端未读游标；可传 after_sequence 覆盖。wait_seconds 指定最长等待时间；到时间无回告返回 timed_out=true。返回 messages[].agent_id/task_id/kind，可区分 progress 和 final；不返回事件/工具调用。",
+            "description": "Block until the next unread message from any child agent in the current TCB cluster. Always pass run_id. Use the server's unread cursor by default; pass after_sequence to override it. wait_seconds specifies the maximum wait; return timed_out=true if no message arrives before it expires. Return messages[].agent_id/task_id/kind to distinguish progress from final messages; exclude events/tool calls.",
             "inputSchema": {
                 "type": "object",
                 "required": ["run_id"],

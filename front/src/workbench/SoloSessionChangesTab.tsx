@@ -66,7 +66,7 @@ function statusClass(status: string) {
   return "bg-[var(--surface-strong)] text-[var(--text)]";
 }
 
-const CHAT_ATTACHMENT_LINE_RE = /^附件路径为[:：]\s*(.+?)\s*$/;
+const CHAT_ATTACHMENT_LINE_RE = /^(?:Attachment path:|附件路径为[:：])\s*(.+?)\s*$/;
 
 function belongsToConversation(message: ChatMessage, conversationId: string) {
   return !message.conversationId || !conversationId || message.conversationId === conversationId;

@@ -1083,9 +1083,9 @@ async def test_cluster_task_lazily_prepares_child_and_injects_dynamic_role(monke
     assert prepared == [("conv_main", 1)]
     assert captured["message"] == (
         "<tcb_team_role>\n"
-        "名称：后端分析\n"
-        "职责：检查并发边界\n"
-        "边界：只完成委派任务，不扩展职责，不自行创建子代理。\n"
+        "Name: 后端分析\n"
+        "Responsibility: 检查并发边界\n"
+        "Boundaries: Complete only the delegated task. Do not expand your responsibilities or create sub-agents.\n"
         "</tcb_team_role>\n\n"
         "<tcb_delegated_task>\n"
         "检查 runtime.py\n"

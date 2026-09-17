@@ -1057,11 +1057,11 @@ async def test_stream_cli_chat_reuses_cluster_guidance_but_refreshes_run_id(
         ]
         assert any(event["type"] == "done" for event in events)
 
-    assert "简单、不可并行或委派成本更高" in prompts[0]
-    assert "当前 run_id: run-1" in prompts[0]
-    assert "简单、不可并行或委派成本更高" not in prompts[1]
-    assert "沿用本会话此前的集群规则" in prompts[1]
-    assert "当前 run_id: run-2" in prompts[1]
+    assert "Do not delegate tasks that are simple, cannot run in parallel, or cost more to delegate" in prompts[0]
+    assert "Current run_id: run-1" in prompts[0]
+    assert "Do not delegate tasks that are simple, cannot run in parallel, or cost more to delegate" not in prompts[1]
+    assert "continue following the cluster rules established earlier in this conversation" in prompts[1]
+    assert "Current run_id: run-2" in prompts[1]
 
 
 @pytest.mark.asyncio

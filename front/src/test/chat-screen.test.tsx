@@ -86,6 +86,22 @@ test("leaves plan mode as soon as plan execution starts", async () => {
   expect(screen.getByRole("button", { name: "计划模式" })).toHaveAttribute("aria-pressed", "false");
 });
 
+test.each(["Please execute the plan. Plan file: ", "请按方案执行。方案文件："])("sends pasted plan execution in standard mode (%s)", async (prefix) => {
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async () => ({
+    id: "assistant-executed", role: "assistant", text: "完成", createdAt: "2026-09-17T01:00:00Z", state: "done",
+  }));
+  window.localStorage.setItem("tcb.planMode.main", "1");
+  render(<ChatScreen botAlias="main" client={createClient({ sendMessage })} />);
+  await screen.findByText("暂无消息，开始聊天吧");
+  const text = `${prefix}docs/plan/example.md`;
+  fireEvent.change(screen.getByPlaceholderText("输入消息"), { target: { value: text } });
+  fireEvent.click(screen.getByRole("button", { name: "发送" }));
+  await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+  expect(sendMessage.mock.calls[0][1]).toBe(text);
+  expect(sendMessage.mock.calls[0][5]).toMatchObject({ taskMode: "standard" });
+  expect(screen.getByRole("button", { name: "计划模式" })).toHaveAttribute("aria-pressed", "false");
+});
+
 test("binds direct done assistant message to backend id from stream meta", async () => {
   const user = userEvent.setup();
   const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (

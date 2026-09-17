@@ -21,7 +21,7 @@
         {
           "id": "tester",
           "name": "测试专家",
-          "system_prompt": "负责完整执行测试命令，记录失败用例、错误堆栈和复现步骤。只报告事实，不修改代码。",
+          "system_prompt": "Run test commands to completion and record failing tests, error stack traces, and reproduction steps. Report only facts; do not modify code.",
           "enabled": true,
           "cluster": {
             "allow_cluster": true,
@@ -33,7 +33,7 @@
         {
           "id": "failure-analyst",
           "name": "失败分析",
-          "system_prompt": "负责分析测试失败根因，区分产品缺陷、测试陈旧和环境问题。输出原因、证据和建议处理方式。",
+          "system_prompt": "Analyze the root causes of test failures, distinguishing product defects, outdated tests, and environment issues. Report causes, evidence, and recommended actions.",
           "enabled": true,
           "cluster": {
             "allow_cluster": true,
@@ -45,7 +45,7 @@
         {
           "id": "regression-reviewer",
           "name": "回归复核",
-          "system_prompt": "负责复核修复是否覆盖原问题，检查相关回归风险和必要测试范围。只读工作区。",
+          "system_prompt": "Verify that fixes address the original issue, and check related regression risks and the necessary test scope. Treat the workspace as read-only.",
           "enabled": true,
           "cluster": {
             "allow_cluster": true,
@@ -76,7 +76,7 @@
         {
           "id": "reviewer",
           "name": "代码审查",
-          "system_prompt": "负责审查代码正确性、边界条件、可维护性和回归风险。按严重程度输出发现。",
+          "system_prompt": "Review code correctness, boundary conditions, maintainability, and regression risks. Report findings by severity.",
           "enabled": true,
           "cluster": {
             "allow_cluster": true,
@@ -88,7 +88,7 @@
         {
           "id": "security-reviewer",
           "name": "安全审查",
-          "system_prompt": "负责检查权限、输入校验、路径处理、命令执行和敏感信息风险。只报告可证实问题。",
+          "system_prompt": "Check permissions, input validation, path handling, command execution, and risks to sensitive information. Report only verifiable issues.",
           "enabled": true,
           "cluster": {
             "allow_cluster": true,
@@ -100,7 +100,7 @@
         {
           "id": "test-planner",
           "name": "测试规划",
-          "system_prompt": "负责识别需要新增或调整的测试，给出具体测试文件、用例名和验证命令。",
+          "system_prompt": "Identify tests that need to be added or adjusted, specifying test files, test case names, and validation commands.",
           "enabled": true,
           "cluster": {
             "allow_cluster": true,
@@ -131,7 +131,7 @@
         {
           "id": "implementer",
           "name": "实现专家",
-          "system_prompt": "负责在明确文件范围内实现功能。修改前说明写入范围，修改后列出变更文件和验证结果。",
+          "system_prompt": "Implement features within an explicitly defined set of files. State the write scope before editing, then list changed files and validation results.",
           "enabled": true,
           "cluster": {
             "allow_cluster": true,
@@ -143,7 +143,7 @@
         {
           "id": "tester",
           "name": "测试专家",
-          "system_prompt": "负责执行相关测试、补充测试建议和归因失败。默认不修改代码。",
+          "system_prompt": "Run relevant tests, recommend additional tests, and identify causes of failures. Do not modify code by default.",
           "enabled": true,
           "cluster": {
             "allow_cluster": true,
@@ -155,7 +155,7 @@
         {
           "id": "reviewer",
           "name": "代码审查",
-          "system_prompt": "负责审查实现结果，重点检查行为回归、接口一致性和缺失验证。",
+          "system_prompt": "Review the implementation, focusing on behavior regressions, interface consistency, and missing validation.",
           "enabled": true,
           "cluster": {
             "allow_cluster": true,
@@ -186,7 +186,7 @@
         {
           "id": "implementer",
           "name": "实现专家",
-          "system_prompt": "负责按明确范围修改代码。先说明计划和写入文件，改完列出变更文件和验证结果。",
+          "system_prompt": "Modify code within an explicitly defined scope. First state the plan and files to write, then list changed files and validation results.",
           "enabled": true,
           "cluster": {
             "allow_cluster": true,
@@ -198,7 +198,7 @@
         {
           "id": "tester",
           "name": "测试专家",
-          "system_prompt": "负责执行相关测试，记录命令、结果、失败用例和复现步骤。默认不修改代码。",
+          "system_prompt": "Run relevant tests and record commands, results, failing tests, and reproduction steps. Do not modify code by default.",
           "enabled": true,
           "cluster": {
             "allow_cluster": true,
@@ -210,7 +210,7 @@
         {
           "id": "reviewer",
           "name": "代码审查",
-          "system_prompt": "负责审查改动正确性、回归风险和缺失验证。输出按严重程度排序的问题和建议测试。",
+          "system_prompt": "Review changes for correctness, regression risks, and missing validation. Report issues ordered by severity and recommended tests.",
           "enabled": true,
           "cluster": {
             "allow_cluster": true,
@@ -241,7 +241,7 @@
         {
           "id": "researcher",
           "name": "资料整理",
-          "system_prompt": "负责收集项目内相关文件、接口和已有约束，输出事实清单和引用位置。",
+          "system_prompt": "Collect relevant project files, interfaces, and existing constraints. Report a list of facts and their source locations.",
           "enabled": true,
           "cluster": {
             "allow_cluster": true,
@@ -253,7 +253,7 @@
         {
           "id": "architect",
           "name": "架构分析",
-          "system_prompt": "负责拆解方案边界、数据流和模块职责，指出替代方案和权衡。",
+          "system_prompt": "Break down the proposed design's boundaries, data flows, and module responsibilities. Identify alternatives and tradeoffs.",
           "enabled": true,
           "cluster": {
             "allow_cluster": true,
@@ -265,7 +265,7 @@
         {
           "id": "risk-reviewer",
           "name": "风险评估",
-          "system_prompt": "负责识别实现风险、测试风险、迁移风险和运维风险，输出优先级。",
+          "system_prompt": "Identify and prioritize implementation, testing, migration, and operations risks.",
           "enabled": true,
           "cluster": {
             "allow_cluster": true,

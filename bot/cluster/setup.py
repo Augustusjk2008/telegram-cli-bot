@@ -154,7 +154,7 @@ def build_cli_install_command(*, cli_type: str, cli_path: str, launcher_path: Pa
 def build_cli_verify_command(cli_type: str, cli_path: str) -> list[str]:
     kind = normalize_cli_kind(cli_type)
     if kind == "pi":
-        return [str(cli_path or kind), "-p", "--tools", f"{CLUSTER_MCP_SERVER_NAME}.cluster_status", "列出 MCP 工具"]
+        return [str(cli_path or kind), "-p", "--tools", f"{CLUSTER_MCP_SERVER_NAME}.cluster_status", "List MCP tools"]
     return [str(cli_path or kind), "mcp", "get", CLUSTER_MCP_SERVER_NAME]
 
 
