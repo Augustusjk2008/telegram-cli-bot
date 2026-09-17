@@ -1,66 +1,66 @@
-# Agent 指南
+# Agent Guide
 
-Orbit Safe Claw 是 Windows 优先的 Python Web 控制台，把用户消息转发给本地 `claude`、`codex` 或 Pi 原生 agent。以下规则适用于整个仓库。
+Orbit Safe Claw is a Windows-first Python web console that forwards user messages to the local `claude`, `codex`, or Pi native agent. The following rules apply to the entire repository.
 
-## 会话与安全边界
+## Sessions and Security Boundaries
 
-- 不得主动关闭、重启、kill 当前 agent 自身，或通过停服务、重启服务等方式让当前 agent 退出。
-- 如需重启 `python -m bot`、Web 服务或其它宿主进程，先让用户执行，或取得明确指令。
-- Agent 不得启动任何开发服务或预览服务，包括 `npm run dev`、Vite dev server、`vite preview`、临时 HTTP server 等，也不得在后台保留监听端口；需要开发服务时由用户自行启动。
-- 保留用户已有改动；不要用破坏性 Git 命令覆盖不属于当前任务的工作。
+- Do not proactively shut down, restart, or kill the current agent itself, or cause the current agent to exit by stopping services, restarting services, or similar means.
+- If you need to restart `python -m bot`, the web service, or other host processes, have the user do it first, or obtain explicit instructions.
+- The agent must not start any development or preview services, including `npm run dev`, Vite dev server, `vite preview`, temporary HTTP servers, etc., nor keep listening ports in the background; when development services are needed, the user should start them themselves.
+- Preserve the user's existing changes; do not use destructive Git commands to overwrite work that does not belong to the current task.
 
-## 常用命令
+## Common Commands
 
 ```bash
-# 安装 / 启动
+# Install / Start
 bash install.sh
 bash start.sh
 python -m bot
 
-# 后端
+# Backend
 python -m pytest tests -q
 
-# 前端
+# Frontend
 cd front && npm run test:gate
 cd front && npm run build
 cd front && npm run lint
 ```
 
-不要假设仓库内 `venv/` 在所有机器可用。优先使用当前激活的 Python 环境，除非已验证本地 venv。
+Do not assume that `venv/` in the repository is usable on all machines. Prefer the currently activated Python environment unless the local venv has been verified.
 
-## 仓库边界
+## Repository Boundaries
 
-- `bot/` 是后端、Web API、bot manager、native agent 和 plugin 实现；`front/` 是 React/Vite 前端；`tests/` 是后端 pytest。
-- 不要提交或 force-add `.env`、真实 `managed_bots.json`、`docs/` 运行态资料和 release notes，以及用户目录 `.tcb/` 下的数据。
-- `managed_bots.example.json` 仅作公开示例；当前 runtime 仅 Web，不存在 per-bot Telegram application lifecycle。
-- 用户可见文案使用中文。
-- Brand/logo 统一使用 `front/public/assets/app-logo*.svg`；login、favicon、mobile shell 和 workbench header 保持一致。
-- 配置从 `bot/config.py` 的环境变量加载；`.env` 使用 `python-dotenv`。
-- 固定公网转发必须保留 `/node/<节点 ID>/` 路径前缀并支持 WebSocket；配置和 `frps`/`frpc` 最小示例见 `README.md`。
+- `bot/` contains the backend, Web API, bot manager, native agent, and plugin implementations; `front/` is the React/Vite frontend; `tests/` is the backend pytest.
+- Do not commit or force-add `.env`, the real `managed_bots.json`, `docs/` runtime materials and release notes, or data under the user directory `.tcb/`.
+- `managed_bots.example.json` is for public examples only; the current runtime is Web-only, and there is no per-bot Telegram application lifecycle.
+- User-visible copy uses Chinese.
+- Brand/logo consistently uses `front/public/assets/app-logo*.svg`; login, favicon, mobile shell, and workbench header remain consistent.
+- Configuration is loaded from environment variables in `bot/config.py`; `.env` uses `python-dotenv`.
+- Fixed public forwarding must retain the `/node/<node ID>/` path prefix and support WebSocket; for configuration and minimal `frps`/`frpc` examples, see `README.md`.
 
-## 核心不变量
+## Core Invariants
 
-- Web session 按 `(bot_id, shared_user_id, agent_id)` 隔离；Web 用户 id 通过 `chat_session_user_id()` 归一化。
-- 用户文本以 `//` 开头时改写为 `/...`；Codex CLI 使用 JSON output。
-- `execution_mode=native_agent` 使用 AG-UI；普通 CLI 保持 legacy SSE `meta/status/trace/done`，增量正文预览放在 `status.preview_text`。
-- CLI SSE 的 `meta/status/trace/done` 顶层必须保留 `turn_id`、`assistant_message_id`，以稳定绑定当前轮。
-- 普通 CLI trace 与原生过程统一进入 `NativeAgentTranscript`；CLI 使用 `mode="cli"`，不得显示原生权限操作。
-- Pi runtime 只能由 `pi_session_runtime.py` 的单 reader 读取 `client.events()`。
-- Pi session 绑定由 `cwd + model_id + pi_agent + reasoning_effort` 决定；任一项变化都必须失效旧 session 和 workspace-history rollback 链。
-- 已知实现差距：当前 Pi runtime/session 复用路径尚未完整比较并失效上述 fingerprint；修改该链路时应补齐实现与回归测试，不得把现状固化为较弱契约。
-- Web 终端会话按 `(user_id, owner_id)` 隔离；每个新标签必须使用独立 `owner_id`，关闭标签必须终止对应 shell；旧客户端的 `rebuild` 端点作为创建会话的兼容别名保留。
+- Web sessions are isolated by `(bot_id, shared_user_id, agent_id)`; Web user IDs are normalized via `chat_session_user_id()`.
+- When user text starts with `//`, rewrite it to `/...`; Codex CLI uses JSON output.
+- `execution_mode=native_agent` uses AG-UI; regular CLI keeps legacy SSE `meta/status/trace/done`, with incremental body preview placed in `status.preview_text`.
+- The top level of CLI SSE `meta/status/trace/done` must retain `turn_id` and `assistant_message_id` to stably bind the current turn.
+- Regular CLI traces and native processes uniformly enter `NativeAgentTranscript`; CLI uses `mode="cli"` and must not display native permission operations.
+- The Pi runtime's `client.events()` may only be read by the single reader in `pi_session_runtime.py`.
+- Pi session binding is determined by `cwd + model_id + pi_agent + reasoning_effort`; any change to any item must invalidate the old session and the workspace-history rollback chain.
+- Known implementation gap: the current Pi runtime/session reuse path does not yet fully compare and invalidate the above fingerprint; when modifying this chain, the implementation and regression tests should be completed, and the current state must not be solidified into a weaker contract.
+- Web terminal sessions are isolated by `(user_id, owner_id)`; each new tab must use an independent `owner_id`, and closing a tab must terminate the corresponding shell; the legacy client's `rebuild` endpoint is retained as a compatibility alias for creating sessions.
 
-修改 native agent/Pi/cluster、Plugin 或安装/发布链路时，使用仓库级 `orbit-maintenance` skill，并只读取与当前子系统对应的 reference。
+When modifying the native agent/Pi/cluster, Plugin, or installation/release chain, use the repository-level `orbit-maintenance` skill, and read only the reference corresponding to the current subsystem.
 
 ## CodeGraph
 
-- 跨模块修改、架构分析、重构、调用链或影响面分析先用可用的 CodeGraph 工具；仅对未覆盖或将要修改的具体细节读源码。
-- CodeGraph 不可用时直接使用 `rg` 和源码阅读；变更后以测试、日志和 `git diff` 验证。
-- 大改动后运行 `codegraph sync .` 刷新索引。
+- For cross-module changes, architecture analysis, refactoring, call-chain or impact analysis, first use the available CodeGraph tools; only read source code for specific details that are not covered or are about to be modified.
+- When CodeGraph is unavailable, use `rg` and source reading directly; after changes, verify with tests, logs, and `git diff`.
+- After major changes, run `codegraph sync .` to refresh the index.
 
-## 验证
+## Verification
 
-- 完成前运行与改动匹配的测试、构建或 smoke check，并报告实际结果；无法运行时说明原因。
-- 后端使用 `pytest`、`pytest-asyncio`、`unittest.mock`；当前未配置后端 linter/type checker。
-- 前端使用 Vitest、Testing Library 和 Playwright；涉及布局时运行浏览器级检查。
-- 避免在 component、page、shell 多层重复断言同一事实，只保留最合适的一层。
+- Before completion, run tests, builds, or smoke checks matching the changes, and report the actual results; if unable to run them, explain why.
+- The backend uses `pytest`, `pytest-asyncio`, and `unittest.mock`; no backend linter/type checker is currently configured.
+- The frontend uses Vitest, Testing Library, and Playwright; when layout is involved, run browser-level checks.
+- Avoid duplicating assertions of the same fact across the component, page, and shell layers; keep only the most appropriate layer.

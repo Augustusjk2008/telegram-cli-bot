@@ -10,6 +10,8 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from bot import config
+from bot.cluster.config import BotClusterConfig
+from bot.models import AgentProfile
 from bot.native_agent import service as native_module
 from bot.native_agent.service import NativeAgentService
 from bot.web import api_service, chat_translation
@@ -90,6 +92,34 @@ async def test_input_translation_sends_once_and_preserves_original(chat, monkeyp
     assert saved["content"] == "请解释"
     assert saved["agent_input_text"] == expected
     assert events[-1]["message"]["meta"]["completion_state"] == "completed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cluster_enabled", [False, True])
+async def test_child_agent_skips_input_and_answer_translation(chat, monkeypatch, cluster_enabled):
+    profile = api_service.get_profile_or_raise(chat.manager, "main")
+    profile.agents.append(AgentProfile(id="worker", name="Worker"))
+    profile.cluster = BotClusterConfig(enabled=cluster_enabled)
+    service = translator(monkeypatch)
+    settings = replace(service.config_store.get_config(), translate_assistant_enabled=True)
+    service.config_store.get_config = lambda: settings
+
+    events = await chat.run(agent_id="worker")
+
+    assert len(chat.sent) == 1
+    assert chat.sent[0].endswith("请解释")
+    assert "Explain this" not in chat.sent[0]
+    service.translate.assert_not_called()
+    service.submit_answer.assert_not_called()
+    assert events[-1]["type"] == "done"
+    assert events[-1]["message"]["meta"]["completion_state"] == "completed"
+    assert events[-1]["message"].get("translation") is None
+    meta = next(event for event in events if event["type"] == "meta")
+    _, _, session = api_service.get_chat_session_for_alias(chat.manager, "main", 1001, "worker")
+    history = api_service._history_service_for_execution_mode(session, chat.mode)
+    saved = history.store.get_message(meta["user_message_id"])
+    assert saved["content"] == saved["agent_input_text"] == "请解释"
+    assert saved.get("translation") is None
 
 
 @pytest.mark.asyncio

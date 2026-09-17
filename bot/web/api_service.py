@@ -5025,7 +5025,7 @@ async def _stream_cli_chat(
     active_lifecycle: _CliProcessLifecycle | None = None
     turn_handle = None
     try:
-        translation_config = translation_snapshot(enabled=translate_chat)
+        translation_config = translation_snapshot(enabled=translate_chat and session.agent_id == "main")
         session.touch()
         loop = asyncio.get_running_loop()
         started_at = loop.time()
