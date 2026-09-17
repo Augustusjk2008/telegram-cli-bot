@@ -107,12 +107,6 @@ export function ChatTranslationSettingsPanel({ client, onSaved }: { client: WebB
               onChange={(event) => setConfig({ ...config, [key]: event.target.value })} />
           </label>
         ))}
-        <p className="text-sm text-[var(--muted)]">
-          两份提示词分别完整发送，请直接在提示词中设置目标语言和输出规则。
-          初版为用户消息译成英语、Bot 回答译成简体中文。模型仅返回
-          {" <skip translation>"} 或 {"<translation failed>"} 时使用原文。
-          留空并保存可恢复对应的初版提示词。
-        </p>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={clearApiKey} onChange={(event) => { setClearApiKey(event.target.checked); setApiKey(""); }} />
           清除已保存的翻译 API 密钥

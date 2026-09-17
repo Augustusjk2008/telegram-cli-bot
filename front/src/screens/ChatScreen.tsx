@@ -17,7 +17,7 @@ import {
   type WheelEvent as ReactWheelEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import { Copy, LoaderCircle, Paperclip, RotateCcw, Trash2 } from "lucide-react";
+import { CheckCheck, Copy, LoaderCircle, Paperclip, RotateCcw, Trash2 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { ChatActionBar } from "../components/ChatActionBar";
 import { ChatComposer, type ChatComposerModelOption } from "../components/ChatComposer";
@@ -1374,6 +1374,26 @@ const ChatMessageRow = memo(function ChatMessageRow({
 }: ChatMessageRowProps) {
   const reduceMotion = useReducedMotion();
   const displayText = translatedMessageText(item);
+  const [copiedQuestion, setCopiedQuestion] = useState(false);
+  const questionCopyFeedbackTimerRef = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (questionCopyFeedbackTimerRef.current !== null) {
+      window.clearTimeout(questionCopyFeedbackTimerRef.current);
+    }
+  }, []);
+  const copyQuestion = async () => {
+    if (copiedQuestion) return;
+    const result = await onCopyFinalAnswer(displayText);
+    if (result === false) return;
+    setCopiedQuestion(true);
+    if (questionCopyFeedbackTimerRef.current !== null) {
+      window.clearTimeout(questionCopyFeedbackTimerRef.current);
+    }
+    questionCopyFeedbackTimerRef.current = window.setTimeout(() => {
+      setCopiedQuestion(false);
+      questionCopyFeedbackTimerRef.current = null;
+    }, 2000);
+  };
   const translationControl = <ChatTranslationControl item={item} onChange={(view) => onTranslationViewChange(item.id, view)} />;
   const handleLoadMessageTrace = useCallback(() => {
     onLoadMessageTrace(item.id);
@@ -1565,12 +1585,15 @@ const ChatMessageRow = memo(function ChatMessageRow({
             {translationControl}
             <button
               type="button"
-              aria-label="复制当前提问"
-              title="复制当前提问"
-              className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] text-[var(--muted)] hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)]"
-              onClick={() => void onCopyFinalAnswer(displayText)}
+              aria-label={copiedQuestion ? "已复制当前提问" : "复制当前提问"}
+              title={copiedQuestion ? "已复制当前提问" : "复制当前提问"}
+              disabled={copiedQuestion}
+              className={copiedQuestion
+                ? "inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--accent-outline)] bg-[var(--accent-soft)] text-[var(--accent)] disabled:cursor-not-allowed"
+                : "inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] text-[var(--muted)] hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)]"}
+              onClick={() => void copyQuestion()}
             >
-              <Copy aria-hidden="true" className="h-3.5 w-3.5" />
+              {copiedQuestion ? <CheckCheck aria-hidden="true" className="h-3.5 w-3.5" /> : <Copy aria-hidden="true" className="h-3.5 w-3.5" />}
             </button>
           </div>
         ) : !hasTranscript && !isStreamingAssistant ? (
