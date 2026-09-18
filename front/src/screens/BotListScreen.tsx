@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { LogOut } from "lucide-react";
 import { BotActivitySummary } from "../components/BotActivitySummary";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
 import { NativeAgentConfigFields } from "../components/NativeAgentConfigFields";
@@ -20,6 +21,7 @@ const DELETE_WORKSPACE_CONFIRM_TEXT = "永久删除";
 type Props = {
   client?: WebBotClient;
   onSelect: (alias: string) => void;
+  onLogout?: () => void;
   onBotsChange?: (bots: BotSummary[]) => void;
   canManage?: boolean;
   canCreateWorkdirDirectory?: boolean;
@@ -123,6 +125,7 @@ function DeleteBotDialog({
 export function BotListScreen({
   client = new MockWebBotClient(),
   onSelect,
+  onLogout,
   onBotsChange,
   canManage = true,
   canCreateWorkdirDirectory = true,
@@ -244,8 +247,19 @@ export function BotListScreen({
 
   return (
     <main data-ui-density="compact" className="flex-1 overflow-y-auto bg-[var(--bg)] p-4">
-      <header className="mb-3">
+      <header className="mb-3 flex items-center justify-between gap-3">
         <h1 className="text-2xl font-bold">智能体管理</h1>
+        {onLogout ? (
+          <button
+            type="button"
+            aria-label="退出登录"
+            title="退出登录"
+            onClick={onLogout}
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center border border-[var(--border)] bg-[var(--surface-glass)] text-[var(--muted)] transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)]"
+          >
+            <LogOut className="h-4 w-4" />
+          </button>
+        ) : null}
       </header>
 
       {error ? (

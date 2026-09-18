@@ -956,6 +956,7 @@ export function App() {
               client={client}
               currentAlias={currentBot}
               onSelect={handleSelectBot}
+              onLogout={handleLogout}
               onBotsChange={setBots}
               canManage={canManageBots}
               canCreateWorkdirDirectory={canCreateWorkdirDirectory}
@@ -973,6 +974,7 @@ export function App() {
           <BotListScreen
             client={client}
             onSelect={handleSelectBot}
+            onLogout={handleLogout}
             onBotsChange={setBots}
             canManage={canManageBots}
             canCreateWorkdirDirectory={canCreateWorkdirDirectory}

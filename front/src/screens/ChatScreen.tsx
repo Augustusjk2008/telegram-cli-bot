@@ -1528,7 +1528,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
                   <ChatMarkdownMessage
                     content={visibleUserText}
                     role="user"
-                    className={isCurrentUserMessage ? "chat-markdown-on-accent" : undefined}
+                    className={isCurrentUserMessage ? "chat-final-answer-compact chat-markdown-on-accent" : "chat-final-answer-compact"}
                     onFileLinkClick={onFileLinkClick}
                   />
                 ) : null}

@@ -6,6 +6,7 @@ import {
   ArchiveRestore,
   FolderOpen,
   LogIn,
+  LogOut,
   Pencil,
   Play,
   Plus,
@@ -70,6 +71,7 @@ type Props = {
   client?: WebBotClient;
   currentAlias: string | null;
   onSelect: (alias: string) => void;
+  onLogout?: () => void;
   onBotsChange?: (bots: BotSummary[]) => void;
   canManage?: boolean;
   canCreateWorkdirDirectory?: boolean;
@@ -1109,6 +1111,7 @@ export function DesktopBotManagerScreen({
   client = new MockWebBotClient(),
   currentAlias,
   onSelect,
+  onLogout,
   onBotsChange,
   canManage = true,
   canCreateWorkdirDirectory = true,
@@ -1514,6 +1517,17 @@ export function DesktopBotManagerScreen({
               >
                 <Plus className="h-4 w-4" />
                 新增智能体
+              </button>
+            ) : null}
+            {onLogout ? (
+              <button
+                type="button"
+                aria-label="退出登录"
+                title="退出登录"
+                onClick={onLogout}
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center border border-[var(--border)] bg-[var(--surface-glass)] text-[var(--muted)] transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)]"
+              >
+                <LogOut className="h-4 w-4" />
               </button>
             ) : null}
           </div>
