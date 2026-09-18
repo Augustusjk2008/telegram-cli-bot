@@ -5,6 +5,32 @@ from bot.web import files_service
 from bot.web.api_common import WebApiError
 
 
+def test_browsing_directories_preserves_chat_session(monkeypatch, tmp_path):
+    (tmp_path / "docs").mkdir()
+    session = MagicMock(
+        browse_dir=str(tmp_path),
+        working_dir=str(tmp_path),
+        active_conversation_id="conversation-1",
+        codex_session_id="codex-1",
+        claude_session_id="claude-1",
+        native_agent_session_id="native-1",
+        native_agent_run_id="run-1",
+        claude_session_initialized=True,
+    )
+    fields = (
+        "working_dir", "active_conversation_id", "codex_session_id",
+        "claude_session_id", "native_agent_session_id", "native_agent_run_id",
+        "claude_session_initialized",
+    )
+    initial_state = {name: getattr(session, name) for name in fields}
+    monkeypatch.setattr(files_service, "get_session_for_alias", lambda *_args: session)
+
+    for path, expected_dir in (("docs", tmp_path / "docs"), ("..", tmp_path)):
+        result = files_service.change_working_directory(MagicMock(), "main", 1, path)
+        assert result["working_dir"] == session.browse_dir == str(expected_dir)
+        assert {name: getattr(session, name) for name in fields} == initial_state
+
+
 def test_rename_path_renames_directory_with_contents(monkeypatch, tmp_path):
     source_dir = tmp_path / "old-folder"
     source_dir.mkdir()
