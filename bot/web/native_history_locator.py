@@ -5,7 +5,7 @@ import sqlite3
 import threading
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
@@ -95,7 +95,7 @@ def _codex_session_date_parts(session_id: str) -> tuple[str, str, str] | None:
         return None
     try:
         timestamp_ms = int(normalized.replace("-", "")[:12], 16)
-        date = datetime.fromtimestamp(timestamp_ms / 1000, UTC)
+        date = datetime.fromtimestamp(timestamp_ms / 1000, timezone.utc)
     except (OverflowError, OSError, ValueError):
         return None
     return (f"{date.year:04d}", f"{date.month:02d}", f"{date.day:02d}")

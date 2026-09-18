@@ -7,7 +7,7 @@ import sqlite3
 import threading
 import time
 from contextlib import closing
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 def _utc_now() -> str:
-    return datetime.now(UTC).isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _normalize_agent_id(agent_id: str | None) -> str:
@@ -158,7 +158,7 @@ class SessionStoreSQLite:
                 raise RuntimeError(
                     f"session migration count mismatch: expected={len(rows)} actual={imported_count}"
                 )
-        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         backup_path = self.legacy_json_path.with_name(
             f"{self.legacy_json_path.stem}.pre-sqlite-{timestamp}{self.legacy_json_path.suffix}"
         )

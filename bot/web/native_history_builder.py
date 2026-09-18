@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from bot.cli import normalize_cli_type
@@ -31,18 +31,18 @@ def _overlay_key(overlay: dict[str, Any]) -> tuple[str, str, str]:
 def _parse_sort_timestamp(value: Any) -> datetime:
     text = str(value or "").strip()
     if not text:
-        return datetime.min.replace(tzinfo=UTC)
+        return datetime.min.replace(tzinfo=timezone.utc)
 
     normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
     try:
         parsed = datetime.fromisoformat(normalized)
     except ValueError:
-        return datetime.min.replace(tzinfo=UTC)
+        return datetime.min.replace(tzinfo=timezone.utc)
 
     if parsed.tzinfo is None:
-        local_tz = datetime.now().astimezone().tzinfo or UTC
+        local_tz = datetime.now().astimezone().tzinfo or timezone.utc
         parsed = parsed.replace(tzinfo=local_tz)
-    return parsed.astimezone(UTC)
+    return parsed.astimezone(timezone.utc)
 
 
 def _turn_sort_key(item: dict[str, Any]) -> tuple[datetime, datetime, str]:

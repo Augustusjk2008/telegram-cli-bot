@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -67,7 +67,7 @@ def collect_cli_error_stats(
     alias_filter = str(alias or "").strip().lower()
     cli_type_filter = str(cli_type or "").strip().lower()
     category_filter = str(category or "").strip().lower()
-    to_at = datetime.now(UTC)
+    to_at = datetime.now(timezone.utc)
     from_at = to_at - timedelta(hours=normalized_hours)
 
     items: list[dict[str, Any]] = []

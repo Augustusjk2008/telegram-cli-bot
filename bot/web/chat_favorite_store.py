@@ -4,7 +4,7 @@ import hashlib
 import json
 import os
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
 from typing import Any
@@ -35,7 +35,7 @@ class FavoriteScope:
 
 
 def _utc_now() -> str:
-    return datetime.now(UTC).isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _normalize_agent_id(value: Any) -> str:
@@ -158,7 +158,7 @@ class ChatFavoriteStore:
     def _backup_corrupt_file(self) -> None:
         if not self.path.exists():
             return
-        timestamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
         backup = self.path.with_name(f"{self.path.name}.corrupt-{timestamp}")
         try:
             self.path.replace(backup)
@@ -184,7 +184,7 @@ class ChatFavoriteStore:
 
     def _write_payload(self, payload: dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = self.path.with_name(f"{self.path.name}.tmp-{os.getpid()}-{datetime.now(UTC).timestamp():.6f}")
+        tmp_path = self.path.with_name(f"{self.path.name}.tmp-{os.getpid()}-{datetime.now(timezone.utc).timestamp():.6f}")
         data = {
             "version": FAVORITES_SCHEMA_VERSION,
             "items": list(payload.get("items") or []),

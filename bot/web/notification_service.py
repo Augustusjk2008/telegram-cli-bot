@@ -6,7 +6,7 @@ import time
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from aiohttp import web
@@ -157,7 +157,7 @@ class ChatNotificationService:
             "status": normalized_status,
             "title": title,
             "preview": self._clip_preview(preview),
-            "completedAt": datetime.now(UTC).isoformat(),
+            "completedAt": datetime.now(timezone.utc).isoformat(),
             "url": str(url or ""),
         }
         if elapsed_seconds is not None:
