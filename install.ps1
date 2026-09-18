@@ -48,6 +48,24 @@ function Write-Warn {
     Write-Host ("[警告] {0}" -f $Message) -ForegroundColor Yellow
 }
 
+function Format-CommandLine {
+    param(
+        [string]$FilePath,
+        [string[]]$Arguments
+    )
+
+    $parts = @($FilePath)
+    foreach ($argument in $Arguments) {
+        if ($argument -match "\s") {
+            $parts += '"{0}"' -f $argument
+        } else {
+            $parts += $argument
+        }
+    }
+
+    return ($parts -join " ")
+}
+
 function Write-Fail {
     param([string]$Message)
 
@@ -126,6 +144,9 @@ function Invoke-CheckedCommand {
         [string]$WorkingDirectory
     )
 
+    $commandText = Format-CommandLine -FilePath $FilePath -Arguments $Arguments
+    Write-Info ("开始执行: {0}" -f $commandText)
+    $startedAt = Get-Date
     $originalLocation = Get-Location
     try {
         if ($WorkingDirectory) {
@@ -141,8 +162,12 @@ function Invoke-CheckedCommand {
     }
 
     if ($exitCode -ne 0) {
+        Write-Warn ("执行失败: {0}（退出码 {1}）" -f $FilePath, $exitCode)
         throw "{0} (退出码 {1})" -f $FailureMessage, $exitCode
     }
+
+    $elapsedSeconds = ((Get-Date) - $startedAt).TotalSeconds
+    Write-Info ("执行完成（{0:N1} 秒）: {1}" -f $elapsedSeconds, $FilePath)
 }
 
 function Get-PythonInfo {
@@ -280,13 +305,27 @@ function Install-WithWinget {
         return $false
     }
 
-    Write-Info ("使用 winget 安装 {0}" -f $DisplayName)
-
-    & winget install --id $PackageId --exact --source winget --accept-source-agreements --accept-package-agreements --silent --disable-interactivity
-    if ($LASTEXITCODE -ne 0) {
+    $wingetArguments = @(
+        "install",
+        "--id", $PackageId,
+        "--exact",
+        "--source", "winget",
+        "--accept-source-agreements",
+        "--accept-package-agreements",
+        "--silent",
+        "--disable-interactivity"
+    )
+    Write-Info ("开始执行: {0}" -f (Format-CommandLine -FilePath "winget" -Arguments $wingetArguments))
+    $startedAt = Get-Date
+    & winget @wingetArguments
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
         Write-Warn ("winget 安装 {0} 失败，将改用官方下载。" -f $DisplayName)
         return $false
     }
+
+    $elapsedSeconds = ((Get-Date) - $startedAt).TotalSeconds
+    Write-Info ("winget 安装完成（{0:N1} 秒）: {1}" -f $elapsedSeconds, $DisplayName)
 
     return $true
 }
@@ -307,8 +346,10 @@ function Download-File {
     )
 
     $target = Join-Path (Get-DownloadDirectory) $FileName
-    Write-Info ("下载 {0}" -f $Url)
+    Write-Info ("开始下载: {0}" -f $Url)
     Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $target
+    $sizeMb = ((Get-Item -LiteralPath $target).Length / 1MB)
+    Write-Info ("下载完成（{0:N1} MB）: {1}" -f $sizeMb, $target)
     return $target
 }
 

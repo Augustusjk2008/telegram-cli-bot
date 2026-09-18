@@ -4,6 +4,7 @@ chcp 65001 >nul
 set "SCRIPT_DIR=%~dp0"
 cd /d "%SCRIPT_DIR%"
 
+echo [INFO] Starting Orbit Safe Claw installer...
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0install.ps1" %*
 set "EXIT_CODE=%ERRORLEVEL%"
 

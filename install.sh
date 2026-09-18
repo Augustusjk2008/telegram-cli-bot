@@ -90,6 +90,41 @@ fail() {
   printf '[错误] %s\n' "$1" >&2
 }
 
+run_command() {
+  local label="$1"
+  shift
+  local started_at=$SECONDS
+
+  info "开始: ${label}"
+  info "命令: $*"
+  if "$@"; then
+    info "完成: ${label}（$((SECONDS - started_at)) 秒）"
+    return 0
+  fi
+
+  local exit_code=$?
+  fail "失败: ${label}（退出码 ${exit_code}）"
+  return "$exit_code"
+}
+
+run_command_in_dir() {
+  local label="$1"
+  local workdir="$2"
+  shift 2
+  local started_at=$SECONDS
+
+  info "开始: ${label}"
+  info "命令: (cd ${workdir} && $*)"
+  if (cd "$workdir" && "$@"); then
+    info "完成: ${label}（$((SECONDS - started_at)) 秒）"
+    return 0
+  fi
+
+  local exit_code=$?
+  fail "失败: ${label}（退出码 ${exit_code}）"
+  return "$exit_code"
+}
+
 version_ge() {
   local current="$1"
   local minimum="$2"
@@ -259,7 +294,10 @@ ensure_tailwind_oxide_binding() {
 
   oxide_version="$(cd "$front_dir" && node -p "require('./node_modules/@tailwindcss/oxide/package.json').version")"
   warn "检测到 Tailwind oxide 原生绑定缺失，尝试补装 ${binding_name}@${oxide_version}"
-  (cd "$front_dir" && npm install --no-save "${binding_name}@${oxide_version}")
+  if ! run_command_in_dir "补装 Tailwind oxide 原生绑定" "$front_dir" npm install --no-save "${binding_name}@${oxide_version}"; then
+    fail "Tailwind oxide 原生绑定修复失败，请删除 front/node_modules 后重试"
+    return 1
+  fi
 
   if (cd "$front_dir" && node -e "require('@tailwindcss/oxide')" >/dev/null 2>&1); then
     info "Tailwind oxide 原生绑定已修复"
@@ -374,7 +412,7 @@ install_example_plugins() {
     return 0
   fi
 
-  "$python_bin" -m bot.plugins.installer --repo-root "$SCRIPT_DIR" --all
+  run_command "安装示例插件" "$python_bin" -m bot.plugins.installer --repo-root "$SCRIPT_DIR" --all
 }
 
 run_install_user_phase() {
@@ -391,13 +429,15 @@ run_install_user_phase() {
 
 install_linux_system_dependencies() {
   step "安装系统依赖"
-  $SUDO apt-get update
-  $SUDO apt-get install -y python3 python3-pip python3-venv git curl ca-certificates
+  run_command "更新 apt 软件包索引" $SUDO apt-get update
+  run_command "安装系统依赖" $SUDO apt-get install -y python3 python3-pip python3-venv git curl ca-certificates
 
   if ! command -v node >/dev/null 2>&1 || ! node --version | grep -Eq '^v(18|[2-9][0-9])\.'; then
     step "安装 Node.js LTS"
+    info "开始配置 NodeSource 软件源"
     curl -fsSL https://deb.nodesource.com/setup_lts.x | $SUDO -E bash -
-    $SUDO apt-get install -y nodejs
+    info "NodeSource 软件源配置完成"
+    run_command "安装 Node.js LTS" $SUDO apt-get install -y nodejs
   fi
 }
 
@@ -430,7 +470,7 @@ install_macos_system_dependencies() {
   fi
 
   step "通过 Homebrew 安装依赖: ${packages[*]}"
-  brew install "${packages[@]}"
+  run_command "通过 Homebrew 安装依赖" brew install "${packages[@]}"
 }
 
 step "检查 Python 3.10+"
@@ -516,20 +556,20 @@ if ! version_ge "$python_version" "3.10"; then
   fail "Python 版本过低: ${python_version}，需要 3.10+"
   exit 1
 fi
-"${python_bin:-python3}" -m venv .venv
+run_command "创建 Python 虚拟环境" "${python_bin:-python3}" -m venv .venv
 PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
 PIP_BIN="$SCRIPT_DIR/.venv/bin/pip"
 
 step "安装后端依赖"
-"$PIP_BIN" install --upgrade pip
-"$PIP_BIN" install -r requirements.txt
+run_command "升级 pip" "$PIP_BIN" install --upgrade pip
+run_command "安装后端依赖" "$PIP_BIN" install -r requirements.txt
 
 step "安装前端依赖"
-(cd front && npm install)
+run_command_in_dir "安装前端依赖" "$SCRIPT_DIR/front" npm install
 ensure_tailwind_oxide_binding
 
 step "构建前端"
-(cd front && npm run build)
+run_command_in_dir "构建前端" "$SCRIPT_DIR/front" npm run build
 
 step "安装示例插件"
 install_example_plugins "$PYTHON_BIN"
