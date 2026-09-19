@@ -74,7 +74,7 @@ test("固定公网转发异常时可以手动尝试恢复", async () => {
   expect(await screen.findByText("固定公网转发已恢复")).toBeInTheDocument();
 });
 
-test("Codex 额度趋势按额度桶分组", async () => {
+test("Codex 额度趋势隐藏已下线的次要额度桶", async () => {
   const user = userEvent.setup();
   const client = createAdminClient();
   const stats = await client.getCodexUsageStats();
@@ -124,10 +124,10 @@ test("Codex 额度趋势按额度桶分组", async () => {
   await openCodexUsageTab(user);
 
   const chart = await screen.findByRole("img", { name: /通用 Codex.*共 3 个样本，当前剩余 92%/ });
-  expect(screen.getByRole("img", { name: /gpt-5\.3-codex-spark.*共 2 个样本/ })).toBeInTheDocument();
+  expect(screen.queryByRole("img", { name: /gpt-5\.3-codex-spark.*共 2 个样本/ })).not.toBeInTheDocument();
   expect(screen.queryByRole("img", { name: /gpt-reserve.*共 2 个样本，当前剩余 77%/ })).not.toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "通用 Codex · Pro", level: 4 })).toBeInTheDocument();
-  expect(screen.getByRole("heading", { name: "gpt-5.3-codex-spark · Pro", level: 4 })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "gpt-5.3-codex-spark · Pro", level: 4 })).not.toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "gpt-reserve · Pro", level: 4 })).not.toBeInTheDocument();
   expect(screen.getByText("当前剩余 92%")).toBeInTheDocument();
   expect(screen.getByText("剩余时长 7 天")).toBeInTheDocument();
@@ -287,7 +287,7 @@ test("Codex 额度趋势没有样本时仍显示已知额度入口", async () =>
   await openCodexUsageTab(user);
 
   expect(screen.getByRole("heading", { name: "通用 Codex", level: 4 })).toBeInTheDocument();
-  expect(screen.getByRole("heading", { name: "gpt-5.3-codex-spark", level: 4 })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "gpt-5.3-codex-spark", level: 4 })).not.toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "gpt-reserve", level: 4 })).not.toBeInTheDocument();
   expect(screen.queryByRole("img", { name: /Codex 剩余额度与剩余时长趋势/ })).not.toBeInTheDocument();
 });
