@@ -2,8 +2,8 @@
   "schemaVersion": 2,
   "id": "docx-preview",
   "name": "DOCX Preview",
-  "version": "0.1.0",
-  "description": "快速浏览 Word 文档内容结构。",
+  "version": "0.2.0",
+  "description": "预览 Word 文档的字体、段落、继承样式与表格格式。",
   "enabled": true,
   "config": {},
   "runtime": {

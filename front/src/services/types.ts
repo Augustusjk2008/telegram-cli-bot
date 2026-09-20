@@ -1684,6 +1684,45 @@ export type DocumentTextRun = {
   code?: boolean;
   color?: string;
   fontSizePx?: number;
+  fontFamily?: string;
+  fontFamilyEastAsia?: string;
+  highlightColor?: string;
+  shadingColor?: string;
+};
+
+export type DocumentParagraphFormat = {
+  align?: "left" | "center" | "right" | "justify";
+  indentLeftPx?: number;
+  indentRightPx?: number;
+  firstLineIndentPx?: number;
+  spaceBeforePx?: number;
+  spaceAfterPx?: number;
+  lineSpacing?: { mode: "multiple" | "exact" | "atLeast"; value: number };
+  textStyle?: Omit<DocumentTextRun, "text">;
+};
+
+export type DocumentWidth = { unit: "px" | "percent"; value: number };
+
+export type DocumentBorder = {
+  style: "none" | "solid" | "dashed" | "dotted" | "double";
+  widthPx?: number;
+  color?: string;
+};
+
+export type DocumentBorders = {
+  top?: DocumentBorder;
+  bottom?: DocumentBorder;
+  left?: DocumentBorder;
+  right?: DocumentBorder;
+  insideHorizontal?: DocumentBorder;
+  insideVertical?: DocumentBorder;
+};
+
+export type DocumentCellPadding = {
+  topPx?: number;
+  rightPx?: number;
+  bottomPx?: number;
+  leftPx?: number;
 };
 
 export type DocumentSlideFrame = {
@@ -1750,23 +1789,30 @@ export type DocumentImageBlock = DocumentSlideImageRef & {
   caption?: string;
 };
 
-export type DocumentBlock =
+export type DocumentParagraphBlock =
   | {
       type: "heading";
       level: 1 | 2 | 3 | 4 | 5 | 6;
       runs: DocumentTextRun[];
+      format?: DocumentParagraphFormat;
     }
   | {
       type: "paragraph";
       runs: DocumentTextRun[];
+      format?: DocumentParagraphFormat;
     }
   | {
       type: "list_item";
       ordered?: boolean;
       depth?: number;
       marker?: string;
+      markerStyle?: Omit<DocumentTextRun, "text">;
       runs: DocumentTextRun[];
-    }
+      format?: DocumentParagraphFormat;
+    };
+
+export type DocumentBlock =
+  | DocumentParagraphBlock
   | {
       type: "slide";
       slideNumber: number;
@@ -1779,15 +1825,29 @@ export type DocumentBlock =
   | DocumentImageBlock
   | {
       type: "table";
+      width?: DocumentWidth;
+      columnWidthsPx?: number[];
+      borders?: DocumentBorders;
+      shadingColor?: string;
+      cellPadding?: DocumentCellPadding;
       rows: Array<{
         cells: Array<{
           runs: DocumentTextRun[];
+          paragraphs?: Array<DocumentParagraphBlock | DocumentImageBlock>;
+          width?: DocumentWidth;
+          borders?: DocumentBorders;
+          shadingColor?: string;
+          padding?: DocumentCellPadding;
+          verticalAlign?: "top" | "center" | "bottom";
+          rowSpan?: number;
+          colSpan?: number;
         }>;
       }>;
     };
 
 export type DocumentViewPayload = {
   path: string;
+  formatting?: "document";
   title?: string;
   statsText?: string;
   blocks: DocumentBlock[];
