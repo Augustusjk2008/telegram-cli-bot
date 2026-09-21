@@ -491,6 +491,7 @@ class BotProfile:
     default_execution_mode: str = "cli"
     native_agent: Dict[str, Any] = field(default_factory=dict)
     archived: bool = False
+    chat_translation_enabled: bool = True
 
     def ensure_cluster_slots(self) -> list[ClusterSlotStatus]:
         child_agents = [agent for agent in self.agents if agent.id != "main"]
@@ -528,6 +529,7 @@ class BotProfile:
             "working_dir": self.working_dir,
             "enabled": self.enabled,
             "archived": self.archived,
+            "chat_translation_enabled": self.chat_translation_enabled,
             "supported_execution_modes": supported_execution_modes,
             "default_execution_mode": default_execution_mode,
             "native_agent": normalize_native_agent_config(self.native_agent),
@@ -590,6 +592,7 @@ class BotProfile:
             working_dir=data.get("working_dir", WORKING_DIR),
             enabled=bool(data.get("enabled", True)) and not archived,
             archived=archived,
+            chat_translation_enabled=data.get("chat_translation_enabled", True) is not False,
             cli_params=cli_params,
             agents=agents,
             cluster=normalize_bot_cluster_config(data.get("cluster")),

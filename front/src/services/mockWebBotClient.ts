@@ -1,6 +1,7 @@
 import { DEFAULT_CHAT_TRANSLATION_CONFIG } from "../utils/chatTranslation";
 import { GENERAL_CODEX_RATE_LIMIT_ID, WebApiClientError } from "./types";
 import type {
+  BotChatTranslationConfig,
   ChatTranslationConfig,
   ChatTranslationConfigInput,
   AdminUser,
@@ -3023,6 +3024,24 @@ export class MockWebBotClient implements WebBotClient {
       accountId,
       allowedBots: [...normalized],
     };
+  }
+
+  private botChatTranslationEnabled = new Map<string, boolean>();
+
+  async getBotChatTranslationConfig(botAlias: string): Promise<BotChatTranslationConfig> {
+    return {
+      enabled: this.botChatTranslationEnabled.get(botAlias) ?? true,
+      global_translate_user_enabled: this.chatTranslationConfig.translate_user_enabled,
+      global_translate_assistant_enabled: this.chatTranslationConfig.translate_assistant_enabled,
+      can_edit: this.hasAdminOps() || this.session.role === "member",
+    };
+  }
+
+  async updateBotChatTranslationConfig(botAlias: string, enabled: boolean): Promise<BotChatTranslationConfig> {
+    const config = await this.getBotChatTranslationConfig(botAlias);
+    if (!config.can_edit) throw new WebApiClientError("无权修改 Bot 聊天翻译设置", { status: 403, code: "forbidden" });
+    this.botChatTranslationEnabled.set(botAlias, enabled);
+    return { ...config, enabled };
   }
 
   async getChatTranslationConfig(): Promise<ChatTranslationConfig> {

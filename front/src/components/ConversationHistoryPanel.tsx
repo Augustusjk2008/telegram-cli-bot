@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { History, LoaderCircle, MessageSquarePlus, Pin, Search, Star, Trash2, X } from "lucide-react";
 import { toolbarButtonClass } from "./ToolbarButton";
 import type { ConversationSummary, FavoriteAnswerItem } from "../services/types";
@@ -6,6 +6,7 @@ import type { ConversationSummary, FavoriteAnswerItem } from "../services/types"
 export type ConversationHistoryPanelTab = "history" | "favorites";
 
 type Props = {
+  translationSettings?: ReactNode;
   open: boolean;
   activeTab?: ConversationHistoryPanelTab;
   loading: boolean;
@@ -42,6 +43,7 @@ function formatConversationTime(value: string) {
 }
 
 export function ConversationHistoryPanel({
+  translationSettings,
   open,
   activeTab = "history",
   loading,
@@ -147,6 +149,7 @@ export function ConversationHistoryPanel({
               </button>
             </div>
           </div>
+          {translationSettings}
           <div className="mt-3 inline-flex rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-0.5">
             <button
               type="button"

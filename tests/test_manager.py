@@ -19,6 +19,28 @@ class TestManagerLoadSave:
     """测试配置加载和保存"""
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("alias", ["main", "project"])
+    async def test_chat_translation_is_persisted_per_bot(self, temp_dir: Path, alias: str):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": [{"alias": "project"}]}), encoding="utf-8")
+        manager = MultiBotManager(BotProfile(alias="main"), str(storage))
+        assert manager.get_profile(alias).chat_translation_enabled is True
+        other = "project" if alias == "main" else "main"
+        for enabled in (False, True):
+            await manager.set_bot_chat_translation(alias, enabled)
+            manager = MultiBotManager(BotProfile(alias="main"), str(storage))
+            assert manager.get_profile(alias).chat_translation_enabled is enabled
+            assert manager.get_profile(other).chat_translation_enabled is True
+
+    @pytest.mark.asyncio
+    async def test_chat_translation_save_failure_restores_setting(self, temp_dir: Path):
+        manager = MultiBotManager(BotProfile(alias="main"), str(temp_dir / "bots.json"))
+        with patch.object(manager, "_persist_main_profile", side_effect=OSError("disk full")):
+            with pytest.raises(OSError):
+                await manager.set_bot_chat_translation("main", False)
+        assert manager.main_profile.chat_translation_enabled is True
+
+    @pytest.mark.asyncio
     async def test_add_native_agent_bot_skips_cli_validation_and_persists_native_config(self, temp_dir: Path):
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({"bots": []}), encoding="utf-8")

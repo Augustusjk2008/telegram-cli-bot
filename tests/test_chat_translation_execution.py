@@ -96,6 +96,24 @@ async def test_input_translation_sends_once_and_preserves_original(chat, monkeyp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("bot_enabled", [False, True])
+@pytest.mark.parametrize("user_enabled,answer_enabled", [(False, False), (True, False), (False, True), (True, True)])
+async def test_bot_translation_respects_global_directions(chat, monkeypatch, bot_enabled, user_enabled, answer_enabled):
+    profile = chat.manager.get_profile("main")
+    profile.chat_translation_enabled = bot_enabled
+    service = translator(monkeypatch)
+    settings = TranslationConfig(translate_user_enabled=user_enabled, translate_assistant_enabled=answer_enabled)
+    service.config_store.get_config = lambda: settings
+
+    events = await chat.run()
+
+    assert chat.sent == ["Explain this" if bot_enabled and user_enabled else "请解释"]
+    assert service.translate.await_count == int(bot_enabled and user_enabled)
+    assert service.submit_answer.call_count == int(bot_enabled and answer_enabled)
+    assert events[-1]["type"] == "done"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("cluster_enabled", [False, True])
 async def test_child_agent_skips_input_and_answer_translation(chat, monkeypatch, cluster_enabled):
     profile = api_service.get_profile_or_raise(chat.manager, "main")

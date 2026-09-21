@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChatTranslationSettingsPanel } from "../components/ChatTranslationSettingsPanel";
+import { BotChatTranslationSettings } from "../components/BotChatTranslationSettings";
 import { ChatScreen, mergeMessagesPreservingClientState } from "../screens/ChatScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { ChatMessage, ChatTranslation, ConversationListResult } from "../services/types";
@@ -27,6 +28,32 @@ afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
   window.localStorage.clear();
+});
+
+test("bot translation keeps the saved preference when saving fails and allows retry", async () => {
+  const config = { enabled: true, global_translate_user_enabled: false, global_translate_assistant_enabled: false, can_edit: true };
+  const update = vi.fn().mockRejectedValueOnce(new Error("保存失败")).mockResolvedValueOnce({ ...config, enabled: false });
+  render(<BotChatTranslationSettings botAlias="project" client={clientWith({
+    getBotChatTranslationConfig: async () => config,
+    updateBotChatTranslationConfig: update,
+  })} />);
+  const toggle = screen.getByRole("switch", { name: "本 Bot 启用聊天翻译" });
+  await waitFor(() => expect(toggle).toBeEnabled());
+  fireEvent.click(toggle);
+  expect(await screen.findByRole("alert")).toHaveTextContent("保存失败");
+  expect(toggle).toBeChecked();
+  fireEvent.click(toggle);
+  await waitFor(() => expect(toggle).not.toBeChecked());
+  expect(update).toHaveBeenLastCalledWith("project", false);
+});
+
+test("bot translation is read-only without configuration access", async () => {
+  render(<BotChatTranslationSettings botAlias="main" client={clientWith({
+    getBotChatTranslationConfig: async () => ({ enabled: true, global_translate_user_enabled: true, global_translate_assistant_enabled: false, can_edit: false }),
+  })} />);
+  const toggle = screen.getByRole("switch", { name: "本 Bot 启用聊天翻译" });
+  await waitFor(() => expect(toggle).toBeChecked());
+  expect(toggle).toBeDisabled();
 });
 
 test("configuration saves independent complete prompts and explicitly clears the key", async () => {

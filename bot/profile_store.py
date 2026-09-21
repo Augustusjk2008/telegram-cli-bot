@@ -58,6 +58,7 @@ def load_managed_profiles(storage_file: Path) -> dict[str, BotProfile]:
             ),
             "enabled": bool(item.get("enabled", True)),
             "archived": bool(item.get("archived", False)),
+            "chat_translation_enabled": item.get("chat_translation_enabled", True),
         }
         if "cli_params" in item:
             profile_data["cli_params"] = item["cli_params"]
@@ -96,6 +97,8 @@ def apply_persisted_main_profile(main_profile: BotProfile, app_settings_file: Pa
     profile_data = app_settings.get_main_bot_profile(app_settings_file)
     if not profile_data:
         return
+
+    main_profile.chat_translation_enabled = profile_data.get("chat_translation_enabled", True) is not False
 
     raw_cli_type = str(profile_data.get("cli_type") or "").strip()
     if raw_cli_type:

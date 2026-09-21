@@ -28,6 +28,7 @@ import { ChatMarkdownMessage } from "../components/ChatMarkdownMessage";
 import { ChatPlainTextMessage } from "../components/ChatPlainTextMessage";
 import { ClusterTeamPanel } from "../components/ClusterTeamPanel";
 import { ConversationHistoryPanel, type ConversationHistoryPanelTab } from "../components/ConversationHistoryPanel";
+import { BotChatTranslationSettings } from "../components/BotChatTranslationSettings";
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import { NativeAgentTranscript } from "../components/NativeAgentTranscript";
 import { ImmersiveToggleButton } from "../components/ImmersiveToggleButton";
@@ -5084,6 +5085,7 @@ export function ChatScreen({
         </div>
       ) : null}
       <ConversationHistoryPanel
+        translationSettings={historyPanelOpen ? <BotChatTranslationSettings key={botAlias} client={client} botAlias={botAlias} /> : null}
         open={historyPanelOpen}
         activeTab={historyPanelTab}
         loading={conversationLoading}

@@ -980,6 +980,13 @@ export type ChatTraceDetails = {
   trace: ChatTraceEvent[];
 };
 
+export type BotChatTranslationConfig = {
+  enabled: boolean;
+  global_translate_user_enabled: boolean;
+  global_translate_assistant_enabled: boolean;
+  can_edit: boolean;
+};
+
 export type ChatTranslationConfig = {
   reasoning_effort: "none" | "low" | "medium" | "high";
   user_prompt: string;

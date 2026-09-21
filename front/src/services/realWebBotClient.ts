@@ -5,6 +5,7 @@ import {
 import { buildWsUrl, withApiBase } from "../utils/publicBase";
 import { ChatStreamIncompleteError } from "./chatStreamError";
 import type {
+  BotChatTranslationConfig,
   ChatTranslationConfig,
   ChatTranslationConfigInput,
   AdminUser,
@@ -4186,6 +4187,16 @@ export class RealWebBotClient implements WebBotClient {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input),
     }));
+  }
+
+  async getBotChatTranslationConfig(botAlias: string): Promise<BotChatTranslationConfig> {
+    return this.requestJson<BotChatTranslationConfig>(`/api/bots/${encodeURIComponent(botAlias)}/chat-translation`);
+  }
+
+  async updateBotChatTranslationConfig(botAlias: string, enabled: boolean): Promise<BotChatTranslationConfig> {
+    return this.requestJson<BotChatTranslationConfig>(`/api/bots/${encodeURIComponent(botAlias)}/chat-translation`, {
+      method: "PATCH", body: JSON.stringify({ enabled }),
+    });
   }
 
   async getInlineCompletionConfig(): Promise<InlineCompletionConfig> {

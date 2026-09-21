@@ -1,4 +1,5 @@
 import type {
+  BotChatTranslationConfig,
   ChatTranslationConfig,
   ChatTranslationConfigInput,
   AdminUser,
@@ -168,6 +169,8 @@ export interface WebBotClient {
   updateUser(accountId: string, input: AdminUserUpdateInput): Promise<AdminUser>;
   updateUserBotPermissions(accountId: string, allowedBots: string[]): Promise<UserBotPermissions>;
   getChatTranslationConfig(): Promise<ChatTranslationConfig>;
+  getBotChatTranslationConfig(botAlias: string): Promise<BotChatTranslationConfig>;
+  updateBotChatTranslationConfig(botAlias: string, enabled: boolean): Promise<BotChatTranslationConfig>;
   updateChatTranslationConfig(input: ChatTranslationConfigInput): Promise<ChatTranslationConfig>;
   getInlineCompletionConfig(): Promise<InlineCompletionConfig>;
   updateInlineCompletionConfig(input: InlineCompletionConfigInput): Promise<InlineCompletionConfig>;

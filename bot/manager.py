@@ -342,6 +342,22 @@ class MultiBotManager:
             self._save_profiles()
             return profile
 
+    async def set_bot_chat_translation(self, alias: str, enabled: bool) -> None:
+        if not isinstance(enabled, bool):
+            raise ValueError("enabled 必须是布尔值")
+        async with self._lock:
+            profile = self._get_profile_for_update(alias)
+            previous = profile.chat_translation_enabled
+            profile.chat_translation_enabled = enabled
+            try:
+                if profile is self.main_profile:
+                    self._persist_main_profile()
+                else:
+                    self._save_profiles()
+            except Exception:
+                profile.chat_translation_enabled = previous
+                raise
+
     async def set_bot_prompt_presets(self, alias: str, presets: Any) -> list[dict[str, str]]:
         normalized_alias = str(alias or "").strip().lower()
         normalized_presets = normalize_prompt_presets(presets, strict=True)

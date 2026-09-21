@@ -7,6 +7,8 @@ test("聊天翻译配置、附件和原生最终回答适配桌面及移动布�
     { id: "user-qa", turn_id: "turn-qa", role: "user", content: "Explain the attachment\n\n附件路径为：C:\\workspace\\source.txt", created_at: "2026-09-16T08:00:00Z", state: "done", translation: { ...translation, text: "请解释附件" } },
     { id: "assistant-qa", turn_id: "turn-qa", role: "assistant", content: "# Original final answer\n\nOriginal paragraph.", created_at: "2026-09-16T08:00:01Z", state: "done", translation, meta: { native_source: { provider: "native_agent", session_id: "qa" }, completion_state: "completed" } },
   ];
+  let botTranslationEnabled = true;
+  let globalTranslationEnabled = true;
   // Only the existing service supplies the page and built assets; all API data is isolated here.
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname.split("/api/")[1];
@@ -16,6 +18,11 @@ test("聊天翻译配置、附件和原生最终回答适配桌面及移动布�
     else if (path === "bots/main") data = { bot, session: { working_dir: "C:\\workspace", is_processing: false, history_count: 2 }, agents: [{ id: "main", name: "main" }] };
     else if (path === "bots/main/history") data = { items: messages, revision: 1 };
     else if (path === "bots/main/history/delta") data = { items: [], revision: 1, reset: false };
+    else if (path === "bots/main/ls") data = { working_dir: "C:\\workspace", entries: [] };
+    else if (path === "bots/main/chat-translation") {
+      if (route.request().method() === "PATCH") botTranslationEnabled = route.request().postDataJSON().enabled;
+      data = { enabled: botTranslationEnabled, global_translate_user_enabled: globalTranslationEnabled, global_translate_assistant_enabled: globalTranslationEnabled, can_edit: true };
+    }
     else if (path === "admin/users") data = [];
     else if (path === "admin/chat-translation/config") data = { translate_user_enabled: true, translate_assistant_enabled: true, base_url: "https://example.test/v1", api_key_set: true, model: "translator", user_prompt: "Translate into English.", assistant_prompt: "Translate into Simplified Chinese.", request_timeout_seconds: 15 };
     else if (path.endsWith("/conversations")) data = { items: [], active_conversation_id: "" };
@@ -30,6 +37,26 @@ test("聊天翻译配置、附件和原生最终回答适配桌面及移动布�
   await expect(page.getByText("source.txt", { exact: true })).toBeVisible();
   for (const width of [1280, 390]) {
     await page.setViewportSize({ width, height: 900 });
+    globalTranslationEnabled = width === 1280;
+    await page.getByRole("button", { name: "历史会话", exact: true }).click();
+    const botSettings = page.getByRole("region", { name: "Bot 聊天翻译设置" });
+    const toggle = botSettings.getByRole("switch", { name: "本 Bot 启用聊天翻译" });
+    await expect(toggle).toBeEnabled();
+    const nextEnabled = !botTranslationEnabled;
+    await toggle.click();
+    await expect(toggle).toBeChecked({ checked: nextEnabled });
+    await expect(toggle).toBeEnabled();
+    await page.getByRole("button", { name: "关闭历史会话", exact: true }).first().click();
+    await page.getByRole("button", { name: "历史会话", exact: true }).click();
+    await expect(toggle).toBeEnabled();
+    await expect(toggle).toBeChecked({ checked: nextEnabled });
+    if (!globalTranslationEnabled) await expect(botSettings).toContainText("全局聊天翻译已关闭");
+    expect(await botSettings.evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      return bounds.left >= 0 && bounds.right <= document.documentElement.clientWidth;
+    })).toBe(true);
+    await page.screenshot({ path: test.info().outputPath(`bot-translation-${width}.png`) });
+    await page.getByRole("button", { name: "关闭历史会话", exact: true }).first().click();
     await final.getByRole("button", { name: "显示原文", exact: true }).click();
     await expect(final.getByRole("heading", { name: "Original final answer" })).toBeVisible();
     await final.getByRole("button", { name: "显示译文", exact: true }).click();
@@ -48,7 +75,7 @@ test("聊天翻译配置、附件和原生最终回答适配桌面及移动布�
     expect(await userToggle.evaluate((button) => button.textContent)).toBe("");
     expect(await userCopy.evaluate((button) => button.textContent)).toBe("");
     expect(await final.getByRole("button", { name: "显示原文", exact: true }).evaluate((button) => (
-      button.parentElement!.querySelector('[aria-label="复制最终回答"]') !== null
+      button.closest("div")!.querySelector('[aria-label="复制最终回答"]') !== null
     ))).toBe(true);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     const screenshotPath = test.info().outputPath(`chat-translation-${width}.png`);
@@ -58,7 +85,7 @@ test("聊天翻译配置、附件和原生最终回答适配桌面及移动布�
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.getByRole("button", { name: "切换 Bot: main", exact: true }).click();
   await page.getByRole("button", { name: "管理中心", exact: true }).click();
-  await page.getByRole("tab", { name: "聊天翻译", exact: true }).click();
+  await page.getByRole("tab", { name: "翻译", exact: true }).click();
   const panel = page.getByRole("region", { name: "聊天翻译配置" });
   await expect(panel.getByLabel("用户消息翻译提示词")).toHaveValue("Translate into English.");
   for (const width of [1280, 390]) {
