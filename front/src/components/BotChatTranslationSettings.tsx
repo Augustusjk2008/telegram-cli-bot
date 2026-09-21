@@ -42,12 +42,6 @@ export function BotChatTranslationSettings({ client, botAlias }: { client: WebBo
           className="h-4 w-4 shrink-0 accent-[var(--accent)]"
         />
       </label>
-      <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
-        {!config ? (error ? "翻译设置不可用" : "正在加载翻译设置…") : !globalEnabled
-          ? "全局聊天翻译已关闭，此开关暂不生效。"
-          : `遵循全局配置：${[config.global_translate_user_enabled && "翻译提问", config.global_translate_assistant_enabled && "翻译最终回答"].filter(Boolean).join("、")}。`}
-      </p>
-      <p className="text-xs leading-5 text-[var(--muted)]">适用于本 Bot 的所有会话，从下一条消息生效。</p>
       {saving ? <p role="status" className="text-xs text-[var(--muted)]">正在保存…</p> : null}
       {error ? <p role="alert" className="mt-1 text-xs text-red-600">{error}</p> : null}
     </section>

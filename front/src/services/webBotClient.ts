@@ -190,7 +190,7 @@ export interface WebBotClient {
   getCodexUsageConfig(): Promise<CodexUsageConfig>;
   updateCodexUsageConfig(input: { enabled: boolean }): Promise<CodexUsageConfig>;
   getCodexUsageStats(query?: CodexUsageStatsQuery): Promise<CodexUsageStats>;
-  listBots(): Promise<BotSummary[]>;
+  listBots(options?: { includeArchived?: boolean }): Promise<BotSummary[]>;
   listPlugins(refresh?: boolean): Promise<PluginSummary[]>;
   listInstallablePlugins(): Promise<InstallablePluginSummary[]>;
   installPlugin(input: string | {

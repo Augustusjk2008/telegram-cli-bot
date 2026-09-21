@@ -58,7 +58,9 @@ class PiTurnChannel:
         control_max_bytes: int = PI_TURN_CONTROL_MAX_BYTES,
         reconnect_grace_seconds: float = PI_TURN_RECONNECT_GRACE_SECONDS,
         abort_turn: Callable[[], Awaitable[Any]] | None = None,
+        bot_id: int | None = None,
     ) -> None:
+        self.bot_id = bot_id
         self.stream_id = f"pit_{uuid.uuid4().hex[:16]}"
         self.turn_id = ""
         self._producer = producer

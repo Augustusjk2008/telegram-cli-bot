@@ -4351,8 +4351,8 @@ export class RealWebBotClient implements WebBotClient {
     return mapCodexUsageStats(data);
   }
 
-  async listBots(): Promise<BotSummary[]> {
-    const data = await this.requestJson<RawBotSummary[]>("/api/bots");
+  async listBots(options?: { includeArchived?: boolean }): Promise<BotSummary[]> {
+    const data = await this.requestJson<RawBotSummary[]>(options?.includeArchived ? "/api/admin/bots" : "/api/bots");
     return data.map((item) => mapBotSummary(item, Boolean(item.is_processing)));
   }
 

@@ -247,6 +247,15 @@ class BotPermissionStore:
                 ]
             self._write(data)
 
+    def revoke_bot_grants(self, alias: str) -> None:
+        """Keep ownership for archive management, but remove every access grant."""
+        normalized_alias = self._normalize_alias(alias)
+        with self._lock:
+            for item in self.list_user_permission_summaries()["items"]:
+                allowed = item["allowed_bots"]
+                if normalized_alias in allowed:
+                    self.set_allowed_bots(item["account_id"], [value for value in allowed if value != normalized_alias])
+
     def rename_bot(self, old_alias: str, new_alias: str) -> None:
         normalized_old = self._normalize_alias(old_alias)
         normalized_new = self._normalize_alias(new_alias)

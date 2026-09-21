@@ -349,6 +349,16 @@ def reset_session(bot_id: int, user_id: int, agent_id: str = "main") -> bool:
     return removed_in_memory or removed_from_store
 
 
+def unload_bot_sessions(bot_alias: str) -> None:
+    """Release idle in-memory sessions while retaining their persisted bindings."""
+    with sessions_lock:
+        for key, session in list(sessions.items()):
+            if session.bot_alias == bot_alias:
+                _save_session_to_store(session)
+                session.disable_persistence()
+                del sessions[key]
+
+
 def clear_bot_sessions(bot_id: int):
     targets: list[UserSession] = []
     with sessions_lock:

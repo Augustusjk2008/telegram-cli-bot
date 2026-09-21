@@ -1117,7 +1117,7 @@ export function DesktopBotManagerScreen({
   canCreateWorkdirDirectory = true,
   canRunUnsafeCli = false,
 }: Props) {
-  const manager = useBotManager({ client, onBotsChange });
+  const manager = useBotManager({ client, onBotsChange, includeArchived: canManage });
   const [nativeAgentFeatureEnabled, setNativeAgentFeatureEnabled] = useState<boolean | null>(null);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<ManagerViewFilter>("all");
@@ -1411,6 +1411,7 @@ export function DesktopBotManagerScreen({
             key={tab.id}
             type="button"
             aria-pressed={inspectorTab === tab.id}
+            disabled={tab.id === "config" && Boolean(focusedBot?.archived)}
             onClick={() => {
               if (tab.id !== inspectorTab && !confirmDiscardDirty()) {
                 return;
@@ -1697,6 +1698,7 @@ export function DesktopBotManagerScreen({
                           <button
                             type="button"
                             aria-label="打开配置"
+                            disabled={Boolean(bot.archived)}
                             onClick={() => {
                               focusBot(bot.alias);
                               setInspectorTab("config");
@@ -1750,7 +1752,7 @@ export function DesktopBotManagerScreen({
           ) : focusedBot ? (
             <div>
               {renderInspectorTabs()}
-              {inspectorTab === "config" ? (
+              {inspectorTab === "config" && !focusedBot.archived ? (
                 <EditPanel
                   bot={focusedBot}
                   manager={manager}
@@ -1854,6 +1856,7 @@ export function DesktopBotManagerScreen({
                       <button
                         type="button"
                         aria-label={`编辑 ${focusedBot.alias}`}
+                        disabled={Boolean(focusedBot.archived)}
                         onClick={() => setInspectorTab("config")}
                         className="inline-flex h-9 items-center gap-1.5 rounded-md border border-[var(--border)] px-3 text-sm hover:bg-[var(--surface-strong)]"
                       >

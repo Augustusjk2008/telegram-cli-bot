@@ -6,6 +6,7 @@ import json
 import logging
 import time
 import uuid
+import zlib
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 from ag_ui import core
@@ -277,6 +278,16 @@ class NativeAgentService:
         self._runtime_eviction_task: asyncio.Task[None] | None = None
         self._turn_channels: dict[str, PiTurnChannel] = {}
 
+    async def close_bot_runtimes(self, alias: str) -> None:
+        bot_id = -int(zlib.adler32(f"web:{alias}".encode("utf-8")))
+        channels = [channel for channel in self._turn_channels.values() if channel.bot_id == bot_id]
+        if any(not channel.diagnostics()["finished"] for channel in channels):
+            raise ValueError("当前 Bot 的原生 agent 仍在运行，先终止或等待完成后再归档")
+        await self._runtime_registry.close_bot_runtimes(bot_id)
+        for channel in channels:
+            await channel.close()
+            self._turn_channels.pop(channel.stream_id, None)
+
     async def shutdown(self) -> None:
         if self._runtime_eviction_task is not None:
             self._runtime_eviction_task.cancel()
@@ -313,7 +324,7 @@ class NativeAgentService:
         async def abort_turn() -> None:
             await self.abort(session)
 
-        channel = PiTurnChannel(producer, abort_turn=abort_turn)
+        channel = PiTurnChannel(producer, abort_turn=abort_turn, bot_id=session.bot_id)
         self._turn_channels[channel.stream_id] = channel
         return channel
 
@@ -629,6 +640,8 @@ class NativeAgentService:
         total_started = time.perf_counter()
         user_id = chat_session_user_id(session.user_id)
         with session._lock:
+            if profile.archived:
+                raise RuntimeError("智能体已归档，请先取消归档")
             if session.is_processing:
                 raise RuntimeError("当前会话正在处理上一条消息")
             session.native_agent_run_id = f"nar_{uuid.uuid4().hex[:12]}"

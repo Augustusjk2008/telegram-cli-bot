@@ -225,6 +225,7 @@ from .api_service import (
     kill_user_process,
     reply_native_agent_permission,
     list_bots,
+    list_archived_bots,
     list_agents,
     list_conversations,
     list_favorite_answers,
@@ -713,7 +714,9 @@ def _iter_field_chunks(field, *, chunk_size: int = 64 * 1024):
 
     return iterator()
 
-def _serialize_auth_session(session: WebAuthSession, *, include_token: bool = False) -> dict[str, Any]:
+def _serialize_auth_session(
+    session: WebAuthSession, *, include_token: bool = False, active_aliases: set[str] | None = None,
+) -> dict[str, Any]:
     auth = AuthContext(
         user_id=_session_user_id_for_account(session.account.account_id, session.account.session_user_id),
         token_used=True,
@@ -725,6 +728,9 @@ def _serialize_auth_session(session: WebAuthSession, *, include_token: bool = Fa
         owned_bot_aliases=_BOT_PERMISSION_STORE.owned_bot_aliases(session.account.account_id),
         is_local_admin=session.account.account_id == "local-admin",
     )
+    if active_aliases is not None:
+        auth.allowed_bot_aliases &= active_aliases
+        auth.owned_bot_aliases &= active_aliases
     return _serialize_auth_context(auth, token=session.token if include_token else "")
 
 
@@ -1233,6 +1239,9 @@ class WebApiServer:
 
     async def _with_auth(self, request: web.Request) -> AuthContext:
         auth = self._auth_context(request)
+        active_aliases = {self.manager.main_profile.alias, *self.manager.managed_profiles}
+        auth.allowed_bot_aliases &= active_aliases
+        auth.owned_bot_aliases &= active_aliases
         request["auth"] = auth
         return auth
 
@@ -1327,6 +1336,8 @@ class WebApiServer:
 
     def _can_operate_bot(self, auth: AuthContext, alias: str) -> bool:
         normalized_alias = self._normalize_bot_alias(alias)
+        if normalized_alias != self.manager.main_profile.alias and normalized_alias not in self.manager.managed_profiles:
+            return False
         if auth.role == ROLE_GUEST:
             return normalized_alias == self._normalize_bot_alias(self.manager.main_profile.alias)
         return self._is_local_admin(auth) or _BOT_PERMISSION_STORE.can_operate_bot(auth.account_id, normalized_alias)
@@ -1335,6 +1346,15 @@ class WebApiServer:
         if self._can_operate_bot(auth, alias):
             return auth
         raise WebApiError(403, "bot_forbidden", "无权访问该 Bot")
+
+    async def _with_archive_management_access(self, request: web.Request) -> AuthContext:
+        auth = await self._with_auth(request)
+        _require_capability(auth, CAP_ADMIN_OPS)
+        alias = self._manager_alias(request)
+        if not (self._is_local_admin(auth) or self._can_operate_bot(auth, alias)
+                or _BOT_PERMISSION_STORE.bot_owner(alias) == auth.account_id):
+            raise WebApiError(403, "bot_forbidden", "无权管理该 Bot")
+        return auth
 
     def _allows_readonly_bot_capability(self, request: web.Request, capability: str, auth: AuthContext) -> bool:
         if capability in auth.capabilities:
@@ -1664,7 +1684,9 @@ class WebApiServer:
             )
         except AuthStoreError as exc:
             raise _auth_error(exc) from exc
-        response = _json({"ok": True, "data": _serialize_auth_session(session)})
+        response = _json({"ok": True, "data": _serialize_auth_session(
+            session, active_aliases={self.manager.main_profile.alias, *self.manager.managed_profiles},
+        )})
         _set_auth_cookie(request, response, session.token, remember=bool(body.get("remember")))
         return response
 
@@ -1679,14 +1701,18 @@ class WebApiServer:
             )
         except AuthStoreError as exc:
             raise _auth_error(exc) from exc
-        response = _json({"ok": True, "data": _serialize_auth_session(session)})
+        response = _json({"ok": True, "data": _serialize_auth_session(
+            session, active_aliases={self.manager.main_profile.alias, *self.manager.managed_profiles},
+        )})
         _set_auth_cookie(request, response, session.token, remember=bool(body.get("remember")))
         return response
 
     async def auth_guest(self, request: web.Request) -> web.Response:
         _require_auth_cookie_issue_origin(request)
         session = _WEB_AUTH_STORE.create_guest_session()
-        response = _json({"ok": True, "data": _serialize_auth_session(session)})
+        response = _json({"ok": True, "data": _serialize_auth_session(
+            session, active_aliases={self.manager.main_profile.alias, *self.manager.managed_profiles},
+        )})
         _set_auth_cookie(request, response, session.token, remember=False)
         return response
 
@@ -1741,14 +1767,15 @@ class WebApiServer:
         permission_items = _BOT_PERMISSION_STORE.list_user_permission_summaries()["items"]
         permissions = {item["account_id"]: item for item in permission_items}
         users = []
+        active_aliases = {self.manager.main_profile.alias, *self.manager.managed_profiles}
         for user in _WEB_AUTH_STORE.list_members()["items"]:
             account_id = user["account_id"]
             permission = permissions.get(account_id, {})
             users.append(
                 {
                     **user,
-                    "allowed_bots": permission.get("allowed_bots", []),
-                    "owned_bots": permission.get("owned_bots", []),
+                    "allowed_bots": [alias for alias in permission.get("allowed_bots", []) if alias in active_aliases],
+                    "owned_bots": [alias for alias in permission.get("owned_bots", []) if alias in active_aliases],
                     "owned_bot_count": permission.get("owned_bot_count", 0),
                     "bot_create_limit": permission.get("bot_create_limit", _BOT_PERMISSION_STORE.MEMBER_BOT_LIMIT),
                 }
@@ -4323,9 +4350,15 @@ class WebApiServer:
         )
 
     async def admin_bots(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_MANAGE_BOTS)
+        auth = await self._with_any_capability(request, {CAP_MANAGE_BOTS, CAP_ADMIN_OPS})
         items = self._filter_bots_for_auth(auth, list_bots(self.manager, auth.user_id))
-        return _json({"ok": True, "data": self._decorate_bots_for_auth(auth, items)})
+        archived = [
+            {**item, "can_operate": False, "effective_capabilities": [],
+             "owner_account_id": _BOT_PERMISSION_STORE.bot_owner(item["alias"])}
+            for item in list_archived_bots(self.manager)
+            if self._is_local_admin(auth) or _BOT_PERMISSION_STORE.bot_owner(item["alias"]) == auth.account_id
+        ]
+        return _json({"ok": True, "data": [*self._decorate_bots_for_auth(auth, items), *archived]})
 
     async def admin_cli_error_stats(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
@@ -4385,7 +4418,7 @@ class WebApiServer:
         return _json({"ok": True, "data": data})
 
     async def admin_remove_bot(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_ADMIN_OPS)
+        auth = await self._with_archive_management_access(request)
         alias = self._manager_alias(request)
         delete_history = str(request.query.get("delete_history", "")).strip().lower() in {"1", "true", "yes", "on"}
         delete_workspace = str(request.query.get("delete_workspace", "")).strip().lower() in {"1", "true", "yes", "on"}
@@ -4416,12 +4449,18 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
         data = await archive_managed_bot(self.manager, alias)
+        _BOT_PERMISSION_STORE.revoke_bot_grants(alias)
         return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})
 
     async def admin_unarchive_bot(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_ADMIN_OPS)
+        auth = await self._with_archive_management_access(request)
         alias = self._manager_alias(request)
         data = await unarchive_managed_bot(self.manager, alias)
+        # Older archives may still have grants on disk; never revive those grants.
+        _BOT_PERMISSION_STORE.revoke_bot_grants(alias)
+        owner = _BOT_PERMISSION_STORE.bot_owner(alias)
+        if owner:
+            _BOT_PERMISSION_STORE.grant_bot_to_account(owner, alias)
         return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})
 
     async def admin_update_cli(self, request: web.Request) -> web.Response:

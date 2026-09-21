@@ -30,6 +30,7 @@ class _FakeClient:
 
     async def close(self) -> None:
         self.close_count += 1
+        self.process.poll = lambda: 0
 
     async def kill(self) -> None:
         self.close_count += 1
@@ -113,6 +114,61 @@ def _runtime(index: int, tmp_path: Path) -> PiSessionRuntime:
             command="pi",
         ),
     )
+
+
+@pytest.mark.asyncio
+async def test_close_bot_runtimes_is_scoped_and_rejects_busy_or_failed_shutdown(tmp_path, monkeypatch):
+    registry = PiSessionRuntimeRegistry()
+    target = _runtime(1, tmp_path)
+    other = _runtime(2, tmp_path)
+    target.state.owner_key = "-123:1:main"
+    other.state.owner_key = "-1234:1:main"
+    for runtime in (target, other):
+        registry._by_runtime_id[runtime.runtime_id] = runtime
+        registry._by_key[runtime.state.runtime_key] = runtime
+    target.state.processing = True
+    with pytest.raises(ValueError, match="仍在运行"):
+        await registry.close_bot_runtimes(-123)
+    assert target.client.close_count == 0
+    target.state.processing = False
+    with monkeypatch.context() as scoped:
+        async def fail_close():
+            raise RuntimeError("close failed")
+        scoped.setattr(target.client, "close", fail_close)
+        with pytest.raises(RuntimeError, match="close failed"):
+            await registry.close_bot_runtimes(-123)
+        assert registry.get_by_runtime_id(target.runtime_id) is target
+    await registry.close_bot_runtimes(-123)
+    assert target.client.close_count == 1
+    assert registry.get_by_runtime_id(target.runtime_id) is None
+    assert other.client.close_count == 0
+
+
+@pytest.mark.asyncio
+async def test_archive_waits_for_native_process_already_closing(tmp_path):
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def persist(runtime):
+        entered.set()
+        await release.wait()
+
+    registry = PiSessionRuntimeRegistry(before_runtime_close=persist)
+    runtime = _runtime(1, tmp_path)
+    runtime.state.owner_key = "-123:1:main"
+    registry._by_runtime_id[runtime.runtime_id] = runtime
+    registry._by_key[runtime.state.runtime_key] = runtime
+    closing = asyncio.create_task(registry.close_runtime(runtime))
+    try:
+        await asyncio.wait_for(entered.wait(), _TEST_TIMEOUT_SECONDS)
+        with pytest.raises(ValueError, match="正在启动或关闭"):
+            await registry.close_bot_runtimes(-123)
+        assert runtime.client.close_count == 0
+    finally:
+        release.set()
+        await closing
+    await registry.close_bot_runtimes(-123)
+    assert runtime.client.close_count == 1
 
 
 def _runtime_with_client(client: _FakeClient, tmp_path: Path) -> PiSessionRuntime:

@@ -94,8 +94,21 @@ class MultiBotManager:
     def _load_profiles(self) -> None:
         self.managed_profiles = load_managed_profiles(self.storage_file)
 
-    def _save_profiles(self) -> None:
-        save_managed_profiles(self.storage_file, self.managed_profiles)
+    def _save_profiles(self, *, removed_alias: str = "") -> None:
+        save_managed_profiles(self.storage_file, self.managed_profiles, removed_alias=removed_alias)
+
+    def load_archived_profiles(self) -> dict[str, BotProfile]:
+        return load_managed_profiles(self.storage_file, archived=True)
+
+    def get_management_profile(self, alias: str) -> BotProfile:
+        normalized_alias = str(alias or "").strip().lower()
+        try:
+            return self.get_profile(normalized_alias)
+        except KeyError:
+            profile = self.load_archived_profiles().get(normalized_alias)
+            if profile is None:
+                raise ValueError(f"不存在 alias `{normalized_alias}`")
+            return profile
 
     def _apply_persisted_main_profile(self) -> None:
         apply_persisted_main_profile(self.main_profile, self.app_settings_file)
@@ -319,7 +332,7 @@ class MultiBotManager:
             )
 
         async with self._lock:
-            if normalized_alias in self.managed_profiles:
+            if normalized_alias in self.managed_profiles or normalized_alias in self.load_archived_profiles():
                 raise ValueError(f"alias `{normalized_alias}` 已存在")
             profile = BotProfile(
                 alias=normalized_alias,
@@ -377,10 +390,14 @@ class MultiBotManager:
             raise ValueError(f"无法移除主 Bot `{normalized_alias}`")
 
         async with self._lock:
-            if normalized_alias not in self.managed_profiles:
-                raise ValueError(f"不存在 alias `{normalized_alias}`")
-            del self.managed_profiles[normalized_alias]
-            self._save_profiles()
+            self.get_management_profile(normalized_alias)
+            profile = self.managed_profiles.pop(normalized_alias, None)
+            try:
+                self._save_profiles(removed_alias=normalized_alias)
+            except BaseException:
+                if profile is not None:
+                    self.managed_profiles[normalized_alias] = profile
+                raise
 
     async def start_bot(self, alias: str) -> None:
         normalized_alias = str(alias or "").strip().lower()
@@ -407,7 +424,7 @@ class MultiBotManager:
             profile.enabled = False
             self._save_profiles()
 
-    async def archive_bot(self, alias: str) -> None:
+    async def archive_bot(self, alias: str) -> BotProfile:
         normalized_alias = str(alias or "").strip().lower()
         if normalized_alias == self.main_profile.alias:
             raise ValueError(f"主 Bot `{normalized_alias}` 无法归档")
@@ -416,9 +433,29 @@ class MultiBotManager:
             if normalized_alias not in self.managed_profiles:
                 raise ValueError(f"不存在 alias `{normalized_alias}`")
             profile = self.managed_profiles[normalized_alias]
-            profile.archived = True
+            from bot.sessions import get_bot_sessions, unload_bot_sessions
+            from bot.native_agent.service import get_native_agent_service
+
+            for session in get_bot_sessions(normalized_alias):
+                with session._lock:
+                    if session.is_processing or session.process is not None:
+                        raise ValueError("当前 Bot 有任务运行中，先终止或等待完成后再归档")
+            # Remove access before awaiting runtime shutdown; publish the archive only
+            # after all idle native processes have closed successfully.
+            del self.managed_profiles[normalized_alias]
+            was_enabled = profile.enabled
             profile.enabled = False
-            self._save_profiles()
+            profile.archived = True
+            try:
+                await get_native_agent_service().close_bot_runtimes(normalized_alias)
+                unload_bot_sessions(normalized_alias)
+                save_managed_profiles(self.storage_file, {**self.managed_profiles, normalized_alias: profile})
+            except BaseException:
+                profile.archived = False
+                profile.enabled = was_enabled
+                self.managed_profiles[normalized_alias] = profile
+                raise
+            return profile
 
     async def unarchive_bot(self, alias: str) -> None:
         normalized_alias = str(alias or "").strip().lower()
@@ -426,11 +463,17 @@ class MultiBotManager:
             raise ValueError(f"主 Bot `{normalized_alias}` 无法取消归档")
 
         async with self._lock:
-            if normalized_alias not in self.managed_profiles:
-                raise ValueError(f"不存在 alias `{normalized_alias}`")
-            profile = self.managed_profiles[normalized_alias]
+            profile = self.get_management_profile(normalized_alias)
+            if not profile.archived:
+                raise ValueError(f"Bot `{normalized_alias}` 未归档")
             profile.archived = False
-            self._save_profiles()
+            profile.enabled = False
+            self.managed_profiles[normalized_alias] = profile
+            try:
+                self._save_profiles()
+            except BaseException:
+                self.managed_profiles.pop(normalized_alias, None)
+                raise
 
     async def set_bot_cli(self, alias: str, cli_type: str, cli_path: str) -> None:
         normalized_alias = str(alias or "").strip().lower()
@@ -525,7 +568,8 @@ class MultiBotManager:
                 raise ValueError(f"不存在 alias `{normalized_alias}`")
             if normalized_new_alias == normalized_alias:
                 raise ValueError("新旧 alias 不能相同")
-            if normalized_new_alias == self.main_profile.alias or normalized_new_alias in self.managed_profiles:
+            if (normalized_new_alias == self.main_profile.alias or normalized_new_alias in self.managed_profiles
+                    or normalized_new_alias in self.load_archived_profiles()):
                 raise ValueError(f"alias `{normalized_new_alias}` 已存在")
 
             profile = self.managed_profiles.pop(normalized_alias)

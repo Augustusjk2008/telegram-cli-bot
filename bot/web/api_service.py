@@ -591,7 +591,7 @@ def build_bot_summary(
     # 优先使用共享聊天 session 的工作目录（如果已建立）
     working_dir = profile.working_dir
     current_session = session
-    if user_id is not None:
+    if user_id is not None and not profile.archived:
         try:
             current_session = session or get_session_for_alias(manager, alias, chat_session_user_id(user_id))
             if current_session and current_session.working_dir:
@@ -599,7 +599,7 @@ def build_bot_summary(
         except Exception:
             # 如果获取 session 失败，使用 profile 的工作目录
             pass
-    agent_items = _build_agent_status_items(profile, _build_agent_runtime_map(bot_id, user_id))
+    agent_items = _build_agent_status_items(profile, {} if profile.archived else _build_agent_runtime_map(bot_id, user_id))
     active_cluster_run = None
     if user_id is not None and current_session is not None and profile.cluster.enabled:
         try:
@@ -609,14 +609,16 @@ def build_bot_summary(
             pass
     activity = _build_activity_summary(agent_items, _cluster_role_names(active_cluster_run))
     latest_answer_completed_at = ""
-    latest_answer_store = ChatStore(Path(working_dir))
-    latest_answer_user_id = chat_session_user_id(user_id) if user_id is not None else None
-    if latest_answer_user_id is not None:
-        latest_answer_store.migrate_conversations_to_shared(bot_id, latest_answer_user_id)
-    latest_answer_completed_at, latest_answer_terminal_at = latest_answer_store.get_latest_answer_times(
-        bot_id=bot_id,
-        user_id=latest_answer_user_id,
-    )
+    latest_answer_terminal_at = ""
+    if not profile.archived:
+        latest_answer_store = ChatStore(Path(working_dir))
+        latest_answer_user_id = chat_session_user_id(user_id) if user_id is not None else None
+        if latest_answer_user_id is not None:
+            latest_answer_store.migrate_conversations_to_shared(bot_id, latest_answer_user_id)
+        latest_answer_completed_at, latest_answer_terminal_at = latest_answer_store.get_latest_answer_times(
+            bot_id=bot_id,
+            user_id=latest_answer_user_id,
+        )
 
     return {
         "alias": profile.alias,
@@ -644,6 +646,11 @@ def build_bot_summary(
 def list_bots(manager: MultiBotManager, user_id: Optional[int] = None) -> list[dict[str, Any]]:
     aliases = [manager.main_profile.alias, *sorted(manager.managed_profiles.keys())]
     return [build_bot_summary(manager, alias, user_id) for alias in aliases]
+
+
+def list_archived_bots(manager: MultiBotManager) -> list[dict[str, Any]]:
+    return [build_bot_summary(manager, alias, profile=profile)
+            for alias, profile in sorted(manager.load_archived_profiles().items())]
 
 
 def get_overview(manager: MultiBotManager, alias: str, user_id: int, agent_id: str = "main", execution_mode: str = "") -> dict[str, Any]:
@@ -2406,6 +2413,7 @@ def _profile_workspace_items(manager: MultiBotManager) -> list[tuple[str, BotPro
     return [
         (manager.main_profile.alias, manager.main_profile),
         *[(alias, manager.managed_profiles[alias]) for alias in sorted(manager.managed_profiles.keys())],
+        *manager.load_archived_profiles().items(),
     ]
 
 
@@ -6502,7 +6510,10 @@ async def remove_managed_bot_with_history(
     normalized_alias = str(alias or "").strip().lower()
     if normalized_alias == str(manager.main_profile.alias or "").strip().lower():
         _raise(400, "invalid_bot_config", f"无法移除主 Bot `{normalized_alias}`")
-    profile = get_profile_or_raise(manager, alias)
+    try:
+        profile = manager.get_management_profile(alias)
+    except ValueError as exc:
+        _raise(404, "bot_not_found", str(exc))
     bot_id = resolve_session_bot_id(manager, alias)
     should_delete_history = bool(delete_history or delete_workspace)
     workspace_result: dict[str, Any] = {
@@ -6562,11 +6573,15 @@ async def stop_managed_bot(manager: MultiBotManager, alias: str) -> dict[str, An
 
 
 async def archive_managed_bot(manager: MultiBotManager, alias: str) -> dict[str, Any]:
+    if _CLUSTER_RUNTIME.has_pending_tasks(bot_alias=alias):
+        _raise(409, "conversation_switch_blocked", "当前 Bot 有集群任务运行中，先终止或等待完成后再归档")
     try:
-        await manager.archive_bot(alias)
+        profile = await manager.archive_bot(alias)
     except ValueError as exc:
         _raise(400, "invalid_bot_config", str(exc))
-    return {"bot": build_bot_summary(manager, alias)}
+    for run_id in _CLUSTER_RUNTIME.unload_bot_runs(alias):
+        _CLUSTER_RUN_CONTROLS.pop(run_id, None)
+    return {"bot": build_bot_summary(manager, alias, profile=profile)}
 
 
 async def unarchive_managed_bot(manager: MultiBotManager, alias: str) -> dict[str, Any]:

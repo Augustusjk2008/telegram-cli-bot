@@ -17,7 +17,7 @@ from bot.models import AgentProfile, BotProfile, normalize_execution_mode_config
 logger = logging.getLogger(__name__)
 
 
-def load_managed_profiles(storage_file: Path) -> dict[str, BotProfile]:
+def load_managed_profiles(storage_file: Path, *, archived: bool = False) -> dict[str, BotProfile]:
     if not storage_file.exists():
         return {}
 
@@ -26,16 +26,22 @@ def load_managed_profiles(storage_file: Path) -> dict[str, BotProfile]:
         data = json.loads(raw)
     except Exception as exc:
         logger.error("读取托管 Bot 配置失败: %s", exc)
+        if archived:
+            raise
         return {}
 
     items = data.get("bots", []) if isinstance(data, dict) else data
     if not isinstance(items, list):
+        if archived:
+            raise ValueError("托管 Bot 配置格式无效")
         logger.warning("托管 Bot 配置格式无效，已忽略")
         return {}
 
     profiles: dict[str, BotProfile] = {}
     for item in items:
         if not isinstance(item, dict):
+            continue
+        if bool(item.get("archived", False)) != archived:
             continue
 
         alias = str(item.get("alias", "")).strip().lower()
@@ -85,12 +91,28 @@ def load_managed_profiles(storage_file: Path) -> dict[str, BotProfile]:
     return profiles
 
 
-def save_managed_profiles(storage_file: Path, profiles: dict[str, BotProfile]) -> None:
-    payload = {"bots": [profiles[key].to_dict() for key in sorted(profiles.keys())]}
-    storage_file.write_text(
+def save_managed_profiles(
+    storage_file: Path, profiles: dict[str, BotProfile], *, removed_alias: str = "",
+) -> None:
+    # Cold profiles stay on disk, including fields unknown to this version.
+    stored = json.loads(storage_file.read_text(encoding="utf-8")) if storage_file.exists() else []
+    items = stored.get("bots", []) if isinstance(stored, dict) else stored
+    if not isinstance(items, list):
+        raise ValueError("托管 Bot 配置格式无效")
+    saved = {
+        str(item.get("alias", "")).strip().lower(): item
+        for item in items
+        if isinstance(item, dict) and item.get("archived")
+        and str(item.get("alias", "")).strip().lower() != removed_alias
+    }
+    saved.update({alias: profile.to_dict() for alias, profile in profiles.items()})
+    payload = {"bots": [saved[key] for key in sorted(saved)]}
+    temporary = storage_file.with_suffix(storage_file.suffix + ".tmp")
+    temporary.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    temporary.replace(storage_file)
 
 
 def apply_persisted_main_profile(main_profile: BotProfile, app_settings_file: Path) -> None:

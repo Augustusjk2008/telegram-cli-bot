@@ -71,6 +71,18 @@ def test_finish_run_keeps_cancelled_run_status() -> None:
     assert runtime.get_run(run.run_id).status == "cancelled"  # type: ignore[union-attr]
 
 
+def test_unload_bot_runs_requires_completed_tasks_and_preserves_other_bots() -> None:
+    runtime = ClusterRuntime()
+    run, task = _run_with_task(runtime)
+    other = runtime.start_run(ClusterRunRequest(bot_alias="other", user_id=1, profile=_profile(), execution_mode="cli"))
+    with pytest.raises(ValueError, match="任务运行中"):
+        runtime.unload_bot_runs("main")
+    runtime.complete_agent_task(run.run_id, task.task_id, "done")
+    assert runtime.unload_bot_runs("main") == [run.run_id]
+    assert runtime.get_run(run.run_id) is None
+    assert runtime.get_run(other.run_id) is other
+
+
 @pytest.mark.asyncio
 async def test_cancel_cluster_run_cancels_running_background_tasks(monkeypatch) -> None:
     import bot.web.api_service as api_service

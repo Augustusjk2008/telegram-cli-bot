@@ -152,7 +152,7 @@ export function BotListScreen({
     unarchiveBot,
     renameBot,
     deleteBot,
-  } = useBotManager({ client, onBotsChange });
+  } = useBotManager({ client, onBotsChange, includeArchived: canManage });
   const [createDraft, setCreateDraft] = useState<CreateDraft>(() => buildCreateDraft());
 
   const directoryBrowserAlias = bots.find((bot) => bot.isMain || bot.alias === "main")?.alias || bots[0]?.alias || "main";
@@ -509,7 +509,7 @@ export function BotListScreen({
                           setRenamingAlias((prev) => prev === bot.alias ? "" : bot.alias);
                           setRenameDrafts((prev) => ({ ...prev, [bot.alias]: bot.alias }));
                         }}
-                        disabled={savingAction !== ""}
+                        disabled={savingAction !== "" || isArchived}
                         className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
                       >
                         改名

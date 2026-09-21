@@ -83,6 +83,7 @@ type SaveBotEditsResult =
 type UseBotManagerArgs = {
   client?: WebBotClient;
   onBotsChange?: (bots: BotSummary[]) => void;
+  includeArchived?: boolean;
 };
 
 function normalizeNativeAgentInput(nativeAgent: CreateBotInput["nativeAgent"] | EditDraft["nativeAgent"] | undefined) {
@@ -108,6 +109,7 @@ function comparableNativeAgentInput(nativeAgent: CreateBotInput["nativeAgent"] |
 export function useBotManager({
   client = new MockWebBotClient(),
   onBotsChange,
+  includeArchived = true,
 }: UseBotManagerArgs = {}) {
   const [bots, setBots] = useState<BotSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -119,14 +121,14 @@ export function useBotManager({
   function replaceBots(next: BotSummary[]) {
     botsRef.current = next;
     setBots(next);
-    onBotsChange?.(next);
+    onBotsChange?.(next.filter((bot) => !bot.archived));
   }
 
   async function loadBots() {
     setLoading(true);
     setError("");
     try {
-      const data = await client.listBots();
+      const data = await client.listBots({ includeArchived });
       replaceBots(data);
       return data;
     } catch (err) {
@@ -146,7 +148,7 @@ export function useBotManager({
 
   useEffect(() => {
     void loadBots();
-  }, [client]);
+  }, [client, includeArchived]);
 
   async function createBot(draft: CreateDraft) {
     if (!draft.alias.trim()) {

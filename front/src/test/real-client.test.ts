@@ -92,6 +92,14 @@ describe("RealWebBotClient", () => {
     expect(restored.archived).toBe(false);
   });
 
+  test("loads archived bots only through the management endpoint", async () => {
+    fetchMock.mockResolvedValue(jsonOk([]));
+    const client = new RealWebBotClient();
+    await client.listBots();
+    await client.listBots({ includeArchived: true });
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual(["/api/bots", "/api/admin/bots"]);
+  });
+
   test("uses the active public base path for auth requests and download links", async () => {
     window.history.replaceState(null, "", "/node/nanjing-laptop/");
     vi.stubGlobal("__PUBLIC_ENV__", { VITE_API_BASE_URL: "/node/nanjing-laptop" });

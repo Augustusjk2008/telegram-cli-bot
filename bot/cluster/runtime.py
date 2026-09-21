@@ -238,6 +238,14 @@ class ClusterRuntime:
             for task in run.tasks.values()
         )
 
+    def unload_bot_runs(self, bot_alias: str) -> list[str]:
+        if self.has_pending_tasks(bot_alias=bot_alias):
+            raise ValueError("当前 Bot 有集群任务运行中，先终止或等待完成后再归档")
+        run_ids = [run.run_id for run in self._runs.values() if run.bot_alias == bot_alias]
+        for run_id in run_ids:
+            self._runs.pop(run_id, None)
+        return run_ids
+
     def find_active_run(
         self,
         bot_alias: str,

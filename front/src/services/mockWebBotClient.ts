@@ -3296,12 +3296,13 @@ export class MockWebBotClient implements WebBotClient {
     return this.buildEnvPatchResult(input, true);
   }
 
-  async listBots(): Promise<BotSummary[]> {
+  async listBots(options?: { includeArchived?: boolean }): Promise<BotSummary[]> {
     const aliases = Array.from(this.bots.keys());
     const visibleAliases = this.session.role === "guest"
       ? aliases.filter((alias) => alias === "main")
       : aliases;
-    return visibleAliases.map((alias) => this.getBotSummary(alias));
+    return visibleAliases.map((alias) => this.getBotSummary(alias))
+      .filter((bot) => options?.includeArchived || !bot.archived);
   }
 
   async listPlugins(_refresh = false): Promise<PluginSummary[]> {

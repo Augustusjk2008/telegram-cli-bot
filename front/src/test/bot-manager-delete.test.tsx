@@ -35,12 +35,15 @@ test("bot list archives and restores a non-main bot", async () => {
   const client = new MockWebBotClient();
   const archiveBot = vi.spyOn(client, "archiveBot");
   const unarchiveBot = vi.spyOn(client, "unarchiveBot");
+  const onBotsChange = vi.fn();
 
-  render(<BotListScreen client={client} onSelect={vi.fn()} />);
+  render(<BotListScreen client={client} onSelect={vi.fn()} onBotsChange={onBotsChange} />);
 
   await user.click(await screen.findByRole("button", { name: "归档 team2" }));
   await waitFor(() => expect(archiveBot).toHaveBeenCalledWith("team2"));
   expect(await screen.findByText("已归档")).toBeInTheDocument();
+  expect(onBotsChange.mock.lastCall?.[0].some((bot: { alias: string }) => bot.alias === "team2")).toBe(false);
+  expect((await client.listBots()).some((bot) => bot.alias === "team2")).toBe(false);
 
   await user.click(screen.getByRole("button", { name: "取消归档 team2" }));
   await waitFor(() => expect(unarchiveBot).toHaveBeenCalledWith("team2"));

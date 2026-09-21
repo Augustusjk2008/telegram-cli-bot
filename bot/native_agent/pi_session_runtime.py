@@ -311,7 +311,7 @@ class PiSessionRuntimeRegistry:
         self._owner_start_refcounts: dict[str, int] = {}
         self._shutdown_started = False
         self._before_runtime_close = before_runtime_close
-        self._closing_runtime_ids: set[str] = set()
+        self._closing_runtime_owners: dict[str, str] = {}
 
     async def open_or_create(self, request: PiSessionRuntimeRequest) -> PiSessionRuntime:
         normalized = _normalize_request(request)
@@ -487,6 +487,34 @@ class PiSessionRuntimeRegistry:
         if detached is not None:
             await self._persist_and_close_runtime(detached)
 
+    async def close_bot_runtimes(self, bot_id: int) -> None:
+        prefix = f"{bot_id}:"
+        async with self._lock:
+            if any(owner.startswith(prefix) for owner in (
+                *self._owner_start_refcounts, *self._closing_runtime_owners.values(),
+            )):
+                raise ValueError("当前 Bot 的原生 agent 正在启动或关闭，请稍后重试归档")
+            runtimes = [runtime for runtime in self._by_runtime_id.values()
+                        if runtime.state.owner_key.startswith(prefix)]
+            if any(runtime.state.processing or runtime.state.pending_permission_ids or runtime._active_consumers
+                   for runtime in runtimes):
+                raise ValueError("当前 Bot 的原生 agent 仍在运行，先终止或等待完成后再归档")
+            self._closing_runtime_owners.update({runtime.runtime_id: runtime.state.owner_key for runtime in runtimes})
+        try:
+            for runtime in runtimes:
+                # Keep failed closures registered so a retry cannot overlook a process.
+                if self._before_runtime_close is not None:
+                    await self._before_runtime_close(runtime)
+                await runtime.close()
+                if runtime.is_running():
+                    raise RuntimeError("原生 agent 进程未完全退出，无法归档")
+                async with self._lock:
+                    self._by_key.pop(runtime.state.runtime_key, None)
+                    self._by_runtime_id.pop(runtime.runtime_id, None)
+        finally:
+            for runtime in runtimes:
+                self._closing_runtime_owners.pop(runtime.runtime_id, None)
+
     async def shutdown(self) -> dict[str, int]:
         deadline = asyncio.get_running_loop().time() + PI_RUNTIME_SHUTDOWN_DEADLINE_SECONDS
         report = {
@@ -512,7 +540,7 @@ class PiSessionRuntimeRegistry:
             self._by_key.clear()
             self._by_runtime_id.clear()
             self._start_reservations.clear()
-            self._closing_runtime_ids.update(runtime.runtime_id for runtime in runtimes)
+            self._closing_runtime_owners.update({runtime.runtime_id: runtime.state.owner_key for runtime in runtimes})
         finally:
             self._lock.release()
 
@@ -548,11 +576,11 @@ class PiSessionRuntimeRegistry:
 
     def _detach_locked(self, runtime: PiSessionRuntime) -> PiSessionRuntime | None:
         current = self._by_runtime_id.get(runtime.runtime_id)
-        if current is not runtime or runtime.runtime_id in self._closing_runtime_ids:
+        if current is not runtime or runtime.runtime_id in self._closing_runtime_owners:
             return None
         self._by_key.pop(runtime.state.runtime_key, None)
         self._by_runtime_id.pop(runtime.runtime_id, None)
-        self._closing_runtime_ids.add(runtime.runtime_id)
+        self._closing_runtime_owners[runtime.runtime_id] = runtime.state.owner_key
         return runtime
 
     async def _persist_and_close_runtime(self, runtime: PiSessionRuntime) -> dict[str, bool]:
@@ -576,7 +604,7 @@ class PiSessionRuntimeRegistry:
                 closed = True
             return {"persisted": persisted, "closed": closed}
         finally:
-            self._closing_runtime_ids.discard(runtime.runtime_id)
+            self._closing_runtime_owners.pop(runtime.runtime_id, None)
 
     async def _close_many(
         self,
