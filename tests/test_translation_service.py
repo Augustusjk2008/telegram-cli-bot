@@ -37,11 +37,13 @@ def build_service(tmp_path, **kwargs):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("direction", ["user", "assistant"])
-async def test_sends_only_the_selected_complete_prompt(tmp_path, direction):
+@pytest.mark.parametrize("effort", ["none", "low", "medium", "high"])
+async def test_sends_selected_prompt_and_reasoning(tmp_path, direction, effort):
     service = build_service(tmp_path)
-    config = replace(CONFIG, user_prompt=" Translate into English.\n", assistant_prompt="翻译为简体中文。\n")
+    config = replace(CONFIG, user_prompt=" Translate into English.\n", assistant_prompt="翻译为简体中文。\n", reasoning_effort=effort)
     await service.translate("源文本", config=config, direction=direction)
     messages = service.client.post_chat_completion.call_args.kwargs["body"]["messages"]
+    assert service.client.post_chat_completion.call_args.kwargs["body"]["reasoning_effort"] == effort
     assert messages[0] == {"role": "system", "content": getattr(config, f"{direction}_prompt")}
     await service.close()
 
@@ -117,6 +119,7 @@ async def test_translation_uses_shared_http_client_and_restores_protected_conten
     assert captured["url"] == "https://provider.test/v1/chat/completions"
     assert captured["headers"]["Authorization"] == "Bearer sk-secret"
     assert captured["json"]["model"] == CONFIG.model
+    assert captured["json"]["reasoning_effort"] == "none"
     assert captured["json"]["stream"] is False
     messages = captured["json"]["messages"]
     assert len(messages) == 2

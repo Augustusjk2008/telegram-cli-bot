@@ -16,6 +16,16 @@ API_CONFIG = {
 }
 
 
+@pytest.mark.parametrize("effort", ["none", "low", "medium", "high"])
+def test_reasoning_defaults_and_persists(tmp_path, effort):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(API_CONFIG), encoding="utf-8")
+    store = TranslationConfigStore(path)
+    assert store.get_public_config()["reasoning_effort"] == "none"
+    assert store.update({"reasoning_effort": effort})["reasoning_effort"] == effort
+    assert TranslationConfigStore(path).get_config().reasoning_effort == effort
+
+
 @pytest.mark.parametrize(("direction", "default"), [
     ("user", DEFAULT_USER_TRANSLATION_PROMPT),
     ("assistant", DEFAULT_ASSISTANT_TRANSLATION_PROMPT),
@@ -42,6 +52,7 @@ def test_config_persists_outside_repo_with_frozen_redacted_snapshots(tmp_path, m
     initial = store.get_config()
     assert not initial.translate_user_enabled and not initial.translate_assistant_enabled
     assert initial.request_timeout_seconds == 15
+    assert initial.reasoning_effort == "none"
     assert store.path == tmp_path / "chat-translation" / "config.json"
     assert not store.path.exists()
 
@@ -83,6 +94,10 @@ def test_each_direction_requires_api_config_and_defaults_blank_prompt(tmp_path, 
 
 
 @pytest.mark.parametrize("payload", [
+    {"reasoning_effort": "minimal"},
+    {"reasoning_effort": ""},
+    {"reasoning_effort": None},
+    {"reasoning_effort": []},
     {"translate_user_enabled": "false"},
     {"translate_assistant_enabled": 1},
     {"clear_api_key": "true"},

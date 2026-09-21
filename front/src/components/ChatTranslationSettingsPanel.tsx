@@ -43,6 +43,7 @@ export function ChatTranslationSettingsPanel({ client, onSaved }: { client: WebB
       translate_assistant_enabled: config.translate_assistant_enabled,
       base_url: config.base_url.trim(),
       model: config.model.trim(),
+      reasoning_effort: config.reasoning_effort,
       request_timeout_seconds: config.request_timeout_seconds,
       api_key: clearApiKey ? "" : apiKey.trim(),
       ...(clearApiKey ? { clear_api_key: true } : {}),
@@ -94,6 +95,16 @@ export function ChatTranslationSettingsPanel({ client, onSaved }: { client: WebB
             <span>翻译超时（秒）</span>
             <input className={inputClass} type="number" min="0.1" step="any" value={config.request_timeout_seconds || ""}
               onChange={(event) => setConfig({ ...config, request_timeout_seconds: Number(event.target.value) })} />
+          </label>
+          <label className="min-w-0 space-y-1 text-sm">
+            <span>翻译推理深度</span>
+            <select className={inputClass} value={config.reasoning_effort}
+              onChange={(event) => setConfig({ ...config, reasoning_effort: event.target.value as typeof config.reasoning_effort })}>
+              <option value="none">无（none）</option>
+              <option value="low">低（low）</option>
+              <option value="medium">中（medium）</option>
+              <option value="high">高（high）</option>
+            </select>
           </label>
         </div>
         {([

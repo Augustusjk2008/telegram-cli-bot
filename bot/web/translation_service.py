@@ -179,6 +179,7 @@ class TranslationService:
                 api_key=config.api_key,
                 body={
                     "model": config.model,
+                    "reasoning_effort": config.reasoning_effort,
                     "stream": False,
                     "messages": [
                         {"role": "system", "content": prompt},

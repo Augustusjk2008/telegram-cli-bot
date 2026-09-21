@@ -1,6 +1,7 @@
 import type { ChatMessage, ChatStatusUpdate, ChatTranslation, ChatTranslationConfig } from "../services/types";
 
 export const DEFAULT_CHAT_TRANSLATION_CONFIG: ChatTranslationConfig = {
+  reasoning_effort: "none",
   user_prompt: "",
   assistant_prompt: "",
   translate_user_enabled: false,

@@ -56,6 +56,7 @@ class TranslationConfig:
     base_url: str = ""
     api_key: str = field(default="", repr=False)
     model: str = ""
+    reasoning_effort: str = "none"
     user_prompt: str = DEFAULT_USER_TRANSLATION_PROMPT
     assistant_prompt: str = DEFAULT_ASSISTANT_TRANSLATION_PROMPT
     request_timeout_seconds: float = 15
@@ -76,6 +77,11 @@ def _updated_config(config: TranslationConfig, payload: dict[str, Any]) -> Trans
     if not isinstance(payload, dict):
         raise TranslationConfigError("翻译配置必须是 JSON 对象")
     values: dict[str, Any] = {}
+    if "reasoning_effort" in payload:
+        effort = payload["reasoning_effort"]
+        if not isinstance(effort, str) or effort not in ("none", "low", "medium", "high"):
+            raise TranslationConfigError("翻译推理深度必须是 none、low、medium 或 high")
+        values["reasoning_effort"] = effort
     for name in ("translate_user_enabled", "translate_assistant_enabled", "clear_api_key"):
         if name in payload:
             if not isinstance(payload[name], bool):

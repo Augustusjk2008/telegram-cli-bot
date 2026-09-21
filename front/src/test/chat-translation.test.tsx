@@ -35,6 +35,8 @@ test("configuration saves independent complete prompts and explicitly clears the
   render(<ChatTranslationSettingsPanel client={clientWith({ getChatTranslationConfig: async () => config, updateChatTranslationConfig: update })} />);
   const save = screen.getByRole("button", { name: "保存聊天翻译配置" });
   await waitFor(() => expect(save).toBeEnabled());
+  expect(screen.getByLabelText("翻译推理深度")).toHaveValue("none");
+  fireEvent.change(screen.getByLabelText("翻译推理深度"), { target: { value: "high" } });
   fireEvent.click(screen.getByRole("checkbox", { name: "翻译提问" }));
   fireEvent.change(screen.getByLabelText("用户消息翻译提示词"), { target: { value: " Translate into English. For logs return <skip translation>. " } });
   fireEvent.change(screen.getByLabelText("Bot 回答翻译提示词"), { target: { value: "Translate into Chinese. On failure return <translation failed>." } });
@@ -43,6 +45,7 @@ test("configuration saves independent complete prompts and explicitly clears the
   expect(update.mock.calls[0][0]).toMatchObject({ translate_user_enabled: true, translate_assistant_enabled: false, api_key: "" });
   expect(update.mock.calls[0][0]).not.toHaveProperty("api_key_configured");
   expect(update.mock.calls[0][0]).toMatchObject({
+    reasoning_effort: "high",
     user_prompt: " Translate into English. For logs return <skip translation>. ",
     assistant_prompt: "Translate into Chinese. On failure return <translation failed>.",
   });

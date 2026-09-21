@@ -981,6 +981,7 @@ export type ChatTraceDetails = {
 };
 
 export type ChatTranslationConfig = {
+  reasoning_effort: "none" | "low" | "medium" | "high";
   user_prompt: string;
   assistant_prompt: string;
   translate_user_enabled: boolean;
