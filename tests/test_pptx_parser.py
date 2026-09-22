@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import base64
 import json
 import shutil
 import subprocess
@@ -30,11 +31,38 @@ spec.loader.exec_module(module)
 def pptx_bytes(slides=3):
     buffer = BytesIO()
     with ZipFile(buffer, "w") as archive:
-        ids = "".join(f'<p:sldId id="{256 + index}"/>' for index in range(slides))
+        ids = "".join(f'<p:sldId id="{256 + index}" r:id="s{index + 1}"/>' for index in range(slides))
         archive.writestr("ppt/presentation.xml", (
-            '<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">'
-            f'<p:sldIdLst>{ids}</p:sldIdLst></p:presentation>'
+            '<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+            f'<p:sldIdLst>{ids}</p:sldIdLst><p:sldSz cx="9144000" cy="5143500"/></p:presentation>'
         ))
+        rels = "".join(f'<Relationship Id="s{index + 1}" Target="slides/slide{index + 1}.xml"/>'
+                       for index in range(slides))
+        archive.writestr("ppt/_rels/presentation.xml.rels", (
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            f'{rels}</Relationships>'
+        ))
+        for index in range(slides):
+            archive.writestr(f"ppt/slides/slide{index + 1}.xml", f'''<p:sld
+                xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+                xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+                show="{0 if index == 1 else 1}">
+              <p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr val="EEEEEE"/></a:solidFill></p:bgPr></p:bg>
+              <p:spTree><p:sp><p:spPr><a:xfrm><a:off x="304800" y="304800"/>
+              <a:ext cx="6096000" cy="914400"/></a:xfrm></p:spPr>
+              <p:txBody><a:p><a:r><a:rPr sz="2400"><a:solidFill><a:srgbClr val="123456"/></a:solidFill></a:rPr>
+              <a:t>No Office required 中文 {index + 1}</a:t></a:r></a:p></p:txBody></p:sp>
+              <p:pic><p:blipFill><a:blip r:embed="img"/></p:blipFill><p:spPr><a:xfrm>
+              <a:off x="304800" y="1524000"/><a:ext cx="914400" cy="914400"/></a:xfrm></p:spPr></p:pic>
+              </p:spTree></p:cSld></p:sld>''')
+            archive.writestr(f"ppt/slides/_rels/slide{index + 1}.xml.rels", (
+                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                '<Relationship Id="img" Target="../media/pixel.png"/></Relationships>'
+            ))
+        archive.writestr("ppt/media/pixel.png", base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF2kAAAAASUVORK5CYII="))
     return buffer.getvalue()
 
 
@@ -130,7 +158,7 @@ def test_oversized_preview_is_rejected_before_publication(monkeypatch):
     write.assert_not_called()
 
 
-def test_converter_discovery_and_actionable_missing_dependency(monkeypatch, tmp_path):
+def test_converter_discovery_allows_missing_optional_dependency(monkeypatch, tmp_path):
     executable = tmp_path / "LibreOffice/program/soffice.com"
     executable.parent.mkdir(parents=True)
     executable.touch()
@@ -142,8 +170,29 @@ def test_converter_discovery_and_actionable_missing_dependency(monkeypatch, tmp_
     monkeypatch.delenv("ProgramFiles(x86)", raising=False)
     assert module.find_libreoffice() == str(executable)
     monkeypatch.setattr(module.Path, "is_file", lambda _: False)
-    with pytest.raises(RuntimeError, match="需要 LibreOffice"):
-        module.find_libreoffice()
+    assert module.find_libreoffice() == ""
+
+
+def test_missing_libreoffice_opens_slides_with_builtin_preview(monkeypatch):
+    monkeypatch.syspath_prepend(str(PLUGIN / "backend"))
+    monkeypatch.setattr(module, "find_libreoffice", lambda _: "")
+    converter = Mock(side_effect=AssertionError("Office must not be started"))
+    monkeypatch.setattr(module, "_run_converter", converter)
+    write = Mock(return_value={"artifactId": "image"})
+    payload = module.parse_pptx_document("slides.pptx", pptx_bytes(), write_artifact=write,
+                                         limits={"max_slides": 2})
+    assert "pdf" not in payload
+    assert "基础静态预览" in payload["statsText"]
+    slides = [block for block in payload["blocks"] if block["type"] == "slide"]
+    assert [slide["slideNumber"] for slide in slides] == [1, 2]
+    assert slides[1]["title"] == "No Office required 中文 2"
+    assert (slides[0]["widthPx"], slides[0]["heightPx"]) == (960, 540)
+    assert slides[0]["background"]["color"] == "#EEEEEE"
+    assert slides[0]["items"][0]["paragraphs"][0]["runs"][0]["color"] == "#123456"
+    assert slides[0]["items"][1]["image"]["artifactId"] == "image"
+    assert "剩余 1 页" in payload["blocks"][-1]["runs"][0]["text"]
+    assert all(call.args[2] == "image/png" for call in write.call_args_list)
+    converter.assert_not_called()
 
 
 def test_converter_timeout_terminates_only_owned_process_tree(monkeypatch):
@@ -173,15 +222,19 @@ def test_converter_process_success_and_failure():
 
 
 @pytest.mark.asyncio
-async def test_pptx_file_handler_and_stdio_artifact_contract(tmp_path):
+@pytest.mark.parametrize("office_available", [False, True])
+async def test_pptx_file_handler_and_stdio_artifact_contract(tmp_path, office_available):
     # Replace only the external Office boundary; exercise the real plugin process,
     # manifest config, workspace read and artifact host APIs.
     plugin_dir = tmp_path / "plugins/pptx-preview"
     shutil.copytree(PLUGIN, plugin_dir)
     parser = plugin_dir / "backend/pptx_parser.py"
     with parser.open("a", encoding="utf-8") as handle:
-        handle.write('\nfind_libreoffice = lambda _: "test-office"\n')
-        handle.write(f'_run_converter = lambda command: Path(command[-1]).with_suffix(".pdf").write_bytes({pdf_bytes()!r})\n')
+        handle.write(f'\nfind_libreoffice = lambda _: {"test-office" if office_available else ""!r}\n')
+        if office_available:
+            handle.write(f'_run_converter = lambda command: Path(command[-1]).with_suffix(".pdf").write_bytes({pdf_bytes()!r})\n')
+        else:
+            handle.write('def _run_converter(command):\n    raise AssertionError("Office must not be started")\n')
     manifest_path = plugin_dir / "plugin.json"
     raw = json.loads(manifest_path.read_text(encoding="utf-8"))
     raw["config"]["maxSlides"] = 2
@@ -196,11 +249,19 @@ async def test_pptx_file_handler_and_stdio_artifact_contract(tmp_path):
         assert resolution.plugin_id == "pptx-preview"
         result = await runtime.render_view("main", manifest, "document", {"path": "sample.PPTX"})
         assert result["renderer"] == "document"
-        assert result["payload"]["statsText"] == "仅预览前 2 页，共 3 页"
-        artifact_id = result["payload"]["pdf"]["artifactId"]
+        if office_available:
+            assert result["payload"]["statsText"] == "仅预览前 2 页，共 3 页"
+            artifact_id = result["payload"]["pdf"]["artifactId"]
+        else:
+            assert "pdf" not in result["payload"]
+            assert result["payload"]["blocks"][1]["title"] == "No Office required 中文 2"
+            artifact_id = result["payload"]["blocks"][0]["items"][1]["image"]["artifactId"]
         artifact = artifacts.get(bot_alias="main", artifact_id=artifact_id)
-        assert artifact.content_type == "application/pdf"
-        assert artifact.path.read_bytes() == pdf_bytes()
+        assert artifact.content_type == ("application/pdf" if office_available else "image/png")
+        if office_available:
+            assert artifact.path.read_bytes() == pdf_bytes()
+        else:
+            assert artifact.path.read_bytes().startswith(b"\x89PNG")
         with pytest.raises(KeyError):
             artifacts.get(bot_alias="other", artifact_id=artifact_id)
     finally:

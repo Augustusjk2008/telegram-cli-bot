@@ -2,8 +2,8 @@
   "schemaVersion": 2,
   "id": "pptx-preview",
   "name": "PPTX Preview",
-  "version": "0.2.0",
-  "description": "使用 LibreOffice 将 PPTX 转换为静态页面，支持翻页与缩放，不播放动画。需要安装 LibreOffice（含 Impress）。",
+  "version": "0.3.0",
+  "description": "无需安装 Office 即可静态预览 PPTX 的文本、图片、背景和表格；可选 LibreOffice 提供更准确的版式、翻页和缩放。不播放动画。",
   "enabled": true,
   "config": {
     "maxSlides": 80,
@@ -24,7 +24,7 @@
       "title": "幻灯片预览",
       "renderer": "document",
       "viewMode": "snapshot",
-      "dataProfile": "light"
+      "dataProfile": "heavy"
     }
   ],
   "fileHandlers": [
@@ -55,10 +55,10 @@
           },
           {
             "key": "libreOfficePath",
-            "label": "LibreOffice 路径",
+            "label": "LibreOffice 路径（可选）",
             "type": "string",
             "default": "",
-            "description": "留空自动查找；也可填写 soffice.com（Windows）或 soffice 的完整路径。",
+            "description": "留空自动查找；未安装时使用内置基础预览，无需额外软件。可选填 soffice.com（Windows）或 soffice 的完整路径以改善版式。",
             "placeholder": "C:\\Program Files\\LibreOffice\\program\\soffice.com"
           }
         ]

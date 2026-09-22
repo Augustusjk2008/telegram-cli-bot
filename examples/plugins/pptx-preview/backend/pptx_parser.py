@@ -39,7 +39,7 @@ def find_libreoffice(configured_path: str = "") -> str:
     for candidate in candidates:
         if candidate.is_file():
             return str(candidate)
-    raise RuntimeError("PPTX 静态预览需要 LibreOffice（含 Impress）。请安装后重试，或在插件设置中填写 LibreOffice 路径")
+    return ""
 
 
 def _slide_count(content: bytes) -> int:
@@ -96,6 +96,11 @@ def parse_pptx_document(
     max_slides = max(1, min(300, int((limits or {}).get("max_slides", 80))))
     count = min(total, max_slides)
     executable = find_libreoffice(libreoffice_path)
+    if not executable:
+        from pptx_builtin import parse_pptx_document as parse_builtin
+
+        return parse_builtin(path, content, write_artifact=write_artifact,
+                             limits={"max_slides": max_slides})
     with TemporaryDirectory(prefix="orbit-pptx-") as directory:
         work = Path(directory)
         source = work / "slides.pptx"
