@@ -326,11 +326,10 @@ async def test_remove_bot_with_workspace_view_requires_write_files(tmp_path: Pat
         match_info = {"alias": "team"}
         query = {"delete_workspace": "true"}
 
-    async def admin_only(_request, capability: str) -> AuthContext:
-        assert capability == CAP_ADMIN_OPS
+    async def archive_admin_only(_request) -> AuthContext:
         return AuthContext(user_id=123, token_used=True, capabilities={CAP_ADMIN_OPS})
 
-    monkeypatch.setattr(server, "_with_capability", admin_only)
+    monkeypatch.setattr(server, "_with_archive_management_access", archive_admin_only)
 
     with pytest.raises(WebApiError) as exc:
         await server.admin_remove_bot(Request())
