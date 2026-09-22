@@ -60,12 +60,12 @@
       "id": "Shutdown",
       "label": "关机",
       "icon": "Terminal",
-      "windowsCommand": "",
+      "windowsCommand": "Stop-Computer",
       "linuxCommand": "sudo shutdown now",
       "macosCommand": "",
       "cwd": ".",
       "confirm": true,
-      "enabled": false
+      "enabled": true
     },
     {
       "id": "todesk",

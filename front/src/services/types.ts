@@ -1855,6 +1855,7 @@ export type DocumentBlock =
 
 export type DocumentViewPayload = {
   path: string;
+  pdf?: { artifactId: string };
   formatting?: "document";
   title?: string;
   statsText?: string;

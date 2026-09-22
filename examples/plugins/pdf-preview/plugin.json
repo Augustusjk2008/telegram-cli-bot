@@ -2,8 +2,8 @@
   "schemaVersion": 2,
   "id": "pdf-preview",
   "name": "PDF Preview",
-  "version": "0.1.0",
-  "description": "快速浏览 PDF 文字层内容。",
+  "version": "0.2.0",
+  "description": "按原始版式预览 PDF 页面、字体、图片与图形，支持翻页、缩放和文字选择。",
   "enabled": true,
   "config": {},
   "runtime": {
@@ -11,13 +11,14 @@
     "entry": "backend/main.py",
     "protocol": "jsonrpc-stdio",
     "permissions": {
-      "workspaceRead": true
+      "workspaceRead": true,
+      "tempArtifacts": true
     }
   },
   "views": [
     {
       "id": "document",
-      "title": "PDF 文本预览",
+      "title": "PDF 预览",
       "renderer": "document",
       "viewMode": "snapshot",
       "dataProfile": "light"
@@ -26,7 +27,7 @@
   "fileHandlers": [
     {
       "id": "pdf-file",
-      "label": "PDF 文本预览",
+      "label": "PDF 预览",
       "extensions": [
         ".pdf"
       ],
