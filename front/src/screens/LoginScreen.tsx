@@ -91,9 +91,6 @@ export function LoginScreen({
                   本地 agent 控制台
                 </div>
                 <h1 className="text-xl font-bold text-[var(--text)] sm:text-2xl">{APP_LOGIN_NAME}</h1>
-                <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--muted)]">
-                  登录后接入本机 bot、文件、终端、Git 和插件视图。当前入口只处理身份校验，不改变本地运行状态。
-                </p>
               </div>
               <div className="hidden rounded-md border border-[var(--border)] bg-[var(--surface-glass)] px-2 py-1 font-mono text-[11px] text-[var(--muted)] sm:block">
                 v{APP_VERSION}

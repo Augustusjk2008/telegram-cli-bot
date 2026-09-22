@@ -39,6 +39,30 @@ describe("RealWebBotClient", () => {
     vi.unstubAllGlobals();
   });
 
+  test.each([true, false])("preserves directory listing paths with URLSearchParams.size support=%s", async (supportsSize) => {
+    const descriptor = Object.getOwnPropertyDescriptor(URLSearchParams.prototype, "size");
+    if (!supportsSize) {
+      Reflect.deleteProperty(URLSearchParams.prototype, "size");
+    }
+    try {
+      fetchMock.mockResolvedValue(jsonOk({ working_dir: "C:/workspace", entries: [] }));
+      const client = new RealWebBotClient();
+      await client.listFiles("company-researcher");
+      for (const path of ["C:/workspace/reviews", "C:/workspace/reviews/研究 notes"]) {
+        await client.listFiles("company-researcher", path, { includeChildCounts: true });
+        const url = new URL(fetchMock.mock.calls.at(-1)![0], "https://example.test");
+        expect(url.pathname).toBe("/api/bots/company-researcher/ls");
+        expect(url.searchParams.get("path")).toBe(path);
+        expect(url.searchParams.get("include_child_counts")).toBe("1");
+      }
+      expect(fetchMock.mock.calls[0][0]).toBe("/api/bots/company-researcher/ls");
+    } finally {
+      if (descriptor) {
+        Object.defineProperty(URLSearchParams.prototype, "size", descriptor);
+      }
+    }
+  });
+
   test("maps the latest notifiable answer timestamp from bot summaries", async () => {
     fetchMock.mockResolvedValue(jsonOk([{
       alias: "main",

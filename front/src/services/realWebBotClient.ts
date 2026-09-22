@@ -5380,7 +5380,8 @@ export class RealWebBotClient implements WebBotClient {
     if (options?.includeChildCounts) {
       params.set("include_child_counts", "1");
     }
-    const suffix = params.size > 0 ? `?${params.toString()}` : "";
+    const query = params.toString();
+    const suffix = query ? `?${query}` : "";
     const data = await this.requestJson<{ working_dir: string; entries: RawFileEntry[]; is_virtual_root?: boolean }>(
       `/api/bots/${encodeURIComponent(botAlias)}/ls${suffix}`,
     );
