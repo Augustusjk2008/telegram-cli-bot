@@ -9,7 +9,7 @@ from typing import Any
 from pptx_parser import parse_pptx_document
 
 NEXT_REQUEST_ID = 9000
-PLUGIN_CONFIG: dict[str, Any] = {"maxSlides": 80, "maxItemsPerSlide": 240}
+PLUGIN_CONFIG: dict[str, Any] = {"maxSlides": 80, "libreOfficePath": ""}
 
 
 def emit(message: dict[str, Any]) -> None:
@@ -78,9 +78,11 @@ def render_view(input_payload: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("缺少 PPTX 路径")
     limits = {
         "max_slides": _coerce_int(PLUGIN_CONFIG.get("maxSlides"), 80, 1, 300),
-        "max_items_per_slide": _coerce_int(PLUGIN_CONFIG.get("maxItemsPerSlide"), 240, 20, 1000),
     }
-    payload = parse_pptx_document(path, read_pptx_bytes(path), write_artifact=write_artifact, limits=limits)
+    payload = parse_pptx_document(
+        path, read_pptx_bytes(path), write_artifact=write_artifact, limits=limits,
+        libreoffice_path=str(PLUGIN_CONFIG.get("libreOfficePath") or ""),
+    )
     return {
         "renderer": "document",
         "title": str(payload.get("title") or Path(path).name),

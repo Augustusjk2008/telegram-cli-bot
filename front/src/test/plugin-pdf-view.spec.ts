@@ -30,7 +30,11 @@ function samplePdf() {
   return Buffer.from(`${result}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${start}\n%%EOF\n`);
 }
 
-test("PDF pages preserve layout, images, selection and local CJK resources", async ({ page, context }) => {
+for (const extension of ["pdf", "pptx"]) {
+test(`${extension.toUpperCase()} pages preserve layout, images, selection and local CJK resources`, async ({ page, context }) => {
+  const filename = `layout.${extension}`;
+  const pluginId = `${extension}-preview`;
+  const statsText = extension === "pptx" ? "仅预览前 3 页，共 4 页" : "3 页";
   const resourceRequests: string[] = [];
   // Exercise the runtime forwarding prefix using the existing server's assets.
   await context.route("**/node/pdf-qa/assets/**", async (route) => {
@@ -45,7 +49,7 @@ test("PDF pages preserve layout, images, selection and local CJK resources", asy
   page.on("response", (response) => {
     if (response.status() >= 400 && /pdfjs|pdf\.worker/.test(response.url())) failedResources.push(response.url());
   });
-  const entries = [{ name: "layout.pdf", is_dir: false, size: 2048 }];
+  const entries = [{ name: filename, is_dir: false, size: 2048 }];
   const bot = { alias: "main", name: "main", cli_type: "codex", status: "running", working_dir: "C:\\workspace", supported_execution_modes: ["cli"] };
   await page.addInitScript(() => localStorage.setItem("web-view-mode", "desktop"));
   await page.route("**/api/**", async (route) => {
@@ -60,9 +64,9 @@ test("PDF pages preserve layout, images, selection and local CJK resources", asy
     else if (path === "bots/main") data = { bot, session: { working_dir: "C:\\workspace", is_processing: false, history_count: 0 }, agents: [{ id: "main", name: "main" }] };
     else if (path === "bots/main/ls") data = { working_dir: "C:\\workspace", entries };
     else if (path === "bots/main/pwd") data = { working_dir: "C:\\workspace" };
-    else if (path === "bots/main/files/reveal") data = { root_path: "C:\\workspace", highlight_path: "layout.pdf", branches: { "": entries } };
-    else if (path.endsWith("resolve-file-target")) data = { kind: "plugin_view", pluginId: "pdf-preview", viewId: "document", title: "layout.pdf", input: { path: "layout.pdf" } };
-    else if (path.endsWith("/views/document/open")) data = { pluginId: "pdf-preview", viewId: "document", renderer: "document", mode: "snapshot", title: "layout.pdf", payload: { path: "layout.pdf", pdf: { artifactId: "sample-pdf" }, blocks: [] } };
+    else if (path === "bots/main/files/reveal") data = { root_path: "C:\\workspace", highlight_path: filename, branches: { "": entries } };
+    else if (path.endsWith("resolve-file-target")) data = { kind: "plugin_view", pluginId, viewId: "document", title: filename, input: { path: filename } };
+    else if (path.endsWith("/views/document/open")) data = { pluginId, viewId: "document", renderer: "document", mode: "snapshot", title: filename, payload: { path: filename, statsText, pdf: { artifactId: "sample-pdf" }, blocks: [] } };
     else if (path.endsWith("/history") || path.endsWith("/history/delta")) data = { items: [], revision: 1 };
     else if (path.endsWith("/conversations")) data = { items: [], active_conversation_id: "" };
     else if (path.endsWith("/agents")) data = { items: [{ id: "main", name: "main" }], active_agent_id: "main" };
@@ -73,8 +77,9 @@ test("PDF pages preserve layout, images, selection and local CJK resources", asy
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("/");
   await page.evaluate(() => { window.__TCB_PUBLIC_ENV__ = { ...window.__TCB_PUBLIC_ENV__, VITE_BASE_PATH: "/node/pdf-qa" }; });
-  await page.getByRole("button", { name: "打开 layout.pdf", exact: true }).click();
+  await page.getByRole("button", { name: `打开 ${filename}`, exact: true }).click();
   const view = page.getByTestId("pdf-view");
+  await expect(view.getByText(statsText, { exact: true })).toBeVisible();
   const paper = view.getByTestId("pdf-page");
   await expect(paper).toHaveAttribute("aria-busy", "false");
   await page.getByRole("button", { name: "聚焦编辑器", exact: true }).click();
@@ -133,3 +138,4 @@ test("PDF pages preserve layout, images, selection and local CJK resources", asy
   expect(resourceRequests.some((url) => url.includes("/pdfjs/cmaps/"))).toBe(true);
   expect(errors).toEqual([]);
 });
+}

@@ -2,12 +2,12 @@
   "schemaVersion": 2,
   "id": "pptx-preview",
   "name": "PPTX Preview",
-  "version": "0.1.0",
-  "description": "快速浏览 PowerPoint 幻灯片文本、图片、背景和表格。",
+  "version": "0.2.0",
+  "description": "使用 LibreOffice 将 PPTX 转换为静态页面，支持翻页与缩放，不播放动画。需要安装 LibreOffice（含 Impress）。",
   "enabled": true,
   "config": {
     "maxSlides": 80,
-    "maxItemsPerSlide": 240
+    "libreOfficePath": ""
   },
   "runtime": {
     "type": "python",
@@ -24,7 +24,7 @@
       "title": "幻灯片预览",
       "renderer": "document",
       "viewMode": "snapshot",
-      "dataProfile": "heavy"
+      "dataProfile": "light"
     }
   ],
   "fileHandlers": [
@@ -54,13 +54,12 @@
             "step": 1
           },
           {
-            "key": "maxItemsPerSlide",
-            "label": "每页最多元素",
-            "type": "integer",
-            "default": 240,
-            "minimum": 20,
-            "maximum": 1000,
-            "step": 10
+            "key": "libreOfficePath",
+            "label": "LibreOffice 路径",
+            "type": "string",
+            "default": "",
+            "description": "留空自动查找；也可填写 soffice.com（Windows）或 soffice 的完整路径。",
+            "placeholder": "C:\\Program Files\\LibreOffice\\program\\soffice.com"
           }
         ]
       }

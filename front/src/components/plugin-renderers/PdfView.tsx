@@ -146,6 +146,7 @@ export default function PdfView({ botAlias, client, payload }: {
     <div data-testid="pdf-view" className="flex h-full min-h-0 min-w-0 flex-col text-[var(--text)]">
       <div className="shrink-0 border-b border-[var(--border)] p-3">
         <div className="truncate text-sm font-medium" title={payload.path}>{payload.title || payload.path}</div>
+        {payload.statsText ? <div className="mt-1 text-xs text-[var(--muted)]">{payload.statsText}</div> : null}
         <div role="toolbar" aria-label="PDF 阅读工具" className="mt-2 flex flex-wrap items-center gap-2 text-sm">
           <button className={buttonClass} disabled={!pdf || pageNumber <= 1} onClick={() => goToPage(pageNumber - 1)}>上一页</button>
           <form className="flex items-center gap-1" onSubmit={(event) => { event.preventDefault(); goToPage(Number(pageInput)); }}>
