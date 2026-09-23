@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FileCopyResult, FileCreateResult, FileDownloadProgress, FileMoveResult, FileRenameResult } from "../services/types";
+import type { FileCopyResult, FileCreateResult, FileDownloadProgress, FileMoveResult, FileRenameResult, RemoteWorkspace } from "../services/types";
+import { joinRemotePath, relativeRemotePath } from "../services/remoteWorkspace";
 import type { WebBotClient } from "../services/webBotClient";
 import { getErrorMessage, isAbortError } from "../utils/errorMessage";
 import { WORKBENCH_EXPANDED_PATH_RESTORE_LIMIT, WORKBENCH_HIGHLIGHT_DURATION_MS } from "./workbenchTypes";
@@ -67,11 +68,11 @@ function joinTreePath(parent: string, name: string) {
   return parent ? `${parent}/${name}` : name;
 }
 
-function joinAbsoluteTreePath(rootPath: string, path: string, remote = false) {
+function joinAbsoluteTreePath(rootPath: string, path: string, remote = false, platform?: RemoteWorkspace["platform"]) {
   if (!path) {
     return rootPath;
   }
-  return `${rootPath.replace(remote ? /\/+$/ : /[\\/]+$/, "")}/${path}`;
+  return remote ? joinRemotePath(rootPath, path, platform) : `${rootPath.replace(/[\\/]+$/, "")}/${path}`;
 }
 
 function parentTreePath(path: string) {
@@ -145,8 +146,9 @@ function ancestorPathsForPath(path: string) {
   return ancestors;
 }
 
-export function useFileTree(botAlias: string, client: WebBotClient, options?: { structureOnly?: boolean; remote?: boolean }): UseFileTreeResult {
+export function useFileTree(botAlias: string, client: WebBotClient, options?: { structureOnly?: boolean; remote?: boolean; platform?: RemoteWorkspace["platform"] }): UseFileTreeResult {
   const remote = options?.remote === true;
+  const platform = options?.platform;
   const [rootPath, setRootPath] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -243,7 +245,7 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
       try {
         const listing = await client.listFiles(
           botAlias,
-          joinAbsoluteTreePath(currentRootPath, branchPath, remote),
+          joinAbsoluteTreePath(currentRootPath, branchPath, remote, platform),
           { includeChildCounts: true },
         );
         const branchState = {
@@ -289,7 +291,7 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
 
     inFlightBranchLoadsRef.current.set(key, { generation, promise });
     return promise;
-  }, [botAlias, client, remote]);
+  }, [botAlias, client, remote, platform]);
 
   const startBackgroundRestoreExpandedPaths = useCallback((currentRootPath: string, paths: string[], generation: number) => {
     const normalizedPaths = uniqueExpandedPaths(paths);
@@ -561,7 +563,7 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
     await client.createDirectory(
       botAlias,
       name,
-      joinAbsoluteTreePath(rootPath, parentPath, remote),
+      joinAbsoluteTreePath(rootPath, parentPath, remote, platform),
     );
     await refreshBranch(parentPath);
     const nextPath = parentPath ? `${parentPath}/${name}` : name;
@@ -574,13 +576,10 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
       botAlias,
       filename,
       content,
-      joinAbsoluteTreePath(rootPath, parentPath, remote),
+      joinAbsoluteTreePath(rootPath, parentPath, remote, platform),
     );
     await refreshBranch(parentPath);
-    const rootPrefix = `${rootPath.replace(/\/+$/, "")}/`;
-    const path = remote && result.path.startsWith(rootPrefix)
-      ? result.path.slice(rootPrefix.length)
-      : result.path;
+    const path = remote ? relativeRemotePath(result.path, rootPath, platform) : result.path;
     selectPath(path);
     highlightPath(path);
     return { ...result, path };

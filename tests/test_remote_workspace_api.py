@@ -99,17 +99,19 @@ async def test_remote_terminal_checks_bot_access_and_uses_remote_factory(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_remote_bot_persistence_keeps_local_runtime_separate(tmp_path, monkeypatch):
+@pytest.mark.parametrize("target", [CONFIG, {**CONFIG, "platform": "windows", "root": "/C:/Projects/demo"}])
+async def test_remote_bot_persistence_keeps_local_runtime_separate(tmp_path, monkeypatch, target):
     storage = tmp_path / "bots.json"
     storage.write_text('{"bots": []}', encoding="utf-8")
     manager = MultiBotManager(BotProfile(alias="main", working_dir=str(tmp_path)), str(storage))
     profile = await manager.add_bot(
         "remote", supported_execution_modes=["native_agent"], default_execution_mode="native_agent",
-        remote_workspace={**CONFIG, "password": "must-not-persist"},
+        remote_workspace={**target, "password": "must-not-persist"},
     )
     assert Path(profile.working_dir).is_dir()
     assert Path(profile.working_dir).is_relative_to(tmp_path / "runtime-data" / "remote-workspaces")
-    assert profile.remote_workspace["root"] == "/srv/project"
+    assert profile.remote_workspace["root"] == target["root"]
+    assert profile.remote_workspace.get("platform") == target.get("platform")
     assert "must-not-persist" not in storage.read_text(encoding="utf-8")
     reloaded = MultiBotManager(manager.main_profile, str(storage)).managed_profiles["remote"]
     assert reloaded.remote_workspace == profile.remote_workspace
@@ -207,3 +209,26 @@ def test_agent_tools_batch_commands_and_edit_with_optimistic_version(monkeypatch
     with pytest.raises(remote_routes.RemoteWorkspaceError, match="exactly once"):
         tools.execute_remote_tool(CONFIG, "edit", {"path": "app.py", "old_text": "old", "new_text": "new"})
     assert connection.write_file.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_windows_routes_normalize_native_paths_and_bind_platform(tmp_path, monkeypatch):
+    server, _auth = _server(tmp_path, monkeypatch)
+    config = {**CONFIG, "platform": "windows", "root": "/C:/Projects/demo"}
+    server.manager.main_profile.remote_workspace = config
+    service, connection = Mock(), Mock()
+    service.get.return_value = connection
+    service.connection_config.return_value = config
+    connection.read_file.return_value = {"filename": "中文.txt", "content": "hello", "last_modified_ns": "hash"}
+    connection.list_directory.return_value = {"working_dir": "/D:/code", "entries": [], "is_virtual_root": False}
+    monkeypatch.setattr(remote_routes, "get_remote_workspace_service", lambda: service)
+    async with TestClient(TestServer(server._build_app())) as client:
+        response = await client.get("/api/bots/main/files/read", params={"filename": r"C:\Projects\demo\中文.txt"})
+        assert response.status == 200
+        connection.read_file.assert_called_once_with("/C:/Projects/demo/中文.txt", root=config["root"], limit=0)
+        response = await client.get(f"/api/remote/connections/{config['connection_id']}/directories", params={"path": r"D:\code"})
+        assert response.status == 200
+        connection.list_directory.assert_called_once_with("/D:/code", root="/D:/")
+        response = await client.post("/api/bots/main/remote/connect", json={"platform": "posix", "password": "secret"})
+        assert response.status == 409
+        service.connect.assert_not_called()

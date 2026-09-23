@@ -128,8 +128,16 @@ def remote_chat_prompt(profile: Any) -> str:
     remote = profile.remote_workspace
     host = json.dumps(str(remote["host"]), ensure_ascii=False)
     root = json.dumps(str(remote["root"]), ensure_ascii=False)
+    shell = (
+        "Remote OS: Windows; commands run in Windows PowerShell (powershell.exe), including the Pi bash alias. "
+        "Use PowerShell syntax compatible with 5.1, not Bash or PowerShell 7 operators. "
+        "File tool paths may be relative or drive-qualified (C:/... or /C:/...); shell paths use C:/... . "
+        "Windows file APIs reject UNC/device paths and junctions/symlinks. "
+        "Use UTF-8 for text files; Git, rg and project build tools must be available on the remote PATH.\n"
+        if remote.get("platform") == "windows" else "Remote OS: POSIX; commands run in /bin/sh.\n"
+    )
     return (
-        f"Remote SSH workspace: host={host}, root={root}.\n"
+        f"Remote SSH workspace: host={host}, root={root}.\n{shell}"
         "This local working directory is only an agent control directory; it contains no project source or tests. "
         "Perform ALL project reads, edits, searches, commands and tests on the remote workspace using "
         "tcb-remote MCP exec/read/write/edit/list (Pi: remote_exec/remote_read/remote_write/remote_edit/remote_list; "

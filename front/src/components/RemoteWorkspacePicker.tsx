@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { DirectoryListing, RemoteWorkspace } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
-import { joinRemotePath, parentRemotePath } from "../services/remoteWorkspace";
+import { joinRemotePath, normalizeRemotePath, parentRemotePath } from "../services/remoteWorkspace";
 import { RemoteConnectionForm, remoteButtonClass, remoteInputClass } from "./RemoteConnectionForm";
 
 export function RemoteWorkspacePicker({ client, onPick }: {
@@ -17,7 +17,7 @@ export function RemoteWorkspacePicker({ client, onPick }: {
   async function browse(connection: RemoteWorkspace, nextPath: string) {
     setBusy(true); setError("");
     try {
-      const next = await client.listRemoteDirectories(connection.connectionId, nextPath);
+      const next = await client.listRemoteDirectories(connection.connectionId, normalizeRemotePath(nextPath, connection.platform));
       setListing(next); setPath(next.workingDir);
     } catch (err) { setError(err instanceof Error ? err.message : "读取远程目录失败"); }
     finally { setBusy(false); }
@@ -29,12 +29,13 @@ export function RemoteWorkspacePicker({ client, onPick }: {
       <input aria-label="远程目录路径" className={remoteInputClass} value={path} onChange={(e) => setPath(e.target.value)} />
       <button className={remoteButtonClass} disabled={busy}>打开</button>
     </form>
+    {remote.platform === "windows" && <p className="text-xs text-[var(--muted)]">可输入 D:\ 等绝对路径切换盘符。</p>}
     <div className="flex flex-wrap gap-2">
-      <button type="button" className={remoteButtonClass} disabled={busy || !listing || listing.workingDir === "/"} onClick={() => void browse(remote, parentRemotePath(listing!.workingDir))}>上级目录</button>
+      <button type="button" className={remoteButtonClass} disabled={busy || !listing || parentRemotePath(listing.workingDir, remote.platform) === listing.workingDir} onClick={() => void browse(remote, parentRemotePath(listing!.workingDir, remote.platform))}>上级目录</button>
       <button type="button" className={remoteButtonClass} disabled={busy} onClick={() => void browse(remote, remote.root)}>主目录</button>
     </div>
     <div aria-label="远程目录" className="max-h-48 overflow-auto">
-      {listing?.entries.filter((entry) => entry.isDir).map((entry) => <button type="button" key={entry.name} className="block w-full rounded px-2 py-2 text-left text-sm hover:bg-[var(--surface-strong)]" disabled={busy} onClick={() => void browse(remote, joinRemotePath(listing.workingDir, entry.name))}>📁 {entry.name}</button>)}
+      {listing?.entries.filter((entry) => entry.isDir).map((entry) => <button type="button" key={entry.name} className="block w-full rounded px-2 py-2 text-left text-sm hover:bg-[var(--surface-strong)]" disabled={busy} onClick={() => void browse(remote, joinRemotePath(listing.workingDir, entry.name, remote.platform))}>📁 {entry.name}</button>)}
       {busy && <p role="status">正在读取目录…</p>}
     </div>
     {error && <p role="alert" className="text-sm text-[var(--danger)]">{error}</p>}

@@ -17,7 +17,8 @@ import { type DragEvent, type KeyboardEvent, type MouseEvent, useEffect, useMemo
 import { createPortal } from "react-dom";
 import { FileNameDialog } from "../components/FileNameDialog";
 import { VirtualList } from "../components/virtual/VirtualList";
-import type { GitTreeDecorationKind } from "../services/types";
+import type { GitTreeDecorationKind, RemoteWorkspace } from "../services/types";
+import { joinRemotePath } from "../services/remoteWorkspace";
 import { isAbsolutePathInput } from "../utils/pathInput";
 import { type FileTreeNode, type UseFileTreeResult } from "./useFileTree";
 
@@ -40,6 +41,7 @@ type Props = {
   canWriteFiles?: boolean;
   canBrowseExternalPaths?: boolean;
   remote?: boolean;
+  remotePlatform?: RemoteWorkspace["platform"];
   focused: boolean;
   onToggleFocus: () => void;
 };
@@ -105,12 +107,12 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
-function joinAbsoluteTreePath(rootPath: string, path: string, remote = false) {
+function joinAbsoluteTreePath(rootPath: string, path: string, remote = false, platform?: RemoteWorkspace["platform"]) {
   if (!path) {
     return rootPath;
   }
   if (remote) {
-    return `${rootPath.replace(/\/+$/, "")}/${path}`;
+    return joinRemotePath(rootPath, path, platform);
   }
   const trimmedRoot = rootPath.replace(/[\\/]+$/, "");
   if (!trimmedRoot) {
@@ -940,6 +942,7 @@ export function FileTreePane({
   canWriteFiles = true,
   canBrowseExternalPaths = false,
   remote = false,
+  remotePlatform,
   focused,
   onToggleFocus,
 }: Props) {
@@ -1467,7 +1470,7 @@ export function FileTreePane({
     const { entry, depth } = row;
     const expanded = tree.isExpanded(entry.path);
     const dirLabel = branchLabel(entry.path);
-    const absolutePath = joinAbsoluteTreePath(tree.rootPath, entry.path, remote);
+    const absolutePath = joinAbsoluteTreePath(tree.rootPath, entry.path, remote, remotePlatform);
     const iconKind = entry.isDir
       ? (expanded ? "folder-open" : "folder-closed")
       : getFileIconKind(entry.name);

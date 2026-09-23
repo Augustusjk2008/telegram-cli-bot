@@ -1,4 +1,4 @@
-"""POSIX SSH/SFTP transport. Public configs contain no authentication secrets.
+"""POSIX and Windows SSH/SFTP transport. Public configs contain no secrets.
 
 SFTP operations are serialized per connection; exec and PTY channels are independent.
 Only locally known stale connections reconnect. Submitted operations are never replayed.
@@ -29,13 +29,15 @@ import uuid
 
 import paramiko
 
+from bot.remote_workspace import windows
+
 
 IO_TIMEOUT = 15
 MAX_TEXT_BYTES = 2 * 1024 * 1024
 READ_CHUNK_BYTES = 32768
 MAX_COMMAND_OUTPUT = 1024 * 1024
 MAX_DIRECTORY_ENTRIES = 10000
-_IDENTITY_FIELDS = ("host", "port", "username", "host_key_fingerprint", "key_filename")
+_IDENTITY_FIELDS = ("host", "port", "username", "host_key_fingerprint", "key_filename", "platform")
 
 
 class RemoteWorkspaceError(Exception):
@@ -82,11 +84,15 @@ def _config(value: dict, *, verified: bool) -> dict:
         if not re.fullmatch(r"SHA256:[A-Za-z0-9+/]{43}=?", fingerprint):
             _invalid("Expected an SSH SHA256 host key fingerprint")
         fingerprint = fingerprint.rstrip("=")
+    platform = value.get("platform", "posix")
+    if platform not in ("posix", "windows"):
+        _invalid("Remote platform must be posix or windows")
     root = _string(value.get("root"), "root", required=verified)
-    if root and (not root.startswith("/") or root.startswith("//")):
-        _invalid("Remote root must be an absolute POSIX path")
     if root:
-        root = posixpath.normpath(root)
+        try:
+            root = _absolute(root, platform)
+        except RemoteWorkspaceError as exc:
+            _invalid(exc.message)
     return {
         "connection_id": connection_id,
         "host": host,
@@ -95,6 +101,7 @@ def _config(value: dict, *, verified: bool) -> dict:
         "root": root,
         "host_key_fingerprint": fingerprint,
         "key_filename": _string(value.get("key_filename"), "key_filename"),
+        **({"platform": "windows"} if platform == "windows" else {}),
     }
 
 
@@ -172,10 +179,52 @@ def _inside(root: str, path: str) -> None:
         raise RemoteWorkspaceError(403, "forbidden_path", "Path escapes the remote workspace root")
 
 
-def _absolute(path: str) -> str:
+def _absolute(path: str, platform: str = "posix") -> str:
+    if platform == "windows":
+        path = _windows_path(path)
+        if not re.match(r"^/[A-Z]:/", path):
+            raise RemoteWorkspaceError(400, "invalid_path", "Expected an absolute Windows drive path")
+        drive, tail = path[:3], posixpath.normpath("/" + path[4:])
+        return drive + tail
     if not isinstance(path, str) or not path.startswith("/") or path.startswith("//") or "\x00" in path:
         raise RemoteWorkspaceError(400, "invalid_path", "Expected an absolute POSIX path")
     return posixpath.normpath(path)
+
+
+def _windows_path(path: str) -> str:
+    if not isinstance(path, str):
+        raise RemoteWorkspaceError(400, "invalid_path", "Invalid Windows path")
+    path = path.replace("\\", "/")
+    if path.startswith("//"):
+        raise RemoteWorkspaceError(400, "invalid_path", "UNC and device paths are not supported")
+    if re.fullmatch(r"/[a-zA-Z]:", path):
+        path += "/"
+    if re.match(r"^/?[a-zA-Z]:/", path):
+        path = "/" + path.lstrip("/")
+        path = path[:1] + path[1].upper() + path[2:]
+        tail = path[4:]
+    else:
+        if path.startswith("/"):
+            raise RemoteWorkspaceError(400, "invalid_path", "Specify the Windows drive, for example C:/Projects")
+        tail = path
+    for part in tail.split("/"):
+        if part in {"", ".", ".."}:
+            continue
+        if (re.search(r'[<>:"|?*\x00-\x1f\x7f]', part) or part.endswith((".", " "))
+                or re.fullmatch(r"CON|PRN|AUX|NUL|CLOCK\$|COM[1-9¹²³]|LPT[1-9¹²³]", part.split(".")[0], re.I)):
+            raise RemoteWorkspaceError(400, "invalid_path", "Invalid or reserved Windows path component")
+    return path
+
+
+def join_remote_path(root: str, path: str, platform: str = "posix") -> str:
+    if platform == "windows":
+        root = _absolute(root, platform)
+        path = _windows_path(path)
+        return _absolute(posixpath.join(root, path or "."), platform)
+    # POSIX resolves symlinks before '..'; leave that resolution to SFTP.
+    result = posixpath.join(root, path or ".")
+    _absolute(result)
+    return result
 
 
 class RemoteConnection:
@@ -187,6 +236,25 @@ class RemoteConnection:
         self._sftp: paramiko.SFTPClient | None = None
         self._lock = threading.RLock()
         self._closed = False
+
+    @property
+    def platform(self) -> str:
+        return self.config.get("platform", "posix")
+
+    def _windows_files(self, paths: list[str], **kwargs) -> None:
+        script = windows.file_script(paths, **kwargs)
+        with _remote_errors():
+            channel = self._client.get_transport().open_session(timeout=IO_TIMEOUT)
+            result = self._run_channel(channel, windows.STDIN_COMMAND, IO_TIMEOUT, 65536, script.encode("utf-8"))
+        if result["returncode"]:
+            match = re.search(r"ORBIT:(forbidden_path|path_not_found|path_exists|file_version_conflict|permission_denied|invalid_path|remote_io_error)", result["stderr"])
+            if match:
+                code = match[1]
+                status = {"forbidden_path": 403, "permission_denied": 403, "invalid_path": 400,
+                          "path_not_found": 404, "path_exists": 409, "file_version_conflict": 409}.get(code, 502)
+                raise RemoteWorkspaceError(status, code, "Windows filesystem operation failed: " + code)
+            raise RemoteWorkspaceError(502, "remote_windows_unavailable",
+                                       "Windows SSH requires powershell.exe (Windows PowerShell 5.1) and native drive paths")
 
     def _disconnect(self) -> None:
         sftp, client = self._sftp, self._client
@@ -280,28 +348,34 @@ class RemoteConnection:
 
     def canonical_root(self, root: str = "") -> str:
         with self._operation() as sftp:
-            path = _absolute(sftp.normalize(root or "."))
+            if root and self.platform == "windows":
+                root = _absolute(root, self.platform)
+            path = _absolute(sftp.normalize(root or "."), self.platform)
+            if self.platform == "windows":
+                self._windows_files([path])
             if not stat.S_ISDIR(sftp.stat(path).st_mode):
                 raise RemoteWorkspaceError(400, "not_a_directory", "Remote root is not a directory")
             return path
 
     def _resolve(self, path: str, root: str, *, missing: bool = False) -> str:
-        root = _absolute(root)
+        root = _absolute(root, self.platform)
         if not isinstance(path, str) or "\x00" in path:
             raise RemoteWorkspaceError(400, "invalid_path", "Invalid remote path")
-        if _absolute(self._sftp.normalize(root)) != root:
+        if _absolute(self._sftp.normalize(root), self.platform) != root:
             raise RemoteWorkspaceError(403, "forbidden_path", "Remote root has changed")
-        candidate = posixpath.join(root, path or ".")
-        _inside(root, _absolute(candidate))
+        candidate = join_remote_path(root, path, self.platform)
+        _inside(root, _absolute(candidate, self.platform))
+        if self.platform == "windows":
+            self._windows_files([root, candidate], missing=missing)
         try:
             self._sftp.lstat(candidate)
         except OSError as exc:
             if not missing or exc.errno != errno.ENOENT:
                 raise
-            parent = _absolute(self._sftp.normalize(posixpath.dirname(candidate)))
+            parent = _absolute(self._sftp.normalize(posixpath.dirname(candidate)), self.platform)
             resolved = posixpath.join(parent, posixpath.basename(candidate))
         else:
-            resolved = _absolute(self._sftp.normalize(candidate))
+            resolved = _absolute(self._sftp.normalize(candidate), self.platform)
         _inside(root, resolved)
         return resolved
 
@@ -315,6 +389,13 @@ class RemoteConnection:
                 name = attrs.filename
                 if name in {"", ".", ".."} or "/" in name or "\x00" in name:
                     continue
+                if self.platform == "windows":
+                    try:
+                        _windows_path(name)
+                    except RemoteWorkspaceError:
+                        continue
+                    if "\\" in name or stat.S_ISLNK(attrs.st_mode):
+                        continue
                 if stat.S_ISLNK(attrs.st_mode):
                     try:
                         target = self._resolve(posixpath.join(directory, name), root)
@@ -441,17 +522,26 @@ class RemoteConnection:
                 raise RemoteWorkspaceError(409, "file_version_conflict", "Fully reopen the file before saving")
             temporary = posixpath.join(posixpath.dirname(resolved), ".orbit-" + uuid.uuid4().hex + ".tmp")
             created = False
+            windows_commit_started = False
             try:
                 with sftp.open(temporary, "wx") as handle:
                     created = True
-                    handle.chmod(stat.S_IMODE(previous.st_mode) if previous else 0o600)
+                    if self.platform == "windows":
+                        self._windows_files([root, resolved], missing=previous is None,
+                                            action="prepare", temporary=temporary, exists=previous is not None)
+                    else:
+                        handle.chmod(stat.S_IMODE(previous.st_mode) if previous else 0o600)
                     handle.write(raw)
                     handle.flush()
                 if self._resolve(path, root, missing=True) != resolved or _signature(self._stat_optional(resolved)) != _signature(previous):
                     raise RemoteWorkspaceError(409, "file_version_conflict", "File changed while saving")
                 if expected_mtime_ns is not None and self._file_version(resolved, previous) != expected_mtime_ns:
                     raise RemoteWorkspaceError(409, "file_version_conflict", "File content has changed; reopen it before saving")
-                if previous is None:
+                if self.platform == "windows":
+                    windows_commit_started = True
+                    self._windows_files([root, resolved], missing=previous is None, action="commit",
+                                        temporary=temporary, exists=previous is not None, version=expected_mtime_ns)
+                elif previous is None:
                     sftp.rename(temporary, resolved)  # Standard SFTP rename refuses overwrite.
                 else:
                     try:
@@ -463,8 +553,13 @@ class RemoteConnection:
                 created = False
                 return {"path": path, "size": len(raw), "file_size_bytes": len(raw),
                         "last_modified_ns": _version(raw), "encoding": encoding}
+            except RemoteWorkspaceError as exc:
+                if windows_commit_started:
+                    exc.data.update({"temporary_path": temporary, "backup_path": temporary + ".bak"})
+                    exc.message += "; staged files and any backup are retained for recovery"
+                raise
             finally:
-                if created:
+                if created and not windows_commit_started:
                     with suppress(OSError, EOFError, paramiko.SSHException):
                         sftp.remove(temporary)
 
@@ -491,6 +586,13 @@ class RemoteConnection:
         if not isinstance(max_output, int) or not 0 < max_output <= MAX_COMMAND_OUTPUT:
             raise RemoteWorkspaceError(400, "invalid_output_limit", "Invalid command output limit")
         channel, directory = self._open_channel(root, timeout)
+        if self.platform == "windows":
+            script = windows.command_script(command, directory).encode("utf-8")
+            return self._run_channel(channel, windows.STDIN_COMMAND, timeout, max_output, script)
+        return self._run_channel(channel, f"cd {shlex.quote(directory)} && exec /bin/sh -c {shlex.quote(command)}", timeout, max_output)
+
+    def _run_channel(self, channel, command: str, timeout: float, max_output: int, stdin: bytes | None = None) -> dict:
+        channel.settimeout(min(timeout, IO_TIMEOUT))
         expired = threading.Event()
 
         def expire():
@@ -504,7 +606,9 @@ class RemoteConnection:
         truncated = False
         try:
             with _remote_errors():
-                channel.exec_command(f"cd {shlex.quote(directory)} && exec /bin/sh -c {shlex.quote(command)}")
+                channel.exec_command(command)
+                if stdin is not None:
+                    channel.sendall(stdin)
                 channel.shutdown_write()
                 while True:
                     received = False
@@ -545,7 +649,8 @@ class RemoteConnection:
         try:
             with _remote_errors():
                 channel.get_pty(term="xterm-256color", width=max(2, int(cols)), height=max(2, int(rows)))
-                channel.exec_command(f'cd {shlex.quote(directory)} && exec "${{SHELL:-/bin/sh}}" -l')
+                command = windows.terminal_command(directory) if self.platform == "windows" else f'cd {shlex.quote(directory)} && exec "${{SHELL:-/bin/sh}}" -l'
+                channel.exec_command(command)
                 return RemoteTerminal(channel)
         except Exception:
             channel.close()
@@ -627,7 +732,7 @@ class RemoteWorkspaceService:
             existing = self._connections.get(pool_id)
             generation = self._generation
             if existing and (
-                any(existing.config[key] != config[key] for key in _IDENTITY_FIELDS)
+                any(existing.config.get(key) != config.get(key) for key in _IDENTITY_FIELDS)
                 or config["root"] not in self._roots[pool_id]
             ):
                 raise RemoteWorkspaceError(409, "remote_connection_mismatch", "Cannot change a saved connection identity or root")
@@ -663,7 +768,7 @@ class RemoteWorkspaceService:
         if not public:
             _invalid("Remote workspace is required")
         root = _string(root, "root", required=True)
-        _absolute(root)
+        _absolute(root, public.get("platform", "posix"))
         connection = self.get(public)
         public["root"] = connection.canonical_root(root)
         with self._lock:
@@ -682,7 +787,7 @@ class RemoteWorkspaceService:
             if connection is None:
                 connection = RemoteConnection(public)
                 self._connections[public["connection_id"]] = connection
-            elif any(connection.config[key] != public[key] for key in _IDENTITY_FIELDS):
+            elif any(connection.config.get(key) != public.get(key) for key in _IDENTITY_FIELDS):
                 raise RemoteWorkspaceError(409, "remote_connection_mismatch", "Connection identity does not match its saved configuration")
             self._roots.setdefault(public["connection_id"], set()).add(public["root"])
             return connection

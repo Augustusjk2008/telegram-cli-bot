@@ -5,7 +5,7 @@ import { FileEditorSurface } from "../components/FileEditorSurface";
 import { FilePreviewPane } from "../components/FilePreviewPane";
 import { GitDiffViewer } from "../components/GitDiffViewer";
 import { PluginViewSurface } from "../components/plugin-renderers/PluginViewSurface";
-import type { CodeNavigationIntent, HostEffect, InlineCompletionConfig, PluginOpenTarget } from "../services/types";
+import type { CodeNavigationIntent, HostEffect, InlineCompletionConfig, PluginOpenTarget, RemoteWorkspace } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { inferFileEditorLanguageId } from "../utils/fileEditorLanguage";
 import { isFilePreviewFullyLoaded, isFilePreviewTooLarge } from "../utils/filePreview";
@@ -13,6 +13,7 @@ import type { EditorRevealLocation, EditorTab } from "./workbenchTypes";
 
 type Props = {
   botAlias: string;
+  remotePlatform?: RemoteWorkspace["platform"];
   client: WebBotClient;
   tabs: EditorTab[];
   activeTab: EditorTab | null;
@@ -97,6 +98,7 @@ function PluginViewLoading() {
 
 export function EditorPane({
   botAlias,
+  remotePlatform,
   client,
   tabs,
   activeTab,
@@ -559,6 +561,7 @@ export function EditorPane({
       <div className="min-h-0 flex-1 overflow-hidden">
         {activeTab.kind === "file-preview" ? (
           <FilePreviewPane
+            remotePlatform={remotePlatform}
             title={activePreviewPath || activeTab.basename}
             result={activePreviewResult}
             loading={activeTab.loading}

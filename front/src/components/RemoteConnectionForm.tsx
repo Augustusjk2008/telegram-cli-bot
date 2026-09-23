@@ -11,6 +11,7 @@ export function RemoteConnectionForm({ client, botAlias, initial, onConnected }:
   initial?: RemoteWorkspace;
   onConnected: (remote: RemoteWorkspace) => void;
 }) {
+  const [platform, setPlatform] = useState<NonNullable<RemoteWorkspace["platform"]>>(initial?.platform || "posix");
   const [host, setHost] = useState(initial?.host || "");
   const [port, setPort] = useState(String(initial?.port || 22));
   const [username, setUsername] = useState(initial?.username || "");
@@ -35,6 +36,7 @@ export function RemoteConnectionForm({ client, botAlias, initial, onConnected }:
     try {
       const result = await client.connectRemote({
         host: host.trim(), port: sshPort, username: username.trim(),
+        platform,
         ...(auth === "password" ? { password } : {}),
         ...(auth === "key" ? { keyFilename: keyFilename.trim(), passphrase } : {}),
         ...(confirmedFingerprint ? { hostKeyFingerprint: confirmedFingerprint } : {}),
@@ -55,6 +57,10 @@ export function RemoteConnectionForm({ client, botAlias, initial, onConnected }:
 
   return <form className="space-y-3" autoComplete="off" onSubmit={(event) => { event.preventDefault(); void connect(); }}>
     <fieldset disabled={busy || Boolean(fingerprint)} className="space-y-3">
+      <label className="block text-sm">目标系统<select className={remoteInputClass} value={platform} disabled={Boolean(botAlias)} onChange={(e) => setPlatform(e.target.value as typeof platform)}>
+        <option value="posix">Linux / POSIX</option><option value="windows">Windows</option>
+      </select></label>
+      {platform === "windows" && <p className="text-xs text-[var(--muted)]">远程命令使用 Windows PowerShell（powershell.exe）；Agent 仍在本机运行。</p>}
       <div className="grid grid-cols-[minmax(0,1fr)_6rem] gap-2">
         <label className="text-sm">SSH 主机<input className={remoteInputClass} value={host} onChange={(e) => setHost(e.target.value)} readOnly={Boolean(botAlias)} required /></label>
         <label className="text-sm">端口<input className={remoteInputClass} type="number" min="1" max="65535" value={port} onChange={(e) => setPort(e.target.value)} readOnly={Boolean(botAlias)} required /></label>

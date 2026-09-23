@@ -491,7 +491,7 @@ export function FilesScreen({
         return;
       }
       if (structureOnly) {
-        await loadListing(remoteWorkspace ? joinRemotePath(currentPath, name) : joinBrowserPath(currentPath, name));
+        await loadListing(remoteWorkspace ? joinRemotePath(currentPath, name, remoteWorkspace.platform) : joinBrowserPath(currentPath, name));
         return;
       }
       await client.changeDirectory(botAlias, name);
@@ -508,7 +508,7 @@ export function FilesScreen({
         return;
       }
       if (structureOnly) {
-        await loadListing(remoteWorkspace ? parentRemotePath(currentPath) : getParentBrowserPath(currentPath));
+        await loadListing(remoteWorkspace ? parentRemotePath(currentPath, remoteWorkspace.platform) : getParentBrowserPath(currentPath));
         return;
       }
       await client.changeDirectory(botAlias, "..");
@@ -1076,7 +1076,7 @@ export function FilesScreen({
     <main data-ui-density="compact" className="flex h-full flex-col bg-[var(--workbench-titlebar-bg)]">
       <header className="flex items-center justify-between border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-4 py-3">
         <div className="flex items-center gap-2 overflow-hidden">
-          {currentPath !== "/" && currentPath !== "." && currentPath !== remoteWorkspace?.root && !isVirtualRoot && !isEditorOpen ? (
+          {currentPath !== "/" && currentPath !== "." && currentPath !== remoteWorkspace?.root && (!remoteWorkspace || parentRemotePath(currentPath, remoteWorkspace.platform) !== currentPath) && !isVirtualRoot && !isEditorOpen ? (
             <ToolbarButton type="button" size="icon" variant="ghost" onClick={() => void handleBack()} aria-label="返回上级目录">
               <ChevronLeft className="w-5 h-5" />
             </ToolbarButton>
@@ -1319,6 +1319,7 @@ export function FilesScreen({
 
       {canPreviewFiles && previewName ? (
         <FilePreviewDialog
+          remotePlatform={remoteWorkspace ? remoteWorkspace.platform || "posix" : undefined}
           title={previewName}
           result={previewResult}
           botAlias={botAlias}

@@ -455,6 +455,7 @@ export type BotExecutionConfigInput = {
 };
 
 export type RemoteWorkspace = {
+  platform?: "posix" | "windows";
   connectionId: string;
   host: string;
   port: number;
@@ -465,6 +466,7 @@ export type RemoteWorkspace = {
 };
 
 export type RemoteConnectionInput = {
+  platform?: "posix" | "windows";
   host: string;
   port: number;
   username: string;

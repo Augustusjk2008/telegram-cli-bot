@@ -1,14 +1,16 @@
 """Bounded agent operations on the Web host's shared SSH connection."""
 from __future__ import annotations
 
-import posixpath
-
+from bot.remote_workspace import windows
 from bot.remote_workspace.chat import validate_tool_arguments
-from bot.remote_workspace.transport import RemoteWorkspaceError, get_remote_workspace_service
+from bot.remote_workspace.transport import RemoteWorkspaceError, get_remote_workspace_service, join_remote_path
 
 
-def resolve_remote_directory(connection, path: str, root: str) -> str:
-    directory = connection.canonical_root(posixpath.join(root, path))
+def resolve_remote_directory(connection, path: str, root: str, platform: str = "posix") -> str:
+    candidate = join_remote_path(root, path, platform)
+    if candidate != root and not candidate.startswith(root.rstrip("/") + "/"):
+        raise RemoteWorkspaceError(403, "forbidden_path", "Path escapes the remote workspace root")
+    directory = connection.canonical_root(candidate)
     if directory != root and not directory.startswith(root.rstrip("/") + "/"):
         raise RemoteWorkspaceError(403, "forbidden_path", "Path escapes the remote workspace root")
     return directory
@@ -19,9 +21,10 @@ def execute_remote_tool(config: dict, tool: str, arguments: dict) -> dict:
     connection = get_remote_workspace_service().get(config)
     root = config["root"]
     if tool == "exec":
-        directory = resolve_remote_directory(connection, args["cwd"], root)
+        directory = resolve_remote_directory(connection, args["cwd"], root, config.get("platform", "posix"))
+        command = windows.batch(args["commands"]) if config.get("platform") == "windows" else "set -e\n" + "\n".join(args["commands"])
         return connection.execute(
-            "set -e\n" + "\n".join(args["commands"]), root=directory,
+            command, root=directory,
             timeout=args["timeout_seconds"], max_output=args["max_output_chars"],
         )
     if tool == "list":

@@ -380,7 +380,7 @@ export function BotListScreen({
               }))}
             />
           ) : null}
-          <label className="block text-sm">工作区位置<select aria-label="工作区位置" className="ml-2 rounded border border-[var(--border)] bg-[var(--surface)] p-2" value={remoteCreate ? "remote" : "local"} onChange={(e) => { setRemoteCreate(e.target.value === "remote"); setCreateDraft((prev) => ({ ...prev, remoteWorkspace: undefined })); }}><option value="local">本地</option><option value="remote">远程 SSH（Linux）</option></select></label>
+          <label className="block text-sm">工作区位置<select aria-label="工作区位置" className="ml-2 rounded border border-[var(--border)] bg-[var(--surface)] p-2" value={remoteCreate ? "remote" : "local"} onChange={(e) => { setRemoteCreate(e.target.value === "remote"); setCreateDraft((prev) => ({ ...prev, remoteWorkspace: undefined })); }}><option value="local">本地</option><option value="remote">远程 SSH（Linux / Windows）</option></select></label>
           {remoteCreate ? <RemoteWorkspacePicker client={client} onPick={(remote) => setCreateDraft((prev) => ({ ...prev, remoteWorkspace: { connectionId: remote.connectionId, root: remote.root } }))} /> : (
           <div className="flex flex-col gap-2 sm:flex-row">
             <input

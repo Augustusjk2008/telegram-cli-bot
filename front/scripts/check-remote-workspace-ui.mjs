@@ -27,16 +27,18 @@ const result = await build({
     import { DesktopWorkbench } from "./src/workbench/DesktopWorkbench";
     import { PersistentTerminalProvider } from "./src/terminal/PersistentTerminalProvider";
     import { WebApiClientError } from "./src/services/types";
-    const remote = { connectionId: "ssh-1", host: "linux.test", port: 22, username: "dev", root: "/home/dev", hostKeyFingerprint: "SHA256:browser-check" };
-    window.remoteSmoke = { connections: 0, confirmed: false, writes: 0, localCalls: [] };
+    const windows = window.remotePlatform === "windows";
+    const remote = { connectionId: "ssh-1", host: windows ? "windows.test" : "linux.test", port: 22, username: "dev", root: windows ? "/C:/Users/dev" : "/home/dev", hostKeyFingerprint: "SHA256:browser-check", ...(windows ? { platform: "windows" } : {}) };
+    window.remoteSmoke = { connections: 0, confirmed: false, writes: 0, localCalls: [], directories: [], platform: "" };
     const client = {
       async connectRemote(input) {
         window.remoteSmoke.connections++;
+        window.remoteSmoke.platform = input.platform;
         if (!input.hostKeyFingerprint) throw new WebApiClientError("Unknown host", { code: "remote_host_key_unknown", status: 409, data: { fingerprint: remote.hostKeyFingerprint } });
         window.remoteSmoke.confirmed = input.hostKeyFingerprint === remote.hostKeyFingerprint;
         return remote;
       },
-      async listRemoteDirectories(_id, dir) { return { workingDir: dir, entries: dir === remote.root ? [{ name: "project", isDir: true }] : [] }; },
+      async listRemoteDirectories(_id, dir) { window.remoteSmoke.directories.push(dir); return { workingDir: dir, entries: dir === remote.root || dir === "/D:/" ? [{ name: "project", isDir: true }] : [] }; },
       async getCurrentPath() { return remote.root; },
       async listFiles(_alias, dir) { return { workingDir: dir || remote.root, entries: [{ name: "README.md", isDir: false }] }; },
       async revealFileTreePath() { return { rootPath: remote.root, highlightPath: "README.md", expandedPaths: [], branches: { "": [{ name: "README.md", isDir: false }] } }; },
@@ -66,49 +68,63 @@ const output = path.join(root, "test-results/remote-workspace");
 await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH } : {}) });
 try {
-  for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 900 }]) {
-    const page = await browser.newPage({ viewport });
+  for (const platform of ["posix", "windows"]) {
+    for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 900 }]) {
+      const page = await browser.newPage({ viewport });
+      const errors = [];
+      page.on("pageerror", (error) => errors.push(error.message));
+      await page.setContent('<html><head><meta charset="utf-8"></head><body><div id="root"></div></body></html>');
+      await page.addStyleTag({ content: css });
+      await page.evaluate((platform) => { window.remotePlatform = platform; }, platform);
+      await page.addScriptTag({ content: result.outputFiles[0].text });
+      await page.getByLabel("目标系统").selectOption(platform);
+      await page.getByLabel("SSH 主机", { exact: true }).fill(platform === "windows" ? "windows.test" : "linux.test");
+      await page.getByLabel("SSH 用户名").fill("dev");
+      await page.getByLabel("SSH 密码").fill("fixture-password");
+      await page.getByRole("button", { name: "测试并连接 SSH" }).click();
+      await page.getByText("SHA256:browser-check", { exact: true }).waitFor();
+      assert.equal(await page.evaluate(() => window.remoteSmoke.connections), 1);
+      await page.screenshot({ path: path.join(output, `host-confirmation-${platform}-${viewport.width}.png`), fullPage: true });
+      await page.getByRole("button", { name: "信任此主机密钥并连接" }).click();
+      if (platform === "windows") {
+        await page.getByLabel("远程目录路径").fill("c:\\");
+        await page.getByRole("button", { name: "打开", exact: true }).click();
+        await page.waitForFunction(() => document.querySelector('[aria-label="远程目录路径"]').value === "/C:/");
+        assert.equal(await page.getByRole("button", { name: "上级目录" }).isDisabled(), true);
+        await page.getByLabel("远程目录路径").fill("d:\\");
+        await page.getByRole("button", { name: "打开", exact: true }).click();
+      }
+      await page.getByRole("button", { name: "📁 project" }).click();
+      await page.getByLabel("远程目录路径").waitFor();
+      await page.waitForFunction((expected) => document.querySelector('[aria-label="远程目录路径"]').value === expected, platform === "windows" ? "/D:/project" : "/home/dev/project");
+      await page.getByRole("button", { name: "选择此远程工作目录" }).click();
+      await page.getByRole("button", { name: "打开 README.md" }).waitFor();
+      assert.equal(await page.evaluate(() => window.remoteSmoke.confirmed), true);
+      assert.equal(await page.evaluate(() => window.remoteSmoke.platform), platform);
+      assert.equal(await page.evaluate(() => window.remoteSmoke.directories.includes("/")), false);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "horizontal overflow");
+      assert.deepEqual(errors, []);
+      await page.screenshot({ path: path.join(output, `files-${platform}-${viewport.width}.png`), fullPage: true });
+      await page.close();
+    }
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
-    await page.setContent('<html><head><meta charset="utf-8"></head><body><div id="root"></div></body></html>');
+    await page.route("https://remote-workspace.invalid/", (route) => route.fulfill({ contentType: "text/html", body: '<html><head><meta charset="utf-8"></head><body><div id="root"></div></body></html>' }));
+    await page.route("**/assets/app-logo*.svg", async (route) => route.fulfill({ contentType: "image/svg+xml", body: await readFile(path.join(root, "public/assets/app-logo.svg"), "utf8") }));
+    await page.goto("https://remote-workspace.invalid/");
     await page.addStyleTag({ content: css });
+    await page.evaluate((platform) => { window.workbenchSmoke = true; window.remotePlatform = platform; }, platform);
     await page.addScriptTag({ content: result.outputFiles[0].text });
-    await page.getByLabel("SSH 主机", { exact: true }).fill("linux.test");
-    await page.getByLabel("SSH 用户名").fill("dev");
-    await page.getByLabel("SSH 密码").fill("fixture-password");
-    await page.getByRole("button", { name: "测试并连接 SSH" }).click();
-    await page.getByText("SHA256:browser-check", { exact: true }).waitFor();
-    assert.equal(await page.evaluate(() => window.remoteSmoke.connections), 1);
-    await page.screenshot({ path: path.join(output, `host-confirmation-${viewport.width}.png`), fullPage: true });
-    await page.getByRole("button", { name: "信任此主机密钥并连接" }).click();
-    await page.getByRole("button", { name: "📁 project" }).click();
-    await page.getByLabel("远程目录路径").waitFor();
-    await page.waitForFunction(() => document.querySelector('[aria-label="远程目录路径"]').value === "/home/dev/project");
-    await page.getByRole("button", { name: "选择此远程工作目录" }).click();
-    await page.getByRole("button", { name: "打开 README.md" }).waitFor();
-    assert.equal(await page.evaluate(() => window.remoteSmoke.confirmed), true);
-    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "horizontal overflow");
+    await page.getByText("Remote agent chat", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "打开 README.md" }).click();
+    await page.getByRole("tab", { name: "README.md" }).waitFor();
+    await page.getByRole("button", { name: "隐藏底部终端", exact: true }).waitFor();
+    assert.deepEqual(await page.evaluate(() => window.remoteSmoke.localCalls), []);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "workbench horizontal overflow");
     assert.deepEqual(errors, []);
-    await page.screenshot({ path: path.join(output, `files-${viewport.width}.png`), fullPage: true });
+    await page.screenshot({ path: path.join(output, `workbench-${platform}-1280.png`), fullPage: true });
     await page.close();
   }
-  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
-  const errors = [];
-  page.on("pageerror", (error) => errors.push(error.message));
-  await page.route("https://remote-workspace.invalid/", (route) => route.fulfill({ contentType: "text/html", body: '<html><head><meta charset="utf-8"></head><body><div id="root"></div></body></html>' }));
-  await page.route("**/assets/app-logo*.svg", async (route) => route.fulfill({ contentType: "image/svg+xml", body: await readFile(path.join(root, "public/assets/app-logo.svg"), "utf8") }));
-  await page.goto("https://remote-workspace.invalid/");
-  await page.addStyleTag({ content: css });
-  await page.evaluate(() => { window.workbenchSmoke = true; });
-  await page.addScriptTag({ content: result.outputFiles[0].text });
-  await page.getByText("Remote agent chat", { exact: true }).waitFor();
-  await page.getByRole("button", { name: "打开 README.md" }).click();
-  await page.getByRole("tab", { name: "README.md" }).waitFor();
-  await page.getByRole("button", { name: "隐藏底部终端", exact: true }).waitFor();
-  assert.deepEqual(await page.evaluate(() => window.remoteSmoke.localCalls), []);
-  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "workbench horizontal overflow");
-  assert.deepEqual(errors, []);
-  await page.screenshot({ path: path.join(output, "workbench-1280.png"), fullPage: true });
-  await page.close();
-  console.log("Remote SSH shared UI browser smoke passed at 390px and 1280px; no server started.");
+  console.log("Remote POSIX/Windows SSH shared UI browser smoke passed at 390px and 1280px; no server started.");
 } finally { await browser.close(); }

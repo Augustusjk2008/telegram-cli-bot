@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { inferFileEditorLanguageId } from "../utils/fileEditorLanguage";
 import { getExternalSourceErrorMessage } from "../services/types";
+import { relativeRemotePath } from "../services/remoteWorkspace";
 import type {
   ExternalSourceReadResult,
   FileReadResult,
@@ -10,6 +11,7 @@ import type {
   CodeNavigationDocumentSyncEvent,
   WorkspaceDocumentSyncInput,
   CodeNavigationDocumentSyncItem,
+  RemoteWorkspace,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { selectTabsForPersistence } from "./workbenchSession";
@@ -27,6 +29,7 @@ type Props = {
   structureOnly?: boolean;
   canWriteFiles?: boolean;
   enableDocumentSync?: boolean;
+  remoteWorkspace?: RemoteWorkspace;
 };
 
 export const EDITOR_DOCUMENT_SYNC_DEBOUNCE_MS = 250;
@@ -192,13 +195,19 @@ function createTabFromSnapshot(tab: PersistedWorkbenchTab): EditorTab {
   });
 }
 
-export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly = false, canWriteFiles = true, enableDocumentSync = true }: Props) {
+export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly = false, canWriteFiles = true, enableDocumentSync = true, remoteWorkspace }: Props) {
   const [tabs, setTabs] = useState<EditorTab[]>([]);
   const [activeTabPath, setActiveTabPath] = useState("");
   const [closedTabs, setClosedTabs] = useState<PersistedWorkbenchTab[]>([]);
   const tabsRef = useRef<EditorTab[]>([]);
   const activeTabPathRef = useRef("");
   const closedTabsRef = useRef<PersistedWorkbenchTab[]>([]);
+  function documentPath(path: string) {
+    return remoteWorkspace ? relativeRemotePath(path, remoteWorkspace.root, remoteWorkspace.platform) : path;
+  }
+  function documentBasename(path: string) {
+    return remoteWorkspace && remoteWorkspace.platform !== "windows" ? path.split("/").pop() || path : basename(path);
+  }
   const scopeIdentity = `${botAlias}\n${scopeKey}`;
   const documentSyncTimersRef = useRef<Map<string, number>>(new Map());
   const pendingDocumentSyncRef = useRef<Map<string, { item: CodeNavigationDocumentSyncItem; event: CodeNavigationDocumentSyncEvent }>>(new Map());
@@ -444,7 +453,7 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
         ? current.map((item) => item.path === path
           ? {
               ...item,
-              basename: basename(path),
+              basename: documentBasename(path),
               content: result.content || "",
               savedContent: result.content || "",
               documentVersion: Math.max(1, Math.trunc(target?.documentVersion || 1)),
@@ -496,7 +505,8 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
     if (structureOnly || !canWriteFiles) {
       return;
     }
-    const nextTab = createTab(path, content, lastModifiedNs, { contentPersistence: "none" });
+    path = documentPath(path);
+    const nextTab = createTab(path, content, lastModifiedNs, { contentPersistence: "none", basename: documentBasename(path) });
     const currentTabs = tabsRef.current;
     const existingIndex = currentTabs.findIndex((item) => item.path === path);
     const nextTabs = existingIndex >= 0 ? currentTabs.slice() : [...currentTabs, nextTab];
@@ -514,6 +524,7 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
     if (structureOnly) {
       return;
     }
+    path = documentPath(path);
     const generation = scopeGenerationRef.current;
     const nextPluginTargets = clonePluginTargets(pluginTargets);
     const existing = tabsRef.current.find((item) => item.path === path);
@@ -534,6 +545,7 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
     setTabs((current) => [
       ...current,
       createTab(path, "", undefined, {
+        basename: documentBasename(path),
         loading: true,
         cold: true,
         readOnly: !canWriteFiles,
@@ -805,7 +817,7 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
     if (structureOnly) {
       return "";
     }
-    const sourcePath = input.path.trim();
+    const sourcePath = documentPath(input.path.trim());
     if (!sourcePath) {
       return "";
     }
@@ -820,7 +832,7 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
         filePreview?.previewKind === "image" ? "" : filePreview?.content || "",
         filePreview?.lastModifiedNs,
         {
-          basename: basename(sourcePath),
+          basename: documentBasename(sourcePath),
           kind: "file-preview",
           filePreview,
           sourcePath,

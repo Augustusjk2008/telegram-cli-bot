@@ -3139,7 +3139,8 @@ export function ChatScreen({
   const shouldUseInlinePreview = !(embedded && onRequestDesktopPreview);
 
   const handleFileLinkClick = useCallback((href: string) => {
-    const nextPath = resolvePreviewFilePath(href, workingDirRef.current);
+    const remote = botOverviewRef.current?.remoteWorkspace;
+    const nextPath = resolvePreviewFilePath(href, workingDirRef.current, remote ? remote.platform || "posix" : undefined);
     if (!nextPath) {
       setError("暂不支持预览该文件链接");
       return;
@@ -5200,6 +5201,7 @@ export function ChatScreen({
 
       {shouldUseInlinePreview && previewName ? (
         <FilePreviewDialog
+          remotePlatform={botOverview?.remoteWorkspace ? botOverview?.remoteWorkspace.platform || "posix" : undefined}
           title={previewName}
           result={previewResult}
           botAlias={botAlias}

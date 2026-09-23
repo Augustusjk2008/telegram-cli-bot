@@ -1,4 +1,6 @@
 import { withApiBase } from "./publicBase";
+import type { RemoteWorkspace } from "../services/types";
+import { normalizeRemotePath, relativeRemotePath } from "../services/remoteWorkspace";
 
 const EXTERNAL_PROTOCOL_RE = /^(https?:|mailto:|tel:)/i;
 const BLOCKED_PROTOCOL_RE = /^(javascript|vbscript|data):/i;
@@ -87,10 +89,15 @@ export function isLikelyLocalFileHref(href: string) {
   );
 }
 
-export function resolvePreviewFilePath(href: string, workingDir: string) {
+export function resolvePreviewFilePath(href: string, workingDir: string, platform?: RemoteWorkspace["platform"]) {
   const cleaned = cleanHref(href);
   if (!cleaned || cleaned.startsWith("#") || !isSafeMarkdownHref(cleaned) || isExternalHref(cleaned)) {
     return null;
+  }
+
+  if (platform) {
+    const candidate = stripTrailingLocation(normalizeRemotePath(cleaned, platform));
+    return !candidate || candidate === "." ? null : relativeRemotePath(candidate, workingDir, platform).replace(/^\.\//, "");
   }
 
   const normalizedCandidate = stripTrailingLocation(normalizePath(cleaned));
@@ -118,15 +125,22 @@ export function resolvePreviewFilePath(href: string, workingDir: string) {
   return normalizedCandidate.replace(/^\.\//, "");
 }
 
-export function resolveMarkdownImagePath(src: string, markdownPath: string) {
+export function resolveMarkdownImagePath(src: string, markdownPath: string, platform?: RemoteWorkspace["platform"]) {
   const cleaned = cleanHref(src);
   if (!cleaned || cleaned.startsWith("#") || !isSafeMarkdownHref(cleaned) || isExternalHref(cleaned)) {
     return null;
   }
 
-  const normalizedSrc = stripTrailingLocation(normalizePath(cleaned));
+  const normalizedSrc = stripTrailingLocation(platform ? normalizeRemotePath(cleaned, platform) : normalizePath(cleaned));
   if (!normalizedSrc || normalizedSrc === ".") {
     return null;
+  }
+
+  if (platform) {
+    if (normalizedSrc.startsWith("/")) return normalizedSrc;
+    const normalizedMarkdownPath = normalizeRemotePath(markdownPath, platform);
+    const slash = normalizedMarkdownPath.lastIndexOf("/");
+    return `${slash < 0 ? "" : normalizedMarkdownPath.slice(0, slash + 1)}${normalizedSrc}`.replace(/^\.\//, "");
   }
 
   if (/^[A-Za-z]:\//.test(normalizedSrc)) {

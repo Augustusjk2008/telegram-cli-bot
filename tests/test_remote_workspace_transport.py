@@ -724,3 +724,75 @@ def test_normalizer_rejects_invalid_persisted_configs(ssh, override):
     config, _ = connected(ssh)
     with error_code("invalid_remote_workspace"):
         remote.normalize_remote_workspace({**config, **override})
+
+
+def windows_connection(ssh, monkeypatch):
+    root = "/C:/work/project"
+    ssh.nodes.update({path: {"mode": stat.S_IFDIR | 0o755} for path in ("/C:", "/C:/work", root)})
+    ssh.nodes[root + "/file.txt"] = {"mode": stat.S_IFREG | 0o640, "data": b"original", "mtime": 100}
+    operations = []
+
+    def file_operation(_connection, paths, **kwargs):
+        operations.append(kwargs.get("action", "check"))
+        if kwargs.get("action") == "commit":
+            ssh.nodes[paths[-1]] = ssh.nodes.pop(kwargs["temporary"])
+
+    monkeypatch.setattr(remote.RemoteConnection, "_windows_files", file_operation)
+    config, connection = connected(ssh, root=r"C:\work\project", platform="windows")
+    return config, connection, operations
+
+
+def test_windows_config_paths_and_native_file_commit(ssh, monkeypatch):
+    config, connection, operations = windows_connection(ssh, monkeypatch)
+    assert config["platform"] == "windows" and config["root"] == "/C:/work/project"
+    assert remote.normalize_remote_workspace(config) == config
+    original = connection.read_file(r"C:\work\project\file.txt", config["root"])
+    monkeypatch.setattr(MemoryFile, "chmod", lambda *args: pytest.fail("Windows saves must preserve ACLs instead of chmod"))
+    result = connection.write_file("file.txt", "中文\r\n", config["root"], original["last_modified_ns"])
+    assert connection.read_file("file.txt", config["root"])["content"] == "中文\r\n"
+    assert result["last_modified_ns"] == remote._version("中文\r\n".encode())
+    assert operations.count("prepare") == 1 and operations.count("commit") == 1
+    assert ssh.clients[0].sftp.rename_calls == 0
+    with error_code("forbidden_path"):
+        connection.read_file(r"..\outside\secret", config["root"])
+    with error_code("remote_connection_mismatch"):
+        ssh.service.get({**config, "platform": "posix"})
+
+
+def test_windows_uncertain_commit_retains_recovery_files_without_retry(ssh, monkeypatch):
+    config, connection, _ = windows_connection(ssh, monkeypatch)
+    attempts = []
+
+    def failed_commit(paths, **kwargs):
+        if kwargs.get("action") == "commit":
+            attempts.append(kwargs["temporary"])
+            raise remote.RemoteWorkspaceError(502, "remote_disconnected", "Response lost")
+
+    monkeypatch.setattr(connection, "_windows_files", failed_commit)
+    with error_code("remote_disconnected") as exc:
+        connection.write_file("file.txt", "replacement", config["root"])
+    assert len(attempts) == 1 and ssh.nodes[attempts[0]]["data"] == b"replacement"
+    assert exc.value.data["temporary_path"] == attempts[0]
+    assert exc.value.data["backup_path"] == attempts[0] + ".bak"
+
+
+def test_windows_exec_uses_stdin_and_terminal_uses_powershell(ssh, monkeypatch):
+    import base64
+
+    config, connection, _ = windows_connection(ssh, monkeypatch)
+    channel = ssh.next_channel = Channel(stdout="你好".encode())
+    result = connection.execute("Write-Output '你好'", config["root"])
+    assert result["stdout"] == "你好" and result["returncode"] == 0
+    assert channel.commands[0].startswith("powershell.exe ") and len(channel.commands[0]) < 8191
+    assert "Write-Output '你好'" in channel.sent.decode("utf-8")
+    assert remote.windows.literal("C:\\work\\project") in channel.sent.decode("utf-8")
+    assert channel.closed
+    channel = ssh.next_channel = Channel(running=True)
+    terminal = connection.open_terminal(config["root"])
+    assert "-NoExit" in channel.commands[0] and "-NonInteractive" not in channel.commands[0]
+    script = base64.b64decode(channel.commands[0].split()[-1]).decode("utf-16-le")
+    assert "Set-Location -LiteralPath " + remote.windows.literal("C:\\work\\project") in script
+    terminal.resize(80, 24)
+    terminal.close()
+    assert channel.size == {"width": 80, "height": 24} and channel.closed
+    assert not ssh.clients[0].closed

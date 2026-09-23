@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import type { FileReadResult } from "../services/types";
+import type { FileReadResult, RemoteWorkspace } from "../services/types";
 import { FilePreviewSurface } from "./FilePreviewSurface";
 import { isFilePreviewFullyLoaded } from "../utils/filePreview";
 
@@ -14,6 +14,7 @@ type Props = {
   title: string;
   result: FileReadResult | null;
   botAlias?: string;
+  remotePlatform?: RemoteWorkspace["platform"];
   variant?: "mobile" | "desktop";
   desktopAnchorRect?: DesktopAnchorRect | null;
   loading?: boolean;
@@ -44,6 +45,7 @@ export function FilePreviewDialog({
   title,
   result,
   botAlias = "",
+  remotePlatform,
   variant = "mobile",
   desktopAnchorRect = null,
   loading = false,
@@ -243,6 +245,7 @@ export function FilePreviewDialog({
               result={result}
               loading={loading}
               botAlias={botAlias}
+              remotePlatform={remotePlatform}
               desktop
               onFileLinkClick={onFileLinkClick}
             />
@@ -313,6 +316,7 @@ export function FilePreviewDialog({
           result={result}
           loading={loading}
           botAlias={botAlias}
+          remotePlatform={remotePlatform}
           onFileLinkClick={onFileLinkClick}
         />
         <div className="mt-4 flex items-center justify-between gap-3">

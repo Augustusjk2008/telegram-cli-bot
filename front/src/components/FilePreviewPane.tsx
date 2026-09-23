@@ -1,11 +1,12 @@
 import { BookOpenText } from "lucide-react";
-import type { FileReadResult } from "../services/types";
+import type { FileReadResult, RemoteWorkspace } from "../services/types";
 import { FilePreviewSurface } from "./FilePreviewSurface";
 
 type Props = {
   title: string;
   result: FileReadResult | null;
   botAlias?: string;
+  remotePlatform?: RemoteWorkspace["platform"];
   loading?: boolean;
   statusText?: string;
   error?: string;
@@ -17,6 +18,7 @@ export function FilePreviewPane({
   title,
   result,
   botAlias = "",
+  remotePlatform,
   loading = false,
   statusText = "",
   error = "",
@@ -37,6 +39,7 @@ export function FilePreviewPane({
             result={result}
             loading={loading}
             botAlias={botAlias}
+            remotePlatform={remotePlatform}
             desktop
             onFileLinkClick={onFileLinkClick}
           />

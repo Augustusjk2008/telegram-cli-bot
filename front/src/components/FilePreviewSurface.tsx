@@ -1,7 +1,7 @@
 import { clsx } from "clsx";
 import { LoaderCircle } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
-import type { FileReadResult } from "../services/types";
+import type { FileReadResult, RemoteWorkspace } from "../services/types";
 import { buildFileDownloadUrl, isExternalHref, isSafeMarkdownHref, resolveMarkdownImagePath } from "../utils/fileLinks";
 import { MarkdownPreview } from "./MarkdownPreview";
 import { isFilePreviewFullyLoaded, isJsonPreviewPath } from "../utils/filePreview";
@@ -13,6 +13,7 @@ export type FilePreviewSurfaceProps = {
   result: FileReadResult | null;
   loading?: boolean;
   botAlias?: string;
+  remotePlatform?: RemoteWorkspace["platform"];
   className?: string;
   desktop?: boolean;
   onFileLinkClick?: (href: string) => void;
@@ -23,6 +24,7 @@ export function FilePreviewSurface({
   result,
   loading = false,
   botAlias = "",
+  remotePlatform,
   className = "",
   desktop = false,
   onFileLinkClick,
@@ -66,10 +68,10 @@ export function FilePreviewSurface({
       if (!normalizedBotAlias) {
         return "";
       }
-      const imagePath = resolveMarkdownImagePath(src, title);
+      const imagePath = resolveMarkdownImagePath(src, title, remotePlatform);
       return imagePath ? buildFileDownloadUrl(normalizedBotAlias, imagePath) : "";
     };
-  }, [botAlias, title]);
+  }, [botAlias, title, remotePlatform]);
 
   function renderContent() {
     if (loading && !result) {

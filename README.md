@@ -138,11 +138,17 @@ bash install.sh
 
 ### SSH 远程工作区
 
-创建智能体时选择「远程 SSH（Linux）」，填写 SSH 连接信息，核对首次连接的主机密钥指纹，再浏览并选择远程目录。支持聊天、文件树、UTF-8 文本读写和独立的 SSH 终端标签；远程主机需要 SSH/SFTP，无需安装 Codex、Claude 或 Pi。
+创建智能体时选择「远程 SSH」，在连接表单选择远程系统（Linux / POSIX 或 Windows），填写 SSH 连接信息，核对首次连接的主机密钥指纹，再浏览并选择远程目录。支持聊天、文件树、UTF-8 文本读写和独立的 SSH 终端标签；远程主机需要 SSH/SFTP，无需安装 Codex、Claude 或 Pi。
 
 Agent 仍在运行 Orbit 的电脑上执行。本地控制目录默认位于 `~/.tcb/orbit-safe-claw/remote-workspaces/`（遵循 `TCB_DATA_DIR`），自动生成 `AGENTS.md` 和 `CLAUDE.md`。项目文件留在远程主机；聊天工具、文件操作和终端复用 SSH 连接。Agent 可批量运行命令、读取指定行范围及精确替换文本，减少反复登录和大段内容传输。
 
 密码和私钥口令只保留在服务内存，服务重启后可通过「SSH 重新登录」恢复连接；私钥文件路径指向运行 Orbit 的电脑。文本文件上限为 2 MiB。当前远程界面不提供 Git 面板、语言服务、插件、调试和工作区回滚。远程目标与会话绑定，使用另一个目录时新建智能体。文件 API 限制在选定目录内，终端和命令使用 SSH 账号自身权限；CLI 的本地工具仍受其原有权限设置约束。
+
+Windows 远程端需要启用 SSH/SFTP，并能通过 SSH 执行 `powershell.exe`（Windows PowerShell 5.1）；无需 PowerShell 7。命令与终端显式使用 Windows PowerShell，批量命令遇到失败会停止并返回退出码。Git、rg、编译器等项目工具需要在远程账号的 PATH 中。可输入 `C:\Projects\demo`、`C:/Projects/demo` 或 `/C:/Projects/demo`，浏览器统一显示 `/C:/Projects/demo`；切换盘符时直接输入另一个盘符的路径。文件 API 支持本地盘符，拒绝 UNC、设备路径、备用数据流及路径中的 junction / symlink；路径应保持所选根目录的大小写。Windows 7 长路径不在兼容范围内。
+
+Windows 7 SP1 作为远程目标按兼容方式支持：先准备 [.NET Framework 4.5.2+ 与 WMF 5.1](https://devblogs.microsoft.com/powershell/windows-management-framework-wmf-5-1-released/)，再安装并验证适用于该机器的 [Win32-OpenSSH](https://github.com/PowerShell/Win32-OpenSSH/wiki/Install-Win32-OpenSSH)。这不表示 Orbit 宿主应用可在 Windows 7 上运行。自动化测试在 Windows PowerShell 5.1 上验证命令和文件操作；Windows 7 的具体 SSH 版本仍需实机确认连接、中文输出、终端缩放、Ctrl+C、关闭标签和超时后的进程清理。旧系统的交互终端依赖 SSH 服务的 [PTY 实现](https://github.com/PowerShell/Win32-OpenSSH/wiki/TTY-PTY-support-in-Windows-OpenSSH)。
+
+Windows 文本保存保留 UTF-8 BOM / CRLF 和内容冲突检查，使用同目录临时文件及 .NET 文件替换，保留目标文件 ACL。文件锁定或权限不足会报错；替换失败或连接中断后可能保留 `.orbit-*.tmp` 和 `.bak` 恢复文件，错误数据中包含对应路径。先核对目标与恢复文件，再决定是否重试保存。
 
 ### Desktop Workbench
 

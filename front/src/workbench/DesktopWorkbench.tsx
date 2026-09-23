@@ -233,10 +233,10 @@ export function DesktopWorkbench({
   onChatPaneVisibilityChange,
 }: Props) {
   const { paneState, toggleSidebar, toggleEditor, toggleTerminal, toggleChat, setSidebarView, restoreSidebarView, resizePane } = useWorkbenchState();
-  const fileTree = useFileTree(botAlias, client, { structureOnly, remote: Boolean(remoteWorkspace) });
+  const fileTree = useFileTree(botAlias, client, { structureOnly, remote: Boolean(remoteWorkspace), platform: remoteWorkspace?.platform });
   const workspaceUserScope = `${accountId || ""}\n${fileTree.rootPath}`;
   const codeNavigationScope = `${accountId || ""}\n${botAlias}\n${fileTree.rootPath}`;
-  const tabs = useEditorTabs({ botAlias, client, scopeKey: workspaceUserScope, structureOnly, canWriteFiles, enableDocumentSync: !remoteWorkspace });
+  const tabs = useEditorTabs({ botAlias, client, scopeKey: workspaceUserScope, structureOnly, canWriteFiles, enableDocumentSync: !remoteWorkspace, remoteWorkspace });
   const columnsRef = useRef<HTMLDivElement | null>(null);
   const centerRowsRef = useRef<HTMLDivElement | null>(null);
   const restoringRef = useRef<{ scopeIdentity: string; requestSeq: number } | null>(null);
@@ -1239,6 +1239,7 @@ export function DesktopWorkbench({
             setSidebarView("settings");
           }}
           remote={Boolean(remoteWorkspace)}
+          remotePlatform={remoteWorkspace?.platform}
           structureOnly={structureOnly}
           canWriteFiles={canWriteFiles}
           canBrowseExternalPaths={canBrowseExternalPaths}
@@ -1520,6 +1521,7 @@ export function DesktopWorkbench({
               >
                 <Suspense fallback={paneFallback}>
                   <EditorPane
+                    remotePlatform={remoteWorkspace ? remoteWorkspace.platform || "posix" : undefined}
                     botAlias={botAlias}
                     client={client}
                     tabs={tabs.tabs}
