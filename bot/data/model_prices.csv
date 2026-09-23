@@ -1,5 +1,7 @@
 model,currency,input_per_million,cache_read_per_million,cache_write_per_million,output_per_million,cache_write_1h_per_million,source_url
 gpt-6-astra,USD,10,1,12.5,50,,https://developers.openai.com/api/docs/models/gpt-6-astra
+gpt-6-sol,USD,2,0.2,2.5,10,,https://developers.openai.com/api/docs/models/gpt-6-sol
+gpt-6-luna,USD,0.1,0.01,0.125,0.5,,https://developers.openai.com/api/docs/models/gpt-6-luna
 gpt-5.6-sol,USD,4,0.4,5,20,,https://developers.openai.com/api/docs/models/gpt-5.6-sol
 gpt-5.6-terra,USD,2,0.2,2.5,12,,https://developers.openai.com/api/docs/models/gpt-5.6-terra
 gpt-5.6-luna,USD,0.2,0.02,0.25,1.2,,https://developers.openai.com/api/docs/models/gpt-5.6-luna

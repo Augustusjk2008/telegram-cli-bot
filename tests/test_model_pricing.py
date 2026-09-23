@@ -141,3 +141,18 @@ def test_default_csv_is_usable_and_small_charges_remain_visible(monkeypatch):
                                protocol="codex", scope="turn")
     assert cost["currency"] == "USD"
     assert 0 < cost["total"] < 0.00001
+
+
+@pytest.mark.parametrize(("model", "expected"), [
+    ("gpt-6-sol", (2, 0.2, 2.5, 10)),
+    ("gpt-6-luna", (0.1, 0.01, 0.125, 0.5)),
+])
+def test_default_csv_prices_new_gpt_6_models(monkeypatch, model, expected):
+    monkeypatch.setattr(config, "MODEL_PRICES_FILE", str(DEFAULT_PRICES_PATH))
+    cost = estimate_usage_cost(model, {
+        "input_tokens": 3_000_000,
+        "cached_input_tokens": 1_000_000,
+        "cache_write_input_tokens": 1_000_000,
+        "output_tokens": 1_000_000,
+    }, protocol="codex", scope="turn")
+    assert tuple(cost[key] for key in ("input", "cache_read", "cache_write", "output")) == expected
