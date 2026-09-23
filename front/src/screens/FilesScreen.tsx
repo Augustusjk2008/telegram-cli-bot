@@ -14,9 +14,11 @@ import type {
   FileEntry,
   FileReadResult,
   InlineCompletionConfig,
+  RemoteWorkspace,
   WorkspaceDocumentCloseItem,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import { joinRemotePath, parentRemotePath } from "../services/remoteWorkspace";
 import {
   getFilePreviewStatusText,
   isFilePreviewFullyLoaded,
@@ -37,6 +39,9 @@ type Props = {
   canBrowseExternalPaths?: boolean;
   canOpenSystemFolder?: boolean;
   canUseInlineCompletion?: boolean;
+  remoteWorkspace?: RemoteWorkspace;
+  reconnectRevision?: number;
+  onDirtyChange?: (dirty: boolean) => void;
 };
 
 type EditorDocumentSnapshot = {
@@ -233,6 +238,9 @@ export function FilesScreen({
   canBrowseExternalPaths = false,
   canOpenSystemFolder = false,
   canUseInlineCompletion = false,
+  remoteWorkspace,
+  reconnectRevision = 0,
+  onDirtyChange,
 }: Props) {
   const [currentPath, setCurrentPath] = useState("");
   const [externalPath, setExternalPath] = useState("");
@@ -278,7 +286,8 @@ export function FilesScreen({
   const editorDocumentScopeRef = useRef<EditorDocumentScopeBinding | null>(null);
   const canPreviewFiles = !structureOnly;
   const canMutateFiles = canPreviewFiles && canWriteFiles;
-  const languageService = useLanguageServerStatus(client, botAlias, editorPath);
+  const canManageFiles = canMutateFiles && !remoteWorkspace;
+  const languageService = useLanguageServerStatus(client, botAlias, remoteWorkspace ? "" : editorPath);
   const canNavigateImplementation = languageService.status?.implementationSupported === true;
 
   const abortExplicitCodeNavigation = () => {
@@ -303,6 +312,7 @@ export function FilesScreen({
   };
 
   const getCurrentEditorDocumentScope = () => {
+    if (remoteWorkspace) return null;
     const current = editorDocumentScopeRef.current;
     if (current?.client === client && current.botAlias === botAlias) {
       return current;
@@ -374,7 +384,7 @@ export function FilesScreen({
   }, [botAlias, canUseInlineCompletion, client, editorLastModifiedNs, editorLoading, editorPath, editorSaving, inlineCompletionConfig]);
 
   const codeNavigationHover = useMemo(() => {
-    if (!editorPath) {
+    if (!editorPath || remoteWorkspace) {
       return undefined;
     }
     return {
@@ -414,7 +424,7 @@ export function FilesScreen({
         }
       },
     };
-  }, [botAlias, client, editorContent, editorPath]);
+  }, [botAlias, client, editorContent, editorPath, remoteWorkspace]);
 
   async function loadListing(targetPath?: string) {
     const requestSeq = listingRequestSeqRef.current + 1;
@@ -446,10 +456,17 @@ export function FilesScreen({
 
   useEffect(() => {
     void loadListing();
-  }, [botAlias, client, structureOnly]);
+  }, [botAlias, client, structureOnly, reconnectRevision]);
 
   const isEditorOpen = Boolean(editorPath);
   const isDirty = isEditorOpen && editorContent !== savedContent;
+  useEffect(() => { onDirtyChange?.(isDirty); return () => onDirtyChange?.(false); }, [isDirty, onDirtyChange]);
+  useEffect(() => {
+    if (!remoteWorkspace || !isDirty) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [isDirty, remoteWorkspace]);
 
   const closeCurrentEditorDocumentScope = async (action: string) => {
     abortExplicitCodeNavigation();
@@ -474,7 +491,7 @@ export function FilesScreen({
         return;
       }
       if (structureOnly) {
-        await loadListing(joinBrowserPath(currentPath, name));
+        await loadListing(remoteWorkspace ? joinRemotePath(currentPath, name) : joinBrowserPath(currentPath, name));
         return;
       }
       await client.changeDirectory(botAlias, name);
@@ -491,7 +508,7 @@ export function FilesScreen({
         return;
       }
       if (structureOnly) {
-        await loadListing(getParentBrowserPath(currentPath));
+        await loadListing(remoteWorkspace ? parentRemotePath(currentPath) : getParentBrowserPath(currentPath));
         return;
       }
       await client.changeDirectory(botAlias, "..");
@@ -1059,7 +1076,7 @@ export function FilesScreen({
     <main data-ui-density="compact" className="flex h-full flex-col bg-[var(--workbench-titlebar-bg)]">
       <header className="flex items-center justify-between border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-4 py-3">
         <div className="flex items-center gap-2 overflow-hidden">
-          {currentPath !== "/" && currentPath !== "." && !isVirtualRoot && !isEditorOpen ? (
+          {currentPath !== "/" && currentPath !== "." && currentPath !== remoteWorkspace?.root && !isVirtualRoot && !isEditorOpen ? (
             <ToolbarButton type="button" size="icon" variant="ghost" onClick={() => void handleBack()} aria-label="返回上级目录">
               <ChevronLeft className="w-5 h-5" />
             </ToolbarButton>
@@ -1117,7 +1134,7 @@ export function FilesScreen({
                 <FolderPlus className="w-5 h-5" />
               </ToolbarButton>
             ) : null}
-            {canMutateFiles && !isVirtualRoot ? (
+            {canManageFiles && !isVirtualRoot ? (
               <label className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] text-[var(--text)] transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)]">
                 <Upload className="w-5 h-5" />
                 <input
@@ -1176,7 +1193,7 @@ export function FilesScreen({
           codeNavigationHover={codeNavigationHover}
           reveal={editorReveal}
           canNavigateImplementation={canNavigateImplementation}
-          onResolveCodeNavigation={(input) => void handleResolveCodeNavigation(input)}
+          onResolveCodeNavigation={remoteWorkspace ? undefined : (input) => void handleResolveCodeNavigation(input)}
           onChange={handleEditorChange}
           onSave={() => void handleSaveEditor()}
           onClose={handleCloseEditor}
@@ -1238,10 +1255,10 @@ export function FilesScreen({
               onDirClick={(name) => void handleDirClick(name)}
               onFileClick={(name) => void handleFileClick(name)}
               onEdit={canMutateFiles ? (file) => void handleOpenEditor(file.name) : undefined}
-              onRename={canMutateFiles ? (file) => void handleOpenRenameDialog(file.name, file.isDir) : undefined}
-              onDownload={canPreviewFiles ? (file) => void handleDownloadEntry(file) : undefined}
-              onDelete={canMutateFiles ? (file) => void handleDeleteEntry(file) : undefined}
-              allowDelete={canMutateFiles && !isVirtualRoot}
+              onRename={canManageFiles ? (file) => void handleOpenRenameDialog(file.name, file.isDir) : undefined}
+              onDownload={canPreviewFiles && !remoteWorkspace ? (file) => void handleDownloadEntry(file) : undefined}
+              onDelete={canManageFiles ? (file) => void handleDeleteEntry(file) : undefined}
+              allowDelete={canManageFiles && !isVirtualRoot}
             />
           )}
         </section>
@@ -1313,7 +1330,7 @@ export function FilesScreen({
           statusText={previewStatusText}
           onLoadFull={canLoadFull ? () => void loadPreview(previewName, "full") : undefined}
           onEdit={canEditPreview ? () => void handleOpenEditor(previewName) : undefined}
-          onDownload={canPreviewFiles ? () => void handleDownloadEntry({ name: previewName, isDir: false }) : undefined}
+          onDownload={canPreviewFiles && !remoteWorkspace ? () => void handleDownloadEntry({ name: previewName, isDir: false }) : undefined}
           onCancelDownload={previewDownloadProgress ? handleCancelDownload : undefined}
           downloadProgressText={previewDownloadProgress ? formatDownloadDetail(previewDownloadProgress) : ""}
           downloadPercent={previewDownloadProgress?.percent}

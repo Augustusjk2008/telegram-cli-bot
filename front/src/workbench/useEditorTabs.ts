@@ -26,6 +26,7 @@ type Props = {
   scopeKey?: string;
   structureOnly?: boolean;
   canWriteFiles?: boolean;
+  enableDocumentSync?: boolean;
 };
 
 export const EDITOR_DOCUMENT_SYNC_DEBOUNCE_MS = 250;
@@ -191,7 +192,7 @@ function createTabFromSnapshot(tab: PersistedWorkbenchTab): EditorTab {
   });
 }
 
-export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly = false, canWriteFiles = true }: Props) {
+export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly = false, canWriteFiles = true, enableDocumentSync = true }: Props) {
   const [tabs, setTabs] = useState<EditorTab[]>([]);
   const [activeTabPath, setActiveTabPath] = useState("");
   const [closedTabs, setClosedTabs] = useState<PersistedWorkbenchTab[]>([]);
@@ -238,7 +239,7 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
   }
 
   function queueDocumentSync(tab: EditorTab, event: CodeNavigationDocumentSyncEvent = "didChange") {
-    if (!isSyncableTab(tab)) {
+    if (!enableDocumentSync || !isSyncableTab(tab)) {
       return;
     }
     if (documentByteSize(tab.content) > EDITOR_DOCUMENT_MAX_BYTES) {
@@ -313,6 +314,7 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
   }
 
   async function closeDocuments(tabsToClose: EditorTab[]) {
+    if (!enableDocumentSync) return;
     const documents = tabsToClose.filter(isSyncableTab).map<WorkspaceDocumentCloseInput["documents"][number]>((tab) => ({
       path: tab.path,
       version: Math.max(1, Math.trunc(tab.documentVersion || 1)),

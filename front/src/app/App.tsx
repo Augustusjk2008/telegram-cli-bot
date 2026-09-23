@@ -4,7 +4,6 @@
  */
 
 import { workspaceLabel } from "../services/remoteWorkspace";
-import { RemoteFilesPane } from "../components/RemoteFilesPane";
 import { RemoteReconnectButton } from "../components/RemoteConnectionForm";
 import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { clsx } from "clsx";
@@ -72,7 +71,6 @@ import {
   LazyBotListScreen as BotListScreen,
   LazyDesktopBotManagerScreen as DesktopBotManagerScreen,
   LazyDesktopWorkbench as DesktopWorkbench,
-  LazyRemoteWorkbench as RemoteWorkbench,
   LazyFilesScreen as FilesScreen,
   LazyGitScreen as GitScreen,
   LazyMobileDebugScreen as MobileDebugScreen,
@@ -286,6 +284,7 @@ export function App() {
   const [mountedChatBots, setMountedChatBots] = useState<string[]>([]);
   const [desktopChatStatusByBot, setDesktopChatStatusByBot] = useState<Record<string, ChatWorkbenchStatus>>({});
   const [desktopChatPaneVisible, setDesktopChatPaneVisible] = useState(true);
+  const [remoteReconnectRevision, setRemoteReconnectRevision] = useState(0);
   const [productModeByBot, setProductModeByBot] = useState<Record<string, WorkbenchProductMode>>({});
   const [soloSessionSnapshotByBot, setSoloSessionSnapshotByBot] = useState<Record<string, SoloSessionSnapshot | null>>({});
   const [soloHistoryRevisionByBot, setSoloHistoryRevisionByBot] = useState<Record<string, number>>({});
@@ -1088,16 +1087,19 @@ export function App() {
   } else if (currentTab === "files") {
     activeScreen = (
       <div className="absolute inset-0">
-        {remoteWorkspace ? <RemoteFilesPane key={`remote-files-${currentBot}`} client={client} botAlias={currentBot} remote={remoteWorkspace} canWrite={canWriteCurrentBotFiles} canReconnect={canOperateCurrentBot} structureOnly={structureOnly} onDirtyChange={setDesktopHasDirtyTabs} /> : <FilesScreen
+        <FilesScreen
           key={`files-${currentBot}`}
           botAlias={currentBot}
           client={client}
+          remoteWorkspace={remoteWorkspace}
+          reconnectRevision={remoteReconnectRevision}
+          onDirtyChange={remoteWorkspace ? setDesktopHasDirtyTabs : undefined}
           structureOnly={structureOnly}
           canWriteFiles={canWriteCurrentBotFiles}
-          canBrowseExternalPaths={hasCapability(session, "admin_ops") && canOperateCurrentBot}
-          canOpenSystemFolder={Boolean(session?.isLocalAdmin) && hasCapability(session, "admin_ops") && canOperateCurrentBot}
-          canUseInlineCompletion={canOperateCurrentBot && canUseInlineCompletion}
-        />}
+          canBrowseExternalPaths={!remoteWorkspace && hasCapability(session, "admin_ops") && canOperateCurrentBot}
+          canOpenSystemFolder={!remoteWorkspace && Boolean(session?.isLocalAdmin) && hasCapability(session, "admin_ops") && canOperateCurrentBot}
+          canUseInlineCompletion={!remoteWorkspace && canOperateCurrentBot && canUseInlineCompletion}
+        />
       </div>
     );
   } else if (currentTab === "debug" && canUseDebug && !remoteWorkspace) {
@@ -1230,9 +1232,7 @@ export function App() {
       <>
         <PersistentTerminalProvider client={client}>
           <Suspense fallback={lazyFallback}>
-          {remoteWorkspace && currentBotSummary ? (
-            <RemoteWorkbench key={currentBot} bot={currentBotSummary} client={client} authToken={session?.token || ""} chat={renderDesktopChatStack({ currentVisible: true })} canWrite={canWriteCurrentBotFiles} structureOnly={structureOnly} terminalDisabledReason={terminalDisabledReason} themeName={themeName} viewMode={viewMode} onViewModeChange={setViewMode} onOpenBotSwitcher={(rect) => { void openBotSwitcher(rect); }} onLogout={handleLogout} onDirtyChange={setDesktopHasDirtyTabs} announcementAction={announcementButton} />
-          ) : productMode === "solo" ? (
+          {productMode === "solo" && !remoteWorkspace ? (
             <SoloWorkbench
               botAlias={currentBot}
               client={client}
@@ -1274,18 +1274,19 @@ export function App() {
               authToken={session?.token || ""}
               accountId={accountKey}
               botAlias={currentBot}
+              remoteWorkspace={remoteWorkspace}
               client={client}
               structureOnly={structureOnly}
               canWriteFiles={canWriteCurrentBotFiles}
-              canBrowseExternalPaths={hasCapability(session, "admin_ops") && canOperateCurrentBot}
-              canOpenSystemFolder={Boolean(session?.isLocalAdmin) && hasCapability(session, "admin_ops") && canOperateCurrentBot}
-              canUseInlineCompletion={canOperateCurrentBot && canUseInlineCompletion}
+              canBrowseExternalPaths={!remoteWorkspace && hasCapability(session, "admin_ops") && canOperateCurrentBot}
+              canOpenSystemFolder={!remoteWorkspace && Boolean(session?.isLocalAdmin) && hasCapability(session, "admin_ops") && canOperateCurrentBot}
+              canUseInlineCompletion={!remoteWorkspace && canOperateCurrentBot && canUseInlineCompletion}
               chatReadOnly={chatReadOnly || !canOperateCurrentBot}
               chatDisabledReason={chatDisabledReason}
               botCanOperate={canOperateCurrentBot}
               terminalDisabledReason={terminalDisabledReason}
               allowTrace={allowTrace}
-              allowCodeJump={!structureOnly && !isGuest(session)}
+              allowCodeJump={!remoteWorkspace && !structureOnly && !isGuest(session)}
               themeName={themeName}
               onThemeChange={handleThemeChange}
               chatBodyFontFamily={chatBodyFontFamily}
@@ -1298,14 +1299,14 @@ export function App() {
               onChatBodyParagraphSpacingChange={handleChatBodyParagraphSpacingChange}
               chatEnterToSend={chatEnterToSend}
               onChatEnterToSendChange={handleChatEnterToSendChange}
-              sessionCapabilities={session?.capabilities}
+              sessionCapabilities={remoteWorkspace ? [] : session?.capabilities}
               viewMode={viewMode}
               hasUnreadOtherBots={hasUnreadOtherBots}
               announcementAction={announcementButton}
               chatStatus={currentBot ? desktopChatStatusByBot[currentBot] : undefined}
-              productMode={productMode}
-              soloAvailable={soloAvailable}
-              onProductModeChange={handleProductModeChange}
+              productMode={remoteWorkspace ? "build" : productMode}
+              soloAvailable={!remoteWorkspace && soloAvailable}
+              onProductModeChange={remoteWorkspace ? undefined : handleProductModeChange}
               chatPaneContent={({ requestPreview }) => renderDesktopChatStack({
                 requestPreview,
               })}
@@ -1345,7 +1346,7 @@ export function App() {
           currentTab={currentTab}
           allowedTabs={allowedTabs}
           hideOuterChrome={hideOuterChrome}
-          activeScreen={<div className="flex h-full min-h-0 flex-col">{remoteWorkspace && <div className="flex flex-wrap items-center gap-2 border-b border-[var(--border)] p-2 text-xs"><span className="min-w-0 flex-1 break-all">SSH {remoteWorkspace.host}:{remoteWorkspace.root} · 仅聊天、文件、终端</span><RemoteReconnectButton client={client} botAlias={currentBot} remote={remoteWorkspace} disabled={!canOperateCurrentBot} /></div>}<div className="relative min-h-0 flex-1"><Suspense fallback={lazyFallback}>{activeScreen}</Suspense></div></div>}
+          activeScreen={<div className="flex h-full min-h-0 flex-col">{remoteWorkspace && <div className="flex flex-wrap items-center gap-2 border-b border-[var(--border)] p-2 text-xs"><span className="min-w-0 flex-1 break-all">SSH {remoteWorkspace.host}:{remoteWorkspace.root} · 仅聊天、文件、终端</span><RemoteReconnectButton client={client} botAlias={currentBot} remote={remoteWorkspace} disabled={!canOperateCurrentBot} onConnected={() => setRemoteReconnectRevision((revision) => revision + 1)} /></div>}<div className="relative min-h-0 flex-1"><Suspense fallback={lazyFallback}>{activeScreen}</Suspense></div></div>}
           viewMode={viewMode}
           hasUnreadOtherBots={hasUnreadOtherBots}
           announcementAction={announcementButton}

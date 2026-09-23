@@ -3,6 +3,7 @@ import { Suspense, useCallback, useEffect, useRef, useState, type ReactNode } fr
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ViewMode } from "../app/layoutMode";
 import { MockWebBotClient } from "../services/mockWebBotClient";
+import { RemoteReconnectButton } from "../components/RemoteConnectionForm";
 import { getExternalSourceErrorMessage } from "../services/types";
 import type {
   CodeLocation,
@@ -12,6 +13,7 @@ import type {
   HostEffect,
   LanguageServerProviderId,
   PluginOpenTarget,
+  RemoteWorkspace,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { premiumMotion, resolveMotionProps } from "../motion/premiumMotion";
@@ -139,6 +141,7 @@ type Props = {
   authToken?: string;
   accountId?: string;
   botAlias: string;
+  remoteWorkspace?: RemoteWorkspace;
   client?: WebBotClient;
   structureOnly?: boolean;
   canWriteFiles?: boolean;
@@ -187,6 +190,7 @@ export function DesktopWorkbench({
   accountId,
   client = new MockWebBotClient(),
   botAlias,
+  remoteWorkspace,
   structureOnly = false,
   canWriteFiles = true,
   canBrowseExternalPaths = false,
@@ -229,10 +233,10 @@ export function DesktopWorkbench({
   onChatPaneVisibilityChange,
 }: Props) {
   const { paneState, toggleSidebar, toggleEditor, toggleTerminal, toggleChat, setSidebarView, restoreSidebarView, resizePane } = useWorkbenchState();
-  const fileTree = useFileTree(botAlias, client, { structureOnly });
+  const fileTree = useFileTree(botAlias, client, { structureOnly, remote: Boolean(remoteWorkspace) });
   const workspaceUserScope = `${accountId || ""}\n${fileTree.rootPath}`;
   const codeNavigationScope = `${accountId || ""}\n${botAlias}\n${fileTree.rootPath}`;
-  const tabs = useEditorTabs({ botAlias, client, scopeKey: workspaceUserScope, structureOnly, canWriteFiles });
+  const tabs = useEditorTabs({ botAlias, client, scopeKey: workspaceUserScope, structureOnly, canWriteFiles, enableDocumentSync: !remoteWorkspace });
   const columnsRef = useRef<HTMLDivElement | null>(null);
   const centerRowsRef = useRef<HTMLDivElement | null>(null);
   const restoringRef = useRef<{ scopeIdentity: string; requestSeq: number } | null>(null);
@@ -291,7 +295,7 @@ export function DesktopWorkbench({
   const definitionSourceScopeRef = useRef("");
   codeNavigationScopeRef.current = codeNavigationScope;
   const reduceMotion = useReducedMotion();
-  const activeLanguageServicePath = tabs.activeTab?.kind === "file" || tabs.activeTab?.kind === "external-source"
+  const activeLanguageServicePath = !remoteWorkspace && (tabs.activeTab?.kind === "file" || tabs.activeTab?.kind === "external-source")
     ? tabs.activeTab.displayPath || tabs.activeTab.path
     : "";
   const languageService = useLanguageServerStatus(client, botAlias, activeLanguageServicePath, languageServerCatalogRevision);
@@ -387,7 +391,7 @@ export function DesktopWorkbench({
   const canViewPlugins = sessionCapabilities.includes("view_plugins");
   const canPreviewFiles = !structureOnly;
   const canMutateFiles = canPreviewFiles && canWriteFiles;
-  const activeSidebarView = !canViewPlugins && layoutState.sidebarView === "plugins"
+  const activeSidebarView = remoteWorkspace || (!canViewPlugins && layoutState.sidebarView === "plugins")
     ? "files"
     : layoutState.sidebarView;
   const activeActivityItem: WorkbenchActivityId = activeSidebarView;
@@ -395,7 +399,7 @@ export function DesktopWorkbench({
     authToken,
     botAlias,
     client,
-    enabled: !structureOnly && layoutState.sidebarView === "debug",
+    enabled: !remoteWorkspace && !structureOnly && layoutState.sidebarView === "debug",
     onRevealLocation: ({ sourcePath, line }) => {
       void openWorkspaceFile(toWorkspaceRelativeSourcePath(sourcePath, fileTree.rootPath), line || undefined);
     },
@@ -463,7 +467,7 @@ export function DesktopWorkbench({
   const showSidebarContent = focusedPane === "sidebar" || !layoutState.sidebarCollapsed;
   const sidebarContentMotion = resolveMotionProps(premiumMotion.sidebarContent, reduceMotion);
   const dialogPanelMotion = resolveMotionProps(premiumMotion.dialogPanel, reduceMotion);
-  const availableActivityItems: WorkbenchActivityId[] = structureOnly
+  const availableActivityItems: WorkbenchActivityId[] = remoteWorkspace || structureOnly
     ? ["files"]
     : [
         "files",
@@ -479,6 +483,7 @@ export function DesktopWorkbench({
     : null;
 
   const refreshGitDecorations = useCallback(async () => {
+    if (remoteWorkspace) return;
     const requestId = gitDecorationRequestRef.current + 1;
     gitDecorationRequestRef.current = requestId;
     try {
@@ -495,16 +500,16 @@ export function DesktopWorkbench({
       setGitDecorations({});
       setGitRepoPath("");
     }
-  }, [botAlias, client]);
+  }, [botAlias, client, remoteWorkspace]);
 
   const refreshWorkspaceChrome = useCallback(async (options?: { preserveExpandedPaths?: boolean; rootPath?: string; gitDelayMs?: number }) => {
     const nextRootPath = await fileTree.refreshTreeAndRoot({
       preserveExpandedPaths: options?.preserveExpandedPaths,
       rootPath: options?.rootPath,
     });
-    await refreshGitDecorations();
+    if (!remoteWorkspace) await refreshGitDecorations();
     return nextRootPath;
-  }, [fileTree, refreshGitDecorations]);
+  }, [fileTree, refreshGitDecorations, remoteWorkspace]);
 
   useEffect(() => {
     const handleWorkspaceDeleted = (event: Event) => {
@@ -605,7 +610,7 @@ export function DesktopWorkbench({
       try {
         const restoredSession = session.restoredSession;
         if (restoredSession) {
-          restoreSidebarView(restoredSession.sidebarView);
+          restoreSidebarView(remoteWorkspace ? "files" : restoredSession.sidebarView);
           setFocusedPane(restoredSession.focusedPane ?? null);
           setTerminalOverride(restoredSession.terminalOverrideCwd
             ? { cwd: restoredSession.terminalOverrideCwd, source: "manual" }
@@ -639,7 +644,7 @@ export function DesktopWorkbench({
   }, [fileTree.rootPath, previewScopeIdentity, session.restoreApplied, session.restoreLoaded, session.restoredSession]);
 
   useEffect(() => {
-    if (!fileTree.rootPath) {
+    if (!fileTree.rootPath || remoteWorkspace) {
       setGitBranchName("");
       setGitDecorations({});
       setGitRepoPath("");
@@ -663,14 +668,14 @@ export function DesktopWorkbench({
     return () => {
       cancelled = true;
     };
-  }, [botAlias, client, fileTree.rootPath]);
+  }, [botAlias, client, fileTree.rootPath, remoteWorkspace]);
 
   useEffect(() => {
-    if (!fileTree.rootPath) {
+    if (!fileTree.rootPath || remoteWorkspace) {
       return;
     }
     void refreshGitDecorations();
-  }, [fileTree.rootPath, refreshGitDecorations]);
+  }, [fileTree.rootPath, refreshGitDecorations, remoteWorkspace]);
 
   useEffect(() => {
     if (!terminalStatus.currentCwd && fileTree.rootPath) {
@@ -682,15 +687,15 @@ export function DesktopWorkbench({
   }, [fileTree.rootPath, terminalStatus.currentCwd]);
 
   useEffect(() => {
-    if (structureOnly && layoutState.sidebarView !== "files") {
+    if ((structureOnly || remoteWorkspace) && layoutState.sidebarView !== "files") {
       setSidebarView("files");
     }
-  }, [layoutState.sidebarView, setSidebarView, structureOnly]);
+  }, [layoutState.sidebarView, setSidebarView, structureOnly, remoteWorkspace]);
 
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (structureOnly) {
+      if (structureOnly || remoteWorkspace) {
         return;
       }
       if (codeNavigationHistory.handleShortcut(event)) {
@@ -717,13 +722,14 @@ export function DesktopWorkbench({
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [codeNavigationHistory.handleShortcut, setSidebarView, structureOnly]);
+  }, [codeNavigationHistory.handleShortcut, setSidebarView, structureOnly, remoteWorkspace]);
 
   function toggleFocusedPane(nextPane: Exclude<FocusedWorkbenchPane, null>) {
     setFocusedPane((current) => current === nextPane ? null : nextPane);
   }
 
   function selectActivityItem(item: WorkbenchActivityId) {
+    if (remoteWorkspace && item !== "files") return;
     setSidebarView(item);
   }
 
@@ -824,7 +830,7 @@ export function DesktopWorkbench({
     if (!isCurrentRequest()) {
       return false;
     }
-    const target = await client.resolveFileOpenTarget(botAlias, path);
+    const target = remoteWorkspace ? { kind: "file" as const } : await client.resolveFileOpenTarget(botAlias, path);
     if (!isCurrentRequest()) {
       return false;
     }
@@ -1157,7 +1163,7 @@ export function DesktopWorkbench({
   }
 
   async function handleUpload(files: File[]) {
-    if (!canMutateFiles) {
+    if (!canMutateFiles || remoteWorkspace) {
       return;
     }
     for (const file of files) {
@@ -1168,8 +1174,8 @@ export function DesktopWorkbench({
   }
 
   async function handleFileTreeHome() {
-    const workingDir = await client.getCurrentPath(botAlias);
-    if (!structureOnly) {
+    const workingDir = remoteWorkspace?.root || await client.getCurrentPath(botAlias);
+    if (!structureOnly && !remoteWorkspace) {
       await client.changeDirectory(botAlias, workingDir);
     }
     await refreshWorkspaceChrome({ rootPath: workingDir });
@@ -1232,6 +1238,7 @@ export function DesktopWorkbench({
             setPendingSidebarWorkdir(path);
             setSidebarView("settings");
           }}
+          remote={Boolean(remoteWorkspace)}
           structureOnly={structureOnly}
           canWriteFiles={canWriteFiles}
           canBrowseExternalPaths={canBrowseExternalPaths}
@@ -1376,7 +1383,7 @@ export function DesktopWorkbench({
     }
   }
 
-  const lanChatDock = (
+  const lanChatDock = !remoteWorkspace && (
     <LanChatDock
       client={client}
       visible={!structureOnly && !Boolean(focusedPane)}
@@ -1390,7 +1397,8 @@ export function DesktopWorkbench({
       data-has-focus={focusedPane ? "true" : "false"}
       data-focused-pane={focusedPane || "none"}
       data-resizing={isResizingPane ? "true" : "false"}
-      className="desktop-workbench-root grid h-[100dvh] min-h-0 w-full grid-rows-[auto_minmax(0,1fr)_auto]"
+      className="desktop-workbench-root grid h-[100dvh] min-h-0 w-full"
+      style={{ gridTemplateRows: remoteWorkspace ? "auto auto minmax(0,1fr) auto" : "auto minmax(0,1fr) auto" }}
     >
       {focusedPane ? (
         <button
@@ -1426,6 +1434,11 @@ export function DesktopWorkbench({
         onLogout={() => onLogout?.()}
       />
 
+      {remoteWorkspace ? <div className="flex items-center gap-2 border-b border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)]">
+        <span className="min-w-0 flex-1 truncate" title={`${remoteWorkspace.host}:${remoteWorkspace.root}`}>SSH {remoteWorkspace.host}:{remoteWorkspace.root}</span>
+        <RemoteReconnectButton client={client} botAlias={botAlias} remote={remoteWorkspace} disabled={!botCanOperate} onConnected={() => { void fileTree.refreshRoot({ preserveExpandedPaths: true, rootPath: remoteWorkspace.root }); }} />
+      </div> : null}
+
       <div data-testid="desktop-workbench-shell" className="min-h-0 overflow-hidden bg-[var(--workbench-titlebar-bg)]">
         <div
           data-testid="desktop-workbench-columns"
@@ -1460,7 +1473,7 @@ export function DesktopWorkbench({
                     className="flex min-h-0 min-w-0 flex-1 flex-col"
                     {...sidebarContentMotion}
                   >
-                    {layoutState.sidebarView === "files" ? (
+                    {activeSidebarView === "files" ? (
                       renderSidebarContent()
                     ) : (
                       <div data-testid="desktop-sidebar-scroll" className="h-full min-h-0 flex-1 overflow-y-auto">
@@ -1531,7 +1544,7 @@ export function DesktopWorkbench({
                     onNavigateForward={() => {
                       void codeNavigationHistory.goForward();
                     }}
-                    onToggleBreakpoint={tabs.activeTab
+                    onToggleBreakpoint={!remoteWorkspace && tabs.activeTab
                       ? (line) => {
                           void debug.toggleBreakpoint(tabs.activeTab?.path || "", line);
                         }
@@ -1610,6 +1623,7 @@ export function DesktopWorkbench({
                   pendingWorkingDir={pendingTerminalOverride?.cwd}
                   themeName={themeName}
                   disabledReason={terminalDisabledReason}
+                  remote={Boolean(remoteWorkspace)}
                   visible={showTerminalPane}
                   focused={focusedPane === "terminal"}
                   onToggleFocus={() => toggleFocusedPane("terminal")}
@@ -1682,7 +1696,7 @@ export function DesktopWorkbench({
         fileDirty={Boolean(tabs.activeTab?.dirty)}
         terminalStatus={terminalStatus}
         chatStatus={externalChatStatus || localChatStatus}
-        debugStatus={debug.statusBar}
+        debugStatus={remoteWorkspace ? { phase: "idle", connectionText: "" } : debug.statusBar}
         restoreState={session.restoreState}
         branchName={gitBranchName}
         viewMode={viewMode}
@@ -1716,7 +1730,7 @@ export function DesktopWorkbench({
         )}
       />
 
-      {!structureOnly ? (
+      {!structureOnly && !remoteWorkspace ? (
         <CommandPalette
           open={commandPaletteOpen}
           botAlias={botAlias}

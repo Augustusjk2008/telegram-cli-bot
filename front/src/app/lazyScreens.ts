@@ -40,5 +40,3 @@ export const LazySettingsScreen = lazy(loadSettingsScreen);
 export const LazyTerminalScreen = lazy(loadTerminalScreen);
 export const LazyDesktopWorkbench = lazy(loadDesktopWorkbench);
 export const LazySoloWorkbench = lazy(loadSoloWorkbench);
-
-export const LazyRemoteWorkbench = lazy(() => import("../workbench/RemoteWorkbench").then((module) => ({ default: module.RemoteWorkbench })));

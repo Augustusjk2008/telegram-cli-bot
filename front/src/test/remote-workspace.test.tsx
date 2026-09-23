@@ -2,12 +2,13 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { BotListScreen } from "../screens/BotListScreen";
 import { RemoteConnectionForm } from "../components/RemoteConnectionForm";
-import { RemoteFilesPane } from "../components/RemoteFilesPane";
+import { FilesScreen } from "../screens/FilesScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { RealWebBotClient } from "../services/realWebBotClient";
 import { WebApiClientError, type RemoteWorkspace } from "../services/types";
 import { PersistentTerminalProvider, usePersistentTerminal } from "../terminal/PersistentTerminalProvider";
 import { readTerminalTabs } from "../terminal/terminalStorage";
+import { DesktopWorkbench } from "../workbench/DesktopWorkbench";
 
 const remote: RemoteWorkspace = { connectionId: "ssh-1", host: "linux.test", port: 22, username: "dev", root: "/home/dev", hostKeyFingerprint: "SHA256:abc" };
 const wire = { connection_id: "ssh-1", host: "linux.test", port: 22, username: "dev", root: "/srv/project", host_key_fingerprint: "SHA256:abc", key_filename: "C:/keys/id_ed25519" };
@@ -107,17 +108,77 @@ test("restored terminal tab reconnects with its remote alias, cwd and owner", as
   expect(create).toHaveBeenCalledTimes(2);
 });
 
-test("remote tree uses POSIX paths and text writes preserve concurrency token", async () => {
+test("shared mobile files screen edits remote text and hides unsupported file actions", async () => {
   const client = new MockWebBotClient();
-  const list = vi.spyOn(client, "listFiles").mockResolvedValue({ workingDir: remote.root, entries: [{ name: "Case\\Name.txt", isDir: false }] });
+  vi.spyOn(client, "listFiles").mockResolvedValue({ workingDir: remote.root, entries: [{ name: "Case\\Name.txt", isDir: false }] });
   const read = vi.spyOn(client, "readFileFull").mockResolvedValue({ mode: "cat", content: "before", isFullContent: true, lastModifiedNs: "123", encoding: "utf-8" });
   const write = vi.spyOn(client, "writeFile").mockResolvedValue({ path: "", fileSizeBytes: 5, lastModifiedNs: "124" });
-  render(<RemoteFilesPane client={client} botAlias="remote" remote={remote} />);
-  fireEvent.click(await screen.findByRole("treeitem", { name: "Case\\Name.txt" }));
-  await waitFor(() => expect(screen.getByLabelText("远程文本编辑器")).toHaveValue("before"));
-  expect(list).toHaveBeenCalledWith("remote", "/home/dev");
-  expect(read).toHaveBeenCalledWith("remote", "/home/dev/Case\\Name.txt");
-  fireEvent.change(screen.getByLabelText("远程文本编辑器"), { target: { value: "after" } });
+  render(<FilesScreen client={client} botAlias="remote" remoteWorkspace={remote} />);
+  fireEvent.click(await screen.findByRole("button", { name: "更多操作 Case\\Name.txt" }));
+  expect(screen.queryByRole("menuitem", { name: /重命名|下载|删除/ })).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("上传文件")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("menuitem", { name: "编辑 Case\\Name.txt" }));
+  await waitFor(() => expect(read).toHaveBeenCalledWith("remote", "Case\\Name.txt"));
+  expect(screen.getByText("before")).toBeInTheDocument();
+  fireEvent.change(screen.getByRole("textbox", { name: "文件内容" }), { target: { value: "after" } });
+  // The editor save path retains the remote file's concurrency token.
   fireEvent.click(screen.getByRole("button", { name: "保存" }));
-  await waitFor(() => expect(write).toHaveBeenCalledWith("remote", "/home/dev/Case\\Name.txt", "after", "123", "utf-8"));
+  await waitFor(() => expect(write).toHaveBeenCalledWith("remote", "Case\\Name.txt", "after", "123", "utf-8"));
+});
+
+test("read-only remote browsing keeps backslashes inside POSIX directory names", async () => {
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getCurrentPath").mockResolvedValue(remote.root);
+  const list = vi.spyOn(client, "listFiles").mockImplementation(async (_alias, path) => ({
+    workingDir: path || remote.root,
+    entries: path === remote.root ? [{ name: "dir\\name", isDir: true }] : [],
+  }));
+  render(<FilesScreen client={client} botAlias="remote" remoteWorkspace={remote} structureOnly />);
+  fireEvent.click(await screen.findByRole("button", { name: "进入 dir\\name" }));
+  await waitFor(() => expect(list).toHaveBeenCalledWith("remote", "/home/dev/dir\\name"));
+  fireEvent.click(screen.getByRole("button", { name: "返回上级目录" }));
+  await waitFor(() => expect(list).toHaveBeenLastCalledWith("remote", remote.root));
+});
+
+test("shared desktop workbench opens remote files without local-only APIs", async () => {
+  const client = new MockWebBotClient();
+  const entries = [{ name: "README.md", isDir: false }, { name: "Case\\Name.txt", isDir: false }];
+  vi.spyOn(client, "listFiles").mockResolvedValue({ workingDir: remote.root, entries });
+  vi.spyOn(client, "revealFileTreePath").mockResolvedValue({ rootPath: remote.root, highlightPath: "README.md", expandedPaths: [], branches: { "": entries } });
+  const read = vi.spyOn(client, "readFileFull").mockResolvedValue({ mode: "cat", content: "remote text", isFullContent: true, lastModifiedNs: "123", encoding: "utf-8" });
+  const create = vi.spyOn(client, "createTextFile").mockResolvedValue({ path: "/home/dev/new.txt", fileSizeBytes: 0, lastModifiedNs: "sha256:new" });
+  const resolve = vi.spyOn(client, "resolveFileOpenTarget");
+  const git = vi.spyOn(client, "getGitOverview");
+  const sync = vi.spyOn(client, "syncWorkspaceDocuments");
+  render(<PersistentTerminalProvider client={client}><DesktopWorkbench botAlias="remote" client={client} remoteWorkspace={remote} chatPaneContent={<div>Remote chat</div>} /></PersistentTerminalProvider>);
+  expect(screen.getByTestId("desktop-workbench-root")).toBeInTheDocument();
+  expect(screen.getByText("Remote chat")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "SSH 重新登录" })).toBeInTheDocument();
+  fireEvent.click(await screen.findByRole("button", { name: "打开 README.md" }));
+  await waitFor(() => expect(read).toHaveBeenCalledWith("remote", "README.md"));
+  const posixFile = await screen.findByRole("button", { name: "打开 Case\\Name.txt" });
+  expect(posixFile).toHaveAttribute("title", "/home/dev/Case\\Name.txt");
+  fireEvent.click(posixFile);
+  await waitFor(() => expect(read).toHaveBeenCalledWith("remote", "Case\\Name.txt"));
+  expect(resolve).not.toHaveBeenCalled();
+  expect(git).not.toHaveBeenCalled();
+  expect(sync).not.toHaveBeenCalled();
+  expect(screen.queryByRole("button", { name: "搜索" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "新建文件" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "文件名" }), { target: { value: "new.txt" } });
+  fireEvent.click(screen.getByRole("button", { name: "创建" }));
+  await waitFor(() => expect(create).toHaveBeenCalledWith("remote", "new.txt", "", remote.root));
+  expect(await screen.findByRole("tab", { name: "new.txt" })).toBeInTheDocument();
+});
+
+test("desktop tree preserves a trailing backslash in the remote root", async () => {
+  const client = new MockWebBotClient();
+  const remoteRoot = { ...remote, root: "/home/dev\\" };
+  const list = vi.spyOn(client, "listFiles").mockImplementation(async (_alias, path) => ({
+    workingDir: path || remoteRoot.root,
+    entries: path === `${remoteRoot.root}/sub` ? [] : [{ name: "sub", isDir: true }],
+  }));
+  render(<PersistentTerminalProvider client={client}><DesktopWorkbench botAlias="remote" client={client} remoteWorkspace={remoteRoot} chatPaneContent={<div>Remote chat</div>} /></PersistentTerminalProvider>);
+  fireEvent.click(await screen.findByRole("button", { name: "展开 sub" }));
+  await waitFor(() => expect(list).toHaveBeenCalledWith("remote", `${remoteRoot.root}/sub`, expect.anything()));
 });

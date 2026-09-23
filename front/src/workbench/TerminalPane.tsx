@@ -15,6 +15,7 @@ type Props = {
   pendingWorkingDir?: string;
   themeName?: UiThemeName;
   disabledReason?: string;
+  remote?: boolean;
   visible?: boolean;
   focused?: boolean;
   onToggleFocus?: () => void;
@@ -31,6 +32,7 @@ export function TerminalPane({
   pendingWorkingDir,
   themeName = DEFAULT_UI_THEME,
   disabledReason = "",
+  remote = false,
   visible = true,
   focused = false,
   onToggleFocus,
@@ -49,6 +51,7 @@ export function TerminalPane({
         pendingWorkingDir={pendingWorkingDir}
         themeName={themeName}
         disabledReason={disabledReason}
+        remote={remote}
         embedded
         focused={focused}
         onToggleFocus={onToggleFocus}

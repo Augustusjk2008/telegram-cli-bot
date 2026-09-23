@@ -67,11 +67,11 @@ function joinTreePath(parent: string, name: string) {
   return parent ? `${parent}/${name}` : name;
 }
 
-function joinAbsoluteTreePath(rootPath: string, path: string) {
+function joinAbsoluteTreePath(rootPath: string, path: string, remote = false) {
   if (!path) {
     return rootPath;
   }
-  return `${rootPath.replace(/[\\/]+$/, "")}/${path}`;
+  return `${rootPath.replace(remote ? /\/+$/ : /[\\/]+$/, "")}/${path}`;
 }
 
 function parentTreePath(path: string) {
@@ -145,8 +145,8 @@ function ancestorPathsForPath(path: string) {
   return ancestors;
 }
 
-export function useFileTree(botAlias: string, client: WebBotClient, options?: { structureOnly?: boolean }): UseFileTreeResult {
-  void options;
+export function useFileTree(botAlias: string, client: WebBotClient, options?: { structureOnly?: boolean; remote?: boolean }): UseFileTreeResult {
+  const remote = options?.remote === true;
   const [rootPath, setRootPath] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -243,7 +243,7 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
       try {
         const listing = await client.listFiles(
           botAlias,
-          joinAbsoluteTreePath(currentRootPath, branchPath),
+          joinAbsoluteTreePath(currentRootPath, branchPath, remote),
           { includeChildCounts: true },
         );
         const branchState = {
@@ -289,7 +289,7 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
 
     inFlightBranchLoadsRef.current.set(key, { generation, promise });
     return promise;
-  }, [botAlias, client]);
+  }, [botAlias, client, remote]);
 
   const startBackgroundRestoreExpandedPaths = useCallback((currentRootPath: string, paths: string[], generation: number) => {
     const normalizedPaths = uniqueExpandedPaths(paths);
@@ -561,7 +561,7 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
     await client.createDirectory(
       botAlias,
       name,
-      joinAbsoluteTreePath(rootPath, parentPath),
+      joinAbsoluteTreePath(rootPath, parentPath, remote),
     );
     await refreshBranch(parentPath);
     const nextPath = parentPath ? `${parentPath}/${name}` : name;
@@ -574,12 +574,16 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
       botAlias,
       filename,
       content,
-      joinAbsoluteTreePath(rootPath, parentPath),
+      joinAbsoluteTreePath(rootPath, parentPath, remote),
     );
     await refreshBranch(parentPath);
-    selectPath(result.path);
-    highlightPath(result.path);
-    return result;
+    const rootPrefix = `${rootPath.replace(/\/+$/, "")}/`;
+    const path = remote && result.path.startsWith(rootPrefix)
+      ? result.path.slice(rootPrefix.length)
+      : result.path;
+    selectPath(path);
+    highlightPath(path);
+    return { ...result, path };
   }
 
   async function renameFile(path: string, newName: string) {
